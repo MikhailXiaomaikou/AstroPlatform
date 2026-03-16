@@ -1,0 +1,387 @@
+"""Astro ecosystem integration — SAMP, VOTable, Jupyter export, ADQL query."""
+
+import io
+import json
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth import get_optional_user
+from app.models.database import get_db
+from app.models.schemas import DataFile, PipelineRun, PipelineTemplateDB, User
+from app.storage import download_fits
+
+router = APIRouter(prefix="/api/integration", tags=["integration"])
+
+
+# ══════════════════════════════════════
+# SAMP Protocol
+# ══════════════════════════════════════
+
+class SAMPStatus(BaseModel):
+    connected: bool
+    hub_url: str | None = None
+    registered_clients: list[str] = []
+
+@router.get("/samp/status")
+async def samp_status():
+    """Check if a SAMP hub is available."""
+    try:
+        from astropy.samp import SAMPIntegratedClient
+        client = SAMPIntegratedClient()
+        client.connect()
+        clients = list(client.get_registered_clients())
+        hub_url = str(client.hub.hub_url) if hasattr(client, 'hub') else None
+        client.disconnect()
+        return SAMPStatus(connected=True, hub_url=hub_url, registered_clients=clients)
+    except Exception:
+        return SAMPStatus(connected=False)
+
+
+class SAMPSendRequest(BaseModel):
+    fits_path: str
+    message_type: str = "table.load.fits"  # or "image.load.fits"
+
+@router.post("/samp/send")
+async def samp_send(req: SAMPSendRequest):
+    """Send a FITS file to connected SAMP clients (DS9, Aladin, TOPCAT)."""
+    from pathlib import Path
+
+    from app.config import settings
+
+    # Resolve local file path
+    full_path = Path(settings.local_storage_dir) / req.fits_path
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="FITS file not found")
+
+    file_url = f"file://{full_path.resolve()}"
+
+    try:
+        from astropy.samp import SAMPIntegratedClient
+        client = SAMPIntegratedClient()
+        client.connect()
+
+        params = {"url": file_url, "name": req.fits_path}
+        message = {"samp.mtype": req.message_type, "samp.params": params}
+        client.notify_all(message)
+        client.disconnect()
+
+        return {"sent": True, "url": file_url, "message_type": req.message_type}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"SAMP send failed: {e}")
+
+
+# ══════════════════════════════════════
+# VOTable Support
+# ══════════════════════════════════════
+
+@router.get("/votable/convert")
+async def convert_to_votable(
+    fits_path: str = Query(..., description="Storage path to FITS file"),
+):
+    """Convert a FITS table to VOTable format."""
+    from astropy.io import fits
+    from astropy.table import Table
+
+    try:
+        raw = download_fits(fits_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="FITS file not found")
+
+    hdul = fits.open(io.BytesIO(raw))
+
+    table = None
+    for hdu in hdul:
+        if isinstance(hdu, (fits.BinTableHDU, fits.TableHDU)):
+            table = Table.read(hdu)
+            break
+    hdul.close()
+
+    if table is None:
+        raise HTTPException(status_code=400, detail="No table data in FITS file")
+
+    buf = io.BytesIO()
+    table.write(buf, format="votable", overwrite=True)
+    buf.seek(0)
+
+    from fastapi.responses import Response
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/x-votable+xml",
+        headers={"Content-Disposition": f"attachment; filename={fits_path.replace('/', '_')}.xml"},
+    )
+
+
+@router.post("/votable/upload")
+async def upload_votable(
+    db: AsyncSession = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
+    """Placeholder for VOTable import — converts VOTable to FITS and stores."""
+    return {"status": "not_implemented", "message": "VOTable upload coming soon"}
+
+
+# ══════════════════════════════════════
+# Jupyter Notebook Export
+# ══════════════════════════════════════
+
+class JupyterExportRequest(BaseModel):
+    template_id: str | None = None
+    run_id: str | None = None
+
+@router.post("/jupyter/export")
+async def export_jupyter(
+    req: JupyterExportRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Export a pipeline template or run as a Jupyter notebook."""
+    dag = None
+    title = "Astro Pipeline"
+
+    if req.template_id:
+        result = await db.execute(
+            select(PipelineTemplateDB).where(PipelineTemplateDB.id == uuid.UUID(req.template_id))
+        )
+        tpl = result.scalar_one_or_none()
+        if not tpl:
+            raise HTTPException(status_code=404, detail="Template not found")
+        dag = tpl.dag
+        title = tpl.name
+    elif req.run_id:
+        result = await db.execute(
+            select(PipelineRun).where(PipelineRun.id == uuid.UUID(req.run_id))
+        )
+        run = result.scalar_one_or_none()
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        dag = run.dag
+        title = f"Pipeline Run {req.run_id[:8]}"
+    else:
+        raise HTTPException(status_code=400, detail="Provide template_id or run_id")
+
+    notebook = _dag_to_notebook(dag, title)
+
+    from fastapi.responses import Response
+    return Response(
+        content=json.dumps(notebook, indent=2),
+        media_type="application/x-ipynb+json",
+        headers={"Content-Disposition": f"attachment; filename={title.replace(' ', '_')}.ipynb"},
+    )
+
+
+def _dag_to_notebook(dag: dict, title: str) -> dict:
+    """Convert a pipeline DAG to a Jupyter notebook."""
+    cells = []
+
+    # Title cell
+    cells.append({
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [f"# {title}\n", "\n", "Auto-generated from Astro Platform pipeline.\n"]
+    })
+
+    # Imports cell
+    cells.append({
+        "cell_type": "code",
+        "metadata": {},
+        "source": [
+            "import numpy as np\n",
+            "from astropy.io import fits\n",
+            "from astropy.table import Table\n",
+            "from astropy.coordinates import SkyCoord\n",
+            "import astropy.units as u\n",
+            "import matplotlib.pyplot as plt\n",
+            "%matplotlib inline\n",
+        ],
+        "outputs": [],
+        "execution_count": None,
+    })
+
+    # Topologically sorted node cells
+    from app.pipeline.engine import topological_sort
+    try:
+        levels = topological_sort(dag)
+    except Exception:
+        levels = [[n["id"]] for n in dag.get("nodes", [])]
+
+    node_map = {n["id"]: n for n in dag.get("nodes", [])}
+
+    for level in levels:
+        for node_id in level:
+            node = node_map.get(node_id, {})
+            node_type = node.get("type", "Unknown")
+            params = node.get("data", {}).get("params", {})
+            label = node.get("data", {}).get("label", node_type)
+
+            # Markdown header
+            cells.append({
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [f"## {label} ({node_type})\n", f"\nParameters: `{json.dumps(params)}`\n"]
+            })
+
+            # Code cell based on node type
+            code = _node_type_to_code(node_type, params, node_id)
+            cells.append({
+                "cell_type": "code",
+                "metadata": {},
+                "source": code,
+                "outputs": [],
+                "execution_count": None,
+            })
+
+    return {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.11.0"},
+        },
+        "cells": cells,
+    }
+
+
+def _node_type_to_code(node_type: str, params: dict, node_id: str) -> list[str]:
+    """Generate Python code for a pipeline node."""
+    if node_type == "LoadData":
+        path = params.get("fits_path", "path/to/your/file.fits")
+        return [
+            f"# Load FITS data\n",
+            f"hdul = fits.open('{path}')\n",
+            f"hdul.info()\n",
+            f"data_{node_id} = Table.read(hdul[1]) if len(hdul) > 1 else hdul[0].data\n",
+        ]
+    elif node_type == "Denoise":
+        sigma = params.get("sigma", 3.0)
+        return [
+            f"from astropy.stats import sigma_clip\n",
+            f"\n",
+            f"sigma_thresh = {sigma}\n",
+            f"# Apply sigma clipping\n",
+            f"clipped = sigma_clip(flux, sigma=sigma_thresh, maxiters=5)\n",
+            f"mask = clipped.mask\n",
+            f"clean_flux = np.where(mask, np.interp(np.arange(len(flux)), np.where(~mask)[0], flux[~mask]), flux)\n",
+        ]
+    elif node_type == "SpectralFit":
+        model = params.get("model", "gaussian")
+        return [
+            f"from scipy.optimize import curve_fit\n",
+            f"\n",
+            f"def {model}(x, amp, center, width):\n",
+            f"    return amp * np.exp(-0.5 * ((x - center) / width)**2)\n" if model == "gaussian" else
+            f"    return amp * width**2 / ((x - center)**2 + width**2)\n",
+            f"\n",
+            f"popt, pcov = curve_fit({model}, wavelength, flux, maxfev=10000)\n",
+            f"print(f'Fit parameters: {{dict(zip([\"amp\", \"center\", \"width\"], popt))}}')\n",
+            f"plt.plot(wavelength, flux, label='Data')\n",
+            f"plt.plot(wavelength, {model}(wavelength, *popt), '--', label='Fit')\n",
+            f"plt.legend()\n",
+            f"plt.show()\n",
+        ]
+    elif node_type == "RedshiftEstimate":
+        return [
+            f"# Redshift estimation via emission line matching\n",
+            f"rest_lines = {{'H-alpha': 6563, 'H-beta': 4861, '[OIII]': 5007, '[OII]': 3727}}\n",
+            f"# Find peaks in spectrum\n",
+            f"from scipy.signal import find_peaks\n",
+            f"peaks, _ = find_peaks(flux, height=np.median(flux) + 2*np.std(flux))\n",
+            f"print(f'Found {{len(peaks)}} peaks at wavelengths: {{wavelength[peaks]}}')\n",
+        ]
+    elif node_type == "Plot":
+        plot_type = params.get("plot_type", "spectrum")
+        return [
+            f"fig, ax = plt.subplots(figsize=(12, 5))\n",
+            f"ax.plot(wavelength, flux, lw=0.8)\n" if plot_type == "spectrum" else
+            f"ax.scatter(x_data, y_data, s=4, alpha=0.6)\n",
+            f"ax.set_xlabel('Wavelength')\n",
+            f"ax.set_ylabel('Flux')\n",
+            "ax.set_title('" + params.get("title", "Plot") + "')\n",
+            f"plt.tight_layout()\n",
+            f"plt.show()\n",
+        ]
+    else:
+        return [f"# {node_type} node — implement as needed\n", f"params = {json.dumps(params)}\n"]
+
+
+# ══════════════════════════════════════
+# ADQL Query
+# ══════════════════════════════════════
+
+class ADQLRequest(BaseModel):
+    query: str
+    service: str = "gaia"  # "gaia", "vizier", "cadc", "simbad"
+
+ADQL_SERVICES = {
+    "gaia": "https://gea.esac.esa.int/tap-server/tap",
+    "vizier": "https://tapvizier.cds.unistra.fr/TAPVizieR/tap",
+    "cadc": "https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/argus",
+    "simbad": "https://simbad.cds.unistra.fr/simbad/sim-tap",
+}
+
+@router.post("/adql/query")
+async def adql_query(req: ADQLRequest):
+    """Execute an ADQL query against a TAP service."""
+    import asyncio
+    from functools import partial
+
+    if req.service not in ADQL_SERVICES:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {req.service}. Available: {list(ADQL_SERVICES.keys())}")
+
+    # Sanitize: block dangerous operations
+    query_upper = req.query.upper().strip()
+    for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "CREATE", "ALTER"):
+        if forbidden in query_upper.split():
+            raise HTTPException(status_code=400, detail=f"Forbidden keyword: {forbidden}")
+
+    try:
+        from astroquery.utils.tap.core import TapPlus
+
+        loop = asyncio.get_event_loop()
+
+        def _run_query():
+            tap = TapPlus(url=ADQL_SERVICES[req.service])
+            job = tap.launch_job(req.query)
+            return job.get_results()
+
+        table = await loop.run_in_executor(None, _run_query)
+
+        # Convert to JSON-serializable format
+        columns = list(table.colnames)
+        data = {}
+        import numpy as np
+        for col in columns:
+            arr = table[col]
+            try:
+                if hasattr(arr, "filled"):
+                    arr = arr.filled(None)
+                vals = []
+                for v in arr:
+                    if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
+                        vals.append(None)
+                    else:
+                        vals.append(float(v) if isinstance(v, (int, float, np.integer, np.floating)) else str(v))
+                data[col] = vals
+            except Exception:
+                data[col] = [str(v) for v in arr]
+
+        return {
+            "columns": columns,
+            "data": data,
+            "row_count": len(table),
+            "service": req.service,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"ADQL query failed: {e}")
+
+
+@router.get("/adql/services")
+async def list_adql_services():
+    """List available ADQL/TAP services."""
+    return [
+        {"id": "gaia", "name": "Gaia Archive", "url": ADQL_SERVICES["gaia"], "description": "ESA Gaia mission data"},
+        {"id": "vizier", "name": "VizieR TAP", "url": ADQL_SERVICES["vizier"], "description": "CDS VizieR catalog service"},
+        {"id": "cadc", "name": "CADC", "url": ADQL_SERVICES["cadc"], "description": "Canadian Astronomy Data Centre"},
+    ]
