@@ -108,6 +108,7 @@ function ActionCard({
 
 function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [vizData, setVizData] = useState<Record<string, unknown> | null>(null);
 
   if (!data || data.length === 0) {
     return (
@@ -202,21 +203,19 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   function handleVisualize() {
     const rows = getSelected();
     if (rows.length === 0) return;
-    const vizData: Record<string, unknown> = {
+    const vd: Record<string, unknown> = {
       ra: rows.map((r) => r.ra),
       dec: rows.map((r) => r.dec),
       names: rows.map((r) => r.name),
       sources: rows.map((r) => r.source),
     };
-    // Add numeric extra columns
     for (const col of extraCols) {
       const vals = rows.map((r) => ((r.extra || {}) as Record<string, unknown>)[col]).filter((v) => typeof v === "number");
-      if (vals.length > 0) vizData[col] = vals;
+      if (vals.length > 0) vd[col] = vals;
     }
-    if (rows.some((r) => r.magnitude != null)) vizData.magnitude = rows.filter((r) => r.magnitude != null).map((r) => r.magnitude);
-    if (rows.some((r) => r.redshift != null)) vizData.redshift = rows.filter((r) => r.redshift != null).map((r) => r.redshift);
-    sessionStorage.setItem("astro_viz_data", JSON.stringify(vizData));
-    window.open("/?viz=1", "_blank");
+    if (rows.some((r) => r.magnitude != null)) vd.magnitude = rows.filter((r) => r.magnitude != null).map((r) => r.magnitude);
+    if (rows.some((r) => r.redshift != null)) vd.redshift = rows.filter((r) => r.redshift != null).map((r) => r.redshift);
+    setVizData(vd);
   }
 
   return (
@@ -280,6 +279,19 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
       </div>
       {unique.length > 50 && (
         <p className="chat-result-more">Showing 50 of {unique.length} results</p>
+      )}
+      {vizData && (
+        <div className="viz-overlay">
+          <div className="viz-overlay-content">
+            <Suspense fallback={<div className="fits-loading">Loading visualization...</div>}>
+              <PlotBuilder
+                initialData={vizData}
+                initialChartType="sky_coverage"
+                onClose={() => setVizData(null)}
+              />
+            </Suspense>
+          </div>
+        </div>
       )}
     </div>
   );
