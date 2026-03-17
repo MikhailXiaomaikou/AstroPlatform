@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 
 interface Props {
@@ -7,13 +7,40 @@ interface Props {
   onClose?: () => void;
 }
 
-const CHART_TYPES: Record<string, string> = {
-  sky_coverage: "Sky Coverage (RA vs Dec)",
-  redshift_histogram: "Redshift Histogram",
-  magnitude_histogram: "Magnitude Histogram",
-  ra_dec_redshift: "RA vs Dec (colored by z)",
-  scatter_custom: "Custom Scatter",
+/* ── Publication-quality style ── */
+const FONT = "Times New Roman, STIXGeneral, serif";
+const AXIS_STYLE = {
+  gridcolor: "rgba(200,200,200,0.3)",
+  gridwidth: 1,
+  zerolinecolor: "rgba(255,255,255,0.2)",
+  linecolor: "rgba(255,255,255,0.5)",
+  linewidth: 1.5,
+  mirror: true,
+  ticks: "outside" as const,
+  ticklen: 5,
+  tickwidth: 1.5,
+  tickcolor: "rgba(255,255,255,0.5)",
+  tickfont: { family: FONT, size: 13, color: "rgba(255,255,255,0.85)" },
+  title: { font: { family: FONT, size: 15, color: "rgba(255,255,255,0.95)" } },
 };
+
+const BASE_LAYOUT: Record<string, unknown> = {
+  paper_bgcolor: "rgba(20, 20, 24, 1)",
+  plot_bgcolor: "rgba(30, 30, 36, 1)",
+  font: { family: FONT, color: "rgba(255,255,255,0.9)", size: 13 },
+  margin: { l: 75, r: 20, t: 55, b: 65 },
+  autosize: true,
+  showlegend: false,
+};
+
+function makeLayout(overrides: Record<string, unknown>) {
+  return {
+    ...(BASE_LAYOUT as any),
+    xaxis: { ...AXIS_STYLE, ...(overrides.xaxis as any || {}) },
+    yaxis: { ...AXIS_STYLE, ...(overrides.yaxis as any || {}) },
+    ...overrides,
+  };
+}
 
 function buildPlotData(
   chartType: string,
@@ -25,104 +52,128 @@ function buildPlotData(
   const redshift = (data.redshift || []) as number[];
   const magnitude = (data.magnitude || []) as number[];
 
-  const darkLayout: Record<string, unknown> = {
-    paper_bgcolor: "rgba(28, 28, 30, 1)",
-    plot_bgcolor: "rgba(44, 44, 46, 1)",
-    font: { color: "rgba(255, 255, 255, 0.85)", family: "system-ui" },
-    xaxis: { gridcolor: "rgba(255,255,255,0.06)", zerolinecolor: "rgba(255,255,255,0.1)" },
-    yaxis: { gridcolor: "rgba(255,255,255,0.06)", zerolinecolor: "rgba(255,255,255,0.1)" },
-    margin: { l: 60, r: 30, t: 50, b: 50 },
-    autosize: true,
-  };
-
   if (chartType === "sky_coverage") {
+    const hasZ = redshift.length === ra.length && redshift.length > 0;
     return {
       data: [{
         type: "scattergl",
         mode: "markers",
-        x: ra,
-        y: dec,
-        text: names,
+        x: ra, y: dec, text: names,
         marker: {
-          size: 5,
-          color: redshift.length === ra.length ? redshift : "#38bdf8",
+          size: 4,
+          color: hasZ ? redshift : "rgba(56,189,248,0.7)",
           colorscale: "Viridis",
-          showscale: redshift.length === ra.length,
-          colorbar: redshift.length === ra.length ? { title: "Redshift" } : undefined,
+          showscale: hasZ,
+          colorbar: hasZ ? {
+            title: { text: "Redshift (z)", font: { family: FONT, size: 13 } },
+            tickfont: { family: FONT, size: 11 },
+            thickness: 15, len: 0.8,
+          } : undefined,
+          line: { width: 0.3, color: "rgba(255,255,255,0.3)" },
         },
-        hovertemplate: "%{text}<br>RA: %{x:.4f}°<br>Dec: %{y:.4f}°<extra></extra>",
+        hovertemplate: "<b>%{text}</b><br>\u03b1 = %{x:.5f}\u00b0<br>\u03b4 = %{y:.5f}\u00b0<extra></extra>",
       }],
-      layout: {
-        ...(darkLayout as any),
-        title: `Sky Coverage (${ra.length} objects)`,
-        xaxis: { ...(darkLayout.xaxis as any), title: "RA (deg)", autorange: "reversed" },
-        yaxis: { ...(darkLayout.yaxis as any), title: "Dec (deg)" },
-      },
+      layout: makeLayout({
+        title: { text: `Sky Distribution (N = ${ra.length})`, font: { family: FONT, size: 16 } },
+        xaxis: { ...AXIS_STYLE, title: { text: "Right Ascension \u03b1 (deg)", font: { family: FONT, size: 15 } }, autorange: "reversed" },
+        yaxis: { ...AXIS_STYLE, title: { text: "Declination \u03b4 (deg)", font: { family: FONT, size: 15 } } },
+      }),
     };
   }
 
   if (chartType === "redshift_histogram") {
+    if (redshift.length === 0) {
+      return { data: [], layout: makeLayout({ title: { text: "No redshift data available" } }) };
+    }
+    const zMin = Math.min(...redshift);
+    const zMax = Math.max(...redshift);
     return {
       data: [{
         type: "histogram",
         x: redshift,
-        marker: { color: "#38bdf8" },
-        nbinsx: Math.min(50, Math.max(10, Math.ceil(redshift.length / 5))),
+        marker: { color: "rgba(56,189,248,0.75)", line: { color: "rgba(56,189,248,1)", width: 1 } },
+        nbinsx: Math.min(40, Math.max(10, Math.ceil(redshift.length / 3))),
       }],
-      layout: {
-        ...(darkLayout as any),
-        title: `Redshift Distribution (${redshift.length} objects)`,
-        xaxis: { ...(darkLayout.xaxis as any), title: "Redshift (z)" },
-        yaxis: { ...(darkLayout.yaxis as any), title: "Count" },
-      },
+      layout: makeLayout({
+        title: { text: `Redshift Distribution (N = ${redshift.length})`, font: { family: FONT, size: 16 } },
+        xaxis: { ...AXIS_STYLE, title: { text: "Redshift (z)", font: { family: FONT, size: 15 } }, range: [zMin - 0.1, zMax + 0.1] },
+        yaxis: { ...AXIS_STYLE, title: { text: "Number of Objects", font: { family: FONT, size: 15 } } },
+        bargap: 0.05,
+      }),
     };
   }
 
   if (chartType === "magnitude_histogram") {
+    if (magnitude.length === 0) {
+      return { data: [], layout: makeLayout({ title: { text: "No magnitude data available" } }) };
+    }
     return {
       data: [{
         type: "histogram",
         x: magnitude,
-        marker: { color: "#f472b6" },
-        nbinsx: Math.min(50, Math.max(10, Math.ceil(magnitude.length / 5))),
+        marker: { color: "rgba(244,114,182,0.75)", line: { color: "rgba(244,114,182,1)", width: 1 } },
+        nbinsx: Math.min(40, Math.max(10, Math.ceil(magnitude.length / 3))),
       }],
-      layout: {
-        ...(darkLayout as any),
-        title: `Magnitude Distribution (${magnitude.length} objects)`,
-        xaxis: { ...(darkLayout.xaxis as any), title: "Magnitude" },
-        yaxis: { ...(darkLayout.yaxis as any), title: "Count" },
-      },
+      layout: makeLayout({
+        title: { text: `Magnitude Distribution (N = ${magnitude.length})`, font: { family: FONT, size: 16 } },
+        xaxis: { ...AXIS_STYLE, title: { text: "Apparent Magnitude (mag)", font: { family: FONT, size: 15 } } },
+        yaxis: { ...AXIS_STYLE, title: { text: "Number of Objects", font: { family: FONT, size: 15 } } },
+        bargap: 0.05,
+      }),
     };
   }
 
   if (chartType === "ra_dec_redshift") {
     const minLen = Math.min(ra.length, dec.length, redshift.length);
+    if (minLen === 0) {
+      return { data: [], layout: makeLayout({ title: { text: "Insufficient data for this plot" } }) };
+    }
     return {
       data: [{
         type: "scattergl",
         mode: "markers",
-        x: ra.slice(0, minLen),
-        y: dec.slice(0, minLen),
-        text: names.slice(0, minLen),
+        x: ra.slice(0, minLen), y: dec.slice(0, minLen), text: names.slice(0, minLen),
         marker: {
-          size: 6,
+          size: 5,
           color: redshift.slice(0, minLen),
           colorscale: "Portland",
           showscale: true,
-          colorbar: { title: "z" },
+          colorbar: {
+            title: { text: "z", font: { family: FONT, size: 13 } },
+            tickfont: { family: FONT, size: 11 },
+            thickness: 15, len: 0.8,
+          },
+          line: { width: 0.3, color: "rgba(255,255,255,0.2)" },
         },
-        hovertemplate: "%{text}<br>RA: %{x:.4f}°<br>Dec: %{y:.4f}°<br>z: %{marker.color:.4f}<extra></extra>",
+        hovertemplate: "<b>%{text}</b><br>\u03b1 = %{x:.5f}\u00b0<br>\u03b4 = %{y:.5f}\u00b0<br>z = %{marker.color:.4f}<extra></extra>",
       }],
-      layout: {
-        ...(darkLayout as any),
-        title: `RA vs Dec colored by Redshift (${minLen} objects)`,
-        xaxis: { ...(darkLayout.xaxis as any), title: "RA (deg)", autorange: "reversed" },
-        yaxis: { ...(darkLayout.yaxis as any), title: "Dec (deg)" },
-      },
+      layout: makeLayout({
+        title: { text: `Sky Position Colored by Redshift (N = ${minLen})`, font: { family: FONT, size: 16 } },
+        xaxis: { ...AXIS_STYLE, title: { text: "Right Ascension \u03b1 (deg)", font: { family: FONT, size: 15 } }, autorange: "reversed" },
+        yaxis: { ...AXIS_STYLE, title: { text: "Declination \u03b4 (deg)", font: { family: FONT, size: 15 } } },
+      }),
     };
   }
 
-  // Default: scatter of first two numeric arrays
+  if (chartType === "redshift_ra" && redshift.length > 0) {
+    const minLen = Math.min(ra.length, redshift.length);
+    return {
+      data: [{
+        type: "scattergl",
+        mode: "markers",
+        x: ra.slice(0, minLen), y: redshift.slice(0, minLen), text: names.slice(0, minLen),
+        marker: { size: 4, color: "rgba(52,211,153,0.7)", line: { width: 0.3, color: "rgba(255,255,255,0.2)" } },
+        hovertemplate: "<b>%{text}</b><br>\u03b1 = %{x:.5f}\u00b0<br>z = %{y:.4f}<extra></extra>",
+      }],
+      layout: makeLayout({
+        title: { text: `Redshift vs Right Ascension (N = ${minLen})`, font: { family: FONT, size: 16 } },
+        xaxis: { ...AXIS_STYLE, title: { text: "Right Ascension \u03b1 (deg)", font: { family: FONT, size: 15 } } },
+        yaxis: { ...AXIS_STYLE, title: { text: "Redshift (z)", font: { family: FONT, size: 15 } } },
+      }),
+    };
+  }
+
+  // Fallback: scatter of first two numeric arrays
   const numericKeys = Object.keys(data).filter(
     (k) => Array.isArray(data[k]) && (data[k] as unknown[]).length > 0 && typeof (data[k] as unknown[])[0] === "number"
   );
@@ -130,33 +181,51 @@ function buildPlotData(
   const yKey = numericKeys[1] || "dec";
   const xArr = (data[xKey] || []) as number[];
   const yArr = (data[yKey] || []) as number[];
-
   return {
     data: [{
-      type: "scattergl",
-      mode: "markers",
-      x: xArr,
-      y: yArr,
-      text: names,
-      marker: { size: 5, color: "#34d399" },
+      type: "scattergl", mode: "markers",
+      x: xArr, y: yArr, text: names,
+      marker: { size: 4, color: "rgba(52,211,153,0.7)" },
     }],
-    layout: {
-      ...(darkLayout as any),
-      title: `${xKey} vs ${yKey}`,
-      xaxis: { ...(darkLayout.xaxis as any), title: xKey },
-      yaxis: { ...(darkLayout.yaxis as any), title: yKey },
-    },
+    layout: makeLayout({
+      title: { text: `${xKey} vs ${yKey} (N = ${Math.min(xArr.length, yArr.length)})`, font: { family: FONT, size: 16 } },
+      xaxis: { ...AXIS_STYLE, title: { text: xKey } },
+      yaxis: { ...AXIS_STYLE, title: { text: yKey } },
+    }),
   };
 }
 
+const CHART_TYPES: Record<string, string> = {
+  sky_coverage: "Sky Distribution (\u03b1 vs \u03b4)",
+  redshift_histogram: "Redshift Distribution",
+  magnitude_histogram: "Magnitude Distribution",
+  ra_dec_redshift: "Sky Position (colored by z)",
+  redshift_ra: "Redshift vs RA",
+  scatter_custom: "Custom Scatter",
+};
+
 export default function PlotBuilder({ initialData, initialChartType, onClose }: Props) {
   const [chartType, setChartType] = useState(initialChartType || "sky_coverage");
-  const [plotResult, setPlotResult] = useState<{ data: Record<string, unknown>[]; layout: Record<string, unknown> } | null>(null);
 
-  useEffect(() => {
-    if (initialData) {
-      setPlotResult(buildPlotData(chartType, initialData));
+  // Filter chart types based on available data
+  const availableCharts = useMemo(() => {
+    if (!initialData) return CHART_TYPES;
+    const z = (initialData.redshift || []) as unknown[];
+    const mag = (initialData.magnitude || []) as unknown[];
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(CHART_TYPES)) {
+      if (k === "redshift_histogram" && z.length === 0) continue;
+      if (k === "magnitude_histogram" && mag.length === 0) continue;
+      if (k === "ra_dec_redshift" && z.length === 0) continue;
+      if (k === "redshift_ra" && z.length === 0) continue;
+      out[k] = v;
     }
+    return out;
+  }, [initialData]);
+
+  const plotResult = useMemo(() => {
+    if (!initialData) return null;
+    return buildPlotData(chartType, initialData);
   }, [chartType, initialData]);
 
   return (
@@ -164,12 +233,8 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
       <div className="plot-builder-header">
         <h3>Interactive Visualization</h3>
         <div className="plot-builder-controls">
-          <select
-            value={chartType}
-            onChange={(e) => setChartType(e.target.value)}
-            className="image-select"
-          >
-            {Object.entries(CHART_TYPES).map(([key, label]) => (
+          <select value={chartType} onChange={(e) => setChartType(e.target.value)} className="image-select">
+            {Object.entries(availableCharts).map(([key, label]) => (
               <option key={key} value={key}>{label}</option>
             ))}
           </select>
@@ -179,26 +244,23 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
         </div>
       </div>
 
-      {plotResult ? (
+      {plotResult && plotResult.data.length > 0 ? (
         <Plot
-          data={plotResult.data}
-          layout={plotResult.layout}
+          data={plotResult.data as any}
+          layout={plotResult.layout as any}
           config={{
             displayModeBar: true,
             displaylogo: false,
             modeBarButtonsToRemove: ["lasso2d", "select2d"],
-            toImageButtonOptions: {
-              format: "png",
-              filename: "astro_plot",
-              width: 1200,
-              height: 800,
-            },
+            toImageButtonOptions: { format: "png", filename: "astro_plot", width: 1200, height: 800, scale: 2 },
           }}
-          style={{ width: "100%", height: "500px" }}
+          style={{ width: "100%", height: "550px" }}
           className="plot-container"
         />
       ) : (
-        <div className="plot-empty">No data to visualize</div>
+        <div className="plot-empty">
+          {plotResult ? "No data available for this chart type" : "No data to visualize"}
+        </div>
       )}
     </div>
   );
