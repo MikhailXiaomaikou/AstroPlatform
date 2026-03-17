@@ -101,57 +101,160 @@ function ActionCard({
   );
 }
 
+function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  if (!data || data.length === 0) {
+    return (
+      <div className="chat-action-result">
+        <p className="chat-result-empty">No results found.</p>
+      </div>
+    );
+  }
+
+  const displayed = data.slice(0, 50);
+  const allSelected = displayed.length > 0 && displayed.every((_, i) => selected.has(i));
+  const someSelected = displayed.some((_, i) => selected.has(i));
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(displayed.map((_, i) => i)));
+    }
+  }
+
+  function toggleOne(i: number) {
+    const next = new Set(selected);
+    if (next.has(i)) next.delete(i);
+    else next.add(i);
+    setSelected(next);
+  }
+
+  function getSelected() {
+    return displayed.filter((_, i) => selected.has(i));
+  }
+
+  function handleDownload() {
+    const rows = getSelected();
+    if (rows.length === 0) return;
+    const header = "source,name,ra,dec,type,magnitude,redshift";
+    const csv = [
+      header,
+      ...rows.map((r) =>
+        [
+          r.source,
+          `"${String(r.name || "").replace(/"/g, '""')}"`,
+          r.ra,
+          r.dec,
+          r.object_type || "",
+          r.magnitude ?? "",
+          r.redshift ?? "",
+        ].join(",")
+      ),
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `astro_chat_results_${rows.length}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleVisualize() {
+    const rows = getSelected();
+    if (rows.length === 0) return;
+    const vizData = {
+      ra: rows.map((r) => r.ra),
+      dec: rows.map((r) => r.dec),
+      magnitude: rows.filter((r) => r.magnitude != null).map((r) => r.magnitude),
+      redshift: rows.filter((r) => r.redshift != null).map((r) => r.redshift),
+      names: rows.map((r) => r.name),
+      sources: rows.map((r) => r.source),
+    };
+    // Open in new tab with data in sessionStorage
+    sessionStorage.setItem("astro_viz_data", JSON.stringify(vizData));
+    window.open("/?viz=1", "_blank");
+  }
+
+  return (
+    <div className="chat-action-result">
+      {selected.size > 0 && (
+        <div className="chat-result-actions">
+          <span className="chat-result-count">{selected.size} selected</span>
+          <button className="btn-chat-action" onClick={handleDownload}>
+            Download CSV
+          </button>
+          <button className="btn-chat-action" onClick={handleVisualize}>
+            Visualize
+          </button>
+          <button className="btn-chat-action" onClick={() => setSelected(new Set())}>
+            Clear
+          </button>
+        </div>
+      )}
+      <table className="chat-result-table">
+        <thead>
+          <tr>
+            <th className="th-check">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
+                onChange={toggleAll}
+                className="row-checkbox"
+              />
+            </th>
+            <th>Source</th>
+            <th>Name</th>
+            <th>RA</th>
+            <th>Dec</th>
+            <th>Type</th>
+            <th>Mag</th>
+          </tr>
+        </thead>
+        <tbody>
+          {displayed.map((row, i) => (
+            <tr key={i} className={selected.has(i) ? "row-selected" : ""}>
+              <td className="td-check">
+                <input
+                  type="checkbox"
+                  checked={selected.has(i)}
+                  onChange={() => toggleOne(i)}
+                  className="row-checkbox"
+                />
+              </td>
+              <td>
+                <span className="source-chip">{row.source as string}</span>
+              </td>
+              <td>{row.name as string}</td>
+              <td>{(row.ra as number)?.toFixed(4)}</td>
+              <td>{(row.dec as number)?.toFixed(4)}</td>
+              <td>{(row.object_type as string) || "—"}</td>
+              <td>
+                {row.magnitude != null
+                  ? (row.magnitude as number).toFixed(2)
+                  : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {data.length > 50 && (
+        <p className="chat-result-more">
+          Showing 50 of {data.length} results
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ActionResult({ result }: { result: Record<string, unknown> }) {
   const type = result.type as string;
 
   if (type === "search_results") {
-    const data = result.data as Array<Record<string, unknown>>;
-    if (!data || data.length === 0) {
-      return (
-        <div className="chat-action-result">
-          <p className="chat-result-empty">No results found.</p>
-        </div>
-      );
-    }
-    return (
-      <div className="chat-action-result">
-        <table className="chat-result-table">
-          <thead>
-            <tr>
-              <th>Source</th>
-              <th>Name</th>
-              <th>RA</th>
-              <th>Dec</th>
-              <th>Type</th>
-              <th>Mag</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.slice(0, 20).map((row, i) => (
-              <tr key={i}>
-                <td>
-                  <span className="source-chip">{row.source as string}</span>
-                </td>
-                <td>{row.name as string}</td>
-                <td>{(row.ra as number)?.toFixed(4)}</td>
-                <td>{(row.dec as number)?.toFixed(4)}</td>
-                <td>{(row.object_type as string) || "—"}</td>
-                <td>
-                  {row.magnitude != null
-                    ? (row.magnitude as number).toFixed(2)
-                    : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {data.length > 20 && (
-          <p className="chat-result-more">
-            ...and {data.length - 20} more results
-          </p>
-        )}
-      </div>
-    );
+    return <SearchResultTable data={result.data as Array<Record<string, unknown>>} />;
   }
 
   if (type === "adql_results") {

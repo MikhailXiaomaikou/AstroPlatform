@@ -3508,6 +3508,23 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+.chat-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0;
+  margin-bottom: 0.35rem;
+  border-bottom: 1px solid var(--color-separator);
+  flex-wrap: wrap;
+}
+
+.chat-result-count {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  margin-right: 0.25rem;
+}
+
 .chat-result-empty {
   font-size: 0.8rem;
   color: var(--color-text-secondary);
