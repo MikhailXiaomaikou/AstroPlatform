@@ -12,12 +12,19 @@ def get_cors_origins() -> list[str]:
     env = os.getenv("ENV", "dev")
     raw = os.getenv("CORS_ORIGINS", "")
 
+    origins = []
     if raw.strip():
-        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+        origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
 
-    # Default for dev mode
-    if env == "dev":
-        return ["http://localhost:5173", "http://127.0.0.1:5173"]
+    # Always include common origins
+    defaults = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://astro-frontend-tyfr.onrender.com",
+        "https://astroplatform.pages.dev",
+    ]
+    for d in defaults:
+        if d not in origins:
+            origins.append(d)
 
-    # In production with no CORS_ORIGINS set, return empty (no origins allowed)
-    return []
+    return origins if origins else ["*"]
