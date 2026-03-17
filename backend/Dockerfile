@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+# v2: added email-validator, relaxed versions
 RUN pip install --no-cache-dir --only-binary=:all: -r requirements.txt || \
     pip install --no-cache-dir -r requirements.txt
 
