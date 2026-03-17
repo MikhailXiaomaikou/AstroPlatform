@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, lazy, Suspense } from "react"
 import {
   sendChatMessage,
   executeChatAction,
+  getStoredApiKey,
   type ChatMessage,
   type ChatAction,
 } from "../../api/client";
@@ -212,7 +213,53 @@ function ActionResult({ result }: { result: Record<string, unknown> }) {
   );
 }
 
+function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
+  const [keyInput, setKeyInput] = useState("");
+
+  function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    const key = keyInput.trim();
+    if (!key) return;
+    try {
+      const keys = JSON.parse(localStorage.getItem("astro_api_keys") || "{}");
+      keys.anthropic = key;
+      localStorage.setItem("astro_api_keys", JSON.stringify(keys));
+    } catch {
+      localStorage.setItem("astro_api_keys", JSON.stringify({ anthropic: key }));
+    }
+    onSaved();
+  }
+
+  return (
+    <div className="chat-apikey-prompt">
+      <h3>Configure API Key</h3>
+      <p>To use the AI assistant, enter your Anthropic API key.</p>
+      <p className="chat-apikey-hint">
+        Get one at{" "}
+        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">
+          console.anthropic.com
+        </a>
+        {" "}(new accounts get $5 free credit)
+      </p>
+      <form className="chat-apikey-form" onSubmit={handleSave}>
+        <input
+          type="text"
+          value={keyInput}
+          onChange={(e) => setKeyInput(e.target.value)}
+          placeholder="sk-ant-..."
+          className="chat-apikey-input"
+          autoComplete="off"
+        />
+        <button type="submit" className="btn-primary" disabled={!keyInput.trim()}>
+          Save & Start
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export default function ChatPage() {
+  const [hasKey, setHasKey] = useState(() => !!getStoredApiKey("anthropic"));
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -345,7 +392,10 @@ export default function ChatPage() {
       </div>
 
       <div className="chat-messages">
-        {messages.length === 0 && !loading && (
+        {!hasKey && (
+          <ApiKeyPrompt onSaved={() => setHasKey(true)} />
+        )}
+        {hasKey && messages.length === 0 && !loading && (
           <div className="chat-empty">
             <div className="chat-empty-icon">&#x2728;</div>
             <h3>How can I help with your research?</h3>
