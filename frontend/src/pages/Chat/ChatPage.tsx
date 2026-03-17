@@ -506,12 +506,21 @@ export default function ChatPage() {
 
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err: unknown) {
-      const errorDetail =
-        err instanceof Error ? err.message : "Unknown error";
+      let errorDetail = "Unknown error";
+      if (err && typeof err === "object" && "response" in err) {
+        const resp = (err as { response?: { data?: { detail?: string }; status?: number } }).response;
+        errorDetail = resp?.data?.detail || `Request failed (${resp?.status})`;
+        // If auth error, prompt to fix key
+        if (resp?.status === 401) {
+          setHasKey(false);
+        }
+      } else if (err instanceof Error) {
+        errorDetail = err.message;
+      }
       const errorMsg: DisplayMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: `Sorry, I encountered an error: ${errorDetail}. Please try again.`,
+        content: `Sorry, I encountered an error: ${errorDetail}`,
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {

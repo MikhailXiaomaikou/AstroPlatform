@@ -140,10 +140,12 @@ async def chat_message(
             "content": msg.content,
         })
 
-    # Add context if available
+    # Add context if available (strip sensitive fields)
     system = SYSTEM_PROMPT
     if req.context:
-        system += f"\n\nCurrent user context:\n{json.dumps(req.context, indent=2)}"
+        safe_context = {k: v for k, v in req.context.items() if k != "api_key"}
+        if safe_context:
+            system += f"\n\nCurrent user context:\n{json.dumps(safe_context, indent=2)}"
     if user:
         system += f"\nUser email: {user.email}, Subscription: {user.subscription_tier}"
 
@@ -161,6 +163,10 @@ async def chat_message(
 
         return ChatResponse(reply=clean_reply, actions=actions)
 
+    except anthropic.AuthenticationError:
+        raise HTTPException(status_code=401, detail="Invalid API key. Please check your Anthropic API key in Settings.")
+    except anthropic.RateLimitError:
+        raise HTTPException(status_code=429, detail="API rate limit exceeded. Please wait a moment and try again.")
     except anthropic.APIError as e:
         logger.error("Claude API error: %s", e)
         raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
