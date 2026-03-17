@@ -51,7 +51,7 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     getWorkspace()
-      .then((data) => setFiles(data as WorkspaceFile[]))
+      .then((data) => setFiles(data as unknown as WorkspaceFile[]))
       .catch(() => {})
       .finally(() => setLoading(false));
     sampStatus().then((s) => setSampConnected(s.connected)).catch(() => {});
