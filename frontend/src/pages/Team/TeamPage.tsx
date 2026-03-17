@@ -23,12 +23,10 @@ import {
   type FriendItem,
   type SearchHistoryItem,
 } from "../../api/client";
-import { useAuth } from "../../context/AuthContext";
 
 type Tab = "friends" | "members" | "pipelines" | "datasets" | "history";
 
 export default function TeamPage() {
-  const { user } = useAuth();
   const [tab, setTab] = useState<Tab>("friends");
 
   // Friends state

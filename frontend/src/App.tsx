@@ -1,6 +1,6 @@
 import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
-import { AuthProvider, useAuth } from "./context/AuthContext";
+import { AuthProvider } from "./context/AuthContext";
 import "./App.css";
 
 class ErrorBoundary extends Component<
@@ -57,8 +57,6 @@ const ChatPage = lazy(() => import("./pages/Chat/ChatPage"));
 const SettingsPage = lazy(() => import("./pages/Settings/SettingsPage"));
 
 function NavBar() {
-  const { user, logout } = useAuth();
-
   return (
     <nav className="top-nav">
       <span className="logo">Astro Platform</span>
