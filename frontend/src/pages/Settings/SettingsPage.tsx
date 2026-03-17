@@ -135,7 +135,7 @@ export default function SettingsPage() {
                 ))}
               </select>
               <input
-                type="password"
+                type="text"
                 placeholder={
                   selectedProvider && providers[selectedProvider]
                     ? `${providers[selectedProvider].prefix}...`
