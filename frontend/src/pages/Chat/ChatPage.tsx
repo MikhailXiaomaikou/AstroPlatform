@@ -32,6 +32,7 @@ function ActionCard({
   const labels: Record<string, string> = {
     search: "Search databases",
     adql: "Run ADQL query",
+    arxiv: "Extract arXiv tables",
     run_pipeline: "Run pipeline",
     explain: "Explanation",
     plot: "Interactive Plot",
@@ -39,6 +40,7 @@ function ActionCard({
 
   const icons: Record<string, string> = {
     search: "🔍",
+    arxiv: "📄",
     adql: "📊",
     run_pipeline: "⚙️",
     explain: "📖",
@@ -87,6 +89,9 @@ function ActionCard({
         {action.action === "plot" && (
           <span>Chart: {(action.chart_type as string) || "auto"}</span>
         )}
+        {action.action === "arxiv" && (
+          <span>Paper: {action.arxiv_id as string}</span>
+        )}
       </div>
       {action.action === "plot" && (
         <Suspense fallback={<div className="fits-loading">Loading plot...</div>}>
@@ -112,22 +117,49 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
     );
   }
 
-  const displayed = data.slice(0, 50);
+  // Deduplicate by name+source
+  const seen = new Set<string>();
+  const unique = data.filter((row) => {
+    const key = `${row.source}-${row.name}-${(row.ra as number)?.toFixed(3)}-${(row.dec as number)?.toFixed(3)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const displayed = unique.slice(0, 50);
+
+  // Dynamically discover extra columns that have data
+  // Fields already shown as dedicated columns
+  const extraColSet = new Set<string>();
+  for (const row of displayed) {
+    const extra = row.extra as Record<string, unknown> | undefined;
+    if (extra) {
+      for (const k of Object.keys(extra)) {
+        if (extra[k] != null) extraColSet.add(k);
+      }
+    }
+  }
+  // Friendly names for common SIMBAD columns
+  const colLabels: Record<string, string> = {
+    sp_type: "Spectral Type", morph_type: "Morphology", plx_value: "Parallax (mas)",
+    pmra: "PM RA (mas/yr)", pmdec: "PM Dec (mas/yr)", rvz_radvel: "Radial Vel (km/s)",
+    rvz_type: "Vel Type", galdim_majaxis: "Major Axis (')", galdim_minaxis: "Minor Axis (')",
+    galdim_angle: "PA (°)", Fe_H_Fe_H: "[Fe/H]",
+    flux_B: "B mag", flux_V: "V mag", flux_R: "R mag", flux_I: "I mag",
+    flux_J: "J mag", flux_H: "H mag", flux_K: "K mag",
+  };
+  const extraCols = Array.from(extraColSet).sort();
+
   const allSelected = displayed.length > 0 && displayed.every((_, i) => selected.has(i));
   const someSelected = displayed.some((_, i) => selected.has(i));
 
   function toggleAll() {
-    if (allSelected) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(displayed.map((_, i) => i)));
-    }
+    setSelected(allSelected ? new Set() : new Set(displayed.map((_, i) => i)));
   }
 
   function toggleOne(i: number) {
     const next = new Set(selected);
-    if (next.has(i)) next.delete(i);
-    else next.add(i);
+    if (next.has(i)) next.delete(i); else next.add(i);
     setSelected(next);
   }
 
@@ -135,29 +167,34 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
     return displayed.filter((_, i) => selected.has(i));
   }
 
+  function fmt(v: unknown): string {
+    if (v == null) return "—";
+    if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(4);
+    return String(v);
+  }
+
   function handleDownload() {
     const rows = getSelected();
     if (rows.length === 0) return;
-    const header = "source,name,ra,dec,type,magnitude,redshift";
+    const cols = ["source", "name", "ra", "dec", "object_type", "magnitude", "redshift", ...extraCols];
+    const header = cols.join(",");
     const csv = [
       header,
-      ...rows.map((r) =>
-        [
-          r.source,
-          `"${String(r.name || "").replace(/"/g, '""')}"`,
-          r.ra,
-          r.dec,
-          r.object_type || "",
-          r.magnitude ?? "",
-          r.redshift ?? "",
-        ].join(",")
-      ),
+      ...rows.map((r) => {
+        const extra = (r.extra || {}) as Record<string, unknown>;
+        return cols.map((c) => {
+          const val = extraCols.includes(c) ? extra[c] : r[c];
+          if (val == null) return "";
+          const s = String(val);
+          return s.includes(",") ? `"${s.replace(/"/g, '""')}"` : s;
+        }).join(",");
+      }),
     ].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `astro_chat_results_${rows.length}.csv`;
+    a.download = `astro_results_${rows.length}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -165,86 +202,84 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   function handleVisualize() {
     const rows = getSelected();
     if (rows.length === 0) return;
-    const vizData = {
+    const vizData: Record<string, unknown> = {
       ra: rows.map((r) => r.ra),
       dec: rows.map((r) => r.dec),
-      magnitude: rows.filter((r) => r.magnitude != null).map((r) => r.magnitude),
-      redshift: rows.filter((r) => r.redshift != null).map((r) => r.redshift),
       names: rows.map((r) => r.name),
       sources: rows.map((r) => r.source),
     };
-    // Open in new tab with data in sessionStorage
+    // Add numeric extra columns
+    for (const col of extraCols) {
+      const vals = rows.map((r) => ((r.extra || {}) as Record<string, unknown>)[col]).filter((v) => typeof v === "number");
+      if (vals.length > 0) vizData[col] = vals;
+    }
+    if (rows.some((r) => r.magnitude != null)) vizData.magnitude = rows.filter((r) => r.magnitude != null).map((r) => r.magnitude);
+    if (rows.some((r) => r.redshift != null)) vizData.redshift = rows.filter((r) => r.redshift != null).map((r) => r.redshift);
     sessionStorage.setItem("astro_viz_data", JSON.stringify(vizData));
     window.open("/?viz=1", "_blank");
   }
 
   return (
     <div className="chat-action-result">
+      {unique.length < data.length && (
+        <p className="chat-result-dedup">{data.length - unique.length} duplicates removed</p>
+      )}
       {selected.size > 0 && (
         <div className="chat-result-actions">
           <span className="chat-result-count">{selected.size} selected</span>
-          <button className="btn-chat-action" onClick={handleDownload}>
-            Download CSV
-          </button>
-          <button className="btn-chat-action" onClick={handleVisualize}>
-            Visualize
-          </button>
-          <button className="btn-chat-action" onClick={() => setSelected(new Set())}>
-            Clear
-          </button>
+          <button className="btn-chat-action" onClick={handleDownload}>Download CSV</button>
+          <button className="btn-chat-action" onClick={handleVisualize}>Visualize</button>
+          <button className="btn-chat-action" onClick={() => setSelected(new Set())}>Clear</button>
         </div>
       )}
-      <table className="chat-result-table">
-        <thead>
-          <tr>
-            <th className="th-check">
-              <input
-                type="checkbox"
-                checked={allSelected}
-                ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
-                onChange={toggleAll}
-                className="row-checkbox"
-              />
-            </th>
-            <th>Source</th>
-            <th>Name</th>
-            <th>RA</th>
-            <th>Dec</th>
-            <th>Type</th>
-            <th>Mag</th>
-          </tr>
-        </thead>
-        <tbody>
-          {displayed.map((row, i) => (
-            <tr key={i} className={selected.has(i) ? "row-selected" : ""}>
-              <td className="td-check">
-                <input
-                  type="checkbox"
-                  checked={selected.has(i)}
-                  onChange={() => toggleOne(i)}
-                  className="row-checkbox"
-                />
-              </td>
-              <td>
-                <span className="source-chip">{row.source as string}</span>
-              </td>
-              <td>{row.name as string}</td>
-              <td>{(row.ra as number)?.toFixed(4)}</td>
-              <td>{(row.dec as number)?.toFixed(4)}</td>
-              <td>{(row.object_type as string) || "—"}</td>
-              <td>
-                {row.magnitude != null
-                  ? (row.magnitude as number).toFixed(2)
-                  : "—"}
-              </td>
+      <div className="chat-result-table-scroll">
+        <table className="chat-result-table">
+          <thead>
+            <tr>
+              <th className="th-check">
+                <input type="checkbox" checked={allSelected}
+                  ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
+                  onChange={toggleAll} className="row-checkbox" />
+              </th>
+              <th>Source</th>
+              <th>Name</th>
+              <th>RA</th>
+              <th>Dec</th>
+              <th>Type</th>
+              <th>Mag</th>
+              <th>z</th>
+              {extraCols.map((c) => (
+                <th key={c} title={c}>{colLabels[c] || c}</th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {data.length > 50 && (
-        <p className="chat-result-more">
-          Showing 50 of {data.length} results
-        </p>
+          </thead>
+          <tbody>
+            {displayed.map((row, i) => {
+              const extra = (row.extra || {}) as Record<string, unknown>;
+              return (
+                <tr key={i} className={selected.has(i) ? "row-selected" : ""}>
+                  <td className="td-check">
+                    <input type="checkbox" checked={selected.has(i)}
+                      onChange={() => toggleOne(i)} className="row-checkbox" />
+                  </td>
+                  <td><span className="source-chip">{row.source as string}</span></td>
+                  <td>{row.name as string}</td>
+                  <td>{(row.ra as number)?.toFixed(5)}</td>
+                  <td>{(row.dec as number)?.toFixed(5)}</td>
+                  <td>{(row.object_type as string) || "—"}</td>
+                  <td>{row.magnitude != null ? (row.magnitude as number).toFixed(2) : "—"}</td>
+                  <td>{row.redshift != null ? (row.redshift as number).toFixed(4) : "—"}</td>
+                  {extraCols.map((c) => (
+                    <td key={c}>{fmt(extra[c])}</td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {unique.length > 50 && (
+        <p className="chat-result-more">Showing 50 of {unique.length} results</p>
       )}
     </div>
   );
@@ -305,6 +340,47 @@ function ActionResult({ result }: { result: Record<string, unknown> }) {
 
   if (type === "explanation") {
     return null;
+  }
+
+  if (type === "arxiv_tables") {
+    const d = result.data as Record<string, unknown>;
+    const tables = (d?.tables || []) as Array<{
+      name: string; columns: string[]; rows: string[][]; row_count: number;
+    }>;
+    if (tables.length === 0) {
+      return <div className="chat-action-result"><p className="chat-result-empty">No tables found.</p></div>;
+    }
+    return (
+      <div className="chat-action-result">
+        <p style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", margin: "0 0 0.5rem" }}>
+          {d?.title as string} — {tables.length} table(s) found
+        </p>
+        {tables.map((t, ti) => (
+          <div key={ti} style={{ marginBottom: "0.75rem" }}>
+            <p style={{ fontSize: "0.75rem", fontWeight: 600, margin: "0 0 0.25rem" }}>{t.name}</p>
+            <div className="chat-result-table-scroll">
+              <table className="chat-result-table">
+                <thead>
+                  <tr>
+                    {t.columns.map((c, ci) => <th key={ci}>{c}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {t.rows.slice(0, 30).map((row, ri) => (
+                    <tr key={ri}>
+                      {row.map((cell, ci) => <td key={ci}>{cell}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {t.row_count > 30 && (
+              <p className="chat-result-more">Showing 30 of {t.row_count} rows</p>
+            )}
+          </div>
+        ))}
+      </div>
+    );
   }
 
   return (

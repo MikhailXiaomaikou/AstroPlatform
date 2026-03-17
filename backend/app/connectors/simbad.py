@@ -91,7 +91,10 @@ class SIMBADConnector(BaseConnector):
 
         where = " AND ".join(conditions)
         adql = (
-            f"SELECT TOP {limit} main_id, ra, dec, otype, rvz_redshift "
+            f"SELECT TOP {limit} main_id, ra, dec, otype, rvz_redshift, "
+            f"rvz_radvel, rvz_type, sp_type, galdim_majaxis, galdim_minaxis, "
+            f"galdim_angle, morph_type, Fe_H_Fe_H, plx_value, pmra, pmdec, "
+            f"flux_B, flux_V, flux_R, flux_I, flux_J, flux_H, flux_K "
             f"FROM basic "
             f"WHERE {where} "
             f"ORDER BY rvz_redshift ASC"
@@ -226,6 +229,26 @@ class SIMBADConnector(BaseConnector):
                     except (ValueError, TypeError):
                         pass
 
+            # Collect all extra columns into extra dict
+            extra: dict = {}
+            skip = {"main_id", "MAIN_ID", "ra", "RA", "dec", "DEC", "otype", "OTYPE",
+                    "V", "FLUX_V", "flux_V", "rvz_redshift", "Z_VALUE"}
+            for col in row.colnames:
+                if col in skip:
+                    continue
+                try:
+                    val = row[col]
+                    if hasattr(val, "item"):
+                        val = val.item()  # numpy scalar to python
+                    if val is None or (isinstance(val, float) and val != val):
+                        continue
+                    # Convert masked to None
+                    if hasattr(val, "mask") or str(val) == "--":
+                        continue
+                    extra[col] = val
+                except Exception:
+                    pass
+
             objects.append(
                 AstroObject(
                     source="simbad",
@@ -236,6 +259,7 @@ class SIMBADConnector(BaseConnector):
                     object_type=obj_type,
                     magnitude=mag,
                     redshift=redshift,
+                    extra=extra,
                 )
             )
         return objects

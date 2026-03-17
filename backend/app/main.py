@@ -14,6 +14,7 @@ from app.api.data import router as data_router
 from app.api.export import router as export_router
 from app.api.health import router as health_router
 from app.api.integration import router as integration_router
+from app.api.arxiv import router as arxiv_router
 from app.api.pipeline import router as pipeline_router
 from app.api.settings import router as settings_router
 from app.api.scheduler import router as scheduler_router
@@ -68,6 +69,7 @@ app.add_middleware(
 )
 
 # Routers
+app.include_router(arxiv_router)
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(data_router)

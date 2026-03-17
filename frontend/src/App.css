@@ -3525,6 +3525,18 @@
   margin-right: 0.25rem;
 }
 
+.chat-result-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.chat-result-dedup {
+  font-size: 0.72rem;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+  margin: 0 0 0.35rem;
+}
+
 .chat-result-empty {
   font-size: 0.8rem;
   color: var(--color-text-secondary);

@@ -43,7 +43,8 @@ Available actions (return as JSON in your response within <actions>...</actions>
    - VizieR: use real catalog names from CDS, e.g. "II/246/out" (2MASS), "I/355/gaiadr3" (Gaia in VizieR). Do NOT invent catalog paths — if unsure of the exact VizieR table name, use a search action instead
    - CADC: query CAOM2 tables (caom2.Observation, caom2.Plane)
    - SIMBAD TAP: query the "basic" table (columns: main_id, ra, dec, otype, rvz_redshift)
-3. {"action": "run_pipeline", "nodes": [{"type": "LoadData", ...}, {"type": "Denoise", ...}], "input_data_id": "..."}
+3. {"action": "arxiv", "arxiv_id": "2301.12345"} — extract data tables from an arXiv paper. Accepts arXiv ID or full URL.
+4. {"action": "run_pipeline", "nodes": [{"type": "LoadData", ...}, {"type": "Denoise", ...}], "input_data_id": "..."}
 4. {"action": "explain", "topic": "..."} — just provide explanation, no platform action needed
 5. {"action": "plot", "chart_type": "hr_diagram|sed_fit|spectrum_overlay|redshift_histogram|sky_coverage|correlation_scatter|corner_plot", "data": {"x": [...], "y": [...], ...}, "params": {"title": "...", "x_label": "...", "y_label": "...", ...}}
 
@@ -290,6 +291,12 @@ async def execute_action(
         params = action.get("params", {})
         plot_json = build_chart(chart_type, data, params)
         return {"type": "plot", "data": plot_json}
+
+    elif action_type == "arxiv":
+        from app.api.arxiv import extract_arxiv_tables, ArxivTableRequest
+        arxiv_id = action.get("arxiv_id", "")
+        result = await extract_arxiv_tables(ArxivTableRequest(arxiv_id=arxiv_id))
+        return {"type": "arxiv_tables", "data": result.model_dump()}
 
     elif action_type == "run_pipeline":
         from app.api.pipeline import run_pipeline, RunRequest
