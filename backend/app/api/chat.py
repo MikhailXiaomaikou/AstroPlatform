@@ -114,9 +114,10 @@ async def chat_message(
     user: User | None = Depends(get_optional_user),
 ):
     """Send a message to the AI assistant."""
-    # Prefer user's own API key, fall back to server-wide key
+    # Priority: context api_key (from frontend localStorage) > user DB key > server env key
+    context_key = (req.context or {}).get("api_key") if req.context else None
     user_keys = (user.api_keys or {}) if user else {}
-    api_key = user_keys.get("anthropic") or (user.anthropic_api_key if user and user.anthropic_api_key else None) or ANTHROPIC_API_KEY
+    api_key = context_key or user_keys.get("anthropic") or (user.anthropic_api_key if user and user.anthropic_api_key else None) or ANTHROPIC_API_KEY
     if not api_key:
         raise HTTPException(
             status_code=503,

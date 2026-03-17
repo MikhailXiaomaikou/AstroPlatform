@@ -265,14 +265,7 @@ export default function TeamPage() {
     }
   }
 
-  if (!user) {
-    return (
-      <div className="team-page">
-        <h1>Team Collaboration</h1>
-        <p className="empty-msg">Sign in to access team features.</p>
-      </div>
-    );
-  }
+  // Beta: no login required
 
   const isTeamTier = true; // beta: all users can use team features
   const pendingReceived = friends.filter((f) => f.status === "pending" && f.direction === "received");

@@ -68,21 +68,9 @@ function NavBar() {
       <NavLink to="/adql">ADQL</NavLink>
       <NavLink to="/team">Team</NavLink>
       <NavLink to="/chat">AI Assistant</NavLink>
-      {user && <NavLink to="/settings">Settings</NavLink>}
+      <NavLink to="/settings">Settings</NavLink>
       <div className="nav-spacer" />
-      {user ? (
-        <div className="nav-user">
-          <span className="nav-email">{user.email}</span>
-          <span className="tier-badge tier-beta">beta</span>
-          <button className="btn-nav-logout" onClick={logout}>
-            Sign Out
-          </button>
-        </div>
-      ) : (
-        <NavLink to="/auth" className="btn-nav-auth">
-          Sign In
-        </NavLink>
-      )}
+      <span className="tier-badge tier-beta">beta</span>
     </nav>
   );
 }

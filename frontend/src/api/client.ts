@@ -825,13 +825,24 @@ export interface ChatResponse {
   actions: ChatAction[];
 }
 
+export function getStoredApiKey(provider = "anthropic"): string | null {
+  try {
+    const keys = JSON.parse(localStorage.getItem("astro_api_keys") || "{}");
+    return keys[provider] || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function sendChatMessage(
   messages: ChatMessage[],
   context?: Record<string, unknown>
 ): Promise<ChatResponse> {
+  // Pass API key from localStorage if available
+  const apiKey = getStoredApiKey("anthropic");
   const { data } = await api.post<ChatResponse>("/api/chat/message", {
     messages,
-    context,
+    context: { ...context, ...(apiKey ? { api_key: apiKey } : {}) },
   });
   return data;
 }
