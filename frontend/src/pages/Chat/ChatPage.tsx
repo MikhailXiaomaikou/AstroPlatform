@@ -109,6 +109,8 @@ function ActionCard({
 function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [vizData, setVizData] = useState<Record<string, unknown> | null>(null);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 15;
 
   if (!data || data.length === 0) {
     return (
@@ -127,7 +129,8 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
     return true;
   });
 
-  const displayed = unique.slice(0, 50);
+  const totalPages = Math.ceil(unique.length / PAGE_SIZE);
+  const displayed = unique.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   // Dynamically discover extra columns that have data
   // Fields already shown as dedicated columns
@@ -151,21 +154,32 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   };
   const extraCols = Array.from(extraColSet).sort();
 
-  const allSelected = displayed.length > 0 && displayed.every((_, i) => selected.has(i));
-  const someSelected = displayed.some((_, i) => selected.has(i));
+  // Selection uses global indices into the unique array
+  const pageStart = page * PAGE_SIZE;
+  const pageIndices = displayed.map((_, i) => pageStart + i);
+  const allSelected = displayed.length > 0 && pageIndices.every((gi) => selected.has(gi));
+  const someSelected = pageIndices.some((gi) => selected.has(gi));
 
   function toggleAll() {
-    setSelected(allSelected ? new Set() : new Set(displayed.map((_, i) => i)));
+    if (allSelected) {
+      const next = new Set(selected);
+      for (const gi of pageIndices) next.delete(gi);
+      setSelected(next);
+    } else {
+      const next = new Set(selected);
+      for (const gi of pageIndices) next.add(gi);
+      setSelected(next);
+    }
   }
 
-  function toggleOne(i: number) {
+  function toggleOne(globalIdx: number) {
     const next = new Set(selected);
-    if (next.has(i)) next.delete(i); else next.add(i);
+    if (next.has(globalIdx)) next.delete(globalIdx); else next.add(globalIdx);
     setSelected(next);
   }
 
   function getSelected() {
-    return displayed.filter((_, i) => selected.has(i));
+    return unique.filter((_, i) => selected.has(i));
   }
 
   function fmt(v: unknown): string {
@@ -200,6 +214,46 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
     URL.revokeObjectURL(url);
   }
 
+  function handleDownloadVOTable() {
+    const rows = getSelected();
+    if (rows.length === 0) return;
+    const cols = ["source", "name", "ra", "dec", "object_type", "magnitude", "redshift", ...extraCols];
+    const escapeXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const numericCols = new Set(["ra", "dec", "magnitude", "redshift"]);
+    const fields = cols.map((c) => {
+      if (numericCols.has(c)) return `      <FIELD name="${escapeXml(c)}" datatype="double"/>`;
+      return `      <FIELD name="${escapeXml(c)}" datatype="char" arraysize="*"/>`;
+    }).join("\n");
+    const trs = rows.map((r) => {
+      const extra = (r.extra || {}) as Record<string, unknown>;
+      const tds = cols.map((c) => {
+        const val = extraCols.includes(c) ? extra[c] : r[c];
+        return `<TD>${val != null ? escapeXml(String(val)) : ""}</TD>`;
+      }).join("");
+      return `        <TR>${tds}</TR>`;
+    }).join("\n");
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">
+  <RESOURCE>
+    <TABLE name="results">
+${fields}
+      <DATA>
+        <TABLEDATA>
+${trs}
+        </TABLEDATA>
+      </DATA>
+    </TABLE>
+  </RESOURCE>
+</VOTABLE>`;
+    const blob = new Blob([xml], { type: "application/xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `astro_results_${rows.length}.vot`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function handleVisualize() {
     const rows = getSelected();
     if (rows.length === 0) return;
@@ -227,6 +281,7 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
         <div className="chat-result-actions">
           <span className="chat-result-count">{selected.size} selected</span>
           <button className="btn-chat-action" onClick={handleDownload}>Download CSV</button>
+          <button className="btn-chat-action" onClick={handleDownloadVOTable}>Download VOTable</button>
           <button className="btn-chat-action" onClick={handleVisualize}>Visualize</button>
           <button className="btn-chat-action" onClick={() => setSelected(new Set())}>Clear</button>
         </div>
@@ -254,12 +309,13 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
           </thead>
           <tbody>
             {displayed.map((row, i) => {
+              const globalIdx = pageStart + i;
               const extra = (row.extra || {}) as Record<string, unknown>;
               return (
-                <tr key={i} className={selected.has(i) ? "row-selected" : ""}>
+                <tr key={globalIdx} className={selected.has(globalIdx) ? "row-selected" : ""}>
                   <td className="td-check">
-                    <input type="checkbox" checked={selected.has(i)}
-                      onChange={() => toggleOne(i)} className="row-checkbox" />
+                    <input type="checkbox" checked={selected.has(globalIdx)}
+                      onChange={() => toggleOne(globalIdx)} className="row-checkbox" />
                   </td>
                   <td><span className="source-chip">{row.source as string}</span></td>
                   <td>{row.name as string}</td>
@@ -277,8 +333,12 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
           </tbody>
         </table>
       </div>
-      {unique.length > 50 && (
-        <p className="chat-result-more">Showing 50 of {unique.length} results</p>
+      {totalPages > 1 && (
+        <div className="chat-result-pagination">
+          <button className="btn-chat-action" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button>
+          <span className="chat-result-page-info">Page {page + 1} of {totalPages} ({unique.length} results)</span>
+          <button className="btn-chat-action" disabled={page >= totalPages - 1} onClick={() => setPage(page + 1)}>Next</button>
+        </div>
       )}
       {vizData && (
         <div className="viz-overlay">
@@ -449,9 +509,46 @@ function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
   );
 }
 
+interface StoredMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  actions?: ChatAction[];
+  actionResults?: [number, Record<string, unknown>][];
+}
+
+function loadChatHistory(): DisplayMessage[] {
+  try {
+    const raw = localStorage.getItem("astro_chat_history");
+    if (!raw) return [];
+    const stored = JSON.parse(raw) as StoredMessage[];
+    return stored.map((m) => ({
+      ...m,
+      actionResults: m.actionResults ? new Map(m.actionResults) : new Map(),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function saveChatHistory(messages: DisplayMessage[]) {
+  try {
+    const stored: StoredMessage[] = messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      actions: m.actions,
+      actionResults: m.actionResults ? Array.from(m.actionResults.entries()) : undefined,
+    }));
+    localStorage.setItem("astro_chat_history", JSON.stringify(stored));
+  } catch {
+    // storage full or unavailable — silently ignore
+  }
+}
+
 export default function ChatPage() {
   const [hasKey, setHasKey] = useState(() => !!getStoredApiKey("anthropic"));
-  const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [executingActions, setExecutingActions] = useState<Set<string>>(
@@ -471,6 +568,10 @@ export default function ChatPage() {
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    saveChatHistory(messages);
+  }, [messages]);
 
   const handleSend = async () => {
     const text = input.trim();
@@ -585,10 +686,25 @@ export default function ChatPage() {
   return (
     <div className="chat-page">
       <div className="chat-header">
-        <h2>AI Research Assistant</h2>
-        <p>
-          Ask about astronomical objects, build pipelines, or run ADQL queries
-        </p>
+        <div className="chat-header-row">
+          <div>
+            <h2>AI Research Assistant</h2>
+            <p>
+              Ask about astronomical objects, build pipelines, or run ADQL queries
+            </p>
+          </div>
+          {messages.length > 0 && (
+            <button
+              className="btn-secondary btn-small"
+              onClick={() => {
+                setMessages([]);
+                localStorage.removeItem("astro_chat_history");
+              }}
+            >
+              Clear Chat
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="chat-messages">

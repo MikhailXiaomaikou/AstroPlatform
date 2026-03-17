@@ -1,6 +1,7 @@
-import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from "react";
+import { Component, lazy, Suspense, useState, useEffect, type ErrorInfo, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
+import api from "./api/client";
 import "./App.css";
 
 class ErrorBoundary extends Component<
@@ -73,10 +74,49 @@ function NavBar() {
   );
 }
 
+function BackendBanner() {
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    if (sessionStorage.getItem("astro_backend_checked")) return;
+    let showTimer: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+
+    showTimer = setTimeout(() => {
+      if (!cancelled) setShow(true);
+    }, 3000);
+
+    api.get("/api/health").then(() => {
+      if (!cancelled) {
+        setShow(false);
+        sessionStorage.setItem("astro_backend_checked", "1");
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setShow(false);
+        sessionStorage.setItem("astro_backend_checked", "1");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (showTimer) clearTimeout(showTimer);
+    };
+  }, []);
+
+  if (!show) return null;
+  return (
+    <div className="backend-banner">
+      Backend is waking up, this may take ~30 seconds...
+    </div>
+  );
+}
+
 function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
+        <BackendBanner />
         <NavBar />
         <main className="main-content">
           <ErrorBoundary>

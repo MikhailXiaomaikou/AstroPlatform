@@ -3984,3 +3984,151 @@
   gap: 0.5rem;
   align-items: center;
 }
+
+/* ══════════════════════════════════════
+   Chat Header Row
+   ══════════════════════════════════════ */
+
+.chat-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.btn-small {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.78rem;
+}
+
+/* ══════════════════════════════════════
+   Pagination
+   ══════════════════════════════════════ */
+
+.chat-result-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  font-size: 0.8rem;
+}
+
+.chat-result-page-info {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+/* ══════════════════════════════════════
+   Plot Axis Range Controls
+   ══════════════════════════════════════ */
+
+.plot-axis-ranges {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.plot-range-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.plot-range-input {
+  width: 72px;
+  padding: 0.3rem 0.5rem;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text);
+  font-size: 0.8rem;
+  font-family: inherit;
+  outline: none;
+  transition: var(--transition);
+}
+
+.plot-range-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.plot-range-input:focus {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
+}
+
+/* ══════════════════════════════════════
+   Backend Banner
+   ══════════════════════════════════════ */
+
+.backend-banner {
+  background: #f0ad4e;
+  color: #333;
+  text-align: center;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  z-index: 200;
+}
+
+/* ══════════════════════════════════════
+   Mobile Responsive (max-width: 768px)
+   ══════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  .top-nav {
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+    padding: 0.5rem 0.75rem;
+    gap: 0.25rem;
+  }
+
+  .top-nav a {
+    padding: 0.3rem 0.55rem;
+    font-size: 0.75rem;
+  }
+
+  .results-table-wrap {
+    overflow-x: auto;
+  }
+
+  .chat-page {
+    padding: 0;
+  }
+
+  .chat-page .chat-messages {
+    padding: 0.75rem;
+  }
+
+  .bulk-action-bar {
+    flex-wrap: wrap;
+  }
+
+  .chat-input-area {
+    padding: 0.5rem 0.75rem 0.75rem;
+  }
+
+  .settings-section {
+    padding: 0.75rem;
+  }
+
+  .plot-builder .plot-container {
+    height: 350px !important;
+  }
+
+  .main-content {
+    padding: 1rem;
+  }
+
+  .plot-axis-ranges {
+    gap: 0.4rem;
+  }
+
+  .plot-range-input {
+    width: 56px;
+  }
+}

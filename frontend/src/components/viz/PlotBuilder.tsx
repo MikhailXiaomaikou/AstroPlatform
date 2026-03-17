@@ -277,6 +277,10 @@ const CHART_TYPES: Record<string, string> = {
 export default function PlotBuilder({ initialData, initialChartType, onClose }: Props) {
   const [chartType, setChartType] = useState(initialChartType || "sky_coverage");
   const [showFit, setShowFit] = useState(false);
+  const [xMin, setXMin] = useState("");
+  const [xMax, setXMax] = useState("");
+  const [yMin, setYMin] = useState("");
+  const [yMax, setYMax] = useState("");
 
   const availableCharts = useMemo(() => {
     if (!initialData) return CHART_TYPES;
@@ -293,8 +297,24 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
 
   const plotResult = useMemo(() => {
     if (!initialData) return null;
-    return buildPlot(chartType, initialData, showFit);
-  }, [chartType, initialData, showFit]);
+    const result = buildPlot(chartType, initialData, showFit);
+    // Apply custom axis ranges if set
+    const xHasMin = xMin !== "" && !isNaN(Number(xMin));
+    const xHasMax = xMax !== "" && !isNaN(Number(xMax));
+    const yHasMin = yMin !== "" && !isNaN(Number(yMin));
+    const yHasMax = yMax !== "" && !isNaN(Number(yMax));
+    if (xHasMin || xHasMax) {
+      const xa = result.layout.xaxis as Record<string, unknown>;
+      xa.range = [xHasMin ? Number(xMin) : undefined, xHasMax ? Number(xMax) : undefined];
+      xa.autorange = false;
+    }
+    if (yHasMin || yHasMax) {
+      const ya = result.layout.yaxis as Record<string, unknown>;
+      ya.range = [yHasMin ? Number(yMin) : undefined, yHasMax ? Number(yMax) : undefined];
+      ya.autorange = false;
+    }
+    return result;
+  }, [chartType, initialData, showFit, xMin, xMax, yMin, yMax]);
 
   return (
     <div className="plot-builder">
@@ -314,6 +334,21 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
             <button className="btn-secondary btn-small" onClick={onClose}>Close</button>
           )}
         </div>
+      </div>
+
+      <div className="plot-axis-ranges">
+        <label className="plot-range-label">
+          X min <input type="text" value={xMin} onChange={(e) => setXMin(e.target.value)} className="plot-range-input" placeholder="auto" />
+        </label>
+        <label className="plot-range-label">
+          X max <input type="text" value={xMax} onChange={(e) => setXMax(e.target.value)} className="plot-range-input" placeholder="auto" />
+        </label>
+        <label className="plot-range-label">
+          Y min <input type="text" value={yMin} onChange={(e) => setYMin(e.target.value)} className="plot-range-input" placeholder="auto" />
+        </label>
+        <label className="plot-range-label">
+          Y max <input type="text" value={yMax} onChange={(e) => setYMax(e.target.value)} className="plot-range-input" placeholder="auto" />
+        </label>
       </div>
 
       {plotResult && plotResult.data.length > 0 ? (
