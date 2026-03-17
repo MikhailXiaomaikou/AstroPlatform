@@ -3851,6 +3851,21 @@
   align-items: center;
 }
 
+.fit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fit-toggle input {
+  accent-color: #FF453A;
+}
+
 .plot-container {
   border-radius: 8px;
   overflow: hidden;
