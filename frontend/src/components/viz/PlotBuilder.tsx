@@ -60,7 +60,8 @@ function mkAxis(label: string, extra?: Record<string, unknown>): Record<string, 
     ticklen: 6,
     tickwidth: 1.2,
     tickcolor: COLORS.axis,
-    tickfont: { family: MONO, size: 12, color: COLORS.tick },
+    tickfont: { family: MONO, size: 11, color: COLORS.tick },
+    tickformat: ".4g",
     minor: { ticks: "inside", ticklen: 3, tickwidth: 0.8, tickcolor: "rgba(0,0,0,0.3)" },
     zeroline: false,
     showline: true,
@@ -69,17 +70,19 @@ function mkAxis(label: string, extra?: Record<string, unknown>): Record<string, 
 }
 
 function mkLayout(title: string, xa: Record<string, unknown>, ya: Record<string, unknown>, extra?: Record<string, unknown>): Record<string, unknown> {
+  const hasColorbar = extra?.hasColorbar;
+  const cleanExtra = extra ? Object.fromEntries(Object.entries(extra).filter(([k]) => k !== "hasColorbar")) : {};
   return {
     paper_bgcolor: COLORS.bg,
     plot_bgcolor: COLORS.plot,
     font: { family: FONT, color: COLORS.text, size: 13 },
-    margin: { l: 80, r: 30, t: 60, b: 70 },
+    margin: { l: 90, r: hasColorbar ? 110 : 40, t: 65, b: 80, pad: 4 },
     autosize: true,
     showlegend: false,
     title: { text: title, font: { family: FONT, size: 18, color: COLORS.title }, x: 0.5, xanchor: "center", y: 0.97 },
     xaxis: xa,
     yaxis: ya,
-    ...extra,
+    ...cleanExtra,
   };
 }
 
@@ -87,11 +90,12 @@ function mkColorbar(label: string): Record<string, unknown> {
   return {
     title: { text: label, font: { family: FONT, size: 14, color: COLORS.title }, side: "right" },
     tickfont: { family: MONO, size: 11, color: COLORS.tick },
-    thickness: 18,
-    len: 0.75,
+    thickness: 16,
+    len: 0.7,
     outlinewidth: 1,
     outlinecolor: COLORS.axis,
     borderwidth: 0,
+    xpad: 12,
   };
 }
 
@@ -192,7 +196,7 @@ function buildPlot(
       layout: mkLayout(`Sky Distribution (<i>N</i> = ${ra.length})`,
         mkAxis("Right Ascension α (deg)", { autorange: "reversed" }),
         mkAxis("Declination δ (deg)"),
-        { showlegend: showFit, annotations, legend: { font: { family: FONT, size: 12 }, bgcolor: "rgba(255,255,255,0.8)", bordercolor: COLORS.grid, borderwidth: 1, x: 0.02, y: 0.98 } }),
+        { hasColorbar: hasZ, showlegend: showFit, annotations, legend: { font: { family: FONT, size: 12 }, bgcolor: "rgba(255,255,255,0.8)", bordercolor: COLORS.grid, borderwidth: 1, x: 0.02, y: 0.98 } }),
     };
   }
 
@@ -278,7 +282,8 @@ function buildPlot(
       }],
       layout: mkLayout(`Sky Position by Redshift (<i>N</i> = ${n})`,
         mkAxis("Right Ascension α (deg)", { autorange: "reversed" }),
-        mkAxis("Declination δ (deg)")),
+        mkAxis("Declination δ (deg)"),
+        { hasColorbar: true }),
     };
   }
 
