@@ -7,6 +7,13 @@ interface Props {
   onClose?: () => void;
 }
 
+function arrMin(arr: number[]): number {
+  return arr.reduce((a, b) => a < b ? a : b, arr[0]);
+}
+function arrMax(arr: number[]): number {
+  return arr.reduce((a, b) => a > b ? a : b, arr[0]);
+}
+
 const FONT = "Times New Roman, STIXGeneral, serif";
 
 const AXIS_BASE: Record<string, unknown> = {
@@ -59,8 +66,8 @@ function linearFit(x: number[], y: number[]): { slope: number; intercept: number
 
 function gaussianKDE(values: number[], nPoints = 100): { x: number[]; y: number[] } {
   if (values.length === 0) return { x: [], y: [] };
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const min = arrMin(values);
+  const max = arrMax(values);
   const range = max - min || 1;
   const bandwidth = range / Math.max(5, Math.sqrt(values.length));
   const xs: number[] = [];
@@ -109,7 +116,7 @@ function buildPlot(
     }];
     if (showFit && ra.length >= 2) {
       const fit = linearFit(ra, dec);
-      const xMin = Math.min(...ra), xMax = Math.max(...ra);
+      const xMin = arrMin(ra), xMax = arrMax(ra);
       traces.push({
         type: "scatter", mode: "lines",
         x: [xMin, xMax], y: [fit.slope * xMin + fit.intercept, fit.slope * xMax + fit.intercept],
@@ -129,7 +136,7 @@ function buildPlot(
 
   if (chartType === "redshift_histogram") {
     if (redshift.length === 0) return { data: [], layout: layout("No redshift data", ax("z"), ax("N")) };
-    const zMin = Math.min(...redshift), zMax = Math.max(...redshift);
+    const zMin = arrMin(redshift), zMax = arrMax(redshift);
     const zRange = zMax - zMin;
     const nBins = Math.min(40, Math.max(8, Math.ceil(redshift.length / 3)));
     const traces: Record<string, unknown>[] = [{
@@ -160,7 +167,7 @@ function buildPlot(
 
   if (chartType === "magnitude_histogram") {
     if (magnitude.length === 0) return { data: [], layout: layout("No magnitude data", ax("mag"), ax("N")) };
-    const mMin = Math.min(...magnitude), mMax = Math.max(...magnitude), mRange = mMax - mMin;
+    const mMin = arrMin(magnitude), mMax = arrMax(magnitude), mRange = mMax - mMin;
     const nBins = Math.min(40, Math.max(8, Math.ceil(magnitude.length / 3)));
     const traces: Record<string, unknown>[] = [{
       type: "histogram", x: magnitude,
@@ -220,7 +227,7 @@ function buildPlot(
     if (showFit && minLen >= 2) {
       const xd = ra.slice(0, minLen), yd = redshift.slice(0, minLen);
       const fit = linearFit(xd, yd);
-      const xMin = Math.min(...xd), xMax = Math.max(...xd);
+      const xMin = arrMin(xd), xMax = arrMax(xd);
       traces.push({
         type: "scatter", mode: "lines",
         x: [xMin, xMax], y: [fit.slope * xMin + fit.intercept, fit.slope * xMax + fit.intercept],
@@ -251,7 +258,7 @@ function buildPlot(
   }];
   if (showFit && minLen >= 2) {
     const fit = linearFit(xArr.slice(0, minLen), yArr.slice(0, minLen));
-    const xMin = Math.min(...xArr), xMax = Math.max(...xArr);
+    const xMin = arrMin(xArr), xMax = arrMax(xArr);
     traces.push({
       type: "scatter", mode: "lines",
       x: [xMin, xMax], y: [fit.slope * xMin + fit.intercept, fit.slope * xMax + fit.intercept],

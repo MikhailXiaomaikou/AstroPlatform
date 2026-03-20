@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, lazy, Suspense } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback, lazy, Suspense } from "react";
 import {
   sendChatMessage,
   executeChatAction,
@@ -121,28 +121,33 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   }
 
   // Deduplicate by name+source
-  const seen = new Set<string>();
-  const unique = data.filter((row) => {
-    const key = `${row.source}-${row.name}-${(row.ra as number)?.toFixed(3)}-${(row.dec as number)?.toFixed(3)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const unique = useMemo(() => {
+    const seen = new Set<string>();
+    return data.filter((row) => {
+      const key = `${row.source}-${row.name}-${(row.ra as number)?.toFixed(3)}-${(row.dec as number)?.toFixed(3)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [data]);
 
   const totalPages = Math.ceil(unique.length / PAGE_SIZE);
   const displayed = unique.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   // Dynamically discover extra columns that have data
-  // Fields already shown as dedicated columns
-  const extraColSet = new Set<string>();
-  for (const row of displayed) {
-    const extra = row.extra as Record<string, unknown> | undefined;
-    if (extra) {
-      for (const k of Object.keys(extra)) {
-        if (extra[k] != null) extraColSet.add(k);
+  const extraCols = useMemo(() => {
+    const colSet = new Set<string>();
+    for (const row of unique) {
+      const extra = row.extra as Record<string, unknown> | undefined;
+      if (extra) {
+        for (const k of Object.keys(extra)) {
+          if (extra[k] != null) colSet.add(k);
+        }
       }
     }
-  }
+    return Array.from(colSet).sort();
+  }, [unique]);
+
   // Friendly names for common SIMBAD columns
   const colLabels: Record<string, string> = {
     sp_type: "Spectral Type", morph_type: "Morphology", plx_value: "Parallax (mas)",
@@ -152,7 +157,6 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
     flux_B: "B mag", flux_V: "V mag", flux_R: "R mag", flux_I: "I mag",
     flux_J: "J mag", flux_H: "H mag", flux_K: "K mag",
   };
-  const extraCols = Array.from(extraColSet).sort();
 
   // Selection uses global indices into the unique array
   const pageStart = page * PAGE_SIZE;
@@ -267,8 +271,8 @@ ${trs}
       const vals = rows.map((r) => ((r.extra || {}) as Record<string, unknown>)[col]).filter((v) => typeof v === "number");
       if (vals.length > 0) vd[col] = vals;
     }
-    if (rows.some((r) => r.magnitude != null)) vd.magnitude = rows.filter((r) => r.magnitude != null).map((r) => r.magnitude);
-    if (rows.some((r) => r.redshift != null)) vd.redshift = rows.filter((r) => r.redshift != null).map((r) => r.redshift);
+    vd.magnitude = rows.map((r) => r.magnitude ?? null);
+    vd.redshift = rows.map((r) => r.redshift ?? null);
     setVizData(vd);
   }
 

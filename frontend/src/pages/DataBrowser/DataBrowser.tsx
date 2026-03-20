@@ -149,8 +149,8 @@ export default function DataBrowser() {
     const data: Record<string, unknown> = {
       ra: selected.map((r) => r.ra),
       dec: selected.map((r) => r.dec),
-      magnitude: selected.filter((r) => r.magnitude != null).map((r) => r.magnitude),
-      redshift: selected.filter((r) => r.redshift != null).map((r) => r.redshift),
+      magnitude: selected.map((r) => r.magnitude ?? null),
+      redshift: selected.map((r) => r.redshift ?? null),
       names: selected.map((r) => r.name),
       sources: selected.map((r) => r.source),
     };
@@ -163,8 +163,8 @@ export default function DataBrowser() {
     const data: Record<string, unknown> = {
       ra: validResults.map((r) => r.ra),
       dec: validResults.map((r) => r.dec),
-      magnitude: validResults.filter((r) => r.magnitude != null).map((r) => r.magnitude),
-      redshift: validResults.filter((r) => r.redshift != null).map((r) => r.redshift),
+      magnitude: validResults.map((r) => r.magnitude ?? null),
+      redshift: validResults.map((r) => r.redshift ?? null),
       names: validResults.map((r) => r.name),
       sources: validResults.map((r) => r.source),
     };
@@ -298,7 +298,6 @@ ${rows}
         // continue with remaining
       }
     }
-    setSharing(true); // brief feedback
     setSharing(false);
     setShowSharePanel(false);
     if (shared > 0) {

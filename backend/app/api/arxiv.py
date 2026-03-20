@@ -154,6 +154,9 @@ async def extract_arxiv_tables(req: ArxivTableRequest):
     if not arxiv_id:
         raise HTTPException(status_code=400, detail="Invalid arXiv ID")
 
+    if not re.match(r'^[\d]{4}\.[\d]{4,5}$', arxiv_id) and not re.match(r'^[a-z-]+/[\d]{7}$', arxiv_id):
+        raise HTTPException(status_code=400, detail="Invalid arXiv ID format")
+
     title = ""
     all_tables: list[dict] = []
 
@@ -194,7 +197,7 @@ async def extract_arxiv_tables(req: ArxivTableRequest):
         # Get title from API if still missing
         if not title:
             try:
-                api_url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
+                api_url = f"https://export.arxiv.org/api/query?id_list={arxiv_id}"
                 resp = await client.get(api_url)
                 if resp.status_code == 200:
                     t_match = re.search(r'<title[^>]*>(.*?)</title>', resp.text, re.DOTALL)

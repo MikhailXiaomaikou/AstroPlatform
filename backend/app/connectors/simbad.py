@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import re
 from functools import partial
 
 from astropy.coordinates import SkyCoord
@@ -28,7 +29,7 @@ class SIMBADConnector(BaseConnector):
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
         simbad = self._make_simbad()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         if ra is not None and dec is not None:
             coord = SkyCoord(ra=ra, dec=dec, unit=(u.degree, u.degree), frame="icrs")
@@ -84,6 +85,8 @@ class SIMBADConnector(BaseConnector):
                 "submillimeter galaxy": "G", "Lyman-break galaxy": "G",
             }
             simbad_type = otype_map.get(object_type, object_type)
+            # Sanitize: only allow alphanumeric and * characters
+            simbad_type = re.sub(r"[^a-zA-Z0-9*]", "", simbad_type)
             conditions.append(f"otype = '{simbad_type}'")
 
         if not conditions:
@@ -99,7 +102,7 @@ class SIMBADConnector(BaseConnector):
             f"ORDER BY rvz_redshift ASC"
         )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             table = await loop.run_in_executor(
                 None,
@@ -126,7 +129,7 @@ class SIMBADConnector(BaseConnector):
             "sp",
         )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         table = await loop.run_in_executor(
             None,
             partial(simbad.query_object, object_id),

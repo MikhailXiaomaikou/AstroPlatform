@@ -576,6 +576,9 @@ async def get_fits_header(
     fits_path: str = Query(..., description="Storage path to FITS file"),
 ):
     """Read FITS file headers and HDU info for preview."""
+    if ".." in fits_path or fits_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
     from astropy.io import fits
 
     try:
@@ -585,44 +588,45 @@ async def get_fits_header(
 
     hdul = fits.open(io.BytesIO(raw))
 
-    headers = []
-    hdus = []
+    try:
+        headers = []
+        hdus = []
 
-    for i, hdu in enumerate(hdul):
-        # Collect header key-value pairs
-        header_items = []
-        for key in hdu.header:
-            if key:
-                val = hdu.header[key]
-                try:
-                    comment = hdu.header.comments[key]
-                except (KeyError, IndexError):
-                    comment = ""
-                header_items.append({
-                    "key": key,
-                    "value": str(val),
-                    "comment": str(comment) if comment else "",
-                })
-        headers.append({"hdu_index": i, "cards": header_items})
+        for i, hdu in enumerate(hdul):
+            # Collect header key-value pairs
+            header_items = []
+            for key in hdu.header:
+                if key:
+                    val = hdu.header[key]
+                    try:
+                        comment = hdu.header.comments[key]
+                    except (KeyError, IndexError):
+                        comment = ""
+                    header_items.append({
+                        "key": key,
+                        "value": str(val),
+                        "comment": str(comment) if comment else "",
+                    })
+            headers.append({"hdu_index": i, "cards": header_items})
 
-        # HDU summary
-        hdu_info: dict = {
-            "index": i,
-            "name": hdu.name or f"HDU{i}",
-            "type": type(hdu).__name__,
-        }
-        if hdu.data is not None:
-            if hasattr(hdu.data, "shape"):
-                hdu_info["shape"] = list(hdu.data.shape)
-                hdu_info["dtype"] = str(hdu.data.dtype)
-            if hasattr(hdu, "columns") and hdu.columns is not None:
-                hdu_info["columns"] = [
-                    {"name": col.name, "format": col.format}
-                    for col in hdu.columns
-                ]
-        hdus.append(hdu_info)
-
-    hdul.close()
+            # HDU summary
+            hdu_info: dict = {
+                "index": i,
+                "name": hdu.name or f"HDU{i}",
+                "type": type(hdu).__name__,
+            }
+            if hdu.data is not None:
+                if hasattr(hdu.data, "shape"):
+                    hdu_info["shape"] = list(hdu.data.shape)
+                    hdu_info["dtype"] = str(hdu.data.dtype)
+                if hasattr(hdu, "columns") and hdu.columns is not None:
+                    hdu_info["columns"] = [
+                        {"name": col.name, "format": col.format}
+                        for col in hdu.columns
+                    ]
+            hdus.append(hdu_info)
+    finally:
+        hdul.close()
 
     return FITSHeaderResponse(fits_path=fits_path, headers=headers, hdus=hdus)
 
@@ -633,6 +637,9 @@ async def get_fits_spectrum(
     max_points: int = Query(2000, description="Max data points to return"),
 ):
     """Extract spectrum data from FITS for interactive preview."""
+    if ".." in fits_path or fits_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
     from astropy.io import fits
     from astropy.table import Table
     import numpy as np
@@ -644,68 +651,67 @@ async def get_fits_spectrum(
 
     hdul = fits.open(io.BytesIO(raw))
 
-    # Try to find spectrum data
-    for hdu in hdul:
-        if isinstance(hdu, (fits.BinTableHDU, fits.TableHDU)):
-            table = Table.read(hdu)
-            columns = {}
-            for col in table.colnames:
-                arr = table[col]
-                try:
-                    if hasattr(arr, "filled"):
-                        if arr.dtype.kind in ("i", "u"):
-                            arr = arr.filled(-9999)
-                        else:
-                            arr = arr.filled(np.nan)
-                    float_arr = np.array(arr, dtype=float)
-                    # Replace NaN/sentinel with None for JSON compatibility
-                    data = [None if (np.isnan(v) or np.isinf(v) or v == -9999) else v for v in float_arr]
-                except (ValueError, TypeError):
-                    # Skip non-numeric columns
-                    continue
-                # Downsample if too many points
-                if len(data) > max_points:
-                    step = len(data) // max_points
-                    data = data[::step]
-                columns[col] = data
-            hdul.close()
-            return {"type": "table", "columns": list(columns.keys()), "data": columns}
+    try:
+        # Try to find spectrum data
+        for hdu in hdul:
+            if isinstance(hdu, (fits.BinTableHDU, fits.TableHDU)):
+                table = Table.read(hdu)
+                columns = {}
+                for col in table.colnames:
+                    arr = table[col]
+                    try:
+                        if hasattr(arr, "filled"):
+                            if arr.dtype.kind in ("i", "u"):
+                                arr = arr.filled(-9999)
+                            else:
+                                arr = arr.filled(np.nan)
+                        float_arr = np.array(arr, dtype=float)
+                        # Replace NaN/sentinel with None for JSON compatibility
+                        data = [None if (np.isnan(v) or np.isinf(v) or v == -9999) else v for v in float_arr]
+                    except (ValueError, TypeError):
+                        # Skip non-numeric columns
+                        continue
+                    # Downsample if too many points
+                    if len(data) > max_points:
+                        step = len(data) // max_points
+                        data = data[::step]
+                    columns[col] = data
+                return {"type": "table", "columns": list(columns.keys()), "data": columns}
 
-    # Fall back to primary HDU
-    if hdul[0].data is not None:
-        data = hdul[0].data.astype(float)
-        if data.ndim == 1:
-            flux = [None if np.isnan(v) else v for v in data]
-            if len(flux) > max_points:
-                step = len(flux) // max_points
-                flux = flux[::step]
-            hdul.close()
-            return {
-                "type": "spectrum",
-                "columns": ["index", "flux"],
-                "data": {
-                    "index": list(range(len(flux))),
-                    "flux": flux,
-                },
-            }
-        elif data.ndim == 2:
-            # Return image statistics and a downsampled version
-            hdul.close()
-            h, w = data.shape
-            # Downsample image to max 256x256
-            step = max(1, max(h, w) // 256)
-            small = np.where(np.isnan(data[::step, ::step]), 0, data[::step, ::step])
-            return {
-                "type": "image",
-                "shape": [h, w],
-                "min": float(np.nanmin(data)),
-                "max": float(np.nanmax(data)),
-                "mean": float(np.nanmean(data)),
-                "thumbnail": small.tolist(),
-            }
+        # Fall back to primary HDU
+        if hdul[0].data is not None:
+            data = hdul[0].data.astype(float)
+            if data.ndim == 1:
+                flux = [None if np.isnan(v) else v for v in data]
+                if len(flux) > max_points:
+                    step = len(flux) // max_points
+                    flux = flux[::step]
+                return {
+                    "type": "spectrum",
+                    "columns": ["index", "flux"],
+                    "data": {
+                        "index": list(range(len(flux))),
+                        "flux": flux,
+                    },
+                }
+            elif data.ndim == 2:
+                # Return image statistics and a downsampled version
+                h, w = data.shape
+                # Downsample image to max 256x256
+                step = max(1, max(h, w) // 256)
+                small = np.where(np.isnan(data[::step, ::step]), 0, data[::step, ::step])
+                return {
+                    "type": "image",
+                    "shape": [h, w],
+                    "min": float(np.nanmin(data)),
+                    "max": float(np.nanmax(data)),
+                    "mean": float(np.nanmean(data)),
+                    "thumbnail": small.tolist(),
+                }
 
-    hdul.close()
-    return {"type": "empty", "columns": [], "data": {}}
+        return {"type": "empty", "columns": [], "data": {}}
+    finally:
+        hdul.close()
 
 
 @router.get("/fits-wcs")
@@ -714,6 +720,9 @@ async def get_fits_wcs(
     grid_steps: int = Query(10, description="Number of grid lines per axis"),
 ):
     """Extract WCS coordinate grid from FITS image for overlay."""
+    if ".." in fits_path or fits_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
     from astropy.io import fits
     from astropy.wcs import WCS
     import numpy as np
@@ -725,100 +734,100 @@ async def get_fits_wcs(
 
     hdul = fits.open(io.BytesIO(raw))
 
-    # Find HDU with WCS info (usually primary or first image)
-    wcs = None
-    img_shape = None
-    for hdu in hdul:
-        if hdu.data is not None and hdu.data.ndim == 2:
+    try:
+        # Find HDU with WCS info (usually primary or first image)
+        wcs = None
+        img_shape = None
+        for hdu in hdul:
+            if hdu.data is not None and hdu.data.ndim == 2:
+                try:
+                    w = WCS(hdu.header, naxis=2)
+                    if w.has_celestial:
+                        wcs = w
+                        img_shape = hdu.data.shape
+                        break
+                except Exception:
+                    continue
+
+        if wcs is None or img_shape is None:
+            return {"has_wcs": False, "grid_lines": [], "labels": []}
+
+        h, w_px = img_shape
+
+        # Compute RA/Dec at corners to determine grid range
+        corners_pix = np.array([[0, 0], [w_px, 0], [0, h], [w_px, h]], dtype=float)
+        corners_world = wcs.pixel_to_world_values(corners_pix[:, 0], corners_pix[:, 1])
+        ra_corners = corners_world[0]
+        dec_corners = corners_world[1]
+
+        ra_min, ra_max = float(np.min(ra_corners)), float(np.max(ra_corners))
+        dec_min, dec_max = float(np.min(dec_corners)), float(np.max(dec_corners))
+
+        grid_lines = []
+        labels = []
+
+        # RA grid lines (vertical in image)
+        ra_values = np.linspace(ra_min, ra_max, grid_steps)
+        for ra_val in ra_values:
+            dec_range = np.linspace(dec_min, dec_max, 50)
+            ra_arr = np.full_like(dec_range, ra_val)
             try:
-                w = WCS(hdu.header, naxis=2)
-                if w.has_celestial:
-                    wcs = w
-                    img_shape = hdu.data.shape
-                    break
+                pix = wcs.world_to_pixel_values(ra_arr, dec_range)
+                points = []
+                for px, py in zip(pix[0], pix[1]):
+                    if 0 <= px <= w_px and 0 <= py <= h:
+                        points.append([float(px) / w_px, float(py) / h])  # normalized 0-1
+                if len(points) > 1:
+                    grid_lines.append({"type": "ra", "value": float(ra_val), "points": points})
+                    # Label at midpoint
+                    mid = points[len(points) // 2]
+                    hours = ra_val / 15.0
+                    h_int = int(hours)
+                    m_int = int((hours - h_int) * 60)
+                    s_flt = ((hours - h_int) * 60 - m_int) * 60
+                    labels.append({
+                        "text": f"{h_int}h{m_int:02d}m{s_flt:04.1f}s",
+                        "x": mid[0], "y": mid[1], "type": "ra"
+                    })
             except Exception:
                 continue
 
-    if wcs is None or img_shape is None:
+        # Dec grid lines (horizontal in image)
+        dec_values = np.linspace(dec_min, dec_max, grid_steps)
+        for dec_val in dec_values:
+            ra_range = np.linspace(ra_min, ra_max, 50)
+            dec_arr = np.full_like(ra_range, dec_val)
+            try:
+                pix = wcs.world_to_pixel_values(ra_range, dec_arr)
+                points = []
+                for px, py in zip(pix[0], pix[1]):
+                    if 0 <= px <= w_px and 0 <= py <= h:
+                        points.append([float(px) / w_px, float(py) / h])
+                if len(points) > 1:
+                    grid_lines.append({"type": "dec", "value": float(dec_val), "points": points})
+                    mid = points[len(points) // 2]
+                    d_int = int(dec_val)
+                    m_abs = abs(dec_val - d_int) * 60
+                    m_int = int(m_abs)
+                    s_flt = (m_abs - m_int) * 60
+                    sign = "+" if dec_val >= 0 else "-"
+                    labels.append({
+                        "text": f"{sign}{abs(d_int)}\u00b0{m_int:02d}'{s_flt:04.1f}\"",
+                        "x": mid[0], "y": mid[1], "type": "dec"
+                    })
+            except Exception:
+                continue
+
+        return {
+            "has_wcs": True,
+            "ra_range": [ra_min, ra_max],
+            "dec_range": [dec_min, dec_max],
+            "image_shape": [h, w_px],
+            "grid_lines": grid_lines,
+            "labels": labels,
+        }
+    finally:
         hdul.close()
-        return {"has_wcs": False, "grid_lines": [], "labels": []}
-
-    h, w_px = img_shape
-
-    # Compute RA/Dec at corners to determine grid range
-    corners_pix = np.array([[0, 0], [w_px, 0], [0, h], [w_px, h]], dtype=float)
-    corners_world = wcs.pixel_to_world_values(corners_pix[:, 0], corners_pix[:, 1])
-    ra_corners = corners_world[0]
-    dec_corners = corners_world[1]
-
-    ra_min, ra_max = float(np.min(ra_corners)), float(np.max(ra_corners))
-    dec_min, dec_max = float(np.min(dec_corners)), float(np.max(dec_corners))
-
-    grid_lines = []
-    labels = []
-
-    # RA grid lines (vertical in image)
-    ra_values = np.linspace(ra_min, ra_max, grid_steps)
-    for ra_val in ra_values:
-        dec_range = np.linspace(dec_min, dec_max, 50)
-        ra_arr = np.full_like(dec_range, ra_val)
-        try:
-            pix = wcs.world_to_pixel_values(ra_arr, dec_range)
-            points = []
-            for px, py in zip(pix[0], pix[1]):
-                if 0 <= px <= w_px and 0 <= py <= h:
-                    points.append([float(px) / w_px, float(py) / h])  # normalized 0-1
-            if len(points) > 1:
-                grid_lines.append({"type": "ra", "value": float(ra_val), "points": points})
-                # Label at midpoint
-                mid = points[len(points) // 2]
-                hours = ra_val / 15.0
-                h_int = int(hours)
-                m_int = int((hours - h_int) * 60)
-                s_flt = ((hours - h_int) * 60 - m_int) * 60
-                labels.append({
-                    "text": f"{h_int}h{m_int:02d}m{s_flt:04.1f}s",
-                    "x": mid[0], "y": mid[1], "type": "ra"
-                })
-        except Exception:
-            continue
-
-    # Dec grid lines (horizontal in image)
-    dec_values = np.linspace(dec_min, dec_max, grid_steps)
-    for dec_val in dec_values:
-        ra_range = np.linspace(ra_min, ra_max, 50)
-        dec_arr = np.full_like(ra_range, dec_val)
-        try:
-            pix = wcs.world_to_pixel_values(ra_range, dec_arr)
-            points = []
-            for px, py in zip(pix[0], pix[1]):
-                if 0 <= px <= w_px and 0 <= py <= h:
-                    points.append([float(px) / w_px, float(py) / h])
-            if len(points) > 1:
-                grid_lines.append({"type": "dec", "value": float(dec_val), "points": points})
-                mid = points[len(points) // 2]
-                d_int = int(dec_val)
-                m_abs = abs(dec_val - d_int) * 60
-                m_int = int(m_abs)
-                s_flt = (m_abs - m_int) * 60
-                sign = "+" if dec_val >= 0 else "-"
-                labels.append({
-                    "text": f"{sign}{abs(d_int)}\u00b0{m_int:02d}'{s_flt:04.1f}\"",
-                    "x": mid[0], "y": mid[1], "type": "dec"
-                })
-        except Exception:
-            continue
-
-    hdul.close()
-
-    return {
-        "has_wcs": True,
-        "ra_range": [ra_min, ra_max],
-        "dec_range": [dec_min, dec_max],
-        "image_shape": [h, w_px],
-        "grid_lines": grid_lines,
-        "labels": labels,
-    }
 
 
 @router.get("/{source}/{object_id}", response_model=FetchResult)
