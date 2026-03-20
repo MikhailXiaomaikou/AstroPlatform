@@ -96,7 +96,8 @@ class SIMBADConnector(BaseConnector):
         adql = (
             f"SELECT TOP {limit} main_id, ra, dec, otype, otype_txt, rvz_redshift, "
             f"rvz_radvel, rvz_type, sp_type, galdim_majaxis, galdim_minaxis, "
-            f"galdim_angle, morph_type, plx_value, pmra, pmdec "
+            f"galdim_angle, morph_type, plx_value, pmra, pmdec, "
+            f"rvz_qual, plx_qual, sp_qual, coo_qual "
             f"FROM basic "
             f"WHERE {where} "
             f"ORDER BY rvz_redshift ASC"
@@ -237,14 +238,14 @@ class SIMBADConnector(BaseConnector):
                     "V", "FLUX_V", "flux_V", "rvz_redshift", "Z_VALUE",
                     "oid", "hpx", "nbref", "update_date",
                     "coo_err_maj", "coo_err_min", "coo_err_angle", "coo_wavelength",
-                    "coo_bibcode", "coo_qual", "coo_err_maj_prec", "coo_err_min_prec",
+                    "coo_bibcode", "coo_err_maj_prec", "coo_err_min_prec",
                     "ra_prec", "dec_prec", "rvz_redshift_prec", "rvz_radvel_prec",
                     "rvz_err_prec", "plx_prec", "plx_err_prec", "pmra_prec", "pmdec_prec",
                     "galdim_majaxis_prec", "galdim_minaxis_prec",
                     "pm_err_maj", "pm_err_min", "pm_err_angle", "pm_err_maj_prec", "pm_err_min_prec",
                     "plx_bibcode", "pm_bibcode", "rvz_bibcode", "sp_bibcode",
                     "morph_bibcode", "galdim_bibcode", "vlsr_bibcode",
-                    "plx_qual", "pm_qual", "rvz_qual", "sp_qual", "morph_qual", "galdim_qual"}
+                    "pm_qual", "morph_qual", "galdim_qual"}
             for col in row.colnames:
                 if col in skip:
                     continue

@@ -281,6 +281,23 @@ const CHART_TYPES: Record<string, string> = {
   scatter_custom: "Custom Scatter",
 };
 
+function degToHMS(deg: number): string {
+  const h = deg / 15;
+  const hh = Math.floor(h);
+  const mm = Math.floor((h - hh) * 60);
+  const ss = ((h - hh) * 60 - mm) * 60;
+  return `${String(hh).padStart(2, "0")}h${String(mm).padStart(2, "0")}m${ss.toFixed(1)}s`;
+}
+
+function degToDMS(deg: number): string {
+  const sign = deg < 0 ? "-" : "+";
+  const absDeg = Math.abs(deg);
+  const dd = Math.floor(absDeg);
+  const mm = Math.floor((absDeg - dd) * 60);
+  const ss = ((absDeg - dd) * 60 - mm) * 60;
+  return `${sign}${String(dd).padStart(2, "0")}d${String(mm).padStart(2, "0")}m${ss.toFixed(1)}s`;
+}
+
 export default function PlotBuilder({ initialData, initialChartType, onClose }: Props) {
   const [chartType, setChartType] = useState(initialChartType || "sky_coverage");
   const [showFit, setShowFit] = useState(false);
@@ -288,6 +305,7 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
   const [xMax, setXMax] = useState("");
   const [yMin, setYMin] = useState("");
   const [yMax, setYMax] = useState("");
+  const [coordFormat, setCoordFormat] = useState<"decimal" | "hms">("decimal");
 
   const availableCharts = useMemo(() => {
     if (!initialData) return CHART_TYPES;
@@ -320,8 +338,39 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
       ya.range = [yHasMin ? Number(yMin) : undefined, yHasMax ? Number(yMax) : undefined];
       ya.autorange = false;
     }
+    // Apply HMS/DMS formatting for sky plots
+    if (coordFormat === "hms" && (chartType === "sky_coverage" || chartType === "ra_dec_redshift")) {
+      const ra = (initialData.ra || []) as number[];
+      const dec = (initialData.dec || []) as number[];
+      if (ra.length > 0 && dec.length > 0) {
+        const xa = result.layout.xaxis as Record<string, unknown>;
+        const ya = result.layout.yaxis as Record<string, unknown>;
+        // Generate tick values and labels for RA
+        const raMin = arrMin(ra), raMax = arrMax(ra);
+        const raStep = Math.max((raMax - raMin) / 6, 0.001);
+        const raTickVals: number[] = [];
+        const raTickText: string[] = [];
+        for (let v = Math.ceil(raMin / raStep) * raStep; v <= raMax; v += raStep) {
+          raTickVals.push(v);
+          raTickText.push(degToHMS(v));
+        }
+        xa.tickvals = raTickVals;
+        xa.ticktext = raTickText;
+        // Generate tick values and labels for Dec
+        const decMin = arrMin(dec), decMax = arrMax(dec);
+        const decStep = Math.max((decMax - decMin) / 6, 0.001);
+        const decTickVals: number[] = [];
+        const decTickText: string[] = [];
+        for (let v = Math.ceil(decMin / decStep) * decStep; v <= decMax; v += decStep) {
+          decTickVals.push(v);
+          decTickText.push(degToDMS(v));
+        }
+        ya.tickvals = decTickVals;
+        ya.ticktext = decTickText;
+      }
+    }
     return result;
-  }, [chartType, initialData, showFit, xMin, xMax, yMin, yMax]);
+  }, [chartType, initialData, showFit, xMin, xMax, yMin, yMax, coordFormat]);
 
   return (
     <div className="plot-builder">
@@ -355,6 +404,18 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
         </label>
         <label className="plot-range-label">
           Y max <input type="text" value={yMax} onChange={(e) => setYMax(e.target.value)} className="plot-range-input" placeholder="auto" />
+        </label>
+        <label className="plot-range-label">
+          Coords{" "}
+          <select
+            value={coordFormat}
+            onChange={(e) => setCoordFormat(e.target.value as "decimal" | "hms")}
+            className="plot-range-input"
+            style={{ width: "auto", minWidth: 90 }}
+          >
+            <option value="decimal">Decimal Deg</option>
+            <option value="hms">HMS/DMS</option>
+          </select>
         </label>
       </div>
 

@@ -6,12 +6,17 @@ import {
   shareDataset,
   getFriends,
   getSearchHistory,
-  type SearchResult,
-  type FetchResult,
-  type AdvancedSearchRequest,
-  type AdvancedSearchMeta,
-  type FriendItem,
-  type SearchHistoryItem,
+  crossMatch,
+  logOperation,
+} from "../../api/client";
+import type {
+  SearchResult,
+  FetchResult,
+  AdvancedSearchRequest,
+  AdvancedSearchMeta,
+  FriendItem,
+  SearchHistoryItem,
+  CrossMatchResult,
 } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import SearchBar from "./SearchBar";
@@ -44,6 +49,13 @@ export default function DataBrowser() {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState<string | null>(null);
   const [bulkMsg, setBulkMsg] = useState<{ text: string; type: "ok" | "err" } | null>(null);
+
+  // Cross-match state
+  const [showCrossMatch, setShowCrossMatch] = useState(false);
+  const [crossMatchInput, setCrossMatchInput] = useState("");
+  const [crossMatchRadius, setCrossMatchRadius] = useState("3.0");
+  const [crossMatchResults, setCrossMatchResults] = useState<CrossMatchResult[] | null>(null);
+  const [crossMatchLoading, setCrossMatchLoading] = useState(false);
 
   // Share to team state
   const [showSharePanel, setShowSharePanel] = useState(false);
@@ -82,6 +94,7 @@ export default function DataBrowser() {
     try {
       const data = await searchData(query, sources.join(","), undefined, undefined, radius);
       setResults(data);
+      logOperation("search", `Searched ${sources.join(",")} for "${query}" (${data.length} results)`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Search failed";
       setError(msg);
@@ -101,6 +114,7 @@ export default function DataBrowser() {
       const response = await advancedSearch(req);
       setResults(response.results);
       setSearchMeta(response.meta);
+      logOperation("search", `Advanced search (${response.results.length} results)`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Advanced search failed";
       setError(msg);
@@ -156,6 +170,7 @@ export default function DataBrowser() {
     };
     setVizData(data);
     setShowViz(true);
+    logOperation("visualize", `Visualized ${selected.length} selected objects`);
   }
 
   function handleVisualizeAll() {
@@ -170,6 +185,7 @@ export default function DataBrowser() {
     };
     setVizData(data);
     setShowViz(true);
+    logOperation("visualize", `Visualized all ${validResults.length} results`);
   }
 
   function handleDownloadSelected() {
@@ -197,6 +213,7 @@ export default function DataBrowser() {
     a.download = `astro_search_results_${selected.length}_objects.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    logOperation("export", `Downloaded CSV with ${selected.length} objects`);
   }
 
   function handleDownloadVOTable() {
@@ -238,6 +255,35 @@ ${rows}
     a.download = `astro_search_results_${selected.length}_objects.vot`;
     a.click();
     URL.revokeObjectURL(url);
+    logOperation("export", `Downloaded VOTable with ${selected.length} objects`);
+  }
+
+  async function handleCrossMatch() {
+    const selected = getSelectedResults();
+    if (selected.length === 0) return;
+    setCrossMatchLoading(true);
+    setCrossMatchResults(null);
+    try {
+      // Parse the pasted CSV into list_b
+      const lines = crossMatchInput.trim().split("\n").filter((l) => l.trim());
+      const listB = lines.map((line) => {
+        const parts = line.split(/[,\t]+/).map((s) => s.trim());
+        return {
+          ra: parseFloat(parts[0]) || 0,
+          dec: parseFloat(parts[1]) || 0,
+          name: parts[2] || `${parts[0]},${parts[1]}`,
+        };
+      });
+      const listA = selected.map((r) => ({ ra: r.ra, dec: r.dec, name: r.name }));
+      const radius = parseFloat(crossMatchRadius) || 3.0;
+      const matches = await crossMatch(listA, listB, radius);
+      setCrossMatchResults(matches);
+      logOperation("crossmatch", `Cross-matched ${listA.length} x ${listB.length} objects, ${matches.length} matches`);
+    } catch {
+      setCrossMatchResults([]);
+    } finally {
+      setCrossMatchLoading(false);
+    }
   }
 
   async function handleBatchFetch() {
@@ -460,6 +506,9 @@ ${rows}
                 >
                   {bulkAction === "fetch" ? "Saving..." : "Save to Workspace"}
                 </button>
+                <button className="btn-secondary btn-small" onClick={() => setShowCrossMatch(!showCrossMatch)}>
+                  Cross-match...
+                </button>
                 {user && (
                   <button className="btn-secondary btn-small" onClick={openSharePanel}>
                     Share to Team
@@ -513,6 +562,67 @@ ${rows}
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Cross-match Panel ── */}
+      {showCrossMatch && (
+        <div className="share-panel">
+          <div className="share-panel-header">
+            <h3>Cross-match selected objects</h3>
+            <button className="btn-close" onClick={() => { setShowCrossMatch(false); setCrossMatchResults(null); }}>Close</button>
+          </div>
+          <div style={{ padding: "8px 0" }}>
+            <p style={{ fontSize: "0.8rem", marginBottom: 8 }}>
+              Paste coordinates (RA,Dec[,name] per line) to cross-match against selected objects:
+            </p>
+            <textarea
+              value={crossMatchInput}
+              onChange={(e) => setCrossMatchInput(e.target.value)}
+              placeholder={"180.0, 45.0, Source1\n180.1, 45.1, Source2"}
+              rows={5}
+              style={{ width: "100%", fontFamily: "monospace", fontSize: "0.8rem", padding: 8, borderRadius: 4, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "inherit" }}
+            />
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+              <label style={{ fontSize: "0.8rem" }}>
+                Radius (arcsec):
+                <input
+                  type="text"
+                  value={crossMatchRadius}
+                  onChange={(e) => setCrossMatchRadius(e.target.value)}
+                  style={{ width: 60, marginLeft: 4, padding: "2px 6px", fontFamily: "monospace", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "inherit", borderRadius: 4 }}
+                />
+              </label>
+              <button className="btn-primary" onClick={handleCrossMatch} disabled={crossMatchLoading || !crossMatchInput.trim()}>
+                {crossMatchLoading ? "Matching..." : "Run Cross-match"}
+              </button>
+            </div>
+            {crossMatchResults !== null && (
+              <div style={{ marginTop: 12 }}>
+                <p style={{ fontSize: "0.8rem", fontWeight: 600 }}>{crossMatchResults.length} matches found</p>
+                {crossMatchResults.length > 0 && (
+                  <div className="results-table-wrap" style={{ maxHeight: 200 }}>
+                    <table className="results-table" style={{ fontSize: "0.75rem" }}>
+                      <thead>
+                        <tr>
+                          <th>Source A</th><th>Source B</th><th>Sep (arcsec)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {crossMatchResults.map((m, i) => (
+                          <tr key={i}>
+                            <td>{m.a_name}</td>
+                            <td>{m.b_name}</td>
+                            <td>{m.separation_arcsec.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

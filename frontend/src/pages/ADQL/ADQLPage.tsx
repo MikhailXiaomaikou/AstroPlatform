@@ -1,11 +1,57 @@
 import { useState, useEffect } from "react";
-import { adqlQuery, listADQLServices, type ADQLResult } from "../../api/client";
+import { adqlQuery, listADQLServices, logOperation } from "../../api/client";
+import type { ADQLResult } from "../../api/client";
 
 interface Service {
   id: string;
   name: string;
   url: string;
   description: string;
+}
+
+const TEMPLATE_QUERIES: Array<{ label: string; query: string }> = [
+  {
+    label: "Gaia bright stars",
+    query: "SELECT TOP 100 source_id, ra, dec, phot_g_mean_mag FROM gaiadr3.gaia_source WHERE phot_g_mean_mag < 6 ORDER BY phot_g_mean_mag",
+  },
+  {
+    label: "High-z galaxies",
+    query: "SELECT TOP 100 main_id, ra, dec, rvz_redshift FROM basic WHERE otype='G' AND rvz_redshift > 4 ORDER BY rvz_redshift DESC",
+  },
+  {
+    label: "Nearby stars (parallax)",
+    query: "SELECT TOP 100 source_id, ra, dec, parallax, phot_g_mean_mag FROM gaiadr3.gaia_source WHERE parallax > 100 ORDER BY parallax DESC",
+  },
+  {
+    label: "QSOs",
+    query: "SELECT TOP 100 main_id, ra, dec, rvz_redshift FROM basic WHERE otype='QSO' ORDER BY rvz_redshift DESC",
+  },
+  {
+    label: "Variable stars",
+    query: "SELECT TOP 100 source_id, ra, dec, phot_variable_flag FROM gaiadr3.gaia_source WHERE phot_variable_flag = 'VARIABLE' LIMIT 100",
+  },
+];
+
+function loadQueryHistory(): string[] {
+  try {
+    const raw = localStorage.getItem("astro_adql_history");
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveQueryToHistory(q: string) {
+  try {
+    const history = loadQueryHistory();
+    // Remove duplicate if exists, then prepend
+    const filtered = history.filter((h) => h !== q);
+    filtered.unshift(q);
+    // Keep last 10
+    localStorage.setItem("astro_adql_history", JSON.stringify(filtered.slice(0, 10)));
+  } catch {
+    // ignore
+  }
 }
 
 const EXAMPLE_QUERIES: Record<string, string> = {
@@ -34,6 +80,7 @@ export default function ADQLPage() {
   const [result, setResult] = useState<ADQLResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [queryHistory, setQueryHistory] = useState<string[]>(loadQueryHistory);
 
   useEffect(() => {
     listADQLServices().then(setServices).catch(() => {});
@@ -53,6 +100,9 @@ export default function ADQLPage() {
     try {
       const res = await adqlQuery(query, service);
       setResult(res);
+      saveQueryToHistory(query);
+      setQueryHistory(loadQueryHistory());
+      logOperation("adql", `ADQL query on ${service}: ${query.slice(0, 100)}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Query failed";
       setError(msg);
@@ -83,6 +133,39 @@ export default function ADQLPage() {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Query history chips */}
+      {queryHistory.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          <span style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)", lineHeight: "28px" }}>Recent:</span>
+          {queryHistory.map((q, i) => (
+            <button
+              key={i}
+              className="btn-secondary btn-small"
+              style={{ fontSize: "0.7rem", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              onClick={() => setQuery(q)}
+              title={q}
+            >
+              {q.slice(0, 50)}{q.length > 50 ? "..." : ""}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Template buttons */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+        <span style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)", lineHeight: "28px" }}>Templates:</span>
+        {TEMPLATE_QUERIES.map((t) => (
+          <button
+            key={t.label}
+            className="btn-secondary btn-small"
+            style={{ fontSize: "0.72rem" }}
+            onClick={() => setQuery(t.query)}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       <div className="adql-editor">

@@ -3,8 +3,12 @@ import {
   sendChatMessage,
   executeChatAction,
   getStoredApiKey,
+  searchADS,
+  getBibTeX,
+  logOperation,
   type ChatMessage,
   type ChatAction,
+  type ADSReference,
 } from "../../api/client";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
@@ -106,10 +110,160 @@ function ActionCard({
   );
 }
 
+function StatsPanel({ rows, extraCols, onClose }: {
+  rows: Array<Record<string, unknown>>;
+  extraCols: string[];
+  onClose: () => void;
+}) {
+  const numericCols = useMemo(() => {
+    const cols: Array<{ key: string; values: number[] }> = [];
+    const checkCols = ["ra", "dec", "magnitude", "redshift", ...extraCols];
+    for (const col of checkCols) {
+      const vals: number[] = [];
+      for (const row of rows) {
+        const v = extraCols.includes(col)
+          ? ((row.extra || {}) as Record<string, unknown>)[col]
+          : row[col];
+        if (typeof v === "number" && isFinite(v)) vals.push(v);
+      }
+      if (vals.length > 0) cols.push({ key: col, values: vals });
+    }
+    return cols;
+  }, [rows, extraCols]);
+
+  function median(arr: number[]): number {
+    const sorted = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  function stdDev(arr: number[], mean: number): number {
+    const sum = arr.reduce((s, v) => s + (v - mean) ** 2, 0);
+    return Math.sqrt(sum / arr.length);
+  }
+
+  return (
+    <div className="viz-overlay" onClick={onClose}>
+      <div className="viz-overlay-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 700 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ margin: 0 }}>Statistics ({rows.length} objects)</h3>
+          <button className="btn-secondary btn-small" onClick={onClose}>Close</button>
+        </div>
+        <div className="chat-result-table-scroll">
+          <table className="chat-result-table">
+            <thead>
+              <tr>
+                <th>Column</th><th>Count</th><th>Mean</th><th>Median</th><th>Std Dev</th><th>Min</th><th>Max</th>
+              </tr>
+            </thead>
+            <tbody>
+              {numericCols.map(({ key, values }) => {
+                const mean = values.reduce((a, b) => a + b, 0) / values.length;
+                return (
+                  <tr key={key}>
+                    <td><strong>{key}</strong></td>
+                    <td>{values.length}</td>
+                    <td>{mean.toFixed(4)}</td>
+                    <td>{median(values).toFixed(4)}</td>
+                    <td>{stdDev(values, mean).toFixed(4)}</td>
+                    <td>{Math.min(...values).toFixed(4)}</td>
+                    <td>{Math.max(...values).toFixed(4)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QualBadge({ value }: { value: string }) {
+  const v = String(value).trim().toUpperCase();
+  let color = "#888";
+  if (v === "A" || v === "B") color = "#4ade80";
+  else if (v === "C") color = "#facc15";
+  else if (v === "D" || v === "E") color = "#f87171";
+  return (
+    <span style={{
+      display: "inline-block",
+      padding: "1px 5px",
+      borderRadius: 4,
+      fontSize: "0.72rem",
+      fontWeight: 600,
+      color: "#fff",
+      backgroundColor: color,
+    }}>
+      {v}
+    </span>
+  );
+}
+
+function CitationModal({ objectName, onClose }: { objectName: string; onClose: () => void }) {
+  const [refs, setRefs] = useState<ADSReference[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedBib, setCopiedBib] = useState<string | null>(null);
+
+  useEffect(() => {
+    searchADS(objectName)
+      .then(setRefs)
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to query ADS"))
+      .finally(() => setLoading(false));
+  }, [objectName]);
+
+  async function handleCopyBib(bibcode: string) {
+    try {
+      const bib = await getBibTeX(bibcode);
+      await navigator.clipboard.writeText(bib);
+      setCopiedBib(bibcode);
+      setTimeout(() => setCopiedBib(null), 2000);
+    } catch {
+      // fallback: ignore
+    }
+  }
+
+  return (
+    <div className="viz-overlay" onClick={onClose}>
+      <div className="viz-overlay-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 650 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ margin: 0 }}>References for {objectName}</h3>
+          <button className="btn-secondary btn-small" onClick={onClose}>Close</button>
+        </div>
+        {loading && <p>Loading references from NASA ADS...</p>}
+        {error && <p style={{ color: "#f87171" }}>{error}</p>}
+        {!loading && refs.length === 0 && !error && <p>No references found.</p>}
+        {refs.map((ref) => (
+          <div key={ref.bibcode} style={{ marginBottom: 12, padding: 8, background: "rgba(255,255,255,0.05)", borderRadius: 6 }}>
+            <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>{ref.title}</div>
+            <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)", marginTop: 2 }}>
+              {ref.authors.slice(0, 3).join(", ")}{ref.authors.length > 3 ? " et al." : ""} ({ref.year})
+            </div>
+            <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
+              {ref.bibcode}
+              {ref.doi && <span> | doi:{ref.doi}</span>}
+            </div>
+            <button
+              className="btn-chat-action"
+              style={{ marginTop: 4, fontSize: "0.72rem" }}
+              onClick={() => handleCopyBib(ref.bibcode)}
+            >
+              {copiedBib === ref.bibcode ? "Copied!" : "Copy BibTeX"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [vizData, setVizData] = useState<Record<string, unknown> | null>(null);
   const [page, setPage] = useState(0);
+  const [showCitation, setShowCitation] = useState<string | null>(null);
+  const [showStats, setShowStats] = useState(false);
   const PAGE_SIZE = 15;
 
   if (!data || data.length === 0) {
@@ -192,6 +346,19 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
     return String(v);
   }
 
+  function handleCite() {
+    const rows = getSelected();
+    if (rows.length === 0) return;
+    const name = rows[0].name as string;
+    if (name) setShowCitation(name);
+  }
+
+  function handleShowStats() {
+    const rows = getSelected();
+    if (rows.length === 0) return;
+    setShowStats(true);
+  }
+
   function handleDownload() {
     const rows = getSelected();
     if (rows.length === 0) return;
@@ -216,6 +383,7 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
     a.download = `astro_results_${rows.length}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    logOperation("export", `Downloaded CSV with ${rows.length} objects`);
   }
 
   function handleDownloadVOTable() {
@@ -256,6 +424,7 @@ ${trs}
     a.download = `astro_results_${rows.length}.vot`;
     a.click();
     URL.revokeObjectURL(url);
+    logOperation("export", `Downloaded VOTable with ${rows.length} objects`);
   }
 
   function handleVisualize() {
@@ -274,6 +443,7 @@ ${trs}
     vd.magnitude = rows.map((r) => r.magnitude ?? null);
     vd.redshift = rows.map((r) => r.redshift ?? null);
     setVizData(vd);
+    logOperation("visualize", `Visualized sky distribution of ${rows.length} objects`);
   }
 
   return (
@@ -287,6 +457,8 @@ ${trs}
           <button className="btn-chat-action" onClick={handleDownload}>Download CSV</button>
           <button className="btn-chat-action" onClick={handleDownloadVOTable}>Download VOTable</button>
           <button className="btn-chat-action" onClick={handleVisualize}>Visualize</button>
+          <button className="btn-chat-action" onClick={handleCite}>Cite</button>
+          <button className="btn-chat-action" onClick={handleShowStats}>Statistics</button>
           <button className="btn-chat-action" onClick={() => setSelected(new Set())}>Clear</button>
         </div>
       )}
@@ -321,7 +493,17 @@ ${trs}
                     <input type="checkbox" checked={selected.has(globalIdx)}
                       onChange={() => toggleOne(globalIdx)} className="row-checkbox" />
                   </td>
-                  <td><span className="source-chip">{row.source as string}</span></td>
+                  <td>
+                    <span
+                      className="source-chip"
+                      title={`Data from ${(row.source as string).toUpperCase()} TAP, queried ${new Date().toISOString().slice(0, 19)}`}
+                    >
+                      {row.source as string}
+                      {(row.source as string) === "simbad" && (
+                        <span style={{ marginLeft: 3, fontSize: "0.6rem", background: "rgba(56,189,248,0.3)", padding: "0 3px", borderRadius: 3 }}>SIMBAD</span>
+                      )}
+                    </span>
+                  </td>
                   <td>{row.name as string}</td>
                   <td>{(row.ra as number)?.toFixed(5)}</td>
                   <td>{(row.dec as number)?.toFixed(5)}</td>
@@ -329,7 +511,11 @@ ${trs}
                   <td>{row.magnitude != null ? (row.magnitude as number).toFixed(2) : "—"}</td>
                   <td>{row.redshift != null ? (row.redshift as number).toFixed(4) : "—"}</td>
                   {extraCols.map((c) => (
-                    <td key={c}>{fmt(extra[c])}</td>
+                    <td key={c}>
+                      {c.endsWith("_qual") && extra[c] != null
+                        ? <QualBadge value={String(extra[c])} />
+                        : fmt(extra[c])}
+                    </td>
                   ))}
                 </tr>
               );
@@ -356,6 +542,12 @@ ${trs}
             </Suspense>
           </div>
         </div>
+      )}
+      {showCitation && (
+        <CitationModal objectName={showCitation} onClose={() => setShowCitation(null)} />
+      )}
+      {showStats && (
+        <StatsPanel rows={getSelected()} extraCols={extraCols} onClose={() => setShowStats(false)} />
       )}
     </div>
   );
@@ -598,6 +790,7 @@ export default function ChatPage() {
         content: m.content,
       }));
 
+      logOperation("chat", `Search: ${text}`);
       const response = await sendChatMessage(chatHistory);
 
       const assistantMsg: DisplayMessage = {
@@ -642,6 +835,7 @@ export default function ChatPage() {
     setExecutingActions((prev) => new Set(prev).add(key));
 
     try {
+      logOperation("action", `Execute: ${action.action}`);
       const result = await executeChatAction(
         action as Record<string, unknown>
       );

@@ -909,4 +909,97 @@ export async function exportViz(
   return data;
 }
 
+// ── Citation / ADS API ──
+
+export interface ADSReference {
+  bibcode: string;
+  title: string;
+  authors: string[];
+  year: string;
+  doi: string | null;
+}
+
+export async function searchADS(objectName: string): Promise<ADSReference[]> {
+  const { data } = await api.get<ADSReference[]>("/api/citations/ads", {
+    params: { object_name: objectName },
+  });
+  return data;
+}
+
+export async function getBibTeX(bibcode: string): Promise<string> {
+  const { data } = await api.get<{ bibtex: string }>("/api/citations/bibtex", {
+    params: { bibcode },
+  });
+  return data.bibtex;
+}
+
+// ── Cross-match API ──
+
+export interface CrossMatchItem {
+  ra: number;
+  dec: number;
+  name: string;
+}
+
+export interface CrossMatchResult {
+  a_name: string;
+  b_name: string;
+  a_ra: number;
+  a_dec: number;
+  b_ra: number;
+  b_dec: number;
+  separation_arcsec: number;
+}
+
+export async function crossMatch(
+  listA: CrossMatchItem[],
+  listB: CrossMatchItem[],
+  radiusArcsec = 3.0
+): Promise<CrossMatchResult[]> {
+  const { data } = await api.post<CrossMatchResult[]>("/api/crossmatch", {
+    list_a: listA,
+    list_b: listB,
+    radius_arcsec: radiusArcsec,
+  });
+  return data;
+}
+
+// ── Operation Log (Feature 6) ──
+
+interface OperationLogEntry {
+  timestamp: string;
+  type: string;
+  detail: string;
+}
+
+export function logOperation(type: string, detail: string): void {
+  try {
+    const raw = localStorage.getItem("astro_operation_log");
+    const log: OperationLogEntry[] = raw ? JSON.parse(raw) : [];
+    log.push({
+      timestamp: new Date().toISOString(),
+      type,
+      detail,
+    });
+    // Keep last 200 entries
+    const trimmed = log.slice(-200);
+    localStorage.setItem("astro_operation_log", JSON.stringify(trimmed));
+  } catch {
+    // storage full or unavailable
+  }
+}
+
+export function getOperationLog(): OperationLogEntry[] {
+  try {
+    const raw = localStorage.getItem("astro_operation_log");
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function clearOperationLog(): void {
+  localStorage.removeItem("astro_operation_log");
+}
+
 export default api;
