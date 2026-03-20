@@ -92,7 +92,7 @@ export default function AuthPage() {
               <label className="auth-label">
                 Password
                 <input
-                  type="text"
+                  type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder={mode === "login" ? "Your password" : "Min 8 characters"}

@@ -45,8 +45,8 @@ Available actions (return as JSON in your response within <actions>...</actions>
    - SIMBAD TAP: query the "basic" table (columns: main_id, ra, dec, otype, rvz_redshift)
 3. {"action": "arxiv", "arxiv_id": "2301.12345"} — extract data tables from an arXiv paper. Accepts arXiv ID or full URL.
 4. {"action": "run_pipeline", "nodes": [{"type": "LoadData", ...}, {"type": "Denoise", ...}], "input_data_id": "..."}
-4. {"action": "explain", "topic": "..."} — just provide explanation, no platform action needed
-5. {"action": "plot", "chart_type": "hr_diagram|sed_fit|spectrum_overlay|redshift_histogram|sky_coverage|correlation_scatter|corner_plot", "data": {"x": [...], "y": [...], ...}, "params": {"title": "...", "x_label": "...", "y_label": "...", ...}}
+5. {"action": "explain", "topic": "..."} — just provide explanation, no platform action needed
+6. {"action": "plot", "chart_type": "hr_diagram|sed_fit|spectrum_overlay|redshift_histogram|sky_coverage|correlation_scatter|corner_plot", "data": {"x": [...], "y": [...], ...}, "params": {"title": "...", "x_label": "...", "y_label": "...", ...}}
 
 When creating plots, always include appropriate axis labels and titles. For astronomical data:
 - Use "RA (deg)" and "Dec (deg)" for coordinate axes

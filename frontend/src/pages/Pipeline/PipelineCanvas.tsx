@@ -16,6 +16,7 @@ import "reactflow/dist/style.css";
 
 import PipelineNode from "../../components/nodes/PipelineNode";
 import NodePalette from "../../components/nodes/NodePalette";
+import NodeParamsEditor from "../../components/nodes/NodeParamsEditor";
 import {
   connectPipelineWS,
   createSchedule,
@@ -73,6 +74,9 @@ export default function PipelineCanvas() {
   const [compareSelection, setCompareSelection] = useState<string[]>([]);
   const [diffResult, setDiffResult] = useState<DagDiffResult | null>(null);
 
+  // Node params editor state
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+
   const selectedCount =
     nodes.filter((n) => n.selected).length +
     edges.filter((e) => e.selected).length;
@@ -97,6 +101,27 @@ export default function PipelineCanvas() {
     setEdges([]);
     setNodeProgress({});
   }, [setNodes, setEdges]);
+
+  // Node params editor handlers
+  const handleNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    setEditingNodeId(node.id);
+  }, []);
+
+  const handleParamsApply = useCallback(
+    (nodeId: string, params: Record<string, unknown>) => {
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === nodeId ? { ...n, data: { ...n.data, params } } : n
+        )
+      );
+      setEditingNodeId(null);
+    },
+    [setNodes]
+  );
+
+  const editingNode = editingNodeId
+    ? nodes.find((n) => n.id === editingNodeId) ?? null
+    : null;
 
   // Load node types and templates on mount
   useEffect(() => {
@@ -598,6 +623,7 @@ export default function PipelineCanvas() {
           onInit={setRfInstance}
           onDrop={onDrop}
           onDragOver={onDragOver}
+          onNodeDoubleClick={handleNodeDoubleClick}
           nodeTypes={nodeTypes}
           deleteKeyCode={["Backspace", "Delete"]}
           fitView
@@ -611,6 +637,17 @@ export default function PipelineCanvas() {
           />
         </ReactFlow>
       </div>
+
+      {editingNode && (
+        <NodeParamsEditor
+          nodeId={editingNode.id}
+          nodeType={editingNode.data.nodeType as string}
+          nodeLabel={editingNode.data.label as string}
+          currentParams={(editingNode.data.params as Record<string, unknown>) ?? {}}
+          onApply={handleParamsApply}
+          onCancel={() => setEditingNodeId(null)}
+        />
+      )}
 
       {showVersionHistory && (
         <div className="version-history-panel">

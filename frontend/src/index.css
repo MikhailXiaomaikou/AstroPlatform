@@ -1,5 +1,6 @@
 /* ── CSS Variables ── */
-:root {
+:root,
+[data-theme="dark"] {
   --color-bg: #1c1c1e;
   --color-surface: #2c2c2e;
   --color-surface-2: #3a3a3c;
@@ -22,6 +23,53 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
   --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
   --transition: all 0.2s ease;
+  /* Semi-transparent utility colors */
+  --color-hover: rgba(255, 255, 255, 0.06);
+  --color-hover-strong: rgba(255, 255, 255, 0.12);
+  --color-active: rgba(255, 255, 255, 0.08);
+  --color-subtle: rgba(255, 255, 255, 0.04);
+  --color-muted: rgba(255, 255, 255, 0.03);
+  --color-overlay: rgba(28, 28, 30, 0.72);
+  --color-overlay-solid: rgba(28, 28, 30, 0.96);
+  --color-placeholder: rgba(255, 255, 255, 0.25);
+  --color-scrollbar: rgba(255, 255, 255, 0.15);
+  --color-scrollbar-hover: rgba(255, 255, 255, 0.25);
+}
+
+[data-theme="light"] {
+  --color-bg: #f5f5f7;
+  --color-surface: #ffffff;
+  --color-surface-2: #e5e5ea;
+  --color-separator: rgba(0, 0, 0, 0.1);
+  --color-text: #1c1c1e;
+  --color-text-secondary: rgba(0, 0, 0, 0.6);
+  --color-text-tertiary: rgba(0, 0, 0, 0.35);
+  --color-accent: #007AFF;
+  --color-accent-hover: #0056CC;
+  --color-green: #30D158;
+  --color-red: #FF453A;
+  --color-orange: #FF9F0A;
+  --color-purple: #BF5AF2;
+  --color-cyan: #64D2FF;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 20px;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+  --transition: all 0.2s ease;
+  /* Semi-transparent utility colors */
+  --color-hover: rgba(0, 0, 0, 0.04);
+  --color-hover-strong: rgba(0, 0, 0, 0.08);
+  --color-active: rgba(0, 0, 0, 0.06);
+  --color-subtle: rgba(0, 0, 0, 0.02);
+  --color-muted: rgba(0, 0, 0, 0.015);
+  --color-overlay: rgba(255, 255, 255, 0.85);
+  --color-overlay-solid: rgba(255, 255, 255, 0.97);
+  --color-placeholder: rgba(0, 0, 0, 0.3);
+  --color-scrollbar: rgba(0, 0, 0, 0.15);
+  --color-scrollbar-hover: rgba(0, 0, 0, 0.3);
 }
 
 *,
@@ -65,9 +113,9 @@ textarea {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--color-scrollbar);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--color-scrollbar-hover);
 }

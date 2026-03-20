@@ -277,3 +277,46 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
                 await db.commit()
 
     return {"received": True}
+
+
+@router.get("/usage")
+async def get_usage(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get current user's usage stats (pipeline runs this month, storage)."""
+    from datetime import datetime, timezone
+    from sqlalchemy import func as sqlfunc
+    from app.models.schemas import PipelineRun, DataFile
+
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # Count pipeline runs this month
+    runs_result = await db.execute(
+        select(sqlfunc.count())
+        .select_from(PipelineRun)
+        .where(PipelineRun.user_id == user.id, PipelineRun.created_at >= month_start)
+    )
+    runs_this_month = runs_result.scalar() or 0
+
+    # Count total data files as proxy for storage
+    files_result = await db.execute(
+        select(sqlfunc.count())
+        .select_from(DataFile)
+        .where(DataFile.user_id == user.id)
+    )
+    total_files = files_result.scalar() or 0
+    # Estimate ~50MB per file as rough proxy
+    storage_used_gb = round(total_files * 0.05, 2)
+
+    tier = user.subscription_tier or "solo"
+    runs_limit = 300 if tier == "solo" else None
+    storage_limit = 5 if tier == "solo" else 50 if tier == "lab" else None
+
+    return {
+        "runs_this_month": runs_this_month,
+        "runs_limit": runs_limit,
+        "storage_used_gb": storage_used_gb,
+        "storage_limit": storage_limit,
+    }

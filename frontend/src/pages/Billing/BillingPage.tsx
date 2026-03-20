@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "../../context/AuthContext";
-import { subscribe, getProfile } from "../../api/client";
+import { subscribe, getProfile, getUsageStats, type UsageStats } from "../../api/client";
 
 interface PlanInfo {
   tier: string;
@@ -63,7 +63,21 @@ export default function BillingPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+
   const currentTier = user?.subscription_tier ?? "solo";
+
+  useEffect(() => {
+    getUsageStats().then(setUsageStats).catch(() => {
+      // Fallback if not authenticated or endpoint unavailable
+      setUsageStats({
+        runs_this_month: 0,
+        runs_limit: currentTier === "solo" ? 300 : null,
+        storage_used_gb: 0,
+        storage_limit: currentTier === "solo" ? 5 : currentTier === "lab" ? 50 : null,
+      });
+    });
+  }, [currentTier]);
 
   const handleSubscribe = async (tier: string) => {
     if (tier === currentTier) return;
@@ -85,14 +99,6 @@ export default function BillingPage() {
     } finally {
       setSwitching(null);
     }
-  };
-
-  // Placeholder usage stats
-  const usageStats = {
-    runsThisMonth: 47,
-    runsLimit: currentTier === "solo" ? 300 : null,
-    storageUsedGB: 2.3,
-    storageLimit: currentTier === "solo" ? 5 : currentTier === "lab" ? 50 : null,
   };
 
   return (
@@ -165,64 +171,66 @@ export default function BillingPage() {
       </div>
 
       {/* ── Usage Stats ── */}
-      <section className="usage-section">
-        <h2>Current Usage</h2>
-        <div className="usage-grid">
-          <div className="usage-item">
-            <div className="usage-label">Pipeline Runs This Month</div>
-            <div className="usage-value">
-              {usageStats.runsThisMonth}
-              {usageStats.runsLimit !== null && (
-                <span className="usage-limit"> / {usageStats.runsLimit}</span>
-              )}
-              {usageStats.runsLimit === null && (
-                <span className="usage-limit"> (unlimited)</span>
+      {usageStats && (
+        <section className="usage-section">
+          <h2>Current Usage</h2>
+          <div className="usage-grid">
+            <div className="usage-item">
+              <div className="usage-label">Pipeline Runs This Month</div>
+              <div className="usage-value">
+                {usageStats.runs_this_month}
+                {usageStats.runs_limit !== null && (
+                  <span className="usage-limit"> / {usageStats.runs_limit}</span>
+                )}
+                {usageStats.runs_limit === null && (
+                  <span className="usage-limit"> (unlimited)</span>
+                )}
+              </div>
+              {usageStats.runs_limit !== null && (
+                <div className="usage-bar">
+                  <div
+                    className="usage-bar-fill"
+                    style={{
+                      width: `${Math.min(
+                        (usageStats.runs_this_month / usageStats.runs_limit) * 100,
+                        100
+                      )}%`,
+                    }}
+                  />
+                </div>
               )}
             </div>
-            {usageStats.runsLimit !== null && (
-              <div className="usage-bar">
-                <div
-                  className="usage-bar-fill"
-                  style={{
-                    width: `${Math.min(
-                      (usageStats.runsThisMonth / usageStats.runsLimit) * 100,
-                      100
-                    )}%`,
-                  }}
-                />
+            <div className="usage-item">
+              <div className="usage-label">Storage Used</div>
+              <div className="usage-value">
+                {usageStats.storage_used_gb} GB
+                {usageStats.storage_limit !== null && (
+                  <span className="usage-limit">
+                    {" "}
+                    / {usageStats.storage_limit} GB
+                  </span>
+                )}
+                {usageStats.storage_limit === null && (
+                  <span className="usage-limit"> (unlimited)</span>
+                )}
               </div>
-            )}
-          </div>
-          <div className="usage-item">
-            <div className="usage-label">Storage Used</div>
-            <div className="usage-value">
-              {usageStats.storageUsedGB} GB
-              {usageStats.storageLimit !== null && (
-                <span className="usage-limit">
-                  {" "}
-                  / {usageStats.storageLimit} GB
-                </span>
-              )}
-              {usageStats.storageLimit === null && (
-                <span className="usage-limit"> (unlimited)</span>
+              {usageStats.storage_limit !== null && (
+                <div className="usage-bar">
+                  <div
+                    className="usage-bar-fill"
+                    style={{
+                      width: `${Math.min(
+                        (usageStats.storage_used_gb / usageStats.storage_limit) * 100,
+                        100
+                      )}%`,
+                    }}
+                  />
+                </div>
               )}
             </div>
-            {usageStats.storageLimit !== null && (
-              <div className="usage-bar">
-                <div
-                  className="usage-bar-fill"
-                  style={{
-                    width: `${Math.min(
-                      (usageStats.storageUsedGB / usageStats.storageLimit) * 100,
-                      100
-                    )}%`,
-                  }}
-                />
-              </div>
-            )}
           </div>
-        </div>
-      </section>
+        </section>
+      )}
     </div>
   );
 }

@@ -7,7 +7,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1.5rem;
-  background: rgba(28, 28, 30, 0.72);
+  background: var(--color-overlay);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   color: var(--color-text);
@@ -37,12 +37,12 @@
 
 .top-nav a:hover {
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
 }
 
 .top-nav a.active {
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--color-hover-strong);
 }
 
 .main-content {
@@ -135,7 +135,7 @@
   padding: 0.55rem 0.85rem;
   border: none;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.9rem;
   font-family: inherit;
@@ -148,7 +148,7 @@
 }
 
 .input-field:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3);
 }
 
@@ -164,7 +164,7 @@
   display: inline-block;
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
+  border: 2px solid var(--color-hover-strong);
   border-top-color: #fff;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
@@ -188,9 +188,9 @@
 .skeleton {
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.04) 25%,
-    rgba(255, 255, 255, 0.08) 50%,
-    rgba(255, 255, 255, 0.04) 75%
+    var(--color-subtle) 25%,
+    var(--color-active) 50%,
+    var(--color-subtle) 75%
   );
   background-size: 400px 100%;
   animation: shimmer 1.5s ease-in-out infinite;
@@ -236,7 +236,7 @@
   padding: 0.6rem 0.85rem 0.6rem 2.5rem;
   border: none;
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.9rem;
   font-family: inherit;
@@ -249,7 +249,7 @@
 }
 
 .search-input:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3);
 }
 
@@ -263,7 +263,7 @@
 /* ── Segmented Control ── */
 .segmented-control {
   display: flex;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   border-radius: var(--radius-sm);
   padding: 2px;
   position: relative;
@@ -291,7 +291,7 @@
 
 .segment-btn.active {
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--color-hover-strong);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
@@ -309,7 +309,7 @@
   padding: 0.35rem 0.55rem;
   border: none;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-family: inherit;
   font-size: 0.85rem;
@@ -318,7 +318,7 @@
 }
 
 .radius-input:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3);
 }
 
@@ -362,7 +362,7 @@
   display: flex;
   gap: 0;
   margin-bottom: 0.75rem;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   border-radius: var(--radius-sm);
   padding: 2px;
   width: fit-content;
@@ -386,7 +386,7 @@
 
 .mode-btn.active {
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--color-hover-strong);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
@@ -407,7 +407,7 @@
   padding: 0.3rem 0.6rem;
   border: none;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text-secondary);
   font-size: 0.8rem;
   font-weight: 500;
@@ -417,7 +417,7 @@
 }
 
 .btn-toggle-filters:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   color: var(--color-text);
 }
 
@@ -434,7 +434,7 @@
   flex-direction: column;
   gap: 0.75rem;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border-radius: var(--radius-md);
   border: 1px solid var(--color-separator);
 }
@@ -477,7 +477,7 @@
   padding: 0.4rem 0.6rem;
   border: none;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.82rem;
   width: 100%;
@@ -490,7 +490,7 @@
 }
 
 .filter-input:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
   outline: none;
 }
@@ -499,7 +499,7 @@
   padding: 0.4rem 0.6rem;
   border: none;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.82rem;
   width: 100%;
@@ -508,7 +508,7 @@
 }
 
 .filter-select:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
   outline: none;
 }
@@ -536,7 +536,7 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   color: var(--color-text-tertiary);
   font-size: 0.65rem;
   font-weight: 700;
@@ -580,7 +580,7 @@
 .results-table-wrap {
   overflow-x: auto;
   margin-bottom: 2rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-separator);
   box-shadow: var(--shadow-sm);
@@ -606,7 +606,7 @@
 
 .results-table td {
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--color-subtle);
   color: var(--color-text);
 }
 
@@ -615,7 +615,7 @@
 }
 
 .results-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
 }
 
 .results-table tbody tr:last-child td {
@@ -773,7 +773,7 @@
 }
 
 .source-error-retries {
-  color: var(--color-text-tertiary, rgba(255, 255, 255, 0.35));
+  color: var(--color-text-tertiary);
   font-size: 0.8em;
 }
 
@@ -809,7 +809,7 @@
 
 .fits-preview {
   padding: 1.5rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-separator);
   box-shadow: var(--shadow-sm);
@@ -842,7 +842,7 @@
 .mono {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 0.8rem;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   padding: 0.15rem 0.5rem;
   border-radius: 4px;
   display: inline-block;
@@ -867,7 +867,7 @@
 .pipeline-sidebar {
   width: 260px;
   flex-shrink: 0;
-  background: rgba(28, 28, 30, 0.72);
+  background: var(--color-overlay);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-right: 1px solid var(--color-separator);
@@ -904,7 +904,7 @@
 
 .palette-item {
   padding: 0.65rem 0.75rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border: 1px solid var(--color-separator);
   border-left: 3px solid;
   border-radius: var(--radius-md);
@@ -914,7 +914,7 @@
 }
 
 .palette-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-active);
   transform: translateY(-1px);
   box-shadow: var(--shadow-md);
 }
@@ -950,7 +950,7 @@
 
 .template-btn {
   padding: 0.5rem 0.75rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-sm);
   color: var(--color-accent);
@@ -1009,7 +1009,7 @@
 .clear-btn {
   width: 100%;
   padding: 0.5rem 0.75rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border: none;
   border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
@@ -1021,7 +1021,7 @@
 }
 
 .clear-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-active);
   color: var(--color-text);
 }
 
@@ -1052,7 +1052,7 @@
 .input-data-input {
   width: 100%;
   padding: 0.45rem 0.65rem;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   border: none;
   border-radius: 6px;
   color: var(--color-text);
@@ -1064,7 +1064,7 @@
 }
 
 .input-data-input:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3);
 }
 
@@ -1165,7 +1165,7 @@
 }
 
 .react-flow__edge-path {
-  stroke: rgba(255, 255, 255, 0.15) !important;
+  stroke: var(--color-scrollbar) !important;
   stroke-width: 2 !important;
 }
 
@@ -1181,7 +1181,7 @@
 .react-flow__handle {
   width: 8px !important;
   height: 8px !important;
-  background: rgba(255, 255, 255, 0.25) !important;
+  background: var(--color-placeholder) !important;
   border: 2px solid var(--color-surface) !important;
   transition: all 0.15s ease !important;
 }
@@ -1311,7 +1311,7 @@
   width: 100%;
   max-width: 400px;
   padding: 2.5rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
@@ -1348,7 +1348,7 @@
   padding: 0.6rem 0.85rem;
   border: none;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.9rem;
   font-family: inherit;
@@ -1361,7 +1361,7 @@
 }
 
 .auth-input:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3);
 }
 
@@ -1450,7 +1450,7 @@
 .fits-tabs {
   display: flex;
   gap: 2px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   border-radius: var(--radius-sm);
   padding: 2px;
 }
@@ -1474,7 +1474,7 @@
 
 .fits-tab.active {
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--color-hover-strong);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
@@ -1518,7 +1518,7 @@
   padding: 0.45rem 0.75rem;
   border: none;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.8rem;
   font-family: inherit;
@@ -1532,7 +1532,7 @@
 }
 
 .header-filter:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3);
 }
 
@@ -1565,7 +1565,7 @@
 
 .header-table td {
   padding: 0.35rem 0.6rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--color-subtle);
 }
 
 .header-key {
@@ -1595,7 +1595,7 @@
   gap: 0.75rem;
   align-items: center;
   padding: 0.4rem 0.6rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border-radius: 6px;
   font-size: 0.75rem;
   margin-bottom: 4px;
@@ -1700,7 +1700,7 @@
 }
 
 .progress-pending .progress-dot {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--color-hover-strong);
 }
 
 .progress-running .progress-dot {
@@ -1800,7 +1800,7 @@
   align-items: center;
   margin-bottom: 0.75rem;
   padding: 0.75rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-separator);
 }
@@ -1822,7 +1822,7 @@
   padding: 0.25rem 0.5rem;
   border: none;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-active);
   color: var(--color-text);
   font-size: 0.75rem;
   font-family: inherit;
@@ -1885,7 +1885,7 @@
   padding: 0.25rem 0.5rem;
   border: none;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-active);
   color: var(--color-text);
   font-size: 0.75rem;
   font-family: inherit;
@@ -2003,7 +2003,7 @@
 }
 
 .workspace-file-list {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-lg);
   padding: 1rem;
@@ -2030,7 +2030,7 @@
 }
 
 .workspace-file-card:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
 }
 
 .workspace-file-card.selected {
@@ -2052,7 +2052,7 @@
 }
 
 .workspace-detail {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-lg);
   padding: 1.25rem;
@@ -2125,7 +2125,7 @@
 
 .note-card {
   padding: 0.6rem 0.75rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border-radius: var(--radius-sm);
   font-size: 0.8rem;
 }
@@ -2145,7 +2145,7 @@
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   color: var(--color-text);
   font-family: inherit;
   font-size: 0.8rem;
@@ -2169,7 +2169,7 @@
 .batch-section {
   margin-bottom: 1.5rem;
   padding: 1.25rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-lg);
 }
@@ -2275,7 +2275,7 @@
   align-items: center;
   gap: 0.4rem;
   padding: 0.4rem 0.5rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border-radius: 6px;
   font-size: 0.75rem;
   flex-wrap: wrap;
@@ -2296,7 +2296,7 @@
   font-family: "SF Mono", monospace;
   font-size: 0.7rem;
   color: var(--color-text-secondary);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   padding: 0.15rem 0.3rem;
   border-radius: 3px;
 }
@@ -2322,7 +2322,7 @@
   right: 0;
   width: 340px;
   height: 100%;
-  background: rgba(28, 28, 30, 0.96);
+  background: var(--color-overlay-solid);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-left: 1px solid var(--color-separator);
@@ -2376,7 +2376,7 @@
 
 .version-item {
   padding: 0.6rem 0.75rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: default;
@@ -2507,7 +2507,7 @@
 .team-tabs {
   display: flex;
   gap: 2px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   border-radius: var(--radius-sm);
   padding: 2px;
   margin-bottom: 1.5rem;
@@ -2533,7 +2533,7 @@
 
 .team-tab.active {
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--color-hover-strong);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
@@ -2552,7 +2552,7 @@
   padding: 0.5rem 0.85rem;
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.85rem;
   font-family: inherit;
@@ -2566,7 +2566,7 @@
 }
 
 .team-input:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3);
   border-color: var(--color-accent);
 }
@@ -2575,7 +2575,7 @@
   padding: 0.5rem 0.6rem;
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.8rem;
   font-family: inherit;
@@ -2607,14 +2607,14 @@
   justify-content: space-between;
   align-items: center;
   padding: 0.65rem 0.85rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-sm);
   transition: var(--transition);
 }
 
 .team-member-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
 }
 
 .team-member-info {
@@ -2741,7 +2741,7 @@
 }
 
 .btn-secondary-sm:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
 }
 
@@ -2749,7 +2749,7 @@
   padding: 0.3rem 0.6rem;
   border: none;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-active);
   color: var(--color-text-secondary);
   font-size: 0.75rem;
   font-family: inherit;
@@ -2758,7 +2758,7 @@
 }
 
 .btn-close:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--color-hover-strong);
 }
 
 .team-shared-grid {
@@ -2770,14 +2770,14 @@
 
 .team-shared-card {
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-md);
   transition: var(--transition);
 }
 
 .team-shared-card:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
 }
 
 .team-shared-card-header {
@@ -2821,7 +2821,7 @@
 .team-comments-panel {
   margin-top: 1rem;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-md);
 }
@@ -2851,7 +2851,7 @@
 
 .team-comment-item {
   padding: 0.6rem 0.75rem;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   border-radius: var(--radius-sm);
 }
 
@@ -2897,14 +2897,14 @@
   justify-content: space-between;
   align-items: center;
   padding: 0.65rem 0.85rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-sm);
   transition: var(--transition);
 }
 
 .team-dataset-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
 }
 
 .team-dataset-info {
@@ -2996,7 +2996,7 @@
 }
 
 .plan-card:hover {
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: var(--color-hover-strong);
   transform: translateY(-2px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
@@ -3261,7 +3261,7 @@
   padding: 0.6rem 0.85rem;
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.85rem;
   font-family: "SF Mono", "Fira Code", monospace;
@@ -3296,7 +3296,7 @@
   padding: 0.5rem 0.85rem;
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
   color: var(--color-text-secondary);
   font-size: 0.8rem;
   cursor: pointer;
@@ -3341,7 +3341,7 @@
 }
 
 .chat-message.assistant .chat-message-avatar {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-separator);
   color: var(--color-text-secondary);
 }
 
@@ -3381,7 +3381,7 @@
 }
 
 .chat-message.assistant .chat-message-content {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   border-bottom-left-radius: 4px;
 }
@@ -3406,13 +3406,13 @@
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-md);
   padding: 0.75rem;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-muted);
   transition: var(--transition);
 }
 
 .chat-action-card:hover {
-  border-color: rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--color-scrollbar);
+  background: var(--color-subtle);
 }
 
 .chat-action-header {
@@ -3500,12 +3500,12 @@
 .chat-result-table td {
   padding: 0.3rem 0.5rem;
   color: var(--color-text);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--color-subtle);
   white-space: nowrap;
 }
 
 .chat-result-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-subtle);
 }
 
 .chat-result-actions {
@@ -3618,7 +3618,7 @@
   padding: 0.65rem 0.85rem;
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.88rem;
   font-family: inherit;
@@ -3631,7 +3631,7 @@
 
 .chat-input:focus {
   border-color: var(--color-accent);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-active);
 }
 
 .chat-input::placeholder {
@@ -3767,7 +3767,7 @@
   padding: 0.55rem 0.85rem;
   border: 1px solid var(--color-separator);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover);
   color: var(--color-text);
   font-size: 0.85rem;
   font-family: "SF Mono", "Fira Code", monospace;
@@ -3777,7 +3777,7 @@
 
 .settings-input:focus {
   border-color: var(--color-accent);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-active);
 }
 
 .settings-input::placeholder {
@@ -3803,7 +3803,7 @@
   align-items: center;
   gap: 0.75rem;
   padding: 0.5rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--color-subtle);
 }
 
 .settings-info-row:last-child {
@@ -3827,7 +3827,7 @@
    ══════════════════════════════════════ */
 
 .plot-builder {
-  background: var(--color-bg-secondary, rgba(28, 28, 30, 1));
+  background: var(--color-bg);
   border-radius: 12px;
   padding: 1rem;
 }
@@ -3874,7 +3874,7 @@
 .plot-empty {
   text-align: center;
   padding: 3rem;
-  color: var(--color-text-tertiary, rgba(255, 255, 255, 0.35));
+  color: var(--color-text-tertiary);
   font-size: 0.9rem;
 }
 
@@ -3895,7 +3895,7 @@
   width: 90%;
   max-width: 1200px;
   max-height: 90vh;
-  background: var(--color-bg-secondary, rgba(28, 28, 30, 1));
+  background: var(--color-bg);
   border-radius: 12px;
   padding: 1.5rem;
   overflow-y: auto;
@@ -4044,7 +4044,7 @@
   padding: 0.3rem 0.5rem;
   border: none;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-active);
   color: var(--color-text);
   font-size: 0.8rem;
   font-family: inherit;
@@ -4057,7 +4057,7 @@
 }
 
 .plot-range-input:focus {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--color-hover-strong);
   box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
 }
 
@@ -4131,4 +4131,176 @@
   .plot-range-input {
     width: 56px;
   }
+}
+
+/* ══════════════════════════════════════
+   Theme Toggle
+   ══════════════════════════════════════ */
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-size: 1rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: var(--transition);
+}
+
+.theme-toggle:hover {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+/* ══════════════════════════════════════
+   Recent Searches
+   ══════════════════════════════════════ */
+
+.recent-searches {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  flex-wrap: wrap;
+}
+
+.recent-searches-label {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.recent-search-chip {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.78rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-separator);
+  background: var(--color-hover);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.recent-search-chip:hover {
+  background: var(--color-hover-strong);
+  border-color: var(--color-accent);
+}
+
+/* ══════════════════════════════════════
+   Node Params Editor (side panel)
+   ══════════════════════════════════════ */
+
+.node-params-editor {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 340px;
+  height: 100%;
+  background: var(--color-overlay-solid);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-left: 1px solid var(--color-separator);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.node-params-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.node-params-editor h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.node-params-type-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: rgba(10, 132, 255, 0.15);
+  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.node-params-empty {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  margin: 1rem 0;
+}
+
+.node-params-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+}
+
+.node-params-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.node-params-field label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.node-params-required {
+  color: #ff453a;
+  margin-left: 0.2rem;
+}
+
+.node-params-field input,
+.node-params-field select {
+  background: var(--color-bg);
+  border: 1px solid var(--color-separator);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.node-params-field input:focus,
+.node-params-field select:focus {
+  border-color: var(--color-accent);
+}
+
+.node-params-field input::placeholder {
+  color: var(--color-placeholder);
+}
+
+.node-params-field select option {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.node-params-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-separator);
 }

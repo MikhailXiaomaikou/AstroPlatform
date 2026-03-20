@@ -64,6 +64,18 @@ export async function subscribe(tier: string): Promise<{ status: string; tier: s
   return data;
 }
 
+export interface UsageStats {
+  runs_this_month: number;
+  runs_limit: number | null;
+  storage_used_gb: number;
+  storage_limit: number | null;
+}
+
+export async function getUsageStats(): Promise<UsageStats> {
+  const { data } = await api.get<UsageStats>("/api/auth/usage");
+  return data;
+}
+
 // ── Data API ──
 
 export interface SearchResult {
@@ -348,7 +360,9 @@ export function connectPipelineWS(
   onMessage: (data: Record<string, unknown>) => void,
   onClose?: () => void
 ): WebSocket {
-  const ws = new WebSocket(`ws://localhost:8000/ws/pipeline/${runId}`);
+  const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
+  const wsUrl = baseUrl.replace(/^http/, "ws");
+  const ws = new WebSocket(`${wsUrl}/ws/pipeline/${runId}`);
 
   ws.onmessage = (event) => {
     try {

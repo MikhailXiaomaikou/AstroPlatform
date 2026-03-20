@@ -21,22 +21,15 @@ class ErrorBoundary extends Component<
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: "2rem", color: "#f5f5f7" }}>
+        <div style={{ padding: "2rem", color: "var(--color-text)" }}>
           <h2>Something went wrong</h2>
-          <pre style={{ color: "#FF453A", whiteSpace: "pre-wrap", marginTop: "1rem" }}>
+          <pre style={{ color: "var(--color-red)", whiteSpace: "pre-wrap", marginTop: "1rem" }}>
             {this.state.error.message}
           </pre>
           <button
             onClick={() => this.setState({ error: null })}
-            style={{
-              marginTop: "1rem",
-              padding: "0.5rem 1rem",
-              background: "#0A84FF",
-              color: "#fff",
-              border: "none",
-              borderRadius: "8px",
-              cursor: "pointer",
-            }}
+            className="btn-primary"
+            style={{ marginTop: "1rem" }}
           >
             Try again
           </button>
@@ -57,7 +50,25 @@ const BillingPage = lazy(() => import("./pages/Billing/BillingPage"));
 const ChatPage = lazy(() => import("./pages/Chat/ChatPage"));
 const SettingsPage = lazy(() => import("./pages/Settings/SettingsPage"));
 
+function useTheme() {
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const saved = localStorage.getItem("astro_theme");
+    return saved === "light" ? "light" : "dark";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("astro_theme", theme);
+  }, [theme]);
+
+  const toggle = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+
+  return { theme, toggle };
+}
+
 function NavBar() {
+  const { theme, toggle } = useTheme();
+
   return (
     <nav className="top-nav">
       <span className="logo">Astro Platform</span>
@@ -69,6 +80,14 @@ function NavBar() {
       <NavLink to="/chat">AI Assistant</NavLink>
       <NavLink to="/settings">Settings</NavLink>
       <div className="nav-spacer" />
+      <button
+        className="theme-toggle"
+        onClick={toggle}
+        title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      >
+        {theme === "dark" ? "\u2600\uFE0F" : "\uD83C\uDF19"}
+      </button>
       <span className="tier-badge tier-beta">beta</span>
     </nav>
   );
@@ -86,7 +105,7 @@ function BackendBanner() {
       if (!cancelled) setShow(true);
     }, 3000);
 
-    api.get("/api/health").then(() => {
+    api.get("/health").then(() => {
       if (!cancelled) {
         setShow(false);
         sessionStorage.setItem("astro_backend_checked", "1");

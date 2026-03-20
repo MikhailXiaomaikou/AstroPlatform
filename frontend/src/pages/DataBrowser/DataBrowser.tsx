@@ -1,15 +1,17 @@
-import { useState, useCallback, useRef, lazy, Suspense } from "react";
+import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react";
 import {
   searchData,
   advancedSearch,
   fetchObject,
   shareDataset,
   getFriends,
+  getSearchHistory,
   type SearchResult,
   type FetchResult,
   type AdvancedSearchRequest,
   type AdvancedSearchMeta,
   type FriendItem,
+  type SearchHistoryItem,
 } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import SearchBar from "./SearchBar";
@@ -50,6 +52,15 @@ export default function DataBrowser() {
   const [sharing, setSharing] = useState(false);
 
   const lastSearchRef = useRef<{ query: string; sources: string[]; radius: number } | null>(null);
+
+  // Search history state
+  const [recentSearches, setRecentSearches] = useState<SearchHistoryItem[]>([]);
+
+  useEffect(() => {
+    getSearchHistory()
+      .then((items) => setRecentSearches(items.slice(0, 5)))
+      .catch(() => setRecentSearches([]));
+  }, []);
 
   // Helpers: get selected SearchResult objects from keys
   const validResults = results.filter((r) => r.object_id !== "error");
@@ -188,6 +199,47 @@ export default function DataBrowser() {
     URL.revokeObjectURL(url);
   }
 
+  function handleDownloadVOTable() {
+    const selected = getSelectedResults();
+    if (selected.length === 0) return;
+
+    const escapeXml = (s: string) =>
+      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+    const rows = selected
+      .map(
+        (r) =>
+          `        <TR><TD>${escapeXml(r.source)}</TD><TD>${escapeXml(r.name)}</TD><TD>${r.ra}</TD><TD>${r.dec}</TD><TD>${escapeXml(r.object_type || "")}</TD><TD>${r.magnitude ?? ""}</TD><TD>${r.redshift ?? ""}</TD></TR>`
+      )
+      .join("\n");
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">
+  <RESOURCE>
+    <TABLE name="results">
+      <FIELD name="source" datatype="char" arraysize="*"/>
+      <FIELD name="name" datatype="char" arraysize="*"/>
+      <FIELD name="ra" datatype="double"/>
+      <FIELD name="dec" datatype="double"/>
+      <FIELD name="object_type" datatype="char" arraysize="*"/>
+      <FIELD name="magnitude" datatype="double"/>
+      <FIELD name="redshift" datatype="double"/>
+      <DATA><TABLEDATA>
+${rows}
+      </TABLEDATA></DATA>
+    </TABLE>
+  </RESOURCE>
+</VOTABLE>`;
+
+    const blob = new Blob([xml], { type: "application/xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `astro_search_results_${selected.length}_objects.vot`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function handleBatchFetch() {
     const selected = getSelectedResults();
     if (selected.length === 0) return;
@@ -317,6 +369,21 @@ export default function DataBrowser() {
       <h1>Data Browser</h1>
       <SearchBar onSearch={handleSearch} onAdvancedSearch={handleAdvancedSearch} loading={loading} />
 
+      {results.length === 0 && !loading && recentSearches.length > 0 && (
+        <div className="recent-searches">
+          <span className="recent-searches-label">Recent Searches:</span>
+          {recentSearches.map((item) => (
+            <button
+              key={item.id}
+              className="recent-search-chip"
+              onClick={() => handleSearch(item.query, item.sources ? item.sources.split(",") : [], 0.05)}
+            >
+              {item.query}
+            </button>
+          ))}
+        </div>
+      )}
+
       {error && <div className="error-banner">{error}</div>}
       {bulkMsg && (
         <div className={bulkMsg.type === "ok" ? "success-banner" : "error-banner"}>
@@ -383,6 +450,9 @@ export default function DataBrowser() {
                 </button>
                 <button className="btn-secondary btn-small" onClick={handleDownloadSelected}>
                   Download CSV
+                </button>
+                <button className="btn-secondary btn-small" onClick={handleDownloadVOTable}>
+                  Download VOTable
                 </button>
                 <button
                   className="btn-secondary btn-small"
