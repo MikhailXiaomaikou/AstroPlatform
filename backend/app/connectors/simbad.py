@@ -61,6 +61,7 @@ class SIMBADConnector(BaseConnector):
         dec: float | None = None,
         radius: float = 1.0,
         limit: int = 100,
+        required_fields: list[str] | None = None,
     ) -> list[AstroObject]:
         """Search SIMBAD using TAP/ADQL with science criteria (type, redshift)."""
         from astroquery.simbad import Simbad
@@ -92,7 +93,19 @@ class SIMBADConnector(BaseConnector):
         if not conditions:
             return []
 
+        # If user is searching by redshift, ensure we only return objects WITH redshift data
+        has_redshift_filter = redshift_min is not None or redshift_max is not None
+        if has_redshift_filter:
+            conditions.append("rvz_redshift IS NOT NULL")
+
+        # Add NOT NULL filters for any explicitly requested data fields
+        valid_basic_cols = {"rvz_redshift", "plx_value", "pmra", "pmdec", "rvz_radvel", "sp_type", "morph_type"}
+        for fld in (required_fields or []):
+            if fld in valid_basic_cols:
+                conditions.append(f"{fld} IS NOT NULL")
+
         where = " AND ".join(conditions)
+        order_by = "rvz_redshift ASC" if has_redshift_filter else "nbref DESC"
         adql = (
             f"SELECT TOP {limit} main_id, ra, dec, otype, otype_txt, rvz_redshift, "
             f"rvz_radvel, rvz_type, sp_type, galdim_majaxis, galdim_minaxis, "
@@ -100,7 +113,7 @@ class SIMBADConnector(BaseConnector):
             f"rvz_qual, plx_qual, sp_qual, coo_qual "
             f"FROM basic "
             f"WHERE {where} "
-            f"ORDER BY rvz_redshift ASC"
+            f"ORDER BY {order_by}"
         )
 
         loop = asyncio.get_running_loop()

@@ -318,6 +318,55 @@ function buildPlot(
     };
   }
 
+  if (chartType === "redshift_dec") {
+    const n = Math.min(dec.length, redshift.length);
+    if (n === 0) return { data: [], layout: mkLayout("No data", mkAxis(""), mkAxis("")) };
+    const xd = dec.slice(0, n), yd = redshift.slice(0, n);
+    const traces: Record<string, unknown>[] = [{
+      type: "scattergl", mode: "markers",
+      x: xd, y: yd, text: names.slice(0, n),
+      marker: { size: 5, color: COLORS.purple, symbol: "circle", line: { width: 0.5, color: "rgba(0,0,0,0.12)" }, opacity: 0.82 },
+      hovertemplate: "<b>%{text}</b><br>δ = %{x:.5f}°<br><i>z</i> = %{y:.4f}<extra></extra>",
+    }];
+    if (showFit && n >= 2) {
+      const fit = linearFit(xd, yd);
+      const x0 = arrMin(xd), x1 = arrMax(xd);
+      traces.push({
+        type: "scatter", mode: "lines",
+        x: [x0, x1], y: [fit.slope * x0 + fit.intercept, fit.slope * x1 + fit.intercept],
+        line: { color: COLORS.red, width: 2, dash: "dash" },
+        name: `Linear: <i>R</i>² = ${fit.r2.toFixed(4)}`, showlegend: true,
+      });
+    }
+    const annotations: Record<string, unknown>[] = [];
+    if (showStats) annotations.push(statsAnnotation(yd, "z"));
+    return {
+      data: traces,
+      layout: mkLayout(`Redshift vs Declination (<i>N</i> = ${n})`,
+        mkAxis("Declination δ (deg)"),
+        mkAxis("Redshift <i>z</i>"),
+        { showlegend: showFit, annotations }),
+    };
+  }
+
+  if (chartType === "density_sky") {
+    if (ra.length === 0) return { data: [], layout: mkLayout("No data", mkAxis(""), mkAxis("")) };
+    return {
+      data: [{
+        type: "histogram2d",
+        x: ra, y: dec,
+        colorscale: "Hot", reversescale: true,
+        colorbar: mkColorbar("Count"),
+        nbinsx: Math.min(30, Math.max(8, Math.ceil(Math.sqrt(ra.length)))),
+        nbinsy: Math.min(30, Math.max(8, Math.ceil(Math.sqrt(ra.length)))),
+      }],
+      layout: mkLayout(`Sky Density Map (<i>N</i> = ${ra.length})`,
+        mkAxis("Right Ascension α (deg)", { autorange: "reversed" }),
+        mkAxis("Declination δ (deg)"),
+        { hasColorbar: true }),
+    };
+  }
+
   // Fallback: auto scatter
   const numKeys = Object.keys(data).filter(
     (k) => Array.isArray(data[k]) && (data[k] as unknown[]).length > 0 && typeof (data[k] as unknown[])[0] === "number"
@@ -348,10 +397,12 @@ function buildPlot(
 
 const CHART_TYPES: Record<string, string> = {
   sky_coverage: "Sky Distribution (α vs δ)",
+  density_sky: "Sky Density Map (2D histogram)",
   redshift_histogram: "Redshift Distribution",
   magnitude_histogram: "Magnitude Distribution",
   ra_dec_redshift: "Sky Position (colored by z)",
   redshift_ra: "Redshift vs RA",
+  redshift_dec: "Redshift vs Dec",
   scatter_custom: "Custom Scatter",
 };
 
@@ -371,7 +422,7 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
     const mag = ((initialData.magnitude || []) as unknown[]).filter((v) => v != null);
     const out: Record<string, string> = {};
     for (const [k, v] of Object.entries(CHART_TYPES)) {
-      if ((k === "redshift_histogram" || k === "ra_dec_redshift" || k === "redshift_ra") && z.length === 0) continue;
+      if ((k === "redshift_histogram" || k === "ra_dec_redshift" || k === "redshift_ra" || k === "redshift_dec") && z.length === 0) continue;
       if (k === "magnitude_histogram" && mag.length === 0) continue;
       out[k] = v;
     }

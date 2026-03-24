@@ -37,6 +37,8 @@ Available actions (return as JSON in your response within <actions>...</actions>
 1. {"action": "search", "query": "natural language description or object name", "sources": ["sdss","gaia","simbad","vizier","mast","ned","2mass","chandra","allwise"], "radius": 0.1}
    - The search backend understands natural language: it parses redshift ranges (z>4), spectral lines (C II, Lyman-alpha), object types (galaxy, quasar), etc.
    - For science-criteria searches (redshift, object type), SIMBAD is automatically used via TAP/ADQL
+   - When user asks for redshift data, ALWAYS include "z>" or "z<" in the query so the backend filters for objects WITH measured redshift
+   - When user asks for specific data fields, include those field names in the query (e.g. "galaxy z>4" returns objects with measured z values, "star parallax" returns objects with parallax measurements)
    - For coordinate/name searches, any source works
 2. {"action": "adql", "query": "SELECT ...", "service": "gaia|vizier|cadc"}
    - Gaia: query gaiadr3.gaia_source (columns: source_id, ra, dec, parallax, phot_g_mean_mag, bp_rp, radial_velocity, etc.)
@@ -202,7 +204,8 @@ async def execute_action(
         redshift_min = parsed.get("redshift_min")
         redshift_max = parsed.get("redshift_max")
         object_type = parsed.get("object_type")
-        has_science_criteria = any([redshift_min, redshift_max, object_type])
+        required_fields = parsed.get("required_fields", [])
+        has_science_criteria = any([redshift_min, redshift_max, object_type, required_fields])
 
         # Try to resolve coordinates from an object name in the query
         import re
@@ -234,6 +237,7 @@ async def execute_action(
                         ra=search_ra,
                         dec=search_dec,
                         radius=radius,
+                        required_fields=required_fields,
                     ),
                     timeout=45.0,
                 )
@@ -274,6 +278,7 @@ async def execute_action(
                         ra=search_ra,
                         dec=search_dec,
                         radius=radius,
+                        required_fields=required_fields,
                     ),
                     timeout=45.0,
                 )

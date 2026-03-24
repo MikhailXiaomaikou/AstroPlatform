@@ -242,6 +242,8 @@ class ParsedQuery:
     observed_wavelength_min_um: float | None = None
     observed_wavelength_max_um: float | None = None
     matched_keywords: list[str] = field(default_factory=list)
+    # Fields the user specifically wants in results (for NOT NULL filtering)
+    required_fields: list[str] = field(default_factory=list)
 
 
 def _match_longest_first(text_lower: str, mapping: dict[str, object]) -> tuple[str | None, object]:
@@ -350,6 +352,22 @@ def parse_natural_query(query: str) -> dict:
     if result.spectral_line_info is not None:
         _compute_observed_ranges(result)
 
+    # ── 8. Detect what data fields the user specifically wants ──
+    field_keywords = {
+        "redshift": "rvz_redshift", "z data": "rvz_redshift", "z value": "rvz_redshift",
+        "parallax": "plx_value", "proper motion": "pmra",
+        "radial velocity": "rvz_radvel", "spectral type": "sp_type",
+        "morphology": "morph_type", "morphological": "morph_type",
+    }
+    for kw, fld in sorted(field_keywords.items(), key=lambda x: len(x[0]), reverse=True):
+        if kw in q:
+            if fld not in result.required_fields:
+                result.required_fields.append(fld)
+    # If user searches by redshift, they want redshift data
+    if result.redshift_min is not None or result.redshift_max is not None:
+        if "rvz_redshift" not in result.required_fields:
+            result.required_fields.append("rvz_redshift")
+
     return _to_dict(result)
 
 
@@ -424,6 +442,8 @@ def _to_dict(result: ParsedQuery) -> dict:
         d["observed_wavelength_max_um"] = result.observed_wavelength_max_um
     if result.matched_keywords:
         d["matched_keywords"] = result.matched_keywords
+    if result.required_fields:
+        d["required_fields"] = result.required_fields
     return d
 
 
