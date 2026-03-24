@@ -1,153 +1,120 @@
-# Astro Research Platform
+# CLAUDE.md
 
-## Project Overview
-A SaaS platform for professional astronomers that unifies data ingestion from major astronomical databases and provides a visual pipeline editor for data processing workflows.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Subscription model**: Solo ($29/mo), Lab ($99/mo, 5 seats), Institution (custom)
+## Build & Run Commands
 
-## Tech Stack
-- **Frontend**: React + TypeScript + ReactFlow (pipeline canvas) + Vite
-- **Backend**: Python 3.11 + FastAPI + Celery + Redis
-- **Database**: PostgreSQL (metadata) + MinIO (FITS file storage)
-- **Astronomy**: astropy, numpy, scipy, specutils
-- **Auth**: JWT + Stripe (subscriptions)
-- **Deploy**: Docker Compose (dev) → AWS ECS (prod)
+```bash
+# Frontend (from frontend/)
+npm run build          # tsc -b && vite build — MUST pass before pushing
+npm run dev            # vite dev server on :5173
+npm run test           # vitest run
+npm run test:watch     # vitest in watch mode
+npm run lint           # eslint
 
-## Repository Structure
-```
-astro-platform/
-├── frontend/                  # React app
-│   ├── src/
-│   │   ├── pages/
-│   │   │   ├── DataBrowser/   # Search & preview astronomical data
-│   │   │   └── Pipeline/      # Drag-and-drop workflow canvas
-│   │   ├── components/
-│   │   │   ├── nodes/         # ReactFlow pipeline nodes
-│   │   │   └── fits/          # FITS file viewer
-│   │   └── api/               # API client (axios)
-│   └── package.json
-│
-├── backend/
-│   ├── app/
-│   │   ├── main.py            # FastAPI entry point
-│   │   ├── api/
-│   │   │   ├── data.py        # /api/data/* endpoints
-│   │   │   └── pipeline.py    # /api/pipeline/* endpoints
-│   │   ├── connectors/        # Data source connectors
-│   │   │   ├── base.py        # Abstract base connector
-│   │   │   ├── sdss.py        # SDSS DR18 via SkyServer API
-│   │   │   ├── gaia.py        # Gaia DR3 via astroquery
-│   │   │   └── simbad.py      # SIMBAD via astroquery
-│   │   ├── pipeline/
-│   │   │   ├── engine.py      # Celery task executor
-│   │   │   └── nodes/         # Built-in processing nodes
-│   │   │       ├── denoise.py
-│   │   │       ├── spectral_fit.py
-│   │   │       ├── coord_transform.py
-│   │   │       └── plot.py
-│   │   ├── models/            # SQLAlchemy ORM models
-│   │   └── storage.py         # MinIO FITS file management
-│   ├── requirements.txt
-│   └── celery_worker.py
-│
-├── docker-compose.yml
-└── CLAUDE.md                  # This file
+# Backend (from backend/)
+source .venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+python3 -m pytest tests/                    # all tests
+python3 -m pytest tests/test_api.py -k test_search  # single test
+
+# Python syntax check (all files)
+python3 -c "import py_compile, glob; [py_compile.compile(f, doraise=True) for f in glob.glob('app/**/*.py', recursive=True)]"
 ```
 
-## Core Concepts
+## TypeScript Constraints (CRITICAL)
 
-### Data Connectors
-Each connector implements `BaseConnector`:
+The frontend uses **strict TypeScript** with these enforced rules:
+- `strict: true`, `noUnusedLocals: true`, `noUnusedParameters: true`
+- `verbatimModuleSyntax: true` — interfaces/types MUST use `import type` syntax
+- `erasableSyntaxOnly: true`
+- Build is `tsc -b && vite build` — TypeScript errors block the build
+
+Common pitfalls:
+- `import { Foo }` for a type → build fails. Use `import type { Foo }` or `import { type Foo }`
+- Unused variables after refactoring → build fails. Remove or prefix with `_`
+- Unused imports → build fails. Clean up after changes
+
+## Architecture
+
+**Full-stack astronomy research platform**: React SPA (Vite) + FastAPI backend + SQLite (dev) / PostgreSQL (prod).
+
+### Backend (`backend/app/`)
+
+- `api/` — 17 FastAPI routers (auth, chat, data, arxiv, citations, crossmatch, team, settings, pipeline, etc.)
+- `connectors/` — 14 astronomical database connectors (SDSS, Gaia, SIMBAD, MAST, VizieR, NED, 2MASS, Chandra, ALMA, AllWISE, ESO, IRSA, JWST, LAMOST). All extend `BaseConnector` in `base.py` with `search()` and `fetch()` methods
+- `pipeline/nodes/` — 12 processing nodes (denoise, spectral_fit, coord_transform, redshift, sed_fit, crossmatch, image_stack, phot_calibrate, plot, plot_interactive, load_data, equivalent_width)
+- `models/schemas.py` — 16 SQLAlchemy models. Uses custom `UUIDType` and `JSONType` for SQLite/PostgreSQL portability
+- `auth.py` — JWT with bcrypt. `get_current_user()` (required) and `get_optional_user()` (optional) as FastAPI dependencies
+
+### Frontend (`frontend/src/`)
+
+- `pages/` — 9 page components: DataBrowser, Pipeline, Chat (AI assistant), ADQL, Team, Workspace, Settings, Billing, Auth
+- `components/viz/PlotBuilder.tsx` — Publication-quality Plotly charts generated client-side. White paper background, CMU Serif fonts, colorblind-safe palette
+- `api/client.ts` — Axios client. Base URL from `VITE_API_URL` env var, falls back to `localhost:8000`. JWT auto-attached via interceptor
+- `context/AuthContext.tsx` — Auth state with login/register/setupKeyLogin/logout
+
+### Key Data Flow
+
+1. **Search**: User query → `parse_natural_query()` extracts science criteria (redshift, spectral lines, object type) → routes to SIMBAD TAP `search_by_criteria()` for science queries, or direct `connector.search()` for name/coordinate queries
+2. **AI Chat**: Frontend sends messages + API key (from localStorage) → backend calls Claude API → response parsed for `<actions>` tags → actions executable inline (search, ADQL, arXiv extraction, plot)
+3. **NaN safety**: Astronomy data often contains masked/NaN values. `_safe_float()` and `_sanitize_extra()` in `data.py` sanitize all connector output before JSON serialization. SIMBAD connector also checks NaN in `_table_to_objects()`
+
+## Critical Patterns
+
+### NaN Handling
+SIMBAD/astropy return masked values that become `float('nan')` and break `json.dumps`. Every path from connector to API response MUST go through `_astro_to_result()` which uses `_safe_float()`:
 ```python
-class BaseConnector:
-    async def search(self, query: str, ra: float, dec: float, radius: float) -> list[AstroObject]
-    async def fetch(self, object_id: str) -> FITSFile
-    def normalize(self, raw_data) -> StandardizedData  # Always converts to astropy Table
+def _safe_float(val):
+    if val is None: return None
+    if val != val or val == float("inf") or val == float("-inf"): return None
+    return val
 ```
 
-### Pipeline Nodes
-Each node is a Celery task + ReactFlow node definition:
+### SIMBAD TAP Queries
+The `basic` table has specific columns. Notably does NOT have `flux_B/V/R/I/J/H/K` or `Fe_H_Fe_H` — those are in separate tables. Available: `main_id, ra, dec, otype, otype_txt, rvz_redshift, rvz_radvel, sp_type, morph_type, plx_value, pmra, pmdec, galdim_*`. Object type values need SQL injection prevention via `re.sub(r"[^a-zA-Z0-9*]", "", simbad_type)`.
+
+### API Key Flow (Beta Mode)
+Currently no login required. API keys stored in browser `localStorage` as `astro_api_keys` JSON. Frontend sends Anthropic key in `context.api_key` field of chat requests. Backend strips it from the Claude system prompt for security.
+
+### Database Migrations
+SQLite `create_all()` does NOT add columns to existing tables. New columns require manual `ALTER TABLE` via:
 ```python
-# Backend: pure function, receives/returns standardized data
-@celery_app.task
-def denoise_node(input_data: dict, params: dict) -> dict:
-    ...
-
-# Frontend: ReactFlow node with input/output handles
-# Nodes connect via handles; data flows left→right
+import sqlite3
+db = sqlite3.connect('data/astro.db')
+db.execute('ALTER TABLE users ADD COLUMN new_col TEXT')
+db.commit()
 ```
 
-### Pipeline Execution Flow
-1. User builds pipeline in canvas (ReactFlow graph = JSON DAG)
-2. POST /api/pipeline/run → serialize DAG to JSON
-3. Backend topologically sorts nodes
-4. Each node runs as Celery task, chained in order
-5. Results stored in MinIO, metadata in PostgreSQL
-6. WebSocket pushes progress updates to frontend
+## Deployment
 
-## API Endpoints
+**Production**: Render.com (backend Docker + PostgreSQL) + Render static site (frontend)
+- Backend: `https://astro-backend-h4x1.onrender.com`
+- Frontend: `https://astro-frontend-tyfr.onrender.com`
+- Backend auto-converts `postgresql://` to `postgresql+asyncpg://` in `config.py`
+- Render free tier sleeps after 15min — `BackendBanner` component in `App.tsx` shows "waking up" notice
+- CORS origins configured in `cors.py` — includes both localhost and Render URLs
 
-### Data API
-```
-GET  /api/data/search?q={name_or_coords}&sources=sdss,gaia,simbad
-GET  /api/data/{source}/{object_id}          # Fetch & store FITS
-GET  /api/data/workspace                     # List user's data files
-```
-
-### Pipeline API
-```
-POST /api/pipeline/run        # Body: { dag: {...}, input_data_id: str }
-GET  /api/pipeline/{run_id}   # Status + results
-GET  /api/pipeline/templates  # List built-in templates
-POST /api/pipeline/save       # Save pipeline as template
-```
-
-## Data Model (PostgreSQL)
-```sql
-users          (id, email, subscription_tier, stripe_customer_id)
-data_files     (id, user_id, source, object_id, fits_path, metadata jsonb)
-pipeline_runs  (id, user_id, dag jsonb, status, created_at, completed_at)
-run_results    (id, run_id, node_id, output_path, logs)
-```
-
-## Built-in Pipeline Nodes (MVP)
-| Node | Input | Output | Key Params |
-|------|-------|--------|------------|
-| LoadData | data_file_id | spectrum/image | - |
-| Denoise | spectrum | spectrum | sigma_clip threshold |
-| SpectralFit | spectrum | fit_result | model (gaussian/lorentzian) |
-| CoordTransform | coords | coords | from_frame, to_frame |
-| Plot | any | PNG/HTML | plot_type (spectrum/image/scatter) |
+Push to `main` branch → Render auto-deploys (may need Manual Deploy for first time).
 
 ## Environment Variables
+
+Backend (required for production):
 ```
-DATABASE_URL=postgresql://...
-REDIS_URL=redis://...
-MINIO_ENDPOINT=...
-MINIO_ACCESS_KEY=...
-MINIO_SECRET_KEY=...
-STRIPE_SECRET_KEY=...
-JWT_SECRET=...
-```
-
-## Development Setup
-```bash
-# Start all services
-docker-compose up -d
-
-# Backend (with hot reload)
-cd backend && uvicorn app.main:app --reload
-
-# Frontend
-cd frontend && npm run dev
-
-# Celery worker
-cd backend && celery -A celery_worker worker --loglevel=info
+ENV=production
+DATABASE_URL=postgresql://...    # auto-converted to asyncpg
+JWT_SECRET=<random-hex-32>
+CORS_ORIGINS=https://your-frontend.com
 ```
 
-## Implementation Priority
-1. **Phase 1** – Backend connectors (SDSS + Gaia) + search API
-2. **Phase 2** – Frontend data browser + FITS preview
-3. **Phase 3** – Pipeline engine (Celery) + 5 built-in nodes
-4. **Phase 4** – Frontend canvas (ReactFlow) wired to backend
-5. **Phase 5** – Auth + Stripe subscriptions + deploy
+Backend (optional):
+```
+ANTHROPIC_API_KEY=sk-ant-...     # server-wide default for AI assistant
+ADS_API_KEY=...                  # NASA ADS citation search
+REDIS_URL=redis://...            # for caching (graceful fallback if unavailable)
+```
+
+Frontend:
+```
+VITE_API_URL=https://your-backend.com   # defaults to http://localhost:8000
+```

@@ -2,7 +2,6 @@
 
 import logging
 
-import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
@@ -21,8 +20,6 @@ from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-stripe.api_key = settings.stripe_secret_key
 
 
 # ── Request / Response models ──
@@ -218,65 +215,13 @@ async def subscribe(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create or update Stripe subscription."""
+    """Update subscription tier (billing not yet integrated)."""
     valid_tiers = {"solo", "lab", "institution"}
     if req.tier not in valid_tiers:
         raise HTTPException(status_code=400, detail=f"Invalid tier. Choose from: {valid_tiers}")
-
-    if not settings.stripe_secret_key:
-        # Dev mode: just update tier directly
-        user.subscription_tier = req.tier
-        await db.commit()
-        return {"status": "updated", "tier": req.tier, "mode": "dev"}
-
-    # Create Stripe customer if needed
-    if not user.stripe_customer_id:
-        customer = stripe.Customer.create(email=user.email)
-        user.stripe_customer_id = customer.id
-        await db.commit()
-
-    # In production, you'd create a Checkout Session or Subscription here
-    # For now, update the tier directly
     user.subscription_tier = req.tier
     await db.commit()
-
     return {"status": "updated", "tier": req.tier}
-
-
-@router.post("/stripe-webhook")
-async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """Handle Stripe webhook events."""
-    if not settings.stripe_webhook_secret:
-        raise HTTPException(status_code=400, detail="Webhook not configured")
-
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-
-    try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, settings.stripe_webhook_secret
-        )
-    except (ValueError, stripe.error.SignatureVerificationError):
-        raise HTTPException(status_code=400, detail="Invalid webhook signature")
-
-    if event["type"] == "customer.subscription.updated":
-        subscription = event["data"]["object"]
-        customer_id = subscription["customer"]
-
-        result = await db.execute(
-            select(User).where(User.stripe_customer_id == customer_id)
-        )
-        user = result.scalar_one_or_none()
-        if user:
-            # Map Stripe price to tier
-            status_val = subscription.get("status")
-            if status_val == "active":
-                logger.info(f"Subscription updated for user {user.email}")
-            elif status_val in ("canceled", "unpaid"):
-                user.subscription_tier = "solo"
-                await db.commit()
-
-    return {"received": True}
 
 
 @router.get("/usage")

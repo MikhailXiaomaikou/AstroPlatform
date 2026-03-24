@@ -11,15 +11,9 @@ _ENV = os.getenv("ENV", "dev")
 class Settings(BaseSettings):
     database_url: str = f"sqlite+aiosqlite:///{_PROJECT_DIR / 'data' / 'astro.db'}"
     redis_url: str = "redis://localhost:6379/0"
-    minio_endpoint: str = "localhost:9000"
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "minioadmin"
-    minio_bucket: str = "astro-fits"
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24  # 24 hours
-    stripe_secret_key: str = ""
-    stripe_webhook_secret: str = ""
 
     # Local-mode: use filesystem instead of MinIO
     local_storage_dir: str = str(_PROJECT_DIR / "data" / "fits")

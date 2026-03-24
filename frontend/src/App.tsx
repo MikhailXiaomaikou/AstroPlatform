@@ -46,7 +46,7 @@ const AuthPage = lazy(() => import("./pages/Auth/AuthPage"));
 const ADQLPage = lazy(() => import("./pages/ADQL/ADQLPage"));
 const WorkspacePage = lazy(() => import("./pages/Workspace/WorkspacePage"));
 const TeamPage = lazy(() => import("./pages/Team/TeamPage"));
-const BillingPage = lazy(() => import("./pages/Billing/BillingPage"));
+
 const ChatPage = lazy(() => import("./pages/Chat/ChatPage"));
 const SettingsPage = lazy(() => import("./pages/Settings/SettingsPage"));
 
@@ -146,7 +146,7 @@ function App() {
                 <Route path="/workspace" element={<WorkspacePage />} />
                 <Route path="/adql" element={<ADQLPage />} />
                 <Route path="/team" element={<TeamPage />} />
-                <Route path="/billing" element={<BillingPage />} />
+
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/auth" element={<AuthPage />} />
