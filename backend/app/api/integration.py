@@ -339,7 +339,7 @@ async def adql_query(req: ADQLRequest):
     try:
         from astroquery.utils.tap.core import TapPlus
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _run_query():
             tap = TapPlus(url=ADQL_SERVICES[req.service])
@@ -359,10 +359,15 @@ async def adql_query(req: ADQLRequest):
                     arr = arr.filled(None)
                 vals = []
                 for v in arr:
-                    if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
+                    if v is None:
                         vals.append(None)
+                    elif isinstance(v, (np.integer, int)):
+                        vals.append(int(v))  # preserve integers (e.g. Gaia source_id)
+                    elif isinstance(v, (np.floating, float)):
+                        fv = float(v)
+                        vals.append(None if (np.isnan(fv) or np.isinf(fv)) else fv)
                     else:
-                        vals.append(float(v) if isinstance(v, (int, float, np.integer, np.floating)) else str(v))
+                        vals.append(str(v))
                 data[col] = vals
             except Exception:
                 data[col] = [str(v) for v in arr]
