@@ -288,18 +288,33 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   const totalPages = Math.ceil(unique.length / PAGE_SIZE);
   const displayed = unique.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-  // Dynamically discover extra columns that have data
+  // Dynamically discover extra columns — only show columns where >30% of rows have data
+  // and skip quality/metadata columns
   const extraCols = useMemo(() => {
-    const colSet = new Set<string>();
+    const skipCols = new Set(["rvz_type", "coo_qual", "otype_txt", "galdim_angle"]);
+    const counts: Record<string, number> = {};
     for (const row of unique) {
       const extra = row.extra as Record<string, unknown> | undefined;
       if (extra) {
         for (const k of Object.keys(extra)) {
-          if (extra[k] != null) colSet.add(k);
+          if (extra[k] != null && !skipCols.has(k)) {
+            counts[k] = (counts[k] || 0) + 1;
+          }
         }
       }
     }
-    return Array.from(colSet).sort();
+    const threshold = Math.max(1, unique.length * 0.3);
+    // Prioritize: quality flags last, important fields first
+    const priority: Record<string, number> = {
+      sp_type: 1, morph_type: 2, plx_value: 3, pmra: 4, pmdec: 5,
+      rvz_radvel: 6, galdim_majaxis: 7, galdim_minaxis: 8,
+    };
+    return Object.entries(counts)
+      .filter(([, count]) => count >= threshold)
+      .filter(([k]) => !k.endsWith("_qual"))  // hide quality flags from main table
+      .sort((a, b) => (priority[a[0]] || 99) - (priority[b[0]] || 99))
+      .map(([k]) => k)
+      .slice(0, 5);  // max 5 extra columns to keep table readable
   }, [unique]);
 
   // Friendly names for common SIMBAD columns
@@ -311,6 +326,11 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
     flux_B: "B mag", flux_V: "V mag", flux_R: "R mag", flux_I: "I mag",
     flux_J: "J mag", flux_H: "H mag", flux_K: "K mag",
   };
+
+  // Auto-hide base columns that are all null
+  const hasMag = useMemo(() => unique.some((r) => r.magnitude != null), [unique]);
+  const hasZ = useMemo(() => unique.some((r) => r.redshift != null), [unique]);
+  const hasType = useMemo(() => unique.some((r) => r.object_type), [unique]);
 
   // Selection uses global indices into the unique array
   const pageStart = page * PAGE_SIZE;
@@ -359,10 +379,19 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
     setShowStats(true);
   }
 
+  function getVisibleCols(): string[] {
+    const cols = ["name", "ra", "dec"];
+    if (hasType) cols.push("object_type");
+    if (hasMag) cols.push("magnitude");
+    if (hasZ) cols.push("redshift");
+    cols.push(...extraCols);
+    return cols;
+  }
+
   function handleDownload() {
     const rows = getSelected();
     if (rows.length === 0) return;
-    const cols = ["source", "name", "ra", "dec", "object_type", "magnitude", "redshift", ...extraCols];
+    const cols = getVisibleCols();
     const header = cols.join(",");
     const csv = [
       header,
@@ -389,7 +418,7 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   function handleDownloadVOTable() {
     const rows = getSelected();
     if (rows.length === 0) return;
-    const cols = ["source", "name", "ra", "dec", "object_type", "magnitude", "redshift", ...extraCols];
+    const cols = getVisibleCols();
     const escapeXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     const numericCols = new Set(["ra", "dec", "magnitude", "redshift"]);
     const fields = cols.map((c) => {
@@ -471,13 +500,12 @@ ${trs}
                   ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
                   onChange={toggleAll} className="row-checkbox" />
               </th>
-              <th>Source</th>
               <th>Name</th>
               <th>RA</th>
               <th>Dec</th>
-              <th>Type</th>
-              <th>Mag</th>
-              <th>z</th>
+              {hasType && <th>Type</th>}
+              {hasMag && <th>Mag</th>}
+              {hasZ && <th>z</th>}
               {extraCols.map((c) => (
                 <th key={c} title={c}>{colLabels[c] || c}</th>
               ))}
@@ -493,23 +521,12 @@ ${trs}
                     <input type="checkbox" checked={selected.has(globalIdx)}
                       onChange={() => toggleOne(globalIdx)} className="row-checkbox" />
                   </td>
-                  <td>
-                    <span
-                      className="source-chip"
-                      title={`Data from ${(row.source as string).toUpperCase()} TAP, queried ${new Date().toISOString().slice(0, 19)}`}
-                    >
-                      {row.source as string}
-                      {(row.source as string) === "simbad" && (
-                        <span style={{ marginLeft: 3, fontSize: "0.6rem", background: "rgba(56,189,248,0.3)", padding: "0 3px", borderRadius: 3 }}>SIMBAD</span>
-                      )}
-                    </span>
-                  </td>
-                  <td>{row.name as string}</td>
+                  <td title={`${(row.source as string).toUpperCase()} | ${new Date().toISOString().slice(0, 10)}`}>{row.name as string}</td>
                   <td>{(row.ra as number)?.toFixed(5)}</td>
                   <td>{(row.dec as number)?.toFixed(5)}</td>
-                  <td>{(row.object_type as string) || "—"}</td>
-                  <td>{row.magnitude != null ? (row.magnitude as number).toFixed(2) : "—"}</td>
-                  <td>{row.redshift != null ? (row.redshift as number).toFixed(4) : "—"}</td>
+                  {hasType && <td>{(row.object_type as string) || "—"}</td>}
+                  {hasMag && <td>{row.magnitude != null ? (row.magnitude as number).toFixed(2) : "—"}</td>}
+                  {hasZ && <td>{row.redshift != null ? (row.redshift as number).toFixed(4) : "—"}</td>}
                   {extraCols.map((c) => (
                     <td key={c}>
                       {c.endsWith("_qual") && extra[c] != null
