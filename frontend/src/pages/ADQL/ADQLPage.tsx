@@ -9,26 +9,77 @@ interface Service {
   description: string;
 }
 
-const TEMPLATE_QUERIES: Array<{ label: string; query: string }> = [
+const TEMPLATE_QUERIES: Array<{ label: string; query: string; service: string; desc: string }> = [
   {
-    label: "Gaia bright stars",
-    query: "SELECT TOP 100 source_id, ra, dec, phot_g_mean_mag FROM gaiadr3.gaia_source WHERE phot_g_mean_mag < 6 ORDER BY phot_g_mean_mag",
+    label: "Gaia: photometry (G < 15)",
+    service: "gaia",
+    desc: "Astrometry + 3-band photometry. ~100% complete for G<20.",
+    query: `SELECT TOP 200 source_id, ra, dec,
+  phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag,
+  bp_rp, parallax, pmra, pmdec
+FROM gaiadr3.gaia_source
+WHERE phot_g_mean_mag < 15
+  AND parallax IS NOT NULL
+ORDER BY phot_g_mean_mag`,
   },
   {
-    label: "High-z galaxies",
-    query: "SELECT TOP 100 main_id, ra, dec, rvz_redshift FROM basic WHERE otype='G' AND rvz_redshift > 4 ORDER BY rvz_redshift DESC",
+    label: "Gaia: full stellar params (bright)",
+    service: "gaia",
+    desc: "Includes Teff, logg, [M/H]. Only ~40% complete (needs BP/RP spectra).",
+    query: `SELECT TOP 200 source_id, ra, dec,
+  phot_g_mean_mag, bp_rp, parallax, pmra, pmdec,
+  teff_gspphot, logg_gspphot, mh_gspphot,
+  ag_gspphot, ebpminrp_gspphot
+FROM gaiadr3.gaia_source
+WHERE teff_gspphot IS NOT NULL
+  AND phot_g_mean_mag < 16
+ORDER BY phot_g_mean_mag`,
   },
   {
-    label: "Nearby stars (parallax)",
-    query: "SELECT TOP 100 source_id, ra, dec, parallax, phot_g_mean_mag FROM gaiadr3.gaia_source WHERE parallax > 100 ORDER BY parallax DESC",
+    label: "Gaia: radial velocities (G < 14)",
+    service: "gaia",
+    desc: "RV only available for ~5% of sources (bright stars G<14).",
+    query: `SELECT TOP 200 source_id, ra, dec,
+  phot_g_mean_mag, parallax, pmra, pmdec,
+  radial_velocity, radial_velocity_error
+FROM gaiadr3.gaia_source
+WHERE radial_velocity IS NOT NULL
+ORDER BY phot_g_mean_mag`,
   },
   {
-    label: "QSOs",
-    query: "SELECT TOP 100 main_id, ra, dec, rvz_redshift FROM basic WHERE otype='QSO' ORDER BY rvz_redshift DESC",
+    label: "Gaia: nearby stars (plx > 50 mas)",
+    service: "gaia",
+    desc: "Stars within ~20 pc. High completeness for parallax.",
+    query: `SELECT TOP 200 source_id, ra, dec,
+  phot_g_mean_mag, bp_rp, parallax, parallax_error,
+  pmra, pmdec, ruwe
+FROM gaiadr3.gaia_source
+WHERE parallax > 50
+  AND ruwe < 1.4
+ORDER BY parallax DESC`,
   },
   {
-    label: "Variable stars",
-    query: "SELECT TOP 100 source_id, ra, dec, phot_variable_flag FROM gaiadr3.gaia_source WHERE phot_variable_flag = 'VARIABLE' LIMIT 100",
+    label: "SIMBAD: high-z galaxies",
+    service: "simbad",
+    desc: "Galaxies with measured redshift z > 4.",
+    query: `SELECT TOP 200 main_id, ra, dec, otype,
+  rvz_redshift, rvz_radvel, morph_type
+FROM basic
+WHERE otype = 'G'
+  AND rvz_redshift > 4
+  AND rvz_redshift IS NOT NULL
+ORDER BY rvz_redshift DESC`,
+  },
+  {
+    label: "SIMBAD: QSOs with redshift",
+    service: "simbad",
+    desc: "Quasars ordered by redshift.",
+    query: `SELECT TOP 200 main_id, ra, dec,
+  rvz_redshift, sp_type
+FROM basic
+WHERE otype = 'QSO'
+  AND rvz_redshift IS NOT NULL
+ORDER BY rvz_redshift DESC`,
   },
 ];
 
@@ -161,7 +212,8 @@ export default function ADQLPage() {
             key={t.label}
             className="btn-secondary btn-small"
             style={{ fontSize: "0.72rem" }}
-            onClick={() => setQuery(t.query)}
+            title={t.desc}
+            onClick={() => { setQuery(t.query); setService(t.service); }}
           >
             {t.label}
           </button>

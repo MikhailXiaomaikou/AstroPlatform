@@ -41,10 +41,16 @@ Available actions (return as JSON in your response within <actions>...</actions>
    - When user asks for specific data fields, include those field names in the query (e.g. "galaxy z>4" returns objects with measured z values, "star parallax" returns objects with parallax measurements)
    - For coordinate/name searches, any source works
 2. {"action": "adql", "query": "SELECT ...", "service": "gaia|vizier|cadc"}
-   - Gaia: query gaiadr3.gaia_source (columns: source_id, ra, dec, parallax, phot_g_mean_mag, bp_rp, radial_velocity, etc.)
-   - VizieR: use real catalog names from CDS, e.g. "II/246/out" (2MASS), "I/355/gaiadr3" (Gaia in VizieR). Do NOT invent catalog paths — if unsure of the exact VizieR table name, use a search action instead
+   - Gaia DR3 (gaiadr3.gaia_source): IMPORTANT data completeness hierarchy:
+     * Layer 1 (~100%): ra, dec, phot_g_mean_mag — always available
+     * Layer 2 (~87%): parallax, pmra, pmdec, ruwe — needs multi-epoch astrometry
+     * Layer 3 (~40%): teff_gspphot, logg_gspphot, mh_gspphot — needs BP/RP spectra, mostly G<18
+     * Layer 4 (~5%): radial_velocity — only for bright stars G<14
+     Also: phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, ag_gspphot, ebpminrp_gspphot
+     Always add IS NOT NULL for columns beyond Layer 1 to avoid empty results.
+   - VizieR: use real catalog names from CDS, e.g. "II/246/out" (2MASS). Do NOT invent paths.
    - CADC: query CAOM2 tables (caom2.Observation, caom2.Plane)
-   - SIMBAD TAP: query the "basic" table (columns: main_id, ra, dec, otype, rvz_redshift)
+   - SIMBAD TAP: "basic" table (main_id, ra, dec, otype, rvz_redshift, sp_type, morph_type, plx_value, pmra, pmdec)
 3. {"action": "arxiv", "arxiv_id": "2301.12345"} — extract data tables from an arXiv paper. Accepts arXiv ID or full URL.
 4. {"action": "run_pipeline", "nodes": [{"type": "LoadData", ...}, {"type": "Denoise", ...}], "input_data_id": "..."}
 5. {"action": "explain", "topic": "..."} — just provide explanation, no platform action needed
