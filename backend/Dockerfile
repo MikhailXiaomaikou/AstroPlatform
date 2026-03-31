@@ -6,12 +6,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
+    gfortran \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-# v2: added email-validator, relaxed versions
-RUN pip install --no-cache-dir --only-binary=:all: -r requirements.txt || \
-    pip install --no-cache-dir -r requirements.txt
+# v3: install with fallback, gfortran available for scipy
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
