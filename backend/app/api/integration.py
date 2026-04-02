@@ -355,17 +355,26 @@ async def adql_query(req: ADQLRequest):
         for col in columns:
             arr = table[col]
             try:
+                # Check if column is masked and get the mask
+                mask = None
+                if hasattr(arr, "mask"):
+                    mask = arr.mask
                 if hasattr(arr, "filled"):
-                    arr = arr.filled(None)
+                    arr = arr.filled(0)  # fill with 0, we use mask to detect nulls
                 vals = []
-                for v in arr:
-                    if v is None:
+                for idx, v in enumerate(arr):
+                    # Use mask to detect missing values
+                    is_masked = mask is not None and (mask[idx] if hasattr(mask, '__getitem__') else mask)
+                    if is_masked or v is None:
                         vals.append(None)
                     elif isinstance(v, (np.integer, int)):
-                        vals.append(int(v))  # preserve integers (e.g. Gaia source_id)
+                        vals.append(int(v))
                     elif isinstance(v, (np.floating, float)):
                         fv = float(v)
-                        vals.append(None if (np.isnan(fv) or np.isinf(fv)) else fv)
+                        if np.isnan(fv) or np.isinf(fv) or abs(fv) > 1e18:
+                            vals.append(None)
+                        else:
+                            vals.append(fv)
                     else:
                         vals.append(str(v))
                 data[col] = vals
