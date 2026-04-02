@@ -1,274 +1,192 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { adqlQuery, listADQLServices, logOperation } from "../../api/client";
 import type { ADQLResult } from "../../api/client";
 
-interface Service {
-  id: string;
-  name: string;
-  url: string;
-  description: string;
-}
-
-const TEMPLATE_QUERIES: Array<{ label: string; query: string; service: string; desc: string }> = [
-  {
-    label: "Gaia: photometry (G < 15)",
-    service: "gaia",
-    desc: "Astrometry + 3-band photometry. ~100% complete for G<20.",
-    query: `SELECT TOP 200 source_id, ra, dec,
-  phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag,
-  bp_rp, parallax, pmra, pmdec
-FROM gaiadr3.gaia_source
-WHERE phot_g_mean_mag < 15
-  AND parallax IS NOT NULL
-ORDER BY phot_g_mean_mag`,
-  },
-  {
-    label: "Gaia: full stellar params (bright)",
-    service: "gaia",
-    desc: "Includes Teff, logg, [M/H]. Only ~40% complete (needs BP/RP spectra).",
-    query: `SELECT TOP 200 source_id, ra, dec,
-  phot_g_mean_mag, bp_rp, parallax, pmra, pmdec,
-  teff_gspphot, logg_gspphot, mh_gspphot,
-  ag_gspphot, ebpminrp_gspphot
-FROM gaiadr3.gaia_source
-WHERE teff_gspphot IS NOT NULL
-  AND phot_g_mean_mag < 16
-ORDER BY phot_g_mean_mag`,
-  },
-  {
-    label: "Gaia: radial velocities (G < 14)",
-    service: "gaia",
-    desc: "RV only available for ~5% of sources (bright stars G<14).",
-    query: `SELECT TOP 200 source_id, ra, dec,
-  phot_g_mean_mag, parallax, pmra, pmdec,
-  radial_velocity, radial_velocity_error
-FROM gaiadr3.gaia_source
-WHERE radial_velocity IS NOT NULL
-ORDER BY phot_g_mean_mag`,
-  },
-  {
-    label: "Gaia: nearby stars (plx > 50 mas)",
-    service: "gaia",
-    desc: "Stars within ~20 pc. High completeness for parallax.",
-    query: `SELECT TOP 200 source_id, ra, dec,
-  phot_g_mean_mag, bp_rp, parallax, parallax_error,
-  pmra, pmdec, ruwe
-FROM gaiadr3.gaia_source
-WHERE parallax > 50
-  AND ruwe < 1.4
-ORDER BY parallax DESC`,
-  },
-  {
-    label: "SIMBAD: high-z galaxies",
-    service: "simbad",
-    desc: "Galaxies with measured redshift z > 4.",
-    query: `SELECT TOP 200 main_id, ra, dec, otype,
-  rvz_redshift, rvz_radvel, morph_type
-FROM basic
-WHERE otype = 'G'
-  AND rvz_redshift > 4
-  AND rvz_redshift IS NOT NULL
-ORDER BY rvz_redshift DESC`,
-  },
-  {
-    label: "SIMBAD: QSOs with redshift",
-    service: "simbad",
-    desc: "Quasars ordered by redshift.",
-    query: `SELECT TOP 200 main_id, ra, dec,
-  rvz_redshift, sp_type
-FROM basic
-WHERE otype = 'QSO'
-  AND rvz_redshift IS NOT NULL
-ORDER BY rvz_redshift DESC`,
-  },
+/* ── Templates ── */
+const TEMPLATES = [
+  { label: "Gaia: photometry", svc: "gaia", tip: "G/BP/RP + parallax + PM. ~100% for G<20.",
+    q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, parallax, pmra, pmdec\nFROM gaiadr3.gaia_source\nWHERE phot_g_mean_mag < 15 AND parallax IS NOT NULL\nORDER BY phot_g_mean_mag" },
+  { label: "Gaia: stellar params", svc: "gaia", tip: "Teff, logg, [M/H]. ~40% complete.",
+    q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, bp_rp, parallax, teff_gspphot, logg_gspphot, mh_gspphot\nFROM gaiadr3.gaia_source\nWHERE teff_gspphot IS NOT NULL AND phot_g_mean_mag < 16\nORDER BY phot_g_mean_mag" },
+  { label: "Gaia: radial velocity", svc: "gaia", tip: "RV only ~5% of sources (G<14).",
+    q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, parallax, radial_velocity, radial_velocity_error\nFROM gaiadr3.gaia_source\nWHERE radial_velocity IS NOT NULL\nORDER BY phot_g_mean_mag" },
+  { label: "Gaia: nearby (plx>50)", svc: "gaia", tip: "Stars within ~20 pc.",
+    q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, bp_rp, parallax, parallax_error, pmra, pmdec, ruwe\nFROM gaiadr3.gaia_source\nWHERE parallax > 50 AND ruwe < 1.4\nORDER BY parallax DESC" },
+  { label: "SIMBAD: z>4 galaxies", svc: "simbad", tip: "Galaxies with measured redshift.",
+    q: "SELECT TOP 200 main_id, ra, dec, otype, rvz_redshift, morph_type\nFROM basic\nWHERE otype = 'G' AND rvz_redshift > 4 AND rvz_redshift IS NOT NULL\nORDER BY rvz_redshift DESC" },
+  { label: "SIMBAD: QSOs", svc: "simbad", tip: "Quasars by redshift.",
+    q: "SELECT TOP 200 main_id, ra, dec, rvz_redshift, sp_type\nFROM basic\nWHERE otype = 'QSO' AND rvz_redshift IS NOT NULL\nORDER BY rvz_redshift DESC" },
 ];
 
-function loadQueryHistory(): string[] {
-  try {
-    const raw = localStorage.getItem("astro_adql_history");
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveQueryToHistory(q: string) {
-  try {
-    const history = loadQueryHistory();
-    // Remove duplicate if exists, then prepend
-    const filtered = history.filter((h) => h !== q);
-    filtered.unshift(q);
-    // Keep last 10
-    localStorage.setItem("astro_adql_history", JSON.stringify(filtered.slice(0, 10)));
-  } catch {
-    // ignore
-  }
-}
-
-const EXAMPLE_QUERIES: Record<string, string> = {
-  gaia: `SELECT TOP 100 source_id, ra, dec, phot_g_mean_mag, parallax
-FROM gaiadr3.gaia_source
-WHERE 1=CONTAINS(
-  POINT('ICRS', ra, dec),
-  CIRCLE('ICRS', 83.633, 22.014, 0.1)
-)
-ORDER BY phot_g_mean_mag`,
-  vizier: `SELECT TOP 50 *
-FROM "II/246/out"
-WHERE 1=CONTAINS(
-  POINT('ICRS', RAJ2000, DEJ2000),
-  CIRCLE('ICRS', 83.633, 22.014, 0.05)
-)`,
-  cadc: `SELECT TOP 50 *
-FROM caom2.Observation
-WHERE target_name = 'M31'`,
+const DEFAULTS: Record<string, string> = {
+  gaia: "SELECT TOP 100 source_id, ra, dec, phot_g_mean_mag, parallax\nFROM gaiadr3.gaia_source\nWHERE phot_g_mean_mag < 10\nORDER BY phot_g_mean_mag",
+  vizier: 'SELECT TOP 50 *\nFROM "II/246/out"\nWHERE 1=CONTAINS(POINT(\'ICRS\', RAJ2000, DEJ2000), CIRCLE(\'ICRS\', 83.633, 22.014, 0.05))',
+  cadc: "SELECT TOP 50 *\nFROM caom2.Observation\nWHERE target_name = 'M31'",
+  simbad: "SELECT TOP 100 main_id, ra, dec, otype, rvz_redshift\nFROM basic\nWHERE otype = 'G' AND rvz_redshift IS NOT NULL\nORDER BY rvz_redshift DESC",
 };
 
+/* ── History ── */
+function getHistory(): string[] {
+  try { return JSON.parse(localStorage.getItem("astro_adql_history") || "[]"); } catch { return []; }
+}
+function addHistory(q: string) {
+  const h = getHistory().filter((x) => x !== q);
+  h.unshift(q);
+  localStorage.setItem("astro_adql_history", JSON.stringify(h.slice(0, 10)));
+}
+
+/* ── Format cell value ── */
+function fmtCell(v: number | string | null): string {
+  if (v == null) return "—";
+  if (typeof v === "number") {
+    if (Number.isInteger(v) || Math.abs(v) > 1e12) return String(v);
+    return v.toFixed(4);
+  }
+  return String(v);
+}
+
+const PAGE_SIZE = 25;
+
+/* ── Component ── */
 export default function ADQLPage() {
-  const [services, setServices] = useState<Service[]>([]);
-  const [service, setService] = useState("gaia");
-  const [query, setQuery] = useState(EXAMPLE_QUERIES.gaia);
+  const [services, setServices] = useState<Array<{ id: string; name: string }>>([]);
+  const [svc, setSvc] = useState("gaia");
+  const [query, setQuery] = useState(DEFAULTS.gaia);
   const [result, setResult] = useState<ADQLResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [queryHistory, setQueryHistory] = useState<string[]>(loadQueryHistory);
+  const [history, setHistory] = useState(getHistory);
+  const [page, setPage] = useState(0);
 
-  useEffect(() => {
-    listADQLServices().then(setServices).catch(() => {});
-  }, []);
+  useEffect(() => { listADQLServices().then(setServices).catch(() => {}); }, []);
 
-  const handleServiceChange = (svc: string) => {
-    setService(svc);
-    if (EXAMPLE_QUERIES[svc] && query === EXAMPLE_QUERIES[service]) {
-      setQuery(EXAMPLE_QUERIES[svc]);
-    }
-  };
+  function switchSvc(id: string) {
+    setSvc(id);
+    if (DEFAULTS[id] && query === DEFAULTS[svc]) setQuery(DEFAULTS[id]);
+  }
 
-  const handleRun = async () => {
-    setLoading(true);
-    setError(null);
-    setResult(null);
+  async function run() {
+    setLoading(true); setError(null); setResult(null); setPage(0);
     try {
-      const res = await adqlQuery(query, service);
+      const res = await adqlQuery(query, svc);
       setResult(res);
-      saveQueryToHistory(query);
-      setQueryHistory(loadQueryHistory());
-      logOperation("adql", `ADQL query on ${service}: ${query.slice(0, 100)}`);
+      addHistory(query); setHistory(getHistory());
+      logOperation("adql", `${svc}: ${query.slice(0, 80)}`);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Query failed";
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  };
+      if (err && typeof err === "object" && "response" in err) {
+        const resp = (err as { response?: { data?: { detail?: string } } }).response;
+        setError(resp?.data?.detail || "Query failed");
+      } else {
+        setError(err instanceof Error ? err.message : "Query failed");
+      }
+    } finally { setLoading(false); }
+  }
+
+  function downloadCSV() {
+    if (!result) return;
+    const header = result.columns.join(",");
+    const rows = Array.from({ length: result.row_count }).map((_, i) =>
+      result.columns.map((c) => {
+        const v = result.data[c]?.[i];
+        if (v == null) return "";
+        const s = String(v);
+        return s.includes(",") ? `"${s.replace(/"/g, '""')}"` : s;
+      }).join(",")
+    );
+    const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `adql_${svc}_${result.row_count}rows.csv`; a.click();
+    logOperation("export", `ADQL CSV export: ${result.row_count} rows from ${svc}`);
+  }
+
+  const totalPages = result ? Math.ceil(Math.min(result.row_count, 500) / PAGE_SIZE) : 0;
+  const visibleRows = useMemo(() => {
+    if (!result) return [];
+    const start = page * PAGE_SIZE;
+    return Array.from({ length: Math.min(PAGE_SIZE, result.row_count - start) }).map((_, i) => start + i);
+  }, [result, page]);
 
   return (
     <div className="adql-page">
       <h1>ADQL Query</h1>
-      <p className="adql-subtitle">
-        Query astronomical databases using ADQL (Astronomical Data Query Language)
-      </p>
 
+      {/* Service selector */}
       <div className="adql-controls">
-        <div className="adql-service-select">
-          <label>TAP Service</label>
-          <div className="segmented-control">
-            {services.map((s) => (
-              <button
-                key={s.id}
-                className={`segment-btn${service === s.id ? " active" : ""}`}
-                onClick={() => handleServiceChange(s.id)}
-              >
-                {s.name}
-              </button>
-            ))}
-          </div>
+        <div className="segmented-control">
+          {services.map((s) => (
+            <button key={s.id} className={`segment-btn${svc === s.id ? " active" : ""}`}
+              onClick={() => switchSvc(s.id)}>{s.name}</button>
+          ))}
         </div>
       </div>
 
-      {/* Query history chips */}
-      {queryHistory.length > 0 && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-          <span style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)", lineHeight: "28px" }}>Recent:</span>
-          {queryHistory.map((q, i) => (
-            <button
-              key={i}
-              className="btn-secondary btn-small"
-              style={{ fontSize: "0.7rem", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-              onClick={() => setQuery(q)}
-              title={q}
-            >
-              {q.slice(0, 50)}{q.length > 50 ? "..." : ""}
+      {/* Templates */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0" }}>
+        {TEMPLATES.map((t) => (
+          <button key={t.label} className="btn-secondary btn-small" title={t.tip}
+            style={{ fontSize: "0.72rem" }}
+            onClick={() => { setQuery(t.q); setSvc(t.svc); }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* History */}
+      {history.length > 0 && (
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", margin: "4px 0 8px" }}>
+          <span style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)", lineHeight: "24px" }}>Recent:</span>
+          {history.map((q, i) => (
+            <button key={i} className="btn-secondary btn-small"
+              style={{ fontSize: "0.65rem", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              onClick={() => setQuery(q)} title={q}>
+              {q.slice(0, 40)}{q.length > 40 ? "…" : ""}
             </button>
           ))}
         </div>
       )}
 
-      {/* Template buttons */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-        <span style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)", lineHeight: "28px" }}>Templates:</span>
-        {TEMPLATE_QUERIES.map((t) => (
-          <button
-            key={t.label}
-            className="btn-secondary btn-small"
-            style={{ fontSize: "0.72rem" }}
-            title={t.desc}
-            onClick={() => { setQuery(t.query); setService(t.service); }}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {/* Editor */}
+      <textarea className="adql-textarea" value={query} onChange={(e) => setQuery(e.target.value)}
+        rows={6} spellCheck={false} />
 
-      <div className="adql-editor">
-        <textarea
-          className="adql-textarea"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          rows={8}
-          spellCheck={false}
-        />
-        <div className="adql-actions">
-          <button
-            className="btn-primary"
-            onClick={handleRun}
-            disabled={loading || !query.trim()}
-          >
-            {loading ? <span className="spinner" /> : null}
-            {loading ? "Running..." : "Run Query"}
+      <div style={{ display: "flex", gap: 8, margin: "8px 0" }}>
+        <button className="btn-primary" onClick={run} disabled={loading || !query.trim()}>
+          {loading ? "Running…" : "Run Query"}
+        </button>
+        {result && (
+          <button className="btn-secondary" onClick={downloadCSV}>
+            Download CSV ({result.row_count} rows)
           </button>
-          <button
-            className="btn-secondary"
-            onClick={() => setQuery(EXAMPLE_QUERIES[service] || "")}
-          >
-            Load Example
-          </button>
-        </div>
+        )}
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
+      {/* Results */}
       {result && (
         <div className="adql-results">
-          <div className="adql-results-header">
-            <span>{result.row_count} rows returned from {result.service}</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <span style={{ fontSize: "0.82rem", color: "var(--color-text-secondary)" }}>
+              {result.row_count} rows from {result.service} · {result.columns.length} columns
+            </span>
+            {totalPages > 1 && (
+              <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: "0.78rem" }}>
+                <button className="btn-secondary btn-small" disabled={page === 0}
+                  onClick={() => setPage(page - 1)}>Prev</button>
+                <span>{page + 1}/{totalPages}</span>
+                <button className="btn-secondary btn-small" disabled={page >= totalPages - 1}
+                  onClick={() => setPage(page + 1)}>Next</button>
+              </div>
+            )}
           </div>
           <div className="results-table-wrap">
             <table className="results-table">
               <thead>
-                <tr>
-                  {result.columns.map((col) => (
-                    <th key={col}>{col}</th>
-                  ))}
-                </tr>
+                <tr>{result.columns.map((c) => <th key={c}>{c}</th>)}</tr>
               </thead>
               <tbody>
-                {Array.from({ length: Math.min(result.row_count, 100) }).map((_, i) => (
+                {visibleRows.map((i) => (
                   <tr key={i}>
-                    {result.columns.map((col) => (
-                      <td key={col} className="mono">
-                        {result.data[col]?.[i] != null ? String(result.data[col][i]) : "—"}
-                      </td>
+                    {result.columns.map((c) => (
+                      <td key={c} className="mono">{fmtCell(result.data[c]?.[i])}</td>
                     ))}
                   </tr>
                 ))}
