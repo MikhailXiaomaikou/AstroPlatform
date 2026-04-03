@@ -118,35 +118,40 @@ function BackendBanner() {
 
   useEffect(() => {
     if (sessionStorage.getItem("astro_backend_checked")) return;
-    let showTimer: ReturnType<typeof setTimeout> | undefined;
     let cancelled = false;
 
-    showTimer = setTimeout(() => {
+    // Show banner only if health check takes longer than 8 seconds
+    const showTimer = setTimeout(() => {
       if (!cancelled) setShow(true);
-    }, 3000);
+    }, 8000);
 
-    api.get("/health").then(() => {
+    api.get("/health", { timeout: 30000 }).then(() => {
       if (!cancelled) {
         setShow(false);
+        clearTimeout(showTimer);
         sessionStorage.setItem("astro_backend_checked", "1");
       }
     }).catch(() => {
+      // Backend unreachable — show banner briefly then dismiss
       if (!cancelled) {
-        setShow(false);
-        sessionStorage.setItem("astro_backend_checked", "1");
+        setShow(true);
+        setTimeout(() => {
+          setShow(false);
+          sessionStorage.setItem("astro_backend_checked", "1");
+        }, 5000);
       }
     });
 
     return () => {
       cancelled = true;
-      if (showTimer) clearTimeout(showTimer);
+      clearTimeout(showTimer);
     };
   }, []);
 
   if (!show) return null;
   return (
     <div className="backend-banner">
-      Backend is waking up, this may take ~30 seconds...
+      Connecting to backend server...
     </div>
   );
 }
