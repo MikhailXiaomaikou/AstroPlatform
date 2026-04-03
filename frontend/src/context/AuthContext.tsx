@@ -6,6 +6,7 @@ import {
   logout as apiLogout,
   register as apiRegister,
   setupKeyLogin as apiSetupKeyLogin,
+  googleLogin as apiGoogleLogin,
   type UserProfile,
 } from "../api/client";
 
@@ -15,6 +16,7 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   setupKeyLogin: (key: string) => Promise<void>;
+  googleLogin: (credential: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -24,6 +26,7 @@ const AuthContext = createContext<AuthState>({
   login: async () => {},
   register: async () => {},
   setupKeyLogin: async () => {},
+  googleLogin: async () => {},
   logout: () => {},
 });
 
@@ -63,13 +66,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(profile);
   };
 
+  const googleLogin = async (credential: string) => {
+    await apiGoogleLogin(credential);
+    const profile = await getProfile();
+    setUser(profile);
+  };
+
   const logout = () => {
     apiLogout();
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, setupKeyLogin, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, setupKeyLogin, googleLogin, logout }}>
       {children}
     </AuthContext.Provider>
   );

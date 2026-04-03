@@ -30,8 +30,11 @@ async def health_detailed():
     # --- Redis ---
     try:
         import redis.asyncio as aioredis
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-        r = aioredis.from_url(redis_url)
+        from app.config import settings
+        kwargs = {}
+        if settings.redis_ssl:
+            kwargs["ssl_cert_reqs"] = "none"
+        r = aioredis.from_url(settings.redis_url, **kwargs)
         try:
             await r.ping()
             checks["redis"] = "ok"

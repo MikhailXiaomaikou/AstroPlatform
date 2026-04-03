@@ -549,12 +549,27 @@ def suggest_sources(parsed: dict) -> list[str]:
 
 
 def get_spectral_lines_list() -> list[dict]:
-    """Return a deduplicated list of spectral lines for the frontend dropdown."""
+    """Return a deduplicated list of spectral lines for the frontend dropdown.
+
+    Each entry includes a canonical `key` that uniquely identifies the line
+    and maps back to SPECTRAL_LINES for backend filtering.
+    """
+    # Pick the shortest alias for each unique line name as the canonical key
+    canonical: dict[str, str] = {}  # name -> shortest key
+    for key, info in SPECTRAL_LINES.items():
+        name = info["name"]
+        if name not in canonical or len(key) < len(canonical[name]):
+            canonical[name] = key
+
     seen: dict[str, dict] = {}
-    for _key, info in SPECTRAL_LINES.items():
+    for key, info in SPECTRAL_LINES.items():
         name = info["name"]
         if name not in seen:
-            entry = {"name": name, "rest_wavelength_um": info.get("rest_wavelength_um")}
+            entry = {
+                "key": canonical[name],
+                "name": name,
+                "rest_wavelength_um": info.get("rest_wavelength_um"),
+            }
             if "rest_freq_ghz" in info:
                 entry["rest_freq_ghz"] = info["rest_freq_ghz"]
             seen[name] = entry

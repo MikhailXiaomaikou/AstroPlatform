@@ -36,7 +36,10 @@ def notify_progress_sync(run_id: str, data: dict):
     try:
         import redis as redis_lib
         from app.config import settings
-        r = redis_lib.Redis.from_url(settings.redis_url)
+        kwargs = {}
+        if settings.redis_ssl:
+            kwargs["ssl_cert_reqs"] = "none"
+        r = redis_lib.Redis.from_url(settings.redis_url, **kwargs)
         message = json.dumps({"run_id": run_id, **data})
         r.publish("pipeline_progress", message)
         r.close()
@@ -72,7 +75,11 @@ async def redis_subscriber():
         import redis.asyncio as aioredis
         from app.config import settings
 
-        r = aioredis.from_url(settings.redis_url)
+        kwargs = {}
+        if settings.redis_ssl:
+            import ssl as _ssl
+            kwargs["ssl_cert_reqs"] = _ssl.CERT_NONE
+        r = aioredis.from_url(settings.redis_url, **kwargs)
         pubsub = r.pubsub()
         await pubsub.subscribe("pipeline_progress")
 

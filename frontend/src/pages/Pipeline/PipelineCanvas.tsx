@@ -3,6 +3,7 @@ import ReactFlow, {
   addEdge,
   Background,
   BackgroundVariant,
+  ConnectionLineType,
   Controls,
   MiniMap,
   useEdgesState,
@@ -41,7 +42,7 @@ import {
 
 const nodeTypes = { pipeline: PipelineNode };
 
-let idCounter = 0;
+let idCounter = Date.now();
 const nextId = () => `node_${++idCounter}`;
 
 interface NodeProgress {
@@ -100,6 +101,7 @@ export default function PipelineCanvas() {
     setNodes([]);
     setEdges([]);
     setNodeProgress({});
+    localStorage.removeItem("pipeline_autosave");
   }, [setNodes, setEdges]);
 
   // Node params editor handlers
@@ -145,6 +147,31 @@ export default function PipelineCanvas() {
       );
     getTemplates().then(setTemplates).catch(() => {});
     listSchedules().then(setSchedules).catch(() => {});
+  }, []);
+
+  // Autosave pipeline to localStorage
+  useEffect(() => {
+    if (nodes.length === 0 && edges.length === 0) return;
+    try {
+      const state = { nodes, edges, inputDataId };
+      localStorage.setItem("pipeline_autosave", JSON.stringify(state));
+    } catch { /* storage full */ }
+  }, [nodes, edges, inputDataId]);
+
+  // Autorestore on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("pipeline_autosave");
+      if (saved) {
+        const { nodes: sn, edges: se, inputDataId: sid } = JSON.parse(saved);
+        if (Array.isArray(sn) && sn.length > 0) {
+          setNodes(sn);
+          setEdges(se || []);
+          if (sid) setInputDataId(sid);
+        }
+      }
+    } catch { /* ignore corrupt data */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cleanup WebSocket on unmount
@@ -213,7 +240,6 @@ export default function PipelineCanvas() {
     setDiffResult(null);
     setCompareMode(false);
     setCompareSelection([]);
-    idCounter = tpl.dag.nodes.length;
   };
 
   const handleSaveVersion = async () => {
@@ -628,6 +654,16 @@ export default function PipelineCanvas() {
           deleteKeyCode={["Backspace", "Delete"]}
           fitView
           proOptions={{ hideAttribution: true }}
+          connectionRadius={30}
+          snapToGrid
+          snapGrid={[15, 15]}
+          defaultEdgeOptions={{
+            type: "smoothstep",
+            animated: true,
+            style: { stroke: "rgba(255,255,255,0.4)", strokeWidth: 2 },
+          }}
+          connectionLineStyle={{ stroke: "rgba(10,132,255,0.6)", strokeWidth: 2 }}
+          connectionLineType={ConnectionLineType.SmoothStep}
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="rgba(255,255,255,0.07)" />
           <Controls />

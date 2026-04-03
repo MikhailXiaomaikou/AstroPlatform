@@ -45,7 +45,7 @@ Common pitfalls:
 - `connectors/` — 14 astronomical database connectors (SDSS, Gaia, SIMBAD, MAST, VizieR, NED, 2MASS, Chandra, ALMA, AllWISE, ESO, IRSA, JWST, LAMOST). All extend `BaseConnector` in `base.py` with `search()` and `fetch()` methods
 - `pipeline/nodes/` — 12 processing nodes (denoise, spectral_fit, coord_transform, redshift, sed_fit, crossmatch, image_stack, phot_calibrate, plot, plot_interactive, load_data, equivalent_width)
 - `models/schemas.py` — 16 SQLAlchemy models. Uses custom `UUIDType` and `JSONType` for SQLite/PostgreSQL portability
-- `auth.py` — JWT with bcrypt. `get_current_user()` (required) and `get_optional_user()` (optional) as FastAPI dependencies
+- `auth.py` — JWT with bcrypt + Google OAuth. `get_current_user()` (required) and `get_optional_user()` (optional) as FastAPI dependencies
 
 ### Frontend (`frontend/src/`)
 
@@ -57,8 +57,10 @@ Common pitfalls:
 ### Key Data Flow
 
 1. **Search**: User query → `parse_natural_query()` extracts science criteria (redshift, spectral lines, object type) → routes to SIMBAD TAP `search_by_criteria()` for science queries, or direct `connector.search()` for name/coordinate queries
-2. **AI Chat**: Frontend sends messages + API key (from localStorage) → backend calls Claude API → response parsed for `<actions>` tags → actions executable inline (search, ADQL, arXiv extraction, plot)
+2. **AI Chat**: Frontend sends messages + API key (from localStorage) → backend calls Claude API → response parsed for `<actions>` tags → actions executable inline (search, ADQL, arXiv extraction, plot, **generate_pipeline**, **modify_pipeline**, **comment_pipeline**)
 3. **NaN safety**: Astronomy data often contains masked/NaN values. `_safe_float()` and `_sanitize_extra()` in `data.py` sanitize all connector output before JSON serialization. SIMBAD connector also checks NaN in `_table_to_objects()`
+4. **FITS Upload**: Users upload FITS files via `POST /api/data/fits/upload` → stored in `data/fits/uploads/` → browseable via `GET /api/data/fits/browse` → usable as pipeline input
+5. **AI Pipeline Generation**: User describes workflow in chat ("denoise then fit lines") → AI returns `generate_pipeline` action with full DAG → saved as template → loadable in Pipeline Editor
 
 ## Critical Patterns
 
@@ -97,6 +99,14 @@ db.commit()
 
 Push to `main` branch → Render auto-deploys (may need Manual Deploy for first time).
 
+**Infrastructure as Code**: `render.yaml` defines all services:
+- `astro-backend` (web) — FastAPI API server
+- `astro-celery-worker` (worker) — Celery pipeline executor, concurrency=2
+- `astro-celery-beat` (worker) — Celery Beat scheduler
+- `astro-frontend` (static) — Vite-built SPA with SPA rewrites
+- `astro-redis` (redis) — Task queue + pub/sub + caching
+- `astro-db` (postgres) — Primary database
+
 ## Environment Variables
 
 Backend (required for production):
@@ -112,9 +122,15 @@ Backend (optional):
 ANTHROPIC_API_KEY=sk-ant-...     # server-wide default for AI assistant
 ADS_API_KEY=...                  # NASA ADS citation search
 REDIS_URL=redis://...            # for caching (graceful fallback if unavailable)
+                                 # supports rediss:// (TLS) for Upstash
+PIPELINE_MODE=celery             # "sync" (default) or "celery" for async execution
+MAX_UPLOAD_SIZE=104857600        # max FITS upload size in bytes (default 100MB)
+GOOGLE_CLIENT_ID=...             # Google OAuth client ID (from Google Cloud Console)
+GOOGLE_CLIENT_SECRET=...         # Google OAuth client secret
 ```
 
 Frontend:
 ```
 VITE_API_URL=https://your-backend.com   # defaults to http://localhost:8000
+VITE_GOOGLE_CLIENT_ID=...               # same Google OAuth client ID as backend
 ```

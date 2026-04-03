@@ -2,21 +2,39 @@ import { useState, useEffect, useMemo } from "react";
 import { adqlQuery, listADQLServices, logOperation } from "../../api/client";
 import type { ADQLResult } from "../../api/client";
 
-/* ── Templates ── */
-const TEMPLATES = [
-  { label: "Gaia: photometry", svc: "gaia", tip: "G/BP/RP + parallax + PM. ~100% for G<20.",
-    q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, parallax, pmra, pmdec\nFROM gaiadr3.gaia_source\nWHERE phot_g_mean_mag < 15 AND parallax IS NOT NULL\nORDER BY phot_g_mean_mag" },
-  { label: "Gaia: stellar params", svc: "gaia", tip: "Teff, logg, [M/H]. ~40% complete.",
-    q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, bp_rp, parallax, teff_gspphot, logg_gspphot, mh_gspphot\nFROM gaiadr3.gaia_source\nWHERE teff_gspphot IS NOT NULL AND phot_g_mean_mag < 16\nORDER BY phot_g_mean_mag" },
-  { label: "Gaia: radial velocity", svc: "gaia", tip: "RV only ~5% of sources (G<14).",
-    q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, parallax, radial_velocity, radial_velocity_error\nFROM gaiadr3.gaia_source\nWHERE radial_velocity IS NOT NULL\nORDER BY phot_g_mean_mag" },
-  { label: "Gaia: nearby (plx>50)", svc: "gaia", tip: "Stars within ~20 pc.",
-    q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, bp_rp, parallax, parallax_error, pmra, pmdec, ruwe\nFROM gaiadr3.gaia_source\nWHERE parallax > 50 AND ruwe < 1.4\nORDER BY parallax DESC" },
-  { label: "SIMBAD: z>4 galaxies", svc: "simbad", tip: "Galaxies with measured redshift.",
-    q: "SELECT TOP 200 main_id, ra, dec, otype, rvz_redshift, morph_type\nFROM basic\nWHERE otype = 'G' AND rvz_redshift > 4 AND rvz_redshift IS NOT NULL\nORDER BY rvz_redshift DESC" },
-  { label: "SIMBAD: QSOs", svc: "simbad", tip: "Quasars by redshift.",
-    q: "SELECT TOP 200 main_id, ra, dec, rvz_redshift, sp_type\nFROM basic\nWHERE otype = 'QSO' AND rvz_redshift IS NOT NULL\nORDER BY rvz_redshift DESC" },
-];
+/* ── Templates (per service) ── */
+const TEMPLATES: Record<string, Array<{ label: string; tip: string; q: string }>> = {
+  gaia: [
+    { label: "Photometry", tip: "G/BP/RP + parallax + PM. ~100% for G<20.",
+      q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, parallax, pmra, pmdec\nFROM gaiadr3.gaia_source\nWHERE phot_g_mean_mag < 15 AND parallax IS NOT NULL\nORDER BY phot_g_mean_mag" },
+    { label: "Stellar params", tip: "Teff, logg, [M/H]. ~40% complete.",
+      q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, bp_rp, parallax, teff_gspphot, logg_gspphot, mh_gspphot\nFROM gaiadr3.gaia_source\nWHERE teff_gspphot IS NOT NULL AND phot_g_mean_mag < 16\nORDER BY phot_g_mean_mag" },
+    { label: "Radial velocity", tip: "RV only ~5% of sources (G<14).",
+      q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, parallax, radial_velocity, radial_velocity_error\nFROM gaiadr3.gaia_source\nWHERE radial_velocity IS NOT NULL\nORDER BY phot_g_mean_mag" },
+    { label: "Nearby (plx>50)", tip: "Stars within ~20 pc.",
+      q: "SELECT TOP 200 source_id, ra, dec, phot_g_mean_mag, bp_rp, parallax, parallax_error, pmra, pmdec, ruwe\nFROM gaiadr3.gaia_source\nWHERE parallax > 50 AND ruwe < 1.4\nORDER BY parallax DESC" },
+  ],
+  simbad: [
+    { label: "z>4 galaxies", tip: "Galaxies with measured redshift.",
+      q: "SELECT TOP 200 main_id, ra, dec, otype, rvz_redshift, morph_type\nFROM basic\nWHERE otype = 'G' AND rvz_redshift > 4 AND rvz_redshift IS NOT NULL\nORDER BY rvz_redshift DESC" },
+    { label: "QSOs", tip: "Quasars by redshift.",
+      q: "SELECT TOP 200 main_id, ra, dec, rvz_redshift, sp_type\nFROM basic\nWHERE otype = 'QSO' AND rvz_redshift IS NOT NULL\nORDER BY rvz_redshift DESC" },
+    { label: "Seyfert galaxies", tip: "Active galaxies.",
+      q: "SELECT TOP 200 main_id, ra, dec, otype, rvz_redshift, sp_type\nFROM basic\nWHERE otype = 'Sy1' OR otype = 'Sy2'\nORDER BY rvz_redshift DESC" },
+  ],
+  vizier: [
+    { label: "2MASS catalog", tip: "J/H/K photometry near Orion.",
+      q: "SELECT TOP 50 RAJ2000, DEJ2000, Jmag, Hmag, Kmag\nFROM \"II/246/out\"\nWHERE 1=CONTAINS(POINT('ICRS', RAJ2000, DEJ2000), CIRCLE('ICRS', 83.633, -5.375, 0.1))" },
+    { label: "SDSS DR16 photo", tip: "Optical photometry.",
+      q: "SELECT TOP 50 ra, dec, psfMag_u, psfMag_g, psfMag_r, psfMag_i, psfMag_z\nFROM \"V/154/sdss16\"\nWHERE 1=CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', 180.0, 0.0, 0.1))" },
+  ],
+  cadc: [
+    { label: "JWST observations", tip: "James Webb archival data.",
+      q: "SELECT TOP 50 observationID, target_name, instrument_name, dataProductType, calibrationLevel\nFROM caom2.Observation\nWHERE collection = 'JWST'\nORDER BY observationID DESC" },
+    { label: "By target", tip: "Search CADC by target name.",
+      q: "SELECT TOP 50 observationID, collection, target_name, instrument_name, dataProductType\nFROM caom2.Observation\nWHERE target_name = 'M31'" },
+  ],
+};
 
 const DEFAULTS: Record<string, string> = {
   gaia: "SELECT TOP 100 source_id, ra, dec, phot_g_mean_mag, parallax\nFROM gaiadr3.gaia_source\nWHERE phot_g_mean_mag < 10\nORDER BY phot_g_mean_mag",
@@ -120,14 +138,16 @@ export default function ADQLPage() {
         </div>
       </div>
 
-      {/* Templates */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0" }}>
-        {TEMPLATES.map((t) => (
-          <button key={t.label} className="btn-secondary btn-small" title={t.tip}
-            style={{ fontSize: "0.72rem" }}
-            onClick={() => { setQuery(t.q); setSvc(t.svc); }}>{t.label}</button>
-        ))}
-      </div>
+      {/* Templates — filtered by current service */}
+      {(TEMPLATES[svc] || []).length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0" }}>
+          {(TEMPLATES[svc] || []).map((t) => (
+            <button key={t.label} className="btn-secondary btn-small" title={t.tip}
+              style={{ fontSize: "0.72rem" }}
+              onClick={() => setQuery(t.q)}>{t.label}</button>
+          ))}
+        </div>
+      )}
 
       {/* History */}
       {history.length > 0 && (
@@ -177,16 +197,16 @@ export default function ADQLPage() {
               </div>
             )}
           </div>
-          <div className="results-table-wrap">
-            <table className="results-table">
+          <div className="results-table-wrap" style={{ overflowX: "auto" }}>
+            <table className="results-table adql-results-table">
               <thead>
-                <tr>{result.columns.map((c) => <th key={c}>{c}</th>)}</tr>
+                <tr>{result.columns.map((c) => <th key={c} title={c}>{c}</th>)}</tr>
               </thead>
               <tbody>
                 {visibleRows.map((i) => (
                   <tr key={i}>
                     {result.columns.map((c) => (
-                      <td key={c} className="mono">{fmtCell(result.data[c]?.[i])}</td>
+                      <td key={c} className="mono" title={String(result.data[c]?.[i] ?? "")}>{fmtCell(result.data[c]?.[i])}</td>
                     ))}
                   </tr>
                 ))}

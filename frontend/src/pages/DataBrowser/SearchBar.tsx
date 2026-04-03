@@ -204,7 +204,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                 onChange={(e) => setRadius(Number(e.target.value))}
                 min={0.001}
                 max={10}
-                step={0.01}
+                step="any"
                 className="radius-input"
               />
             </label>
@@ -274,7 +274,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                       value={redshiftMin}
                       onChange={(e) => setRedshiftMin(e.target.value)}
                       placeholder="z min"
-                      step="0.1"
+                      step="any"
                       min="0"
                       className="filter-input"
                     />
@@ -284,7 +284,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                       value={redshiftMax}
                       onChange={(e) => setRedshiftMax(e.target.value)}
                       placeholder="z max"
-                      step="0.1"
+                      step="any"
                       min="0"
                       className="filter-input"
                     />
@@ -300,14 +300,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                   >
                     <option value="">Any</option>
                     {spectralLines.map((line) => (
-                      <option
-                        key={line.name}
-                        value={line.name
-                          .replace(/[\[\]]/g, "")
-                          .replace(/\s+/g, "")
-                          .replace(/[^\w()-]/g, "")
-                          .toLowerCase()}
-                      >
+                      <option key={line.key} value={line.key}>
                         {line.name} ({line.rest_wavelength_um.toFixed(2)} &mu;m)
                       </option>
                     ))}
@@ -327,7 +320,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                       value={wavelengthMin}
                       onChange={(e) => setWavelengthMin(e.target.value)}
                       placeholder="min"
-                      step="0.01"
+                      step="any"
                       min="0"
                       className="filter-input"
                     />
@@ -337,7 +330,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                       value={wavelengthMax}
                       onChange={(e) => setWavelengthMax(e.target.value)}
                       placeholder="max"
-                      step="0.01"
+                      step="any"
                       min="0"
                       className="filter-input"
                     />
@@ -395,7 +388,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                       value={advRa}
                       onChange={(e) => setAdvRa(e.target.value)}
                       placeholder="RA (&deg;)"
-                      step="0.01"
+                      step="any"
                       min="0"
                       max="360"
                       className="filter-input"
@@ -405,7 +398,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                       value={advDec}
                       onChange={(e) => setAdvDec(e.target.value)}
                       placeholder="Dec (&deg;)"
-                      step="0.01"
+                      step="any"
                       min="-90"
                       max="90"
                       className="filter-input"
@@ -424,7 +417,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                         onChange={(e) => setAdvRadius(Number(e.target.value))}
                         min={0.001}
                         max={10}
-                        step={0.1}
+                        step="any"
                         className="filter-input"
                       />
                     </label>

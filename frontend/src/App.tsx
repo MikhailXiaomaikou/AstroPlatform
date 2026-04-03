@@ -1,6 +1,6 @@
 import { Component, lazy, Suspense, useState, useEffect, type ErrorInfo, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
-import { AuthProvider } from "./context/AuthContext";
+import { AuthProvider, useAuth } from "./context/AuthContext";
 import api from "./api/client";
 import "./App.css";
 
@@ -68,6 +68,7 @@ function useTheme() {
 
 function NavBar() {
   const { theme, toggle } = useTheme();
+  const { user, logout } = useAuth();
 
   return (
     <nav className="top-nav">
@@ -88,6 +89,25 @@ function NavBar() {
       >
         {theme === "dark" ? "\u2600\uFE0F" : "\uD83C\uDF19"}
       </button>
+      {user ? (
+        <div className="nav-user">
+          {user.avatar_url ? (
+            <img src={user.avatar_url} alt="" className="nav-avatar" referrerPolicy="no-referrer" />
+          ) : (
+            <span className="nav-avatar nav-avatar-placeholder">
+              {(user.display_name || user.email)[0].toUpperCase()}
+            </span>
+          )}
+          <span className="nav-user-name" title={user.email}>
+            {user.display_name || user.email.split("@")[0]}
+          </span>
+          <button className="nav-logout" onClick={logout} title="Sign out">
+            Sign out
+          </button>
+        </div>
+      ) : (
+        <NavLink to="/auth" className="nav-auth-link">Sign in</NavLink>
+      )}
       <span className="tier-badge tier-beta">beta</span>
     </nav>
   );

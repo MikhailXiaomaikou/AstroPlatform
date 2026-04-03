@@ -1,3 +1,4 @@
+import { useState, useMemo } from "react";
 import type { SearchResult } from "../../api/client";
 
 interface Props {
@@ -9,16 +10,20 @@ interface Props {
   onSelectionChange?: (keys: Set<string>) => void;
 }
 
+const PAGE_SIZE = 25;
+
+type SortKey = "source" | "name" | "ra" | "dec" | "object_type" | "magnitude" | "redshift";
+
 function resultKey(r: SearchResult, i: number): string {
   return `${r.source}-${r.object_id}-${i}`;
 }
 
-function SkeletonRows() {
+function SkeletonRows({ colCount }: { colCount: number }) {
   return (
     <>
       {Array.from({ length: 5 }).map((_, i) => (
         <tr key={i}>
-          <td colSpan={9}>
+          <td colSpan={colCount}>
             <div className="skeleton skeleton-row" />
           </td>
         </tr>
@@ -42,6 +47,16 @@ function EmptyState() {
   );
 }
 
+function compareFn(key: SortKey, a: SearchResult, b: SearchResult): number {
+  const va = a[key];
+  const vb = b[key];
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  if (typeof va === "number" && typeof vb === "number") return va - vb;
+  return String(va).localeCompare(String(vb));
+}
+
 export default function ResultsTable({
   results,
   onFetch,
@@ -50,18 +65,42 @@ export default function ResultsTable({
   selectedKeys,
   onSelectionChange,
 }: Props) {
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortAsc, setSortAsc] = useState(true);
+  const [page, setPage] = useState(0);
+
+  const sorted = useMemo(() => {
+    if (!sortKey) return results;
+    const copy = [...results];
+    copy.sort((a, b) => {
+      const c = compareFn(sortKey, a, b);
+      return sortAsc ? c : -c;
+    });
+    return copy;
+  }, [results, sortKey, sortAsc]);
+
+  const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
+  const displayed = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  // Reset page when results change
+  useMemo(() => { setPage(0); }, [results]);
+
   if (!loading && results.length === 0) return <EmptyState />;
 
-  const allKeys = results.map((r, i) => resultKey(r, i));
+  const allKeys = displayed.map((r, i) => resultKey(r, page * PAGE_SIZE + i));
   const allSelected = allKeys.length > 0 && allKeys.every((k) => selectedKeys?.has(k));
   const someSelected = allKeys.some((k) => selectedKeys?.has(k));
 
   function toggleAll() {
     if (!onSelectionChange) return;
     if (allSelected) {
-      onSelectionChange(new Set());
+      const next = new Set(selectedKeys);
+      for (const k of allKeys) next.delete(k);
+      onSelectionChange(next);
     } else {
-      onSelectionChange(new Set(allKeys));
+      const next = new Set(selectedKeys);
+      for (const k of allKeys) next.add(k);
+      onSelectionChange(next);
     }
   }
 
@@ -76,86 +115,129 @@ export default function ResultsTable({
     onSelectionChange(next);
   }
 
+  function handleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortAsc(!sortAsc);
+    } else {
+      setSortKey(key);
+      setSortAsc(true);
+    }
+  }
+
+  function sortIndicator(key: SortKey) {
+    if (sortKey !== key) return null;
+    return <span className="sort-indicator">{sortAsc ? " \u25B2" : " \u25BC"}</span>;
+  }
+
+  const colCount = onSelectionChange ? 9 : 8;
+
   return (
-    <div className="results-table-wrap">
-      <table className="results-table">
-        <thead>
-          <tr>
-            {onSelectionChange && (
-              <th className="th-check">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
-                  onChange={toggleAll}
-                  className="row-checkbox"
-                />
-              </th>
-            )}
-            <th>Source</th>
-            <th>Name</th>
-            <th>RA (°)</th>
-            <th>Dec (°)</th>
-            <th>Type</th>
-            <th>Mag</th>
-            <th>Redshift</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {loading ? (
-            <SkeletonRows />
-          ) : (
-            results.map((r, i) => {
-              const key = resultKey(r, i);
-              const isFetching = fetchingId === key;
-              const isSelected = selectedKeys?.has(key) ?? false;
-              return (
-                <tr key={key} className={isSelected ? "row-selected" : ""}>
-                  {onSelectionChange && (
-                    <td className="td-check">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleOne(key)}
-                        className="row-checkbox"
-                      />
-                    </td>
-                  )}
-                  <td>
-                    <span className={`badge badge-${r.source}`}>
-                      {r.source.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="name-cell" title={r.object_id}>
-                    {r.name}
-                  </td>
-                  <td>{r.ra.toFixed(5)}</td>
-                  <td>{r.dec.toFixed(5)}</td>
-                  <td>{r.object_type || "—"}</td>
-                  <td>{r.magnitude?.toFixed(2) ?? "—"}</td>
-                  <td>{r.redshift?.toFixed(4) ?? "—"}</td>
-                  <td>
-                    {r.object_id !== "error" && (
-                      <button
-                        className="btn-fetch"
-                        disabled={isFetching}
-                        onClick={() => onFetch(r.source, r.object_id)}
-                      >
-                        {isFetching ? (
-                          <span className="spinner spinner-blue" />
-                        ) : (
-                          "Fetch FITS"
-                        )}
-                      </button>
+    <>
+      <div className="results-table-wrap">
+        <table className="results-table">
+          <colgroup>
+            {onSelectionChange && <col className="col-check" />}
+            <col className="col-source" />
+            <col className="col-name" />
+            <col className="col-ra" />
+            <col className="col-dec" />
+            <col className="col-type" />
+            <col className="col-mag" />
+            <col className="col-redshift" />
+            <col className="col-action" />
+          </colgroup>
+          <thead>
+            <tr>
+              {onSelectionChange && (
+                <th className="th-check">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
+                    onChange={toggleAll}
+                    className="row-checkbox"
+                  />
+                </th>
+              )}
+              <th className="th-sortable" onClick={() => handleSort("source")}>Source{sortIndicator("source")}</th>
+              <th className="th-sortable" onClick={() => handleSort("name")}>Name{sortIndicator("name")}</th>
+              <th className="th-sortable" onClick={() => handleSort("ra")}>RA (&deg;){sortIndicator("ra")}</th>
+              <th className="th-sortable" onClick={() => handleSort("dec")}>Dec (&deg;){sortIndicator("dec")}</th>
+              <th className="th-sortable" onClick={() => handleSort("object_type")}>Type{sortIndicator("object_type")}</th>
+              <th className="th-sortable" onClick={() => handleSort("magnitude")}>Mag{sortIndicator("magnitude")}</th>
+              <th className="th-sortable" onClick={() => handleSort("redshift")} title="Redshift. Note: SDSS photometric data and Gaia do not include redshift. Use SIMBAD or NED for redshift queries.">Redshift{sortIndicator("redshift")}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <SkeletonRows colCount={colCount} />
+            ) : (
+              displayed.map((r, i) => {
+                const globalIdx = page * PAGE_SIZE + i;
+                const key = resultKey(r, globalIdx);
+                const isFetching = fetchingId === `${r.source}-${r.object_id}`;
+                const isSelected = selectedKeys?.has(key) ?? false;
+                return (
+                  <tr key={key} className={isSelected ? "row-selected" : ""}>
+                    {onSelectionChange && (
+                      <td className="td-check">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleOne(key)}
+                          className="row-checkbox"
+                        />
+                      </td>
                     )}
-                  </td>
-                </tr>
-              );
-            })
-          )}
-        </tbody>
-      </table>
-    </div>
+                    <td>
+                      <span className={`badge badge-${r.source}`}>
+                        {r.source.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="name-cell" title={r.object_id}>
+                      {r.name}
+                    </td>
+                    <td>{r.ra.toFixed(5)}</td>
+                    <td>{r.dec.toFixed(5)}</td>
+                    <td>{r.object_type || "\u2014"}</td>
+                    <td>{r.magnitude?.toFixed(2) ?? "\u2014"}</td>
+                    <td>{r.redshift?.toFixed(4) ?? "\u2014"}</td>
+                    <td>
+                      {r.object_id !== "error" && (
+                        <button
+                          className="btn-fetch"
+                          disabled={isFetching}
+                          onClick={() => onFetch(r.source, r.object_id)}
+                        >
+                          {isFetching ? (
+                            <span className="spinner spinner-blue" />
+                          ) : (
+                            "Fetch FITS"
+                          )}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+      {totalPages > 1 && (
+        <div className="results-pagination">
+          <button className="btn-secondary btn-small" disabled={page === 0} onClick={() => setPage(page - 1)}>
+            Previous
+          </button>
+          <span className="results-page-info">
+            Page {page + 1} of {totalPages} ({sorted.length} results)
+          </span>
+          <button className="btn-secondary btn-small" disabled={page >= totalPages - 1} onClick={() => setPage(page + 1)}>
+            Next
+          </button>
+        </div>
+      )}
+    </>
   );
 }

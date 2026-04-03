@@ -9,6 +9,7 @@ import {
   crossMatch,
   logOperation,
 } from "../../api/client";
+import FITSBrowser from "../../components/fits/FITSBrowser";
 import type {
   SearchResult,
   FetchResult,
@@ -148,7 +149,25 @@ export default function DataBrowser() {
       const result = await fetchObject(source, objectId);
       setFetched(result);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Fetch failed";
+      let msg = `Failed to fetch FITS from ${source.toUpperCase()} for "${objectId}": `;
+      if (err && typeof err === "object" && "response" in err) {
+        const resp = (err as { response?: { status?: number; data?: { detail?: string } }}).response;
+        if (resp?.data?.detail) {
+          msg += resp.data.detail;
+        } else if (resp?.status) {
+          msg += `server returned HTTP ${resp.status}`;
+        } else {
+          msg += "no response from server";
+        }
+      } else if (err instanceof Error) {
+        if (err.message === "Network Error") {
+          msg += "cannot reach the backend server. Check your connection or try again later.";
+        } else {
+          msg += err.message;
+        }
+      } else {
+        msg += "unknown error";
+      }
       setError(msg);
     } finally {
       setFetchingId(null);
@@ -409,9 +428,29 @@ ${rows}
     }
   }
 
+  const [activeTab, setActiveTab] = useState<"search" | "files">("search");
+
   return (
     <div className="data-browser">
       <h1>Data Browser</h1>
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+        <button
+          className={activeTab === "search" ? "btn-primary btn-small" : "btn-secondary btn-small"}
+          onClick={() => setActiveTab("search")}
+        >
+          Search
+        </button>
+        <button
+          className={activeTab === "files" ? "btn-primary btn-small" : "btn-secondary btn-small"}
+          onClick={() => setActiveTab("files")}
+        >
+          My Files
+        </button>
+      </div>
+
+      {activeTab === "files" && <FITSBrowser />}
+
+      {activeTab === "search" && <>
       <SearchBar onSearch={handleSearch} onAdvancedSearch={handleAdvancedSearch} loading={loading} />
 
       {results.length === 0 && !loading && recentSearches.length > 0 && (
@@ -478,6 +517,42 @@ ${rows}
           })}
         </div>
       )}
+
+      {/* ── Source Summary Bar ── */}
+      {results.length > 0 && lastSearchRef.current && (() => {
+        const queried = lastSearchRef.current!.sources;
+        const sourceCounts: Record<string, number> = {};
+        const sourceErrors: Record<string, string> = {};
+        for (const s of queried) sourceCounts[s] = 0;
+        for (const r of results) {
+          if (r.object_id === "error") {
+            sourceErrors[r.source] = ERROR_TYPE_LABELS[r.error_type ?? "unknown"] ?? "Error";
+          } else {
+            sourceCounts[r.source] = (sourceCounts[r.source] || 0) + 1;
+          }
+        }
+        return (
+          <div className="source-summary-bar">
+            {queried.map((s) => {
+              const count = sourceCounts[s] || 0;
+              const errMsg = sourceErrors[s];
+              return (
+                <span
+                  key={s}
+                  className={`source-summary-chip${errMsg ? " source-chip-error" : count === 0 ? " source-chip-empty" : ""}`}
+                  title={errMsg || `${count} results`}
+                >
+                  <span className={`badge badge-${s}`}>{s.toUpperCase()}</span>
+                  {errMsg
+                    ? <span className="source-chip-label">{errMsg}</span>
+                    : <span className="source-chip-label">{count} results</span>
+                  }
+                </span>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* ── Bulk Action Bar ── */}
       {validResults.length > 0 && (
@@ -656,6 +731,7 @@ ${rows}
           </div>
         </div>
       )}
+      </>}
     </div>
   );
 }

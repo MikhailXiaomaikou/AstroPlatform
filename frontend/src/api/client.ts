@@ -26,6 +26,9 @@ export interface UserProfile {
   email: string;
   subscription_tier: string;
   stripe_customer_id: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
+  google_linked: boolean;
 }
 
 export async function register(email: string, password: string): Promise<TokenResponse> {
@@ -42,6 +45,12 @@ export async function login(email: string, password: string): Promise<TokenRespo
 
 export async function setupKeyLogin(setupKey: string): Promise<TokenResponse> {
   const { data } = await api.post<TokenResponse>("/api/auth/setup-key-login", { setup_key: setupKey });
+  localStorage.setItem("astro_token", data.access_token);
+  return data;
+}
+
+export async function googleLogin(credential: string): Promise<TokenResponse> {
+  const { data } = await api.post<TokenResponse>("/api/auth/google", { credential });
   localStorage.setItem("astro_token", data.access_token);
   return data;
 }
@@ -174,6 +183,7 @@ export interface AdvancedSearchResponse {
 }
 
 export interface SpectralLineInfo {
+  key: string;
   name: string;
   rest_wavelength_um: number;
   rest_freq_ghz?: number;
@@ -221,6 +231,42 @@ export async function getFITSSpectrum(fitsPath: string, maxPoints = 2000): Promi
     params: { fits_path: fitsPath, max_points: maxPoints },
   });
   return data;
+}
+
+// ── FITS Upload & Browse API ──
+
+export interface FITSFileInfo {
+  id: string;
+  filename: string;
+  fits_path: string;
+  size_bytes: number;
+  source: string;
+  object_id: string;
+  created_at: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export async function uploadFITS(
+  file: File,
+  objectId?: string
+): Promise<FITSFileInfo> {
+  const form = new FormData();
+  form.append("file", file);
+  const params: Record<string, string> = {};
+  if (objectId) params.object_id = objectId;
+  const { data } = await api.post<FITSFileInfo>("/api/data/fits/upload", form, { params });
+  return data;
+}
+
+export async function browseFITS(source?: string): Promise<FITSFileInfo[]> {
+  const params: Record<string, string> = {};
+  if (source) params.source = source;
+  const { data } = await api.get<FITSFileInfo[]>("/api/data/fits/browse", { params });
+  return data;
+}
+
+export async function deleteFITS(fileId: string): Promise<void> {
+  await api.delete(`/api/data/fits/${fileId}`);
 }
 
 // ── Pipeline API ──
@@ -373,10 +419,6 @@ export function connectPipelineWS(
     }
   };
 
-  ws.onclose = () => {
-    onClose?.();
-  };
-
   // Keep alive with pings
   const pingInterval = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) {
@@ -385,6 +427,11 @@ export function connectPipelineWS(
       clearInterval(pingInterval);
     }
   }, 30000);
+
+  ws.onclose = () => {
+    clearInterval(pingInterval);
+    onClose?.();
+  };
 
   return ws;
 }

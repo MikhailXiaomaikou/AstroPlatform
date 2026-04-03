@@ -66,6 +66,9 @@ class User(Base):
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255))
     anthropic_api_key: Mapped[str | None] = mapped_column(Text)  # legacy, kept for migration compat
     api_keys: Mapped[dict | None] = mapped_column(JSONType())  # {"anthropic": "sk-...", "openai": "sk-...", ...}
+    google_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    avatar_url: Mapped[str | None] = mapped_column(Text)
+    display_name: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

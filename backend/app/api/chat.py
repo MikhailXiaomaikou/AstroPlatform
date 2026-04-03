@@ -27,6 +27,8 @@ When a user describes what data they want, you:
 3. Return it as an executable action so the user just clicks "Execute"
 4. Explain what you're doing and why in plain language
 
+You can also **design, modify, and comment on data processing pipelines**. When the user describes a workflow ("denoise this spectrum then fit emission lines"), you build a pipeline DAG automatically.
+
 ## Decision tree: which database to use
 
 **Gaia DR3** (service: "gaia", table: gaiadr3.gaia_source) — USE FOR:
@@ -82,6 +84,67 @@ main_id, ra, dec, otype, otype_txt, rvz_redshift, rvz_radvel, rvz_type, sp_type,
 
 5. {"action": "plot", "chart_type": "...", "data": {...}, "params": {...}}
    — Generate a plot from inline data.
+
+6. {"action": "generate_pipeline", "name": "...", "description": "...", "dag": {"nodes": [...], "edges": [...]}}
+   — Generate a pipeline DAG from a natural language workflow description. See PIPELINE section below.
+
+7. {"action": "modify_pipeline", "modifications": [{"action": "add_node"|"remove_node"|"update_params"|"add_edge"|"remove_edge", ...}], "explanation": "..."}
+   — Modify an existing pipeline. Used when the user says "add a denoise step before the fit" or "change sigma to 5.0".
+
+8. {"action": "comment_pipeline", "template_id": "...", "comment": "..."}
+   — Add a review comment on a pipeline template. Use when the user asks you to review or comment on a pipeline.
+
+## Pipeline DAG generation
+
+Available node types and their params:
+- **LoadData**: Load FITS file. params: {}
+- **Denoise**: Sigma-clip noise. params: {"sigma": 3.0}
+- **SpectralFit**: Fit Gaussian/Lorentzian to emission/absorption lines. params: {"model": "gaussian"|"lorentzian", "region_min": float, "region_max": float}
+- **RedshiftEstimate**: Estimate redshift from spectral lines. params: {"method": "peak"|"xcorr"}
+- **EquivalentWidth**: Measure spectral line equivalent width. params: {"line_center": float, "window": float, "continuum_method": "median"|"linear"}
+- **SEDFit**: Fit SED to blackbody/power-law/modified_blackbody/composite. params: {"model": "blackbody"|"power_law"|"modified_blackbody"|"composite"}
+- **CoordTransform**: Transform coordinate frames. params: {"from_frame": "icrs"|"galactic"|"ecliptic", "to_frame": "icrs"|"galactic"|"ecliptic"}
+- **CrossMatch**: Cross-match catalogs. params: {"radius_arcsec": 3.0, "catalog": "2mass"|"wise"|"sdss"}
+- **PhotCalibrate**: Photometric calibration. params: {"zero_point": float, "band": "g"|"r"|"i"|"z"}
+- **ImageStack**: Stack multiple images. params: {"method": "median"|"mean"|"sigma_clip"}
+- **Plot**: Generate static PNG plot. params: {"plot_type": "spectrum"|"scatter"|"histogram"}
+- **InteractivePlot**: Generate interactive Plotly viz. params: {"plot_type": "spectrum"|"scatter"|"histogram"|"hr_diagram"}
+
+### DAG format
+Nodes: {"id": "n1", "type": "LoadData", "position": {"x": 0, "y": 150}, "data": {"label": "Load Data", "params": {...}}}
+Edges: {"id": "e1-2", "source": "n1", "target": "n2"}
+
+Position nodes left-to-right, 300px apart horizontally, centered vertically at y=150.
+
+### Pipeline examples
+
+User: "denoise this spectrum then fit emission lines"
+→ generate_pipeline with:
+  n1: LoadData(x=0) → n2: Denoise(x=300, sigma=3.0) → n3: SpectralFit(x=600, model="gaussian") → n4: InteractivePlot(x=900, plot_type="spectrum")
+
+User: "estimate redshift of a galaxy spectrum"
+→ generate_pipeline with:
+  n1: LoadData → n2: Denoise → n3: RedshiftEstimate(method="xcorr") → n4: InteractivePlot
+
+User: "fit the SED and plot it"
+→ generate_pipeline with:
+  n1: LoadData → n2: SEDFit(model="blackbody") → n3: InteractivePlot(plot_type="spectrum")
+
+User: "add a denoise step before the spectral fit"
+→ modify_pipeline: add_node Denoise between LoadData and SpectralFit
+
+User: "change the sigma to 5"
+→ modify_pipeline: update_params on Denoise node, set sigma=5.0
+
+User: "review this pipeline"
+→ comment_pipeline with review feedback
+
+### modify_pipeline modifications format:
+- {"action": "add_node", "node": {"id": "n_new", "type": "...", "data": {"label": "...", "params": {...}}}, "after_node": "n1", "before_node": "n2"}
+- {"action": "remove_node", "node_id": "n2"}
+- {"action": "update_params", "node_id": "n2", "params": {"sigma": 5.0}}
+- {"action": "add_edge", "source": "n1", "target": "n_new"}
+- {"action": "remove_edge", "source": "n1", "target": "n2"}
 
 ## Examples of how to translate user requests
 
@@ -367,6 +430,106 @@ async def execute_action(
         mock_request = StarletteRequest(scope)
         result = await run_pipeline(request=mock_request, req=req, db=db, user=user, async_mode=False)
         return {"type": "pipeline_result", "data": result.model_dump()}
+
+    elif action_type == "generate_pipeline":
+        # AI generated a pipeline DAG — validate and return it for the frontend to load
+        name = action.get("name", "AI-Generated Pipeline")
+        description = action.get("description", "")
+        dag = action.get("dag", {})
+
+        # Validate DAG structure
+        if "nodes" not in dag or "edges" not in dag:
+            raise HTTPException(status_code=400, detail="Generated DAG must have 'nodes' and 'edges'")
+
+        from app.pipeline.nodes import registry as node_registry
+        valid_types = set(node_registry.keys())
+
+        # Auto-assign positions if missing
+        for i, node in enumerate(dag.get("nodes", [])):
+            if "position" not in node:
+                node["position"] = {"x": i * 300, "y": 150}
+            if "data" not in node:
+                node["data"] = {"label": node.get("type", ""), "params": {}}
+            elif "label" not in node["data"]:
+                node["data"]["label"] = node.get("type", "")
+
+        # Warn about unknown node types but don't reject
+        warnings = []
+        for node in dag.get("nodes", []):
+            if node.get("type") not in valid_types:
+                warnings.append(f"Unknown node type: {node.get('type')}")
+
+        # Optionally save as template
+        if user:
+            from app.models.schemas import PipelineTemplateDB
+            tpl = PipelineTemplateDB(
+                name=name,
+                description=description,
+                dag=dag,
+                user_id=user.id,
+            )
+            db.add(tpl)
+            await db.commit()
+            await db.refresh(tpl)
+            template_id = str(tpl.id)
+        else:
+            template_id = None
+
+        return {
+            "type": "generated_pipeline",
+            "data": {
+                "name": name,
+                "description": description,
+                "dag": dag,
+                "template_id": template_id,
+                "warnings": warnings,
+            },
+        }
+
+    elif action_type == "modify_pipeline":
+        # AI wants to modify an existing pipeline
+        modifications = action.get("modifications", [])
+        explanation = action.get("explanation", "")
+        current_dag = action.get("current_dag")
+
+        # If no current_dag provided via context, try to get from context
+        if not current_dag and (req_context := action.get("context")):
+            current_dag = req_context.get("current_dag")
+
+        return {
+            "type": "pipeline_modification",
+            "data": {
+                "modifications": modifications,
+                "explanation": explanation,
+                "current_dag": current_dag,
+            },
+        }
+
+    elif action_type == "comment_pipeline":
+        template_id = action.get("template_id", "")
+        comment_text = action.get("comment", "")
+
+        if template_id and user:
+            from app.models.schemas import PipelineComment
+            try:
+                tid = uuid.UUID(template_id)
+                comment = PipelineComment(
+                    template_id=tid,
+                    user_id=user.id,
+                    content=f"[AI Review] {comment_text}",
+                )
+                db.add(comment)
+                await db.commit()
+            except (ValueError, Exception) as e:
+                logger.warning(f"Failed to save pipeline comment: {e}")
+
+        return {
+            "type": "pipeline_comment",
+            "data": {
+                "template_id": template_id,
+                "comment": comment_text,
+            },
+        }
 
     elif action_type == "explain":
         return {"type": "explanation", "data": {"topic": action.get("topic", "")}}

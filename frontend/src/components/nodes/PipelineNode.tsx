@@ -68,16 +68,16 @@ function PipelineNode({ data, selected }: NodeProps<PipelineNodeData>) {
         )}
       </div>
       {data.nodeType !== "LoadData" && (
-        <Handle type="target" position={Position.Left} />
+        <Handle type="target" position={Position.Left} className="pipeline-handle pipeline-handle-target" />
       )}
       {data.nodeType !== "Plot" && (
-        <Handle type="source" position={Position.Right} />
+        <Handle type="source" position={Position.Right} className="pipeline-handle pipeline-handle-source" />
       )}
       {data.nodeType === "Plot" && (
-        <Handle type="source" position={Position.Right} style={{ opacity: 0.3 }} />
+        <Handle type="source" position={Position.Right} className="pipeline-handle" style={{ opacity: 0.3 }} />
       )}
       {data.nodeType === "LoadData" && (
-        <Handle type="target" position={Position.Left} style={{ opacity: 0.3 }} />
+        <Handle type="target" position={Position.Left} className="pipeline-handle" style={{ opacity: 0.3 }} />
       )}
     </div>
   );

@@ -31,11 +31,45 @@ from app.rate_limit import limiter
 logger = logging.getLogger(__name__)
 
 
+def _migrate_add_columns(connection):
+    """Add new columns to existing tables (SQLite create_all won't do this)."""
+    import sqlalchemy
+    inspector = sqlalchemy.inspect(connection)
+    if "users" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("users")}
+        migrations = [
+            ("google_id", "VARCHAR(255)"),
+            ("avatar_url", "TEXT"),
+            ("display_name", "VARCHAR(255)"),
+        ]
+        for col_name, col_type in migrations:
+            if col_name not in existing:
+                try:
+                    connection.execute(sqlalchemy.text(
+                        f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info("Added column users.%s", col_name)
+                except Exception as e:
+                    # Column may have been added by a concurrent worker
+                    logger.debug("Migration users.%s skipped: %s", col_name, e)
+        # Add unique index on google_id if not already present
+        existing_indexes = {idx["name"] for idx in inspector.get_indexes("users")}
+        if "ix_users_google_id" not in existing_indexes:
+            try:
+                connection.execute(sqlalchemy.text(
+                    "CREATE UNIQUE INDEX ix_users_google_id ON users (google_id)"
+                ))
+                logger.info("Created unique index ix_users_google_id")
+            except Exception:
+                pass  # Index may already exist under a different name
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create tables on startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_migrate_add_columns)
     logger.info("Database tables created")
 
     # Start Redis subscriber for WebSocket relay (best-effort)

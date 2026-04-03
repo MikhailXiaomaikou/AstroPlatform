@@ -13,9 +13,11 @@ async def get_redis() -> aioredis.Redis | None:
     global _redis
     if _redis is None:
         try:
-            import os
-            url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-            _redis = aioredis.from_url(url, decode_responses=True)
+            from app.config import settings
+            kwargs: dict = {"decode_responses": True}
+            if settings.redis_ssl:
+                kwargs["ssl_cert_reqs"] = "none"
+            _redis = aioredis.from_url(settings.redis_url, **kwargs)
             await _redis.ping()
         except Exception as e:
             logger.warning("Redis cache unavailable: %s", e)

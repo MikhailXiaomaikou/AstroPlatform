@@ -138,7 +138,10 @@ def _publish_progress(run_id: str, data: dict):
     try:
         import redis as redis_lib
         from app.config import settings
-        r = redis_lib.Redis.from_url(settings.redis_url)
+        kwargs = {}
+        if settings.redis_ssl:
+            kwargs["ssl_cert_reqs"] = "none"
+        r = redis_lib.Redis.from_url(settings.redis_url, **kwargs)
         message = json.dumps({"run_id": run_id, **data})
         r.publish("pipeline_progress", message)
         r.close()

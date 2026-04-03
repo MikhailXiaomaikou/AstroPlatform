@@ -10,6 +10,7 @@ import {
   type ChatAction,
   type ADSReference,
 } from "../../api/client";
+import MarkdownText from "../../components/chat/MarkdownText";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 interface DisplayMessage {
@@ -40,6 +41,9 @@ function ActionCard({
     run_pipeline: "Run pipeline",
     explain: "Explanation",
     plot: "Interactive Plot",
+    generate_pipeline: "Generate Pipeline",
+    modify_pipeline: "Modify Pipeline",
+    comment_pipeline: "Comment on Pipeline",
   };
 
   const icons: Record<string, string> = {
@@ -49,6 +53,9 @@ function ActionCard({
     run_pipeline: "⚙️",
     explain: "📖",
     plot: "📈",
+    generate_pipeline: "🔧",
+    modify_pipeline: "✏️",
+    comment_pipeline: "💬",
   };
 
   return (
@@ -60,13 +67,13 @@ function ActionCard({
         <span className="chat-action-label">
           {labels[action.action] || action.action}
         </span>
-        {action.action !== "explain" && !result && (
+        {action.action !== "explain" && action.action !== "comment_pipeline" && !result && (
           <button
             className="btn-chat-action"
             onClick={() => onExecute(index, action)}
             disabled={executing}
           >
-            {executing ? "Running..." : "Execute"}
+            {executing ? "Running..." : action.action === "generate_pipeline" ? "Create Pipeline" : "Execute"}
           </button>
         )}
       </div>
@@ -95,6 +102,27 @@ function ActionCard({
         )}
         {action.action === "arxiv" && (
           <span>Paper: {action.arxiv_id as string}</span>
+        )}
+        {action.action === "generate_pipeline" && (
+          <span>
+            <strong>{String(action.name || "")}</strong>
+            {action.description ? <> — {String(action.description)}</> : null}
+            <br />
+            {((action.dag as { nodes: Array<{ type: string }> })?.nodes || [])
+              .map((n: { type: string }) => n.type)
+              .join(" → ")}
+          </span>
+        )}
+        {action.action === "modify_pipeline" && (
+          <span>
+            {((action.modifications as Array<{ action: string }>) || [])
+              .map((m: { action: string }) => m.action)
+              .join(", ")}
+            {action.explanation ? <> — {String(action.explanation)}</> : null}
+          </span>
+        )}
+        {action.action === "comment_pipeline" && (
+          <span>{String(action.comment || "").slice(0, 100)}...</span>
         )}
       </div>
       {action.action === "plot" && (
@@ -266,16 +294,9 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   const [showStats, setShowStats] = useState(false);
   const PAGE_SIZE = 15;
 
-  if (!data || data.length === 0) {
-    return (
-      <div className="chat-action-result">
-        <p className="chat-result-empty">No results found.</p>
-      </div>
-    );
-  }
-
   // Deduplicate by name+source
   const unique = useMemo(() => {
+    if (!data || data.length === 0) return [];
     const seen = new Set<string>();
     return data.filter((row) => {
       const key = `${row.source}-${row.name}-${(row.ra as number)?.toFixed(3)}-${(row.dec as number)?.toFixed(3)}`;
@@ -331,6 +352,14 @@ function SearchResultTable({ data }: { data: Array<Record<string, unknown>> }) {
   const hasMag = useMemo(() => unique.some((r) => r.magnitude != null), [unique]);
   const hasZ = useMemo(() => unique.some((r) => r.redshift != null), [unique]);
   const hasType = useMemo(() => unique.some((r) => r.object_type), [unique]);
+
+  if (unique.length === 0) {
+    return (
+      <div className="chat-action-result">
+        <p className="chat-result-empty">No results found.</p>
+      </div>
+    );
+  }
 
   // Selection uses global indices into the unique array
   const pageStart = page * PAGE_SIZE;
@@ -493,6 +522,18 @@ ${trs}
       )}
       <div className="chat-result-table-scroll">
         <table className="chat-result-table">
+          <colgroup>
+            <col className="col-check" />
+            <col className="col-chat-name" />
+            <col className="col-chat-ra" />
+            <col className="col-chat-dec" />
+            {hasType && <col className="col-chat-type" />}
+            {hasMag && <col className="col-chat-mag" />}
+            {hasZ && <col className="col-chat-z" />}
+            {extraCols.map((c) => (
+              <col key={c} className="col-chat-extra" />
+            ))}
+          </colgroup>
           <thead>
             <tr>
               <th className="th-check">
@@ -592,11 +633,12 @@ function ActionResult({ result }: { result: Record<string, unknown> }) {
     const numRows = Math.min(rowCount || 0, 20);
     return (
       <div className="chat-action-result">
-        <table className="chat-result-table">
+        <div className="chat-result-table-scroll">
+        <table className="chat-result-table chat-result-table-adql">
           <thead>
             <tr>
               {columns.map((col) => (
-                <th key={col}>{col}</th>
+                <th key={col} title={col}>{col}</th>
               ))}
             </tr>
           </thead>
@@ -604,7 +646,7 @@ function ActionResult({ result }: { result: Record<string, unknown> }) {
             {Array.from({ length: numRows }).map((_, rowIdx) => (
               <tr key={rowIdx}>
                 {columns.map((col) => (
-                  <td key={col}>
+                  <td key={col} title={tableData[col]?.[rowIdx] != null ? String(tableData[col][rowIdx]) : undefined}>
                     {tableData[col]?.[rowIdx] != null
                       ? String(tableData[col][rowIdx])
                       : "—"}
@@ -614,6 +656,7 @@ function ActionResult({ result }: { result: Record<string, unknown> }) {
             ))}
           </tbody>
         </table>
+        </div>
         {(rowCount || 0) > 20 && (
           <p className="chat-result-more">
             Showing 20 of {rowCount} rows
@@ -664,6 +707,72 @@ function ActionResult({ result }: { result: Record<string, unknown> }) {
             )}
           </div>
         ))}
+      </div>
+    );
+  }
+
+  if (type === "generated_pipeline") {
+    const d = result.data as Record<string, unknown>;
+    const dag = d?.dag as { nodes: Array<{ type: string; id: string }>; edges: Array<{ source: string; target: string }> };
+    const warnings = (d?.warnings as string[]) || [];
+    return (
+      <div className="chat-action-result">
+        <div style={{ padding: "0.5rem", background: "rgba(79,195,247,0.08)", borderRadius: 6, marginBottom: "0.5rem" }}>
+          <strong style={{ color: "#4fc3f7" }}>{String(d?.name || "")}</strong>
+          {d?.description ? <span style={{ color: "#aaa", marginLeft: 8 }}>{String(d.description)}</span> : null}
+        </div>
+        <div style={{ fontSize: "0.85rem", color: "#e0e0e0" }}>
+          {dag?.nodes?.map((n, i) => (
+            <span key={n.id}>
+              {i > 0 && <span style={{ color: "#666", margin: "0 0.3rem" }}> → </span>}
+              <span style={{ background: "#2a3a4a", padding: "2px 6px", borderRadius: 4 }}>{n.type}</span>
+            </span>
+          ))}
+        </div>
+        {warnings.length > 0 && (
+          <div style={{ color: "#ffa726", fontSize: "0.75rem", marginTop: "0.3rem" }}>
+            {warnings.join("; ")}
+          </div>
+        )}
+        {typeof d?.template_id === "string" && (
+          <div style={{ fontSize: "0.75rem", color: "#777", marginTop: "0.3rem" }}>
+            Saved as template. <a href="/pipeline" style={{ color: "#4fc3f7" }}>Open in Pipeline Editor</a>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (type === "pipeline_modification") {
+    const d = result.data as Record<string, unknown>;
+    const mods = (d?.modifications as Array<Record<string, unknown>>) || [];
+    return (
+      <div className="chat-action-result">
+        <div style={{ fontSize: "0.85rem", color: "#e0e0e0" }}>
+          <strong>Pipeline modifications:</strong>
+          <ul style={{ margin: "0.3rem 0", paddingLeft: "1.2rem" }}>
+            {mods.map((m, i) => (
+              <li key={i} style={{ marginBottom: "0.2rem" }}>
+                <span style={{ color: "#4fc3f7" }}>{String(m.action)}</span>
+                {m.node_id ? <> on <code>{String(m.node_id)}</code></> : null}
+                {m.node ? <> — <code>{String((m.node as Record<string, unknown>).type)}</code></> : null}
+              </li>
+            ))}
+          </ul>
+          {d?.explanation ? <p style={{ color: "#aaa", fontSize: "0.8rem" }}>{String(d.explanation)}</p> : null}
+        </div>
+      </div>
+    );
+  }
+
+  if (type === "pipeline_comment") {
+    const d = result.data as Record<string, unknown>;
+    return (
+      <div className="chat-action-result">
+        <div style={{ padding: "0.5rem", background: "rgba(255,167,38,0.08)", borderRadius: 6, fontSize: "0.85rem" }}>
+          <strong style={{ color: "#ffa726" }}>AI Review Comment</strong>
+          <p style={{ color: "#e0e0e0", margin: "0.3rem 0 0" }}>{String(d?.comment || "")}</p>
+        </div>
       </div>
     );
   }
@@ -976,9 +1085,13 @@ export default function ChatPage() {
             </div>
             <div className="chat-message-body">
               <div className="chat-message-content">
-                {msg.content.split("\n").map((line, i) => (
-                  <p key={i}>{line || "\u00A0"}</p>
-                ))}
+                {msg.role === "assistant" ? (
+                  <MarkdownText content={msg.content} />
+                ) : (
+                  msg.content.split("\n").map((line, i) => (
+                    <p key={i}>{line || "\u00A0"}</p>
+                  ))
+                )}
               </div>
               {msg.actions && msg.actions.length > 0 && (
                 <div className="chat-actions-list">

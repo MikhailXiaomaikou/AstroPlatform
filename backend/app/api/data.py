@@ -4,14 +4,15 @@ import logging
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FastAPIFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
-from app.auth import get_optional_user
+from app.auth import get_current_user, get_optional_user
 from app.cache import cache_get, cache_key, cache_set
+from app.config import settings as app_settings_mod
 from app.rate_limit import limiter
 from app.connectors.base import AstroObject
 from app.connectors.registry import CONNECTORS_KEYS, get_connector
@@ -828,6 +829,161 @@ async def get_fits_wcs(
         }
     finally:
         hdul.close()
+
+
+# ── FITS Upload & Browse ──
+
+
+class FITSFileInfo(BaseModel):
+    id: str
+    filename: str
+    fits_path: str
+    size_bytes: int
+    source: str
+    object_id: str
+    created_at: str | None = None
+    metadata: dict = {}
+
+
+@router.post("/fits/upload", response_model=FITSFileInfo)
+async def upload_fits_file(
+    file: UploadFile = FastAPIFile(..., description="FITS file to upload"),
+    object_id: str = Query("", description="Optional object identifier"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Upload a FITS file for use in pipelines and visualization."""
+    from app.config import settings as app_settings
+
+    if not file.filename or not file.filename.lower().endswith((".fits", ".fit", ".fts", ".fits.gz")):
+        raise HTTPException(status_code=400, detail="Only FITS files are accepted (.fits, .fit, .fts, .fits.gz)")
+
+    max_size = app_settings.max_upload_size
+    # Check declared size first to reject obviously too-large uploads early
+    if file.size and file.size > max_size:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {max_size // (1024*1024)} MB",
+        )
+
+    # Read with a hard limit to prevent memory exhaustion
+    contents = await file.read(max_size + 1)
+    if len(contents) > max_size:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {max_size // (1024*1024)} MB",
+        )
+
+    # Validate it's actually a FITS file
+    from astropy.io import fits
+    try:
+        hdul = fits.open(io.BytesIO(contents))
+        n_hdus = len(hdul)
+        primary_header = dict(hdul[0].header) if hdul[0].header else {}
+        hdul.close()
+    except Exception:
+        raise HTTPException(status_code=400, detail="File is not a valid FITS file")
+
+    # Store file
+    file_uuid = uuid.uuid4().hex
+    safe_name = file.filename.replace("/", "_").replace("\\", "_")
+    fits_path = f"uploads/{str(user.id)[:8]}/{file_uuid}_{safe_name}"
+    upload_fits(fits_path, contents)
+
+    # Sanitize header for JSON storage
+    meta: dict = {}
+    for k, v in primary_header.items():
+        if k and k.strip():
+            try:
+                import json as _json
+                _json.dumps(v)
+                meta[k] = v
+            except (TypeError, ValueError):
+                meta[k] = str(v)
+
+    data_file = DataFile(
+        user_id=user.id,
+        source="upload",
+        object_id=object_id or safe_name,
+        fits_path=fits_path,
+        metadata_={"n_hdus": n_hdus, "size_bytes": len(contents), "original_filename": safe_name, **meta},
+    )
+    db.add(data_file)
+    await db.commit()
+    await db.refresh(data_file)
+
+    return FITSFileInfo(
+        id=str(data_file.id),
+        filename=safe_name,
+        fits_path=fits_path,
+        size_bytes=len(contents),
+        source="upload",
+        object_id=data_file.object_id,
+        created_at=data_file.created_at.isoformat() if data_file.created_at else None,
+        metadata=data_file.metadata_ or {},
+    )
+
+
+@router.get("/fits/browse", response_model=list[FITSFileInfo])
+async def browse_fits_files(
+    source: str | None = Query(None, description="Filter by source (upload, sdss, gaia, ...)"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List all FITS files in the user's workspace."""
+    query = select(DataFile).where(DataFile.user_id == user.id)
+    if source:
+        query = query.where(DataFile.source == source)
+    query = query.order_by(DataFile.created_at.desc()).limit(200)
+
+    result = await db.execute(query)
+    files = result.scalars().all()
+
+    out = []
+    for f in files:
+        meta = f.metadata_ or {}
+        out.append(FITSFileInfo(
+            id=str(f.id),
+            filename=meta.get("original_filename", f.object_id),
+            fits_path=f.fits_path,
+            size_bytes=meta.get("size_bytes", 0),
+            source=f.source,
+            object_id=f.object_id,
+            created_at=f.created_at.isoformat() if f.created_at else None,
+            metadata=meta,
+        ))
+    return out
+
+
+@router.delete("/fits/{file_id}")
+async def delete_fits_file(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete a FITS file from the user's workspace."""
+    try:
+        fid = uuid.UUID(file_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid file ID")
+
+    result = await db.execute(
+        select(DataFile).where(DataFile.id == fid, DataFile.user_id == user.id)
+    )
+    data_file = result.scalar_one_or_none()
+    if data_file is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Delete from storage
+    from pathlib import Path
+    full_path = Path(app_settings_mod.local_storage_dir) / data_file.fits_path
+    if full_path.exists():
+        full_path.unlink()
+
+    await db.delete(data_file)
+    await db.commit()
+
+    return {"deleted": True}
 
 
 @router.get("/{source}/{object_id}", response_model=FetchResult)

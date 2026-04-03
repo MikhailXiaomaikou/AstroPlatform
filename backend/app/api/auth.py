@@ -1,7 +1,9 @@
-"""Auth API — registration, login, user profile, Stripe subscription."""
+"""Auth API — registration, login, Google OAuth, user profile, Stripe subscription."""
 
 import logging
+import secrets
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
@@ -39,11 +41,18 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class GoogleLoginRequest(BaseModel):
+    credential: str  # Google ID token (JWT from Google Identity Services)
+
+
 class UserProfile(BaseModel):
     id: str
     email: str
     subscription_tier: str
     stripe_customer_id: str | None = None
+    display_name: str | None = None
+    avatar_url: str | None = None
+    google_linked: bool = False
 
 
 class SetupKeyRequest(BaseModel):
@@ -103,6 +112,118 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
     return TokenResponse(access_token=token)
 
 
+@router.post("/google", response_model=TokenResponse)
+@limiter.limit("20/minute")
+async def google_login(request: Request, req: GoogleLoginRequest, db: AsyncSession = Depends(get_db)):
+    """Authenticate with Google. Verifies the ID token, creates or finds the user."""
+    if not settings.google_client_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Google login not configured. Set GOOGLE_CLIENT_ID in environment.",
+        )
+
+    # Verify Google ID token via Google's tokeninfo endpoint
+    google_payload = await _verify_google_token(req.credential)
+
+    google_id = google_payload["sub"]
+    email = google_payload.get("email", "")
+    email_verified = google_payload.get("email_verified", False)
+    display_name = google_payload.get("name", "")
+    avatar_url = google_payload.get("picture", "")
+
+    if not email or not email_verified:
+        raise HTTPException(status_code=400, detail="Google account email is not verified")
+
+    # 1. Check if user exists by google_id
+    result = await db.execute(select(User).where(User.google_id == google_id))
+    user = result.scalar_one_or_none()
+
+    if user:
+        # Update profile info from Google
+        if display_name and user.display_name != display_name:
+            user.display_name = display_name
+        if avatar_url and user.avatar_url != avatar_url:
+            user.avatar_url = avatar_url
+        await db.commit()
+        return TokenResponse(access_token=create_access_token(user.id))
+
+    # 2. Check if user exists by email (link Google to existing account)
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if user:
+        user.google_id = google_id
+        if not user.display_name:
+            user.display_name = display_name
+        if not user.avatar_url:
+            user.avatar_url = avatar_url
+        await db.commit()
+        return TokenResponse(access_token=create_access_token(user.id))
+
+    # 3. Create new user (handle race condition with concurrent requests)
+    from sqlalchemy.exc import IntegrityError
+    random_pw = secrets.token_urlsafe(32)
+    user = User(
+        email=email,
+        password_hash=hash_password(random_pw),
+        google_id=google_id,
+        display_name=display_name,
+        avatar_url=avatar_url,
+        subscription_tier="solo",
+    )
+    db.add(user)
+    try:
+        await db.commit()
+        await db.refresh(user)
+    except IntegrityError:
+        # Concurrent request already created this user — look them up again
+        await db.rollback()
+        result = await db.execute(select(User).where(User.google_id == google_id))
+        user = result.scalar_one_or_none()
+        if user is None:
+            result = await db.execute(select(User).where(User.email == email))
+            user = result.scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=500, detail="Account creation failed. Please try again.")
+
+    return TokenResponse(access_token=create_access_token(user.id))
+
+
+async def _verify_google_token(id_token: str) -> dict:
+    """Verify a Google ID token and return the payload.
+
+    Uses Google's tokeninfo endpoint for simplicity and reliability.
+    In high-traffic production, switch to local JWT verification with
+    Google's public keys from https://www.googleapis.com/oauth2/v3/certs.
+    """
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # Method 1: tokeninfo endpoint (simple, reliable)
+        resp = await client.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": id_token},
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    payload = resp.json()
+
+    # Verify audience matches our client ID
+    aud = payload.get("aud", "")
+    if aud != settings.google_client_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Google token audience mismatch",
+        )
+
+    # Verify issuer
+    iss = payload.get("iss", "")
+    if iss not in ("accounts.google.com", "https://accounts.google.com"):
+        raise HTTPException(status_code=401, detail="Invalid Google token issuer")
+
+    return payload
+
+
 @router.get("/me", response_model=UserProfile)
 async def get_profile(user: User = Depends(get_current_user)):
     return UserProfile(
@@ -110,6 +231,9 @@ async def get_profile(user: User = Depends(get_current_user)):
         email=user.email,
         subscription_tier=user.subscription_tier,
         stripe_customer_id=user.stripe_customer_id,
+        display_name=user.display_name,
+        avatar_url=user.avatar_url,
+        google_linked=bool(user.google_id),
     )
 
 

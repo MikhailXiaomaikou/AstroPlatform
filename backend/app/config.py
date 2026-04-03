@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     # Pipeline execution mode: "sync" or "celery"
     pipeline_mode: str = "sync"
 
+    # Max FITS upload size in bytes (default 100 MB)
+    max_upload_size: int = 100 * 1024 * 1024
+
+    # Google OAuth
+    google_client_id: str = ""
+    google_client_secret: str = ""
+
     model_config = {"env_file": ".env"}
 
     def __init__(self, **kwargs):
@@ -38,6 +45,19 @@ class Settings(BaseSettings):
                     "JWT_SECRET environment variable must be set in production. "
                     "Set ENV=dev to use the development fallback."
                 )
+
+    @property
+    def redis_ssl(self) -> bool:
+        """True when Redis URL uses TLS (rediss://, e.g. Upstash)."""
+        return self.redis_url.startswith("rediss://")
+
+    @property
+    def celery_broker_url(self) -> str:
+        """Celery broker URL with TLS query params for Upstash/rediss."""
+        if self.redis_ssl:
+            sep = "&" if "?" in self.redis_url else "?"
+            return f"{self.redis_url}{sep}ssl_cert_reqs=CERT_NONE"
+        return self.redis_url
 
 
 settings = Settings()

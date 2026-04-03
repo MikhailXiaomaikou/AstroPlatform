@@ -590,6 +590,7 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
+  table-layout: fixed;
 }
 
 .results-table th {
@@ -602,12 +603,17 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .results-table td {
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--color-subtle);
   color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .results-table tbody tr {
@@ -627,6 +633,76 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.th-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.th-sortable:hover {
+  color: var(--color-accent);
+}
+
+.sort-indicator {
+  font-size: 0.65em;
+  margin-left: 2px;
+}
+
+.results-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+}
+
+.results-page-info {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+/* ── Table column widths ── */
+
+.col-check { width: 36px; }
+.col-source { width: 80px; }
+.col-name { width: 22%; }
+.col-ra, .col-dec { width: 110px; }
+.col-type { width: 90px; }
+.col-mag, .col-redshift { width: 85px; }
+.col-extra { width: 100px; }
+.col-action { width: 90px; }
+
+/* ── Numeric column alignment ── */
+
+.results-table td:nth-child(4),
+.results-table td:nth-child(5),
+.results-table td:nth-child(7),
+.results-table td:nth-child(8),
+.results-table th:nth-child(4),
+.results-table th:nth-child(5),
+.results-table th:nth-child(7),
+.results-table th:nth-child(8) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-result-table td:nth-child(3),
+.chat-result-table td:nth-child(4),
+.chat-result-table td:nth-child(6),
+.chat-result-table td:nth-child(7),
+.chat-result-table th:nth-child(3),
+.chat-result-table th:nth-child(4),
+.chat-result-table th:nth-child(6),
+.chat-result-table th:nth-child(7) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ADQL tables — all number columns right-aligned via class */
+.td-num, .th-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Badges ── */
@@ -721,6 +797,46 @@
   border-radius: var(--radius-md);
   color: var(--color-green);
   font-size: 0.9rem;
+}
+
+.source-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.source-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-separator);
+  font-size: 0.78rem;
+}
+
+.source-summary-chip .source-chip-label {
+  color: var(--color-text-secondary);
+}
+
+.source-chip-error {
+  border-color: rgba(255, 159, 10, 0.3);
+  background: rgba(255, 159, 10, 0.06);
+}
+
+.source-chip-error .source-chip-label {
+  color: var(--color-orange);
+}
+
+.source-chip-empty {
+  border-color: rgba(255, 255, 255, 0.08);
+  opacity: 0.6;
+}
+
+.source-chip-empty .source-chip-label {
+  color: var(--color-text-tertiary);
 }
 
 .source-errors {
@@ -1156,6 +1272,33 @@
   color: var(--color-text-tertiary);
 }
 
+/* ── Handle styling for easier connections ── */
+
+.pipeline-handle {
+  width: 10px !important;
+  height: 10px !important;
+  border: 2px solid rgba(255, 255, 255, 0.5) !important;
+  background: var(--color-bg) !important;
+  transition: all 0.15s ease;
+}
+
+.pipeline-handle:hover,
+.pipeline-handle.connecting {
+  width: 14px !important;
+  height: 14px !important;
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent) !important;
+  box-shadow: 0 0 6px rgba(10, 132, 255, 0.5);
+}
+
+.pipeline-handle-source {
+  right: -5px !important;
+}
+
+.pipeline-handle-target {
+  left: -5px !important;
+}
+
 /* ══════════════════════════════════════
    ReactFlow Overrides — Dark Theme
    ══════════════════════════════════════ */
@@ -1165,7 +1308,17 @@
 }
 
 .react-flow__edge-path {
-  stroke: var(--color-scrollbar) !important;
+  stroke: rgba(255, 255, 255, 0.4) !important;
+  stroke-width: 2 !important;
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--color-accent) !important;
+  stroke-width: 3 !important;
+}
+
+.react-flow__connection-line {
+  stroke: rgba(10, 132, 255, 0.6) !important;
   stroke-width: 2 !important;
 }
 
@@ -1230,6 +1383,52 @@
   align-items: center;
   gap: 0.5rem;
   font-size: 0.8rem;
+}
+
+.nav-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+}
+
+.nav-avatar-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.nav-user-name {
+  color: var(--color-text);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-logout {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
+.nav-logout:hover {
+  color: var(--color-red);
+  background: rgba(255, 69, 58, 0.1);
+}
+
+.nav-auth-link {
+  font-size: 0.8rem;
+  color: var(--color-accent) !important;
 }
 
 .nav-email {
@@ -1420,6 +1619,28 @@
   font-size: 1rem !important;
 }
 
+.auth-divider {
+  display: flex;
+  align-items: center;
+  margin: 1rem 0;
+  gap: 0.75rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.auth-divider span {
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 /* ══════════════════════════════════════
    SIMBAD Badge
    ══════════════════════════════════════ */
@@ -1547,6 +1768,7 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 0.75rem;
+  table-layout: fixed;
 }
 
 .header-table th {
@@ -1561,11 +1783,20 @@
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+.header-table th:first-child { width: 25%; }
+.header-table th:nth-child(2) { width: 40%; }
+.header-table th:nth-child(3) { width: 35%; }
 
 .header-table td {
   padding: 0.35rem 0.6rem;
   border-bottom: 1px solid var(--color-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-key {
@@ -1954,6 +2185,19 @@
 
 .adql-results {
   margin-top: 1rem;
+}
+
+.adql-results-table {
+  table-layout: auto !important;
+  min-width: 100%;
+}
+
+.adql-results-table th,
+.adql-results-table td {
+  white-space: nowrap;
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .adql-results-header {
@@ -3386,6 +3630,51 @@
   border-bottom-left-radius: 4px;
 }
 
+/* ── Markdown in chat ── */
+
+.chat-message-content .md-h2 { font-size: 1.1rem; font-weight: 600; margin: 0.6rem 0 0.3rem; }
+.chat-message-content .md-h3 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0 0.2rem; }
+.chat-message-content .md-h4 { font-size: 0.92rem; font-weight: 600; margin: 0.4rem 0 0.2rem; }
+
+.chat-message-content .md-inline-code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 0.82em;
+}
+
+.chat-message-content .md-code-block {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  margin: 0.4rem 0;
+  overflow-x: auto;
+  font-size: 0.8rem;
+  font-family: "SF Mono", "Fira Code", monospace;
+  line-height: 1.45;
+}
+
+.chat-message-content .md-list {
+  margin: 0.3rem 0;
+  padding-left: 1.4rem;
+}
+
+.chat-message-content .md-list li {
+  margin-bottom: 0.15rem;
+}
+
+.chat-message-content .md-link {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.chat-message-content .md-hr {
+  border: none;
+  border-top: 1px solid var(--color-separator);
+  margin: 0.5rem 0;
+}
+
 /* ── Action cards ── */
 
 .chat-actions-list {
@@ -3486,6 +3775,7 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 0.75rem;
+  table-layout: fixed;
 }
 
 .chat-result-table th {
@@ -3495,6 +3785,8 @@
   color: var(--color-text-secondary);
   border-bottom: 1px solid var(--color-separator);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-result-table td {
@@ -3502,7 +3794,25 @@
   color: var(--color-text);
   border-bottom: 1px solid var(--color-subtle);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+/* Chat table column sizes */
+.chat-result-table .th-check,
+.chat-result-table .td-check {
+  width: 30px;
+  min-width: 30px;
+  max-width: 30px;
+}
+
+.chat-result-table .col-chat-name { width: 25%; min-width: 120px; }
+.chat-result-table .col-chat-ra,
+.chat-result-table .col-chat-dec { width: 95px; }
+.chat-result-table .col-chat-type { width: 80px; }
+.chat-result-table .col-chat-mag { width: 65px; }
+.chat-result-table .col-chat-z { width: 75px; }
+.chat-result-table .col-chat-extra { width: 100px; }
 
 .chat-result-table tbody tr:hover {
   background: var(--color-subtle);
@@ -3528,6 +3838,18 @@
 .chat-result-table-scroll {
   overflow-x: auto;
   max-width: 100%;
+}
+
+/* ADQL tables have dynamic columns — use auto layout with min-width */
+.chat-result-table-adql {
+  table-layout: auto;
+  min-width: 100%;
+}
+
+.chat-result-table-adql th,
+.chat-result-table-adql td {
+  min-width: 80px;
+  max-width: 200px;
 }
 
 .chat-result-dedup {
@@ -3918,9 +4240,12 @@
 
 .th-check, .td-check {
   width: 36px;
+  min-width: 36px;
+  max-width: 36px;
   text-align: center;
   padding-left: 0.5rem !important;
   padding-right: 0 !important;
+  overflow: visible;
 }
 
 .row-selected {
