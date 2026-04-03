@@ -29,9 +29,11 @@ class SDSSConnector(BaseConnector):
 
         sql = f"""SELECT TOP 50
             p.objid, p.ra, p.dec, p.r AS mag_r, p.type,
-            dbo.fPhotoTypeN(p.type) AS type_name
+            dbo.fPhotoTypeN(p.type) AS type_name,
+            s.z AS spec_z, s.class AS spec_class
         FROM PhotoObj AS p
         JOIN dbo.fGetNearbyObjEq({ra}, {dec}, {radius * 60}) AS n ON n.objID = p.objID
+        LEFT JOIN SpecObj AS s ON s.bestobjid = p.objid
         ORDER BY p.r"""
 
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -158,6 +160,22 @@ class SDSSConnector(BaseConnector):
 
             type_name = str(row["type_name"]) if "type_name" in row.colnames else ""
 
+            # Spectroscopic redshift from SpecObj LEFT JOIN
+            redshift = None
+            if "spec_z" in row.colnames:
+                try:
+                    z = float(row["spec_z"])
+                    if z == z and z > -1:  # NaN check and sanity
+                        redshift = z
+                except (ValueError, TypeError):
+                    pass
+
+            extra: dict = {}
+            if "spec_class" in row.colnames:
+                sc = str(row["spec_class"]).strip()
+                if sc and sc != "":
+                    extra["spec_class"] = sc
+
             objects.append(
                 AstroObject(
                     source="sdss",
@@ -167,6 +185,8 @@ class SDSSConnector(BaseConnector):
                     dec=dec,
                     object_type=type_name,
                     magnitude=mag,
+                    redshift=redshift,
+                    extra=extra,
                 )
             )
         return objects

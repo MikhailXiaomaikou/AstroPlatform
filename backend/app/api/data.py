@@ -443,20 +443,24 @@ async def advanced_search(
     # Sources that support criteria-based search without coordinates
     CRITERIA_SOURCES = {"simbad"}
 
+    # Check if we have science criteria that SIMBAD can handle via TAP
+    has_science_criteria = any([
+        body.redshift_min, body.redshift_max, body.object_type,
+        body.observation_type, body.natural_query,
+    ])
+
     # Without coordinates, only use sources that support criteria-based search
     if not has_coords:
         skipped = [s for s in source_list if s not in CRITERIA_SOURCES]
         source_list = [s for s in source_list if s in CRITERIA_SOURCES]
+        # Auto-add SIMBAD for criteria search if not already in list
+        if has_science_criteria and "simbad" not in source_list:
+            source_list.append("simbad")
         if skipped:
             logger.info(
                 "No coordinates — limiting to criteria-capable sources. Skipped: %s",
                 skipped,
             )
-
-    # Check if we have science criteria that SIMBAD can handle via TAP
-    has_science_criteria = any([
-        body.redshift_min, body.redshift_max, body.object_type,
-    ])
 
     # Execute search across remaining sources
     async def _search_source(source: str):

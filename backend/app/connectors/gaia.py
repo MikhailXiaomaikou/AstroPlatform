@@ -114,6 +114,25 @@ class GaiaConnector(BaseConnector):
                     except (ValueError, TypeError):
                         pass
 
+            # Convert radial_velocity (km/s) to redshift: z = v / c
+            redshift = None
+            rv = None
+            for col in ("radial_velocity", "RADIAL_VELOCITY"):
+                if col in row.colnames:
+                    try:
+                        rv = float(row[col])
+                        if rv == rv:  # NaN check
+                            redshift = rv / 299792.458  # c in km/s
+                    except (ValueError, TypeError):
+                        pass
+                    break
+
+            extra: dict = {}
+            if parallax is not None:
+                extra["parallax"] = parallax
+            if rv is not None and rv == rv:
+                extra["radial_velocity_km_s"] = round(rv, 2)
+
             objects.append(
                 AstroObject(
                     source="gaia",
@@ -123,7 +142,8 @@ class GaiaConnector(BaseConnector):
                     dec=dec,
                     object_type="star",
                     magnitude=mag,
-                    extra={"parallax": parallax} if parallax is not None else {},
+                    redshift=redshift,
+                    extra=extra,
                 )
             )
         return objects

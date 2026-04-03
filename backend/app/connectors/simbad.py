@@ -84,11 +84,20 @@ class SIMBADConnector(BaseConnector):
                 "star": "*", "nebula": "Neb", "pulsar": "Psr",
                 "supernova": "SN*", "Lyman-alpha emitter": "EmG",
                 "submillimeter galaxy": "G", "Lyman-break galaxy": "G",
+                "Seyfert galaxy": "Sy%", "blazar": "Bla",
+                "starburst galaxy": "SBG", "white dwarf": "WD*",
+                "brown dwarf": "BD*", "cepheid": "Ce*",
+                "RR Lyrae": "RR*", "galaxy cluster": "ClG",
+                "globular cluster": "GlC", "gamma-ray burst": "grb",
+                "planetary nebula": "PN",
             }
             simbad_type = otype_map.get(object_type, object_type)
-            # Sanitize: only allow alphanumeric and * characters
-            simbad_type = re.sub(r"[^a-zA-Z0-9*]", "", simbad_type)
-            conditions.append(f"otype = '{simbad_type}'")
+            # Sanitize: only allow alphanumeric, *, and % characters
+            simbad_type = re.sub(r"[^a-zA-Z0-9*%]", "", simbad_type)
+            if "%" in simbad_type:
+                conditions.append(f"otype LIKE '{simbad_type}'")
+            else:
+                conditions.append(f"otype = '{simbad_type}'")
 
         if not conditions:
             return []
