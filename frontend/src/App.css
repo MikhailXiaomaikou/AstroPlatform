@@ -958,10 +958,6 @@
 .mono {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 0.8rem;
-  background: var(--color-hover);
-  padding: 0.15rem 0.5rem;
-  border-radius: 4px;
-  display: inline-block;
 }
 
 .fits-hint {

@@ -38,6 +38,7 @@ export default function DataBrowser() {
   const { user } = useAuth();
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fetchingId, setFetchingId] = useState<string | null>(null);
   const [fetched, setFetched] = useState<FetchResult | null>(null);
@@ -101,6 +102,7 @@ export default function DataBrowser() {
       setError(msg);
     } finally {
       setLoading(false);
+      setSearched(true);
     }
   };
 
@@ -121,6 +123,7 @@ export default function DataBrowser() {
       setError(msg);
     } finally {
       setLoading(false);
+      setSearched(true);
     }
   };
 
@@ -706,6 +709,7 @@ ${rows}
         onFetch={handleFetch}
         fetchingId={fetchingId}
         loading={loading}
+        searched={searched}
         selectedKeys={selectedKeys}
         onSelectionChange={setSelectedKeys}
       />

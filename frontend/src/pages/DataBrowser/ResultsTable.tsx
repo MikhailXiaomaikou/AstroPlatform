@@ -6,6 +6,7 @@ interface Props {
   onFetch: (source: string, objectId: string) => void;
   fetchingId: string | null;
   loading?: boolean;
+  searched?: boolean;
   selectedKeys?: Set<string>;
   onSelectionChange?: (keys: Set<string>) => void;
 }
@@ -62,6 +63,7 @@ export default function ResultsTable({
   onFetch,
   fetchingId,
   loading,
+  searched,
   selectedKeys,
   onSelectionChange,
 }: Props) {
@@ -85,7 +87,16 @@ export default function ResultsTable({
   // Reset page when results change
   useMemo(() => { setPage(0); }, [results]);
 
-  if (!loading && results.length === 0) return <EmptyState />;
+  if (!loading && results.length === 0) {
+    if (searched) {
+      return (
+        <div className="empty-state">
+          <p>No results found. Try broadening your search criteria or selecting different data sources.</p>
+        </div>
+      );
+    }
+    return <EmptyState />;
+  }
 
   const allKeys = displayed.map((r, i) => resultKey(r, page * PAGE_SIZE + i));
   const allSelected = allKeys.length > 0 && allKeys.every((k) => selectedKeys?.has(k));
