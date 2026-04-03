@@ -103,14 +103,21 @@ class GaiaConnector(BaseConnector):
             mag = None
             for col in ("phot_g_mean_mag", "PHOT_G_MEAN_MAG"):
                 if col in row.colnames:
-                    mag = float(row[col])
+                    try:
+                        v = float(row[col])
+                        if v == v:
+                            mag = v
+                    except (ValueError, TypeError):
+                        pass
                     break
 
             parallax = None
             for col in ("parallax", "PARALLAX"):
                 if col in row.colnames:
                     try:
-                        parallax = float(row[col])
+                        v = float(row[col])
+                        if v == v:  # NaN check (masked values become nan)
+                            parallax = v
                     except (ValueError, TypeError):
                         pass
 
@@ -120,9 +127,10 @@ class GaiaConnector(BaseConnector):
             for col in ("radial_velocity", "RADIAL_VELOCITY"):
                 if col in row.colnames:
                     try:
-                        rv = float(row[col])
-                        if rv == rv:  # NaN check
-                            redshift = rv / 299792.458  # c in km/s
+                        v = float(row[col])
+                        if v == v:  # NaN check
+                            rv = v
+                            redshift = v / 299792.458  # c in km/s
                     except (ValueError, TypeError):
                         pass
                     break
@@ -130,7 +138,7 @@ class GaiaConnector(BaseConnector):
             extra: dict = {}
             if parallax is not None:
                 extra["parallax"] = parallax
-            if rv is not None and rv == rv:
+            if rv is not None:
                 extra["radial_velocity_km_s"] = round(rv, 2)
 
             objects.append(

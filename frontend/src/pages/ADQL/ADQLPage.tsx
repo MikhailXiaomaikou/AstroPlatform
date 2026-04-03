@@ -198,7 +198,12 @@ export default function ADQLPage() {
             )}
           </div>
           <div className="results-table-wrap" style={{ overflowX: "auto" }}>
-            <table className="results-table adql-results-table">
+            <table className="results-table adql-results-table" style={{ minWidth: Math.max(result.columns.length * 120, 600) }}>
+              <colgroup>
+                {result.columns.map((c) => (
+                  <col key={c} style={{ width: `${100 / result.columns.length}%` }} />
+                ))}
+              </colgroup>
               <thead>
                 <tr>{result.columns.map((c) => <th key={c} title={c}>{c}</th>)}</tr>
               </thead>

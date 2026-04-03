@@ -2188,23 +2188,19 @@
 }
 
 .results-table.adql-results-table {
-  table-layout: auto;
-  min-width: 100%;
-  width: auto;
+  table-layout: fixed;
 }
 
 .results-table.adql-results-table th {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 250px;
 }
 
 .results-table.adql-results-table td {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 250px;
   padding: 0.65rem 0.85rem;
 }
 
