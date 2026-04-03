@@ -311,7 +311,8 @@ def _build_query_text(req: AdvancedSearchRequest) -> str:
 
 
 def _post_filter_results(
-    results: list[AstroObject], req: AdvancedSearchRequest
+    results: list[AstroObject], req: AdvancedSearchRequest,
+    source: str = "",
 ) -> list[AstroObject]:
     """Apply science filters to results from connectors that don't support them natively."""
     filtered = results
@@ -325,7 +326,9 @@ def _post_filter_results(
             r for r in filtered
             if r.redshift is not None and r.redshift <= req.redshift_max
         ]
-    if req.object_type:
+    # Skip object_type filtering for SIMBAD — it already filters by otype in the TAP query.
+    # The user-facing name ("Seyfert galaxy") doesn't match SIMBAD codes ("Sy1","Sy2").
+    if req.object_type and source != "simbad":
         obj_lower = req.object_type.lower()
         filtered = [
             r for r in filtered
@@ -511,7 +514,7 @@ async def advanced_search(
             continue
 
         # Post-filter results by science criteria
-        filtered = _post_filter_results(result, body)
+        filtered = _post_filter_results(result, body, source=source_name)
         all_results.extend(_astro_to_result(obj) for obj in filtered)
 
     meta = AdvancedSearchMeta(
