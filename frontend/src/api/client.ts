@@ -233,6 +233,58 @@ export async function getFITSSpectrum(fitsPath: string, maxPoints = 2000): Promi
   return data;
 }
 
+// ── Object Detail API ──
+
+export interface ObjectDetail {
+  name: string;
+  ra: number;
+  dec: number;
+  object_type: string;
+  object_type_long: string;
+  redshift: number | null;
+  radial_velocity: number | null;
+  spectral_type: string | null;
+  morphology: string | null;
+  parallax: number | null;
+  proper_motion_ra: number | null;
+  proper_motion_dec: number | null;
+  cross_ids: Array<{ name: string }>;
+  surveys: Array<{ source: string; has_data: boolean; count: number }>;
+  references: Array<{ bibcode: string; title: string; authors: string[]; year: string }>;
+  all_data: Record<string, SearchResult[]>;
+}
+
+export async function getObjectDetail(name: string, ra?: number, dec?: number): Promise<ObjectDetail> {
+  const params: Record<string, string | number> = { name };
+  if (ra !== undefined) params.ra = ra;
+  if (dec !== undefined) params.dec = dec;
+  const { data } = await api.get<ObjectDetail>("/api/data/object-detail", { params });
+  return data;
+}
+
+// ── Spectrum Analysis API ──
+
+export interface SpectrumAnalysis {
+  peaks: Array<{ wavelength: number; flux: number; snr: number; is_emission: boolean }>;
+  redshift_auto: { best_z: number; z_error: number; confidence: number; matched_lines: Array<{ line: string; rest_wavelength: number; observed_wavelength: number }> } | null;
+  continuum_shape: string;
+  ai_classification: string;
+  ai_confidence: string;
+  ai_redshift: { value: number; uncertainty: number } | null;
+  ai_lines: Array<{ name: string; rest_wavelength: number; observed_wavelength: number; type: string; strength: string; ew: number | null }>;
+  ai_special_features: string[];
+  ai_summary: string;
+  ai_narrative: string;
+  ai_next_steps: string[];
+}
+
+export async function analyzeSpectrum(fitsPath: string, apiKey?: string): Promise<SpectrumAnalysis> {
+  const body: Record<string, unknown> = { fits_path: fitsPath };
+  if (apiKey) body.api_key = apiKey;
+  const { data } = await api.post<SpectrumAnalysis>("/api/data/fits/analyze", body);
+  return data;
+}
+
 // ── FITS Upload & Browse API ──
 
 export interface FITSFileInfo {

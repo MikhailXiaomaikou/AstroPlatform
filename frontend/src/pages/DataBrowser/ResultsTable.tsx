@@ -9,6 +9,7 @@ interface Props {
   searched?: boolean;
   selectedKeys?: Set<string>;
   onSelectionChange?: (keys: Set<string>) => void;
+  onObjectClick?: (name: string, ra: number, dec: number) => void;
 }
 
 const PAGE_SIZE = 25;
@@ -66,6 +67,7 @@ export default function ResultsTable({
   searched,
   selectedKeys,
   onSelectionChange,
+  onObjectClick,
 }: Props) {
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
@@ -207,7 +209,11 @@ export default function ResultsTable({
                       </span>
                     </td>
                     <td className="name-cell" title={r.object_id}>
-                      {r.name}
+                      {onObjectClick ? (
+                        <button className="name-link" onClick={() => onObjectClick(r.name, r.ra, r.dec)}>
+                          {r.name}
+                        </button>
+                      ) : r.name}
                     </td>
                     <td>{r.ra.toFixed(5)}</td>
                     <td>{r.dec.toFixed(5)}</td>

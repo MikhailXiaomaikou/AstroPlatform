@@ -3,10 +3,14 @@ import {
   getFITSHeader,
   getFITSSpectrum,
   getFITSWCS,
+  analyzeSpectrum,
+  getStoredApiKey,
   type FITSHeader,
   type FITSSpectrum,
   type WCSGridData,
+  type SpectrumAnalysis,
 } from "../../api/client";
+import MarkdownText from "../chat/MarkdownText";
 
 interface Props {
   filename: string;
@@ -15,7 +19,7 @@ interface Props {
   objectId: string;
 }
 
-type Tab = "info" | "header" | "data" | "image";
+type Tab = "info" | "header" | "data" | "image" | "analysis";
 
 // Common emission/absorption lines for annotation
 const SPECTRAL_LINES: Record<string, number> = {
@@ -86,6 +90,9 @@ export default function FITSPreview({ filename, fitsPath, source, objectId }: Pr
   const [spectrumLoading, setSpectrumLoading] = useState(false);
   const [headerFilter, setHeaderFilter] = useState("");
   const [selectedHdu, setSelectedHdu] = useState(0);
+  const [analysis, setAnalysis] = useState<SpectrumAnalysis | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   useEffect(() => {
     if (tab === "header" && !header && !headerLoading) {
@@ -106,6 +113,27 @@ export default function FITSPreview({ filename, fitsPath, source, objectId }: Pr
 
   const tabs: Tab[] = ["info", "header", "data"];
   if (spectrum?.type === "image" || spectrum?.thumbnail) tabs.push("image");
+  tabs.push("analysis");
+
+  const handleAnalyze = () => {
+    setAnalysisLoading(true);
+    setAnalysisError(null);
+    const apiKey = getStoredApiKey("anthropic") || undefined;
+    analyzeSpectrum(fitsPath, apiKey)
+      .then((result) => {
+        setAnalysis(result);
+        setTab("analysis");
+      })
+      .catch((e) => {
+        if (e && typeof e === "object" && "response" in e) {
+          const resp = (e as { response?: { data?: { detail?: string } } }).response;
+          setAnalysisError(resp?.data?.detail || "Analysis failed");
+        } else {
+          setAnalysisError(e instanceof Error ? e.message : "Analysis failed");
+        }
+      })
+      .finally(() => setAnalysisLoading(false));
+  };
 
   return (
     <div className="fits-preview">
@@ -218,6 +246,130 @@ export default function FITSPreview({ filename, fitsPath, source, objectId }: Pr
             <ImageViewer spectrum={spectrum} fitsPath={fitsPath} />
           ) : (
             <p className="fits-hint">No image data available</p>
+          )}
+        </div>
+      )}
+
+      {tab === "analysis" && (
+        <div className="fits-data-tab fits-analysis-tab">
+          {!analysis && !analysisLoading && !analysisError && (
+            <div className="fits-analysis-prompt">
+              <p>AI will analyze this spectrum: detect peaks, estimate redshift, classify the object, and suggest next steps.</p>
+              <button className="btn-primary" onClick={handleAnalyze}>
+                Analyze with AI
+              </button>
+            </div>
+          )}
+          {analysisLoading && (
+            <div className="fits-loading"><span className="spinner spinner-blue" /> Analyzing spectrum (this may take 10-15 seconds)...</div>
+          )}
+          {analysisError && (
+            <div className="error-banner" style={{ margin: "1rem 0" }}>
+              {analysisError}
+              <button className="btn-secondary btn-small" style={{ marginLeft: 8 }} onClick={handleAnalyze}>Retry</button>
+            </div>
+          )}
+          {analysis && (
+            <div className="fits-analysis-result">
+              {/* Classification header */}
+              <div className="analysis-header">
+                {analysis.ai_classification && (
+                  <span className="analysis-class-badge">{analysis.ai_classification}</span>
+                )}
+                {analysis.ai_confidence && (
+                  <span className={`analysis-confidence confidence-${analysis.ai_confidence}`}>
+                    {analysis.ai_confidence} confidence
+                  </span>
+                )}
+                {(analysis.ai_redshift?.value != null) && (
+                  <span className="analysis-z">z = {analysis.ai_redshift.value.toFixed(6)}</span>
+                )}
+                {(!analysis.ai_classification && analysis.redshift_auto) && (
+                  <span className="analysis-z">z(auto) = {analysis.redshift_auto.best_z.toFixed(6)}</span>
+                )}
+              </div>
+
+              {/* AI Summary */}
+              {analysis.ai_summary && (
+                <div className="analysis-summary">{analysis.ai_summary}</div>
+              )}
+
+              {/* AI Narrative */}
+              {analysis.ai_narrative && (
+                <div className="analysis-narrative">
+                  <MarkdownText content={analysis.ai_narrative} />
+                </div>
+              )}
+
+              {/* Identified lines table */}
+              {analysis.ai_lines && analysis.ai_lines.length > 0 && (
+                <div className="analysis-section">
+                  <h4>Identified Spectral Lines</h4>
+                  <table className="analysis-lines-table">
+                    <thead>
+                      <tr>
+                        <th>Line</th>
+                        <th>Rest (\u00C5)</th>
+                        <th>Observed (\u00C5)</th>
+                        <th>Type</th>
+                        <th>Strength</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {analysis.ai_lines.map((line, i) => (
+                        <tr key={i}>
+                          <td>{line.name}</td>
+                          <td>{line.rest_wavelength?.toFixed(1)}</td>
+                          <td>{line.observed_wavelength?.toFixed(1)}</td>
+                          <td className={line.type === "emission" ? "line-emission" : "line-absorption"}>
+                            {line.type}
+                          </td>
+                          <td>{line.strength}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Detected peaks */}
+              {analysis.peaks && analysis.peaks.length > 0 && (
+                <div className="analysis-section">
+                  <h4>Detected Peaks ({analysis.peaks.length})</h4>
+                  <div className="analysis-peaks">
+                    {analysis.peaks.slice(0, 15).map((p, i) => (
+                      <span key={i} className={`analysis-peak ${p.is_emission ? "peak-em" : "peak-abs"}`}>
+                        {p.wavelength.toFixed(1)} \u00C5 <small>SNR {p.snr.toFixed(1)}</small>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Special features */}
+              {analysis.ai_special_features && analysis.ai_special_features.length > 0 && (
+                <div className="analysis-section">
+                  <h4>Special Features</h4>
+                  <ul className="analysis-features">
+                    {analysis.ai_special_features.map((f, i) => <li key={i}>{f}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {/* Next steps */}
+              {analysis.ai_next_steps && analysis.ai_next_steps.length > 0 && (
+                <div className="analysis-section">
+                  <h4>Suggested Next Steps</h4>
+                  <ol className="analysis-steps">
+                    {analysis.ai_next_steps.map((s, i) => <li key={i}>{s}</li>)}
+                  </ol>
+                </div>
+              )}
+
+              <button className="btn-secondary btn-small" style={{ marginTop: "1rem" }} onClick={handleAnalyze}>
+                Re-analyze
+              </button>
+            </div>
           )}
         </div>
       )}

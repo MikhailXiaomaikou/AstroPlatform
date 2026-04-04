@@ -23,6 +23,7 @@ import { useAuth } from "../../context/AuthContext";
 import SearchBar from "./SearchBar";
 import ResultsTable from "./ResultsTable";
 import FITSPreview from "../../components/fits/FITSPreview";
+import ObjectDetailPanel from "../../components/ObjectDetailPanel";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 const ERROR_TYPE_LABELS: Record<string, string> = {
@@ -64,6 +65,9 @@ export default function DataBrowser() {
   const [friends, setFriends] = useState<FriendItem[]>([]);
   const [shareTargetId, setShareTargetId] = useState("");
   const [sharing, setSharing] = useState(false);
+
+  // Object detail panel state
+  const [detailObject, setDetailObject] = useState<{ name: string; ra: number; dec: number } | null>(null);
 
   const lastSearchRef = useRef<{ query: string; sources: string[]; radius: number } | null>(null);
 
@@ -712,6 +716,15 @@ ${rows}
         searched={searched}
         selectedKeys={selectedKeys}
         onSelectionChange={setSelectedKeys}
+        onObjectClick={(name, ra, dec) => setDetailObject({ name, ra, dec })}
+      />
+
+      <ObjectDetailPanel
+        objectName={detailObject?.name ?? ""}
+        ra={detailObject?.ra}
+        dec={detailObject?.dec}
+        isOpen={detailObject !== null}
+        onClose={() => setDetailObject(null)}
       />
 
       {fetched && (

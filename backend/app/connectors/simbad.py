@@ -142,6 +142,89 @@ class SIMBADConnector(BaseConnector):
 
         return self._table_to_objects(table)
 
+    async def get_identifiers(self, object_name: str) -> list[dict]:
+        """Get all known identifiers for an object via SIMBAD TAP (2-step: resolve OID then query ident)."""
+        from astroquery.simbad import Simbad
+
+        safe_name = object_name.replace("'", "''")
+        loop = asyncio.get_running_loop()
+
+        # Step 1: get the internal OID
+        try:
+            oid_table = await loop.run_in_executor(
+                None, partial(Simbad.query_tap, f"SELECT oidref FROM ident WHERE id = '{safe_name}'")
+            )
+        except Exception:
+            return []
+        if oid_table is None or len(oid_table) == 0:
+            return []
+
+        oid = int(oid_table["oidref"][0])
+
+        # Step 2: get all identifiers for this OID
+        try:
+            id_table = await loop.run_in_executor(
+                None, partial(Simbad.query_tap, f"SELECT id FROM ident WHERE oidref = {oid}")
+            )
+        except Exception:
+            return []
+        if id_table is None or len(id_table) == 0:
+            return []
+
+        return [{"name": str(row["id"]).strip()} for row in id_table]
+
+    async def get_object_detail(self, object_name: str) -> dict | None:
+        """Get detailed info for a single object via TAP (richer than basic search)."""
+        from astroquery.simbad import Simbad
+
+        safe_name = object_name.replace("'", "''")
+        adql = (
+            f"SELECT main_id, ra, dec, otype, otype_txt, "
+            f"rvz_redshift, rvz_radvel, sp_type, morph_type, "
+            f"plx_value, pmra, pmdec, nbref "
+            f"FROM basic JOIN ident ON basic.oid = ident.oidref "
+            f"WHERE ident.id = '{safe_name}'"
+        )
+        loop = asyncio.get_running_loop()
+        try:
+            table = await loop.run_in_executor(None, partial(Simbad.query_tap, adql))
+        except Exception:
+            return None
+
+        if table is None or len(table) == 0:
+            return None
+
+        row = table[0]
+
+        def safe(col: str):
+            if col not in table.colnames:
+                return None
+            v = row[col]
+            if hasattr(v, "mask"):
+                return None
+            try:
+                f = float(v)
+                return f if f == f else None  # NaN check
+            except (ValueError, TypeError):
+                s = str(v).strip()
+                return s if s else None
+
+        return {
+            "name": str(row["main_id"]).strip() if "main_id" in table.colnames else object_name,
+            "ra": safe("ra") or 0.0,
+            "dec": safe("dec") or 0.0,
+            "object_type": safe("otype") or "",
+            "object_type_long": safe("otype_txt") or "",
+            "redshift": safe("rvz_redshift"),
+            "radial_velocity": safe("rvz_radvel"),
+            "spectral_type": safe("sp_type"),
+            "morphology": safe("morph_type"),
+            "parallax": safe("plx_value"),
+            "proper_motion_ra": safe("pmra"),
+            "proper_motion_dec": safe("pmdec"),
+            "n_references": safe("nbref"),
+        }
+
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
     async def fetch(self, object_id: str) -> FITSFile:
         """Fetch SIMBAD data as a FITS table."""

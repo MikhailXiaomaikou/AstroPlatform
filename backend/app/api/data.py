@@ -838,6 +838,166 @@ async def get_fits_wcs(
         hdul.close()
 
 
+# ── Object Detail (Aggregation) ──
+
+
+class CrossId(BaseModel):
+    name: str
+
+
+class SurveyStatus(BaseModel):
+    source: str
+    has_data: bool
+    count: int
+
+
+class Reference(BaseModel):
+    bibcode: str
+    title: str
+    authors: list[str]
+    year: str
+
+
+class ObjectDetailResponse(BaseModel):
+    name: str
+    ra: float
+    dec: float
+    object_type: str = ""
+    object_type_long: str = ""
+    redshift: float | None = None
+    radial_velocity: float | None = None
+    spectral_type: str | None = None
+    morphology: str | None = None
+    parallax: float | None = None
+    proper_motion_ra: float | None = None
+    proper_motion_dec: float | None = None
+    cross_ids: list[CrossId] = []
+    surveys: list[SurveyStatus] = []
+    references: list[Reference] = []
+    all_data: dict[str, list[dict]] = {}
+
+
+@router.get("/object-detail", response_model=ObjectDetailResponse)
+@limiter.limit("30/minute")
+async def get_object_detail(
+    request: Request,
+    name: str = Query(..., description="Object name (e.g. M31, NGC 1068)"),
+    ra: float | None = Query(None),
+    dec: float | None = Query(None),
+):
+    """Aggregate all available information about an astronomical object."""
+    # Cache
+    ck = cache_key("object_detail", name=name, ra=ra, dec=dec)
+    cached = await cache_get(ck)
+    if cached is not None:
+        return ObjectDetailResponse(**cached)
+
+    from app.connectors.simbad import SIMBADConnector
+
+    simbad = SIMBADConnector()
+
+    # 1. Get canonical info from SIMBAD
+    detail = await simbad.get_object_detail(name)
+    if detail is None:
+        # Try resolving coordinates
+        if ra is not None and dec is not None:
+            detail = {
+                "name": name, "ra": ra, "dec": dec,
+                "object_type": "", "object_type_long": "",
+            }
+        else:
+            raise HTTPException(status_code=404, detail=f"Object '{name}' not found in SIMBAD")
+
+    obj_ra = detail.get("ra") or ra or 0.0
+    obj_dec = detail.get("dec") or dec or 0.0
+
+    # 2. Parallel: cross-IDs + cone searches + ADS
+    survey_sources = ["sdss", "gaia", "mast", "ned", "2mass", "chandra", "allwise"]
+    search_radius = 0.005  # ~18 arcsec
+
+    async def _cone_search(src: str):
+        try:
+            conn = get_connector(src)
+            results = await asyncio.wait_for(
+                conn.search(name, ra=obj_ra, dec=obj_dec, radius=search_radius),
+                timeout=15.0,
+            )
+            return src, results
+        except Exception:
+            return src, []
+
+    async def _get_ids():
+        try:
+            return await asyncio.wait_for(simbad.get_identifiers(detail.get("name", name)), timeout=10.0)
+        except Exception:
+            return []
+
+    async def _get_refs():
+        try:
+            from app.api.citations import _search_ads_sync
+            loop = asyncio.get_running_loop()
+            refs = await loop.run_in_executor(None, _search_ads_sync, detail.get("name", name))
+            return refs[:10] if refs else []
+        except Exception:
+            return []
+
+    # Run all in parallel
+    tasks = [_cone_search(s) for s in survey_sources]
+    tasks.append(_get_ids())  # type: ignore
+    tasks.append(_get_refs())  # type: ignore
+    all_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Parse results
+    survey_results = all_results[:len(survey_sources)]
+    cross_ids_raw = all_results[len(survey_sources)] if not isinstance(all_results[len(survey_sources)], Exception) else []
+    refs_raw = all_results[len(survey_sources) + 1] if not isinstance(all_results[len(survey_sources) + 1], Exception) else []
+
+    surveys: list[SurveyStatus] = []
+    all_data: dict[str, list[dict]] = {}
+    for r in survey_results:
+        if isinstance(r, Exception):
+            continue
+        src, objects = r
+        surveys.append(SurveyStatus(source=src, has_data=len(objects) > 0, count=len(objects)))
+        if objects:
+            all_data[src] = [_astro_to_result(o).model_dump() for o in objects[:10]]
+
+    cross_ids = [CrossId(name=ci["name"]) for ci in (cross_ids_raw if isinstance(cross_ids_raw, list) else [])]
+
+    references: list[Reference] = []
+    if isinstance(refs_raw, list):
+        for ref in refs_raw:
+            if isinstance(ref, dict):
+                references.append(Reference(
+                    bibcode=ref.get("bibcode", ""),
+                    title=ref.get("title", ""),
+                    authors=ref.get("authors", [])[:5],
+                    year=ref.get("year", ""),
+                ))
+
+    response = ObjectDetailResponse(
+        name=detail.get("name", name),
+        ra=_safe_float(obj_ra) or 0.0,
+        dec=_safe_float(obj_dec) or 0.0,
+        object_type=detail.get("object_type", ""),
+        object_type_long=detail.get("object_type_long", ""),
+        redshift=_safe_float(detail.get("redshift")),
+        radial_velocity=_safe_float(detail.get("radial_velocity")),
+        spectral_type=detail.get("spectral_type"),
+        morphology=detail.get("morphology"),
+        parallax=_safe_float(detail.get("parallax")),
+        proper_motion_ra=_safe_float(detail.get("proper_motion_ra")),
+        proper_motion_dec=_safe_float(detail.get("proper_motion_dec")),
+        cross_ids=cross_ids,
+        surveys=surveys,
+        references=references,
+        all_data=all_data,
+    )
+
+    await cache_set(ck, response.model_dump(), ttl=600)
+    return response
+
+
 # ── FITS Upload & Browse ──
 
 
@@ -929,6 +1089,101 @@ async def upload_fits_file(
         created_at=data_file.created_at.isoformat() if data_file.created_at else None,
         metadata=data_file.metadata_ or {},
     )
+
+
+class AnalyzeRequest(BaseModel):
+    fits_path: str
+    api_key: str | None = None
+
+
+@router.post("/fits/analyze")
+@limiter.limit("10/minute")
+async def analyze_fits_spectrum(
+    request: Request,
+    req: AnalyzeRequest,
+    user: User | None = Depends(get_optional_user),
+):
+    """AI-powered spectrum analysis: extract features + Claude interpretation."""
+    import os
+    from app.services.spectrum_analyzer import (
+        extract_spectrum_from_fits,
+        analyze_spectrum,
+        ai_interpret,
+    )
+    from app.pipeline.nodes.redshift import redshift_estimate
+
+    if ".." in req.fits_path or req.fits_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    # 1. Extract spectrum
+    try:
+        spec_data = extract_spectrum_from_fits(req.fits_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="FITS file not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    wavelength = spec_data["wavelength"]
+    flux = spec_data["flux"]
+
+    # 2. Automated analysis
+    try:
+        summary = analyze_spectrum(wavelength, flux)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 3. Automated redshift estimation
+    redshift_result = None
+    if len(wavelength) >= 50:
+        try:
+            rz = redshift_estimate(
+                {"data": {"wavelength": wavelength, "flux": flux}},
+                {"method": "chi2_grid", "z_min": 0.0, "z_max": 2.0, "z_step": 0.001},
+            )
+            redshift_result = rz.get("redshift_result")
+        except Exception as e:
+            logger.warning("Redshift estimation failed: %s", e)
+
+    # 4. Build response with automated results
+    result: dict = {
+        "peaks": [
+            {"wavelength": p.wavelength, "flux": p.flux, "snr": p.snr, "is_emission": p.is_emission}
+            for p in summary.peaks
+        ],
+        "continuum_shape": summary.continuum_shape,
+        "redshift_auto": redshift_result,
+        "wavelength_range": [summary.wavelength_min, summary.wavelength_max],
+        "n_points": summary.n_points,
+    }
+
+    # 5. AI interpretation (optional, requires API key)
+    api_key = req.api_key
+    if not api_key:
+        user_keys = (user.api_keys or {}) if user else {}
+        api_key = (
+            user_keys.get("anthropic")
+            or (user.anthropic_api_key if user and user.anthropic_api_key else None)
+            or os.getenv("ANTHROPIC_API_KEY", "")
+        )
+
+    if api_key:
+        try:
+            ai_result = await ai_interpret(summary, redshift_result, api_key)
+            result["ai_classification"] = ai_result.get("classification", "unknown")
+            result["ai_confidence"] = ai_result.get("confidence", "low")
+            result["ai_redshift"] = ai_result.get("redshift")
+            result["ai_lines"] = ai_result.get("lines", [])
+            result["ai_special_features"] = ai_result.get("special_features", [])
+            result["ai_summary"] = ai_result.get("summary", "")
+            result["ai_narrative"] = ai_result.get("narrative", "")
+            result["ai_next_steps"] = ai_result.get("next_steps", [])
+        except Exception as e:
+            logger.warning("AI interpretation failed: %s", e)
+            result["ai_error"] = str(e)
+    else:
+        result["ai_error"] = "No API key available for AI analysis. Set your Anthropic key in Settings."
+
+    return result
 
 
 @router.get("/fits/browse", response_model=list[FITSFileInfo])
