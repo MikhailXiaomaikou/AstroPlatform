@@ -36,7 +36,9 @@ function ActionCard({
 }) {
   const labels: Record<string, string> = {
     search: "Search databases",
+    search_objects: "Search databases",
     adql: "Run ADQL query",
+    run_adql: "Run ADQL query",
     arxiv: "Extract arXiv tables",
     run_pipeline: "Run pipeline",
     explain: "Explanation",
@@ -44,30 +46,42 @@ function ActionCard({
     generate_pipeline: "Generate Pipeline",
     modify_pipeline: "Modify Pipeline",
     comment_pipeline: "Comment on Pipeline",
+    get_object_info: "Object Info",
+    analyze_spectrum: "Spectrum Analysis",
+    search_literature: "Literature Search",
   };
 
   const icons: Record<string, string> = {
     search: "🔍",
+    search_objects: "🔍",
     arxiv: "📄",
     adql: "📊",
+    run_adql: "📊",
     run_pipeline: "⚙️",
     explain: "📖",
     plot: "📈",
     generate_pipeline: "🔧",
     modify_pipeline: "✏️",
     comment_pipeline: "💬",
+    get_object_info: "🌌",
+    analyze_spectrum: "🔬",
+    search_literature: "📚",
   };
 
+  const isAutoExecuted = !!(action as Record<string, unknown>)._auto_executed;
+  const autoResult = (action as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
+
   return (
-    <div className="chat-action-card">
+    <div className={`chat-action-card${isAutoExecuted ? " auto-executed" : ""}`}>
       <div className="chat-action-header">
         <span className="chat-action-icon">
           {icons[action.action] || "▶"}
         </span>
         <span className="chat-action-label">
           {labels[action.action] || action.action}
+          {isAutoExecuted && <span className="auto-badge">auto</span>}
         </span>
-        {action.action !== "explain" && action.action !== "comment_pipeline" && !result && (
+        {!isAutoExecuted && action.action !== "explain" && action.action !== "comment_pipeline" && !result && (
           <button
             className="btn-chat-action"
             onClick={() => onExecute(index, action)}
@@ -134,6 +148,11 @@ function ActionCard({
         </Suspense>
       )}
       {result && <ActionResult result={result} />}
+      {isAutoExecuted && autoResult && !result && (
+        <div className="chat-action-result auto-result">
+          <AutoToolResult toolName={action.action} result={autoResult} />
+        </div>
+      )}
     </div>
   );
 }
@@ -608,6 +627,89 @@ ${trs}
         <StatsPanel rows={getSelected()} extraCols={extraCols} onClose={() => setShowStats(false)} />
       )}
     </div>
+  );
+}
+
+function AutoToolResult({ toolName, result }: { toolName: string; result: Record<string, unknown> }) {
+  if (result.error) {
+    return <div style={{ color: "var(--color-red)", fontSize: "0.8rem" }}>Error: {String(result.error)}</div>;
+  }
+
+  // Search results
+  if (toolName === "search_objects") {
+    const items = (result.results as Array<Record<string, unknown>>) || [];
+    const total = (result.total as number) || items.length;
+    return (
+      <div>
+        <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", marginBottom: 4 }}>
+          Found {total} objects
+        </div>
+        {items.slice(0, 8).map((r, i) => (
+          <div key={i} style={{ fontSize: "0.75rem", padding: "2px 0", display: "flex", gap: 8 }}>
+            <span className={`badge badge-${r.source}`} style={{ fontSize: "0.6rem" }}>{String(r.source).toUpperCase()}</span>
+            <span>{String(r.name)}</span>
+            {r.redshift != null && <span style={{ color: "var(--color-text-tertiary)" }}>z={Number(r.redshift).toFixed(4)}</span>}
+          </div>
+        ))}
+        {total > 8 && <div style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)" }}>...and {total - 8} more</div>}
+      </div>
+    );
+  }
+
+  // ADQL results
+  if (toolName === "run_adql") {
+    const cols = (result.columns as string[]) || [];
+    const rowCount = (result.row_count as number) || 0;
+    return (
+      <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)" }}>
+        Query returned {rowCount} rows, {cols.length} columns ({cols.slice(0, 5).join(", ")}{cols.length > 5 ? "..." : ""})
+      </div>
+    );
+  }
+
+  // Object info
+  if (toolName === "get_object_info") {
+    return (
+      <div style={{ fontSize: "0.78rem" }}>
+        <strong>{String(result.name)}</strong> — {String(result.object_type)}
+        {result.redshift != null && <span> z={Number(result.redshift).toFixed(6)}</span>}
+        {result.cross_ids ? <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.72rem" }}>
+          {(result.cross_ids as string[]).length} known identifiers
+        </div> : null}
+      </div>
+    );
+  }
+
+  // Literature
+  if (toolName === "search_literature") {
+    const refs = (result.results as Array<Record<string, unknown>>) || [];
+    return (
+      <div>
+        {refs.slice(0, 5).map((r, i) => (
+          <div key={i} style={{ fontSize: "0.75rem", padding: "2px 0" }}>
+            <span style={{ color: "var(--color-text-tertiary)" }}>{String(r.year)}</span>{" "}
+            {String(r.title).slice(0, 80)}{String(r.title).length > 80 ? "..." : ""}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Pipeline
+  if (toolName === "generate_pipeline") {
+    const dag = result.dag as { nodes: Array<{ type: string }> } | undefined;
+    return (
+      <div style={{ fontSize: "0.78rem" }}>
+        Pipeline <strong>{String(result.name)}</strong>: {dag?.nodes?.map(n => n.type).join(" → ")}
+      </div>
+    );
+  }
+
+  // Default: compact JSON
+  return (
+    <pre style={{ fontSize: "0.7rem", maxHeight: 100, overflow: "auto", color: "var(--color-text-tertiary)" }}>
+      {JSON.stringify(result, null, 1).slice(0, 500)}
+    </pre>
   );
 }
 

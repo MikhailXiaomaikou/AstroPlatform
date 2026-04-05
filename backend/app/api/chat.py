@@ -225,7 +225,12 @@ async def chat_message(
     req: ChatRequest,
     user: User | None = Depends(get_optional_user),
 ):
-    """Send a message to the AI assistant."""
+    """Send a message to the AI research agent.
+
+    Uses Claude's native tool_use to call search/query/analysis tools,
+    inspect results, and automatically plan next steps — a true agentic loop.
+    Falls back to single-turn with <actions> tags if tool_use is unavailable.
+    """
     # Priority: context api_key (from frontend localStorage) > user DB key > server env key
     context_key = (req.context or {}).get("api_key") if req.context else None
     user_keys = (user.api_keys or {}) if user else {}
@@ -241,17 +246,16 @@ async def chat_message(
     except ImportError:
         raise HTTPException(status_code=503, detail="anthropic package not installed")
 
+    from app.services.ai_tools import TOOLS, execute_tool
+
     client = anthropic.Anthropic(api_key=api_key)
 
     # Build messages for Claude
-    claude_messages = []
+    claude_messages: list[dict] = []
     for msg in req.messages:
-        claude_messages.append({
-            "role": msg.role,
-            "content": msg.content,
-        })
+        claude_messages.append({"role": msg.role, "content": msg.content})
 
-    # Add context if available (strip sensitive fields)
+    # Build system prompt with context
     system = SYSTEM_PROMPT
     if req.context:
         safe_context = {k: v for k, v in req.context.items() if k != "api_key"}
@@ -261,16 +265,91 @@ async def chat_message(
         system += f"\nUser email: {user.email}, Subscription: {user.subscription_tier}"
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2048,
-            system=system,
-            messages=claude_messages,
-        )
+        # ── Agent loop: Claude calls tools, sees results, continues ──
+        all_tool_results: list[dict] = []
+        text_parts: list[str] = []
+        max_iterations = 5  # safety limit
 
-        full_reply = response.content[0].text
+        for _iteration in range(max_iterations):
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=system,
+                messages=claude_messages,
+                tools=TOOLS,
+            )
+
+            # Process response blocks
+            tool_calls_in_turn: list[dict] = []
+            for block in response.content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+                elif block.type == "tool_use":
+                    tool_calls_in_turn.append({
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.input,
+                    })
+
+            # If no tool calls, we're done
+            if not tool_calls_in_turn:
+                break
+
+            # Execute all tool calls in this turn
+            assistant_content = []
+            for block in response.content:
+                if block.type == "text":
+                    assistant_content.append({"type": "text", "text": block.text})
+                elif block.type == "tool_use":
+                    assistant_content.append({
+                        "type": "tool_use",
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.input,
+                    })
+
+            claude_messages.append({"role": "assistant", "content": assistant_content})
+
+            # Execute tools and build tool_result messages
+            tool_result_blocks = []
+            for tc in tool_calls_in_turn:
+                result = await execute_tool(tc["name"], tc["input"], api_key)
+                # Truncate large results for context window
+                result_str = json.dumps(result, default=str)
+                if len(result_str) > 8000:
+                    result_str = result_str[:8000] + '... (truncated)'
+                tool_result_blocks.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "content": result_str,
+                })
+                all_tool_results.append({
+                    "tool": tc["name"],
+                    "input": tc["input"],
+                    "result": result,
+                })
+
+            claude_messages.append({"role": "user", "content": tool_result_blocks})
+
+            # If Claude said stop_reason=end_turn, exit
+            if response.stop_reason == "end_turn":
+                break
+
+        # Combine all text parts
+        full_reply = "\n\n".join(text_parts)
+
+        # Also parse legacy <actions> tags (backward compatibility)
         actions = _parse_actions(full_reply)
         clean_reply = _strip_actions_from_reply(full_reply)
+
+        # Convert tool results to frontend-friendly actions
+        for tr in all_tool_results:
+            actions.append({
+                "action": tr["tool"],
+                "tool_input": tr["input"],
+                "tool_result": tr["result"],
+                "_auto_executed": True,
+            })
 
         return ChatResponse(reply=clean_reply, actions=actions)
 

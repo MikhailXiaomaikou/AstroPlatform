@@ -3874,6 +3874,27 @@
   background: var(--color-subtle);
 }
 
+.chat-action-card.auto-executed {
+  border-left: 2px solid var(--color-green);
+  padding-left: 0.6rem;
+}
+
+.auto-badge {
+  font-size: 0.6rem;
+  background: rgba(48, 209, 88, 0.15);
+  color: var(--color-green);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.auto-result {
+  border-top-color: rgba(48, 209, 88, 0.2);
+}
+
 .chat-action-header {
   display: flex;
   align-items: center;
