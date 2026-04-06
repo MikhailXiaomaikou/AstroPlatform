@@ -6,6 +6,7 @@ import {
   searchADS,
   getBibTeX,
   logOperation,
+  uploadFITS,
   type ChatMessage,
   type ChatAction,
   type ADSReference,
@@ -997,6 +998,28 @@ export default function ChatPage() {
     saveChatHistory(messages);
   }, [messages]);
 
+  const [dragOver, setDragOver] = useState(false);
+
+  const handleFitsDrop = async (files: FileList) => {
+    for (const file of Array.from(files)) {
+      if (!file.name.toLowerCase().match(/\.(fits|fit|fts)$/)) continue;
+      try {
+        const result = await uploadFITS(file);
+        // Auto-send a message asking AI to analyze
+        const msg = `I uploaded a FITS file: ${file.name} (stored at ${result.fits_path}). Please analyze this spectrum.`;
+        setInput(msg);
+        // Trigger send after state update
+        setTimeout(() => {
+          const btn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+          btn?.click();
+        }, 100);
+      } catch {
+        setInput(`I want to analyze a FITS file but upload failed for ${file.name}.`);
+      }
+      break; // Only handle first file
+    }
+  };
+
   const handleSend = async () => {
     const text = input.trim();
     if (!text || loading) return;
@@ -1259,7 +1282,12 @@ export default function ChatPage() {
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="chat-input-area">
+      <div
+        className={`chat-input-area${dragOver ? " drag-over" : ""}`}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFitsDrop(e.dataTransfer.files); }}
+      >
         <div className="chat-input-wrapper">
           <textarea
             ref={inputRef}
@@ -1267,7 +1295,7 @@ export default function ChatPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about astronomical data, pipelines, or ADQL queries..."
+            placeholder={dragOver ? "Drop FITS file here..." : "Ask about astronomical data, or drop a FITS file..."}
             rows={1}
             disabled={loading}
           />
@@ -1281,7 +1309,7 @@ export default function ChatPage() {
           </button>
         </div>
         <span className="chat-input-hint">
-          Press Enter to send, Shift+Enter for new line
+          Enter to send, Shift+Enter for new line. Drop a FITS file to analyze.
         </span>
       </div>
     </div>

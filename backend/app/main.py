@@ -86,10 +86,48 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Astro Research Platform",
-    version="0.3.0",
-    description="SaaS platform for professional astronomers — data ingestion & pipeline editor",
+    version="0.4.0",
+    description="AI-native platform for professional astronomers — data discovery, analysis & pipelines",
     lifespan=lifespan,
 )
+
+# ── Request monitoring ──
+import time as _time
+from collections import defaultdict as _defaultdict
+
+_api_stats = {
+    "requests_total": 0,
+    "errors_total": 0,
+    "start_time": _time.time(),
+    "endpoint_counts": _defaultdict(int),
+    "endpoint_errors": _defaultdict(int),
+    "last_errors": [],  # last 20 errors
+}
+
+
+@app.middleware("http")
+async def monitor_requests(request, call_next):
+    _api_stats["requests_total"] += 1
+    path = request.url.path
+    _api_stats["endpoint_counts"][path] += 1
+    try:
+        response = await call_next(request)
+        if response.status_code >= 400:
+            _api_stats["errors_total"] += 1
+            _api_stats["endpoint_errors"][path] += 1
+            if response.status_code >= 500:
+                _api_stats["last_errors"].append({
+                    "time": _time.strftime("%H:%M:%S"),
+                    "path": path,
+                    "status": response.status_code,
+                })
+                _api_stats["last_errors"] = _api_stats["last_errors"][-20:]
+        return response
+    except Exception as e:
+        _api_stats["errors_total"] += 1
+        _api_stats["endpoint_errors"][path] += 1
+        raise
+
 
 # Rate limiting
 app.state.limiter = limiter
@@ -125,4 +163,21 @@ app.include_router(ws_router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "0.4.0"}
+
+
+@app.get("/health/stats")
+async def health_stats():
+    """API usage statistics and recent errors."""
+    uptime = _time.time() - _api_stats["start_time"]
+    top_endpoints = sorted(
+        _api_stats["endpoint_counts"].items(), key=lambda x: x[1], reverse=True
+    )[:10]
+    return {
+        "uptime_seconds": int(uptime),
+        "requests_total": _api_stats["requests_total"],
+        "errors_total": _api_stats["errors_total"],
+        "error_rate": round(_api_stats["errors_total"] / max(_api_stats["requests_total"], 1), 4),
+        "top_endpoints": [{"path": p, "count": c} for p, c in top_endpoints],
+        "recent_errors": _api_stats["last_errors"][-10:],
+    }

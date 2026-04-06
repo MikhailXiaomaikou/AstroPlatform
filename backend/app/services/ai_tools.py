@@ -122,7 +122,7 @@ TOOLS = [
     },
     {
         "name": "search_literature",
-        "description": "Search NASA ADS for academic papers about an astronomical object or topic.",
+        "description": "Search NASA ADS for academic papers about an astronomical object or topic. Returns titles, authors, years, and paper abstracts that you can cite in your response.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -333,8 +333,14 @@ async def _exec_literature(inp: dict) -> dict:
             return {"results": [], "message": "No papers found. ADS API key may not be configured."}
         return {
             "results": [
-                {"title": r["title"], "authors": r["authors"][:3], "year": r["year"], "bibcode": r["bibcode"]}
-                for r in raw[:10]
+                {
+                    "title": r["title"],
+                    "authors": r["authors"][:3],
+                    "year": r["year"],
+                    "bibcode": r["bibcode"],
+                    "abstract": (r.get("abstract") or "")[:500],
+                }
+                for r in raw[:8]
             ]
         }
     except Exception as e:

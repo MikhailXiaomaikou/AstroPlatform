@@ -1,6 +1,7 @@
 import { Component, lazy, Suspense, useState, useEffect, type ErrorInfo, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { useLang } from "./i18n";
 import api from "./api/client";
 import "./App.css";
 
@@ -69,6 +70,7 @@ function useTheme() {
 function NavBar() {
   const { theme, toggle } = useTheme();
   const { user, logout } = useAuth();
+  const [lang, setLang] = useLang();
 
   return (
     <nav className="top-nav">
@@ -88,6 +90,13 @@ function NavBar() {
         aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
       >
         {theme === "dark" ? "\u2600\uFE0F" : "\uD83C\uDF19"}
+      </button>
+      <button
+        className="theme-toggle"
+        onClick={() => setLang(lang === "en" ? "zh" : "en")}
+        title={lang === "en" ? "切换中文" : "Switch to English"}
+      >
+        {lang === "en" ? "中" : "EN"}
       </button>
       {user ? (
         <div className="nav-user">

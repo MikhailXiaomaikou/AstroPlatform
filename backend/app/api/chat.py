@@ -167,6 +167,10 @@ Respond conversationally but scientifically. Always explain what columns you cho
 
 Always respond in the same language the user uses.
 
+When you use the search_literature tool, cite papers in your response using the format:
+"According to Author et al. (Year), ..." or "(Author et al., Year; bibcode)".
+Reference specific findings from the abstracts to support your analysis.
+
 Always respond in the same language the user uses."""
 
 

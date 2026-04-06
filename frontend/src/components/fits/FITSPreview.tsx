@@ -231,7 +231,7 @@ export default function FITSPreview({ filename, fitsPath, source, objectId }: Pr
           {spectrumLoading ? (
             <div className="fits-loading"><span className="spinner spinner-blue" /> Loading data...</div>
           ) : spectrum ? (
-            <SpectrumView spectrum={spectrum} />
+            <SpectrumView spectrum={spectrum} analysisLines={analysis?.ai_lines as AnalysisLine[] | undefined} />
           ) : (
             <p className="fits-hint">No data available</p>
           )}
@@ -381,7 +381,14 @@ export default function FITSPreview({ filename, fitsPath, source, objectId }: Pr
 // Interactive Spectrum Viewer
 // ════════════════════════════════════════════
 
-function SpectrumView({ spectrum }: { spectrum: FITSSpectrum }) {
+interface AnalysisLine {
+  name: string;
+  observed_wavelength: number;
+  type: string;
+  strength: string;
+}
+
+function SpectrumView({ spectrum, analysisLines }: { spectrum: FITSSpectrum; analysisLines?: AnalysisLine[] }) {
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState(0);
@@ -552,6 +559,23 @@ function SpectrumView({ spectrum }: { spectrum: FITSSpectrum }) {
           );
         })}
 
+        {/* AI-identified lines */}
+        {analysisLines && analysisLines.map((ln) => {
+          const wl = ln.observed_wavelength;
+          if (!wl || wl < xMin || wl > xMax) return null;
+          const x = xScale(wl);
+          const color = ln.type === "emission" ? "rgba(48,209,88,0.7)" : "rgba(100,210,255,0.7)";
+          return (
+            <g key={`ai-${ln.name}-${wl}`}>
+              <line x1={x} y1={pad.top} x2={x} y2={H - pad.bottom} stroke={color} strokeWidth={1.5} />
+              <text x={x + 3} y={pad.top + 12} fill={color} fontSize={9} fontWeight={600}
+                transform={`rotate(-90, ${x + 3}, ${pad.top + 12})`}>
+                {ln.name}
+              </text>
+            </g>
+          );
+        })}
+
         {/* Continuum points */}
         {continuumPoints.map((wl, i) => {
           const x = xScale(wl);
@@ -610,6 +634,12 @@ function ImageViewer({ spectrum, fitsPath }: { spectrum: FITSSpectrum; fitsPath?
   const [blinkIdx, setBlinkIdx] = useState(0);
   const [blinkSpeed, setBlinkSpeed] = useState(500);
   const blinkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Region selection for photometry
+  const [regionMode, setRegionMode] = useState(false);
+  const [regionStart, setRegionStart] = useState<{ x: number; y: number } | null>(null);
+  const [regionEnd, setRegionEnd] = useState<{ x: number; y: number } | null>(null);
+  const [regionStats, setRegionStats] = useState<{ min: number; max: number; mean: number; std: number; sum: number; count: number } | null>(null);
 
   const data = spectrum.thumbnail;
   const imgMin = spectrum.min ?? 0;
@@ -751,16 +781,54 @@ function ImageViewer({ spectrum, fitsPath }: { spectrum: FITSSpectrum; fitsPath?
     }
   };
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!canvasRef.current || !data) return;
+  const getPixelCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || !data) return null;
     const rect = canvasRef.current.getBoundingClientRect();
-    const scaleX = data[0].length / rect.width;
-    const scaleY = data.length / rect.height;
-    const x = Math.floor((e.clientX - rect.left) * scaleX);
-    const y = Math.floor((e.clientY - rect.top) * scaleY);
-    if (x >= 0 && x < data[0].length && y >= 0 && y < data.length) {
-      setPixelInfo(`Pixel (${x}, ${y}) = ${data[y][x].toFixed(4)}`);
+    const x = Math.floor((e.clientX - rect.left) * data[0].length / rect.width);
+    const y = Math.floor((e.clientY - rect.top) * data.length / rect.height);
+    if (x >= 0 && x < data[0].length && y >= 0 && y < data.length) return { x, y };
+    return null;
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const p = getPixelCoords(e);
+    if (p && data) {
+      setPixelInfo(`Pixel (${p.x}, ${p.y}) = ${data[p.y][p.x].toFixed(4)}`);
+      if (regionMode && regionStart) setRegionEnd(p);
     }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!regionMode) return;
+    const p = getPixelCoords(e);
+    if (p) { setRegionStart(p); setRegionEnd(null); setRegionStats(null); }
+  };
+
+  const handleMouseUp = () => {
+    if (!regionMode || !regionStart || !regionEnd || !data) return;
+    const x1 = Math.min(regionStart.x, regionEnd.x);
+    const x2 = Math.max(regionStart.x, regionEnd.x);
+    const y1 = Math.min(regionStart.y, regionEnd.y);
+    const y2 = Math.max(regionStart.y, regionEnd.y);
+    if (x1 === x2 || y1 === y2) return;
+
+    const vals: number[] = [];
+    for (let y = y1; y <= y2; y++) {
+      for (let x = x1; x <= x2; x++) {
+        vals.push(data[y][x]);
+      }
+    }
+    const sum = vals.reduce((a, b) => a + b, 0);
+    const mean = sum / vals.length;
+    const std = Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
+    setRegionStats({
+      min: Math.min(...vals),
+      max: Math.max(...vals),
+      mean,
+      std,
+      sum,
+      count: vals.length,
+    });
   };
 
   return (
@@ -814,6 +882,10 @@ function ImageViewer({ spectrum, fitsPath }: { spectrum: FITSSpectrum; fitsPath?
             WCS Grid {wcsLoading ? "(loading...)" : ""}
           </label>
         )}
+        <label className="spectrum-checkbox">
+          <input type="checkbox" checked={regionMode} onChange={(e) => { setRegionMode(e.target.checked); setRegionStats(null); }} />
+          Region Select
+        </label>
       </div>
 
       {/* Blink Comparison Controls */}
@@ -860,10 +932,25 @@ function ImageViewer({ spectrum, fitsPath }: { spectrum: FITSSpectrum; fitsPath?
 
       <canvas
         ref={canvasRef}
-        className="fits-image-canvas"
+        className={`fits-image-canvas${regionMode ? " region-cursor" : ""}`}
         onMouseMove={handleMouseMove}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
         onMouseLeave={() => setPixelInfo("")}
       />
+
+      {regionStats && (
+        <div className="region-stats">
+          <strong>Region Statistics</strong> ({regionStats.count} pixels)
+          <div className="region-stats-grid">
+            <span>Min: {regionStats.min.toFixed(4)}</span>
+            <span>Max: {regionStats.max.toFixed(4)}</span>
+            <span>Mean: {regionStats.mean.toFixed(4)}</span>
+            <span>Std: {regionStats.std.toFixed(4)}</span>
+            <span>Sum: {regionStats.sum.toFixed(2)}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

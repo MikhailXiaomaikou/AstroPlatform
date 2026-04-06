@@ -112,6 +112,62 @@ def _astro_to_result(obj: AstroObject) -> SearchResult:
     )
 
 
+def _dedup_by_position(results: list[SearchResult], sep_arcsec: float = 3.0) -> list[SearchResult]:
+    """Merge results from different sources that refer to the same object.
+
+    Uses position matching within `sep_arcsec` arcseconds.
+    Keeps the result with the most complete data (prefer the one with redshift).
+    Merges source info into the extra dict.
+    """
+    if len(results) <= 1:
+        return results
+
+    deduped: list[SearchResult] = []
+    used = [False] * len(results)
+
+    for i, r in enumerate(results):
+        if used[i]:
+            continue
+        group = [r]
+        used[i] = True
+
+        for j in range(i + 1, len(results)):
+            if used[j]:
+                continue
+            # Position match: angular separation in arcseconds
+            dra = (r.ra - results[j].ra) * 3600.0
+            ddec = (r.dec - results[j].dec) * 3600.0
+            sep = (dra**2 + ddec**2) ** 0.5
+            if sep < sep_arcsec:
+                group.append(results[j])
+                used[j] = True
+
+        # Pick the best from the group: prefer one with redshift, then most extra fields
+        group.sort(key=lambda x: (
+            x.redshift is not None,
+            len(x.extra),
+            x.object_type != "",
+        ), reverse=True)
+
+        best = group[0]
+        # Merge sources info
+        if len(group) > 1:
+            other_sources = [g.source for g in group[1:]]
+            best.extra = {**best.extra, "also_in": other_sources}
+            # Fill in missing data from other sources
+            for g in group[1:]:
+                if best.redshift is None and g.redshift is not None:
+                    best.redshift = g.redshift
+                if not best.object_type and g.object_type:
+                    best.object_type = g.object_type
+                if best.magnitude is None and g.magnitude is not None:
+                    best.magnitude = g.magnitude
+
+        deduped.append(best)
+
+    return deduped
+
+
 @router.get("/search", response_model=list[SearchResult])
 @limiter.limit("30/minute")
 async def search_data(
@@ -170,6 +226,9 @@ async def search_data(
             )
             continue
         all_results.extend(_astro_to_result(obj) for obj in result)
+
+    # Deduplicate by position across sources
+    all_results = _dedup_by_position(all_results)
 
     # Cache results for 5 minutes
     await cache_set(ck, [r.model_dump() for r in all_results], ttl=300)

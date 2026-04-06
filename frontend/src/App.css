@@ -1068,6 +1068,19 @@
   font-size: 0.8rem;
 }
 
+.region-cursor { cursor: crosshair; }
+.region-stats {
+  margin-top: 0.5rem; padding: 0.5rem 0.75rem; font-size: 0.78rem;
+  background: rgba(10, 132, 255, 0.06); border-radius: var(--radius-sm);
+  border: 1px solid rgba(10, 132, 255, 0.15);
+}
+.region-stats strong { color: var(--color-accent); font-size: 0.75rem; }
+.region-stats-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.25rem 1rem;
+  margin-top: 0.3rem; color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── AI Spectrum Analysis ── */
 
 .fits-analysis-prompt {
@@ -4124,6 +4137,11 @@
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+  transition: border-color 0.2s;
+}
+.chat-input-area.drag-over {
+  border-top-color: var(--color-accent);
+  background: rgba(10, 132, 255, 0.04);
 }
 
 .chat-input-wrapper {

@@ -22,7 +22,7 @@ def _search_ads_sync(object_name: str) -> list[dict]:
     headers = {"Authorization": f"Bearer {ADS_API_KEY}"}
     params = {
         "q": f"object:{object_name}",
-        "fl": "bibcode,title,author,year,doi,pub",
+        "fl": "bibcode,title,author,year,doi,pub,abstract",
         "rows": 5,
     }
     try:
@@ -36,9 +36,10 @@ def _search_ads_sync(object_name: str) -> list[dict]:
             {
                 "bibcode": doc.get("bibcode", ""),
                 "title": (doc.get("title") or [""])[0],
-                "authors": doc.get("author", [])[:5],  # limit authors
+                "authors": doc.get("author", [])[:5],
                 "year": doc.get("year", ""),
                 "doi": (doc.get("doi") or [None])[0],
+                "abstract": doc.get("abstract", ""),
             }
             for doc in docs
         ]
