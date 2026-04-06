@@ -1019,7 +1019,30 @@ export default function ChatPage() {
       }));
 
       logOperation("chat", `Search: ${text}`);
-      const response = await sendChatMessage(chatHistory);
+
+      // Build context from user's current workspace state
+      const wsContext: Record<string, unknown> = {};
+      try {
+        const lastSearch = localStorage.getItem("astro_last_search");
+        if (lastSearch) wsContext.last_search = JSON.parse(lastSearch);
+      } catch { /* ignore */ }
+      try {
+        const workspace = localStorage.getItem("astro_workspace_files");
+        if (workspace) wsContext.workspace_files = JSON.parse(workspace);
+      } catch { /* ignore */ }
+      try {
+        const pipeline = localStorage.getItem("pipeline_autosave");
+        if (pipeline) {
+          const p = JSON.parse(pipeline);
+          wsContext.current_pipeline = {
+            node_count: p.nodes?.length || 0,
+            node_types: (p.nodes || []).map((n: Record<string, unknown>) => (n.data as Record<string, unknown>)?.nodeType || n.type),
+            input_data: p.inputDataId,
+          };
+        }
+      } catch { /* ignore */ }
+
+      const response = await sendChatMessage(chatHistory, wsContext);
 
       const assistantMsg: DisplayMessage = {
         id: crypto.randomUUID(),

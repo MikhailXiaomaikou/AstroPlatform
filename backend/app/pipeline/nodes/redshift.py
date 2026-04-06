@@ -47,7 +47,7 @@ def redshift_estimate(input_data: dict, params: dict) -> dict:
     z_max = float(params.get("z_max", 5.0))
 
     # Validate method early
-    valid_methods = ("peak", "xcorr", "chi2_grid")
+    valid_methods = ("peak", "xcorr", "chi2_grid", "vote")
     if method not in valid_methods:
         raise ValueError(f"Unknown method '{method}'. Choose 'peak', 'xcorr', or 'chi2_grid'.")
 
@@ -68,7 +68,31 @@ def redshift_estimate(input_data: dict, params: dict) -> dict:
     rest_wavelengths = np.array(list(line_list.values()))
     line_names = list(line_list.keys())
 
-    if method == "peak":
+    if method == "vote":
+        # Multi-method voting: run all three, pick highest confidence
+        results_all = []
+        for m_name, m_func_args in [
+            ("peak", lambda: _peak_method(wavelength, flux, rest_wavelengths, line_names, z_min, z_max)),
+            ("xcorr", lambda: _xcorr_method(wavelength, flux, rest_wavelengths, line_names)),
+            ("chi2_grid", lambda: _chi2_grid_method(wavelength, flux, rest_wavelengths, line_names, z_min, z_max, 0.001)),
+        ]:
+            try:
+                bz, ze, ml, cf = m_func_args()
+                results_all.append({"method": m_name, "z": bz, "error": ze, "matched": ml, "confidence": cf})
+            except Exception:
+                pass
+
+        if not results_all:
+            best_z, z_error, matched, confidence = 0.0, -1.0, [], 0.0
+        else:
+            # Pick the result with highest confidence
+            best = max(results_all, key=lambda r: r["confidence"])
+            best_z = best["z"]
+            z_error = best["error"]
+            matched = best["matched"]
+            confidence = best["confidence"]
+            method = f"vote({best['method']})"
+    elif method == "peak":
         best_z, z_error, matched, confidence = _peak_method(
             wavelength, flux, rest_wavelengths, line_names, z_min, z_max
         )

@@ -576,6 +576,80 @@ export async function exportRunPDF(runId: string): Promise<Blob> {
   return data;
 }
 
+// ── Saved Objects / Bookmarks ──
+
+export interface SavedObjectInfo {
+  id: string;
+  name: string;
+  ra: number;
+  dec: number;
+  object_type: string;
+  source: string;
+  redshift: number | null;
+  notes: string | null;
+  project: string;
+  created_at: string | null;
+}
+
+export async function saveObject(obj: {
+  name: string; ra?: number; dec?: number; object_type?: string;
+  source?: string; redshift?: number; notes?: string; project?: string;
+}): Promise<{ id: string }> {
+  const { data } = await api.post("/api/data/saved-objects", obj);
+  return data;
+}
+
+export async function listSavedObjects(project?: string): Promise<SavedObjectInfo[]> {
+  const params: Record<string, string> = {};
+  if (project) params.project = project;
+  const { data } = await api.get<SavedObjectInfo[]>("/api/data/saved-objects", { params });
+  return data;
+}
+
+export async function listProjects(): Promise<string[]> {
+  const { data } = await api.get<string[]>("/api/data/saved-objects/projects");
+  return data;
+}
+
+export async function deleteSavedObject(id: string): Promise<void> {
+  await api.delete(`/api/data/saved-objects/${id}`);
+}
+
+export async function batchLookup(names: string[]): Promise<{
+  results: Array<Record<string, unknown>>;
+  total: number;
+  found: number;
+}> {
+  const { data } = await api.post("/api/data/batch-lookup", { names });
+  return data;
+}
+
+// ── Analysis Report Export ──
+
+export async function exportAnalysisMarkdown(
+  analysis: Record<string, unknown>,
+  objectName?: string,
+  fitsPath?: string,
+): Promise<Blob> {
+  const { data } = await api.post("/api/export/report/markdown", {
+    analysis,
+    object_name: objectName || "",
+    fits_path: fitsPath || "",
+  }, { responseType: "blob" });
+  return data;
+}
+
+export async function exportSearchNotebook(
+  query: string,
+  results: Array<Record<string, unknown>>,
+): Promise<Blob> {
+  const { data } = await api.post("/api/export/notebook/from-search", {
+    query,
+    results,
+  }, { responseType: "blob" });
+  return data;
+}
+
 // ── Integration API ──
 
 export async function sampStatus(): Promise<{
@@ -936,6 +1010,46 @@ export interface ChatAction {
 export interface ChatResponse {
   reply: string;
   actions: ChatAction[];
+}
+
+// ── Chat Session Persistence ──
+
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  message_count: number;
+  updated_at: string;
+}
+
+export async function saveChatSession(
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>,
+  sessionId?: string,
+  title?: string,
+): Promise<{ id: string }> {
+  const { data } = await api.post("/api/chat/sessions/save", {
+    session_id: sessionId,
+    title: title || "New Chat",
+    messages,
+  });
+  return data;
+}
+
+export async function listChatSessions(): Promise<ChatSessionSummary[]> {
+  const { data } = await api.get<ChatSessionSummary[]>("/api/chat/sessions");
+  return data;
+}
+
+export async function loadChatSession(sessionId: string): Promise<{
+  id: string;
+  title: string;
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>;
+}> {
+  const { data } = await api.get(`/api/chat/sessions/${sessionId}`);
+  return data;
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  await api.delete(`/api/chat/sessions/${sessionId}`);
 }
 
 export function getStoredApiKey(provider = "anthropic"): string | null {

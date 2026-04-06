@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getObjectDetail } from "../api/client";
+import { getObjectDetail, saveObject } from "../api/client";
 import type { ObjectDetail } from "../api/client";
 
 interface Props {
@@ -15,6 +15,7 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"overview" | "surveys" | "refs" | "data">("overview");
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !objectName) return;
@@ -45,6 +46,19 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
               </div>
               <div className="odp-coords">
                 RA {data.ra.toFixed(5)}&deg; &nbsp; Dec {data.dec.toFixed(5)}&deg;
+                <button
+                  className={`odp-save-btn${saved ? " saved" : ""}`}
+                  onClick={() => {
+                    saveObject({
+                      name: data.name, ra: data.ra, dec: data.dec,
+                      object_type: data.object_type, redshift: data.redshift ?? undefined,
+                    }).then(() => setSaved(true)).catch(() => {});
+                  }}
+                  disabled={saved}
+                  title={saved ? "Saved to bookmarks" : "Save to bookmarks"}
+                >
+                  {saved ? "Saved" : "Save"}
+                </button>
               </div>
             </>
           ) : (

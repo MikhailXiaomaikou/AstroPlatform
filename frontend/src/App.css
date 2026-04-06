@@ -686,7 +686,13 @@
 .odp-title { margin: 0; font-size: 1.2rem; font-weight: 700; color: var(--color-text); }
 .odp-subtitle { font-size: 0.85rem; color: var(--color-accent); margin-top: 4px; }
 .odp-z { color: var(--color-text-secondary); margin-left: 8px; }
-.odp-coords { font-size: 0.75rem; color: var(--color-text-tertiary); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.odp-coords { font-size: 0.75rem; color: var(--color-text-tertiary); margin-top: 4px; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 8px; }
+.odp-save-btn {
+  margin-left: auto; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px;
+  background: var(--color-accent); color: #fff; border: none; cursor: pointer;
+}
+.odp-save-btn:hover { opacity: 0.8; }
+.odp-save-btn.saved { background: var(--color-green); cursor: default; }
 
 .odp-loading, .odp-error { padding: 2rem; text-align: center; color: var(--color-text-secondary); }
 .odp-error { color: var(--color-red); }

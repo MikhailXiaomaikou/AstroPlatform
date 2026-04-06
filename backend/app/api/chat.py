@@ -615,3 +615,149 @@ async def execute_action(
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action type: {action_type}")
+
+
+# ── Chat Session Persistence ──
+
+
+class SaveSessionRequest(BaseModel):
+    session_id: str | None = None
+    title: str = "New Chat"
+    messages: list[dict]
+
+
+class SessionSummary(BaseModel):
+    id: str
+    title: str
+    message_count: int
+    updated_at: str
+
+
+@router.post("/sessions/save")
+async def save_chat_session(
+    req: SaveSessionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Save or update a chat session."""
+    from app.models.schemas import ChatSession
+    from sqlalchemy import select
+
+    if req.session_id:
+        try:
+            sid = uuid.UUID(req.session_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+        result = await db.execute(
+            select(ChatSession).where(ChatSession.id == sid, ChatSession.user_id == user.id)
+        )
+        session = result.scalar_one_or_none()
+        if session:
+            session.messages = req.messages
+            session.title = req.title
+            await db.commit()
+            return {"id": str(session.id), "saved": True}
+
+    # Create new session
+    # Auto-title from first user message
+    title = req.title
+    if title == "New Chat" and req.messages:
+        for m in req.messages:
+            if m.get("role") == "user":
+                title = m["content"][:60]
+                break
+
+    session = ChatSession(
+        user_id=user.id,
+        title=title,
+        messages=req.messages,
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    return {"id": str(session.id), "saved": True}
+
+
+@router.get("/sessions", response_model=list[SessionSummary])
+async def list_chat_sessions(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List user's saved chat sessions."""
+    from app.models.schemas import ChatSession
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(ChatSession)
+        .where(ChatSession.user_id == user.id)
+        .order_by(ChatSession.updated_at.desc())
+        .limit(50)
+    )
+    sessions = result.scalars().all()
+    return [
+        SessionSummary(
+            id=str(s.id),
+            title=s.title,
+            message_count=len(s.messages) if isinstance(s.messages, list) else 0,
+            updated_at=s.updated_at.isoformat() if s.updated_at else "",
+        )
+        for s in sessions
+    ]
+
+
+@router.get("/sessions/{session_id}")
+async def get_chat_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Load a saved chat session."""
+    from app.models.schemas import ChatSession
+    from sqlalchemy import select
+
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID")
+
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == sid, ChatSession.user_id == user.id)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return {
+        "id": str(session.id),
+        "title": session.title,
+        "messages": session.messages,
+        "created_at": session.created_at.isoformat() if session.created_at else None,
+        "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+    }
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_chat_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete a chat session."""
+    from app.models.schemas import ChatSession
+    from sqlalchemy import select
+
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID")
+
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == sid, ChatSession.user_id == user.id)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    await db.delete(session)
+    await db.commit()
+    return {"deleted": True}

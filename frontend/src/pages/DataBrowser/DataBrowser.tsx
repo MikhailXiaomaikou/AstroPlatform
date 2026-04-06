@@ -8,6 +8,7 @@ import {
   getSearchHistory,
   crossMatch,
   logOperation,
+  exportSearchNotebook,
 } from "../../api/client";
 import FITSBrowser from "../../components/fits/FITSBrowser";
 import type {
@@ -101,6 +102,11 @@ export default function DataBrowser() {
       const data = await searchData(query, sources.join(","), undefined, undefined, radius);
       setResults(data);
       logOperation("search", `Searched ${sources.join(",")} for "${query}" (${data.length} results)`);
+      // Save for AI context
+      try { localStorage.setItem("astro_last_search", JSON.stringify({
+        query, sources, radius, count: data.length,
+        sample: data.slice(0, 5).map(r => ({ name: r.name, source: r.source, type: r.object_type, z: r.redshift })),
+      })); } catch { /* */ }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Search failed";
       setError(msg);
@@ -122,6 +128,11 @@ export default function DataBrowser() {
       setResults(response.results);
       setSearchMeta(response.meta);
       logOperation("search", `Advanced search (${response.results.length} results)`);
+      try { localStorage.setItem("astro_last_search", JSON.stringify({
+        query: req.natural_query || req.object_type || "advanced",
+        count: response.results.length,
+        sample: response.results.slice(0, 5).map(r => ({ name: r.name, source: r.source, type: r.object_type, z: r.redshift })),
+      })); } catch { /* */ }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Advanced search failed";
       setError(msg);
@@ -580,6 +591,19 @@ ${rows}
                 </button>
                 <button className="btn-secondary btn-small" onClick={handleDownloadVOTable}>
                   Download VOTable
+                </button>
+                <button className="btn-secondary btn-small" onClick={async () => {
+                  const sel = validResults.filter((_, i) => selectedKeys.has(`${validResults[i]?.source}-${validResults[i]?.object_id}-${i}`));
+                  const data = sel.length > 0 ? sel : validResults;
+                  try {
+                    const blob = await exportSearchNotebook(lastSearchRef.current?.query || "search", data as unknown as Array<Record<string, unknown>>);
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a"); a.href = url;
+                    a.download = `astro_${data.length}_objects.ipynb`; a.click();
+                    URL.revokeObjectURL(url);
+                  } catch { /* */ }
+                }}>
+                  Export Notebook
                 </button>
                 <button
                   className="btn-secondary btn-small"

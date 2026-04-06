@@ -11,14 +11,37 @@ from astropy.table import Table
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
 
-SKYSERVER_SQL_URL = "https://skyserver.sdss.org/dr18/SkyServerWS/SearchTools/SqlSearch"
-SKYSERVER_SPECTRA_URL = "https://dr18.sdss.org/sas/dr18/spectro/sdss/redux/26/spectra"
+SKYSERVER_SQL_URLS = [
+    "https://skyserver.sdss.org/dr18/SkyServerWS/SearchTools/SqlSearch",
+    "https://skyserver.sdss.org/dr17/SkyServerWS/SearchTools/SqlSearch",
+]
+SKYSERVER_SPECTRA_URLS = [
+    "https://dr18.sdss.org/sas/dr18/spectro/sdss/redux/26/spectra",
+    "https://data.sdss.org/sas/dr17/sdss/spectro/redux/26/spectra",
+]
+# Keep backward compat references
+SKYSERVER_SQL_URL = SKYSERVER_SQL_URLS[0]
+SKYSERVER_SPECTRA_URL = SKYSERVER_SPECTRA_URLS[0]
 
 
 class SDSSConnector(BaseConnector):
     """Connector for SDSS DR18 via SkyServer SQL Search."""
 
     source_name = "sdss"
+
+    async def _query_skyserver(self, sql: str) -> str:
+        """Try multiple SkyServer mirrors until one responds."""
+        last_err = None
+        for url in SKYSERVER_SQL_URLS:
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    resp = await client.get(url, params={"cmd": sql, "format": "csv"})
+                    resp.raise_for_status()
+                    return resp.text
+            except Exception as e:
+                last_err = e
+                continue
+        raise last_err or ConnectionError("All SDSS SkyServer mirrors unavailable")
 
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
     async def search(
@@ -36,11 +59,9 @@ class SDSSConnector(BaseConnector):
         LEFT JOIN SpecObj AS s ON s.bestobjid = p.objid
         ORDER BY p.r"""
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(SKYSERVER_SQL_URL, params={"cmd": sql, "format": "csv"})
-            resp.raise_for_status()
+        text = await self._query_skyserver(sql)
 
-        table = self._parse_csv(resp.text)
+        table = self._parse_csv(text)
         return self._table_to_objects(table)
 
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
@@ -55,23 +76,31 @@ class SDSSConnector(BaseConnector):
         FROM SpecObj AS s
         WHERE s.bestobjid = {object_id}"""
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(SKYSERVER_SQL_URL, params={"cmd": sql, "format": "csv"})
-            resp.raise_for_status()
-
-        spec_table = self._parse_csv(resp.text)
+        text = await self._query_skyserver(sql)
+        spec_table = self._parse_csv(text)
 
         if len(spec_table) > 0:
-            # Has spectrum — download FITS
+            # Has spectrum — download FITS, try mirrors
             row = spec_table[0]
             plate = str(int(row["plate"])).zfill(4)
             mjd = str(int(row["mjd"]))
             fiberid = str(int(row["fiberid"])).zfill(4)
-            url = f"{SKYSERVER_SPECTRA_URL}/{plate}/spec-{plate}-{mjd}-{fiberid}.fits"
+            fits_name = f"spec-{plate}-{mjd}-{fiberid}.fits"
 
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
+            last_err = None
+            resp = None
+            for base_url in SKYSERVER_SPECTRA_URLS:
+                try:
+                    url = f"{base_url}/{plate}/{fits_name}"
+                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                        resp = await client.get(url)
+                        resp.raise_for_status()
+                        break
+                except Exception as e:
+                    last_err = e
+                    resp = None
+            if resp is None:
+                raise last_err or ConnectionError("All SDSS spectrum mirrors unavailable")
 
             return FITSFile(
                 object_id=object_id,
@@ -87,11 +116,8 @@ class SDSSConnector(BaseConnector):
         FROM PhotoObj AS p
         WHERE p.objid = {object_id}"""
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(SKYSERVER_SQL_URL, params={"cmd": sql_photo, "format": "csv"})
-            resp.raise_for_status()
-
-        photo_table = self._parse_csv(resp.text)
+        photo_text = await self._query_skyserver(sql_photo)
+        photo_table = self._parse_csv(photo_text)
         if len(photo_table) == 0:
             raise ValueError(f"No SDSS data found for objid {object_id}")
 

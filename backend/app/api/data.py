@@ -1290,3 +1290,156 @@ async def fetch_object(
         filename=fits_file.filename,
         file_id=file_id,
     )
+
+
+# ── Saved Objects / Bookmarks ──
+
+
+class SaveObjectRequest(BaseModel):
+    name: str
+    ra: float = 0.0
+    dec: float = 0.0
+    object_type: str = ""
+    source: str = ""
+    redshift: float | None = None
+    notes: str = ""
+    project: str = "Default"
+
+
+class SavedObjectInfo(BaseModel):
+    id: str
+    name: str
+    ra: float
+    dec: float
+    object_type: str
+    source: str
+    redshift: float | None
+    notes: str | None
+    project: str
+    created_at: str | None
+
+
+@router.post("/saved-objects")
+async def save_object(
+    req: SaveObjectRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Bookmark an astronomical object."""
+    from app.models.schemas import SavedObject
+    obj = SavedObject(
+        user_id=user.id,
+        name=req.name,
+        ra=req.ra,
+        dec=req.dec,
+        object_type=req.object_type,
+        source=req.source,
+        redshift=req.redshift,
+        notes=req.notes,
+        project=req.project,
+    )
+    db.add(obj)
+    await db.commit()
+    await db.refresh(obj)
+    return {"id": str(obj.id), "saved": True}
+
+
+@router.get("/saved-objects", response_model=list[SavedObjectInfo])
+async def list_saved_objects(
+    project: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List user's saved objects, optionally filtered by project."""
+    from app.models.schemas import SavedObject
+    q = select(SavedObject).where(SavedObject.user_id == user.id)
+    if project:
+        q = q.where(SavedObject.project == project)
+    q = q.order_by(SavedObject.created_at.desc()).limit(200)
+    result = await db.execute(q)
+    return [
+        SavedObjectInfo(
+            id=str(o.id), name=o.name, ra=o.ra, dec=o.dec,
+            object_type=o.object_type, source=o.source,
+            redshift=o.redshift, notes=o.notes, project=o.project,
+            created_at=o.created_at.isoformat() if o.created_at else None,
+        )
+        for o in result.scalars().all()
+    ]
+
+
+@router.get("/saved-objects/projects")
+async def list_projects(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List distinct project names for the user."""
+    from app.models.schemas import SavedObject
+    from sqlalchemy import distinct
+    result = await db.execute(
+        select(distinct(SavedObject.project)).where(SavedObject.user_id == user.id)
+    )
+    return [row[0] for row in result.all()]
+
+
+@router.delete("/saved-objects/{obj_id}")
+async def delete_saved_object(
+    obj_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Remove a saved object."""
+    from app.models.schemas import SavedObject
+    try:
+        oid = uuid.UUID(obj_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid ID")
+    result = await db.execute(
+        select(SavedObject).where(SavedObject.id == oid, SavedObject.user_id == user.id)
+    )
+    obj = result.scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Saved object not found")
+    await db.delete(obj)
+    await db.commit()
+    return {"deleted": True}
+
+
+# ── Batch Object Lookup ──
+
+
+class BatchLookupRequest(BaseModel):
+    names: list[str]
+
+
+@router.post("/batch-lookup")
+@limiter.limit("5/minute")
+async def batch_object_lookup(
+    request: Request,
+    req: BatchLookupRequest,
+):
+    """Look up multiple objects in parallel via SIMBAD. Max 50 per request."""
+    if len(req.names) > 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 objects per batch request")
+
+    from app.connectors.simbad import SIMBADConnector
+    simbad = SIMBADConnector()
+
+    async def _lookup(name: str):
+        try:
+            detail = await asyncio.wait_for(simbad.get_object_detail(name), timeout=10.0)
+            return {"name": name, "found": detail is not None, **(detail or {})}
+        except Exception as e:
+            return {"name": name, "found": False, "error": str(e)}
+
+    tasks = [_lookup(n) for n in req.names]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    return {
+        "results": [
+            r if not isinstance(r, Exception) else {"name": "?", "found": False, "error": str(r)}
+            for r in results
+        ],
+        "total": len(req.names),
+        "found": sum(1 for r in results if not isinstance(r, Exception) and r.get("found")),
+    }
