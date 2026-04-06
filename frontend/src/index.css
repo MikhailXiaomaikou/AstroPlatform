@@ -34,6 +34,11 @@
   --color-placeholder: rgba(255, 255, 255, 0.25);
   --color-scrollbar: rgba(255, 255, 255, 0.15);
   --color-scrollbar-hover: rgba(255, 255, 255, 0.25);
+  --color-accent-subtle: rgba(10, 132, 255, 0.12);
+  --color-border: rgba(255, 255, 255, 0.08);
+  --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 [data-theme="light"] {
@@ -70,6 +75,11 @@
   --color-placeholder: rgba(0, 0, 0, 0.3);
   --color-scrollbar: rgba(0, 0, 0, 0.15);
   --color-scrollbar-hover: rgba(0, 0, 0, 0.3);
+  --color-accent-subtle: rgba(0, 122, 255, 0.1);
+  --color-border: rgba(0, 0, 0, 0.06);
+  --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 *,

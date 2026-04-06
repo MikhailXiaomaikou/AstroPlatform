@@ -451,17 +451,11 @@ ${rows}
   return (
     <div className="data-browser">
       <h1>Data Browser</h1>
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-        <button
-          className={activeTab === "search" ? "btn-primary btn-small" : "btn-secondary btn-small"}
-          onClick={() => setActiveTab("search")}
-        >
+      <div className="page-tabs">
+        <button className={`page-tab${activeTab === "search" ? " active" : ""}`} onClick={() => setActiveTab("search")}>
           Search
         </button>
-        <button
-          className={activeTab === "files" ? "btn-primary btn-small" : "btn-secondary btn-small"}
-          onClick={() => setActiveTab("files")}
-        >
+        <button className={`page-tab${activeTab === "files" ? " active" : ""}`} onClick={() => setActiveTab("files")}>
           My Files
         </button>
       </div>
