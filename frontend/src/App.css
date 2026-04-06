@@ -22,9 +22,13 @@
   font-weight: 800;
   font-size: 1rem;
   margin-right: 1rem;
-  color: var(--color-accent);
+  color: var(--color-accent) !important;
   letter-spacing: 0.02em;
   white-space: nowrap;
+  text-decoration: none;
+  background: none !important;
+  padding: 0 !important;
+  cursor: pointer;
 }
 
 .top-nav a {
