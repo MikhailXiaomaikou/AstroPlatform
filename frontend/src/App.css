@@ -3682,6 +3682,37 @@
   border-bottom: 1px solid var(--color-separator);
 }
 
+.chat-sessions-panel {
+  border-bottom: 1px solid var(--color-separator);
+  padding: 0.75rem 1.5rem;
+  background: var(--color-subtle);
+  max-height: 300px;
+  overflow-y: auto;
+  animation: slideDown 0.2s var(--ease-out);
+}
+.chat-sessions-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+.chat-session-item {
+  display: flex; align-items: center; gap: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.chat-session-load {
+  flex: 1; background: none; border: none; text-align: left; cursor: pointer;
+  padding: 0.5rem 0; color: var(--color-text);
+  transition: all 0.1s;
+}
+.chat-session-load:hover { color: var(--color-accent); }
+.chat-session-title { display: block; font-size: 0.82rem; font-weight: 500; }
+.chat-session-meta { display: block; font-size: 0.7rem; color: var(--color-text-tertiary); }
+.chat-session-delete {
+  background: none; border: none; color: var(--color-text-tertiary);
+  cursor: pointer; font-size: 0.75rem; padding: 4px;
+}
+.chat-session-delete:hover { color: var(--color-red); }
+
 .chat-header h2 {
   margin: 0 0 0.25rem;
   font-size: 1.25rem;

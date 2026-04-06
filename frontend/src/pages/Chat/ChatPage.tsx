@@ -7,9 +7,14 @@ import {
   getBibTeX,
   logOperation,
   uploadFITS,
+  saveChatSession,
+  listChatSessions,
+  loadChatSession,
+  deleteChatSession,
   type ChatMessage,
   type ChatAction,
   type ADSReference,
+  type ChatSessionSummary,
 } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
@@ -982,6 +987,52 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Session management
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [showSessions, setShowSessions] = useState(false);
+
+  const handleSaveSession = async () => {
+    if (messages.length === 0) return;
+    try {
+      const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+      const res = await saveChatSession(data, currentSessionId || undefined);
+      setCurrentSessionId(res.id);
+      listChatSessions().then(setSessions).catch(() => {});
+    } catch { /* ignore */ }
+  };
+
+  const handleLoadSession = async (id: string) => {
+    try {
+      const session = await loadChatSession(id);
+      const loaded: DisplayMessage[] = session.messages.map((m: Record<string, unknown>) => ({
+        id: crypto.randomUUID(),
+        role: m.role as "user" | "assistant",
+        content: m.content as string,
+        actions: m.actions as ChatAction[] | undefined,
+      }));
+      setMessages(loaded);
+      setCurrentSessionId(id);
+      setShowSessions(false);
+      saveChatHistory(loaded);
+    } catch { /* ignore */ }
+  };
+
+  const handleNewChat = () => {
+    setMessages([]);
+    setCurrentSessionId(null);
+    localStorage.removeItem("astro_chat_history");
+    setShowSessions(false);
+  };
+
+  const handleDeleteSession = async (id: string) => {
+    try {
+      await deleteChatSession(id);
+      setSessions(prev => prev.filter(s => s.id !== id));
+      if (currentSessionId === id) setCurrentSessionId(null);
+    } catch { /* ignore */ }
+  };
+
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
@@ -1165,19 +1216,43 @@ export default function ChatPage() {
               Ask about astronomical objects, build pipelines, or run ADQL queries
             </p>
           </div>
-          {messages.length > 0 && (
-            <button
-              className="btn-secondary btn-small"
-              onClick={() => {
-                setMessages([]);
-                localStorage.removeItem("astro_chat_history");
-              }}
-            >
-              Clear Chat
+          <div style={{ display: "flex", gap: "0.4rem" }}>
+            <button className="btn-secondary btn-small" onClick={() => {
+              setShowSessions(!showSessions);
+              if (!showSessions) listChatSessions().then(setSessions).catch(() => {});
+            }}>
+              History
             </button>
-          )}
+            {messages.length > 0 && (
+              <button className="btn-secondary btn-small" onClick={handleSaveSession}>
+                Save
+              </button>
+            )}
+            <button className="btn-secondary btn-small" onClick={handleNewChat}>
+              New Chat
+            </button>
+          </div>
         </div>
       </div>
+
+      {showSessions && (
+        <div className="chat-sessions-panel">
+          <div className="chat-sessions-header">
+            <strong>Chat History</strong>
+            <button className="btn-secondary btn-small" onClick={() => setShowSessions(false)}>Close</button>
+          </div>
+          {sessions.length === 0 && <p style={{ color: "var(--color-text-tertiary)", fontSize: "0.82rem", padding: "0.5rem 0" }}>No saved sessions. Click "Save" to save the current chat.</p>}
+          {sessions.map(s => (
+            <div key={s.id} className="chat-session-item">
+              <button className="chat-session-load" onClick={() => handleLoadSession(s.id)}>
+                <span className="chat-session-title">{s.title}</span>
+                <span className="chat-session-meta">{s.message_count} messages · {new Date(s.updated_at).toLocaleDateString()}</span>
+              </button>
+              <button className="chat-session-delete" onClick={() => handleDeleteSession(s.id)} title="Delete">X</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="chat-messages">
         {!hasKey && (

@@ -14,6 +14,23 @@ logger = logging.getLogger(__name__)
 
 # ── Tool Definitions (Anthropic tool_use format) ──
 
+# In-memory cache for last search results per user session (keyed by a simple token)
+_search_result_cache: dict[str, list[dict]] = {}
+
+
+def store_search_results(key: str, results: list[dict]) -> None:
+    """Cache search results so AI can access full data later."""
+    _search_result_cache[key] = results
+    # Keep only last 20 sessions
+    if len(_search_result_cache) > 20:
+        oldest = list(_search_result_cache.keys())[0]
+        del _search_result_cache[oldest]
+
+
+def get_cached_results(key: str) -> list[dict] | None:
+    return _search_result_cache.get(key)
+
+
 TOOLS = [
     {
         "name": "search_objects",
@@ -131,6 +148,53 @@ TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "get_last_search_results",
+        "description": (
+            "Retrieve the full list of the user's most recent search results "
+            "(up to 200 objects with all fields). Use when the user asks about "
+            "'my results', 'the objects I found', etc."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "max_results": {"type": "integer", "description": "Max results to return (default 50)", "default": 50},
+            },
+        },
+    },
+    {
+        "name": "run_pipeline",
+        "description": (
+            "Execute a pipeline DAG synchronously and return the results. "
+            "Use after generating a pipeline to actually run it on data."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dag": {
+                    "type": "object",
+                    "description": "Pipeline DAG with nodes and edges arrays",
+                },
+                "input_data_id": {"type": "string", "description": "FITS file path to use as input"},
+            },
+            "required": ["dag", "input_data_id"],
+        },
+    },
+    {
+        "name": "read_arxiv_paper",
+        "description": (
+            "Download and read the text content of an arXiv paper. "
+            "Provide the arXiv ID (e.g. '2301.12345'). Returns the paper's "
+            "title, abstract, and extracted text from the PDF."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "arxiv_id": {"type": "string", "description": "arXiv paper ID (e.g. '2301.12345')"},
+            },
+            "required": ["arxiv_id"],
+        },
+    },
 ]
 
 
@@ -151,6 +215,12 @@ async def execute_tool(tool_name: str, tool_input: dict, api_key: str = "") -> d
             return _exec_pipeline(tool_input)
         elif tool_name == "search_literature":
             return await _exec_literature(tool_input)
+        elif tool_name == "get_last_search_results":
+            return _exec_get_cached_results(tool_input)
+        elif tool_name == "run_pipeline":
+            return await _exec_run_pipeline(tool_input)
+        elif tool_name == "read_arxiv_paper":
+            return await _exec_read_paper(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -218,6 +288,9 @@ async def _exec_search(inp: dict) -> dict:
             for obj in res[:25]:
                 r = _astro_to_result(obj).model_dump()
                 all_results.append(r)
+
+    # Cache results for later retrieval by get_last_search_results
+    store_search_results("latest", all_results)
 
     return {"results": all_results, "total": len(all_results)}
 
@@ -345,3 +418,127 @@ async def _exec_literature(inp: dict) -> dict:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+def _exec_get_cached_results(inp: dict) -> dict:
+    """Return full cached search results."""
+    max_n = inp.get("max_results", 50)
+    results = get_cached_results("latest")
+    if results is None:
+        return {"results": [], "message": "No recent search results cached. Run a search first."}
+    return {"results": results[:max_n], "total": len(results)}
+
+
+async def _exec_run_pipeline(inp: dict) -> dict:
+    """Execute a pipeline DAG synchronously and return results."""
+    from app.pipeline.engine import execute_dag, topological_sort
+    from app.pipeline.nodes import registry
+
+    dag = inp.get("dag", {})
+    input_data_id = inp.get("input_data_id", "")
+
+    if "nodes" not in dag or "edges" not in dag:
+        return {"error": "DAG must have 'nodes' and 'edges'"}
+
+    # Validate node types
+    for node in dag.get("nodes", []):
+        if node.get("type") not in registry:
+            return {"error": f"Unknown node type: {node.get('type')}"}
+
+    try:
+        topological_sort(dag)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    import uuid
+    run_id = str(uuid.uuid4())
+    try:
+        results = execute_dag(dag, input_data_id, run_id)
+    except Exception as e:
+        return {"error": f"Pipeline execution failed: {e}"}
+
+    # Summarize results (truncate large data arrays)
+    summary = {}
+    for nid, res in results.items():
+        s = {}
+        if "error" in res:
+            s["error"] = res["error"]
+        else:
+            for k, v in res.items():
+                if k == "data" and isinstance(v, dict):
+                    s["data_keys"] = list(v.keys())
+                    s["data_lengths"] = {dk: len(dv) if isinstance(dv, list) else "scalar" for dk, dv in v.items()}
+                elif isinstance(v, list) and len(v) > 10:
+                    s[k] = f"[{len(v)} items]"
+                else:
+                    s[k] = v
+        summary[nid] = s
+
+    return {"run_id": run_id, "status": "completed", "results": summary}
+
+
+async def _exec_read_paper(inp: dict) -> dict:
+    """Download an arXiv paper and extract text content."""
+    import httpx
+    import re
+
+    arxiv_id = inp.get("arxiv_id", "").strip()
+    if not arxiv_id:
+        return {"error": "arxiv_id is required"}
+
+    # Clean the ID (remove 'arXiv:' prefix if present)
+    arxiv_id = re.sub(r'^arXiv:', '', arxiv_id, flags=re.IGNORECASE)
+
+    # Fetch paper metadata from arXiv API
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f"http://export.arxiv.org/api/query?id_list={arxiv_id}")
+            resp.raise_for_status()
+    except Exception as e:
+        return {"error": f"Failed to fetch arXiv metadata: {e}"}
+
+    xml_text = resp.text
+
+    # Parse title and abstract from Atom XML
+    title_match = re.search(r'<title[^>]*>(.*?)</title>', xml_text, re.DOTALL)
+    abstract_match = re.search(r'<summary[^>]*>(.*?)</summary>', xml_text, re.DOTALL)
+    authors = re.findall(r'<name>(.*?)</name>', xml_text)
+
+    title = title_match.group(1).strip() if title_match else "Unknown"
+    # Skip the first title match (it's the feed title "ArXiv Query")
+    titles = re.findall(r'<title[^>]*>(.*?)</title>', xml_text, re.DOTALL)
+    if len(titles) > 1:
+        title = titles[1].strip()
+
+    abstract = abstract_match.group(1).strip() if abstract_match else ""
+    # Clean up whitespace
+    abstract = re.sub(r'\s+', ' ', abstract)
+
+    # Try to get the PDF and extract text (best-effort)
+    pdf_text = ""
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            pdf_resp = await client.get(f"https://arxiv.org/pdf/{arxiv_id}")
+            if pdf_resp.status_code == 200 and len(pdf_resp.content) < 5_000_000:
+                # Try to extract text from PDF
+                try:
+                    import io
+                    from pdfminer.high_level import extract_text as _extract_pdf
+                    pdf_text = _extract_pdf(io.BytesIO(pdf_resp.content))
+                    # Truncate to first ~3000 chars (enough for intro + methods)
+                    pdf_text = pdf_text[:3000]
+                except ImportError:
+                    pdf_text = "(pdfminer not installed — only abstract available)"
+                except Exception:
+                    pdf_text = "(PDF text extraction failed — only abstract available)"
+    except Exception:
+        pass
+
+    return {
+        "arxiv_id": arxiv_id,
+        "title": title,
+        "authors": authors[:10],
+        "abstract": abstract,
+        "pdf_text_preview": pdf_text[:2000] if pdf_text else "",
+        "url": f"https://arxiv.org/abs/{arxiv_id}",
+    }
