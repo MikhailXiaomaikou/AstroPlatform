@@ -234,8 +234,8 @@ class SavedObject(Base):
     dec: Mapped[float] = mapped_column(default=0.0)
     object_type: Mapped[str] = mapped_column(String(100), default="")
     source: Mapped[str] = mapped_column(String(50), default="")
-    redshift: Mapped[float | None] = mapped_column()
-    notes: Mapped[str | None] = mapped_column(Text)
+    redshift: Mapped[float | None] = mapped_column(nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     project: Mapped[str] = mapped_column(String(255), default="Default")
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONType())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -247,7 +247,7 @@ class ChatSession(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), default="New Chat")
-    messages: Mapped[dict] = mapped_column(JSONType(), default=list)  # [{role, content, actions}]
+    messages: Mapped[list] = mapped_column(JSONType(), default=list)  # [{role, content, actions}]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

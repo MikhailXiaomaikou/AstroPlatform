@@ -49,7 +49,7 @@ def redshift_estimate(input_data: dict, params: dict) -> dict:
     # Validate method early
     valid_methods = ("peak", "xcorr", "chi2_grid", "vote")
     if method not in valid_methods:
-        raise ValueError(f"Unknown method '{method}'. Choose 'peak', 'xcorr', or 'chi2_grid'.")
+        raise ValueError(f"Unknown method '{method}'. Choose from: {', '.join(valid_methods)}.")
 
     data = input_data.get("data", {})
     flux = np.array(data.get(flux_key, []), dtype=float)
@@ -83,7 +83,7 @@ def redshift_estimate(input_data: dict, params: dict) -> dict:
                 pass
 
         if not results_all:
-            best_z, z_error, matched, confidence = 0.0, -1.0, [], 0.0
+            raise ValueError("RedshiftEstimate (vote): all sub-methods failed to produce a result")
         else:
             # Pick the result with highest confidence
             best = max(results_all, key=lambda r: r["confidence"])

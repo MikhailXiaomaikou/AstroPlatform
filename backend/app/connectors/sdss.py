@@ -71,10 +71,15 @@ class SDSSConnector(BaseConnector):
         First tries to find a matching spectrum (plate-mjd-fiberid) and download the FITS.
         If no spectrum exists, returns the photometric data as a FITS table.
         """
+        # Validate object_id is numeric (prevent SQL injection on remote SkyServer)
+        clean_id = object_id.strip()
+        if not clean_id.isdigit():
+            raise ValueError(f"Invalid SDSS objid (must be numeric): {object_id}")
+
         # Try to find spectrum for this objid
         sql = f"""SELECT TOP 1 s.plate, s.mjd, s.fiberid, s.z, s.zErr, s.class
         FROM SpecObj AS s
-        WHERE s.bestobjid = {object_id}"""
+        WHERE s.bestobjid = {clean_id}"""
 
         text = await self._query_skyserver(sql)
         spec_table = self._parse_csv(text)
@@ -114,7 +119,7 @@ class SDSSConnector(BaseConnector):
             p.Err_u, p.Err_g, p.Err_r, p.Err_i, p.Err_z,
             dbo.fPhotoTypeN(p.type) AS type_name
         FROM PhotoObj AS p
-        WHERE p.objid = {object_id}"""
+        WHERE p.objid = {clean_id}"""
 
         photo_text = await self._query_skyserver(sql_photo)
         photo_table = self._parse_csv(photo_text)

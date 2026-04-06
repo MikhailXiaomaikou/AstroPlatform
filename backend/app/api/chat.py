@@ -317,7 +317,7 @@ async def chat_message(
                 # Truncate large results for context window
                 result_str = json.dumps(result, default=str)
                 if len(result_str) > 8000:
-                    result_str = result_str[:8000] + '... (truncated)'
+                    result_str = json.dumps({"truncated": True, "summary": str(result)[:2000]}, default=str)
                 tool_result_blocks.append({
                     "type": "tool_result",
                     "tool_use_id": tc["id"],
@@ -331,8 +331,8 @@ async def chat_message(
 
             claude_messages.append({"role": "user", "content": tool_result_blocks})
 
-            # If Claude said stop_reason=end_turn, exit
-            if response.stop_reason == "end_turn":
+            # Only continue the loop if Claude explicitly wants more tool calls
+            if response.stop_reason != "tool_use":
                 break
 
         # Combine all text parts

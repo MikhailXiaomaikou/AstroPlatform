@@ -349,9 +349,11 @@ async def export_analysis_markdown(req: ReportRequest):
         lines.append(f"| Line | Rest (Å) | Observed (Å) | Type | Strength |")
         lines.append(f"|------|----------|-------------|------|----------|")
         for ln in ai_lines:
+            rw = ln.get('rest_wavelength')
+            ow = ln.get('observed_wavelength')
             lines.append(
-                f"| {ln.get('name','')} | {ln.get('rest_wavelength',''):.1f} | "
-                f"{ln.get('observed_wavelength',''):.1f} | {ln.get('type','')} | {ln.get('strength','')} |"
+                f"| {ln.get('name','')} | {f'{rw:.1f}' if isinstance(rw, (int,float)) else ''} | "
+                f"{f'{ow:.1f}' if isinstance(ow, (int,float)) else ''} | {ln.get('type','')} | {ln.get('strength','')} |"
             )
         lines.append(f"")
 
