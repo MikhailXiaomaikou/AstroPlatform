@@ -88,11 +88,9 @@ export function t(key: string): string {
 import { useState, useCallback } from "react";
 
 export function useT(): (key: string) => string {
-  const [, setTick] = useState(0);
-  const translate = useCallback((key: string) => t(key), []);
-  // Expose a toggle that forces re-render
-  void setTick; // suppress unused warning in non-toggle usage
-  return translate;
+  // Re-read currentLang on every render (no memoization)
+  // Components using useLang() trigger re-renders via setState
+  return (key: string) => t(key);
 }
 
 export function useLang(): [Lang, (lang: Lang) => void] {

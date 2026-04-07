@@ -125,6 +125,8 @@ def _dedup_by_position(results: list[SearchResult], sep_arcsec: float = 3.0) -> 
     deduped: list[SearchResult] = []
     used = [False] * len(results)
 
+    import math
+
     for i, r in enumerate(results):
         if used[i]:
             continue
@@ -134,8 +136,9 @@ def _dedup_by_position(results: list[SearchResult], sep_arcsec: float = 3.0) -> 
         for j in range(i + 1, len(results)):
             if used[j]:
                 continue
-            # Position match: angular separation in arcseconds
-            dra = (r.ra - results[j].ra) * 3600.0
+            # Position match: angular separation in arcseconds (with cos(dec) correction)
+            cos_dec = math.cos(math.radians((r.dec + results[j].dec) / 2.0))
+            dra = (r.ra - results[j].ra) * cos_dec * 3600.0
             ddec = (r.dec - results[j].dec) * 3600.0
             sep = (dra**2 + ddec**2) ** 0.5
             if sep < sep_arcsec:

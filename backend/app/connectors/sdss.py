@@ -145,7 +145,7 @@ class SDSSConnector(BaseConnector):
     async def _resolve_name(self, name: str) -> tuple[float, float]:
         from astropy.coordinates import SkyCoord
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         coord = await loop.run_in_executor(
             None, partial(SkyCoord.from_name, name)
         )

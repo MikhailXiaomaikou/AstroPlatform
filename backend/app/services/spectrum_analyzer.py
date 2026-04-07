@@ -82,16 +82,19 @@ def extract_spectrum_from_fits(fits_path: str, max_points: int = 2000) -> dict:
         # Fallback: primary HDU 1D data
         if hdul[0].data is not None and hdul[0].data.ndim == 1:
             flux_arr = hdul[0].data.astype(float)
-            valid = np.isfinite(flux_arr)
-            flux_arr = flux_arr[valid]
 
-            # Try to build wavelength from header WCS
+            # Build wavelength from header WCS BEFORE filtering NaN
             header = hdul[0].header
             crval1 = header.get("CRVAL1", 0)
             cdelt1 = header.get("CDELT1", header.get("CD1_1", 1))
             crpix1 = header.get("CRPIX1", 1)
-            n = len(flux_arr)
-            wave = crval1 + (np.arange(n) - (crpix1 - 1)) * cdelt1
+            n_orig = len(flux_arr)
+            wave = crval1 + (np.arange(n_orig) - (crpix1 - 1)) * cdelt1
+
+            # Now filter NaN from both arrays in sync
+            valid = np.isfinite(flux_arr)
+            flux_arr = flux_arr[valid]
+            wave = wave[valid]
 
             if len(wave) > max_points:
                 step = len(wave) // max_points

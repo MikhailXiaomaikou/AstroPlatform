@@ -453,7 +453,9 @@ async def _exec_run_pipeline(inp: dict) -> dict:
     import uuid
     run_id = str(uuid.uuid4())
     try:
-        results = execute_dag(dag, input_data_id, run_id)
+        # Run in executor to avoid blocking the async event loop
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(None, execute_dag, dag, input_data_id, run_id)
     except Exception as e:
         return {"error": f"Pipeline execution failed: {e}"}
 

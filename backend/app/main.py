@@ -107,8 +107,11 @@ _api_stats = {
 
 @app.middleware("http")
 async def monitor_requests(request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
     _api_stats["requests_total"] += 1
-    path = request.url.path
+    import re as _re
+    path = _re.sub(r'[0-9a-f-]{36}', '{id}', request.url.path)
     _api_stats["endpoint_counts"][path] += 1
     try:
         response = await call_next(request)

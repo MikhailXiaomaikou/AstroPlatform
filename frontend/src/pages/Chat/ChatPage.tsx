@@ -1050,24 +1050,29 @@ export default function ChatPage() {
   }, [messages]);
 
   const [dragOver, setDragOver] = useState(false);
+  const pendingSendRef = useRef(false);
+
+  // Auto-send when input is set by FITS drop
+  useEffect(() => {
+    if (pendingSendRef.current && input.trim()) {
+      pendingSendRef.current = false;
+      handleSend();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input]);
 
   const handleFitsDrop = async (files: FileList) => {
     for (const file of Array.from(files)) {
       if (!file.name.toLowerCase().match(/\.(fits|fit|fts)$/)) continue;
       try {
         const result = await uploadFITS(file);
-        // Auto-send a message asking AI to analyze
         const msg = `I uploaded a FITS file: ${file.name} (stored at ${result.fits_path}). Please analyze this spectrum.`;
+        pendingSendRef.current = true;
         setInput(msg);
-        // Trigger send after state update
-        setTimeout(() => {
-          const btn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
-          btn?.click();
-        }, 100);
       } catch {
         setInput(`I want to analyze a FITS file but upload failed for ${file.name}.`);
       }
-      break; // Only handle first file
+      break;
     }
   };
 

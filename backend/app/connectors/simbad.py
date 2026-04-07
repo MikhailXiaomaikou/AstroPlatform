@@ -200,8 +200,12 @@ class SIMBADConnector(BaseConnector):
             if col not in table.colnames:
                 return None
             v = row[col]
-            if hasattr(v, "mask"):
-                return None
+            try:
+                import numpy as _np
+                if _np.ma.is_masked(v):
+                    return None
+            except (ImportError, TypeError):
+                pass
             try:
                 f = float(v)
                 return f if f == f else None  # NaN check

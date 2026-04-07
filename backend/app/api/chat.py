@@ -659,6 +659,8 @@ async def save_chat_session(
         if session:
             session.messages = req.messages
             session.title = req.title
+            from datetime import datetime, timezone
+            session.updated_at = datetime.now(timezone.utc)
             await db.commit()
             return {"id": str(session.id), "saved": True}
 
