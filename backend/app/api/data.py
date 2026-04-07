@@ -1282,7 +1282,7 @@ async def browse_fits_files(
 @router.get("/fits/download")
 async def download_fits_file(
     fits_path: str = Query(..., description="Storage path to FITS file"),
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
 ):
     """Download a FITS file for local use."""
     from fastapi.responses import Response
@@ -1357,6 +1357,7 @@ async def upload_general_file(
 @router.get("/files/download")
 async def download_general_file(
     path: str = Query(..., description="Storage path"),
+    user: User = Depends(get_current_user),
 ):
     """Download any file from storage."""
     from fastapi.responses import Response

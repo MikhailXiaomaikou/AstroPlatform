@@ -157,11 +157,15 @@ def _build_report_html(run: PipelineRun, results: list[RunResult]) -> str:
 
     rows_html = ""
     for r in results:
-        logs_escaped = (r.logs or "").replace("&", "&amp;").replace("<", "&lt;")
+        def _esc(s: str) -> str:
+            return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        logs_escaped = _esc(r.logs or "")
+        nid_escaped = _esc(r.node_id or "")
+        path_escaped = _esc(r.output_path or "")
         rows_html += (
             f"<tr>"
-            f"<td>{r.node_id}</td>"
-            f"<td>{r.output_path or ''}</td>"
+            f"<td>{nid_escaped}</td>"
+            f"<td>{path_escaped}</td>"
             f"<td><pre>{logs_escaped}</pre></td>"
             f"</tr>"
         )
@@ -421,7 +425,7 @@ async def export_workflow_as_python(req: WorkflowExportRequest):
             lines.append("")
 
         elif tool == "run_adql":
-            query = inp.get("query", "").replace('"""', '\\"\\"\\"')
+            query = inp.get("query", "")
             service = inp.get("service", "gaia")
             lines.append(f"from astroquery.utils.tap.core import TapPlus")
             tap_urls = {
@@ -431,7 +435,7 @@ async def export_workflow_as_python(req: WorkflowExportRequest):
             }
             url = tap_urls.get(service, tap_urls["gaia"])
             lines.append(f'tap = TapPlus(url="{url}")')
-            lines.append(f'query = """{query}"""')
+            lines.append(f"query = {repr(query)}")
             lines.append(f"job = tap.launch_job(query)")
             lines.append(f"results_{i} = job.get_results()")
             lines.append(f"print(f'Step {i}: {{len(results_{i})}} rows')")
@@ -447,15 +451,14 @@ async def export_workflow_as_python(req: WorkflowExportRequest):
         elif tool == "get_object_info":
             name = inp.get("name", "")
             lines.append(f"from astroquery.simbad import Simbad")
-            lines.append(f'result_{i} = Simbad.query_object("{name}")')
+            lines.append(f"result_{i} = Simbad.query_object({repr(name)})")
             lines.append(f"print(result_{i})")
             lines.append("")
 
         elif tool == "analyze_spectrum":
             path = inp.get("fits_path", "")
             lines.append(f"from astropy.io import fits")
-            lines.append(f'# Load spectrum from: {path}')
-            lines.append(f'# hdul = fits.open("{path}")')
+            lines.append(f"# hdul = fits.open({repr(path)})")
             lines.append("")
 
         else:

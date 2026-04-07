@@ -25,7 +25,7 @@ MAX_OUTPUT_SIZE = 50_000
 ALLOWED_MODULES = {
     # Core
     "math", "statistics", "collections", "itertools", "functools",
-    "json", "csv", "re", "datetime", "io", "os.path",
+    "json", "csv", "re", "datetime", "io",
     # Data science
     "numpy", "np",
     "scipy", "scipy.optimize", "scipy.signal", "scipy.stats",
@@ -62,6 +62,11 @@ class CodeExecutionResult:
 @contextmanager
 def _timeout(seconds: int):
     """Context manager that raises TimeoutError after `seconds`."""
+    if sys.platform == "win32":
+        # Windows lacks SIGALRM — skip timeout (best-effort)
+        yield
+        return
+
     def _handler(_signum, _frame):
         raise TimeoutError(f"Code execution timed out after {seconds} seconds")
 
@@ -237,12 +242,10 @@ def execute_python(code: str, context: dict | None = None) -> CodeExecutionResul
         logger.warning("Failed to capture matplotlib figures: %s", e)
 
     # Extract key result variables (skip large objects)
-    skip_names = {"__builtins__", "np", "numpy", "plt", "matplotlib", "astropy",
-                  "u", "Table", "SkyCoord", "scipy", "load_fits", "get_search_results"}
+    # Record pre-existing keys to skip in variable extraction
+    pre_existing_keys = set(exec_globals.keys())
     for name, val in exec_globals.items():
-        if name.startswith("_") or name in skip_names:
-            continue
-        if context and name in context:
+        if name.startswith("_") or name in pre_existing_keys:
             continue
         try:
             r = repr(val)

@@ -295,7 +295,8 @@ async def chat_message(
     if req.context:
         safe_context = {k: v for k, v in req.context.items() if k != "api_key"}
         if safe_context:
-            system += f"\n\nCurrent user context:\n{json.dumps(safe_context, indent=2)}"
+            ctx_str = json.dumps(safe_context, indent=2, default=str)[:2000]
+            system += f"\n\nCurrent user context:\n{ctx_str}"
     if user:
         system += f"\nUser email: {user.email}, Subscription: {user.subscription_tier}"
 

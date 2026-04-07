@@ -262,10 +262,16 @@ def compute_absolute_magnitude(apparent_mag, redshift=None, distance_mpc=None, p
         return M
     elif distance_mpc is not None:
         d = np.asarray(distance_mpc, dtype=float)
-        return m - 5 * np.log10(d * 1e6) + 5
+        valid = d > 0
+        M = np.full_like(m, np.nan)
+        M[valid] = m[valid] - 5 * np.log10(d[valid] * 1e6) + 5
+        return M
     elif redshift is not None:
-        d = compute_luminosity_distance(redshift)
-        return m - 5 * np.log10(np.asarray(d) * 1e6) + 5
+        d = np.asarray(compute_luminosity_distance(redshift), dtype=float)
+        valid = d > 0
+        M = np.full_like(m, np.nan)
+        M[valid] = m[valid] - 5 * np.log10(d[valid] * 1e6) + 5
+        return M
     else:
         raise ValueError("Provide redshift, distance_mpc, or parallax_mas")
 
@@ -339,6 +345,9 @@ def multi_gaussian_fit(wavelength, flux, n_components=2, initial_centers=None):
     wave = np.asarray(wavelength, dtype=float)
     f = np.asarray(flux, dtype=float)
 
+    if len(wave) < n_components * 3 + 1:
+        return {"success": False, "error": f"Need at least {n_components * 3 + 1} data points for {n_components} components, got {len(wave)}"}
+
     def multi_gauss(x, *params):
         result = np.zeros_like(x)
         for i in range(0, len(params), 3):
@@ -355,7 +364,7 @@ def multi_gaussian_fit(wavelength, flux, n_components=2, initial_centers=None):
     else:
         # Auto-detect peaks
         from scipy.signal import find_peaks
-        peaks, props = find_peaks(f, height=np.median(f), distance=len(f) // (n_components + 1))
+        peaks, props = find_peaks(f, height=np.median(f), distance=max(1, len(f) // (n_components + 1)))
         peaks = peaks[:n_components]
         for p in peaks:
             p0.extend([f[p], wave[p], 5.0])
@@ -403,13 +412,23 @@ def continuum_normalize(wavelength, flux, order=5, sigma_clip=3.0, n_iter=3):
     mask = np.ones(len(f), dtype=bool)
 
     for _ in range(n_iter):
+        if np.sum(mask) <= order:
+            break  # Not enough points for polynomial fit
         coeffs = np.polyfit(wave[mask], f[mask], deg=order)
         continuum = np.polyval(coeffs, wave)
         residuals = f - continuum
         std = np.std(residuals[mask])
+        if std == 0:
+            break  # Perfectly flat — no further clipping needed
         mask = np.abs(residuals) < sigma_clip * std
 
+    if np.sum(mask) <= order:
+        # Fallback: return unmodified spectrum
+        return np.ones_like(f), np.full_like(f, np.median(f))
+
     continuum = np.polyval(np.polyfit(wave[mask], f[mask], deg=order), wave)
+    # Guard against zero continuum
+    continuum = np.where(np.abs(continuum) < 1e-30, 1e-30, continuum)
     normalized = f / continuum
 
     return normalized, continuum
