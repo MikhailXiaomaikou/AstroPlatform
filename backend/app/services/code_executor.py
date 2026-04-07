@@ -161,6 +161,29 @@ def execute_python(code: str, context: dict | None = None) -> CodeExecutionResul
     except ImportError:
         pass
 
+    # Pre-import astronomy analysis toolkit
+    try:
+        from app.services import astro_analysis as astro
+        exec_globals["astro"] = astro
+        # Also expose top-level convenience functions
+        exec_globals["pub_figure"] = astro.pub_figure
+        exec_globals["pub_style"] = astro.pub_style
+        exec_globals["plot_hr_diagram"] = astro.plot_hr_diagram
+        exec_globals["plot_bpt"] = astro.plot_bpt
+        exec_globals["plot_sed"] = astro.plot_sed
+        exec_globals["plot_lightcurve"] = astro.plot_lightcurve
+        exec_globals["plot_sky_distribution"] = astro.plot_sky_distribution
+        exec_globals["bpt_classify"] = astro.bpt_classify
+        exec_globals["compute_absolute_magnitude"] = astro.compute_absolute_magnitude
+        exec_globals["compute_luminosity_distance"] = astro.compute_luminosity_distance
+        exec_globals["k_correction"] = astro.k_correction
+        exec_globals["spectral_stacking"] = astro.spectral_stacking
+        exec_globals["multi_gaussian_fit"] = astro.multi_gaussian_fit
+        exec_globals["continuum_normalize"] = astro.continuum_normalize
+        exec_globals["batch_equivalent_width"] = astro.batch_equivalent_width
+    except ImportError:
+        pass
+
     # Inject context variables
     if context:
         exec_globals.update(context)

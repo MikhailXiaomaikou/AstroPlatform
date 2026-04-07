@@ -667,6 +667,19 @@ export async function exportSearchNotebook(
   return data;
 }
 
+// ── Workflow Export ──
+
+export async function exportWorkflowPython(
+  toolCalls: Array<{ tool: string; input: Record<string, unknown>; result?: unknown }>,
+  title?: string,
+): Promise<Blob> {
+  const { data } = await api.post("/api/export/workflow/python", {
+    tool_calls: toolCalls,
+    title: title || "AI Research Workflow",
+  }, { responseType: "blob" });
+  return data;
+}
+
 // ── Integration API ──
 
 export async function sampStatus(): Promise<{
