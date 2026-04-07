@@ -55,6 +55,9 @@ function ActionCard({
     get_object_info: "Object Info",
     analyze_spectrum: "Spectrum Analysis",
     search_literature: "Literature Search",
+    get_last_search_results: "Search Results",
+    read_arxiv_paper: "Read Paper",
+    run_python: "Python Code",
   };
 
   const icons: Record<string, string> = {
@@ -72,6 +75,9 @@ function ActionCard({
     get_object_info: "🌌",
     analyze_spectrum: "🔬",
     search_literature: "📚",
+    get_last_search_results: "📋",
+    read_arxiv_paper: "📄",
+    run_python: "🐍",
   };
 
   const isAutoExecuted = !!(action as Record<string, unknown>)._auto_executed;
@@ -707,6 +713,57 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     return (
       <div style={{ fontSize: "0.78rem" }}>
         Pipeline <strong>{String(result.name)}</strong>: {dag?.nodes?.map(n => n.type).join(" → ")}
+      </div>
+    );
+  }
+
+  // Python code execution
+  if (toolName === "run_python") {
+    const success = result.success as boolean;
+    const stdout = result.stdout as string || "";
+    const error = result.error as string | undefined;
+    const figures = (result.figures as string[]) || [];
+    const variables = result.variables as Record<string, string> | undefined;
+    const tb = result.traceback as string | undefined;
+
+    return (
+      <div className="code-result">
+        {/* Status */}
+        <div style={{ fontSize: "0.72rem", color: success ? "var(--color-green)" : "var(--color-red)", marginBottom: 4 }}>
+          {success ? "Executed successfully" : `Error: ${error || "unknown"}`}
+        </div>
+
+        {/* Stdout */}
+        {stdout && (
+          <pre className="code-output">{stdout}</pre>
+        )}
+
+        {/* Traceback */}
+        {tb && !success && (
+          <pre className="code-output code-error">{tb.slice(-500)}</pre>
+        )}
+
+        {/* Figures */}
+        {figures.map((b64, i) => (
+          <img
+            key={i}
+            src={`data:image/png;base64,${b64}`}
+            alt={`Figure ${i + 1}`}
+            className="code-figure"
+          />
+        ))}
+
+        {/* Variables */}
+        {variables && Object.keys(variables).length > 0 && (
+          <details className="code-vars">
+            <summary>Variables ({Object.keys(variables).length})</summary>
+            {Object.entries(variables).map(([k, v]) => (
+              <div key={k} className="code-var">
+                <span className="code-var-name">{k}</span> = <span className="code-var-val">{v}</span>
+              </div>
+            ))}
+          </details>
+        )}
       </div>
     );
   }

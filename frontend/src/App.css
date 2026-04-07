@@ -4015,6 +4015,64 @@
   border-top-color: rgba(48, 209, 88, 0.2);
 }
 
+/* ── Code execution results ── */
+
+.code-result {
+  font-size: 0.82rem;
+}
+
+.code-output {
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--color-text);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  max-height: 300px;
+  overflow: auto;
+  margin: 0.3rem 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.code-error {
+  border-left: 3px solid var(--color-red);
+  color: var(--color-red);
+}
+
+.code-figure {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  margin: 0.5rem 0;
+  border: 1px solid var(--color-border);
+}
+
+.code-vars {
+  font-size: 0.72rem;
+  margin-top: 0.3rem;
+  color: var(--color-text-secondary);
+}
+
+.code-vars summary {
+  cursor: pointer;
+  font-weight: 500;
+  padding: 0.2rem 0;
+}
+
+.code-var {
+  padding: 1px 0;
+  font-family: var(--font-mono);
+}
+
+.code-var-name {
+  color: var(--color-accent);
+}
+
+.code-var-val {
+  color: var(--color-text-tertiary);
+}
+
 .chat-action-header {
   display: flex;
   align-items: center;

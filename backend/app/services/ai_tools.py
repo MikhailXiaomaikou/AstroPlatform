@@ -181,6 +181,32 @@ TOOLS = [
         },
     },
     {
+        "name": "run_python",
+        "description": (
+            "Execute Python code for data analysis, statistical modeling, or visualization. "
+            "Available libraries: numpy (as np), scipy, astropy (Table, SkyCoord, units as u), "
+            "matplotlib.pyplot (as plt), pandas. "
+            "Helper functions: load_fits(path) returns astropy HDUList, "
+            "get_search_results() returns the latest search results as a list of dicts. "
+            "Use print() to output results. Matplotlib figures are automatically captured. "
+            "Max execution time: 30 seconds."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Python code to execute. Use print() for output and plt for plots.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Brief description of what the code does",
+                },
+            },
+            "required": ["code"],
+        },
+    },
+    {
         "name": "read_arxiv_paper",
         "description": (
             "Download and read the text content of an arXiv paper. "
@@ -215,6 +241,8 @@ async def execute_tool(tool_name: str, tool_input: dict, api_key: str = "") -> d
             return _exec_pipeline(tool_input)
         elif tool_name == "search_literature":
             return await _exec_literature(tool_input)
+        elif tool_name == "run_python":
+            return await _exec_run_python(tool_input)
         elif tool_name == "get_last_search_results":
             return _exec_get_cached_results(tool_input)
         elif tool_name == "run_pipeline":
@@ -418,6 +446,36 @@ async def _exec_literature(inp: dict) -> dict:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+async def _exec_run_python(inp: dict) -> dict:
+    """Execute Python code in sandboxed environment."""
+    from app.services.code_executor import execute_python
+
+    code = inp.get("code", "")
+    if not code.strip():
+        return {"error": "No code provided"}
+
+    # Run in executor to not block the event loop
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, execute_python, code, None)
+
+    response: dict = {
+        "success": result.success,
+        "stdout": result.stdout[:5000] if result.stdout else "",
+    }
+
+    if result.error:
+        response["error"] = result.error
+    if result.stderr and not result.success:
+        response["traceback"] = result.stderr[:2000]
+    if result.figures:
+        response["figures"] = result.figures[:5]  # max 5 figures
+        response["figure_count"] = len(result.figures)
+    if result.variables:
+        response["variables"] = dict(list(result.variables.items())[:20])
+
+    return response
 
 
 def _exec_get_cached_results(inp: dict) -> dict:
