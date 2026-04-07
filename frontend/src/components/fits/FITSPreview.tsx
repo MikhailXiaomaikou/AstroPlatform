@@ -139,6 +139,14 @@ export default function FITSPreview({ filename, fitsPath, source, objectId }: Pr
     <div className="fits-preview">
       <div className="fits-preview-header">
         <h3>FITS File</h3>
+        <a
+          href={`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/api/data/fits/download?fits_path=${encodeURIComponent(fitsPath)}`}
+          download
+          className="btn-secondary btn-small"
+          style={{ marginLeft: "auto", textDecoration: "none", fontSize: "0.72rem" }}
+        >
+          Download
+        </a>
         <div className="fits-tabs">
           {tabs.map((t) => (
             <button

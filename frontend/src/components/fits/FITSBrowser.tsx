@@ -5,6 +5,7 @@ import {
   deleteFITS,
   getFITSHeader,
   getFITSSpectrum,
+  downloadFITSUrl,
 } from "../../api/client";
 import type { FITSFileInfo, FITSHeader, FITSSpectrum } from "../../api/client";
 
@@ -253,6 +254,23 @@ export default function FITSBrowser({ onSelectFile }: Props) {
               >
                 Preview
               </button>
+              <a
+                href={downloadFITSUrl(f.fits_path)}
+                download
+                style={{
+                  background: "#2a5a3b",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 4,
+                  padding: "0.2rem 0.5rem",
+                  fontSize: "0.75rem",
+                  cursor: "pointer",
+                  textDecoration: "none",
+                  display: "inline-block",
+                }}
+              >
+                Download
+              </a>
               <button
                 onClick={() => handleDelete(f.id)}
                 style={{

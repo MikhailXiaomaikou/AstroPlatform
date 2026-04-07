@@ -1279,6 +1279,119 @@ async def browse_fits_files(
     return out
 
 
+@router.get("/fits/download")
+async def download_fits_file(
+    fits_path: str = Query(..., description="Storage path to FITS file"),
+    user: User | None = Depends(get_optional_user),
+):
+    """Download a FITS file for local use."""
+    from fastapi.responses import Response
+
+    if ".." in fits_path or fits_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    try:
+        raw = download_fits(fits_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="FITS file not found")
+
+    filename = fits_path.split("/")[-1]
+    return Response(
+        content=raw,
+        media_type="application/fits",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(raw)),
+        },
+    )
+
+
+@router.post("/files/upload")
+async def upload_general_file(
+    file: UploadFile = FastAPIFile(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Upload any research file (CSV, VOTable, TXT, FITS, PDF, etc.)."""
+    from app.config import settings as app_settings
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename")
+
+    max_size = app_settings.max_upload_size
+    if file.size and file.size > max_size:
+        raise HTTPException(status_code=413, detail=f"File too large. Max {max_size // (1024*1024)} MB")
+
+    contents = await file.read(max_size + 1)
+    if len(contents) > max_size:
+        raise HTTPException(status_code=413, detail=f"File too large. Max {max_size // (1024*1024)} MB")
+
+    file_uuid = uuid.uuid4().hex
+    safe_name = file.filename.replace("/", "_").replace("\\", "_")
+    storage_path = f"uploads/{str(user.id)[:8]}/{file_uuid}_{safe_name}"
+    upload_fits(storage_path, contents)  # reuse storage function (works for any file)
+
+    data_file = DataFile(
+        user_id=user.id,
+        source="upload",
+        object_id=safe_name,
+        fits_path=storage_path,
+        metadata_={
+            "original_filename": safe_name,
+            "size_bytes": len(contents),
+            "content_type": file.content_type or "application/octet-stream",
+        },
+    )
+    db.add(data_file)
+    await db.commit()
+    await db.refresh(data_file)
+
+    return {
+        "id": str(data_file.id),
+        "filename": safe_name,
+        "path": storage_path,
+        "size_bytes": len(contents),
+    }
+
+
+@router.get("/files/download")
+async def download_general_file(
+    path: str = Query(..., description="Storage path"),
+):
+    """Download any file from storage."""
+    from fastapi.responses import Response
+
+    if ".." in path or path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    try:
+        raw = download_fits(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    filename = path.split("/")[-1]
+    # Guess content type from extension
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    content_types = {
+        "fits": "application/fits", "fit": "application/fits", "fts": "application/fits",
+        "csv": "text/csv", "tsv": "text/tab-separated-values",
+        "json": "application/json", "txt": "text/plain",
+        "pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg",
+        "vot": "application/xml", "xml": "application/xml",
+        "ipynb": "application/x-ipynb+json",
+    }
+    ctype = content_types.get(ext, "application/octet-stream")
+
+    return Response(
+        content=raw,
+        media_type=ctype,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(raw)),
+        },
+    )
+
+
 @router.delete("/fits/{file_id}")
 async def delete_fits_file(
     file_id: str,

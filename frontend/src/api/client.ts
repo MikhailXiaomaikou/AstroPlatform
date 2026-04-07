@@ -321,6 +321,23 @@ export async function deleteFITS(fileId: string): Promise<void> {
   await api.delete(`/api/data/fits/${fileId}`);
 }
 
+export function downloadFITSUrl(fitsPath: string): string {
+  const base = import.meta.env.VITE_API_URL || "http://localhost:8000";
+  return `${base}/api/data/fits/download?fits_path=${encodeURIComponent(fitsPath)}`;
+}
+
+export async function uploadGeneralFile(file: File): Promise<{ id: string; filename: string; path: string; size_bytes: number }> {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await api.post("/api/data/files/upload", form);
+  return data;
+}
+
+export function downloadFileUrl(path: string): string {
+  const base = import.meta.env.VITE_API_URL || "http://localhost:8000";
+  return `${base}/api/data/files/download?path=${encodeURIComponent(path)}`;
+}
+
 // ── Pipeline API ──
 
 export interface NodeType {
