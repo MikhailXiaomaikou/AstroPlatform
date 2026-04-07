@@ -1,7 +1,7 @@
 import { Component, lazy, Suspense, useState, useEffect, type ErrorInfo, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
-import { useLang } from "./i18n";
+import { I18nProvider, useI18n, ALL_LANGS, LANG_NAMES, type Lang } from "./i18n";
 import api from "./api/client";
 import "./App.css";
 
@@ -70,18 +70,18 @@ function useTheme() {
 function NavBar() {
   const { theme, toggle } = useTheme();
   const { user, logout } = useAuth();
-  const [lang, setLang] = useLang();
+  const { lang, setLang, t } = useI18n();
 
   return (
     <nav className="top-nav">
       <NavLink to="/" className="logo">Astro Platform</NavLink>
-      <NavLink to="/">Data Browser</NavLink>
-      <NavLink to="/pipeline">Pipeline</NavLink>
-      <NavLink to="/workspace">Workspace</NavLink>
-      <NavLink to="/adql">ADQL</NavLink>
-      <NavLink to="/team">Team</NavLink>
-      <NavLink to="/chat">AI Assistant</NavLink>
-      <NavLink to="/settings">Settings</NavLink>
+      <NavLink to="/">{t("nav.data_browser")}</NavLink>
+      <NavLink to="/pipeline">{t("nav.pipeline")}</NavLink>
+      <NavLink to="/workspace">{t("nav.workspace")}</NavLink>
+      <NavLink to="/adql">{t("nav.adql")}</NavLink>
+      <NavLink to="/team">{t("nav.team")}</NavLink>
+      <NavLink to="/chat">{t("nav.ai_assistant")}</NavLink>
+      <NavLink to="/settings">{t("nav.settings")}</NavLink>
       <div className="nav-spacer" />
       <button
         className="theme-toggle"
@@ -91,13 +91,16 @@ function NavBar() {
       >
         {theme === "dark" ? "\u2600\uFE0F" : "\uD83C\uDF19"}
       </button>
-      <button
-        className="theme-toggle"
-        onClick={() => setLang(lang === "en" ? "zh" : "en")}
-        title={lang === "en" ? "切换中文" : "Switch to English"}
+      <select
+        className="lang-select"
+        value={lang}
+        onChange={(e) => setLang(e.target.value as Lang)}
+        title="Language"
       >
-        {lang === "en" ? "中" : "EN"}
-      </button>
+        {ALL_LANGS.map((l) => (
+          <option key={l} value={l}>{LANG_NAMES[l]}</option>
+        ))}
+      </select>
       {user ? (
         <div className="nav-user">
           {user.avatar_url ? (
@@ -110,12 +113,12 @@ function NavBar() {
           <span className="nav-user-name" title={user.email}>
             {user.display_name || user.email.split("@")[0]}
           </span>
-          <button className="nav-logout" onClick={logout} title="Sign out">
-            Sign out
+          <button className="nav-logout" onClick={logout} title={t("nav.sign_out")}>
+            {t("nav.sign_out")}
           </button>
         </div>
       ) : (
-        <NavLink to="/auth" className="nav-auth-link">Sign in</NavLink>
+        <NavLink to="/auth" className="nav-auth-link">{t("nav.sign_in")}</NavLink>
       )}
       <span className="tier-badge tier-beta">beta</span>
     </nav>
@@ -167,6 +170,7 @@ function BackendBanner() {
 
 function App() {
   return (
+    <I18nProvider>
     <AuthProvider>
       <BrowserRouter>
         <BackendBanner />
@@ -190,6 +194,7 @@ function App() {
         </main>
       </BrowserRouter>
     </AuthProvider>
+    </I18nProvider>
   );
 }
 
