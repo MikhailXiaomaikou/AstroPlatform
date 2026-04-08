@@ -715,9 +715,23 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
       <div style={{ fontSize: "0.78rem" }}>
         Pipeline <strong>{String(result.name)}</strong>: {dag?.nodes?.map(n => n.type).join(" → ")}
         <div style={{ marginTop: 4 }}>
-          <a href="/pipeline" style={{ color: "var(--color-accent)", fontSize: "0.75rem" }}>
+          <button
+            className="btn-secondary btn-small"
+            onClick={() => {
+              // Store the generated DAG so Pipeline Editor can load it
+              if (dag) {
+                localStorage.setItem("pipeline_autosave", JSON.stringify({
+                  nodes: (dag as Record<string, unknown>).nodes,
+                  edges: (dag as Record<string, unknown>).edges || [],
+                  inputDataId: "example/fits/path.fits",
+                }));
+              }
+              window.location.href = "/pipeline";
+            }}
+            style={{ fontSize: "0.72rem" }}
+          >
             Open in Pipeline Editor
-          </a>
+          </button>
         </div>
       </div>
     );

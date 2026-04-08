@@ -456,9 +456,15 @@ async def _exec_run_python(inp: dict) -> dict:
     if not code.strip():
         return {"error": "No code provided"}
 
-    # Run in executor to not block the event loop
+    # Run in executor with timeout to not block the event loop
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, execute_python, code, None)
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, execute_python, code, None),
+            timeout=35.0,
+        )
+    except asyncio.TimeoutError:
+        return {"success": False, "error": "Code execution timed out after 35 seconds", "stdout": ""}
 
     response: dict = {
         "success": result.success,

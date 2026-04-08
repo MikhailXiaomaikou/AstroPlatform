@@ -61,9 +61,14 @@ class CodeExecutionResult:
 
 @contextmanager
 def _timeout(seconds: int):
-    """Context manager that raises TimeoutError after `seconds`."""
-    if sys.platform == "win32":
-        # Windows lacks SIGALRM — skip timeout (best-effort)
+    """Context manager that raises TimeoutError after `seconds`.
+
+    Uses SIGALRM on main thread, falls back to no-op on worker threads/Windows.
+    The actual timeout enforcement is handled by the caller via run_in_executor.
+    """
+    import threading
+    if sys.platform == "win32" or threading.current_thread() is not threading.main_thread():
+        # Can't use SIGALRM in worker threads — skip (timeout handled externally)
         yield
         return
 
