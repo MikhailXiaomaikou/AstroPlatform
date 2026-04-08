@@ -159,13 +159,18 @@ class NEDConnector(BaseConnector):
         # Try multiple key patterns NED uses
         preferred = item.get("Preferred", item)
 
+        def _ned_str(val) -> str:
+            if isinstance(val, dict):
+                return str(val.get("Value", val.get("value", ""))).strip()
+            return str(val).strip()
+
         name = ""
         for key in ("Name", "name", "prefname", "ObjName"):
             if key in preferred:
-                name = str(preferred[key]).strip()
+                name = _ned_str(preferred[key])
                 break
         if not name and "Name" in item:
-            name = str(item["Name"]).strip()
+            name = _ned_str(item["Name"])
         if not name:
             return None
 
@@ -202,7 +207,11 @@ class NEDConnector(BaseConnector):
         obj_type = ""
         for key in ("Type", "type", "ObjType"):
             if key in preferred:
-                obj_type = str(preferred[key]).strip()
+                val = preferred[key]
+                if isinstance(val, dict):
+                    obj_type = str(val.get("Value", val.get("value", ""))).strip()
+                else:
+                    obj_type = str(val).strip()
                 break
 
         redshift = None
@@ -226,7 +235,7 @@ class NEDConnector(BaseConnector):
         extra: dict = {}
         for key in ("Morphology", "morphology", "morph_type"):
             if key in preferred:
-                extra["morphology"] = str(preferred[key]).strip()
+                extra["morphology"] = _ned_str(preferred[key])
                 break
         for key in ("Velocity", "velocity"):
             if key in preferred:

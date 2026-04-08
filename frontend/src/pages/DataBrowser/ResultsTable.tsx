@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import type { SearchResult } from "../../api/client";
+import { useI18n } from "../../i18n";
 
 interface Props {
   results: SearchResult[];
@@ -34,7 +35,7 @@ function SkeletonRows({ colCount }: { colCount: number }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ message }: { message: string }) {
   return (
     <div className="empty-state">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
@@ -44,7 +45,7 @@ function EmptyState() {
           d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 15.803a7.5 7.5 0 0010.607 0z"
         />
       </svg>
-      <p>Search for astronomical objects to see results</p>
+      <p>{message}</p>
     </div>
   );
 }
@@ -69,6 +70,7 @@ export default function ResultsTable({
   onSelectionChange,
   onObjectClick,
 }: Props) {
+  const { t } = useI18n();
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
   const [page, setPage] = useState(0);
@@ -91,13 +93,9 @@ export default function ResultsTable({
 
   if (!loading && results.length === 0) {
     if (searched) {
-      return (
-        <div className="empty-state">
-          <p>No results found. Try broadening your search criteria or selecting different data sources.</p>
-        </div>
-      );
+      return <EmptyState message={t("search.no_results")} />;
     }
-    return <EmptyState />;
+    return <EmptyState message={t("search.empty")} />;
   }
 
   const allKeys = displayed.map((r, i) => resultKey(r, page * PAGE_SIZE + i));
@@ -172,13 +170,13 @@ export default function ResultsTable({
                   />
                 </th>
               )}
-              <th className="th-sortable" onClick={() => handleSort("source")}>Source{sortIndicator("source")}</th>
-              <th className="th-sortable" onClick={() => handleSort("name")}>Name{sortIndicator("name")}</th>
+              <th className="th-sortable" onClick={() => handleSort("source")}>{t("data.source")}{sortIndicator("source")}</th>
+              <th className="th-sortable" onClick={() => handleSort("name")}>{t("data.name")}{sortIndicator("name")}</th>
               <th className="th-sortable" onClick={() => handleSort("ra")}>RA (&deg;){sortIndicator("ra")}</th>
               <th className="th-sortable" onClick={() => handleSort("dec")}>Dec (&deg;){sortIndicator("dec")}</th>
-              <th className="th-sortable" onClick={() => handleSort("object_type")}>Type{sortIndicator("object_type")}</th>
-              <th className="th-sortable" onClick={() => handleSort("magnitude")}>Mag{sortIndicator("magnitude")}</th>
-              <th className="th-sortable" onClick={() => handleSort("redshift")} title="Redshift. Note: SDSS photometric data and Gaia do not include redshift. Use SIMBAD or NED for redshift queries.">Redshift{sortIndicator("redshift")}</th>
+              <th className="th-sortable" onClick={() => handleSort("object_type")}>{t("data.type")}{sortIndicator("object_type")}</th>
+              <th className="th-sortable" onClick={() => handleSort("magnitude")}>{t("data.magnitude")}{sortIndicator("magnitude")}</th>
+              <th className="th-sortable" onClick={() => handleSort("redshift")}>{t("data.redshift")}{sortIndicator("redshift")}</th>
               <th></th>
             </tr>
           </thead>
@@ -230,7 +228,7 @@ export default function ResultsTable({
                           {isFetching ? (
                             <span className="spinner spinner-blue" />
                           ) : (
-                            "Fetch FITS"
+                            t("data.fetch_fits")
                           )}
                         </button>
                       )}
@@ -245,13 +243,13 @@ export default function ResultsTable({
       {totalPages > 1 && (
         <div className="results-pagination">
           <button className="btn-secondary btn-small" disabled={page === 0} onClick={() => setPage(page - 1)}>
-            Previous
+            {t("common.previous")}
           </button>
           <span className="results-page-info">
-            Page {page + 1} of {totalPages} ({sorted.length} results)
+            {page + 1} / {totalPages} ({sorted.length} {t("search.results")})
           </span>
           <button className="btn-secondary btn-small" disabled={page >= totalPages - 1} onClick={() => setPage(page + 1)}>
-            Next
+            {t("common.next")}
           </button>
         </div>
       )}

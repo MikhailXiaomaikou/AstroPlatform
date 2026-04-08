@@ -21,6 +21,7 @@ import type {
   CrossMatchResult,
 } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
+import { useI18n } from "../../i18n";
 import SearchBar from "./SearchBar";
 import ResultsTable from "./ResultsTable";
 import FITSPreview from "../../components/fits/FITSPreview";
@@ -38,6 +39,7 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
 
 export default function DataBrowser() {
   const { user } = useAuth();
+  const { t } = useI18n();
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
@@ -450,13 +452,13 @@ ${rows}
 
   return (
     <div className="data-browser">
-      <h1>Data Browser</h1>
+      <h1>{t("nav.data_browser")}</h1>
       <div className="page-tabs">
         <button className={`page-tab${activeTab === "search" ? " active" : ""}`} onClick={() => setActiveTab("search")}>
-          Search
+          {t("search.search")}
         </button>
         <button className={`page-tab${activeTab === "files" ? " active" : ""}`} onClick={() => setActiveTab("files")}>
-          My Files
+          {t("data.my_files")}
         </button>
       </div>
 

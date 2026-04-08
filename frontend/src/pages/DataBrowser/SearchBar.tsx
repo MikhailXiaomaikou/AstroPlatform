@@ -4,6 +4,7 @@ import {
   type AdvancedSearchRequest,
   type SpectralLineInfo,
 } from "../../api/client";
+import { useI18n } from "../../i18n";
 
 interface Props {
   onSearch: (query: string, sources: string[], radius: number) => void;
@@ -57,6 +58,7 @@ const OBSERVATION_TYPES = [
 ];
 
 export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props) {
+  const { t } = useI18n();
   const [mode, setMode] = useState<"quick" | "advanced">("quick");
 
   // Quick search state
@@ -151,14 +153,14 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
           className={`mode-btn${mode === "quick" ? " active" : ""}`}
           onClick={() => setMode("quick")}
         >
-          Quick Search
+          {t("search.quick")}
         </button>
         <button
           type="button"
           className={`mode-btn${mode === "advanced" ? " active" : ""}`}
           onClick={() => setMode("advanced")}
         >
-          Advanced Search
+          {t("search.advanced")}
         </button>
       </div>
 
@@ -216,7 +218,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
             disabled={loading || !query.trim()}
           >
             {loading ? <span className="spinner" /> : null}
-            {loading ? "Searching\u2026" : "Search"}
+            {loading ? t("search.searching") : t("search.search")}
           </button>
         </form>
       ) : (
@@ -449,7 +451,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
             disabled={loading || advSources.length === 0}
           >
             {loading ? <span className="spinner" /> : null}
-            {loading ? "Searching\u2026" : "Advanced Search"}
+            {loading ? t("search.searching") : t("search.advanced")}
           </button>
         </form>
       )}

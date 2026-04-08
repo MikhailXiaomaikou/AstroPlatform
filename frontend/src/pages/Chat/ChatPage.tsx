@@ -17,6 +17,7 @@ import {
   type ChatSessionSummary,
 } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
+import { useI18n } from "../../i18n";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 interface DisplayMessage {
@@ -1034,6 +1035,7 @@ function saveChatHistory(messages: DisplayMessage[]) {
 }
 
 export default function ChatPage() {
+  const { t } = useI18n();
   const [hasKey, setHasKey] = useState(() => !!getStoredApiKey("anthropic"));
   const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
   const [input, setInput] = useState("");
@@ -1273,7 +1275,7 @@ export default function ChatPage() {
       <div className="chat-header">
         <div className="chat-header-row">
           <div>
-            <h2>AI Research Assistant</h2>
+            <h2>{t("nav.ai_assistant")}</h2>
             <p>
               Ask about astronomical objects, build pipelines, or run ADQL queries
             </p>
@@ -1283,15 +1285,15 @@ export default function ChatPage() {
               setShowSessions(!showSessions);
               if (!showSessions) listChatSessions().then(setSessions).catch(() => {});
             }}>
-              History
+              {t("chat.history")}
             </button>
             {messages.length > 0 && (
               <button className="btn-secondary btn-small" onClick={handleSaveSession}>
-                Save
+                {t("chat.save")}
               </button>
             )}
             <button className="btn-secondary btn-small" onClick={handleNewChat}>
-              New Chat
+              {t("chat.new_chat")}
             </button>
           </div>
         </div>
@@ -1432,7 +1434,7 @@ export default function ChatPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={dragOver ? "Drop FITS file here..." : "Ask about astronomical data, or drop a FITS file..."}
+            placeholder={dragOver ? "Drop FITS file here..." : t("chat.placeholder")}
             rows={1}
             disabled={loading}
           />
@@ -1446,7 +1448,7 @@ export default function ChatPage() {
           </button>
         </div>
         <span className="chat-input-hint">
-          Enter to send, Shift+Enter for new line. Drop a FITS file to analyze.
+          {t("chat.hint")}
         </span>
       </div>
     </div>
