@@ -202,7 +202,7 @@ async def search_data(
     async def _search_with_timeout(source: str):
         return await asyncio.wait_for(
             get_connector(source).search(q, ra=ra, dec=dec, radius=radius),
-            timeout=45.0,
+            timeout=20.0,
         )
 
     tasks = [_search_with_timeout(s) for s in source_list]
@@ -542,14 +542,14 @@ async def advanced_search(
                     dec=search_dec,
                     radius=body.radius,
                 ),
-                timeout=45.0,
+                timeout=20.0,
             )
 
         return await asyncio.wait_for(
             connector.search(
                 query_text, ra=search_ra, dec=search_dec, radius=body.radius
             ),
-            timeout=45.0,
+            timeout=20.0,
         )
 
     tasks = [_search_source(s) for s in source_list]
@@ -974,7 +974,8 @@ async def get_object_detail(
     obj_dec = detail.get("dec") or dec or 0.0
 
     # 2. Parallel: cross-IDs + cone searches + ADS
-    survey_sources = ["sdss", "gaia", "mast", "ned", "2mass", "chandra", "allwise"]
+    # Fast sources only — skip chandra (404 retries) and mast (frequent timeouts)
+    survey_sources = ["sdss", "gaia", "ned", "2mass", "allwise"]
     search_radius = 0.005  # ~18 arcsec
 
     async def _cone_search(src: str):
@@ -982,7 +983,7 @@ async def get_object_detail(
             conn = get_connector(src)
             results = await asyncio.wait_for(
                 conn.search(name, ra=obj_ra, dec=obj_dec, radius=search_radius),
-                timeout=15.0,
+                timeout=8.0,
             )
             return src, results
         except Exception:
