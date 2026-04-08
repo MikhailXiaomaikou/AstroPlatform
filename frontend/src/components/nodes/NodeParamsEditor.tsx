@@ -88,6 +88,20 @@ const NODE_PARAM_DEFS: Record<string, ParamDef[]> = {
       default: "spectrum_overlay",
     },
   ],
+  CustomScript: [
+    {
+      key: "code",
+      label: "Python Code",
+      type: "text",
+      default: "# Access upstream data via input_data dict\n# Assign output to 'result' variable\nimport numpy as np\nresult = input_data",
+    },
+    {
+      key: "output_key",
+      label: "Output Variable Name",
+      type: "text",
+      default: "result",
+    },
+  ],
 };
 
 /* ── component ── */

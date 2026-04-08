@@ -188,6 +188,10 @@ export default function DataBrowser() {
       } else {
         msg += "unknown error";
       }
+      // Add source-specific tips
+      if (source === "sdss" && msg.includes("503")) {
+        msg += " (SDSS SkyServer may be temporarily overloaded. Try again in a few minutes.)";
+      }
       setError(msg);
     } finally {
       setFetchingId(null);

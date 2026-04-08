@@ -3,11 +3,10 @@ import {
   uploadFITS,
   browseFITS,
   deleteFITS,
-  getFITSHeader,
-  getFITSSpectrum,
   downloadFITSUrl,
 } from "../../api/client";
-import type { FITSFileInfo, FITSHeader, FITSSpectrum } from "../../api/client";
+import type { FITSFileInfo } from "../../api/client";
+import FITSPreviewComponent from "./FITSPreview";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -26,8 +25,6 @@ export default function FITSBrowser({ onSelectFile }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("");
   const [previewPath, setPreviewPath] = useState<string | null>(null);
-  const [previewHeader, setPreviewHeader] = useState<FITSHeader | null>(null);
-  const [previewSpectrum, setPreviewSpectrum] = useState<FITSSpectrum | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -73,8 +70,6 @@ export default function FITSBrowser({ onSelectFile }: Props) {
         const deleted = files.find((f) => f.id === fileId);
         if (deleted && deleted.fits_path === previewPath) {
           setPreviewPath(null);
-          setPreviewHeader(null);
-          setPreviewSpectrum(null);
         }
       }
     } catch (e) {
@@ -82,20 +77,8 @@ export default function FITSBrowser({ onSelectFile }: Props) {
     }
   };
 
-  const handlePreview = async (fitsPath: string) => {
-    setPreviewPath(fitsPath);
-    setPreviewHeader(null);
-    setPreviewSpectrum(null);
-    try {
-      const [header, spectrum] = await Promise.all([
-        getFITSHeader(fitsPath),
-        getFITSSpectrum(fitsPath),
-      ]);
-      setPreviewHeader(header);
-      setPreviewSpectrum(spectrum);
-    } catch {
-      // Preview failed, that's OK
-    }
+  const handlePreview = (fitsPath: string) => {
+    setPreviewPath(previewPath === fitsPath ? null : fitsPath);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -290,35 +273,15 @@ export default function FITSBrowser({ onSelectFile }: Props) {
         ))}
       </div>
 
-      {/* Preview panel */}
+      {/* Full FITS Preview */}
       {previewPath && (
-        <div style={{ marginTop: "1rem", borderTop: "1px solid #444", paddingTop: "1rem" }}>
-          <h4 style={{ color: "#4fc3f7", margin: "0 0 0.5rem" }}>
-            Preview: {previewPath.split("/").pop()}
-          </h4>
-          {previewHeader && (
-            <div style={{ marginBottom: "0.5rem" }}>
-              <strong style={{ color: "#aaa", fontSize: "0.8rem" }}>
-                HDUs: {previewHeader.hdus.length}
-              </strong>
-              <div style={{ maxHeight: 150, overflowY: "auto", fontSize: "0.75rem", color: "#999" }}>
-                {previewHeader.hdus.map((hdu) => (
-                  <div key={hdu.index}>
-                    [{hdu.index}] {hdu.name} ({hdu.type})
-                    {hdu.shape && ` — shape: ${hdu.shape.join("x")}`}
-                    {hdu.columns && ` — ${hdu.columns.length} columns`}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {previewSpectrum && previewSpectrum.type !== "empty" && (
-            <div style={{ fontSize: "0.8rem", color: "#aaa" }}>
-              Type: {previewSpectrum.type}
-              {previewSpectrum.columns && ` — Columns: ${previewSpectrum.columns.join(", ")}`}
-              {previewSpectrum.shape && ` — Shape: ${previewSpectrum.shape.join("x")}`}
-            </div>
-          )}
+        <div style={{ marginTop: "1rem" }}>
+          <FITSPreviewComponent
+            filename={previewPath.split("/").pop() || ""}
+            fitsPath={previewPath}
+            source="upload"
+            objectId={previewPath.split("/").pop() || ""}
+          />
         </div>
       )}
     </div>

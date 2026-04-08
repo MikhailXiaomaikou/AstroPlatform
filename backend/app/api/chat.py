@@ -109,6 +109,7 @@ Available node types and their params:
 - **ImageStack**: Stack multiple images. params: {"method": "median"|"mean"|"sigma_clip"}
 - **Plot**: Generate static PNG plot. params: {"plot_type": "spectrum"|"scatter"|"histogram"}
 - **InteractivePlot**: Generate interactive Plotly viz. params: {"plot_type": "spectrum"|"scatter"|"histogram"|"hr_diagram"}
+- **CustomScript**: Run custom Python code. params: {"code": "python code here", "output_key": "result"}. Code has access to input_data, numpy, scipy, astropy, astro_analysis toolkit.
 
 ### DAG format
 Nodes: {"id": "n1", "type": "LoadData", "position": {"x": 0, "y": 150}, "data": {"label": "Load Data", "params": {...}}}
@@ -130,11 +131,16 @@ User: "fit the SED and plot it"
 → generate_pipeline with:
   n1: LoadData → n2: SEDFit(model="blackbody") → n3: InteractivePlot(plot_type="spectrum")
 
+User: "build a [C II] spectral line analysis pipeline"
+→ generate_pipeline with:
+  n1: LoadData → n2: Denoise(sigma=2.0) → n3: SpectralFit(model="gaussian", region_min=157.0, region_max=158.5)
+  → n4: EquivalentWidth(line_center=157.74) → n5: InteractivePlot
+
+User: "add a custom analysis step that computes line-to-continuum ratio"
+→ generate_pipeline including CustomScript node with appropriate Python code
+
 User: "add a denoise step before the spectral fit"
 → modify_pipeline: add_node Denoise between LoadData and SpectralFit
-
-User: "change the sigma to 5"
-→ modify_pipeline: update_params on Denoise node, set sigma=5.0
 
 User: "review this pipeline"
 → comment_pipeline with review feedback

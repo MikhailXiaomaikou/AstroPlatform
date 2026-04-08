@@ -151,6 +151,7 @@ async def list_node_types():
         {"type": "PhotCalibrate", "label": "Phot. Calibrate", "description": "Apply photometric calibration", "inputs": 1, "outputs": 1},
         {"type": "ImageStack", "label": "Image Stack", "description": "Stack/combine multiple images", "inputs": 1, "outputs": 1},
         {"type": "InteractivePlot", "label": "Interactive Plot", "description": "Generate interactive Plotly visualization", "inputs": 1, "outputs": 1},
+        {"type": "CustomScript", "label": "Custom Script", "description": "Run custom Python code (numpy, scipy, astropy)", "inputs": 1, "outputs": 1},
     ]
 
 
