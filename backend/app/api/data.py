@@ -1439,12 +1439,28 @@ async def fetch_object(
         raise HTTPException(status_code=400, detail=str(e))
 
     try:
-        fits_file = await connector.fetch(object_id)
+        fits_file = await asyncio.wait_for(connector.fetch(object_id), timeout=30.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail=f"Timeout fetching from {source} — the external service took too long")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch from {source}: {e}")
+        logger.exception("Fetch from %s failed for %s", source, object_id)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch from {source}: {type(e).__name__}: {e}")
 
-    fits_path = f"{source}/{object_id}/{uuid.uuid4().hex}.fits"
-    upload_fits(fits_path, fits_file.data)
+    fits_path = f"{source}/{object_id.replace('/', '_')}/{uuid.uuid4().hex}.fits"
+    try:
+        upload_fits(fits_path, fits_file.data)
+    except Exception as e:
+        logger.warning("Failed to store FITS locally (%s): %s", fits_path, e)
+        # Still return success — the data was fetched even if storage failed
+        return FetchResult(
+            source=source,
+            object_id=object_id,
+            fits_path="",
+            filename=fits_file.filename,
+            file_id=None,
+        )
 
     # Save to database if user is authenticated
     file_id = None
