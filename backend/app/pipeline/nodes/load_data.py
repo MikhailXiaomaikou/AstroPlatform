@@ -21,6 +21,19 @@ def load_data(input_data: dict | None, params: dict) -> dict:
     if not fits_path:
         raise ValueError("LoadData requires 'fits_path' in params or input_data")
 
+    # If fits_path is a directory, find the first .fits file inside
+    from pathlib import Path as _Path
+    storage_dir = _Path(settings.local_storage_dir) if 'settings' in dir() else None
+    try:
+        from app.config import settings as _cfg
+        full = _Path(_cfg.local_storage_dir) / fits_path
+        if full.is_dir():
+            fits_files = list(full.glob("*.fits"))
+            if fits_files:
+                fits_path = str(fits_files[0].relative_to(_Path(_cfg.local_storage_dir)))
+    except Exception:
+        pass
+
     try:
         raw = download_fits(fits_path)
     except FileNotFoundError:
@@ -34,14 +47,20 @@ def load_data(input_data: dict | None, params: dict) -> dict:
             if source in CONNECTORS_KEYS:
                 try:
                     connector = get_connector(source)
-                    loop = asyncio.new_event_loop()
-                    fits_file = loop.run_until_complete(connector.fetch(obj_id))
-                    loop.close()
-                    # Store for future use
-                    import uuid
-                    store_path = f"{source}/{obj_id.replace('/', '_')}/{uuid.uuid4().hex}.fits"
-                    _upload(store_path, fits_file.data)
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        fits_file = pool.submit(
+                            lambda: asyncio.run(connector.fetch(obj_id))
+                        ).result(timeout=30)
                     raw = fits_file.data
+                    # Store for future use
+                    import uuid as _uuid
+                    store_path = f"{source}/{obj_id.replace('/', '_')}/{_uuid.uuid4().hex}.fits"
+                    try:
+                        _upload(store_path, raw)
+                        fits_path = store_path  # update path to actual file
+                    except Exception:
+                        pass  # storage failed, we still have the data
                 except Exception as e:
                     raise ValueError(f"LoadData: FITS file not found locally and auto-fetch from {source} failed: {e}")
             else:

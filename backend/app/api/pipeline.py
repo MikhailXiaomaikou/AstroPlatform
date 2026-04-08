@@ -222,7 +222,7 @@ async def run_pipeline(
     req: RunRequest,
     db: AsyncSession = Depends(get_db),
     user: User | None = Depends(get_optional_user),
-    async_mode: bool = Query(True, description="When True, dispatch via Celery and return immediately"),
+    async_mode: bool = Query(False, description="When True, dispatch via Celery (requires Redis)"),
 ):
     """Validate DAG and execute pipeline.
 
