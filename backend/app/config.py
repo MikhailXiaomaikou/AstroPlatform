@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 60 * 24  # 24 hours
 
     # Local-mode: use filesystem instead of MinIO
-    local_storage_dir: str = str(_PROJECT_DIR / "data" / "fits")
+    # In Docker: /app is WORKDIR, so use /app/data/fits
+    local_storage_dir: str = str(Path("/app/data/fits") if os.getenv("ENV") == "production" else _PROJECT_DIR / "data" / "fits")
 
     # Pipeline execution mode: "sync" or "celery"
     pipeline_mode: str = "sync"
