@@ -172,9 +172,29 @@ export default function ADQLPage() {
           {loading ? "Running…" : "Run Query"}
         </button>
         {result && (
-          <button className="btn-secondary" onClick={downloadCSV}>
-            Download CSV ({result.row_count} rows)
-          </button>
+          <>
+            <button className="btn-secondary" onClick={downloadCSV}>
+              Download CSV ({result.row_count} rows)
+            </button>
+            <button className="btn-secondary" onClick={() => {
+              // Export as Jupyter notebook
+              const results = Array.from({ length: Math.min(result.row_count, 200) }).map((_, i) => {
+                const row: Record<string, unknown> = {};
+                for (const col of result.columns) { row[col] = result.data[col]?.[i]; }
+                return row;
+              });
+              import("../../api/client").then(({ exportSearchNotebook }) => {
+                exportSearchNotebook(query, results).then(blob => {
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a"); a.href = url;
+                  a.download = `adql_${result.row_count}_rows.ipynb`; a.click();
+                  URL.revokeObjectURL(url);
+                });
+              });
+            }}>
+              Jupyter Notebook
+            </button>
+          </>
         )}
       </div>
 

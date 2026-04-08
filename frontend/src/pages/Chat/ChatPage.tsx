@@ -714,6 +714,11 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     return (
       <div style={{ fontSize: "0.78rem" }}>
         Pipeline <strong>{String(result.name)}</strong>: {dag?.nodes?.map(n => n.type).join(" → ")}
+        <div style={{ marginTop: 4 }}>
+          <a href="/pipeline" style={{ color: "var(--color-accent)", fontSize: "0.75rem" }}>
+            Open in Pipeline Editor
+          </a>
+        </div>
       </div>
     );
   }

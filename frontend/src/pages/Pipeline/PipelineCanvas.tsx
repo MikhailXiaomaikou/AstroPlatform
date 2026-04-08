@@ -31,6 +31,7 @@ import {
   getTemplateVersions,
   listSchedules,
   runPipeline,
+  getPipelineRun,
   saveTemplateVersion,
   toggleSchedule,
   type DagDiffResult,
@@ -58,6 +59,7 @@ export default function PipelineCanvas() {
   const [availableTypes, setAvailableTypes] = useState<NodeType[]>([]);
   const [templates, setTemplates] = useState<PipelineTemplate[]>([]);
   const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [runResults, setRunResults] = useState<Record<string, unknown> | null>(null);
   const [inputDataId, setInputDataId] = useState("example/fits/path.fits");
   const [nodeProgress, setNodeProgress] = useState<Record<string, NodeProgress>>({});
   const wsRef = useRef<WebSocket | null>(null);
@@ -359,6 +361,10 @@ export default function PipelineCanvas() {
             } else if (type === "run_complete") {
               setRunStatus(`Run ${res.run_id} — completed`);
               setLastRunId(res.run_id);
+              if (data.results) setRunResults(data.results as Record<string, unknown>);
+              getPipelineRun(res.run_id).then((run) => {
+                if (run.results) setRunResults(run.results as Record<string, unknown>);
+              }).catch(() => {});
               // Mark all remaining as completed
               setNodeProgress((prev) => {
                 const updated = { ...prev };
@@ -380,6 +386,13 @@ export default function PipelineCanvas() {
         // Sync mode — all done
         setRunStatus(`Run ${res.run_id} — ${res.status}`);
         setLastRunId(res.run_id);
+        if (res.results) {
+          setRunResults(res.results as Record<string, unknown>);
+        }
+        // Fetch full results
+        getPipelineRun(res.run_id).then((run: Record<string, unknown>) => {
+          if (run.results) setRunResults(run.results as Record<string, unknown>);
+        }).catch(() => {});
         setNodeProgress((prev) => {
           const updated = { ...prev };
           for (const key of Object.keys(updated)) {
@@ -544,6 +557,60 @@ export default function PipelineCanvas() {
                   PDF
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Run Results Panel */}
+          {runResults && lastRunId && (
+            <div className="pipeline-results-panel">
+              <h4>Run Results</h4>
+              {Object.entries(runResults).map(([nodeId, result]) => {
+                const r = result as Record<string, unknown>;
+                const hasError = !!r.error;
+                const nodeType = nodes.find(n => n.id === nodeId)?.data?.nodeType as string || nodeId;
+                return (
+                  <details key={nodeId} className={`pipeline-result-node${hasError ? " result-error" : ""}`} open={hasError}>
+                    <summary>
+                      <span className={`result-status ${hasError ? "status-err" : "status-ok"}`}>
+                        {hasError ? "\u2717" : "\u2713"}
+                      </span>
+                      {String(nodeType)} <small>({nodeId})</small>
+                    </summary>
+                    <div className="result-content">
+                      {hasError && <div className="result-error-msg">{String(r.error)}</div>}
+                      {r.data && typeof r.data === "object" ? (
+                        <div className="result-data-summary">
+                          {Object.entries(r.data as Record<string, unknown>).map(([k, v]) => (
+                            <div key={k} className="result-data-row">
+                              <span className="result-key">{k}</span>
+                              <span className="result-val">
+                                {Array.isArray(v) ? `[${(v as unknown[]).length} items]` : String(v).slice(0, 100)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {r.redshift_result ? (
+                        <div className="result-highlight">
+                          z = {String((r.redshift_result as Record<string, unknown>).best_z)}
+                          {" "}(confidence: {String((r.redshift_result as Record<string, unknown>).confidence)})
+                        </div>
+                      ) : null}
+                      {r.sed_fit_result && (r.sed_fit_result as Record<string, unknown>).success ? (
+                        <div className="result-highlight">
+                          SED: {String((r.sed_fit_result as Record<string, unknown>).model)}
+                          {" "}\u03C7\u00B2 = {String((r.sed_fit_result as Record<string, unknown>).reduced_chi_squared)}
+                        </div>
+                      ) : null}
+                      {r.equivalent_width_result ? (
+                        <div className="result-highlight">
+                          EW = {String((r.equivalent_width_result as Record<string, unknown>).ew_value)} \u00C5
+                        </div>
+                      ) : null}
+                    </div>
+                  </details>
+                );
+              })}
             </div>
           )}
         </div>
