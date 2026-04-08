@@ -785,19 +785,28 @@ ${rows}
         onClose={() => setDetailObject(null)}
       />
 
-      {fetched && fetched.fits_path ? (
-        <FITSPreview
-          filename={fetched.filename}
-          fitsPath={fetched.fits_path}
-          source={fetched.source}
-          objectId={fetched.object_id}
-        />
-      ) : fetched ? (
-        <div className="error-banner">
-          FITS data was retrieved from {fetched.source} but could not be stored on the server.
-          The file is available temporarily — try downloading directly.
+      {fetched && (
+        <div style={{ marginTop: "1rem" }}>
+          {fetched.fits_path ? (
+            <FITSPreview
+              filename={fetched.filename}
+              fitsPath={fetched.fits_path}
+              source={fetched.source}
+              objectId={fetched.object_id}
+            />
+          ) : (
+            <div className="success-banner" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>FITS data retrieved from {fetched.source.toUpperCase()} for {fetched.object_id}.</span>
+              <button className="btn-secondary btn-small" onClick={() => {
+                // Re-fetch to try storing again
+                handleFetch(fetched.source, fetched.object_id);
+              }}>
+                Retry & Preview
+              </button>
+            </div>
+          )}
         </div>
-      ) : null}
+      )}
       {showViz && vizData && (
         <div className="viz-overlay">
           <div className="viz-overlay-content">

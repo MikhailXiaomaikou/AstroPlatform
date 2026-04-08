@@ -463,6 +463,14 @@ export async function getTemplateDiff(
   return data;
 }
 
+export async function batchRunPipeline(
+  dag: { nodes: DagNode[]; edges: DagEdge[] },
+  inputDataIds: string[],
+): Promise<{ results: Array<Record<string, unknown>>; total: number; succeeded: number; failed: number }> {
+  const { data } = await api.post("/api/pipeline/batch-run", { dag, input_data_ids: inputDataIds });
+  return data;
+}
+
 export async function getPipelineRun(runId: string): Promise<Record<string, unknown>> {
   const { data } = await api.get(`/api/pipeline/${runId}`);
   return data;

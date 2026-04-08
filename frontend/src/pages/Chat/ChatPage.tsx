@@ -1314,6 +1314,22 @@ export default function ChatPage() {
             <button className="btn-secondary btn-small" onClick={handleNewChat}>
               {t("chat.new_chat")}
             </button>
+            {messages.length > 0 && (
+              <button className="btn-secondary btn-small" onClick={() => {
+                const lines = messages.map(m => {
+                  const role = m.role === "user" ? "**User:**" : "**AI:**";
+                  return `${role}\n\n${m.content}\n`;
+                });
+                const md = `# AI Research Chat\n\n${lines.join("\n---\n\n")}`;
+                const blob = new Blob([md], { type: "text/markdown" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a"); a.href = url;
+                a.download = "ai_research_chat.md"; a.click();
+                URL.revokeObjectURL(url);
+              }}>
+                {t("common.export")}
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -292,6 +292,61 @@ async def run_pipeline(
     return RunResponse(run_id=run_id_str, status="completed", results=safe_results, warnings=dag_warnings)
 
 
+class BatchRunRequest(BaseModel):
+    dag: dict
+    input_data_ids: list[str]
+
+
+class BatchRunResult(BaseModel):
+    results: list[dict]
+    total: int
+    succeeded: int
+    failed: int
+
+
+@router.post("/batch-run", response_model=BatchRunResult)
+@limiter.limit("5/minute")
+async def batch_run_pipeline(
+    request: Request,
+    req: BatchRunRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
+    """Run the same pipeline on multiple input files. Max 20 per batch."""
+    if len(req.input_data_ids) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 inputs per batch")
+
+    if "nodes" not in req.dag or "edges" not in req.dag:
+        raise HTTPException(status_code=400, detail="DAG must have 'nodes' and 'edges'")
+
+    try:
+        validate_dag(req.dag)
+    except DAGValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    results = []
+    succeeded = 0
+    failed = 0
+
+    for input_id in req.input_data_ids:
+        run_id = str(uuid.uuid4())
+        try:
+            node_results = execute_dag(req.dag, input_id, run_id)
+            safe = _trim_results(node_results)
+            results.append({"input": input_id, "run_id": run_id, "status": "completed", "results": safe})
+            succeeded += 1
+        except Exception as e:
+            results.append({"input": input_id, "run_id": run_id, "status": "failed", "error": str(e)})
+            failed += 1
+
+    return BatchRunResult(
+        results=results,
+        total=len(req.input_data_ids),
+        succeeded=succeeded,
+        failed=failed,
+    )
+
+
 @router.get("/{run_id}")
 async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
     try:
