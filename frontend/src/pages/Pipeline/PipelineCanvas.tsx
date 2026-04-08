@@ -56,6 +56,50 @@ export default function PipelineCanvas() {
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  // Undo/redo history
+  const historyRef = useRef<Array<{ nodes: Node[]; edges: Edge[] }>>([]);
+  const historyIdxRef = useRef(-1);
+  const skipHistoryRef = useRef(false);
+
+  const pushHistory = useCallback(() => {
+    if (skipHistoryRef.current) return;
+    const snap = { nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) };
+    historyRef.current = historyRef.current.slice(0, historyIdxRef.current + 1);
+    historyRef.current.push(snap);
+    if (historyRef.current.length > 30) historyRef.current.shift();
+    historyIdxRef.current = historyRef.current.length - 1;
+  }, [nodes, edges]);
+
+  const undo = useCallback(() => {
+    if (historyIdxRef.current <= 0) return;
+    historyIdxRef.current--;
+    const snap = historyRef.current[historyIdxRef.current];
+    skipHistoryRef.current = true;
+    setNodes(snap.nodes);
+    setEdges(snap.edges);
+    setTimeout(() => { skipHistoryRef.current = false; }, 100);
+  }, [setNodes, setEdges]);
+
+  const redo = useCallback(() => {
+    if (historyIdxRef.current >= historyRef.current.length - 1) return;
+    historyIdxRef.current++;
+    const snap = historyRef.current[historyIdxRef.current];
+    skipHistoryRef.current = true;
+    setNodes(snap.nodes);
+    setEdges(snap.edges);
+    setTimeout(() => { skipHistoryRef.current = false; }, 100);
+  }, [setNodes, setEdges]);
+
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); redo(); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undo, redo]);
+
   const [availableTypes, setAvailableTypes] = useState<NodeType[]>([]);
   const [templates, setTemplates] = useState<PipelineTemplate[]>([]);
   const [runStatus, setRunStatus] = useState<string | null>(null);
@@ -184,8 +228,11 @@ export default function PipelineCanvas() {
   }, []);
 
   const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge({ ...connection, animated: true }, eds)),
-    [setEdges]
+    (connection: Connection) => {
+      pushHistory();
+      setEdges((eds) => addEdge({ ...connection, animated: true }, eds));
+    },
+    [setEdges, pushHistory]
   );
 
   const onDragOver = useCallback((e: React.DragEvent) => {

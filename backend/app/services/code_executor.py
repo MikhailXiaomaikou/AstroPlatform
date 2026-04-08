@@ -237,6 +237,16 @@ def execute_python(code: str, context: dict | None = None) -> CodeExecutionResul
         for fig_num in fig_nums:
             fig = plt.figure(fig_num)
             buf = io.BytesIO()
+            # Use dark theme for figures (matches default dark UI)
+            fig.patch.set_facecolor("#1c1c1e")
+            for ax in fig.get_axes():
+                ax.set_facecolor("#2c2c2e")
+                ax.tick_params(colors="#ccc")
+                ax.xaxis.label.set_color("#ccc")
+                ax.yaxis.label.set_color("#ccc")
+                ax.title.set_color("#eee")
+                for spine in ax.spines.values():
+                    spine.set_edgecolor("#555")
             fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
                        facecolor="#1c1c1e", edgecolor="none")
             buf.seek(0)

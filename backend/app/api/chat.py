@@ -7,9 +7,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from starlette.requests import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user, get_optional_user
+from app.rate_limit import limiter
 from app.models.database import get_db
 from app.models.schemas import User
 
@@ -255,6 +257,90 @@ def _parse_actions(text: str) -> list[dict]:
     return actions
 
 
+@router.post("/message/stream")
+@limiter.limit("15/minute")
+async def chat_message_stream(
+    request: Request,
+    req: ChatRequest,
+    user: User | None = Depends(get_optional_user),
+):
+    """Streaming version — sends SSE events as AI processes tools."""
+    from starlette.responses import StreamingResponse
+
+    async def generate():
+        # Reuse the same logic but yield intermediate results
+        context_key = (req.context or {}).get("api_key") if req.context else None
+        user_keys = (user.api_keys or {}) if user else {}
+        api_key = context_key or user_keys.get("anthropic") or (user.anthropic_api_key if user and user.anthropic_api_key else None) or ANTHROPIC_API_KEY
+        if not api_key:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'No API key configured'})}\n\n"
+            return
+
+        import anthropic
+        from app.services.ai_tools import TOOLS, execute_tool
+
+        client = anthropic.Anthropic(api_key=api_key)
+        claude_messages: list[dict] = [{"role": m.role, "content": m.content} for m in req.messages]
+
+        system = SYSTEM_PROMPT
+        if req.context:
+            safe_context = {k: v for k, v in req.context.items() if k != "api_key"}
+            if safe_context:
+                ctx_str = json.dumps(safe_context, indent=2, default=str)[:2000]
+                system += f"\n\nCurrent user context:\n{ctx_str}"
+
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
+
+        try:
+            for _iteration in range(5):
+                response = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=4096,
+                    system=system,
+                    messages=claude_messages,
+                    tools=TOOLS,
+                )
+
+                tool_calls = []
+                for block in response.content:
+                    if block.type == "text":
+                        yield f"data: {json.dumps({'type': 'text', 'content': block.text})}\n\n"
+                    elif block.type == "tool_use":
+                        tool_calls.append({"id": block.id, "name": block.name, "input": block.input})
+                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': block.name, 'input': block.input})}\n\n"
+
+                if not tool_calls:
+                    break
+
+                assistant_content = []
+                for block in response.content:
+                    if block.type == "text":
+                        assistant_content.append({"type": "text", "text": block.text})
+                    elif block.type == "tool_use":
+                        assistant_content.append({"type": "tool_use", "id": block.id, "name": block.name, "input": block.input})
+                claude_messages.append({"role": "assistant", "content": assistant_content})
+
+                tool_result_blocks = []
+                for tc in tool_calls:
+                    result = await execute_tool(tc["name"], tc["input"], api_key)
+                    result_str = json.dumps(result, default=str)
+                    if len(result_str) > 8000:
+                        result_str = json.dumps({"truncated": True, "summary": str(result)[:2000]}, default=str)
+                    tool_result_blocks.append({"type": "tool_result", "tool_use_id": tc["id"], "content": result_str})
+                    yield f"data: {json.dumps({'type': 'tool_result', 'tool': tc['name'], 'result': result})}\n\n"
+
+                claude_messages.append({"role": "user", "content": tool_result_blocks})
+                if response.stop_reason != "tool_use":
+                    break
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
 def _strip_actions_from_reply(text: str) -> str:
     """Remove <actions> blocks from the user-facing reply."""
     import re
@@ -262,7 +348,9 @@ def _strip_actions_from_reply(text: str) -> str:
 
 
 @router.post("/message", response_model=ChatResponse)
+@limiter.limit("15/minute")
 async def chat_message(
+    request: Request,
     req: ChatRequest,
     user: User | None = Depends(get_optional_user),
 ):
