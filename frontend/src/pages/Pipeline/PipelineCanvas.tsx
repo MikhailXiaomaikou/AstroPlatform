@@ -567,7 +567,9 @@ export default function PipelineCanvas() {
               {Object.entries(runResults).map(([nodeId, result]) => {
                 const r = result as Record<string, unknown>;
                 const hasError = !!r.error;
-                const nodeType = nodes.find(n => n.id === nodeId)?.data?.nodeType as string || nodeId;
+                const nodeType = nodes.find(n => n.id === nodeId)?.data?.nodeType as string
+                  || (r.node_id ? String(r.node_id) : null)
+                  || nodeId;
                 return (
                   <details key={nodeId} className={`pipeline-result-node${hasError ? " result-error" : ""}`} open={hasError}>
                     <summary>

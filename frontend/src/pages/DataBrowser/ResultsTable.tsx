@@ -220,17 +220,42 @@ export default function ResultsTable({
                     <td>{r.redshift?.toFixed(4) ?? "\u2014"}</td>
                     <td>
                       {r.object_id !== "error" && (
-                        <button
-                          className="btn-fetch"
-                          disabled={isFetching}
-                          onClick={() => onFetch(r.source, r.object_id)}
-                        >
-                          {isFetching ? (
-                            <span className="spinner spinner-blue" />
-                          ) : (
-                            t("data.fetch_fits")
-                          )}
-                        </button>
+                        <div style={{ display: "flex", gap: 3 }}>
+                          <button
+                            className="btn-fetch"
+                            disabled={isFetching}
+                            onClick={() => onFetch(r.source, r.object_id)}
+                          >
+                            {isFetching ? (
+                              <span className="spinner spinner-blue" />
+                            ) : (
+                              t("data.fetch_fits")
+                            )}
+                          </button>
+                          <button
+                            className="btn-fetch"
+                            style={{ background: "rgba(48,209,88,0.15)", color: "var(--color-green)" }}
+                            onClick={() => {
+                              const dag = {
+                                nodes: [
+                                  { id: "n1", type: "LoadData", position: { x: 0, y: 150 }, data: { label: "Load Data", params: { fits_path: `${r.source}/${r.object_id}` }, nodeType: "LoadData" } },
+                                  { id: "n2", type: "Denoise", position: { x: 300, y: 150 }, data: { label: "Denoise", params: { sigma: 3 }, nodeType: "Denoise" } },
+                                  { id: "n3", type: "InteractivePlot", position: { x: 600, y: 150 }, data: { label: "Plot", params: {}, nodeType: "InteractivePlot" } },
+                                ],
+                                edges: [
+                                  { id: "e1-2", source: "n1", target: "n2" },
+                                  { id: "e2-3", source: "n2", target: "n3" },
+                                ],
+                                inputDataId: `${r.source}/${r.object_id}`,
+                              };
+                              localStorage.setItem("pipeline_autosave", JSON.stringify(dag));
+                              window.location.href = "/pipeline";
+                            }}
+                            title="Open in Pipeline Editor"
+                          >
+                            Pipeline
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>

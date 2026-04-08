@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from "react";
-import { adqlQuery, listADQLServices, logOperation } from "../../api/client";
+import { adqlQuery, listADQLServices, logOperation, exportSearchNotebook } from "../../api/client";
 import type { ADQLResult } from "../../api/client";
 
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
@@ -179,21 +179,21 @@ export default function ADQLPage() {
             <button className="btn-secondary" onClick={downloadCSV}>
               Download CSV ({result.row_count} rows)
             </button>
-            <button className="btn-secondary" onClick={() => {
-              // Export as Jupyter notebook
-              const results = Array.from({ length: Math.min(result.row_count, 200) }).map((_, i) => {
-                const row: Record<string, unknown> = {};
-                for (const col of result.columns) { row[col] = result.data[col]?.[i]; }
-                return row;
-              });
-              import("../../api/client").then(({ exportSearchNotebook }) => {
-                exportSearchNotebook(query, results).then(blob => {
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a"); a.href = url;
-                  a.download = `adql_${result.row_count}_rows.ipynb`; a.click();
-                  URL.revokeObjectURL(url);
+            <button className="btn-secondary" onClick={async () => {
+              try {
+                const rows = Array.from({ length: Math.min(result.row_count, 200) }).map((_, i) => {
+                  const row: Record<string, unknown> = {};
+                  for (const col of result.columns) { row[col] = result.data[col]?.[i]; }
+                  return row;
                 });
-              });
+                const blob = await exportSearchNotebook(query, rows);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a"); a.href = url;
+                a.download = `adql_${result.row_count}_rows.ipynb`; a.click();
+                URL.revokeObjectURL(url);
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Notebook export failed");
+              }
             }}>
               Jupyter Notebook
             </button>
