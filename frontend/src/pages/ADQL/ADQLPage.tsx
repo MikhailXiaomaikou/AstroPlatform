@@ -1,6 +1,8 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { adqlQuery, listADQLServices, logOperation } from "../../api/client";
 import type { ADQLResult } from "../../api/client";
+
+const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 /* ── Templates (per service) ── */
 const TEMPLATES: Record<string, Array<{ label: string; tip: string; q: string }>> = {
@@ -75,6 +77,7 @@ export default function ADQLPage() {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState(getHistory);
   const [page, setPage] = useState(0);
+  const [showViz, setShowViz] = useState(false);
 
   useEffect(() => { listADQLServices().then(setServices).catch(() => {}); }, []);
 
@@ -194,9 +197,24 @@ export default function ADQLPage() {
             }}>
               Jupyter Notebook
             </button>
+            <button className="btn-secondary" onClick={() => setShowViz(!showViz)}>
+              {showViz ? "Hide Chart" : "Visualize"}
+            </button>
           </>
         )}
       </div>
+
+      {showViz && result && (
+        <div style={{ marginBottom: "1rem" }}>
+          <Suspense fallback={<div className="fits-loading">Loading visualization...</div>}>
+            <PlotBuilder
+              initialData={result.data as Record<string, unknown>}
+              initialChartType="correlation_scatter"
+              onClose={() => setShowViz(false)}
+            />
+          </Suspense>
+        </div>
+      )}
 
       {error && <div className="error-banner">{error}</div>}
 

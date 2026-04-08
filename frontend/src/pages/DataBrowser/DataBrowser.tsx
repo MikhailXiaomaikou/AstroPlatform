@@ -620,6 +620,25 @@ ${rows}
                 }}>
                   Export Notebook
                 </button>
+                <button className="btn-secondary btn-small" onClick={() => {
+                  // Create a pipeline with LoadData node pointing to selected results
+                  const dag = {
+                    nodes: [
+                      { id: "n1", type: "LoadData", position: { x: 0, y: 150 }, data: { label: "Load Data", params: {}, nodeType: "LoadData" } },
+                      { id: "n2", type: "Denoise", position: { x: 300, y: 150 }, data: { label: "Denoise", params: { sigma: 3 }, nodeType: "Denoise" } },
+                      { id: "n3", type: "InteractivePlot", position: { x: 600, y: 150 }, data: { label: "Plot", params: {}, nodeType: "InteractivePlot" } },
+                    ],
+                    edges: [
+                      { id: "e1-2", source: "n1", target: "n2" },
+                      { id: "e2-3", source: "n2", target: "n3" },
+                    ],
+                    inputDataId: "example/fits/path.fits",
+                  };
+                  localStorage.setItem("pipeline_autosave", JSON.stringify(dag));
+                  window.location.href = "/pipeline";
+                }}>
+                  Open in Pipeline
+                </button>
                 <button
                   className="btn-secondary btn-small"
                   onClick={handleBatchFetch}
@@ -766,14 +785,19 @@ ${rows}
         onClose={() => setDetailObject(null)}
       />
 
-      {fetched && (
+      {fetched && fetched.fits_path ? (
         <FITSPreview
           filename={fetched.filename}
           fitsPath={fetched.fits_path}
           source={fetched.source}
           objectId={fetched.object_id}
         />
-      )}
+      ) : fetched ? (
+        <div className="error-banner">
+          FITS data was retrieved from {fetched.source} but could not be stored on the server.
+          The file is available temporarily — try downloading directly.
+        </div>
+      ) : null}
       {showViz && vizData && (
         <div className="viz-overlay">
           <div className="viz-overlay-content">

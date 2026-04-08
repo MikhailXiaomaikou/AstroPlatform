@@ -35,7 +35,12 @@ export default function FITSBrowser({ onSelectFile }: Props) {
       const data = await browseFITS(filter || undefined);
       setFiles(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load files");
+      const msg = e instanceof Error ? e.message : "Failed to load files";
+      if (msg.includes("401") || msg.includes("Unauthorized")) {
+        setError("Sign in to manage your FITS files.");
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
