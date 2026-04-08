@@ -166,7 +166,19 @@ export default function DataBrowser() {
     setFetchingId(key);
     setError(null);
     try {
-      const result = await fetchObject(source, objectId);
+      // Retry once on network error
+      let result;
+      try {
+        result = await fetchObject(source, objectId);
+      } catch (firstErr) {
+        if (firstErr instanceof Error && firstErr.message === "Network Error") {
+          // Wait 2s and retry
+          await new Promise(r => setTimeout(r, 2000));
+          result = await fetchObject(source, objectId);
+        } else {
+          throw firstErr;
+        }
+      }
       setFetched(result);
     } catch (err: unknown) {
       let msg = `Failed to fetch FITS from ${source.toUpperCase()} for "${objectId}": `;
@@ -181,7 +193,10 @@ export default function DataBrowser() {
         }
       } else if (err instanceof Error) {
         if (err.message === "Network Error") {
-          msg += "cannot reach the backend server. Check your connection or try again later.";
+          const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
+          msg += `cannot reach ${apiUrl}. This may be caused by: network/firewall blocking, ad blocker, or the backend is restarting. Try refreshing the page.`;
+        } else if (err.message.includes("timeout")) {
+          msg += "request timed out. The external data source may be slow. Try again.";
         } else {
           msg += err.message;
         }
