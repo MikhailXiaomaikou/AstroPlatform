@@ -391,12 +391,29 @@ export default function PipelineCanvas() {
         }
         // Fetch full results
         getPipelineRun(res.run_id).then((run: Record<string, unknown>) => {
-          if (run.results) setRunResults(run.results as Record<string, unknown>);
+          if (run.results) {
+            setRunResults(run.results as Record<string, unknown>);
+            // Set per-node status based on actual results
+            const results = run.results as Record<string, Record<string, unknown>>;
+            setNodeProgress((prev) => {
+              const updated = { ...prev };
+              for (const [nid, r] of Object.entries(results)) {
+                if (r.error) {
+                  updated[nid] = { status: "error", error: String(r.error) };
+                } else {
+                  updated[nid] = { status: "completed" };
+                }
+              }
+              return updated;
+            });
+          }
         }).catch(() => {});
         setNodeProgress((prev) => {
           const updated = { ...prev };
           for (const key of Object.keys(updated)) {
-            updated[key] = { status: "completed" };
+            if (updated[key].status === "pending") {
+              updated[key] = { status: "completed" };
+            }
           }
           return updated;
         });

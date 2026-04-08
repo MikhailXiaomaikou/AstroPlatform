@@ -13,6 +13,7 @@ import {
   sampStatus,
   type BatchTarget,
 } from "../../api/client";
+import FITSPreview from "../../components/fits/FITSPreview";
 
 interface WorkspaceFile {
   id: string;
@@ -47,6 +48,7 @@ export default function WorkspacePage() {
   const [batchResults, setBatchResults] = useState<Record<string, unknown[]> | null>(null);
   const [batchLoading, setBatchLoading] = useState(false);
   const [sampConnected, setSampConnected] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -212,6 +214,52 @@ export default function WorkspacePage() {
               <dt>FITS Path</dt>
               <dd className="mono">{selectedFile.fits_path}</dd>
             </dl>
+
+            {/* Action buttons */}
+            <div style={{ display: "flex", gap: "0.4rem", margin: "0.75rem 0" }}>
+              {selectedFile.fits_path && (
+                <>
+                  <button className="btn-secondary btn-small" onClick={() => setShowPreview(!showPreview)}>
+                    {showPreview ? "Hide Preview" : "Preview FITS"}
+                  </button>
+                  <button className="btn-secondary btn-small" style={{ background: "rgba(48,209,88,0.15)", color: "var(--color-green)" }}
+                    onClick={() => {
+                      const dag = {
+                        nodes: [
+                          { id: "n1", type: "LoadData", position: { x: 0, y: 150 }, data: { label: "Load Data", params: { fits_path: selectedFile.fits_path }, nodeType: "LoadData" } },
+                          { id: "n2", type: "Denoise", position: { x: 300, y: 150 }, data: { label: "Denoise", params: { sigma: 3 }, nodeType: "Denoise" } },
+                          { id: "n3", type: "InteractivePlot", position: { x: 600, y: 150 }, data: { label: "Plot", params: {}, nodeType: "InteractivePlot" } },
+                        ],
+                        edges: [
+                          { id: "e1-2", source: "n1", target: "n2" },
+                          { id: "e2-3", source: "n2", target: "n3" },
+                        ],
+                        inputDataId: selectedFile.fits_path,
+                      };
+                      localStorage.setItem("pipeline_autosave", JSON.stringify(dag));
+                      window.location.href = "/pipeline";
+                    }}>
+                    Open in Pipeline
+                  </button>
+                  <a href={`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/api/data/fits/download?fits_path=${encodeURIComponent(selectedFile.fits_path)}`}
+                    download className="btn-secondary btn-small" style={{ textDecoration: "none" }}>
+                    Download
+                  </a>
+                </>
+              )}
+            </div>
+
+            {/* FITS Preview */}
+            {showPreview && selectedFile.fits_path && (
+              <div style={{ marginBottom: "1rem" }}>
+                <FITSPreview
+                  filename={selectedFile.object_id}
+                  fitsPath={selectedFile.fits_path}
+                  source={selectedFile.source}
+                  objectId={selectedFile.object_id}
+                />
+              </div>
+            )}
 
             {/* Tags */}
             <div className="detail-section">
