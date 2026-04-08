@@ -272,14 +272,18 @@ async def run_pipeline(
         except Exception as e:
             logger.warning(f"Celery dispatch failed, falling back to sync: {e}")
 
-    # Synchronous execution (async_mode=False or Celery dispatch failed)
+    # Synchronous execution in thread executor (avoids blocking async event loop)
+    import asyncio
+    loop = asyncio.get_running_loop()
     try:
-        node_results = execute_dag(req.dag, req.input_data_id, run_id_str)
+        node_results = await loop.run_in_executor(
+            None, execute_dag, req.dag, req.input_data_id, run_id_str
+        )
     except Exception as e:
         logger.exception(f"Pipeline run {run_id_str} failed")
         run.status = "failed"
         await db.commit()
-        raise HTTPException(status_code=500, detail=f"Pipeline failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Pipeline failed: {type(e).__name__}: {e}")
 
     # Trim results
     safe_results = _trim_results(node_results)
