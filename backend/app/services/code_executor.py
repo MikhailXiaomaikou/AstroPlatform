@@ -7,11 +7,13 @@ figures as base64 PNG images.
 
 import base64
 import io
+import inspect
 import logging
 import signal
 import sys
 import traceback
 from contextlib import contextmanager
+from types import ModuleType
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,7 @@ ALLOWED_MODULES = {
     # Core
     "math", "statistics", "collections", "itertools", "functools",
     "json", "csv", "re", "datetime", "io",
+    "inspect",
     # Data science
     "numpy", "np",
     "scipy", "scipy.optimize", "scipy.signal", "scipy.stats",
@@ -127,6 +130,21 @@ def _make_data_accessor():
         "load_fits": load_fits,
         "get_search_results": get_search_results,
     }
+
+
+def _should_persist_value(val) -> bool:
+    """Keep most Python objects alive across cells, but skip modules and figures."""
+    if isinstance(val, ModuleType):
+        return False
+    try:
+        import matplotlib.figure
+        if isinstance(val, matplotlib.figure.Figure):
+            return False
+    except Exception:
+        pass
+    if inspect.ismodule(val):
+        return False
+    return True
 
 
 def execute_python(code: str, context: dict | None = None, session_id: str = "default") -> CodeExecutionResult:
@@ -221,6 +239,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         exec_globals["multi_gaussian_fit"] = astro.multi_gaussian_fit
         exec_globals["continuum_normalize"] = astro.continuum_normalize
         exec_globals["batch_equivalent_width"] = astro.batch_equivalent_width
+        exec_globals["available_functions"] = astro.available_functions
     except ImportError:
         pass
 
@@ -297,16 +316,10 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     for name, val in exec_globals.items():
         if name.startswith("_") or name in pre_existing_keys:
             continue
-        # Only persist serializable/small objects
         try:
-            if isinstance(val, (int, float, str, bool, list, dict, tuple, type(None))):
+            if _should_persist_value(val):
                 session_vars[name] = val
-            elif hasattr(val, 'tolist'):  # numpy arrays
-                if hasattr(val, 'size') and val.size < 10000:
-                    session_vars[name] = val
-            elif hasattr(val, '__len__') and len(val) < 1000:
-                session_vars[name] = val
-        except (TypeError, ValueError):
+        except Exception:
             pass
 
     # Extract key result variables (skip large objects)

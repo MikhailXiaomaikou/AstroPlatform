@@ -103,6 +103,15 @@ export default function DataBrowser() {
     try {
       const data = await searchData(query, sources.join(","), undefined, undefined, radius);
       setResults(data);
+      const sourceErrors = data.filter((r) => r.object_id === "error");
+      const validCount = data.length - sourceErrors.length;
+      if (validCount === 0 && sourceErrors.length > 0) {
+        setError(
+          sourceErrors
+            .map((r) => `${r.source.toUpperCase()}: ${r.name.replace(/^Error querying [^:]+:\s*/, "")}`)
+            .join(" | ")
+        );
+      }
       logOperation("search", `Searched ${sources.join(",")} for "${query}" (${data.length} results)`);
       // Save for AI context
       try { localStorage.setItem("astro_last_search", JSON.stringify({

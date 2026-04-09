@@ -182,10 +182,13 @@ Use it for ANY task that requires computation: statistical analysis, curve fitti
 
 **Variables persist between code blocks** (like Jupyter cells). You can define variables in one
 run_python call and use them in the next. No need to put everything in one giant code block.
+Complex objects such as astropy cosmology instances, scipy functions, and custom classes also persist.
+Do not probe for availability with `eval`, `sys`, or fragile introspection hacks. These helpers are guaranteed.
 
 Key patterns:
 - `results = get_search_results()` — access the user's latest search results
 - `hdul = load_fits("path/to/file.fits")` — load a FITS file
+- `available_functions()` — list the preloaded astronomy helpers with signatures/doc summaries
 - Print results with `print()` — output shown to user
 - Matplotlib figures auto-captured and displayed in chat
 
@@ -202,7 +205,7 @@ Pre-imported astronomy toolkit (`astro` module):
 - `plot_lightcurve(time, mag, mag_err=None)`
 - `plot_sky_distribution(ra, dec)`
 - `bpt_classify(log_nii_ha, log_oiii_hb)` — returns "SF"/"AGN"/"Composite" array
-- `compute_absolute_magnitude(mag, redshift=None, parallax_mas=None)`
+- `compute_absolute_magnitude(mag, redshift=None, distance_mpc=None, distance_pc=None, parallax_mas=None)`
 - `compute_luminosity_distance(z)` — returns Mpc
 - `k_correction(z, band="r", galaxy_type="elliptical")`
 - `multi_gaussian_fit(wavelength, flux, n_components=2)`

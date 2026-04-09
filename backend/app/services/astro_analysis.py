@@ -5,6 +5,8 @@ They produce journal-standard (ApJ/MNRAS) figures and compute common
 astronomical diagnostics without requiring the user to write boilerplate.
 """
 
+import inspect
+
 import numpy as np
 
 # ── Publication Figure Defaults ──
@@ -231,9 +233,15 @@ def bpt_classify(log_nii_ha, log_oiii_hb):
 
 
 def compute_luminosity_distance(z, H0=70.0, Om0=0.3):
-    """Compute luminosity distance in Mpc for given redshifts.
+    """Compute luminosity distance in Mpc.
 
-    Uses flat Lambda-CDM cosmology.
+    Args:
+        z: Redshift scalar or array.
+        H0: Hubble constant in km/s/Mpc.
+        Om0: Matter density parameter in a flat Lambda-CDM cosmology.
+
+    Returns:
+        Scalar or array of luminosity distances in Mpc.
     """
     try:
         from astropy.cosmology import FlatLambdaCDM
@@ -247,18 +255,48 @@ def compute_luminosity_distance(z, H0=70.0, Om0=0.3):
         return c * z / H0 * (1 + z / 2)
 
 
-def compute_absolute_magnitude(apparent_mag, redshift=None, distance_mpc=None, parallax_mas=None):
-    """Compute absolute magnitude from apparent magnitude + distance indicator.
+def compute_absolute_magnitude(
+    mag,
+    redshift=None,
+    distance_mpc=None,
+    distance_pc=None,
+    parallax_mas=None,
+):
+    """Compute absolute magnitude from apparent magnitude and one distance indicator.
 
-    Provide ONE of: redshift, distance_mpc, or parallax_mas.
+    Args:
+        mag: Apparent magnitude scalar or array.
+        redshift: Redshift scalar/array. Converted internally to luminosity distance.
+        distance_mpc: Distance in megaparsecs.
+        distance_pc: Distance in parsecs.
+        parallax_mas: Parallax in milliarcseconds.
+
+    Notes:
+        Provide exactly one of ``redshift``, ``distance_mpc``, ``distance_pc``,
+        or ``parallax_mas``.
     """
-    m = np.asarray(apparent_mag, dtype=float)
+    m = np.asarray(mag, dtype=float)
+
+    provided = sum(
+        value is not None
+        for value in (redshift, distance_mpc, distance_pc, parallax_mas)
+    )
+    if provided != 1:
+        raise ValueError(
+            "Provide exactly one of redshift, distance_mpc, distance_pc, or parallax_mas"
+        )
 
     if parallax_mas is not None:
         plx = np.asarray(parallax_mas, dtype=float)
         valid = plx > 0
         M = np.full_like(m, np.nan)
         M[valid] = m[valid] + 5 * np.log10(plx[valid]) - 10
+        return M
+    elif distance_pc is not None:
+        d_pc = np.asarray(distance_pc, dtype=float)
+        valid = d_pc > 0
+        M = np.full_like(m, np.nan)
+        M[valid] = m[valid] - 5 * np.log10(d_pc[valid]) + 5
         return M
     elif distance_mpc is not None:
         d = np.asarray(distance_mpc, dtype=float)
@@ -487,3 +525,32 @@ def batch_equivalent_width(wavelength, flux, line_centers, window=10.0, cont_win
         })
 
     return results
+
+
+def available_functions():
+    """Return signatures and one-line docs for sandbox preloaded helpers."""
+    exported = [
+        pub_figure,
+        pub_style,
+        plot_hr_diagram,
+        plot_bpt,
+        plot_sed,
+        plot_lightcurve,
+        plot_sky_distribution,
+        bpt_classify,
+        compute_absolute_magnitude,
+        compute_luminosity_distance,
+        k_correction,
+        spectral_stacking,
+        multi_gaussian_fit,
+        continuum_normalize,
+        batch_equivalent_width,
+    ]
+    info = {}
+    for func in exported:
+        doc = inspect.getdoc(func) or ""
+        info[func.__name__] = {
+            "signature": f"{func.__name__}{inspect.signature(func)}",
+            "summary": doc.splitlines()[0] if doc else "",
+        }
+    return info

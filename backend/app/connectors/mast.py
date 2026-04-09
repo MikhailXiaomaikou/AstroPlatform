@@ -20,6 +20,26 @@ class MASTConnector(BaseConnector):
 
     source_name = "mast"
 
+    def _resolve_coordinates(self, query: str, ra: float | None, dec: float | None):
+        if ra is not None and dec is not None:
+            return SkyCoord(ra=ra, dec=dec, unit=(u.degree, u.degree), frame="icrs")
+
+        try:
+            return SkyCoord.from_name(query)
+        except Exception:
+            parts = query.replace(",", " ").split()
+            if len(parts) >= 2:
+                try:
+                    return SkyCoord(
+                        ra=float(parts[0]),
+                        dec=float(parts[1]),
+                        unit=(u.degree, u.degree),
+                        frame="icrs",
+                    )
+                except ValueError:
+                    return None
+        return None
+
     @with_retry(max_retries=1, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
@@ -27,29 +47,34 @@ class MASTConnector(BaseConnector):
         from astroquery.mast import Observations
 
         loop = asyncio.get_event_loop()
+        coord = self._resolve_coordinates(query, ra, dec)
 
-        if ra is not None and dec is not None:
-            coord = SkyCoord(ra=ra, dec=dec, unit=(u.degree, u.degree), frame="icrs")
+        if coord is not None:
             table = await loop.run_in_executor(
                 None,
                 partial(
-                    Observations.query_criteria,
-                    coordinates=coord,
+                    Observations.query_region,
+                    coord,
                     radius=radius * u.degree,
-                    obs_collection=["HST", "JWST"],
-                    dataRights="PUBLIC",
                 ),
             )
         else:
-            # Query by object name
             table = await loop.run_in_executor(
                 None,
-                partial(
-                    Observations.query_object,
-                    query,
-                    radius=radius * u.degree,
-                ),
+                partial(Observations.query_object, query, radius=radius * u.degree),
             )
+
+        if table is None or len(table) == 0:
+            return []
+
+        # Query region returns a broader set of collections. Filter locally because
+        # the remote name-resolution path in query_criteria/query_object has proven
+        # much less reliable for common targets like M31.
+        allowed_collections = {"HST", "JWST"}
+        if "obs_collection" in table.colnames:
+            table = table[[str(row["obs_collection"]).strip() in allowed_collections for row in table]]
+        if "dataRights" in table.colnames:
+            table = table[[str(row["dataRights"]).strip().upper() == "PUBLIC" for row in table]]
 
         if table is None or len(table) == 0:
             return []

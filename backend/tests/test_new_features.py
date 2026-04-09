@@ -31,6 +31,18 @@ class TestAstroAnalysis:
         M = compute_absolute_magnitude(np.array([15.0]), distance_mpc=np.array([0.0]))
         assert np.isnan(M[0])
 
+    def test_compute_absolute_magnitude_distance_pc(self):
+        from app.services.astro_analysis import compute_absolute_magnitude
+        M = compute_absolute_magnitude(np.array([15.0]), distance_pc=np.array([1e6]))
+        assert M[0] == pytest.approx(-10.0, abs=0.1)
+
+    def test_available_functions_docs(self):
+        from app.services.astro_analysis import available_functions
+        info = available_functions()
+        assert "compute_absolute_magnitude" in info
+        assert "distance_pc" in info["compute_absolute_magnitude"]["signature"]
+        assert info["compute_luminosity_distance"]["summary"]
+
     def test_continuum_normalize(self):
         from app.services.astro_analysis import continuum_normalize
         wave = np.linspace(4000, 7000, 200)
@@ -139,6 +151,36 @@ print("ok")
         r = execute_python('r = get_search_results(); print(len(r))')
         assert r.success
         assert "1" in r.stdout
+
+    def test_complex_objects_persist_between_runs(self):
+        from app.services.code_executor import clear_session_vars, execute_python
+
+        clear_session_vars("persist-test")
+        r1 = execute_python(
+            "flat_lcdm = FlatLambdaCDM(H0=70, Om0=0.3)\nfrom scipy.optimize import curve_fit",
+            session_id="persist-test",
+        )
+        assert r1.success
+
+        r2 = execute_python(
+            'print(round(flat_lcdm.H0.value))\nprint(callable(curve_fit))',
+            session_id="persist-test",
+        )
+        assert r2.success
+        assert "70" in r2.stdout
+        assert "True" in r2.stdout
+
+    def test_available_functions_helper(self):
+        from app.services.code_executor import execute_python
+
+        r = execute_python(
+            'info = available_functions()\n'
+            'print(info["compute_absolute_magnitude"]["signature"])\n'
+            'print(info["compute_luminosity_distance"]["summary"])'
+        )
+        assert r.success
+        assert "distance_pc" in r.stdout
+        assert "luminosity distance" in r.stdout.lower()
 
 
 class TestAITools:
