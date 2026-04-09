@@ -333,12 +333,20 @@ async def _exec_adql(inp: dict) -> dict:
     truncated = {}
     for col, vals in data.items():
         truncated[col] = vals[:20] if isinstance(vals, list) else vals
-    return {
+    adql_result = {
         "columns": result.get("columns", []) if isinstance(result, dict) else [],
         "data": truncated,
         "row_count": row_count,
         "showing": min(20, row_count),
     }
+
+    # Auto-inject full result into Python sandbox for immediate use
+    store_search_results("latest_adql", [
+        {col: data.get(col, [None] * row_count)[i] for col in adql_result["columns"]}
+        for i in range(min(row_count, 200))
+    ] if data else [])
+
+    return adql_result
 
 
 async def _exec_object_info(inp: dict) -> dict:

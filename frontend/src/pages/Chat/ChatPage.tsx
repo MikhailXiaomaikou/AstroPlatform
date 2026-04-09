@@ -11,6 +11,7 @@ import {
   listChatSessions,
   loadChatSession,
   deleteChatSession,
+  exportChatNotebook,
   type ChatMessage,
   type ChatAction,
   type ADSReference,
@@ -1327,6 +1328,7 @@ export default function ChatPage() {
               {t("chat.new_chat")}
             </button>
             {messages.length > 0 && (
+              <>
               <button className="btn-secondary btn-small" onClick={() => {
                 const lines = messages.map(m => {
                   const role = m.role === "user" ? "**User:**" : "**AI:**";
@@ -1341,6 +1343,19 @@ export default function ChatPage() {
               }}>
                 {t("common.export")}
               </button>
+              <button className="btn-secondary btn-small" onClick={async () => {
+                try {
+                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  const blob = await exportChatNotebook(data);
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a"); a.href = url;
+                  a.download = "ai_research_session.ipynb"; a.click();
+                  URL.revokeObjectURL(url);
+                } catch { /* */ }
+              }}>
+                Notebook
+              </button>
+              </>
             )}
           </div>
         </div>

@@ -12,7 +12,7 @@ interface Props {
   loading: boolean;
 }
 
-const ALL_SOURCES = ["sdss", "gaia", "simbad", "vizier", "mast", "ned", "2mass", "chandra", "allwise", "alma", "eso", "irsa", "jwst", "lamost"];
+const ALL_SOURCES = ["sdss", "gaia", "simbad", "vizier", "mast", "ned", "2mass", "chandra", "allwise", "alma", "eso", "irsa", "jwst", "lamost", "desi"];
 const DEFAULT_SOURCES = ["sdss", "gaia", "simbad"];
 const DEFAULT_ADV_SOURCES = ["simbad", "alma", "mast"];
 

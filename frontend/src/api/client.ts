@@ -678,6 +678,19 @@ export async function exportSearchNotebook(
   return data;
 }
 
+// ── Chat → Notebook Export ──
+
+export async function exportChatNotebook(
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>,
+  title?: string,
+): Promise<Blob> {
+  const { data } = await api.post("/api/export/notebook/from-chat", {
+    messages,
+    title: title || "AI Research Session",
+  }, { responseType: "blob" });
+  return data;
+}
+
 // ── Workflow Export ──
 
 export async function exportWorkflowPython(

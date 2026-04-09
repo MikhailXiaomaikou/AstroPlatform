@@ -126,9 +126,15 @@ def _make_data_accessor():
         from app.services.ai_tools import get_cached_results
         return get_cached_results("latest") or []
 
+    def get_adql_results():
+        """Get the latest ADQL query results as a list of dicts."""
+        from app.services.ai_tools import get_cached_results
+        return get_cached_results("latest_adql") or []
+
     return {
         "load_fits": load_fits,
         "get_search_results": get_search_results,
+        "get_adql_results": get_adql_results,
     }
 
 

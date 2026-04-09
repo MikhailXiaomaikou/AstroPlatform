@@ -26,6 +26,7 @@ import SearchBar from "./SearchBar";
 import ResultsTable from "./ResultsTable";
 import FITSPreview from "../../components/fits/FITSPreview";
 import ObjectDetailPanel from "../../components/ObjectDetailPanel";
+import AladinViewer from "../../components/viz/AladinViewer";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 const ERROR_TYPE_LABELS: Record<string, string> = {
@@ -71,6 +72,7 @@ export default function DataBrowser() {
 
   // Object detail panel state
   const [detailObject, setDetailObject] = useState<{ name: string; ra: number; dec: number } | null>(null);
+  const [showSkyView, setShowSkyView] = useState(false);
 
   const lastSearchRef = useRef<{ query: string; sources: string[]; radius: number } | null>(null);
 
@@ -671,9 +673,14 @@ ${rows}
                 </button>
               </>
             ) : (
-              <button className="btn-secondary btn-small" onClick={handleVisualizeAll}>
-                Visualize All
-              </button>
+              <>
+                <button className="btn-secondary btn-small" onClick={handleVisualizeAll}>
+                  Visualize All
+                </button>
+                <button className="btn-secondary btn-small" onClick={() => setShowSkyView(!showSkyView)}>
+                  {showSkyView ? "Hide Sky View" : "Sky View"}
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -772,6 +779,17 @@ ${rows}
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {showSkyView && validResults.length > 0 && (
+        <div style={{ marginBottom: "1rem" }}>
+          <AladinViewer
+            objects={validResults.map(r => ({ name: r.name, ra: r.ra, dec: r.dec, source: r.source, object_type: r.object_type }))}
+            centerRa={validResults[0]?.ra}
+            centerDec={validResults[0]?.dec}
+            fov={0.5}
+          />
         </div>
       )}
 

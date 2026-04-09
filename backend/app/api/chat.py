@@ -133,6 +133,9 @@ User: "fit the SED and plot it"
 → generate_pipeline with:
   n1: LoadData → n2: SEDFit(model="blackbody") → n3: InteractivePlot(plot_type="spectrum")
 
+When the user describes a workflow or analysis task, ALWAYS generate a pipeline using the
+generate_pipeline tool. Don't just describe the steps — create the actual pipeline nodes.
+
 User: "build a [C II] spectral line analysis pipeline"
 → generate_pipeline with:
   n1: LoadData → n2: Denoise(sigma=2.0) → n3: SpectralFit(model="gaussian", region_min=157.0, region_max=158.5)
@@ -196,6 +199,8 @@ Pre-imported (available without import):
 - `np` (numpy), `plt` (matplotlib.pyplot), `pd` (pandas), `scipy`
 - `u` (astropy.units), `Table`, `SkyCoord` (astropy)
 - `FlatLambdaCDM`, `Planck18` (astropy.cosmology) — use directly for cosmology calculations
+- `get_adql_results()` — get latest ADQL query results as list of dicts (auto-injected)
+- `available_functions()` — list all pre-loaded helper functions with signatures and docs
 
 Pre-imported astronomy toolkit (`astro` module):
 - `pub_figure()` / `pub_style()` — publication-quality figure setup (ApJ/MNRAS fonts)

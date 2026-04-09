@@ -62,6 +62,12 @@ const translations: Record<string, Record<Lang, string>> = {
   "auth.start":           { en: "Start exploring the universe", zh: "开始探索宇宙", fr: "Commencez à explorer l'univers", es: "Comience a explorar el universo" },
 
   // Common
+  // Errors
+  "error.network":     { en: "Cannot reach the server. Check your connection or try again.", zh: "无法连接服务器。请检查网络连接或稍后重试。", fr: "Impossible de contacter le serveur. Vérifiez votre connexion.", es: "No se puede conectar al servidor. Verifique su conexión." },
+  "error.timeout":     { en: "Request timed out. The data source may be slow. Try again.", zh: "请求超时。数据源可能较慢，请重试。", fr: "La requête a expiré. La source de données peut être lente.", es: "La solicitud ha expirado. La fuente de datos puede ser lenta." },
+  "error.mast_tip":    { en: "MAST service timed out. Try searching SIMBAD or Gaia instead.", zh: "MAST 服务超时。建议改用 SIMBAD 或 Gaia 搜索。", fr: "Le service MAST a expiré. Essayez SIMBAD ou Gaia.", es: "El servicio MAST ha expirado. Intente con SIMBAD o Gaia." },
+  "error.sdss_tip":    { en: "SDSS SkyServer may be overloaded. Try again in a few minutes.", zh: "SDSS SkyServer 可能过载。请几分钟后重试。", fr: "SDSS SkyServer peut être surchargé. Réessayez dans quelques minutes.", es: "SDSS SkyServer puede estar sobrecargado. Intente en unos minutos." },
+
   "common.loading":    { en: "Loading...",        zh: "加载中...",      fr: "Chargement...",    es: "Cargando..." },
   "common.save":       { en: "Save",              zh: "保存",          fr: "Sauvegarder",      es: "Guardar" },
   "common.saved":      { en: "Saved",             zh: "已保存",        fr: "Sauvegardé",       es: "Guardado" },
