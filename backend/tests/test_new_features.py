@@ -214,6 +214,46 @@ class TestAITools:
         r = await execute_tool("get_last_search_results", {})
         assert "results" in r
 
+    @pytest.mark.asyncio
+    async def test_run_python_uses_explicit_session_id(self):
+        from app.services.ai_tools import execute_tool
+        from app.services.code_executor import clear_session_vars
+
+        clear_session_vars("sess-a")
+        clear_session_vars("sess-b")
+
+        r1 = await execute_tool("run_python", {"code": "x = 42"}, python_session_id="sess-a")
+        r2 = await execute_tool("run_python", {"code": "print('x' in globals())"}, python_session_id="sess-b")
+        r3 = await execute_tool("run_python", {"code": "print(x)"}, python_session_id="sess-a")
+
+        assert r1["success"] is True
+        assert r2["stdout"].strip() == "False"
+        assert r3["stdout"].strip() == "42"
+
+
+class TestExportHelpers:
+    @pytest.mark.asyncio
+    async def test_chat_notebook_extracts_python_from_params(self):
+        from app.api.export import ChatToNotebookRequest, export_chat_as_notebook
+        import json
+
+        response = await export_chat_as_notebook(ChatToNotebookRequest(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": "I ran code",
+                    "actions": [{"action": "run_python", "params": {"code": "print(123)"}}],
+                }
+            ]
+        ))
+
+        body = ""
+        async for chunk in response.body_iterator:
+            body += chunk
+        notebook = json.loads(body)
+        code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
+        assert any("print(123)" in "".join(cell["source"]) for cell in code_cells)
+
 
 class TestPipelineBatch:
     """Test batch pipeline execution."""

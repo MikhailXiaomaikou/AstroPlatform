@@ -307,6 +307,8 @@ async def chat_message_stream(
 
         yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
 
+        python_session_id = (req.context or {}).get("python_session_id", "default")
+
         try:
             for _iteration in range(5):
                 response = client.messages.create(
@@ -338,7 +340,7 @@ async def chat_message_stream(
 
                 tool_result_blocks = []
                 for tc in tool_calls:
-                    result = await execute_tool(tc["name"], tc["input"], api_key)
+                    result = await execute_tool(tc["name"], tc["input"], api_key, python_session_id)
                     result_str = json.dumps(result, default=str)
                     if len(result_str) > 8000:
                         result_str = json.dumps({"truncated": True, "summary": str(result)[:2000]}, default=str)
@@ -409,6 +411,7 @@ async def chat_message(
             system += f"\n\nCurrent user context:\n{ctx_str}"
     if user:
         system += f"\nUser email: {user.email}, Subscription: {user.subscription_tier}"
+    python_session_id = (req.context or {}).get("python_session_id", "default")
 
     try:
         # ── Agent loop: Claude calls tools, sees results, continues ──
@@ -459,7 +462,7 @@ async def chat_message(
             # Execute tools and build tool_result messages
             tool_result_blocks = []
             for tc in tool_calls_in_turn:
-                result = await execute_tool(tc["name"], tc["input"], api_key)
+                result = await execute_tool(tc["name"], tc["input"], api_key, python_session_id)
                 # Truncate large results for context window
                 result_str = json.dumps(result, default=str)
                 if len(result_str) > 8000:

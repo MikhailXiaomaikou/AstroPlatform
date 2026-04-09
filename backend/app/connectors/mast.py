@@ -47,7 +47,12 @@ class MASTConnector(BaseConnector):
         from astroquery.mast import Observations
 
         loop = asyncio.get_event_loop()
-        coord = self._resolve_coordinates(query, ra, dec)
+        if ra is not None and dec is not None:
+            coord = self._resolve_coordinates(query, ra, dec)
+        else:
+            coord = await loop.run_in_executor(
+                None, partial(self._resolve_coordinates, query, ra, dec)
+            )
 
         if coord is not None:
             table = await loop.run_in_executor(

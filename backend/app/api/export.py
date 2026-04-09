@@ -521,7 +521,13 @@ async def export_chat_as_notebook(req: ChatToNotebookRequest):
 
         for action in (actions or []):
             if isinstance(action, dict) and action.get("action") == "run_python":
-                code = action.get("code", "") or action.get("tool_input", {}).get("code", "")
+                params = action.get("params", {}) if isinstance(action.get("params"), dict) else {}
+                tool_input = action.get("tool_input", {}) if isinstance(action.get("tool_input"), dict) else {}
+                code = (
+                    action.get("code", "")
+                    or params.get("code", "")
+                    or tool_input.get("code", "")
+                )
                 if code:
                     cells.append({
                         "cell_type": "code",

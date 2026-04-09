@@ -1082,6 +1082,7 @@ export default function ChatPage() {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [showSessions, setShowSessions] = useState(false);
+  const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
 
   const handleSaveSession = async () => {
     if (messages.length === 0) return;
@@ -1089,6 +1090,7 @@ export default function ChatPage() {
       const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
       const res = await saveChatSession(data, currentSessionId || undefined);
       setCurrentSessionId(res.id);
+      pythonSessionIdRef.current = res.id;
       listChatSessions().then(setSessions).catch(() => {});
     } catch { /* ignore */ }
   };
@@ -1104,6 +1106,7 @@ export default function ChatPage() {
       }));
       setMessages(loaded);
       setCurrentSessionId(id);
+      pythonSessionIdRef.current = id;
       setShowSessions(false);
       saveChatHistory(loaded);
     } catch { /* ignore */ }
@@ -1112,6 +1115,7 @@ export default function ChatPage() {
   const handleNewChat = () => {
     setMessages([]);
     setCurrentSessionId(null);
+    pythonSessionIdRef.current = crypto.randomUUID();
     localStorage.removeItem("astro_chat_history");
     setShowSessions(false);
   };
@@ -1211,6 +1215,7 @@ export default function ChatPage() {
           };
         }
       } catch { /* ignore */ }
+      wsContext.python_session_id = pythonSessionIdRef.current;
 
       const response = await sendChatMessage(chatHistory, wsContext);
 

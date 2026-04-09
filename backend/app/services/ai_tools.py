@@ -226,7 +226,12 @@ TOOLS = [
 
 # ── Tool Executors ──
 
-async def execute_tool(tool_name: str, tool_input: dict, api_key: str = "") -> dict:
+async def execute_tool(
+    tool_name: str,
+    tool_input: dict,
+    api_key: str = "",
+    python_session_id: str = "default",
+) -> dict:
     """Execute a tool call and return the result as a dict."""
     try:
         if tool_name == "search_objects":
@@ -242,7 +247,7 @@ async def execute_tool(tool_name: str, tool_input: dict, api_key: str = "") -> d
         elif tool_name == "search_literature":
             return await _exec_literature(tool_input)
         elif tool_name == "run_python":
-            return await _exec_run_python(tool_input)
+            return await _exec_run_python(tool_input, python_session_id)
         elif tool_name == "get_last_search_results":
             return _exec_get_cached_results(tool_input)
         elif tool_name == "run_pipeline":
@@ -456,7 +461,7 @@ async def _exec_literature(inp: dict) -> dict:
         return {"error": str(e)}
 
 
-async def _exec_run_python(inp: dict) -> dict:
+async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dict:
     """Execute Python code in sandboxed environment."""
     from app.services.code_executor import execute_python
 
@@ -468,7 +473,7 @@ async def _exec_run_python(inp: dict) -> dict:
     loop = asyncio.get_running_loop()
     try:
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, execute_python, code, None),
+            loop.run_in_executor(None, execute_python, code, None, python_session_id),
             timeout=35.0,
         )
     except asyncio.TimeoutError:

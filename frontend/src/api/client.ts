@@ -145,8 +145,31 @@ export async function searchData(
   const params: Record<string, string | number> = { q, sources, radius };
   if (ra !== undefined) params.ra = ra;
   if (dec !== undefined) params.dec = dec;
-  const { data } = await api.get<SearchResult[]>("/api/data/search", { params });
-  return data;
+  try {
+    const { data } = await api.get<SearchResult[]>("/api/data/search", { params });
+    return data;
+  } catch (err: unknown) {
+    if (axios.isAxiosError(err)) {
+      if (err.response?.data && typeof err.response.data === "object" && "detail" in err.response.data) {
+        throw new Error(String(err.response.data.detail));
+      }
+      if (err.code === "ECONNABORTED") {
+        throw new Error("request timed out");
+      }
+      if (err.message === "Network Error") {
+        try {
+          const { data } = await api.get<SearchResult[]>("/api/data/search", { params });
+          return data;
+        } catch {
+          const sourceList = sources.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+          if (sourceList.length > 0 && sourceList.every((s) => s === "mast" || s === "jwst")) {
+            throw new Error("MAST/JWST search failed before the server returned per-source results. Try again, reduce the search radius, or add SIMBAD to resolve coordinates first.");
+          }
+        }
+      }
+    }
+    throw err;
+  }
 }
 
 // ── Advanced Search ──
