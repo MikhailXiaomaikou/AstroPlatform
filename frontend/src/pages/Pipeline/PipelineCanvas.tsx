@@ -41,6 +41,7 @@ import {
   type VersionSummary,
 } from "../../api/client";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 
 const nodeTypes = { pipeline: PipelineNode };
 
@@ -54,6 +55,7 @@ interface NodeProgress {
 
 export default function PipelineCanvas() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -518,16 +520,24 @@ export default function PipelineCanvas() {
                 <button
                   className="btn-secondary btn-small"
                   onClick={handleSaveVersion}
-                  disabled={nodes.length === 0}
+                  disabled={nodes.length === 0 || !user}
+                  title={user ? "Save a new template version" : "Sign in to save template versions"}
                 >
                   Save Version
                 </button>
                 <button
                   className="btn-secondary btn-small"
                   onClick={handleShowHistory}
+                  disabled={!user}
+                  title={user ? "Show version history" : "Sign in to view template version history"}
                 >
                   History
                 </button>
+                {!user && (
+                  <div style={{ fontSize: "0.72rem", color: "var(--color-text-tertiary)", marginTop: 6 }}>
+                    Sign in to save template versions and view history.
+                  </div>
+                )}
               </div>
             )}
           </div>

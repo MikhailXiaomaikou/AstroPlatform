@@ -209,6 +209,7 @@ class TestSearchErrorHelpers:
         msg = _build_source_error_name("ned", "timeout", TimeoutError())
         assert "responding slowly" in msg
         assert "narrow the search" in msg
+        assert ": ." not in msg
 
 
 class TestAITools:

@@ -158,12 +158,16 @@ def _search_timeout_for_source(source: str) -> float:
 
 def _build_source_error_name(source_name: str, error_type: str, result: Exception) -> str:
     """Format a user-facing per-source search error."""
-    base = f"Error querying {source_name}: {result}"
     if source_name == "ned" and error_type == "timeout":
         return (
-            f"{base}. NED is responding slowly right now; "
+            f"Error querying {source_name}: "
+            "NED is responding slowly right now; "
             "try again in a moment or narrow the search."
         )
+    detail = str(result).strip()
+    base = f"Error querying {source_name}"
+    if detail:
+        return f"{base}: {detail}"
     return base
 
 
