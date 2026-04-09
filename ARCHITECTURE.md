@@ -259,7 +259,7 @@
 ## Directory Structure
 
 ```
-    astro-platform/
+    standard-astro/
     ├── .github/workflows/ci.yml          # CI: pytest + tsc + vitest + ruff
     ├── docker-compose.yml                # 6 services with resource limits
     ├── CLAUDE.md                         # Project documentation

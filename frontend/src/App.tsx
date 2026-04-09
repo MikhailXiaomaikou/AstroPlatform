@@ -74,7 +74,7 @@ function NavBar() {
 
   return (
     <nav className="top-nav">
-      <NavLink to="/" className="logo">Astro Platform</NavLink>
+      <NavLink to="/" className="logo">Standard Astro</NavLink>
       <NavLink to="/">{t("nav.data_browser")}</NavLink>
       <NavLink to="/pipeline">{t("nav.pipeline")}</NavLink>
       <NavLink to="/workspace">{t("nav.workspace")}</NavLink>

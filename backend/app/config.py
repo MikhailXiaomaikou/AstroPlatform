@@ -20,7 +20,7 @@ def _ensure_writable_home():
     home = os.environ.get("HOME", "")
     home_ok = home and os.path.isdir(home) and os.access(home, os.W_OK)
     if not home_ok:
-        fallback = os.path.join(tempfile.gettempdir(), "astro_platform_home")
+        fallback = os.path.join(tempfile.gettempdir(), "standard_astro_home")
         os.makedirs(fallback, exist_ok=True)
         # Force-set HOME (not setdefault) — HOME may exist but point to /nonexistent
         os.environ["HOME"] = fallback

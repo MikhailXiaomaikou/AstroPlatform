@@ -180,7 +180,7 @@ def _dag_to_notebook(dag: dict, title: str) -> dict:
     cells.append({
         "cell_type": "markdown",
         "metadata": {},
-        "source": [f"# {title}\n", "\n", "Auto-generated from Astro Platform pipeline.\n"]
+        "source": [f"# {title}\n", "\n", "Auto-generated from Standard Astro pipeline.\n"]
     })
 
     # Imports cell

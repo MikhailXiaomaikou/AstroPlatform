@@ -61,7 +61,7 @@ const translations: Record<string, Record<Lang, string>> = {
   "auth.create_account":  { en: "Create Account",  zh: "创建账号",      fr: "Créer un compte",  es: "Crear cuenta" },
   "auth.email":           { en: "Email",            zh: "邮箱",          fr: "E-mail",           es: "Correo" },
   "auth.password":        { en: "Password",         zh: "密码",          fr: "Mot de passe",     es: "Contraseña" },
-  "auth.welcome":         { en: "Welcome back to Astro Platform", zh: "欢迎回到 Astro Platform", fr: "Bienvenue sur Astro Platform", es: "Bienvenido a Astro Platform" },
+  "auth.welcome":         { en: "Welcome back to Standard Astro", zh: "欢迎回到 Standard Astro", fr: "Bienvenue sur Standard Astro", es: "Bienvenido a Standard Astro" },
   "auth.start":           { en: "Start exploring the universe", zh: "开始探索宇宙", fr: "Commencez à explorer l'univers", es: "Comience a explorar el universo" },
 
   // Common

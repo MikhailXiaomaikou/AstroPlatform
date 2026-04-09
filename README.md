@@ -1,9 +1,9 @@
-# Astro Platform
+# Standard Astro
 
 An AI-native research environment for professional astronomers. Search 14 astronomical databases simultaneously, analyze spectra with AI, build processing pipelines visually, and export publication-ready results — all from a single interface.
 
-**Live Demo:** https://astro-frontend-tyfr.onrender.com  
-**API:** https://astro-backend-h4x1.onrender.com
+**Live Demo:** https://standard-astro-frontend-tyfr.onrender.com  
+**API:** https://standard-astro-backend-h4x1.onrender.com
 
 ---
 
@@ -193,12 +193,12 @@ Push to `main` branch, then in Render Dashboard:
 3. (Optional) Set `GOOGLE_CLIENT_ID` on both backend and frontend
 
 Services created by `render.yaml`:
-- `astro-backend` (web) — FastAPI
-- `astro-celery-worker` (worker) — Pipeline executor
-- `astro-celery-beat` (worker) — Scheduler
-- `astro-frontend` (static) — React SPA
-- `astro-redis` (redis) — Cache + queue
-- `astro-db` (postgres) — Database
+- `standard-astro-backend` (web) — FastAPI
+- `standard-astro-celery-worker` (worker) — Pipeline executor
+- `standard-astro-celery-beat` (worker) — Scheduler
+- `standard-astro-frontend` (static) — React SPA
+- `standard-astro-redis` (redis) — Cache + queue
+- `standard-astro-db` (postgres) — Database
 
 ### Docker Compose (self-hosted)
 
@@ -337,13 +337,13 @@ MIT
 
 ## Citation
 
-If you use Astro Platform in your research, please cite:
+If you use Standard Astro in your research, please cite:
 
 ```bibtex
 @software{astroplatform,
-  title={Astro Platform: An AI-Native Research Environment for Multi-wavelength Astronomical Data Exploration},
+  title={Standard Astro: An AI-Native Research Environment for Multi-wavelength Astronomical Data Exploration},
   author={Chen, Kexuan},
   year={2026},
-  url={https://github.com/MikhailXiaomaikou/AstroPlatform}
+  url={https://github.com/MikhailXiaomaikou/StandardAstro}
 }
 ```

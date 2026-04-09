@@ -1,13 +1,13 @@
-# AstroPlatform Deployment Guide (for OpenClaw / AI Agent)
+# StandardAstro Deployment Guide (for OpenClaw / AI Agent)
 
 ## Overview
 
-Deploy AstroPlatform as a public website:
+Deploy StandardAstro as a public website:
 - **Backend**: Python FastAPI → deploy to **Render.com** (free tier, simpler than Railway)
 - **Frontend**: React Vite → deploy to **Cloudflare Pages** (free, fast, no VPN needed)
 - **Database**: PostgreSQL → Render provides free PostgreSQL
 
-GitHub repo: https://github.com/MikhailXiaomaikou/AstroPlatform
+GitHub repo: https://github.com/MikhailXiaomaikou/StandardAstro
 
 ---
 
@@ -19,7 +19,7 @@ GitHub repo: https://github.com/MikhailXiaomaikou/AstroPlatform
 
 ### 1b. Create PostgreSQL database
 - Dashboard → "New" → "PostgreSQL"
-- Name: `astro-db`
+- Name: `standard-astro-db`
 - Region: Oregon (or nearest)
 - Plan: Free
 - Click "Create Database"
@@ -27,9 +27,9 @@ GitHub repo: https://github.com/MikhailXiaomaikou/AstroPlatform
 
 ### 1c. Create Web Service for backend
 - Dashboard → "New" → "Web Service"
-- Connect GitHub repo: `MikhailXiaomaikou/AstroPlatform`
+- Connect GitHub repo: `MikhailXiaomaikou/StandardAstro`
 - Settings:
-  - **Name**: `astro-backend`
+  - **Name**: `standard-astro-backend`
   - **Region**: same as database
   - **Root Directory**: `backend`
   - **Runtime**: Docker
@@ -52,8 +52,8 @@ Note: `CORS_ORIGINS` will be updated after frontend deploy.
 ### 1e. Deploy
 - Click "Create Web Service"
 - Wait for build + deploy (may take 5-10 minutes)
-- Backend URL will be like: `https://astro-backend-xxxx.onrender.com`
-- Verify: visit `https://astro-backend-xxxx.onrender.com/health` → should return `{"status":"ok"}`
+- Backend URL will be like: `https://standard-astro-backend-xxxx.onrender.com`
+- Verify: visit `https://standard-astro-backend-xxxx.onrender.com/health` → should return `{"status":"ok"}`
 
 ---
 
@@ -66,7 +66,7 @@ Note: `CORS_ORIGINS` will be updated after frontend deploy.
 ### 2b. Create Pages project
 - Sidebar → "Workers & Pages" → "Create"
 - Tab: "Pages" → "Connect to Git"
-- Connect GitHub → select `MikhailXiaomaikou/AstroPlatform`
+- Connect GitHub → select `MikhailXiaomaikou/StandardAstro`
 - Build settings:
   - **Project name**: `astroplatform`
   - **Production branch**: `main`
@@ -78,7 +78,7 @@ Note: `CORS_ORIGINS` will be updated after frontend deploy.
 ### 2c. Set environment variable
 - Add environment variable:
   - **Variable name**: `VITE_API_URL`
-  - **Value**: `https://astro-backend-xxxx.onrender.com` (the Render backend URL from step 1e)
+  - **Value**: `https://standard-astro-backend-xxxx.onrender.com` (the Render backend URL from step 1e)
 
 ### 2d. Deploy
 - Click "Save and Deploy"
@@ -88,7 +88,7 @@ Note: `CORS_ORIGINS` will be updated after frontend deploy.
 
 ## STEP 3: Connect Frontend ↔ Backend (CORS)
 
-Go back to Render.com → `astro-backend` service → Environment:
+Go back to Render.com → `standard-astro-backend` service → Environment:
 - Update `CORS_ORIGINS` to the actual Cloudflare Pages URL:
   ```
   CORS_ORIGINS=https://astroplatform.pages.dev
@@ -102,7 +102,7 @@ Go back to Render.com → `astro-backend` service → Environment:
 Once backend is live, run:
 
 ```bash
-curl -X POST https://astro-backend-xxxx.onrender.com/api/auth/generate-setup-keys \
+curl -X POST https://standard-astro-backend-xxxx.onrender.com/api/auth/generate-setup-keys \
   -H "Content-Type: application/json" \
   -d '{"count": 10, "label": "beta"}'
 ```
@@ -139,7 +139,7 @@ Render free tier sleeps after 15 min of inactivity. First request after sleep ta
 ## Alternative: Use Railway instead of Render
 
 If using Railway (https://railway.app):
-1. New Project → Deploy from GitHub Repo → `AstroPlatform`
+1. New Project → Deploy from GitHub Repo → `StandardAstro`
 2. Click the service → Settings → set Root Directory to `backend`
 3. Settings → Builder → select "Dockerfile" if available
 4. Variables → add same env vars as above

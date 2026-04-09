@@ -91,8 +91,8 @@ db.commit()
 ## Deployment
 
 **Production**: Render.com (backend Docker + PostgreSQL) + Render static site (frontend)
-- Backend: `https://astro-backend-h4x1.onrender.com`
-- Frontend: `https://astro-frontend-tyfr.onrender.com`
+- Backend: `https://standard-astro-backend-h4x1.onrender.com`
+- Frontend: `https://standard-astro-frontend-tyfr.onrender.com`
 - Backend auto-converts `postgresql://` to `postgresql+asyncpg://` in `config.py`
 - Render free tier sleeps after 15min — `BackendBanner` component in `App.tsx` shows "waking up" notice
 - CORS origins configured in `cors.py` — includes both localhost and Render URLs
@@ -100,12 +100,12 @@ db.commit()
 Push to `main` branch → Render auto-deploys (may need Manual Deploy for first time).
 
 **Infrastructure as Code**: `render.yaml` defines all services:
-- `astro-backend` (web) — FastAPI API server
-- `astro-celery-worker` (worker) — Celery pipeline executor, concurrency=2
-- `astro-celery-beat` (worker) — Celery Beat scheduler
-- `astro-frontend` (static) — Vite-built SPA with SPA rewrites
-- `astro-redis` (redis) — Task queue + pub/sub + caching
-- `astro-db` (postgres) — Primary database
+- `standard-astro-backend` (web) — FastAPI API server
+- `standard-astro-celery-worker` (worker) — Celery pipeline executor, concurrency=2
+- `standard-astro-celery-beat` (worker) — Celery Beat scheduler
+- `standard-astro-frontend` (static) — Vite-built SPA with SPA rewrites
+- `standard-astro-redis` (redis) — Task queue + pub/sub + caching
+- `standard-astro-db` (postgres) — Primary database
 
 ## Environment Variables
 

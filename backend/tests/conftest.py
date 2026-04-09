@@ -1,4 +1,4 @@
-"""Shared test fixtures for the astro-platform backend tests."""
+"""Shared test fixtures for the standard-astro backend tests."""
 
 import os
 os.environ["RATE_LIMIT_ENABLED"] = "false"

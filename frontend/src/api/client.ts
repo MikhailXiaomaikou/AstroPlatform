@@ -738,9 +738,9 @@ export async function exportChatLatex(
 ): Promise<Blob> {
   const { data } = await api.post("/api/export/report/latex", {
     messages,
-    title: title || "Astro Platform Research Report",
+    title: title || "Standard Astro Research Report",
     abstract: abstract || "",
-    author: author || "Astro Platform User",
+    author: author || "Standard Astro User",
   }, { responseType: "blob" });
   return data;
 }

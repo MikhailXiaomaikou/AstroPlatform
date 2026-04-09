@@ -1,5 +1,5 @@
 databases:
-  - name: astro-db
+  - name: standard-astro-db
     plan: free
     databaseName: astro
     user: astro
@@ -7,7 +7,7 @@ databases:
 services:
   # ── Backend API ──
   - type: web
-    name: astro-backend
+    name: standard-astro-backend
     runtime: docker
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
@@ -18,11 +18,11 @@ services:
         value: production
       - key: DATABASE_URL
         fromDatabase:
-          name: astro-db
+          name: standard-astro-db
           property: connectionString
       - key: REDIS_URL
         fromService:
-          name: astro-redis
+          name: standard-astro-redis
           type: redis
           property: connectionString
       - key: JWT_SECRET
@@ -30,7 +30,7 @@ services:
       - key: PIPELINE_MODE
         value: celery
       - key: CORS_ORIGINS
-        value: https://astro-frontend-tyfr.onrender.com,https://astro-frontend.onrender.com
+        value: https://standard-astro-frontend-tyfr.onrender.com,https://standard-astro-frontend.onrender.com
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
@@ -38,7 +38,7 @@ services:
 
   # ── Celery Worker ──
   - type: worker
-    name: astro-celery-worker
+    name: standard-astro-celery-worker
     runtime: docker
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
@@ -49,11 +49,11 @@ services:
         value: production
       - key: DATABASE_URL
         fromDatabase:
-          name: astro-db
+          name: standard-astro-db
           property: connectionString
       - key: REDIS_URL
         fromService:
-          name: astro-redis
+          name: standard-astro-redis
           type: redis
           property: connectionString
       - key: JWT_SECRET
@@ -61,7 +61,7 @@ services:
 
   # ── Celery Beat (scheduler) ──
   - type: worker
-    name: astro-celery-beat
+    name: standard-astro-celery-beat
     runtime: docker
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
@@ -72,17 +72,17 @@ services:
         value: production
       - key: DATABASE_URL
         fromDatabase:
-          name: astro-db
+          name: standard-astro-db
           property: connectionString
       - key: REDIS_URL
         fromService:
-          name: astro-redis
+          name: standard-astro-redis
           type: redis
           property: connectionString
 
   # ── Frontend ──
   - type: web
-    name: astro-frontend
+    name: standard-astro-frontend
     runtime: static
     buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/dist
@@ -96,13 +96,13 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://astro-backend.onrender.com
+        value: https://standard-astro-backend.onrender.com
       - key: VITE_GOOGLE_CLIENT_ID
         sync: false
 
   # ── Redis ──
   - type: redis
-    name: astro-redis
+    name: standard-astro-redis
     plan: free
     maxmemoryPolicy: allkeys-lru
     ipAllowList: []

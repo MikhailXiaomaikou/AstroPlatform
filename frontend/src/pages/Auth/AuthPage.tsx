@@ -169,7 +169,7 @@ export default function AuthPage() {
           {mode === "setup-key" && "Setup Key"}
         </h2>
         <p className="auth-subtitle">
-          {mode === "login" && "Welcome back to Astro Platform"}
+          {mode === "login" && "Welcome back to Standard Astro"}
           {mode === "register" && "Start exploring the universe"}
           {mode === "setup-key" && "Enter your setup key to get started"}
         </p>
