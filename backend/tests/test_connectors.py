@@ -199,3 +199,49 @@ class TestWithRetryAdvanced:
         assert results[1] == "b_ok"
         assert count_a == 2
         assert count_b == 3
+
+
+class TestVizierConnector:
+    """Unit tests for Vizier-specific behavior."""
+
+    async def test_search_disables_astroquery_cache(self, monkeypatch):
+        from astropy.table import Table
+        from app.connectors.vizier import VizierConnector
+
+        calls: dict[str, object] = {}
+
+        class FakeVizier:
+            def query_region(self, coord, radius=None, cache=None):
+                calls["cache"] = cache
+                calls["radius"] = radius
+                return [Table({"_RAJ2000": [10.0], "_DEJ2000": [20.0], "Name": ["M31"]})]
+
+        connector = VizierConnector()
+        monkeypatch.setattr(connector, "_make_vizier", lambda catalogs=None, row_limit=50: FakeVizier())
+
+        results = await connector.search("M31", ra=10.0, dec=20.0, radius=0.1)
+
+        assert calls["cache"] is False
+        assert len(results) == 1
+        assert results[0].source == "vizier"
+
+    async def test_fetch_disables_astroquery_cache(self, monkeypatch):
+        from astropy.table import Table
+        from app.connectors.vizier import VizierConnector
+
+        calls: dict[str, object] = {}
+
+        class FakeVizier:
+            def get_catalogs(self, object_id, cache=None):
+                calls["cache"] = cache
+                calls["object_id"] = object_id
+                return [Table({"value": [1.0]})]
+
+        connector = VizierConnector()
+        monkeypatch.setattr("astroquery.vizier.Vizier", lambda row_limit=500: FakeVizier())
+
+        result = await connector.fetch("II/246/out")
+
+        assert calls["cache"] is False
+        assert calls["object_id"] == "II/246/out"
+        assert result.source == "vizier"

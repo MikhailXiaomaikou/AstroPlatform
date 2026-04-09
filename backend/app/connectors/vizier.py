@@ -49,7 +49,7 @@ class VizierConnector(BaseConnector):
 
         table_list = await loop.run_in_executor(
             None,
-            partial(vizier.query_region, coord, radius=radius_qty),
+            partial(vizier.query_region, coord, radius=radius_qty, cache=False),
         )
 
         if table_list is None or len(table_list) == 0:
@@ -75,7 +75,7 @@ class VizierConnector(BaseConnector):
 
         table_list = await loop.run_in_executor(
             None,
-            partial(vizier.get_catalogs, object_id),
+            partial(vizier.get_catalogs, object_id, cache=False),
         )
 
         if table_list is None or len(table_list) == 0:
