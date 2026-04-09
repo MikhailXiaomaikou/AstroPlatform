@@ -21,6 +21,20 @@ MAX_EXEC_TIME = 30
 # Maximum output size in characters
 MAX_OUTPUT_SIZE = 50_000
 
+# Session-scoped variable store — persists between code executions
+_session_vars: dict[str, dict] = {}
+
+
+def get_session_vars(session_id: str = "default") -> dict:
+    """Get or create a session variable store."""
+    if session_id not in _session_vars:
+        _session_vars[session_id] = {}
+    return _session_vars[session_id]
+
+
+def clear_session_vars(session_id: str = "default") -> None:
+    _session_vars.pop(session_id, None)
+
 # Allowed imports — astronomy + data science stack
 ALLOWED_MODULES = {
     # Core
@@ -115,7 +129,7 @@ def _make_data_accessor():
     }
 
 
-def execute_python(code: str, context: dict | None = None) -> CodeExecutionResult:
+def execute_python(code: str, context: dict | None = None, session_id: str = "default") -> CodeExecutionResult:
     """Execute Python code in a sandboxed environment.
 
     Args:
@@ -171,6 +185,22 @@ def execute_python(code: str, context: dict | None = None) -> CodeExecutionResul
     except ImportError:
         pass
 
+    # Try to pre-import pandas
+    try:
+        import pandas as pd
+        exec_globals["pd"] = pd
+        exec_globals["pandas"] = pd
+    except ImportError:
+        pass
+
+    # Pre-import astropy.cosmology
+    try:
+        from astropy.cosmology import FlatLambdaCDM, Planck18
+        exec_globals["FlatLambdaCDM"] = FlatLambdaCDM
+        exec_globals["Planck18"] = Planck18
+    except ImportError:
+        pass
+
     # Pre-import astronomy analysis toolkit
     try:
         from app.services import astro_analysis as astro
@@ -194,9 +224,16 @@ def execute_python(code: str, context: dict | None = None) -> CodeExecutionResul
     except ImportError:
         pass
 
+    # Inject session variables (persist between code blocks)
+    session_vars = get_session_vars(session_id)
+    exec_globals.update(session_vars)
+
     # Inject context variables
     if context:
         exec_globals.update(context)
+
+    # Record pre-existing keys to skip in variable extraction
+    pre_existing_keys = set(exec_globals.keys())
 
     # Close any existing matplotlib figures
     plt.close("all")
@@ -256,9 +293,23 @@ def execute_python(code: str, context: dict | None = None) -> CodeExecutionResul
     except Exception as e:
         logger.warning("Failed to capture matplotlib figures: %s", e)
 
+    # Save user-defined variables back to session for persistence
+    for name, val in exec_globals.items():
+        if name.startswith("_") or name in pre_existing_keys:
+            continue
+        # Only persist serializable/small objects
+        try:
+            if isinstance(val, (int, float, str, bool, list, dict, tuple, type(None))):
+                session_vars[name] = val
+            elif hasattr(val, 'tolist'):  # numpy arrays
+                if hasattr(val, 'size') and val.size < 10000:
+                    session_vars[name] = val
+            elif hasattr(val, '__len__') and len(val) < 1000:
+                session_vars[name] = val
+        except (TypeError, ValueError):
+            pass
+
     # Extract key result variables (skip large objects)
-    # Record pre-existing keys to skip in variable extraction
-    pre_existing_keys = set(exec_globals.keys())
     for name, val in exec_globals.items():
         if name.startswith("_") or name in pre_existing_keys:
             continue

@@ -698,10 +698,22 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const refs = (result.results as Array<Record<string, unknown>>) || [];
     return (
       <div>
-        {refs.slice(0, 5).map((r, i) => (
-          <div key={i} style={{ fontSize: "0.75rem", padding: "2px 0" }}>
-            <span style={{ color: "var(--color-text-tertiary)" }}>{String(r.year)}</span>{" "}
-            {String(r.title).slice(0, 80)}{String(r.title).length > 80 ? "..." : ""}
+        {refs.slice(0, 8).map((r, i) => (
+          <div key={i} style={{ fontSize: "0.75rem", padding: "4px 0", borderBottom: "1px solid var(--color-border)" }}>
+            <div>
+              <a href={`https://ui.adsabs.harvard.edu/abs/${r.bibcode}`} target="_blank" rel="noopener noreferrer"
+                style={{ color: "var(--color-accent)", textDecoration: "none" }}>
+                {String(r.title)}
+              </a>
+            </div>
+            <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.7rem" }}>
+              {(r.authors as string[] || []).slice(0, 3).join(", ")}{(r.authors as string[] || []).length > 3 ? " et al." : ""} ({String(r.year)})
+            </div>
+            {r.abstract ? (
+              <div style={{ color: "var(--color-text-secondary)", fontSize: "0.7rem", marginTop: 2, lineHeight: 1.3 }}>
+                {String(r.abstract).slice(0, 200)}{String(r.abstract).length > 200 ? "..." : ""}
+              </div>
+            ) : null}
           </div>
         ))}
       </div>
