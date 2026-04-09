@@ -12,6 +12,7 @@ from app.connectors.retry import with_retry
 
 NED_LOOKUP_URL = "https://ned.ipac.caltech.edu/srs/ObjectLookup"
 NED_SEARCH_URL = "https://ned.ipac.caltech.edu/cgi-bin/objsearch"
+NED_REQUEST_TIMEOUT = 25.0
 
 
 class NEDConnector(BaseConnector):
@@ -33,7 +34,7 @@ class NEDConnector(BaseConnector):
             "name": query,
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=NED_REQUEST_TIMEOUT) as client:
             resp = await client.get(NED_LOOKUP_URL, params=params)
             resp.raise_for_status()
 
@@ -52,7 +53,7 @@ class NEDConnector(BaseConnector):
             "name": object_id,
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=NED_REQUEST_TIMEOUT) as client:
             resp = await client.get(NED_LOOKUP_URL, params=params)
             resp.raise_for_status()
 
@@ -113,7 +114,7 @@ class NEDConnector(BaseConnector):
             "of": "json",
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=NED_REQUEST_TIMEOUT) as client:
             resp = await client.get(NED_SEARCH_URL, params=params)
             resp.raise_for_status()
 

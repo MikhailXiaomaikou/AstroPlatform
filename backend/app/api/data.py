@@ -35,6 +35,9 @@ COORD_REQUIRED_SOURCES = {
     "sdss", "gaia", "vizier", "2mass", "chandra", "allwise",
     "irsa", "eso", "lamost", "mast", "jwst", "alma", "ned", "desi",
 }
+SOURCE_TIMEOUTS = {
+    "ned": 75.0,
+}
 
 
 def _classify_error(exc: Exception) -> str:
@@ -148,6 +151,22 @@ async def _resolve_search_coordinates(
     return ra, dec
 
 
+def _search_timeout_for_source(source: str) -> float:
+    """Return a per-source search timeout budget."""
+    return SOURCE_TIMEOUTS.get(source, 20.0)
+
+
+def _build_source_error_name(source_name: str, error_type: str, result: Exception) -> str:
+    """Format a user-facing per-source search error."""
+    base = f"Error querying {source_name}: {result}"
+    if source_name == "ned" and error_type == "timeout":
+        return (
+            f"{base}. NED is responding slowly right now; "
+            "try again in a moment or narrow the search."
+        )
+    return base
+
+
 async def _require_owned_file_by_path(
     db: AsyncSession, user: User, path: str
 ) -> DataFile:
@@ -254,7 +273,7 @@ async def search_data(
         source_dec = search_dec if source in COORD_REQUIRED_SOURCES else dec
         return await asyncio.wait_for(
             get_connector(source).search(q, ra=source_ra, dec=source_dec, radius=radius),
-            timeout=20.0,
+            timeout=_search_timeout_for_source(source),
         )
 
     tasks = [_search_with_timeout(s) for s in source_list]
@@ -272,7 +291,7 @@ async def search_data(
                 SearchResult(
                     source=source_name,
                     object_id="error",
-                    name=f"Error querying {source_name}: {result}",
+                    name=_build_source_error_name(source_name, error_type, result),
                     ra=0,
                     dec=0,
                     error_type=error_type,
@@ -607,7 +626,7 @@ async def advanced_search(
                 SearchResult(
                     source=source_name,
                     object_id="error",
-                    name=f"Error querying {source_name}: {result}",
+                    name=_build_source_error_name(source_name, error_type, result),
                     ra=0,
                     dec=0,
                     error_type=error_type,

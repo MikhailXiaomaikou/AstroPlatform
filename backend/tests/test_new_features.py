@@ -196,6 +196,21 @@ print("ok")
         assert r.variable_types["answer"] == "int"
 
 
+class TestSearchErrorHelpers:
+    def test_ned_timeout_budget_is_extended(self):
+        from app.api.data import _search_timeout_for_source
+
+        assert _search_timeout_for_source("ned") == 75.0
+        assert _search_timeout_for_source("simbad") == 20.0
+
+    def test_ned_timeout_message_mentions_slow_service(self):
+        from app.api.data import _build_source_error_name
+
+        msg = _build_source_error_name("ned", "timeout", TimeoutError())
+        assert "responding slowly" in msg
+        assert "narrow the search" in msg
+
+
 class TestAITools:
     """Test the AI tool definitions and execution."""
 
