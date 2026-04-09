@@ -608,36 +608,14 @@ class TestTeamEndpoints:
         token = create_access_token(user.id)
         return user, token
 
-    async def test_invite_requires_lab_tier(self, app_client, db_session):
-        """Solo-tier user cannot invite; upgrading to lab allows it."""
-        from sqlalchemy import update
-
-        # Create a solo-tier user (the inviter)
-        user1_id, user1_token = await self._register_user(app_client, "solo_owner@astro.io")
+    async def test_invite_works_during_beta(self, app_client, db_session):
+        """During beta, all users can invite (tier check disabled)."""
+        # Create users
+        _user1_id, user1_token = await self._register_user(app_client, "solo_owner@astro.io")
+        await self._register_user(app_client, "invitee@astro.io")
         headers1 = {"Authorization": f"Bearer {user1_token}"}
 
-        # Create a second user to be invited
-        await self._register_user(app_client, "invitee@astro.io")
-
-        # Invite should fail with 403 for solo tier
-        resp = await app_client.post(
-            "/api/team/invite",
-            json={"email": "invitee@astro.io", "role": "member"},
-            headers=headers1,
-        )
-        assert resp.status_code == 403
-
-        # Upgrade user to lab tier
-        from app.models.schemas import User as UserModel
-
-        await db_session.execute(
-            update(UserModel)
-            .where(UserModel.id == uuid.UUID(user1_id))
-            .values(subscription_tier="lab")
-        )
-        await db_session.commit()
-
-        # Re-try invite (get_current_user re-fetches from DB so tier is updated)
+        # Invite should succeed for any tier during beta
         resp = await app_client.post(
             "/api/team/invite",
             json={"email": "invitee@astro.io", "role": "member"},
