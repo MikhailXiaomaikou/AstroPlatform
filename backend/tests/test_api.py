@@ -316,14 +316,25 @@ class TestPipelineVersioning:
         ],
     }
 
+    async def _register_and_get_headers(self, app_client):
+        """Helper: register a user and return auth headers."""
+        import secrets
+        email = f"pipeline-test-{secrets.token_hex(4)}@astro.io"
+        resp = await app_client.post("/api/auth/register", json={"email": email, "password": "testpassword123"})
+        assert resp.status_code == 201
+        token = resp.json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
+
     async def _create_template(self, app_client):
         """Helper: save a template and return its ID."""
+        headers = await self._register_and_get_headers(app_client)
         resp = await app_client.post(
             "/api/pipeline/save",
             json={"name": "Test Template", "description": "For versioning tests", "dag": self._DAG_V1},
+            headers=headers,
         )
         assert resp.status_code == 200
-        return resp.json()["id"]
+        return resp.json()["id"], headers
 
     async def _create_version(self, app_client, template_id, dag, change_note, headers):
         """Helper: create a version and return the response JSON."""
@@ -336,10 +347,7 @@ class TestPipelineVersioning:
         return resp.json()
 
     async def test_save_template_then_create_version(self, app_client, test_user):
-        _, token = test_user
-        headers = {"Authorization": f"Bearer {token}"}
-
-        template_id = await self._create_template(app_client)
+        template_id, headers = await self._create_template(app_client)
         version = await self._create_version(
             app_client, template_id, self._DAG_V1, "Initial version", headers
         )
@@ -350,10 +358,7 @@ class TestPipelineVersioning:
         assert "created_at" in version
 
     async def test_list_versions(self, app_client, test_user):
-        _, token = test_user
-        headers = {"Authorization": f"Bearer {token}"}
-
-        template_id = await self._create_template(app_client)
+        template_id, headers = await self._create_template(app_client)
         await self._create_version(app_client, template_id, self._DAG_V1, "v1", headers)
         await self._create_version(app_client, template_id, self._DAG_V2, "v2", headers)
 
@@ -372,7 +377,7 @@ class TestPipelineVersioning:
         _, token = test_user
         headers = {"Authorization": f"Bearer {token}"}
 
-        template_id = await self._create_template(app_client)
+        template_id, headers = await self._create_template(app_client)
         version = await self._create_version(
             app_client, template_id, self._DAG_V1, "first", headers
         )
@@ -392,7 +397,7 @@ class TestPipelineVersioning:
         _, token = test_user
         headers = {"Authorization": f"Bearer {token}"}
 
-        template_id = await self._create_template(app_client)
+        template_id, headers = await self._create_template(app_client)
         v1 = await self._create_version(
             app_client, template_id, self._DAG_V1, "v1", headers
         )
@@ -427,15 +432,10 @@ class TestPipelineVersioning:
         assert diff["removed_edges"] == []
 
     async def test_version_requires_auth(self, app_client):
-        # Create a template (save endpoint allows optional auth)
-        resp = await app_client.post(
-            "/api/pipeline/save",
-            json={"name": "No Auth Template", "description": "test", "dag": self._DAG_V1},
-        )
-        assert resp.status_code == 200
-        template_id = resp.json()["id"]
+        # Create a template with auth
+        template_id, headers = await self._create_template(app_client)
 
-        # Attempt to create version without auth token
+        # Attempt to create version WITHOUT auth token
         resp = await app_client.post(
             f"/api/pipeline/templates/{template_id}/versions",
             json={"dag": self._DAG_V1, "change_note": "no auth"},
