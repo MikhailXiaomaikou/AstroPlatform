@@ -386,11 +386,14 @@ export async function getTemplates(): Promise<PipelineTemplate[]> {
 
 export async function runPipeline(
   dag: { nodes: DagNode[]; edges: DagEdge[] },
-  inputDataId: string
+  inputDataId: string,
+  asyncMode = true
 ): Promise<RunResponse> {
   const { data } = await api.post<RunResponse>("/api/pipeline/run", {
     dag,
     input_data_id: inputDataId,
+  }, {
+    params: { async_mode: asyncMode },
   });
   return data;
 }

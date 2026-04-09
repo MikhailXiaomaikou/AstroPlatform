@@ -112,6 +112,18 @@ def _astro_to_result(obj: AstroObject) -> SearchResult:
     )
 
 
+async def _require_owned_file_by_path(
+    db: AsyncSession, user: User, path: str
+) -> DataFile:
+    result = await db.execute(
+        select(DataFile).where(DataFile.fits_path == path, DataFile.user_id == user.id)
+    )
+    data_file = result.scalar_one_or_none()
+    if data_file is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    return data_file
+
+
 def _dedup_by_position(results: list[SearchResult], sep_arcsec: float = 3.0) -> list[SearchResult]:
     """Merge results from different sources that refer to the same object.
 
@@ -644,10 +656,13 @@ async def list_workspace(
 @router.get("/fits-header", response_model=FITSHeaderResponse)
 async def get_fits_header(
     fits_path: str = Query(..., description="Storage path to FITS file"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Read FITS file headers and HDU info for preview."""
     if ".." in fits_path or fits_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid file path")
+    await _require_owned_file_by_path(db, user, fits_path)
 
     from astropy.io import fits
 
@@ -705,10 +720,13 @@ async def get_fits_header(
 async def get_fits_spectrum(
     fits_path: str = Query(..., description="Storage path to FITS file"),
     max_points: int = Query(2000, description="Max data points to return"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Extract spectrum data from FITS for interactive preview."""
     if ".." in fits_path or fits_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid file path")
+    await _require_owned_file_by_path(db, user, fits_path)
 
     from astropy.io import fits
     from astropy.table import Table
@@ -788,10 +806,13 @@ async def get_fits_spectrum(
 async def get_fits_wcs(
     fits_path: str = Query(..., description="Storage path to FITS file"),
     grid_steps: int = Query(10, description="Number of grid lines per axis"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Extract WCS coordinate grid from FITS image for overlay."""
     if ".." in fits_path or fits_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid file path")
+    await _require_owned_file_by_path(db, user, fits_path)
 
     from astropy.io import fits
     from astropy.wcs import WCS
@@ -1283,6 +1304,7 @@ async def browse_fits_files(
 @router.get("/fits/download")
 async def download_fits_file(
     fits_path: str = Query(..., description="Storage path to FITS file"),
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Download a FITS file for local use."""
@@ -1290,6 +1312,7 @@ async def download_fits_file(
 
     if ".." in fits_path or fits_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid file path")
+    await _require_owned_file_by_path(db, user, fits_path)
 
     try:
         raw = download_fits(fits_path)
@@ -1358,6 +1381,7 @@ async def upload_general_file(
 @router.get("/files/download")
 async def download_general_file(
     path: str = Query(..., description="Storage path"),
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Download any file from storage."""
@@ -1365,6 +1389,7 @@ async def download_general_file(
 
     if ".." in path or path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid file path")
+    await _require_owned_file_by_path(db, user, path)
 
     try:
         raw = download_fits(path)

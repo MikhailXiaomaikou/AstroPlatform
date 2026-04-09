@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import get_current_user, get_optional_user
+from app.auth import get_current_user
 from app.connectors.registry import CONNECTORS_KEYS, get_connector
 from app.models.database import get_db
 from app.models.schemas import DataFile, DataNote, DataTag, User
@@ -155,7 +155,7 @@ async def export_data(
     file_id: str,
     format: str = "csv",
     db: AsyncSession = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
 ):
     """Export data file content as CSV, VOTable, or LaTeX."""
     from astropy.io import fits
@@ -163,7 +163,9 @@ async def export_data(
     from app.storage import download_fits
 
     fid = uuid.UUID(file_id)
-    result = await db.execute(select(DataFile).where(DataFile.id == fid))
+    result = await db.execute(
+        select(DataFile).where(DataFile.id == fid, DataFile.user_id == user.id)
+    )
     data_file = result.scalar_one_or_none()
     if not data_file:
         raise HTTPException(status_code=404, detail="File not found")

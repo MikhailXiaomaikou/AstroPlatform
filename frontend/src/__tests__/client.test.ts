@@ -38,9 +38,9 @@ describe("API client configuration", () => {
     expect(api.defaults.baseURL).toBe("http://localhost:8000");
   });
 
-  it("sets timeout to 30 seconds", async () => {
+  it("sets timeout to 120 seconds", async () => {
     const { default: api } = await import("../api/client");
-    expect(api.defaults.timeout).toBe(30000);
+    expect(api.defaults.timeout).toBe(120000);
   });
 
   it("attaches Authorization header when token is present", async () => {

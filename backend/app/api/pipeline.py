@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
-from app.auth import get_current_user, get_optional_user
+from app.auth import get_current_user, get_optional_user, hash_password
 from app.rate_limit import limiter
 from app.config import settings
 from app.models.database import get_db
@@ -22,6 +22,9 @@ from app.pipeline.validate import DAGValidationError, validate_dag
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
+
+_ANONYMOUS_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+_ANONYMOUS_USER_EMAIL = "guest@astro.local"
 
 
 # ── Request / Response models ──
@@ -77,6 +80,58 @@ class DiffResult(BaseModel):
     modified_nodes: list[dict]
     added_edges: list[dict]
     removed_edges: list[dict]
+
+
+async def _get_or_create_anonymous_user(db: AsyncSession) -> User:
+    result = await db.execute(select(User).where(User.id == _ANONYMOUS_USER_ID))
+    user = result.scalar_one_or_none()
+    if user is not None:
+        return user
+
+    user = User(
+        id=_ANONYMOUS_USER_ID,
+        email=_ANONYMOUS_USER_EMAIL,
+        password_hash=hash_password(str(uuid.uuid4())),
+        subscription_tier="solo",
+        display_name="Guest",
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def _get_owned_template(
+    db: AsyncSession, template_id: uuid.UUID, user: User
+) -> PipelineTemplateDB:
+    result = await db.execute(
+        select(PipelineTemplateDB).where(
+            PipelineTemplateDB.id == template_id,
+            PipelineTemplateDB.user_id == user.id,
+        )
+    )
+    template = result.scalar_one_or_none()
+    if template is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return template
+
+
+async def _get_accessible_template(
+    db: AsyncSession, template_id: uuid.UUID, user: User
+) -> PipelineTemplateDB:
+    result = await db.execute(
+        select(PipelineTemplateDB).where(
+            PipelineTemplateDB.id == template_id,
+            (
+                (PipelineTemplateDB.user_id == user.id)
+                | (PipelineTemplateDB.is_builtin == True)
+            ),
+        )
+    )
+    template = result.scalar_one_or_none()
+    if template is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return template
 
 
 # ── Built-in templates (seeded on first request) ──
@@ -201,13 +256,13 @@ async def list_templates(
 async def save_template(
     req: SaveTemplateRequest,
     db: AsyncSession = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
 ):
     tpl = PipelineTemplateDB(
         name=req.name,
         description=req.description,
         dag=req.dag,
-        user_id=user.id if user else None,
+        user_id=user.id,
     )
     db.add(tpl)
     await db.commit()
@@ -222,7 +277,7 @@ async def run_pipeline(
     req: RunRequest,
     db: AsyncSession = Depends(get_db),
     user: User | None = Depends(get_optional_user),
-    async_mode: bool = Query(False, description="When True, dispatch via Celery (requires Redis)"),
+    async_mode: bool = Query(True, description="When True, dispatch via Celery (requires Redis)"),
 ):
     """Validate DAG and execute pipeline.
 
@@ -253,9 +308,11 @@ async def run_pipeline(
 
     # Create DB record
     run_id = uuid.uuid4()
+    owner = user or await _get_or_create_anonymous_user(db)
+
     run = PipelineRun(
         id=run_id,
-        user_id=user.id if user else uuid.UUID("00000000-0000-0000-0000-000000000000"),
+        user_id=owner.id,
         dag=req.dag,
         status="pending",
     )
@@ -352,13 +409,19 @@ async def batch_run_pipeline(
 
 
 @router.get("/{run_id}")
-async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
+async def get_run(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     try:
         rid = uuid.UUID(run_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid run ID")
 
-    result = await db.execute(select(PipelineRun).where(PipelineRun.id == rid))
+    result = await db.execute(
+        select(PipelineRun).where(PipelineRun.id == rid, PipelineRun.user_id == user.id)
+    )
     run = result.scalar_one_or_none()
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -388,12 +451,7 @@ async def save_template_version(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid template ID")
 
-    result = await db.execute(
-        select(PipelineTemplateDB).where(PipelineTemplateDB.id == tid)
-    )
-    template = result.scalar_one_or_none()
-    if template is None:
-        raise HTTPException(status_code=404, detail="Template not found")
+    template = await _get_owned_template(db, tid, user)
 
     # Determine next version number
     result = await db.execute(
@@ -436,11 +494,7 @@ async def list_template_versions(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid template ID")
 
-    result = await db.execute(
-        select(PipelineTemplateDB).where(PipelineTemplateDB.id == tid)
-    )
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Template not found")
+    await _get_accessible_template(db, tid, user)
 
     result = await db.execute(
         select(PipelineVersion)
@@ -474,6 +528,8 @@ async def get_template_version(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid ID")
 
+    await _get_accessible_template(db, tid, user)
+
     result = await db.execute(
         select(PipelineVersion)
         .where(PipelineVersion.id == vid, PipelineVersion.template_id == tid)
@@ -506,6 +562,8 @@ async def diff_versions(
         vid2 = uuid.UUID(v2)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid ID")
+
+    await _get_accessible_template(db, tid, user)
 
     result1 = await db.execute(
         select(PipelineVersion)
