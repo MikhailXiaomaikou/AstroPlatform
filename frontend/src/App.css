@@ -5063,3 +5063,133 @@
   padding-top: 0.75rem;
   border-top: 1px solid var(--color-separator);
 }
+
+/* ── Literature Panel ── */
+
+.literature-panel {
+  margin-top: 1rem;
+}
+
+.literature-search-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.literature-input {
+  flex: 1;
+  padding: 0.6rem 1rem;
+  font-size: 0.95rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.literature-input:focus {
+  border-color: var(--color-accent, #5b8def);
+}
+
+.literature-input::placeholder {
+  opacity: 0.5;
+}
+
+.literature-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.literature-results-header {
+  font-size: 0.85rem;
+  opacity: 0.7;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.literature-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  transition: border-color 0.2s;
+}
+
+.literature-card:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.literature-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.literature-title-link {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--color-accent, #5b8def);
+  text-decoration: none;
+  line-height: 1.35;
+}
+
+.literature-title-link:hover {
+  text-decoration: underline;
+}
+
+.literature-year {
+  font-size: 0.8rem;
+  opacity: 0.6;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.literature-authors {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin-bottom: 0.3rem;
+}
+
+.literature-pub {
+  display: inline-block;
+  font-size: 0.75rem;
+  opacity: 0.55;
+  font-style: italic;
+  margin-bottom: 0.4rem;
+}
+
+.literature-abstract {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  opacity: 0.8;
+  margin-bottom: 0.5rem;
+}
+
+.literature-toggle {
+  background: none;
+  border: none;
+  color: var(--color-accent, #5b8def);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0;
+  margin-left: 0.3rem;
+}
+
+.literature-toggle:hover {
+  text-decoration: underline;
+}
+
+.literature-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.literature-actions a.btn-secondary {
+  text-decoration: none;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+}

@@ -38,6 +38,9 @@ const translations: Record<string, Record<Lang, string>> = {
   "data.magnitude":    { en: "Mag",              zh: "星等",          fr: "Mag",              es: "Mag" },
   "data.fetch_fits":   { en: "Fetch FITS",       zh: "获取 FITS",     fr: "Télécharger FITS", es: "Obtener FITS" },
   "data.my_files":     { en: "My Files",         zh: "我的文件",      fr: "Mes fichiers",     es: "Mis archivos" },
+  "data.literature":   { en: "Literature",       zh: "文献搜索",      fr: "Littérature",      es: "Literatura" },
+  "data.lit_placeholder": { en: "Search ADS/arXiv (e.g. 'high-z quasars', 'JWST galaxies')", zh: "搜索 ADS/arXiv（如 'high-z quasars'）", fr: "Rechercher ADS/arXiv (ex. 'high-z quasars')", es: "Buscar ADS/arXiv (ej. 'high-z quasars')" },
+  "data.lit_search":   { en: "Search Literature", zh: "搜索文献",      fr: "Rechercher",       es: "Buscar" },
 
   // Pipeline
   "pipeline.run":      { en: "Run Pipeline",     zh: "运行流水线",    fr: "Exécuter",         es: "Ejecutar" },

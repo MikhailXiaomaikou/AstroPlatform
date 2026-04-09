@@ -252,6 +252,42 @@ class ChatSession(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class SharedResult(Base):
+    """Search results shared with a team (by owner_id)."""
+    __tablename__ = "shared_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
+    shared_by: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    objects: Mapped[list] = mapped_column(JSONType(), nullable=False)  # list of object dicts
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SharedNotebook(Base):
+    """Chat session notebooks shared with a team."""
+    __tablename__ = "shared_notebooks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
+    shared_by: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    content: Mapped[str] = mapped_column(Text, nullable=False)  # markdown export
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TeamActivity(Base):
+    """Activity feed entries for a team."""
+    __tablename__ = "team_activities"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)  # "search", "pipeline_run", "shared_results", "shared_notebook"
+    summary: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ScheduledRun(Base):
     __tablename__ = "scheduled_runs"
 

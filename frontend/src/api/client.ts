@@ -702,6 +702,19 @@ export async function exportSearchNotebook(
   return data;
 }
 
+// ── Chat → Markdown Export ──
+
+export async function exportChatMarkdown(
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>,
+  title?: string,
+): Promise<Blob> {
+  const { data } = await api.post("/api/export/report/from-chat", {
+    messages,
+    title: title || "AI Research Chat",
+  }, { responseType: "blob" });
+  return data;
+}
+
 // ── Chat → Notebook Export ──
 
 export async function exportChatNotebook(
@@ -711,6 +724,34 @@ export async function exportChatNotebook(
   const { data } = await api.post("/api/export/notebook/from-chat", {
     messages,
     title: title || "AI Research Session",
+  }, { responseType: "blob" });
+  return data;
+}
+
+// ── Chat → LaTeX Export ──
+
+export async function exportChatLatex(
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>,
+  title?: string,
+  abstract?: string,
+  author?: string,
+): Promise<Blob> {
+  const { data } = await api.post("/api/export/report/latex", {
+    messages,
+    title: title || "Astro Platform Research Report",
+    abstract: abstract || "",
+    author: author || "Astro Platform User",
+  }, { responseType: "blob" });
+  return data;
+}
+
+// ── Chat → BibTeX Export ──
+
+export async function exportChatBibTeX(
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>,
+): Promise<Blob> {
+  const { data } = await api.post("/api/export/report/bibtex", {
+    messages,
   }, { responseType: "blob" });
   return data;
 }
@@ -1041,6 +1082,86 @@ export async function clearSearchHistory(): Promise<void> {
   await api.delete("/api/team/search-history");
 }
 
+// ── Shared Results API ──
+
+export interface SharedResultItem {
+  id: string;
+  team_id: string;
+  shared_by: string;
+  shared_by_email: string;
+  title: string;
+  objects: Record<string, unknown>[];
+  created_at: string | null;
+}
+
+export async function shareResults(
+  teamId: string,
+  title: string,
+  objects: Record<string, unknown>[]
+): Promise<SharedResultItem> {
+  const { data } = await api.post<SharedResultItem>(
+    `/api/team/${teamId}/shared-results`,
+    { title, objects }
+  );
+  return data;
+}
+
+export async function getSharedResults(teamId: string): Promise<SharedResultItem[]> {
+  const { data } = await api.get<SharedResultItem[]>(
+    `/api/team/${teamId}/shared-results`
+  );
+  return data;
+}
+
+// ── Shared Notebooks API ──
+
+export interface SharedNotebookItem {
+  id: string;
+  team_id: string;
+  shared_by: string;
+  shared_by_email: string;
+  title: string;
+  content: string;
+  created_at: string | null;
+}
+
+export async function shareNotebook(
+  teamId: string,
+  title: string,
+  content: string
+): Promise<SharedNotebookItem> {
+  const { data } = await api.post<SharedNotebookItem>(
+    `/api/team/${teamId}/shared-notebooks`,
+    { title, content }
+  );
+  return data;
+}
+
+export async function getSharedNotebooks(teamId: string): Promise<SharedNotebookItem[]> {
+  const { data } = await api.get<SharedNotebookItem[]>(
+    `/api/team/${teamId}/shared-notebooks`
+  );
+  return data;
+}
+
+// ── Team Activity API ──
+
+export interface ActivityItem {
+  id: string;
+  user_id: string;
+  user_email: string;
+  action: string;
+  summary: string;
+  created_at: string | null;
+}
+
+export async function getTeamActivity(teamId: string): Promise<ActivityItem[]> {
+  const { data } = await api.get<ActivityItem[]>(
+    `/api/team/${teamId}/activity`
+  );
+  return data;
+}
+
 // ── Settings API ──
 
 export interface KeyInfo {
@@ -1213,6 +1334,33 @@ export interface ADSReference {
 export async function searchADS(objectName: string): Promise<ADSReference[]> {
   const { data } = await api.get<ADSReference[]>("/api/citations/ads", {
     params: { object_name: objectName },
+  });
+  return data;
+}
+
+export interface LiteratureResult {
+  bibcode: string;
+  title: string;
+  authors: string[];
+  year: string;
+  doi: string | null;
+  abstract: string;
+  pub: string;
+  arxiv_url?: string;
+}
+
+export interface LiteratureSearchResponse {
+  results: LiteratureResult[];
+  source: string;
+  query: string;
+}
+
+export async function searchLiterature(
+  query: string,
+  maxResults = 20
+): Promise<LiteratureSearchResponse> {
+  const { data } = await api.get<LiteratureSearchResponse>("/api/citations/search", {
+    params: { q: query, max_results: maxResults },
   });
   return data;
 }

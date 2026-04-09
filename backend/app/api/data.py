@@ -159,16 +159,11 @@ def _search_timeout_for_source(source: str) -> float:
 def _build_source_error_name(source_name: str, error_type: str, result: Exception) -> str:
     """Format a user-facing per-source search error."""
     if source_name == "ned" and error_type == "timeout":
-        return (
-            f"Error querying {source_name}: "
-            "NED is responding slowly right now; "
-            "try again in a moment or narrow the search."
-        )
+        return "NED is responding slowly right now; try again in a moment or narrow the search."
     detail = str(result).strip()
-    base = f"Error querying {source_name}"
     if detail:
-        return f"{base}: {detail}"
-    return base
+        return detail
+    return f"Error querying {source_name}"
 
 
 async def _require_owned_file_by_path(

@@ -16,7 +16,10 @@ from app.models.schemas import (
     PipelineTemplateDB,
     SearchHistory,
     SharedDataset,
+    SharedNotebook,
     SharedPipeline,
+    SharedResult,
+    TeamActivity,
     TeamMember,
     User,
 )
@@ -106,6 +109,45 @@ class SearchHistoryResponse(BaseModel):
     created_at: str | None
 
 
+class ShareResultsRequest(BaseModel):
+    title: str = ""
+    objects: list[dict]
+
+
+class SharedResultResponse(BaseModel):
+    id: str
+    team_id: str
+    shared_by: str
+    shared_by_email: str
+    title: str
+    objects: list[dict]
+    created_at: str | None
+
+
+class ShareNotebookRequest(BaseModel):
+    title: str = ""
+    content: str
+
+
+class SharedNotebookResponse(BaseModel):
+    id: str
+    team_id: str
+    shared_by: str
+    shared_by_email: str
+    title: str
+    content: str
+    created_at: str | None
+
+
+class ActivityResponse(BaseModel):
+    id: str
+    user_id: str
+    user_email: str
+    action: str
+    summary: str
+    created_at: str | None
+
+
 # ── Helpers ──
 
 def _require_team_tier(user: User):
@@ -130,6 +172,20 @@ async def _find_team_owner(user: User, db: AsyncSession) -> uuid.UUID:
     if membership:
         return membership.owner_id
     return user.id
+
+
+async def _record_activity(
+    db: AsyncSession, team_id: uuid.UUID, user_id: uuid.UUID, action: str, summary: str
+):
+    """Insert an activity record for the team feed."""
+    activity = TeamActivity(
+        team_id=team_id,
+        user_id=user_id,
+        action=action,
+        summary=summary,
+    )
+    db.add(activity)
+    await db.flush()
 
 
 # ── Team Management ──
@@ -740,3 +796,186 @@ async def clear_search_history(
     )
     await db.commit()
     return {"deleted": True}
+
+
+# ══════════════════════════════════════
+# Shared Search Results
+# ══════════════════════════════════════
+
+@router.post("/{team_id}/shared-results", response_model=SharedResultResponse)
+async def share_results(
+    team_id: str,
+    req: ShareResultsRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Share search results (object list) with the team."""
+    tid = uuid.UUID(team_id)
+
+    if not req.objects:
+        raise HTTPException(status_code=400, detail="Objects list must not be empty")
+
+    shared = SharedResult(
+        team_id=tid,
+        shared_by=user.id,
+        title=req.title or f"{len(req.objects)} objects",
+        objects=req.objects,
+    )
+    db.add(shared)
+    await _record_activity(
+        db, tid, user.id, "shared_results",
+        f"Shared {len(req.objects)} search results: {shared.title}",
+    )
+    await db.commit()
+    await db.refresh(shared)
+
+    return SharedResultResponse(
+        id=str(shared.id),
+        team_id=str(tid),
+        shared_by=str(user.id),
+        shared_by_email=user.email,
+        title=shared.title,
+        objects=shared.objects,
+        created_at=shared.created_at.isoformat() if shared.created_at else None,
+    )
+
+
+@router.get("/{team_id}/shared-results", response_model=list[SharedResultResponse])
+async def list_shared_results(
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List search results shared with the team."""
+    tid = uuid.UUID(team_id)
+
+    result = await db.execute(
+        select(SharedResult, User)
+        .join(User, SharedResult.shared_by == User.id)
+        .where(SharedResult.team_id == tid)
+        .order_by(SharedResult.created_at.desc())
+        .limit(50)
+    )
+    rows = result.all()
+
+    return [
+        SharedResultResponse(
+            id=str(sr.id),
+            team_id=str(sr.team_id),
+            shared_by=str(sr.shared_by),
+            shared_by_email=sharer.email,
+            title=sr.title,
+            objects=sr.objects,
+            created_at=sr.created_at.isoformat() if sr.created_at else None,
+        )
+        for sr, sharer in rows
+    ]
+
+
+# ══════════════════════════════════════
+# Shared Notebooks
+# ══════════════════════════════════════
+
+@router.post("/{team_id}/shared-notebooks", response_model=SharedNotebookResponse)
+async def share_notebook(
+    team_id: str,
+    req: ShareNotebookRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Share a chat session notebook export with the team."""
+    tid = uuid.UUID(team_id)
+
+    if not req.content.strip():
+        raise HTTPException(status_code=400, detail="Notebook content must not be empty")
+
+    shared = SharedNotebook(
+        team_id=tid,
+        shared_by=user.id,
+        title=req.title or "Untitled Notebook",
+        content=req.content,
+    )
+    db.add(shared)
+    await _record_activity(
+        db, tid, user.id, "shared_notebook",
+        f"Shared notebook: {shared.title}",
+    )
+    await db.commit()
+    await db.refresh(shared)
+
+    return SharedNotebookResponse(
+        id=str(shared.id),
+        team_id=str(tid),
+        shared_by=str(user.id),
+        shared_by_email=user.email,
+        title=shared.title,
+        content=shared.content,
+        created_at=shared.created_at.isoformat() if shared.created_at else None,
+    )
+
+
+@router.get("/{team_id}/shared-notebooks", response_model=list[SharedNotebookResponse])
+async def list_shared_notebooks(
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List notebooks shared with the team."""
+    tid = uuid.UUID(team_id)
+
+    result = await db.execute(
+        select(SharedNotebook, User)
+        .join(User, SharedNotebook.shared_by == User.id)
+        .where(SharedNotebook.team_id == tid)
+        .order_by(SharedNotebook.created_at.desc())
+        .limit(50)
+    )
+    rows = result.all()
+
+    return [
+        SharedNotebookResponse(
+            id=str(sn.id),
+            team_id=str(sn.team_id),
+            shared_by=str(sn.shared_by),
+            shared_by_email=sharer.email,
+            title=sn.title,
+            content=sn.content,
+            created_at=sn.created_at.isoformat() if sn.created_at else None,
+        )
+        for sn, sharer in rows
+    ]
+
+
+# ══════════════════════════════════════
+# Team Activity Feed
+# ══════════════════════════════════════
+
+@router.get("/{team_id}/activity", response_model=list[ActivityResponse])
+async def get_team_activity(
+    team_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return the recent activity feed for a team."""
+    tid = uuid.UUID(team_id)
+
+    result = await db.execute(
+        select(TeamActivity, User)
+        .join(User, TeamActivity.user_id == User.id)
+        .where(TeamActivity.team_id == tid)
+        .order_by(TeamActivity.created_at.desc())
+        .limit(100)
+    )
+    rows = result.all()
+
+    return [
+        ActivityResponse(
+            id=str(a.id),
+            user_id=str(a.user_id),
+            user_email=u.email,
+            action=a.action,
+            summary=a.summary,
+            created_at=a.created_at.isoformat() if a.created_at else None,
+        )
+        for a, u in rows
+    ]

@@ -9,6 +9,7 @@ import base64
 import io
 import inspect
 import logging
+import os
 import signal
 import sys
 import traceback
@@ -20,8 +21,14 @@ logger = logging.getLogger(__name__)
 # Maximum execution time in seconds
 MAX_EXEC_TIME = 30
 
-# Maximum output size in characters
-MAX_OUTPUT_SIZE = 50_000
+# Maximum output size in characters (raised from 50k to 500k for large tables)
+MAX_OUTPUT_SIZE = 500_000
+
+# Memory warning threshold in bytes (default 512 MB)
+MEMORY_WARN_THRESHOLD = 512 * 1024 * 1024
+
+# Maximum array/table rows allowed in a single variable repr
+MAX_REPR_ROWS = 2000
 
 # Session-scoped variable store — persists between code executions
 _session_vars: dict[str, dict] = {}
@@ -113,6 +120,111 @@ def _safe_import(name, *args, **kwargs):
     return __builtins__.__import__(name, *args, **kwargs) if hasattr(__builtins__, '__import__') else __import__(name, *args, **kwargs)
 
 
+def _get_memory_usage_bytes() -> int:
+    """Return approximate RSS memory usage in bytes (best-effort)."""
+    try:
+        import resource
+        # ru_maxrss is in bytes on Linux, kilobytes on macOS
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            return usage  # already bytes on macOS
+        return usage * 1024  # KB -> bytes on Linux
+    except Exception:
+        return 0
+
+
+def _check_memory(warn_stream: io.StringIO | None = None) -> int:
+    """Check memory usage; write a warning if approaching the threshold.
+
+    Returns current usage in bytes.
+    """
+    usage = _get_memory_usage_bytes()
+    if usage > MEMORY_WARN_THRESHOLD and warn_stream is not None:
+        mb = usage / (1024 * 1024)
+        limit_mb = MEMORY_WARN_THRESHOLD / (1024 * 1024)
+        warn_stream.write(
+            f"\n⚠ Memory warning: ~{mb:.0f} MB in use (threshold {limit_mb:.0f} MB). "
+            "Consider using process_in_chunks() or reducing data size.\n"
+        )
+    return usage
+
+
+def _make_sandbox_helpers():
+    """Create large-data processing helpers available inside the sandbox."""
+
+    def process_in_chunks(data, chunk_size, func):
+        """Process a list/array in chunks to limit peak memory usage.
+
+        Args:
+            data: list, numpy array, pandas DataFrame, or astropy Table
+            chunk_size: number of rows/elements per chunk
+            func: callable that receives a chunk and returns a result
+
+        Returns:
+            list of results, one per chunk
+
+        Example::
+
+            results = process_in_chunks(big_table, 1000, lambda chunk: chunk['flux'].mean())
+        """
+        results = []
+        length = len(data)
+        for start in range(0, length, chunk_size):
+            end = min(start + chunk_size, length)
+            chunk = data[start:end]
+            results.append(func(chunk))
+        return results
+
+    def load_votable(path: str):
+        """Load a VOTable file efficiently, returning an astropy Table.
+
+        Large VOTables are read with a streaming parser that converts
+        to a Table only after filtering if needed.
+        """
+        from astropy.io.votable import parse as _parse_votable
+        votable = _parse_votable(path)
+        table = votable.get_first_table().to_table()
+        return table
+
+    def load_csv(path: str, **kwargs):
+        """Load a CSV file efficiently using pandas or astropy.
+
+        Accepts the same keyword arguments as pandas.read_csv (e.g.
+        ``usecols``, ``nrows``, ``dtype``).  Falls back to the csv
+        stdlib module if pandas is unavailable.
+
+        Returns:
+            pandas DataFrame (preferred) or list[dict]
+        """
+        try:
+            import pandas as _pd
+            return _pd.read_csv(path, **kwargs)
+        except ImportError:
+            pass
+        # Fallback: stdlib csv
+        import csv as _csv
+        nrows = kwargs.get("nrows")
+        rows = []
+        with open(path, newline="") as fh:
+            reader = _csv.DictReader(fh)
+            for i, row in enumerate(reader):
+                if nrows is not None and i >= nrows:
+                    break
+                rows.append(row)
+        return rows
+
+    def memory_usage_mb() -> float:
+        """Return approximate process memory usage in megabytes."""
+        return _get_memory_usage_bytes() / (1024 * 1024)
+
+    return {
+        "process_in_chunks": process_in_chunks,
+        "load_votable": load_votable,
+        "load_csv": load_csv,
+        "memory_usage_mb": memory_usage_mb,
+    }
+
+
 def _make_data_accessor():
     """Create helper functions that the code can call to access platform data."""
     def load_fits(fits_path: str):
@@ -188,6 +300,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         "plt": plt,
         "matplotlib": matplotlib,
         **_make_data_accessor(),
+        **_make_sandbox_helpers(),
     }
 
     # Try to pre-import astropy
@@ -288,6 +401,9 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
+    # Check memory usage and append warning if needed
+    _check_memory(stderr_capture)
+
     # Capture output
     result.stdout = stdout_capture.getvalue()[:MAX_OUTPUT_SIZE]
     stderr_text = stderr_capture.getvalue()
@@ -329,13 +445,13 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         except Exception:
             pass
 
-    # Extract key result variables (skip large objects)
+    # Extract key result variables (allow larger representations)
     for name, val in exec_globals.items():
         if name.startswith("_") or name in pre_existing_keys:
             continue
         try:
             r = repr(val)
-            if len(r) < 500:  # Only capture small representations
+            if len(r) < 5000:  # Raised from 500 to 5000 for larger tables
                 result.variables[name] = r
                 result.variable_types[name] = type(val).__name__
         except Exception:

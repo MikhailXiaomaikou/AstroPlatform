@@ -187,7 +187,11 @@ TOOLS = [
             "Available libraries: numpy (as np), scipy, astropy (Table, SkyCoord, units as u), "
             "matplotlib.pyplot (as plt), pandas. "
             "Helper functions: load_fits(path) returns astropy HDUList, "
-            "get_search_results() returns the latest search results as a list of dicts. "
+            "get_search_results() returns the latest search results as a list of dicts, "
+            "load_votable(path) loads a VOTable as an astropy Table, "
+            "load_csv(path) loads a CSV as a pandas DataFrame, "
+            "process_in_chunks(data, chunk_size, func) processes large data in memory-safe chunks, "
+            "memory_usage_mb() returns current memory usage in MB. "
             "Use print() to output results. Matplotlib figures are automatically captured. "
             "Max execution time: 30 seconds."
         ),
@@ -337,18 +341,18 @@ async def _exec_adql(inp: dict) -> dict:
     row_count = result.get("row_count", 0) if isinstance(result, dict) else 0
     truncated = {}
     for col, vals in data.items():
-        truncated[col] = vals[:20] if isinstance(vals, list) else vals
+        truncated[col] = vals[:100] if isinstance(vals, list) else vals
     adql_result = {
         "columns": result.get("columns", []) if isinstance(result, dict) else [],
         "data": truncated,
         "row_count": row_count,
-        "showing": min(20, row_count),
+        "showing": min(100, row_count),
     }
 
     # Auto-inject full result into Python sandbox for immediate use
     store_search_results("latest_adql", [
         {col: data.get(col, [None] * row_count)[i] for col in adql_result["columns"]}
-        for i in range(min(row_count, 200))
+        for i in range(min(row_count, 1000))
     ] if data else [])
 
     return adql_result
@@ -481,20 +485,20 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
 
     response: dict = {
         "success": result.success,
-        "stdout": result.stdout[:5000] if result.stdout else "",
+        "stdout": result.stdout[:50_000] if result.stdout else "",
     }
 
     if result.error:
         response["error"] = result.error
     if result.stderr and not result.success:
-        response["traceback"] = result.stderr[:2000]
+        response["traceback"] = result.stderr[:10_000]
     if result.figures:
-        response["figures"] = result.figures[:5]  # max 5 figures
+        response["figures"] = result.figures[:10]  # max 10 figures
         response["figure_count"] = len(result.figures)
     if result.variables:
-        response["variables"] = dict(list(result.variables.items())[:20])
+        response["variables"] = dict(list(result.variables.items())[:50])
     if result.variable_types:
-        response["variable_types"] = dict(list(result.variable_types.items())[:20])
+        response["variable_types"] = dict(list(result.variable_types.items())[:50])
 
     return response
 

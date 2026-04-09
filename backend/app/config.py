@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
@@ -6,6 +7,31 @@ from pydantic_settings import BaseSettings
 _PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 
 _ENV = os.getenv("ENV", "dev")
+
+# ---------------------------------------------------------------------------
+# Ensure astropy / astroquery have a writable cache & config directory.
+# In containerised environments (Docker, Render) HOME is often set to a
+# non-existent path like /nonexistent, which causes "[Errno 13] Permission
+# denied" when astroquery tries to write cache files.
+# We check early — before any astropy import — and redirect XDG dirs to a
+# writable temp location when the home directory is not usable.
+# ---------------------------------------------------------------------------
+def _ensure_writable_home():
+    home = os.environ.get("HOME", "")
+    home_ok = home and os.path.isdir(home) and os.access(home, os.W_OK)
+    if not home_ok:
+        fallback = os.path.join(tempfile.gettempdir(), "astro_platform_home")
+        os.makedirs(fallback, exist_ok=True)
+        # Force-set HOME (not setdefault) — HOME may exist but point to /nonexistent
+        os.environ["HOME"] = fallback
+        cache_dir = os.path.join(fallback, ".cache")
+        config_dir = os.path.join(fallback, ".config")
+        os.environ["XDG_CACHE_HOME"] = cache_dir
+        os.environ["XDG_CONFIG_HOME"] = config_dir
+        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(config_dir, exist_ok=True)
+
+_ensure_writable_home()
 
 
 class Settings(BaseSettings):

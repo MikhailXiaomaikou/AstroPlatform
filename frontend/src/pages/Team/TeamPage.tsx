@@ -16,15 +16,24 @@ import {
   getSearchHistory,
   deleteSearchHistoryItem,
   clearSearchHistory,
-  type TeamMember,
-  type SharedPipelineItem,
-  type SharedDatasetItem,
-  type PipelineCommentItem,
-  type FriendItem,
-  type SearchHistoryItem,
+  getSharedResults,
+  getSharedNotebooks,
+  getTeamActivity,
+  getProfile,
+} from "../../api/client";
+import type {
+  TeamMember,
+  SharedPipelineItem,
+  SharedDatasetItem,
+  PipelineCommentItem,
+  FriendItem,
+  SearchHistoryItem,
+  SharedResultItem,
+  SharedNotebookItem,
+  ActivityItem,
 } from "../../api/client";
 
-type Tab = "friends" | "members" | "pipelines" | "datasets" | "history";
+type Tab = "friends" | "members" | "pipelines" | "datasets" | "history" | "shared";
 
 export default function TeamPage() {
   const [tab, setTab] = useState<Tab>("friends");
@@ -58,9 +67,24 @@ export default function TeamPage() {
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  // Shared tab state
+  const [teamId, setTeamId] = useState<string | null>(null);
+  const [sharedResults, setSharedResults] = useState<SharedResultItem[]>([]);
+  const [sharedNotebooks, setSharedNotebooks] = useState<SharedNotebookItem[]>([]);
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
+  const [sharedLoading, setSharedLoading] = useState(false);
+  const [expandedNotebook, setExpandedNotebook] = useState<string | null>(null);
+
   // Load friends on mount
   useEffect(() => {
     loadFriends();
+  }, []);
+
+  // Resolve teamId from user profile on mount
+  useEffect(() => {
+    getProfile()
+      .then((p) => setTeamId(p.id))
+      .catch(() => setTeamId(null));
   }, []);
 
   // Load tab data when tab changes
@@ -69,7 +93,8 @@ export default function TeamPage() {
     if (tab === "pipelines") loadPipelines();
     if (tab === "datasets") loadDatasets();
     if (tab === "history") loadHistory();
-  }, [tab]);
+    if (tab === "shared") loadShared();
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadFriends() {
     setFriendsLoading(true);
@@ -128,6 +153,25 @@ export default function TeamPage() {
       // ignore
     } finally {
       setHistoryLoading(false);
+    }
+  }
+
+  async function loadShared() {
+    if (!teamId) return;
+    setSharedLoading(true);
+    try {
+      const [resultsData, notebooksData, activityData] = await Promise.all([
+        getSharedResults(teamId),
+        getSharedNotebooks(teamId),
+        getTeamActivity(teamId),
+      ]);
+      setSharedResults(resultsData);
+      setSharedNotebooks(notebooksData);
+      setActivity(activityData);
+    } catch {
+      // ignore
+    } finally {
+      setSharedLoading(false);
     }
   }
 
@@ -304,6 +348,12 @@ export default function TeamPage() {
           onClick={() => setTab("history")}
         >
           Search History
+        </button>
+        <button
+          className={`team-tab ${tab === "shared" ? "active" : ""}`}
+          onClick={() => setTab("shared")}
+        >
+          Shared
         </button>
       </div>
 
@@ -620,6 +670,109 @@ export default function TeamPage() {
                 </li>
               ))}
             </ul>
+          )}
+        </div>
+      )}
+
+      {/* ── Shared Tab ── */}
+      {tab === "shared" && (
+        <div className="team-section">
+          {sharedLoading ? (
+            <p className="empty-msg">Loading shared items...</p>
+          ) : !teamId ? (
+            <p className="empty-msg">Sign in to view shared items.</p>
+          ) : (
+            <>
+              {/* Activity Feed */}
+              {activity.length > 0 && (
+                <div className="friend-section">
+                  <h3 className="friend-section-title">Recent Activity</h3>
+                  <ul className="team-member-list">
+                    {activity.slice(0, 20).map((a) => (
+                      <li key={a.id} className="team-member-item">
+                        <div className="team-member-info" style={{ flex: 1 }}>
+                          <span className="team-member-email">{a.user_email}</span>
+                          <span className="role-badge role-member">{a.action}</span>
+                          <span style={{ marginLeft: 8, opacity: 0.8 }}>{a.summary}</span>
+                        </div>
+                        <div className="team-member-actions">
+                          <span className="history-date">
+                            {a.created_at ? new Date(a.created_at).toLocaleString() : ""}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Shared Results */}
+              <div className="friend-section">
+                <h3 className="friend-section-title">Shared Search Results</h3>
+                {sharedResults.length === 0 ? (
+                  <p className="empty-msg">
+                    No shared results yet. Use the &quot;Share with Team&quot; button in the Data Browser
+                    to share search results.
+                  </p>
+                ) : (
+                  <div className="team-shared-grid">
+                    {sharedResults.map((sr) => (
+                      <div key={sr.id} className="team-shared-card">
+                        <div className="team-shared-card-header">
+                          <h3>{sr.title}</h3>
+                          <span className="role-badge role-member">
+                            {sr.objects.length} objects
+                          </span>
+                        </div>
+                        <p className="team-shared-meta">
+                          Shared by {sr.shared_by_email}
+                          {sr.created_at && (
+                            <> on {new Date(sr.created_at).toLocaleDateString()}</>
+                          )}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Shared Notebooks */}
+              <div className="friend-section">
+                <h3 className="friend-section-title">Shared Notebooks</h3>
+                {sharedNotebooks.length === 0 ? (
+                  <p className="empty-msg">
+                    No shared notebooks yet. Export a chat session and share it with your team.
+                  </p>
+                ) : (
+                  <div className="team-shared-grid">
+                    {sharedNotebooks.map((sn) => (
+                      <div key={sn.id} className="team-shared-card">
+                        <div className="team-shared-card-header">
+                          <h3>{sn.title}</h3>
+                        </div>
+                        <p className="team-shared-meta">
+                          Shared by {sn.shared_by_email}
+                          {sn.created_at && (
+                            <> on {new Date(sn.created_at).toLocaleDateString()}</>
+                          )}
+                        </p>
+                        <button
+                          className="btn-secondary-sm"
+                          onClick={() =>
+                            setExpandedNotebook(expandedNotebook === sn.id ? null : sn.id)
+                          }
+                        >
+                          {expandedNotebook === sn.id ? "Collapse" : "View"}
+                        </button>
+                        {expandedNotebook === sn.id && (
+                          <pre className="team-notebook-content">{sn.content}</pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}

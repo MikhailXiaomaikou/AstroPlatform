@@ -11,7 +11,10 @@ import {
   listChatSessions,
   loadChatSession,
   deleteChatSession,
+  exportChatMarkdown,
   exportChatNotebook,
+  exportChatLatex,
+  exportChatBibTeX,
   type ChatMessage,
   type ChatAction,
   type ADSReference,
@@ -1087,6 +1090,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
   const [input, setInput] = useState("");
   const [pageError, setPageError] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [executingActions, setExecutingActions] = useState<Set<string>>(
     new Set()
@@ -1099,6 +1103,13 @@ export default function ChatPage() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [showSessions, setShowSessions] = useState(false);
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToastMsg(null), 2500);
+  }, []);
 
   useEffect(() => {
     const draft = localStorage.getItem("astro_chat_draft");
@@ -1362,14 +1373,15 @@ export default function ChatPage() {
             </button>
             {messages.length > 0 && (
               <>
-              <button type="button" className="btn-secondary btn-small" onClick={() => {
-                const lines = messages.map(m => {
-                  const role = m.role === "user" ? "**User:**" : "**AI:**";
-                  return `${role}\n\n${m.content}\n`;
-                });
-                const md = `# AI Research Chat\n\n${lines.join("\n---\n\n")}`;
-                const blob = new Blob([md], { type: "text/markdown" });
-                downloadBlob(blob, "ai_research_chat.md");
+              <button type="button" className="btn-secondary btn-small" onClick={async () => {
+                try {
+                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  const blob = await exportChatMarkdown(data);
+                  downloadBlob(blob, "ai_research_chat.md");
+                  showToast("Markdown exported successfully");
+                } catch (e) {
+                  setPageError(e instanceof Error ? e.message : "Markdown export failed");
+                }
               }}>
                 {t("common.export")}
               </button>
@@ -1378,11 +1390,36 @@ export default function ChatPage() {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatNotebook(data);
                   downloadBlob(blob, "ai_research_session.ipynb");
+                  showToast("Notebook exported successfully");
                 } catch (e) {
                   setPageError(e instanceof Error ? e.message : "Notebook export failed");
                 }
               }}>
                 Notebook
+              </button>
+              <button type="button" className="btn-secondary btn-small" onClick={async () => {
+                try {
+                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  const blob = await exportChatLatex(data);
+                  downloadBlob(blob, "astro_report.tex");
+                  showToast("LaTeX exported successfully");
+                } catch (e) {
+                  setPageError(e instanceof Error ? e.message : "LaTeX export failed");
+                }
+              }}>
+                LaTeX
+              </button>
+              <button type="button" className="btn-secondary btn-small" onClick={async () => {
+                try {
+                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  const blob = await exportChatBibTeX(data);
+                  downloadBlob(blob, "references.bib");
+                  showToast("BibTeX exported successfully");
+                } catch (e) {
+                  setPageError(e instanceof Error ? e.message : "BibTeX export failed");
+                }
+              }}>
+                BibTeX
               </button>
               </>
             )}
@@ -1411,6 +1448,14 @@ export default function ChatPage() {
 
       <div className="chat-messages">
         {pageError && <div className="error-banner">{pageError}</div>}
+        {toastMsg && (
+          <div style={{
+            position: "fixed", top: 24, right: 24, zIndex: 1000,
+            background: "var(--color-success, #22c55e)", color: "#fff",
+            padding: "10px 20px", borderRadius: 8, fontSize: "0.85rem",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.15)", pointerEvents: "none",
+          }}>{toastMsg}</div>
+        )}
         {!hasKey && (
           <ApiKeyPrompt onSaved={() => setHasKey(true)} />
         )}

@@ -80,6 +80,8 @@ export default function ADQLPage() {
   const [history, setHistory] = useState(getHistory);
   const [page, setPage] = useState(0);
   const [showViz, setShowViz] = useState(false);
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortAsc, setSortAsc] = useState(true);
 
   useEffect(() => { listADQLServices().then(setServices).catch(() => {}); }, []);
 
@@ -89,7 +91,7 @@ export default function ADQLPage() {
   }
 
   async function run() {
-    setLoading(true); setError(null); setResult(null); setPage(0);
+    setLoading(true); setError(null); setResult(null); setPage(0); setSortCol(null); setSortAsc(true);
     try {
       const res = await adqlQuery(query, svc);
       setResult(res);
@@ -135,12 +137,47 @@ export default function ADQLPage() {
     logOperation("export", `ADQL CSV export: ${result.row_count} rows from ${svc}`);
   }
 
+  function handleSort(col: string) {
+    if (sortCol === col) {
+      setSortAsc(!sortAsc);
+    } else {
+      setSortCol(col);
+      setSortAsc(true);
+    }
+    setPage(0);
+  }
+
+  function sortIndicator(col: string) {
+    if (sortCol !== col) return null;
+    return <span className="sort-indicator">{sortAsc ? " \u25B2" : " \u25BC"}</span>;
+  }
+
+  const sortedIndices = useMemo(() => {
+    if (!result) return [];
+    const indices = Array.from({ length: result.row_count }, (_, i) => i);
+    if (!sortCol) return indices;
+    const colData = result.data[sortCol];
+    if (!colData) return indices;
+    indices.sort((a, b) => {
+      const va = colData[a];
+      const vb = colData[b];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === "number" && typeof vb === "number") return sortAsc ? va - vb : vb - va;
+      const sa = String(va), sb = String(vb);
+      const cmp = sa.localeCompare(sb);
+      return sortAsc ? cmp : -cmp;
+    });
+    return indices;
+  }, [result, sortCol, sortAsc]);
+
   const totalPages = result ? Math.ceil(Math.min(result.row_count, 500) / PAGE_SIZE) : 0;
   const visibleRows = useMemo(() => {
-    if (!result) return [];
+    if (!sortedIndices.length) return [];
     const start = page * PAGE_SIZE;
-    return Array.from({ length: Math.min(PAGE_SIZE, result.row_count - start) }).map((_, i) => start + i);
-  }, [result, page]);
+    return sortedIndices.slice(start, start + PAGE_SIZE);
+  }, [sortedIndices, page]);
 
   return (
     <div className="adql-page">
@@ -267,7 +304,10 @@ export default function ADQLPage() {
                 ))}
               </colgroup>
               <thead>
-                <tr>{result.columns.map((c) => <th key={c} title={c}>{c}</th>)}</tr>
+                <tr>{result.columns.map((c) => (
+                  <th key={c} title={c} className="th-sortable" style={{ cursor: "pointer" }}
+                    onClick={() => handleSort(c)}>{c}{sortIndicator(c)}</th>
+                ))}</tr>
               </thead>
               <tbody>
                 {visibleRows.map((i) => (

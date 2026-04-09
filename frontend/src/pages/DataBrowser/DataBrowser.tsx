@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   searchData,
   advancedSearch,
@@ -9,6 +10,8 @@ import {
   crossMatch,
   logOperation,
   exportSearchNotebook,
+  shareResults,
+  getProfile,
 } from "../../api/client";
 import FITSBrowser from "../../components/fits/FITSBrowser";
 import type {
@@ -24,6 +27,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useI18n } from "../../i18n";
 import SearchBar from "./SearchBar";
 import ResultsTable from "./ResultsTable";
+import LiteraturePanel from "./LiteraturePanel";
 import FITSPreview from "../../components/fits/FITSPreview";
 import ObjectDetailPanel from "../../components/ObjectDetailPanel";
 import AladinViewer from "../../components/viz/AladinViewer";
@@ -41,6 +45,7 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
 export default function DataBrowser() {
   const { user } = useAuth();
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
@@ -69,6 +74,7 @@ export default function DataBrowser() {
   const [friends, setFriends] = useState<FriendItem[]>([]);
   const [shareTargetId, setShareTargetId] = useState("");
   const [sharing, setSharing] = useState(false);
+  const [sharingToTeam, setSharingToTeam] = useState(false);
 
   // Object detail panel state
   const [detailObject, setDetailObject] = useState<{ name: string; ra: number; dec: number } | null>(null);
@@ -422,6 +428,51 @@ ${rows}
     }
   }
 
+  async function handleShareWithTeam() {
+    const selected = getSelectedResults();
+    if (selected.length === 0) return;
+    setSharingToTeam(true);
+    setBulkMsg(null);
+    try {
+      const profile = await getProfile();
+      const objects = selected.map((r) => ({
+        name: r.name,
+        ra: r.ra,
+        dec: r.dec,
+        source: r.source,
+        object_id: r.object_id,
+        object_type: r.object_type || "",
+        redshift: r.redshift ?? null,
+        magnitude: r.magnitude ?? null,
+      }));
+      await shareResults(profile.id, `${selected.length} objects`, objects);
+      setBulkMsg({ text: `Shared ${selected.length} objects with team.`, type: "ok" });
+      setTimeout(() => setBulkMsg(null), 3000);
+    } catch {
+      setBulkMsg({ text: "Failed to share with team. Make sure you are signed in.", type: "err" });
+    } finally {
+      setSharingToTeam(false);
+    }
+  }
+
+  function handleSendToAI() {
+    const selected = getSelectedResults();
+    if (selected.length === 0) return;
+    const objectLines = selected.map((r) => {
+      const parts = [r.name, `RA=${r.ra.toFixed(5)}`, `Dec=${r.dec.toFixed(5)}`, `source=${r.source}`];
+      if (r.object_type) parts.push(`type=${r.object_type}`);
+      if (r.redshift != null) parts.push(`z=${r.redshift}`);
+      if (r.magnitude != null) parts.push(`mag=${r.magnitude}`);
+      return parts.join(", ");
+    });
+    const draft =
+      `I have selected these ${selected.length} astronomical objects from a search:\n\n` +
+      objectLines.map((line) => `- ${line}`).join("\n") +
+      `\n\nWhat can you tell me about them?`;
+    localStorage.setItem("astro_chat_draft", draft);
+    navigate("/chat");
+  }
+
   const selectedCount = selectedKeys.size;
 
   // Build criteria chips from search meta
@@ -478,7 +529,7 @@ ${rows}
     }
   }
 
-  const [activeTab, setActiveTab] = useState<"search" | "files">("search");
+  const [activeTab, setActiveTab] = useState<"search" | "files" | "literature">("search");
 
   return (
     <div className="data-browser">
@@ -490,9 +541,14 @@ ${rows}
         <button className={`page-tab${activeTab === "files" ? " active" : ""}`} onClick={() => setActiveTab("files")}>
           {t("data.my_files")}
         </button>
+        <button className={`page-tab${activeTab === "literature" ? " active" : ""}`} onClick={() => setActiveTab("literature")}>
+          {t("data.literature")}
+        </button>
       </div>
 
       {activeTab === "files" && <FITSBrowser />}
+
+      {activeTab === "literature" && <LiteraturePanel />}
 
       {activeTab === "search" && <>
       <SearchBar onSearch={handleSearch} onAdvancedSearch={handleAdvancedSearch} loading={loading} />
@@ -631,6 +687,9 @@ ${rows}
                 }}>
                   Export Notebook
                 </button>
+                <button className="btn-secondary btn-small" onClick={handleSendToAI}>
+                  Ask AI
+                </button>
                 <button className="btn-secondary btn-small" onClick={() => {
                   // Create a pipeline with LoadData node pointing to selected results
                   const dag = {
@@ -661,9 +720,18 @@ ${rows}
                   Cross-match...
                 </button>
                 {user && (
-                  <button className="btn-secondary btn-small" onClick={openSharePanel}>
-                    Share to Team
-                  </button>
+                  <>
+                    <button className="btn-secondary btn-small" onClick={openSharePanel}>
+                      Share to Friend
+                    </button>
+                    <button
+                      className="btn-secondary btn-small"
+                      onClick={handleShareWithTeam}
+                      disabled={sharingToTeam}
+                    >
+                      {sharingToTeam ? "Sharing..." : "Share with Team"}
+                    </button>
+                  </>
                 )}
                 <button
                   className="btn-secondary btn-small"
