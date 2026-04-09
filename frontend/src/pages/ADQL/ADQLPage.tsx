@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from "react";
+import { useNavigate } from "react-router-dom";
 import { adqlQuery, listADQLServices, logOperation, exportSearchNotebook } from "../../api/client";
 import type { ADQLResult } from "../../api/client";
 
@@ -69,6 +70,7 @@ const PAGE_SIZE = 25;
 
 /* ── Component ── */
 export default function ADQLPage() {
+  const navigate = useNavigate();
   const [services, setServices] = useState<Array<{ id: string; name: string }>>([]);
   const [svc, setSvc] = useState("gaia");
   const [query, setQuery] = useState(DEFAULTS.gaia);
@@ -91,6 +93,19 @@ export default function ADQLPage() {
     try {
       const res = await adqlQuery(query, svc);
       setResult(res);
+      try {
+        localStorage.setItem("astro_last_adql", JSON.stringify({
+          service: svc,
+          query,
+          row_count: res.row_count,
+          columns: res.columns,
+          sample: Array.from({ length: Math.min(res.row_count, 5) }).map((_, i) => {
+            const row: Record<string, unknown> = {};
+            for (const col of res.columns) row[col] = res.data[col]?.[i];
+            return row;
+          }),
+        }));
+      } catch { /* ignore */ }
       addHistory(query); setHistory(getHistory());
       logOperation("adql", `${svc}: ${query.slice(0, 80)}`);
     } catch (err: unknown) {
@@ -196,6 +211,15 @@ export default function ADQLPage() {
               }
             }}>
               Jupyter Notebook
+            </button>
+            <button className="btn-secondary" onClick={() => {
+              localStorage.setItem(
+                "astro_chat_draft",
+                `Review this ${svc.toUpperCase()} ADQL query, explain the result schema, and suggest the next Python analysis steps:\n\n${query}`
+              );
+              navigate("/chat");
+            }}>
+              Send to AI
             </button>
             <button className="btn-secondary" onClick={() => setShowViz(!showViz)}>
               {showViz ? "Hide Chart" : "Visualize"}

@@ -47,7 +47,7 @@ const AuthPage = lazy(() => import("./pages/Auth/AuthPage"));
 const ADQLPage = lazy(() => import("./pages/ADQL/ADQLPage"));
 const WorkspacePage = lazy(() => import("./pages/Workspace/WorkspacePage"));
 const TeamPage = lazy(() => import("./pages/Team/TeamPage"));
-
+const HelpPage = lazy(() => import("./pages/Help/HelpPage"));
 const ChatPage = lazy(() => import("./pages/Chat/ChatPage"));
 const SettingsPage = lazy(() => import("./pages/Settings/SettingsPage"));
 
@@ -81,6 +81,7 @@ function NavBar() {
       <NavLink to="/adql">{t("nav.adql")}</NavLink>
       <NavLink to="/team">{t("nav.team")}</NavLink>
       <NavLink to="/chat">{t("nav.ai_assistant")}</NavLink>
+      <NavLink to="/help">Help</NavLink>
       <NavLink to="/settings">{t("nav.settings")}</NavLink>
       <div className="nav-spacer" />
       <button
@@ -184,7 +185,7 @@ function App() {
                 <Route path="/workspace" element={<WorkspacePage />} />
                 <Route path="/adql" element={<ADQLPage />} />
                 <Route path="/team" element={<TeamPage />} />
-
+                <Route path="/help" element={<HelpPage />} />
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/auth" element={<AuthPage />} />

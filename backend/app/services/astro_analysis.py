@@ -256,7 +256,8 @@ def compute_luminosity_distance(z, H0=70.0, Om0=0.3):
 
 
 def compute_absolute_magnitude(
-    mag,
+    mag=None,
+    apparent_mag=None,
     redshift=None,
     distance_mpc=None,
     distance_pc=None,
@@ -266,6 +267,7 @@ def compute_absolute_magnitude(
 
     Args:
         mag: Apparent magnitude scalar or array.
+        apparent_mag: Alias of ``mag``.
         redshift: Redshift scalar/array. Converted internally to luminosity distance.
         distance_mpc: Distance in megaparsecs.
         distance_pc: Distance in parsecs.
@@ -275,7 +277,13 @@ def compute_absolute_magnitude(
         Provide exactly one of ``redshift``, ``distance_mpc``, ``distance_pc``,
         or ``parallax_mas``.
     """
-    m = np.asarray(mag, dtype=float)
+    if mag is None and apparent_mag is None:
+        raise ValueError("Provide apparent magnitude via mag or apparent_mag")
+    if mag is not None and apparent_mag is not None:
+        raise ValueError("Use either mag or apparent_mag, not both")
+
+    magnitude = mag if mag is not None else apparent_mag
+    m = np.asarray(magnitude, dtype=float)
 
     provided = sum(
         value is not None

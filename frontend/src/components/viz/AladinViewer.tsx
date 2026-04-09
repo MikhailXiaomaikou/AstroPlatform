@@ -1,9 +1,4 @@
-/**
- * Aladin Lite sky viewer — embeds an interactive HiPS sky map
- * with search result overlay markers.
- */
-
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 interface AladinObject {
   name: string;
@@ -23,7 +18,8 @@ interface Props {
 declare global {
   interface Window {
     A?: {
-      aladin: (el: HTMLElement, opts: Record<string, unknown>) => {
+      init?: Promise<void>;
+      aladin: (selector: string, opts: Record<string, unknown>) => {
         gotoRaDec: (ra: number, dec: number) => void;
         setFov: (fov: number) => void;
         addCatalog: (cat: unknown) => void;
@@ -31,103 +27,144 @@ declare global {
       catalog: (opts: Record<string, unknown>) => {
         addSources: (sources: unknown[]) => void;
       };
-      source: (ra: number, dec: number, data: Record<string, string>) => unknown;
+      marker: (ra: number, dec: number, data: Record<string, string>) => unknown;
     };
   }
 }
 
 export default function AladinViewer({ objects, centerRa, centerDec, fov = 1.0 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const containerId = useId().replace(/:/g, "-");
   const aladinRef = useRef<ReturnType<NonNullable<typeof window.A>["aladin"]> | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [statusMessage, setStatusMessage] = useState("Loading Aladin Lite...");
 
-  // Load Aladin Lite script
   useEffect(() => {
-    if (document.getElementById("aladin-script")) return;
+    let cancelled = false;
 
-    // CSS
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = "https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.min.css";
-    document.head.appendChild(link);
+    async function ensureAladin() {
+      setStatus("loading");
+      setStatusMessage("Loading Aladin Lite...");
 
-    // JS
-    const script = document.createElement("script");
-    script.id = "aladin-script";
-    script.src = "https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.min.js";
-    script.async = true;
-    script.charset = "utf-8";
-    document.head.appendChild(script);
+      let script = document.getElementById("aladin-script") as HTMLScriptElement | null;
+      if (!script) {
+        script = document.createElement("script");
+        script.id = "aladin-script";
+        script.src = "https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js";
+        script.async = true;
+        script.charset = "utf-8";
+        document.head.appendChild(script);
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        if (window.A) {
+          resolve();
+          return;
+        }
+        const handleLoad = () => resolve();
+        const handleError = () => reject(new Error("Failed to load Aladin Lite script"));
+        script!.addEventListener("load", handleLoad, { once: true });
+        script!.addEventListener("error", handleError, { once: true });
+        setTimeout(() => reject(new Error("Timed out waiting for Aladin Lite")), 10000);
+      });
+
+      if (window.A?.init) {
+        await window.A.init;
+      }
+
+      if (cancelled) return;
+      if (!window.A) {
+        setStatus("error");
+        setStatusMessage("Aladin Lite loaded incompletely. Refresh and try again.");
+        return;
+      }
+
+      setStatus("ready");
+      setStatusMessage("");
+    }
+
+    ensureAladin().catch((err: unknown) => {
+      if (cancelled) return;
+      setStatus("error");
+      setStatusMessage(err instanceof Error ? err.message : "Failed to initialize sky viewer");
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Initialize Aladin once script is loaded
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (status !== "ready" || !containerRef.current || !window.A) return;
 
-    const initAladin = () => {
-      if (!window.A || !containerRef.current) return;
+    const ra = centerRa ?? (objects.length > 0 ? objects[0].ra : 0);
+    const dec = centerDec ?? (objects.length > 0 ? objects[0].dec : 0);
 
-      const ra = centerRa ?? (objects.length > 0 ? objects[0].ra : 0);
-      const dec = centerDec ?? (objects.length > 0 ? objects[0].dec : 0);
+    containerRef.current.innerHTML = "";
+    const aladin = window.A.aladin(`#${containerId}`, {
+      survey: "P/DSS2/color",
+      fov,
+      target: `${ra} ${dec}`,
+      showReticle: true,
+      showZoomControl: true,
+      showFullscreenControl: true,
+      showLayersControl: true,
+      showGotoControl: true,
+      cooFrame: "ICRSd",
+    });
+    aladinRef.current = aladin;
 
-      const aladin = window.A.aladin(containerRef.current, {
-        survey: "P/DSS2/color",
-        fov,
-        target: `${ra} ${dec}`,
-        showReticle: true,
-        showZoomControl: true,
-        showFullscreenControl: true,
-        showLayersControl: true,
-        showGotoControl: true,
-        cooFrame: "J2000",
+    if (objects.length > 0) {
+      const cat = window.A.catalog({
+        name: "Search Results",
+        sourceSize: 14,
+        color: "#0A84FF",
+        shape: "circle",
       });
-      aladinRef.current = aladin;
 
-      // Add catalog overlay
-      if (objects.length > 0) {
-        const cat = window.A.catalog({
-          name: "Search Results",
-          sourceSize: 14,
-          color: "#0A84FF",
-          shape: "circle",
-        });
-
-        const sources = objects.map((obj) =>
-          window.A!.source(obj.ra, obj.dec, {
-            name: obj.name,
-            type: obj.object_type || "",
-            source: obj.source || "",
-          })
-        );
-        cat.addSources(sources);
-        aladin.addCatalog(cat);
-      }
-    };
-
-    // Wait for Aladin to load
-    if (window.A) {
-      initAladin();
-    } else {
-      const check = setInterval(() => {
-        if (window.A) {
-          clearInterval(check);
-          initAladin();
-        }
-      }, 200);
-      const timeout = setTimeout(() => clearInterval(check), 10000);
-      return () => { clearInterval(check); clearTimeout(timeout); };
+      const sources = objects.map((obj) =>
+        window.A!.marker(obj.ra, obj.dec, {
+          popupTitle: obj.name,
+          popupDesc: `${obj.source?.toUpperCase() || "ARCHIVE"}${obj.object_type ? ` • ${obj.object_type}` : ""}`,
+        })
+      );
+      cat.addSources(sources);
+      aladin.addCatalog(cat);
     }
-  }, [objects, centerRa, centerDec, fov]);
+  }, [centerDec, centerRa, containerId, fov, objects, status]);
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        width: "100%",
-        height: 400,
-        borderRadius: "var(--radius-md)",
-        overflow: "hidden",
-        border: "1px solid var(--color-separator)",
-      }}
-    />
+    <div style={{ position: "relative" }}>
+      {(status === "loading" || status === "error") && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "grid",
+            placeItems: "center",
+            zIndex: 1,
+            color: status === "error" ? "var(--color-red)" : "var(--color-text-secondary)",
+            background: "rgba(0,0,0,0.35)",
+            borderRadius: "var(--radius-md)",
+            textAlign: "center",
+            padding: "1rem",
+          }}
+        >
+          {statusMessage}
+        </div>
+      )}
+      <div
+        id={containerId}
+        ref={containerRef}
+        style={{
+          width: "100%",
+          height: 400,
+          borderRadius: "var(--radius-md)",
+          overflow: "hidden",
+          border: "1px solid var(--color-separator)",
+          background: "#111",
+        }}
+      />
+    </div>
   );
 }

@@ -165,6 +165,7 @@ export async function searchData(
           if (sourceList.length > 0 && sourceList.every((s) => s === "mast" || s === "jwst")) {
             throw new Error("MAST/JWST search failed before the server returned per-source results. Try again, reduce the search radius, or add SIMBAD to resolve coordinates first.");
           }
+          throw new Error("Search failed before the server returned per-source results. Try again, reduce the search radius, or add SIMBAD / coordinates for name resolution.");
         }
       }
     }

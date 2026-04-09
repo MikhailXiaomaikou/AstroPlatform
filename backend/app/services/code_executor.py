@@ -73,6 +73,7 @@ class CodeExecutionResult:
         self.error: str | None = None
         self.figures: list[str] = []  # base64 PNG strings
         self.variables: dict[str, str] = {}  # name -> repr (for key results)
+        self.variable_types: dict[str, str] = {}  # name -> type name
         self.success: bool = True
 
 
@@ -336,6 +337,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
             r = repr(val)
             if len(r) < 500:  # Only capture small representations
                 result.variables[name] = r
+                result.variable_types[name] = type(val).__name__
         except Exception:
             pass
 

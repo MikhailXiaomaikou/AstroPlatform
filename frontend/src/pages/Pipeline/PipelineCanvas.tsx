@@ -40,6 +40,7 @@ import {
   type ScheduleItem,
   type VersionSummary,
 } from "../../api/client";
+import { useNavigate } from "react-router-dom";
 
 const nodeTypes = { pipeline: PipelineNode };
 
@@ -52,6 +53,7 @@ interface NodeProgress {
 }
 
 export default function PipelineCanvas() {
+  const navigate = useNavigate();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -471,6 +473,15 @@ export default function PipelineCanvas() {
     }
   };
 
+  const handleOpenAI = useCallback(() => {
+    localStorage.setItem(
+      "astro_chat_draft",
+      "Review my current pipeline, identify weak spots, and suggest the next modification."
+    );
+    localStorage.setItem("pipeline_autosave", JSON.stringify({ nodes, edges, inputDataId }));
+    navigate("/chat");
+  }, [edges, inputDataId, navigate, nodes]);
+
   // Update node styles based on progress
   const styledNodes = nodes.map((n) => {
     const progress = nodeProgress[n.id];
@@ -537,6 +548,14 @@ export default function PipelineCanvas() {
             disabled={nodes.length === 0}
           >
             Clear All
+          </button>
+          <button
+            className="btn-secondary btn-small"
+            onClick={handleOpenAI}
+            disabled={nodes.length === 0}
+            style={{ marginTop: 8 }}
+          >
+            Ask AI About This Pipeline
           </button>
         </div>
 

@@ -757,6 +757,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const error = result.error as string | undefined;
     const figures = (result.figures as string[]) || [];
     const variables = result.variables as Record<string, string> | undefined;
+    const variableTypes = result.variable_types as Record<string, string> | undefined;
     const tb = result.traceback as string | undefined;
 
     return (
@@ -792,7 +793,10 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
             <summary>Variables ({Object.keys(variables).length})</summary>
             {Object.entries(variables).map(([k, v]) => (
               <div key={k} className="code-var">
-                <span className="code-var-name">{k}</span> = <span className="code-var-val">{v}</span>
+                <span className="code-var-name">{k}</span>
+                {variableTypes?.[k] ? <span style={{ color: "var(--color-text-tertiary)" }}> ({variableTypes[k]})</span> : null}
+                {" = "}
+                <span className="code-var-val">{v}</span>
               </div>
             ))}
           </details>
@@ -1066,11 +1070,23 @@ function saveChatHistory(messages: DisplayMessage[]) {
   }
 }
 
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export default function ChatPage() {
   const { t } = useI18n();
   const [hasKey, setHasKey] = useState(() => !!getStoredApiKey("anthropic"));
   const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
   const [input, setInput] = useState("");
+  const [pageError, setPageError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [executingActions, setExecutingActions] = useState<Set<string>>(
     new Set()
@@ -1083,6 +1099,14 @@ export default function ChatPage() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [showSessions, setShowSessions] = useState(false);
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
+
+  useEffect(() => {
+    const draft = localStorage.getItem("astro_chat_draft");
+    if (draft) {
+      setInput(draft);
+      localStorage.removeItem("astro_chat_draft");
+    }
+  }, []);
 
   const handleSaveSession = async () => {
     if (messages.length === 0) return;
@@ -1215,6 +1239,10 @@ export default function ChatPage() {
           };
         }
       } catch { /* ignore */ }
+      try {
+        const lastAdql = localStorage.getItem("astro_last_adql");
+        if (lastAdql) wsContext.last_adql = JSON.parse(lastAdql);
+      } catch { /* ignore */ }
       wsContext.python_session_id = pythonSessionIdRef.current;
 
       const response = await sendChatMessage(chatHistory, wsContext);
@@ -1318,45 +1346,41 @@ export default function ChatPage() {
             </p>
           </div>
           <div style={{ display: "flex", gap: "0.4rem" }}>
-            <button className="btn-secondary btn-small" onClick={() => {
+            <button type="button" className="btn-secondary btn-small" onClick={() => {
               setShowSessions(!showSessions);
               if (!showSessions) listChatSessions().then(setSessions).catch(() => {});
             }}>
               {t("chat.history")}
             </button>
             {messages.length > 0 && (
-              <button className="btn-secondary btn-small" onClick={handleSaveSession}>
+              <button type="button" className="btn-secondary btn-small" onClick={handleSaveSession}>
                 {t("chat.save")}
               </button>
             )}
-            <button className="btn-secondary btn-small" onClick={handleNewChat}>
+            <button type="button" className="btn-secondary btn-small" onClick={handleNewChat}>
               {t("chat.new_chat")}
             </button>
             {messages.length > 0 && (
               <>
-              <button className="btn-secondary btn-small" onClick={() => {
+              <button type="button" className="btn-secondary btn-small" onClick={() => {
                 const lines = messages.map(m => {
                   const role = m.role === "user" ? "**User:**" : "**AI:**";
                   return `${role}\n\n${m.content}\n`;
                 });
                 const md = `# AI Research Chat\n\n${lines.join("\n---\n\n")}`;
                 const blob = new Blob([md], { type: "text/markdown" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a"); a.href = url;
-                a.download = "ai_research_chat.md"; a.click();
-                URL.revokeObjectURL(url);
+                downloadBlob(blob, "ai_research_chat.md");
               }}>
                 {t("common.export")}
               </button>
-              <button className="btn-secondary btn-small" onClick={async () => {
+              <button type="button" className="btn-secondary btn-small" onClick={async () => {
                 try {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatNotebook(data);
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a"); a.href = url;
-                  a.download = "ai_research_session.ipynb"; a.click();
-                  URL.revokeObjectURL(url);
-                } catch { /* */ }
+                  downloadBlob(blob, "ai_research_session.ipynb");
+                } catch (e) {
+                  setPageError(e instanceof Error ? e.message : "Notebook export failed");
+                }
               }}>
                 Notebook
               </button>
@@ -1386,6 +1410,7 @@ export default function ChatPage() {
       )}
 
       <div className="chat-messages">
+        {pageError && <div className="error-banner">{pageError}</div>}
         {!hasKey && (
           <ApiKeyPrompt onSaved={() => setHasKey(true)} />
         )}

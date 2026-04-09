@@ -36,6 +36,11 @@ class TestAstroAnalysis:
         M = compute_absolute_magnitude(np.array([15.0]), distance_pc=np.array([1e6]))
         assert M[0] == pytest.approx(-10.0, abs=0.1)
 
+    def test_compute_absolute_magnitude_apparent_mag_alias(self):
+        from app.services.astro_analysis import compute_absolute_magnitude
+        M = compute_absolute_magnitude(apparent_mag=np.array([10.0]), distance_pc=np.array([100.0]))
+        assert M[0] == pytest.approx(5.0, abs=0.1)
+
     def test_available_functions_docs(self):
         from app.services.astro_analysis import available_functions
         info = available_functions()
@@ -181,6 +186,14 @@ print("ok")
         assert r.success
         assert "distance_pc" in r.stdout
         assert "luminosity distance" in r.stdout.lower()
+
+    def test_variable_types_are_reported(self):
+        from app.services.code_executor import execute_python
+
+        r = execute_python("values = [1, 2, 3]\nanswer = 42")
+        assert r.success
+        assert r.variable_types["values"] == "list"
+        assert r.variable_types["answer"] == "int"
 
 
 class TestAITools:

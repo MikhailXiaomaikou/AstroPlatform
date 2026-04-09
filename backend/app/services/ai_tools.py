@@ -493,6 +493,8 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         response["figure_count"] = len(result.figures)
     if result.variables:
         response["variables"] = dict(list(result.variables.items())[:20])
+    if result.variable_types:
+        response["variable_types"] = dict(list(result.variable_types.items())[:20])
 
     return response
 

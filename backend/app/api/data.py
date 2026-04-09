@@ -2,6 +2,7 @@ import asyncio
 import io
 import logging
 import uuid
+from functools import partial
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File as FastAPIFile
@@ -29,6 +30,11 @@ from app.storage import download_fits, upload_fits
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/data", tags=["data"])
+
+COORD_REQUIRED_SOURCES = {
+    "sdss", "gaia", "vizier", "2mass", "chandra", "allwise",
+    "irsa", "eso", "lamost", "mast", "jwst", "alma", "ned", "desi",
+}
 
 
 def _classify_error(exc: Exception) -> str:
@@ -110,6 +116,36 @@ def _astro_to_result(obj: AstroObject) -> SearchResult:
         redshift=_safe_float(obj.redshift),
         extra=_sanitize_extra(obj.extra) if obj.extra else {},
     )
+
+
+async def _resolve_search_coordinates(
+    query: str,
+    ra: float | None,
+    dec: float | None,
+) -> tuple[float | None, float | None]:
+    """Resolve a search target to coordinates without blocking the event loop."""
+    if ra is not None and dec is not None:
+        return ra, dec
+
+    try:
+        from astropy.coordinates import SkyCoord
+
+        loop = asyncio.get_running_loop()
+        coord = await loop.run_in_executor(None, partial(SkyCoord.from_name, query))
+        return coord.ra.deg, coord.dec.deg
+    except Exception:
+        pass
+
+    try:
+        simbad = get_connector("simbad")
+        matches = await asyncio.wait_for(simbad.search(query, radius=0.05), timeout=10.0)
+        for obj in matches:
+            if obj.ra is not None and obj.dec is not None:
+                return float(obj.ra), float(obj.dec)
+    except Exception as exc:
+        logger.debug("SIMBAD fallback coordinate resolution failed for %s: %s", query, exc)
+
+    return ra, dec
 
 
 async def _require_owned_file_by_path(
@@ -211,9 +247,13 @@ async def search_data(
         logger.debug("Cache hit for search key %s", ck)
         return [SearchResult(**r) for r in cached]
 
+    search_ra, search_dec = await _resolve_search_coordinates(q, ra, dec)
+
     async def _search_with_timeout(source: str):
+        source_ra = search_ra if source in COORD_REQUIRED_SOURCES else ra
+        source_dec = search_dec if source in COORD_REQUIRED_SOURCES else dec
         return await asyncio.wait_for(
-            get_connector(source).search(q, ra=ra, dec=dec, radius=radius),
+            get_connector(source).search(q, ra=source_ra, dec=source_dec, radius=radius),
             timeout=20.0,
         )
 
@@ -502,21 +542,9 @@ async def advanced_search(
     has_coords = search_ra is not None and search_dec is not None
 
     if not has_coords:
-        # Try to resolve query_text as coordinates
-        try:
-            from astropy.coordinates import SkyCoord
-            coord = SkyCoord.from_name(query_text)
-            search_ra = coord.ra.deg
-            search_dec = coord.dec.deg
-            has_coords = True
-        except Exception:
-            pass
+        search_ra, search_dec = await _resolve_search_coordinates(query_text, None, None)
+        has_coords = search_ra is not None and search_dec is not None
 
-    # Sources that require sky coordinates to function
-    COORD_REQUIRED_SOURCES = {
-        "sdss", "gaia", "vizier", "2mass", "chandra", "allwise",
-        "irsa", "eso", "lamost", "mast", "jwst", "alma", "ned",
-    }
     # Sources that support criteria-based search without coordinates
     CRITERIA_SOURCES = {"simbad"}
 
