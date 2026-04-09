@@ -1,7 +1,8 @@
-"""SpectralFit node — fits a Gaussian or Lorentzian model to spectral data."""
+"""SpectralFit node — fits a Gaussian, Lorentzian, or Voigt model to spectral data."""
 
 import numpy as np
 from scipy.optimize import curve_fit
+from scipy.special import voigt_profile
 
 
 def _gaussian(x, amplitude, mean, stddev):
@@ -12,9 +13,14 @@ def _lorentzian(x, amplitude, center, gamma):
     return amplitude * gamma**2 / ((x - center) ** 2 + gamma**2)
 
 
+def _voigt(x, amplitude, center, sigma, gamma):
+    return amplitude * voigt_profile(x - center, sigma, gamma)
+
+
 MODELS = {
     "gaussian": (_gaussian, ["amplitude", "mean", "stddev"]),
     "lorentzian": (_lorentzian, ["amplitude", "center", "gamma"]),
+    "voigt": (_voigt, ["amplitude", "center", "sigma", "gamma"]),
 }
 
 
@@ -45,6 +51,8 @@ def spectral_fit(input_data: dict, params: dict) -> dict:
     # Initial guesses
     peak_idx = np.argmax(y)
     p0 = [y[peak_idx], x[peak_idx], (x[-1] - x[0]) / 10]
+    if model_name == "voigt":
+        p0.append((x[-1] - x[0]) / 20)  # gamma initial guess
 
     try:
         popt, pcov = curve_fit(func, x, y, p0=p0, maxfev=10000)

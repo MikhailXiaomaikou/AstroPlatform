@@ -358,7 +358,28 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         exec_globals["multi_gaussian_fit"] = astro.multi_gaussian_fit
         exec_globals["continuum_normalize"] = astro.continuum_normalize
         exec_globals["batch_equivalent_width"] = astro.batch_equivalent_width
+        exec_globals["cosmological_calculator"] = astro.cosmological_calculator
+        exec_globals["redshift_at_age"] = astro.redshift_at_age
+        exec_globals["extinction_curve"] = astro.extinction_curve
+        exec_globals["deredden"] = astro.deredden
+        exec_globals["estimate_ebv"] = astro.estimate_ebv
+        exec_globals["monte_carlo_propagate"] = astro.monte_carlo_propagate
+        exec_globals["bootstrap_statistic"] = astro.bootstrap_statistic
+        exec_globals["error_weighted_mean"] = astro.error_weighted_mean
+        exec_globals["lomb_scargle_period"] = astro.lomb_scargle_period
+        exec_globals["phase_fold"] = astro.phase_fold
+        exec_globals["plot_periodogram"] = astro.plot_periodogram
+        exec_globals["plot_phase_folded"] = astro.plot_phase_folded
+        exec_globals["variability_indices"] = astro.variability_indices
+        exec_globals["classify_variable"] = astro.classify_variable
+        exec_globals["voigt_fit"] = astro.voigt_fit
+        exec_globals["velocity_dispersion"] = astro.velocity_dispersion
+        exec_globals["radial_velocity"] = astro.radial_velocity
+        exec_globals["spectral_template_match"] = astro.spectral_template_match
         exec_globals["available_functions"] = astro.available_functions
+        exec_globals["target_visibility"] = astro.target_visibility
+        exec_globals["airmass_plot"] = astro.airmass_plot
+        exec_globals["exposure_time_estimate"] = astro.exposure_time_estimate
     except ImportError:
         pass
 

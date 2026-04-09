@@ -9,6 +9,7 @@ from app.pipeline.nodes.coord_transform import coord_transform
 from app.pipeline.nodes.redshift import redshift_estimate
 from app.pipeline.nodes.equivalent_width import equivalent_width
 from app.pipeline.nodes.image_stack import image_stack
+from app.pipeline.nodes.timeseries import timeseries_analysis
 
 
 class TestDenoiseNode:
@@ -301,3 +302,38 @@ class TestImageStackNode:
         images = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
         with pytest.raises(ValueError, match="Unknown stacking method"):
             image_stack({"data": {"images": images}}, {"method": "bogus"})
+
+
+class TestTimeSeriesNode:
+    """Test time-series analysis pipeline node."""
+
+    def test_detect_known_period(self):
+        """Synthetic sinusoidal signal — verify period is recovered."""
+        np.random.seed(42)
+        true_period = 5.0  # days
+        n_points = 300
+        time = np.sort(np.random.uniform(0, 100, n_points))
+        mag = 15.0 + 0.5 * np.sin(2 * np.pi * time / true_period)
+        mag += np.random.normal(0, 0.05, n_points)
+
+        result = timeseries_analysis(
+            {"data": {"time": time.tolist(), "mag": mag.tolist()}},
+            {"min_period": 1.0, "max_period": 50.0},
+        )
+
+        recovered = result["period_result"]["best_period"]
+        assert abs(recovered - true_period) < 0.5, (
+            f"Expected period ~{true_period}, got {recovered}"
+        )
+        assert result["period_result"]["fap"] < 0.01
+        assert "phase" in result["data"]
+        assert len(result["data"]["phase"]) == n_points
+        assert result["classification"]["classification"] != "non_variable"
+
+    def test_empty_data_raises(self):
+        """Empty arrays should raise ValueError."""
+        with pytest.raises(ValueError, match="empty"):
+            timeseries_analysis(
+                {"data": {"time": [], "mag": []}},
+                {},
+            )

@@ -209,6 +209,45 @@ TOOLS = [
         },
     },
     {
+        "name": "generate_proposal",
+        "description": (
+            "Gather data for an observation proposal. Resolves target coordinates, "
+            "computes visibility from the telescope's observatory, estimates exposure "
+            "time if target magnitude is known, and finds relevant literature. "
+            "Returns structured information for drafting a telescope proposal."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_name": {"type": "string", "description": "Target object name (e.g., 'NGC 1275')"},
+                "telescope": {"type": "string", "description": "Telescope: vlt, keck, gemini, hst, jwst, alma, subaru"},
+                "instrument": {"type": "string", "description": "Instrument name (optional, for reference)"},
+                "science_goal": {"type": "string", "description": "Brief science justification"},
+                "exposure_hours": {"type": "number", "description": "Requested exposure time in hours (optional)"},
+            },
+            "required": ["target_name", "telescope", "science_goal"],
+        },
+    },
+    {
+        "name": "query_transients",
+        "description": (
+            "Search for astronomical transients and alerts from TNS (Transient Name Server) "
+            "and ZTF/Lasair. Find recent supernovae, novae, tidal disruption events, and other "
+            "transients by name, coordinates, or type."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Transient name (e.g., 'SN 2024abc', 'AT 2024xyz')"},
+                "ra": {"type": "number", "description": "Right ascension in degrees"},
+                "dec": {"type": "number", "description": "Declination in degrees"},
+                "radius_arcsec": {"type": "number", "description": "Search radius in arcseconds (default 10)"},
+                "days_back": {"type": "integer", "description": "Search window in days (default 30)"},
+                "obj_type": {"type": "string", "description": "Filter by type: SN, SN Ia, SN II, TDE, nova, AGN, etc."},
+            },
+        },
+    },
+    {
         "name": "read_arxiv_paper",
         "description": (
             "Download and read the text content of an arXiv paper. "
@@ -254,6 +293,10 @@ async def execute_tool(
             return _exec_get_cached_results(tool_input)
         elif tool_name == "run_pipeline":
             return await _exec_run_pipeline(tool_input)
+        elif tool_name == "generate_proposal":
+            return await _exec_generate_proposal(tool_input)
+        elif tool_name == "query_transients":
+            return await _exec_query_transients(tool_input)
         elif tool_name == "read_arxiv_paper":
             return await _exec_read_paper(tool_input)
         else:
@@ -558,6 +601,126 @@ async def _exec_run_pipeline(inp: dict) -> dict:
         summary[nid] = s
 
     return {"run_id": run_id, "status": "completed", "results": summary}
+
+
+async def _exec_generate_proposal(inp: dict) -> dict:
+    """Gather observation proposal data: coordinates, visibility, ETC, literature."""
+    target_name = inp.get("target_name", "")
+    telescope = inp.get("telescope", "vlt").lower()
+    instrument = inp.get("instrument", "")
+    science_goal = inp.get("science_goal", "")
+    exposure_hours = inp.get("exposure_hours")
+
+    proposal: dict = {
+        "target_name": target_name,
+        "telescope": telescope,
+        "instrument": instrument,
+        "science_goal": science_goal,
+        "requested_exposure_hours": exposure_hours,
+    }
+
+    # 1. Resolve target coordinates via SIMBAD
+    ra, dec = None, None
+    target_mag = None
+    try:
+        from astropy.coordinates import SkyCoord
+        coord = SkyCoord.from_name(target_name)
+        ra, dec = float(coord.ra.deg), float(coord.dec.deg)
+        proposal["coordinates"] = {"ra_deg": round(ra, 6), "dec_deg": round(dec, 6),
+                                   "ra_hms": coord.ra.to_string(unit="hour", sep=":"),
+                                   "dec_dms": coord.dec.to_string(sep=":")}
+    except Exception as e:
+        proposal["coordinates"] = {"error": f"Could not resolve '{target_name}': {e}"}
+
+    # Try to get magnitude and extra info from SIMBAD
+    try:
+        from app.connectors.simbad import SIMBADConnector
+        simbad = SIMBADConnector()
+        detail = await simbad.get_object_detail(target_name)
+        if detail:
+            proposal["object_type"] = detail.get("object_type", "unknown")
+            proposal["redshift"] = detail.get("redshift")
+            # Try to extract a V magnitude
+            extra = detail.get("extra", {})
+            if isinstance(extra, dict):
+                for key in ("flux_V", "flux_v", "mag_V", "mag_v", "V", "phot_g_mean_mag"):
+                    val = extra.get(key)
+                    if val is not None:
+                        try:
+                            target_mag = float(val)
+                            break
+                        except (ValueError, TypeError):
+                            pass
+    except Exception:
+        pass
+
+    # 2. Compute visibility
+    if ra is not None and dec is not None:
+        try:
+            from app.services.astro_analysis import target_visibility, _TELESCOPE_OBSERVATORY
+            obs = _TELESCOPE_OBSERVATORY.get(telescope, "paranal")
+            vis = target_visibility(ra, dec, observatory=obs)
+            proposal["visibility"] = vis
+        except Exception as e:
+            proposal["visibility"] = {"error": str(e)}
+    else:
+        proposal["visibility"] = {"error": "No coordinates available"}
+
+    # 3. Exposure time estimate (if magnitude available)
+    if target_mag is not None:
+        try:
+            from app.services.astro_analysis import exposure_time_estimate
+            etc_result = exposure_time_estimate(
+                target_mag, snr_target=10, telescope=telescope
+            )
+            proposal["exposure_estimate"] = etc_result
+        except Exception as e:
+            proposal["exposure_estimate"] = {"error": str(e)}
+    else:
+        proposal["exposure_estimate"] = {
+            "note": "No magnitude found for automatic ETC. "
+                    "Use exposure_time_estimate() in run_python with a known magnitude."
+        }
+
+    # 4. Search ADS for recent papers on the target
+    try:
+        lit_result = await _exec_literature({"query": target_name})
+        proposal["recent_literature"] = lit_result.get("results", [])[:5]
+    except Exception:
+        proposal["recent_literature"] = []
+
+    # 5. Summary notes
+    notes = []
+    vis = proposal.get("visibility", {})
+    if isinstance(vis, dict) and not vis.get("error"):
+        hrs = vis.get("hours_observable", 0)
+        if hrs < 2:
+            notes.append(f"Warning: target only observable {hrs:.1f} hours (alt > 30 deg).")
+        if vis.get("never_rises"):
+            notes.append("Target never rises from this observatory — choose a different site.")
+    if telescope in ("hst", "jwst"):
+        notes.append("Space telescope — ground visibility is for reference only. "
+                     "Check STScI APT for actual schedulability.")
+    if exposure_hours and exposure_hours > 10:
+        notes.append("Large time request — ensure strong scientific justification.")
+    proposal["notes"] = notes
+
+    return proposal
+
+
+async def _exec_query_transients(inp: dict) -> dict:
+    """Search TNS and Lasair for transients."""
+    from app.services.transient_service import query_transients
+
+    result = await query_transients(
+        name=inp.get("name"),
+        ra=inp.get("ra"),
+        dec=inp.get("dec"),
+        radius_arcsec=inp.get("radius_arcsec", 10),
+        days_back=inp.get("days_back", 30),
+        obj_type=inp.get("obj_type"),
+    )
+    return result
 
 
 async def _exec_read_paper(inp: dict) -> dict:

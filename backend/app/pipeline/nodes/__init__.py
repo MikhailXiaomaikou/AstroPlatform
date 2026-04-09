@@ -17,6 +17,7 @@ def _get_registry() -> dict[str, Callable]:
     from app.pipeline.nodes.image_stack import image_stack
     from app.pipeline.nodes.plot_interactive import interactive_plot_node
     from app.pipeline.nodes.custom_script import custom_script
+    from app.pipeline.nodes.timeseries import timeseries_analysis
 
     return {
         "LoadData": load_data,
@@ -32,6 +33,7 @@ def _get_registry() -> dict[str, Callable]:
         "ImageStack": image_stack,
         "InteractivePlot": interactive_plot_node,
         "CustomScript": custom_script,
+        "TimeSeriesAnalysis": timeseries_analysis,
     }
 
 
