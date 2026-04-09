@@ -1156,34 +1156,43 @@ def voigt_fit(wavelength, flux, initial_centers=None, n_components=1):
     wave = np.asarray(wavelength, dtype=float)
     f = np.asarray(flux, dtype=float)
 
-    n_params = 4 * n_components  # amplitude, center, sigma, gamma per component
+    # 4 params per component + 1 continuum offset
+    n_params = 4 * n_components + 1
 
     if len(wave) < n_params + 1:
         return {"success": False, "error": f"Need at least {n_params + 1} data points, got {len(wave)}"}
 
+    # Estimate continuum from edges of the spectrum
+    n_edge = max(5, len(wave) // 10)
+    continuum_est = float(np.median(np.concatenate([f[:n_edge], f[-n_edge:]])))
+
     def multi_voigt(x, *params):
-        result = np.zeros_like(x)
-        for i in range(0, len(params), 4):
+        # Last param is continuum offset
+        result = np.full_like(x, params[-1])
+        for i in range(0, len(params) - 1, 4):
             amp, center, sigma, gamma = params[i], params[i + 1], abs(params[i + 2]), abs(params[i + 3])
             result += amp * voigt_profile(x - center, sigma, gamma)
         return result
 
-    # Build initial guesses
+    # Build initial guesses: subtract continuum for amplitude estimates
+    f_sub = f - continuum_est
     p0 = []
     if initial_centers:
         for c in initial_centers[:n_components]:
             idx = np.argmin(np.abs(wave - c))
-            p0.extend([f[idx], c, 2.0, 1.0])
+            p0.extend([f_sub[idx], c, 2.0, 1.0])
     else:
         from scipy.signal import find_peaks
-        peaks, _ = find_peaks(f, height=np.median(f), distance=max(1, len(f) // (n_components + 1)))
+        peaks, _ = find_peaks(f_sub, height=np.std(f_sub), distance=max(1, len(f_sub) // (n_components + 1)))
         peaks = peaks[:n_components]
         for p in peaks:
-            p0.extend([f[p], wave[p], 2.0, 1.0])
+            p0.extend([f_sub[p], wave[p], 2.0, 1.0])
 
     # Pad if not enough peaks found
-    while len(p0) < n_params:
-        p0.extend([np.max(f), np.mean(wave), 2.0, 1.0])
+    while len(p0) < 4 * n_components:
+        p0.extend([np.max(f_sub), np.mean(wave), 2.0, 1.0])
+    # Append continuum initial guess
+    p0.append(continuum_est)
 
     try:
         popt, pcov = curve_fit(multi_voigt, wave, f, p0=p0, maxfev=10000)
@@ -1380,14 +1389,17 @@ def spectral_template_match(wavelength, flux, flux_err=None):
     # Approximations of main-sequence spectral energy distributions.
     # Coefficients [c0, c1, c2, c3] for polynomial c0 + c1*x + c2*x^2 + c3*x^3
     # where x = (wavelength - 5500) / 1000.
+    # x = (lambda - 5500)/1000: negative = blue, positive = red
+    # Hot stars are brighter in blue (negative x → higher flux) → negative c1
+    # Cool stars are brighter in red (positive x → higher flux) → positive c1
     templates = {
-        "O": [1.0, 0.30, -0.02, 0.001],   # hot, blue-rising
-        "B": [1.0, 0.20, -0.015, 0.0008],  # hot, moderately blue
-        "A": [1.0, 0.08, -0.01, 0.0005],   # mild blue slope
-        "F": [1.0, 0.02, -0.005, 0.0002],  # nearly flat
-        "G": [1.0, -0.05, 0.005, -0.001],  # slight red rise
-        "K": [1.0, -0.12, 0.015, -0.002],  # red-rising
-        "M": [1.0, -0.25, 0.04, -0.004],   # strongly red-rising
+        "O": [1.0, -0.30, 0.02, -0.001],   # hot, blue-bright
+        "B": [1.0, -0.20, 0.015, -0.0008],  # hot, moderately blue
+        "A": [1.0, -0.08, 0.01, -0.0005],   # mild blue slope
+        "F": [1.0, -0.02, 0.005, -0.0002],  # nearly flat
+        "G": [1.0, 0.05, -0.005, 0.001],    # slight red rise
+        "K": [1.0, 0.12, -0.015, 0.002],    # red-bright
+        "M": [1.0, 0.25, -0.04, 0.004],     # strongly red-bright
     }
 
     chi2_values = {}
