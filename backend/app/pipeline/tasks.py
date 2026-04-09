@@ -3,7 +3,6 @@
 import logging
 import uuid
 
-from celery import chain, chord, group
 
 from app.pipeline.nodes import registry
 

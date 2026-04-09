@@ -5,9 +5,7 @@ handles the tool_use → result → next message cycle automatically.
 """
 
 import asyncio
-import json
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

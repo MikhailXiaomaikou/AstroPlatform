@@ -1,8 +1,6 @@
 """Celery task wrapper for pipeline nodes."""
 
-import json
 import logging
-import uuid
 
 from celery_worker import celery_app
 from app.pipeline.nodes import registry

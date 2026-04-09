@@ -23,7 +23,6 @@ def load_data(input_data: dict | None, params: dict) -> dict:
 
     # If fits_path is a directory, find the first .fits file inside
     from pathlib import Path as _Path
-    storage_dir = _Path(settings.local_storage_dir) if 'settings' in dir() else None
     try:
         from app.config import settings as _cfg
         full = _Path(_cfg.local_storage_dir) / fits_path

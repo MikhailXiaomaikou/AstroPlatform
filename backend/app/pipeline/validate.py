@@ -1,12 +1,10 @@
 """DAG validation before pipeline execution."""
-from typing import Any
 
 class DAGValidationError(Exception):
     pass
 
 def validate_dag(dag: dict) -> list[str]:
     """Validate a pipeline DAG. Returns list of warnings. Raises DAGValidationError for fatal issues."""
-    errors = []
     warnings = []
 
     nodes = dag.get("nodes", [])

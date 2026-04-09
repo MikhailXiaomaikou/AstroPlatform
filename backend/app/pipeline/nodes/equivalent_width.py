@@ -64,7 +64,8 @@ def equivalent_width(input_data: dict, params: dict) -> dict:
     # Build continuum model based on method
     if continuum_method == "median":
         cont_level_val = float(np.median(cont_flux))
-        continuum_model = lambda w, _v=cont_level_val: np.full_like(w, _v)
+        def continuum_model(w, _v=cont_level_val):
+            return np.full_like(w, _v)
     elif continuum_method == "polynomial":
         order = min(poly_order, len(cont_wave) - 1)
         coeffs = np.polyfit(cont_wave, cont_flux, deg=order)

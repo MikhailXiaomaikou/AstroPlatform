@@ -12,9 +12,8 @@ from starlette.requests import Request
 
 from app.auth import get_current_user, get_optional_user, hash_password
 from app.rate_limit import limiter
-from app.config import settings
 from app.models.database import get_db
-from app.models.schemas import PipelineRun, PipelineTemplateDB, PipelineVersion, RunResult, User
+from app.models.schemas import PipelineRun, PipelineTemplateDB, PipelineVersion, User
 from app.pipeline.engine import execute_dag, execute_pipeline_task, topological_sort
 from app.pipeline.nodes import registry
 from app.pipeline.validate import DAGValidationError, validate_dag
@@ -124,7 +123,7 @@ async def _get_accessible_template(
             PipelineTemplateDB.id == template_id,
             (
                 (PipelineTemplateDB.user_id == user.id)
-                | (PipelineTemplateDB.is_builtin == True)
+                | (PipelineTemplateDB.is_builtin.is_(True))
             ),
         )
     )
@@ -217,7 +216,7 @@ async def list_templates(
 ):
     # Seed built-in templates if not yet in DB
     result = await db.execute(
-        select(PipelineTemplateDB).where(PipelineTemplateDB.is_builtin == True)
+        select(PipelineTemplateDB).where(PipelineTemplateDB.is_builtin.is_(True))
     )
     builtins = result.scalars().all()
     if not builtins:
@@ -232,10 +231,10 @@ async def list_templates(
         await db.commit()
 
     # Fetch all templates: built-in + user's own
-    query = select(PipelineTemplateDB).where(PipelineTemplateDB.is_builtin == True)
+    query = select(PipelineTemplateDB).where(PipelineTemplateDB.is_builtin.is_(True))
     if user:
         query = select(PipelineTemplateDB).where(
-            (PipelineTemplateDB.is_builtin == True) |
+            (PipelineTemplateDB.is_builtin.is_(True)) |
             (PipelineTemplateDB.user_id == user.id)
         )
     result = await db.execute(query)

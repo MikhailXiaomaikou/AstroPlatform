@@ -9,7 +9,6 @@ import base64
 import io
 import inspect
 import logging
-import os
 import signal
 import sys
 import traceback

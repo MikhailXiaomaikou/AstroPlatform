@@ -1,6 +1,5 @@
 """FITS file storage — local filesystem mode (no MinIO required)."""
 
-import os
 from pathlib import Path
 
 from app.config import settings

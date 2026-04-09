@@ -1,7 +1,6 @@
 """Cross-match two lists of coordinates."""
 
 import math
-from typing import Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel

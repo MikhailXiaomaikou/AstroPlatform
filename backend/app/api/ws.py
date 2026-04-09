@@ -1,6 +1,5 @@
 """WebSocket endpoint for pipeline progress updates."""
 
-import asyncio
 import json
 import logging
 from collections import defaultdict

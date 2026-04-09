@@ -137,16 +137,14 @@ class ChandraConnector(BaseConnector):
                     name = str(row[name_col]).strip()
                     break
 
-            flux = None
+            extra: dict = {}
             for flux_col in ("flux_aper_b", "flux"):
                 if flux_col in row.colnames:
                     try:
-                        flux = float(row[flux_col])
+                        extra["flux"] = float(row[flux_col])
                         break
                     except (ValueError, TypeError):
                         pass
-
-            extra: dict = {}
             for col in ("significance", "extent_flag", "hard_hm", "hard_ms"):
                 if col in row.colnames:
                     try:

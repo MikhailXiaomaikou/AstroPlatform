@@ -9,7 +9,6 @@ import os
 
 def get_cors_origins() -> list[str]:
     """Return the list of allowed CORS origins."""
-    env = os.getenv("ENV", "dev")
     raw = os.getenv("CORS_ORIGINS", "")
 
     origins = []

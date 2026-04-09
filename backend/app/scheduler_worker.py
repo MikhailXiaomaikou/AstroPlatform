@@ -61,7 +61,7 @@ def check_and_dispatch_due_schedules():
             stmt = (
                 select(ScheduledRun)
                 .where(
-                    ScheduledRun.enabled == True,
+                    ScheduledRun.enabled.is_(True),
                     ScheduledRun.next_run_at <= now,
                 )
             )

@@ -155,7 +155,7 @@ class SDSSConnector(BaseConnector):
         # Keep objid and similar large-int columns as strings to avoid float precision loss
         _string_columns = {"objid", "bestobjid", "specobjid", "fluxobjid"}
 
-        lines = [l for l in text.strip().splitlines() if not l.startswith("#")]
+        lines = [line for line in text.strip().splitlines() if not line.startswith("#")]
         if len(lines) < 2:
             return Table()
         reader = csv.DictReader(lines)

@@ -1,8 +1,6 @@
 """NED (NASA/IPAC Extragalactic Database) connector via HTTP API."""
 
-import asyncio
 import io
-from functools import partial
 
 import numpy as np
 from astropy.table import Table

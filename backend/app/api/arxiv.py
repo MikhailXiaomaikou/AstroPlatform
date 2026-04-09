@@ -2,7 +2,6 @@
 
 import logging
 import re
-from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException

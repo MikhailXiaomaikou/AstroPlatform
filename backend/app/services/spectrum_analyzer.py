@@ -130,7 +130,8 @@ def analyze_spectrum(wavelength: list[float], flux: list[float]) -> SpectrumSumm
         cont_model = np.poly1d(coeffs)
         cont_slope = float(coeffs[-2]) if len(coeffs) > 1 else 0.0
     else:
-        cont_model = lambda x: np.full_like(x, median_flux)
+        def cont_model(x):
+            return np.full_like(x, median_flux)
         cont_slope = 0.0
         coeffs = [0, 0, median_flux]
 

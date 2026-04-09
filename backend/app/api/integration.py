@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_optional_user
 from app.models.database import get_db
-from app.models.schemas import DataFile, PipelineRun, PipelineTemplateDB, User
+from app.models.schemas import PipelineRun, PipelineTemplateDB, User
 from app.storage import download_fits
 
 router = APIRouter(prefix="/api/integration", tags=["integration"])
@@ -249,58 +249,58 @@ def _node_type_to_code(node_type: str, params: dict, node_id: str) -> list[str]:
     if node_type == "LoadData":
         path = params.get("fits_path", "path/to/your/file.fits")
         return [
-            f"# Load FITS data\n",
+            "# Load FITS data\n",
             f"hdul = fits.open('{path}')\n",
-            f"hdul.info()\n",
+            "hdul.info()\n",
             f"data_{node_id} = Table.read(hdul[1]) if len(hdul) > 1 else hdul[0].data\n",
         ]
     elif node_type == "Denoise":
         sigma = params.get("sigma", 3.0)
         return [
-            f"from astropy.stats import sigma_clip\n",
-            f"\n",
+            "from astropy.stats import sigma_clip\n",
+            "\n",
             f"sigma_thresh = {sigma}\n",
-            f"# Apply sigma clipping\n",
-            f"clipped = sigma_clip(flux, sigma=sigma_thresh, maxiters=5)\n",
-            f"mask = clipped.mask\n",
-            f"clean_flux = np.where(mask, np.interp(np.arange(len(flux)), np.where(~mask)[0], flux[~mask]), flux)\n",
+            "# Apply sigma clipping\n",
+            "clipped = sigma_clip(flux, sigma=sigma_thresh, maxiters=5)\n",
+            "mask = clipped.mask\n",
+            "clean_flux = np.where(mask, np.interp(np.arange(len(flux)), np.where(~mask)[0], flux[~mask]), flux)\n",
         ]
     elif node_type == "SpectralFit":
         model = params.get("model", "gaussian")
         return [
-            f"from scipy.optimize import curve_fit\n",
-            f"\n",
+            "from scipy.optimize import curve_fit\n",
+            "\n",
             f"def {model}(x, amp, center, width):\n",
-            f"    return amp * np.exp(-0.5 * ((x - center) / width)**2)\n" if model == "gaussian" else
-            f"    return amp * width**2 / ((x - center)**2 + width**2)\n",
-            f"\n",
+            "    return amp * np.exp(-0.5 * ((x - center) / width)**2)\n" if model == "gaussian" else
+            "    return amp * width**2 / ((x - center)**2 + width**2)\n",
+            "\n",
             f"popt, pcov = curve_fit({model}, wavelength, flux, maxfev=10000)\n",
-            f"print(f'Fit parameters: {{dict(zip([\"amp\", \"center\", \"width\"], popt))}}')\n",
-            f"plt.plot(wavelength, flux, label='Data')\n",
+            "print(f'Fit parameters: {dict(zip([\"amp\", \"center\", \"width\"], popt))}')\n",
+            "plt.plot(wavelength, flux, label='Data')\n",
             f"plt.plot(wavelength, {model}(wavelength, *popt), '--', label='Fit')\n",
-            f"plt.legend()\n",
-            f"plt.show()\n",
+            "plt.legend()\n",
+            "plt.show()\n",
         ]
     elif node_type == "RedshiftEstimate":
         return [
-            f"# Redshift estimation via emission line matching\n",
-            f"rest_lines = {{'H-alpha': 6563, 'H-beta': 4861, '[OIII]': 5007, '[OII]': 3727}}\n",
-            f"# Find peaks in spectrum\n",
-            f"from scipy.signal import find_peaks\n",
-            f"peaks, _ = find_peaks(flux, height=np.median(flux) + 2*np.std(flux))\n",
-            f"print(f'Found {{len(peaks)}} peaks at wavelengths: {{wavelength[peaks]}}')\n",
+            "# Redshift estimation via emission line matching\n",
+            "rest_lines = {'H-alpha': 6563, 'H-beta': 4861, '[OIII]': 5007, '[OII]': 3727}\n",
+            "# Find peaks in spectrum\n",
+            "from scipy.signal import find_peaks\n",
+            "peaks, _ = find_peaks(flux, height=np.median(flux) + 2*np.std(flux))\n",
+            "print(f'Found {len(peaks)} peaks at wavelengths: {wavelength[peaks]}')\n",
         ]
     elif node_type == "Plot":
         plot_type = params.get("plot_type", "spectrum")
         return [
-            f"fig, ax = plt.subplots(figsize=(12, 5))\n",
-            f"ax.plot(wavelength, flux, lw=0.8)\n" if plot_type == "spectrum" else
-            f"ax.scatter(x_data, y_data, s=4, alpha=0.6)\n",
-            f"ax.set_xlabel('Wavelength')\n",
-            f"ax.set_ylabel('Flux')\n",
+            "fig, ax = plt.subplots(figsize=(12, 5))\n",
+            "ax.plot(wavelength, flux, lw=0.8)\n" if plot_type == "spectrum" else
+            "ax.scatter(x_data, y_data, s=4, alpha=0.6)\n",
+            "ax.set_xlabel('Wavelength')\n",
+            "ax.set_ylabel('Flux')\n",
             "ax.set_title('" + params.get("title", "Plot") + "')\n",
-            f"plt.tight_layout()\n",
-            f"plt.show()\n",
+            "plt.tight_layout()\n",
+            "plt.show()\n",
         ]
     else:
         return [f"# {node_type} node — implement as needed\n", f"params = {json.dumps(params)}\n"]
@@ -325,7 +325,6 @@ ADQL_SERVICES = {
 async def adql_query(req: ADQLRequest):
     """Execute an ADQL query against a TAP service."""
     import asyncio
-    from functools import partial
 
     if req.service not in ADQL_SERVICES:
         raise HTTPException(status_code=400, detail=f"Unknown service: {req.service}. Available: {list(ADQL_SERVICES.keys())}")

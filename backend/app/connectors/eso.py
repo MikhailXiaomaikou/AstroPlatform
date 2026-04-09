@@ -30,7 +30,6 @@ class ESOConnector(BaseConnector):
         from functools import partial
 
         from astropy.coordinates import SkyCoord
-        import astropy.units as u
         from astroquery.eso import Eso
 
         # Resolve coordinates

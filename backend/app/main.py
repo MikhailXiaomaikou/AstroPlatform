@@ -92,8 +92,8 @@ app = FastAPI(
 )
 
 # ── Request monitoring ──
-import time as _time
-from collections import defaultdict as _defaultdict
+import time as _time  # noqa: E402
+from collections import defaultdict as _defaultdict  # noqa: E402
 
 _api_stats = {
     "requests_total": 0,
@@ -126,7 +126,7 @@ async def monitor_requests(request, call_next):
                 })
                 _api_stats["last_errors"] = _api_stats["last_errors"][-20:]
         return response
-    except Exception as e:
+    except Exception:
         _api_stats["errors_total"] += 1
         _api_stats["endpoint_errors"][path] += 1
         raise
