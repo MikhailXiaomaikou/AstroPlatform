@@ -1463,41 +1463,30 @@ export default function ChatPage() {
           <div className="chat-empty">
             <div className="chat-empty-icon">&#x2728;</div>
             <h3>How can I help with your research?</h3>
-            <div className="chat-suggestions">
-              <button
-                className="chat-suggestion"
-                onClick={() =>
-                  setInput("Search for quasars near RA=180, Dec=45")
-                }
-              >
-                Search for quasars near RA=180, Dec=45
-              </button>
-              <button
-                className="chat-suggestion"
-                onClick={() =>
-                  setInput(
-                    "Write an ADQL query to find bright stars in Gaia DR3"
-                  )
-                }
-              >
-                Write an ADQL query for bright Gaia stars
-              </button>
-              <button
-                className="chat-suggestion"
-                onClick={() =>
-                  setInput("How do I denoise a spectrum and fit emission lines?")
-                }
-              >
-                How to denoise a spectrum and fit lines?
-              </button>
-              <button
-                className="chat-suggestion"
-                onClick={() =>
-                  setInput("Explain the difference between ICRS and Galactic coordinates")
-                }
-              >
-                Explain ICRS vs Galactic coordinates
-              </button>
+            <div className="chat-templates-grid">
+              {[
+                { icon: "\u{1F31F}", title: t("template.hr_diagram"), prompt: t("template.hr_desc"), difficulty: "beginner" as const },
+                { icon: "\u{1F30C}", title: t("template.galaxy_redshift"), prompt: t("template.galaxy_desc"), difficulty: "beginner" as const },
+                { icon: "\u2B50", title: t("template.variable_star"), prompt: t("template.variable_desc"), difficulty: "intermediate" as const },
+                { icon: "\u{1F52D}", title: t("template.spectral"), prompt: t("template.spectral_desc"), difficulty: "intermediate" as const },
+                { icon: "\u{1F4CA}", title: t("template.highz"), prompt: t("template.highz_desc"), difficulty: "advanced" as const },
+                { icon: "\u{1F4AB}", title: t("template.supernova"), prompt: t("template.supernova_desc"), difficulty: "advanced" as const },
+              ].map((tmpl, i) => (
+                <button
+                  key={i}
+                  className="chat-template-card"
+                  onClick={() => setInput(tmpl.prompt)}
+                >
+                  <div className="chat-template-header">
+                    <span className="chat-template-icon">{tmpl.icon}</span>
+                    <span className={`chat-template-badge badge-${tmpl.difficulty}`}>
+                      {t(`template.difficulty.${tmpl.difficulty}`)}
+                    </span>
+                  </div>
+                  <div className="chat-template-title">{tmpl.title}</div>
+                  <div className="chat-template-desc">{tmpl.prompt}</div>
+                </button>
+              ))}
             </div>
           </div>
         )}

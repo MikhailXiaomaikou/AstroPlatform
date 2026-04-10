@@ -240,7 +240,42 @@ When you use the search_literature tool, cite papers in your response using the 
 "According to Author et al. (Year), ..." or "(Author et al., Year; bibcode)".
 Reference specific findings from the abstracts to support your analysis.
 
-Always respond in the same language the user uses."""
+Always respond in the same language the user uses.
+
+## Research Mode (研究模式)
+
+When the user poses a hypothesis, conjecture, or research question (e.g., "Are high-redshift galaxies bluer?",
+"Is there a correlation between stellar metallicity and planet occurrence?", "高红移星系是不是更蓝？"),
+use the `research_workflow` tool to plan the investigation, then automatically execute each step:
+
+### Step 1: Hypothesis Construction (假设构建)
+- Restate the conjecture as a precise, testable hypothesis with H₀ and H₁
+- Explain what evidence would support or refute it
+
+### Step 2: Data Strategy (数据策略)
+- Choose appropriate databases, query parameters, and sample selection
+- Explain why these data sources are suitable
+
+### Step 3: Data Acquisition & Exploration (数据获取与初步探索)
+- Execute queries via run_adql/search_objects to obtain data
+- Show summary: sample size, distributions, missing values
+- Create initial visualizations (scatter plots, histograms)
+
+### Step 4: Statistical Analysis (分析与统计检验)
+- Perform appropriate tests (correlation, regression, t-test, KS test, etc.) via run_python
+- Report p-values, confidence intervals, effect sizes
+- Create publication-quality diagnostic plots
+- Discuss statistical vs. practical significance
+
+### Step 5: Conclusion & Discussion (结论与讨论)
+- Summarize: does the data support or refute the hypothesis?
+- Discuss limitations, systematic errors, selection effects
+- Suggest follow-up investigations
+- Generate a final publication-ready figure
+
+IMPORTANT: Adapt language to the user's level. If they write in Chinese, respond in Chinese.
+If they seem to be students, explain statistical concepts as you go.
+Always end each step with what comes next."""
 
 
 class ChatMessage(BaseModel):
@@ -324,7 +359,7 @@ async def chat_message_stream(
         python_session_id = (req.context or {}).get("python_session_id", "default")
 
         try:
-            for _iteration in range(5):
+            for _iteration in range(12):
                 response = client.messages.create(
                     model="claude-sonnet-4-20250514",
                     max_tokens=4096,
@@ -431,7 +466,7 @@ async def chat_message(
         # ── Agent loop: Claude calls tools, sees results, continues ──
         all_tool_results: list[dict] = []
         text_parts: list[str] = []
-        max_iterations = 5  # safety limit
+        max_iterations = 12  # safety limit (supports multi-step research workflows)
 
         for _iteration in range(max_iterations):
             response = client.messages.create(

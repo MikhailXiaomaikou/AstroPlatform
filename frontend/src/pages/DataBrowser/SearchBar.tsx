@@ -57,6 +57,24 @@ const OBSERVATION_TYPES = [
   "optical",
 ];
 
+const SOURCE_TOOLTIPS: Record<string, string> = {
+  simbad: "Known objects by name",
+  gaia: "2B+ star positions & distances",
+  sdss: "Galaxy images & spectra",
+  mast: "HST, JWST, Kepler data",
+  alma: "Submillimeter observations",
+  vizier: "Catalog collection",
+  ned: "Extragalactic database",
+  "2mass": "Near-infrared survey",
+  chandra: "X-ray observations",
+  allwise: "All-sky infrared survey",
+  eso: "ESO archive",
+  irsa: "Infrared archive",
+  jwst: "JWST observations",
+  lamost: "Spectroscopic survey",
+  desi: "Dark energy survey",
+};
+
 export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props) {
   const { t } = useI18n();
   const [mode, setMode] = useState<"quick" | "advanced">("quick");
@@ -192,6 +210,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                   type="button"
                   className={`segment-btn${sources.includes(s) ? " active" : ""}`}
                   onClick={() => toggleSource(s)}
+                  title={SOURCE_TOOLTIPS[s] || s.toUpperCase()}
                 >
                   {s.toUpperCase()}
                 </button>
@@ -211,6 +230,26 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
               />
             </label>
           </div>
+
+          {!query.trim() && (
+            <div className="search-suggestions-hint">
+              <span className="search-suggestions-label">{t("search.suggestions_heading")}</span>
+              <div className="search-suggestions-list">
+                <button type="button" className="search-suggestion-chip" onClick={() => setQuery("M31")}>
+                  &quot;M31&quot; &mdash; {t("search.suggestion.m31")}
+                </button>
+                <button type="button" className="search-suggestion-chip" onClick={() => setQuery("Sirius")}>
+                  &quot;Sirius&quot; &mdash; {t("search.suggestion.sirius")}
+                </button>
+                <button type="button" className="search-suggestion-chip" onClick={() => setQuery("Crab Nebula")}>
+                  &quot;Crab Nebula&quot; &mdash; {t("search.suggestion.crab")}
+                </button>
+                <button type="button" className="search-suggestion-chip" onClick={() => setQuery("10.68 41.27")}>
+                  &quot;10.68 41.27&quot; &mdash; {t("search.suggestion.coords")}
+                </button>
+              </div>
+            </div>
+          )}
 
           <button
             type="submit"
@@ -438,6 +477,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                   type="button"
                   className={`segment-btn${advSources.includes(s) ? " active" : ""}`}
                   onClick={() => toggleAdvSource(s)}
+                  title={SOURCE_TOOLTIPS[s] || s.toUpperCase()}
                 >
                   {s.toUpperCase()}
                 </button>

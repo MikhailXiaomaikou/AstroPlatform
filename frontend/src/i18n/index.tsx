@@ -64,6 +64,40 @@ const translations: Record<string, Record<Lang, string>> = {
   "auth.welcome":         { en: "Welcome back to Standard Astro", zh: "欢迎回到 Standard Astro", fr: "Bienvenue sur Standard Astro", es: "Bienvenido a Standard Astro" },
   "auth.start":           { en: "Start exploring the universe", zh: "开始探索宇宙", fr: "Commencez à explorer l'univers", es: "Comience a explorar el universo" },
 
+  // Research Templates
+  "template.heading":         { en: "Research Templates", zh: "研究模板", fr: "Modèles de recherche", es: "Plantillas de investigación" },
+  "template.hr_diagram":      { en: "HR Diagram & Stellar Evolution", zh: "HR 图与恒星演化", fr: "Diagramme HR & Évolution stellaire", es: "Diagrama HR y Evolución estelar" },
+  "template.hr_desc":         { en: "Plot the HR diagram for the Pleiades, analyze evolutionary stages, and explain the distribution of main-sequence stars, red giants, and white dwarfs", zh: "帮我制作昴星团(Pleiades)的赫罗图，分析其中恒星的演化阶段，并解释主序星、红巨星和白矮星的分布", fr: "Tracez le diagramme HR des Pléiades, analysez les stades évolutifs et expliquez la distribution des étoiles", es: "Trazar el diagrama HR de las Pléyades, analizar las etapas evolutivas y explicar la distribución de estrellas" },
+  "template.galaxy_redshift": { en: "Galaxy Redshift Distribution", zh: "星系红移分布", fr: "Distribution de décalage spectral", es: "Distribución de corrimiento al rojo" },
+  "template.galaxy_desc":     { en: "Query galaxy redshift data from SDSS for a sky region, plot a redshift histogram, and analyze galaxy cluster signals", zh: "查询 SDSS 中一片天区的星系红移数据，绘制红移分布直方图，分析是否存在星系团的信号", fr: "Interroger les données de décalage spectral des galaxies SDSS et analyser les signaux d'amas", es: "Consultar datos de corrimiento al rojo de galaxias SDSS y analizar señales de cúmulos" },
+  "template.variable_star":   { en: "Variable Star Period Detection", zh: "变星周期检测", fr: "Détection de période d'étoile variable", es: "Detección de período de estrella variable" },
+  "template.variable_desc":   { en: "Find a known Cepheid variable, obtain its light curve, detect the period using Lomb-Scargle, and perform phase-folding analysis", zh: "帮我找一颗已知的造父变星，获取其光变曲线数据，用 Lomb-Scargle 方法检测周期，并进行相位折叠分析", fr: "Trouver une céphéide connue, obtenir sa courbe de lumière, détecter la période par Lomb-Scargle", es: "Encontrar una cefeida conocida, obtener su curva de luz, detectar el período con Lomb-Scargle" },
+  "template.spectral":        { en: "Spectral Analysis", zh: "光谱分析与分类", fr: "Analyse spectrale", es: "Análisis espectral" },
+  "template.spectral_desc":   { en: "Obtain a star's spectrum, identify absorption features, determine spectral type and radial velocity, and estimate effective temperature", zh: "获取一颗恒星的光谱数据，识别吸收线特征，测定光谱型和径向速度，估算其有效温度", fr: "Obtenir le spectre d'une étoile, identifier les raies d'absorption et déterminer le type spectral", es: "Obtener el espectro de una estrella, identificar líneas de absorción y determinar el tipo espectral" },
+  "template.highz":           { en: "High-z Galaxy Selection", zh: "高红移星系筛选", fr: "Sélection de galaxies à haut z", es: "Selección de galaxias de alto z" },
+  "template.highz_desc":      { en: "Use color-color diagram methods to select z>3 Lyman-break galaxy candidates from SDSS and analyze their color distribution", zh: "使用颜色-颜色图方法，从 SDSS 数据中筛选 z>3 的 Lyman-break 星系候选体，分析其颜色分布", fr: "Utiliser les diagrammes couleur-couleur pour sélectionner des galaxies Lyman-break z>3 dans SDSS", es: "Usar diagramas color-color para seleccionar galaxias Lyman-break z>3 de SDSS" },
+  "template.supernova":       { en: "Supernova Follow-up", zh: "超新星后续观测", fr: "Suivi de supernova", es: "Seguimiento de supernova" },
+  "template.supernova_desc":  { en: "Find recent supernovae, cross-match host galaxy info, analyze host redshift and morphology, and draft an observing proposal", zh: "查找最近一周发现的超新星，交叉匹配宿主星系信息，分析宿主星系的红移和形态类型，并撰写观测提案", fr: "Trouver les supernovae récentes, croiser les infos de galaxie hôte et rédiger une proposition", es: "Encontrar supernovas recientes, cruzar información de galaxias anfitrionas y redactar una propuesta" },
+  "template.difficulty.beginner":     { en: "Beginner", zh: "入门", fr: "Débutant", es: "Principiante" },
+  "template.difficulty.intermediate": { en: "Intermediate", zh: "中级", fr: "Intermédiaire", es: "Intermedio" },
+  "template.difficulty.advanced":     { en: "Advanced", zh: "高级", fr: "Avancé", es: "Avanzado" },
+
+  // Search Suggestions
+  "search.suggestions_heading": { en: "Try searching for:", zh: "试试搜索：", fr: "Essayez de chercher :", es: "Prueba buscar:" },
+  "search.suggestion.m31":      { en: "Andromeda Galaxy", zh: "仙女座星系", fr: "Galaxie d'Andromède", es: "Galaxia de Andrómeda" },
+  "search.suggestion.sirius":   { en: "Brightest star", zh: "天狼星", fr: "Étoile la plus brillante", es: "Estrella más brillante" },
+  "search.suggestion.crab":     { en: "Supernova remnant", zh: "蟹状星云", fr: "Rémanent de supernova", es: "Remanente de supernova" },
+  "search.suggestion.coords":   { en: "Coordinates search", zh: "坐标搜索", fr: "Recherche par coordonnées", es: "Búsqueda por coordenadas" },
+
+  // Column Explainer
+  "columns.explainer_toggle":   { en: "What do these columns mean?", zh: "这些列是什么意思？", fr: "Que signifient ces colonnes ?", es: "Qué significan estas columnas?" },
+  "columns.name_desc":          { en: "Object identifier from the catalog", zh: "来自星表的天体标识符", fr: "Identifiant de l'objet dans le catalogue", es: "Identificador del objeto en el catálogo" },
+  "columns.ra_desc":            { en: "Sky coordinates (like latitude/longitude for the sky)", zh: "天球坐标（类似于天空的经纬度）", fr: "Coordonnées célestes (comme la latitude/longitude du ciel)", es: "Coordenadas celestes (como latitud/longitud del cielo)" },
+  "columns.mag_desc":           { en: "Brightness (lower = brighter; Sun = -26.7, faintest visible = +6)", zh: "亮度（数值越小越亮；太阳 = -26.7，肉眼极限 = +6）", fr: "Luminosité (plus bas = plus brillant ; Soleil = -26.7)", es: "Brillo (menor = más brillante; Sol = -26.7, límite visible = +6)" },
+  "columns.redshift_desc":      { en: "How fast it's receding (0 = stationary, 1 = very distant)", zh: "退行速度（0 = 静止，1 = 非常遥远）", fr: "Vitesse de récession (0 = stationnaire, 1 = très distant)", es: "Velocidad de recesión (0 = estacionario, 1 = muy distante)" },
+  "columns.type_desc":          { en: "Classification (star, galaxy, quasar, etc.)", zh: "分类（恒星、星系、类星体等）", fr: "Classification (étoile, galaxie, quasar, etc.)", es: "Clasificación (estrella, galaxia, quásar, etc.)" },
+  "columns.source_desc":        { en: "Which database this result came from", zh: "该结果来自哪个数据库", fr: "De quelle base de données provient ce résultat", es: "De qué base de datos proviene este resultado" },
+
   // Common
   // Errors
   "error.network":     { en: "Cannot reach the server. Check your connection or try again.", zh: "无法连接服务器。请检查网络连接或稍后重试。", fr: "Impossible de contacter le serveur. Vérifiez votre connexion.", es: "No se puede conectar al servidor. Verifique su conexión." },

@@ -74,6 +74,7 @@ export default function ResultsTable({
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
   const [page, setPage] = useState(0);
+  const [showColumnHelp, setShowColumnHelp] = useState(false);
 
   const sorted = useMemo(() => {
     if (!sortKey) return results;
@@ -144,6 +145,40 @@ export default function ResultsTable({
 
   return (
     <>
+      <div className="column-explainer">
+        <button
+          type="button"
+          className="column-explainer-toggle"
+          onClick={() => setShowColumnHelp(!showColumnHelp)}
+        >
+          {t("columns.explainer_toggle")}
+          <svg
+            className={`chevron${showColumnHelp ? " open" : ""}`}
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            width="14"
+            height="14"
+          >
+            <path
+              fillRule="evenodd"
+              d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+              clipRule="evenodd"
+            />
+          </svg>
+        </button>
+        {showColumnHelp && (
+          <div className="column-explainer-content">
+            <dl className="column-explainer-list">
+              <div><dt>{t("data.name")}</dt><dd>{t("columns.name_desc")}</dd></div>
+              <div><dt>RA / Dec</dt><dd>{t("columns.ra_desc")}</dd></div>
+              <div><dt>{t("data.magnitude")}</dt><dd>{t("columns.mag_desc")}</dd></div>
+              <div><dt>{t("data.redshift")}</dt><dd>{t("columns.redshift_desc")}</dd></div>
+              <div><dt>{t("data.type")}</dt><dd>{t("columns.type_desc")}</dd></div>
+              <div><dt>{t("data.source")}</dt><dd>{t("columns.source_desc")}</dd></div>
+            </dl>
+          </div>
+        )}
+      </div>
       <div className="results-table-wrap">
         <table className="results-table">
           <colgroup>

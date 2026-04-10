@@ -262,6 +262,29 @@ TOOLS = [
             "required": ["arxiv_id"],
         },
     },
+    {
+        "name": "research_workflow",
+        "description": (
+            "Plan and execute a complete research workflow from hypothesis to conclusion. "
+            "Use this when the user poses a research question or hypothesis that requires "
+            "multi-step data analysis. The tool helps structure the investigation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hypothesis": {
+                    "type": "string",
+                    "description": "The research hypothesis or question to investigate",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["quick", "thorough"],
+                    "description": "quick = rapid verification with basic statistics; thorough = comprehensive analysis with multiple tests",
+                },
+            },
+            "required": ["hypothesis"],
+        },
+    },
 ]
 
 
@@ -299,6 +322,8 @@ async def execute_tool(
             return await _exec_query_transients(tool_input)
         elif tool_name == "read_arxiv_paper":
             return await _exec_read_paper(tool_input)
+        elif tool_name == "research_workflow":
+            return _exec_research_workflow(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -787,4 +812,79 @@ async def _exec_read_paper(inp: dict) -> dict:
         "abstract": abstract,
         "pdf_text_preview": pdf_text[:2000] if pdf_text else "",
         "url": f"https://arxiv.org/abs/{arxiv_id}",
+    }
+
+
+def _exec_research_workflow(inp: dict) -> dict:
+    """Plan a structured research workflow from hypothesis to conclusion.
+
+    This is a PLANNING tool — it returns a research plan that the AI then
+    executes step-by-step using other tools (run_adql, run_python, search_objects).
+    """
+    hypothesis = inp.get("hypothesis", "")
+    scope = inp.get("scope", "thorough")
+
+    if not hypothesis.strip():
+        return {"error": "hypothesis is required"}
+
+    # Determine likely data sources based on keywords
+    h_lower = hypothesis.lower()
+    data_sources = []
+    suggested_queries = []
+
+    if any(kw in h_lower for kw in ["star", "stellar", "hr diagram", "parallax", "proper motion", "teff", "luminosity"]):
+        data_sources.append("gaia")
+        suggested_queries.append("SELECT TOP 1000 ... FROM gaiadr3.gaia_source WHERE ...")
+    if any(kw in h_lower for kw in ["galaxy", "galaxies", "redshift", "agn", "quasar", "morpholog"]):
+        data_sources.append("simbad")
+        suggested_queries.append("SELECT TOP 500 ... FROM basic WHERE otype = 'G' AND rvz_redshift IS NOT NULL")
+    if any(kw in h_lower for kw in ["spectrum", "spectral", "emission", "absorption", "line"]):
+        data_sources.append("sdss")
+    if any(kw in h_lower for kw in ["transient", "supernova", "sn ", "nova", "tde"]):
+        data_sources.append("tns")
+    if not data_sources:
+        data_sources = ["simbad", "gaia"]
+
+    # Build analysis steps based on scope
+    analysis_steps = [
+        "Acquire sample from database with appropriate selection criteria",
+        "Clean data: remove NaN/null values, apply quality cuts",
+        "Compute derived quantities (absolute magnitudes, colors, distances, etc.)",
+        "Visualize distributions and relationships (histograms, scatter plots)",
+    ]
+    statistical_tests = ["Pearson/Spearman correlation"]
+    suggested_plots = ["histogram", "scatter"]
+
+    if scope == "thorough":
+        analysis_steps.extend([
+            "Split sample into subgroups if applicable",
+            "Perform regression analysis with uncertainties",
+            "Check for selection effects and systematic biases",
+            "Compare results with published literature",
+        ])
+        statistical_tests.extend([
+            "Linear regression (with bootstrap uncertainties)",
+            "KS test (for distribution comparison)",
+            "Bayesian analysis if sample size permits",
+        ])
+        suggested_plots.extend([
+            "residual plot",
+            "corner/contour plot",
+            "comparison with literature values",
+            "publication-ready summary figure",
+        ])
+    else:
+        statistical_tests.append("Simple linear fit")
+        suggested_plots.append("summary figure")
+
+    return {
+        "hypothesis_formal": f"Research question: {hypothesis}",
+        "null_hypothesis": "H₀: No significant relationship/difference exists as hypothesized.",
+        "data_sources": data_sources,
+        "suggested_queries": suggested_queries,
+        "analysis_steps": analysis_steps,
+        "suggested_plots": suggested_plots,
+        "statistical_tests": statistical_tests,
+        "scope": scope,
+        "next_action": "Begin Step 1: refine the hypothesis, then proceed to data acquisition using run_adql or search_objects.",
     }

@@ -3884,6 +3884,212 @@
   background: rgba(10, 132, 255, 0.08);
 }
 
+/* ── Research Template Cards ── */
+
+.chat-templates-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  max-width: 780px;
+  width: 100%;
+}
+
+.chat-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.85rem;
+  border: 1px solid var(--color-separator);
+  border-radius: var(--radius-md);
+  background: var(--color-subtle);
+  cursor: pointer;
+  transition: var(--transition);
+  text-align: left;
+}
+
+.chat-template-card:hover {
+  border-color: var(--color-accent);
+  background: rgba(10, 132, 255, 0.06);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.chat-template-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-template-icon {
+  font-size: 1.3rem;
+}
+
+.chat-template-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.chat-template-badge.badge-beginner {
+  background: rgba(48, 209, 88, 0.15);
+  color: var(--color-green, #30d158);
+}
+
+.chat-template-badge.badge-intermediate {
+  background: rgba(255, 204, 0, 0.15);
+  color: var(--color-yellow, #ffd60a);
+}
+
+.chat-template-badge.badge-advanced {
+  background: rgba(255, 69, 58, 0.15);
+  color: var(--color-red, #ff453a);
+}
+
+.chat-template-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.chat-template-desc {
+  font-size: 0.72rem;
+  color: var(--color-text-tertiary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  .chat-templates-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .chat-templates-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Search Suggestions ── */
+
+.search-suggestions-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 0;
+}
+
+.search-suggestions-label {
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+  font-weight: 500;
+}
+
+.search-suggestions-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.search-suggestion-chip {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--color-separator);
+  border-radius: var(--radius-sm);
+  background: var(--color-subtle);
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.search-suggestion-chip:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+  background: rgba(10, 132, 255, 0.08);
+}
+
+/* ── Column Explainer ── */
+
+.column-explainer {
+  margin-bottom: 0.5rem;
+}
+
+.column-explainer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--color-separator);
+  border-radius: var(--radius-sm);
+  background: var(--color-subtle);
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: var(--transition);
+  width: 100%;
+}
+
+.column-explainer-toggle:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.column-explainer-toggle .chevron {
+  margin-left: auto;
+  transition: transform 0.2s ease;
+}
+
+.column-explainer-toggle .chevron.open {
+  transform: rotate(180deg);
+}
+
+.column-explainer-content {
+  border: 1px solid var(--color-separator);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  background: var(--color-subtle);
+  padding: 0.6rem 0.85rem;
+}
+
+.column-explainer-list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+}
+
+.column-explainer-list > div {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.column-explainer-list dt {
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.column-explainer-list dd {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .column-explainer-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Message bubbles ── */
 
 .chat-message {
