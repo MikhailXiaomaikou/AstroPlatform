@@ -1,4 +1,4 @@
-"""PARSEC isochrone fetcher — queries CMD 3.7 API for theoretical isochrones."""
+"""PARSEC isochrone fetcher — queries CMD 3.9 API for theoretical isochrones."""
 
 import io
 import logging
@@ -9,11 +9,11 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# CMD 3.7 API endpoint
-CMD_URL = "http://stev.oapd.inaf.it/cgi-bin/cmd"
+# CMD 3.9 API endpoint (must use HTTPS — HTTP redirects lose POST data)
+CMD_URL = "https://stev.oapd.inaf.it/cgi-bin/cmd_3.9"
 
 # Base URL for resolving relative output links
-CMD_BASE_URL = "http://stev.oapd.inaf.it"
+CMD_BASE_URL = "https://stev.oapd.inaf.it"
 
 # Photometric system codes for CMD 3.7
 PHOTSYS_MAP = {
@@ -31,7 +31,7 @@ def _build_form_data(
     photometric_system: str,
     d_log_age: float = 0.1,
 ) -> dict[str, str]:
-    """Build the CMD 3.7 form POST data."""
+    """Build the CMD 3.9 form POST data."""
     phot_key = photometric_system.lower()
     if phot_key not in PHOTSYS_MAP:
         raise ValueError(
@@ -39,42 +39,65 @@ def _build_form_data(
             f"Supported: {list(PHOTSYS_MAP.keys())}"
         )
 
+    # Convert [M/H] to Z for the isoc_zlow/zupp fields
+    # Z_sun = 0.0152, [M/H] = log10(Z/Z_sun)
+    z_val = 0.0152 * 10 ** metallicity
+
     return {
-        "cmd_version": "3.7",
+        "cmd_version": "3.9",
+        # Evolutionary tracks
         "track_parsec": "parsec_CAF09_v1.2S",
-        "track_colibri": "parsec_CAF09_v1.2S_S_LMC08_TPC",
+        "track_colibri": "parsec_CAF09_v1.2S_S_LMC_08_web",
         "track_postagb": "no",
         "n_Reimers": "0.2",
         "eta_Reimers": "0.2",
+        # Photometric system
         "photsys_file": PHOTSYS_MAP[phot_key],
         "photsys_version": "YBCnewVega",
+        # Dust
         "dust_sourceM": "dpmod60alox40",
         "dust_sourceC": "AMCSIC15",
         "kind_cspecmag": "aringer09",
+        "kind_dust": "0",
         "kind_mag": "2",
         "kind_interp": "1",
         "kind_tpagb": "3",
+        "kind_postagb": "-1",
+        "kind_LPV": "4",
+        # Extinction
+        "extinction_coeff": "constant",
+        "extinction_curve": "cardelli",
+        "extinction_av": "0.0",
+        # IMF
         "imf_file": "tab_imf/imf_kroupa_orig.dat",
+        # Isochrone age — use log(age)
         "isoc_isagelog": "1",
-        "isoc_agelow": str(log_age_low),
-        "isoc_ageupp": str(log_age_high),
+        "isoc_agelow": str(10 ** log_age_low),
+        "isoc_ageupp": str(10 ** log_age_high),
         "isoc_dage": "0.0",
         "isoc_lagelow": str(log_age_low),
         "isoc_lageupp": str(log_age_high),
         "isoc_dlage": str(d_log_age),
-        "isoc_ismetlog": "1",
-        "isoc_zlow": "0.0152",
-        "isoc_zupp": "0.0152",
+        # Isochrone metallicity — use Z (not [M/H])
+        "isoc_ismetlog": "0",
+        "isoc_zlow": str(z_val),
+        "isoc_zupp": str(z_val),
         "isoc_dz": "0.0",
         "isoc_metlow": str(metallicity),
         "isoc_metupp": str(metallicity),
         "isoc_dmet": "0.0",
+        # Output
         "output_kind": "0",
         "output_evstage": "1",
+        "output_gzip": "0",
+        # Luminosity function (not used but required)
         "lf_maginf": "-15",
         "lf_magsup": "20",
         "lf_deltamag": "0.5",
         "sim_mtot": "1.0e4",
+        # CGI fields declarations
+        ".cgifields": "output_gzip",
+        # Submit
         "submit_form": "Submit",
     }
 
@@ -86,12 +109,14 @@ def _extract_output_url(html: str) -> str:
     data file (ending in ``.dat``).  We extract the first such link.
     """
     # Look for href links ending in .dat
-    match = re.search(r'href=["\']([^"\']*\.dat)["\']', html)
+    match = re.search(r'href=["\']?([^"\'>\s]*\.dat)["\']?', html)
     if match:
         url = match.group(1)
         if url.startswith("http"):
             return url
-        # Resolve relative URLs
+        # Resolve relative URLs like "../tmp/output123.dat"
+        if url.startswith("../"):
+            return CMD_BASE_URL + "/" + url.lstrip("../")
         if url.startswith("/"):
             return CMD_BASE_URL + url
         return CMD_BASE_URL + "/" + url
