@@ -286,6 +286,36 @@ TOOLS = [
             "required": ["hypothesis"],
         },
     },
+    {
+        "name": "fit_isochrone",
+        "description": (
+            "Fit PARSEC isochrones to observed colour-magnitude data to determine "
+            "cluster age, metallicity, distance, and extinction. Use this when the user "
+            "asks about the age of a star cluster, wants to fit isochrones, or asks "
+            "'how old is this cluster'. Requires observed BP-RP colours and G magnitudes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bp_rp": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Observed BP-RP colour array",
+                },
+                "abs_mag": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Observed G magnitude array (apparent or absolute)",
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["grid", "mcmc"],
+                    "description": "Fitting method: 'grid' for fast grid+Nelder-Mead, 'mcmc' for full MCMC with uncertainties",
+                },
+            },
+            "required": ["bp_rp", "abs_mag"],
+        },
+    },
 ]
 
 
@@ -325,6 +355,8 @@ async def execute_tool(
             return await _exec_read_paper(tool_input)
         elif tool_name == "research_workflow":
             return _exec_research_workflow(tool_input)
+        elif tool_name == "fit_isochrone":
+            return await _exec_fit_isochrone(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -880,3 +912,39 @@ def _exec_research_workflow(inp: dict) -> dict:
         "scope": scope,
         "next_action": "Begin Step 1: refine the hypothesis, then proceed to data acquisition using run_adql or search_objects.",
     }
+
+
+async def _exec_fit_isochrone(inp: dict) -> dict:
+    """Execute isochrone fitting on observed CMD data."""
+    bp_rp = inp.get("bp_rp", [])
+    abs_mag = inp.get("abs_mag", [])
+    method = inp.get("method", "grid")
+
+    if not bp_rp or not abs_mag:
+        return {"error": "bp_rp and abs_mag arrays are required"}
+    if len(bp_rp) != len(abs_mag):
+        return {"error": f"bp_rp ({len(bp_rp)}) and abs_mag ({len(abs_mag)}) must have the same length"}
+
+    import asyncio
+    from app.services.astro_analysis import fit_isochrone
+
+    loop = asyncio.get_running_loop()
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: fit_isochrone(
+                    bp_rp, abs_mag,
+                    method=method,
+                ),
+            ),
+            timeout=120.0,
+        )
+    except asyncio.TimeoutError:
+        return {"error": "Isochrone fitting timed out after 120 seconds"}
+
+    # Remove non-serializable items (matplotlib Figure)
+    if "corner_fig" in result:
+        del result["corner_fig"]
+
+    return result

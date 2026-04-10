@@ -116,6 +116,277 @@ def get_isochrone(log_age, metallicity=0.0, photometric_system="gaia"):
     )
 
 
+# ── Isochrone Fitting ──
+
+def fit_isochrone(
+    bp_rp,
+    abs_mag,
+    mag_err=None,
+    color_err=None,
+    method="grid",
+    photometric_system="gaia",
+    age_range=(6.5, 10.3),
+    met_range=(-2.0, 0.5),
+    dm_range=(0.0, 20.0),
+    av_range=(0.0, 2.0),
+    n_grid_age=20,
+    n_grid_met=5,
+    n_walkers=32,
+    n_steps=500,
+    n_burn=200,
+    seed=42,
+):
+    """Fit PARSEC isochrones to observed CMD data.
+
+    Finds the best-fit (age, [M/H], distance_modulus, A_V) by minimising the
+    chi-squared sum of nearest-point distances on the colour-magnitude diagram.
+
+    Args:
+        bp_rp: observed colour array (e.g. G_BP - G_RP)
+        abs_mag: observed magnitude array (apparent or absolute)
+        mag_err: magnitude uncertainties (optional, default 0.1)
+        color_err: colour uncertainties (optional, default 0.05)
+        method: 'grid' for grid+Nelder-Mead, 'mcmc' for emcee MCMC
+        photometric_system: 'gaia' or 'sdss'
+        age_range: (min, max) log10(age/yr) for search
+        met_range: (min, max) [M/H]
+        dm_range: (min, max) distance modulus
+        av_range: (min, max) A_V extinction
+        n_grid_age: grid points in age dimension
+        n_grid_met: grid points in metallicity dimension
+        n_walkers: MCMC walkers (method='mcmc')
+        n_steps: MCMC steps (method='mcmc')
+        n_burn: MCMC burn-in (method='mcmc')
+        seed: random seed
+
+    Returns:
+        dict with keys:
+            best_fit: {log_age, metallicity, distance_modulus, A_V}
+            chi2: best-fit chi-squared
+            chi2_reduced: chi2 / dof
+            method: fitting method used
+            (if mcmc) uncertainties: {param: [p16, p50, p84]}
+            (if mcmc) corner_fig: matplotlib Figure
+            (if mcmc) chain: raw MCMC chain (n_walkers * n_steps, 4)
+    """
+    from scipy.optimize import minimize
+
+    bp_rp = np.asarray(bp_rp, dtype=float)
+    abs_mag = np.asarray(abs_mag, dtype=float)
+
+    # Default uncertainties
+    if mag_err is None:
+        mag_err = np.full_like(abs_mag, 0.1)
+    else:
+        mag_err = np.asarray(mag_err, dtype=float)
+    if color_err is None:
+        color_err = np.full_like(bp_rp, 0.05)
+    else:
+        color_err = np.asarray(color_err, dtype=float)
+
+    n_data = len(bp_rp)
+    if n_data < 5:
+        raise ValueError(f"Need at least 5 data points, got {n_data}")
+
+    # Extinction coefficients for Gaia: A_G / A_V and E(BP-RP) / A_V
+    # From Casagrande & VandenBerg (2018)
+    a_g_over_av = 0.836
+    e_bprp_over_av = 0.415
+
+    def _get_model_cmd(log_age, met):
+        """Fetch isochrone and extract colour-magnitude columns."""
+        try:
+            iso = get_isochrone(log_age, met, photometric_system)
+            if iso is None or len(iso) == 0:
+                return None, None
+            # Gaia columns
+            if "G_BPmag" in iso.columns and "G_RPmag" in iso.columns and "Gmag" in iso.columns:
+                model_color = iso["G_BPmag"].values - iso["G_RPmag"].values
+                model_mag = iso["Gmag"].values
+            elif "G_BPmag" in [c for c in iso.columns] or "gmag" in iso.columns:
+                # SDSS fallback
+                model_color = iso.iloc[:, -3].values - iso.iloc[:, -1].values
+                model_mag = iso.iloc[:, -2].values
+            else:
+                return None, None
+            mask = np.isfinite(model_color) & np.isfinite(model_mag)
+            return model_color[mask], model_mag[mask]
+        except Exception:
+            return None, None
+
+    # Cache fetched isochrones to avoid re-downloading
+    _iso_cache = {}
+
+    def _chi2(params):
+        """Compute chi-squared for a given parameter set."""
+        log_age, met, dm, av = params
+
+        # Bounds check
+        if not (age_range[0] <= log_age <= age_range[1]):
+            return 1e12
+        if not (met_range[0] <= met <= met_range[1]):
+            return 1e12
+        if not (dm_range[0] <= dm <= dm_range[1]):
+            return 1e12
+        if not (av_range[0] <= av <= av_range[1]):
+            return 1e12
+
+        # Round for caching
+        cache_key = (round(log_age, 2), round(met, 2))
+        if cache_key not in _iso_cache:
+            _iso_cache[cache_key] = _get_model_cmd(cache_key[0], cache_key[1])
+        model_color, model_mag = _iso_cache[cache_key]
+
+        if model_color is None or len(model_color) < 3:
+            return 1e12
+
+        # Apply extinction and distance modulus to model
+        shifted_mag = model_mag + dm + a_g_over_av * av
+        shifted_color = model_color + e_bprp_over_av * av
+
+        # For each observed point, find nearest model point on the CMD
+        chi2_sum = 0.0
+        for i in range(n_data):
+            d_color = (bp_rp[i] - shifted_color) / color_err[i]
+            d_mag = (abs_mag[i] - shifted_mag) / mag_err[i]
+            dist2 = d_color**2 + d_mag**2
+            chi2_sum += np.min(dist2)
+
+        return chi2_sum
+
+    # --- Grid search ---
+    logger.info("Starting isochrone fit: method=%s, n_data=%d", method, n_data)
+
+    age_grid = np.linspace(age_range[0], age_range[1], n_grid_age)
+    met_grid = np.linspace(met_range[0], met_range[1], n_grid_met)
+
+    best_chi2 = 1e12
+    best_params = [8.0, 0.0, 10.0, 0.1]
+
+    for log_age in age_grid:
+        for met in met_grid:
+            # Quick search with fixed dm=median(mag)-5 and av=0
+            dm_init = float(np.median(abs_mag)) - 5.0
+            c2 = _chi2([log_age, met, dm_init, 0.0])
+            if c2 < best_chi2:
+                best_chi2 = c2
+                best_params = [log_age, met, dm_init, 0.0]
+
+    logger.info("Grid search best: log_age=%.2f, [M/H]=%.2f, chi2=%.1f",
+                best_params[0], best_params[1], best_chi2)
+
+    # --- Nelder-Mead refinement ---
+    result = minimize(_chi2, best_params, method="Nelder-Mead",
+                      options={"maxiter": 2000, "xatol": 0.01, "fatol": 1.0})
+    best_params = list(result.x)
+    best_chi2 = float(result.fun)
+    dof = max(n_data - 4, 1)
+
+    fit_result = {
+        "best_fit": {
+            "log_age": round(float(best_params[0]), 3),
+            "metallicity": round(float(best_params[1]), 3),
+            "distance_modulus": round(float(best_params[2]), 3),
+            "A_V": round(float(best_params[3]), 3),
+            "age_myr": round(10 ** float(best_params[0]) / 1e6, 1),
+            "distance_pc": round(10 ** (float(best_params[2]) / 5 + 1), 1),
+        },
+        "chi2": round(best_chi2, 2),
+        "chi2_reduced": round(best_chi2 / dof, 4),
+        "n_data": n_data,
+        "dof": dof,
+        "method": method,
+    }
+
+    if method == "mcmc":
+        try:
+            import emcee
+            import corner as corner_pkg
+        except ImportError:
+            fit_result["mcmc_error"] = "emcee or corner not installed"
+            return fit_result
+
+        rng = np.random.default_rng(seed)
+
+        def _log_prob(params):
+            log_age, met, dm, av = params
+            # Uniform priors
+            if not (age_range[0] <= log_age <= age_range[1]):
+                return -np.inf
+            if not (met_range[0] <= met <= met_range[1]):
+                return -np.inf
+            if not (dm_range[0] <= dm <= dm_range[1]):
+                return -np.inf
+            if not (av_range[0] <= av <= av_range[1]):
+                return -np.inf
+            c2 = _chi2(params)
+            if c2 >= 1e11:
+                return -np.inf
+            return -0.5 * c2
+
+        ndim = 4
+        # Initialize walkers around best-fit
+        p0 = np.array(best_params) + rng.normal(0, [0.1, 0.05, 0.2, 0.02], (n_walkers, ndim))
+        # Clip to bounds
+        p0[:, 0] = np.clip(p0[:, 0], age_range[0], age_range[1])
+        p0[:, 1] = np.clip(p0[:, 1], met_range[0], met_range[1])
+        p0[:, 2] = np.clip(p0[:, 2], dm_range[0], dm_range[1])
+        p0[:, 3] = np.clip(p0[:, 3], av_range[0], av_range[1])
+
+        sampler = emcee.EnsembleSampler(n_walkers, ndim, _log_prob)
+        logger.info("Running MCMC: %d walkers, %d steps, %d burn-in",
+                     n_walkers, n_steps, n_burn)
+        sampler.run_mcmc(p0, n_steps, progress=False)
+
+        chain = sampler.get_chain(discard=n_burn, flat=True)
+        labels = ["log(age)", "[M/H]", "DM", "A_V"]
+
+        percentiles = {}
+        for i, label in enumerate(labels):
+            p16, p50, p84 = np.percentile(chain[:, i], [16, 50, 84])
+            percentiles[label] = {
+                "p16": round(float(p16), 4),
+                "p50": round(float(p50), 4),
+                "p84": round(float(p84), 4),
+                "value": round(float(p50), 4),
+                "err_minus": round(float(p50 - p16), 4),
+                "err_plus": round(float(p84 - p50), 4),
+            }
+
+        fit_result["uncertainties"] = percentiles
+        fit_result["best_fit"]["log_age"] = percentiles["log(age)"]["p50"]
+        fit_result["best_fit"]["metallicity"] = percentiles["[M/H]"]["p50"]
+        fit_result["best_fit"]["distance_modulus"] = percentiles["DM"]["p50"]
+        fit_result["best_fit"]["A_V"] = percentiles["A_V"]["p50"]
+        fit_result["best_fit"]["age_myr"] = round(
+            10 ** percentiles["log(age)"]["p50"] / 1e6, 1
+        )
+        fit_result["best_fit"]["distance_pc"] = round(
+            10 ** (percentiles["DM"]["p50"] / 5 + 1), 1
+        )
+        fit_result["acceptance_fraction"] = round(
+            float(np.mean(sampler.acceptance_fraction)), 4
+        )
+
+        # Corner plot
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig = corner_pkg.corner(
+            chain,
+            labels=labels,
+            quantiles=[0.16, 0.5, 0.84],
+            show_titles=True,
+            title_kwargs={"fontsize": 10},
+        )
+        fig.suptitle("Isochrone Fit — MCMC Posterior", fontsize=12, y=1.02)
+        fit_result["corner_fig"] = fig
+        plt.close(fig)
+
+    return fit_result
+
+
 # ── Common Astronomy Plots ──
 
 def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
@@ -1937,6 +2208,7 @@ def available_functions():
         pub_figure,
         pub_style,
         get_isochrone,
+        fit_isochrone,
         plot_hr_diagram,
         plot_bpt,
         plot_sed,
