@@ -30,7 +30,7 @@ services:
       - key: PIPELINE_MODE
         value: celery
       - key: CORS_ORIGINS
-        value: https://standard-astro-frontend-tyfr.onrender.com,https://standard-astro-frontend.onrender.com
+        value: https://astro-frontend-tyfr.onrender.com,https://standard-astro-frontend-tyfr.onrender.com
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
@@ -96,7 +96,7 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://standard-astro-backend.onrender.com
+        value: https://astro-backend-h4x1.onrender.com
       - key: VITE_GOOGLE_CLIENT_ID
         sync: false
 

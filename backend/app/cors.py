@@ -19,9 +19,11 @@ def get_cors_origins() -> list[str]:
     defaults = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://astro-frontend-tyfr.onrender.com",
+        "https://astro-frontend.onrender.com",
+        "https://astro-backend-h4x1.onrender.com",
         "https://standard-astro-frontend-tyfr.onrender.com",
         "https://standard-astro-frontend.onrender.com",
-        "https://standard-astro-backend.onrender.com",
         "https://astroplatform.pages.dev",
     ]
     for d in defaults:
