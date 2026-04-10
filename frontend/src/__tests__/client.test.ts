@@ -139,6 +139,40 @@ describe("Auth helper functions", () => {
     expect(result.access_token).toBe("login-token-xyz");
     postSpy.mockRestore();
   });
+
+  it("sendChatMessage surfaces backend detail errors", async () => {
+    const { default: api, sendChatMessage } = await import("../api/client");
+
+    const postSpy = vi.spyOn(api, "post").mockRejectedValueOnce({
+      isAxiosError: true,
+      response: {
+        data: { detail: "AI assistant not configured" },
+      },
+    });
+
+    await expect(
+      sendChatMessage([{ role: "user", content: "hello" }])
+    ).rejects.toThrow("AI assistant not configured");
+
+    postSpy.mockRestore();
+  });
+
+  it("sendChatMessage explains backend connectivity failures after network errors", async () => {
+    const { default: api, sendChatMessage } = await import("../api/client");
+
+    const postSpy = vi.spyOn(api, "post").mockRejectedValueOnce({
+      isAxiosError: true,
+      message: "Network Error",
+    });
+    const getSpy = vi.spyOn(api, "get").mockResolvedValueOnce({ data: { status: "ok" } });
+
+    await expect(
+      sendChatMessage([{ role: "user", content: "hello" }])
+    ).rejects.toThrow("The backend lost its connection to the AI provider before returning a response.");
+
+    postSpy.mockRestore();
+    getSpy.mockRestore();
+  });
 });
 
 describe("API function exports", () => {

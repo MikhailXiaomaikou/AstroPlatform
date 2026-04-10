@@ -1267,13 +1267,43 @@ export async function sendChatMessage(
 ): Promise<ChatResponse> {
   // Pass API key from localStorage if available
   const apiKey = getStoredApiKey("anthropic");
-  const { data } = await api.post<ChatResponse>("/api/chat/message", {
-    messages,
-    context: { ...context, ...(apiKey ? { api_key: apiKey } : {}) },
-  }, {
-    timeout: 420000,
-  });
-  return data;
+  try {
+    const { data } = await api.post<ChatResponse>(
+      "/api/chat/message",
+      {
+        messages,
+        context: { ...context, ...(apiKey ? { api_key: apiKey } : {}) },
+      },
+      {
+        timeout: 420000,
+      }
+    );
+    return data;
+  } catch (err: unknown) {
+    if (axios.isAxiosError(err)) {
+      if (err.response?.data && typeof err.response.data === "object" && "detail" in err.response.data) {
+        throw new Error(String(err.response.data.detail));
+      }
+      if (err.code === "ECONNABORTED") {
+        throw new Error("The AI request timed out. Try a narrower prompt or split the task into smaller steps.");
+      }
+      if (err.message === "Network Error") {
+        let backendReachable = false;
+        try {
+          await api.get("/health", { timeout: 10000 });
+          backendReachable = true;
+        } catch {
+          backendReachable = false;
+        }
+        if (backendReachable) {
+          throw new Error("The backend lost its connection to the AI provider before returning a response. Check the server logs and Anthropic connectivity.");
+        }
+        throw new Error("Could not reach the backend server. Check whether the API service is up and the frontend API URL is correct.");
+      }
+      throw new Error(err.message || "AI request failed");
+    }
+    throw err;
+  }
 }
 
 export async function executeChatAction(

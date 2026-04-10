@@ -613,6 +613,12 @@ async def chat_message(
             status_code=504,
             detail="The AI workflow took too long. Try a narrower query or split the task into separate query and analysis steps.",
         )
+    except Exception as e:
+        logger.exception("Unexpected AI chat failure")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected AI chat failure: {str(e) or e.__class__.__name__}",
+        )
 
 
 @router.post("/execute-action")
