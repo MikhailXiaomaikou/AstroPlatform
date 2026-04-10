@@ -318,15 +318,19 @@
   gap: 1rem;
   align-items: center;
   font-size: 0.85rem;
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 
 /* ── Segmented Control ── */
 .segmented-control {
   display: flex;
+  flex-wrap: wrap;
   background: var(--color-hover);
   border-radius: var(--radius-sm);
   padding: 2px;
   position: relative;
+  max-width: 100%;
 }
 
 .segment-btn {
@@ -366,6 +370,7 @@
 
 .radius-input {
   width: 72px;
+  min-width: 0;
   padding: 0.35rem 0.55rem;
   border: none;
   border-radius: 6px;
@@ -375,6 +380,7 @@
   font-size: 0.85rem;
   outline: none;
   transition: var(--transition);
+  box-sizing: border-box;
 }
 
 .radius-input:focus {
@@ -539,6 +545,8 @@
   border-radius: var(--radius-sm);
   background: var(--color-hover);
   color: var(--color-text);
+  box-sizing: border-box;
+  min-width: 0;
   font-size: 0.82rem;
   width: 100%;
   min-width: 0;
