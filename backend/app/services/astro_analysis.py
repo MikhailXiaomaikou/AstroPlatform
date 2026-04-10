@@ -387,6 +387,229 @@ def fit_isochrone(
     return fit_result
 
 
+# ── Model Comparison & Residual Analysis ──
+
+def compare_models(data, models):
+    """Compare multiple fitted models using information criteria.
+
+    Args:
+        data: dict with 'x' and 'y' arrays (observed data), and optionally 'y_err'.
+              Alternatively, an integer n_data (number of data points) if chi2 values
+              are pre-computed in each model entry.
+        models: list of dicts, each with:
+            - 'name': model label (str)
+            - 'chi2': chi-squared value (float)
+            - 'n_params': number of free parameters (int)
+            Optionally:
+            - 'func': callable model function (ignored if chi2 provided)
+            - 'params': best-fit parameters (ignored if chi2 provided)
+
+    Returns:
+        dict with:
+            ranked: list of dicts sorted by BIC, each containing
+                name, chi2, chi2_reduced, AIC, BIC, delta_BIC, verdict
+            best_model: name of the best model
+            summary: human-readable comparison text
+    """
+    if isinstance(data, (int, float)):
+        n_data = int(data)
+    elif isinstance(data, dict):
+        n_data = len(data.get("y", data.get("x", [])))
+    else:
+        n_data = len(data)
+
+    if n_data < 1:
+        raise ValueError("Need at least 1 data point")
+
+    results = []
+    for m in models:
+        name = m.get("name", "unnamed")
+        chi2 = float(m["chi2"])
+        k = int(m.get("n_params", m.get("k", 1)))
+        dof = max(n_data - k, 1)
+
+        # AIC = chi2 + 2k  (for Gaussian likelihood, AIC = -2*lnL + 2k ≈ chi2 + 2k)
+        aic = chi2 + 2 * k
+        # BIC = chi2 + k * ln(n)
+        bic = chi2 + k * np.log(n_data)
+
+        results.append({
+            "name": name,
+            "chi2": round(chi2, 4),
+            "chi2_reduced": round(chi2 / dof, 4),
+            "n_params": k,
+            "AIC": round(aic, 4),
+            "BIC": round(bic, 4),
+        })
+
+    # Sort by BIC
+    results.sort(key=lambda r: r["BIC"])
+    best_bic = results[0]["BIC"]
+
+    for r in results:
+        delta = r["BIC"] - best_bic
+        r["delta_BIC"] = round(delta, 4)
+        if delta < 2:
+            r["verdict"] = "inconclusive"
+        elif delta < 6:
+            r["verdict"] = "positive"
+        elif delta < 10:
+            r["verdict"] = "strong"
+        else:
+            r["verdict"] = "decisive"
+
+    # Best model gets "best" verdict
+    results[0]["verdict"] = "best"
+
+    # Summary text
+    best = results[0]
+    lines = [f"Best model: {best['name']} (BIC={best['BIC']:.1f}, chi2_red={best['chi2_reduced']:.3f})"]
+    for r in results[1:]:
+        lines.append(
+            f"  vs {r['name']}: delta_BIC={r['delta_BIC']:.1f} → {r['verdict']} "
+            f"evidence against this model"
+        )
+
+    return {
+        "ranked": results,
+        "best_model": best["name"],
+        "summary": "\n".join(lines),
+    }
+
+
+def analyze_residuals(data, model_prediction, errors=None):
+    """Analyse fit residuals for systematic patterns.
+
+    Computes autocorrelation (Durbin-Watson), normality (Shapiro-Wilk),
+    outlier count, and generates a Q-Q plot.
+
+    Args:
+        data: observed values (array)
+        model_prediction: model values at same points (array)
+        errors: measurement uncertainties (optional; used to normalise residuals)
+
+    Returns:
+        dict with:
+            residuals: array of residuals
+            durbin_watson: DW statistic (2.0 = no autocorrelation)
+            durbin_watson_rating: 'pass' / 'warn' / 'fail'
+            shapiro_stat, shapiro_p: Shapiro-Wilk test results
+            normality_rating: 'pass' / 'warn' / 'fail'
+            n_outliers_3sigma: count of >3-sigma outliers
+            outlier_fraction: fraction of outliers
+            outlier_rating: 'pass' / 'warn' / 'fail'
+            overall_rating: worst of the three ratings
+            qq_fig: matplotlib Figure with Q-Q plot
+    """
+    from scipy import stats
+
+    data = np.asarray(data, dtype=float)
+    model_prediction = np.asarray(model_prediction, dtype=float)
+
+    residuals = data - model_prediction
+    if errors is not None:
+        errors = np.asarray(errors, dtype=float)
+        norm_residuals = residuals / np.where(errors > 0, errors, 1.0)
+    else:
+        std = np.std(residuals)
+        norm_residuals = residuals / std if std > 0 else residuals
+
+    n = len(residuals)
+    if n < 5:
+        raise ValueError(f"Need at least 5 data points for residual analysis, got {n}")
+
+    # --- Durbin-Watson statistic ---
+    diffs = np.diff(norm_residuals)
+    dw = float(np.sum(diffs**2) / np.sum(norm_residuals**2)) if np.sum(norm_residuals**2) > 0 else 2.0
+    # DW ~ 2.0 means no autocorrelation; <1.5 or >2.5 is suspicious
+    if 1.5 <= dw <= 2.5:
+        dw_rating = "pass"
+    elif 1.0 <= dw < 1.5 or 2.5 < dw <= 3.0:
+        dw_rating = "warn"
+    else:
+        dw_rating = "fail"
+
+    # --- Shapiro-Wilk normality test ---
+    # Shapiro-Wilk limited to 5000 samples
+    test_residuals = norm_residuals[:5000] if n > 5000 else norm_residuals
+    sw_stat, sw_p = stats.shapiro(test_residuals)
+    if sw_p > 0.05:
+        norm_rating = "pass"
+    elif sw_p > 0.01:
+        norm_rating = "warn"
+    else:
+        norm_rating = "fail"
+
+    # --- 3-sigma outliers ---
+    n_outliers = int(np.sum(np.abs(norm_residuals) > 3.0))
+    outlier_frac = n_outliers / n
+    # For Gaussian, expect ~0.27% beyond 3-sigma
+    if outlier_frac < 0.01:
+        outlier_rating = "pass"
+    elif outlier_frac < 0.03:
+        outlier_rating = "warn"
+    else:
+        outlier_rating = "fail"
+
+    # --- Overall rating ---
+    ratings = [dw_rating, norm_rating, outlier_rating]
+    if "fail" in ratings:
+        overall = "fail"
+    elif "warn" in ratings:
+        overall = "warn"
+    else:
+        overall = "pass"
+
+    # --- Q-Q plot ---
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+
+    # Panel 1: Residual histogram
+    axes[0].hist(norm_residuals, bins=min(30, max(10, n // 10)), density=True,
+                 color="#4a90d9", alpha=0.7, edgecolor="white")
+    x_gauss = np.linspace(-4, 4, 100)
+    axes[0].plot(x_gauss, stats.norm.pdf(x_gauss), "r-", lw=1.5, label="Gaussian")
+    axes[0].set_xlabel("Normalised Residual")
+    axes[0].set_ylabel("Density")
+    axes[0].set_title("Residual Distribution")
+    axes[0].legend(fontsize=8)
+
+    # Panel 2: Q-Q plot
+    stats.probplot(norm_residuals, dist="norm", plot=axes[1])
+    axes[1].set_title("Q-Q Plot")
+    axes[1].get_lines()[0].set_color("#4a90d9")
+    axes[1].get_lines()[0].set_markersize(3)
+
+    # Panel 3: Residuals vs index (autocorrelation visual)
+    axes[2].scatter(range(n), norm_residuals, s=8, alpha=0.6, color="#4a90d9")
+    axes[2].axhline(0, color="gray", ls="--", lw=0.8)
+    axes[2].axhline(3, color="red", ls=":", lw=0.8, alpha=0.5)
+    axes[2].axhline(-3, color="red", ls=":", lw=0.8, alpha=0.5)
+    axes[2].set_xlabel("Index")
+    axes[2].set_ylabel("Normalised Residual")
+    axes[2].set_title(f"Residuals (DW={dw:.2f})")
+
+    fig.tight_layout()
+
+    return {
+        "residuals": residuals.tolist(),
+        "durbin_watson": round(dw, 4),
+        "durbin_watson_rating": dw_rating,
+        "shapiro_stat": round(float(sw_stat), 4),
+        "shapiro_p": round(float(sw_p), 6),
+        "normality_rating": norm_rating,
+        "n_outliers_3sigma": n_outliers,
+        "outlier_fraction": round(outlier_frac, 4),
+        "outlier_rating": outlier_rating,
+        "overall_rating": overall,
+        "n_data": n,
+        "qq_fig": fig,
+    }
+
+
 # ── Common Astronomy Plots ──
 
 def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
@@ -2209,6 +2432,8 @@ def available_functions():
         pub_style,
         get_isochrone,
         fit_isochrone,
+        compare_models,
+        analyze_residuals,
         plot_hr_diagram,
         plot_bpt,
         plot_sed,

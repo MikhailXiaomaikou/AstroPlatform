@@ -371,6 +371,8 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         exec_globals["pub_style"] = astro.pub_style
         exec_globals["get_isochrone"] = astro.get_isochrone
         exec_globals["fit_isochrone"] = astro.fit_isochrone
+        exec_globals["compare_models"] = astro.compare_models
+        exec_globals["analyze_residuals"] = astro.analyze_residuals
         exec_globals["plot_hr_diagram"] = astro.plot_hr_diagram
         exec_globals["plot_bpt"] = astro.plot_bpt
         exec_globals["plot_sed"] = astro.plot_sed

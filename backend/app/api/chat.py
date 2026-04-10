@@ -278,9 +278,19 @@ use the `research_workflow` tool to plan the investigation, then automatically e
 - Report p-values, confidence intervals, effect sizes
 - Create publication-quality diagnostic plots
 - Discuss statistical vs. practical significance
+- Use analyze_residuals(data, model) to check fit quality (Durbin-Watson, Shapiro-Wilk, outliers)
+
+### Step 4b: Model Comparison (模型比较) — if applicable
+If more than one model or hypothesis is plausible, use compare_models() to rank them:
+- Pass each model's chi2 and n_params
+- Report BIC, AIC, delta_BIC, and the natural-language verdict
+- "decisive" (delta_BIC>10), "strong" (6-10), "positive" (2-6), "inconclusive" (<2)
+- Include the model comparison table in your conclusions
 
 ### Step 5: Conclusion & Discussion (结论与讨论)
 - Summarize: does the data support or refute the hypothesis?
+- If model comparison was done, state which model is preferred and with what confidence
+- Report residual analysis results (pass/warn/fail for autocorrelation, normality, outliers)
 - Discuss limitations, systematic errors, selection effects
 - Suggest follow-up investigations
 - Generate a final publication-ready figure
