@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 
 interface Props {
@@ -11,6 +11,13 @@ interface Props {
 function arrMin(a: number[]): number { return a.reduce((x, y) => x < y ? x : y, a[0]); }
 function arrMax(a: number[]): number { return a.reduce((x, y) => x > y ? x : y, a[0]); }
 function median(a: number[]): number { const s = [...a].sort((x, y) => x - y); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+function isNumericSeries(values: unknown): values is number[] {
+  if (!Array.isArray(values) || values.length === 0) return false;
+  for (const value of values.slice(0, 50)) {
+    if (typeof value === "number" && Number.isFinite(value)) return true;
+  }
+  return false;
+}
 
 function degToHMS(deg: number): string {
   const h = deg / 15; const hh = Math.floor(h);
@@ -412,7 +419,7 @@ function buildPlot(
 
   // Fallback: auto scatter
   const numKeys = Object.keys(data).filter(
-    (k) => Array.isArray(data[k]) && (data[k] as unknown[]).length > 0 && typeof (data[k] as unknown[])[0] === "number"
+    (k) => isNumericSeries(data[k])
   );
   const xKey = numKeys[0] || "ra", yKey = numKeys[1] || "dec";
   const xArr = (data[xKey] || []) as number[], yArr = (data[yKey] || []) as number[];
@@ -463,14 +470,42 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
   const numericColumns = useMemo(() => {
     if (!initialData) return [];
     return Object.keys(initialData).filter((k) => {
-      const arr = initialData[k];
-      return Array.isArray(arr) && arr.length > 0 && typeof arr[0] === "number";
+      return isNumericSeries(initialData[k]);
     });
   }, [initialData]);
   const [customX, setCustomX] = useState("");
   const [customY, setCustomY] = useState("");
   const [customColor, setCustomColor] = useState("");
   const [flipY, setFlipY] = useState(false);
+
+  useEffect(() => {
+    if (chartType !== "scatter_custom" || numericColumns.length === 0) return;
+
+    const preferredX = numericColumns.includes("bp_rp")
+      ? "bp_rp"
+      : numericColumns.includes("color")
+        ? "color"
+        : numericColumns[0];
+    const preferredY = numericColumns.includes("abs_g_mag")
+      ? "abs_g_mag"
+      : numericColumns.includes("phot_g_mean_mag")
+        ? "phot_g_mean_mag"
+        : numericColumns.find((col) => col !== preferredX) || numericColumns[0];
+    const preferredColor = numericColumns.includes("parallax")
+      ? "parallax"
+      : numericColumns.includes("redshift")
+        ? "redshift"
+        : "";
+
+    if (!customX || !numericColumns.includes(customX)) setCustomX(preferredX);
+    if (!customY || !numericColumns.includes(customY)) setCustomY(preferredY);
+    if (preferredColor && (!customColor || !numericColumns.includes(customColor))) {
+      setCustomColor(preferredColor);
+    }
+    if ((preferredX === "bp_rp" && preferredY === "abs_g_mag") || preferredY === "phot_g_mean_mag") {
+      setFlipY(true);
+    }
+  }, [chartType, customColor, customX, customY, numericColumns]);
 
   const availableCharts = useMemo(() => {
     if (!initialData) return CHART_TYPES;

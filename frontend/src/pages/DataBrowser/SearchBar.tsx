@@ -120,10 +120,27 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
       prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
     );
 
+  const submitQuickSearch = (nextQuery = query) => {
+    const trimmed = nextQuery.trim();
+    if (!trimmed || sources.length === 0) return;
+    onSearch(trimmed, sources, radius);
+  };
+
   const handleQuickSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    submitQuickSearch();
+  };
+
+  const handleSuggestionSelect = (value: string) => {
+    setQuery(value);
+    submitQuickSearch(value);
+  };
+
+  const handleQuickKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
     if (!query.trim() || sources.length === 0) return;
-    onSearch(query.trim(), sources, radius);
+    submitQuickSearch();
   };
 
   const handleAdvancedSubmit = (e: React.FormEvent) => {
@@ -197,6 +214,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleQuickKeyDown}
               placeholder="Object name or coordinates (e.g. M31, 10.68 41.27)"
               className="search-input"
             />
@@ -235,16 +253,16 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
             <div className="search-suggestions-hint">
               <span className="search-suggestions-label">{t("search.suggestions_heading")}</span>
               <div className="search-suggestions-list">
-                <button type="button" className="search-suggestion-chip" onClick={() => setQuery("M31")}>
+                <button type="button" className="search-suggestion-chip" onClick={() => handleSuggestionSelect("M31")}>
                   &quot;M31&quot; &mdash; {t("search.suggestion.m31")}
                 </button>
-                <button type="button" className="search-suggestion-chip" onClick={() => setQuery("Sirius")}>
+                <button type="button" className="search-suggestion-chip" onClick={() => handleSuggestionSelect("Sirius")}>
                   &quot;Sirius&quot; &mdash; {t("search.suggestion.sirius")}
                 </button>
-                <button type="button" className="search-suggestion-chip" onClick={() => setQuery("Crab Nebula")}>
+                <button type="button" className="search-suggestion-chip" onClick={() => handleSuggestionSelect("Crab Nebula")}>
                   &quot;Crab Nebula&quot; &mdash; {t("search.suggestion.crab")}
                 </button>
-                <button type="button" className="search-suggestion-chip" onClick={() => setQuery("10.68 41.27")}>
+                <button type="button" className="search-suggestion-chip" onClick={() => handleSuggestionSelect("10.68 41.27")}>
                   &quot;10.68 41.27&quot; &mdash; {t("search.suggestion.coords")}
                 </button>
               </div>
@@ -252,9 +270,10 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
           )}
 
           <button
-            type="submit"
+            type="button"
             className="btn-search"
             disabled={loading || !query.trim()}
+            onClick={() => submitQuickSearch()}
           >
             {loading ? <span className="spinner" /> : null}
             {loading ? t("search.searching") : t("search.search")}

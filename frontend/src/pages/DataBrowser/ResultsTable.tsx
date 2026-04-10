@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import type { SearchResult } from "../../api/client";
 import { useI18n } from "../../i18n";
+import { buildPipelineDraft, findWorkspaceFile } from "../../utils/workspaceCache";
 
 interface Props {
   results: SearchResult[];
@@ -271,19 +272,8 @@ export default function ResultsTable({
                             className="btn-fetch"
                             style={{ background: "rgba(48,209,88,0.15)", color: "var(--color-green)" }}
                             onClick={() => {
-                              const dag = {
-                                nodes: [
-                                  { id: "n1", type: "LoadData", position: { x: 0, y: 150 }, data: { label: "Load Data", params: { fits_path: `${r.source}/${r.object_id}` }, nodeType: "LoadData" } },
-                                  { id: "n2", type: "Denoise", position: { x: 300, y: 150 }, data: { label: "Denoise", params: { sigma: 3 }, nodeType: "Denoise" } },
-                                  { id: "n3", type: "InteractivePlot", position: { x: 600, y: 150 }, data: { label: "Plot", params: {}, nodeType: "InteractivePlot" } },
-                                ],
-                                edges: [
-                                  { id: "e1-2", source: "n1", target: "n2" },
-                                  { id: "e2-3", source: "n2", target: "n3" },
-                                ],
-                                inputDataId: `${r.source}/${r.object_id}`,
-                              };
-                              localStorage.setItem("pipeline_autosave", JSON.stringify(dag));
+                              const inputDataId = findWorkspaceFile(r.source, r.object_id)?.fits_path || `${r.source}/${r.object_id}`;
+                              localStorage.setItem("pipeline_autosave", JSON.stringify(buildPipelineDraft(inputDataId)));
                               window.location.href = "/pipeline";
                             }}
                             title="Open in Pipeline Editor"

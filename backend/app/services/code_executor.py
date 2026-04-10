@@ -18,7 +18,7 @@ from types import ModuleType
 logger = logging.getLogger(__name__)
 
 # Maximum execution time in seconds
-MAX_EXEC_TIME = 30
+MAX_EXEC_TIME = 75
 
 # Maximum output size in characters (raised from 50k to 500k for large tables)
 MAX_OUTPUT_SIZE = 500_000
@@ -31,6 +31,7 @@ MAX_REPR_ROWS = 2000
 
 # Session-scoped variable store — persists between code executions
 _session_vars: dict[str, dict] = {}
+_astro_module: ModuleType | None = None
 
 
 def get_session_vars(session_id: str = "default") -> dict:
@@ -42,6 +43,23 @@ def get_session_vars(session_id: str = "default") -> dict:
 
 def clear_session_vars(session_id: str = "default") -> None:
     _session_vars.pop(session_id, None)
+
+
+def _get_astro_module() -> ModuleType:
+    """Return the Standard Astro helper module exposed as `astro`."""
+    global _astro_module
+    if _astro_module is None:
+        from app.services import astro_analysis as astro_analysis
+
+        module = ModuleType("astro")
+        module.__doc__ = astro_analysis.__doc__
+        for name in dir(astro_analysis):
+            if name.startswith("_"):
+                continue
+            setattr(module, name, getattr(astro_analysis, name))
+        _astro_module = module
+    return _astro_module
+
 
 # Allowed imports — astronomy + data science stack
 ALLOWED_MODULES = {
@@ -58,6 +76,7 @@ ALLOWED_MODULES = {
     "astropy.coordinates", "astropy.units", "astropy.cosmology",
     "astropy.wcs", "astropy.stats", "astropy.modeling",
     "astropy.convolution",
+    "astro",
     # Visualization
     "matplotlib", "matplotlib.pyplot", "plt",
     # Tables
@@ -110,11 +129,13 @@ def _timeout(seconds: int):
 
 def _safe_import(name, *args, **kwargs):
     """Restricted import that only allows whitelisted modules."""
+    if name == "astro":
+        return _get_astro_module()
     top_level = name.split(".")[0]
     if top_level not in ALLOWED_MODULES and name not in ALLOWED_MODULES:
         hint = ""
         if name == "astro":
-            hint = " Hint: 'astro' is already pre-loaded — use it directly without importing. For astronomy utilities, use 'astropy' (not 'astro')."
+            hint = " Hint: 'astro' is the Standard Astro helper toolkit. It is pre-loaded and also importable as 'astro'."
         raise ImportError(
             f"Import of '{name}' is not allowed. "
             f"Available: numpy, scipy, astropy, matplotlib, pandas.{hint}"
@@ -227,7 +248,7 @@ def _make_sandbox_helpers():
     }
 
 
-def _make_data_accessor():
+def _make_data_accessor(session_id: str):
     """Create helper functions that the code can call to access platform data."""
     def load_fits(fits_path: str):
         """Load a FITS file from the platform storage. Returns an astropy HDUList."""
@@ -239,12 +260,12 @@ def _make_data_accessor():
     def get_search_results():
         """Get the most recent search results as a list of dicts."""
         from app.services.ai_tools import get_cached_results
-        return get_cached_results("latest") or []
+        return get_cached_results(f"latest:{session_id}") or get_cached_results("latest") or []
 
     def get_adql_results():
         """Get the latest ADQL query results as a list of dicts."""
         from app.services.ai_tools import get_cached_results
-        return get_cached_results("latest_adql") or []
+        return get_cached_results(f"latest_adql:{session_id}") or get_cached_results("latest_adql") or []
 
     return {
         "load_fits": load_fits,
@@ -301,7 +322,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         "numpy": np,
         "plt": plt,
         "matplotlib": matplotlib,
-        **_make_data_accessor(),
+        **_make_data_accessor(session_id),
         **_make_sandbox_helpers(),
     }
 
@@ -343,7 +364,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
 
     # Pre-import astronomy analysis toolkit
     try:
-        from app.services import astro_analysis as astro
+        astro = _get_astro_module()
         exec_globals["astro"] = astro
         # Also expose top-level convenience functions
         exec_globals["pub_figure"] = astro.pub_figure

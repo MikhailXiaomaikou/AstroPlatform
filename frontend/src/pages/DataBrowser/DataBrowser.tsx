@@ -31,6 +31,7 @@ import LiteraturePanel from "./LiteraturePanel";
 import FITSPreview from "../../components/fits/FITSPreview";
 import ObjectDetailPanel from "../../components/ObjectDetailPanel";
 import AladinViewer from "../../components/viz/AladinViewer";
+import { buildPipelineDraft, findWorkspaceFile, upsertWorkspaceFile } from "../../utils/workspaceCache";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 const ERROR_TYPE_LABELS: Record<string, string> = {
@@ -94,6 +95,15 @@ export default function DataBrowser() {
   // Helpers: get selected SearchResult objects from keys
   const validResults = results.filter((r) => r.object_id !== "error");
   const errorEntries = results.filter((r) => r.object_id === "error");
+
+  function resolvePipelineInput(source: string, objectId: string) {
+    return findWorkspaceFile(source, objectId)?.fits_path || `${source}/${objectId}`;
+  }
+
+  function openPipelineWithInput(inputDataId: string) {
+    localStorage.setItem("pipeline_autosave", JSON.stringify(buildPipelineDraft(inputDataId)));
+    window.location.href = "/pipeline";
+  }
 
   function getSelectedResults(): SearchResult[] {
     return validResults.filter((r, i) => selectedKeys.has(`${r.source}-${r.object_id}-${i}`));
@@ -195,6 +205,16 @@ export default function DataBrowser() {
         } else {
           throw firstErr;
         }
+      }
+      if (result.fits_path) {
+        upsertWorkspaceFile({
+          id: result.file_id || undefined,
+          source: result.source,
+          object_id: result.object_id,
+          fits_path: result.fits_path,
+          metadata: { filename: result.filename },
+          local_only: !result.file_id,
+        });
       }
       setFetched(result);
     } catch (err: unknown) {
@@ -369,7 +389,17 @@ ${rows}
     let done = 0;
     for (const r of selected) {
       try {
-        await fetchObject(r.source, r.object_id);
+        const result = await fetchObject(r.source, r.object_id);
+        if (result.fits_path) {
+          upsertWorkspaceFile({
+            id: result.file_id || undefined,
+            source: result.source,
+            object_id: result.object_id,
+            fits_path: result.fits_path,
+            metadata: { filename: result.filename },
+            local_only: !result.file_id,
+          });
+        }
         done++;
       } catch {
         // continue with remaining
@@ -553,6 +583,25 @@ ${rows}
       {activeTab === "search" && <>
       <SearchBar onSearch={handleSearch} onAdvancedSearch={handleAdvancedSearch} loading={loading} />
 
+      {loading && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "0.75rem 1rem",
+            marginBottom: "0.75rem",
+            borderRadius: 10,
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          <span className="spinner spinner-blue" />
+          <span>Searching connected archives and resolving coordinates…</span>
+        </div>
+      )}
+
       {results.length === 0 && !loading && recentSearches.length > 0 && (
         <div className="recent-searches">
           <span className="recent-searches-label">Recent Searches:</span>
@@ -691,21 +740,9 @@ ${rows}
                   Ask AI
                 </button>
                 <button className="btn-secondary btn-small" onClick={() => {
-                  // Create a pipeline with LoadData node pointing to selected results
-                  const dag = {
-                    nodes: [
-                      { id: "n1", type: "LoadData", position: { x: 0, y: 150 }, data: { label: "Load Data", params: {}, nodeType: "LoadData" } },
-                      { id: "n2", type: "Denoise", position: { x: 300, y: 150 }, data: { label: "Denoise", params: { sigma: 3 }, nodeType: "Denoise" } },
-                      { id: "n3", type: "InteractivePlot", position: { x: 600, y: 150 }, data: { label: "Plot", params: {}, nodeType: "InteractivePlot" } },
-                    ],
-                    edges: [
-                      { id: "e1-2", source: "n1", target: "n2" },
-                      { id: "e2-3", source: "n2", target: "n3" },
-                    ],
-                    inputDataId: "example/fits/path.fits",
-                  };
-                  localStorage.setItem("pipeline_autosave", JSON.stringify(dag));
-                  window.location.href = "/pipeline";
+                  const firstSelected = getSelectedResults()[0];
+                  if (!firstSelected) return;
+                  openPipelineWithInput(resolvePipelineInput(firstSelected.source, firstSelected.object_id));
                 }}>
                   Open in Pipeline
                 </button>

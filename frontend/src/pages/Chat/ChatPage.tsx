@@ -22,6 +22,7 @@ import {
 } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
 import { useI18n } from "../../i18n";
+import { useAuth } from "../../context/AuthContext";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 interface DisplayMessage {
@@ -1084,7 +1085,74 @@ function downloadBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+const LOCAL_CHAT_SESSIONS_KEY = "astro_local_chat_sessions";
+
+interface LocalChatSession {
+  id: string;
+  title: string;
+  updated_at: string;
+  message_count: number;
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>;
+}
+
+function readLocalChatSessions(): LocalChatSession[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_CHAT_SESSIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalChatSessions(sessions: LocalChatSession[]) {
+  try {
+    localStorage.setItem(LOCAL_CHAT_SESSIONS_KEY, JSON.stringify(sessions));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function summarizeLocalSessions(): ChatSessionSummary[] {
+  return readLocalChatSessions().map(({ id, title, message_count, updated_at }) => ({
+    id,
+    title,
+    message_count,
+    updated_at,
+  }));
+}
+
+function saveLocalChatSession(
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>,
+  sessionId?: string | null,
+): { id: string } {
+  const sessions = readLocalChatSessions();
+  const id = sessionId || crypto.randomUUID();
+  const title = messages.find((m) => m.role === "user")?.content.slice(0, 60) || "New Chat";
+  const updated_at = new Date().toISOString();
+  const session: LocalChatSession = {
+    id,
+    title,
+    updated_at,
+    message_count: messages.length,
+    messages,
+  };
+  const next = [session, ...sessions.filter((s) => s.id !== id)].slice(0, 20);
+  writeLocalChatSessions(next);
+  return { id };
+}
+
+function loadLocalChatSession(id: string): LocalChatSession | null {
+  return readLocalChatSessions().find((session) => session.id === id) || null;
+}
+
+function deleteLocalChatSession(id: string): void {
+  writeLocalChatSessions(readLocalChatSessions().filter((session) => session.id !== id));
+}
+
 export default function ChatPage() {
+  const { user } = useAuth();
   const { t } = useI18n();
   const [hasKey, setHasKey] = useState(() => !!getStoredApiKey("anthropic"));
   const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
@@ -1111,6 +1179,28 @@ export default function ChatPage() {
     toastTimerRef.current = setTimeout(() => setToastMsg(null), 2500);
   }, []);
 
+  const refreshSessions = useCallback(() => {
+    if (user) {
+      listChatSessions().then(setSessions).catch(() => setSessions([]));
+      return;
+    }
+    setSessions(summarizeLocalSessions());
+  }, [user]);
+
+  const persistSession = useCallback(async (
+    data: Array<{ role: string; content: string; actions?: unknown[] }>,
+    sessionId?: string | null,
+  ) => {
+    if (user) {
+      try {
+        return await saveChatSession(data, sessionId || undefined);
+      } catch {
+        return saveLocalChatSession(data, sessionId);
+      }
+    }
+    return saveLocalChatSession(data, sessionId);
+  }, [user]);
+
   useEffect(() => {
     const draft = localStorage.getItem("astro_chat_draft");
     if (draft) {
@@ -1123,10 +1213,11 @@ export default function ChatPage() {
     if (messages.length === 0) return;
     try {
       const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
-      const res = await saveChatSession(data, currentSessionId || undefined);
+      const res = await persistSession(data, currentSessionId);
       setCurrentSessionId(res.id);
       pythonSessionIdRef.current = res.id;
-      listChatSessions().then(setSessions).catch(() => {});
+      refreshSessions();
+      showToast(user ? "Chat saved" : "Chat saved locally");
     } catch { /* ignore */ }
   };
 
@@ -1137,19 +1228,20 @@ export default function ChatPage() {
     prevLoadingRef.current = loading;
     if (wasLoading && !loading && messages.length > 2) {
       const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
-      saveChatSession(data, currentSessionId || undefined)
+      persistSession(data, currentSessionId)
         .then((res) => {
           setCurrentSessionId(res.id);
           pythonSessionIdRef.current = res.id;
-          listChatSessions().then(setSessions).catch(() => {});
+          refreshSessions();
         })
         .catch(() => {});
     }
-  }, [loading, messages, currentSessionId]);
+  }, [currentSessionId, loading, messages, persistSession, refreshSessions]);
 
   const handleLoadSession = async (id: string) => {
     try {
-      const session = await loadChatSession(id);
+      const session = user ? await loadChatSession(id) : loadLocalChatSession(id);
+      if (!session) return;
       const loaded: DisplayMessage[] = session.messages.map((m: Record<string, unknown>) => ({
         id: crypto.randomUUID(),
         role: m.role as "user" | "assistant",
@@ -1174,8 +1266,12 @@ export default function ChatPage() {
 
   const handleDeleteSession = async (id: string) => {
     try {
-      await deleteChatSession(id);
-      setSessions(prev => prev.filter(s => s.id !== id));
+      if (user) {
+        await deleteChatSession(id);
+      } else {
+        deleteLocalChatSession(id);
+      }
+      refreshSessions();
       if (currentSessionId === id) setCurrentSessionId(null);
     } catch { /* ignore */ }
   };
@@ -1270,6 +1366,10 @@ export default function ChatPage() {
       try {
         const lastAdql = localStorage.getItem("astro_last_adql");
         if (lastAdql) wsContext.last_adql = JSON.parse(lastAdql);
+      } catch { /* ignore */ }
+      try {
+        const lastAdqlRows = localStorage.getItem("astro_last_adql_rows");
+        if (lastAdqlRows) wsContext.last_adql_rows = JSON.parse(lastAdqlRows);
       } catch { /* ignore */ }
       wsContext.python_session_id = pythonSessionIdRef.current;
 
@@ -1376,7 +1476,7 @@ export default function ChatPage() {
           <div style={{ display: "flex", gap: "0.4rem" }}>
             <button type="button" className="btn-secondary btn-small" onClick={() => {
               setShowSessions(!showSessions);
-              if (!showSessions) listChatSessions().then(setSessions).catch(() => {});
+              if (!showSessions) refreshSessions();
             }}>
               {t("chat.history")}
             </button>
@@ -1392,6 +1492,7 @@ export default function ChatPage() {
               <>
               <button type="button" className="btn-secondary btn-small" onClick={async () => {
                 try {
+                  showToast("Preparing Markdown export…");
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatMarkdown(data);
                   downloadBlob(blob, "ai_research_chat.md");
@@ -1404,6 +1505,7 @@ export default function ChatPage() {
               </button>
               <button type="button" className="btn-secondary btn-small" onClick={async () => {
                 try {
+                  showToast("Preparing notebook export…");
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatNotebook(data);
                   downloadBlob(blob, "ai_research_session.ipynb");
@@ -1416,6 +1518,7 @@ export default function ChatPage() {
               </button>
               <button type="button" className="btn-secondary btn-small" onClick={async () => {
                 try {
+                  showToast("Preparing LaTeX export…");
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatLatex(data);
                   downloadBlob(blob, "astro_report.tex");
@@ -1428,6 +1531,7 @@ export default function ChatPage() {
               </button>
               <button type="button" className="btn-secondary btn-small" onClick={async () => {
                 try {
+                  showToast("Preparing BibTeX export…");
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatBibTeX(data);
                   downloadBlob(blob, "references.bib");
@@ -1450,7 +1554,13 @@ export default function ChatPage() {
             <strong>Chat History</strong>
             <button className="btn-secondary btn-small" onClick={() => setShowSessions(false)}>Close</button>
           </div>
-          {sessions.length === 0 && <p style={{ color: "var(--color-text-tertiary)", fontSize: "0.82rem", padding: "0.5rem 0" }}>No saved sessions. Click "Save" to save the current chat.</p>}
+          {sessions.length === 0 && (
+            <p style={{ color: "var(--color-text-tertiary)", fontSize: "0.82rem", padding: "0.5rem 0" }}>
+              {user
+                ? 'No saved sessions yet. Completed chats are auto-saved, and you can also click "Save" anytime.'
+                : 'No saved sessions yet. Completed chats are saved locally in this browser; sign in to sync them to your account.'}
+            </p>
+          )}
           {sessions.map(s => (
             <div key={s.id} className="chat-session-item">
               <button className="chat-session-load" onClick={() => handleLoadSession(s.id)}>

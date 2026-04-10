@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-SYSTEM_PROMPT = """You are an AI research assistant for the Astro Research Platform. Users ask you questions in natural language and you translate them into database queries automatically. Users should NEVER need to write ADQL/SQL themselves — that's YOUR job.
+SYSTEM_PROMPT = """You are an AI research assistant for Standard Astro. Users ask you questions in natural language and you translate them into database queries automatically. Users should NEVER need to write ADQL/SQL themselves — that's YOUR job.
 
 ## Your role
 When a user describes what data they want, you:
@@ -183,7 +183,7 @@ Always respond in the same language the user uses.
 
 You have a `run_python` tool that executes Python code in a sandboxed environment.
 The ONLY importable modules are: numpy, scipy, astropy, matplotlib, pandas, math, statistics, collections, itertools, functools, json, csv, re, datetime, io, inspect.
-Do NOT import 'astro' — use 'astropy' instead. There is no module called 'astro'.
+The Standard Astro helper toolkit is available as the preloaded `astro` variable and is also importable as `astro`.
 Do NOT import os, sys, subprocess, requests, urllib, or any networking/filesystem modules — they are blocked.
 Use it for ANY task that requires computation: statistical analysis, curve fitting, plotting, data manipulation.
 
@@ -206,7 +206,7 @@ Pre-imported (available without import):
 - `get_adql_results()` — get latest ADQL query results as list of dicts (auto-injected)
 - `available_functions()` — list all pre-loaded helper functions with signatures and docs
 
-Pre-imported astronomy toolkit (already available as `astro` — do NOT `import astro`, it is pre-loaded):
+Pre-imported astronomy toolkit (available as `astro`, whether used directly or imported):
 - `pub_figure()` / `pub_style()` — publication-quality figure setup (ApJ/MNRAS fonts)
 - `plot_hr_diagram(bp_rp, gmag, parallax=None)` — HR diagram
 - `plot_bpt(log_nii_ha, log_oiii_hb)` — BPT diagram with Kewley+01/Kauffmann+03 lines
@@ -238,6 +238,7 @@ then compose a well-structured proposal narrative based on the results.
 ALWAYS use these functions when applicable — they produce publication-quality output.
 When the user asks for analysis, statistics, or plots, use run_python. Don't describe — DO IT.
 If code errors, read the traceback, fix the code, and run again.
+When formatting floating-point values, use float formats like `:.2f`, not integer-only formats like `%d`.
 
 When you use the search_literature tool, cite papers in your response using the format:
 "According to Author et al. (Year), ..." or "(Author et al., Year; bibcode)".
@@ -345,7 +346,7 @@ async def chat_message_stream(
             return
 
         import anthropic
-        from app.services.ai_tools import TOOLS, execute_tool
+        from app.services.ai_tools import TOOLS, store_search_results
 
         client = anthropic.Anthropic(api_key=api_key)
         claude_messages: list[dict] = [{"role": m.role, "content": m.content} for m in req.messages]
@@ -360,12 +361,14 @@ async def chat_message_stream(
         yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
 
         python_session_id = (req.context or {}).get("python_session_id", "default")
+        last_adql_rows = (req.context or {}).get("last_adql_rows")
+        if isinstance(last_adql_rows, list):
+            store_search_results(f"latest_adql:{python_session_id}", last_adql_rows[:1000])
 
         try:
             for _iteration in range(12):
-                response = client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=4096,
+                response = await _claude_messages_create(
+                    client,
                     system=system,
                     messages=claude_messages,
                     tools=TOOLS,
@@ -391,8 +394,9 @@ async def chat_message_stream(
                 claude_messages.append({"role": "assistant", "content": assistant_content})
 
                 tool_result_blocks = []
-                for tc in tool_calls:
-                    result = await execute_tool(tc["name"], tc["input"], api_key, python_session_id)
+                executed_tools = await _execute_tool_calls(tool_calls, api_key, python_session_id)
+                for tc in executed_tools:
+                    result = tc["result"]
                     result_str = json.dumps(result, default=str)
                     if len(result_str) > 8000:
                         result_str = json.dumps({"truncated": True, "summary": str(result)[:2000]}, default=str)
@@ -403,6 +407,8 @@ async def chat_message_stream(
                 if response.stop_reason != "tool_use":
                     break
 
+        except TimeoutError:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'The AI workflow took too long. Try a narrower query or split the task into query and analysis steps.'})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
@@ -415,6 +421,43 @@ def _strip_actions_from_reply(text: str) -> str:
     """Remove <actions> blocks from the user-facing reply."""
     import re
     return re.sub(r'<actions>.*?</actions>', '', text, flags=re.DOTALL).strip()
+
+
+async def _claude_messages_create(client, *, system: str, messages: list[dict], tools: list[dict]):
+    """Run the blocking Anthropic SDK call in a worker thread."""
+    import asyncio
+
+    return await asyncio.wait_for(
+        asyncio.to_thread(
+            client.messages.create,
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=system,
+            messages=messages,
+            tools=tools,
+        ),
+        timeout=180.0,
+    )
+
+
+async def _execute_tool_calls(tool_calls: list[dict], api_key: str, python_session_id: str) -> list[dict]:
+    """Execute one model turn's tool calls concurrently while preserving order."""
+    from app.services.ai_tools import execute_tool
+
+    coroutines = [
+        execute_tool(tc["name"], tc["input"], api_key, python_session_id)
+        for tc in tool_calls
+    ]
+    results = await asyncio.gather(*coroutines)
+    return [
+        {
+            "id": tc["id"],
+            "name": tc["name"],
+            "input": tc["input"],
+            "result": result,
+        }
+        for tc, result in zip(tool_calls, results)
+    ]
 
 
 @router.post("/message", response_model=ChatResponse)
@@ -445,7 +488,7 @@ async def chat_message(
     except ImportError:
         raise HTTPException(status_code=503, detail="anthropic package not installed")
 
-    from app.services.ai_tools import TOOLS, execute_tool
+    from app.services.ai_tools import TOOLS, store_search_results
 
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -464,6 +507,9 @@ async def chat_message(
     if user:
         system += f"\nUser email: {user.email}, Subscription: {user.subscription_tier}"
     python_session_id = (req.context or {}).get("python_session_id", "default")
+    last_adql_rows = (req.context or {}).get("last_adql_rows")
+    if isinstance(last_adql_rows, list):
+        store_search_results(f"latest_adql:{python_session_id}", last_adql_rows[:1000])
 
     try:
         # ── Agent loop: Claude calls tools, sees results, continues ──
@@ -472,9 +518,8 @@ async def chat_message(
         max_iterations = 12  # safety limit (supports multi-step research workflows)
 
         for _iteration in range(max_iterations):
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=4096,
+            response = await _claude_messages_create(
+                client,
                 system=system,
                 messages=claude_messages,
                 tools=TOOLS,
@@ -513,8 +558,9 @@ async def chat_message(
 
             # Execute tools and build tool_result messages
             tool_result_blocks = []
-            for tc in tool_calls_in_turn:
-                result = await execute_tool(tc["name"], tc["input"], api_key, python_session_id)
+            executed_tools = await _execute_tool_calls(tool_calls_in_turn, api_key, python_session_id)
+            for tc in executed_tools:
+                result = tc["result"]
                 # Truncate large results for context window
                 result_str = json.dumps(result, default=str)
                 if len(result_str) > 8000:
@@ -561,6 +607,11 @@ async def chat_message(
     except anthropic.APIError as e:
         logger.error("Claude API error: %s", e)
         raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
+    except TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="The AI workflow took too long. Try a narrower query or split the task into separate query and analysis steps.",
+        )
 
 
 @router.post("/execute-action")

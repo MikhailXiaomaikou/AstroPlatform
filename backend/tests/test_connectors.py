@@ -245,3 +245,49 @@ class TestVizierConnector:
         assert calls["cache"] is False
         assert calls["object_id"] == "II/246/out"
         assert result.source == "vizier"
+
+
+class TestSIMBADConnector:
+    async def test_common_aliases_use_canonical_name(self, monkeypatch):
+        from astropy.table import Table
+        from app.connectors.simbad import SIMBADConnector
+
+        calls: dict[str, str] = {}
+
+        class FakeSimbad:
+            def query_object(self, name):
+                calls["name"] = name
+                return Table({"MAIN_ID": ["M 45"], "RA": [56.75], "DEC": [24.12], "OTYPE": ["Cl*"]})
+
+        connector = SIMBADConnector()
+        monkeypatch.setattr(connector, "_make_simbad", lambda: FakeSimbad())
+
+        results = await connector.search("Pleiades")
+
+        assert calls["name"] == "M45"
+        assert len(results) == 1
+        assert results[0].name == "M 45"
+
+
+class TestSDSSConnector:
+    async def test_search_falls_back_when_sql_path_fails(self, monkeypatch):
+        from astropy.table import Table
+        from app.connectors.sdss import SDSSConnector
+
+        connector = SDSSConnector()
+
+        async def fail_sql(_sql: str):
+            raise TimeoutError("sql timed out")
+
+        async def fallback(ra: float, dec: float, radius: float):
+            assert radius <= 0.05
+            return Table({"objid": ["123"], "ra": [ra], "dec": [dec], "r": [17.2], "type": [6]})
+
+        monkeypatch.setattr(connector, "_query_skyserver", fail_sql)
+        monkeypatch.setattr(connector, "_query_region_fallback", fallback)
+
+        results = await connector.search("M31", ra=10.6847, dec=41.2687, radius=0.2)
+
+        assert len(results) == 1
+        assert results[0].source == "sdss"
+        assert results[0].object_id == "123"

@@ -14,15 +14,10 @@ import {
   type BatchTarget,
 } from "../../api/client";
 import FITSPreview from "../../components/fits/FITSPreview";
+import { useAuth } from "../../context/AuthContext";
+import { buildPipelineDraft, mergeWorkspaceFiles, readWorkspaceCache, type WorkspaceCacheFile } from "../../utils/workspaceCache";
 
-interface WorkspaceFile {
-  id: string;
-  source: string;
-  object_id: string;
-  fits_path: string;
-  metadata: Record<string, unknown> | null;
-  created_at: string | null;
-}
+type WorkspaceFile = WorkspaceCacheFile;
 
 interface FileTag {
   id: string;
@@ -36,6 +31,7 @@ interface FileNote {
 }
 
 export default function WorkspacePage() {
+  const { user } = useAuth();
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
@@ -53,8 +49,8 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     getWorkspace()
-      .then((data) => setFiles(data as unknown as WorkspaceFile[]))
-      .catch(() => {})
+      .then((data) => setFiles(mergeWorkspaceFiles([...(data as unknown as WorkspaceFile[]), ...readWorkspaceCache()])))
+      .catch(() => setFiles(readWorkspaceCache()))
       .finally(() => setLoading(false));
     sampStatus().then((s) => setSampConnected(s.connected)).catch(() => {});
   }, []);
@@ -187,7 +183,10 @@ export default function WorkspacePage() {
           {loading ? (
             <div className="fits-loading"><span className="spinner spinner-blue" /> Loading...</div>
           ) : files.length === 0 ? (
-            <p className="fits-hint">No saved files. Fetch data from the Data Browser to get started.</p>
+            <div className="fits-hint">
+              <p>No saved files. Fetch data from the Data Browser to get started.</p>
+              {!user && <p>Sign in if you want these files synced to your server-side workspace and history.</p>}
+            </div>
           ) : (
             files.map((f) => (
               <div
@@ -224,19 +223,7 @@ export default function WorkspacePage() {
                   </button>
                   <button className="btn-secondary btn-small" style={{ background: "rgba(48,209,88,0.15)", color: "var(--color-green)" }}
                     onClick={() => {
-                      const dag = {
-                        nodes: [
-                          { id: "n1", type: "LoadData", position: { x: 0, y: 150 }, data: { label: "Load Data", params: { fits_path: selectedFile.fits_path }, nodeType: "LoadData" } },
-                          { id: "n2", type: "Denoise", position: { x: 300, y: 150 }, data: { label: "Denoise", params: { sigma: 3 }, nodeType: "Denoise" } },
-                          { id: "n3", type: "InteractivePlot", position: { x: 600, y: 150 }, data: { label: "Plot", params: {}, nodeType: "InteractivePlot" } },
-                        ],
-                        edges: [
-                          { id: "e1-2", source: "n1", target: "n2" },
-                          { id: "e2-3", source: "n2", target: "n3" },
-                        ],
-                        inputDataId: selectedFile.fits_path,
-                      };
-                      localStorage.setItem("pipeline_autosave", JSON.stringify(dag));
+                      localStorage.setItem("pipeline_autosave", JSON.stringify(buildPipelineDraft(selectedFile.fits_path)));
                       window.location.href = "/pipeline";
                     }}>
                     Open in Pipeline

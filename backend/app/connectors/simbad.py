@@ -17,6 +17,14 @@ class SIMBADConnector(BaseConnector):
     """Connector for SIMBAD astronomical database via astroquery."""
 
     source_name = "simbad"
+    COMMON_ALIASES = {
+        "pleiades": "M45",
+        "hyades": "Melotte 25",
+        "orion nebula": "M42",
+        "andromeda galaxy": "M31",
+        "whirlpool galaxy": "M51",
+        "eagle nebula": "M16",
+    }
 
     def _make_simbad(self):
         from astroquery.simbad import Simbad
@@ -30,15 +38,16 @@ class SIMBADConnector(BaseConnector):
     ) -> list[AstroObject]:
         simbad = self._make_simbad()
         loop = asyncio.get_running_loop()
+        canonical_query = self.COMMON_ALIASES.get(query.strip().lower(), query)
 
         # Always try name-based query first when a meaningful query string is
         # provided, even if coordinates were resolved.  This handles clusters,
         # nebulae, and other extended objects whose catalogue entry may not
         # fall inside a small cone search (e.g. "Pleiades" → Cl Melotte 22).
-        if query and query.strip() and query not in ("survey", "sky"):
+        if canonical_query and canonical_query.strip() and canonical_query not in ("survey", "sky"):
             table = await loop.run_in_executor(
                 None,
-                partial(simbad.query_object, query),
+                partial(simbad.query_object, canonical_query),
             )
             if table is not None and len(table) > 0:
                 return self._table_to_objects(table)
@@ -49,7 +58,7 @@ class SIMBADConnector(BaseConnector):
                 from astroquery.simbad import Simbad as _Simbad
                 ids_table = await loop.run_in_executor(
                     None,
-                    partial(_Simbad.query_objectids, query),
+                    partial(_Simbad.query_objectids, canonical_query),
                 )
                 if ids_table is not None and len(ids_table) > 0:
                     main_id = str(ids_table[0][0]).strip()

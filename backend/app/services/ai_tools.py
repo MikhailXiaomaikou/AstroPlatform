@@ -184,6 +184,7 @@ TOOLS = [
             "Execute Python code for data analysis, statistical modeling, or visualization. "
             "Available libraries: numpy (as np), scipy, astropy (Table, SkyCoord, units as u), "
             "matplotlib.pyplot (as plt), pandas. "
+            "The Standard Astro helper toolkit is preloaded as `astro` and may also be imported as `astro`. "
             "Helper functions: load_fits(path) returns astropy HDUList, "
             "get_search_results() returns the latest search results as a list of dicts, "
             "load_votable(path) loads a VOTable as an astropy Table, "
@@ -191,7 +192,7 @@ TOOLS = [
             "process_in_chunks(data, chunk_size, func) processes large data in memory-safe chunks, "
             "memory_usage_mb() returns current memory usage in MB. "
             "Use print() to output results. Matplotlib figures are automatically captured. "
-            "Max execution time: 30 seconds."
+            "Max execution time: 75 seconds."
         ),
         "input_schema": {
             "type": "object",
@@ -299,9 +300,9 @@ async def execute_tool(
     """Execute a tool call and return the result as a dict."""
     try:
         if tool_name == "search_objects":
-            return await _exec_search(tool_input)
+            return await _exec_search(tool_input, python_session_id)
         elif tool_name == "run_adql":
-            return await _exec_adql(tool_input)
+            return await _exec_adql(tool_input, python_session_id)
         elif tool_name == "get_object_info":
             return await _exec_object_info(tool_input)
         elif tool_name == "analyze_spectrum":
@@ -331,9 +332,10 @@ async def execute_tool(
         return {"error": str(e)}
 
 
-async def _exec_search(inp: dict) -> dict:
+async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     from app.connectors.registry import CONNECTORS_KEYS, get_connector
     from app.api.data import _astro_to_result
+    from app.api.data import _resolve_search_coordinates, _search_timeout_for_source
     from app.search.query_parser import parse_natural_query
 
     query = inp.get("query", "")
@@ -349,19 +351,7 @@ async def _exec_search(inp: dict) -> dict:
     redshift_max = parsed.get("redshift_max")
     has_criteria = any([object_type, redshift_min, redshift_max])
 
-    # Resolve coordinates
-    search_ra, search_dec = None, None
-    import re
-    obj_match = re.search(
-        r'\b(M\s*\d+|NGC\s*\d+|IC\s*\d+|Mrk\s*\d+)\b', query, re.IGNORECASE
-    )
-    if obj_match:
-        try:
-            from astropy.coordinates import SkyCoord
-            coord = SkyCoord.from_name(obj_match.group(0))
-            search_ra, search_dec = coord.ra.deg, coord.dec.deg
-        except Exception:
-            pass
+    search_ra, search_dec = await _resolve_search_coordinates(query, None, None)
 
     async def _search_one(source: str):
         connector = get_connector(source)
@@ -372,12 +362,11 @@ async def _exec_search(inp: dict) -> dict:
                     redshift_min=redshift_min,
                     redshift_max=redshift_max,
                     ra=search_ra, dec=search_dec, radius=radius,
-                ), timeout=30.0,
+                ), timeout=max(45.0, _search_timeout_for_source(source)),
             )
-        search_q = obj_match.group(0) if obj_match else query
         return await asyncio.wait_for(
-            connector.search(search_q, ra=search_ra, dec=search_dec, radius=radius),
-            timeout=30.0,
+            connector.search(query, ra=search_ra, dec=search_dec, radius=radius),
+            timeout=max(45.0, _search_timeout_for_source(source)),
         )
 
     tasks = [_search_one(s) for s in sources]
@@ -394,11 +383,12 @@ async def _exec_search(inp: dict) -> dict:
 
     # Cache results for later retrieval by get_last_search_results
     store_search_results("latest", all_results)
+    store_search_results(f"latest:{python_session_id}", all_results)
 
     return {"results": all_results, "total": len(all_results)}
 
 
-async def _exec_adql(inp: dict) -> dict:
+async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     from app.api.integration import adql_query, ADQLRequest
     req = ADQLRequest(query=inp.get("query", ""), service=inp.get("service", "gaia"))
     result = await adql_query(req)
@@ -416,10 +406,12 @@ async def _exec_adql(inp: dict) -> dict:
     }
 
     # Auto-inject full result into Python sandbox for immediate use
-    store_search_results("latest_adql", [
+    adql_rows = [
         {col: data.get(col, [None] * row_count)[i] for col in adql_result["columns"]}
         for i in range(min(row_count, 1000))
-    ] if data else [])
+    ] if data else []
+    store_search_results("latest_adql", adql_rows)
+    store_search_results(f"latest_adql:{python_session_id}", adql_rows)
 
     return adql_result
 
@@ -544,10 +536,10 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     try:
         result = await asyncio.wait_for(
             loop.run_in_executor(None, execute_python, code, None, python_session_id),
-            timeout=35.0,
+            timeout=90.0,
         )
     except asyncio.TimeoutError:
-        return {"success": False, "error": "Code execution timed out after 35 seconds", "stdout": ""}
+        return {"success": False, "error": "Code execution timed out after 90 seconds", "stdout": ""}
 
     response: dict = {
         "success": result.success,

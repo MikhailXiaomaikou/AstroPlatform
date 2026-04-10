@@ -6,6 +6,8 @@ import io
 from functools import partial
 
 import httpx
+import astropy.units as u
+from astropy.coordinates import SkyCoord
 from astropy.table import Table
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
@@ -34,7 +36,7 @@ class SDSSConnector(BaseConnector):
         last_err = None
         for url in SKYSERVER_SQL_URLS:
             try:
-                async with httpx.AsyncClient(timeout=20.0) as client:
+                async with httpx.AsyncClient(timeout=45.0) as client:
                     resp = await client.get(url, params={"cmd": sql, "format": "csv"})
                     resp.raise_for_status()
                     return resp.text
@@ -43,6 +45,29 @@ class SDSSConnector(BaseConnector):
                 continue
         raise last_err or ConnectionError("All SDSS SkyServer mirrors unavailable")
 
+    async def _query_region_fallback(self, ra: float, dec: float, radius: float) -> Table:
+        """Fallback to astroquery's region service when SkyServer SQL is slow."""
+        from astroquery.sdss import SDSS
+
+        effective_radius = min(max(radius, 0.001), 0.05) * u.deg
+        coord = SkyCoord(ra=ra, dec=dec, unit="deg", frame="icrs")
+        loop = asyncio.get_running_loop()
+
+        def _run_query():
+            return SDSS.query_region(
+                coordinates=coord,
+                radius=effective_radius,
+                photoobj_fields=["objid", "ra", "dec", "r", "type"],
+                timeout=60,
+                data_release=17,
+                cache=False,
+            )
+
+        table = await loop.run_in_executor(None, _run_query)
+        if table is None:
+            return Table()
+        return table
+
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
@@ -50,18 +75,23 @@ class SDSSConnector(BaseConnector):
         if ra is None or dec is None:
             ra, dec = await self._resolve_name(query)
 
+        effective_radius = min(max(radius, 0.001), 0.05)
         sql = f"""SELECT TOP 50
             p.objid, p.ra, p.dec, p.r AS mag_r, p.type,
             dbo.fPhotoTypeN(p.type) AS type_name,
-            s.z AS spec_z, s.class AS spec_class
-        FROM PhotoObj AS p
-        JOIN dbo.fGetNearbyObjEq({ra}, {dec}, {radius * 60}) AS n ON n.objID = p.objID
+            s.z AS spec_z, s.class AS spec_class,
+            n.distance
+        FROM dbo.fGetNearbyObjEq({ra}, {dec}, {effective_radius * 60}) AS n
+        JOIN PhotoObj AS p ON n.objID = p.objID
         LEFT JOIN SpecObj AS s ON s.bestobjid = p.objid
-        ORDER BY p.r"""
+        WHERE p.mode = 1
+        ORDER BY n.distance"""
 
-        text = await self._query_skyserver(sql)
-
-        table = self._parse_csv(text)
+        try:
+            text = await self._query_skyserver(sql)
+            table = self._parse_csv(text)
+        except Exception:
+            table = await self._query_region_fallback(ra, dec, effective_radius)
         return self._table_to_objects(table)
 
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
@@ -183,11 +213,13 @@ class SDSSConnector(BaseConnector):
             obj_id = str(row["objid"]).strip() if "objid" in row.colnames else ""
 
             mag = None
-            if "mag_r" in row.colnames:
-                try:
-                    mag = float(row["mag_r"])
-                except (ValueError, TypeError):
-                    pass
+            for mag_col in ("mag_r", "r"):
+                if mag_col in row.colnames:
+                    try:
+                        mag = float(row[mag_col])
+                        break
+                    except (ValueError, TypeError):
+                        pass
 
             type_name = str(row["type_name"]) if "type_name" in row.colnames else ""
 
@@ -206,6 +238,11 @@ class SDSSConnector(BaseConnector):
                 sc = str(row["spec_class"]).strip()
                 if sc and sc != "":
                     extra["spec_class"] = sc
+            if "distance" in row.colnames:
+                try:
+                    extra["distance_arcmin"] = float(row["distance"])
+                except (ValueError, TypeError):
+                    pass
 
             objects.append(
                 AstroObject(

@@ -66,6 +66,18 @@ function fmtCell(v: number | string | null): string {
   return String(v);
 }
 
+function extractRows(result: ADQLResult, limit = 1000): Array<Record<string, unknown>> {
+  return Array.from({ length: Math.min(result.row_count, limit) }).map((_, i) => {
+    const row: Record<string, unknown> = {};
+    for (const col of result.columns) row[col] = result.data[col]?.[i];
+    return row;
+  });
+}
+
+function preferredChartType(_result: ADQLResult | null): string {
+  return "scatter_custom";
+}
+
 const PAGE_SIZE = 25;
 
 /* ── Component ── */
@@ -82,6 +94,7 @@ export default function ADQLPage() {
   const [showViz, setShowViz] = useState(false);
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
 
   useEffect(() => { listADQLServices().then(setServices).catch(() => {}); }, []);
 
@@ -95,18 +108,16 @@ export default function ADQLPage() {
     try {
       const res = await adqlQuery(query, svc);
       setResult(res);
+      const rows = extractRows(res);
       try {
         localStorage.setItem("astro_last_adql", JSON.stringify({
           service: svc,
           query,
           row_count: res.row_count,
           columns: res.columns,
-          sample: Array.from({ length: Math.min(res.row_count, 5) }).map((_, i) => {
-            const row: Record<string, unknown> = {};
-            for (const col of res.columns) row[col] = res.data[col]?.[i];
-            return row;
-          }),
+          sample: rows.slice(0, 5),
         }));
+        localStorage.setItem("astro_last_adql_rows", JSON.stringify(rows));
       } catch { /* ignore */ }
       addHistory(query); setHistory(getHistory());
       logOperation("adql", `${svc}: ${query.slice(0, 80)}`);
@@ -233,18 +244,18 @@ export default function ADQLPage() {
             </button>
             <button className="btn-secondary" onClick={async () => {
               try {
-                const rows = Array.from({ length: Math.min(result.row_count, 200) }).map((_, i) => {
-                  const row: Record<string, unknown> = {};
-                  for (const col of result.columns) { row[col] = result.data[col]?.[i]; }
-                  return row;
-                });
+                setExportMsg("Generating notebook…");
+                const rows = extractRows(result, 200);
                 const blob = await exportSearchNotebook(query, rows);
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a"); a.href = url;
                 a.download = `adql_${result.row_count}_rows.ipynb`; a.click();
                 URL.revokeObjectURL(url);
+                setExportMsg("Notebook exported successfully");
+                setTimeout(() => setExportMsg(null), 2500);
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Notebook export failed");
+                setExportMsg(null);
               }
             }}>
               Jupyter Notebook
@@ -252,7 +263,7 @@ export default function ADQLPage() {
             <button className="btn-secondary" onClick={() => {
               localStorage.setItem(
                 "astro_chat_draft",
-                `Review this ${svc.toUpperCase()} ADQL query, explain the result schema, and suggest the next Python analysis steps:\n\n${query}`
+                `Use get_adql_results() to analyze the ADQL result set that is already loaded from this ${svc.toUpperCase()} query. Explain the schema, summarize the sample, and suggest the next Python analysis steps:\n\n${query}`
               );
               navigate("/chat");
             }}>
@@ -270,7 +281,7 @@ export default function ADQLPage() {
           <Suspense fallback={<div className="fits-loading">Loading visualization...</div>}>
             <PlotBuilder
               initialData={result.data as Record<string, unknown>}
-              initialChartType="correlation_scatter"
+              initialChartType={preferredChartType(result)}
               onClose={() => setShowViz(false)}
             />
           </Suspense>
@@ -278,6 +289,7 @@ export default function ADQLPage() {
       )}
 
       {error && <div className="error-banner">{error}</div>}
+      {exportMsg && <div className="success-banner">{exportMsg}</div>}
 
       {/* Results */}
       {result && (

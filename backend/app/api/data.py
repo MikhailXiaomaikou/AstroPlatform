@@ -160,6 +160,8 @@ def _build_source_error_name(source_name: str, error_type: str, result: Exceptio
     """Format a user-facing per-source search error."""
     if source_name == "ned" and error_type == "timeout":
         return "NED is responding slowly right now; try again in a moment or narrow the search."
+    if source_name == "sdss" and error_type == "timeout":
+        return "SDSS SkyServer is responding slowly right now; try again in a moment or narrow the search radius."
     detail = str(result).strip()
     if detail:
         return detail

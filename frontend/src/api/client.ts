@@ -1269,6 +1269,8 @@ export async function sendChatMessage(
   const { data } = await api.post<ChatResponse>("/api/chat/message", {
     messages,
     context: { ...context, ...(apiKey ? { api_key: apiKey } : {}) },
+  }, {
+    timeout: 420000,
   });
   return data;
 }

@@ -149,6 +149,12 @@ print("ok")
         assert r.success
         assert "function" in r.stdout
 
+    def test_import_astro_alias_is_allowed(self):
+        from app.services.code_executor import execute_python
+        r = execute_python("import astro\nprint(callable(astro.compute_luminosity_distance))")
+        assert r.success
+        assert "True" in r.stdout
+
     def test_data_accessor(self):
         from app.services.code_executor import execute_python
         from app.services.ai_tools import store_search_results
@@ -156,6 +162,17 @@ print("ok")
         r = execute_python('r = get_search_results(); print(len(r))')
         assert r.success
         assert "1" in r.stdout
+
+    def test_adql_accessor_prefers_session_specific_cache(self):
+        from app.services.code_executor import execute_python
+        from app.services.ai_tools import store_search_results
+
+        store_search_results("latest_adql", [{"value": "global"}])
+        store_search_results("latest_adql:session-1", [{"value": "session"}])
+
+        r = execute_python("rows = get_adql_results(); print(rows[0]['value'])", session_id="session-1")
+        assert r.success
+        assert "session" in r.stdout
 
     def test_complex_objects_persist_between_runs(self):
         from app.services.code_executor import clear_session_vars, execute_python
@@ -210,6 +227,13 @@ class TestSearchErrorHelpers:
         assert "responding slowly" in msg
         assert "narrow the search" in msg
         assert ": ." not in msg
+
+    def test_sdss_timeout_message_mentions_skyserver(self):
+        from app.api.data import _build_source_error_name
+
+        msg = _build_source_error_name("sdss", "timeout", TimeoutError())
+        assert "SkyServer" in msg
+        assert "narrow the search radius" in msg
 
 
 class TestAITools:
