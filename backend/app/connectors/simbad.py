@@ -24,6 +24,16 @@ class SIMBADConnector(BaseConnector):
         "andromeda galaxy": "M31",
         "whirlpool galaxy": "M51",
         "eagle nebula": "M16",
+        "crab nebula": "M1",
+    }
+
+    # Known coordinates + search radii (degrees) for extended objects whose
+    # catalogue entry may not be returned by query_object.
+    KNOWN_COORDS: dict[str, tuple[float, float, float]] = {
+        "pleiades": (56.75, 24.12, 2.0),
+        "crab nebula": (83.63, 22.01, 0.2),
+        "orion nebula": (83.82, -5.39, 0.5),
+        "hyades": (66.75, 15.87, 2.0),
     }
 
     def _make_simbad(self):
@@ -40,20 +50,56 @@ class SIMBADConnector(BaseConnector):
         loop = asyncio.get_running_loop()
         canonical_query = self.COMMON_ALIASES.get(query.strip().lower(), query)
 
+        query_lower = query.strip().lower()
+
         # Always try name-based query first when a meaningful query string is
-        # provided, even if coordinates were resolved.  This handles clusters,
-        # nebulae, and other extended objects whose catalogue entry may not
-        # fall inside a small cone search (e.g. "Pleiades" → Cl Melotte 22).
+        # provided.  This handles clusters, nebulae, and other extended objects.
         if canonical_query and canonical_query.strip() and canonical_query not in ("survey", "sky"):
+            # Step 1: try query_object with the canonical alias
             table = await loop.run_in_executor(
                 None,
                 partial(simbad.query_object, canonical_query),
             )
             if table is not None and len(table) > 0:
                 return self._table_to_objects(table)
-            # query_object failed — try query_objectids to resolve alternate
-            # names (e.g. "Pleiades" → many identifiers), then re-query the
-            # main identifier.
+
+            # Step 2: try SkyCoord.from_name() (uses CDS Sesame name resolver)
+            # which handles common English names like "Pleiades", "Crab Nebula"
+            resolved_coord = None
+            try:
+                resolved_coord = await loop.run_in_executor(
+                    None,
+                    partial(SkyCoord.from_name, canonical_query),
+                )
+            except Exception:
+                # Sesame failed for canonical — try the original query too
+                if canonical_query != query:
+                    try:
+                        resolved_coord = await loop.run_in_executor(
+                            None,
+                            partial(SkyCoord.from_name, query),
+                        )
+                    except Exception:
+                        pass
+
+            # Step 3: check hardcoded coords for well-known extended objects
+            if resolved_coord is None and query_lower in self.KNOWN_COORDS:
+                kra, kdec, _kr = self.KNOWN_COORDS[query_lower]
+                resolved_coord = SkyCoord(ra=kra, dec=kdec, unit=(u.degree, u.degree), frame="icrs")
+
+            if resolved_coord is not None:
+                # Use a wider radius for known extended objects, else a default
+                cone_radius = 0.2
+                if query_lower in self.KNOWN_COORDS:
+                    cone_radius = self.KNOWN_COORDS[query_lower][2]
+                table = await loop.run_in_executor(
+                    None,
+                    partial(simbad.query_region, resolved_coord, radius=cone_radius * u.degree),
+                )
+                if table is not None and len(table) > 0:
+                    return self._table_to_objects(table)
+
+            # Step 4: try query_objectids as a last resort
             try:
                 from astroquery.simbad import Simbad as _Simbad
                 ids_table = await loop.run_in_executor(

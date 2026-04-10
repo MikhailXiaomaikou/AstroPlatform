@@ -1,4 +1,5 @@
 """AI assistant powered by Claude — helps users interact with the platform."""
+import asyncio
 import json
 import logging
 import os

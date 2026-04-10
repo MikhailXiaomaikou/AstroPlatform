@@ -588,16 +588,19 @@ ${rows}
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            padding: "0.75rem 1rem",
+            justifyContent: "center",
+            gap: 10,
+            padding: "1.25rem 1rem",
             marginBottom: "0.75rem",
             borderRadius: 10,
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            color: "var(--color-text-secondary)",
+            background: "rgba(10, 132, 255, 0.08)",
+            border: "1px solid rgba(10, 132, 255, 0.25)",
+            color: "var(--color-accent, #0a84ff)",
+            fontSize: "0.9rem",
+            fontWeight: 500,
           }}
         >
-          <span className="spinner spinner-blue" />
+          <span className="spinner spinner-blue" style={{ width: 20, height: 20 }} />
           <span>Searching connected archives and resolving coordinates…</span>
         </div>
       )}

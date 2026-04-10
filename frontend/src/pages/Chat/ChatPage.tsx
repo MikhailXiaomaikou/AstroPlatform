@@ -1465,6 +1465,15 @@ export default function ChatPage() {
 
   return (
     <div className="chat-page">
+      {toastMsg && (
+        <div style={{
+          position: "fixed", top: 24, right: 24, zIndex: 9999,
+          background: "var(--color-success, #22c55e)", color: "#fff",
+          padding: "10px 20px", borderRadius: 8, fontSize: "0.85rem",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.15)", pointerEvents: "none",
+          transition: "opacity 0.3s ease",
+        }}>{toastMsg}</div>
+      )}
       <div className="chat-header">
         <div className="chat-header-row">
           <div>
@@ -1575,14 +1584,6 @@ export default function ChatPage() {
 
       <div className="chat-messages">
         {pageError && <div className="error-banner">{pageError}</div>}
-        {toastMsg && (
-          <div style={{
-            position: "fixed", top: 24, right: 24, zIndex: 1000,
-            background: "var(--color-success, #22c55e)", color: "#fff",
-            padding: "10px 20px", borderRadius: 8, fontSize: "0.85rem",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.15)", pointerEvents: "none",
-          }}>{toastMsg}</div>
-        )}
         {!hasKey && (
           <ApiKeyPrompt onSaved={() => setHasKey(true)} />
         )}
