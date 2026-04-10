@@ -31,6 +31,37 @@ class SIMBADConnector(BaseConnector):
         simbad = self._make_simbad()
         loop = asyncio.get_running_loop()
 
+        # Always try name-based query first when a meaningful query string is
+        # provided, even if coordinates were resolved.  This handles clusters,
+        # nebulae, and other extended objects whose catalogue entry may not
+        # fall inside a small cone search (e.g. "Pleiades" → Cl Melotte 22).
+        if query and query.strip() and query not in ("survey", "sky"):
+            table = await loop.run_in_executor(
+                None,
+                partial(simbad.query_object, query),
+            )
+            if table is not None and len(table) > 0:
+                return self._table_to_objects(table)
+            # query_object failed — try query_objectids to resolve alternate
+            # names (e.g. "Pleiades" → many identifiers), then re-query the
+            # main identifier.
+            try:
+                from astroquery.simbad import Simbad as _Simbad
+                ids_table = await loop.run_in_executor(
+                    None,
+                    partial(_Simbad.query_objectids, query),
+                )
+                if ids_table is not None and len(ids_table) > 0:
+                    main_id = str(ids_table[0][0]).strip()
+                    table = await loop.run_in_executor(
+                        None,
+                        partial(simbad.query_object, main_id),
+                    )
+                    if table is not None and len(table) > 0:
+                        return self._table_to_objects(table)
+            except Exception:
+                pass
+
         if ra is not None and dec is not None:
             coord = SkyCoord(ra=ra, dec=dec, unit=(u.degree, u.degree), frame="icrs")
             radius_qty = radius * u.degree
@@ -42,10 +73,7 @@ class SIMBADConnector(BaseConnector):
             # No coordinates and no valid object name — skip
             return []
         else:
-            table = await loop.run_in_executor(
-                None,
-                partial(simbad.query_object, query),
-            )
+            return []
 
         if table is None:
             return []

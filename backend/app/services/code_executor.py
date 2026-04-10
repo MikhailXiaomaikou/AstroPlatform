@@ -112,9 +112,12 @@ def _safe_import(name, *args, **kwargs):
     """Restricted import that only allows whitelisted modules."""
     top_level = name.split(".")[0]
     if top_level not in ALLOWED_MODULES and name not in ALLOWED_MODULES:
+        hint = ""
+        if name == "astro":
+            hint = " Hint: 'astro' is already pre-loaded — use it directly without importing. For astronomy utilities, use 'astropy' (not 'astro')."
         raise ImportError(
             f"Import of '{name}' is not allowed. "
-            f"Available: numpy, scipy, astropy, matplotlib, pandas"
+            f"Available: numpy, scipy, astropy, matplotlib, pandas.{hint}"
         )
     return __builtins__.__import__(name, *args, **kwargs) if hasattr(__builtins__, '__import__') else __import__(name, *args, **kwargs)
 

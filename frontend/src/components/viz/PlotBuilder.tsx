@@ -155,6 +155,7 @@ function buildPlot(
   data: Record<string, unknown>,
   showFit: boolean,
   showStats: boolean,
+  customScatterOpts?: { xCol: string; yCol: string; colorCol: string; flipY: boolean },
 ): { data: Record<string, unknown>[]; layout: Record<string, unknown> } {
   const ra = (data.ra || []) as number[];
   const dec = (data.dec || []) as number[];
@@ -367,6 +368,48 @@ function buildPlot(
     };
   }
 
+  if (chartType === "scatter_custom" && customScatterOpts) {
+    const { xCol, yCol, colorCol, flipY } = customScatterOpts;
+    const xArr = (data[xCol] || []) as number[];
+    const yArr = (data[yCol] || []) as number[];
+    const n = Math.min(xArr.length, yArr.length);
+    if (n === 0) return { data: [], layout: mkLayout("No data for selected columns", mkAxis(""), mkAxis("")) };
+    const hasColor = colorCol && colorCol !== "" && data[colorCol];
+    const colorArr = hasColor ? (data[colorCol] as number[]).slice(0, n) : undefined;
+    const traces: Record<string, unknown>[] = [{
+      type: "scattergl", mode: "markers",
+      x: xArr.slice(0, n), y: yArr.slice(0, n),
+      marker: {
+        size: 4, symbol: "circle",
+        color: colorArr || COLORS.cyan,
+        colorscale: colorArr ? "Viridis" : undefined,
+        showscale: !!colorArr,
+        colorbar: colorArr ? mkColorbar(colorCol) : undefined,
+        line: { width: 0.5, color: "rgba(0,0,0,0.12)" },
+        opacity: 0.82,
+      },
+    }];
+    if (showFit && n >= 2) {
+      const fit = linearFit(xArr.slice(0, n), yArr.slice(0, n));
+      const x0 = arrMin(xArr.slice(0, n)), x1 = arrMax(xArr.slice(0, n));
+      traces.push({
+        type: "scatter", mode: "lines",
+        x: [x0, x1], y: [fit.slope * x0 + fit.intercept, fit.slope * x1 + fit.intercept],
+        line: { color: COLORS.red, width: 2, dash: "dash" },
+        name: `Linear: <i>R</i>\u00B2 = ${fit.r2.toFixed(4)}`, showlegend: true,
+      });
+    }
+    const annotations: Record<string, unknown>[] = [];
+    if (showStats) annotations.push(statsAnnotation(yArr.slice(0, n), yCol));
+    return {
+      data: traces,
+      layout: mkLayout(`${xCol} vs ${yCol} (<i>N</i> = ${n})`,
+        mkAxis(xCol),
+        mkAxis(yCol, flipY ? { autorange: "reversed" } : undefined),
+        { showlegend: showFit, annotations, hasColorbar: !!colorArr }),
+    };
+  }
+
   // Fallback: auto scatter
   const numKeys = Object.keys(data).filter(
     (k) => Array.isArray(data[k]) && (data[k] as unknown[]).length > 0 && typeof (data[k] as unknown[])[0] === "number"
@@ -416,6 +459,19 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
   const [yMax, setYMax] = useState("");
   const [coordFormat, setCoordFormat] = useState<"decimal" | "hms">("decimal");
 
+  // Custom scatter column selectors
+  const numericColumns = useMemo(() => {
+    if (!initialData) return [];
+    return Object.keys(initialData).filter((k) => {
+      const arr = initialData[k];
+      return Array.isArray(arr) && arr.length > 0 && typeof arr[0] === "number";
+    });
+  }, [initialData]);
+  const [customX, setCustomX] = useState("");
+  const [customY, setCustomY] = useState("");
+  const [customColor, setCustomColor] = useState("");
+  const [flipY, setFlipY] = useState(false);
+
   const availableCharts = useMemo(() => {
     if (!initialData) return CHART_TYPES;
     const z = ((initialData.redshift || []) as unknown[]).filter((v) => v != null);
@@ -431,7 +487,10 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
 
   const plotResult = useMemo(() => {
     if (!initialData) return null;
-    const result = buildPlot(chartType, initialData, showFit, showStats);
+    const scatterOpts = chartType === "scatter_custom" && customX && customY
+      ? { xCol: customX, yCol: customY, colorCol: customColor, flipY }
+      : undefined;
+    const result = buildPlot(chartType, initialData, showFit, showStats, scatterOpts);
 
     // Apply custom axis ranges
     const xHasMin = xMin !== "" && !isNaN(Number(xMin));
@@ -471,7 +530,7 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
     }
 
     return result;
-  }, [chartType, initialData, showFit, showStats, xMin, xMax, yMin, yMax, coordFormat]);
+  }, [chartType, initialData, showFit, showStats, xMin, xMax, yMin, yMax, coordFormat, customX, customY, customColor, flipY]);
 
   return (
     <div className="plot-builder">
@@ -510,6 +569,36 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
           </select>
         </label>
       </div>
+
+      {chartType === "scatter_custom" && numericColumns.length > 0 && (
+        <div className="plot-axis-ranges" style={{ marginTop: 4 }}>
+          <label className="plot-range-label">
+            X axis{" "}
+            <select value={customX} onChange={(e) => setCustomX(e.target.value)} className="plot-range-input" style={{ width: "auto", minWidth: 120 }}>
+              <option value="">-- select --</option>
+              {numericColumns.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="plot-range-label">
+            Y axis{" "}
+            <select value={customY} onChange={(e) => setCustomY(e.target.value)} className="plot-range-input" style={{ width: "auto", minWidth: 120 }}>
+              <option value="">-- select --</option>
+              {numericColumns.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="plot-range-label">
+            Color{" "}
+            <select value={customColor} onChange={(e) => setCustomColor(e.target.value)} className="plot-range-input" style={{ width: "auto", minWidth: 120 }}>
+              <option value="">none</option>
+              {numericColumns.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="fit-toggle">
+            <input type="checkbox" checked={flipY} onChange={(e) => setFlipY(e.target.checked)} />
+            Flip Y
+          </label>
+        </div>
+      )}
 
       {plotResult && plotResult.data.length > 0 ? (
         <Plot

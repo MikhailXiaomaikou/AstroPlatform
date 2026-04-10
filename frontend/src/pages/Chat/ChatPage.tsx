@@ -1130,6 +1130,23 @@ export default function ChatPage() {
     } catch { /* ignore */ }
   };
 
+  // Auto-save after each AI response completes (loading transitions false)
+  const prevLoadingRef = useRef(false);
+  useEffect(() => {
+    const wasLoading = prevLoadingRef.current;
+    prevLoadingRef.current = loading;
+    if (wasLoading && !loading && messages.length > 2) {
+      const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+      saveChatSession(data, currentSessionId || undefined)
+        .then((res) => {
+          setCurrentSessionId(res.id);
+          pythonSessionIdRef.current = res.id;
+          listChatSessions().then(setSessions).catch(() => {});
+        })
+        .catch(() => {});
+    }
+  }, [loading, messages, currentSessionId]);
+
   const handleLoadSession = async (id: string) => {
     try {
       const session = await loadChatSession(id);
