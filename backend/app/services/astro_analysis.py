@@ -6,8 +6,11 @@ astronomical diagnostics without requiring the user to write boilerplate.
 """
 
 import inspect
+import logging
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # ── Publication Figure Defaults ──
 
@@ -55,10 +58,69 @@ def pub_figure(nrows=1, ncols=1, figsize=None, **kwargs):
     return fig, axes
 
 
+# ── Isochrone Helpers ──
+
+
+def get_isochrone(log_age, metallicity=0.0, photometric_system="gaia"):
+    """Get a PARSEC isochrone for a given age and metallicity.
+
+    Tries local API cache first, falls back to CMD 3.7 web API.
+
+    Args:
+        log_age: log10(age/yr), e.g. 8.0 for 100 Myr, 10.0 for 10 Gyr
+        metallicity: [M/H], default 0.0 (solar)
+        photometric_system: 'gaia' or 'sdss'
+
+    Returns:
+        pandas DataFrame with columns including mass, logTe, logg,
+        and photometric magnitudes (Gmag, G_BPmag, G_RPmag for Gaia;
+        umag, gmag, rmag, imag, zmag for SDSS).
+    """
+    import httpx
+    import pandas as pd
+
+    # Try local API first
+    try:
+        params = {
+            "log_age": log_age,
+            "metallicity": metallicity,
+        }
+        resp = httpx.get(
+            "http://127.0.0.1:8000/api/isochrones/get",
+            params=params,
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and data:
+                df = pd.DataFrame(data)
+                logger.info(
+                    "Loaded isochrone from local API: log_age=%.2f, [M/H]=%.2f (%d rows)",
+                    log_age, metallicity, len(df),
+                )
+                return df
+    except Exception:
+        pass
+
+    # Fall back to CMD 3.7 web API
+    logger.info(
+        "Falling back to CMD API for isochrone: log_age=%.2f, [M/H]=%.2f",
+        log_age, metallicity,
+    )
+    from app.services.parsec_fetcher import fetch_isochrone
+
+    return fetch_isochrone(
+        log_age=log_age,
+        metallicity=metallicity,
+        photometric_system=photometric_system,
+    )
+
+
 # ── Common Astronomy Plots ──
 
 def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
-                    title="HR Diagram", color_by=None):
+                    title="HR Diagram", color_by=None,
+                    isochrones=None, isochrone_ages=None):
     """Publication-quality HR diagram (color-magnitude or color-absolute magnitude).
 
     Args:
@@ -67,6 +129,8 @@ def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
         parallax: parallax in mas (if given, converts to absolute magnitude)
         labels: object labels for legend
         color_by: array to color points by (e.g., metallicity)
+        isochrones: list of DataFrames from get_isochrone() to overlay
+        isochrone_ages: list of log_age floats to auto-fetch and overlay
     """
     import matplotlib.pyplot as plt
     fig, ax = pub_figure()
@@ -87,6 +151,75 @@ def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
         plt.colorbar(sc, ax=ax, label="Color parameter")
     else:
         ax.scatter(bp_rp, y, s=3, alpha=0.5, color="#0A84FF", rasterized=True)
+
+    # ── Isochrone overlay ──
+    # If isochrone_ages provided, auto-fetch them
+    if isochrone_ages is not None and isochrones is None:
+        isochrones = []
+        for age in isochrone_ages:
+            try:
+                iso_df = get_isochrone(age)
+                isochrones.append(iso_df)
+            except Exception as exc:
+                logger.warning("Could not fetch isochrone for log_age=%.2f: %s", age, exc)
+
+    if isochrones:
+        from matplotlib.colors import Normalize
+
+        # Determine log_age for each isochrone (from DataFrame or index)
+        iso_ages = []
+        for iso_df in isochrones:
+            age_val = None
+            for col in ("logAge", "logageyr", "log_age", "logage"):
+                if col in iso_df.columns:
+                    age_val = float(iso_df[col].iloc[0])
+                    break
+            iso_ages.append(age_val)
+
+        # Build colormap for age range
+        valid_ages = [a for a in iso_ages if a is not None]
+        if valid_ages:
+            age_min, age_max = min(valid_ages), max(valid_ages)
+        else:
+            age_min, age_max = 0.0, 1.0
+        if age_min == age_max:
+            age_max = age_min + 1.0
+        norm = Normalize(vmin=age_min, vmax=age_max)
+        cmap = plt.get_cmap("plasma")
+
+        for iso_df, age_val in zip(isochrones, iso_ages):
+            # Determine color and magnitude columns
+            bp_col, rp_col, g_col = None, None, None
+            for c in iso_df.columns:
+                cl = c.lower()
+                if cl in ("g_bpmag", "g_bp", "gbpmag"):
+                    bp_col = c
+                elif cl in ("g_rpmag", "g_rp", "grpmag"):
+                    rp_col = c
+                elif cl in ("gmag", "g_mag"):
+                    g_col = c
+
+            if bp_col is None or rp_col is None or g_col is None:
+                logger.warning(
+                    "Isochrone DataFrame missing expected Gaia columns "
+                    "(found: %s). Skipping overlay.", list(iso_df.columns)
+                )
+                continue
+
+            iso_color = iso_df[bp_col] - iso_df[rp_col]
+            iso_mag = iso_df[g_col]
+
+            color_val = age_val if age_val is not None else 0.5
+            line_color = cmap(norm(color_val))
+            label = f"log(age)={age_val:.1f}" if age_val is not None else "isochrone"
+
+            ax.plot(
+                iso_color, iso_mag,
+                color=line_color, linewidth=1.2, alpha=0.85,
+                label=label, zorder=5,
+            )
+
+        ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=1)
 
     ax.set_xlabel(r"$G_{BP} - G_{RP}$ [mag]")
     ax.set_ylabel(ylabel)
@@ -1803,6 +1936,7 @@ def available_functions():
     exported = [
         pub_figure,
         pub_style,
+        get_isochrone,
         plot_hr_diagram,
         plot_bpt,
         plot_sed,

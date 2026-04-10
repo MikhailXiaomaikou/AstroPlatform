@@ -2,7 +2,7 @@ import json
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, TypeDecorator, func
+from sqlalchemy import DateTime, Float, ForeignKey, String, Text, TypeDecorator, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -302,3 +302,18 @@ class ScheduledRun(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IsochroneCache(Base):
+    __tablename__ = "isochrone_cache"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    log_age: Mapped[float] = mapped_column(Float, nullable=False)
+    metallicity: Mapped[float] = mapped_column(Float, nullable=False)
+    photometric_system: Mapped[str] = mapped_column(String(50), nullable=False, default="gaia")
+    data: Mapped[dict] = mapped_column(JSONType(), nullable=False)  # DataFrame as list of dicts
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("log_age", "metallicity", "photometric_system", name="uq_isochrone_params"),
+    )

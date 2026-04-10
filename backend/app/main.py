@@ -14,6 +14,7 @@ from app.api.data import router as data_router
 from app.api.export import router as export_router
 from app.api.health import router as health_router
 from app.api.integration import router as integration_router
+from app.api.isochrones import router as isochrones_router
 from app.api.arxiv import router as arxiv_router
 from app.api.pipeline import router as pipeline_router
 from app.api.settings import router as settings_router
@@ -203,6 +204,7 @@ app.include_router(data_router)
 app.include_router(export_router)
 app.include_router(health_router)
 app.include_router(integration_router)
+app.include_router(isochrones_router)
 app.include_router(pipeline_router)
 app.include_router(scheduler_router)
 app.include_router(settings_router)

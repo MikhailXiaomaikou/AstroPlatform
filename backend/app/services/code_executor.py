@@ -369,6 +369,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         # Also expose top-level convenience functions
         exec_globals["pub_figure"] = astro.pub_figure
         exec_globals["pub_style"] = astro.pub_style
+        exec_globals["get_isochrone"] = astro.get_isochrone
         exec_globals["plot_hr_diagram"] = astro.plot_hr_diagram
         exec_globals["plot_bpt"] = astro.plot_bpt
         exec_globals["plot_sed"] = astro.plot_sed
