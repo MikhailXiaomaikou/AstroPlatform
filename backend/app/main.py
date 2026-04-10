@@ -34,10 +34,14 @@ logger = logging.getLogger(__name__)
 def _migrate_add_columns(connection):
     """Add new columns to existing tables (SQLite create_all won't do this)."""
     import sqlalchemy
+    from app.utils.usernames import normalize_username
+
     inspector = sqlalchemy.inspect(connection)
     if "users" in inspector.get_table_names():
         existing = {c["name"] for c in inspector.get_columns("users")}
+        username_column_present = "username" in existing
         migrations = [
+            ("username", "VARCHAR(255)"),
             ("google_id", "VARCHAR(255)"),
             ("avatar_url", "TEXT"),
             ("display_name", "VARCHAR(255)"),
@@ -49,11 +53,55 @@ def _migrate_add_columns(connection):
                         f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"
                     ))
                     logger.info("Added column users.%s", col_name)
+                    if col_name == "username":
+                        username_column_present = True
+                    existing.add(col_name)
                 except Exception as e:
                     # Column may have been added by a concurrent worker
+                    if col_name == "username":
+                        username_column_present = True
                     logger.debug("Migration users.%s skipped: %s", col_name, e)
+        if username_column_present:
+            try:
+                rows = connection.execute(
+                    sqlalchemy.text(
+                        "SELECT id, username, email, display_name FROM users ORDER BY created_at ASC"
+                    )
+                ).fetchall()
+                used_usernames: set[str] = set()
+                for row in rows:
+                    current = normalize_username(row.username or "")
+                    if not current:
+                        current = normalize_username(row.display_name or "") or normalize_username(row.email or "")
+                    if not current:
+                        current = "user"
+                    base = current[:32]
+                    candidate = base
+                    suffix = 2
+                    while candidate in used_usernames:
+                        suffix_str = str(suffix)
+                        trimmed = base[: max(1, 32 - len(suffix_str))].rstrip("._-") or "user"
+                        candidate = f"{trimmed}{suffix_str}"
+                        suffix += 1
+                    used_usernames.add(candidate)
+                    if row.username != candidate:
+                        connection.execute(
+                            sqlalchemy.text("UPDATE users SET username = :username WHERE id = :id"),
+                            {"username": candidate, "id": str(row.id)},
+                        )
+                existing.add("username")
+            except Exception as e:
+                logger.debug("Username backfill skipped: %s", e)
         # Add unique index on google_id if not already present
         existing_indexes = {idx["name"] for idx in inspector.get_indexes("users")}
+        if "ix_users_username" not in existing_indexes:
+            try:
+                connection.execute(sqlalchemy.text(
+                    "CREATE UNIQUE INDEX ix_users_username ON users (username)"
+                ))
+                logger.info("Created unique index ix_users_username")
+            except Exception:
+                pass
         if "ix_users_google_id" not in existing_indexes:
             try:
                 connection.execute(sqlalchemy.text(
@@ -85,7 +133,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Astro Research Platform",
+    title="Standard Astro",
     version="0.4.0",
     description="AI-native platform for professional astronomers — data discovery, analysis & pipelines",
     lifespan=lifespan,

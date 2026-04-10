@@ -30,8 +30,9 @@ class TestModelInstantiation:
     """Verify every ORM model can be instantiated with defaults."""
 
     def test_user(self):
-        u = User(email="a@b.com", password_hash="hash", subscription_tier="solo")
-        assert u.email == "a@b.com"
+        u = User(username="alice", email="alice@astro.local", password_hash="hash", subscription_tier="solo")
+        assert u.username == "alice"
+        assert u.email == "alice@astro.local"
         assert u.subscription_tier == "solo"
 
     def test_data_file(self):

@@ -17,13 +17,14 @@ from app.models.schemas import PipelineRun, PipelineTemplateDB, PipelineVersion,
 from app.pipeline.engine import execute_dag, execute_pipeline_task, topological_sort
 from app.pipeline.nodes import registry
 from app.pipeline.validate import DAGValidationError, validate_dag
+from app.utils.usernames import internal_email_for_username
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
 _ANONYMOUS_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
-_ANONYMOUS_USER_EMAIL = "guest@astro.local"
+_ANONYMOUS_USER_EMAIL = internal_email_for_username("guest")
 
 
 # ── Request / Response models ──
@@ -89,6 +90,7 @@ async def _get_or_create_anonymous_user(db: AsyncSession) -> User:
 
     user = User(
         id=_ANONYMOUS_USER_ID,
+        username="guest",
         email=_ANONYMOUS_USER_EMAIL,
         password_hash=hash_password(str(uuid.uuid4())),
         subscription_tier="solo",

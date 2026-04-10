@@ -5,8 +5,9 @@ import secrets
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import (
@@ -19,6 +20,12 @@ from app.config import settings
 from app.models.database import get_db
 from app.models.schemas import SetupKey, User
 from app.rate_limit import limiter
+from app.utils.usernames import (
+    internal_email_for_username,
+    normalize_username,
+    preferred_username,
+    username_from_email,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -27,12 +34,12 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # ── Request / Response models ──
 
 class RegisterRequest(BaseModel):
-    email: EmailStr
+    username: str
     password: str
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    username: str
     password: str
 
 
@@ -47,6 +54,7 @@ class GoogleLoginRequest(BaseModel):
 
 class UserProfile(BaseModel):
     id: str
+    username: str
     email: str
     subscription_tier: str
     stripe_customer_id: str | None = None
@@ -77,24 +85,65 @@ class SubscribeRequest(BaseModel):
 
 # ── Endpoints ──
 
+_USERNAME_MIN_LENGTH = 3
+_USERNAME_MAX_LENGTH = 32
+
+
+def _clean_username(raw: str) -> str:
+    username = normalize_username(raw)
+    if not username:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+    if len(username) < _USERNAME_MIN_LENGTH:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+    if len(username) > _USERNAME_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail="Username must be at most 32 characters")
+    return username
+
+
+async def _username_exists(db: AsyncSession, username: str) -> bool:
+    result = await db.execute(select(User.id).where(User.username == username))
+    return result.scalar_one_or_none() is not None
+
+
+async def _unique_username(db: AsyncSession, *candidates: str, fallback: str = "user") -> str:
+    base = preferred_username(*candidates, fallback=fallback)
+    if len(base) < _USERNAME_MIN_LENGTH:
+        base = fallback
+    base = base[:_USERNAME_MAX_LENGTH]
+    candidate = base
+    suffix = 2
+    while await _username_exists(db, candidate):
+        suffix_str = str(suffix)
+        trimmed = base[: max(1, _USERNAME_MAX_LENGTH - len(suffix_str))].rstrip("._-") or fallback
+        candidate = f"{trimmed}{suffix_str}"
+        suffix += 1
+    return candidate
+
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")
 async def register(request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    existing = await db.execute(select(User).where(User.email == req.email))
+    username = _clean_username(req.username)
+    existing = await db.execute(select(User).where(User.username == username))
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=400, detail="Username already registered")
 
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     user = User(
-        email=req.email,
+        username=username,
+        email=internal_email_for_username(username),
         password_hash=hash_password(req.password),
         subscription_tier="solo",
+        display_name=username,
     )
     db.add(user)
-    await db.commit()
-    await db.refresh(user)
+    try:
+        await db.commit()
+        await db.refresh(user)
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Username already registered") from exc
 
     token = create_access_token(user.id)
     return TokenResponse(access_token=token)
@@ -103,10 +152,11 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit("10/minute")
 async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == req.email))
+    username = _clean_username(req.username)
+    result = await db.execute(select(User).where(User.username == username))
     user = result.scalar_one_or_none()
     if user is None or not verify_password(req.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = create_access_token(user.id)
     return TokenResponse(access_token=token)
@@ -140,6 +190,13 @@ async def google_login(request: Request, req: GoogleLoginRequest, db: AsyncSessi
 
     if user:
         # Update profile info from Google
+        if not user.username:
+            user.username = await _unique_username(
+                db,
+                display_name,
+                username_from_email(email),
+                fallback="google-user",
+            )
         if display_name and user.display_name != display_name:
             user.display_name = display_name
         if avatar_url and user.avatar_url != avatar_url:
@@ -153,6 +210,13 @@ async def google_login(request: Request, req: GoogleLoginRequest, db: AsyncSessi
 
     if user:
         user.google_id = google_id
+        if not user.username:
+            user.username = await _unique_username(
+                db,
+                display_name,
+                username_from_email(email),
+                fallback="google-user",
+            )
         if not user.display_name:
             user.display_name = display_name
         if not user.avatar_url:
@@ -161,9 +225,15 @@ async def google_login(request: Request, req: GoogleLoginRequest, db: AsyncSessi
         return TokenResponse(access_token=create_access_token(user.id))
 
     # 3. Create new user (handle race condition with concurrent requests)
-    from sqlalchemy.exc import IntegrityError
     random_pw = secrets.token_urlsafe(32)
+    username = await _unique_username(
+        db,
+        display_name,
+        username_from_email(email),
+        fallback="google-user",
+    )
     user = User(
+        username=username,
         email=email,
         password_hash=hash_password(random_pw),
         google_id=google_id,
@@ -228,6 +298,7 @@ async def _verify_google_token(id_token: str) -> dict:
 async def get_profile(user: User = Depends(get_current_user)):
     return UserProfile(
         id=str(user.id),
+        username=user.username or user.email.split("@")[0],
         email=user.email,
         subscription_tier=user.subscription_tier,
         stripe_customer_id=user.stripe_customer_id,
@@ -263,13 +334,20 @@ async def setup_key_login(request: Request, req: SetupKeyRequest, db: AsyncSessi
 
     # First use: create a new account bound to this key
     random_suffix = secrets.token_hex(4)
-    email = f"beta-{setup_key.label}-{random_suffix}@astro.local"
+    username = await _unique_username(
+        db,
+        setup_key.label,
+        f"beta-{setup_key.label}-{random_suffix}",
+        fallback="beta-user",
+    )
     random_pw = secrets.token_urlsafe(16)
 
     user = User(
-        email=email,
+        username=username,
+        email=internal_email_for_username(username),
         password_hash=hash_password(random_pw),
         subscription_tier="solo",
+        display_name=username,
     )
     db.add(user)
     await db.flush()

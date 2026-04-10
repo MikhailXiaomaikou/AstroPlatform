@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.models.database import Base, get_db
 from app.auth import create_access_token, hash_password
 from app.models.schemas import User
+from app.utils.usernames import username_from_email
 
 
 # ── In-memory SQLite engine (per-test-session) ──
@@ -63,6 +64,7 @@ async def test_user(db_session: AsyncSession):
     """Insert a user into the DB and return (user, token) tuple."""
     user = User(
         id=uuid.uuid4(),
+        username=username_from_email("test@astro.example.com"),
         email="test@astro.example.com",
         password_hash=hash_password("securepassword123"),
         subscription_tier="solo",

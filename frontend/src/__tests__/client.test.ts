@@ -105,10 +105,10 @@ describe("Auth helper functions", () => {
       data: { access_token: "register-token-abc", token_type: "bearer" },
     });
 
-    const result = await register("user@example.com", "password123");
+    const result = await register("astro_user", "password123");
 
     expect(postSpy).toHaveBeenCalledWith("/api/auth/register", {
-      email: "user@example.com",
+      username: "astro_user",
       password: "password123",
     });
     expect(localStorageMock.setItem).toHaveBeenCalledWith(
@@ -126,10 +126,10 @@ describe("Auth helper functions", () => {
       data: { access_token: "login-token-xyz", token_type: "bearer" },
     });
 
-    const result = await login("user@example.com", "pass456");
+    const result = await login("astro_user", "pass456");
 
     expect(postSpy).toHaveBeenCalledWith("/api/auth/login", {
-      email: "user@example.com",
+      username: "astro_user",
       password: "pass456",
     });
     expect(localStorageMock.setItem).toHaveBeenCalledWith(

@@ -23,6 +23,7 @@ export interface TokenResponse {
 
 export interface UserProfile {
   id: string;
+  username: string;
   email: string;
   subscription_tier: string;
   stripe_customer_id: string | null;
@@ -31,14 +32,14 @@ export interface UserProfile {
   google_linked: boolean;
 }
 
-export async function register(email: string, password: string): Promise<TokenResponse> {
-  const { data } = await api.post<TokenResponse>("/api/auth/register", { email, password });
+export async function register(username: string, password: string): Promise<TokenResponse> {
+  const { data } = await api.post<TokenResponse>("/api/auth/register", { username, password });
   localStorage.setItem("astro_token", data.access_token);
   return data;
 }
 
-export async function login(email: string, password: string): Promise<TokenResponse> {
-  const { data } = await api.post<TokenResponse>("/api/auth/login", { email, password });
+export async function login(username: string, password: string): Promise<TokenResponse> {
+  const { data } = await api.post<TokenResponse>("/api/auth/login", { username, password });
   localStorage.setItem("astro_token", data.access_token);
   return data;
 }

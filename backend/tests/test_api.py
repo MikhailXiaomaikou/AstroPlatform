@@ -7,6 +7,7 @@ import pytest
 
 from app.auth import hash_password
 from app.models.schemas import DataFile, PipelineRun, PipelineTemplateDB, RunResult, User
+from app.utils.usernames import username_from_email
 
 
 class TestHealthEndpoint:
@@ -20,15 +21,18 @@ class TestAuthEndpoints:
     async def test_register_creates_user(self, app_client):
         resp = await app_client.post(
             "/api/auth/register",
-            json={"email": "new@astro.io", "password": "longpassword123"},
+            json={"username": "newastro", "password": "longpassword123"},
         )
         assert resp.status_code == 201
         body = resp.json()
         assert "access_token" in body
         assert body["token_type"] == "bearer"
+        me = await app_client.get("/api/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"})
+        assert me.status_code == 200
+        assert me.json()["username"] == "newastro"
 
-    async def test_register_duplicate_email(self, app_client):
-        payload = {"email": "dup@astro.io", "password": "longpassword123"}
+    async def test_register_duplicate_username(self, app_client):
+        payload = {"username": "dupastro", "password": "longpassword123"}
         await app_client.post("/api/auth/register", json=payload)
         resp = await app_client.post("/api/auth/register", json=payload)
         assert resp.status_code == 400
@@ -37,39 +41,39 @@ class TestAuthEndpoints:
     async def test_register_short_password(self, app_client):
         resp = await app_client.post(
             "/api/auth/register",
-            json={"email": "short@astro.io", "password": "abc"},
+            json={"username": "shortastro", "password": "abc"},
         )
         assert resp.status_code == 400
 
     async def test_login_correct_credentials(self, app_client):
-        email, password = "login@astro.io", "securepassword123"
+        username, password = "loginastro", "securepassword123"
         await app_client.post(
             "/api/auth/register",
-            json={"email": email, "password": password},
+            json={"username": username, "password": password},
         )
         resp = await app_client.post(
             "/api/auth/login",
-            json={"email": email, "password": password},
+            json={"username": username, "password": password},
         )
         assert resp.status_code == 200
         assert "access_token" in resp.json()
 
     async def test_login_wrong_password(self, app_client):
-        email = "wrong@astro.io"
+        username = "wrongastro"
         await app_client.post(
             "/api/auth/register",
-            json={"email": email, "password": "correctpassword1"},
+            json={"username": username, "password": "correctpassword1"},
         )
         resp = await app_client.post(
             "/api/auth/login",
-            json={"email": email, "password": "wrongpassword99"},
+            json={"username": username, "password": "wrongpassword99"},
         )
         assert resp.status_code == 401
 
     async def test_login_nonexistent_user(self, app_client):
         resp = await app_client.post(
             "/api/auth/login",
-            json={"email": "ghost@astro.io", "password": "whatever123"},
+            json={"username": "ghostastro", "password": "whatever123"},
         )
         assert resp.status_code == 401
 
@@ -319,8 +323,8 @@ class TestPipelineVersioning:
     async def _register_and_get_headers(self, app_client):
         """Helper: register a user and return auth headers."""
         import secrets
-        email = f"pipeline-test-{secrets.token_hex(4)}@astro.io"
-        resp = await app_client.post("/api/auth/register", json={"email": email, "password": "testpassword123"})
+        username = f"pipeline-test-{secrets.token_hex(4)}"
+        resp = await app_client.post("/api/auth/register", json={"username": username, "password": "testpassword123"})
         assert resp.status_code == 201
         token = resp.json()["access_token"]
         return {"Authorization": f"Bearer {token}"}
@@ -576,11 +580,11 @@ class TestVisualizationEndpoints:
 class TestTeamEndpoints:
     """Tests for the team/collaboration API endpoints."""
 
-    async def _register_user(self, app_client, email, password="securepassword123"):
-        """Helper: register a user via the API and return (user_id, token)."""
+    async def _register_user(self, app_client, username, password="securepassword123"):
+        """Helper: register a user via the API and return (user_id, token, email)."""
         resp = await app_client.post(
             "/api/auth/register",
-            json={"email": email, "password": password},
+            json={"username": username, "password": password},
         )
         assert resp.status_code == 201
         token = resp.json()["access_token"]
@@ -589,8 +593,8 @@ class TestTeamEndpoints:
             "/api/auth/me",
             headers={"Authorization": f"Bearer {token}"},
         )
-        user_id = me_resp.json()["id"]
-        return user_id, token
+        profile = me_resp.json()
+        return profile["id"], token, profile["email"]
 
     async def _create_lab_user(self, db_session, email="lab@astro.io"):
         """Helper: insert a lab-tier user directly into the DB and return (user, token)."""
@@ -598,6 +602,7 @@ class TestTeamEndpoints:
 
         user = User(
             id=uuid.uuid4(),
+            username=username_from_email(email),
             email=email,
             password_hash=hash_password("securepassword123"),
             subscription_tier="lab",
@@ -611,19 +616,19 @@ class TestTeamEndpoints:
     async def test_invite_works_during_beta(self, app_client, db_session):
         """During beta, all users can invite (tier check disabled)."""
         # Create users
-        _user1_id, user1_token = await self._register_user(app_client, "solo_owner@astro.io")
-        await self._register_user(app_client, "invitee@astro.io")
+        _user1_id, user1_token, _ = await self._register_user(app_client, "solo_owner")
+        _, _, invitee_email = await self._register_user(app_client, "invitee")
         headers1 = {"Authorization": f"Bearer {user1_token}"}
 
         # Invite should succeed for any tier during beta
         resp = await app_client.post(
             "/api/team/invite",
-            json={"email": "invitee@astro.io", "role": "member"},
+            json={"email": invitee_email, "role": "member"},
             headers=headers1,
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["email"] == "invitee@astro.io"
+        assert body["email"] == invitee_email
         assert body["role"] == "member"
 
     async def test_invite_and_list_members(self, app_client, db_session):
@@ -632,12 +637,12 @@ class TestTeamEndpoints:
         headers = {"Authorization": f"Bearer {owner_token}"}
 
         # Register a second user via the API
-        await self._register_user(app_client, "member@astro.io")
+        _, _, member_email = await self._register_user(app_client, "member")
 
         # Invite
         resp = await app_client.post(
             "/api/team/invite",
-            json={"email": "member@astro.io", "role": "member"},
+            json={"email": member_email, "role": "member"},
             headers=headers,
         )
         assert resp.status_code == 200
@@ -647,7 +652,7 @@ class TestTeamEndpoints:
         assert resp.status_code == 200
         members = resp.json()
         assert len(members) == 1
-        assert members[0]["email"] == "member@astro.io"
+        assert members[0]["email"] == member_email
         assert members[0]["role"] == "member"
 
     async def test_remove_member(self, app_client, db_session):
@@ -655,12 +660,12 @@ class TestTeamEndpoints:
         owner, owner_token = await self._create_lab_user(db_session, "rmowner@astro.io")
         headers = {"Authorization": f"Bearer {owner_token}"}
 
-        await self._register_user(app_client, "toremove@astro.io")
+        _, _, remove_email = await self._register_user(app_client, "toremove")
 
         # Invite
         resp = await app_client.post(
             "/api/team/invite",
-            json={"email": "toremove@astro.io", "role": "member"},
+            json={"email": remove_email, "role": "member"},
             headers=headers,
         )
         assert resp.status_code == 200
@@ -684,12 +689,12 @@ class TestTeamEndpoints:
         owner, owner_token = await self._create_lab_user(db_session, "roleowner@astro.io")
         headers = {"Authorization": f"Bearer {owner_token}"}
 
-        await self._register_user(app_client, "roleuser@astro.io")
+        _, _, role_email = await self._register_user(app_client, "roleuser")
 
         # Invite as member
         resp = await app_client.post(
             "/api/team/invite",
-            json={"email": "roleuser@astro.io", "role": "member"},
+            json={"email": role_email, "role": "member"},
             headers=headers,
         )
         assert resp.status_code == 200
@@ -711,7 +716,7 @@ class TestTeamEndpoints:
         headers_owner = {"Authorization": f"Bearer {owner_token}"}
 
         # Register second user
-        user2_id, user2_token = await self._register_user(app_client, "pipeguest@astro.io")
+        user2_id, user2_token, _ = await self._register_user(app_client, "pipeguest")
         headers_guest = {"Authorization": f"Bearer {user2_token}"}
 
         # Save a pipeline template
@@ -791,7 +796,7 @@ class TestTeamEndpoints:
         owner, owner_token = await self._create_lab_user(db_session, "dsowner@astro.io")
         headers_owner = {"Authorization": f"Bearer {owner_token}"}
 
-        user2_id, user2_token = await self._register_user(app_client, "dsguest@astro.io")
+        user2_id, user2_token, _ = await self._register_user(app_client, "dsguest")
         headers_guest = {"Authorization": f"Bearer {user2_token}"}
 
         # Insert a data file directly

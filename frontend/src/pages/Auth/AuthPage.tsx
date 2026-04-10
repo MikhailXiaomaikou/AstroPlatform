@@ -104,7 +104,7 @@ function GoogleSignInButton({ onSuccess, disabled }: { onSuccess: (credential: s
 
 export default function AuthPage() {
   const [mode, setMode] = useState<AuthMode>("login");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [setupKey, setSetupKey] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -120,9 +120,9 @@ export default function AuthPage() {
       if (mode === "setup-key") {
         await setupKeyLogin(setupKey.trim());
       } else if (mode === "login") {
-        await login(email, password);
+        await login(username, password);
       } else {
-        await register(email, password);
+        await register(username, password);
       }
       navigate("/");
     } catch (err: unknown) {
@@ -206,14 +206,15 @@ export default function AuthPage() {
           ) : (
             <>
               <label className="auth-label">
-                Email
+                Username
                 <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="your-handle"
                   required
                   className="auth-input"
+                  autoComplete="username"
                 />
               </label>
 
@@ -251,7 +252,7 @@ export default function AuthPage() {
             className="auth-toggle auth-toggle-key"
             onClick={() => switchMode(mode === "setup-key" ? "login" : "setup-key")}
           >
-            {mode === "setup-key" ? "Use email & password instead" : "Have a setup key?"}
+            {mode === "setup-key" ? "Use username & password instead" : "Have a setup key?"}
           </button>
         </div>
       </div>

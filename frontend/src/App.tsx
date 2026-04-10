@@ -108,11 +108,11 @@ function NavBar() {
             <img src={user.avatar_url} alt="" className="nav-avatar" referrerPolicy="no-referrer" />
           ) : (
             <span className="nav-avatar nav-avatar-placeholder">
-              {(user.display_name || user.email)[0].toUpperCase()}
+              {(user.display_name || user.username || user.email)[0].toUpperCase()}
             </span>
           )}
-          <span className="nav-user-name" title={user.email}>
-            {user.display_name || user.email.split("@")[0]}
+          <span className="nav-user-name" title={user.username || user.email}>
+            {user.display_name || user.username || user.email.split("@")[0]}
           </span>
           <button className="nav-logout" onClick={logout} title={t("nav.sign_out")}>
             {t("nav.sign_out")}

@@ -505,7 +505,8 @@ async def chat_message(
             ctx_str = json.dumps(safe_context, indent=2, default=str)[:2000]
             system += f"\n\nCurrent user context:\n{ctx_str}"
     if user:
-        system += f"\nUser email: {user.email}, Subscription: {user.subscription_tier}"
+        username = getattr(user, "username", None) or user.email.split("@")[0]
+        system += f"\nUser username: {username}, Subscription: {user.subscription_tier}"
     python_session_id = (req.context or {}).get("python_session_id", "default")
     last_adql_rows = (req.context or {}).get("last_adql_rows")
     if isinstance(last_adql_rows, list):

@@ -13,8 +13,8 @@ import {
 interface AuthState {
   user: UserProfile | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string) => Promise<void>;
   setupKeyLogin: (key: string) => Promise<void>;
   googleLogin: (credential: string) => Promise<void>;
   logout: () => void;
@@ -48,14 +48,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const login = async (email: string, password: string) => {
-    await apiLogin(email, password);
+  const login = async (username: string, password: string) => {
+    await apiLogin(username, password);
     const profile = await getProfile();
     setUser(profile);
   };
 
-  const register = async (email: string, password: string) => {
-    await apiRegister(email, password);
+  const register = async (username: string, password: string) => {
+    await apiRegister(username, password);
     const profile = await getProfile();
     setUser(profile);
   };
