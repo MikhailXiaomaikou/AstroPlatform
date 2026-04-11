@@ -216,22 +216,29 @@ def fetch_isochrone(
         photometric_system,
     )
 
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        # Step 1: submit the form
-        resp = client.post(CMD_URL, data=form_data)
-        resp.raise_for_status()
+    max_retries = 3
+    last_err: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                resp = client.post(CMD_URL, data=form_data)
+                resp.raise_for_status()
+                output_url = _extract_output_url(resp.text)
+                logger.debug("CMD output URL: %s", output_url)
+                dat_resp = client.get(output_url)
+                dat_resp.raise_for_status()
 
-        # Step 2: extract the output URL from the response HTML
-        output_url = _extract_output_url(resp.text)
-        logger.debug("CMD output URL: %s", output_url)
+            df = _parse_isochrone_table(dat_resp.text)
+            logger.info("Fetched isochrone with %d rows and %d columns.", len(df), len(df.columns))
+            return df
+        except Exception as exc:
+            last_err = exc
+            logger.warning("CMD API attempt %d/%d failed: %s", attempt, max_retries, exc)
+            if attempt < max_retries:
+                import time
+                time.sleep(2 * attempt)
 
-        # Step 3: download the .dat file
-        dat_resp = client.get(output_url)
-        dat_resp.raise_for_status()
-
-    df = _parse_isochrone_table(dat_resp.text)
-    logger.info("Fetched isochrone with %d rows and %d columns.", len(df), len(df.columns))
-    return df
+    raise RuntimeError(f"CMD API failed after {max_retries} retries: {last_err}")
 
 
 def fetch_isochrone_grid(
