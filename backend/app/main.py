@@ -9,10 +9,13 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api.alerts import router as alerts_router
+from app.api.anomalies import router as anomalies_router
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.data import router as data_router
+from app.api.dossier import router as dossier_router
 from app.api.export import router as export_router
+from app.api.followup import router as followup_router
 from app.api.health import router as health_router
 from app.api.integration import router as integration_router
 from app.api.isochrones import router as isochrones_router
@@ -22,6 +25,7 @@ from app.api.settings import router as settings_router
 from app.api.scheduler import router as scheduler_router
 from app.api.team import router as team_router
 from app.api.visualization import router as viz_router
+from app.api.citation_graph import router as citation_graph_router
 from app.api.citations import router as citations_router
 from app.api.crossmatch import router as crossmatch_router
 from app.api.workspace import router as workspace_router
@@ -197,13 +201,17 @@ app.add_middleware(
 
 # Routers
 app.include_router(alerts_router)
+app.include_router(anomalies_router)
 app.include_router(arxiv_router)
 app.include_router(auth_router)
+app.include_router(citation_graph_router)
 app.include_router(citations_router)
 app.include_router(crossmatch_router)
 app.include_router(chat_router)
 app.include_router(data_router)
+app.include_router(dossier_router)
 app.include_router(export_router)
+app.include_router(followup_router)
 app.include_router(health_router)
 app.include_router(integration_router)
 app.include_router(isochrones_router)

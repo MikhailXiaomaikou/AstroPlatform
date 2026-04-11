@@ -35,10 +35,16 @@ def ingest_alerts_task():
     service = AlertIngestionService()
 
     async def _run():
-        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import (
+            AsyncSession,
+            async_sessionmaker,
+            create_async_engine,
+        )
 
         async_engine = create_async_engine(settings.database_url, echo=False)
-        async_session = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+        async_session = async_sessionmaker(
+            async_engine, class_=AsyncSession, expire_on_commit=False
+        )
 
         alerts = await service.fetch_recent(hours=24, limit=200)
         if not alerts:
@@ -48,6 +54,28 @@ def ingest_alerts_task():
         async with async_session() as db:
             count = await service.ingest(alerts, db)
             logger.info("Ingested %d new alerts", count)
+
+            # Auto-classify new alerts
+            from app.services.transient_classifier import TransientClassifier
+
+            classifier = TransientClassifier()
+            for alert_data in alerts[:count]:  # only newly ingested
+                try:
+                    if (
+                        alert_data.get("raw_data")
+                        and len(alert_data.get("raw_data", {}).get("photometry", []))
+                        > 3
+                    ):
+                        result = classifier.classify_from_alert(alert_data)
+                        logger.info(
+                            "Classified %s as %s (%.1f%%)",
+                            alert_data.get("source_id", "?"),
+                            result.get("classification", "?"),
+                            result.get("confidence", 0) * 100,
+                        )
+                except Exception:
+                    pass  # classification is best-effort
+
             return count
 
     try:

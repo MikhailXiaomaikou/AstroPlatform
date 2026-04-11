@@ -1408,6 +1408,41 @@ export async function getBibTeX(bibcode: string): Promise<string> {
   return data.bibtex;
 }
 
+// ── Citation Graph API ──
+
+export interface CitationGraphNode {
+  id: string;
+  title: string;
+  authors: string;
+  year: number;
+  citations: number;
+  in_original_set: boolean;
+}
+
+export interface CitationGraphEdge {
+  source: string;
+  target: string;
+  type: string;
+}
+
+export interface CitationGraphResponse {
+  nodes: CitationGraphNode[];
+  edges: CitationGraphEdge[];
+  stats: { total_nodes: number; total_edges: number };
+  info?: string;
+}
+
+export async function fetchCitationGraph(
+  bibcodes: string[],
+  depth = 1
+): Promise<CitationGraphResponse> {
+  const { data } = await api.post<CitationGraphResponse>(
+    "/api/literature/citation-graph",
+    { bibcodes, depth }
+  );
+  return data;
+}
+
 // ── Cross-match API ──
 
 export interface CrossMatchItem {
@@ -1515,6 +1550,54 @@ export async function searchAlertsCone(ra: number, dec: number, radius_arcsec: n
   const { data } = await api.get<TransientAlert[]>("/api/alerts/cone", {
     params: { ra, dec, radius_arcsec },
   });
+  return data;
+}
+
+// ── Anomaly Explorer API ──
+
+export interface AnomalyItem {
+  id: string;
+  object_name: string;
+  ra: number;
+  dec: number;
+  anomaly_score: number;
+  source: "Query" | "Alert" | "Cross-wavelength";
+  unusual_features: string;
+  detection_methods: string[];
+  timestamp: string;
+}
+
+export interface AnomalyFeedResponse {
+  items: AnomalyItem[];
+  page: number;
+  per_page: number;
+  total: number;
+}
+
+export interface AnomalyStats {
+  total: number;
+  high_confidence: number;
+}
+
+export async function getAnomalyFeed(
+  page = 1,
+  filters?: { min_score?: number; source?: string; sort?: string },
+): Promise<AnomalyFeedResponse> {
+  const params: Record<string, string | number> = { page };
+  if (filters?.min_score !== undefined) params.min_score = filters.min_score;
+  if (filters?.source) params.source = filters.source;
+  if (filters?.sort) params.sort = filters.sort;
+  const { data } = await api.get<AnomalyFeedResponse>("/api/anomalies/feed", { params });
+  return data;
+}
+
+export async function getAnomalyStats(): Promise<AnomalyStats> {
+  const { data } = await api.get<AnomalyStats>("/api/anomalies/stats");
+  return data;
+}
+
+export async function dismissAnomaly(id: string): Promise<{ id: string; dismissed: boolean }> {
+  const { data } = await api.patch<{ id: string; dismissed: boolean }>(`/api/anomalies/${id}/dismiss`);
   return data;
 }
 

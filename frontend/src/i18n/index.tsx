@@ -17,6 +17,7 @@ const translations: Record<string, Record<Lang, string>> = {
   "nav.ai_assistant":  { en: "AI Assistant",    zh: "AI 助手",       fr: "Assistant IA",    es: "Asistente IA" },
   "nav.settings":      { en: "Settings",        zh: "设置",          fr: "Paramètres",      es: "Ajustes" },
   "nav.alerts":        { en: "Alerts",          zh: "警报",          fr: "Alertes",         es: "Alertas" },
+  "nav.anomalies":     { en: "Anomalies",       zh: "异常探测",      fr: "Anomalies",       es: "Anomalias" },
   "nav.sign_in":       { en: "Sign in",         zh: "登录",          fr: "Connexion",       es: "Iniciar sesión" },
   "nav.sign_out":      { en: "Sign out",        zh: "退出",          fr: "Déconnexion",     es: "Cerrar sesión" },
 

@@ -1,4 +1,5 @@
 """AI assistant powered by Claude — helps users interact with the platform."""
+
 import asyncio
 import json
 import logging
@@ -32,6 +33,10 @@ When a user describes what data they want, you:
 You can also **design, modify, and comment on data processing pipelines**. When the user describes a workflow ("denoise this spectrum then fit emission lines"), you build a pipeline DAG automatically.
 
 You can **search for astronomical transients and alerts** using the query_transients tool. This searches TNS (Transient Name Server) and Lasair/ZTF for recent supernovae, novae, tidal disruption events, kilonovae, and other transients. Search by name (e.g. "SN 2024abc"), coordinates, or type. Use this when users ask about recent transients, supernovae discoveries, or time-domain events.
+
+Use **get_object_dossier** to fetch comprehensive cross-matched data from all available databases simultaneously for any object.
+Use **get_followup_recommendation** to generate follow-up observation recommendations for transient alerts.
+Use **analyze_cross_wavelength** to check for multi-wavelength discrepancies that might indicate unusual physics.
 
 ## Decision tree: which database to use
 
@@ -328,7 +333,8 @@ def _parse_actions(text: str) -> list[dict]:
     """Extract action JSON from <actions>...</actions> tags."""
     actions = []
     import re
-    matches = re.findall(r'<actions>(.*?)</actions>', text, re.DOTALL)
+
+    matches = re.findall(r"<actions>(.*?)</actions>", text, re.DOTALL)
     for match in matches:
         try:
             parsed = json.loads(match.strip())
@@ -338,9 +344,9 @@ def _parse_actions(text: str) -> list[dict]:
                 actions.append(parsed)
         except json.JSONDecodeError:
             # Try line-by-line
-            for line in match.strip().split('\n'):
+            for line in match.strip().split("\n"):
                 line = line.strip()
-                if line.startswith('{'):
+                if line.startswith("{"):
                     try:
                         actions.append(json.loads(line))
                     except json.JSONDecodeError:
@@ -362,7 +368,12 @@ async def chat_message_stream(
         # Reuse the same logic but yield intermediate results
         context_key = (req.context or {}).get("api_key") if req.context else None
         user_keys = (user.api_keys or {}) if user else {}
-        api_key = context_key or user_keys.get("anthropic") or (user.anthropic_api_key if user and user.anthropic_api_key else None) or ANTHROPIC_API_KEY
+        api_key = (
+            context_key
+            or user_keys.get("anthropic")
+            or (user.anthropic_api_key if user and user.anthropic_api_key else None)
+            or ANTHROPIC_API_KEY
+        )
         if not api_key:
             yield f"data: {json.dumps({'type': 'error', 'message': 'No API key configured'})}\n\n"
             return
@@ -371,7 +382,9 @@ async def chat_message_stream(
         from app.services.ai_tools import TOOLS, store_search_results
 
         client = anthropic.Anthropic(api_key=api_key)
-        claude_messages: list[dict] = [{"role": m.role, "content": m.content} for m in req.messages]
+        claude_messages: list[dict] = [
+            {"role": m.role, "content": m.content} for m in req.messages
+        ]
 
         system = SYSTEM_PROMPT
         if req.context:
@@ -385,7 +398,9 @@ async def chat_message_stream(
         python_session_id = (req.context or {}).get("python_session_id", "default")
         last_adql_rows = (req.context or {}).get("last_adql_rows")
         if isinstance(last_adql_rows, list):
-            store_search_results(f"latest_adql:{python_session_id}", last_adql_rows[:1000])
+            store_search_results(
+                f"latest_adql:{python_session_id}", last_adql_rows[:1000]
+            )
 
         try:
             for _iteration in range(12):
@@ -401,7 +416,9 @@ async def chat_message_stream(
                     if block.type == "text":
                         yield f"data: {json.dumps({'type': 'text', 'content': block.text})}\n\n"
                     elif block.type == "tool_use":
-                        tool_calls.append({"id": block.id, "name": block.name, "input": block.input})
+                        tool_calls.append(
+                            {"id": block.id, "name": block.name, "input": block.input}
+                        )
                         yield f"data: {json.dumps({'type': 'tool_start', 'tool': block.name, 'input': block.input})}\n\n"
 
                 if not tool_calls:
@@ -412,17 +429,37 @@ async def chat_message_stream(
                     if block.type == "text":
                         assistant_content.append({"type": "text", "text": block.text})
                     elif block.type == "tool_use":
-                        assistant_content.append({"type": "tool_use", "id": block.id, "name": block.name, "input": block.input})
-                claude_messages.append({"role": "assistant", "content": assistant_content})
+                        assistant_content.append(
+                            {
+                                "type": "tool_use",
+                                "id": block.id,
+                                "name": block.name,
+                                "input": block.input,
+                            }
+                        )
+                claude_messages.append(
+                    {"role": "assistant", "content": assistant_content}
+                )
 
                 tool_result_blocks = []
-                executed_tools = await _execute_tool_calls(tool_calls, api_key, python_session_id)
+                executed_tools = await _execute_tool_calls(
+                    tool_calls, api_key, python_session_id
+                )
                 for tc in executed_tools:
                     result = tc["result"]
                     result_str = json.dumps(result, default=str)
                     if len(result_str) > 8000:
-                        result_str = json.dumps({"truncated": True, "summary": str(result)[:2000]}, default=str)
-                    tool_result_blocks.append({"type": "tool_result", "tool_use_id": tc["id"], "content": result_str})
+                        result_str = json.dumps(
+                            {"truncated": True, "summary": str(result)[:2000]},
+                            default=str,
+                        )
+                    tool_result_blocks.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tc["id"],
+                            "content": result_str,
+                        }
+                    )
                     yield f"data: {json.dumps({'type': 'tool_result', 'tool': tc['name'], 'result': result})}\n\n"
 
                 claude_messages.append({"role": "user", "content": tool_result_blocks})
@@ -442,10 +479,13 @@ async def chat_message_stream(
 def _strip_actions_from_reply(text: str) -> str:
     """Remove <actions> blocks from the user-facing reply."""
     import re
-    return re.sub(r'<actions>.*?</actions>', '', text, flags=re.DOTALL).strip()
+
+    return re.sub(r"<actions>.*?</actions>", "", text, flags=re.DOTALL).strip()
 
 
-async def _claude_messages_create(client, *, system: str, messages: list[dict], tools: list[dict]):
+async def _claude_messages_create(
+    client, *, system: str, messages: list[dict], tools: list[dict]
+):
     """Run the blocking Anthropic SDK call in a worker thread."""
     import asyncio
 
@@ -462,7 +502,9 @@ async def _claude_messages_create(client, *, system: str, messages: list[dict], 
     )
 
 
-async def _execute_tool_calls(tool_calls: list[dict], api_key: str, python_session_id: str) -> list[dict]:
+async def _execute_tool_calls(
+    tool_calls: list[dict], api_key: str, python_session_id: str
+) -> list[dict]:
     """Execute one model turn's tool calls concurrently while preserving order."""
     from app.services.ai_tools import execute_tool
 
@@ -498,7 +540,12 @@ async def chat_message(
     # Priority: context api_key (from frontend localStorage) > user DB key > server env key
     context_key = (req.context or {}).get("api_key") if req.context else None
     user_keys = (user.api_keys or {}) if user else {}
-    api_key = context_key or user_keys.get("anthropic") or (user.anthropic_api_key if user and user.anthropic_api_key else None) or ANTHROPIC_API_KEY
+    api_key = (
+        context_key
+        or user_keys.get("anthropic")
+        or (user.anthropic_api_key if user and user.anthropic_api_key else None)
+        or ANTHROPIC_API_KEY
+    )
     if not api_key:
         raise HTTPException(
             status_code=503,
@@ -554,11 +601,13 @@ async def chat_message(
                 if block.type == "text":
                     text_parts.append(block.text)
                 elif block.type == "tool_use":
-                    tool_calls_in_turn.append({
-                        "id": block.id,
-                        "name": block.name,
-                        "input": block.input,
-                    })
+                    tool_calls_in_turn.append(
+                        {
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        }
+                    )
 
             # If no tool calls, we're done
             if not tool_calls_in_turn:
@@ -570,34 +619,44 @@ async def chat_message(
                 if block.type == "text":
                     assistant_content.append({"type": "text", "text": block.text})
                 elif block.type == "tool_use":
-                    assistant_content.append({
-                        "type": "tool_use",
-                        "id": block.id,
-                        "name": block.name,
-                        "input": block.input,
-                    })
+                    assistant_content.append(
+                        {
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        }
+                    )
 
             claude_messages.append({"role": "assistant", "content": assistant_content})
 
             # Execute tools and build tool_result messages
             tool_result_blocks = []
-            executed_tools = await _execute_tool_calls(tool_calls_in_turn, api_key, python_session_id)
+            executed_tools = await _execute_tool_calls(
+                tool_calls_in_turn, api_key, python_session_id
+            )
             for tc in executed_tools:
                 result = tc["result"]
                 # Truncate large results for context window
                 result_str = json.dumps(result, default=str)
                 if len(result_str) > 8000:
-                    result_str = json.dumps({"truncated": True, "summary": str(result)[:2000]}, default=str)
-                tool_result_blocks.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc["id"],
-                    "content": result_str,
-                })
-                all_tool_results.append({
-                    "tool": tc["name"],
-                    "input": tc["input"],
-                    "result": result,
-                })
+                    result_str = json.dumps(
+                        {"truncated": True, "summary": str(result)[:2000]}, default=str
+                    )
+                tool_result_blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tc["id"],
+                        "content": result_str,
+                    }
+                )
+                all_tool_results.append(
+                    {
+                        "tool": tc["name"],
+                        "input": tc["input"],
+                        "result": result,
+                    }
+                )
 
             claude_messages.append({"role": "user", "content": tool_result_blocks})
 
@@ -614,19 +673,27 @@ async def chat_message(
 
         # Convert tool results to frontend-friendly actions
         for tr in all_tool_results:
-            actions.append({
-                "action": tr["tool"],
-                "tool_input": tr["input"],
-                "tool_result": tr["result"],
-                "_auto_executed": True,
-            })
+            actions.append(
+                {
+                    "action": tr["tool"],
+                    "tool_input": tr["input"],
+                    "tool_result": tr["result"],
+                    "_auto_executed": True,
+                }
+            )
 
         return ChatResponse(reply=clean_reply, actions=actions)
 
     except anthropic.AuthenticationError:
-        raise HTTPException(status_code=401, detail="Invalid API key. Please check your Anthropic API key in Settings.")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key. Please check your Anthropic API key in Settings.",
+        )
     except anthropic.RateLimitError:
-        raise HTTPException(status_code=429, detail="API rate limit exceeded. Please wait a moment and try again.")
+        raise HTTPException(
+            status_code=429,
+            detail="API rate limit exceeded. Please wait a moment and try again.",
+        )
     except anthropic.APIError as e:
         logger.error("Claude API error: %s", e)
         raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
@@ -674,21 +741,26 @@ async def execute_action(
         redshift_max = parsed.get("redshift_max")
         object_type = parsed.get("object_type")
         required_fields = parsed.get("required_fields", [])
-        has_science_criteria = any([redshift_min, redshift_max, object_type, required_fields])
+        has_science_criteria = any(
+            [redshift_min, redshift_max, object_type, required_fields]
+        )
 
         # Try to resolve coordinates from an object name in the query
         import re
+
         search_ra = None
         search_dec = None
         obj_match = re.search(
-            r'\b(M\s*\d+|NGC\s*\d+|IC\s*\d+|Mrk\s*\d+|3C\s*\d+|'
-            r'UGC\s*\d+|SDSS\s*J[\d.+-]+)\b',
-            query, re.IGNORECASE,
+            r"\b(M\s*\d+|NGC\s*\d+|IC\s*\d+|Mrk\s*\d+|3C\s*\d+|"
+            r"UGC\s*\d+|SDSS\s*J[\d.+-]+)\b",
+            query,
+            re.IGNORECASE,
         )
         resolved_name = obj_match.group(0) if obj_match else None
         if resolved_name:
             try:
                 from astropy.coordinates import SkyCoord
+
                 coord = SkyCoord.from_name(resolved_name)
                 search_ra, search_dec = coord.ra.deg, coord.dec.deg
             except Exception:
@@ -697,7 +769,11 @@ async def execute_action(
         async def _search_one(source: str):
             connector = get_connector(source)
             # Use SIMBAD's criteria-based TAP search for science queries
-            if source == "simbad" and has_science_criteria and hasattr(connector, "search_by_criteria"):
+            if (
+                source == "simbad"
+                and has_science_criteria
+                and hasattr(connector, "search_by_criteria")
+            ):
                 return await asyncio.wait_for(
                     connector.search_by_criteria(
                         object_type=object_type,
@@ -727,11 +803,16 @@ async def execute_action(
         for source_name, result in zip(source_list, results_per_source):
             if isinstance(result, Exception):
                 logger.warning("Chat search failed for %s: %s", source_name, result)
-                all_results.append(SearchResult(
-                    source=source_name, object_id="error",
-                    name=f"Error querying {source_name}: {result}",
-                    ra=0, dec=0, error_type="connection",
-                ))
+                all_results.append(
+                    SearchResult(
+                        source=source_name,
+                        object_id="error",
+                        name=f"Error querying {source_name}: {result}",
+                        ra=0,
+                        dec=0,
+                        error_type="connection",
+                    )
+                )
                 continue
             all_results.extend(_astro_to_result(obj) for obj in result)
 
@@ -760,12 +841,16 @@ async def execute_action(
     elif action_type == "adql":
         # Call the integration endpoint directly (no rate limiter on this one)
         from app.api.integration import adql_query, ADQLRequest
-        req = ADQLRequest(query=action.get("query", ""), service=action.get("service", "gaia"))
+
+        req = ADQLRequest(
+            query=action.get("query", ""), service=action.get("service", "gaia")
+        )
         result = await adql_query(req)
         return {"type": "adql_results", "data": result}
 
     elif action_type == "plot":
         from app.pipeline.nodes.plot_interactive import build_chart
+
         chart_type = action.get("chart_type", "correlation_scatter")
         data = action.get("data", {})
         params = action.get("params", {})
@@ -774,6 +859,7 @@ async def execute_action(
 
     elif action_type == "arxiv":
         from app.api.arxiv import extract_arxiv_tables, ArxivTableRequest
+
         arxiv_id = action.get("arxiv_id", "")
         result = await extract_arxiv_tables(ArxivTableRequest(arxiv_id=arxiv_id))
         return {"type": "arxiv_tables", "data": result.model_dump()}
@@ -781,14 +867,22 @@ async def execute_action(
     elif action_type == "run_pipeline":
         from app.api.pipeline import run_pipeline, RunRequest
         from starlette.requests import Request as StarletteRequest
+
         nodes = action.get("nodes", [])
         input_data_id = action.get("input_data_id", "")
         dag = {"nodes": nodes, "edges": action.get("edges", [])}
         req = RunRequest(dag=dag, input_data_id=input_data_id)
-        scope = {"type": "http", "method": "POST", "path": "/api/chat/execute-action",
-                 "headers": [], "query_string": b"async_mode=false"}
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/chat/execute-action",
+            "headers": [],
+            "query_string": b"async_mode=false",
+        }
         mock_request = StarletteRequest(scope)
-        result = await run_pipeline(request=mock_request, req=req, db=db, user=user, async_mode=False)
+        result = await run_pipeline(
+            request=mock_request, req=req, db=db, user=user, async_mode=False
+        )
         return {"type": "pipeline_result", "data": result.model_dump()}
 
     elif action_type == "generate_pipeline":
@@ -799,9 +893,12 @@ async def execute_action(
 
         # Validate DAG structure
         if "nodes" not in dag or "edges" not in dag:
-            raise HTTPException(status_code=400, detail="Generated DAG must have 'nodes' and 'edges'")
+            raise HTTPException(
+                status_code=400, detail="Generated DAG must have 'nodes' and 'edges'"
+            )
 
         from app.pipeline.nodes import registry as node_registry
+
         valid_types = set(node_registry.keys())
 
         # Auto-assign positions if missing
@@ -822,6 +919,7 @@ async def execute_action(
         # Optionally save as template
         if user:
             from app.models.schemas import PipelineTemplateDB
+
             tpl = PipelineTemplateDB(
                 name=name,
                 description=description,
@@ -871,6 +969,7 @@ async def execute_action(
 
         if template_id and user:
             from app.models.schemas import PipelineComment
+
             try:
                 tid = uuid.UUID(template_id)
                 comment = PipelineComment(
@@ -895,7 +994,9 @@ async def execute_action(
         return {"type": "explanation", "data": {"topic": action.get("topic", "")}}
 
     else:
-        raise HTTPException(status_code=400, detail=f"Unknown action type: {action_type}")
+        raise HTTPException(
+            status_code=400, detail=f"Unknown action type: {action_type}"
+        )
 
 
 # ── Chat Session Persistence ──
@@ -930,13 +1031,16 @@ async def save_chat_session(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid session ID")
         result = await db.execute(
-            select(ChatSession).where(ChatSession.id == sid, ChatSession.user_id == user.id)
+            select(ChatSession).where(
+                ChatSession.id == sid, ChatSession.user_id == user.id
+            )
         )
         session = result.scalar_one_or_none()
         if session:
             session.messages = req.messages
             session.title = req.title
             from datetime import datetime, timezone
+
             session.updated_at = datetime.now(timezone.utc)
             await db.commit()
             return {"id": str(session.id), "saved": True}

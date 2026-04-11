@@ -51,6 +51,7 @@ const HelpPage = lazy(() => import("./pages/Help/HelpPage"));
 const ChatPage = lazy(() => import("./pages/Chat/ChatPage"));
 const SettingsPage = lazy(() => import("./pages/Settings/SettingsPage"));
 const AlertDashboard = lazy(() => import("./pages/AlertDashboard/AlertDashboard"));
+const AnomalyExplorer = lazy(() => import("./pages/AnomalyExplorer/AnomalyExplorer"));
 
 function useTheme() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -84,6 +85,7 @@ function NavBar() {
       <NavLink to="/chat">{t("nav.ai_assistant")}</NavLink>
       <NavLink to="/help">Help</NavLink>
       <NavLink to="/alerts">{t("nav.alerts")}</NavLink>
+      <NavLink to="/anomalies">{t("nav.anomalies")}</NavLink>
       <NavLink to="/settings">{t("nav.settings")}</NavLink>
       <div className="nav-spacer" />
       <button
@@ -190,6 +192,7 @@ function App() {
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/alerts" element={<AlertDashboard />} />
+                <Route path="/anomalies" element={<AnomalyExplorer />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/auth" element={<AuthPage />} />
               </Routes>
