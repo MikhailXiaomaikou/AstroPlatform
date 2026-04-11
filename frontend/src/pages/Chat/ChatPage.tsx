@@ -1530,57 +1530,76 @@ export default function ChatPage() {
             {messages.length > 0 && (
               <>
               <button type="button" className="btn-secondary btn-small" onClick={async () => {
+                const btn = document.activeElement as HTMLButtonElement | null;
+                if (btn) btn.textContent = "Exporting...";
                 try {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatMarkdown(data);
                   downloadBlob(blob, "ai_research_chat.md");
-                  showToast("Markdown exported");
+                  showToast("Markdown exported successfully!");
                 } catch {
                   showToast("Markdown export failed");
+                } finally {
+                  if (btn) btn.textContent = t("common.export");
                 }
               }}>
                 {t("common.export")}
               </button>
               <button type="button" className="btn-secondary btn-small" onClick={async () => {
+                const btn = document.activeElement as HTMLButtonElement | null;
+                if (btn) btn.textContent = "Exporting...";
                 try {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatNotebook(data);
                   downloadBlob(blob, "ai_research_session.ipynb");
-                  showToast("Notebook exported");
+                  showToast("Notebook exported successfully!");
                 } catch {
                   showToast("Notebook export failed");
+                } finally {
+                  if (btn) btn.textContent = "Notebook";
                 }
               }}>
                 Notebook
               </button>
               <button type="button" className="btn-secondary btn-small" onClick={async () => {
+                const btn = document.activeElement as HTMLButtonElement | null;
+                if (btn) btn.textContent = "Exporting...";
                 try {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatLatex(data);
-                  downloadBlob(blob, "astro_report.tex");
-                  showToast("LaTeX exported");
-                } catch {
-                  // Fallback: generate LaTeX client-side if API fails
-                  try {
-                    const tex = generateLatexFallback(messages);
-                    const blob = new Blob([tex], { type: "application/x-tex" });
+                  if (blob.size > 0) {
                     downloadBlob(blob, "astro_report.tex");
-                    showToast("LaTeX exported");
-                  } catch {
-                    showToast("LaTeX export failed");
+                    showToast("LaTeX exported successfully!");
+                  } else {
+                    throw new Error("Empty response");
                   }
+                } catch {
+                  const tex = generateLatexFallback(messages);
+                  const fallbackBlob = new Blob([tex], { type: "application/x-tex" });
+                  downloadBlob(fallbackBlob, "astro_report.tex");
+                  showToast("LaTeX exported (local fallback)");
+                } finally {
+                  if (btn) btn.textContent = "LaTeX";
                 }
               }}>
                 LaTeX
               </button>
               <button type="button" className="btn-secondary btn-small" onClick={async () => {
+                const btn = document.activeElement as HTMLButtonElement | null;
+                if (btn) btn.textContent = "Exporting...";
                 try {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
                   const blob = await exportChatBibTeX(data);
-                  downloadBlob(blob, "references.bib");
-                  showToast("BibTeX exported");
+                  if (blob.size > 0) {
+                    downloadBlob(blob, "references.bib");
+                    showToast("BibTeX exported successfully!");
+                  } else {
+                    showToast("No references found to export");
+                  }
                 } catch {
                   showToast("BibTeX export failed");
+                } finally {
+                  if (btn) btn.textContent = "BibTeX";
                 }
               }}>
                 BibTeX

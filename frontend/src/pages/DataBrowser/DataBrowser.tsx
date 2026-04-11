@@ -143,6 +143,7 @@ export default function DataBrowser() {
       setError(msg);
     } finally {
       setLoading(false);
+      setLoadingSources([]);
       setSearched(true);
     }
   };
@@ -170,6 +171,7 @@ export default function DataBrowser() {
       setError(msg);
     } finally {
       setLoading(false);
+      setLoadingSources([]);
       setSearched(true);
     }
   };
