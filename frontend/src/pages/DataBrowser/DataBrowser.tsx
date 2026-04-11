@@ -49,6 +49,7 @@ export default function DataBrowser() {
   const navigate = useNavigate();
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingSources, setLoadingSources] = useState<string[]>([]);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fetchingId, setFetchingId] = useState<string | null>(null);
@@ -113,6 +114,7 @@ export default function DataBrowser() {
 
   const handleSearch = async (query: string, sources: string[], radius: number) => {
     setLoading(true);
+    setLoadingSources(sources);
     setError(null);
     setFetched(null);
     setSearchMeta(null);
@@ -147,6 +149,7 @@ export default function DataBrowser() {
 
   const handleAdvancedSearch = async (req: AdvancedSearchRequest) => {
     setLoading(true);
+    setLoadingSources(req.sources ?? []);
     setError(null);
     setFetched(null);
     setSearchMeta(null);
@@ -587,9 +590,10 @@ ${rows}
         <div
           style={{
             display: "flex",
+            flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            gap: 10,
+            gap: 8,
             padding: "1.25rem 1rem",
             marginBottom: "0.75rem",
             borderRadius: 10,
@@ -600,8 +604,38 @@ ${rows}
             fontWeight: 500,
           }}
         >
-          <span className="spinner spinner-blue" style={{ width: 20, height: 20 }} />
-          <span>Searching connected archives and resolving coordinates…</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="spinner spinner-blue" style={{ width: 20, height: 20 }} />
+            <span>
+              Searching {loadingSources.length} source{loadingSources.length !== 1 ? "s" : ""}...
+            </span>
+          </div>
+          {loadingSources.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+              {loadingSources.map((s) => (
+                <span
+                  key={s}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "2px 8px",
+                    borderRadius: 6,
+                    background: "rgba(10, 132, 255, 0.12)",
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  <span
+                    className="spinner spinner-blue"
+                    style={{ width: 10, height: 10 }}
+                  />
+                  {s.toUpperCase()}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

@@ -208,16 +208,38 @@ export default function PipelineCanvas() {
     } catch { /* storage full */ }
   }, [nodes, edges, inputDataId]);
 
+  // Banner shown when pipeline was pre-loaded from Data Browser
+  const [importBanner, setImportBanner] = useState<string | null>(null);
+
   // Autorestore on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem("pipeline_autosave");
       if (saved) {
-        const { nodes: sn, edges: se, inputDataId: sid } = JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        const sn = parsed.nodes as Node[] | undefined;
+        const se = parsed.edges as Edge[] | undefined;
+        const sid = parsed.inputDataId as string | undefined;
+        const from = parsed._from as string | undefined;
         if (Array.isArray(sn) && sn.length > 0) {
-          setNodes(sn);
+          // Normalise node type — Data Browser drafts may use the backend
+          // node type (e.g. "LoadData") instead of the ReactFlow custom type
+          const normalised = sn.map((n) => ({
+            ...n,
+            type: "pipeline" as const,
+          }));
+          setNodes(normalised);
           setEdges(se || []);
           if (sid) setInputDataId(sid);
+
+          if (from === "data_browser") {
+            // Show a temporary banner & clear the flag so it doesn't repeat
+            setImportBanner(`Pipeline pre-loaded with data: ${sid ?? "unknown"}`);
+            const cleaned = { ...parsed };
+            delete cleaned._from;
+            localStorage.setItem("pipeline_autosave", JSON.stringify(cleaned));
+            setTimeout(() => setImportBanner(null), 5000);
+          }
         }
       }
     } catch { /* ignore corrupt data */ }
@@ -800,6 +822,28 @@ export default function PipelineCanvas() {
           )}
         </div>
       </div>
+
+      {importBanner && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 20,
+            padding: "8px 18px",
+            borderRadius: 8,
+            background: "rgba(48, 209, 88, 0.15)",
+            border: "1px solid rgba(48, 209, 88, 0.4)",
+            color: "#30d158",
+            fontSize: "0.85rem",
+            fontWeight: 500,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {importBanner}
+        </div>
+      )}
 
       <div className="pipeline-canvas" ref={reactFlowWrapper}>
         <ReactFlow

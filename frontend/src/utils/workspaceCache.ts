@@ -81,14 +81,15 @@ export function findWorkspaceFile(source: string, objectId: string): WorkspaceCa
 export function buildPipelineDraft(inputDataId: string) {
   return {
     nodes: [
-      { id: "n1", type: "LoadData", position: { x: 0, y: 150 }, data: { label: "Load Data", params: { fits_path: inputDataId }, nodeType: "LoadData" } },
-      { id: "n2", type: "Denoise", position: { x: 300, y: 150 }, data: { label: "Denoise", params: { sigma: 3 }, nodeType: "Denoise" } },
-      { id: "n3", type: "InteractivePlot", position: { x: 600, y: 150 }, data: { label: "Plot", params: {}, nodeType: "InteractivePlot" } },
+      { id: "n1", type: "pipeline", position: { x: 0, y: 150 }, data: { label: "Load Data", params: { fits_path: inputDataId }, nodeType: "LoadData" } },
+      { id: "n2", type: "pipeline", position: { x: 300, y: 150 }, data: { label: "Denoise", params: { sigma: 3 }, nodeType: "Denoise" } },
+      { id: "n3", type: "pipeline", position: { x: 600, y: 150 }, data: { label: "Plot", params: {}, nodeType: "InteractivePlot" } },
     ],
     edges: [
       { id: "e1-2", source: "n1", target: "n2" },
       { id: "e2-3", source: "n2", target: "n3" },
     ],
     inputDataId,
+    _from: "data_browser" as const,
   };
 }
