@@ -16,6 +16,7 @@ const translations: Record<string, Record<Lang, string>> = {
   "nav.team":          { en: "Team",            zh: "团队",          fr: "Équipe",          es: "Equipo" },
   "nav.ai_assistant":  { en: "AI Assistant",    zh: "AI 助手",       fr: "Assistant IA",    es: "Asistente IA" },
   "nav.settings":      { en: "Settings",        zh: "设置",          fr: "Paramètres",      es: "Ajustes" },
+  "nav.alerts":        { en: "Alerts",          zh: "警报",          fr: "Alertes",         es: "Alertas" },
   "nav.sign_in":       { en: "Sign in",         zh: "登录",          fr: "Connexion",       es: "Iniciar sesión" },
   "nav.sign_out":      { en: "Sign out",        zh: "退出",          fr: "Déconnexion",     es: "Cerrar sesión" },
 
@@ -97,6 +98,11 @@ const translations: Record<string, Record<Lang, string>> = {
   "columns.redshift_desc":      { en: "How fast it's receding (0 = stationary, 1 = very distant)", zh: "退行速度（0 = 静止，1 = 非常遥远）", fr: "Vitesse de récession (0 = stationnaire, 1 = très distant)", es: "Velocidad de recesión (0 = estacionario, 1 = muy distante)" },
   "columns.type_desc":          { en: "Classification (star, galaxy, quasar, etc.)", zh: "分类（恒星、星系、类星体等）", fr: "Classification (étoile, galaxie, quasar, etc.)", es: "Clasificación (estrella, galaxia, quásar, etc.)" },
   "columns.source_desc":        { en: "Which database this result came from", zh: "该结果来自哪个数据库", fr: "De quelle base de données provient ce résultat", es: "De qué base de datos proviene este resultado" },
+
+  // Alerts
+  "alerts.title":      { en: "Alert Dashboard",  zh: "警报仪表板",    fr: "Tableau d'alertes", es: "Panel de alertas" },
+  "alerts.stats":      { en: "Total Alerts",     zh: "警报总数",      fr: "Total des alertes", es: "Total de alertas" },
+  "alerts.no_alerts":  { en: "No alerts found for this time window.", zh: "在此时间窗口中未找到警报。", fr: "Aucune alerte trouvée pour cette période.", es: "No se encontraron alertas para este periodo." },
 
   // Common
   // Errors

@@ -1,8 +1,13 @@
 """Transient/alert stream integration — TNS, Lasair (ZTF), and GCN."""
 
-import httpx
 import asyncio
 import logging
+
+import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.schemas import TransientAlert
 
 logger = logging.getLogger(__name__)
 
@@ -236,10 +241,14 @@ async def query_transients(
     radius_arcsec: float = 10,
     days_back: int = 30,
     obj_type: str | None = None,
+    db: AsyncSession | None = None,
 ) -> dict:
-    """Unified transient query — searches TNS and Lasair in parallel.
+    """Unified transient query — searches local cache, TNS, and Lasair in parallel.
 
-    Returns dict with 'tns' and 'lasair' result lists plus a summary.
+    When a database session is provided, local TransientAlert cache is checked
+    first for speed.  Remote results from TNS and Lasair supplement the local data.
+
+    Returns dict with 'tns', 'lasair', and 'local' result lists plus a summary.
     """
     tasks = []
 
@@ -270,17 +279,75 @@ async def query_transients(
     tns_results = gathered[0] if not isinstance(gathered[0], Exception) else []
     lasair_results = gathered[1] if len(gathered) > 1 and not isinstance(gathered[1], Exception) else []
 
-    total = len(tns_results) + len(lasair_results)
-    summary = f"Found {len(tns_results)} TNS result(s)"
+    # Query local TransientAlert cache for fast, recent results
+    local_results: list[dict] = []
+    if db is not None:
+        try:
+            local_results = await _query_local_alerts(
+                db, name=name, ra=ra, dec=dec,
+                radius_arcsec=radius_arcsec, obj_type=obj_type,
+            )
+        except Exception as exc:
+            logger.warning("Local alert query failed: %s", exc)
+
+    total = len(tns_results) + len(lasair_results) + len(local_results)
+    parts = []
+    if local_results:
+        parts.append(f"{len(local_results)} cached alert(s)")
+    parts.append(f"{len(tns_results)} TNS result(s)")
     if lasair_results:
-        summary += f" and {len(lasair_results)} Lasair/ZTF result(s)"
+        parts.append(f"{len(lasair_results)} Lasair/ZTF result(s)")
+    summary = "Found " + " and ".join(parts)
 
     return {
         "summary": summary,
         "total": total,
+        "local": local_results,
         "tns": tns_results,
         "lasair": lasair_results,
     }
+
+
+async def _query_local_alerts(
+    db: AsyncSession,
+    name: str | None = None,
+    ra: float | None = None,
+    dec: float | None = None,
+    radius_arcsec: float = 10,
+    obj_type: str | None = None,
+) -> list[dict]:
+    """Query the local TransientAlert cache."""
+    stmt = select(TransientAlert).order_by(TransientAlert.created_at.desc())
+
+    if name:
+        stmt = stmt.where(TransientAlert.source_id.ilike(f"%{name}%"))
+    if ra is not None and dec is not None:
+        radius_deg = radius_arcsec / 3600.0
+        stmt = stmt.where(
+            TransientAlert.ra.between(ra - radius_deg, ra + radius_deg),
+            TransientAlert.dec.between(dec - radius_deg, dec + radius_deg),
+        )
+    if obj_type:
+        stmt = stmt.where(TransientAlert.classification == obj_type)
+
+    stmt = stmt.limit(50)
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+
+    return [
+        {
+            "source_id": row.source_id,
+            "ra": row.ra,
+            "dec": row.dec,
+            "classification": row.classification,
+            "magnitude": row.magnitude,
+            "discovery_date": row.discovery_date.isoformat() if row.discovery_date else None,
+            "redshift": row.redshift,
+            "host_galaxy": row.host_galaxy,
+            "source": "local_cache",
+        }
+        for row in rows
+    ]
 
 
 def _safe_float(val: object) -> float | None:

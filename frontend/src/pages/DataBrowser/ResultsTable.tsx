@@ -253,7 +253,23 @@ export default function ResultsTable({
                     <td>{r.dec.toFixed(5)}</td>
                     <td>{r.object_type || "\u2014"}</td>
                     <td>{r.magnitude?.toFixed(2) ?? "\u2014"}</td>
-                    <td>{r.redshift?.toFixed(4) ?? "\u2014"}</td>
+                    <td>
+                      {r.redshift != null ? (
+                        <>
+                          {r.redshift.toFixed(4)}
+                          {r.z_source === "spectroscopic" && (
+                            <span className="badge badge-spec" style={{ marginLeft: 4, fontSize: "0.7em", padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.18)", color: "var(--color-blue, #3b82f6)" }}>spec</span>
+                          )}
+                          {r.z_source === "photometric" && (
+                            <span
+                              className="badge badge-phot"
+                              title={r.photo_z_err != null ? `\u00b1${r.photo_z_err.toFixed(4)}` : "photometric estimate"}
+                              style={{ marginLeft: 4, fontSize: "0.7em", padding: "1px 4px", borderRadius: 3, background: "rgba(249,115,22,0.18)", color: "var(--color-orange, #f97316)", cursor: "help" }}
+                            >phot</span>
+                          )}
+                        </>
+                      ) : "\u2014"}
+                    </td>
                     <td>
                       {r.object_id !== "error" && (
                         <div style={{ display: "flex", gap: 3 }}>

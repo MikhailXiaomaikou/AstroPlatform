@@ -5407,3 +5407,160 @@
   font-size: 0.75rem;
   padding: 0.2rem 0.6rem;
 }
+
+/* ══════════════════════════════════════
+   Alert Dashboard
+   ══════════════════════════════════════ */
+
+.alert-dashboard {
+  animation: fadeIn 0.3s var(--ease-out);
+}
+
+.alert-dashboard-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0 0 1.25rem;
+}
+
+/* ── Stats bar ── */
+
+.alert-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 1.25rem;
+  background: var(--color-muted);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-separator);
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.alert-stat-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.alert-stat-label {
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.alert-stat-value {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.alert-stat-latest {
+  margin-left: auto;
+}
+
+.alert-stats-loading {
+  font-size: 0.82rem;
+  color: var(--color-text-tertiary);
+}
+
+/* ── Type badge ── */
+
+.alert-type-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* ── Filter bar ── */
+
+.alert-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.alert-filter-types {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.alert-filter-check {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.alert-filter-check input[type="checkbox"] {
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.alert-time-select {
+  margin-left: auto;
+  padding: 0.35rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-separator);
+  background: var(--color-muted);
+  color: var(--color-text);
+  font-size: 0.82rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* ── Alert table overrides ── */
+
+.alert-table {
+  table-layout: auto;
+}
+
+.alert-row {
+  cursor: pointer;
+}
+
+.alert-row:hover {
+  background: var(--color-subtle);
+}
+
+/* ── Detail panel adjustments ── */
+
+.alert-detail-panel .odp-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* ── Watchlist placeholder ── */
+
+.alert-watchlist-placeholder {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: var(--color-muted);
+  border: 1px dashed var(--color-separator);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.alert-watchlist-placeholder h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: var(--color-text);
+}
+
+.alert-watchlist-placeholder p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-tertiary);
+}

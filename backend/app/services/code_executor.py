@@ -411,6 +411,21 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     except ImportError:
         pass
 
+    # Photo-z functions are lazily imported in astro_analysis.available_functions()
+    # and thus not available as module-level attributes on the astro module.
+    # Import them directly from photo_z.
+    try:
+        from app.services.photo_z import (
+            estimate_photo_z_template,
+            estimate_photo_z_ml,
+            estimate_photo_z,
+        )
+        exec_globals["estimate_photo_z_template"] = estimate_photo_z_template
+        exec_globals["estimate_photo_z_ml"] = estimate_photo_z_ml
+        exec_globals["estimate_photo_z"] = estimate_photo_z
+    except ImportError:
+        pass
+
     # Inject session variables (persist between code blocks)
     session_vars = get_session_vars(session_id)
     exec_globals.update(session_vars)

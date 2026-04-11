@@ -99,6 +99,9 @@ export interface SearchResult {
   redshift: number | null;
   extra: Record<string, unknown>;
   error_type: string | null;
+  z_source: string | null;
+  photo_z: number | null;
+  photo_z_err: number | null;
 }
 
 export interface FetchResult {
@@ -1472,6 +1475,47 @@ export function getOperationLog(): OperationLogEntry[] {
 
 export function clearOperationLog(): void {
   localStorage.removeItem("astro_operation_log");
+}
+
+// ── Alerts API ──
+
+export interface TransientAlert {
+  id: string;
+  source: string;
+  source_id: string;
+  ra: number;
+  dec: number;
+  discovery_date: string | null;
+  magnitude: number | null;
+  mag_band: string | null;
+  classification: string | null;
+  classification_confidence: number | null;
+  redshift: number | null;
+  host_galaxy: string | null;
+}
+
+export interface AlertStats {
+  total: number;
+  by_classification: Record<string, number>;
+  by_source: Record<string, number>;
+  latest_ingestion: string | null;
+}
+
+export async function getAlerts(params?: { days?: number; classification?: string; limit?: number }): Promise<TransientAlert[]> {
+  const { data } = await api.get<TransientAlert[]>("/api/alerts", { params });
+  return data;
+}
+
+export async function getAlertStats(): Promise<AlertStats> {
+  const { data } = await api.get<AlertStats>("/api/alerts/stats");
+  return data;
+}
+
+export async function searchAlertsCone(ra: number, dec: number, radius_arcsec: number): Promise<TransientAlert[]> {
+  const { data } = await api.get<TransientAlert[]>("/api/alerts/cone", {
+    params: { ra, dec, radius_arcsec },
+  });
+  return data;
 }
 
 export default api;

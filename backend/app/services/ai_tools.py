@@ -287,6 +287,32 @@ TOOLS = [
         },
     },
     {
+        "name": "estimate_photo_z",
+        "description": (
+            "Estimate photometric redshift from multi-band photometry. "
+            "Use when users ask about galaxy distances or redshifts for objects without spectra."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "magnitudes": {
+                    "type": "object",
+                    "description": "Band magnitudes, e.g. {'g': 20.1, 'r': 19.5, 'i': 19.2}",
+                },
+                "mag_errors": {
+                    "type": "object",
+                    "description": "Magnitude errors per band",
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["template", "ml", "hybrid"],
+                    "description": "Estimation method: 'template' (SED fitting), 'ml' (empirical colors), or 'hybrid' (weighted average of both). Default: 'hybrid'",
+                },
+            },
+            "required": ["magnitudes"],
+        },
+    },
+    {
         "name": "fit_isochrone",
         "description": (
             "Fit PARSEC isochrones to observed colour-magnitude data to determine "
@@ -355,6 +381,8 @@ async def execute_tool(
             return await _exec_read_paper(tool_input)
         elif tool_name == "research_workflow":
             return _exec_research_workflow(tool_input)
+        elif tool_name == "estimate_photo_z":
+            return await _exec_estimate_photo_z(tool_input)
         elif tool_name == "fit_isochrone":
             return await _exec_fit_isochrone(tool_input)
         else:
@@ -912,6 +940,46 @@ def _exec_research_workflow(inp: dict) -> dict:
         "scope": scope,
         "next_action": "Begin Step 1: refine the hypothesis, then proceed to data acquisition using run_adql or search_objects.",
     }
+
+
+async def _exec_estimate_photo_z(inp: dict) -> dict:
+    """Run the unified photometric redshift estimator."""
+    from app.services.photo_z import estimate_photo_z
+
+    magnitudes = inp.get("magnitudes", {})
+    mag_errors = inp.get("mag_errors", {})
+    method = inp.get("method", "hybrid")
+
+    if not magnitudes:
+        return {"error": "magnitudes dict is required (e.g. {'g': 20.1, 'r': 19.5})"}
+
+    loop = asyncio.get_running_loop()
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: estimate_photo_z(magnitudes, mag_errors, method=method),
+            ),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError:
+        return {"error": "Photo-z estimation timed out after 60 seconds"}
+
+    # Truncate pdf_z for the context window (keep z_phot, z_err, method, details)
+    if "pdf_z" in result:
+        result["pdf_z"] = f"[{len(result['pdf_z'])} values]"
+    if "z_grid" in result:
+        result["z_grid"] = f"[{len(result['z_grid'])} values]"
+    # Also truncate nested detail arrays
+    for sub_key in ("template", "ml"):
+        sub = (result.get("details") or {}).get(sub_key)
+        if isinstance(sub, dict):
+            if "pdf_z" in sub:
+                sub["pdf_z"] = f"[{len(sub['pdf_z'])} values]"
+            if "z_grid" in sub:
+                sub["z_grid"] = f"[{len(sub['z_grid'])} values]"
+
+    return result
 
 
 async def _exec_fit_isochrone(inp: dict) -> dict:

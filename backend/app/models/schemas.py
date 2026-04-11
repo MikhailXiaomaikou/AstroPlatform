@@ -317,3 +317,23 @@ class IsochroneCache(Base):
     __table_args__ = (
         UniqueConstraint("log_age", "metallicity", "photometric_system", name="uq_isochrone_params"),
     )
+
+
+class TransientAlert(Base):
+    __tablename__ = "transient_alerts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)  # "ztf", "tns"
+    source_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    ra: Mapped[float] = mapped_column(Float, nullable=False)
+    dec: Mapped[float] = mapped_column(Float, nullable=False)
+    discovery_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    magnitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mag_band: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    classification: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    classification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    redshift: Mapped[float | None] = mapped_column(Float, nullable=True)
+    host_galaxy: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    raw_data: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

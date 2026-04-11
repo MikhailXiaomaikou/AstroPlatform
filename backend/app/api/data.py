@@ -71,6 +71,9 @@ class SearchResult(BaseModel):
     redshift: float | None = None
     extra: dict = {}
     error_type: str | None = None
+    z_source: str | None = None
+    photo_z: float | None = None
+    photo_z_err: float | None = None
 
 
 class FetchResult(BaseModel):
@@ -108,6 +111,7 @@ def _sanitize_extra(d: dict) -> dict:
 
 
 def _astro_to_result(obj: AstroObject) -> SearchResult:
+    redshift = _safe_float(obj.redshift)
     return SearchResult(
         source=obj.source,
         object_id=obj.object_id,
@@ -116,9 +120,58 @@ def _astro_to_result(obj: AstroObject) -> SearchResult:
         dec=_safe_float(obj.dec) or 0.0,
         object_type=obj.object_type,
         magnitude=_safe_float(obj.magnitude),
-        redshift=_safe_float(obj.redshift),
+        redshift=redshift,
         extra=_sanitize_extra(obj.extra) if obj.extra else {},
+        z_source="spectroscopic" if redshift is not None else None,
     )
+
+
+# Bands accepted by the photo-z template fitter.
+_PHOTO_Z_BANDS = {"u", "g", "r", "i", "z", "J", "H", "Ks", "W1", "W2"}
+_MIN_PHOTO_Z_BANDS = 3
+
+
+def _maybe_compute_photo_z(result: SearchResult) -> SearchResult:
+    """Estimate photometric redshift for a result that lacks spec-z.
+
+    Requires at least ``_MIN_PHOTO_Z_BANDS`` magnitude values in the
+    ``extra`` dict (keyed by band name from ugriz / JHKs / W1W2).
+    """
+    if result.z_source == "spectroscopic":
+        return result
+
+    mags: dict[str, float] = {}
+    errs: dict[str, float] = {}
+    for band in _PHOTO_Z_BANDS:
+        val = result.extra.get(band) or result.extra.get(f"mag_{band}")
+        if val is not None:
+            try:
+                mag_f = float(val)
+                if mag_f != mag_f:  # NaN check
+                    continue
+                mags[band] = mag_f
+                # Use error if available, otherwise default 0.1 mag
+                err_val = result.extra.get(f"{band}_err") or result.extra.get(f"mag_{band}_err")
+                errs[band] = float(err_val) if err_val is not None else 0.1
+            except (ValueError, TypeError):
+                continue
+
+    if len(mags) < _MIN_PHOTO_Z_BANDS:
+        return result
+
+    try:
+        from app.services.photo_z import estimate_photo_z_template
+
+        pz = estimate_photo_z_template(mags, errs)
+        result.photo_z = _safe_float(pz.get("z_phot"))
+        result.photo_z_err = _safe_float(pz.get("z_err"))
+        if result.photo_z is not None:
+            result.redshift = result.photo_z
+            result.z_source = "photometric"
+    except Exception:
+        logger.debug("photo-z estimation failed for %s/%s", result.source, result.object_id, exc_info=True)
+
+    return result
 
 
 async def _resolve_search_coordinates(
@@ -248,6 +301,7 @@ async def search_data(
     ra: float | None = Query(None, description="Right ascension in degrees"),
     dec: float | None = Query(None, description="Declination in degrees"),
     radius: float = Query(0.1, description="Search radius in degrees"),
+    compute_photo_z: bool = Query(False, description="Estimate photometric redshift for results without spec-z"),
     db: AsyncSession = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
@@ -304,6 +358,10 @@ async def search_data(
 
     # Deduplicate by position across sources
     all_results = _dedup_by_position(all_results)
+
+    # Optionally estimate photometric redshifts for results missing spec-z
+    if compute_photo_z:
+        all_results = [_maybe_compute_photo_z(r) for r in all_results]
 
     # Cache results for 5 minutes
     await cache_set(ck, [r.model_dump() for r in all_results], ttl=300)

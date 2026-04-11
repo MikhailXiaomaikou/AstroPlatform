@@ -2469,6 +2469,14 @@ def available_functions():
         airmass_plot,
         exposure_time_estimate,
     ]
+
+    # Lazy-import photo-z so its numpy-heavy globals aren't loaded at
+    # module level — only when the function catalogue is requested.
+    from app.services.photo_z import estimate_photo_z_template, estimate_photo_z_ml, estimate_photo_z
+    exported.append(estimate_photo_z_template)
+    exported.append(estimate_photo_z_ml)
+    exported.append(estimate_photo_z)
+
     info = {}
     for func in exported:
         doc = inspect.getdoc(func) or ""

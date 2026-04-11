@@ -29,13 +29,17 @@ celery_app.conf.update(
 # Auto-discover pipeline tasks (tasks.py in app.pipeline)
 # and explicitly include engine.py which also defines Celery tasks
 celery_app.autodiscover_tasks(["app.pipeline"])
-celery_app.conf.include = ["app.pipeline.engine", "app.services.isochrone_tasks"]
+celery_app.conf.include = ["app.pipeline.engine", "app.services.isochrone_tasks", "app.services.alert_tasks"]
 
 # Celery Beat schedule: run the scheduler check every 60 seconds
 celery_app.conf.beat_schedule = {
     "check-scheduled-pipelines": {
         "task": "scheduler.check_due_schedules",
         "schedule": 60.0,  # every 60 seconds
+    },
+    "ingest-ztf-alerts": {
+        "task": "alerts.ingest",
+        "schedule": 900.0,  # every 15 minutes
     },
 }
 
