@@ -3,12 +3,15 @@
 import numpy as np
 import pytest
 
+from app.connectors.base import AstroObject
 from app.pipeline.nodes.denoise import denoise
 from app.pipeline.nodes.spectral_fit import spectral_fit, _gaussian
 from app.pipeline.nodes.coord_transform import coord_transform
 from app.pipeline.nodes.redshift import redshift_estimate
 from app.pipeline.nodes.equivalent_width import equivalent_width
 from app.pipeline.nodes.image_stack import image_stack
+from app.pipeline.nodes.import_workspace import import_workspace
+from app.pipeline.nodes.query_data import query_data
 from app.pipeline.nodes.timeseries import timeseries_analysis
 
 
@@ -337,3 +340,40 @@ class TestTimeSeriesNode:
                 {"data": {"time": [], "mag": []}},
                 {},
             )
+
+
+class TestQueryDataNode:
+    def test_query_data_returns_catalog_rows(self, monkeypatch):
+        class FakeConnector:
+            async def search(self, query, ra=None, dec=None, radius=0.1):
+                return [
+                    AstroObject(
+                        source="simbad",
+                        object_id="M31",
+                        name="M 31",
+                        ra=10.6847,
+                        dec=41.2687,
+                        object_type="Galaxy",
+                    )
+                ]
+
+        monkeypatch.setattr("app.pipeline.nodes.query_data.get_connector", lambda source: FakeConnector())
+
+        result = query_data({}, {"query": "M31", "sources": "simbad", "radius": 0.2})
+
+        assert result["type"] == "catalog"
+        assert result["row_count"] == 1
+        assert result["rows"][0]["name"] == "M 31"
+        assert "ra" in result["data"]
+
+
+class TestImportWorkspaceNode:
+    def test_import_workspace_reads_csv(self, monkeypatch):
+        raw = b"name,flux\nA,1.0\nB,2.0\n"
+        monkeypatch.setattr("app.pipeline.nodes.import_workspace.download_fits", lambda path: raw)
+
+        result = import_workspace({}, {"path": "uploads/test/catalog.csv"})
+
+        assert result["type"] == "table"
+        assert result["columns"] == ["name", "flux"]
+        assert result["rows"][0]["name"] == "A"

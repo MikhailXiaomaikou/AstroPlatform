@@ -195,6 +195,8 @@ _BUILTIN_TEMPLATES = [
 @router.get("/nodes/types")
 async def list_node_types():
     return [
+        {"type": "QueryData", "label": "Query Data", "description": "Search catalog sources like SIMBAD, Gaia, SDSS, or MAST", "inputs": 0, "outputs": 1},
+        {"type": "ImportWorkspace", "label": "Import Workspace", "description": "Load a saved Workspace file into the pipeline", "inputs": 0, "outputs": 1},
         {"type": "LoadData", "label": "Load Data", "description": "Load a FITS file from storage", "inputs": 0, "outputs": 1},
         {"type": "Denoise", "label": "Denoise", "description": "Sigma-clip noise from spectrum", "inputs": 1, "outputs": 1},
         {"type": "SpectralFit", "label": "Spectral Fit", "description": "Fit Gaussian/Lorentzian to spectrum", "inputs": 1, "outputs": 1},

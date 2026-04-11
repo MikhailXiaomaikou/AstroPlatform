@@ -94,11 +94,13 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
                     if pid in node_results:
                         input_data.update(node_results[pid])
             else:
-                input_data = {"fits_path": input_data_id}
+                input_data = {"fits_path": input_data_id, "path": input_data_id, "input_data_id": input_data_id}
 
             # LoadData needs fits_path in params
             if node_type == "LoadData" and "fits_path" not in params:
                 params["fits_path"] = input_data.get("fits_path", input_data_id)
+            if node_type == "ImportWorkspace" and "path" not in params:
+                params["path"] = input_data.get("path", input_data_id)
 
             logger.info(f"[{run_id}] Running node {node_id} ({node_type})")
             try:
@@ -230,10 +232,12 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                         if pid in node_results:
                             input_data.update(node_results[pid])
                 else:
-                    input_data = {"fits_path": input_data_id}
+                    input_data = {"fits_path": input_data_id, "path": input_data_id, "input_data_id": input_data_id}
 
                 if node_type == "LoadData" and "fits_path" not in params:
                     params["fits_path"] = input_data.get("fits_path", input_data_id)
+                if node_type == "ImportWorkspace" and "path" not in params:
+                    params["path"] = input_data.get("path", input_data_id)
 
                 # Notify node start
                 _publish_progress(run_id, {

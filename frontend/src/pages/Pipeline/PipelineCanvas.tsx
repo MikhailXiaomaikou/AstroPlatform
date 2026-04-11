@@ -25,6 +25,7 @@ import {
   exportRunCSV,
   exportRunPDF,
   exportRunVOTable,
+  getWorkspace,
   getNodeTypes,
   getTemplates,
   getTemplateDiff,
@@ -42,6 +43,7 @@ import {
 } from "../../api/client";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import { mergeWorkspaceFiles, readWorkspaceCache, type WorkspaceCacheFile } from "../../utils/workspaceCache";
 
 const nodeTypes = { pipeline: PipelineNode };
 
@@ -105,6 +107,7 @@ export default function PipelineCanvas() {
   }, [undo, redo]);
 
   const [availableTypes, setAvailableTypes] = useState<NodeType[]>([]);
+  const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
   const [templates, setTemplates] = useState<PipelineTemplate[]>([]);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [runResults, setRunResults] = useState<Record<string, unknown> | null>(null);
@@ -181,6 +184,8 @@ export default function PipelineCanvas() {
       .then(setAvailableTypes)
       .catch(() =>
         setAvailableTypes([
+          { type: "QueryData", label: "Query Data", description: "Search catalog sources", inputs: 0, outputs: 1 },
+          { type: "ImportWorkspace", label: "Import Workspace", description: "Load a Workspace file", inputs: 0, outputs: 1 },
           { type: "LoadData", label: "Load Data", description: "Load FITS file", inputs: 0, outputs: 1 },
           { type: "Denoise", label: "Denoise", description: "Sigma-clip noise", inputs: 1, outputs: 1 },
           { type: "SpectralFit", label: "Spectral Fit", description: "Fit spectral line", inputs: 1, outputs: 1 },
@@ -197,6 +202,15 @@ export default function PipelineCanvas() {
       );
     getTemplates().then(setTemplates).catch(() => {});
     listSchedules().then(setSchedules).catch(() => {});
+    getWorkspace()
+      .then((files) => {
+        const remoteFiles = files as unknown as WorkspaceCacheFile[];
+        setWorkspacePaths(
+          mergeWorkspaceFiles([...remoteFiles, ...readWorkspaceCache()])
+            .map((file) => file.fits_path)
+        );
+      })
+      .catch(() => setWorkspacePaths(readWorkspaceCache().map((file) => file.fits_path)));
   }, []);
 
   // Autosave pipeline to localStorage
@@ -602,6 +616,9 @@ export default function PipelineCanvas() {
               className="input-data-input"
             />
           </label>
+          <div style={{ fontSize: "0.75rem", color: "var(--color-text-tertiary)", marginTop: "-0.35rem", marginBottom: "0.6rem" }}>
+            Used by root Load Data / Import Workspace nodes when their path is left blank.
+          </div>
           <button
             className="run-btn"
             onClick={handleRun}
@@ -887,6 +904,7 @@ export default function PipelineCanvas() {
           nodeLabel={editingNode.data.label as string}
           currentParams={(editingNode.data.params as Record<string, unknown>) ?? {}}
           onApply={handleParamsApply}
+          workspacePaths={workspacePaths}
           onCancel={() => setEditingNodeId(null)}
         />
       )}

@@ -1,17 +1,20 @@
 """Chandra/XMM X-ray connector via CSC2 cone search API."""
 
 import asyncio
-import csv
 import io
 from functools import partial
+import re
 
 import httpx
+import astropy.units as u
+from astropy.coordinates import SkyCoord
+from astropy.io.votable import parse_single_table
 from astropy.table import Table
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
 
-CSC2_CONE_URL = "https://cda.cfa.harvard.edu/cscview/coneSearch"
+CSC2_CONE_URL = "https://cda.cfa.harvard.edu/csc21scs/coneSearch"
 
 
 class ChandraConnector(BaseConnector):
@@ -26,19 +29,18 @@ class ChandraConnector(BaseConnector):
         if ra is None or dec is None:
             ra, dec = await self._resolve_name(query)
 
-        # CSC2 cone search — radius in arcmin
         params = {
-            "pos": f"{ra},{dec}",
-            "sr": str(radius * 60),  # convert deg to arcmin
-            "format": "csv",
-            "columns": "name,ra,dec,flux_aper_b,significance,extent_flag,hard_hm,hard_ms",
+            "RA": str(ra),
+            "DEC": str(dec),
+            "SR": str(radius),
+            "VERB": "1",
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(CSC2_CONE_URL, params=params)
             resp.raise_for_status()
 
-        return self._parse_results(resp.text)
+        return self._parse_results(resp.content)
 
     @with_retry(max_retries=1, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
@@ -46,17 +48,14 @@ class ChandraConnector(BaseConnector):
 
         object_id should be a CSC source name (e.g. '2CXO J004244.3+411609').
         """
-        params = {
-            "pos": object_id,
-            "sr": "0.01",
-            "format": "csv",
-        }
+        ra, dec = await self._resolve_object_id(object_id)
+        params = {"RA": str(ra), "DEC": str(dec), "SR": "0.01", "VERB": "1"}
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(CSC2_CONE_URL, params=params)
             resp.raise_for_status()
 
-        table = self._csv_to_table(resp.text)
+        table = self._votable_to_table(resp.content)
         if len(table) == 0:
             raise ValueError(f"No Chandra data found for '{object_id}'")
 
@@ -82,35 +81,38 @@ class ChandraConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     async def _resolve_name(self, name: str) -> tuple[float, float]:
-        from astropy.coordinates import SkyCoord
-
         loop = asyncio.get_event_loop()
         coord = await loop.run_in_executor(None, partial(SkyCoord.from_name, name))
         return coord.ra.deg, coord.dec.deg
 
-    def _csv_to_table(self, text: str) -> Table:
-        """Parse CSC2 CSV response into an astropy Table."""
-        lines = [ln for ln in text.strip().splitlines() if ln and not ln.startswith("#")]
-        if len(lines) < 2:
+    async def _resolve_object_id(self, object_id: str) -> tuple[float, float]:
+        match = re.search(
+            r"J(?P<h>\d{2})(?P<m>\d{2})(?P<s>\d{2}(?:\.\d+)?)"
+            r"(?P<sign>[+-])(?P<d>\d{2})(?P<dm>\d{2})(?P<ds>\d{2}(?:\.\d+)?)",
+            object_id,
+        )
+        if match:
+            sign = "-" if match.group("sign") == "-" else "+"
+            coord = SkyCoord(
+                f"{match.group('h')}h{match.group('m')}m{match.group('s')}s "
+                f"{sign}{match.group('d')}d{match.group('dm')}m{match.group('ds')}s",
+                unit=(u.hourangle, u.deg),
+                frame="icrs",
+            )
+            return coord.ra.deg, coord.dec.deg
+        return await self._resolve_name(object_id)
+
+    def _votable_to_table(self, raw: bytes) -> Table:
+        """Parse a CSC2 Simple Cone Search VOTable response."""
+        if not raw.strip():
             return Table()
-
-        reader = csv.DictReader(lines)
-        rows = list(reader)
-        if not rows:
+        table = parse_single_table(io.BytesIO(raw)).to_table(use_names_over_ids=True)
+        if table is None:
             return Table()
+        return table
 
-        columns: dict[str, list] = {key: [] for key in rows[0].keys()}
-        for row in rows:
-            for key in columns:
-                val = row[key].strip() if row[key] else ""
-                try:
-                    columns[key].append(float(val))
-                except (ValueError, TypeError):
-                    columns[key].append(val)
-        return Table(columns)
-
-    def _parse_results(self, text: str) -> list[AstroObject]:
-        table = self._csv_to_table(text)
+    def _parse_results(self, raw: bytes) -> list[AstroObject]:
+        table = self._votable_to_table(raw)
         objects: list[AstroObject] = []
 
         for row in table:
@@ -145,7 +147,7 @@ class ChandraConnector(BaseConnector):
                         break
                     except (ValueError, TypeError):
                         pass
-            for col in ("significance", "extent_flag", "hard_hm", "hard_ms"):
+            for col in ("significance", "extent_flag", "hard_hm", "hard_ms", "err_ellipse_r0", "err_ellipse_r1"):
                 if col in row.colnames:
                     try:
                         extra[col] = float(row[col])

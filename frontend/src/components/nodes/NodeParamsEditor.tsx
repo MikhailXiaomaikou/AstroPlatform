@@ -9,9 +9,20 @@ interface ParamDef {
   default?: string | number;
   options?: string[]; // for select
   required?: boolean;
+  placeholder?: string;
 }
 
 const NODE_PARAM_DEFS: Record<string, ParamDef[]> = {
+  QueryData: [
+    { key: "query", label: "Target / Query", type: "text", required: true, placeholder: "M31, Pleiades, Crab Nebula..." },
+    { key: "sources", label: "Sources", type: "text", default: "simbad,gaia", placeholder: "Comma-separated: simbad,gaia,sdss" },
+    { key: "radius", label: "Radius (deg)", type: "number", default: 0.1 },
+    { key: "ra", label: "RA (optional)", type: "number" },
+    { key: "dec", label: "Dec (optional)", type: "number" },
+  ],
+  ImportWorkspace: [
+    { key: "path", label: "Workspace File", type: "select", required: true },
+  ],
   LoadData: [
     { key: "fits_path", label: "FITS Path", type: "text" },
   ],
@@ -111,6 +122,7 @@ interface NodeParamsEditorProps {
   nodeType: string;
   nodeLabel: string;
   currentParams: Record<string, unknown>;
+  workspacePaths?: string[];
   onApply: (nodeId: string, params: Record<string, unknown>) => void;
   onCancel: () => void;
 }
@@ -120,6 +132,7 @@ export default function NodeParamsEditor({
   nodeType,
   nodeLabel,
   currentParams,
+  workspacePaths = [],
   onApply,
   onCancel,
 }: NodeParamsEditorProps) {
@@ -135,13 +148,15 @@ export default function NodeParamsEditor({
         initial[def.key] = currentParams[def.key] as string | number;
       } else if (def.default !== undefined) {
         initial[def.key] = def.default;
+      } else if (def.type === "select" && nodeType === "ImportWorkspace" && def.key === "path" && workspacePaths.length > 0) {
+        initial[def.key] = workspacePaths[0];
       } else {
         initial[def.key] = def.type === "number" ? "" as unknown as number : "";
       }
     }
     setFormValues(initial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeId, nodeType]);
+  }, [currentParams, nodeId, nodeType, paramDefs, workspacePaths]);
 
   const handleChange = (key: string, value: string, type: "text" | "number" | "select") => {
     if (type === "number") {
@@ -186,13 +201,13 @@ export default function NodeParamsEditor({
               {def.required && <span className="node-params-required">*</span>}
             </label>
 
-            {def.type === "select" ? (
+            {def.type === "select" && !(nodeType === "ImportWorkspace" && def.key === "path" && workspacePaths.length === 0) ? (
               <select
                 id={`param-${nodeId}-${def.key}`}
                 value={String(formValues[def.key] ?? "")}
                 onChange={(e) => handleChange(def.key, e.target.value, def.type)}
               >
-                {def.options?.map((opt) => (
+                {(nodeType === "ImportWorkspace" && def.key === "path" ? workspacePaths : def.options)?.map((opt) => (
                   <option key={opt} value={opt}>
                     {opt}
                   </option>
@@ -205,8 +220,13 @@ export default function NodeParamsEditor({
                 step={def.type === "number" ? "any" : undefined}
                 value={formValues[def.key] ?? ""}
                 onChange={(e) => handleChange(def.key, e.target.value, def.type)}
-                placeholder={def.default !== undefined ? `Default: ${def.default}` : undefined}
+                placeholder={def.placeholder || (def.default !== undefined ? `Default: ${def.default}` : undefined)}
               />
+            )}
+            {nodeType === "ImportWorkspace" && def.key === "path" && workspacePaths.length === 0 && (
+              <div className="node-params-empty" style={{ marginTop: 6 }}>
+                No synced workspace files found. Enter a storage path manually or save files to Workspace first.
+              </div>
             )}
           </div>
         ))}

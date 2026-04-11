@@ -5,6 +5,8 @@ from typing import Callable
 
 def _get_registry() -> dict[str, Callable]:
     from app.pipeline.nodes.load_data import load_data
+    from app.pipeline.nodes.query_data import query_data
+    from app.pipeline.nodes.import_workspace import import_workspace
     from app.pipeline.nodes.denoise import denoise
     from app.pipeline.nodes.spectral_fit import spectral_fit
     from app.pipeline.nodes.coord_transform import coord_transform
@@ -20,6 +22,8 @@ def _get_registry() -> dict[str, Callable]:
     from app.pipeline.nodes.timeseries import timeseries_analysis
 
     return {
+        "QueryData": query_data,
+        "ImportWorkspace": import_workspace,
         "LoadData": load_data,
         "Denoise": denoise,
         "SpectralFit": spectral_fit,

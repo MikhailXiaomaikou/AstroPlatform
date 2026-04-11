@@ -11,6 +11,7 @@ import {
   exportData,
   sampSend,
   sampStatus,
+  downloadFileUrl,
   type BatchTarget,
 } from "../../api/client";
 import FITSPreview from "../../components/fits/FITSPreview";
@@ -46,6 +47,19 @@ export default function WorkspacePage() {
   const [sampConnected, setSampConnected] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const selectedMetadata = selectedFile?.metadata || null;
+  const selectedContentType = String(selectedMetadata?.["content_type"] || "");
+  const selectedFilename = String(
+    selectedMetadata?.["original_filename"] ||
+    selectedMetadata?.["filename"] ||
+    selectedFile?.object_id ||
+    ""
+  );
+  const isGenericWorkspaceFile = !!selectedFile && (
+    selectedMetadata?.["workspace_kind"] === "generic" ||
+    (!!selectedContentType && !selectedContentType.includes("fits"))
+  );
 
   useEffect(() => {
     getWorkspace()
@@ -210,13 +224,19 @@ export default function WorkspacePage() {
             <dl className="fits-meta">
               <dt>Source</dt>
               <dd><span className={`badge badge-${selectedFile.source}`}>{selectedFile.source.toUpperCase()}</span></dd>
-              <dt>FITS Path</dt>
+              <dt>{isGenericWorkspaceFile ? "Storage Path" : "FITS Path"}</dt>
               <dd className="mono">{selectedFile.fits_path}</dd>
+              {selectedFilename && selectedFilename !== selectedFile.object_id && (
+                <>
+                  <dt>Filename</dt>
+                  <dd>{selectedFilename}</dd>
+                </>
+              )}
             </dl>
 
             {/* Action buttons */}
             <div style={{ display: "flex", gap: "0.4rem", margin: "0.75rem 0" }}>
-              {selectedFile.fits_path && (
+              {selectedFile.fits_path && !isGenericWorkspaceFile && (
                 <>
                   <button className="btn-secondary btn-small" onClick={() => setShowPreview(!showPreview)}>
                     {showPreview ? "Hide Preview" : "Preview FITS"}
@@ -234,10 +254,20 @@ export default function WorkspacePage() {
                   </a>
                 </>
               )}
+              {selectedFile.fits_path && isGenericWorkspaceFile && (
+                <a
+                  href={downloadFileUrl(selectedFile.fits_path)}
+                  download={selectedFilename || undefined}
+                  className="btn-secondary btn-small"
+                  style={{ textDecoration: "none" }}
+                >
+                  Download
+                </a>
+              )}
             </div>
 
             {/* FITS Preview */}
-            {showPreview && selectedFile.fits_path && (
+            {showPreview && selectedFile.fits_path && !isGenericWorkspaceFile && (
               <div style={{ marginBottom: "1rem" }}>
                 <FITSPreview
                   filename={selectedFile.object_id}

@@ -5,6 +5,8 @@ interface Props {
 }
 
 const TYPE_COLORS: Record<string, string> = {
+  QueryData: "#2563eb",
+  ImportWorkspace: "#3b82f6",
   LoadData: "#0A84FF",
   Denoise: "#BF5AF2",
   SpectralFit: "#64D2FF",
@@ -19,6 +21,12 @@ const TYPE_COLORS: Record<string, string> = {
   InteractivePlot: "#8b5cf6",
 };
 
+const TYPE_ORDER = [
+  "QueryData",
+  "ImportWorkspace",
+  "LoadData",
+];
+
 export default function NodePalette({ nodeTypes }: Props) {
   const onDragStart = (e: React.DragEvent, nodeType: NodeType) => {
     e.dataTransfer.setData("application/reactflow-type", nodeType.type);
@@ -29,7 +37,14 @@ export default function NodePalette({ nodeTypes }: Props) {
   return (
     <div className="node-palette">
       <h3>Nodes</h3>
-      {nodeTypes.map((nt) => (
+      {[...nodeTypes].sort((a, b) => {
+        const ai = TYPE_ORDER.indexOf(a.type);
+        const bi = TYPE_ORDER.indexOf(b.type);
+        if (ai === -1 && bi === -1) return a.label.localeCompare(b.label);
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      }).map((nt) => (
         <div
           key={nt.type}
           className="palette-item"

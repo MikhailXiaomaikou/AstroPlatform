@@ -2,6 +2,8 @@ import { memo } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
 
 const TYPE_COLORS: Record<string, string> = {
+  QueryData: "#2563eb",
+  ImportWorkspace: "#3b82f6",
   LoadData: "#0A84FF",
   Denoise: "#BF5AF2",
   SpectralFit: "#64D2FF",
@@ -15,6 +17,9 @@ const TYPE_COLORS: Record<string, string> = {
   ImageStack: "#AF52DE",
   InteractivePlot: "#8b5cf6",
 };
+
+const SOURCE_NODE_TYPES = new Set(["QueryData", "ImportWorkspace", "LoadData"]);
+const TERMINAL_NODE_TYPES = new Set(["Plot"]);
 
 const PROGRESS_COLORS: Record<string, string> = {
   pending: "rgba(255,255,255,0.1)",
@@ -67,16 +72,16 @@ function PipelineNode({ data, selected }: NodeProps<PipelineNodeData>) {
           <div className="node-error-msg">{data.progressError}</div>
         )}
       </div>
-      {data.nodeType !== "LoadData" && (
+      {!SOURCE_NODE_TYPES.has(data.nodeType) && (
         <Handle type="target" position={Position.Left} className="pipeline-handle pipeline-handle-target" />
       )}
-      {data.nodeType !== "Plot" && (
+      {!TERMINAL_NODE_TYPES.has(data.nodeType) && (
         <Handle type="source" position={Position.Right} className="pipeline-handle pipeline-handle-source" />
       )}
-      {data.nodeType === "Plot" && (
+      {TERMINAL_NODE_TYPES.has(data.nodeType) && (
         <Handle type="source" position={Position.Right} className="pipeline-handle" style={{ opacity: 0.3 }} />
       )}
-      {data.nodeType === "LoadData" && (
+      {SOURCE_NODE_TYPES.has(data.nodeType) && (
         <Handle type="target" position={Position.Left} className="pipeline-handle" style={{ opacity: 0.3 }} />
       )}
     </div>

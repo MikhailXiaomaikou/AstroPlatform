@@ -7,6 +7,7 @@ import {
   getBibTeX,
   logOperation,
   uploadFITS,
+  uploadGeneralFile,
   saveChatSession,
   listChatSessions,
   loadChatSession,
@@ -23,6 +24,7 @@ import {
 import MarkdownText from "../../components/chat/MarkdownText";
 import { useI18n } from "../../i18n";
 import { useAuth } from "../../context/AuthContext";
+import { registerWorkspaceExport } from "../../utils/workspaceCache";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 interface DisplayMessage {
@@ -1125,6 +1127,13 @@ interface LocalChatSession {
   messages: Array<{ role: string; content: string; actions?: unknown[] }>;
 }
 
+type ExportAction = "markdown" | "notebook" | "latex" | "bibtex";
+
+interface ToastState {
+  message: string;
+  tone: "success" | "error" | "info";
+}
+
 function readLocalChatSessions(): LocalChatSession[] {
   try {
     const raw = localStorage.getItem(LOCAL_CHAT_SESSIONS_KEY);
@@ -1188,8 +1197,14 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
   const [input, setInput] = useState("");
   const [pageError, _setPageError] = useState<string | null>(null);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState<Record<ExportAction, boolean>>({
+    markdown: false,
+    notebook: false,
+    latex: false,
+    bibtex: false,
+  });
   const [executingActions, setExecutingActions] = useState<Set<string>>(
     new Set()
   );
@@ -1203,11 +1218,76 @@ export default function ChatPage() {
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = useCallback((msg: string) => {
-    setToastMsg(msg);
+  const showToast = useCallback((message: string, tone: ToastState["tone"] = "success") => {
+    setToast({ message, tone });
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => setToastMsg(null), 3000);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
   }, []);
+
+  const rememberExportInWorkspace = useCallback(async (
+    blob: Blob,
+    filename: string,
+    exportKind: ExportAction,
+  ): Promise<boolean> => {
+    if (!user) return false;
+    try {
+      const upload = await uploadGeneralFile(
+        new File([blob], filename, { type: blob.type || "application/octet-stream" })
+      );
+      registerWorkspaceExport({
+        id: upload.id,
+        filename: upload.filename,
+        storagePath: upload.path,
+        exportKind,
+        contentType: blob.type || "application/octet-stream",
+        sizeBytes: blob.size,
+        localOnly: false,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [user]);
+
+  const handleExport = useCallback(async (
+    exportKind: ExportAction,
+    label: string,
+    filename: string,
+    exporter: () => Promise<Blob>,
+    options?: { emptyMessage?: string; fallback?: () => Blob; skipDownloadWhenEmpty?: boolean },
+  ) => {
+    setExporting((prev) => ({ ...prev, [exportKind]: true }));
+    try {
+      let blob = await exporter();
+      if (blob.size === 0 && options?.skipDownloadWhenEmpty) {
+        showToast(options.emptyMessage || `No ${label} content was available to export`, "info");
+        return;
+      }
+      if (blob.size === 0) {
+        if (options?.fallback) {
+          blob = options.fallback();
+        } else {
+          throw new Error(options?.emptyMessage || `${label} export returned an empty file`);
+        }
+      }
+
+      downloadBlob(blob, filename);
+      const savedToWorkspace = await rememberExportInWorkspace(blob, filename, exportKind);
+
+      if (savedToWorkspace) {
+        showToast(`Exported ${label} successfully — saved to Workspace`, "success");
+      } else if (user) {
+        showToast(`Exported ${label} successfully — downloaded locally, but Workspace sync failed`, "success");
+      } else {
+        showToast(`Exported ${label} successfully — downloaded locally. Sign in to sync it to Workspace.`, "success");
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : `${label} export failed`;
+      showToast(`Export failed: ${detail}`, "error");
+    } finally {
+      setExporting((prev) => ({ ...prev, [exportKind]: false }));
+    }
+  }, [rememberExportInWorkspace, showToast, user]);
 
   const refreshSessions = useCallback(() => {
     if (user) {
@@ -1495,14 +1575,15 @@ export default function ChatPage() {
 
   return (
     <div className="chat-page">
-      {toastMsg && (
+      {toast && (
         <div style={{
           position: "fixed", top: 24, right: 24, zIndex: 99999,
-          background: "#22c55e", color: "#fff",
+          background: toast.tone === "error" ? "#ef4444" : toast.tone === "info" ? "#0ea5e9" : "#22c55e",
+          color: "#fff",
           padding: "12px 24px", borderRadius: 8, fontSize: "0.9rem",
           fontWeight: 600,
           boxShadow: "0 4px 16px rgba(0,0,0,0.25)", pointerEvents: "none",
-        }}>{toastMsg}</div>
+        }}>{toast.message}</div>
       )}
       <div className="chat-header">
         <div className="chat-header-row">
@@ -1529,80 +1610,73 @@ export default function ChatPage() {
             </button>
             {messages.length > 0 && (
               <>
-              <button type="button" className="btn-secondary btn-small" onClick={async () => {
-                const btn = document.activeElement as HTMLButtonElement | null;
-                if (btn) btn.textContent = "Exporting...";
-                try {
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                disabled={exporting.markdown}
+                onClick={() => {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
-                  const blob = await exportChatMarkdown(data);
-                  downloadBlob(blob, "ai_research_chat.md");
-                  showToast("Markdown exported successfully!");
-                } catch {
-                  showToast("Markdown export failed");
-                } finally {
-                  if (btn) btn.textContent = t("common.export");
-                }
-              }}>
-                {t("common.export")}
+                  void handleExport(
+                    "markdown",
+                    "Markdown",
+                    "ai_research_chat.md",
+                    () => exportChatMarkdown(data),
+                  );
+                }}
+              >
+                {exporting.markdown ? "Exporting..." : t("common.export")}
               </button>
-              <button type="button" className="btn-secondary btn-small" onClick={async () => {
-                const btn = document.activeElement as HTMLButtonElement | null;
-                if (btn) btn.textContent = "Exporting...";
-                try {
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                disabled={exporting.notebook}
+                onClick={() => {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
-                  const blob = await exportChatNotebook(data);
-                  downloadBlob(blob, "ai_research_session.ipynb");
-                  showToast("Notebook exported successfully!");
-                } catch {
-                  showToast("Notebook export failed");
-                } finally {
-                  if (btn) btn.textContent = "Notebook";
-                }
-              }}>
-                Notebook
+                  void handleExport(
+                    "notebook",
+                    "Notebook",
+                    "ai_research_session.ipynb",
+                    () => exportChatNotebook(data),
+                  );
+                }}
+              >
+                {exporting.notebook ? "Exporting..." : "Notebook"}
               </button>
-              <button type="button" className="btn-secondary btn-small" onClick={async () => {
-                const btn = document.activeElement as HTMLButtonElement | null;
-                if (btn) btn.textContent = "Exporting...";
-                try {
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                disabled={exporting.latex}
+                onClick={() => {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
-                  const blob = await exportChatLatex(data);
-                  if (blob.size > 0) {
-                    downloadBlob(blob, "astro_report.tex");
-                    showToast("LaTeX exported successfully!");
-                  } else {
-                    throw new Error("Empty response");
-                  }
-                } catch {
-                  const tex = generateLatexFallback(messages);
-                  const fallbackBlob = new Blob([tex], { type: "application/x-tex" });
-                  downloadBlob(fallbackBlob, "astro_report.tex");
-                  showToast("LaTeX exported (local fallback)");
-                } finally {
-                  if (btn) btn.textContent = "LaTeX";
-                }
-              }}>
-                LaTeX
+                  void handleExport(
+                    "latex",
+                    "LaTeX",
+                    "astro_report.tex",
+                    () => exportChatLatex(data),
+                    {
+                      fallback: () => new Blob([generateLatexFallback(messages)], { type: "application/x-tex" }),
+                    },
+                  );
+                }}
+              >
+                {exporting.latex ? "Exporting..." : "LaTeX"}
               </button>
-              <button type="button" className="btn-secondary btn-small" onClick={async () => {
-                const btn = document.activeElement as HTMLButtonElement | null;
-                if (btn) btn.textContent = "Exporting...";
-                try {
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                disabled={exporting.bibtex}
+                onClick={() => {
                   const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
-                  const blob = await exportChatBibTeX(data);
-                  if (blob.size > 0) {
-                    downloadBlob(blob, "references.bib");
-                    showToast("BibTeX exported successfully!");
-                  } else {
-                    showToast("No references found to export");
-                  }
-                } catch {
-                  showToast("BibTeX export failed");
-                } finally {
-                  if (btn) btn.textContent = "BibTeX";
-                }
-              }}>
-                BibTeX
+                  void handleExport(
+                    "bibtex",
+                    "BibTeX",
+                    "references.bib",
+                    () => exportChatBibTeX(data),
+                    { emptyMessage: "No references found to export", skipDownloadWhenEmpty: true },
+                  );
+                }}
+              >
+                {exporting.bibtex ? "Exporting..." : "BibTeX"}
               </button>
               </>
             )}

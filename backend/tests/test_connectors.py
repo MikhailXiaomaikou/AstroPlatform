@@ -291,3 +291,58 @@ class TestSDSSConnector:
         assert len(results) == 1
         assert results[0].source == "sdss"
         assert results[0].object_id == "123"
+
+
+class TestChandraConnector:
+    async def test_search_uses_csc21_cone_search(self, monkeypatch):
+        from app.connectors.chandra import ChandraConnector, CSC2_CONE_URL
+
+        calls: dict[str, object] = {}
+        votable = b"""<?xml version="1.0"?>
+<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">
+  <RESOURCE>
+    <TABLE>
+      <FIELD name="name" datatype="char" arraysize="*"/>
+      <FIELD name="ra" datatype="double"/>
+      <FIELD name="dec" datatype="double"/>
+      <DATA>
+        <TABLEDATA>
+          <TR><TD>2CXO J0534.5+2201</TD><TD>83.6331</TD><TD>22.0145</TD></TR>
+        </TABLEDATA>
+      </DATA>
+    </TABLE>
+  </RESOURCE>
+</VOTABLE>"""
+
+        class FakeResponse:
+            def __init__(self, content: bytes):
+                self.content = content
+
+            def raise_for_status(self):
+                return None
+
+        class FakeClient:
+            def __init__(self, timeout=None):
+                calls["timeout"] = timeout
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, params=None):
+                calls["url"] = url
+                calls["params"] = params
+                return FakeResponse(votable)
+
+        monkeypatch.setattr("app.connectors.chandra.httpx.AsyncClient", FakeClient)
+
+        connector = ChandraConnector()
+        results = await connector.search("Crab Nebula", ra=83.6331, dec=22.0145, radius=0.1)
+
+        assert calls["url"] == CSC2_CONE_URL
+        assert calls["params"] == {"RA": "83.6331", "DEC": "22.0145", "SR": "0.1", "VERB": "1"}
+        assert calls["timeout"] == 30.0
+        assert len(results) == 1
+        assert results[0].source == "chandra"

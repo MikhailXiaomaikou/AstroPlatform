@@ -228,6 +228,9 @@ describe("SearchResult interface compatibility", () => {
       redshift: null,
       extra: {},
       error_type: "timeout",
+      z_source: null,
+      photo_z: null,
+      photo_z_err: null,
     };
 
     expect(result.error_type).toBe("timeout");
@@ -247,6 +250,9 @@ describe("SearchResult interface compatibility", () => {
       redshift: 0.05,
       extra: { survey: "DR3" },
       error_type: null,
+      z_source: "spectroscopic",
+      photo_z: null,
+      photo_z_err: null,
     };
 
     expect(result.error_type).toBeNull();

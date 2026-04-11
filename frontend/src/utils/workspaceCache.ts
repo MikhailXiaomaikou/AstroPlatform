@@ -8,6 +8,16 @@ export interface WorkspaceCacheFile {
   local_only?: boolean;
 }
 
+export interface WorkspaceExportRegistration {
+  id?: string;
+  filename: string;
+  storagePath: string;
+  exportKind: "markdown" | "notebook" | "latex" | "bibtex";
+  contentType: string;
+  sizeBytes: number;
+  localOnly?: boolean;
+}
+
 const WORKSPACE_CACHE_KEY = "astro_workspace_files";
 
 function normalizeWorkspaceFile(file: Partial<WorkspaceCacheFile> & Pick<WorkspaceCacheFile, "source" | "object_id" | "fits_path">): WorkspaceCacheFile {
@@ -76,6 +86,24 @@ export function upsertWorkspaceFile(file: Partial<WorkspaceCacheFile> & Pick<Wor
 
 export function findWorkspaceFile(source: string, objectId: string): WorkspaceCacheFile | undefined {
   return readWorkspaceCache().find((file) => file.source === source && file.object_id === objectId);
+}
+
+export function registerWorkspaceExport(exportFile: WorkspaceExportRegistration): WorkspaceCacheFile[] {
+  return upsertWorkspaceFile({
+    id: exportFile.id,
+    source: "export",
+    object_id: exportFile.filename,
+    fits_path: exportFile.storagePath,
+    created_at: new Date().toISOString(),
+    local_only: exportFile.localOnly,
+    metadata: {
+      workspace_kind: "generic",
+      export_kind: exportFile.exportKind,
+      original_filename: exportFile.filename,
+      content_type: exportFile.contentType,
+      size_bytes: exportFile.sizeBytes,
+    },
+  });
 }
 
 export function buildPipelineDraft(inputDataId: string) {
