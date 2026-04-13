@@ -2719,12 +2719,14 @@ export default function ChatPage() {
             placeholder={dragOver ? "Drop FITS file here..." : t("chat.placeholder")}
             rows={1}
             disabled={loading}
+            aria-label="Message input"
           />
           <button
             className="btn-chat-send"
             onClick={handleSend}
             disabled={!input.trim() || loading}
             title="Send message (Enter)"
+            aria-label="Send message"
           >
             &#x2191;
           </button>

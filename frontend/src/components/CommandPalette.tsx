@@ -100,7 +100,7 @@ export default function CommandPalette() {
   }
 
   return (
-    <div className="cmd-palette-backdrop" onClick={() => setOpen(false)}>
+    <div className="cmd-palette-backdrop" role="dialog" aria-modal="true" aria-label="Command palette" onClick={() => setOpen(false)}>
       <div className="cmd-palette" onClick={(e) => e.stopPropagation()}>
         <input
           ref={inputRef}
@@ -112,8 +112,9 @@ export default function CommandPalette() {
             setSelectedIndex(0);
           }}
           onKeyDown={handleKeyDown}
+          aria-label="Search commands"
         />
-        <div className="cmd-palette-results">
+        <div className="cmd-palette-results" role="listbox">
           {filtered.length === 0 && (
             <div className="cmd-palette-empty">{t("cmd.no_match")}</div>
           )}
@@ -126,6 +127,8 @@ export default function CommandPalette() {
                   <div
                     key={cmd.id}
                     className={`cmd-palette-item${globalIdx === selectedIndex ? " selected" : ""}`}
+                    role="option"
+                    aria-selected={globalIdx === selectedIndex}
                     onClick={() => {
                       cmd.action();
                       setOpen(false);

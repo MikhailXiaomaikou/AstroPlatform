@@ -6006,3 +6006,82 @@
   font-size: 0.75rem;
   color: var(--color-text-tertiary);
 }
+
+/* ══════════════════════════════════════
+   Responsive Enhancements
+   ══════════════════════════════════════ */
+
+/* Command palette: full width on small screens */
+@media (max-width: 640px) {
+  .cmd-palette { width: calc(100vw - 32px); max-width: 560px; }
+  .cmd-palette-input { font-size: 16px; } /* prevent iOS zoom */
+}
+
+/* Pipeline: bottom-sheet panels on narrow screens */
+@media (max-width: 768px) {
+  .node-params-editor { position: fixed; left: 0; right: 0; bottom: 0; top: auto; max-height: 60vh; width: 100%; border-radius: 12px 12px 0 0; z-index: 30; }
+  .node-result-panel { width: 100%; position: fixed; left: 0; right: 0; bottom: 0; top: auto; max-height: 50vh; border-radius: 12px 12px 0 0; }
+}
+
+/* Chat: full-width input on mobile */
+@media (max-width: 640px) {
+  .chat-input-area { padding: 8px; }
+  .chat-input-area textarea { font-size: 16px; } /* prevent iOS zoom */
+  .chat-header-row { flex-wrap: wrap; gap: 4px; }
+  .chat-header-row .btn-small { font-size: 0.7rem; padding: 4px 8px; }
+}
+
+/* Tables: horizontal scroll on narrow screens */
+@media (max-width: 768px) {
+  .results-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .results-table { min-width: 600px; }
+}
+
+/* Onboarding tooltip: center on small screens */
+@media (max-width: 640px) {
+  .onboarding-tooltip { left: 16px !important; right: 16px; max-width: none; }
+}
+
+/* Data browser: stack layout on mobile */
+@media (max-width: 640px) {
+  .column-panel { position: fixed; left: 8px; right: 8px; top: auto; bottom: 8px; max-height: 50vh; }
+}
+
+/* ══════════════════════════════════════
+   Accessibility
+   ══════════════════════════════════════ */
+
+.skip-to-content {
+  position: absolute;
+  left: -9999px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  z-index: 9999;
+}
+.skip-to-content:focus {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  width: auto;
+  height: auto;
+  padding: 12px 24px;
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 8px;
+  z-index: 9999;
+  outline: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

@@ -107,6 +107,7 @@ function NavBar() {
         value={lang}
         onChange={(e) => setLang(e.target.value as Lang)}
         title="Language"
+        aria-label="Select language"
       >
         {ALL_LANGS.map((l) => (
           <option key={l} value={l}>{LANG_NAMES[l]}</option>
@@ -227,12 +228,13 @@ function App() {
     <I18nProvider>
     <AuthProvider>
       <BrowserRouter>
+        <a href="#main-content" className="skip-to-content">Skip to content</a>
         <TrackingBridge />
         <BackendBanner />
         <NavBar />
         <CommandPalette />
         <OnboardingOverlay />
-        <main className="main-content">
+        <main id="main-content" className="main-content">
           <ErrorBoundary>
             <Suspense fallback={<div className="fits-loading">Loading...</div>}>
               <Routes>

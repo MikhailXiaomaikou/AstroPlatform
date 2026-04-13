@@ -944,10 +944,10 @@ export default function PipelineCanvas() {
       )}
 
       {inspectResult && (
-        <div className="node-result-panel">
+        <div className="node-result-panel" role="dialog" aria-label="Node results">
           <div className="node-result-panel-header">
             <h4>{t("pipeline.node_result")} {inspectResult.nodeId}</h4>
-            <button onClick={() => setInspectResult(null)}>&times;</button>
+            <button onClick={() => setInspectResult(null)} aria-label="Close">&times;</button>
           </div>
           <div className="node-result-panel-body">
             <pre>{JSON.stringify(inspectResult.data, null, 2)}</pre>
@@ -978,6 +978,7 @@ export default function PipelineCanvas() {
                   setCompareMode(false);
                   setCompareSelection([]);
                 }}
+                aria-label="Close"
               >
                 Close
               </button>

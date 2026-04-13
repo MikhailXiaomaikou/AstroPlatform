@@ -239,7 +239,7 @@ export default function NodeParamsEditor({
   };
 
   return (
-    <div className="node-params-editor">
+    <div className="node-params-editor" role="dialog" aria-label="Node parameters">
       <div className="node-params-editor-header">
         <h3>{nodeLabel}</h3>
         <span className="node-params-type-badge">{nodeType}</span>

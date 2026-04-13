@@ -11,13 +11,14 @@ function tx(en: string, zh: string, lang: Lang): string {
 
 /* ── Tab keys ── */
 
-type Tab = "quickstart" | "tutorials" | "glossary" | "faq";
+type Tab = "quickstart" | "tutorials" | "glossary" | "faq" | "shortcuts";
 
 const TABS: { key: Tab; en: string; zh: string }[] = [
   { key: "quickstart", en: "Quick Start", zh: "快速入门" },
   { key: "tutorials", en: "Research Tutorials", zh: "研究案例" },
   { key: "glossary", en: "Glossary", zh: "术语表" },
   { key: "faq", en: "FAQ", zh: "常见问题" },
+  { key: "shortcuts", en: "Keyboard Shortcuts", zh: "快捷键" },
 ];
 
 /* ── FAQ data ── */
@@ -247,6 +248,7 @@ export default function HelpPage() {
       {tab === "faq" && (
         <FaqTab lang={lang} openIdx={openFaq} setOpenIdx={setOpenFaq} />
       )}
+      {tab === "shortcuts" && <KeyboardShortcutsTab lang={lang} />}
     </div>
   );
 }
@@ -632,6 +634,135 @@ function FaqTab({
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   Keyboard Shortcuts Tab
+   ═══════════════════════════════════════ */
+
+interface Shortcut {
+  keys: string;
+  desc: { en: string; zh: string };
+}
+
+const SHORTCUTS: Shortcut[] = [
+  { keys: "Cmd/Ctrl + K", desc: { en: "Open command palette", zh: "打开命令面板" } },
+  { keys: "Cmd/Ctrl + Z", desc: { en: "Undo (Pipeline editor)", zh: "撤销（流水线编辑器）" } },
+  {
+    keys: "Cmd/Ctrl + Shift + Z / Cmd/Ctrl + Y",
+    desc: { en: "Redo (Pipeline editor)", zh: "重做（流水线编辑器）" },
+  },
+  { keys: "Escape", desc: { en: "Close dialogs, panels, and command palette", zh: "关闭对话框、面板和命令面板" } },
+  {
+    keys: "Enter",
+    desc: { en: "Send message (Chat) / Execute command (Command palette)", zh: "发送消息（聊天）/ 执行命令（命令面板）" },
+  },
+  { keys: "Shift + Enter", desc: { en: "New line in chat input", zh: "在聊天输入中换行" } },
+  { keys: "Tab", desc: { en: "Navigate between interactive elements", zh: "在交互元素之间导航" } },
+  { keys: "Arrow Up / Down", desc: { en: "Navigate command palette results", zh: "浏览命令面板结果" } },
+];
+
+function KeyboardShortcutsTab({ lang }: { lang: Lang }) {
+  return (
+    <div style={{ display: "grid", gap: "0.75rem" }}>
+      <h2 style={{ margin: 0 }}>
+        {tx("Keyboard Shortcuts", "快捷键", lang)}
+      </h2>
+      <p style={{ color: "var(--color-text-secondary)", margin: 0, maxWidth: 720 }}>
+        {tx(
+          "Use these shortcuts to work faster across the platform.",
+          "使用这些快捷键提高平台操作效率。",
+          lang,
+        )}
+      </p>
+
+      <div
+        style={{
+          display: "grid",
+          gap: "1px",
+          background: "var(--color-border)",
+          borderRadius: "var(--radius-md)",
+          overflow: "hidden",
+          border: "1px solid var(--color-border)",
+        }}
+      >
+        {/* Header row */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "280px 1fr",
+            gap: "1rem",
+            padding: "0.7rem 1rem",
+            background: "var(--color-surface)",
+            fontWeight: 600,
+            fontSize: "0.85rem",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          <span>{tx("Shortcut", "快捷键", lang)}</span>
+          <span>{tx("Action", "操作", lang)}</span>
+        </div>
+
+        {/* Shortcut rows */}
+        {SHORTCUTS.map((s, i) => (
+          <div
+            key={i}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "280px 1fr",
+              gap: "1rem",
+              padding: "0.7rem 1rem",
+              background: "var(--color-surface)",
+              alignItems: "baseline",
+            }}
+          >
+            <span>
+              {s.keys.split(" / ").map((k, j) => (
+                <span key={j}>
+                  {j > 0 && (
+                    <span
+                      style={{
+                        color: "var(--color-text-tertiary)",
+                        fontSize: "0.82rem",
+                        margin: "0 0.35rem",
+                      }}
+                    >
+                      or
+                    </span>
+                  )}
+                  <kbd
+                    style={{
+                      display: "inline-block",
+                      padding: "0.15rem 0.45rem",
+                      borderRadius: "var(--radius-sm)",
+                      border: "1px solid var(--color-border)",
+                      background: "var(--color-bg, #f5f5f5)",
+                      fontFamily: "inherit",
+                      fontSize: "0.82rem",
+                      fontWeight: 600,
+                      color: "var(--color-accent)",
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {k.trim()}
+                  </kbd>
+                </span>
+              ))}
+            </span>
+            <span
+              style={{
+                color: "var(--color-text-secondary)",
+                fontSize: "0.85rem",
+                lineHeight: 1.5,
+              }}
+            >
+              {tx(s.desc.en, s.desc.zh, lang)}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -70,7 +70,7 @@ export default function OnboardingOverlay() {
           }}
         />
       )}
-      <div className="onboarding-tooltip" style={tooltipStyle}>
+      <div className="onboarding-tooltip" style={tooltipStyle} role="dialog" aria-modal="true">
         <div className="onboarding-step-indicator">
           {t("onboard.step_of")} {step + 1} {t("onboard.of")} {STEP_KEYS.length}
         </div>
