@@ -295,6 +295,7 @@ export default function ADQLPage() {
                 "astro_chat_draft",
                 `Use get_adql_results() to analyze the ADQL result set that is already loaded from this ${svc.toUpperCase()} query. Explain the schema, summarize the sample, and suggest the next Python analysis steps:\n\n${query}`
               );
+              localStorage.setItem("astro_chat_new_session", "1");
               navigate("/chat");
             }}>
               Send to AI

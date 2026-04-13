@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.auth import hash_password
+from app.auth import create_access_token, hash_password
 from app.models.schemas import ChatSession, DataFile, PipelineRun, PipelineTemplateDB, RunResult, User
 from app.utils.usernames import username_from_email
 
@@ -97,6 +97,9 @@ class TestPipelineEndpoints:
         assert "Denoise" in type_names
         assert "SpectralFit" in type_names
         assert "Plot" in type_names
+        assert "BiasSubtract" in type_names
+        assert "AstrometricSolve" in type_names
+        assert "SourceExtract" in type_names
 
     async def test_list_templates(self, app_client):
         resp = await app_client.get("/api/pipeline/templates")
@@ -925,3 +928,153 @@ class TestTeamEndpoints:
             else:
                 resp = await app_client.post(url, json={})
             assert resp.status_code == 401, f"{method} {url} should require auth"
+
+
+class TestCollaborationAndMemoryEndpoints:
+    async def _create_session(self, db_session):
+        user = User(
+            id=uuid.uuid4(),
+            username="sessionowner",
+            email="sessionowner@example.com",
+            password_hash=hash_password("securepassword123"),
+            subscription_tier="solo",
+        )
+        db_session.add(user)
+        await db_session.flush()
+        session = ChatSession(
+            user_id=user.id,
+            title="Shared M31 Session",
+            messages=[
+                {"role": "user", "content": "Analyze M31"},
+                {"role": "assistant", "content": "Loaded Gaia and SDSS context."},
+            ],
+        )
+        db_session.add(session)
+        await db_session.commit()
+        await db_session.refresh(session)
+        return user, create_access_token(user.id), session
+
+    async def test_session_share_snapshot_and_research_memory(self, app_client, db_session):
+        owner, owner_token, session = await self._create_session(db_session)
+        collaborator = User(
+            id=uuid.uuid4(),
+            username="collabuser",
+            email="collab@example.com",
+            password_hash=hash_password("securepassword123"),
+            subscription_tier="solo",
+        )
+        db_session.add(collaborator)
+        await db_session.commit()
+        collab_token = create_access_token(collaborator.id)
+
+        owner_headers = {"Authorization": f"Bearer {owner_token}"}
+        collab_headers = {"Authorization": f"Bearer {collab_token}"}
+
+        share_resp = await app_client.post(
+            f"/api/sessions/{session.id}/share",
+            json={"access_level": "fork", "expires_hours": 24},
+            headers=owner_headers,
+        )
+        assert share_resp.status_code == 200
+        share_body = share_resp.json()
+        assert share_body["share_token"]
+
+        list_resp = await app_client.get(f"/api/sessions/{session.id}/shares", headers=owner_headers)
+        assert list_resp.status_code == 200
+        assert len(list_resp.json()) == 1
+
+        shared_resp = await app_client.get(f"/api/shared/{share_body['share_token']}", headers=collab_headers)
+        assert shared_resp.status_code == 200
+        assert shared_resp.json()["session"]["title"] == "Shared M31 Session"
+        assert shared_resp.json()["can_fork"] is True
+
+        fork_resp = await app_client.post(f"/api/shared/{share_body['share_token']}/fork", headers=collab_headers)
+        assert fork_resp.status_code == 200
+        assert fork_resp.json()["forked_from"] == str(session.id)
+
+        snapshot_resp = await app_client.post(
+            f"/api/sessions/{session.id}/snapshots",
+            json={"name": "before edits"},
+            headers=owner_headers,
+        )
+        assert snapshot_resp.status_code == 200
+        snapshot_id = snapshot_resp.json()["id"]
+
+        session.messages = [
+            {"role": "user", "content": "Analyze M31"},
+            {"role": "assistant", "content": "Loaded Gaia and SDSS context."},
+            {"role": "assistant", "content": "Added a new CMD fit."},
+        ]
+        await db_session.commit()
+
+        snapshot_resp_2 = await app_client.post(
+            f"/api/sessions/{session.id}/snapshots",
+            json={"name": "after cmd fit"},
+            headers=owner_headers,
+        )
+        assert snapshot_resp_2.status_code == 200
+        snapshot_id_2 = snapshot_resp_2.json()["id"]
+
+        diff_resp = await app_client.get(
+            f"/api/sessions/{session.id}/snapshots/diff",
+            params={"a": snapshot_id, "b": snapshot_id_2},
+            headers=owner_headers,
+        )
+        assert diff_resp.status_code == 200
+        assert diff_resp.json()["added_messages"] >= 1
+
+        profile_resp = await app_client.put(
+            "/api/research/profile",
+            json={"memory_enabled": True},
+            headers=owner_headers,
+        )
+        assert profile_resp.status_code == 200
+
+        refresh_resp = await app_client.post(
+            "/api/research/profile/refresh",
+            params={"session_id": str(session.id)},
+            headers=owner_headers,
+        )
+        assert refresh_resp.status_code == 200
+
+        history_resp = await app_client.get("/api/research/history", headers=owner_headers)
+        assert history_resp.status_code == 200
+        assert len(history_resp.json()) >= 1
+
+        restore_resp = await app_client.post(
+            f"/api/sessions/{session.id}/snapshots/{snapshot_id}/restore",
+            headers=owner_headers,
+        )
+        assert restore_resp.status_code == 200
+
+
+class TestInferenceAdminEndpoints:
+    async def test_admin_inference_config_and_health(self, app_client, db_session, monkeypatch):
+        admin = User(
+            id=uuid.uuid4(),
+            username="astroadmin",
+            email="astroadmin@example.com",
+            password_hash=hash_password("securepassword123"),
+            subscription_tier="admin",
+        )
+        db_session.add(admin)
+        await db_session.commit()
+        token = create_access_token(admin.id)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        monkeypatch.setenv("ADMIN_USERNAMES", "astroadmin")
+
+        cfg_resp = await app_client.get("/api/admin/inference/config", headers=headers)
+        assert cfg_resp.status_code == 200
+        assert "routing" in cfg_resp.json()
+
+        update_resp = await app_client.put(
+            "/api/admin/inference/config",
+            json={"routing": {"analysis_agent": "claude"}},
+            headers=headers,
+        )
+        assert update_resp.status_code == 200
+
+        health_resp = await app_client.get("/api/admin/inference/health", headers=headers)
+        assert health_resp.status_code == 200
+        assert any(item["backend"] == "claude" for item in health_resp.json()["backends"])

@@ -563,7 +563,9 @@ export default function AnomalyExplorer() {
       `Unusual features: ${item.unusual_features}\n\n` +
       `What could explain this anomaly? Provide possible astrophysical interpretations and suggest follow-up observations.`;
 
-    navigate("/chat", { state: { prefill } });
+    localStorage.setItem("astro_chat_draft", prefill);
+    localStorage.setItem("astro_chat_new_session", "1");
+    navigate("/chat");
   };
 
   // Generate dossier

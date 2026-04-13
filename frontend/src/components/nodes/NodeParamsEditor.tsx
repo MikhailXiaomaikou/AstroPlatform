@@ -5,26 +5,54 @@ import { useEffect, useState } from "react";
 interface ParamDef {
   key: string;
   label: string;
-  type: "text" | "number" | "select";
+  type: "text" | "number" | "select" | "checkboxes";
   default?: string | number;
-  options?: string[]; // for select
+  options?: string[]; // for select and checkboxes
   required?: boolean;
   placeholder?: string;
 }
 
 const NODE_PARAM_DEFS: Record<string, ParamDef[]> = {
   QueryData: [
-    { key: "query", label: "Target / Query", type: "text", required: true, placeholder: "M31, Pleiades, Crab Nebula..." },
-    { key: "sources", label: "Sources", type: "text", default: "simbad,gaia", placeholder: "Comma-separated: simbad,gaia,sdss" },
-    { key: "radius", label: "Radius (deg)", type: "number", default: 0.1 },
-    { key: "ra", label: "RA (optional)", type: "number" },
-    { key: "dec", label: "Dec (optional)", type: "number" },
+    { key: "query", label: "Target Name", type: "text", required: true, placeholder: "M31, Pleiades, Crab Nebula, 10.68 41.27" },
+    { key: "sources", label: "Sources", type: "checkboxes", default: "simbad,gaia", options: ["simbad", "gaia", "sdss", "vizier", "mast", "ned", "2mass", "chandra", "allwise"] },
+    { key: "radius", label: "Search Radius (deg)", type: "number", default: 0.1 },
+    { key: "max_results", label: "Max Results", type: "number", default: 100 },
+    { key: "ra", label: "RA (optional, deg)", type: "number", placeholder: "Auto-resolved from target name" },
+    { key: "dec", label: "Dec (optional, deg)", type: "number", placeholder: "Auto-resolved from target name" },
   ],
   ImportWorkspace: [
     { key: "path", label: "Workspace File", type: "select", required: true },
   ],
   LoadData: [
     { key: "fits_path", label: "FITS Path", type: "text" },
+  ],
+  BiasSubtract: [
+    { key: "science_fits_path", label: "Science FITS (optional)", type: "text", placeholder: "Falls back to upstream image or run input path" },
+    { key: "bias_paths", label: "Bias Paths", type: "text", placeholder: 'Comma-separated FITS paths or leave blank if using bias_frames' },
+  ],
+  DarkCorrect: [
+    { key: "science_fits_path", label: "Science FITS (optional)", type: "text" },
+    { key: "dark_paths", label: "Dark Paths", type: "text", placeholder: "Comma-separated FITS paths" },
+    { key: "science_exptime", label: "Science EXPTIME", type: "number", default: 1.0 },
+    { key: "dark_exptime", label: "Dark EXPTIME", type: "number", default: 1.0 },
+  ],
+  FlatField: [
+    { key: "science_fits_path", label: "Science FITS (optional)", type: "text" },
+    { key: "flat_paths", label: "Flat Paths", type: "text", placeholder: "Comma-separated FITS paths" },
+  ],
+  CosmicRayReject: [
+    { key: "fits_path", label: "FITS Path (optional)", type: "text" },
+    { key: "sigclip", label: "Sigma Clip", type: "number", default: 5.0 },
+    { key: "sigfrac", label: "Sigma Fraction", type: "number", default: 0.3 },
+    { key: "objlim", label: "Object Limit", type: "number", default: 5.0 },
+  ],
+  AstrometricSolve: [
+    { key: "fits_path", label: "FITS Path", type: "text", required: true },
+  ],
+  SourceExtract: [
+    { key: "fits_path", label: "FITS Path (optional)", type: "text", placeholder: "Uses upstream output_path or fits_path if blank" },
+    { key: "aperture_radii", label: "Aperture Radii", type: "text", default: "3,5,7" },
   ],
   Denoise: [
     { key: "sigma", label: "Sigma", type: "number", default: 3.0 },
@@ -145,7 +173,12 @@ export default function NodeParamsEditor({
     const initial: Record<string, string | number> = {};
     for (const def of paramDefs) {
       if (currentParams[def.key] !== undefined && currentParams[def.key] !== null) {
-        initial[def.key] = currentParams[def.key] as string | number;
+        const currentValue = currentParams[def.key];
+        if (Array.isArray(currentValue) && ["bias_paths", "dark_paths", "flat_paths", "aperture_radii"].includes(def.key)) {
+          initial[def.key] = currentValue.join(",");
+        } else {
+          initial[def.key] = currentValue as string | number;
+        }
       } else if (def.default !== undefined) {
         initial[def.key] = def.default;
       } else if (def.type === "select" && nodeType === "ImportWorkspace" && def.key === "path" && workspacePaths.length > 0) {
@@ -158,7 +191,7 @@ export default function NodeParamsEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentParams, nodeId, nodeType, paramDefs, workspacePaths]);
 
-  const handleChange = (key: string, value: string, type: "text" | "number" | "select") => {
+  const handleChange = (key: string, value: string, type: "text" | "number" | "select" | "checkboxes") => {
     if (type === "number") {
       // Allow empty string while typing; store parsed number otherwise
       setFormValues((prev) => ({
@@ -176,7 +209,15 @@ export default function NodeParamsEditor({
     for (const def of paramDefs) {
       const val = formValues[def.key];
       if (val !== "" && val !== undefined) {
-        params[def.key] = val;
+        if (typeof val === "string" && ["bias_paths", "dark_paths", "flat_paths", "aperture_radii"].includes(def.key)) {
+          params[def.key] = val
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .map((item) => (def.key === "aperture_radii" ? Number(item) : item));
+        } else {
+          params[def.key] = val;
+        }
       }
     }
     onApply(nodeId, params);
@@ -201,7 +242,27 @@ export default function NodeParamsEditor({
               {def.required && <span className="node-params-required">*</span>}
             </label>
 
-            {def.type === "select" && !(nodeType === "ImportWorkspace" && def.key === "path" && workspacePaths.length === 0) ? (
+            {def.type === "checkboxes" && def.options ? (
+              <div className="node-params-checkboxes">
+                {def.options.map((opt) => {
+                  const selected = String(formValues[def.key] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+                  const checked = selected.includes(opt);
+                  return (
+                    <label key={opt} className="node-params-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          const next = checked ? selected.filter((s) => s !== opt) : [...selected, opt];
+                          handleChange(def.key, next.join(","), "text");
+                        }}
+                      />
+                      <span>{opt.toUpperCase()}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : def.type === "select" && !(nodeType === "ImportWorkspace" && def.key === "path" && workspacePaths.length === 0) ? (
               <select
                 id={`param-${nodeId}-${def.key}`}
                 value={String(formValues[def.key] ?? "")}

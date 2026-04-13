@@ -60,13 +60,29 @@ function PipelineNode({ data, selected }: NodeProps<PipelineNodeData>) {
       <div className="pipeline-node-body">
         <span className="pipeline-node-type">{data.nodeType}</span>
         {data.params && Object.keys(data.params).length > 0 && (
-          <ul className="pipeline-node-params">
-            {Object.entries(data.params).map(([k, v]) => (
-              <li key={k}>
-                <span className="param-key">{k}:</span> {String(v)}
-              </li>
-            ))}
-          </ul>
+          data.nodeType === "QueryData" ? (
+            <div className="pipeline-node-summary">
+              {data.params.query ? <span className="param-summary-target">{String(data.params.query)}</span> : null}
+              {data.params.sources ? (
+                <span className="param-summary-sources">
+                  {String(data.params.sources).split(",").map((s) => s.trim().toUpperCase()).join("+")}
+                </span>
+              ) : null}
+              {data.params.radius != null ? <span className="param-summary-detail">{String(data.params.radius)}&deg;</span> : null}
+            </div>
+          ) : data.nodeType === "ImportWorkspace" ? (
+            <div className="pipeline-node-summary">
+              <span className="param-summary-target">{String(data.params.path ?? "").split("/").pop() || "No file"}</span>
+            </div>
+          ) : (
+            <ul className="pipeline-node-params">
+              {Object.entries(data.params).map(([k, v]) => (
+                <li key={k}>
+                  <span className="param-key">{k}:</span> {String(v)}
+                </li>
+              ))}
+            </ul>
+          )
         )}
         {data.progressError && (
           <div className="node-error-msg">{data.progressError}</div>

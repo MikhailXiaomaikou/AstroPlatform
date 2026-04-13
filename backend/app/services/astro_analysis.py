@@ -2577,6 +2577,25 @@ def available_functions():
     exported.append(estimate_photo_z_ml)
     exported.append(estimate_photo_z)
 
+    from app.analysis.image_reduction import (
+        bias_subtract,
+        dark_subtract,
+        flat_correct,
+        cosmic_ray_reject,
+        full_reduction,
+        solve_astrometry,
+        extract_and_photometer,
+    )
+    exported.extend([
+        bias_subtract,
+        dark_subtract,
+        flat_correct,
+        cosmic_ray_reject,
+        full_reduction,
+        solve_astrometry,
+        extract_and_photometer,
+    ])
+
     info = {}
     for func in exported:
         doc = inspect.getdoc(func) or ""

@@ -264,22 +264,23 @@ async def ai_interpret(
     summary: SpectrumSummary,
     redshift_result: dict | None,
     api_key: str,
+    provider_api_keys: dict[str, str] | None = None,
 ) -> dict:
-    """Send spectrum summary to Claude and get AI interpretation."""
-    import anthropic
+    """Send spectrum summary to the routed LLM backend and get AI interpretation."""
+    from app.ai.inference_router import inference_router
 
     prompt_text = build_claude_prompt(summary, redshift_result)
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1500,
+    response = await inference_router.route(
+        "spectrum_agent",
+        [{"role": "user", "content": prompt_text}],
         system=SPECTRUM_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt_text}],
+        api_key=api_key,
+        provider_api_keys=provider_api_keys,
+        max_tokens=1500,
     )
 
     import json
-    text = response.content[0].text.strip()
+    text = str(response.get("content", "") or "").strip()
     # Strip markdown code fences if present
     if text.startswith("```"):
         text = text.split("\n", 1)[1] if "\n" in text else text[3:]

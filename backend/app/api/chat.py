@@ -1,4 +1,4 @@
-"""AI assistant powered by Claude — helps users interact with the platform."""
+"""AI assistant backed by the inference router and multi-agent orchestrator."""
 
 import asyncio
 import json
@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from starlette.requests import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.inference_router import InferenceError, inference_router
+from app.ai.orchestrator import orchestrator
 from app.auth import get_current_user, get_optional_user
 from app.rate_limit import limiter
 from app.models.database import get_db
@@ -33,6 +35,8 @@ When a user describes what data they want, you:
 You can also **design, modify, and comment on data processing pipelines**. When the user describes a workflow ("denoise this spectrum then fit emission lines"), you build a pipeline DAG automatically.
 
 You can **search for astronomical transients and alerts** using the query_transients tool. This searches TNS (Transient Name Server) and Lasair/ZTF for recent supernovae, novae, tidal disruption events, kilonovae, and other transients. Search by name (e.g. "SN 2024abc"), coordinates, or type. Use this when users ask about recent transients, supernovae discoveries, or time-domain events.
+
+For CCD image reduction, guide the user through the standard pipeline: bias → dark → flat → cosmic ray → astrometry → source extraction. Ask what calibration frames are available, then use the CCD reduction tools directly.
 
 Use **get_object_dossier** to fetch comprehensive cross-matched data from all available databases simultaneously for any object.
 Use **get_followup_recommendation** to generate follow-up observation recommendations for transient alerts.
@@ -107,6 +111,12 @@ main_id, ra, dec, otype, otype_txt, rvz_redshift, rvz_radvel, rvz_type, sp_type,
 
 Available node types and their params:
 - **LoadData**: Load FITS file. params: {}
+- **BiasSubtract**: Subtract master bias from CCD image. params: {"bias_frames": [[...], [...]]}
+- **DarkCorrect**: Subtract scaled master dark. params: {"dark_frames": [[...], [...]], "science_exptime": float, "dark_exptime": float}
+- **FlatField**: Divide by normalized master flat. params: {"flat_frames": [[...], [...]]}
+- **CosmicRayReject**: Clean cosmic rays. params: {"sigclip": 5.0, "sigfrac": 0.3, "objlim": 5.0}
+- **AstrometricSolve**: Solve WCS for an image. params: {"fits_path": "processed/file.fits"}
+- **SourceExtract**: Extract sources and aperture photometry. params: {"fits_path": "processed/file.fits", "aperture_radii": [3,5,7]}
 - **Denoise**: Sigma-clip noise. params: {"sigma": 3.0}
 - **SpectralFit**: Fit Gaussian/Lorentzian to emission/absorption lines. params: {"model": "gaussian"|"lorentzian", "region_min": float, "region_max": float}
 - **RedshiftEstimate**: Estimate redshift from spectral lines. params: {"method": "peak"|"xcorr"}
@@ -343,6 +353,80 @@ class ChatResponse(BaseModel):
     actions: list[dict] = []
 
 
+def _normalize_messages(messages: list[ChatMessage]) -> list[dict]:
+    return [{"role": message.role, "content": message.content} for message in messages]
+
+
+def _safe_context(context: dict | None) -> dict:
+    if not context:
+        return {}
+    return {key: value for key, value in context.items() if key not in {"api_key", "api_keys"}}
+
+
+def _provider_api_keys(context: dict | None, user: User | None) -> dict[str, str]:
+    keys: dict[str, str] = {}
+    if user and isinstance(user.api_keys, dict):
+        keys.update({str(k): str(v) for k, v in user.api_keys.items() if v})
+    if user and user.anthropic_api_key and "anthropic" not in keys:
+        keys["anthropic"] = user.anthropic_api_key
+    context_key = str((context or {}).get("api_key") or "").strip()
+    if context_key:
+        keys["anthropic"] = context_key
+    if ANTHROPIC_API_KEY and "anthropic" not in keys:
+        keys["anthropic"] = ANTHROPIC_API_KEY
+    return keys
+
+
+def _filter_tools(tool_names: list[str] | None, tools: list[dict]) -> list[dict]:
+    if not tool_names:
+        return tools
+    allowed = set(tool_names)
+    selected = [tool for tool in tools if tool["name"] in allowed]
+    return selected or tools
+
+
+async def _build_runtime(
+    req: ChatRequest,
+    user: User | None,
+    db: AsyncSession,
+):
+    from app.services.ai_tools import TOOLS
+
+    normalized_messages = _normalize_messages(req.messages)
+    safe_context = _safe_context(req.context)
+    system = SYSTEM_PROMPT
+    if safe_context:
+        ctx_str = json.dumps(safe_context, indent=2, default=str)[:2000]
+        system += f"\n\nCurrent user context:\n{ctx_str}"
+    if user:
+        username = getattr(user, "username", None) or user.email.split("@")[0]
+        system += f"\nUser username: {username}, Subscription: {user.subscription_tier}"
+
+    latest_user_message = next(
+        (message.content for message in reversed(req.messages) if message.role == "user"),
+        "",
+    )
+    toolset = TOOLS
+    agent_names = ["orchestrator"]
+    try:
+        runtime = await orchestrator.build_runtime_context(
+            latest_user_message,
+            normalized_messages,
+            user.id if user else None,
+            db,
+        )
+        runtime_prompt = str(runtime.get("system_prompt", "") or "").strip()
+        if runtime_prompt:
+            system += "\n\n" + runtime_prompt
+        toolset = _filter_tools(runtime.get("tool_names"), TOOLS)
+        if runtime.get("agent_names"):
+            agent_names = list(runtime["agent_names"])
+    except Exception as exc:
+        logger.warning("Falling back to default orchestrator context: %s", exc)
+
+    return system, toolset, agent_names
+
+
 def _parse_actions(text: str) -> list[dict]:
     """Extract action JSON from <actions>...</actions> tags."""
     actions = []
@@ -374,38 +458,24 @@ async def chat_message_stream(
     request: Request,
     req: ChatRequest,
     user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Streaming version — sends SSE events as AI processes tools."""
     from starlette.responses import StreamingResponse
 
     async def generate():
         # Reuse the same logic but yield intermediate results
-        context_key = (req.context or {}).get("api_key") if req.context else None
-        user_keys = (user.api_keys or {}) if user else {}
-        api_key = (
-            context_key
-            or user_keys.get("anthropic")
-            or (user.anthropic_api_key if user and user.anthropic_api_key else None)
-            or ANTHROPIC_API_KEY
-        )
-        if not api_key:
+        provider_api_keys = _provider_api_keys(req.context, user)
+        if not provider_api_keys.get("anthropic"):
             yield f"data: {json.dumps({'type': 'error', 'message': 'No API key configured'})}\n\n"
             return
 
-        import anthropic
         from app.services.ai_tools import TOOLS, store_search_results
 
-        client = anthropic.Anthropic(api_key=api_key)
-        claude_messages: list[dict] = [
-            {"role": m.role, "content": m.content} for m in req.messages
-        ]
-
-        system = SYSTEM_PROMPT
-        if req.context:
-            safe_context = {k: v for k, v in req.context.items() if k != "api_key"}
-            if safe_context:
-                ctx_str = json.dumps(safe_context, indent=2, default=str)[:2000]
-                system += f"\n\nCurrent user context:\n{ctx_str}"
+        toolset = TOOLS
+        claude_messages: list[dict] = _normalize_messages(req.messages)
+        system, toolset, agent_names = await _build_runtime(req, user, db)
+        agent_name = agent_names[0] if agent_names else "orchestrator"
 
         yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
 
@@ -418,46 +488,43 @@ async def chat_message_stream(
 
         try:
             for _iteration in range(12):
-                response = await _claude_messages_create(
-                    client,
+                response = await _llm_messages_create(
                     system=system,
                     messages=claude_messages,
-                    tools=TOOLS,
+                    tools=toolset,
+                    provider_api_keys=provider_api_keys,
+                    agent_name=agent_name,
                 )
 
-                tool_calls = []
-                for block in response.content:
-                    if block.type == "text":
-                        yield f"data: {json.dumps({'type': 'text', 'content': block.text})}\n\n"
-                    elif block.type == "tool_use":
-                        tool_calls.append(
-                            {"id": block.id, "name": block.name, "input": block.input}
-                        )
-                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': block.name, 'input': block.input})}\n\n"
+                tool_calls = list(response.get("tool_calls") or [])
+                text = str(response.get("content", "") or "")
+                if text:
+                    yield f"data: {json.dumps({'type': 'text', 'content': text})}\n\n"
+                for tool_call in tool_calls:
+                    yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_call['name'], 'input': tool_call['input']})}\n\n"
 
                 if not tool_calls:
                     break
 
                 assistant_content = []
-                for block in response.content:
-                    if block.type == "text":
-                        assistant_content.append({"type": "text", "text": block.text})
-                    elif block.type == "tool_use":
-                        assistant_content.append(
-                            {
-                                "type": "tool_use",
-                                "id": block.id,
-                                "name": block.name,
-                                "input": block.input,
-                            }
-                        )
+                if text:
+                    assistant_content.append({"type": "text", "text": text})
+                for tool_call in tool_calls:
+                    assistant_content.append(
+                        {
+                            "type": "tool_use",
+                            "id": tool_call["id"],
+                            "name": tool_call["name"],
+                            "input": tool_call["input"],
+                        }
+                    )
                 claude_messages.append(
                     {"role": "assistant", "content": assistant_content}
                 )
 
                 tool_result_blocks = []
                 executed_tools = await _execute_tool_calls(
-                    tool_calls, api_key, python_session_id
+                    tool_calls, provider_api_keys.get("anthropic", ""), python_session_id
                 )
                 for tc in executed_tools:
                     result = tc["result"]
@@ -477,11 +544,13 @@ async def chat_message_stream(
                     yield f"data: {json.dumps({'type': 'tool_result', 'tool': tc['name'], 'result': result})}\n\n"
 
                 claude_messages.append({"role": "user", "content": tool_result_blocks})
-                if response.stop_reason != "tool_use":
+                if response.get("stop_reason") != "tool_use":
                     break
 
         except TimeoutError:
             yield f"data: {json.dumps({'type': 'error', 'message': 'The AI workflow took too long. Try a narrower query or split the task into query and analysis steps.'})}\n\n"
+        except InferenceError as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
@@ -497,22 +566,25 @@ def _strip_actions_from_reply(text: str) -> str:
     return re.sub(r"<actions>.*?</actions>", "", text, flags=re.DOTALL).strip()
 
 
-async def _claude_messages_create(
-    client, *, system: str, messages: list[dict], tools: list[dict]
+async def _llm_messages_create(
+    *,
+    system: str,
+    messages: list[dict],
+    tools: list[dict],
+    provider_api_keys: dict[str, str],
+    agent_name: str = "orchestrator",
 ):
-    """Run the blocking Anthropic SDK call in a worker thread."""
-    import asyncio
-
-    return await asyncio.wait_for(
-        asyncio.to_thread(
-            client.messages.create,
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            system=system,
-            messages=messages,
-            tools=tools,
-        ),
-        timeout=180.0,
+    """Route one model turn through the inference router."""
+    return await inference_router.route(
+        agent_name,
+        messages,
+        system=system,
+        tools=tools,
+        provider_api_keys=provider_api_keys,
+        api_key=provider_api_keys.get("anthropic"),
+        max_tokens=4096,
+        temperature=0.0,
+        backend_timeout=180.0,
     )
 
 
@@ -544,6 +616,7 @@ async def chat_message(
     request: Request,
     req: ChatRequest,
     user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Send a message to the AI research agent.
 
@@ -551,45 +624,18 @@ async def chat_message(
     inspect results, and automatically plan next steps — a true agentic loop.
     Falls back to single-turn with <actions> tags if tool_use is unavailable.
     """
-    # Priority: context api_key (from frontend localStorage) > user DB key > server env key
-    context_key = (req.context or {}).get("api_key") if req.context else None
-    user_keys = (user.api_keys or {}) if user else {}
-    api_key = (
-        context_key
-        or user_keys.get("anthropic")
-        or (user.anthropic_api_key if user and user.anthropic_api_key else None)
-        or ANTHROPIC_API_KEY
-    )
-    if not api_key:
+    provider_api_keys = _provider_api_keys(req.context, user)
+    if not provider_api_keys.get("anthropic"):
         raise HTTPException(
             status_code=503,
             detail="AI assistant not configured — set your API key in Settings or ask the admin to configure ANTHROPIC_API_KEY",
         )
 
-    try:
-        import anthropic
-    except ImportError:
-        raise HTTPException(status_code=503, detail="anthropic package not installed")
-
     from app.services.ai_tools import TOOLS, store_search_results
 
-    client = anthropic.Anthropic(api_key=api_key)
-
-    # Build messages for Claude
-    claude_messages: list[dict] = []
-    for msg in req.messages:
-        claude_messages.append({"role": msg.role, "content": msg.content})
-
-    # Build system prompt with context
-    system = SYSTEM_PROMPT
-    if req.context:
-        safe_context = {k: v for k, v in req.context.items() if k != "api_key"}
-        if safe_context:
-            ctx_str = json.dumps(safe_context, indent=2, default=str)[:2000]
-            system += f"\n\nCurrent user context:\n{ctx_str}"
-    if user:
-        username = getattr(user, "username", None) or user.email.split("@")[0]
-        system += f"\nUser username: {username}, Subscription: {user.subscription_tier}"
+    claude_messages: list[dict] = _normalize_messages(req.messages)
+    system, toolset, agent_names = await _build_runtime(req, user, db)
+    agent_name = agent_names[0] if agent_names else "orchestrator"
     python_session_id = (req.context or {}).get("python_session_id", "default")
     last_adql_rows = (req.context or {}).get("last_adql_rows")
     if isinstance(last_adql_rows, list):
@@ -602,26 +648,19 @@ async def chat_message(
         max_iterations = 12  # safety limit (supports multi-step research workflows)
 
         for _iteration in range(max_iterations):
-            response = await _claude_messages_create(
-                client,
+            response = await _llm_messages_create(
                 system=system,
                 messages=claude_messages,
-                tools=TOOLS,
+                tools=toolset,
+                provider_api_keys=provider_api_keys,
+                agent_name=agent_name,
             )
 
             # Process response blocks
-            tool_calls_in_turn: list[dict] = []
-            for block in response.content:
-                if block.type == "text":
-                    text_parts.append(block.text)
-                elif block.type == "tool_use":
-                    tool_calls_in_turn.append(
-                        {
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input,
-                        }
-                    )
+            text = str(response.get("content", "") or "")
+            if text:
+                text_parts.append(text)
+            tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
 
             # If no tool calls, we're done
             if not tool_calls_in_turn:
@@ -629,25 +668,24 @@ async def chat_message(
 
             # Execute all tool calls in this turn
             assistant_content = []
-            for block in response.content:
-                if block.type == "text":
-                    assistant_content.append({"type": "text", "text": block.text})
-                elif block.type == "tool_use":
-                    assistant_content.append(
-                        {
-                            "type": "tool_use",
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input,
-                        }
-                    )
+            if text:
+                assistant_content.append({"type": "text", "text": text})
+            for tool_call in tool_calls_in_turn:
+                assistant_content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_call["id"],
+                        "name": tool_call["name"],
+                        "input": tool_call["input"],
+                    }
+                )
 
             claude_messages.append({"role": "assistant", "content": assistant_content})
 
             # Execute tools and build tool_result messages
             tool_result_blocks = []
             executed_tools = await _execute_tool_calls(
-                tool_calls_in_turn, api_key, python_session_id
+                tool_calls_in_turn, provider_api_keys.get("anthropic", ""), python_session_id
             )
             for tc in executed_tools:
                 result = tc["result"]
@@ -675,7 +713,7 @@ async def chat_message(
             claude_messages.append({"role": "user", "content": tool_result_blocks})
 
             # Only continue the loop if Claude explicitly wants more tool calls
-            if response.stop_reason != "tool_use":
+            if response.get("stop_reason") != "tool_use":
                 break
 
         # Combine all text parts
@@ -698,18 +736,8 @@ async def chat_message(
 
         return ChatResponse(reply=clean_reply, actions=actions)
 
-    except anthropic.AuthenticationError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key. Please check your Anthropic API key in Settings.",
-        )
-    except anthropic.RateLimitError:
-        raise HTTPException(
-            status_code=429,
-            detail="API rate limit exceeded. Please wait a moment and try again.",
-        )
-    except anthropic.APIError as e:
-        logger.error("Claude API error: %s", e)
+    except InferenceError as e:
+        logger.error("Inference router error: %s", e)
         raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
     except TimeoutError:
         raise HTTPException(
@@ -1038,6 +1066,7 @@ async def save_chat_session(
     """Save or update a chat session."""
     from app.models.schemas import ChatSession
     from sqlalchemy import select
+    from app.services.memory_service import memory_service
 
     if req.session_id:
         try:
@@ -1056,6 +1085,7 @@ async def save_chat_session(
             from datetime import datetime, timezone
 
             session.updated_at = datetime.now(timezone.utc)
+            await memory_service.refresh_session_memory(user.id, session.id, db)
             await db.commit()
             return {"id": str(session.id), "saved": True}
 
@@ -1074,6 +1104,8 @@ async def save_chat_session(
         messages=req.messages,
     )
     db.add(session)
+    await db.flush()
+    await memory_service.refresh_session_memory(user.id, session.id, db)
     await db.commit()
     await db.refresh(session)
     return {"id": str(session.id), "saved": True}

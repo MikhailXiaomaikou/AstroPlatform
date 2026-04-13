@@ -97,7 +97,7 @@ class TestAlertAPI:
         resp = await app_client.get("/api/alerts/stats")
         assert resp.status_code == 200
         body = resp.json()
-        assert "total_alerts" in body
+        assert "total" in body
 
     @pytest.mark.asyncio
     async def test_alerts_cone_search(self, app_client):

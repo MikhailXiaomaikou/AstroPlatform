@@ -39,6 +39,7 @@ def query_data(input_data: dict | None, params: dict) -> dict:
     query = str(params.get("query") or "").strip()
     sources_raw = str(params.get("sources") or "simbad").strip()
     radius = float(params.get("radius", 0.1) or 0.1)
+    max_results = int(params.get("max_results", 100) or 100)
     ra = _coerce_float(params.get("ra"))
     dec = _coerce_float(params.get("dec"))
 
@@ -72,6 +73,10 @@ def query_data(input_data: dict | None, params: dict) -> dict:
             extra = entry.pop("extra", {}) or {}
             flattened = {**entry, **extra}
             rows.append(flattened)
+            if len(rows) >= max_results:
+                break
+        if len(rows) >= max_results:
+            break
 
     return {
         "type": "catalog",

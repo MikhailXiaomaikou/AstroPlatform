@@ -1300,6 +1300,165 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
   await api.delete(`/api/chat/sessions/${sessionId}`);
 }
 
+export interface SessionShareItem {
+  id: string;
+  share_token: string;
+  access_level: "view" | "fork" | "comment";
+  expires_at: string | null;
+  created_at: string | null;
+}
+
+export interface SessionCommentItem {
+  id: string;
+  user_id: string;
+  target_type: string;
+  target_id: string | null;
+  content: string;
+  parent_id: string | null;
+  created_at: string | null;
+}
+
+export interface SessionSnapshotItem {
+  id: string;
+  name: string;
+  created_at: string | null;
+}
+
+export interface SharedSessionPayload {
+  share: {
+    access_level: "view" | "fork" | "comment";
+    expires_at: string | null;
+  };
+  session: {
+    id: string;
+    title: string;
+    messages: Array<{ role: string; content: string; actions?: unknown[] }>;
+    created_at: string | null;
+    updated_at: string | null;
+  };
+  comments: SessionCommentItem[];
+  can_fork: boolean;
+  can_comment: boolean;
+}
+
+export interface SessionSnapshotDiff {
+  added_messages: number;
+  removed_messages: number;
+  updated_title: boolean;
+  titles: { a: string; b: string };
+}
+
+export async function createSessionShare(
+  sessionId: string,
+  accessLevel: "view" | "fork" | "comment" = "view",
+  expiresHours?: number,
+): Promise<{ id: string; share_url: string; share_token: string; access_level: string; expires_at: string | null }> {
+  const { data } = await api.post(`/api/sessions/${sessionId}/share`, {
+    access_level: accessLevel,
+    expires_hours: expiresHours ?? null,
+  });
+  return data;
+}
+
+export async function listSessionShares(sessionId: string): Promise<SessionShareItem[]> {
+  const { data } = await api.get<SessionShareItem[]>(`/api/sessions/${sessionId}/shares`);
+  return data;
+}
+
+export async function revokeSessionShare(sessionId: string, shareId: string): Promise<void> {
+  await api.delete(`/api/sessions/${sessionId}/share/${shareId}`);
+}
+
+export async function createSessionSnapshot(sessionId: string, name: string): Promise<{ id: string; name: string }> {
+  const { data } = await api.post(`/api/sessions/${sessionId}/snapshots`, { name });
+  return data;
+}
+
+export async function listSessionSnapshots(sessionId: string): Promise<SessionSnapshotItem[]> {
+  const { data } = await api.get<SessionSnapshotItem[]>(`/api/sessions/${sessionId}/snapshots`);
+  return data;
+}
+
+export async function restoreSessionSnapshot(sessionId: string, snapshotId: string): Promise<{ restored: boolean }> {
+  const { data } = await api.post(`/api/sessions/${sessionId}/snapshots/${snapshotId}/restore`);
+  return data;
+}
+
+export async function diffSessionSnapshots(sessionId: string, a: string, b: string): Promise<SessionSnapshotDiff> {
+  const { data } = await api.get<SessionSnapshotDiff>(`/api/sessions/${sessionId}/snapshots/diff`, { params: { a, b } });
+  return data;
+}
+
+export async function getSharedSession(token: string): Promise<SharedSessionPayload> {
+  const { data } = await api.get<SharedSessionPayload>(`/api/shared/${token}`);
+  return data;
+}
+
+export async function forkSharedSession(token: string): Promise<{ id: string; forked_from: string }> {
+  const { data } = await api.post(`/api/shared/${token}/fork`);
+  return data;
+}
+
+export async function addSharedSessionComment(
+  token: string,
+  payload: { target_type?: string; target_id?: string | null; content: string; parent_id?: string | null },
+): Promise<{ id: string }> {
+  const { data } = await api.post(`/api/shared/${token}/comments`, payload);
+  return data;
+}
+
+export interface ResearchProfile {
+  id: string;
+  user_id: string;
+  memory_enabled: boolean;
+  frequently_queried_objects: Array<{ name: string; count: number }>;
+  preferred_databases: string[];
+  preferred_analysis_methods: string[];
+  research_interests: string[];
+  expertise_level: string;
+  past_hypotheses: Array<Record<string, unknown>>;
+  preferred_plotting_style: Record<string, unknown>;
+}
+
+export interface ResearchHistoryItem {
+  id: string;
+  session_id: string;
+  summary: string;
+  objects: string[];
+  methods: string[];
+  findings: string[];
+  created_at: string | null;
+}
+
+export async function getResearchProfile(): Promise<ResearchProfile> {
+  const { data } = await api.get<ResearchProfile>("/api/research/profile");
+  return data;
+}
+
+export async function updateResearchProfile(payload: Partial<Pick<ResearchProfile, "memory_enabled" | "research_interests" | "expertise_level" | "preferred_plotting_style">>): Promise<{ saved: boolean }> {
+  const { data } = await api.put("/api/research/profile", payload);
+  return data;
+}
+
+export async function refreshResearchProfile(sessionId?: string): Promise<{ refreshed: boolean }> {
+  const { data } = await api.post("/api/research/profile/refresh", null, {
+    params: sessionId ? { session_id: sessionId } : undefined,
+  });
+  return data;
+}
+
+export async function listResearchHistory(query?: string): Promise<ResearchHistoryItem[]> {
+  const { data } = await api.get<ResearchHistoryItem[]>("/api/research/history", {
+    params: query ? { q: query } : undefined,
+  });
+  return data;
+}
+
+export async function deleteResearchMemory(): Promise<{ deleted: boolean }> {
+  const { data } = await api.delete("/api/research/memory");
+  return data;
+}
+
 export async function validatePaperSession(sessionId: string): Promise<AnalysisValidationResult> {
   const { data } = await api.post<AnalysisValidationResult>(`/api/paper/validate/${sessionId}`);
   return data;
@@ -1610,8 +1769,8 @@ export interface AlertStats {
 }
 
 export async function getAlerts(params?: { days?: number; classification?: string; limit?: number }): Promise<TransientAlert[]> {
-  const { data } = await api.get<TransientAlert[]>("/api/alerts", { params });
-  return data;
+  const { data } = await api.get<{ count: number; alerts: TransientAlert[] }>("/api/alerts", { params });
+  return data.alerts ?? [];
 }
 
 export async function getAlertStats(): Promise<AlertStats> {

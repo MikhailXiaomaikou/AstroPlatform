@@ -8,6 +8,12 @@ const TYPE_COLORS: Record<string, string> = {
   QueryData: "#2563eb",
   ImportWorkspace: "#3b82f6",
   LoadData: "#0A84FF",
+  BiasSubtract: "#1d4ed8",
+  DarkCorrect: "#2563eb",
+  FlatField: "#3b82f6",
+  CosmicRayReject: "#0ea5e9",
+  AstrometricSolve: "#38bdf8",
+  SourceExtract: "#60a5fa",
   Denoise: "#BF5AF2",
   SpectralFit: "#64D2FF",
   CoordTransform: "#FF9F0A",
@@ -25,6 +31,12 @@ const TYPE_ORDER = [
   "QueryData",
   "ImportWorkspace",
   "LoadData",
+  "BiasSubtract",
+  "DarkCorrect",
+  "FlatField",
+  "CosmicRayReject",
+  "AstrometricSolve",
+  "SourceExtract",
 ];
 
 export default function NodePalette({ nodeTypes }: Props) {

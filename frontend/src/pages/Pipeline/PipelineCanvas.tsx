@@ -187,6 +187,12 @@ export default function PipelineCanvas() {
           { type: "QueryData", label: "Query Data", description: "Search catalog sources", inputs: 0, outputs: 1 },
           { type: "ImportWorkspace", label: "Import Workspace", description: "Load a Workspace file", inputs: 0, outputs: 1 },
           { type: "LoadData", label: "Load Data", description: "Load FITS file", inputs: 0, outputs: 1 },
+          { type: "BiasSubtract", label: "Bias Subtract", description: "Subtract a master bias", inputs: 1, outputs: 1 },
+          { type: "DarkCorrect", label: "Dark Correct", description: "Subtract a scaled master dark", inputs: 1, outputs: 1 },
+          { type: "FlatField", label: "Flat Field", description: "Divide by a normalized master flat", inputs: 1, outputs: 1 },
+          { type: "CosmicRayReject", label: "Cosmic Ray Reject", description: "Clean cosmic rays", inputs: 1, outputs: 2 },
+          { type: "AstrometricSolve", label: "Astrometric Solve", description: "Solve WCS metadata", inputs: 1, outputs: 1 },
+          { type: "SourceExtract", label: "Source Extract", description: "Run source extraction and photometry", inputs: 1, outputs: 1 },
           { type: "Denoise", label: "Denoise", description: "Sigma-clip noise", inputs: 1, outputs: 1 },
           { type: "SpectralFit", label: "Spectral Fit", description: "Fit spectral line", inputs: 1, outputs: 1 },
           { type: "CoordTransform", label: "Coord Transform", description: "Transform coordinates", inputs: 1, outputs: 1 },
@@ -872,6 +878,7 @@ export default function PipelineCanvas() {
           onInit={setRfInstance}
           onDrop={onDrop}
           onDragOver={onDragOver}
+          onNodeClick={handleNodeDoubleClick}
           onNodeDoubleClick={handleNodeDoubleClick}
           nodeTypes={nodeTypes}
           deleteKeyCode={["Backspace", "Delete"]}

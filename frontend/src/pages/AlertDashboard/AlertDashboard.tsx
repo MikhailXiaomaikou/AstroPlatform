@@ -98,7 +98,7 @@ function StatsBar({ stats, loading }: { stats: AlertStats | null; loading: boole
     <div className="alert-stats-bar">
       <div className="alert-stat-item">
         <span className="alert-stat-label">{t("alerts.stats")}</span>
-        <span className="alert-stat-value">{stats.total.toLocaleString()}</span>
+        <span className="alert-stat-value">{(stats.total ?? 0).toLocaleString()}</span>
       </div>
       {FILTER_TYPES.map((type) => (
         <div key={type} className="alert-stat-item">
@@ -130,7 +130,9 @@ function DetailPanel({ alert, onClose }: { alert: TransientAlert; onClose: () =>
       `Redshift: ${alert.redshift ?? "N/A"}\n` +
       `Host Galaxy: ${alert.host_galaxy ?? "N/A"}`;
 
-    navigate("/chat", { state: { prefill: `Analyze this transient alert:\n\n${context}` } });
+    localStorage.setItem("astro_chat_draft", `Analyze this transient alert:\n\n${context}`);
+    localStorage.setItem("astro_chat_new_session", "1");
+    navigate("/chat");
   };
 
   return (

@@ -81,7 +81,7 @@ async def alert_stats(
     latest_row = (await db.execute(latest_stmt)).scalar()
 
     return {
-        "total_alerts": total,
+        "total": total,
         "by_source": by_source,
         "by_classification": by_classification,
         "latest_ingestion": latest_row.isoformat() if latest_row else None,

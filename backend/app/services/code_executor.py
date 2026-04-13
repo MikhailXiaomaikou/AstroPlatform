@@ -426,6 +426,28 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     except ImportError:
         pass
 
+    # CCD reduction helpers
+    try:
+        from app.analysis.image_reduction import (
+            bias_subtract,
+            dark_subtract,
+            flat_correct,
+            cosmic_ray_reject,
+            full_reduction,
+            solve_astrometry,
+            extract_and_photometer,
+        )
+
+        exec_globals["bias_subtract"] = bias_subtract
+        exec_globals["dark_subtract"] = dark_subtract
+        exec_globals["flat_correct"] = flat_correct
+        exec_globals["cosmic_ray_reject"] = cosmic_ray_reject
+        exec_globals["full_reduction"] = full_reduction
+        exec_globals["solve_astrometry"] = solve_astrometry
+        exec_globals["extract_and_photometer"] = extract_and_photometer
+    except ImportError:
+        pass
+
     # Inject session variables (persist between code blocks)
     session_vars = get_session_vars(session_id)
     exec_globals.update(session_vars)

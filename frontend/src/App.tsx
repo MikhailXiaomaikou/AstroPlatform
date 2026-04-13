@@ -50,6 +50,8 @@ const WorkspacePage = lazy(() => import("./pages/Workspace/WorkspacePage"));
 const TeamPage = lazy(() => import("./pages/Team/TeamPage"));
 const HelpPage = lazy(() => import("./pages/Help/HelpPage"));
 const ChatPage = lazy(() => import("./pages/Chat/ChatPage"));
+const SharedSessionPage = lazy(() => import("./pages/SharedSession/SharedSessionPage"));
+const ResearchHistoryPage = lazy(() => import("./pages/ResearchHistory/ResearchHistoryPage"));
 const SettingsPage = lazy(() => import("./pages/Settings/SettingsPage"));
 const AlertDashboard = lazy(() => import("./pages/AlertDashboard/AlertDashboard"));
 const AnomalyExplorer = lazy(() => import("./pages/AnomalyExplorer/AnomalyExplorer"));
@@ -84,6 +86,7 @@ function NavBar() {
       <NavLink to="/adql">{t("nav.adql")}</NavLink>
       <NavLink to="/team">{t("nav.team")}</NavLink>
       <NavLink to="/chat">{t("nav.ai_assistant")}</NavLink>
+      {user ? <NavLink to="/research">Research</NavLink> : null}
       <NavLink to="/help">Help</NavLink>
       <NavLink to="/alerts">{t("nav.alerts")}</NavLink>
       <NavLink to="/anomalies">{t("nav.anomalies")}</NavLink>
@@ -236,6 +239,8 @@ function App() {
                 <Route path="/team" element={<TeamPage />} />
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/chat" element={<ChatPage />} />
+                <Route path="/research" element={<ResearchHistoryPage />} />
+                <Route path="/shared/:token" element={<SharedSessionPage />} />
                 <Route path="/alerts" element={<AlertDashboard />} />
                 <Route path="/anomalies" element={<AnomalyExplorer />} />
                 <Route path="/settings" element={<SettingsPage />} />

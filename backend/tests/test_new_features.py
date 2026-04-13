@@ -47,6 +47,8 @@ class TestAstroAnalysis:
         assert "compute_absolute_magnitude" in info
         assert "distance_pc" in info["compute_absolute_magnitude"]["signature"]
         assert info["compute_luminosity_distance"]["summary"]
+        assert "full_reduction" in info
+        assert "solve_astrometry" in info
 
     def test_continuum_normalize(self):
         from app.services.astro_analysis import continuum_normalize
@@ -241,7 +243,7 @@ class TestAITools:
 
     def test_tool_count(self):
         from app.services.ai_tools import TOOLS
-        assert len(TOOLS) == 23
+        assert len(TOOLS) == 26
 
     def test_tool_names(self):
         from app.services.ai_tools import TOOLS
@@ -252,6 +254,9 @@ class TestAITools:
         assert "read_arxiv_paper" in names
         assert "validate_analysis" in names
         assert "generate_paper_draft" in names
+        assert "reduce_ccd_image" in names
+        assert "solve_astrometry" in names
+        assert "extract_photometry" in names
 
     @pytest.mark.asyncio
     async def test_generate_pipeline(self):

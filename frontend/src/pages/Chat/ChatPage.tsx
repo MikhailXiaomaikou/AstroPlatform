@@ -12,6 +12,13 @@ import {
   listChatSessions,
   loadChatSession,
   deleteChatSession,
+  createSessionShare,
+  listSessionShares,
+  revokeSessionShare,
+  createSessionSnapshot,
+  listSessionSnapshots,
+  restoreSessionSnapshot,
+  diffSessionSnapshots,
   exportChatMarkdown,
   exportChatNotebook,
   exportChatLatex,
@@ -21,6 +28,9 @@ import {
   type ChatAction,
   type ADSReference,
   type ChatSessionSummary,
+  type SessionShareItem,
+  type SessionSnapshotItem,
+  type SessionSnapshotDiff,
   type AnalysisValidationResult,
   type PaperDraftResponse,
   updatePaperDraft,
@@ -1135,6 +1145,7 @@ interface LocalChatSession {
 
 type ExportAction = "markdown" | "notebook" | "latex" | "bibtex";
 type JournalFormat = "aastex" | "mnras" | "aa";
+type ShareAccessLevel = "view" | "fork" | "comment";
 type PaperTab =
   | "abstract"
   | "introduction"
@@ -1315,6 +1326,16 @@ export default function ChatPage() {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [showSessions, setShowSessions] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareAccessLevel, setShareAccessLevel] = useState<ShareAccessLevel>("view");
+  const [shareExpiryHours, setShareExpiryHours] = useState<number>(72);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [sessionShares, setSessionShares] = useState<SessionShareItem[]>([]);
+  const [sessionSnapshots, setSessionSnapshots] = useState<SessionSnapshotItem[]>([]);
+  const [snapshotName, setSnapshotName] = useState("");
+  const [snapshotCompareSelection, setSnapshotCompareSelection] = useState<string[]>([]);
+  const [snapshotDiff, setSnapshotDiff] = useState<SessionSnapshotDiff | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1413,6 +1434,16 @@ export default function ChatPage() {
     setSessions(summarizeLocalSessions());
   }, [user]);
 
+  const loadCollaborationState = useCallback(async (sessionId: string) => {
+    if (!user) return;
+    const [shares, snapshots] = await Promise.all([
+      listSessionShares(sessionId),
+      listSessionSnapshots(sessionId),
+    ]);
+    setSessionShares(shares);
+    setSessionSnapshots(snapshots);
+  }, [user]);
+
   const persistSession = useCallback(async (
     data: Array<{ role: string; content: string; actions?: unknown[] }>,
     sessionId?: string | null,
@@ -1426,6 +1457,25 @@ export default function ChatPage() {
     }
     return saveLocalChatSession(data, sessionId);
   }, [user]);
+
+  const ensurePersistedSession = useCallback(async () => {
+    if (messages.length === 0) {
+      throw new Error("Save at least one message before sharing or snapshotting this session");
+    }
+    if (!user) {
+      throw new Error("Sign in to manage collaboration features");
+    }
+    const data = messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+      actions: message.actions,
+    }));
+    const saved = await saveChatSession(data, currentSessionId || undefined);
+    setCurrentSessionId(saved.id);
+    pythonSessionIdRef.current = saved.id;
+    refreshSessions();
+    return saved.id;
+  }, [currentSessionId, messages, refreshSessions, user]);
 
   const handleOpenPaperDraft = useCallback(async () => {
     if (!user) {
@@ -1541,6 +1591,16 @@ export default function ChatPage() {
   }, [paperDraft, paperEditorJson, paperFormat, paperSessionId, paperTab, paperValidation?.overall_status, showToast]);
 
   useEffect(() => {
+    // If caller requested a new session, clear history first
+    const newSession = localStorage.getItem("astro_chat_new_session");
+    if (newSession) {
+      localStorage.removeItem("astro_chat_new_session");
+      setMessages([]);
+      setCurrentSessionId(null);
+      pythonSessionIdRef.current = crypto.randomUUID();
+      localStorage.removeItem("astro_chat_history");
+    }
+
     const draft = localStorage.getItem("astro_chat_draft");
     if (draft) {
       setInput(draft);
@@ -1614,6 +1674,128 @@ export default function ChatPage() {
       if (currentSessionId === id) setCurrentSessionId(null);
     } catch { /* ignore */ }
   };
+
+  useEffect(() => {
+    const pendingSessionId = localStorage.getItem("astro_chat_open_session");
+    if (!pendingSessionId || !user) return;
+    localStorage.removeItem("astro_chat_open_session");
+    loadChatSession(pendingSessionId)
+      .then((session) => {
+        const loaded: DisplayMessage[] = session.messages.map((message: Record<string, unknown>) => ({
+          id: crypto.randomUUID(),
+          role: message.role as "user" | "assistant",
+          content: message.content as string,
+          actions: message.actions as ChatAction[] | undefined,
+        }));
+        setMessages(loaded);
+        setCurrentSessionId(pendingSessionId);
+        pythonSessionIdRef.current = pendingSessionId;
+        saveChatHistory(loaded);
+      })
+      .catch(() => {
+        showToast("Could not load the requested session", "error");
+      });
+  }, [showToast, user]);
+
+  const handleOpenCollaboration = useCallback(async () => {
+    if (!user) {
+      showToast("Sign in to share sessions and manage snapshots", "info");
+      return;
+    }
+    try {
+      const sessionId = await ensurePersistedSession();
+      setShareLoading(true);
+      await loadCollaborationState(sessionId);
+      setShareModalOpen(true);
+      setShareUrl(null);
+      setSnapshotDiff(null);
+      setSnapshotCompareSelection([]);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to prepare the session", "error");
+    } finally {
+      setShareLoading(false);
+    }
+  }, [ensurePersistedSession, loadCollaborationState, showToast, user]);
+
+  const handleCreateShare = useCallback(async () => {
+    try {
+      const sessionId = await ensurePersistedSession();
+      setShareLoading(true);
+      const created = await createSessionShare(
+        sessionId,
+        shareAccessLevel,
+        Number.isFinite(shareExpiryHours) && shareExpiryHours > 0 ? shareExpiryHours : undefined,
+      );
+      setShareUrl(created.share_url);
+      await loadCollaborationState(sessionId);
+      if (navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(created.share_url).catch(() => {});
+      }
+      showToast("Share link created and copied to clipboard", "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to create share link", "error");
+    } finally {
+      setShareLoading(false);
+    }
+  }, [ensurePersistedSession, loadCollaborationState, shareAccessLevel, shareExpiryHours, showToast]);
+
+  const handleRevokeShare = useCallback(async (shareId: string) => {
+    if (!currentSessionId) return;
+    try {
+      await revokeSessionShare(currentSessionId, shareId);
+      await loadCollaborationState(currentSessionId);
+      showToast("Share link revoked", "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to revoke share", "error");
+    }
+  }, [currentSessionId, loadCollaborationState, showToast]);
+
+  const handleCreateSnapshot = useCallback(async () => {
+    try {
+      const sessionId = await ensurePersistedSession();
+      const label = snapshotName.trim() || `Snapshot ${new Date().toLocaleString()}`;
+      await createSessionSnapshot(sessionId, label);
+      setSnapshotName("");
+      await loadCollaborationState(sessionId);
+      showToast("Snapshot created", "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to create snapshot", "error");
+    }
+  }, [ensurePersistedSession, loadCollaborationState, showToast, snapshotName]);
+
+  const handleRestoreSnapshot = useCallback(async (snapshotId: string) => {
+    if (!currentSessionId) return;
+    try {
+      await restoreSessionSnapshot(currentSessionId, snapshotId);
+      const session = await loadChatSession(currentSessionId);
+      const loaded: DisplayMessage[] = session.messages.map((m: Record<string, unknown>) => ({
+        id: crypto.randomUUID(),
+        role: m.role as "user" | "assistant",
+        content: m.content as string,
+        actions: m.actions as ChatAction[] | undefined,
+      }));
+      setMessages(loaded);
+      saveChatHistory(loaded);
+      await loadCollaborationState(currentSessionId);
+      showToast("Snapshot restored", "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to restore snapshot", "error");
+    }
+  }, [currentSessionId, loadCollaborationState, showToast]);
+
+  const handleCompareSnapshots = useCallback(async () => {
+    if (!currentSessionId || snapshotCompareSelection.length !== 2) return;
+    try {
+      const diff = await diffSessionSnapshots(
+        currentSessionId,
+        snapshotCompareSelection[0],
+        snapshotCompareSelection[1],
+      );
+      setSnapshotDiff(diff);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to compare snapshots", "error");
+    }
+  }, [currentSessionId, showToast, snapshotCompareSelection]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1831,13 +2013,8 @@ export default function ChatPage() {
   return (
     <div className="chat-page">
       {toast && (
-        <div style={{
-          position: "fixed", top: 24, right: 24, zIndex: 99999,
+        <div className="chat-toast" style={{
           background: toast.tone === "error" ? "#ef4444" : toast.tone === "info" ? "#0ea5e9" : "#22c55e",
-          color: "#fff",
-          padding: "12px 24px", borderRadius: 8, fontSize: "0.9rem",
-          fontWeight: 600,
-          boxShadow: "0 4px 16px rgba(0,0,0,0.25)", pointerEvents: "none",
         }}>{toast.message}</div>
       )}
       <div className="chat-header">
@@ -1858,6 +2035,16 @@ export default function ChatPage() {
             {messages.length > 0 && (
               <button type="button" className="btn-secondary btn-small" onClick={handleSaveSession}>
                 {t("chat.save")}
+              </button>
+            )}
+            {messages.length > 0 && (
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                disabled={shareLoading}
+                onClick={() => { void handleOpenCollaboration(); }}
+              >
+                {shareLoading ? "Opening..." : "Share / Snapshots"}
               </button>
             )}
             {user && messages.length > 0 && (
@@ -1971,6 +2158,155 @@ export default function ChatPage() {
               <button className="chat-session-delete" onClick={() => handleDeleteSession(s.id)} title="Delete">X</button>
             </div>
           ))}
+        </div>
+      )}
+
+      {shareModalOpen && (
+        <div className="viz-overlay" onClick={() => setShareModalOpen(false)}>
+          <div
+            className="viz-overlay-content"
+            style={{ maxWidth: 920, width: "min(920px, 92vw)", maxHeight: "88vh", overflow: "auto" }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, marginBottom: 16 }}>
+              <div>
+                <h3 style={{ margin: 0 }}>Share And Snapshots</h3>
+                <div style={{ color: "var(--color-text-secondary)", marginTop: 4 }}>
+                  Manage share links, forks, and point-in-time session restores.
+                </div>
+              </div>
+              <button className="btn-secondary btn-small" onClick={() => setShareModalOpen(false)}>Close</button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 16 }}>
+              <div style={{ padding: 14, borderRadius: 12, background: "rgba(15,23,42,0.04)" }}>
+                <h4 style={{ marginTop: 0 }}>Create Share Link</h4>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <label>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Access Level</div>
+                    <select
+                      className="search-input"
+                      value={shareAccessLevel}
+                      onChange={(event) => setShareAccessLevel(event.target.value as ShareAccessLevel)}
+                    >
+                      <option value="view">View</option>
+                      <option value="fork">Fork</option>
+                      <option value="comment">Comment</option>
+                    </select>
+                  </label>
+                  <label>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Expiry (hours)</div>
+                    <input
+                      className="search-input"
+                      type="number"
+                      min={1}
+                      value={shareExpiryHours}
+                      onChange={(event) => setShareExpiryHours(Number(event.target.value) || 0)}
+                    />
+                  </label>
+                  <button className="btn-primary" disabled={shareLoading} onClick={() => { void handleCreateShare(); }}>
+                    {shareLoading ? "Creating..." : "Create Share Link"}
+                  </button>
+                  {shareUrl && (
+                    <div className="fits-hint" style={{ wordBreak: "break-all" }}>
+                      Latest link: {shareUrl}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginTop: 18 }}>
+                  <h4>Active Shares</h4>
+                  {sessionShares.length === 0 ? (
+                    <div className="fits-hint">No active share links yet.</div>
+                  ) : (
+                    sessionShares.map((share) => (
+                      <div key={share.id} className="note-card" style={{ marginBottom: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                          <div>
+                            <strong>{share.access_level}</strong>
+                            <div style={{ color: "var(--color-text-secondary)", fontSize: "0.85rem", marginTop: 4 }}>
+                              {share.expires_at ? `Expires ${new Date(share.expires_at).toLocaleString()}` : "No expiry"}
+                            </div>
+                            <div className="mono" style={{ marginTop: 6 }}>.../{share.share_token}</div>
+                          </div>
+                          <button className="btn-secondary btn-small" onClick={() => { void handleRevokeShare(share.id); }}>
+                            Revoke
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div style={{ padding: 14, borderRadius: 12, background: "rgba(15,23,42,0.04)" }}>
+                <h4 style={{ marginTop: 0 }}>Version Snapshots</h4>
+                <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                  <input
+                    className="search-input"
+                    value={snapshotName}
+                    onChange={(event) => setSnapshotName(event.target.value)}
+                    placeholder='e.g. "before extinction correction"'
+                  />
+                  <button className="btn-secondary" onClick={() => { void handleCreateSnapshot(); }}>
+                    Snapshot
+                  </button>
+                </div>
+                {sessionSnapshots.length === 0 ? (
+                  <div className="fits-hint">No snapshots yet.</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {sessionSnapshots.map((snapshot) => {
+                      const selected = snapshotCompareSelection.includes(snapshot.id);
+                      return (
+                        <div key={snapshot.id} className="note-card">
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                            <div>
+                              <strong>{snapshot.name}</strong>
+                              <div className="note-date" style={{ marginTop: 4 }}>
+                                {snapshot.created_at ? new Date(snapshot.created_at).toLocaleString() : "Unknown time"}
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button
+                                className={`btn-secondary btn-small${selected ? " active" : ""}`}
+                                onClick={() => {
+                                  setSnapshotCompareSelection((prev) => {
+                                    if (prev.includes(snapshot.id)) return prev.filter((id) => id !== snapshot.id);
+                                    if (prev.length === 2) return [prev[1], snapshot.id];
+                                    return [...prev, snapshot.id];
+                                  });
+                                }}
+                              >
+                                Compare
+                              </button>
+                              <button className="btn-secondary btn-small" onClick={() => { void handleRestoreSnapshot(snapshot.id); }}>
+                                Restore
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                  <button
+                    className="btn-secondary btn-small"
+                    disabled={snapshotCompareSelection.length !== 2}
+                    onClick={() => { void handleCompareSnapshots(); }}
+                  >
+                    Compare Selected
+                  </button>
+                </div>
+                {snapshotDiff && (
+                  <div className="fits-hint" style={{ marginTop: 12 }}>
+                    Title changed: {snapshotDiff.updated_title ? "yes" : "no"} · Added messages: {snapshotDiff.added_messages} · Removed messages: {snapshotDiff.removed_messages}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

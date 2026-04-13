@@ -20,11 +20,14 @@ from app.api.followup import router as followup_router
 from app.api.health import router as health_router
 from app.api.integration import router as integration_router
 from app.api.isochrones import router as isochrones_router
+from app.api.inference import router as inference_router
 from app.api.arxiv import router as arxiv_router
 from app.api.pipeline import router as pipeline_router
 from app.api.paper import router as paper_router
+from app.api.research import router as research_router
 from app.api.settings import router as settings_router
 from app.api.scheduler import router as scheduler_router
+from app.api.sessions import router as sessions_router, shared_router as shared_sessions_router
 from app.api.team import router as team_router
 from app.api.visualization import router as viz_router
 from app.api.citation_graph import router as citation_graph_router
@@ -227,12 +230,16 @@ app.include_router(admin_events_router)
 app.include_router(export_router)
 app.include_router(followup_router)
 app.include_router(health_router)
+app.include_router(inference_router)
 app.include_router(integration_router)
 app.include_router(isochrones_router)
 app.include_router(pipeline_router)
 app.include_router(paper_router)
+app.include_router(research_router)
 app.include_router(scheduler_router)
+app.include_router(sessions_router)
 app.include_router(settings_router)
+app.include_router(shared_sessions_router)
 app.include_router(team_router)
 app.include_router(viz_router)
 app.include_router(workspace_router)

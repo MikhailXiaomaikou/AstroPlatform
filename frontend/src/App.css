@@ -1535,6 +1535,32 @@
   color: var(--color-text-tertiary);
 }
 
+.pipeline-node-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 0.7rem;
+  margin-top: 2px;
+}
+
+.param-summary-target {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.param-summary-sources {
+  color: var(--color-accent);
+  font-size: 0.65rem;
+}
+
+.param-summary-detail {
+  color: var(--color-text-tertiary);
+}
+
 /* ── Handle styling for easier connections ── */
 
 .pipeline-handle {
@@ -3725,6 +3751,27 @@
   padding: 0;
 }
 
+/* Toast notification — positioned below the 52px sticky nav */
+.chat-toast {
+  position: fixed;
+  top: 68px;
+  right: 24px;
+  z-index: 99999;
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  animation: toast-in 0.3s ease-out;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 .chat-header {
   padding: 1.25rem 1.5rem 0.75rem;
   border-bottom: 1px solid var(--color-separator);
@@ -5267,6 +5314,26 @@
 .node-params-field select option {
   background: var(--color-surface);
   color: var(--color-text);
+}
+
+.node-params-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+
+.node-params-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.node-params-checkbox-label input[type="checkbox"] {
+  accent-color: var(--color-accent);
 }
 
 .node-params-actions {

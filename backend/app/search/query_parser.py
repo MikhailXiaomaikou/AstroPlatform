@@ -155,6 +155,64 @@ OBJECT_TYPE_KEYWORDS: dict[str, str] = {
     "open cluster": "open cluster",
 }
 
+# ── Known astronomical regions (name → center coords + default search radius) ──
+
+ASTRONOMICAL_REGIONS: dict[str, dict] = {
+    # Star-forming regions
+    "taurus": {"name": "Taurus SFR", "ra": 68.0, "dec": 26.0, "radius": 10.0},
+    "taurus star-forming": {"name": "Taurus SFR", "ra": 68.0, "dec": 26.0, "radius": 10.0},
+    "taurus molecular cloud": {"name": "Taurus SFR", "ra": 68.0, "dec": 26.0, "radius": 10.0},
+    "orion": {"name": "Orion Nebula", "ra": 83.82, "dec": -5.39, "radius": 5.0},
+    "orion nebula": {"name": "Orion Nebula", "ra": 83.82, "dec": -5.39, "radius": 2.0},
+    "orion molecular cloud": {"name": "Orion Molecular Cloud", "ra": 83.82, "dec": -5.39, "radius": 8.0},
+    "ophiuchus": {"name": "Ophiuchus SFR", "ra": 246.8, "dec": -24.5, "radius": 6.0},
+    "rho ophiuchi": {"name": "Rho Ophiuchi", "ra": 246.4, "dec": -24.4, "radius": 3.0},
+    "rho oph": {"name": "Rho Ophiuchi", "ra": 246.4, "dec": -24.4, "radius": 3.0},
+    "serpens": {"name": "Serpens SFR", "ra": 277.5, "dec": 1.25, "radius": 3.0},
+    "chamaeleon": {"name": "Chamaeleon SFR", "ra": 168.0, "dec": -77.0, "radius": 5.0},
+    "lupus": {"name": "Lupus SFR", "ra": 240.0, "dec": -39.0, "radius": 5.0},
+    "perseus": {"name": "Perseus SFR", "ra": 52.0, "dec": 31.0, "radius": 5.0},
+    "perseus molecular cloud": {"name": "Perseus SFR", "ra": 52.0, "dec": 31.0, "radius": 5.0},
+    "carina": {"name": "Carina Nebula", "ra": 161.0, "dec": -59.75, "radius": 2.0},
+    "carina nebula": {"name": "Carina Nebula", "ra": 161.0, "dec": -59.75, "radius": 2.0},
+    "eagle nebula": {"name": "Eagle Nebula (M16)", "ra": 274.7, "dec": -13.81, "radius": 1.0},
+    "lagoon nebula": {"name": "Lagoon Nebula (M8)", "ra": 271.1, "dec": -24.38, "radius": 1.5},
+    "rosette nebula": {"name": "Rosette Nebula", "ra": 98.0, "dec": 5.0, "radius": 2.0},
+    # Nearby galaxies & groups
+    "magellanic cloud": {"name": "LMC", "ra": 80.89, "dec": -69.76, "radius": 5.0},
+    "large magellanic cloud": {"name": "LMC", "ra": 80.89, "dec": -69.76, "radius": 5.0},
+    "lmc": {"name": "LMC", "ra": 80.89, "dec": -69.76, "radius": 5.0},
+    "small magellanic cloud": {"name": "SMC", "ra": 13.19, "dec": -72.83, "radius": 3.0},
+    "smc": {"name": "SMC", "ra": 13.19, "dec": -72.83, "radius": 3.0},
+    # Constellations / galactic regions
+    "scorpius": {"name": "Scorpius", "ra": 250.0, "dec": -25.0, "radius": 15.0},
+    "sagittarius": {"name": "Sagittarius", "ra": 283.0, "dec": -30.0, "radius": 15.0},
+    "cygnus": {"name": "Cygnus", "ra": 305.0, "dec": 40.0, "radius": 15.0},
+    "centaurus": {"name": "Centaurus", "ra": 201.0, "dec": -43.0, "radius": 15.0},
+    "virgo cluster": {"name": "Virgo Cluster", "ra": 187.7, "dec": 12.3, "radius": 8.0},
+    "coma cluster": {"name": "Coma Cluster", "ra": 194.9, "dec": 27.98, "radius": 3.0},
+    "fornax cluster": {"name": "Fornax Cluster", "ra": 54.6, "dec": -35.5, "radius": 4.0},
+    # Galactic plane features
+    "galactic center": {"name": "Galactic Center", "ra": 266.42, "dec": -29.01, "radius": 2.0},
+    "galactic centre": {"name": "Galactic Center", "ra": 266.42, "dec": -29.01, "radius": 2.0},
+    "galactic bulge": {"name": "Galactic Bulge", "ra": 266.42, "dec": -29.01, "radius": 10.0},
+    # Well-known survey fields
+    "hubble deep field": {"name": "Hubble Deep Field", "ra": 189.2, "dec": 62.22, "radius": 0.1},
+    "hdf": {"name": "Hubble Deep Field", "ra": 189.2, "dec": 62.22, "radius": 0.1},
+    "hubble ultra deep field": {"name": "Hubble Ultra Deep Field", "ra": 53.16, "dec": -27.79, "radius": 0.1},
+    "hudf": {"name": "Hubble Ultra Deep Field", "ra": 53.16, "dec": -27.79, "radius": 0.1},
+    "cosmos field": {"name": "COSMOS Field", "ra": 150.12, "dec": 2.21, "radius": 1.0},
+    "cosmos": {"name": "COSMOS Field", "ra": 150.12, "dec": 2.21, "radius": 1.0},
+    "goods-north": {"name": "GOODS-North", "ra": 189.23, "dec": 62.24, "radius": 0.15},
+    "goods-south": {"name": "GOODS-South", "ra": 53.12, "dec": -27.81, "radius": 0.15},
+    # Star clusters
+    "pleiades": {"name": "Pleiades (M45)", "ra": 56.87, "dec": 24.12, "radius": 2.0},
+    "hyades": {"name": "Hyades", "ra": 66.75, "dec": 15.87, "radius": 5.0},
+    "praesepe": {"name": "Praesepe (M44)", "ra": 130.1, "dec": 19.67, "radius": 1.5},
+    "omega centauri": {"name": "Omega Centauri", "ra": 201.7, "dec": -47.48, "radius": 0.5},
+    "47 tucanae": {"name": "47 Tucanae", "ra": 6.02, "dec": -72.08, "radius": 0.5},
+}
+
 OBSERVATION_TYPE_KEYWORDS: dict[str, str] = {
     "spectroscopy": "spectroscopy",
     "spectroscopic": "spectroscopy",
@@ -236,6 +294,7 @@ class ParsedQuery:
     ra: float | None = None
     dec: float | None = None
     radius: float | None = None
+    region: str | None = None  # Matched region display name
     # Computed fields
     observed_freq_min_ghz: float | None = None
     observed_freq_max_ghz: float | None = None
@@ -348,6 +407,18 @@ def parse_natural_query(query: str) -> dict:
     if m_rad:
         result.radius = float(m_rad.group(1))
 
+    # ── 6b. Detect known astronomical regions ──
+    # Only apply region coordinates when no explicit RA/Dec was given
+    if result.ra is None and result.dec is None:
+        matched_region_key, region_info = _match_longest_first(q, ASTRONOMICAL_REGIONS)
+        if matched_region_key is not None and region_info is not None:
+            result.ra = region_info["ra"]
+            result.dec = region_info["dec"]
+            if result.radius is None:
+                result.radius = region_info["radius"]
+            result.region = region_info["name"]
+            result.matched_keywords.append(f"Region: {region_info['name']}")
+
     # ── 7. Compute observed wavelength/frequency for line + redshift ──
     if result.spectral_line_info is not None:
         _compute_observed_ranges(result)
@@ -432,6 +503,8 @@ def _to_dict(result: ParsedQuery) -> dict:
         d["dec"] = result.dec
     if result.radius is not None:
         d["radius"] = result.radius
+    if result.region is not None:
+        d["region"] = result.region
     if result.observed_freq_min_ghz is not None:
         d["observed_freq_min_ghz"] = result.observed_freq_min_ghz
     if result.observed_freq_max_ghz is not None:

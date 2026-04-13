@@ -20,11 +20,23 @@ def _get_registry() -> dict[str, Callable]:
     from app.pipeline.nodes.plot_interactive import interactive_plot_node
     from app.pipeline.nodes.custom_script import custom_script
     from app.pipeline.nodes.timeseries import timeseries_analysis
+    from app.pipeline.nodes.bias_subtract import bias_subtract_node
+    from app.pipeline.nodes.dark_correct import dark_correct
+    from app.pipeline.nodes.flat_field import flat_field
+    from app.pipeline.nodes.cosmic_ray_reject import cosmic_ray_reject_node
+    from app.pipeline.nodes.astrometric_solve import astrometric_solve
+    from app.pipeline.nodes.source_extract import source_extract
 
     return {
         "QueryData": query_data,
         "ImportWorkspace": import_workspace,
         "LoadData": load_data,
+        "BiasSubtract": bias_subtract_node,
+        "DarkCorrect": dark_correct,
+        "FlatField": flat_field,
+        "CosmicRayReject": cosmic_ray_reject_node,
+        "AstrometricSolve": astrometric_solve,
+        "SourceExtract": source_extract,
         "Denoise": denoise,
         "SpectralFit": spectral_fit,
         "CoordTransform": coord_transform,

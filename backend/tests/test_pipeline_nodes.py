@@ -10,6 +10,11 @@ from app.pipeline.nodes.coord_transform import coord_transform
 from app.pipeline.nodes.redshift import redshift_estimate
 from app.pipeline.nodes.equivalent_width import equivalent_width
 from app.pipeline.nodes.image_stack import image_stack
+from app.pipeline.nodes.bias_subtract import bias_subtract_node
+from app.pipeline.nodes.dark_correct import dark_correct
+from app.pipeline.nodes.flat_field import flat_field
+from app.pipeline.nodes.cosmic_ray_reject import cosmic_ray_reject_node
+from app.pipeline.nodes.source_extract import source_extract
 from app.pipeline.nodes.import_workspace import import_workspace
 from app.pipeline.nodes.query_data import query_data
 from app.pipeline.nodes.timeseries import timeseries_analysis
@@ -377,3 +382,41 @@ class TestImportWorkspaceNode:
         assert result["type"] == "table"
         assert result["columns"] == ["name", "flux"]
         assert result["rows"][0]["name"] == "A"
+
+
+class TestCCDPipelineNodes:
+    def test_bias_dark_flat_nodes_accept_paths(self, monkeypatch):
+        science = np.ones((4, 4)) * 100.0
+        bias = np.ones((4, 4)) * 10.0
+        dark = np.ones((4, 4)) * 5.0
+        flat = np.ones((4, 4)) * 2.0
+
+        monkeypatch.setattr("app.pipeline.nodes.bias_subtract._read_fits_array", lambda path: (bias if "bias" in path else science, {}))
+        monkeypatch.setattr("app.pipeline.nodes.dark_correct._read_fits_array", lambda path: (dark if "dark" in path else science, {"EXPTIME": 10.0}))
+        monkeypatch.setattr("app.pipeline.nodes.flat_field._read_fits_array", lambda path: (flat if "flat" in path else science, {}))
+
+        bias_result = bias_subtract_node({}, {"science_fits_path": "science.fits", "bias_paths": ["bias.fits"]})
+        dark_result = dark_correct({}, {"science_fits_path": "science.fits", "dark_paths": ["dark.fits"], "science_exptime": 10.0, "dark_exptime": 10.0})
+        flat_result = flat_field({}, {"science_fits_path": "science.fits", "flat_paths": ["flat.fits"]})
+
+        assert np.allclose(np.array(bias_result["image"]), 90.0)
+        assert np.allclose(np.array(dark_result["image"]), 95.0)
+        assert np.allclose(np.array(flat_result["image"]), 100.0)
+
+    def test_cosmic_ray_reject_accepts_fits_path(self, monkeypatch):
+        image = np.ones((8, 8))
+        image[4, 4] = 9999.0
+        monkeypatch.setattr("app.pipeline.nodes.cosmic_ray_reject._read_fits_array", lambda path: (image, {}))
+        result = cosmic_ray_reject_node({}, {"fits_path": "science.fits", "sigclip": 3.0})
+        assert result["mask"][4][4] == 1
+
+    def test_source_extract_serializes_dataframe(self, monkeypatch):
+        import pandas as pd
+
+        monkeypatch.setattr(
+            "app.pipeline.nodes.source_extract.extract_and_photometer",
+            lambda path, aperture_radii=None: pd.DataFrame([{"x": 1.0, "y": 2.0, "mag_inst": 14.2}]),
+        )
+        result = source_extract({"fits_path": "reduced.fits"}, {})
+        assert result["row_count"] == 1
+        assert result["rows"][0]["mag_inst"] == 14.2

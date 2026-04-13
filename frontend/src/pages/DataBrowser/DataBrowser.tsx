@@ -568,6 +568,12 @@ ${rows}
         value: `${lineName}${wl ? ` ${(wl as number).toFixed(2)}\u03BCm` : ""}`,
       });
     }
+    if (pf.region) {
+      const ra = pf.ra as number | undefined;
+      const dec = pf.dec as number | undefined;
+      const coordStr = ra != null && dec != null ? ` (${ra.toFixed(1)}°, ${dec > 0 ? "+" : ""}${dec.toFixed(1)}°)` : "";
+      criteriaChips.push({ label: "Region", value: `${pf.region as string}${coordStr}` });
+    }
     if (pf.object_type) {
       criteriaChips.push({ label: "Object", value: pf.object_type as string });
     }

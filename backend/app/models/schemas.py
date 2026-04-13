@@ -2,7 +2,7 @@ import json
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, TypeDecorator, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, TypeDecorator, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -283,6 +283,96 @@ class PaperDraft(Base):
     validation: Mapped[dict | None] = mapped_column(JSONType())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SharedSession(Base):
+    __tablename__ = "shared_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("chat_sessions.id"), nullable=False, index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False, index=True)
+    share_token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    access_level: Mapped[str] = mapped_column(String(20), default="view")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SessionFork(Base):
+    __tablename__ = "session_forks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("chat_sessions.id"), nullable=False, unique=True, index=True)
+    forked_from: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("chat_sessions.id"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SessionComment(Base):
+    __tablename__ = "session_comments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("chat_sessions.id"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(50), default="general")
+    target_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(UUIDType(), ForeignKey("session_comments.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SessionSnapshot(Base):
+    __tablename__ = "session_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("chat_sessions.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    snapshot_data: Mapped[dict] = mapped_column(JSONType(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserResearchProfile(Base):
+    __tablename__ = "user_research_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    frequently_queried_objects: Mapped[list | None] = mapped_column(JSONType(), default=list)
+    preferred_databases: Mapped[list | None] = mapped_column(JSONType(), default=list)
+    preferred_analysis_methods: Mapped[list | None] = mapped_column(JSONType(), default=list)
+    research_interests: Mapped[list | None] = mapped_column(JSONType(), default=list)
+    expertise_level: Mapped[str] = mapped_column(String(30), default="beginner")
+    past_hypotheses: Mapped[list | None] = mapped_column(JSONType(), default=list)
+    preferred_plotting_style: Mapped[dict | None] = mapped_column(JSONType(), default=dict)
+    memory_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SessionEmbedding(Base):
+    __tablename__ = "session_embeddings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False, index=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("chat_sessions.id"), nullable=False, index=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list | None] = mapped_column(JSONType(), default=list)
+    key_objects: Mapped[list | None] = mapped_column(JSONType(), default=list)
+    key_methods: Mapped[list | None] = mapped_column(JSONType(), default=list)
+    key_findings: Mapped[list | None] = mapped_column(JSONType(), default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class InferenceLog(Base):
+    __tablename__ = "inference_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    agent_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    backend_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class SharedResult(Base):
