@@ -1,7 +1,11 @@
 import axios from "axios";
 
+export const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : "");
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000",
+  baseURL: API_BASE_URL,
   timeout: 300000,
 });
 
@@ -374,7 +378,7 @@ export async function deleteFITS(fileId: string): Promise<void> {
 }
 
 export function downloadFITSUrl(fitsPath: string): string {
-  const base = import.meta.env.VITE_API_URL || "http://localhost:8000";
+  const base = API_BASE_URL;
   return `${base}/api/data/fits/download?fits_path=${encodeURIComponent(fitsPath)}`;
 }
 
@@ -386,7 +390,7 @@ export async function uploadGeneralFile(file: File): Promise<{ id: string; filen
 }
 
 export function downloadFileUrl(path: string): string {
-  const base = import.meta.env.VITE_API_URL || "http://localhost:8000";
+  const base = API_BASE_URL;
   return `${base}/api/data/files/download?path=${encodeURIComponent(path)}`;
 }
 
@@ -544,7 +548,7 @@ export function connectPipelineWS(
   onMessage: (data: Record<string, unknown>) => void,
   onClose?: () => void
 ): WebSocket {
-  const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
+  const baseUrl = API_BASE_URL;
   const wsUrl = baseUrl.replace(/^http/, "ws");
   const ws = new WebSocket(`${wsUrl}/ws/pipeline/${runId}`);
 

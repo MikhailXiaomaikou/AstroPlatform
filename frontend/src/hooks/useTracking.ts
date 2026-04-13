@@ -3,7 +3,9 @@ import { useCallback, useMemo } from "react";
 const SESSION_KEY = "astro_tracking_session_id";
 const PAGE_KEY = "astro_current_page";
 const EVENT_COUNT_KEY = "astro_tracking_event_count";
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : "");
 
 function getOrCreateSessionId(): string {
   const existing = sessionStorage.getItem(SESSION_KEY);

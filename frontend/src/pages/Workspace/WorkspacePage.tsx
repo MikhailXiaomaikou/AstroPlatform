@@ -248,7 +248,7 @@ export default function WorkspacePage() {
                     }}>
                     Open in Pipeline
                   </button>
-                  <a href={`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/api/data/fits/download?fits_path=${encodeURIComponent(selectedFile.fits_path)}`}
+                  <a href={`${import.meta.env.VITE_API_URL || (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : "")}/api/data/fits/download?fits_path=${encodeURIComponent(selectedFile.fits_path)}`}
                     download className="btn-secondary btn-small" style={{ textDecoration: "none" }}>
                     Download
                   </a>

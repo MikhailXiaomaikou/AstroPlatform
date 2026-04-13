@@ -269,7 +269,9 @@ export default function DataBrowser() {
         }
       } else if (err instanceof Error) {
         if (err.message === "Network Error") {
-          const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
+          const apiUrl =
+            import.meta.env.VITE_API_URL ||
+            (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : "");
           msg += `cannot reach ${apiUrl}. This may be caused by: network/firewall blocking, ad blocker, or the backend is restarting. Try refreshing the page.`;
         } else if (err.message.includes("timeout")) {
           msg += "request timed out. The external data source may be slow. Try again.";
