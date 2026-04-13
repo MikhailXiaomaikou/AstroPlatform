@@ -1176,7 +1176,7 @@ class TestChatMultiAgentRouting:
                 "user_context": "",
             }
 
-        async def fake_run_agent_loop(*, system, messages, tools, provider_api_keys, agent_name, python_session_id):
+        async def fake_run_agent_loop(*, system, messages, tools, provider_api_keys, agent_name, python_session_id, preferred_backend=None):
             calls.append(agent_name)
             return {
                 "reply": f"{agent_name} complete",

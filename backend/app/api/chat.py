@@ -763,7 +763,8 @@ async def _run_agent_loop(
                 }
             )
         working_messages.append({"role": "user", "content": tool_result_blocks})
-        if response.get("stop_reason") != "tool_use":
+        # Claude uses "tool_use", OpenAI uses "tool_calls" as stop reason
+        if response.get("stop_reason") not in ("tool_use", "tool_calls"):
             break
 
     full_reply = "\n\n".join(text_parts)
