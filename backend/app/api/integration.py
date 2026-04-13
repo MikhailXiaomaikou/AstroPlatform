@@ -346,7 +346,18 @@ async def adql_query(req: ADQLRequest):
             job = tap.launch_job(req.query)
             return job.get_results()
 
-        table = await loop.run_in_executor(None, _run_query)
+        # Retry once on transient TAP failures (connection resets, 503s)
+        try:
+            table = await loop.run_in_executor(None, _run_query)
+        except Exception as first_err:
+            err_str = str(first_err).lower()
+            if any(hint in err_str for hint in ("timeout", "connection", "503", "502", "reset")):
+                logger.warning("ADQL first attempt failed (%s), retrying...", first_err)
+                import asyncio as _aio
+                await _aio.sleep(1.0)
+                table = await loop.run_in_executor(None, _run_query)
+            else:
+                raise
 
         # Convert to JSON-serializable format (lowercase column names for consistency)
         columns = [c.lower() for c in table.colnames]
@@ -402,8 +413,15 @@ async def adql_query(req: ADQLRequest):
             "row_count": len(table),
             "service": req.service,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"ADQL query failed: {e}")
+        err_msg = str(e)
+        err_lower = err_msg.lower()
+        # TAP services return 400 for bad queries (syntax errors, unknown columns/tables)
+        if any(hint in err_lower for hint in ("syntax", "parse", "unknown column", "unknown table", "not found", "400", "bad request", "adql")):
+            raise HTTPException(status_code=400, detail=f"ADQL query error: {err_msg}")
+        raise HTTPException(status_code=502, detail=f"ADQL service error: {err_msg}")
 
 
 @router.get("/adql/services")
