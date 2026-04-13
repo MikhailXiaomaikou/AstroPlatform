@@ -217,10 +217,19 @@ class OpenAICompatibleBackend(LLMBackend):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        async with httpx.AsyncClient(timeout=request_timeout or 60.0) as client:
-            response = await client.post(f"{self._base_url}/chat/completions", json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        timeout = request_timeout or 120.0
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(f"{self._base_url}/chat/completions", json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.TimeoutException:
+            raise InferenceError(f"{self.backend_label} request timed out after {timeout}s — try a shorter query or fewer tools")
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500] if exc.response else ""
+            raise InferenceError(f"{self.backend_label} HTTP {exc.response.status_code}: {body}")
+        except httpx.HTTPError as exc:
+            raise InferenceError(f"{self.backend_label} connection error: {exc}")
 
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message", {})
