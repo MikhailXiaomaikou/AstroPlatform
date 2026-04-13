@@ -76,6 +76,13 @@ function PipelineNode({ data, selected }: NodeProps<PipelineNodeData>) {
             <div className="pipeline-node-summary">
               <span className="param-summary-target">{String(data.params.path ?? "").split("/").pop() || "No file"}</span>
             </div>
+          ) : data.nodeType === "Denoise" ? (
+            <div className="pipeline-node-summary">
+              <span className="param-summary-target">{String(data.params.method ?? "sigma_clip")}</span>
+              {data.params.sigma != null && String(data.params.method ?? "sigma_clip") === "sigma_clip" ? <span className="param-summary-detail">{String(data.params.sigma)}σ</span> : null}
+              {data.params.window_length != null && String(data.params.method) === "savgol" ? <span className="param-summary-detail">w={String(data.params.window_length)}</span> : null}
+              {data.params.wavelet != null && String(data.params.method) === "wavelet" ? <span className="param-summary-detail">{String(data.params.wavelet)}</span> : null}
+            </div>
           ) : (
             <ul className="pipeline-node-params">
               {Object.entries(data.params).map(([k, v]) => (

@@ -217,7 +217,7 @@ export default function PipelineCanvas() {
           { type: "CosmicRayReject", label: "Cosmic Ray Reject", description: "Clean cosmic rays", inputs: 1, outputs: 2 },
           { type: "AstrometricSolve", label: "Astrometric Solve", description: "Solve WCS metadata", inputs: 1, outputs: 1 },
           { type: "SourceExtract", label: "Source Extract", description: "Run source extraction and photometry", inputs: 1, outputs: 1 },
-          { type: "Denoise", label: "Denoise", description: "Sigma-clip noise", inputs: 1, outputs: 1 },
+          { type: "Denoise", label: "Denoise", description: "Multi-method noise reduction", inputs: 1, outputs: 1 },
           { type: "SpectralFit", label: "Spectral Fit", description: "Fit spectral line", inputs: 1, outputs: 1 },
           { type: "CoordTransform", label: "Coord Transform", description: "Transform coordinates", inputs: 1, outputs: 1 },
           { type: "Plot", label: "Plot", description: "Generate plot", inputs: 1, outputs: 1 },

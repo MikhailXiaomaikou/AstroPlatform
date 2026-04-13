@@ -61,9 +61,15 @@ const NODE_PARAM_DEFS: Record<string, ParamDef[]> = {
     { key: "aperture_radii", label: "Aperture Radii (px)", type: "text", default: "3,5,7" },
   ],
   Denoise: [
-    { key: "sigma", label: "Sigma", type: "number", default: 3.0 },
-    { key: "max_iters", label: "Max Iterations", type: "number", default: 5 },
+    { key: "method", label: "Method", type: "select", options: ["sigma_clip", "savgol", "wavelet", "gaussian", "median"], default: "sigma_clip" },
     { key: "flux_key", label: "Flux Key", type: "text", default: "flux" },
+    { key: "sigma", label: "Sigma (clip threshold)", type: "number", default: 3.0, placeholder: "For sigma_clip method" },
+    { key: "max_iters", label: "Max Iterations", type: "number", default: 5, placeholder: "For sigma_clip method" },
+    { key: "window_length", label: "Window Length", type: "number", default: 11, placeholder: "For savgol method (odd number)" },
+    { key: "polyorder", label: "Polynomial Order", type: "number", default: 3, placeholder: "For savgol method" },
+    { key: "wavelet", label: "Wavelet", type: "select", options: ["db4", "db6", "db8", "sym4", "sym6", "coif2", "haar"], default: "db4" },
+    { key: "threshold_sigma", label: "Threshold (σ)", type: "number", default: 2.0, placeholder: "For wavelet method" },
+    { key: "kernel_size", label: "Kernel Size", type: "number", default: 5, placeholder: "For gaussian/median method" },
   ],
   SpectralFit: [
     { key: "model", label: "Model", type: "select", options: ["gaussian", "lorentzian"], default: "gaussian" },
