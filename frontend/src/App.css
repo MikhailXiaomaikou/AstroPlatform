@@ -5884,8 +5884,9 @@
 .onboarding-tooltip p {
   margin: 0 0 16px;
   font-size: 0.9rem;
-  color: var(--color-muted);
+  color: var(--color-text);
   line-height: 1.5;
+  opacity: 0.9;
 }
 
 .onboarding-step-indicator {
