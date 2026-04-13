@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useI18n } from "../../i18n";
 import ReactFlow, {
   addEdge,
   Background,
@@ -59,6 +60,7 @@ interface NodeProgress {
 export default function PipelineCanvas() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { t } = useI18n();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -944,7 +946,7 @@ export default function PipelineCanvas() {
       {inspectResult && (
         <div className="node-result-panel">
           <div className="node-result-panel-header">
-            <h4>Node: {inspectResult.nodeId}</h4>
+            <h4>{t("pipeline.node_result")} {inspectResult.nodeId}</h4>
             <button onClick={() => setInspectResult(null)}>&times;</button>
           </div>
           <div className="node-result-panel-body">

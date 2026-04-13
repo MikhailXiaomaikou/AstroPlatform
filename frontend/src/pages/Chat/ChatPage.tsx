@@ -2095,8 +2095,8 @@ export default function ChatPage() {
             <button type="button" className="btn-secondary btn-small" onClick={handleNewChat}>
               {t("chat.new_chat")}
             </button>
-            <button type="button" className="btn-secondary btn-small" onClick={handleImportSession} title="Import session from JSON file">
-              Import
+            <button type="button" className="btn-secondary btn-small" onClick={handleImportSession} title={t("chat.import_title")}>
+              {t("chat.import")}
             </button>
             {messages.length > 0 && (
               <>

@@ -1,15 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { useI18n } from "../i18n";
 
 interface Command {
   id: string;
-  label: string;
-  category: string;
+  labelKey: string;
+  categoryKey: string;
   action: () => void;
   keywords?: string;
 }
 
 export default function CommandPalette() {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -18,29 +20,29 @@ export default function CommandPalette() {
 
   const commands: Command[] = [
     // Navigation
-    { id: "nav-search", label: "Search Objects", category: "Navigation", action: () => navigate("/"), keywords: "data browser find" },
-    { id: "nav-chat", label: "AI Assistant", category: "Navigation", action: () => navigate("/chat"), keywords: "ask question" },
-    { id: "nav-pipeline", label: "Pipeline Studio", category: "Navigation", action: () => navigate("/pipeline"), keywords: "workflow dag" },
-    { id: "nav-adql", label: "ADQL Query", category: "Navigation", action: () => navigate("/adql"), keywords: "sql tap" },
-    { id: "nav-workspace", label: "Workspace", category: "Navigation", action: () => navigate("/workspace"), keywords: "files saved" },
-    { id: "nav-team", label: "Team", category: "Navigation", action: () => navigate("/team"), keywords: "collaborate share" },
-    { id: "nav-alerts", label: "Transient Alerts", category: "Navigation", action: () => navigate("/alerts"), keywords: "transient supernova" },
-    { id: "nav-anomalies", label: "Anomaly Explorer", category: "Navigation", action: () => navigate("/anomalies"), keywords: "outlier detection" },
-    { id: "nav-settings", label: "Settings", category: "Navigation", action: () => navigate("/settings"), keywords: "config preferences" },
-    { id: "nav-help", label: "Help & Docs", category: "Navigation", action: () => navigate("/help"), keywords: "documentation guide" },
+    { id: "nav-search", labelKey: "cmd.search_objects", categoryKey: "cmd.cat_nav", action: () => navigate("/"), keywords: "data browser find" },
+    { id: "nav-chat", labelKey: "cmd.ai_assistant", categoryKey: "cmd.cat_nav", action: () => navigate("/chat"), keywords: "ask question" },
+    { id: "nav-pipeline", labelKey: "cmd.pipeline_studio", categoryKey: "cmd.cat_nav", action: () => navigate("/pipeline"), keywords: "workflow dag" },
+    { id: "nav-adql", labelKey: "cmd.adql_query", categoryKey: "cmd.cat_nav", action: () => navigate("/adql"), keywords: "sql tap" },
+    { id: "nav-workspace", labelKey: "cmd.workspace", categoryKey: "cmd.cat_nav", action: () => navigate("/workspace"), keywords: "files saved" },
+    { id: "nav-team", labelKey: "cmd.team", categoryKey: "cmd.cat_nav", action: () => navigate("/team"), keywords: "collaborate share" },
+    { id: "nav-alerts", labelKey: "cmd.alerts", categoryKey: "cmd.cat_nav", action: () => navigate("/alerts"), keywords: "transient supernova" },
+    { id: "nav-anomalies", labelKey: "cmd.anomalies", categoryKey: "cmd.cat_nav", action: () => navigate("/anomalies"), keywords: "outlier detection" },
+    { id: "nav-settings", labelKey: "cmd.settings", categoryKey: "cmd.cat_nav", action: () => navigate("/settings"), keywords: "config preferences" },
+    { id: "nav-help", labelKey: "cmd.help", categoryKey: "cmd.cat_nav", action: () => navigate("/help"), keywords: "documentation guide" },
     // Actions
-    { id: "act-new-chat", label: "New Chat Session", category: "Actions", action: () => { localStorage.setItem("astro_chat_new_session", "1"); navigate("/chat"); }, keywords: "create conversation" },
-    { id: "act-new-pipeline", label: "New Pipeline", category: "Actions", action: () => navigate("/pipeline"), keywords: "create workflow" },
+    { id: "act-new-chat", labelKey: "cmd.new_chat", categoryKey: "cmd.cat_action", action: () => { localStorage.setItem("astro_chat_new_session", "1"); navigate("/chat"); }, keywords: "create conversation" },
+    { id: "act-new-pipeline", labelKey: "cmd.new_pipeline", categoryKey: "cmd.cat_action", action: () => navigate("/pipeline"), keywords: "create workflow" },
   ];
 
-  // Filter commands by substring match
+  // Filter commands by substring match on translated label, keywords, and category
   const filtered = query
     ? commands.filter((c) => {
         const search = query.toLowerCase();
         return (
-          c.label.toLowerCase().includes(search) ||
+          t(c.labelKey).toLowerCase().includes(search) ||
           (c.keywords || "").toLowerCase().includes(search) ||
-          c.category.toLowerCase().includes(search)
+          t(c.categoryKey).toLowerCase().includes(search)
         );
       })
     : commands;
@@ -93,7 +95,8 @@ export default function CommandPalette() {
   // Group filtered commands by category
   const groups: Record<string, Command[]> = {};
   for (const cmd of filtered) {
-    (groups[cmd.category] ||= []).push(cmd);
+    const cat = t(cmd.categoryKey);
+    (groups[cat] ||= []).push(cmd);
   }
 
   return (
@@ -102,7 +105,7 @@ export default function CommandPalette() {
         <input
           ref={inputRef}
           className="cmd-palette-input"
-          placeholder="Type a command..."
+          placeholder={t("cmd.placeholder")}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -112,7 +115,7 @@ export default function CommandPalette() {
         />
         <div className="cmd-palette-results">
           {filtered.length === 0 && (
-            <div className="cmd-palette-empty">No matching commands</div>
+            <div className="cmd-palette-empty">{t("cmd.no_match")}</div>
           )}
           {Object.entries(groups).map(([category, cmds]) => (
             <div key={category}>
@@ -129,7 +132,7 @@ export default function CommandPalette() {
                     }}
                     onMouseEnter={() => setSelectedIndex(globalIdx)}
                   >
-                    {cmd.label}
+                    {t(cmd.labelKey)}
                   </div>
                 );
               })}
@@ -137,9 +140,9 @@ export default function CommandPalette() {
           ))}
         </div>
         <div className="cmd-palette-footer">
-          <span>&uarr;&darr; Navigate</span>
-          <span>&crarr; Select</span>
-          <span>Esc Close</span>
+          <span>&uarr;&darr; {t("cmd.navigate")}</span>
+          <span>&crarr; {t("cmd.select")}</span>
+          <span>Esc {t("common.close")}</span>
         </div>
       </div>
     </div>

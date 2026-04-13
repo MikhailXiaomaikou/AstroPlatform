@@ -1,39 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
+import { useI18n } from "../i18n";
 
-interface Step {
-  title: string;
-  description: string;
-  targetSelector: string;
-}
-
-const STEPS: Step[] = [
-  {
-    title: "Search the Universe",
-    description:
-      "Query 19 astronomical databases simultaneously. Enter any object name, coordinates, or use natural language like 'galaxies with redshift > 0.5'.",
-    targetSelector: '.top-nav a:not(.logo)[href="/"]',
-  },
-  {
-    title: "AI Research Assistant",
-    description:
-      "Chat with an AI that understands astronomy. It can search catalogs, run ADQL queries, generate pipelines, and help write papers.",
-    targetSelector: 'a[href="/chat"]',
-  },
-  {
-    title: "Visual Pipeline Builder",
-    description:
-      "Build data processing workflows by dragging nodes. Denoise, fit spectra, cross-match catalogs, and more — all connected in a visual DAG.",
-    targetSelector: 'a[href="/pipeline"]',
-  },
-  {
-    title: "Direct Database Access",
-    description:
-      "Write ADQL queries against Gaia, SIMBAD, VizieR, and CADC TAP services with syntax highlighting and template queries.",
-    targetSelector: 'a[href="/adql"]',
-  },
+const STEP_KEYS = [
+  { titleKey: "onboard.search_title", descKey: "onboard.search_desc", targetSelector: '.top-nav a:not(.logo)[href="/"]' },
+  { titleKey: "onboard.chat_title", descKey: "onboard.chat_desc", targetSelector: 'a[href="/chat"]' },
+  { titleKey: "onboard.pipeline_title", descKey: "onboard.pipeline_desc", targetSelector: 'a[href="/pipeline"]' },
+  { titleKey: "onboard.adql_title", descKey: "onboard.adql_desc", targetSelector: 'a[href="/adql"]' },
 ];
 
 export default function OnboardingOverlay() {
+  const { t } = useI18n();
   const [visible, setVisible] = useState(false);
   const [step, setStep] = useState(0);
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
@@ -46,7 +22,7 @@ export default function OnboardingOverlay() {
   }, []);
 
   const updateTargetRect = useCallback(() => {
-    const el = document.querySelector(STEPS[step].targetSelector);
+    const el = document.querySelector(STEP_KEYS[step].targetSelector);
     if (el) setTargetRect(el.getBoundingClientRect());
   }, [step]);
 
@@ -64,7 +40,7 @@ export default function OnboardingOverlay() {
   };
 
   const handleNext = () => {
-    if (step < STEPS.length - 1) setStep(step + 1);
+    if (step < STEP_KEYS.length - 1) setStep(step + 1);
     else handleComplete();
   };
 
@@ -74,19 +50,10 @@ export default function OnboardingOverlay() {
 
   if (!visible) return null;
 
-  const currentStep = STEPS[step];
+  const current = STEP_KEYS[step];
   const tooltipStyle: React.CSSProperties = targetRect
-    ? {
-        position: "fixed",
-        top: targetRect.bottom + 12,
-        left: Math.max(16, targetRect.left - 100),
-      }
-    : {
-        position: "fixed",
-        top: "50%",
-        left: "50%",
-        transform: "translate(-50%, -50%)",
-      };
+    ? { position: "fixed", top: targetRect.bottom + 12, left: Math.max(16, targetRect.left - 100) }
+    : { position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
 
   return (
     <div className="onboarding-backdrop">
@@ -105,22 +72,22 @@ export default function OnboardingOverlay() {
       )}
       <div className="onboarding-tooltip" style={tooltipStyle}>
         <div className="onboarding-step-indicator">
-          Step {step + 1} of {STEPS.length}
+          {t("onboard.step_of")} {step + 1} {t("onboard.of")} {STEP_KEYS.length}
         </div>
-        <h3>{currentStep.title}</h3>
-        <p>{currentStep.description}</p>
+        <h3>{t(current.titleKey)}</h3>
+        <p>{t(current.descKey)}</p>
         <div className="onboarding-actions">
           <button className="btn-ghost btn-small" onClick={handleComplete}>
-            Skip Tour
+            {t("onboard.skip")}
           </button>
           <div style={{ display: "flex", gap: 8 }}>
             {step > 0 && (
               <button className="btn-secondary btn-small" onClick={handleBack}>
-                Back
+                {t("onboard.back")}
               </button>
             )}
             <button className="btn-primary btn-small" onClick={handleNext}>
-              {step < STEPS.length - 1 ? "Next" : "Get Started"}
+              {step < STEP_KEYS.length - 1 ? t("onboard.next") : t("onboard.start")}
             </button>
           </div>
         </div>

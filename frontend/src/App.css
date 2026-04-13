@@ -5907,7 +5907,8 @@
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--color-muted);
+  color: var(--color-text);
+  opacity: 0.7;
   font-weight: 500;
   font-size: 0.82rem;
   cursor: pointer;
@@ -5915,7 +5916,7 @@
 }
 
 .btn-ghost:hover {
-  color: var(--color-text);
+  opacity: 1;
   background: var(--color-accent-subtle);
 }
 

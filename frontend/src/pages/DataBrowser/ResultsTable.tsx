@@ -250,20 +250,20 @@ export default function ResultsTable({
             type="button"
             className="btn-column-toggle"
             onClick={() => setShowColumnPanel(!showColumnPanel)}
-            title="Toggle columns"
+            title={t("col.toggle_title")}
           >
             <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
               <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.062 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
             </svg>
-            Columns
+            {t("col.toggle")}
           </button>
           {showColumnPanel && (
             <div className="column-panel">
               <div className="column-panel-header">
-                <button type="button" className="btn-small btn-secondary" onClick={selectAllColumns}>All</button>
-                <button type="button" className="btn-small btn-secondary" onClick={deselectAllColumns}>None</button>
+                <button type="button" className="btn-small btn-secondary" onClick={selectAllColumns}>{t("col.all")}</button>
+                <button type="button" className="btn-small btn-secondary" onClick={deselectAllColumns}>{t("col.none")}</button>
               </div>
-              <div className="column-panel-group">Core</div>
+              <div className="column-panel-group">{t("col.core")}</div>
               {CORE_COLUMNS.map((col) => (
                 <label key={col}>
                   <input type="checkbox" checked={visibleColumns.has(col)} onChange={() => toggleColumn(col)} />
@@ -272,7 +272,7 @@ export default function ResultsTable({
               ))}
               {extraColumns.length > 0 && (
                 <>
-                  <div className="column-panel-group">Extra</div>
+                  <div className="column-panel-group">{t("col.extra")}</div>
                   {extraColumns.map((col) => (
                     <label key={col}>
                       <input type="checkbox" checked={visibleColumns.has(col)} onChange={() => toggleColumn(col)} />

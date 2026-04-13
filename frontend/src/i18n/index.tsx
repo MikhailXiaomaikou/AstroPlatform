@@ -105,6 +105,57 @@ const translations: Record<string, Record<Lang, string>> = {
   "alerts.stats":      { en: "Total Alerts",     zh: "警报总数",      fr: "Total des alertes", es: "Total de alertas" },
   "alerts.no_alerts":  { en: "No alerts found for this time window.", zh: "在此时间窗口中未找到警报。", fr: "Aucune alerte trouvée pour cette période.", es: "No se encontraron alertas para este periodo." },
 
+  // Command Palette
+  "cmd.placeholder":     { en: "Type a command...",     zh: "输入命令...",         fr: "Tapez une commande...",   es: "Escriba un comando..." },
+  "cmd.no_match":        { en: "No matching commands",  zh: "无匹配命令",          fr: "Aucune commande trouvée", es: "Sin comandos coincidentes" },
+  "cmd.cat_nav":         { en: "Navigation",            zh: "导航",               fr: "Navigation",              es: "Navegación" },
+  "cmd.cat_action":      { en: "Actions",               zh: "操作",               fr: "Actions",                 es: "Acciones" },
+  "cmd.search_objects":  { en: "Search Objects",        zh: "搜索天体",            fr: "Rechercher des objets",   es: "Buscar objetos" },
+  "cmd.ai_assistant":    { en: "AI Assistant",          zh: "AI 助手",             fr: "Assistant IA",            es: "Asistente IA" },
+  "cmd.pipeline_studio": { en: "Pipeline Studio",      zh: "流水线工作室",         fr: "Studio Pipeline",         es: "Estudio Pipeline" },
+  "cmd.adql_query":      { en: "ADQL Query",           zh: "ADQL 查询",           fr: "Requête ADQL",            es: "Consulta ADQL" },
+  "cmd.workspace":       { en: "Workspace",            zh: "工作区",              fr: "Espace de travail",       es: "Espacio de trabajo" },
+  "cmd.team":            { en: "Team",                  zh: "团队",               fr: "Équipe",                  es: "Equipo" },
+  "cmd.alerts":          { en: "Transient Alerts",      zh: "瞬变警报",            fr: "Alertes transitoires",    es: "Alertas transitorias" },
+  "cmd.anomalies":       { en: "Anomaly Explorer",     zh: "异常探测器",           fr: "Explorateur d'anomalies", es: "Explorador de anomalías" },
+  "cmd.settings":        { en: "Settings",             zh: "设置",               fr: "Paramètres",              es: "Ajustes" },
+  "cmd.help":            { en: "Help & Docs",          zh: "帮助与文档",           fr: "Aide & Documentation",    es: "Ayuda y Documentación" },
+  "cmd.new_chat":        { en: "New Chat Session",     zh: "新建对话",             fr: "Nouvelle conversation",   es: "Nueva conversación" },
+  "cmd.new_pipeline":    { en: "New Pipeline",         zh: "新建流水线",           fr: "Nouveau pipeline",        es: "Nuevo pipeline" },
+  "cmd.navigate":        { en: "Navigate",             zh: "导航",               fr: "Naviguer",                es: "Navegar" },
+  "cmd.select":          { en: "Select",               zh: "选择",               fr: "Sélectionner",            es: "Seleccionar" },
+
+  // Onboarding
+  "onboard.step_of":          { en: "Step",              zh: "步骤",          fr: "Étape",       es: "Paso" },
+  "onboard.of":               { en: "of",                zh: "/",             fr: "sur",         es: "de" },
+  "onboard.skip":             { en: "Skip Tour",         zh: "跳过引导",      fr: "Passer",      es: "Omitir" },
+  "onboard.back":             { en: "Back",              zh: "上一步",        fr: "Retour",      es: "Atrás" },
+  "onboard.next":             { en: "Next",              zh: "下一步",        fr: "Suivant",     es: "Siguiente" },
+  "onboard.start":            { en: "Get Started",       zh: "开始使用",      fr: "Commencer",   es: "Empezar" },
+  "onboard.search_title":     { en: "Search the Universe", zh: "搜索宇宙",   fr: "Explorer l'Univers", es: "Explorar el Universo" },
+  "onboard.search_desc":      { en: "Query 19+ astronomical databases simultaneously. Enter any object name, coordinates, or use natural language like 'galaxies with redshift > 0.5'.", zh: "同时查询 19+ 个天文数据库。输入天体名称、坐标，或使用自然语言如「红移大于 0.5 的星系」。", fr: "Interrogez 19+ bases de données astronomiques simultanément. Saisissez un nom d'objet, des coordonnées ou du langage naturel.", es: "Consulte 19+ bases de datos astronómicas simultáneamente. Ingrese un nombre de objeto, coordenadas o lenguaje natural." },
+  "onboard.chat_title":       { en: "AI Research Assistant", zh: "AI 研究助手", fr: "Assistant de Recherche IA", es: "Asistente de Investigación IA" },
+  "onboard.chat_desc":        { en: "Chat with an AI that understands astronomy. It can search catalogs, run ADQL queries, generate pipelines, and help write papers.", zh: "与理解天文学的 AI 对话。它可以搜索星表、运行 ADQL 查询、生成流水线并协助撰写论文。", fr: "Discutez avec une IA qui comprend l'astronomie. Elle peut interroger des catalogues, exécuter des requêtes ADQL et générer des pipelines.", es: "Hable con una IA que entiende astronomía. Puede buscar catálogos, ejecutar consultas ADQL, generar pipelines y ayudar a escribir artículos." },
+  "onboard.pipeline_title":   { en: "Visual Pipeline Builder", zh: "可视化流水线构建器", fr: "Constructeur visuel de Pipeline", es: "Constructor visual de Pipeline" },
+  "onboard.pipeline_desc":    { en: "Build data processing workflows by dragging nodes. Denoise, fit spectra, cross-match catalogs, and more — all connected in a visual DAG.", zh: "通过拖拽节点构建数据处理工作流。降噪、光谱拟合、交叉匹配等——全部以可视化 DAG 连接。", fr: "Construisez des workflows de traitement de données en glissant-déposant des nœuds. Dénoisez, ajustez des spectres, croisez des catalogues.", es: "Construya flujos de trabajo de procesamiento de datos arrastrando nodos. Elimine ruido, ajuste espectros, cruce catálogos." },
+  "onboard.adql_title":       { en: "Direct Database Access", zh: "直接数据库访问", fr: "Accès direct aux bases de données", es: "Acceso directo a bases de datos" },
+  "onboard.adql_desc":        { en: "Write ADQL queries against Gaia, SIMBAD, VizieR, and CADC TAP services with syntax highlighting and template queries.", zh: "使用语法高亮和模板查询，直接对 Gaia、SIMBAD、VizieR 和 CADC TAP 服务编写 ADQL 查询。", fr: "Écrivez des requêtes ADQL sur les services Gaia, SIMBAD, VizieR et CADC TAP avec coloration syntaxique.", es: "Escriba consultas ADQL en los servicios Gaia, SIMBAD, VizieR y CADC TAP con resaltado de sintaxis." },
+
+  // Column management
+  "col.toggle":       { en: "Columns",         zh: "列管理",        fr: "Colonnes",          es: "Columnas" },
+  "col.toggle_title":  { en: "Toggle columns",  zh: "切换列显示",    fr: "Basculer colonnes", es: "Alternar columnas" },
+  "col.all":           { en: "All",             zh: "全选",          fr: "Tout",              es: "Todo" },
+  "col.none":          { en: "None",            zh: "清除",          fr: "Aucun",             es: "Ninguno" },
+  "col.core":          { en: "Core",            zh: "核心",          fr: "Principal",         es: "Principal" },
+  "col.extra":         { en: "Extra",           zh: "附加",          fr: "Supplémentaire",    es: "Extra" },
+
+  // Pipeline result panel
+  "pipeline.node_result": { en: "Node:",          zh: "节点:",         fr: "Nœud :",           es: "Nodo:" },
+
+  // Chat import
+  "chat.import":           { en: "Import",                        zh: "导入",               fr: "Importer",              es: "Importar" },
+  "chat.import_title":     { en: "Import session from JSON file", zh: "从 JSON 文件导入对话", fr: "Importer depuis un fichier JSON", es: "Importar sesión desde archivo JSON" },
+
   // Common
   // Errors
   "error.network":     { en: "Cannot reach the server. Check your connection or try again.", zh: "无法连接服务器。请检查网络连接或稍后重试。", fr: "Impossible de contacter le serveur. Vérifiez votre connexion.", es: "No se puede conectar al servidor. Verifique su conexión." },
