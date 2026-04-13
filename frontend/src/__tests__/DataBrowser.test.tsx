@@ -380,11 +380,11 @@ describe("ResultsTable", () => {
     const results = [makeResult()];
     render(<ResultsTable {...defaultProps} results={results} />);
 
-    const colBtn = screen.getByText("Columns");
+    const colBtn = screen.getByText("col.toggle");
     await user.click(colBtn);
 
-    // Panel should appear with Core group label
-    expect(screen.getByText("Core")).toBeInTheDocument();
+    // Panel should appear with Core group label (i18n key fallback)
+    expect(screen.getByText("col.core")).toBeInTheDocument();
   });
 
   // ── Object click ──

@@ -422,6 +422,75 @@ async def batch_run_pipeline(
     )
 
 
+@router.get("/runs/compare")
+async def compare_runs(
+    run_ids: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Compare two pipeline runs: params, results, timing."""
+    ids = [s.strip() for s in run_ids.split(",") if s.strip()]
+    if len(ids) != 2:
+        raise HTTPException(status_code=400, detail="Provide exactly 2 run IDs separated by comma")
+
+    runs = []
+    for rid_str in ids:
+        try:
+            rid = uuid.UUID(rid_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid run ID: {rid_str}")
+        result = await db.execute(
+            select(PipelineRun).where(PipelineRun.id == rid, PipelineRun.user_id == user.id)
+        )
+        run = result.scalar_one_or_none()
+        if not run:
+            raise HTTPException(status_code=404, detail=f"Run {rid_str} not found")
+        runs.append(run)
+
+    r1, r2 = runs
+
+    # Compare DAGs
+    dag_diff = {}
+    dag1_nodes = {n["id"]: n for n in (r1.dag.get("nodes") or [])}
+    dag2_nodes = {n["id"]: n for n in (r2.dag.get("nodes") or [])}
+    all_node_ids = set(dag1_nodes) | set(dag2_nodes)
+    for nid in all_node_ids:
+        n1 = dag1_nodes.get(nid)
+        n2 = dag2_nodes.get(nid)
+        if n1 and not n2:
+            dag_diff[nid] = {"status": "removed"}
+        elif n2 and not n1:
+            dag_diff[nid] = {"status": "added"}
+        elif n1 and n2 and n1.get("data", {}).get("params") != n2.get("data", {}).get("params"):
+            dag_diff[nid] = {
+                "status": "changed",
+                "params_1": n1["data"].get("params"),
+                "params_2": n2["data"].get("params"),
+            }
+
+    # Compare results
+    r1_results = r1.results or {}
+    r2_results = r2.results or {}
+    result_diff = {}
+    for key in set(r1_results) | set(r2_results):
+        if key.startswith("_"):
+            continue
+        v1 = r1_results.get(key)
+        v2 = r2_results.get(key)
+        if v1 != v2:
+            result_diff[key] = {
+                "run_1": str(v1)[:200] if v1 else None,
+                "run_2": str(v2)[:200] if v2 else None,
+            }
+
+    return {
+        "run_1": {"id": str(r1.id), "status": r1.status, "created_at": str(r1.created_at)},
+        "run_2": {"id": str(r2.id), "status": r2.status, "created_at": str(r2.created_at)},
+        "dag_diff": dag_diff,
+        "result_diff": result_diff,
+    }
+
+
 @router.get("/{run_id}")
 async def get_run(
     run_id: str,

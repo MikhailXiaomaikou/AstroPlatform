@@ -140,72 +140,74 @@ describe("Auth helper functions", () => {
     postSpy.mockRestore();
   });
 
-  it("sendChatMessage surfaces backend detail errors", async () => {
-    const { default: api, sendChatMessage } = await import("../api/client");
+  it("sendChatMessage surfaces backend detail errors via SSE", async () => {
+    const { sendChatMessage } = await import("../api/client");
 
-    const postSpy = vi.spyOn(api, "post").mockRejectedValueOnce({
-      isAxiosError: true,
-      response: {
-        data: { detail: "AI assistant not configured" },
-      },
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      json: () => Promise.resolve({ detail: "AI assistant not configured" }),
     });
+    vi.stubGlobal("fetch", mockFetch);
 
     await expect(
       sendChatMessage([{ role: "user", content: "hello" }])
     ).rejects.toThrow("AI assistant not configured");
 
-    postSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 
-  it("sendChatMessage explains backend connectivity failures after network errors", async () => {
+  it("sendChatMessage explains connectivity failures after fetch errors", async () => {
     const { default: api, sendChatMessage } = await import("../api/client");
 
-    const postSpy = vi.spyOn(api, "post").mockRejectedValueOnce({
-      isAxiosError: true,
-      message: "Network Error",
-    });
+    const mockFetch = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", mockFetch);
     const getSpy = vi.spyOn(api, "get").mockResolvedValueOnce({ data: { status: "ok" } });
 
     await expect(
       sendChatMessage([{ role: "user", content: "hello" }])
-    ).rejects.toThrow("The backend lost its connection to the AI provider before returning a response.");
+    ).rejects.toThrow("Connection to AI provider was interrupted");
 
-    postSpy.mockRestore();
+    vi.unstubAllGlobals();
     getSpy.mockRestore();
   });
 
-  it("sendChatMessage forwards all stored provider API keys", async () => {
+  it("sendChatMessage accumulates SSE text and tool_result events", async () => {
     store["astro_api_keys"] = JSON.stringify({
       openai: "sk-openai-test",
       anthropic: "sk-ant-test",
     });
     store["astro_ai_provider"] = "openai";
 
-    const { default: api, sendChatMessage } = await import("../api/client");
+    const { sendChatMessage } = await import("../api/client");
 
-    const postSpy = vi.spyOn(api, "post").mockResolvedValueOnce({
-      data: { reply: "ok", actions: [] },
+    const sseBody = [
+      'data: {"type":"text","content":"Hello"}\n\n',
+      'data: {"type":"tool_result","tool":"search_objects","result":{"ok":true}}\n\n',
+      'data: {"type":"done"}\n\n',
+    ].join("");
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
     });
 
-    await sendChatMessage([{ role: "user", content: "hello" }], { page: "chat" });
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      body: stream,
+    });
+    vi.stubGlobal("fetch", mockFetch);
 
-    expect(postSpy).toHaveBeenCalledWith(
-      "/api/chat/message",
-      {
-        messages: [{ role: "user", content: "hello" }],
-        context: {
-          page: "chat",
-          api_keys: {
-            openai: "sk-openai-test",
-            anthropic: "sk-ant-test",
-          },
-          api_provider: "openai",
-        },
-      },
-      { timeout: 420000 }
-    );
+    const result = await sendChatMessage([{ role: "user", content: "hello" }], { page: "chat" });
 
-    postSpy.mockRestore();
+    expect(result.reply).toBe("Hello");
+    expect(result.actions).toHaveLength(1);
+    expect(result.actions[0].action).toBe("search_objects");
+
+    vi.unstubAllGlobals();
   });
 
   it("getAlerts uses the canonical trailing-slash endpoint", async () => {

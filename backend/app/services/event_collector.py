@@ -45,6 +45,9 @@ ALLOWED_EVENT_TYPES = {
     "session.started",
     "session.page_view",
     "session.ended",
+    "security.auth_failure",
+    "security.forbidden",
+    "security.rate_limited",
 }
 
 

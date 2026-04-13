@@ -756,6 +756,34 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "sensitivity_analysis",
+        "description": (
+            "Run sensitivity analysis by perturbing parameters and observing result changes. "
+            "Provide a Python expression or function call, the parameter to vary, and the range. "
+            "Returns a table of parameter values vs results."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Python code that computes a result. Must assign to 'result' variable.",
+                },
+                "parameter": {
+                    "type": "string",
+                    "description": "Variable name to perturb (must be assigned in the code before use)",
+                },
+                "base_value": {"type": "number", "description": "Nominal parameter value"},
+                "perturbations": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Fractional perturbations to apply (e.g., [-0.2, -0.1, 0, 0.1, 0.2] for ±20%)",
+                },
+            },
+            "required": ["code", "parameter", "base_value"],
+        },
+    },
 ]
 
 
@@ -824,6 +852,8 @@ async def execute_tool(
             return await _exec_extract_sources(tool_input)
         elif tool_name == "classify_transient":
             return await _exec_classify_transient(tool_input)
+        elif tool_name == "sensitivity_analysis":
+            return await _exec_sensitivity_analysis(tool_input, python_session_id)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -1092,6 +1122,37 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         response["auto_fix_note"] = auto_fix_note
 
     return response
+
+
+async def _exec_sensitivity_analysis(inp: dict, python_session_id: str = "default") -> dict:
+    """Perturb a parameter and observe how results change."""
+    from app.services.code_executor import execute_python
+
+    code = inp.get("code", "")
+    param = inp.get("parameter", "")
+    base = float(inp.get("base_value", 0))
+    perturbations = inp.get("perturbations", [-0.2, -0.1, 0, 0.1, 0.2])
+
+    results = []
+    loop = asyncio.get_running_loop()
+    for frac in perturbations:
+        value = base * (1 + frac)
+        modified_code = f"{param} = {value}\n{code}"
+        try:
+            exec_result = await asyncio.wait_for(
+                loop.run_in_executor(None, execute_python, modified_code, None, python_session_id),
+                timeout=30.0,
+            )
+            if exec_result.success:
+                # Extract 'result' variable from output
+                result_val = exec_result.variables.get("result")
+                results.append({"perturbation": frac, "value": value, "result": result_val, "success": True})
+            else:
+                results.append({"perturbation": frac, "value": value, "error": exec_result.error, "success": False})
+        except asyncio.TimeoutError:
+            results.append({"perturbation": frac, "value": value, "error": "timeout", "success": False})
+
+    return {"parameter": param, "base_value": base, "results": results}
 
 
 def _exec_get_cached_results(inp: dict) -> dict:

@@ -101,6 +101,7 @@ class PipelineRun(Base):
     results: Mapped[dict | None] = mapped_column(JSONType())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    environment: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)
 
     __table_args__ = (
         Index("idx_pipelinerun_status", "status"),

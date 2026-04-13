@@ -267,6 +267,136 @@ class TestExportEndpoints:
             assert "Pipeline Run Report" in resp.text
             assert "denoise_1" in resp.text
 
+    async def _create_rich_pipeline_run(self, db_session, user):
+        """Helper: insert a PipelineRun with a multi-node DAG and results."""
+        run_id = uuid.uuid4()
+        run = PipelineRun(
+            id=run_id,
+            user_id=user.id,
+            dag={
+                "nodes": [
+                    {"id": "load_1", "type": "LoadData", "data": {"label": "Load FITS", "params": {"fits_path": "/data/m31.fits"}}},
+                    {"id": "denoise_1", "type": "Denoise", "data": {"label": "Sigma Clip", "params": {"sigma": 3}}},
+                    {"id": "plot_1", "type": "Plot", "data": {"label": "Preview", "params": {}}},
+                ],
+                "edges": [
+                    {"source": "load_1", "target": "denoise_1"},
+                    {"source": "denoise_1", "target": "plot_1"},
+                ],
+            },
+            status="completed",
+            results={
+                "denoise_1": {"data": {"flux": [1.0, 2.0, 3.0]}, "outliers_removed": 3},
+            },
+        )
+        db_session.add(run)
+        await db_session.flush()
+
+        for nid, logs in [("load_1", "Loaded 100x100 image"), ("denoise_1", "Sigma clip applied"), ("plot_1", "Plot saved")]:
+            db_session.add(RunResult(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                node_id=nid,
+                output_path=f"/output/{nid}.fits",
+                logs=logs,
+            ))
+        await db_session.commit()
+        return run_id
+
+    async def test_export_notebook_valid_run(self, app_client, test_user, db_session):
+        """Export a multi-node pipeline run as a Jupyter notebook."""
+        import json as _json
+
+        user, token = test_user
+        run_id = await self._create_rich_pipeline_run(db_session, user)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await app_client.get(f"/api/export/run/{run_id}/notebook", headers=headers)
+        assert resp.status_code == 200
+        assert "ipynb" in resp.headers["content-type"] or "json" in resp.headers["content-type"]
+        assert "attachment" in resp.headers.get("content-disposition", "")
+
+        nb = _json.loads(resp.text)
+
+        # Valid .ipynb structure
+        assert nb["nbformat"] == 4
+        assert "cells" in nb
+        assert nb["metadata"]["kernelspec"]["name"] == "python3"
+
+        cells = nb["cells"]
+        # Should have at least: header + deps + 3 nodes * (markdown + code) + summary
+        assert len(cells) >= 9
+
+        # First cell is markdown with run metadata
+        assert cells[0]["cell_type"] == "markdown"
+        src_text = "".join(cells[0]["source"])
+        assert "Pipeline Run Report" in src_text
+        assert str(run_id) in src_text
+        assert "completed" in src_text
+
+        # Second cell is code with imports
+        assert cells[1]["cell_type"] == "code"
+        assert cells[1]["execution_count"] is None
+        assert cells[1]["outputs"] == []
+        imports_text = "".join(cells[1]["source"])
+        assert "import numpy" in imports_text
+
+        # Last cell is markdown summary
+        assert cells[-1]["cell_type"] == "markdown"
+        summary_text = "".join(cells[-1]["source"])
+        assert "Summary" in summary_text
+        assert "Standard Astro" in summary_text
+
+        # Nodes appear in topological order (load_1 before denoise_1 before plot_1)
+        all_text = _json.dumps(cells)
+        load_pos = all_text.index("load_1")
+        denoise_pos = all_text.index("denoise_1")
+        plot_pos = all_text.index("plot_1")
+        assert load_pos < denoise_pos < plot_pos
+
+        # Node code cells contain type-specific templates
+        code_texts = [
+            "".join(c["source"]) for c in cells if c["cell_type"] == "code"
+        ]
+        code_all = "\n".join(code_texts)
+        assert "sigma_clip" in code_all  # Denoise template
+        assert "matplotlib" in code_all  # Plot template
+        assert "astropy.io" in code_all  # LoadData template
+
+        # Results are embedded for denoise_1
+        assert "node_output" in code_all
+        assert "outliers_removed" in code_all
+
+        # Logs appear in markdown cells
+        md_texts = [
+            "".join(c["source"]) for c in cells if c["cell_type"] == "markdown"
+        ]
+        md_all = "\n".join(md_texts)
+        assert "Sigma clip applied" in md_all
+
+    async def test_export_notebook_empty_dag(self, app_client, test_user, db_session):
+        """Export a run with an empty DAG — should still return valid notebook."""
+        import json as _json
+
+        user, token = test_user
+        run_id = await self._create_pipeline_run(db_session, user)  # empty DAG
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await app_client.get(f"/api/export/run/{run_id}/notebook", headers=headers)
+        assert resp.status_code == 200
+        nb = _json.loads(resp.text)
+        assert nb["nbformat"] == 4
+        # At minimum: header + deps + summary = 3 cells
+        assert len(nb["cells"]) >= 3
+
+    async def test_export_notebook_nonexistent_run(self, app_client, test_user):
+        """Should return 404 for a non-existent run_id."""
+        _, token = test_user
+        headers = {"Authorization": f"Bearer {token}"}
+        fake_id = str(uuid.uuid4())
+        resp = await app_client.get(f"/api/export/run/{fake_id}/notebook", headers=headers)
+        assert resp.status_code == 404
+
 
 class TestPaperEndpoints:
     async def _create_chat_session(self, db_session, user):

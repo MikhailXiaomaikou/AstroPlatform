@@ -150,6 +150,16 @@ def _migrate_add_columns(connection):
                 except Exception:
                     pass
 
+    # --- PipelineRun environment snapshot column ---
+    if "pipeline_runs" in inspector.get_table_names():
+        existing_pr = {c["name"] for c in inspector.get_columns("pipeline_runs")}
+        if "environment" not in existing_pr:
+            try:
+                connection.execute(sqlalchemy.text("ALTER TABLE pipeline_runs ADD COLUMN environment TEXT"))
+                logger.info("Added column pipeline_runs.environment")
+            except Exception:
+                pass
+
     # --- Performance indexes for data_files and pipeline_runs ---
     perf_indexes = [
         ("idx_datafile_source", "data_files", "(source)"),
@@ -256,6 +266,40 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Page-Name", "X-Tracking-Session"],
 )
 app.add_middleware(EventTrackingMiddleware)
+
+# ── Security response headers ──
+MAX_REQUEST_BODY = 1_048_576  # 1 MB for non-upload endpoints
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Set security headers on every response and enforce a 1 MB body-size
+    limit for endpoints other than the FITS upload route (which uses its own
+    ``MAX_UPLOAD_SIZE`` setting)."""
+    # --- request body size gate (skip FITS upload) ---
+    if request.url.path != "/api/data/fits/upload":
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_REQUEST_BODY:
+                    from starlette.responses import JSONResponse
+                    return JSONResponse(
+                        status_code=413,
+                        content={"detail": "Request body too large"},
+                    )
+            except ValueError:
+                pass  # malformed header — let downstream handle it
+
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=()"
+    )
+    return response
+
 
 # Routers
 app.include_router(alerts_router)

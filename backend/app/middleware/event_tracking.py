@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.auth import decode_token
 from app.services.event_collector import event_collector
+
+logger = logging.getLogger(__name__)
 
 
 class EventTrackingMiddleware(BaseHTTPMiddleware):
@@ -55,4 +58,34 @@ class EventTrackingMiddleware(BaseHTTPMiddleware):
                 duration_ms=duration_ms,
                 page=request.headers.get("X-Page-Name"),
             )
+
+        # Track security-relevant HTTP status codes
+        _SECURITY_EVENTS = {
+            401: "security.auth_failure",
+            403: "security.forbidden",
+            429: "security.rate_limited",
+        }
+        security_event = _SECURITY_EVENTS.get(response.status_code)
+        if security_event:
+            try:
+                await event_collector.track(
+                    event_type=security_event,
+                    event_data={
+                        "path": request.url.path,
+                        "method": request.method,
+                    },
+                    user_id=getattr(request.state, "user_id", None),
+                    session_id=getattr(request.state, "tracking_session_id", None),
+                    duration_ms=duration_ms,
+                    page=request.headers.get("X-Page-Name"),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to track security event %s for %s %s",
+                    security_event,
+                    request.method,
+                    request.url.path,
+                    exc_info=True,
+                )
+
         return response

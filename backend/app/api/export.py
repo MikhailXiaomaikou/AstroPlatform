@@ -980,6 +980,413 @@ async def export_report_bibtex(req: BibTeXRequest):
     )
 
 
+# ── Jupyter Notebook Export (Pipeline Run) ──
+
+# Maps pipeline node types to Python code snippets that reproduce the operation.
+_NODE_CODE_TEMPLATES: dict[str, str] = {
+    "LoadData": (
+        "from astropy.io import fits\n"
+        "# Load FITS data — update the path to your local file\n"
+        "# hdul = fits.open('{fits_path}')\n"
+        "# data = hdul[0].data\n"
+        "# header = hdul[0].header\n"
+        "print('LoadData: configure the FITS path above')"
+    ),
+    "QueryData": (
+        "from astroquery.utils.tap.core import TapPlus\n"
+        "# Query an astronomical database\n"
+        "# tap = TapPlus(url='https://gea.esac.esa.int/tap-server/tap')\n"
+        "# job = tap.launch_job('SELECT ...')\n"
+        "# results = job.get_results()\n"
+        "print('QueryData: configure the query above')"
+    ),
+    "Denoise": (
+        "from astropy.stats import sigma_clip\n"
+        "# Apply sigma-clipping to remove outliers\n"
+        "# clipped = sigma_clip(data, sigma=3.0)\n"
+        "# denoised = np.where(clipped.mask, np.nanmedian(data), data)\n"
+        "print('Denoise: apply sigma clipping to your data')"
+    ),
+    "SpectralFit": (
+        "from astropy.modeling import models, fitting\n"
+        "# Fit spectral lines\n"
+        "# gauss = models.Gaussian1D(amplitude=1, mean=6563, stddev=5)\n"
+        "# fitter = fitting.LevMarLSQFitter()\n"
+        "# fitted = fitter(gauss, wavelength, flux)\n"
+        "print('SpectralFit: configure your line model above')"
+    ),
+    "CoordTransform": (
+        "from astropy.coordinates import SkyCoord\n"
+        "import astropy.units as u\n"
+        "# Transform coordinates between frames\n"
+        "# coord = SkyCoord(ra=10.0*u.deg, dec=20.0*u.deg, frame='icrs')\n"
+        "# galactic = coord.galactic\n"
+        "print('CoordTransform: configure coordinates above')"
+    ),
+    "RedshiftEstimate": (
+        "# Estimate redshift from spectral lines\n"
+        "# rest_wavelength = 6562.8  # H-alpha\n"
+        "# observed_wavelength = ...  # from your data\n"
+        "# z = (observed_wavelength - rest_wavelength) / rest_wavelength\n"
+        "print('RedshiftEstimate: set observed wavelength above')"
+    ),
+    "CrossMatch": (
+        "from astropy.coordinates import SkyCoord\n"
+        "import astropy.units as u\n"
+        "# Cross-match two catalogs\n"
+        "# cat1 = SkyCoord(ra=ra1*u.deg, dec=dec1*u.deg)\n"
+        "# cat2 = SkyCoord(ra=ra2*u.deg, dec=dec2*u.deg)\n"
+        "# idx, sep, _ = cat1.match_to_catalog_sky(cat2)\n"
+        "print('CrossMatch: load your catalogs above')"
+    ),
+    "Plot": (
+        "import matplotlib.pyplot as plt\n"
+        "# Generate a plot\n"
+        "# fig, ax = plt.subplots(figsize=(10, 6))\n"
+        "# ax.plot(x, y)\n"
+        "# ax.set_xlabel('X')\n"
+        "# ax.set_ylabel('Y')\n"
+        "# plt.tight_layout()\n"
+        "# plt.show()\n"
+        "print('Plot: configure your plot above')"
+    ),
+    "InteractivePlot": (
+        "# import plotly.express as px\n"
+        "# fig = px.scatter(x=x, y=y)\n"
+        "# fig.show()\n"
+        "print('InteractivePlot: configure your interactive plot above')"
+    ),
+    "SEDFit": (
+        "# Spectral Energy Distribution fitting\n"
+        "# Provide photometric data points (bands + fluxes)\n"
+        "# and fit an SED model.\n"
+        "print('SEDFit: configure photometry data above')"
+    ),
+    "EquivalentWidth": (
+        "# Measure equivalent width of spectral lines\n"
+        "# from specutils import SpectralRegion\n"
+        "# from specutils.analysis import equivalent_width\n"
+        "# ew = equivalent_width(spectrum, regions=SpectralRegion(...))\n"
+        "print('EquivalentWidth: configure spectral region above')"
+    ),
+    "PhotCalibrate": (
+        "# Photometric calibration\n"
+        "# Apply zero-point corrections to instrumental magnitudes\n"
+        "# calibrated_mag = instrumental_mag + zero_point\n"
+        "print('PhotCalibrate: set zero-point above')"
+    ),
+    "ImageStack": (
+        "# Stack multiple images\n"
+        "# from astropy.nddata import CCDData\n"
+        "# from ccdproc import combine\n"
+        "# combined = combine(image_list, method='median')\n"
+        "print('ImageStack: provide image list above')"
+    ),
+    "BiasSubtract": (
+        "# Subtract bias frame\n"
+        "# from ccdproc import subtract_bias\n"
+        "# corrected = subtract_bias(image, bias)\n"
+        "print('BiasSubtract: provide bias frame above')"
+    ),
+    "DarkCorrect": (
+        "# Dark current correction\n"
+        "# from ccdproc import subtract_dark\n"
+        "# corrected = subtract_dark(image, dark, exposure_time='exptime', exposure_unit=u.s)\n"
+        "print('DarkCorrect: provide dark frame above')"
+    ),
+    "FlatField": (
+        "# Flat-field correction\n"
+        "# from ccdproc import flat_correct\n"
+        "# corrected = flat_correct(image, flat)\n"
+        "print('FlatField: provide flat frame above')"
+    ),
+    "CosmicRayReject": (
+        "# Cosmic ray rejection\n"
+        "# from astroscrappy import detect_cosmics\n"
+        "# mask, clean = detect_cosmics(data)\n"
+        "print('CosmicRayReject: apply to your image data')"
+    ),
+    "SourceExtract": (
+        "# Source extraction\n"
+        "# from photutils.detection import DAOStarFinder\n"
+        "# daofind = DAOStarFinder(fwhm=3.0, threshold=5.*std)\n"
+        "# sources = daofind(data - median)\n"
+        "print('SourceExtract: configure detection parameters above')"
+    ),
+    "PSFPhotometry": (
+        "# PSF photometry\n"
+        "# from photutils.psf import PSFPhotometry\n"
+        "# phot = PSFPhotometry(psf_model, fit_shape=(11,11))\n"
+        "# result = phot(data, init_params=init_table)\n"
+        "print('PSFPhotometry: configure PSF model above')"
+    ),
+    "AstrometricSolve": (
+        "# Astrometric plate solving\n"
+        "# Determine WCS solution for an image\n"
+        "print('AstrometricSolve: provide image for plate solving')"
+    ),
+    "TimeSeriesAnalysis": (
+        "# Time-series analysis\n"
+        "# from astropy.timeseries import LombScargle\n"
+        "# ls = LombScargle(times, flux)\n"
+        "# frequency, power = ls.autopower()\n"
+        "print('TimeSeriesAnalysis: provide time-series data above')"
+    ),
+    "CustomScript": (
+        "# Custom user script\n"
+        "# Insert your custom analysis code here.\n"
+        "print('CustomScript: add your code')"
+    ),
+    "Condition": (
+        "# Conditional branch\n"
+        "# This node routes data based on a condition.\n"
+        "print('Condition: define your branching logic')"
+    ),
+}
+
+
+def _topological_sort_flat(dag: dict) -> list[str]:
+    """Return node IDs in topological order (flattened from level-based sort).
+
+    Uses Kahn's algorithm.  Falls back to the order in ``dag['nodes']``
+    if edges are missing or the graph is trivial.
+    """
+    nodes_list = dag.get("nodes", [])
+    if not nodes_list:
+        return []
+
+    node_ids = [n["id"] for n in nodes_list]
+    edges = dag.get("edges", [])
+    if not edges:
+        return node_ids
+
+    from collections import deque
+
+    adj: dict[str, list[str]] = {nid: [] for nid in node_ids}
+    in_deg: dict[str, int] = {nid: 0 for nid in node_ids}
+    for edge in edges:
+        src, tgt = edge["source"], edge["target"]
+        if src in adj and tgt in in_deg:
+            adj[src].append(tgt)
+            in_deg[tgt] += 1
+
+    queue = deque(nid for nid, d in in_deg.items() if d == 0)
+    ordered: list[str] = []
+    while queue:
+        nid = queue.popleft()
+        ordered.append(nid)
+        for nb in adj.get(nid, []):
+            in_deg[nb] -= 1
+            if in_deg[nb] == 0:
+                queue.append(nb)
+
+    # If cycle detected, fall back to declaration order for remaining nodes
+    if len(ordered) < len(node_ids):
+        seen = set(ordered)
+        for nid in node_ids:
+            if nid not in seen:
+                ordered.append(nid)
+
+    return ordered
+
+
+@router.get("/run/{run_id}/notebook")
+async def export_run_notebook(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export a pipeline run as a Jupyter notebook (.ipynb)."""
+    import json as _json
+
+    run, results = await _get_run_and_results(run_id, user, db)
+    dag = run.dag or {"nodes": [], "edges": []}
+    node_map = {n["id"]: n for n in dag.get("nodes", [])}
+    sorted_ids = _topological_sort_flat(dag)
+
+    # Build a quick lookup: node_id -> RunResult
+    result_by_node: dict[str, RunResult] = {r.node_id: r for r in results}
+
+    cells: list[dict] = []
+
+    # ── Cell 1: Markdown header with run metadata ──
+    created = run.created_at.isoformat() if run.created_at else "N/A"
+    completed = run.completed_at.isoformat() if run.completed_at else "N/A"
+    cells.append({
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "# Pipeline Run Report\n",
+            "\n",
+            f"- **Run ID:** `{run.id}`\n",
+            f"- **Status:** {run.status}\n",
+            f"- **Created:** {created}\n",
+            f"- **Completed:** {completed}\n",
+            "\n",
+            f"Nodes: {len(dag.get('nodes', []))} | "
+            f"Edges: {len(dag.get('edges', []))}\n",
+        ],
+    })
+
+    # ── Cell 2: Code cell — install dependencies ──
+    cells.append({
+        "cell_type": "code",
+        "metadata": {},
+        "source": [
+            "# Install / verify dependencies (uncomment as needed)\n",
+            "# !pip install numpy astropy matplotlib scipy specutils\n",
+            "\n",
+            "import numpy as np\n",
+            "import matplotlib.pyplot as plt\n",
+            "from astropy.table import Table\n",
+            "from astropy.coordinates import SkyCoord\n",
+            "import astropy.units as u\n",
+        ],
+        "execution_count": None,
+        "outputs": [],
+    })
+
+    # ── Per-node cells (topologically sorted) ──
+    results_json = run.results or {}
+
+    for node_id in sorted_ids:
+        node_def = node_map.get(node_id, {})
+        node_type = node_def.get("type", "unknown")
+        node_label = node_def.get("data", {}).get("label", node_id)
+        node_params = node_def.get("data", {}).get("params", {})
+
+        # Markdown cell: node name and type
+        md_lines = [
+            f"## Node: {node_label}\n",
+            "\n",
+            f"- **ID:** `{node_id}`\n",
+            f"- **Type:** `{node_type}`\n",
+        ]
+        if node_params:
+            md_lines.append("- **Parameters:**\n")
+            for pk, pv in node_params.items():
+                md_lines.append(f"  - `{pk}`: `{pv}`\n")
+
+        rr = result_by_node.get(node_id)
+        if rr:
+            if rr.output_path:
+                md_lines.append(f"- **Output path:** `{rr.output_path}`\n")
+            if rr.execution_time_ms is not None:
+                md_lines.append(f"- **Execution time:** {rr.execution_time_ms} ms\n")
+
+        cells.append({
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": md_lines,
+        })
+
+        # Code cell: reproducible Python snippet
+        code_template = _NODE_CODE_TEMPLATES.get(node_type)
+        if node_type == "CustomScript":
+            # Embed the user's actual script if available
+            user_code = node_params.get("code", "")
+            if user_code:
+                code_template = f"# Custom script from pipeline\n{user_code}"
+
+        if code_template:
+            # Substitute known parameter values into the template
+            code_text = code_template
+            if node_type == "LoadData" and node_params.get("fits_path"):
+                code_text = code_text.replace("{fits_path}", str(node_params["fits_path"]))
+            code_lines = [line + "\n" for line in code_text.split("\n")]
+        else:
+            code_lines = [
+                f"# Node type '{node_type}' — add your implementation here\n",
+                f"print('Node {node_id} ({node_type}): not yet implemented')\n",
+            ]
+
+        cells.append({
+            "cell_type": "code",
+            "metadata": {},
+            "source": code_lines,
+            "execution_count": None,
+            "outputs": [],
+        })
+
+        # Output cell: embed the node's result if available
+        node_result_data = results_json.get(node_id)
+        if node_result_data is not None:
+            result_repr = _json.dumps(node_result_data, indent=2, default=str)
+            # Truncate very large outputs to keep the notebook manageable
+            if len(result_repr) > 5000:
+                result_repr = result_repr[:5000] + "\n# ... (truncated)"
+
+            cells.append({
+                "cell_type": "code",
+                "metadata": {},
+                "source": [
+                    f"# Output from node '{node_id}' (recorded during pipeline execution)\n",
+                    f"node_output = {result_repr}\n",
+                    "print(f'Keys: {list(node_output.keys()) if isinstance(node_output, dict) else type(node_output).__name__}')\n",
+                ],
+                "execution_count": None,
+                "outputs": [],
+            })
+
+        # If the RunResult has logs, add them as a markdown cell
+        if rr and rr.logs:
+            cells.append({
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    f"**Logs for `{node_id}`:**\n",
+                    "\n",
+                    "```\n",
+                    rr.logs + "\n",
+                    "```\n",
+                ],
+            })
+
+    # ── Last cell: summary ──
+    node_count = len(dag.get("nodes", []))
+    edge_count = len(dag.get("edges", []))
+    cells.append({
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "---\n",
+            "\n",
+            "## Summary\n",
+            "\n",
+            f"Pipeline run `{run.id}` completed with status **{run.status}**.\n",
+            "\n",
+            f"- **Nodes executed:** {node_count}\n",
+            f"- **Edges:** {edge_count}\n",
+            f"- **Results recorded:** {len(results)}\n",
+            "\n",
+            "*Generated by Standard Astro Research Platform*\n",
+        ],
+    })
+
+    notebook = {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {
+                "display_name": "Python 3",
+                "language": "python",
+                "name": "python3",
+            },
+            "language_info": {"name": "python", "version": "3.11.0"},
+        },
+        "cells": cells,
+    }
+
+    notebook_json = _json.dumps(notebook, indent=2, default=str)
+    return StreamingResponse(
+        iter([notebook_json]),
+        media_type="application/x-ipynb+json",
+        headers={
+            "Content-Disposition": f'attachment; filename="run_{run_id}.ipynb"'
+        },
+    )
+
+
 class ChatToNotebookRequest(_BaseModel):
     messages: list[dict] = []
     title: str = "AI Research Session"

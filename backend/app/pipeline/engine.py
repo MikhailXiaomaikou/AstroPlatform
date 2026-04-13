@@ -166,17 +166,33 @@ def _compute_skipped_nodes(
     return skipped
 
 
+def _capture_environment() -> dict:
+    """Snapshot Python and key library versions for reproducibility."""
+    import sys
+    import platform as _platform
+    versions = {"python": sys.version.split()[0], "platform": _platform.platform()}
+    for pkg in ["numpy", "astropy", "scipy", "pandas", "scikit-learn"]:
+        try:
+            mod = __import__(pkg)
+            versions[pkg] = getattr(mod, "__version__", "unknown")
+        except ImportError:
+            pass
+    return versions
+
+
 def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
     """Run the pipeline synchronously (local mode, no Celery needed).
 
     Returns dict of {node_id: result} for all nodes.
     """
+    env_snapshot = _capture_environment()
+
     levels = topological_sort(dag)
     node_map = build_node_map(dag)
     parent_map = build_parent_map(dag)
     edge_index = build_edge_index(dag)
 
-    node_results: dict[str, dict] = {}
+    node_results: dict[str, dict] = {"_environment": env_snapshot}
     skipped_nodes: set[str] = set()
 
     for level in levels:
@@ -211,6 +227,20 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
                 for pid in parents:
                     if pid in node_results:
                         input_data.update(node_results[pid])
+
+                # Propagate uncertainties from parent nodes
+                parent_uncertainties = {}
+                for pid in parents:
+                    parent_result = node_results.get(pid, {})
+                    if "_uncertainties" in parent_result:
+                        parent_uncertainties[pid] = parent_result["_uncertainties"]
+                    # Also collect any error/uncertainty columns from data
+                    parent_data = parent_result.get("data", {})
+                    for key in parent_data:
+                        if key.endswith("_err") or key.endswith("_error") or key.endswith("_uncertainty"):
+                            parent_uncertainties.setdefault("_error_columns", {})[key] = True
+                if parent_uncertainties:
+                    input_data["_parent_uncertainties"] = parent_uncertainties
             else:
                 input_data = {"fits_path": input_data_id, "path": input_data_id, "input_data_id": input_data_id}
 
@@ -347,6 +377,8 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
             return {"run_id": run_id, "status": "failed", "error": "Run not found"}
 
         run.status = "running"
+        env_snapshot = _capture_environment()
+        run.environment = env_snapshot
         session.commit()
 
         _publish_progress(run_id, {"type": "run_start", "status": "running"})
@@ -418,6 +450,20 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                     for pid in parents:
                         if pid in node_results:
                             input_data.update(node_results[pid])
+
+                    # Propagate uncertainties from parent nodes
+                    parent_uncertainties = {}
+                    for pid in parents:
+                        parent_result = node_results.get(pid, {})
+                        if "_uncertainties" in parent_result:
+                            parent_uncertainties[pid] = parent_result["_uncertainties"]
+                        # Also collect any error/uncertainty columns from data
+                        parent_data = parent_result.get("data", {})
+                        for key in parent_data:
+                            if key.endswith("_err") or key.endswith("_error") or key.endswith("_uncertainty"):
+                                parent_uncertainties.setdefault("_error_columns", {})[key] = True
+                    if parent_uncertainties:
+                        input_data["_parent_uncertainties"] = parent_uncertainties
                 else:
                     input_data = {"fits_path": input_data_id, "path": input_data_id, "input_data_id": input_data_id}
 
