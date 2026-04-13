@@ -5,7 +5,7 @@ const PAGE_KEY = "astro_current_page";
 const EVENT_COUNT_KEY = "astro_tracking_event_count";
 const API_BASE =
   import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : "");
+  (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : "https://astro-backend-h4x1.onrender.com");
 
 function getOrCreateSessionId(): string {
   const existing = sessionStorage.getItem(SESSION_KEY);

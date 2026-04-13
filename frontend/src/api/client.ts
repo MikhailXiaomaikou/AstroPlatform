@@ -1,8 +1,9 @@
 import axios from "axios";
 
+const DEFAULT_PRODUCTION_API_URL = "https://astro-backend-h4x1.onrender.com";
 export const API_BASE_URL =
   import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : "");
+  (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : DEFAULT_PRODUCTION_API_URL);
 
 const api = axios.create({
   baseURL: API_BASE_URL,
