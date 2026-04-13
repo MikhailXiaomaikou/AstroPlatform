@@ -1,6 +1,7 @@
 """AI assistant backed by the inference router and multi-agent orchestrator."""
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -231,10 +232,11 @@ Pre-imported (available without import):
 When combining multiple ADQL queries, use `get_adql_result_sets()` instead of assuming `get_adql_results()` contains every prior query.
 ADQL page tables are columnar in the UI, but Python helpers always expose row-wise `list[dict]`.
 If `bp_rp` is missing but `phot_bp_mean_mag` and `phot_rp_mean_mag` exist, the helper may derive it automatically.
+For ADQL rows, a robust pattern is `rows = get_adql_results(); df = pd.DataFrame(rows)` and then checking `df.empty` / expected columns before plotting.
 
 Pre-imported astronomy toolkit (available as `astro`, whether used directly or imported):
 - `pub_figure()` / `pub_style()` — publication-quality figure setup (ApJ/MNRAS fonts)
-- `plot_hr_diagram(bp_rp, gmag, parallax=None)` — HR diagram
+- `plot_hr_diagram(bp_rp, gmag, parallax=None, ax=None)` — HR diagram
 - `plot_bpt(log_nii_ha, log_oiii_hb)` — BPT diagram with Kewley+01/Kauffmann+03 lines
 - `plot_sed(wavelength, flux, flux_err=None, model_wave=None, model_flux=None)`
 - `plot_lightcurve(time, mag, mag_err=None)`
@@ -346,6 +348,7 @@ Always end each step with what comes next."""
 class ChatMessage(BaseModel):
     role: str  # "user" or "assistant"
     content: str
+    actions: list[dict] | None = None
 
 
 class ChatRequest(BaseModel):
@@ -494,6 +497,7 @@ async def chat_message_stream(
 
         python_session_id = (req.context or {}).get("python_session_id", "default")
         _prime_adql_context_cache(req.context, python_session_id)
+        await _prime_python_session_from_history(req.messages, python_session_id)
 
         try:
             if len(agent_names) > 1:
@@ -577,6 +581,42 @@ def _prime_adql_context_cache(context: dict | None, python_session_id: str) -> N
     store_adql_result_set(python_session_id, result_set)
 
 
+def _extract_successful_python_history(messages: list[ChatMessage]) -> list[str]:
+    code_blocks: list[str] = []
+    for message in messages:
+        if message.role != "assistant" or not message.actions:
+            continue
+        for action in message.actions:
+            if not isinstance(action, dict):
+                continue
+            if action.get("action") != "run_python":
+                continue
+            tool_result = action.get("tool_result")
+            if isinstance(tool_result, dict) and tool_result.get("success") is False:
+                continue
+            tool_input = action.get("tool_input") or action.get("params")
+            if not isinstance(tool_input, dict):
+                continue
+            code = tool_input.get("code")
+            if isinstance(code, str) and code.strip():
+                code_blocks.append(code)
+    return code_blocks
+
+
+async def _prime_python_session_from_history(messages: list[ChatMessage], python_session_id: str) -> None:
+    if not python_session_id or python_session_id == "default":
+        return
+    code_blocks = _extract_successful_python_history(messages)
+    if not code_blocks:
+        return
+
+    from app.services.code_executor import replay_session_history
+
+    maybe = replay_session_history(python_session_id, code_blocks)
+    if inspect.isawaitable(maybe):
+        await maybe
+
+
 async def _llm_messages_create(
     *,
     system: str,
@@ -594,7 +634,7 @@ async def _llm_messages_create(
         provider_api_keys=provider_api_keys,
         max_tokens=4096,
         temperature=0.0,
-        backend_timeout=180.0,
+        backend_timeout=300.0,
     )
 
 
@@ -805,6 +845,7 @@ async def chat_message(
     runtime = await _build_runtime(req, user, db)
     python_session_id = (req.context or {}).get("python_session_id", "default")
     _prime_adql_context_cache(req.context, python_session_id)
+    await _prime_python_session_from_history(req.messages, python_session_id)
 
     try:
         response = await _run_orchestrated_chat(

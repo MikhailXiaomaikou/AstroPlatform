@@ -1119,6 +1119,42 @@ class TestCollaborationAndMemoryEndpoints:
 
 
 class TestChatMultiAgentRouting:
+    async def test_chat_replays_prior_successful_python_actions(self, app_client):
+        from app.services.code_executor import clear_session_vars
+
+        clear_session_vars("chat-replay")
+
+        async def fake_run_orchestrated_chat(**kwargs):
+            return {"reply": "ok", "actions": []}
+
+        with patch("app.api.chat._run_orchestrated_chat", new=fake_run_orchestrated_chat):
+            resp = await app_client.post(
+                "/api/chat/message",
+                json={
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": "I created a variable.",
+                            "actions": [
+                                {
+                                    "action": "run_python",
+                                    "tool_input": {"code": "x = 42"},
+                                    "tool_result": {"success": True, "stdout": ""},
+                                }
+                            ],
+                        },
+                        {"role": "user", "content": "What is x?"},
+                    ],
+                    "context": {"python_session_id": "chat-replay"},
+                },
+            )
+
+        assert resp.status_code == 200
+        from app.services.code_executor import execute_python
+        replay_check = execute_python("print(x)", session_id="chat-replay")
+        assert replay_check.success
+        assert replay_check.stdout.strip() == "42"
+
     async def test_chat_message_executes_all_classified_agents(self, app_client):
         calls: list[str] = []
 
@@ -1154,6 +1190,17 @@ class TestChatMultiAgentRouting:
         assert "data_agent complete" in body["reply"]
         assert "analysis_agent complete" in body["reply"]
         assert len(body["actions"]) == 2
+
+    async def test_orchestrator_collapses_data_analysis_plot_fast_path(self):
+        from app.ai.orchestrator import orchestrator
+
+        agents, note = orchestrator._collapse_fast_path(
+            ["data_agent", "analysis_agent", "visualization_agent"],
+            "Query Gaia around Pleiades and plot an HR diagram",
+        )
+
+        assert agents == ["analysis_agent"]
+        assert note is not None
 
 
 class TestInferenceAdminEndpoints:

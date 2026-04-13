@@ -1233,6 +1233,7 @@ export async function deleteApiKey(provider: string): Promise<void> {
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  actions?: unknown[];
 }
 
 export interface ChatAction {

@@ -685,7 +685,8 @@ def analyze_residuals(data, model_prediction, errors=None):
 
 def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
                     title="HR Diagram", color_by=None,
-                    isochrones=None, isochrone_ages=None):
+                    isochrones=None, isochrone_ages=None,
+                    ax=None, scatter_kwargs=None):
     """Publication-quality HR diagram (color-magnitude or color-absolute magnitude).
 
     Args:
@@ -696,9 +697,16 @@ def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
         color_by: array to color points by (e.g., metallicity)
         isochrones: list of DataFrames from get_isochrone() to overlay
         isochrone_ages: list of log_age floats to auto-fetch and overlay
+        ax: optional matplotlib Axes to draw into
+        scatter_kwargs: optional keyword overrides passed to scatter()
     """
     import matplotlib.pyplot as plt
-    fig, ax = pub_figure()
+    scatter_kwargs = dict(scatter_kwargs or {})
+    if ax is None:
+        fig, ax = pub_figure()
+    else:
+        fig = ax.figure
+        pub_style()
 
     y = np.array(gmag)
     ylabel = "G [mag]"
@@ -712,10 +720,12 @@ def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
         ylabel = r"$M_G$ [mag]"
 
     if color_by is not None:
-        sc = ax.scatter(bp_rp, y, c=color_by, s=3, alpha=0.6, cmap="viridis", rasterized=True)
+        sc = ax.scatter(
+            bp_rp, y, c=color_by, s=3, alpha=0.6, cmap="viridis", rasterized=True, **scatter_kwargs
+        )
         plt.colorbar(sc, ax=ax, label="Color parameter")
     else:
-        ax.scatter(bp_rp, y, s=3, alpha=0.5, color="#0A84FF", rasterized=True)
+        ax.scatter(bp_rp, y, s=3, alpha=0.5, color="#0A84FF", rasterized=True, **scatter_kwargs)
 
     # ── Isochrone overlay ──
     # If isochrone_ages provided, auto-fetch them
@@ -790,7 +800,7 @@ def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.invert_yaxis()
-    plt.tight_layout()
+    fig.tight_layout()
     return fig, ax
 
 

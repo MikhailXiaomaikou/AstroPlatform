@@ -6,6 +6,7 @@ figures as base64 PNG images.
 """
 
 import base64
+import hashlib
 import io
 import inspect
 import logging
@@ -32,6 +33,7 @@ MAX_REPR_ROWS = 2000
 
 # Session-scoped variable store — persists between code executions
 _session_vars: dict[str, dict] = {}
+_session_replay_signatures: dict[str, str] = {}
 _astro_module: ModuleType | None = None
 
 
@@ -44,6 +46,31 @@ def get_session_vars(session_id: str = "default") -> dict:
 
 def clear_session_vars(session_id: str = "default") -> None:
     _session_vars.pop(session_id, None)
+    _session_replay_signatures.pop(session_id, None)
+
+
+def has_session_state(session_id: str = "default") -> bool:
+    return bool(_session_vars.get(session_id))
+
+
+def replay_session_history(session_id: str, code_blocks: list[str]) -> None:
+    """Rebuild a Python session by replaying prior successful code blocks."""
+    normalized_blocks = [block for block in code_blocks if isinstance(block, str) and block.strip()]
+    if not normalized_blocks:
+        return
+
+    signature = hashlib.sha256("\n\n# === cell ===\n\n".join(normalized_blocks).encode("utf-8")).hexdigest()
+    if has_session_state(session_id) and _session_replay_signatures.get(session_id) == signature:
+        return
+
+    clear_session_vars(session_id)
+    for block in normalized_blocks:
+        result = execute_python(block, session_id=session_id)
+        if not result.success:
+            logger.warning("Skipping failed replay block for session %s: %s", session_id, result.error)
+            clear_session_vars(session_id)
+            return
+    _session_replay_signatures[session_id] = signature
 
 
 def _get_astro_module() -> ModuleType:
@@ -251,6 +278,17 @@ def _make_sandbox_helpers():
 
 def _make_data_accessor(session_id: str):
     """Create helper functions that the code can call to access platform data."""
+    def _normalize_adql_rows(payload):
+        if isinstance(payload, dict):
+            rows = payload.get("rows")
+            return rows if isinstance(rows, list) else []
+        if isinstance(payload, list):
+            if payload and isinstance(payload[0], dict) and "rows" in payload[0] and "columns" in payload[0]:
+                nested_rows = payload[0].get("rows")
+                return nested_rows if isinstance(nested_rows, list) else []
+            return payload
+        return []
+
     def load_fits(fits_path: str):
         """Load a FITS file from the platform storage. Returns an astropy HDUList."""
         from app.storage import download_fits
@@ -266,7 +304,8 @@ def _make_data_accessor(session_id: str):
     def get_adql_results():
         """Get the latest ADQL query results as a row-wise list of dicts."""
         from app.services.ai_tools import get_cached_results
-        return get_cached_results(f"latest_adql:{session_id}") or get_cached_results("latest_adql") or []
+        payload = get_cached_results(f"latest_adql:{session_id}") or get_cached_results("latest_adql") or []
+        return _normalize_adql_rows(payload)
 
     def get_latest_adql_result():
         """Get the latest ADQL result set with service/query metadata and rows."""

@@ -1894,6 +1894,7 @@ export default function ChatPage() {
       const chatHistory: ChatMessage[] = updatedMessages.map((m) => ({
         role: m.role,
         content: m.content,
+        actions: m.actions,
       }));
 
       logOperation("chat", `Search: ${text}`);

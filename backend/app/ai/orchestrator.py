@@ -44,6 +44,18 @@ class Orchestrator:
             "visualization_agent": [r"\b(plot|figure|visuali[sz]e|diagram|lightcurve|sed|hr diagram|bpt)\b"],
         }
 
+    def _collapse_fast_path(self, agents: list[str], user_message: str) -> tuple[list[str], str | None]:
+        exploratory_agents = {"data_agent", "analysis_agent", "visualization_agent"}
+        selected = [agent for agent in agents if agent in exploratory_agents]
+        if not selected:
+            return agents, None
+        if set(agents).issubset(exploratory_agents) and ("analysis_agent" in selected or "visualization_agent" in selected):
+            return ["analysis_agent"], (
+                "Fast path enabled: direct catalog-to-analysis workflows should run in one analysis pass "
+                "with data and plotting tools available, instead of serial specialist handoffs."
+            )
+        return agents, None
+
     async def classify_intent(self, user_message: str, conversation_history: list[dict] | None = None) -> list[str]:
         message = user_message.lower()
         matched: list[str] = []
@@ -57,7 +69,8 @@ class Orchestrator:
         return matched
 
     async def build_runtime_context(self, user_message: str, conversation_history: list[dict], user_id, db) -> dict:
-        agents = await self.classify_intent(user_message, conversation_history)
+        classified_agents = await self.classify_intent(user_message, conversation_history)
+        agents, fast_path_note = self._collapse_fast_path(classified_agents, user_message)
         user_context = ""
         if user_id:
             try:
@@ -76,11 +89,18 @@ class Orchestrator:
             )
 
         selected_agents = [self.agents[name] for name in agents if name in self.agents]
-        tool_names = sorted({tool for agent in selected_agents for tool in agent.tool_names})
+        tool_source_agents = classified_agents if fast_path_note else agents
+        tool_names = sorted({
+            tool
+            for name in tool_source_agents
+            for tool in (self.agents[name].tool_names if name in self.agents else [])
+        })
         system_parts = [
             "You are the Standard Astro Orchestrator coordinating specialist astronomy agents.",
             "If multiple specialties are relevant, produce one coherent answer and avoid duplicate work.",
         ]
+        if fast_path_note:
+            system_parts.append(fast_path_note)
         if user_context:
             system_parts.append("User Background:\n" + user_context)
         for agent in selected_agents:

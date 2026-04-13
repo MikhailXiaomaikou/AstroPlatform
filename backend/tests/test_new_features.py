@@ -222,6 +222,26 @@ print("ok")
         assert "SELECT * FROM a" in r.stdout
         assert "B" in r.stdout
 
+    def test_adql_results_unwraps_single_resultset_wrapper(self):
+        from app.services.ai_tools import store_search_results
+        from app.services.code_executor import execute_python
+
+        store_search_results(
+            "latest_adql:wrapped",
+            [
+                {
+                    "service": "gaia",
+                    "query": "SELECT * FROM wrapped",
+                    "columns": ["cluster"],
+                    "rows": [{"cluster": "Pleiades"}],
+                }
+            ],
+        )
+
+        r = execute_python("rows = get_adql_results(); print(rows[0]['cluster'])", session_id="wrapped")
+        assert r.success
+        assert "Pleiades" in r.stdout
+
     def test_build_adql_result_set_derives_color_and_absolute_magnitude(self):
         from app.services.ai_tools import build_adql_result_set
 
@@ -243,6 +263,35 @@ print("ok")
         assert "abs_g_mag" in row
         assert "bp_rp" in result_set["columns"]
         assert "abs_g_mag" in result_set["columns"]
+
+    def test_replay_session_history_restores_variables(self):
+        from app.services.code_executor import clear_session_vars, execute_python, replay_session_history
+
+        clear_session_vars("replay-test")
+        replay_session_history(
+            "replay-test",
+            [
+                "import numpy as np\nvalues = np.array([1, 2, 3])",
+                "mean_value = float(values.mean())",
+            ],
+        )
+
+        r = execute_python("print(mean_value)", session_id="replay-test")
+        assert r.success
+        assert "2.0" in r.stdout
+
+    def test_plot_hr_diagram_accepts_existing_axes(self):
+        from app.services.astro_analysis import plot_hr_diagram, pub_figure
+
+        fig, ax = pub_figure()
+        out_fig, out_ax = plot_hr_diagram(
+            [0.5, 1.0, 1.5],
+            [10.0, 11.0, 12.0],
+            ax=ax,
+            title="Existing Axes",
+        )
+        assert out_fig is fig
+        assert out_ax is ax
 
     def test_complex_objects_persist_between_runs(self):
         from app.services.code_executor import clear_session_vars, execute_python
