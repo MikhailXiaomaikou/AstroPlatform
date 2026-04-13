@@ -1316,6 +1316,7 @@ export interface SessionCommentItem {
   content: string;
   parent_id: string | null;
   created_at: string | null;
+  can_delete?: boolean;
 }
 
 export interface SessionSnapshotItem {
@@ -1330,11 +1331,28 @@ export interface SharedSessionPayload {
     expires_at: string | null;
   };
   session: {
+    schema_version?: number;
     id: string;
     title: string;
     messages: Array<{ role: string; content: string; actions?: unknown[] }>;
     created_at: string | null;
     updated_at: string | null;
+    paper_drafts?: Array<{
+      id: string;
+      journal_format: string;
+      paper_json: Record<string, unknown>;
+      latex_source: string;
+      bibtex: string;
+      validation: Record<string, unknown>;
+      created_at: string | null;
+      updated_at: string | null;
+    }>;
+    artifact_summary?: {
+      message_count: number;
+      python_blocks: number;
+      pipeline_actions: number;
+      figure_count: number;
+    };
   };
   comments: SessionCommentItem[];
   can_fork: boolean;
@@ -1405,6 +1423,10 @@ export async function addSharedSessionComment(
 ): Promise<{ id: string }> {
   const { data } = await api.post(`/api/shared/${token}/comments`, payload);
   return data;
+}
+
+export async function deleteSharedSessionComment(token: string, commentId: string): Promise<void> {
+  await api.delete(`/api/shared/${token}/comments/${commentId}`);
 }
 
 export interface ResearchProfile {

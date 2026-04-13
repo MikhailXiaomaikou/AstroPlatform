@@ -17,6 +17,7 @@ from app.auth import get_current_user, get_optional_user
 from app.models.database import get_db
 from app.models.schemas import (
     ChatSession,
+    PaperDraft,
     SessionComment,
     SessionFork,
     SessionSnapshot,
@@ -44,13 +45,16 @@ class SnapshotRequest(BaseModel):
     name: str
 
 
-def _serialize_session(session: ChatSession) -> dict:
+def _serialize_paper_draft(draft: PaperDraft) -> dict:
     return {
-        "id": str(session.id),
-        "title": session.title,
-        "messages": deepcopy(session.messages or []),
-        "created_at": session.created_at.isoformat() if session.created_at else None,
-        "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+        "id": str(draft.id),
+        "journal_format": draft.journal_format,
+        "paper_json": deepcopy(draft.paper_json or {}),
+        "latex_source": draft.latex_source,
+        "bibtex": draft.bibtex,
+        "validation": deepcopy(draft.validation or {}),
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
     }
 
 
@@ -60,6 +64,72 @@ def _coerce_utc(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _summarize_artifacts(messages: list[dict]) -> dict:
+    pipeline_actions = 0
+    python_blocks = 0
+    figure_count = 0
+    for message in messages:
+        for action in message.get("actions") or []:
+            if not isinstance(action, dict):
+                continue
+            action_name = str(action.get("action") or "")
+            if action_name in {"generate_pipeline", "run_pipeline", "modify_pipeline"}:
+                pipeline_actions += 1
+            if action_name == "run_python":
+                python_blocks += 1
+                tool_result = action.get("tool_result")
+                if isinstance(tool_result, dict):
+                    figure_count += int(tool_result.get("figure_count") or 0)
+    return {
+        "message_count": len(messages),
+        "python_blocks": python_blocks,
+        "pipeline_actions": pipeline_actions,
+        "figure_count": figure_count,
+    }
+
+
+async def _serialize_session(session: ChatSession, db: AsyncSession) -> dict:
+    paper_drafts = (
+        await db.execute(
+            select(PaperDraft)
+            .where(PaperDraft.session_id == session.id)
+            .order_by(PaperDraft.updated_at.desc(), PaperDraft.created_at.desc())
+        )
+    ).scalars().all()
+    messages = deepcopy(session.messages or [])
+    return {
+        "schema_version": 2,
+        "id": str(session.id),
+        "title": session.title,
+        "messages": messages,
+        "created_at": session.created_at.isoformat() if session.created_at else None,
+        "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+        "paper_drafts": [_serialize_paper_draft(draft) for draft in paper_drafts],
+        "artifact_summary": _summarize_artifacts(messages),
+    }
+
+
+async def _restore_paper_drafts(session: ChatSession, snapshot_data: dict, db: AsyncSession) -> None:
+    existing = (
+        await db.execute(select(PaperDraft).where(PaperDraft.session_id == session.id))
+    ).scalars().all()
+    for draft in existing:
+        await db.delete(draft)
+    await db.flush()
+    for raw in snapshot_data.get("paper_drafts") or []:
+        db.add(
+            PaperDraft(
+                user_id=session.user_id,
+                session_id=session.id,
+                journal_format=str(raw.get("journal_format") or "aastex"),
+                paper_json=deepcopy(raw.get("paper_json") or {}),
+                latex_source=str(raw.get("latex_source") or ""),
+                bibtex=str(raw.get("bibtex") or ""),
+                validation=deepcopy(raw.get("validation") or {}),
+            )
+        )
 
 
 async def _require_owned_session(session_id: str, user: User, db: AsyncSession) -> ChatSession:
@@ -191,6 +261,7 @@ async def get_shared_session(
     user: User | None = Depends(get_optional_user),
 ):
     shared, session = await _load_shared_session(token, db)
+    session_payload = await _serialize_session(session, db)
     comments = (
         await db.execute(
             select(SessionComment).where(SessionComment.session_id == session.id).order_by(SessionComment.created_at.asc())
@@ -201,7 +272,7 @@ async def get_shared_session(
             "access_level": shared.access_level,
             "expires_at": shared.expires_at.isoformat() if shared.expires_at else None,
         },
-        "session": _serialize_session(session),
+        "session": session_payload,
         "comments": [
             {
                 "id": str(comment.id),
@@ -211,6 +282,7 @@ async def get_shared_session(
                 "content": comment.content,
                 "parent_id": str(comment.parent_id) if comment.parent_id else None,
                 "created_at": comment.created_at.isoformat() if comment.created_at else None,
+                "can_delete": bool(user and (comment.user_id == user.id or shared.owner_id == user.id)),
             }
             for comment in comments
         ],
@@ -229,13 +301,26 @@ async def fork_shared_session(
     if shared.access_level not in {"fork", "comment"}:
         raise HTTPException(status_code=403, detail="This shared session is view-only")
 
+    session_payload = await _serialize_session(session, db)
     forked = ChatSession(
         user_id=user.id,
         title=f"Fork of {session.title}",
-        messages=deepcopy(session.messages or []),
+        messages=deepcopy(session_payload.get("messages") or []),
     )
     db.add(forked)
     await db.flush()
+    for raw in session_payload.get("paper_drafts") or []:
+        db.add(
+            PaperDraft(
+                user_id=user.id,
+                session_id=forked.id,
+                journal_format=str(raw.get("journal_format") or "aastex"),
+                paper_json=deepcopy(raw.get("paper_json") or {}),
+                latex_source=str(raw.get("latex_source") or ""),
+                bibtex=str(raw.get("bibtex") or ""),
+                validation=deepcopy(raw.get("validation") or {}),
+            )
+        )
     db.add(SessionFork(session_id=forked.id, forked_from=session.id, user_id=user.id))
     await db.commit()
     await db.refresh(forked)
@@ -346,12 +431,44 @@ async def delete_session_comment(
             select(SessionComment).where(
                 SessionComment.id == comment_uuid,
                 SessionComment.session_id == session.id,
-                SessionComment.user_id == user.id,
             )
         )
     ).scalar_one_or_none()
     if comment is None:
         raise HTTPException(status_code=404, detail="Comment not found")
+    if comment.user_id != user.id and session.user_id != user.id:
+        raise HTTPException(status_code=403, detail="You cannot delete this comment")
+    await db.delete(comment)
+    await db.commit()
+    return {"deleted": True}
+
+
+@shared_router.delete("/{token}/comments/{comment_id}")
+async def delete_shared_session_comment(
+    token: str,
+    comment_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    shared, session = await _load_shared_session(token, db)
+    if shared.access_level != "comment":
+        raise HTTPException(status_code=403, detail="Comment access is not enabled for this share link")
+    try:
+        comment_uuid = uuid.UUID(comment_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid comment ID") from exc
+    comment = (
+        await db.execute(
+            select(SessionComment).where(
+                SessionComment.id == comment_uuid,
+                SessionComment.session_id == session.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if comment is None:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if comment.user_id != user.id and shared.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="You cannot delete this comment")
     await db.delete(comment)
     await db.commit()
     return {"deleted": True}
@@ -368,7 +485,7 @@ async def create_snapshot(
     snapshot = SessionSnapshot(
         session_id=session.id,
         name=req.name,
-        snapshot_data=_serialize_session(session),
+        snapshot_data=await _serialize_session(session, db),
     )
     db.add(snapshot)
     await db.commit()
@@ -420,9 +537,10 @@ async def restore_snapshot(
     snapshot_data = snapshot.snapshot_data or {}
     session.title = snapshot_data.get("title", session.title)
     session.messages = deepcopy(snapshot_data.get("messages", session.messages or []))
+    await _restore_paper_drafts(session, snapshot_data, db)
     await db.commit()
     await db.refresh(session)
-    return {"restored": True, "session": _serialize_session(session)}
+    return {"restored": True, "session": await _serialize_session(session, db)}
 
 
 @router.get("/{session_id}/snapshots/diff")
@@ -452,12 +570,24 @@ async def diff_snapshots(
 
     left_messages = left.get("messages", [])
     right_messages = right.get("messages", [])
+    left_papers = left.get("paper_drafts", [])
+    right_papers = right.get("paper_drafts", [])
     changes = []
     if left.get("title") != right.get("title"):
         changes.append({"type": "modified", "field": "title", "from": left.get("title"), "to": right.get("title")})
     if len(left_messages) != len(right_messages):
         delta = len(right_messages) - len(left_messages)
         changes.append({"type": "modified", "field": "message_count", "from": len(left_messages), "to": len(right_messages), "delta": delta})
+    if len(left_papers) != len(right_papers):
+        changes.append(
+            {
+                "type": "modified",
+                "field": "paper_draft_count",
+                "from": len(left_papers),
+                "to": len(right_papers),
+                "delta": len(right_papers) - len(left_papers),
+            }
+        )
     min_len = min(len(left_messages), len(right_messages))
     for idx in range(min_len):
         if left_messages[idx] != right_messages[idx]:
@@ -473,10 +603,15 @@ async def diff_snapshots(
     if len(left_messages) > min_len:
         for msg in left_messages[min_len:min_len + 10]:
             changes.append({"type": "removed", "field": "message", "from": msg})
+    left_titles = [str((draft.get("paper_json") or {}).get("title") or "") for draft in left_papers]
+    right_titles = [str((draft.get("paper_json") or {}).get("title") or "") for draft in right_papers]
+    if left_titles != right_titles:
+        changes.append({"type": "modified", "field": "paper_titles", "from": left_titles, "to": right_titles})
     return {
         "changes": changes,
         "added_messages": added_messages,
         "removed_messages": removed_messages,
         "updated_title": left.get("title") != right.get("title"),
         "titles": {"a": left.get("title"), "b": right.get("title")},
+        "paper_draft_count": {"a": len(left_papers), "b": len(right_papers)},
     }

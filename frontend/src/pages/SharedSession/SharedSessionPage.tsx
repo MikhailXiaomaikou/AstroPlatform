@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import {
   addSharedSessionComment,
+  deleteSharedSessionComment,
   forkSharedSession,
   getSharedSession,
   type SessionCommentItem,
@@ -20,6 +21,7 @@ export default function SharedSessionPage() {
   const [comment, setComment] = useState("");
   const [savingComment, setSavingComment] = useState(false);
   const [forking, setForking] = useState(false);
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -70,6 +72,7 @@ export default function SharedSessionPage() {
             content: comment.trim(),
             parent_id: null,
             created_at: new Date().toISOString(),
+            can_delete: true,
           } satisfies SessionCommentItem,
         ],
       } : prev);
@@ -78,6 +81,22 @@ export default function SharedSessionPage() {
       setError(err instanceof Error ? err.message : "Failed to add comment");
     } finally {
       setSavingComment(false);
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!token) return;
+    setDeletingCommentId(commentId);
+    try {
+      await deleteSharedSessionComment(token, commentId);
+      setPayload((prev) => prev ? {
+        ...prev,
+        comments: prev.comments.filter((item) => item.id !== commentId),
+      } : prev);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete comment");
+    } finally {
+      setDeletingCommentId(null);
     }
   };
 
@@ -127,6 +146,19 @@ export default function SharedSessionPage() {
               </div>
             ))}
           </div>
+          {payload.session.paper_drafts && payload.session.paper_drafts.length > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <h3>Paper Drafts</h3>
+              {payload.session.paper_drafts.map((draft) => (
+                <div key={draft.id} className="note-card" style={{ marginBottom: 10 }}>
+                  <strong>{String(draft.paper_json?.title || "Untitled Draft")}</strong>
+                  <div className="fits-hint" style={{ marginTop: 6 }}>
+                    Format: {draft.journal_format.toUpperCase()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="workspace-file-list" style={{ maxWidth: 360 }}>
@@ -137,7 +169,18 @@ export default function SharedSessionPage() {
             sortedComments.map((item) => (
               <div key={item.id} className="note-card" style={{ marginBottom: 10 }}>
                 <p style={{ marginBottom: 6 }}>{item.content}</p>
-                <span className="note-date">{item.created_at ? new Date(item.created_at).toLocaleString() : "Unknown time"}</span>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                  <span className="note-date">{item.created_at ? new Date(item.created_at).toLocaleString() : "Unknown time"}</span>
+                  {item.can_delete && (
+                    <button
+                      className="btn-ghost"
+                      disabled={deletingCommentId === item.id}
+                      onClick={() => { void handleDeleteComment(item.id); }}
+                    >
+                      {deletingCommentId === item.id ? "Deleting..." : "Delete"}
+                    </button>
+                  )}
+                </div>
               </div>
             ))
           )}

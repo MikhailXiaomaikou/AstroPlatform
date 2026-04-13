@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import uuid
+from copy import deepcopy
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -128,7 +129,7 @@ Available node types and their params:
 - **ImageStack**: Stack multiple images. params: {"method": "median"|"mean"|"sigma_clip"}
 - **Plot**: Generate static PNG plot. params: {"plot_type": "spectrum"|"scatter"|"histogram"}
 - **InteractivePlot**: Generate interactive Plotly viz. params: {"plot_type": "spectrum"|"scatter"|"histogram"|"hr_diagram"}
-- **CustomScript**: Run custom Python code. params: {"code": "python code here", "output_key": "result"}. Code has access to input_data, numpy, scipy, astropy, astro_analysis toolkit.
+- **CustomScript**: Run custom Python code. params: {"code": "python code here", "output_key": "result"}. Code has access to input_data, numpy, scipy, astropy, and the `astro` helper toolkit.
 
 ### DAG format
 Nodes: {"id": "n1", "type": "LoadData", "position": {"x": 0, "y": 150}, "data": {"label": "Load Data", "params": {...}}}
@@ -408,6 +409,8 @@ async def _build_runtime(
     )
     toolset = TOOLS
     agent_names = ["orchestrator"]
+    user_context = ""
+    merged_system = system
     try:
         runtime = await orchestrator.build_runtime_context(
             latest_user_message,
@@ -417,14 +420,21 @@ async def _build_runtime(
         )
         runtime_prompt = str(runtime.get("system_prompt", "") or "").strip()
         if runtime_prompt:
-            system += "\n\n" + runtime_prompt
+            merged_system += "\n\n" + runtime_prompt
         toolset = _filter_tools(runtime.get("tool_names"), TOOLS)
         if runtime.get("agent_names"):
             agent_names = list(runtime["agent_names"])
+        user_context = str(runtime.get("user_context", "") or "")
     except Exception as exc:
         logger.warning("Falling back to default orchestrator context: %s", exc)
 
-    return system, toolset, agent_names
+    return {
+        "base_system": system,
+        "system": merged_system,
+        "toolset": toolset,
+        "agent_names": agent_names,
+        "user_context": user_context,
+    }
 
 
 def _parse_actions(text: str) -> list[dict]:
@@ -467,12 +477,11 @@ async def chat_message_stream(
         # Reuse the same logic but yield intermediate results
         provider_api_keys = _provider_api_keys(req.context, user)
 
-        from app.services.ai_tools import TOOLS, store_search_results
+        from app.services.ai_tools import store_search_results
 
-        toolset = TOOLS
         claude_messages: list[dict] = _normalize_messages(req.messages)
-        system, toolset, agent_names = await _build_runtime(req, user, db)
-        agent_name = agent_names[0] if agent_names else "orchestrator"
+        runtime = await _build_runtime(req, user, db)
+        agent_names = list(runtime.get("agent_names") or ["orchestrator"])
 
         yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
 
@@ -484,69 +493,20 @@ async def chat_message_stream(
             )
 
         try:
-            for _iteration in range(12):
-                response = await _llm_messages_create(
-                    system=system,
-                    messages=claude_messages,
-                    tools=toolset,
-                    provider_api_keys=provider_api_keys,
-                    agent_name=agent_name,
-                )
-
-                tool_calls = list(response.get("tool_calls") or [])
-                text = str(response.get("content", "") or "")
-                if text:
-                    yield f"data: {json.dumps({'type': 'text', 'content': text})}\n\n"
-                for tool_call in tool_calls:
-                    yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_call['name'], 'input': tool_call['input']})}\n\n"
-
-                if not tool_calls:
-                    break
-
-                assistant_content = []
-                if text:
-                    assistant_content.append({"type": "text", "text": text})
-                for tool_call in tool_calls:
-                    assistant_content.append(
-                        {
-                            "type": "tool_use",
-                            "id": tool_call["id"],
-                            "name": tool_call["name"],
-                            "input": tool_call["input"],
-                        }
-                    )
-                claude_messages.append(
-                    {"role": "assistant", "content": assistant_content}
-                )
-
-                tool_result_blocks = []
-                executed_tools = await _execute_tool_calls(
-                    tool_calls,
-                    provider_api_keys.get("anthropic", ""),
-                    provider_api_keys,
-                    python_session_id,
-                )
-                for tc in executed_tools:
-                    result = tc["result"]
-                    result_str = json.dumps(result, default=str)
-                    if len(result_str) > 8000:
-                        result_str = json.dumps(
-                            {"truncated": True, "summary": str(result)[:2000]},
-                            default=str,
-                        )
-                    tool_result_blocks.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tc["id"],
-                            "content": result_str,
-                        }
-                    )
-                    yield f"data: {json.dumps({'type': 'tool_result', 'tool': tc['name'], 'result': result})}\n\n"
-
-                claude_messages.append({"role": "user", "content": tool_result_blocks})
-                if response.get("stop_reason") != "tool_use":
-                    break
-
+            if len(agent_names) > 1:
+                yield f"data: {json.dumps({'type': 'status', 'message': f'Routing across {len(agent_names)} specialist agents...'})}\n\n"
+            for agent_name in agent_names:
+                yield f"data: {json.dumps({'type': 'status', 'message': f'{agent_name} working...'})}\n\n"
+            response = await _run_orchestrated_chat(
+                runtime=runtime,
+                messages=claude_messages,
+                provider_api_keys=provider_api_keys,
+                python_session_id=python_session_id,
+            )
+            if response["reply"]:
+                yield f"data: {json.dumps({'type': 'text', 'content': response['reply']})}\n\n"
+            for action in response["actions"]:
+                yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result')})}\n\n"
         except TimeoutError:
             yield f"data: {json.dumps({'type': 'error', 'message': 'The AI workflow took too long. Try a narrower query or split the task into query and analysis steps.'})}\n\n"
         except InferenceError as e:
@@ -609,6 +569,171 @@ async def _execute_tool_calls(
     ]
 
 
+async def _run_agent_loop(
+    *,
+    system: str,
+    messages: list[dict],
+    tools: list[dict],
+    provider_api_keys: dict[str, str],
+    agent_name: str,
+    python_session_id: str,
+) -> dict:
+    working_messages = deepcopy(messages)
+    all_tool_results: list[dict] = []
+    text_parts: list[str] = []
+    max_iterations = 12
+
+    for _iteration in range(max_iterations):
+        response = await _llm_messages_create(
+            system=system,
+            messages=working_messages,
+            tools=tools,
+            provider_api_keys=provider_api_keys,
+            agent_name=agent_name,
+        )
+
+        text = str(response.get("content", "") or "")
+        if text:
+            text_parts.append(text)
+        tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
+        if not tool_calls_in_turn:
+            break
+
+        assistant_content = []
+        if text:
+            assistant_content.append({"type": "text", "text": text})
+        for tool_call in tool_calls_in_turn:
+            assistant_content.append(
+                {
+                    "type": "tool_use",
+                    "id": tool_call["id"],
+                    "name": tool_call["name"],
+                    "input": tool_call["input"],
+                }
+            )
+        working_messages.append({"role": "assistant", "content": assistant_content})
+
+        tool_result_blocks = []
+        executed_tools = await _execute_tool_calls(
+            tool_calls_in_turn,
+            provider_api_keys.get("anthropic", ""),
+            provider_api_keys,
+            python_session_id,
+        )
+        for tc in executed_tools:
+            result = tc["result"]
+            result_str = json.dumps(result, default=str)
+            if len(result_str) > 8000:
+                result_str = json.dumps(
+                    {"truncated": True, "summary": str(result)[:2000]},
+                    default=str,
+                )
+            tool_result_blocks.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "content": result_str,
+                }
+            )
+            all_tool_results.append(
+                {
+                    "tool": tc["name"],
+                    "input": tc["input"],
+                    "result": result,
+                }
+            )
+        working_messages.append({"role": "user", "content": tool_result_blocks})
+        if response.get("stop_reason") != "tool_use":
+            break
+
+    full_reply = "\n\n".join(text_parts)
+    actions = _parse_actions(full_reply)
+    clean_reply = _strip_actions_from_reply(full_reply)
+    for tr in all_tool_results:
+        actions.append(
+            {
+                "action": tr["tool"],
+                "tool_input": tr["input"],
+                "tool_result": tr["result"],
+                "_auto_executed": True,
+            }
+        )
+    return {
+        "reply": clean_reply,
+        "actions": actions,
+        "tool_results": all_tool_results,
+    }
+
+
+def _build_agent_handoff_message(handoff) -> str:
+    return (
+        f"Prior agent `{handoff.source_agent}` completed its step.\n"
+        f"Context summary: {handoff.context_summary}\n"
+        f"Instruction: {handoff.instruction}"
+    )
+
+
+async def _run_orchestrated_chat(
+    *,
+    runtime: dict,
+    messages: list[dict],
+    provider_api_keys: dict[str, str],
+    python_session_id: str,
+) -> dict:
+    agent_names = list(runtime.get("agent_names") or [])
+    if not agent_names:
+        agent_names = ["orchestrator"]
+
+    if len(agent_names) == 1:
+        single = await _run_agent_loop(
+            system=str(runtime.get("system", "") or ""),
+            messages=messages,
+            tools=list(runtime.get("toolset") or []),
+            provider_api_keys=provider_api_keys,
+            agent_name=agent_names[0],
+            python_session_id=python_session_id,
+        )
+        return {"reply": single["reply"], "actions": single["actions"]}
+
+    agent_results: list[dict] = []
+    handoff = None
+    for index, agent_name in enumerate(agent_names):
+        agent_runtime = orchestrator.get_agent_runtime(
+            agent_name,
+            str(runtime.get("user_context", "") or ""),
+        )
+        agent_messages = deepcopy(messages)
+        if handoff is not None:
+            agent_messages.append({"role": "user", "content": _build_agent_handoff_message(handoff)})
+        result = await _run_agent_loop(
+            system=str(runtime.get("base_system", "") or "") + "\n\n" + agent_runtime["system_prompt"],
+            messages=agent_messages,
+            tools=_filter_tools(agent_runtime.get("tool_names"), list(runtime.get("toolset") or [])),
+            provider_api_keys=provider_api_keys,
+            agent_name=agent_name,
+            python_session_id=python_session_id,
+        )
+        agent_results.append(
+            {
+                "agent_name": agent_name,
+                "reply": result["reply"],
+                "actions": result["actions"],
+            }
+        )
+        if index < len(agent_names) - 1:
+            handoff = await orchestrator.summarize_handoff(
+                agent_name,
+                agent_names[index + 1],
+                result["reply"],
+            )
+
+    merged_reply = await orchestrator.merge_responses(agent_results)
+    merged_actions: list[dict] = []
+    for result in agent_results:
+        merged_actions.extend(result["actions"])
+    return {"reply": merged_reply, "actions": merged_actions}
+
+
 @router.post("/message", response_model=ChatResponse)
 @limiter.limit("15/minute")
 async def chat_message(
@@ -625,113 +750,23 @@ async def chat_message(
     """
     provider_api_keys = _provider_api_keys(req.context, user)
 
-    from app.services.ai_tools import TOOLS, store_search_results
+    from app.services.ai_tools import store_search_results
 
     claude_messages: list[dict] = _normalize_messages(req.messages)
-    system, toolset, agent_names = await _build_runtime(req, user, db)
-    agent_name = agent_names[0] if agent_names else "orchestrator"
+    runtime = await _build_runtime(req, user, db)
     python_session_id = (req.context or {}).get("python_session_id", "default")
     last_adql_rows = (req.context or {}).get("last_adql_rows")
     if isinstance(last_adql_rows, list):
         store_search_results(f"latest_adql:{python_session_id}", last_adql_rows[:1000])
 
     try:
-        # ── Agent loop: Claude calls tools, sees results, continues ──
-        all_tool_results: list[dict] = []
-        text_parts: list[str] = []
-        max_iterations = 12  # safety limit (supports multi-step research workflows)
-
-        for _iteration in range(max_iterations):
-            response = await _llm_messages_create(
-                system=system,
-                messages=claude_messages,
-                tools=toolset,
-                provider_api_keys=provider_api_keys,
-                agent_name=agent_name,
-            )
-
-            # Process response blocks
-            text = str(response.get("content", "") or "")
-            if text:
-                text_parts.append(text)
-            tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
-
-            # If no tool calls, we're done
-            if not tool_calls_in_turn:
-                break
-
-            # Execute all tool calls in this turn
-            assistant_content = []
-            if text:
-                assistant_content.append({"type": "text", "text": text})
-            for tool_call in tool_calls_in_turn:
-                assistant_content.append(
-                    {
-                        "type": "tool_use",
-                        "id": tool_call["id"],
-                        "name": tool_call["name"],
-                        "input": tool_call["input"],
-                    }
-                )
-
-            claude_messages.append({"role": "assistant", "content": assistant_content})
-
-            # Execute tools and build tool_result messages
-            tool_result_blocks = []
-            executed_tools = await _execute_tool_calls(
-                tool_calls_in_turn,
-                provider_api_keys.get("anthropic", ""),
-                provider_api_keys,
-                python_session_id,
-            )
-            for tc in executed_tools:
-                result = tc["result"]
-                # Truncate large results for context window
-                result_str = json.dumps(result, default=str)
-                if len(result_str) > 8000:
-                    result_str = json.dumps(
-                        {"truncated": True, "summary": str(result)[:2000]}, default=str
-                    )
-                tool_result_blocks.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tc["id"],
-                        "content": result_str,
-                    }
-                )
-                all_tool_results.append(
-                    {
-                        "tool": tc["name"],
-                        "input": tc["input"],
-                        "result": result,
-                    }
-                )
-
-            claude_messages.append({"role": "user", "content": tool_result_blocks})
-
-            # Only continue the loop if Claude explicitly wants more tool calls
-            if response.get("stop_reason") != "tool_use":
-                break
-
-        # Combine all text parts
-        full_reply = "\n\n".join(text_parts)
-
-        # Also parse legacy <actions> tags (backward compatibility)
-        actions = _parse_actions(full_reply)
-        clean_reply = _strip_actions_from_reply(full_reply)
-
-        # Convert tool results to frontend-friendly actions
-        for tr in all_tool_results:
-            actions.append(
-                {
-                    "action": tr["tool"],
-                    "tool_input": tr["input"],
-                    "tool_result": tr["result"],
-                    "_auto_executed": True,
-                }
-            )
-
-        return ChatResponse(reply=clean_reply, actions=actions)
+        response = await _run_orchestrated_chat(
+            runtime=runtime,
+            messages=claude_messages,
+            provider_api_keys=provider_api_keys,
+            python_session_id=python_session_id,
+        )
+        return ChatResponse(reply=response["reply"], actions=response["actions"])
 
     except InferenceError as e:
         logger.error("Inference router error: %s", e)

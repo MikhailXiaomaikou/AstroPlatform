@@ -89,6 +89,7 @@ class Orchestrator:
             "agent_names": [agent.name for agent in selected_agents],
             "tool_names": tool_names,
             "system_prompt": "\n\n".join(system_parts),
+            "user_context": user_context,
         }
 
     async def summarize_handoff(self, source_agent: str, target_agent: str, text: str) -> AgentHandoff:
@@ -100,6 +101,38 @@ class Orchestrator:
             data_references=[],
             instruction=f"Continue the workflow with emphasis on {target_agent}.",
         )
+
+    def get_agent_runtime(self, agent_name: str, user_context: str = "") -> dict:
+        agent = self.agents.get(agent_name)
+        if agent is None:
+            return {
+                "agent_name": "orchestrator",
+                "tool_names": [],
+                "system_prompt": "You are the Standard Astro Orchestrator. Coordinate the available tools carefully.",
+            }
+        parts = [
+            f"You are the Standard Astro specialist agent `{agent.name}`.",
+            agent.system_prompt,
+            "Execute the parts of the workflow that match your specialty. Avoid repeating work already completed by another agent.",
+        ]
+        if user_context:
+            parts.append("User Background:\n" + user_context)
+        return {
+            "agent_name": agent.name,
+            "tool_names": list(agent.tool_names),
+            "system_prompt": "\n\n".join(parts),
+        }
+
+    async def merge_responses(self, agent_results: list[dict]) -> str:
+        seen: set[str] = set()
+        parts: list[str] = []
+        for result in agent_results:
+            text = str(result.get("reply", "") or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            parts.append(text)
+        return "\n\n".join(parts).strip()
 
 
 orchestrator = Orchestrator()

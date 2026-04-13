@@ -157,6 +157,16 @@ print("ok")
         assert r.success
         assert "True" in r.stdout
 
+    def test_legacy_astro_analysis_import_is_rewritten(self):
+        from app.services.code_executor import execute_python
+
+        r = execute_python(
+            "from app.services import astro_analysis\n"
+            "print(callable(astro_analysis.compute_luminosity_distance))"
+        )
+        assert r.success
+        assert "True" in r.stdout
+
     def test_data_accessor(self):
         from app.services.code_executor import execute_python
         from app.services.ai_tools import store_search_results
@@ -289,6 +299,20 @@ class TestAITools:
         assert r1["success"] is True
         assert r2["stdout"].strip() == "False"
         assert r3["stdout"].strip() == "42"
+
+    @pytest.mark.asyncio
+    async def test_run_python_auto_fixes_float_integer_formatting(self):
+        from app.services.ai_tools import execute_tool
+
+        result = await execute_tool(
+            "run_python",
+            {"code": 'value = 3.8\nprint(f"{value:d}")'},
+            python_session_id="format-fix",
+        )
+
+        assert result["success"] is True
+        assert result.get("auto_fix_note")
+        assert result["stdout"].strip() == "4"
 
 
 class TestExportHelpers:

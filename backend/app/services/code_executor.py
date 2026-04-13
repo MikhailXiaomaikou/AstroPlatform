@@ -9,6 +9,7 @@ import base64
 import io
 import inspect
 import logging
+import re
 import signal
 import sys
 import traceback
@@ -274,6 +275,39 @@ def _make_data_accessor(session_id: str):
     }
 
 
+def _normalize_code(code: str) -> str:
+    """Rewrite legacy helper imports to the supported `astro` module."""
+    normalized: list[str] = []
+    for line in code.splitlines():
+        stripped = line.strip()
+        if re.fullmatch(r"from\s+app\.services\s+import\s+astro_analysis", stripped):
+            normalized.append("import astro as astro_analysis")
+            continue
+        match = re.fullmatch(
+            r"from\s+app\.services\s+import\s+astro_analysis\s+as\s+([A-Za-z_][A-Za-z0-9_]*)",
+            stripped,
+        )
+        if match:
+            normalized.append(f"import astro as {match.group(1)}")
+            continue
+        match = re.fullmatch(r"import\s+astro_analysis(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?", stripped)
+        if match:
+            alias = match.group(1) or "astro_analysis"
+            normalized.append(f"import astro as {alias}")
+            continue
+        match = re.fullmatch(
+            r"import\s+app\.services\.astro_analysis\s+as\s+([A-Za-z_][A-Za-z0-9_]*)",
+            stripped,
+        )
+        if match:
+            normalized.append(f"import astro as {match.group(1)}")
+            continue
+        line = re.sub(r"\bfrom\s+astro_analysis\s+import\b", "from astro import", line)
+        line = re.sub(r"\bfrom\s+app\.services\.astro_analysis\s+import\b", "from astro import", line)
+        normalized.append(line)
+    return "\n".join(normalized)
+
+
 def _should_persist_value(val) -> bool:
     """Keep most Python objects alive across cells, but skip modules and figures."""
     if isinstance(val, ModuleType):
@@ -300,6 +334,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         CodeExecutionResult with stdout, stderr, figures, and key variables
     """
     result = CodeExecutionResult()
+    code = _normalize_code(code)
 
     # Capture stdout/stderr
     stdout_capture = io.StringIO()
@@ -343,6 +378,11 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     try:
         import scipy
         exec_globals["scipy"] = scipy
+        try:
+            from scipy.optimize import curve_fit
+            exec_globals["curve_fit"] = curve_fit
+        except ImportError:
+            pass
     except ImportError:
         pass
 
@@ -366,6 +406,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     try:
         astro = _get_astro_module()
         exec_globals["astro"] = astro
+        exec_globals["astro_analysis"] = astro
         # Also expose top-level convenience functions
         exec_globals["pub_figure"] = astro.pub_figure
         exec_globals["pub_style"] = astro.pub_style

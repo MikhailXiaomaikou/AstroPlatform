@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.auth import create_access_token, hash_password
-from app.models.schemas import ChatSession, DataFile, PipelineRun, PipelineTemplateDB, RunResult, User
+from app.models.schemas import ChatSession, DataFile, PaperDraft, PipelineRun, PipelineTemplateDB, RunResult, User
 from app.utils.usernames import username_from_email
 
 
@@ -955,7 +955,21 @@ class TestCollaborationAndMemoryEndpoints:
         return user, create_access_token(user.id), session
 
     async def test_session_share_snapshot_and_research_memory(self, app_client, db_session):
+        from sqlalchemy import select
+
         owner, owner_token, session = await self._create_session(db_session)
+        draft = PaperDraft(
+            id=uuid.uuid4(),
+            user_id=owner.id,
+            session_id=session.id,
+            journal_format="aastex",
+            paper_json={"title": "Initial Draft"},
+            latex_source="\\documentclass{aastex631}",
+            bibtex="@article{m31, title={M31}}",
+            validation={"overall_status": "PASS"},
+        )
+        db_session.add(draft)
+        await db_session.commit()
         collaborator = User(
             id=uuid.uuid4(),
             username="collabuser",
@@ -987,10 +1001,18 @@ class TestCollaborationAndMemoryEndpoints:
         assert shared_resp.status_code == 200
         assert shared_resp.json()["session"]["title"] == "Shared M31 Session"
         assert shared_resp.json()["can_fork"] is True
+        assert len(shared_resp.json()["session"]["paper_drafts"]) == 1
+        assert shared_resp.json()["session"]["paper_drafts"][0]["paper_json"]["title"] == "Initial Draft"
 
         fork_resp = await app_client.post(f"/api/shared/{share_body['share_token']}/fork", headers=collab_headers)
         assert fork_resp.status_code == 200
         assert fork_resp.json()["forked_from"] == str(session.id)
+        forked_id = uuid.UUID(fork_resp.json()["id"])
+        forked_drafts = (
+            await db_session.execute(select(PaperDraft).where(PaperDraft.session_id == forked_id))
+        ).scalars().all()
+        assert len(forked_drafts) == 1
+        assert forked_drafts[0].paper_json["title"] == "Initial Draft"
 
         snapshot_resp = await app_client.post(
             f"/api/sessions/{session.id}/snapshots",
@@ -1005,6 +1027,8 @@ class TestCollaborationAndMemoryEndpoints:
             {"role": "assistant", "content": "Loaded Gaia and SDSS context."},
             {"role": "assistant", "content": "Added a new CMD fit."},
         ]
+        draft.paper_json = {"title": "Updated Draft"}
+        draft.latex_source = "\\documentclass{aastex631}\n% updated"
         await db_session.commit()
 
         snapshot_resp_2 = await app_client.post(
@@ -1022,6 +1046,7 @@ class TestCollaborationAndMemoryEndpoints:
         )
         assert diff_resp.status_code == 200
         assert diff_resp.json()["added_messages"] >= 1
+        assert diff_resp.json()["paper_draft_count"] == {"a": 1, "b": 1}
 
         profile_resp = await app_client.put(
             "/api/research/profile",
@@ -1046,6 +1071,89 @@ class TestCollaborationAndMemoryEndpoints:
             headers=owner_headers,
         )
         assert restore_resp.status_code == 200
+        restored_draft = (
+            await db_session.execute(select(PaperDraft).where(PaperDraft.session_id == session.id))
+        ).scalar_one()
+        assert restored_draft.paper_json["title"] == "Initial Draft"
+
+    async def test_shared_comment_author_can_delete_comment(self, app_client, db_session):
+        owner, owner_token, session = await self._create_session(db_session)
+        collaborator = User(
+            id=uuid.uuid4(),
+            username="commenter",
+            email="commenter@example.com",
+            password_hash=hash_password("securepassword123"),
+            subscription_tier="solo",
+        )
+        db_session.add(collaborator)
+        await db_session.commit()
+
+        owner_headers = {"Authorization": f"Bearer {owner_token}"}
+        collab_headers = {"Authorization": f"Bearer {create_access_token(collaborator.id)}"}
+
+        share_resp = await app_client.post(
+            f"/api/sessions/{session.id}/share",
+            json={"access_level": "comment", "expires_hours": 24},
+            headers=owner_headers,
+        )
+        token = share_resp.json()["share_token"]
+
+        add_resp = await app_client.post(
+            f"/api/shared/{token}/comments",
+            json={"content": "Please check the CMD fit", "target_type": "general"},
+            headers=collab_headers,
+        )
+        assert add_resp.status_code == 200
+        comment_id = add_resp.json()["id"]
+
+        shared_resp = await app_client.get(f"/api/shared/{token}", headers=collab_headers)
+        assert shared_resp.status_code == 200
+        assert shared_resp.json()["comments"][0]["can_delete"] is True
+
+        delete_resp = await app_client.delete(
+            f"/api/shared/{token}/comments/{comment_id}",
+            headers=collab_headers,
+        )
+        assert delete_resp.status_code == 200
+        assert delete_resp.json()["deleted"] is True
+
+
+class TestChatMultiAgentRouting:
+    async def test_chat_message_executes_all_classified_agents(self, app_client):
+        calls: list[str] = []
+
+        async def fake_build_runtime(req, user, db):
+            return {
+                "base_system": "base",
+                "system": "base",
+                "toolset": [{"name": "search_objects"}, {"name": "run_python"}],
+                "agent_names": ["data_agent", "analysis_agent"],
+                "user_context": "",
+            }
+
+        async def fake_run_agent_loop(*, system, messages, tools, provider_api_keys, agent_name, python_session_id):
+            calls.append(agent_name)
+            return {
+                "reply": f"{agent_name} complete",
+                "actions": [{"action": agent_name, "tool_result": {"ok": True}}],
+                "tool_results": [],
+            }
+
+        with patch("app.api.chat._build_runtime", new=fake_build_runtime), patch(
+            "app.api.chat._run_agent_loop",
+            new=fake_run_agent_loop,
+        ):
+            resp = await app_client.post(
+                "/api/chat/message",
+                json={"messages": [{"role": "user", "content": "Find data and analyze it"}]},
+            )
+
+        assert resp.status_code == 200
+        assert calls == ["data_agent", "analysis_agent"]
+        body = resp.json()
+        assert "data_agent complete" in body["reply"]
+        assert "analysis_agent complete" in body["reply"]
+        assert len(body["actions"]) == 2
 
 
 class TestInferenceAdminEndpoints:

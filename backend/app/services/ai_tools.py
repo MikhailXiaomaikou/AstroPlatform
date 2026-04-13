@@ -6,6 +6,7 @@ handles the tool_use → result → next message cycle automatically.
 
 import asyncio
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -889,6 +890,23 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     except asyncio.TimeoutError:
         return {"success": False, "error": "Code execution timed out after 90 seconds", "stdout": ""}
 
+    auto_fix_note = None
+    if not result.success and result.error:
+        retry = _retryable_python_fix(code, result.error)
+        if retry is not None:
+            fixed_code, auto_fix_note = retry
+            try:
+                retry_result = await asyncio.wait_for(
+                    loop.run_in_executor(None, execute_python, fixed_code, None, python_session_id),
+                    timeout=90.0,
+                )
+                if retry_result.success:
+                    result = retry_result
+                else:
+                    auto_fix_note = None
+            except asyncio.TimeoutError:
+                auto_fix_note = None
+
     response: dict = {
         "success": result.success,
         "stdout": result.stdout[:50_000] if result.stdout else "",
@@ -905,6 +923,8 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         response["variables"] = dict(list(result.variables.items())[:50])
     if result.variable_types:
         response["variable_types"] = dict(list(result.variable_types.items())[:50])
+    if auto_fix_note:
+        response["auto_fix_note"] = auto_fix_note
 
     return response
 
@@ -1672,3 +1692,11 @@ async def _exec_extract_sources(inp: dict) -> dict:
 
     result = await loop.run_in_executor(None, _do_extract)
     return result
+
+
+def _retryable_python_fix(code: str, error: str) -> tuple[str, str] | None:
+    if "Unknown format code 'd' for object of type 'float'" in error:
+        fixed = re.sub(r":(\d*)d(?=})", lambda m: f":{m.group(1)}.0f", code)
+        if fixed != code:
+            return fixed, "Adjusted float formatting from integer `:d` to `:.0f` and retried."
+    return None
