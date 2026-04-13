@@ -71,7 +71,8 @@ function fmtCell(v: number | string | null): string {
 function extractRows(result: ADQLResult, limit = 1000): Array<Record<string, unknown>> {
   return Array.from({ length: Math.min(result.row_count, limit) }).map((_, i) => {
     const row: Record<string, unknown> = {};
-    for (const col of result.columns) row[col] = result.data[col]?.[i];
+    // Normalize column names to lowercase for consistent access
+    for (const col of result.columns) row[col.toLowerCase()] = result.data[col]?.[i];
     return row;
   });
 }

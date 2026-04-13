@@ -348,12 +348,12 @@ async def adql_query(req: ADQLRequest):
 
         table = await loop.run_in_executor(None, _run_query)
 
-        # Convert to JSON-serializable format
-        columns = list(table.colnames)
+        # Convert to JSON-serializable format (lowercase column names for consistency)
+        columns = [c.lower() for c in table.colnames]
         data = {}
         import numpy as np
-        for col in columns:
-            arr = table[col]
+        for col, orig_col in zip(columns, table.colnames):
+            arr = table[orig_col]
             try:
                 # Check if column is masked and get the mask
                 mask = None

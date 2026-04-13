@@ -383,23 +383,30 @@ function buildPlot(
     };
   }
 
+  // Case-insensitive column access: TAP services may return UPPERCASE column names
+  const col = (name: string): unknown[] | undefined => (data[name] ?? data[name.toUpperCase()] ?? data[name.toLowerCase()]) as unknown[] | undefined;
+  const hasColCI = (name: string): boolean => isNumericSeries(col(name));
+  const numCol = (name: string): number[] => (col(name) ?? []) as number[];
+  const findColCI = (candidates: string[]): string | undefined =>
+    candidates.find((c) => isNumericSeries(col(c)));
+
   if (chartType === "hr_diagram") {
     // Auto-detect X: bp_rp directly, or compute from phot_bp_mean_mag - phot_rp_mean_mag
     let bpRp: number[] | null = null;
-    if (isNumericSeries(data.bp_rp)) {
-      bpRp = data.bp_rp as number[];
-    } else if (isNumericSeries(data.phot_bp_mean_mag) && isNumericSeries(data.phot_rp_mean_mag)) {
-      const bp = data.phot_bp_mean_mag as number[];
-      const rp = data.phot_rp_mean_mag as number[];
+    if (hasColCI("bp_rp")) {
+      bpRp = numCol("bp_rp");
+    } else if (hasColCI("phot_bp_mean_mag") && hasColCI("phot_rp_mean_mag")) {
+      const bp = numCol("phot_bp_mean_mag");
+      const rp = numCol("phot_rp_mean_mag");
       bpRp = bp.map((v, i) => v - (rp[i] ?? 0));
     }
     // Auto-detect Y: abs_g_mag directly, or compute from phot_g_mean_mag + 5*log10(parallax/1000)+5
     let absG: number[] | null = null;
-    if (isNumericSeries(data.abs_g_mag)) {
-      absG = data.abs_g_mag as number[];
-    } else if (isNumericSeries(data.phot_g_mean_mag) && isNumericSeries(data.parallax)) {
-      const gMag = data.phot_g_mean_mag as number[];
-      const plx = data.parallax as number[];
+    if (hasColCI("abs_g_mag")) {
+      absG = numCol("abs_g_mag");
+    } else if (hasColCI("phot_g_mean_mag") && hasColCI("parallax")) {
+      const gMag = numCol("phot_g_mean_mag");
+      const plx = numCol("parallax");
       absG = gMag.map((g, i) => {
         const p = plx[i];
         if (!p || p <= 0) return NaN;
@@ -409,8 +416,8 @@ function buildPlot(
     if (!bpRp || !absG) return { data: [], layout: mkLayout("Insufficient data for H-R Diagram", mkAxis(""), mkAxis("")) };
     // Filter out NaN pairs
     const valid: { x: number; y: number; teff: number | null }[] = [];
-    const hasTeff = isNumericSeries(data.teff_gspphot);
-    const teffArr = hasTeff ? data.teff_gspphot as number[] : null;
+    const hasTeff = hasColCI("teff_gspphot");
+    const teffArr = hasTeff ? numCol("teff_gspphot") : null;
     for (let i = 0; i < Math.min(bpRp.length, absG.length); i++) {
       if (Number.isFinite(bpRp[i]) && Number.isFinite(absG[i])) {
         valid.push({ x: bpRp[i], y: absG[i], teff: teffArr && i < teffArr.length && Number.isFinite(teffArr[i]) ? teffArr[i] : null });
@@ -459,28 +466,28 @@ function buildPlot(
   }
 
   if (chartType === "lightcurve") {
-    // Auto-detect time column
+    // Auto-detect time column (case-insensitive)
     const timeCandidates = ["hmjd", "mjd", "time", "jd"];
-    const timeCol = timeCandidates.find((c) => isNumericSeries(data[c]));
+    const timeColName = findColCI(timeCandidates);
     // Auto-detect magnitude/flux column
     const magFluxCandidates = ["mag", "magnitude", "flux"];
-    const magFluxCol = magFluxCandidates.find((c) => isNumericSeries(data[c]));
-    if (!timeCol || !magFluxCol) return { data: [], layout: mkLayout("Insufficient data for Light Curve", mkAxis(""), mkAxis("")) };
-    const timeArr = data[timeCol] as number[];
-    const magFluxArr = data[magFluxCol] as number[];
+    const magFluxCol = findColCI(magFluxCandidates);
+    if (!timeColName || !magFluxCol) return { data: [], layout: mkLayout("Insufficient data for Light Curve", mkAxis(""), mkAxis("")) };
+    const timeArr = numCol(timeColName);
+    const magFluxArr = numCol(magFluxCol);
     const isMag = magFluxCol.toLowerCase().includes("mag");
     // Auto-detect error column
     const errCandidates = ["magerr", "mag_err", "mag_error", "flux_err"];
-    const errCol = errCandidates.find((c) => isNumericSeries(data[c]));
-    const errArr = errCol ? data[errCol] as number[] : null;
+    const errColName = findColCI(errCandidates);
+    const errArr = errColName ? numCol(errColName) : null;
     // Auto-detect band/filter column
     const bandCandidates = ["band", "filter", "filtercode"];
-    const bandCol = bandCandidates.find((c) => Array.isArray(data[c]) && (data[c] as unknown[]).length > 0);
+    const bandCol = bandCandidates.find((c) => { const v = col(c); return Array.isArray(v) && v.length > 0; });
     const bandColors: Record<string, string> = { g: "#2ca02c", r: "#d62728", i: "#ff7f0e", z: "#9467bd", u: "#1f77b4" };
     const defaultTraceColors = [COLORS.blue, COLORS.red, COLORS.green, COLORS.purple, COLORS.yellow, COLORS.cyan];
     const traces: Record<string, unknown>[] = [];
     if (bandCol) {
-      const bandArr = data[bandCol] as string[];
+      const bandArr = (col(bandCol) ?? []) as string[];
       const bands = [...new Set(bandArr.map(String))];
       bands.forEach((band, bi) => {
         const indices: number[] = [];
@@ -549,15 +556,15 @@ function buildPlot(
   }
 
   if (chartType === "spectrum") {
-    // Auto-detect wavelength column
+    // Auto-detect wavelength column (case-insensitive)
     const waveCandidates = ["wavelength", "wave", "lambda"];
-    const waveCol = waveCandidates.find((c) => isNumericSeries(data[c]));
+    const waveColName = findColCI(waveCandidates);
     // Auto-detect flux column
     const fluxCandidates = ["flux", "flux_density", "counts"];
-    const fluxCol = fluxCandidates.find((c) => isNumericSeries(data[c]));
-    if (!waveCol || !fluxCol) return { data: [], layout: mkLayout("Insufficient data for Spectrum", mkAxis(""), mkAxis("")) };
-    const waveArr = data[waveCol] as number[];
-    const fluxArr = data[fluxCol] as number[];
+    const fluxColName = findColCI(fluxCandidates);
+    if (!waveColName || !fluxColName) return { data: [], layout: mkLayout("Insufficient data for Spectrum", mkAxis(""), mkAxis("")) };
+    const waveArr = numCol(waveColName);
+    const fluxArr = numCol(fluxColName);
     const n = Math.min(waveArr.length, fluxArr.length);
     const validX: number[] = [], validY: number[] = [];
     for (let i = 0; i < n; i++) {
@@ -809,7 +816,8 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
     if (!initialData) return CHART_TYPES;
     const z = ((initialData.redshift || []) as unknown[]).filter((v) => v != null);
     const mag = ((initialData.magnitude || []) as unknown[]).filter((v) => v != null);
-    const hasCol = (c: string) => isNumericSeries(initialData[c]);
+    const colCI = (c: string): unknown[] | undefined => (initialData[c] ?? initialData[c.toUpperCase()] ?? initialData[c.toLowerCase()]) as unknown[] | undefined;
+    const hasCol = (c: string) => isNumericSeries(colCI(c));
     const hasAnyCol = (cols: string[]) => cols.some(hasCol);
     const out: Record<string, string> = {};
     for (const [k, v] of Object.entries(CHART_TYPES)) {

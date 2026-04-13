@@ -215,7 +215,9 @@ async def _query_gaia(ra: float, dec: float) -> dict:
         return {"status": "no_match"}
 
     cols = [c["name"] for c in data.get("metadata", [])]
-    rec = dict(zip(cols, rows[0]))
+    raw_rec = dict(zip(cols, rows[0]))
+    # Normalize column names to lowercase (TAP services return UPPERCASE)
+    rec = {k.lower(): v for k, v in raw_rec.items()}
 
     parallax = _safe_float(rec.get("parallax"))
     distance_pc = None

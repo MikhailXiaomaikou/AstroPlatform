@@ -47,7 +47,8 @@ def _coerce_float(value: Any) -> float | None:
 
 
 def _augment_adql_row(row: dict[str, Any]) -> dict[str, Any]:
-    enriched = dict(row)
+    # Normalize keys to lowercase (TAP services may return UPPERCASE)
+    enriched = {k.lower(): v for k, v in row.items()}
     if "bp_rp" not in enriched or enriched.get("bp_rp") is None:
         bp = _coerce_float(enriched.get("phot_bp_mean_mag"))
         rp = _coerce_float(enriched.get("phot_rp_mean_mag"))
