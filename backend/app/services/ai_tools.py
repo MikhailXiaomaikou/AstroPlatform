@@ -422,6 +422,100 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "crossmatch_catalogs",
+        "description": (
+            "Cross-match two astronomical catalogs by sky position. "
+            "Provide ADQL queries for each catalog (must return 'ra' and 'dec' columns in degrees). "
+            "Supports join types: 1and2 (inner), all1 (left), all2 (right), "
+            "1or2 (full outer), 1not2 (anti-join), 2not1 (anti-join). "
+            "Returns matched rows with separation in arcseconds."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "table1_query": {
+                    "type": "string",
+                    "description": (
+                        "ADQL query returning the first catalog (must SELECT ra, dec). "
+                        "Example: 'SELECT TOP 1000 ra, dec, phot_g_mean_mag FROM gaiadr3.gaia_source WHERE ...'"
+                    ),
+                },
+                "table2_query": {
+                    "type": "string",
+                    "description": "ADQL query returning the second catalog (must SELECT ra, dec).",
+                },
+                "radius_arcsec": {
+                    "type": "number",
+                    "description": "Maximum match radius in arcseconds (default 3.0)",
+                },
+                "join_type": {
+                    "type": "string",
+                    "enum": ["1and2", "1or2", "all1", "all2", "1not2", "2not1"],
+                    "description": "Join type (default '1and2' = inner join, matched rows only)",
+                },
+                "service1": {
+                    "type": "string",
+                    "enum": ["gaia", "simbad", "vizier", "cadc"],
+                    "description": "TAP service for table1 query (default 'gaia')",
+                },
+                "service2": {
+                    "type": "string",
+                    "enum": ["gaia", "simbad", "vizier", "cadc"],
+                    "description": "TAP service for table2 query (default 'gaia')",
+                },
+            },
+            "required": ["table1_query", "table2_query"],
+        },
+    },
+    {
+        "name": "search_lightcurve",
+        "description": (
+            "Search for Kepler, TESS, or K2 light curves for a given target. "
+            "Returns available observations with mission, target name, and exposure time."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Target name or TIC/KIC ID (e.g. 'Kepler-10', 'TIC 261136679')",
+                },
+                "mission": {
+                    "type": "string",
+                    "enum": ["kepler", "tess", "k2"],
+                    "description": "Mission to search (default 'kepler')",
+                },
+            },
+            "required": ["target"],
+        },
+    },
+    {
+        "name": "extract_sources",
+        "description": (
+            "Extract sources from a FITS image using SEP (SExtractor in Python). "
+            "Performs background subtraction, source detection, and Kron aperture photometry. "
+            "Returns source positions, shape parameters, fluxes, and instrumental magnitudes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fits_path": {
+                    "type": "string",
+                    "description": "Path to the FITS image file in storage",
+                },
+                "threshold_sigma": {
+                    "type": "number",
+                    "description": "Detection threshold in sigma above background (default 3.0)",
+                },
+                "min_area": {
+                    "type": "integer",
+                    "description": "Minimum number of pixels for a detection (default 5)",
+                },
+            },
+            "required": ["fits_path"],
+        },
+    },
 ]
 
 
@@ -471,6 +565,12 @@ async def execute_tool(
             return await _exec_get_followup(tool_input)
         elif tool_name == "analyze_cross_wavelength":
             return await _exec_cross_wavelength(tool_input)
+        elif tool_name == "crossmatch_catalogs":
+            return await _exec_crossmatch_catalogs(tool_input, python_session_id)
+        elif tool_name == "search_lightcurve":
+            return await _exec_search_lightcurve(tool_input)
+        elif tool_name == "extract_sources":
+            return await _exec_extract_sources(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -1238,4 +1338,132 @@ async def _exec_cross_wavelength(inp: dict) -> dict:
             return {"error": "ra and dec are required (or provide a name for resolution)"}
 
     result = await cross_wavelength_analysis(ra=ra, dec=dec)
+    return result
+
+
+async def _exec_crossmatch_catalogs(inp: dict, python_session_id: str = "default") -> dict:
+    """Cross-match two catalogs obtained via ADQL queries."""
+    import pandas as pd
+    from app.api.integration import adql_query, ADQLRequest
+    from app.services.crossmatch_engine import get_crossmatch_engine
+
+    q1 = inp.get("table1_query", "")
+    q2 = inp.get("table2_query", "")
+    radius = inp.get("radius_arcsec", 3.0)
+    join_type = inp.get("join_type", "1and2")
+    service1 = inp.get("service1", "gaia")
+    service2 = inp.get("service2", "gaia")
+
+    if not q1 or not q2:
+        return {"error": "Both table1_query and table2_query are required"}
+
+    # Run both ADQL queries concurrently
+    async def _run_adql(query: str, service: str) -> pd.DataFrame:
+        result = await adql_query(ADQLRequest(query=query, service=service))
+        data = result.get("data", {}) if isinstance(result, dict) else {}
+        if not data:
+            raise ValueError(f"ADQL query returned no data: {query[:80]}...")
+        return pd.DataFrame(data)
+
+    try:
+        t1, t2 = await asyncio.gather(
+            _run_adql(q1, service1),
+            _run_adql(q2, service2),
+        )
+    except Exception as e:
+        return {"error": f"Failed to fetch catalogs: {e}"}
+
+    # Validate required columns
+    for label, tbl in [("table1", t1), ("table2", t2)]:
+        if "ra" not in tbl.columns or "dec" not in tbl.columns:
+            return {
+                "error": (
+                    f"{label} query must return 'ra' and 'dec' columns. "
+                    f"Got: {list(tbl.columns)}"
+                )
+            }
+
+    # Run cross-match
+    engine = get_crossmatch_engine()
+    try:
+        matched = await engine.crossmatch(
+            t1, t2, radius_arcsec=radius, join=join_type, find="best"
+        )
+    except Exception as e:
+        return {"error": f"Cross-match failed: {e}"}
+
+    # Truncate for context window
+    max_rows = 200
+    total = len(matched)
+    truncated = matched.head(max_rows)
+
+    # Convert to serializable dicts, replacing NaN with None
+    rows = truncated.where(truncated.notna(), None).to_dict(orient="records")
+
+    # Cache for the Python sandbox
+    store_search_results("latest_crossmatch", rows)
+    store_search_results(f"latest_crossmatch:{python_session_id}", rows)
+
+    return {
+        "match_count": total,
+        "showing": min(max_rows, total),
+        "columns": list(matched.columns),
+        "rows": rows,
+        "join_type": join_type,
+        "radius_arcsec": radius,
+    }
+
+
+async def _exec_search_lightcurve(inp: dict) -> dict:
+    """Execute search_lightcurve from astro_analysis."""
+    from app.services.astro_analysis import search_lightcurve
+
+    target = inp.get("target", "")
+    mission = inp.get("mission", "kepler")
+    if not target:
+        return {"error": "target is required"}
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, lambda: search_lightcurve(target, mission=mission))
+    return result
+
+
+async def _exec_extract_sources(inp: dict) -> dict:
+    """Load a FITS image and extract sources using SEP."""
+    import os
+    from app.services.astro_analysis import extract_sources
+
+    fits_path = inp.get("fits_path", "")
+    threshold_sigma = inp.get("threshold_sigma", 3.0)
+    min_area = inp.get("min_area", 5)
+
+    if not fits_path:
+        return {"error": "fits_path is required"}
+
+    # Resolve path relative to data directory
+    base_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+    full_path = os.path.normpath(os.path.join(base_dir, fits_path))
+    if not os.path.isfile(full_path):
+        # Try as absolute path
+        full_path = fits_path
+    if not os.path.isfile(full_path):
+        return {"error": f"FITS file not found: {fits_path}"}
+
+    from astropy.io import fits as afits
+
+    loop = asyncio.get_event_loop()
+
+    def _do_extract():
+        with afits.open(full_path) as hdul:
+            # Find first image extension
+            image_data = None
+            for hdu in hdul:
+                if hdu.data is not None and hdu.data.ndim == 2:
+                    image_data = hdu.data
+                    break
+            if image_data is None:
+                return {"error": "No 2D image extension found in FITS file"}
+            return extract_sources(image_data, threshold_sigma=threshold_sigma, min_area=min_area)
+
+    result = await loop.run_in_executor(None, _do_extract)
     return result

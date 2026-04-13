@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useI18n } from "../../i18n";
 import { getAlerts, getAlertStats } from "../../api/client";
 import type { TransientAlert, AlertStats } from "../../api/client";
+import AladinViewer from "../../components/viz/AladinViewer";
+import { useTracking } from "../../hooks/useTracking";
 
 /* ── Type color mapping ── */
 
@@ -160,6 +162,28 @@ function DetailPanel({ alert, onClose }: { alert: TransientAlert; onClose: () =>
             </tbody>
           </table>
 
+          {/* Sky viewer centered on alert coordinates */}
+          <div style={{ marginTop: "1.5rem" }}>
+            <h3 style={{ fontSize: "0.85rem", marginBottom: 6, color: "var(--color-text-secondary)" }}>
+              Sky View
+            </h3>
+            <AladinViewer
+              ra={alert.ra}
+              dec={alert.dec}
+              fov={2 / 60}  /* 2 arcmin */
+              height="280px"
+              markers={[
+                {
+                  ra: alert.ra,
+                  dec: alert.dec,
+                  name: alert.source_id,
+                  color: "#ef4444",
+                  popup: `${alert.classification ?? "Unclassified"} | ${alert.source}`,
+                },
+              ]}
+            />
+          </div>
+
           <div style={{ marginTop: "1.5rem" }}>
             <button className="btn-primary" onClick={handleSendToAI}>
               Send to AI Assistant
@@ -175,6 +199,7 @@ function DetailPanel({ alert, onClose }: { alert: TransientAlert; onClose: () =>
 
 export default function AlertDashboard() {
   const { t } = useI18n();
+  const { track } = useTracking();
 
   // Data state
   const [alerts, setAlerts] = useState<TransientAlert[]>([]);
@@ -342,7 +367,14 @@ export default function AlertDashboard() {
                 <tr
                   key={alert.id}
                   className="alert-row"
-                  onClick={() => setSelectedAlert(alert)}
+                  onClick={() => {
+                    setSelectedAlert(alert);
+                    track("alert.viewed", {
+                      alert_id: alert.source_id,
+                      classification: alert.classification,
+                      magnitude: alert.magnitude,
+                    });
+                  }}
                 >
                   <td>
                     <button className="name-link">{alert.source_id}</button>

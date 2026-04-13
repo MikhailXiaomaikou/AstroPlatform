@@ -1241,34 +1241,17 @@ def redshift_at_age(age_gyr, H0=67.4, Om0=0.315):
 
 # ── Dust / Extinction Correction ──
 
-def extinction_curve(wavelength_angstrom, ebv, Rv=3.1):
-    """Compute extinction A_lambda using CCM89 (Cardelli, Clayton & Mathis 1989).
-
-    Implements the CCM89 parameterization for UV/optical/NIR (1250 Å – 33333 Å).
-
-    Args:
-        wavelength_angstrom: Wavelength(s) in Angstroms (scalar or array).
-        ebv: E(B-V) color excess.
-        Rv: Ratio of total-to-selective extinction (default 3.1).
-
-    Returns:
-        A_lambda array (extinction in magnitudes at each wavelength).
-    """
+def _extinction_curve_manual(wavelength_angstrom, ebv, Rv=3.1):
+    """Fallback CCM89 implementation (used when dust_extinction is unavailable)."""
     wave = np.atleast_1d(np.asarray(wavelength_angstrom, dtype=float))
-    # Convert to inverse microns
-    x = 1.0e4 / wave  # x in μm⁻¹
-
+    x = 1.0e4 / wave  # x in um^-1
     a = np.zeros_like(x)
     b = np.zeros_like(x)
-
-    # Infrared: 0.3 ≤ x < 1.1 μm⁻¹
     ir = (x >= 0.3) & (x < 1.1)
     if np.any(ir):
         xi = x[ir]
         a[ir] = 0.574 * xi**1.61
         b[ir] = -0.527 * xi**1.61
-
-    # Optical/NIR: 1.1 ≤ x < 3.3 μm⁻¹
     opt = (x >= 1.1) & (x < 3.3)
     if np.any(opt):
         y = x[opt] - 1.82
@@ -1278,12 +1261,9 @@ def extinction_curve(wavelength_angstrom, ebv, Rv=3.1):
         b[opt] = (1.41338 * y + 2.28305 * y**2 + 1.07233 * y**3
                   - 5.38434 * y**4 - 0.62251 * y**5 + 5.30260 * y**6
                   - 2.09002 * y**7)
-
-    # Ultraviolet: 3.3 ≤ x ≤ 8.0 μm⁻¹
     uv = (x >= 3.3) & (x <= 8.0)
     if np.any(uv):
         xi = x[uv]
-        # UV bump
         fa = np.zeros_like(xi)
         fb = np.zeros_like(xi)
         uv2 = xi >= 5.9
@@ -1291,30 +1271,61 @@ def extinction_curve(wavelength_angstrom, ebv, Rv=3.1):
             xm = xi[uv2] - 5.9
             fa[uv2] = -0.04473 * xm**2 - 0.009779 * xm**3
             fb[uv2] = 0.2130 * xm**2 + 0.1207 * xm**3
-
         a[uv] = (1.752 - 0.316 * xi - 0.104
                  / ((xi - 4.67)**2 + 0.341) + fa)
         b[uv] = (-3.090 + 1.825 * xi + 1.206
                  / ((xi - 4.62)**2 + 0.263) + fb)
-
     A_lambda = (a + b / Rv) * Rv * ebv
     return A_lambda
 
 
-def deredden(wavelength_angstrom, flux, ebv, Rv=3.1):
-    """Correct flux for dust extinction using CCM89.
+def extinction_curve(wavelength_angstrom, ebv, Rv=3.1, model='ccm89'):
+    """Compute extinction A_lambda using CCM89 or F99.
+
+    Args:
+        wavelength_angstrom: Wavelength(s) in Angstroms (scalar or array).
+        ebv: E(B-V) color excess.
+        Rv: Ratio of total-to-selective extinction (default 3.1).
+        model: 'ccm89' (Cardelli+1989) or 'f99' (Fitzpatrick 1999, better UV).
+
+    Returns:
+        A_lambda array (extinction in magnitudes at each wavelength).
+    """
+    try:
+        from dust_extinction.parameter_averages import CCM89, F99
+        import astropy.units as u
+
+        wave = np.atleast_1d(np.asarray(wavelength_angstrom, dtype=float))
+        if model == 'f99':
+            ext_model = F99(Rv=Rv)
+        else:
+            ext_model = CCM89(Rv=Rv)
+        # dust_extinction returns A(lambda)/A(V); multiply by A(V) = Rv * E(B-V)
+        Av = Rv * ebv
+        A_lambda = ext_model(wave * u.AA) * Av
+        return np.asarray(A_lambda, dtype=float)
+    except ImportError:
+        logger.debug("dust_extinction not installed, using manual CCM89 fallback")
+        if model == 'f99':
+            logger.warning("F99 model requires dust_extinction package; falling back to CCM89")
+        return _extinction_curve_manual(wavelength_angstrom, ebv, Rv=Rv)
+
+
+def deredden(wavelength_angstrom, flux, ebv, Rv=3.1, model='ccm89'):
+    """Correct flux for dust extinction using CCM89 or F99.
 
     Args:
         wavelength_angstrom: Wavelength(s) in Angstroms.
         flux: Observed flux (scalar or array, same shape as wavelength).
         ebv: E(B-V) color excess.
         Rv: Ratio of total-to-selective extinction (default 3.1).
+        model: 'ccm89' (Cardelli+1989) or 'f99' (Fitzpatrick 1999, better UV).
 
     Returns:
         Dereddened flux array: flux_corrected = flux * 10^(0.4 * A_lambda).
     """
     flux = np.asarray(flux, dtype=float)
-    A_lam = extinction_curve(wavelength_angstrom, ebv, Rv=Rv)
+    A_lam = extinction_curve(wavelength_angstrom, ebv, Rv=Rv, model=model)
     return flux * 10.0**(0.4 * A_lam)
 
 
@@ -2425,6 +2436,91 @@ def exposure_time_estimate(target_mag, snr_target=10, telescope="vlt",
     }
 
 
+# ── Light Curve Analysis (lightkurve) ──
+
+def search_lightcurve(target, mission='kepler'):
+    """Search for Kepler/TESS/K2 light curves via lightkurve."""
+    import lightkurve as lk
+    result = lk.search_lightcurve(target, mission=mission)
+    if len(result) == 0:
+        return {"found": 0, "message": f"No {mission} light curves found for {target}"}
+    return {
+        "found": len(result),
+        "results": [{"mission": str(r.mission), "target": str(r.target_name),
+                      "exptime": float(r.exptime.value) if r.exptime else None}
+                     for r in result[:20]]
+    }
+
+
+def download_and_clean_lightcurve(target, mission='kepler', flatten=True):
+    """Download, stitch, and clean a light curve."""
+    import lightkurve as lk
+    search = lk.search_lightcurve(target, mission=mission)
+    if len(search) == 0:
+        raise ValueError(f"No {mission} light curves found for {target}")
+    lc_collection = search.download_all()
+    lc = lc_collection.stitch()
+    if flatten:
+        lc = lc.remove_outliers().flatten()
+    return {
+        'time': lc.time.value.tolist(),
+        'flux': lc.flux.value.tolist(),
+        'flux_err': lc.flux_err.value.tolist() if lc.flux_err is not None else None,
+        'meta': {'target': target, 'mission': mission, 'segments': len(lc_collection)}
+    }
+
+
+def transit_search(target, mission='kepler'):
+    """Search for periodic transits using BLS periodogram."""
+    import lightkurve as lk
+    search = lk.search_lightcurve(target, mission=mission)
+    if len(search) == 0:
+        raise ValueError(f"No {mission} light curves found for {target}")
+    lc = search.download_all().stitch().flatten()
+    pg = lc.to_periodogram(method='bls')
+    return {
+        'period_days': float(pg.period_at_max_power.value),
+        'transit_time': float(pg.transit_time_at_max_power.value),
+        'depth': float(pg.depth_at_max_power.value),
+        'max_power': float(pg.max_power.value),
+    }
+
+
+# ── Source Extraction (SEP) ──
+
+def extract_sources(image_data, threshold_sigma=3.0, min_area=5):
+    """Extract sources from a 2D image using SEP (SExtractor in Python)."""
+    import sep
+    data = np.asarray(image_data, dtype=np.float64)
+    # Ensure C-contiguous
+    if not data.flags['C_CONTIGUOUS']:
+        data = np.ascontiguousarray(data)
+    bkg = sep.Background(data)
+    data_sub = data - bkg
+    objects = sep.extract(data_sub, threshold_sigma, err=bkg.globalrms, minarea=min_area)
+    if len(objects) == 0:
+        return {'n_sources': 0, 'sources': []}
+    # Kron aperture photometry
+    kronrad, krflag = sep.kron_radius(data_sub, objects['x'], objects['y'],
+                                       objects['a'], objects['b'], objects['theta'], 6.0)
+    flux, fluxerr, flag = sep.sum_ellipse(data_sub, objects['x'], objects['y'],
+                                           objects['a'], objects['b'], objects['theta'],
+                                           2.5 * kronrad, err=bkg.globalrms)
+    sources = []
+    for i in range(len(objects)):
+        sources.append({
+            'x': float(objects['x'][i]),
+            'y': float(objects['y'][i]),
+            'a': float(objects['a'][i]),
+            'b': float(objects['b'][i]),
+            'theta': float(objects['theta'][i]),
+            'flux': float(flux[i]),
+            'flux_err': float(fluxerr[i]),
+            'mag': float(-2.5 * np.log10(max(flux[i], 1e-30))),
+        })
+    return {'n_sources': len(sources), 'sources': sources}
+
+
 def available_functions():
     """Return signatures and one-line docs for sandbox preloaded helpers."""
     exported = [
@@ -2468,6 +2564,10 @@ def available_functions():
         target_visibility,
         airmass_plot,
         exposure_time_estimate,
+        search_lightcurve,
+        download_and_clean_lightcurve,
+        transit_search,
+        extract_sources,
     ]
 
     # Lazy-import photo-z so its numpy-heavy globals aren't loaded at

@@ -25,6 +25,7 @@ import type {
 } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { useI18n } from "../../i18n";
+import { useTracking } from "../../hooks/useTracking";
 import SearchBar from "./SearchBar";
 import ResultsTable from "./ResultsTable";
 import LiteraturePanel from "./LiteraturePanel";
@@ -47,6 +48,7 @@ export default function DataBrowser() {
   const { user } = useAuth();
   const { t } = useI18n();
   const navigate = useNavigate();
+  const { track } = useTracking();
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingSources, setLoadingSources] = useState<string[]>([]);
@@ -113,6 +115,7 @@ export default function DataBrowser() {
   // ── Search handlers ──
 
   const handleSearch = async (query: string, sources: string[], radius: number) => {
+    const started = performance.now();
     setLoading(true);
     setLoadingSources(sources);
     setError(null);
@@ -125,6 +128,16 @@ export default function DataBrowser() {
       setResults(data);
       const sourceErrors = data.filter((r) => r.object_id === "error");
       const validCount = data.length - sourceErrors.length;
+      track("search.query", {
+        databases: sources,
+        object_name: query,
+        ra: null,
+        dec: null,
+        radius,
+        result_count: validCount,
+        query_time_ms: Math.round(performance.now() - started),
+        filters: {},
+      });
       if (validCount === 0 && sourceErrors.length > 0) {
         setError(
           sourceErrors
@@ -141,6 +154,11 @@ export default function DataBrowser() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Search failed";
       setError(msg);
+      track("error.query_failed", {
+        database: sources.join(","),
+        error_type: "search_failed",
+        error_msg: msg,
+      });
     } finally {
       setLoading(false);
       setLoadingSources([]);
@@ -149,6 +167,7 @@ export default function DataBrowser() {
   };
 
   const handleAdvancedSearch = async (req: AdvancedSearchRequest) => {
+    const started = performance.now();
     setLoading(true);
     setLoadingSources(req.sources ?? []);
     setError(null);
@@ -160,6 +179,16 @@ export default function DataBrowser() {
       const response = await advancedSearch(req);
       setResults(response.results);
       setSearchMeta(response.meta);
+      track("search.query", {
+        databases: req.sources || [],
+        object_name: req.natural_query || "",
+        ra: req.ra ?? null,
+        dec: req.dec ?? null,
+        radius: req.radius ?? 1.0,
+        result_count: response.results.filter((r) => r.object_id !== "error").length,
+        query_time_ms: Math.round(performance.now() - started),
+        filters: response.meta.parsed_filters || {},
+      });
       logOperation("search", `Advanced search (${response.results.length} results)`);
       try { localStorage.setItem("astro_last_search", JSON.stringify({
         query: req.natural_query || req.object_type || "advanced",
@@ -169,6 +198,11 @@ export default function DataBrowser() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Advanced search failed";
       setError(msg);
+      track("error.query_failed", {
+        database: (req.sources || []).join(","),
+        error_type: "advanced_search_failed",
+        error_msg: msg,
+      });
     } finally {
       setLoading(false);
       setLoadingSources([]);
@@ -926,16 +960,29 @@ ${rows}
         </div>
       )}
 
-      {showSkyView && validResults.length > 0 && (
-        <div style={{ marginBottom: "1rem" }}>
-          <AladinViewer
-            objects={validResults.map(r => ({ name: r.name, ra: r.ra, dec: r.dec, source: r.source, object_type: r.object_type }))}
-            centerRa={validResults[0]?.ra}
-            centerDec={validResults[0]?.dec}
-            fov={0.5}
-          />
-        </div>
-      )}
+      {showSkyView && validResults.length > 0 && (() => {
+        // Compute mean position and FOV from spread of results
+        const ras = validResults.map(r => r.ra);
+        const decs = validResults.map(r => r.dec);
+        const meanRa = ras.reduce((a, b) => a + b, 0) / ras.length;
+        const meanDec = decs.reduce((a, b) => a + b, 0) / decs.length;
+        const raSpread = Math.max(...ras) - Math.min(...ras);
+        const decSpread = Math.max(...decs) - Math.min(...decs);
+        const spread = Math.max(raSpread, decSpread);
+        // Add 20% padding, minimum 0.05 deg, maximum 30 deg
+        const computedFov = Math.max(0.05, Math.min(30, spread * 1.2 || 0.5));
+
+        return (
+          <div style={{ marginBottom: "1rem" }}>
+            <AladinViewer
+              objects={validResults.map(r => ({ name: r.name, ra: r.ra, dec: r.dec, source: r.source, object_type: r.object_type }))}
+              centerRa={meanRa}
+              centerDec={meanDec}
+              fov={computedFov}
+            />
+          </div>
+        );
+      })()}
 
       <ResultsTable
         results={validResults}
@@ -945,7 +992,23 @@ ${rows}
         searched={searched}
         selectedKeys={selectedKeys}
         onSelectionChange={setSelectedKeys}
-        onObjectClick={(name, ra, dec) => setDetailObject({ name, ra, dec })}
+        onObjectClick={(name, ra, dec) => {
+          setDetailObject({ name, ra, dec });
+          const clicked = validResults.find((result) => result.name === name && result.ra === ra && result.dec === dec);
+          if (clicked) {
+            track("search.result_click", {
+              object_name: clicked.name,
+              object_type: clicked.object_type,
+              source_database: clicked.source,
+            });
+            track("object.viewed", {
+              object_name: clicked.name,
+              object_type: clicked.object_type,
+              ra: clicked.ra,
+              dec: clicked.dec,
+            });
+          }
+        }}
       />
 
       <ObjectDetailPanel

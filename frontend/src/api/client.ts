@@ -11,6 +11,16 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  if (typeof sessionStorage !== "undefined") {
+    const trackingSession = sessionStorage.getItem("astro_tracking_session_id");
+    const pageName = sessionStorage.getItem("astro_current_page");
+    if (trackingSession) {
+      config.headers["X-Tracking-Session"] = trackingSession;
+    }
+    if (pageName) {
+      config.headers["X-Page-Name"] = pageName;
+    }
+  }
   return config;
 });
 
@@ -62,6 +72,20 @@ export function logout() {
 
 export function isAuthenticated(): boolean {
   return !!localStorage.getItem("astro_token");
+}
+
+export async function trackEvent(
+  eventType: string,
+  eventData: Record<string, unknown> = {},
+  options?: { sessionId?: string; page?: string; durationMs?: number }
+): Promise<void> {
+  await api.post("/api/events/track", {
+    event_type: eventType,
+    event_data: eventData,
+    session_id: options?.sessionId,
+    page: options?.page,
+    duration_ms: options?.durationMs,
+  });
 }
 
 export async function getProfile(): Promise<UserProfile> {

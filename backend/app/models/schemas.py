@@ -2,7 +2,7 @@ import json
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, TypeDecorator, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, TypeDecorator, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -251,6 +251,23 @@ class ChatSession(Base):
     messages: Mapped[list] = mapped_column(JSONType(), default=list)  # [{role, content, actions}]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class UserEvent(Base):
+    __tablename__ = "user_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=True)
+    session_id: Mapped[uuid.UUID | None] = mapped_column(UUIDType(), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    event_data: Mapped[dict | None] = mapped_column(JSONType())
+    page: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("idx_user_event_type_time", "user_id", "event_type", "timestamp"),
+    )
 
 
 class SharedResult(Base):

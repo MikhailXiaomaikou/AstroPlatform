@@ -1,8 +1,9 @@
 import { Component, lazy, Suspense, useState, useEffect, type ErrorInfo, type ReactNode } from "react";
-import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
+import { BrowserRouter, Routes, Route, NavLink, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { I18nProvider, useI18n, ALL_LANGS, LANG_NAMES, type Lang } from "./i18n";
 import api from "./api/client";
+import { useTracking } from "./hooks/useTracking";
 import "./App.css";
 
 class ErrorBoundary extends Component<
@@ -173,11 +174,55 @@ function BackendBanner() {
   );
 }
 
+function TrackingBridge() {
+  const location = useLocation();
+  const { track, setCurrentPage, getEventCount } = useTracking();
+  const [startedAt] = useState(() => Date.now());
+  const [pageEnteredAt, setPageEnteredAt] = useState(() => Date.now());
+  const [lastPath, setLastPath] = useState(location.pathname);
+
+  useEffect(() => {
+    const pageName = location.pathname || "/";
+    setCurrentPage(pageName);
+    track("session.started", {
+      referrer: document.referrer || "",
+      user_agent_summary: navigator.userAgent.slice(0, 120),
+    });
+
+    const handleUnload = () => {
+      const totalDuration = Date.now() - startedAt;
+      const pageDuration = Date.now() - pageEnteredAt;
+      track("session.page_view", { page_name: pageName, time_on_page_ms: pageDuration });
+      track("session.ended", { total_duration_ms: totalDuration, events_count: getEventCount() });
+    };
+
+    window.addEventListener("beforeunload", handleUnload);
+    return () => window.removeEventListener("beforeunload", handleUnload);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const pageName = location.pathname || "/";
+    setCurrentPage(pageName);
+    if (lastPath !== pageName) {
+      track("session.page_view", {
+        page_name: lastPath,
+        time_on_page_ms: Date.now() - pageEnteredAt,
+      });
+      setLastPath(pageName);
+      setPageEnteredAt(Date.now());
+    }
+  }, [lastPath, location.pathname, pageEnteredAt, setCurrentPage, track]);
+
+  return null;
+}
+
 function App() {
   return (
     <I18nProvider>
     <AuthProvider>
       <BrowserRouter>
+        <TrackingBridge />
         <BackendBanner />
         <NavBar />
         <main className="main-content">

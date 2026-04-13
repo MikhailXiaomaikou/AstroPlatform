@@ -14,6 +14,7 @@ from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.data import router as data_router
 from app.api.dossier import router as dossier_router
+from app.api.events import router as events_router, admin_router as admin_events_router
 from app.api.export import router as export_router
 from app.api.followup import router as followup_router
 from app.api.health import router as health_router
@@ -33,6 +34,8 @@ from app.api.ws import router as ws_router, redis_subscriber
 from app.cors import get_cors_origins
 from app.models.database import engine, Base
 from app.rate_limit import limiter
+from app.middleware.event_tracking import EventTrackingMiddleware
+from app.services.event_collector import event_collector, periodic_flush
 
 logger = logging.getLogger(__name__)
 
@@ -128,12 +131,19 @@ async def lifespan(app: FastAPI):
 
     # Start Redis subscriber for WebSocket relay (best-effort)
     subscriber_task = asyncio.create_task(redis_subscriber())
+    event_flush_task = asyncio.create_task(periodic_flush(event_collector, interval=event_collector.FLUSH_INTERVAL))
 
     yield
 
     subscriber_task.cancel()
+    event_flush_task.cancel()
     try:
         await subscriber_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await event_collector.flush()
+        await event_flush_task
     except asyncio.CancelledError:
         pass
 
@@ -196,8 +206,9 @@ app.add_middleware(
     allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Page-Name", "X-Tracking-Session"],
 )
+app.add_middleware(EventTrackingMiddleware)
 
 # Routers
 app.include_router(alerts_router)
@@ -210,6 +221,8 @@ app.include_router(crossmatch_router)
 app.include_router(chat_router)
 app.include_router(data_router)
 app.include_router(dossier_router)
+app.include_router(events_router)
+app.include_router(admin_events_router)
 app.include_router(export_router)
 app.include_router(followup_router)
 app.include_router(health_router)

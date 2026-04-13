@@ -24,6 +24,7 @@ import {
 import MarkdownText from "../../components/chat/MarkdownText";
 import { useI18n } from "../../i18n";
 import { useAuth } from "../../context/AuthContext";
+import { useTracking } from "../../hooks/useTracking";
 import { registerWorkspaceExport } from "../../utils/workspaceCache";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
@@ -1193,6 +1194,7 @@ function deleteLocalChatSession(id: string): void {
 export default function ChatPage() {
   const { user } = useAuth();
   const { t } = useI18n();
+  const { track } = useTracking();
   const [hasKey, setHasKey] = useState(() => !!getStoredApiKey("anthropic"));
   const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
   const [input, setInput] = useState("");
@@ -1273,6 +1275,22 @@ export default function ChatPage() {
 
       downloadBlob(blob, filename);
       const savedToWorkspace = await rememberExportInWorkspace(blob, filename, exportKind);
+      const exportEventMap: Record<ExportAction, string> = {
+        markdown: "export.paper_draft",
+        notebook: "export.notebook",
+        latex: "export.latex",
+        bibtex: "export.paper_draft",
+      };
+      const combinedText = messages.map((msg) => msg.content).join(" ");
+      const bibcodeMatches = combinedText.match(/\b\d{4}[A-Za-z][A-Za-z&.]+\.+\S+/g) || [];
+      track(exportEventMap[exportKind], {
+        journal_format: exportKind === "latex" ? "aastex" : undefined,
+        sections: exportKind === "latex" ? ["chat_export"] : undefined,
+        figures_count: messages.filter((msg) => (msg.actions || []).some((action) => action.action === "plot")).length,
+        citations_count: exportKind === "bibtex" ? bibcodeMatches.length : undefined,
+        cell_count: exportKind === "notebook" ? messages.length + 2 : undefined,
+        word_count: combinedText.split(/\s+/).filter(Boolean).length,
+      });
 
       if (savedToWorkspace) {
         showToast(`Exported ${label} successfully — saved to Workspace`, "success");
@@ -1287,7 +1305,7 @@ export default function ChatPage() {
     } finally {
       setExporting((prev) => ({ ...prev, [exportKind]: false }));
     }
-  }, [rememberExportInWorkspace, showToast, user]);
+  }, [messages, rememberExportInWorkspace, showToast, track, user]);
 
   const refreshSessions = useCallback(() => {
     if (user) {
@@ -1445,6 +1463,11 @@ export default function ChatPage() {
     setLoading(true);
 
     try {
+      track("ai.message_sent", {
+        prompt_length_chars: text.length,
+        prompt_length_words: text.split(/\s+/).filter(Boolean).length,
+        topic_keywords: text.split(/[\s,.;:!?，。；：！？]+/).filter(Boolean).slice(0, 8),
+      });
       const chatHistory: ChatMessage[] = updatedMessages.map((m) => ({
         role: m.role,
         content: m.content,
@@ -1513,6 +1536,11 @@ export default function ChatPage() {
         content: `Sorry, I encountered an error: ${errorDetail}`,
       };
       setMessages((prev) => [...prev, errorMsg]);
+      track("error.ai_failed", {
+        agent_name: "chat_assistant",
+        backend: "anthropic",
+        error_type: "chat_failed",
+      });
     } finally {
       setLoading(false);
     }
@@ -1524,6 +1552,7 @@ export default function ChatPage() {
     action: ChatAction
   ) => {
     const key = `${msgId}-${actionIndex}`;
+    const started = performance.now();
     setExecutingActions((prev) => new Set(prev).add(key));
 
     try {
@@ -1531,6 +1560,13 @@ export default function ChatPage() {
       const result = await executeChatAction(
         action as Record<string, unknown>
       );
+      track("ai.tool_called", {
+        tool_name: action.action,
+        params_summary: JSON.stringify(action).slice(0, 300),
+        success: true,
+        duration_ms: Math.round(performance.now() - started),
+        error_msg: null,
+      });
       setMessages((prev) =>
         prev.map((m) => {
           if (m.id === msgId) {
@@ -1544,6 +1580,13 @@ export default function ChatPage() {
     } catch (err: unknown) {
       const errorDetail =
         err instanceof Error ? err.message : "Unknown error";
+      track("ai.tool_called", {
+        tool_name: action.action,
+        params_summary: JSON.stringify(action).slice(0, 300),
+        success: false,
+        duration_ms: Math.round(performance.now() - started),
+        error_msg: errorDetail,
+      });
       setMessages((prev) =>
         prev.map((m) => {
           if (m.id === msgId) {

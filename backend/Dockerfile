@@ -9,6 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gfortran \
     && rm -rf /var/lib/apt/lists/*
 
+# Optional: Install Java for STILTS cross-match backend.
+# Uncomment the line below and set STILTS_JAR_PATH env var to enable.
+# RUN apt-get update && apt-get install -y --no-install-recommends openjdk-17-jre-headless && rm -rf /var/lib/apt/lists/*
+# ENV STILTS_JAR_PATH=/app/stilts.jar
+
 COPY requirements.txt .
 # v3: install with fallback, gfortran available for scipy
 RUN pip install --no-cache-dir -r requirements.txt

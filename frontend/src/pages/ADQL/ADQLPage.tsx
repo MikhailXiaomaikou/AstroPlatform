@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import { adqlQuery, listADQLServices, logOperation, exportSearchNotebook } from "../../api/client";
 import type { ADQLResult } from "../../api/client";
+import { useTracking } from "../../hooks/useTracking";
 
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
@@ -83,6 +84,7 @@ const PAGE_SIZE = 25;
 /* ── Component ── */
 export default function ADQLPage() {
   const navigate = useNavigate();
+  const { track } = useTracking();
   const [services, setServices] = useState<Array<{ id: string; name: string }>>([]);
   const [svc, setSvc] = useState("gaia");
   const [query, setQuery] = useState(DEFAULTS.gaia);
@@ -104,10 +106,19 @@ export default function ADQLPage() {
   }
 
   async function run() {
+    const started = performance.now();
     setLoading(true); setError(null); setResult(null); setPage(0); setSortCol(null); setSortAsc(true);
     try {
       const res = await adqlQuery(query, svc);
       setResult(res);
+      track("search.adql", {
+        query_text: query,
+        database: svc,
+        result_count: res.row_count,
+        success: true,
+        error_msg: null,
+        query_time_ms: Math.round(performance.now() - started),
+      });
       const rows = extractRows(res);
       try {
         localStorage.setItem("astro_last_adql", JSON.stringify({
@@ -122,6 +133,23 @@ export default function ADQLPage() {
       addHistory(query); setHistory(getHistory());
       logOperation("adql", `${svc}: ${query.slice(0, 80)}`);
     } catch (err: unknown) {
+      const detail =
+        err && typeof err === "object" && "response" in err
+          ? ((err as { response?: { data?: { detail?: string } } }).response?.data?.detail || "Query failed")
+          : (err instanceof Error ? err.message : "Query failed");
+      track("search.adql", {
+        query_text: query,
+        database: svc,
+        result_count: 0,
+        success: false,
+        error_msg: detail,
+        query_time_ms: Math.round(performance.now() - started),
+      });
+      track("error.query_failed", {
+        database: svc,
+        error_type: "adql_failed",
+        error_msg: detail,
+      });
       if (err && typeof err === "object" && "response" in err) {
         const resp = (err as { response?: { data?: { detail?: string } } }).response;
         setError(resp?.data?.detail || "Query failed");
@@ -146,6 +174,7 @@ export default function ADQLPage() {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
     a.download = `adql_${svc}_${result.row_count}rows.csv`; a.click();
     logOperation("export", `ADQL CSV export: ${result.row_count} rows from ${svc}`);
+    track("export.csv", { row_count: result.row_count, column_count: result.columns.length });
   }
 
   function handleSort(col: string) {
@@ -252,6 +281,7 @@ export default function ADQLPage() {
                 a.download = `adql_${result.row_count}_rows.ipynb`; a.click();
                 URL.revokeObjectURL(url);
                 setExportMsg("Notebook exported successfully");
+                track("export.notebook", { cell_count: 3 + rows.length });
                 setTimeout(() => setExportMsg(null), 2500);
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Notebook export failed");
