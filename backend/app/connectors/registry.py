@@ -25,6 +25,7 @@ def _init():
         from app.connectors.panstarrs import PanSTARRSConnector
         from app.connectors.xmm import XMMConnector
         from app.connectors.desi import DESIConnector
+        from app.connectors.radio import NVSSConnector, FIRSTConnector
         _connectors = {
             "sdss": SDSSConnector(),
             "gaia": GaiaConnector(),
@@ -43,12 +44,14 @@ def _init():
             "desi": DESIConnector(),
             "panstarrs": PanSTARRSConnector(),
             "xmm": XMMConnector(),
+            "nvss": NVSSConnector(),
+            "first": FIRSTConnector(),
         }
 
 
 CONNECTORS_KEYS = [
     "sdss", "gaia", "simbad", "vizier", "mast", "ned", "2mass", "chandra", "allwise", "alma",
-    "eso", "irsa", "jwst", "lamost", "desi", "panstarrs", "xmm",
+    "eso", "irsa", "jwst", "lamost", "desi", "panstarrs", "xmm", "nvss", "first",
 ]
 
 

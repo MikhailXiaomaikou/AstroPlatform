@@ -12,6 +12,7 @@ import {
   listChatSessions,
   loadChatSession,
   deleteChatSession,
+  importChatSession,
   createSessionShare,
   listSessionShares,
   revokeSessionShare,
@@ -1671,6 +1672,39 @@ export default function ChatPage() {
     } catch { /* ignore */ }
   };
 
+  const handleImportSession = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const result = await importChatSession(data);
+        const session = await loadChatSession(result.id);
+        const loaded: DisplayMessage[] = session.messages.map((m: Record<string, unknown>) => ({
+          id: crypto.randomUUID(),
+          role: m.role as "user" | "assistant",
+          content: m.content as string,
+          actions: m.actions as ChatAction[] | undefined,
+        }));
+        setMessages(loaded);
+        setCurrentSessionId(result.id);
+        pythonSessionIdRef.current = crypto.randomUUID();
+        setShowSessions(false);
+        saveChatHistory(loaded);
+        refreshSessions();
+        showToast(`Imported "${result.title}" (${result.message_count} messages)`, "success");
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "Import failed";
+        showToast(`Import failed: ${detail}`, "error");
+      }
+    };
+    input.click();
+  };
+
   useEffect(() => {
     const pendingSessionId = localStorage.getItem("astro_chat_open_session");
     if (!pendingSessionId || !user) return;
@@ -2059,6 +2093,9 @@ export default function ChatPage() {
             )}
             <button type="button" className="btn-secondary btn-small" onClick={handleNewChat}>
               {t("chat.new_chat")}
+            </button>
+            <button type="button" className="btn-secondary btn-small" onClick={handleImportSession} title="Import session from JSON file">
+              Import
             </button>
             {messages.length > 0 && (
               <>

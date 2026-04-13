@@ -1261,3 +1261,54 @@ async def delete_chat_session(
     await db.delete(session)
     await db.commit()
     return {"deleted": True}
+
+
+@router.post("/sessions/import")
+async def import_chat_session(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Import a chat session from a JSON file."""
+    from app.models.schemas import ChatSession
+    from app.services.memory_service import memory_service
+
+    body = await request.json()
+
+    # Validate structure
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        raise HTTPException(status_code=400, detail="Invalid format: 'messages' must be a list")
+
+    # Validate each message has required fields
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or "role" not in msg or "content" not in msg:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid message at index {i}: must have 'role' and 'content'",
+            )
+
+    title = body.get("title", "Imported Session")
+    # Auto-title from first user message when no title is provided
+    if title == "Imported Session" and messages:
+        for m in messages:
+            if m.get("role") == "user":
+                title = m["content"][:60]
+                break
+
+    session = ChatSession(
+        user_id=user.id,
+        title=title,
+        messages=messages,
+    )
+    db.add(session)
+    await db.flush()
+    await memory_service.refresh_session_memory(user.id, session.id, db)
+    await db.commit()
+    await db.refresh(session)
+
+    return {
+        "id": str(session.id),
+        "title": session.title,
+        "message_count": len(messages),
+    }

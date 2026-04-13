@@ -8,6 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schemas import TransientAlert
+from app.services.alert_ingestion import fetch_ztf_lightcurve
+from app.services.transient_classifier import (
+    TransientClassifier,
+    extract_lc_features,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +295,36 @@ async def query_transients(
         except Exception as exc:
             logger.warning("Local alert query failed: %s", exc)
 
+    # -- ZTF public light curve lookup + optional classification -----------
+    ztf_lightcurve: dict | None = None
+    ztf_classification: dict | None = None
+
+    if ra is not None and dec is not None:
+        try:
+            ztf_lightcurve = await fetch_ztf_lightcurve(ra, dec, radius_arcsec)
+
+            if ztf_lightcurve and not ztf_lightcurve.get("error"):
+                bands = ztf_lightcurve.get("bands", {})
+                # Pick the best-sampled band for classification.
+                best_band: str | None = None
+                best_count = 0
+                for band_name, band_data in bands.items():
+                    n = len(band_data.get("times", []))
+                    if n > best_count:
+                        best_count = n
+                        best_band = band_name
+
+                if best_band is not None and best_count > 5:
+                    bd = bands[best_band]
+                    features = extract_lc_features(
+                        bd["times"], bd["mags"], bd["mag_errs"], band=best_band
+                    )
+                    ztf_classification = TransientClassifier.classify_transient(features)
+                    ztf_classification["band_used"] = best_band
+                    ztf_classification["n_epochs"] = best_count
+        except Exception as exc:
+            logger.warning("ZTF lightcurve/classification failed: %s", exc)
+
     total = len(tns_results) + len(lasair_results) + len(local_results)
     parts = []
     if local_results:
@@ -299,13 +334,20 @@ async def query_transients(
         parts.append(f"{len(lasair_results)} Lasair/ZTF result(s)")
     summary = "Found " + " and ".join(parts)
 
-    return {
+    result: dict = {
         "summary": summary,
         "total": total,
         "local": local_results,
         "tns": tns_results,
         "lasair": lasair_results,
     }
+
+    if ztf_lightcurve is not None:
+        result["ztf_lightcurve"] = ztf_lightcurve
+    if ztf_classification is not None:
+        result["ztf_classification"] = ztf_classification
+
+    return result
 
 
 async def _query_local_alerts(

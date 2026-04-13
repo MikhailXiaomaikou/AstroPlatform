@@ -311,7 +311,7 @@ class TestAITools:
 
     def test_tool_count(self):
         from app.services.ai_tools import TOOLS
-        assert len(TOOLS) == 26
+        assert len(TOOLS) == 27
 
     def test_tool_names(self):
         from app.services.ai_tools import TOOLS

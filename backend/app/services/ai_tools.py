@@ -453,26 +453,21 @@ TOOLS = [
     {
         "name": "estimate_photo_z",
         "description": (
-            "Estimate photometric redshift from multi-band photometry. "
-            "Use when users ask about galaxy distances or redshifts for objects without spectra. "
-            "NOTE: This is a demo-quality implementation (7 templates, no dust). "
-            "For publication, use dedicated photo-z codes like EAZY."
+            "Estimate photometric redshift from multi-band magnitudes using SED template fitting. "
+            "WARNING: Demo-only implementation with 7 templates and no dust extinction — not "
+            "suitable for scientific use. Use EAZY or Le Phare for publication-quality photo-z."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "magnitudes": {
                     "type": "object",
-                    "description": "Band magnitudes, e.g. {'g': 20.1, 'r': 19.5, 'i': 19.2}",
-                },
-                "mag_errors": {
-                    "type": "object",
-                    "description": "Magnitude errors per band",
-                },
-                "method": {
-                    "type": "string",
-                    "enum": ["template", "ml", "hybrid"],
-                    "description": "Estimation method: 'template' (SED fitting), 'ml' (empirical colors), or 'hybrid' (weighted average of both). Default: 'hybrid'",
+                    "description": (
+                        "Dict mapping filter band names to magnitudes. Supported bands: "
+                        "sdss_u, sdss_g, sdss_r, sdss_i, sdss_z, twomass_j, twomass_h, "
+                        "twomass_ks, wise_w1, wise_w2. "
+                        "Example: {\"sdss_g\": 20.1, \"sdss_r\": 19.5, \"sdss_i\": 19.2}"
+                    ),
                 },
             },
             "required": ["magnitudes"],
@@ -726,6 +721,40 @@ TOOLS = [
             "required": ["fits_path"],
         },
     },
+    {
+        "name": "classify_transient",
+        "description": (
+            "Classify a transient event from light curve data. Accepts pre-extracted features dict "
+            "OR raw light curve arrays (times, magnitudes, mag_errors). Returns classification "
+            "(SN_Ia, SN_II, SN_Ib_c, TDE, CV, AGN, KN, LPV, Unknown), confidence score, and "
+            "per-class probabilities. WARNING: Uses synthetic training data — verify results "
+            "with spectroscopy."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "features": {
+                    "type": "object",
+                    "description": "Pre-extracted light curve features dict (rise_time, decline_rate, peak_mag, etc.)",
+                },
+                "times": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "MJD observation times (alternative to features)",
+                },
+                "magnitudes": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Magnitude measurements",
+                },
+                "mag_errors": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Magnitude uncertainties",
+                },
+            },
+        },
+    },
 ]
 
 
@@ -792,6 +821,8 @@ async def execute_tool(
             return await _exec_extract_photometry(tool_input)
         elif tool_name == "extract_sources":
             return await _exec_extract_sources(tool_input)
+        elif tool_name == "classify_transient":
+            return await _exec_classify_transient(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -1437,16 +1468,35 @@ def _exec_research_workflow(inp: dict) -> dict:
     }
 
 
+_BAND_NAME_MAP = {
+    "sdss_u": "u", "sdss_g": "g", "sdss_r": "r", "sdss_i": "i", "sdss_z": "z",
+    "twomass_j": "J", "twomass_h": "H", "twomass_ks": "Ks",
+    "wise_w1": "W1", "wise_w2": "W2",
+}
+
+
+def _normalize_band_names(mags: dict) -> dict:
+    """Map prefixed band names (sdss_g, twomass_j, ...) to photo_z internal names."""
+    normalized: dict = {}
+    for key, val in mags.items():
+        mapped = _BAND_NAME_MAP.get(key.lower(), key)
+        normalized[mapped] = val
+    return normalized
+
+
 async def _exec_estimate_photo_z(inp: dict) -> dict:
     """Run the unified photometric redshift estimator."""
     from app.services.photo_z import estimate_photo_z
 
-    magnitudes = inp.get("magnitudes", {})
-    mag_errors = inp.get("mag_errors", {})
+    raw_magnitudes = inp.get("magnitudes", {})
+    raw_mag_errors = inp.get("mag_errors", {})
     method = inp.get("method", "hybrid")
 
-    if not magnitudes:
-        return {"error": "magnitudes dict is required (e.g. {'g': 20.1, 'r': 19.5})"}
+    if not raw_magnitudes:
+        return {"error": "magnitudes dict is required (e.g. {'sdss_g': 20.1, 'sdss_r': 19.5})"}
+
+    magnitudes = _normalize_band_names(raw_magnitudes)
+    mag_errors = _normalize_band_names(raw_mag_errors) if raw_mag_errors else {}
 
     loop = asyncio.get_running_loop()
     try:
@@ -1820,6 +1870,40 @@ async def _exec_extract_sources(inp: dict) -> dict:
             return extract_sources(image_data, threshold_sigma=threshold_sigma, min_area=min_area)
 
     result = await loop.run_in_executor(None, _do_extract)
+    return result
+
+
+async def _exec_classify_transient(inp: dict) -> dict:
+    """Classify a transient from features or raw light curve data."""
+    from app.services.transient_classifier import TransientClassifier, extract_lc_features
+
+    features = inp.get("features")
+    times = inp.get("times")
+    magnitudes = inp.get("magnitudes")
+    mag_errors = inp.get("mag_errors")
+
+    if features is None and times is None:
+        return {"error": "Either 'features' dict or 'times'+'magnitudes' arrays are required"}
+
+    loop = asyncio.get_running_loop()
+
+    def _do_classify():
+        if features is not None:
+            return TransientClassifier.classify_transient(features)
+        # Extract features from raw light curve, then classify
+        mags = magnitudes or []
+        errs = mag_errors if mag_errors else None
+        extracted = extract_lc_features(times, mags, errs)
+        return TransientClassifier.classify_transient(extracted)
+
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, _do_classify),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError:
+        return {"error": "Transient classification timed out after 60 seconds"}
+
     return result
 
 

@@ -1,7 +1,8 @@
 """CORS origin configuration.
 
 Reads allowed origins from the CORS_ORIGINS environment variable (comma-separated).
-Defaults to ["http://localhost:5173"] when ENV is not set or is "dev".
+Defaults include localhost dev servers and known production domains.
+Never falls back to wildcard "*" in production — that would allow any origin.
 """
 
 import os
@@ -30,4 +31,4 @@ def get_cors_origins() -> list[str]:
         if d not in origins:
             origins.append(d)
 
-    return origins if origins else ["*"]
+    return origins

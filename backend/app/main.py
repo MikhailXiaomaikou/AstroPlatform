@@ -45,7 +45,15 @@ logger = logging.getLogger(__name__)
 
 
 def _migrate_add_columns(connection):
-    """Add new columns to existing tables (SQLite create_all won't do this)."""
+    """Add new columns to existing tables (SQLite create_all won't do this).
+
+    NOTE: This function is kept for SQLite dev-server compatibility, where
+    ``Base.metadata.create_all`` cannot add columns to pre-existing tables.
+    It is fully idempotent (every operation checks first or catches errors).
+    For production deployments, prefer running Alembic migrations instead:
+        alembic upgrade head
+    The equivalent Alembic migration is versions/002_consolidate_manual_migrations.py.
+    """
     import sqlalchemy
     from app.utils.usernames import normalize_username
 
@@ -123,6 +131,41 @@ def _migrate_add_columns(connection):
                 logger.info("Created unique index ix_users_google_id")
             except Exception:
                 pass  # Index may already exist under a different name
+
+    # --- RunResult reproducibility metadata columns ---
+    if "run_results" in inspector.get_table_names():
+        existing_rr = {c["name"] for c in inspector.get_columns("run_results")}
+        rr_migrations = [
+            ("input_hash", "VARCHAR(64)"),
+            ("output_checksum", "VARCHAR(64)"),
+            ("execution_time_ms", "INTEGER"),
+        ]
+        for col_name, col_type in rr_migrations:
+            if col_name not in existing_rr:
+                try:
+                    connection.execute(sqlalchemy.text(
+                        f"ALTER TABLE run_results ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info("Added column run_results.%s", col_name)
+                except Exception:
+                    pass
+
+    # --- Performance indexes for data_files and pipeline_runs ---
+    perf_indexes = [
+        ("idx_datafile_source", "data_files", "(source)"),
+        ("idx_datafile_object_id", "data_files", "(object_id)"),
+        ("idx_datafile_user_source", "data_files", "(user_id, source)"),
+        ("idx_pipelinerun_status", "pipeline_runs", "(status)"),
+        ("idx_pipelinerun_user_status", "pipeline_runs", "(user_id, status)"),
+    ]
+    for idx_name, table, cols in perf_indexes:
+        if table in inspector.get_table_names():
+            try:
+                connection.execute(sqlalchemy.text(
+                    f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {cols}"
+                ))
+            except Exception:
+                pass
 
 
 @asynccontextmanager

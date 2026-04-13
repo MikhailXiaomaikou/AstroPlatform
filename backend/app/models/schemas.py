@@ -84,6 +84,12 @@ class DataFile(Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONType())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    __table_args__ = (
+        Index("idx_datafile_source", "source"),
+        Index("idx_datafile_object_id", "object_id"),
+        Index("idx_datafile_user_source", "user_id", "source"),
+    )
+
 
 class PipelineRun(Base):
     __tablename__ = "pipeline_runs"
@@ -96,6 +102,11 @@ class PipelineRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    __table_args__ = (
+        Index("idx_pipelinerun_status", "status"),
+        Index("idx_pipelinerun_user_status", "user_id", "status"),
+    )
+
 
 class RunResult(Base):
     __tablename__ = "run_results"
@@ -105,6 +116,9 @@ class RunResult(Base):
     node_id: Mapped[str] = mapped_column(String(255), nullable=False)
     output_path: Mapped[str | None] = mapped_column(Text)
     logs: Mapped[str | None] = mapped_column(Text)
+    input_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    output_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    execution_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class PipelineTemplateDB(Base):

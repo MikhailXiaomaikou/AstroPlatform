@@ -532,6 +532,11 @@ export async function getPipelineRun(runId: string): Promise<Record<string, unkn
   return data;
 }
 
+export async function getNodeResult(runId: string, nodeId: string): Promise<Record<string, unknown>> {
+  const { data } = await api.get(`/api/pipeline/runs/${runId}/nodes/${nodeId}`);
+  return data;
+}
+
 // ── WebSocket ──
 
 export function connectPipelineWS(
@@ -1299,6 +1304,14 @@ export async function loadChatSession(sessionId: string): Promise<{
 
 export async function deleteChatSession(sessionId: string): Promise<void> {
   await api.delete(`/api/chat/sessions/${sessionId}`);
+}
+
+export async function importChatSession(data: {
+  title?: string;
+  messages: Array<{ role: string; content: string }>;
+}): Promise<{ id: string; title: string; message_count: number }> {
+  const res = await api.post("/api/chat/sessions/import", data);
+  return res.data;
 }
 
 export interface SessionShareItem {

@@ -4,6 +4,8 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { I18nProvider, useI18n, ALL_LANGS, LANG_NAMES, type Lang } from "./i18n";
 import api from "./api/client";
 import { useTracking } from "./hooks/useTracking";
+import CommandPalette from "./components/CommandPalette";
+import OnboardingOverlay from "./components/OnboardingOverlay";
 import "./App.css";
 
 class ErrorBoundary extends Component<
@@ -228,6 +230,8 @@ function App() {
         <TrackingBridge />
         <BackendBanner />
         <NavBar />
+        <CommandPalette />
+        <OnboardingOverlay />
         <main className="main-content">
           <ErrorBoundary>
             <Suspense fallback={<div className="fits-loading">Loading...</div>}>

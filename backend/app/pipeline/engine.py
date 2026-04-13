@@ -1,7 +1,10 @@
 """Pipeline execution engine — topologically sorts a DAG and runs nodes synchronously (local mode)."""
 
+import asyncio
+import hashlib
 import json
 import logging
+import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
@@ -9,6 +12,56 @@ from datetime import datetime, timezone
 from app.pipeline.nodes import registry
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Sync wrappers for async cache helpers (used in sync execute_dag & Celery)
+# ---------------------------------------------------------------------------
+
+def _cache_get_sync(key: str):
+    """Synchronously fetch a cached value.  Returns None on any failure."""
+    try:
+        from app.cache import cache_get
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(cache_get(key))
+        finally:
+            loop.close()
+    except Exception:
+        return None
+
+
+def _cache_set_sync(key: str, value, ttl: int = 300):
+    """Synchronously store a value in the cache.  Silently ignores errors."""
+    try:
+        from app.cache import cache_set
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(cache_set(key, value, ttl=ttl))
+        finally:
+            loop.close()
+    except Exception:
+        pass
+
+
+def _build_node_cache_key(node_type: str, params: dict, parents: list[str], node_results: dict) -> str | None:
+    """Compute a deterministic cache key for a pipeline node.
+
+    The key incorporates the node type, its parameters, and the output
+    checksums of all parent nodes so that any upstream change invalidates
+    the cache automatically.  Returns ``None`` if the key cannot be built.
+    """
+    try:
+        parent_hashes = "".join(
+            node_results.get(p, {}).get("_output_checksum", "") for p in parents
+        ) if parents else ""
+        cache_payload = json.dumps(
+            {"params": params, "parent_hashes": parent_hashes},
+            sort_keys=True, default=str,
+        )
+        return f"pipeline_node:{node_type}:{hashlib.sha256(cache_payload.encode()).hexdigest()}"
+    except Exception:
+        return None
 
 
 def topological_sort(dag: dict) -> list[list[str]]:
@@ -167,14 +220,57 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
             if node_type == "ImportWorkspace" and "path" not in params:
                 params["path"] = input_data.get("path", input_data_id)
 
+            # -- Node-level cache: skip execution if result already cached ------
+            # Build a cache key from node type, params, and parent output checksums.
+            # Setting params["force_rerun"] = True bypasses the cache for this node.
+            cache_key = _build_node_cache_key(node_type, params, parents, node_results)
+
+            if cache_key and not params.get("force_rerun"):
+                try:
+                    cached = _cache_get_sync(cache_key)
+                    if cached:
+                        logger.info(f"[{run_id}] Node {node_id} cache hit")
+                        cached["_cached"] = True
+                        node_results[node_id] = cached
+                        _publish_progress(run_id, {"node_id": node_id, "status": "completed", "cached": True})
+                        # Handle Condition nodes even on cache hit
+                        if node_type == "Condition" and "error" not in cached:
+                            new_skips = _compute_skipped_nodes(
+                                node_id, cached["_condition_result"],
+                                edge_index, parent_map, node_map,
+                            )
+                            skipped_nodes |= new_skips
+                        continue
+                except Exception:
+                    pass  # cache miss or error — proceed with normal execution
+            # -- End cache lookup --------------------------------------------------
+
             logger.info(f"[{run_id}] Running node {node_id} ({node_type})")
+            input_hash = hashlib.sha256(
+                json.dumps(params, sort_keys=True, default=str).encode()
+            ).hexdigest()
+            t0 = time.monotonic()
             try:
                 result = node_fn(input_data, params)
             except Exception as e:
                 logger.error(f"[{run_id}] Node {node_id} failed: {e}")
                 result = {"error": str(e), "node_id": node_id}
+            execution_time_ms = int((time.monotonic() - t0) * 1000)
+            output_checksum = hashlib.sha256(
+                json.dumps(result, sort_keys=True, default=str).encode()
+            ).hexdigest()
 
+            result["_input_hash"] = input_hash
+            result["_output_checksum"] = output_checksum
+            result["_execution_time_ms"] = execution_time_ms
             node_results[node_id] = result
+
+            # Store successful results in cache (24h TTL)
+            if cache_key and "error" not in result:
+                try:
+                    _cache_set_sync(cache_key, result, ttl=86400)
+                except Exception:
+                    pass
 
             # After a Condition node, compute which branch to skip
             if node_type == "Condition" and "error" not in result:
@@ -330,6 +426,52 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                 if node_type == "ImportWorkspace" and "path" not in params:
                     params["path"] = input_data.get("path", input_data_id)
 
+                # -- Node-level cache: skip execution if result already cached --
+                # Build a cache key from node type, params, and parent output
+                # checksums.  Set params["force_rerun"] = True to bypass cache.
+                cache_key = _build_node_cache_key(node_type, params, parents, node_results)
+
+                if cache_key and not params.get("force_rerun"):
+                    try:
+                        cached = _cache_get_sync(cache_key)
+                        if cached:
+                            logger.info(f"[{run_id}] Node {node_id} cache hit")
+                            cached["_cached"] = True
+                            node_results[node_id] = cached
+                            completed_count += 1
+
+                            # Handle Condition nodes even on cache hit
+                            if node_type == "Condition" and "error" not in cached:
+                                new_skips = _compute_skipped_nodes(
+                                    node_id, cached["_condition_result"],
+                                    edge_index, parent_map, node_map,
+                                )
+                                skipped_nodes |= new_skips
+
+                            # Store per-node result in DB for cached hit
+                            run_result = RunResult(
+                                run_id=uuid.UUID(run_id),
+                                node_id=node_id,
+                                output_path=cached.get("output_path"),
+                                logs=json.dumps(cached) if cached else None,
+                                input_hash=cached.get("_input_hash", ""),
+                                output_checksum=cached.get("_output_checksum", ""),
+                                execution_time_ms=0,
+                            )
+                            session.add(run_result)
+                            session.commit()
+
+                            _publish_progress(run_id, {
+                                "type": "node_complete",
+                                "node_id": node_id,
+                                "progress": completed_count / total_nodes,
+                                "cached": True,
+                            })
+                            continue
+                    except Exception:
+                        pass  # cache miss or error — proceed with normal execution
+                # -- End cache lookup -----------------------------------------------
+
                 # Notify node start
                 _publish_progress(run_id, {
                     "type": "node_start",
@@ -338,15 +480,33 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                 })
 
                 logger.info(f"[{run_id}] Running node {node_id} ({node_type})")
+                input_hash = hashlib.sha256(
+                    json.dumps(params, sort_keys=True, default=str).encode()
+                ).hexdigest()
+                t0 = time.monotonic()
                 try:
                     result = node_fn(input_data, params)
                 except Exception as e:
                     logger.error(f"[{run_id}] Node {node_id} failed: {e}")
                     result = {"error": str(e), "node_id": node_id}
                     has_errors = True
+                execution_time_ms = int((time.monotonic() - t0) * 1000)
+                output_checksum = hashlib.sha256(
+                    json.dumps(result, sort_keys=True, default=str).encode()
+                ).hexdigest()
 
+                result["_input_hash"] = input_hash
+                result["_output_checksum"] = output_checksum
+                result["_execution_time_ms"] = execution_time_ms
                 node_results[node_id] = result
                 completed_count += 1
+
+                # Store successful results in cache (24h TTL)
+                if cache_key and "error" not in result:
+                    try:
+                        _cache_set_sync(cache_key, result, ttl=86400)
+                    except Exception:
+                        pass
 
                 # After a Condition node, compute which branch to skip
                 if node_type == "Condition" and "error" not in result:
@@ -362,6 +522,9 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                     node_id=node_id,
                     output_path=result.get("output_path"),
                     logs=json.dumps(result) if result else None,
+                    input_hash=input_hash,
+                    output_checksum=output_checksum,
+                    execution_time_ms=execution_time_ms,
                 )
                 session.add(run_result)
                 session.commit()

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { adqlQuery, listADQLServices, logOperation, exportSearchNotebook } from "../../api/client";
 import type { ADQLResult } from "../../api/client";
 import { useTracking } from "../../hooks/useTracking";
+import ADQLEditor from "../../components/ADQLEditor";
 
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
@@ -327,8 +328,7 @@ export default function ADQLPage() {
       )}
 
       {/* Editor */}
-      <textarea className="adql-textarea" value={query} onChange={(e) => setQuery(e.target.value)}
-        rows={6} spellCheck={false} />
+      <ADQLEditor value={query} onChange={setQuery} placeholder="Enter ADQL query..." />
 
       <div style={{ display: "flex", gap: 8, margin: "8px 0" }}>
         <button className="btn-primary" onClick={run} disabled={loading || !query.trim()}>

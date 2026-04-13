@@ -383,6 +383,239 @@ function buildPlot(
     };
   }
 
+  if (chartType === "hr_diagram") {
+    // Auto-detect X: bp_rp directly, or compute from phot_bp_mean_mag - phot_rp_mean_mag
+    let bpRp: number[] | null = null;
+    if (isNumericSeries(data.bp_rp)) {
+      bpRp = data.bp_rp as number[];
+    } else if (isNumericSeries(data.phot_bp_mean_mag) && isNumericSeries(data.phot_rp_mean_mag)) {
+      const bp = data.phot_bp_mean_mag as number[];
+      const rp = data.phot_rp_mean_mag as number[];
+      bpRp = bp.map((v, i) => v - (rp[i] ?? 0));
+    }
+    // Auto-detect Y: abs_g_mag directly, or compute from phot_g_mean_mag + 5*log10(parallax/1000)+5
+    let absG: number[] | null = null;
+    if (isNumericSeries(data.abs_g_mag)) {
+      absG = data.abs_g_mag as number[];
+    } else if (isNumericSeries(data.phot_g_mean_mag) && isNumericSeries(data.parallax)) {
+      const gMag = data.phot_g_mean_mag as number[];
+      const plx = data.parallax as number[];
+      absG = gMag.map((g, i) => {
+        const p = plx[i];
+        if (!p || p <= 0) return NaN;
+        return g + 5 * Math.log10(p / 1000) + 5;
+      });
+    }
+    if (!bpRp || !absG) return { data: [], layout: mkLayout("Insufficient data for H-R Diagram", mkAxis(""), mkAxis("")) };
+    // Filter out NaN pairs
+    const valid: { x: number; y: number; teff: number | null }[] = [];
+    const hasTeff = isNumericSeries(data.teff_gspphot);
+    const teffArr = hasTeff ? data.teff_gspphot as number[] : null;
+    for (let i = 0; i < Math.min(bpRp.length, absG.length); i++) {
+      if (Number.isFinite(bpRp[i]) && Number.isFinite(absG[i])) {
+        valid.push({ x: bpRp[i], y: absG[i], teff: teffArr && i < teffArr.length && Number.isFinite(teffArr[i]) ? teffArr[i] : null });
+      }
+    }
+    if (valid.length === 0) return { data: [], layout: mkLayout("No valid data for H-R Diagram", mkAxis(""), mkAxis("")) };
+    const xVals = valid.map((v) => v.x);
+    const yVals = valid.map((v) => v.y);
+    const colorVals = teffArr ? valid.map((v) => v.teff) : null;
+    const hasColorData = colorVals && colorVals.every((v) => v !== null);
+    const traces: Record<string, unknown>[] = [{
+      type: "scattergl", mode: "markers",
+      x: xVals, y: yVals,
+      marker: {
+        size: 3, symbol: "circle",
+        color: hasColorData ? colorVals : COLORS.blue,
+        colorscale: hasColorData ? "Hot" : undefined,
+        reversescale: hasColorData ? true : undefined,
+        showscale: !!hasColorData,
+        colorbar: hasColorData ? mkColorbar("T<sub>eff</sub> (K)") : undefined,
+        line: { width: 0 },
+        opacity: 0.7,
+      },
+      hovertemplate: "<b>B<sub>P</sub>−R<sub>P</sub></b> = %{x:.3f}<br><b>M<sub>G</sub></b> = %{y:.3f}" + (hasColorData ? "<br>T<sub>eff</sub> = %{marker.color:.0f} K" : "") + "<extra></extra>",
+    }];
+    const annotations: Record<string, unknown>[] = [{
+      text: "<i>Main Sequence</i>",
+      showarrow: true,
+      arrowhead: 2,
+      arrowsize: 1,
+      arrowwidth: 1.5,
+      arrowcolor: "rgba(0,0,0,0.3)",
+      ax: 40, ay: -30,
+      xref: "x", yref: "y",
+      x: 1.5, y: 6,
+      font: { family: FONT, size: 12, color: "rgba(0,0,0,0.5)" },
+    }];
+    if (showStats) annotations.push(statsAnnotation(yVals, "M_G"));
+    return {
+      data: traces,
+      layout: mkLayout(`H-R Diagram (<i>N</i> = ${valid.length})`,
+        mkAxis("B<sub>P</sub> − R<sub>P</sub> (mag)"),
+        mkAxis("M<sub>G</sub> (mag)", { autorange: "reversed" }),
+        { hasColorbar: !!hasColorData, annotations }),
+    };
+  }
+
+  if (chartType === "lightcurve") {
+    // Auto-detect time column
+    const timeCandidates = ["hmjd", "mjd", "time", "jd"];
+    const timeCol = timeCandidates.find((c) => isNumericSeries(data[c]));
+    // Auto-detect magnitude/flux column
+    const magFluxCandidates = ["mag", "magnitude", "flux"];
+    const magFluxCol = magFluxCandidates.find((c) => isNumericSeries(data[c]));
+    if (!timeCol || !magFluxCol) return { data: [], layout: mkLayout("Insufficient data for Light Curve", mkAxis(""), mkAxis("")) };
+    const timeArr = data[timeCol] as number[];
+    const magFluxArr = data[magFluxCol] as number[];
+    const isMag = magFluxCol.toLowerCase().includes("mag");
+    // Auto-detect error column
+    const errCandidates = ["magerr", "mag_err", "mag_error", "flux_err"];
+    const errCol = errCandidates.find((c) => isNumericSeries(data[c]));
+    const errArr = errCol ? data[errCol] as number[] : null;
+    // Auto-detect band/filter column
+    const bandCandidates = ["band", "filter", "filtercode"];
+    const bandCol = bandCandidates.find((c) => Array.isArray(data[c]) && (data[c] as unknown[]).length > 0);
+    const bandColors: Record<string, string> = { g: "#2ca02c", r: "#d62728", i: "#ff7f0e", z: "#9467bd", u: "#1f77b4" };
+    const defaultTraceColors = [COLORS.blue, COLORS.red, COLORS.green, COLORS.purple, COLORS.yellow, COLORS.cyan];
+    const traces: Record<string, unknown>[] = [];
+    if (bandCol) {
+      const bandArr = data[bandCol] as string[];
+      const bands = [...new Set(bandArr.map(String))];
+      bands.forEach((band, bi) => {
+        const indices: number[] = [];
+        for (let i = 0; i < Math.min(timeArr.length, magFluxArr.length, bandArr.length); i++) {
+          if (String(bandArr[i]) === band && Number.isFinite(timeArr[i]) && Number.isFinite(magFluxArr[i])) indices.push(i);
+        }
+        if (indices.length === 0) return;
+        const color = bandColors[band.toLowerCase()] || defaultTraceColors[bi % defaultTraceColors.length];
+        traces.push({
+          type: "scatter", mode: "markers+lines",
+          x: indices.map((i) => timeArr[i]),
+          y: indices.map((i) => magFluxArr[i]),
+          name: band,
+          showlegend: true,
+          marker: { size: 4, color, symbol: "circle" },
+          line: { color, width: 1 },
+          error_y: errArr ? {
+            type: "data" as const,
+            array: indices.map((i) => errArr[i] ?? 0),
+            visible: true,
+            color: "rgba(0,0,0,0.3)",
+            thickness: 1,
+            width: 2,
+          } : undefined,
+        });
+      });
+    } else {
+      const n = Math.min(timeArr.length, magFluxArr.length);
+      const validX: number[] = [], validY: number[] = [], validErr: number[] = [];
+      for (let i = 0; i < n; i++) {
+        if (Number.isFinite(timeArr[i]) && Number.isFinite(magFluxArr[i])) {
+          validX.push(timeArr[i]);
+          validY.push(magFluxArr[i]);
+          if (errArr) validErr.push(errArr[i] ?? 0);
+        }
+      }
+      traces.push({
+        type: "scatter", mode: "markers+lines",
+        x: validX, y: validY,
+        marker: { size: 4, color: COLORS.blue, symbol: "circle" },
+        line: { color: COLORS.blue, width: 1 },
+        error_y: validErr.length > 0 ? {
+          type: "data" as const,
+          array: validErr,
+          visible: true,
+          color: "rgba(0,0,0,0.3)",
+          thickness: 1,
+          width: 2,
+        } : undefined,
+      });
+    }
+    const totalPts = traces.reduce((s, t) => s + ((t.x as number[])?.length ?? 0), 0);
+    const yLabel = isMag ? "Magnitude" : "Flux";
+    const annotations: Record<string, unknown>[] = [];
+    if (showStats) {
+      const allY = traces.flatMap((t) => (t.y as number[]) ?? []);
+      annotations.push(statsAnnotation(allY, yLabel));
+    }
+    return {
+      data: traces,
+      layout: mkLayout(`Light Curve (<i>N</i> = ${totalPts})`,
+        mkAxis("Time (MJD)"),
+        mkAxis(yLabel, isMag ? { autorange: "reversed" } : undefined),
+        { showlegend: !!bandCol, annotations, legend: { font: { family: FONT, size: 12 }, bgcolor: "rgba(255,255,255,0.8)", bordercolor: COLORS.grid, borderwidth: 1, x: 0.02, y: 0.98 } }),
+    };
+  }
+
+  if (chartType === "spectrum") {
+    // Auto-detect wavelength column
+    const waveCandidates = ["wavelength", "wave", "lambda"];
+    const waveCol = waveCandidates.find((c) => isNumericSeries(data[c]));
+    // Auto-detect flux column
+    const fluxCandidates = ["flux", "flux_density", "counts"];
+    const fluxCol = fluxCandidates.find((c) => isNumericSeries(data[c]));
+    if (!waveCol || !fluxCol) return { data: [], layout: mkLayout("Insufficient data for Spectrum", mkAxis(""), mkAxis("")) };
+    const waveArr = data[waveCol] as number[];
+    const fluxArr = data[fluxCol] as number[];
+    const n = Math.min(waveArr.length, fluxArr.length);
+    const validX: number[] = [], validY: number[] = [];
+    for (let i = 0; i < n; i++) {
+      if (Number.isFinite(waveArr[i]) && Number.isFinite(fluxArr[i])) {
+        validX.push(waveArr[i]);
+        validY.push(fluxArr[i]);
+      }
+    }
+    if (validX.length === 0) return { data: [], layout: mkLayout("No valid spectrum data", mkAxis(""), mkAxis("")) };
+    const traces: Record<string, unknown>[] = [{
+      type: "scatter", mode: "lines",
+      x: validX, y: validY,
+      line: { color: COLORS.blue, width: 1.2 },
+      hovertemplate: "λ = %{x:.1f} \u00C5<br>Flux = %{y:.4g}<extra></extra>",
+    }];
+    // Spectral reference lines
+    const spectralLines: { name: string; wave: number; color: string }[] = [
+      { name: "Ly\u03B1", wave: 1216, color: "rgba(100,100,200,0.5)" },
+      { name: "Mg II", wave: 2800, color: "rgba(200,100,100,0.5)" },
+      { name: "H\u03B2", wave: 4861, color: "rgba(100,180,100,0.5)" },
+      { name: "[OIII]", wave: 5007, color: "rgba(100,180,100,0.5)" },
+      { name: "H\u03B1", wave: 6563, color: "rgba(200,80,80,0.5)" },
+      { name: "[NII]", wave: 6584, color: "rgba(200,150,80,0.5)" },
+    ];
+    const waveLo = arrMin(validX), waveHi = arrMax(validX);
+    const shapes: Record<string, unknown>[] = [];
+    const annotations: Record<string, unknown>[] = [];
+    const fluxMax = arrMax(validY);
+    for (const sl of spectralLines) {
+      if (sl.wave >= waveLo && sl.wave <= waveHi) {
+        shapes.push({
+          type: "line",
+          x0: sl.wave, x1: sl.wave,
+          y0: 0, y1: 1,
+          xref: "x", yref: "paper",
+          line: { color: sl.color, width: 1.5, dash: "dash" },
+        });
+        annotations.push({
+          text: sl.name,
+          x: sl.wave, y: fluxMax * 0.95,
+          xref: "x", yref: "y",
+          showarrow: false,
+          font: { family: FONT, size: 10, color: "rgba(0,0,0,0.6)" },
+          textangle: -90,
+          xanchor: "right",
+        });
+      }
+    }
+    if (showStats) annotations.push(statsAnnotation(validY, "Flux"));
+    return {
+      data: traces,
+      layout: mkLayout(`Spectrum (<i>N</i> = ${validX.length} pts)`,
+        mkAxis("Wavelength (\u00C5)"),
+        mkAxis("Flux"),
+        { shapes, annotations }),
+    };
+  }
+
   if (chartType === "scatter_custom" && customScatterOpts) {
     const { xCol, yCol, colorCol, flipY, errorYCol, errorXCol } = customScatterOpts;
     const xArr = (data[xCol] || []) as number[];
@@ -479,6 +712,9 @@ const CHART_TYPES: Record<string, string> = {
   ra_dec_redshift: "Sky Position (colored by z)",
   redshift_ra: "Redshift vs RA",
   redshift_dec: "Redshift vs Dec",
+  hr_diagram: "H-R Diagram (Color-Magnitude)",
+  lightcurve: "Light Curve",
+  spectrum: "Spectrum",
   scatter_custom: "Custom Scatter",
 };
 
@@ -507,7 +743,41 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
   const [errorXCol, setErrorXCol] = useState<string | null>(null);
 
   useEffect(() => {
-    if (chartType !== "scatter_custom" || numericColumns.length === 0) return;
+    if (numericColumns.length === 0) return;
+
+    if (chartType === "hr_diagram") {
+      const xCol = numericColumns.includes("bp_rp") ? "bp_rp" : numericColumns.includes("phot_bp_mean_mag") ? "phot_bp_mean_mag" : "";
+      const yCol = numericColumns.includes("abs_g_mag") ? "abs_g_mag" : numericColumns.includes("phot_g_mean_mag") ? "phot_g_mean_mag" : "";
+      if (xCol) setCustomX(xCol);
+      if (yCol) setCustomY(yCol);
+      setFlipY(true);
+      if (numericColumns.includes("teff_gspphot")) setCustomColor("teff_gspphot");
+      return;
+    }
+
+    if (chartType === "lightcurve") {
+      const timeCol = ["hmjd", "mjd", "time", "jd"].find((c) => numericColumns.includes(c));
+      const magFluxCol = ["mag", "magnitude", "flux"].find((c) => numericColumns.includes(c));
+      if (timeCol) setCustomX(timeCol);
+      if (magFluxCol) {
+        setCustomY(magFluxCol);
+        setFlipY(magFluxCol.toLowerCase().includes("mag"));
+      }
+      const errCol = ["magerr", "mag_err", "mag_error", "flux_err"].find((c) => numericColumns.includes(c));
+      if (errCol) setErrorYCol(errCol);
+      return;
+    }
+
+    if (chartType === "spectrum") {
+      const waveCol = ["wavelength", "wave", "lambda"].find((c) => numericColumns.includes(c));
+      const fluxCol = ["flux", "flux_density", "counts"].find((c) => numericColumns.includes(c));
+      if (waveCol) setCustomX(waveCol);
+      if (fluxCol) setCustomY(fluxCol);
+      setFlipY(false);
+      return;
+    }
+
+    if (chartType !== "scatter_custom") return;
 
     const preferredX = numericColumns.includes("bp_rp")
       ? "bp_rp"
@@ -539,10 +809,15 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
     if (!initialData) return CHART_TYPES;
     const z = ((initialData.redshift || []) as unknown[]).filter((v) => v != null);
     const mag = ((initialData.magnitude || []) as unknown[]).filter((v) => v != null);
+    const hasCol = (c: string) => isNumericSeries(initialData[c]);
+    const hasAnyCol = (cols: string[]) => cols.some(hasCol);
     const out: Record<string, string> = {};
     for (const [k, v] of Object.entries(CHART_TYPES)) {
       if ((k === "redshift_histogram" || k === "ra_dec_redshift" || k === "redshift_ra" || k === "redshift_dec") && z.length === 0) continue;
       if (k === "magnitude_histogram" && mag.length === 0) continue;
+      if (k === "hr_diagram" && !(hasCol("bp_rp") || (hasCol("phot_bp_mean_mag") && hasCol("phot_rp_mean_mag")))) continue;
+      if (k === "lightcurve" && !(hasAnyCol(["hmjd", "mjd", "time", "jd"]) && hasAnyCol(["mag", "magnitude", "flux"]))) continue;
+      if (k === "spectrum" && !hasAnyCol(["wavelength", "wave", "lambda"])) continue;
       out[k] = v;
     }
     return out;

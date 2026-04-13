@@ -563,6 +563,8 @@ def suggest_sources(parsed: dict) -> list[str]:
         "allwise": 0.5,
         "panstarrs": 0.5,
         "xmm": 0.5,
+        "nvss": 0.5,
+        "first": 0.5,
     }
 
     obs_type = parsed.get("observation_type", "")
@@ -601,6 +603,14 @@ def suggest_sources(parsed: dict) -> list[str]:
     if obs_type == "X-ray":
         scores["chandra"] += 8.0
         scores["xmm"] += 6.0
+
+    # Boost NVSS and FIRST for radio observations and related object types
+    if obs_type == "radio":
+        scores["nvss"] += 8.0
+        scores["first"] += 8.0
+    if obj_type in ("AGN", "pulsar", "SNR", "supernova remnant", "jet"):
+        scores["nvss"] += 4.0
+        scores["first"] += 4.0
 
     # Boost MAST for UV/optical/IR imaging and HST data
     if obs_type in ("ultraviolet", "imaging", "near-infrared"):

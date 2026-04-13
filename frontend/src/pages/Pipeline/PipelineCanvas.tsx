@@ -26,6 +26,7 @@ import {
   exportRunPDF,
   exportRunVOTable,
   getWorkspace,
+  getNodeResult,
   getNodeTypes,
   getTemplates,
   getTemplateDiff,
@@ -131,6 +132,9 @@ export default function PipelineCanvas() {
   // Node params editor state
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
 
+  // Node result inspection panel
+  const [inspectResult, setInspectResult] = useState<{ nodeId: string; data: Record<string, unknown> } | null>(null);
+
   const selectedCount =
     nodes.filter((n) => n.selected).length +
     edges.filter((e) => e.selected).length;
@@ -161,6 +165,24 @@ export default function PipelineCanvas() {
   const handleNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
     setEditingNodeId(node.id);
   }, []);
+
+  // Single-click: if node is completed and we have a run, show its result
+  const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    const progress = nodeProgress[node.id];
+    if (progress?.status === "completed" && lastRunId) {
+      getNodeResult(lastRunId, node.id)
+        .then((data) => setInspectResult({ nodeId: node.id, data }))
+        .catch(() => {
+          // Fall back to the full run results if the per-node endpoint fails
+          if (runResults && typeof runResults === "object" && node.id in runResults) {
+            setInspectResult({ nodeId: node.id, data: runResults[node.id] as Record<string, unknown> });
+          }
+        });
+    } else {
+      // Not completed — open params editor instead
+      setEditingNodeId(node.id);
+    }
+  }, [nodeProgress, lastRunId, runResults]);
 
   const handleParamsApply = useCallback(
     (nodeId: string, params: Record<string, unknown>) => {
@@ -881,7 +903,7 @@ export default function PipelineCanvas() {
           onInit={setRfInstance}
           onDrop={onDrop}
           onDragOver={onDragOver}
-          onNodeClick={handleNodeDoubleClick}
+          onNodeClick={handleNodeClick}
           onNodeDoubleClick={handleNodeDoubleClick}
           nodeTypes={nodeTypes}
           deleteKeyCode={["Backspace", "Delete"]}
@@ -917,6 +939,18 @@ export default function PipelineCanvas() {
           workspacePaths={workspacePaths}
           onCancel={() => setEditingNodeId(null)}
         />
+      )}
+
+      {inspectResult && (
+        <div className="node-result-panel">
+          <div className="node-result-panel-header">
+            <h4>Node: {inspectResult.nodeId}</h4>
+            <button onClick={() => setInspectResult(null)}>&times;</button>
+          </div>
+          <div className="node-result-panel-body">
+            <pre>{JSON.stringify(inspectResult.data, null, 2)}</pre>
+          </div>
+        </div>
       )}
 
       {showVersionHistory && (

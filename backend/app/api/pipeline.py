@@ -13,7 +13,7 @@ from starlette.requests import Request
 from app.auth import get_current_user, get_optional_user, hash_password
 from app.rate_limit import limiter
 from app.models.database import get_db
-from app.models.schemas import PipelineRun, PipelineTemplateDB, PipelineVersion, User
+from app.models.schemas import PipelineRun, PipelineTemplateDB, PipelineVersion, RunResult, User
 from app.pipeline.engine import execute_dag, execute_pipeline_task, topological_sort
 from app.pipeline.nodes import registry
 from app.pipeline.validate import DAGValidationError, validate_dag
@@ -448,6 +448,55 @@ async def get_run(
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
     }
+
+
+@router.get("/runs/{run_id}/nodes/{node_id}")
+async def get_node_result(
+    run_id: str,
+    node_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get the output of a specific node from a pipeline run."""
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid run ID")
+
+    # Verify the run belongs to the user
+    result = await db.execute(
+        select(PipelineRun).where(
+            PipelineRun.id == rid,
+            PipelineRun.user_id == user.id,
+        )
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Check if results contain the node
+    if run.results and node_id in run.results:
+        return {"node_id": node_id, "result": run.results[node_id]}
+
+    # Also check RunResult table
+    rr = await db.execute(
+        select(RunResult).where(
+            RunResult.run_id == rid,
+            RunResult.node_id == node_id,
+        )
+    )
+    rr_row = rr.scalar_one_or_none()
+    if rr_row:
+        return {
+            "node_id": node_id,
+            "output_path": rr_row.output_path,
+            "logs": rr_row.logs,
+            "input_hash": rr_row.input_hash,
+            "output_checksum": rr_row.output_checksum,
+            "execution_time_ms": rr_row.execution_time_ms,
+        }
+
+    raise HTTPException(status_code=404, detail="Node result not found")
 
 
 # ── Version Management Endpoints ──

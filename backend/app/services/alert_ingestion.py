@@ -1,6 +1,8 @@
 """ZTF transient alert ingestion via the Lasair broker API."""
 
 import asyncio
+import csv
+import io
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -12,6 +14,89 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.schemas import TransientAlert
 
 logger = logging.getLogger(__name__)
+
+
+# ── ZTF IRSA public light curve API ──
+
+_FILTER_MAP = {"zg": "g", "zr": "r", "zi": "i"}
+
+
+async def fetch_ztf_lightcurve(
+    ra: float, dec: float, radius_arcsec: float = 3.0
+) -> dict:
+    """Fetch ZTF public light curves from the IRSA cone search API.
+
+    Parameters
+    ----------
+    ra : float
+        Right ascension in decimal degrees.
+    dec : float
+        Declination in decimal degrees.
+    radius_arcsec : float
+        Search radius in arcseconds (default 3.0).
+
+    Returns
+    -------
+    dict
+        Standardised light curve payload with per-band times/mags/mag_errs,
+        total epoch count, and time span.  On failure the ``error`` key is set
+        and ``bands`` is empty.
+    """
+    url = (
+        f"https://irsa.ipac.caltech.edu/cgi-bin/ZTF/nph_light_curves"
+        f"?FORMAT=CSV&POS=CIRCLE+{ra}+{dec}+{radius_arcsec / 3600}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            text = resp.text.strip()
+
+        if not text:
+            return {"source": "ztf", "ra": ra, "dec": dec, "bands": {}, "n_epochs": 0, "time_span_days": 0.0}
+
+        # Parse CSV robustly using the stdlib csv reader.
+        reader = csv.DictReader(io.StringIO(text))
+
+        # Accumulate per-band data.
+        bands: dict[str, dict[str, list[float]]] = {}
+        all_times: list[float] = []
+
+        for row in reader:
+            try:
+                hmjd = float(row["hmjd"])
+                mag = float(row["mag"])
+                magerr = float(row["magerr"])
+            except (KeyError, ValueError, TypeError):
+                continue
+
+            filtercode = row.get("filtercode", "").strip()
+            band_label = _FILTER_MAP.get(filtercode, filtercode)
+
+            if band_label not in bands:
+                bands[band_label] = {"times": [], "mags": [], "mag_errs": []}
+
+            bands[band_label]["times"].append(hmjd)
+            bands[band_label]["mags"].append(mag)
+            bands[band_label]["mag_errs"].append(magerr)
+            all_times.append(hmjd)
+
+        n_epochs = len(all_times)
+        time_span = (max(all_times) - min(all_times)) if n_epochs > 1 else 0.0
+
+        return {
+            "source": "ztf",
+            "ra": ra,
+            "dec": dec,
+            "bands": bands,
+            "n_epochs": n_epochs,
+            "time_span_days": time_span,
+        }
+
+    except Exception as exc:
+        logger.error("fetch_ztf_lightcurve failed (ra=%.5f, dec=%.5f): %s", ra, dec, exc)
+        return {"source": "ztf", "error": str(exc), "bands": {}}
 
 
 class AlertIngestionService:
