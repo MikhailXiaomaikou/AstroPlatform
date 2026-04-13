@@ -1805,21 +1805,59 @@ export interface AlertStats {
   latest_ingestion: string | null;
 }
 
+async function normalizeAlertApiError(err: unknown, fallback: string): Promise<never> {
+  if (axios.isAxiosError(err)) {
+    if (err.response?.data && typeof err.response.data === "object" && "detail" in err.response.data) {
+      throw new Error(String(err.response.data.detail));
+    }
+    if (err.code === "ECONNABORTED") {
+      throw new Error("Alert request timed out. The transient service may be slow; try again in a moment.");
+    }
+    if (err.message === "Network Error") {
+      let backendReachable = false;
+      try {
+        await api.get("/health", { timeout: 10000 });
+        backendReachable = true;
+      } catch {
+        backendReachable = false;
+      }
+      if (backendReachable) {
+        throw new Error("The backend did not return a valid alerts response. Check the alerts API route and server logs.");
+      }
+      throw new Error("Could not reach the backend server while loading alerts. Check whether the API service is up and the frontend API URL is correct.");
+    }
+    throw new Error(err.message || fallback);
+  }
+  throw err;
+}
+
 export async function getAlerts(params?: { days?: number; classification?: string; limit?: number }): Promise<TransientAlert[]> {
-  const { data } = await api.get<{ count: number; alerts: TransientAlert[] }>("/api/alerts", { params });
-  return data.alerts ?? [];
+  try {
+    const { data } = await api.get<{ count: number; alerts: TransientAlert[] }>("/api/alerts/", { params });
+    return data.alerts ?? [];
+  } catch (err: unknown) {
+    return await normalizeAlertApiError(err, "Failed to fetch alerts");
+  }
 }
 
 export async function getAlertStats(): Promise<AlertStats> {
-  const { data } = await api.get<AlertStats>("/api/alerts/stats");
-  return data;
+  try {
+    const { data } = await api.get<AlertStats>("/api/alerts/stats");
+    return data;
+  } catch (err: unknown) {
+    return await normalizeAlertApiError(err, "Failed to fetch alert stats");
+  }
 }
 
 export async function searchAlertsCone(ra: number, dec: number, radius_arcsec: number): Promise<TransientAlert[]> {
-  const { data } = await api.get<TransientAlert[]>("/api/alerts/cone", {
-    params: { ra, dec, radius_arcsec },
-  });
-  return data;
+  try {
+    const { data } = await api.get<{ alerts?: TransientAlert[] }>("/api/alerts/cone", {
+      params: { ra, dec, radius_arcsec },
+    });
+    return data.alerts ?? [];
+  } catch (err: unknown) {
+    return await normalizeAlertApiError(err, "Failed to search alerts by cone");
+  }
 }
 
 // ── Anomaly Explorer API ──

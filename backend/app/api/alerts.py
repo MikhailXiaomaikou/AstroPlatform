@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 _ingestion_service = AlertIngestionService()
 
 
+@router.get("")
 @router.get("/")
 async def list_alerts(
     source: str | None = Query(None, description="Filter by source: ztf, tns"),
@@ -88,6 +89,7 @@ async def alert_stats(
     }
 
 
+@router.get("/cone")
 @router.get("/search/cone")
 async def cone_search(
     ra: float = Query(..., description="Right ascension in degrees"),

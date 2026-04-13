@@ -173,6 +173,36 @@ describe("Auth helper functions", () => {
     postSpy.mockRestore();
     getSpy.mockRestore();
   });
+
+  it("getAlerts uses the canonical trailing-slash endpoint", async () => {
+    const { default: api, getAlerts } = await import("../api/client");
+
+    const getSpy = vi.spyOn(api, "get").mockResolvedValueOnce({
+      data: { count: 1, alerts: [{ id: "1", source: "ztf", source_id: "ZTF24abc", ra: 1, dec: 2, discovery_date: null, magnitude: null, mag_band: null, classification: null, classification_confidence: null, redshift: null, host_galaxy: null }] },
+    });
+
+    const alerts = await getAlerts({ limit: 5 });
+
+    expect(getSpy).toHaveBeenCalledWith("/api/alerts/", { params: { limit: 5 } });
+    expect(alerts).toHaveLength(1);
+    getSpy.mockRestore();
+  });
+
+  it("getAlerts explains alerts API failures after network errors", async () => {
+    const { default: api, getAlerts } = await import("../api/client");
+
+    const getSpy = vi.spyOn(api, "get")
+      .mockRejectedValueOnce({ isAxiosError: true, message: "Network Error" })
+      .mockResolvedValueOnce({ data: { status: "ok" } });
+
+    await expect(getAlerts()).rejects.toThrow(
+      "The backend did not return a valid alerts response. Check the alerts API route and server logs."
+    );
+
+    expect(getSpy).toHaveBeenNthCalledWith(1, "/api/alerts/", { params: undefined });
+    expect(getSpy).toHaveBeenNthCalledWith(2, "/health", { timeout: 10000 });
+    getSpy.mockRestore();
+  });
 });
 
 describe("API function exports", () => {

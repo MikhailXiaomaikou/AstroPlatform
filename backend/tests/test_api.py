@@ -86,6 +86,15 @@ class TestDataSearchEndpoint:
         assert isinstance(resp.json(), list)
 
 
+class TestAlertsEndpoint:
+    async def test_alerts_list_accepts_no_trailing_slash(self, app_client):
+        resp = await app_client.get("/api/alerts")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "alerts" in body
+        assert "count" in body
+
+
 class TestPipelineEndpoints:
     async def test_list_node_types(self, app_client):
         resp = await app_client.get("/api/pipeline/nodes/types")
