@@ -9,6 +9,7 @@ const PROVIDERS: Record<string, ProviderMeta> = {
   deepseek: { name: "DeepSeek", prefix: "sk-" },
   custom: { name: "Custom / Other", prefix: "" },
 };
+const CHAT_PROVIDERS = ["anthropic", "openai", "deepseek"] as const;
 
 function getStoredKeys(): Record<string, string> {
   try {
@@ -22,16 +23,32 @@ function saveStoredKeys(keys: Record<string, string>) {
   localStorage.setItem("astro_api_keys", JSON.stringify(keys));
 }
 
+function getStoredPreferredProvider(): string {
+  try {
+    return localStorage.getItem("astro_ai_provider") || "anthropic";
+  } catch {
+    return "anthropic";
+  }
+}
+
+function saveStoredPreferredProvider(provider: string) {
+  localStorage.setItem("astro_ai_provider", provider);
+}
+
 export default function SettingsPage() {
   const [keys, setKeys] = useState<Record<string, string>>(getStoredKeys);
   const [selectedProvider, setSelectedProvider] = useState("anthropic");
+  const [preferredProvider, setPreferredProvider] = useState(getStoredPreferredProvider);
   const [keyInput, setKeyInput] = useState("");
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
-    // Also try to save to server if logged in
     saveStoredKeys(keys);
   }, [keys]);
+
+  useEffect(() => {
+    saveStoredPreferredProvider(preferredProvider);
+  }, [preferredProvider]);
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -39,6 +56,9 @@ export default function SettingsPage() {
     if (!key) return;
     const next = { ...keys, [selectedProvider]: key };
     setKeys(next);
+    if (CHAT_PROVIDERS.includes(selectedProvider as typeof CHAT_PROVIDERS[number])) {
+      setPreferredProvider(selectedProvider);
+    }
     setKeyInput("");
     setMessage({ type: "ok", text: `${PROVIDERS[selectedProvider]?.name || selectedProvider} key saved.` });
   }
@@ -47,6 +67,10 @@ export default function SettingsPage() {
     const next = { ...keys };
     delete next[provider];
     setKeys(next);
+    if (preferredProvider === provider) {
+      const fallback = CHAT_PROVIDERS.find((candidate) => Boolean(next[candidate])) || "anthropic";
+      setPreferredProvider(fallback);
+    }
     setMessage({ type: "ok", text: `${PROVIDERS[provider]?.name || provider} key removed.` });
   }
 
@@ -64,9 +88,26 @@ export default function SettingsPage() {
       <section className="settings-section">
         <h2>AI API Keys</h2>
         <p className="settings-desc">
-          Configure API keys for AI providers. The AI assistant uses Anthropic by default.
-          Keys are stored in your browser locally.
+          Configure API keys for AI providers. The AI assistant can route across Anthropic, OpenAI,
+          and DeepSeek based on your preferred provider and available keys. Keys are stored in your browser locally.
         </p>
+
+        <div className="settings-key-form" style={{ marginBottom: 12 }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <span>Preferred AI provider for chat</span>
+            <select
+              value={preferredProvider}
+              onChange={(e) => setPreferredProvider(e.target.value)}
+              className="settings-select"
+            >
+              {CHAT_PROVIDERS.map((provider) => (
+                <option key={provider} value={provider}>
+                  {PROVIDERS[provider]?.name || provider}{keys[provider] ? "" : " (no key saved)"}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
         {configuredKeys.length > 0 && (
           <div className="settings-keys-list">

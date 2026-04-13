@@ -373,7 +373,7 @@ def _normalize_messages(messages: list[ChatMessage]) -> list[dict]:
 def _safe_context(context: dict | None) -> dict:
     if not context:
         return {}
-    return {key: value for key, value in context.items() if key not in {"api_key", "api_keys"}}
+    return {key: value for key, value in context.items() if key not in {"api_key", "api_keys", "api_provider"}}
 
 
 def _provider_api_keys(context: dict | None, user: User | None) -> dict[str, str]:
@@ -382,12 +382,35 @@ def _provider_api_keys(context: dict | None, user: User | None) -> dict[str, str
         keys.update({str(k): str(v) for k, v in user.api_keys.items() if v})
     if user and user.anthropic_api_key and "anthropic" not in keys:
         keys["anthropic"] = user.anthropic_api_key
+    context_api_keys = (context or {}).get("api_keys")
+    if isinstance(context_api_keys, dict):
+        keys.update({str(k): str(v) for k, v in context_api_keys.items() if v})
+
     context_key = str((context or {}).get("api_key") or "").strip()
+    context_provider = str((context or {}).get("api_provider") or "").strip().lower()
     if context_key:
-        keys["anthropic"] = context_key
+        if context_provider in {"anthropic", "openai", "deepseek", "local"}:
+            keys[context_provider] = context_key
+        elif context_key.startswith("sk-ant-"):
+            keys["anthropic"] = context_key
+        else:
+            # Legacy fallback: the generic api_key field was historically used
+            # for the primary hosted backend. Treat untyped keys as OpenAI-style.
+            keys.setdefault("openai", context_key)
     if ANTHROPIC_API_KEY and "anthropic" not in keys:
         keys["anthropic"] = ANTHROPIC_API_KEY
     return keys
+
+
+def _preferred_backend(context: dict | None) -> str | None:
+    provider = str((context or {}).get("api_provider") or "").strip().lower()
+    provider_to_backend = {
+        "anthropic": "claude",
+        "openai": "openai",
+        "deepseek": "deepseek",
+        "local": "local",
+    }
+    return provider_to_backend.get(provider)
 
 
 def _filter_tools(tool_names: list[str] | None, tools: list[dict]) -> list[dict]:
@@ -488,6 +511,7 @@ async def chat_message_stream(
     async def generate():
         # Reuse the same logic but yield intermediate results
         provider_api_keys = _provider_api_keys(req.context, user)
+        preferred_backend = _preferred_backend(req.context)
 
         claude_messages: list[dict] = _normalize_messages(req.messages)
         runtime = await _build_runtime(req, user, db)
@@ -509,6 +533,7 @@ async def chat_message_stream(
                 messages=claude_messages,
                 provider_api_keys=provider_api_keys,
                 python_session_id=python_session_id,
+                preferred_backend=preferred_backend,
             )
             if response["reply"]:
                 yield f"data: {json.dumps({'type': 'text', 'content': response['reply']})}\n\n"
@@ -624,6 +649,7 @@ async def _llm_messages_create(
     tools: list[dict],
     provider_api_keys: dict[str, str],
     agent_name: str = "orchestrator",
+    preferred_backend: str | None = None,
 ):
     """Route one model turn through the inference router."""
     return await inference_router.route(
@@ -632,6 +658,7 @@ async def _llm_messages_create(
         system=system,
         tools=tools,
         provider_api_keys=provider_api_keys,
+        preferred_backend=preferred_backend,
         max_tokens=4096,
         temperature=0.0,
         backend_timeout=300.0,
@@ -668,6 +695,7 @@ async def _run_agent_loop(
     provider_api_keys: dict[str, str],
     agent_name: str,
     python_session_id: str,
+    preferred_backend: str | None = None,
 ) -> dict:
     working_messages = deepcopy(messages)
     all_tool_results: list[dict] = []
@@ -681,6 +709,7 @@ async def _run_agent_loop(
             tools=tools,
             provider_api_keys=provider_api_keys,
             agent_name=agent_name,
+            preferred_backend=preferred_backend,
         )
 
         text = str(response.get("content", "") or "")
@@ -770,6 +799,7 @@ async def _run_orchestrated_chat(
     messages: list[dict],
     provider_api_keys: dict[str, str],
     python_session_id: str,
+    preferred_backend: str | None = None,
 ) -> dict:
     agent_names = list(runtime.get("agent_names") or [])
     if not agent_names:
@@ -783,6 +813,7 @@ async def _run_orchestrated_chat(
             provider_api_keys=provider_api_keys,
             agent_name=agent_names[0],
             python_session_id=python_session_id,
+            preferred_backend=preferred_backend,
         )
         return {"reply": single["reply"], "actions": single["actions"]}
 
@@ -803,6 +834,7 @@ async def _run_orchestrated_chat(
             provider_api_keys=provider_api_keys,
             agent_name=agent_name,
             python_session_id=python_session_id,
+            preferred_backend=preferred_backend,
         )
         agent_results.append(
             {
@@ -840,6 +872,7 @@ async def chat_message(
     Falls back to single-turn with <actions> tags if tool_use is unavailable.
     """
     provider_api_keys = _provider_api_keys(req.context, user)
+    preferred_backend = _preferred_backend(req.context)
 
     claude_messages: list[dict] = _normalize_messages(req.messages)
     runtime = await _build_runtime(req, user, db)
@@ -853,6 +886,7 @@ async def chat_message(
             messages=claude_messages,
             provider_api_keys=provider_api_keys,
             python_session_id=python_session_id,
+            preferred_backend=preferred_backend,
         )
         return ChatResponse(reply=response["reply"], actions=response["actions"])
 

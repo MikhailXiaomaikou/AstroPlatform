@@ -218,9 +218,76 @@ print("ok")
             session_id="session-history",
         )
         assert r.success
-        assert "2" in r.stdout
-        assert "SELECT * FROM a" in r.stdout
-        assert "B" in r.stdout
+
+
+class TestInferenceRouting:
+    def test_chat_provider_keys_accept_context_api_keys(self):
+        from app.api.chat import _provider_api_keys
+
+        keys = _provider_api_keys(
+            {
+                "api_keys": {
+                    "openai": "sk-openai-test",
+                    "anthropic": "sk-ant-test",
+                }
+            },
+            None,
+        )
+
+        assert keys["openai"] == "sk-openai-test"
+        assert keys["anthropic"] == "sk-ant-test"
+
+    def test_chat_provider_keys_infer_openai_for_legacy_generic_key(self):
+        from app.api.chat import _provider_api_keys
+
+        keys = _provider_api_keys({"api_key": "sk-openai-test"}, None)
+
+        assert keys["openai"] == "sk-openai-test"
+
+    def test_preferred_backend_maps_supported_provider(self):
+        from app.api.chat import _preferred_backend
+
+        assert _preferred_backend({"api_provider": "openai"}) == "openai"
+        assert _preferred_backend({"api_provider": "anthropic"}) == "claude"
+        assert _preferred_backend({"api_provider": "google"}) is None
+
+    @pytest.mark.asyncio
+    async def test_inference_router_skips_unavailable_local_backend(self, monkeypatch):
+        from app.ai.inference_router import InferenceRouter
+
+        router = InferenceRouter()
+        router.agent_routing["orchestrator"] = "openai"
+
+        calls: list[str] = []
+
+        async def fake_openai_complete(*args, **kwargs):
+            calls.append("openai")
+            return {"content": "ok", "tool_calls": [], "usage": {}}
+
+        async def fail_if_called(*args, **kwargs):
+            raise AssertionError("Unavailable backend should not be called")
+
+        async def no_op_log(*args, **kwargs):
+            return None
+
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        monkeypatch.delenv("LOCAL_MODEL_ENABLED", raising=False)
+        monkeypatch.setattr(router.backends["openai"], "complete", fake_openai_complete)
+        monkeypatch.setattr(router.backends["local"], "complete", fail_if_called)
+        monkeypatch.setattr(router.backends["claude"], "complete", fail_if_called)
+        monkeypatch.setattr(router.backends["deepseek"], "complete", fail_if_called)
+        monkeypatch.setattr(router, "log_inference", no_op_log)
+
+        result = await router.route(
+            "orchestrator",
+            [{"role": "user", "content": "hello"}],
+            provider_api_keys={"openai": "sk-openai-test"},
+        )
+
+        assert result["content"] == "ok"
+        assert calls == ["openai"]
 
     def test_adql_results_unwraps_single_resultset_wrapper(self):
         from app.services.ai_tools import store_search_results

@@ -1013,12 +1013,12 @@ function ActionResult({ result }: { result: Record<string, unknown> }) {
 
 function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
   const [keyInput, setKeyInput] = useState("");
-  const [provider, setProvider] = useState<"anthropic" | "openai" | "google">("anthropic");
+  const [provider, setProvider] = useState<"anthropic" | "openai" | "deepseek">("anthropic");
 
   const providerInfo: Record<string, { label: string; url: string; placeholder: string; rec?: boolean }> = {
     anthropic: { label: "Anthropic (Claude)", url: "https://console.anthropic.com/settings/keys", placeholder: "sk-ant-...", rec: true },
     openai:    { label: "OpenAI (GPT)",       url: "https://platform.openai.com/api-keys",        placeholder: "sk-..." },
-    google:    { label: "Google (Gemini)",     url: "https://aistudio.google.com/apikey",           placeholder: "AIza..." },
+    deepseek:  { label: "DeepSeek",            url: "https://platform.deepseek.com/api_keys",      placeholder: "sk-..." },
   };
 
   const info = providerInfo[provider];
@@ -1034,6 +1034,7 @@ function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
     } catch {
       localStorage.setItem("astro_api_keys", JSON.stringify({ [provider]: key }));
     }
+    localStorage.setItem("astro_ai_provider", provider);
     onSaved();
   }
 
@@ -1047,7 +1048,7 @@ function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
             key={key}
             type="button"
             className={`btn-small ${provider === key ? "btn-primary" : "btn-secondary"}`}
-            onClick={() => { setProvider(key as "anthropic" | "openai" | "google"); setKeyInput(""); }}
+            onClick={() => { setProvider(key as "anthropic" | "openai" | "deepseek"); setKeyInput(""); }}
           >
             {p.label}{p.rec ? " ★" : ""}
           </button>

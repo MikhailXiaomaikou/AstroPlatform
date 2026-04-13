@@ -278,14 +278,31 @@ class InferenceRouter:
         }
         self.fallback_chain = [name for name in ["claude", "openai", "deepseek", "local"] if name in self.backends]
 
-    async def route(self, agent_name: str, messages: list[dict], *, system: str | None = None, tools: list[dict] | None = None, api_key: str | None = None, provider_api_keys: dict[str, str] | None = None, backend_timeout: float = 60.0, **kwargs) -> dict:
-        primary = self.agent_routing.get(agent_name, "claude")
+    def _backend_is_available(self, backend_name: str, provider_api_keys: dict[str, str] | None) -> bool:
+        keys = provider_api_keys or {}
+        if backend_name == "claude":
+            return bool(keys.get("anthropic") or os.getenv("ANTHROPIC_API_KEY", ""))
+        if backend_name == "openai":
+            return bool(keys.get("openai") or os.getenv("OPENAI_API_KEY", ""))
+        if backend_name == "deepseek":
+            return bool(keys.get("deepseek") or os.getenv("DEEPSEEK_API_KEY", ""))
+        if backend_name == "local":
+            return bool(os.getenv("LOCAL_MODEL_ENABLED", ""))
+        return backend_name in self.backends
+
+    async def route(self, agent_name: str, messages: list[dict], *, system: str | None = None, tools: list[dict] | None = None, api_key: str | None = None, provider_api_keys: dict[str, str] | None = None, backend_timeout: float = 60.0, preferred_backend: str | None = None, **kwargs) -> dict:
+        primary = preferred_backend or self.agent_routing.get(agent_name, "claude")
         attempted = [primary] + [item for item in self.fallback_chain if item != primary]
-        last_error = None
+        attempted_errors: list[tuple[str, Exception]] = []
+        attempted_configured = 0
         for backend_name in attempted:
             backend = self.backends.get(backend_name)
             if backend is None:
                 continue
+            if not self._backend_is_available(backend_name, provider_api_keys):
+                logger.info("Skipping unavailable inference backend %s for %s", backend_name, agent_name)
+                continue
+            attempted_configured += 1
             started = time.perf_counter()
             try:
                 result = await asyncio.wait_for(
@@ -297,11 +314,19 @@ class InferenceRouter:
                 return result
             except Exception as exc:
                 latency_ms = int((time.perf_counter() - started) * 1000)
-                last_error = exc
+                attempted_errors.append((backend_name, exc))
                 await self.log_inference(agent_name, backend_name, {}, success=False, latency_ms=latency_ms, error=str(exc))
                 logger.warning("Inference backend %s failed for %s: %s", backend_name, agent_name, exc)
                 continue
-        raise InferenceError(f"All backends failed: {last_error}")
+        if attempted_configured == 0:
+            raise InferenceError(
+                "No configured AI backends are available. Add an Anthropic, OpenAI, or DeepSeek API key in Settings, "
+                "or enable LOCAL_MODEL_ENABLED for a local model backend."
+            )
+        if attempted_errors:
+            details = "; ".join(f"{backend}: {exc}" for backend, exc in attempted_errors[:3])
+            raise InferenceError(f"All configured AI backends failed: {details}")
+        raise InferenceError("No inference backends could be used for this request.")
 
     async def log_inference(self, agent: str, backend: str, usage: dict, success: bool, latency_ms: int, error: str | None = None):
         prices = {

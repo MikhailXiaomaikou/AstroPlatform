@@ -1533,18 +1533,66 @@ export function getStoredApiKey(provider = "anthropic"): string | null {
   }
 }
 
+export function getStoredAiProvider(): string | null {
+  try {
+    const provider = localStorage.getItem("astro_ai_provider");
+    return provider && provider.trim() ? provider.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getStoredApiKeys(): Record<string, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem("astro_api_keys") || "{}");
+    if (!raw || typeof raw !== "object") {
+      return {};
+    }
+    const keys: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof key === "string" && typeof value === "string" && value.trim().length > 0) {
+        keys[key] = value;
+      }
+    }
+    return keys;
+  } catch {
+    return {};
+  }
+}
+
+export function getPreferredAiProvider(): string | null {
+  const storedProvider = getStoredAiProvider();
+  const keys = getStoredApiKeys();
+  if (storedProvider === "local") {
+    return "local";
+  }
+  if (storedProvider && keys[storedProvider]) {
+    return storedProvider;
+  }
+  for (const provider of ["anthropic", "openai", "deepseek"]) {
+    if (keys[provider]) {
+      return provider;
+    }
+  }
+  return null;
+}
+
 export async function sendChatMessage(
   messages: ChatMessage[],
   context?: Record<string, unknown>
 ): Promise<ChatResponse> {
-  // Pass API key from localStorage if available
-  const apiKey = getStoredApiKey("anthropic");
+  const apiKeys = getStoredApiKeys();
+  const apiProvider = getPreferredAiProvider();
   try {
     const { data } = await api.post<ChatResponse>(
       "/api/chat/message",
       {
         messages,
-        context: { ...context, ...(apiKey ? { api_key: apiKey } : {}) },
+        context: {
+          ...context,
+          ...(Object.keys(apiKeys).length ? { api_keys: apiKeys } : {}),
+          ...(apiProvider ? { api_provider: apiProvider } : {}),
+        },
       },
       {
         timeout: 420000,
@@ -1568,7 +1616,7 @@ export async function sendChatMessage(
           backendReachable = false;
         }
         if (backendReachable) {
-          throw new Error("The backend lost its connection to the AI provider before returning a response. Check the server logs and Anthropic connectivity.");
+          throw new Error("The backend lost its connection to the AI provider before returning a response. Check the server logs and provider connectivity.");
         }
         throw new Error("Could not reach the backend server. Check whether the API service is up and the frontend API URL is correct.");
       }

@@ -174,6 +174,40 @@ describe("Auth helper functions", () => {
     getSpy.mockRestore();
   });
 
+  it("sendChatMessage forwards all stored provider API keys", async () => {
+    store["astro_api_keys"] = JSON.stringify({
+      openai: "sk-openai-test",
+      anthropic: "sk-ant-test",
+    });
+    store["astro_ai_provider"] = "openai";
+
+    const { default: api, sendChatMessage } = await import("../api/client");
+
+    const postSpy = vi.spyOn(api, "post").mockResolvedValueOnce({
+      data: { reply: "ok", actions: [] },
+    });
+
+    await sendChatMessage([{ role: "user", content: "hello" }], { page: "chat" });
+
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/chat/message",
+      {
+        messages: [{ role: "user", content: "hello" }],
+        context: {
+          page: "chat",
+          api_keys: {
+            openai: "sk-openai-test",
+            anthropic: "sk-ant-test",
+          },
+          api_provider: "openai",
+        },
+      },
+      { timeout: 420000 }
+    );
+
+    postSpy.mockRestore();
+  });
+
   it("getAlerts uses the canonical trailing-slash endpoint", async () => {
     const { default: api, getAlerts } = await import("../api/client");
 
