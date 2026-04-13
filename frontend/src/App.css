@@ -3955,6 +3955,13 @@
   text-decoration: underline;
 }
 
+.chat-apikey-provider-select {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
 .chat-apikey-form {
   display: flex;
   gap: 0.5rem;

@@ -1013,6 +1013,15 @@ function ActionResult({ result }: { result: Record<string, unknown> }) {
 
 function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
   const [keyInput, setKeyInput] = useState("");
+  const [provider, setProvider] = useState<"anthropic" | "openai" | "google">("anthropic");
+
+  const providerInfo: Record<string, { label: string; url: string; placeholder: string; rec?: boolean }> = {
+    anthropic: { label: "Anthropic (Claude)", url: "https://console.anthropic.com/settings/keys", placeholder: "sk-ant-...", rec: true },
+    openai:    { label: "OpenAI (GPT)",       url: "https://platform.openai.com/api-keys",        placeholder: "sk-..." },
+    google:    { label: "Google (Gemini)",     url: "https://aistudio.google.com/apikey",           placeholder: "AIza..." },
+  };
+
+  const info = providerInfo[provider];
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -1020,10 +1029,10 @@ function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
     if (!key) return;
     try {
       const keys = JSON.parse(localStorage.getItem("astro_api_keys") || "{}");
-      keys.anthropic = key;
+      keys[provider] = key;
       localStorage.setItem("astro_api_keys", JSON.stringify(keys));
     } catch {
-      localStorage.setItem("astro_api_keys", JSON.stringify({ anthropic: key }));
+      localStorage.setItem("astro_api_keys", JSON.stringify({ [provider]: key }));
     }
     onSaved();
   }
@@ -1031,20 +1040,31 @@ function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
   return (
     <div className="chat-apikey-prompt">
       <h3>Configure API Key</h3>
-      <p>To use the AI assistant, enter your Anthropic API key.</p>
+      <p>To use the AI assistant, enter an API key from any supported provider.</p>
+      <div className="chat-apikey-provider-select">
+        {Object.entries(providerInfo).map(([key, p]) => (
+          <button
+            key={key}
+            type="button"
+            className={`btn-small ${provider === key ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => { setProvider(key as "anthropic" | "openai" | "google"); setKeyInput(""); }}
+          >
+            {p.label}{p.rec ? " ★" : ""}
+          </button>
+        ))}
+      </div>
       <p className="chat-apikey-hint">
-        Get one at{" "}
-        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">
-          console.anthropic.com
+        Get a key at{" "}
+        <a href={info.url} target="_blank" rel="noopener noreferrer">
+          {new URL(info.url).hostname}
         </a>
-        {" "}(new accounts get $5 free credit)
       </p>
       <form className="chat-apikey-form" onSubmit={handleSave}>
         <input
           type="text"
           value={keyInput}
           onChange={(e) => setKeyInput(e.target.value)}
-          placeholder="sk-ant-..."
+          placeholder={info.placeholder}
           className="chat-apikey-input"
           autoComplete="off"
         />
