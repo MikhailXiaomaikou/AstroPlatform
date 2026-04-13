@@ -385,6 +385,7 @@ async def adql_query(req: ADQLRequest):
             columns,
             data,
             len(table),
+            limit=len(table),
         )
         result_set = build_adql_result_set(
             service=req.service,

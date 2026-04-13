@@ -340,8 +340,8 @@ function QuickStartTab({ lang }: { lang: Lang }) {
         <FeatureCard
           title="ADQL"
           desc={tx(
-            "Run TAP queries, export CSV or Notebook, or send queries and results to the AI Assistant. Access results in Python via get_adql_results().",
-            "运行 TAP 查询，导出 CSV 或 Notebook，或将查询和结果发送到 AI 助手。通过 get_adql_results() 在 Python 中访问结果。",
+            "Run TAP queries, export CSV or Notebook, or send queries and results to the AI Assistant. In Python, use get_adql_results() for the latest rows or get_adql_result_sets() for multi-query history.",
+            "运行 TAP 查询，导出 CSV 或 Notebook，或将查询和结果发送到 AI 助手。在 Python 中，最新结果用 get_adql_results()，多次查询历史用 get_adql_result_sets()。",
             lang,
           )}
         />

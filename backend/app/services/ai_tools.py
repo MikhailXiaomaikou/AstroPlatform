@@ -24,8 +24,8 @@ MAX_ADQL_RESULT_HISTORY = 8
 def store_search_results(key: str, results: Any) -> None:
     """Cache search results so AI can access full data later."""
     _search_result_cache[key] = results
-    # Keep only last 20 sessions
-    if len(_search_result_cache) > 20:
+    # Keep only the latest cache entries; multiple keys are used per runtime session.
+    if len(_search_result_cache) > 200:
         oldest = list(_search_result_cache.keys())[0]
         del _search_result_cache[oldest]
 

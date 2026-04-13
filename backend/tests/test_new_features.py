@@ -186,6 +186,64 @@ print("ok")
         assert r.success
         assert "session" in r.stdout
 
+    def test_adql_result_sets_accessor_returns_history(self):
+        from app.services.ai_tools import replace_adql_result_sets
+        from app.services.code_executor import execute_python
+
+        replace_adql_result_sets(
+            "session-history",
+            [
+                {
+                    "service": "gaia",
+                    "query": "SELECT * FROM a",
+                    "row_count": 2,
+                    "columns": ["cluster", "bp_rp"],
+                    "rows": [{"cluster": "A", "bp_rp": 0.1}, {"cluster": "A", "bp_rp": 0.2}],
+                },
+                {
+                    "service": "gaia",
+                    "query": "SELECT * FROM b",
+                    "row_count": 1,
+                    "columns": ["cluster", "bp_rp"],
+                    "rows": [{"cluster": "B", "bp_rp": 0.3}],
+                },
+            ],
+        )
+
+        r = execute_python(
+            "sets = get_adql_result_sets()\n"
+            "print(len(sets))\n"
+            "print(sets[0]['query'])\n"
+            "print(get_adql_results()[0]['cluster'])",
+            session_id="session-history",
+        )
+        assert r.success
+        assert "2" in r.stdout
+        assert "SELECT * FROM a" in r.stdout
+        assert "B" in r.stdout
+
+    def test_build_adql_result_set_derives_color_and_absolute_magnitude(self):
+        from app.services.ai_tools import build_adql_result_set
+
+        result_set = build_adql_result_set(
+            service="gaia",
+            query="SELECT phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, parallax FROM gaiadr3.gaia_source",
+            columns=["phot_g_mean_mag", "phot_bp_mean_mag", "phot_rp_mean_mag", "parallax"],
+            data={
+                "phot_g_mean_mag": [10.0],
+                "phot_bp_mean_mag": [11.5],
+                "phot_rp_mean_mag": [10.0],
+                "parallax": [10.0],
+            },
+            row_count=1,
+        )
+
+        row = result_set["rows"][0]
+        assert row["bp_rp"] == 1.5
+        assert "abs_g_mag" in row
+        assert "bp_rp" in result_set["columns"]
+        assert "abs_g_mag" in result_set["columns"]
+
     def test_complex_objects_persist_between_runs(self):
         from app.services.code_executor import clear_session_vars, execute_python
 

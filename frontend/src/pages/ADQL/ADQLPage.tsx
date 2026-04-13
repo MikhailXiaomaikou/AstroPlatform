@@ -359,12 +359,10 @@ export default function ADQLPage() {
               Jupyter Notebook
             </button>
             <button className="btn-secondary" onClick={() => {
-              const resultSets = readStoredAdqlResultSets();
               localStorage.setItem(
                 "astro_chat_draft",
                 `Use get_adql_result_sets() to inspect the ADQL result history already loaded from the ADQL page. The latest result is from ${svc.toUpperCase()}. If you only need the newest rows, use get_adql_results(). Explain the schema, summarize the sample, and then continue with Python analysis defensively (check keys, empty arrays, and row counts before plotting).\n\nLatest query:\n${query}`
               );
-              localStorage.setItem("astro_last_adql_result_set_count", String(resultSets.length));
               navigate("/chat");
             }}>
               Send to AI

@@ -547,6 +547,7 @@ def _prime_adql_context_cache(context: dict | None, python_session_id: str) -> N
     if isinstance(last_adql, dict):
         service = str(last_adql.get("service") or "gaia")
         query = str(last_adql.get("query") or "")
+        row_count = int(last_adql.get("row_count") or len(last_adql_rows))
         columns = [
             str(col)
             for col in (last_adql.get("columns") or [])
@@ -555,6 +556,7 @@ def _prime_adql_context_cache(context: dict | None, python_session_id: str) -> N
     else:
         service = "gaia"
         query = ""
+        row_count = len(last_adql_rows)
         columns = []
 
     if not columns and isinstance(last_adql_rows[0], dict):
@@ -569,7 +571,7 @@ def _prime_adql_context_cache(context: dict | None, python_session_id: str) -> N
         query=query,
         columns=columns,
         data=data,
-        row_count=len(last_adql_rows),
+        row_count=row_count,
         limit=len(last_adql_rows),
     )
     store_adql_result_set(python_session_id, result_set)
