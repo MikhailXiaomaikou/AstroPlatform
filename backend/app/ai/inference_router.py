@@ -360,12 +360,18 @@ class InferenceRouter:
                     timeout=backend_timeout,
                 )
                 latency_ms = int((time.perf_counter() - started) * 1000)
-                await self.log_inference(agent_name, backend_name, result.get("usage", {}), success=True, latency_ms=latency_ms)
+                try:
+                    await self.log_inference(agent_name, backend_name, result.get("usage", {}), success=True, latency_ms=latency_ms)
+                except Exception:
+                    logger.debug("Failed to log inference (non-fatal)")
                 return result
             except Exception as exc:
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 attempted_errors.append((backend_name, exc))
-                await self.log_inference(agent_name, backend_name, {}, success=False, latency_ms=latency_ms, error=str(exc))
+                try:
+                    await self.log_inference(agent_name, backend_name, {}, success=False, latency_ms=latency_ms, error=str(exc))
+                except Exception:
+                    logger.debug("Failed to log inference error (non-fatal)")
                 logger.warning("Inference backend %s failed for %s: %s", backend_name, agent_name, exc)
                 continue
         if attempted_configured == 0:
