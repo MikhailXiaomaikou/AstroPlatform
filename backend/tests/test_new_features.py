@@ -241,7 +241,7 @@ class TestAITools:
 
     def test_tool_count(self):
         from app.services.ai_tools import TOOLS
-        assert len(TOOLS) == 21
+        assert len(TOOLS) == 23
 
     def test_tool_names(self):
         from app.services.ai_tools import TOOLS
@@ -250,6 +250,8 @@ class TestAITools:
         assert "run_python" in names
         assert "run_pipeline" in names
         assert "read_arxiv_paper" in names
+        assert "validate_analysis" in names
+        assert "generate_paper_draft" in names
 
     @pytest.mark.asyncio
     async def test_generate_pipeline(self):
@@ -306,6 +308,57 @@ class TestExportHelpers:
         notebook = json.loads(body)
         code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
         assert any("print(123)" in "".join(cell["source"]) for cell in code_cells)
+
+
+class TestPaperDraftHelpers:
+    @pytest.mark.asyncio
+    async def test_generate_paper_draft_and_validation(self, db_session):
+        import uuid
+
+        from app.auth import hash_password
+        from app.models.schemas import ChatSession, User
+        from app.services.analysis_validator import validate_analysis
+        from app.services.paper_generator import generate_paper_draft
+
+        user = User(
+            id=uuid.uuid4(),
+            username="paperuser",
+            email="paperuser@example.com",
+            password_hash=hash_password("securepassword123"),
+        )
+        db_session.add(user)
+        await db_session.commit()
+
+        session = ChatSession(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            title="Paper Session",
+            messages=[
+                {"role": "user", "content": "Analyze M31."},
+                {
+                    "role": "assistant",
+                    "content": "Here is the result.",
+                    "actions": [
+                        {
+                            "action": "search",
+                            "query": "M31",
+                            "sources": ["simbad"],
+                            "tool_result": [{"name": "M31", "ra": 10.684, "dec": 41.269}],
+                        }
+                    ],
+                },
+            ],
+        )
+        db_session.add(session)
+        await db_session.commit()
+
+        validation = await validate_analysis(str(session.id), db_session)
+        assert validation["overall_status"] in {"PASS", "WARN", "FAIL"}
+
+        generated = await generate_paper_draft(str(session.id), "aastex", db_session)
+        assert "paper_json" in generated
+        assert "\\documentclass" in generated["latex_source"]
+        assert "Reproducibility Appendix" in generated["latex_source"]
 
 
 class TestPipelineBatch:

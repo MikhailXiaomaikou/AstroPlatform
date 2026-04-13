@@ -22,6 +22,7 @@ from app.api.integration import router as integration_router
 from app.api.isochrones import router as isochrones_router
 from app.api.arxiv import router as arxiv_router
 from app.api.pipeline import router as pipeline_router
+from app.api.paper import router as paper_router
 from app.api.settings import router as settings_router
 from app.api.scheduler import router as scheduler_router
 from app.api.team import router as team_router
@@ -229,6 +230,7 @@ app.include_router(health_router)
 app.include_router(integration_router)
 app.include_router(isochrones_router)
 app.include_router(pipeline_router)
+app.include_router(paper_router)
 app.include_router(scheduler_router)
 app.include_router(settings_router)
 app.include_router(team_router)

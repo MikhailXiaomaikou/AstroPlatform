@@ -16,10 +16,15 @@ import {
   exportChatNotebook,
   exportChatLatex,
   exportChatBibTeX,
+  generatePaperDraft,
   type ChatMessage,
   type ChatAction,
   type ADSReference,
   type ChatSessionSummary,
+  type AnalysisValidationResult,
+  type PaperDraftResponse,
+  updatePaperDraft,
+  validatePaperSession,
 } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
 import { useI18n } from "../../i18n";
@@ -1129,10 +1134,93 @@ interface LocalChatSession {
 }
 
 type ExportAction = "markdown" | "notebook" | "latex" | "bibtex";
+type JournalFormat = "aastex" | "mnras" | "aa";
+type PaperTab =
+  | "abstract"
+  | "introduction"
+  | "data_sources"
+  | "analysis_methods"
+  | "results"
+  | "discussion"
+  | "conclusions"
+  | "acknowledgments";
 
 interface ToastState {
   message: string;
   tone: "success" | "error" | "info";
+}
+
+function getPaperSectionText(paperJson: Record<string, unknown>, tab: PaperTab): string {
+  switch (tab) {
+    case "abstract":
+      return String(paperJson.abstract || "");
+    case "introduction":
+      return String(((paperJson.introduction as Record<string, unknown> | undefined)?.text) || "");
+    case "data_sources":
+      return String(((paperJson.data_and_methods as Record<string, unknown> | undefined)?.data_sources) || "");
+    case "analysis_methods":
+      return String(((paperJson.data_and_methods as Record<string, unknown> | undefined)?.analysis_methods) || "");
+    case "results":
+      return String(((paperJson.results as Record<string, unknown> | undefined)?.text) || "");
+    case "discussion":
+      return String(((paperJson.discussion as Record<string, unknown> | undefined)?.text) || "");
+    case "conclusions":
+      return String(paperJson.conclusions || "");
+    case "acknowledgments":
+      return String(paperJson.acknowledgments || "");
+    default:
+      return "";
+  }
+}
+
+function setPaperSectionText(
+  paperJson: Record<string, unknown>,
+  tab: PaperTab,
+  value: string,
+): Record<string, unknown> {
+  const next = structuredClone(paperJson);
+  switch (tab) {
+    case "abstract":
+      next.abstract = value;
+      break;
+    case "introduction":
+      next.introduction = {
+        ...((next.introduction as Record<string, unknown> | undefined) || {}),
+        text: value,
+      };
+      break;
+    case "data_sources":
+      next.data_and_methods = {
+        ...((next.data_and_methods as Record<string, unknown> | undefined) || {}),
+        data_sources: value,
+      };
+      break;
+    case "analysis_methods":
+      next.data_and_methods = {
+        ...((next.data_and_methods as Record<string, unknown> | undefined) || {}),
+        analysis_methods: value,
+      };
+      break;
+    case "results":
+      next.results = {
+        ...((next.results as Record<string, unknown> | undefined) || {}),
+        text: value,
+      };
+      break;
+    case "discussion":
+      next.discussion = {
+        ...((next.discussion as Record<string, unknown> | undefined) || {}),
+        text: value,
+      };
+      break;
+    case "conclusions":
+      next.conclusions = value;
+      break;
+    case "acknowledgments":
+      next.acknowledgments = value;
+      break;
+  }
+  return next;
 }
 
 function readLocalChatSessions(): LocalChatSession[] {
@@ -1207,6 +1295,16 @@ export default function ChatPage() {
     latex: false,
     bibtex: false,
   });
+  const [paperModalOpen, setPaperModalOpen] = useState(false);
+  const [paperSessionId, setPaperSessionId] = useState<string | null>(null);
+  const [paperFormat, setPaperFormat] = useState<JournalFormat>("aastex");
+  const [paperValidation, setPaperValidation] = useState<AnalysisValidationResult | null>(null);
+  const [paperDraft, setPaperDraft] = useState<PaperDraftResponse | null>(null);
+  const [paperEditorJson, setPaperEditorJson] = useState<Record<string, unknown> | null>(null);
+  const [paperTab, setPaperTab] = useState<PaperTab>("abstract");
+  const [paperLoading, setPaperLoading] = useState(false);
+  const [paperGenerating, setPaperGenerating] = useState(false);
+  const [paperSaving, setPaperSaving] = useState(false);
   const [executingActions, setExecutingActions] = useState<Set<string>>(
     new Set()
   );
@@ -1328,6 +1426,119 @@ export default function ChatPage() {
     }
     return saveLocalChatSession(data, sessionId);
   }, [user]);
+
+  const handleOpenPaperDraft = useCallback(async () => {
+    if (!user) {
+      showToast("Sign in to generate a paper draft", "info");
+      return;
+    }
+    if (messages.length === 0) {
+      showToast("Add some analysis messages before generating a paper draft", "info");
+      return;
+    }
+
+    setPaperModalOpen(true);
+    setPaperLoading(true);
+    setPaperDraft(null);
+    setPaperEditorJson(null);
+    setPaperValidation(null);
+    try {
+      const sessionData = messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        actions: m.actions,
+      }));
+      const saved = await saveChatSession(sessionData, currentSessionId || undefined);
+      setCurrentSessionId(saved.id);
+      setPaperSessionId(saved.id);
+      pythonSessionIdRef.current = saved.id;
+      refreshSessions();
+
+      const validation = await validatePaperSession(saved.id);
+      setPaperValidation(validation);
+      setPaperTab("abstract");
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "Paper validation failed";
+      showToast(detail, "error");
+      setPaperModalOpen(false);
+    } finally {
+      setPaperLoading(false);
+    }
+  }, [currentSessionId, messages, refreshSessions, showToast, user]);
+
+  const handleGeneratePaper = useCallback(async (overrideValidation = false) => {
+    if (!paperSessionId) {
+      showToast("Save the session before generating a paper draft", "error");
+      return;
+    }
+
+    setPaperGenerating(true);
+    try {
+      const draft = await generatePaperDraft(paperSessionId, paperFormat, overrideValidation);
+      setPaperDraft(draft);
+      setPaperEditorJson(draft.paper_json);
+      setPaperValidation(draft.validation);
+      track("export.paper_draft", {
+        journal_format: paperFormat,
+        word_count: String(draft.paper_json.abstract || "").split(/\s+/).filter(Boolean).length,
+        figures_count: Array.isArray((draft.paper_json.results as Record<string, unknown> | undefined)?.figures)
+          ? (((draft.paper_json.results as Record<string, unknown>).figures as unknown[]) || []).length
+          : 0,
+        citations_count: (draft.bibtex.match(/@\w+\{/g) || []).length,
+      });
+      showToast("Paper draft generated", "success");
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "Paper generation failed";
+      showToast(detail, "error");
+    } finally {
+      setPaperGenerating(false);
+    }
+  }, [paperFormat, paperSessionId, showToast, track]);
+
+  const handleSavePaperDraft = useCallback(async () => {
+    if (!paperDraft || !paperEditorJson) return;
+    setPaperSaving(true);
+    try {
+      const updated = await updatePaperDraft(paperDraft.id, paperEditorJson);
+      setPaperDraft(updated);
+      setPaperEditorJson(updated.paper_json);
+      showToast("Paper draft saved", "success");
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "Saving paper draft failed";
+      showToast(detail, "error");
+    } finally {
+      setPaperSaving(false);
+    }
+  }, [paperDraft, paperEditorJson, showToast]);
+
+  const handleRegeneratePaperSection = useCallback(async () => {
+    if (!paperSessionId || !paperEditorJson) return;
+    setPaperGenerating(true);
+    try {
+      const regenerated = await generatePaperDraft(
+        paperSessionId,
+        paperFormat,
+        paperValidation?.overall_status === "FAIL",
+      );
+      const nextPaperJson = setPaperSectionText(
+        paperEditorJson,
+        paperTab,
+        getPaperSectionText(regenerated.paper_json, paperTab),
+      );
+      setPaperEditorJson(nextPaperJson);
+      if (paperDraft) {
+        const updated = await updatePaperDraft(paperDraft.id, nextPaperJson);
+        setPaperDraft(updated);
+        setPaperEditorJson(updated.paper_json);
+      }
+      showToast(`Regenerated ${paperTab.replace(/_/g, " ")}`, "success");
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "Section regeneration failed";
+      showToast(detail, "error");
+    } finally {
+      setPaperGenerating(false);
+    }
+  }, [paperDraft, paperEditorJson, paperFormat, paperSessionId, paperTab, paperValidation?.overall_status, showToast]);
 
   useEffect(() => {
     const draft = localStorage.getItem("astro_chat_draft");
@@ -1505,6 +1716,7 @@ export default function ChatPage() {
         if (lastAdqlRows) wsContext.last_adql_rows = JSON.parse(lastAdqlRows);
       } catch { /* ignore */ }
       wsContext.python_session_id = pythonSessionIdRef.current;
+      wsContext.current_session_id = currentSessionId;
 
       const response = await sendChatMessage(chatHistory, wsContext);
 
@@ -1646,6 +1858,16 @@ export default function ChatPage() {
             {messages.length > 0 && (
               <button type="button" className="btn-secondary btn-small" onClick={handleSaveSession}>
                 {t("chat.save")}
+              </button>
+            )}
+            {user && messages.length > 0 && (
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                disabled={paperLoading || paperGenerating}
+                onClick={() => { void handleOpenPaperDraft(); }}
+              >
+                {paperLoading ? "Checking..." : paperGenerating ? "Generating..." : "Generate Paper Draft"}
               </button>
             )}
             <button type="button" className="btn-secondary btn-small" onClick={handleNewChat}>
@@ -1844,6 +2066,201 @@ export default function ChatPage() {
 
         <div ref={messagesEndRef} />
       </div>
+
+      {paperModalOpen && (
+        <div className="viz-overlay" onClick={() => setPaperModalOpen(false)}>
+          <div
+            className="viz-overlay-content"
+            style={{ maxWidth: 980, width: "min(980px, 92vw)", maxHeight: "88vh", overflow: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, marginBottom: 16 }}>
+              <div>
+                <h3 style={{ margin: 0 }}>Paper Draft</h3>
+                <div style={{ color: "var(--color-text-secondary)", fontSize: "0.9rem", marginTop: 4 }}>
+                  Validate the session, generate a draft, edit sections, and download LaTeX/BibTeX.
+                </div>
+              </div>
+              <button className="btn-secondary btn-small" onClick={() => setPaperModalOpen(false)}>Close</button>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontWeight: 600 }}>Journal</span>
+                <select
+                  value={paperFormat}
+                  onChange={(e) => setPaperFormat(e.target.value as JournalFormat)}
+                  className="search-input"
+                  style={{ width: 160 }}
+                >
+                  <option value="aastex">AASTeX</option>
+                  <option value="mnras">MNRAS</option>
+                  <option value="aa">A&amp;A</option>
+                </select>
+              </label>
+              <button
+                className="btn-primary btn-small"
+                disabled={paperLoading || paperGenerating || !paperSessionId}
+                onClick={() => { void handleGeneratePaper(paperValidation?.overall_status === "FAIL"); }}
+              >
+                {paperGenerating ? "Generating..." : paperValidation?.overall_status === "FAIL" ? "Generate Anyway" : "Generate Draft"}
+              </button>
+              {paperDraft && (
+                <>
+                  <button
+                    className="btn-secondary btn-small"
+                    disabled={paperSaving || !paperEditorJson}
+                    onClick={() => { void handleSavePaperDraft(); }}
+                  >
+                    {paperSaving ? "Saving..." : "Save Changes"}
+                  </button>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={() => {
+                      downloadBlob(
+                        new Blob([paperDraft.latex_source], { type: "application/x-tex" }),
+                        `${(paperDraft.paper_json.title as string || "standard_astro_draft").replace(/\s+/g, "_")}.tex`,
+                      );
+                    }}
+                  >
+                    Download LaTeX
+                  </button>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={() => {
+                      downloadBlob(
+                        new Blob([paperDraft.bibtex], { type: "application/x-bibtex" }),
+                        `${(paperDraft.paper_json.title as string || "standard_astro_references").replace(/\s+/g, "_")}.bib`,
+                      );
+                    }}
+                  >
+                    Download BibTeX
+                  </button>
+                </>
+              )}
+            </div>
+
+            {paperLoading && (
+              <div className="fits-loading" style={{ marginBottom: 16 }}>Inspecting session and running validation...</div>
+            )}
+
+            {paperValidation && (
+              <div style={{ marginBottom: 18, padding: 14, borderRadius: 10, background: "rgba(15,23,42,0.05)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
+                  <strong>
+                    Validation: {paperValidation.overall_status} ({Math.round(paperValidation.score * 100)}%)
+                  </strong>
+                  <span style={{
+                    padding: "4px 8px",
+                    borderRadius: 999,
+                    background:
+                      paperValidation.overall_status === "FAIL" ? "#fee2e2" :
+                      paperValidation.overall_status === "WARN" ? "#fef3c7" : "#dcfce7",
+                    color:
+                      paperValidation.overall_status === "FAIL" ? "#b91c1c" :
+                      paperValidation.overall_status === "WARN" ? "#a16207" : "#166534",
+                    fontWeight: 700,
+                    fontSize: "0.75rem",
+                  }}>
+                    {paperValidation.overall_status}
+                  </span>
+                </div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {paperValidation.checks.map((check) => (
+                    <div key={check.name} style={{ border: "1px solid rgba(15,23,42,0.08)", borderRadius: 8, padding: 10, background: "#fff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                        <strong>{check.name.replace(/_/g, " ")}</strong>
+                        <span style={{
+                          fontSize: "0.72rem",
+                          fontWeight: 700,
+                          color: check.status === "FAIL" ? "#b91c1c" : check.status === "WARN" ? "#a16207" : "#166534",
+                        }}>
+                          {check.status}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "0.88rem", marginTop: 6 }}>{check.details}</div>
+                      <div style={{ fontSize: "0.82rem", color: "var(--color-text-secondary)", marginTop: 4 }}>
+                        Recommendation: {check.recommendation}
+                      </div>
+                      <div style={{ marginTop: 8 }}>
+                        <button
+                          className="btn-secondary btn-small"
+                          onClick={() => {
+                            setInput(`Help me address this analysis validation issue in my current session: ${check.recommendation}`);
+                            setPaperModalOpen(false);
+                          }}
+                        >
+                          Send Fix Prompt to AI
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {paperDraft && paperEditorJson && (
+              <>
+                <div style={{ marginBottom: 12 }}>
+                  <input
+                    className="search-input"
+                    style={{ width: "100%", fontSize: "1.05rem", fontWeight: 700 }}
+                    value={String(paperEditorJson.title || "")}
+                    onChange={(e) => setPaperEditorJson({ ...paperEditorJson, title: e.target.value })}
+                    placeholder="Paper title"
+                  />
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                  {[
+                    ["abstract", "Abstract"],
+                    ["introduction", "Introduction"],
+                    ["data_sources", "Data"],
+                    ["analysis_methods", "Methods"],
+                    ["results", "Results"],
+                    ["discussion", "Discussion"],
+                    ["conclusions", "Conclusions"],
+                    ["acknowledgments", "Acknowledgments"],
+                  ].map(([key, label]) => (
+                    <button
+                      key={key}
+                      className={`btn-small ${paperTab === key ? "btn-primary" : "btn-secondary"}`}
+                      onClick={() => setPaperTab(key as PaperTab)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <textarea
+                    className="chat-input"
+                    style={{ minHeight: 260, width: "100%" }}
+                    value={getPaperSectionText(paperEditorJson, paperTab)}
+                    onChange={(e) => setPaperEditorJson(setPaperSectionText(paperEditorJson, paperTab, e.target.value))}
+                  />
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ color: "var(--color-text-secondary)", fontSize: "0.85rem" }}>
+                    Figures: {Array.isArray(((paperEditorJson.results as Record<string, unknown> | undefined)?.figures))
+                      ? ((((paperEditorJson.results as Record<string, unknown>).figures as unknown[]) || []).length)
+                      : 0}
+                    {" · "}
+                    Tables: {Array.isArray(((paperEditorJson.results as Record<string, unknown> | undefined)?.tables))
+                      ? ((((paperEditorJson.results as Record<string, unknown>).tables as unknown[]) || []).length)
+                      : 0}
+                  </div>
+                  <button
+                    className="btn-secondary btn-small"
+                    disabled={paperGenerating}
+                    onClick={() => { void handleRegeneratePaperSection(); }}
+                  >
+                    {paperGenerating ? "Regenerating..." : "Regenerate Section"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <div
         className={`chat-input-area${dragOver ? " drag-over" : ""}`}

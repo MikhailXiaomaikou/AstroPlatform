@@ -270,6 +270,21 @@ class UserEvent(Base):
     )
 
 
+class PaperDraft(Base):
+    __tablename__ = "paper_drafts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("chat_sessions.id"), nullable=False, index=True)
+    journal_format: Mapped[str] = mapped_column(String(50), default="aastex")
+    paper_json: Mapped[dict] = mapped_column(JSONType(), nullable=False)
+    latex_source: Mapped[str] = mapped_column(Text, nullable=False)
+    bibtex: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    validation: Mapped[dict | None] = mapped_column(JSONType())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class SharedResult(Base):
     """Search results shared with a team (by owner_id)."""
     __tablename__ = "shared_results"

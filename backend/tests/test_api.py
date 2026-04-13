@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.auth import hash_password
-from app.models.schemas import DataFile, PipelineRun, PipelineTemplateDB, RunResult, User
+from app.models.schemas import ChatSession, DataFile, PipelineRun, PipelineTemplateDB, RunResult, User
 from app.utils.usernames import username_from_email
 
 
@@ -254,6 +254,84 @@ class TestExportEndpoints:
         if "text/html" in content_type:
             assert "Pipeline Run Report" in resp.text
             assert "denoise_1" in resp.text
+
+
+class TestPaperEndpoints:
+    async def _create_chat_session(self, db_session, user):
+        session = ChatSession(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            title="M31 draft session",
+            messages=[
+                {"role": "user", "content": "Study M31 stellar populations."},
+                {
+                    "role": "assistant",
+                    "content": "I searched SIMBAD and summarized the result.",
+                    "actions": [
+                        {
+                            "action": "search",
+                            "query": "M31",
+                            "sources": ["simbad"],
+                            "tool_result": [
+                                {"name": "M31", "ra": 10.684, "dec": 41.269, "object_type": "Galaxy"},
+                            ],
+                        }
+                    ],
+                },
+            ],
+        )
+        db_session.add(session)
+        await db_session.commit()
+        await db_session.refresh(session)
+        return session
+
+    async def test_validate_session_for_paper(self, app_client, test_user, db_session):
+        user, token = test_user
+        session = await self._create_chat_session(db_session, user)
+        resp = await app_client.post(
+            f"/api/paper/validate/{session.id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["overall_status"] in {"PASS", "WARN", "FAIL"}
+        assert len(body["checks"]) >= 5
+
+    async def test_generate_and_update_paper_draft(self, app_client, test_user, db_session):
+        user, token = test_user
+        session = await self._create_chat_session(db_session, user)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        generate = await app_client.post(
+            "/api/paper/generate",
+            json={"session_id": str(session.id), "journal_format": "aastex"},
+            headers=headers,
+        )
+        assert generate.status_code == 200
+        body = generate.json()
+        assert body["paper_json"]["title"]
+        assert "\\documentclass" in body["latex_source"]
+
+        paper_id = body["id"]
+        updated_json = body["paper_json"]
+        updated_json["title"] = "Updated M31 Draft"
+
+        update = await app_client.put(
+            f"/api/paper/{paper_id}",
+            json={"paper_json": updated_json},
+            headers=headers,
+        )
+        assert update.status_code == 200
+        updated = update.json()
+        assert updated["paper_json"]["title"] == "Updated M31 Draft"
+
+        tex = await app_client.get(f"/api/paper/{paper_id}/download", headers=headers)
+        assert tex.status_code == 200
+        assert tex.headers["content-type"].startswith("application/x-tex")
+
+        bib = await app_client.get(f"/api/paper/{paper_id}/bibtex", headers=headers)
+        assert bib.status_code == 200
+        assert bib.headers["content-type"].startswith("application/x-bibtex")
 
 
 class TestErrorHandling:

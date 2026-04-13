@@ -161,6 +161,43 @@ TOOLS = [
         },
     },
     {
+        "name": "validate_analysis",
+        "description": (
+            "Run a scientific rigor audit on the current saved chat session before paper export. "
+            "Use this to check unit consistency, statistical assumptions, provenance, and completeness."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Saved chat session ID. If omitted, the current saved session ID is inferred from the Python session when possible.",
+                },
+            },
+        },
+    },
+    {
+        "name": "generate_paper_draft",
+        "description": (
+            "Generate a structured paper draft from a saved chat session. "
+            "Use when the user asks to write up results, create a manuscript, or export analysis as a paper."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Saved chat session ID. If omitted, the current saved session ID is inferred from the Python session when possible.",
+                },
+                "journal_format": {
+                    "type": "string",
+                    "enum": ["aastex", "mnras", "aa"],
+                    "description": "Target journal format. Ask the user if they have a preference; default is aastex.",
+                },
+            },
+        },
+    },
+    {
         "name": "run_pipeline",
         "description": (
             "Execute a pipeline DAG synchronously and return the results. "
@@ -545,6 +582,10 @@ async def execute_tool(
             return await _exec_run_python(tool_input, python_session_id)
         elif tool_name == "get_last_search_results":
             return _exec_get_cached_results(tool_input)
+        elif tool_name == "validate_analysis":
+            return await _exec_validate_analysis(tool_input, python_session_id)
+        elif tool_name == "generate_paper_draft":
+            return await _exec_generate_paper_draft(tool_input, python_session_id)
         elif tool_name == "run_pipeline":
             return await _exec_run_pipeline(tool_input)
         elif tool_name == "generate_proposal":
@@ -814,6 +855,64 @@ def _exec_get_cached_results(inp: dict) -> dict:
     if results is None:
         return {"results": [], "message": "No recent search results cached. Run a search first."}
     return {"results": results[:max_n], "total": len(results)}
+
+
+def _resolve_session_id(tool_input: dict, python_session_id: str) -> str | None:
+    session_id = str(tool_input.get("session_id") or "").strip()
+    if session_id:
+        return session_id
+    fallback = str(python_session_id or "").strip()
+    return fallback or None
+
+
+async def _exec_validate_analysis(inp: dict, python_session_id: str = "default") -> dict:
+    from app.models.database import async_session
+    from app.services.analysis_validator import validate_analysis
+
+    session_id = _resolve_session_id(inp, python_session_id)
+    if not session_id:
+        return {"error": "session_id is required. Save the current chat session first."}
+
+    async with async_session() as db:
+        try:
+            validation = await validate_analysis(session_id, db)
+        except Exception as exc:
+            return {"error": str(exc)}
+    return validation
+
+
+async def _exec_generate_paper_draft(inp: dict, python_session_id: str = "default") -> dict:
+    from app.models.database import async_session
+    from app.services.paper_generator import generate_paper_draft
+
+    session_id = _resolve_session_id(inp, python_session_id)
+    if not session_id:
+        return {"error": "session_id is required. Save the current chat session first."}
+
+    journal_format = str(inp.get("journal_format", "aastex") or "aastex").strip().lower()
+    async with async_session() as db:
+        try:
+            generated = await generate_paper_draft(session_id, journal_format, db)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    paper_json = generated["paper_json"]
+    return {
+        "title": paper_json.get("title", ""),
+        "abstract": paper_json.get("abstract", ""),
+        "journal_format": paper_json.get("journal_format", journal_format),
+        "sections": {
+            "introduction": paper_json.get("introduction", {}).get("text", ""),
+            "data_and_methods": paper_json.get("data_and_methods", {}).get("analysis_methods", ""),
+            "results": paper_json.get("results", {}).get("text", ""),
+            "discussion": paper_json.get("discussion", {}).get("text", ""),
+            "conclusions": paper_json.get("conclusions", ""),
+        },
+        "figures": paper_json.get("results", {}).get("figures", []),
+        "tables": paper_json.get("results", {}).get("tables", []),
+        "bibtex_preview": generated["bibtex"][:4000],
+        "latex_preview": generated["latex_source"][:6000],
+    }
 
 
 async def _exec_run_pipeline(inp: dict) -> dict:

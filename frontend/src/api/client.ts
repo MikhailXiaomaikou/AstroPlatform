@@ -1248,6 +1248,27 @@ export interface ChatSessionSummary {
   updated_at: string;
 }
 
+export interface AnalysisValidationCheck {
+  name: string;
+  status: "PASS" | "WARN" | "FAIL";
+  details: string;
+  recommendation: string;
+}
+
+export interface AnalysisValidationResult {
+  overall_status: "PASS" | "WARN" | "FAIL";
+  score: number;
+  checks: AnalysisValidationCheck[];
+}
+
+export interface PaperDraftResponse {
+  id: string;
+  paper_json: Record<string, unknown>;
+  latex_source: string;
+  bibtex: string;
+  validation: AnalysisValidationResult;
+}
+
 export async function saveChatSession(
   messages: Array<{ role: string; content: string; actions?: unknown[] }>,
   sessionId?: string,
@@ -1277,6 +1298,34 @@ export async function loadChatSession(sessionId: string): Promise<{
 
 export async function deleteChatSession(sessionId: string): Promise<void> {
   await api.delete(`/api/chat/sessions/${sessionId}`);
+}
+
+export async function validatePaperSession(sessionId: string): Promise<AnalysisValidationResult> {
+  const { data } = await api.post<AnalysisValidationResult>(`/api/paper/validate/${sessionId}`);
+  return data;
+}
+
+export async function generatePaperDraft(
+  sessionId: string,
+  journalFormat = "aastex",
+  overrideValidation = false,
+): Promise<PaperDraftResponse> {
+  const { data } = await api.post<PaperDraftResponse>("/api/paper/generate", {
+    session_id: sessionId,
+    journal_format: journalFormat,
+    override_validation: overrideValidation,
+  });
+  return data;
+}
+
+export async function updatePaperDraft(
+  paperId: string,
+  paperJson: Record<string, unknown>,
+): Promise<PaperDraftResponse> {
+  const { data } = await api.put<PaperDraftResponse>(`/api/paper/${paperId}`, {
+    paper_json: paperJson,
+  });
+  return data;
 }
 
 export function getStoredApiKey(provider = "anthropic"): string | null {
