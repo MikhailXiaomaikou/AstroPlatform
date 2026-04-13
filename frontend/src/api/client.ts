@@ -1588,44 +1588,97 @@ export async function sendChatMessage(
 ): Promise<ChatResponse> {
   const apiKeys = getStoredApiKeys();
   const apiProvider = getPreferredAiProvider();
+  const body = {
+    messages,
+    context: {
+      ...context,
+      ...(Object.keys(apiKeys).length ? { api_keys: apiKeys } : {}),
+      ...(apiProvider ? { api_provider: apiProvider } : {}),
+    },
+  };
+
+  // Use SSE streaming endpoint to avoid proxy timeouts (Render kills idle
+  // connections after ~30s; streaming keeps the connection alive).
   try {
-    const { data } = await api.post<ChatResponse>(
-      "/api/chat/message",
-      {
-        messages,
-        context: {
-          ...context,
-          ...(Object.keys(apiKeys).length ? { api_keys: apiKeys } : {}),
-          ...(apiProvider ? { api_provider: apiProvider } : {}),
-        },
+    const resp = await fetch(`${API_BASE_URL}/api/chat/message/stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(localStorage.getItem("astro_token")
+          ? { Authorization: `Bearer ${localStorage.getItem("astro_token")}` }
+          : {}),
       },
-      {
-        timeout: 420000,
-      }
-    );
-    return data;
-  } catch (err: unknown) {
-    if (axios.isAxiosError(err)) {
-      if (err.response?.data && typeof err.response.data === "object" && "detail" in err.response.data) {
-        throw new Error(String(err.response.data.detail));
-      }
-      if (err.code === "ECONNABORTED") {
-        throw new Error("The AI request timed out. Try a narrower prompt or split the task into smaller steps.");
-      }
-      if (err.message === "Network Error") {
-        let backendReachable = false;
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const errBody = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(
+        typeof errBody === "object" && errBody && "detail" in errBody
+          ? String(errBody.detail)
+          : `AI request failed (${resp.status})`
+      );
+    }
+
+    const reader = resp.body?.getReader();
+    if (!reader) throw new Error("Streaming not supported by browser");
+
+    const decoder = new TextDecoder();
+    const replyParts: string[] = [];
+    const actions: ChatAction[] = [];
+    let buffer = "";
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (!raw) continue;
+        let evt: Record<string, unknown>;
         try {
-          await api.get("/health", { timeout: 10000 });
-          backendReachable = true;
+          evt = JSON.parse(raw);
         } catch {
-          backendReachable = false;
+          continue;
         }
-        if (backendReachable) {
-          throw new Error("The backend lost its connection to the AI provider before returning a response. Check the server logs and provider connectivity.");
+
+        if (evt.type === "text" && typeof evt.content === "string") {
+          replyParts.push(evt.content);
+        } else if (evt.type === "tool_result") {
+          actions.push({
+            action: String(evt.tool || ""),
+            tool_result: evt.result,
+            _auto_executed: true,
+          } as ChatAction);
+        } else if (evt.type === "error" && typeof evt.message === "string") {
+          throw new Error(evt.message);
         }
-        throw new Error("Could not reach the backend server. Check whether the API service is up and the frontend API URL is correct.");
+        // "status" and "done" events are ignored (no UI for them yet)
       }
-      throw new Error(err.message || "AI request failed");
+    }
+
+    return {
+      reply: replyParts.join("\n\n"),
+      actions,
+    };
+  } catch (err: unknown) {
+    if (err instanceof TypeError && (err.message === "Failed to fetch" || err.message === "NetworkError when attempting to fetch resource.")) {
+      let backendReachable = false;
+      try {
+        await api.get("/health", { timeout: 10000 });
+        backendReachable = true;
+      } catch {
+        backendReachable = false;
+      }
+      if (backendReachable) {
+        throw new Error("Connection to AI provider was interrupted. This may be a timeout — try a shorter prompt.");
+      }
+      throw new Error("Could not reach the backend server. Check whether the API service is up.");
     }
     throw err;
   }
