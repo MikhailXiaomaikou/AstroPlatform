@@ -890,14 +890,18 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     from app.api.integration import adql_query, ADQLRequest
     req = ADQLRequest(query=inp.get("query", ""), service=inp.get("service", "gaia"))
     result = await adql_query(req)
-    # Truncate for context window
-    data = result.get("data", {}) if isinstance(result, dict) else {}
+    # Normalize column names to lowercase so AI-generated code like
+    # data['source_id'] works even when TAP returns 'SOURCE_ID'
+    raw_data = result.get("data", {}) if isinstance(result, dict) else {}
+    data = {col.lower(): vals for col, vals in raw_data.items()}
+    raw_columns = result.get("columns", []) if isinstance(result, dict) else []
+    columns = [c.lower() for c in raw_columns]
     row_count = result.get("row_count", 0) if isinstance(result, dict) else 0
     truncated = {}
     for col, vals in data.items():
         truncated[col] = vals[:100] if isinstance(vals, list) else vals
     adql_result = {
-        "columns": result.get("columns", []) if isinstance(result, dict) else [],
+        "columns": columns,
         "data": truncated,
         "row_count": row_count,
         "showing": min(100, row_count),
@@ -906,7 +910,7 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     result_set = build_adql_result_set(
         service=req.service,
         query=req.query,
-        columns=result.get("columns", []) if isinstance(result, dict) else [],
+        columns=columns,
         data=data,
         row_count=row_count,
     )
@@ -1912,4 +1916,15 @@ def _retryable_python_fix(code: str, error: str) -> tuple[str, str] | None:
         fixed = re.sub(r":(\d*)d(?=})", lambda m: f":{m.group(1)}.0f", code)
         if fixed != code:
             return fixed, "Adjusted float formatting from integer `:d` to `:.0f` and retried."
+
+    # KeyError for column names — try swapping case (e.g. 'SOURCE_ID' vs 'source_id')
+    key_match = re.search(r"KeyError:\s*['\"](\w+)['\"]", error)
+    if key_match:
+        bad_key = key_match.group(1)
+        alt_key = bad_key.lower() if bad_key == bad_key.upper() else bad_key.upper()
+        if alt_key != bad_key:
+            fixed = code.replace(f"'{bad_key}'", f"'{alt_key}'").replace(f'"{bad_key}"', f'"{alt_key}"')
+            if fixed != code:
+                return fixed, f"Swapped column name case from '{bad_key}' to '{alt_key}' and retried."
+
     return None
