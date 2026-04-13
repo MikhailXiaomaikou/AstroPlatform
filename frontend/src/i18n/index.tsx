@@ -16,8 +16,10 @@ const translations: Record<string, Record<Lang, string>> = {
   "nav.team":          { en: "Team",            zh: "团队",          fr: "Équipe",          es: "Equipo" },
   "nav.ai_assistant":  { en: "AI Assistant",    zh: "AI 助手",       fr: "Assistant IA",    es: "Asistente IA" },
   "nav.settings":      { en: "Settings",        zh: "设置",          fr: "Paramètres",      es: "Ajustes" },
+  "nav.account":       { en: "Account",         zh: "账户",          fr: "Compte",          es: "Cuenta" },
   "nav.alerts":        { en: "Alerts",          zh: "警报",          fr: "Alertes",         es: "Alertas" },
   "nav.anomalies":     { en: "Anomalies",       zh: "异常探测",      fr: "Anomalies",       es: "Anomalias" },
+  "nav.observations":  { en: "Observations",    zh: "观测",          fr: "Observations",    es: "Observaciones" },
   "nav.sign_in":       { en: "Sign in",         zh: "登录",          fr: "Connexion",       es: "Iniciar sesión" },
   "nav.sign_out":      { en: "Sign out",        zh: "退出",          fr: "Déconnexion",     es: "Cerrar sesión" },
 
@@ -119,6 +121,7 @@ const translations: Record<string, Record<Lang, string>> = {
   "cmd.alerts":          { en: "Transient Alerts",      zh: "瞬变警报",            fr: "Alertes transitoires",    es: "Alertas transitorias" },
   "cmd.anomalies":       { en: "Anomaly Explorer",     zh: "异常探测器",           fr: "Explorateur d'anomalies", es: "Explorador de anomalías" },
   "cmd.settings":        { en: "Settings",             zh: "设置",               fr: "Paramètres",              es: "Ajustes" },
+  "cmd.account":         { en: "Account",              zh: "账户",               fr: "Compte",                  es: "Cuenta" },
   "cmd.help":            { en: "Help & Docs",          zh: "帮助与文档",           fr: "Aide & Documentation",    es: "Ayuda y Documentación" },
   "cmd.new_chat":        { en: "New Chat Session",     zh: "新建对话",             fr: "Nouvelle conversation",   es: "Nueva conversación" },
   "cmd.new_pipeline":    { en: "New Pipeline",         zh: "新建流水线",           fr: "Nouveau pipeline",        es: "Nuevo pipeline" },

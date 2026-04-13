@@ -1,11 +1,12 @@
 import { Component, lazy, Suspense, useState, useEffect, type ErrorInfo, type ReactNode } from "react";
-import { BrowserRouter, Routes, Route, NavLink, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { I18nProvider, useI18n, ALL_LANGS, LANG_NAMES, type Lang } from "./i18n";
 import api from "./api/client";
 import { useTracking } from "./hooks/useTracking";
 import CommandPalette from "./components/CommandPalette";
 import OnboardingOverlay from "./components/OnboardingOverlay";
+import HelpDrawer from "./components/HelpDrawer";
 import LandingPage from "./pages/Landing/LandingPage";
 import "./App.css";
 
@@ -54,10 +55,8 @@ const TeamPage = lazy(() => import("./pages/Team/TeamPage"));
 const HelpPage = lazy(() => import("./pages/Help/HelpPage"));
 const ChatPage = lazy(() => import("./pages/Chat/ChatPage"));
 const SharedSessionPage = lazy(() => import("./pages/SharedSession/SharedSessionPage"));
-const ResearchHistoryPage = lazy(() => import("./pages/ResearchHistory/ResearchHistoryPage"));
-const SettingsPage = lazy(() => import("./pages/Settings/SettingsPage"));
-const AlertDashboard = lazy(() => import("./pages/AlertDashboard/AlertDashboard"));
-const AnomalyExplorer = lazy(() => import("./pages/AnomalyExplorer/AnomalyExplorer"));
+const ObservationsPage = lazy(() => import("./pages/Observations/ObservationsPage"));
+const AccountPage = lazy(() => import("./pages/Account/AccountPage"));
 
 function useTheme() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -89,11 +88,9 @@ function NavBar() {
       <NavLink to="/adql">{t("nav.adql")}</NavLink>
       <NavLink to="/team">{t("nav.team")}</NavLink>
       <NavLink to="/chat">{t("nav.ai_assistant")}</NavLink>
-      {user ? <NavLink to="/research">Research</NavLink> : null}
-      <NavLink to="/help">Help</NavLink>
-      <NavLink to="/alerts">{t("nav.alerts")}</NavLink>
-      <NavLink to="/anomalies">{t("nav.anomalies")}</NavLink>
-      <NavLink to="/settings">{t("nav.settings")}</NavLink>
+      <HelpDrawer />
+      <NavLink to="/observations">{t("nav.observations")}</NavLink>
+      <NavLink to="/account">{t("nav.account")}</NavLink>
       <div className="nav-spacer" />
       <button
         className="theme-toggle"
@@ -247,11 +244,13 @@ function App() {
                 <Route path="/team" element={<TeamPage />} />
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/chat" element={<ChatPage />} />
-                <Route path="/research" element={<ResearchHistoryPage />} />
+                <Route path="/account" element={<AccountPage />} />
+                <Route path="/research" element={<Navigate to="/account" replace />} />
+                <Route path="/settings" element={<Navigate to="/account" replace />} />
                 <Route path="/shared/:token" element={<SharedSessionPage />} />
-                <Route path="/alerts" element={<AlertDashboard />} />
-                <Route path="/anomalies" element={<AnomalyExplorer />} />
-                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/observations" element={<ObservationsPage />} />
+                <Route path="/alerts" element={<Navigate to="/observations" replace />} />
+                <Route path="/anomalies" element={<Navigate to="/observations" replace />} />
                 <Route path="/auth" element={<AuthPage />} />
               </Routes>
             </Suspense>

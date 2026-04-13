@@ -26,9 +26,9 @@ export default function CommandPalette() {
     { id: "nav-adql", labelKey: "cmd.adql_query", categoryKey: "cmd.cat_nav", action: () => navigate("/adql"), keywords: "sql tap" },
     { id: "nav-workspace", labelKey: "cmd.workspace", categoryKey: "cmd.cat_nav", action: () => navigate("/workspace"), keywords: "files saved" },
     { id: "nav-team", labelKey: "cmd.team", categoryKey: "cmd.cat_nav", action: () => navigate("/team"), keywords: "collaborate share" },
-    { id: "nav-alerts", labelKey: "cmd.alerts", categoryKey: "cmd.cat_nav", action: () => navigate("/alerts"), keywords: "transient supernova" },
-    { id: "nav-anomalies", labelKey: "cmd.anomalies", categoryKey: "cmd.cat_nav", action: () => navigate("/anomalies"), keywords: "outlier detection" },
-    { id: "nav-settings", labelKey: "cmd.settings", categoryKey: "cmd.cat_nav", action: () => navigate("/settings"), keywords: "config preferences" },
+    { id: "nav-alerts", labelKey: "cmd.alerts", categoryKey: "cmd.cat_nav", action: () => navigate("/observations"), keywords: "transient supernova" },
+    { id: "nav-anomalies", labelKey: "cmd.anomalies", categoryKey: "cmd.cat_nav", action: () => navigate("/observations"), keywords: "outlier detection" },
+    { id: "nav-account", labelKey: "cmd.account", categoryKey: "cmd.cat_nav", action: () => navigate("/account"), keywords: "config preferences settings research profile api keys" },
     { id: "nav-help", labelKey: "cmd.help", categoryKey: "cmd.cat_nav", action: () => navigate("/help"), keywords: "documentation guide" },
     // Actions
     { id: "act-new-chat", labelKey: "cmd.new_chat", categoryKey: "cmd.cat_action", action: () => { localStorage.setItem("astro_chat_new_session", "1"); navigate("/chat"); }, keywords: "create conversation" },
