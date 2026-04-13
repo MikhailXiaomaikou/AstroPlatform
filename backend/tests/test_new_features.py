@@ -289,6 +289,105 @@ class TestInferenceRouting:
         assert result["content"] == "ok"
         assert calls == ["openai"]
 
+    @pytest.mark.asyncio
+    async def test_openai_backend_extracts_content_array(self, monkeypatch):
+        from app.ai.inference_router import OpenAIBackend
+
+        backend = OpenAIBackend()
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": [
+                                    {"type": "output_text", "text": "Hello from OpenAI"},
+                                ],
+                            },
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        monkeypatch.setattr("app.ai.inference_router.httpx.AsyncClient", FakeClient)
+
+        result = await backend.complete(
+            [{"role": "user", "content": "hello"}],
+            provider_api_keys={"openai": "sk-openai-test"},
+        )
+
+        assert result["content"] == "Hello from OpenAI"
+        assert result["tool_calls"] == []
+
+    @pytest.mark.asyncio
+    async def test_openai_backend_supports_legacy_function_call(self, monkeypatch):
+        from app.ai.inference_router import OpenAIBackend
+
+        backend = OpenAIBackend()
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "finish_reason": "function_call",
+                            "message": {
+                                "content": None,
+                                "function_call": {
+                                    "name": "search_objects",
+                                    "arguments": "{\"query\": \"M31\"}",
+                                },
+                            },
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        monkeypatch.setattr("app.ai.inference_router.httpx.AsyncClient", FakeClient)
+
+        result = await backend.complete(
+            [{"role": "user", "content": "find M31"}],
+            tools=[{"name": "search_objects", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}}}],
+            provider_api_keys={"openai": "sk-openai-test"},
+        )
+
+        assert result["tool_calls"][0]["name"] == "search_objects"
+        assert result["tool_calls"][0]["input"]["query"] == "M31"
+
     def test_adql_results_unwraps_single_resultset_wrapper(self):
         from app.services.ai_tools import store_search_results
         from app.services.code_executor import execute_python

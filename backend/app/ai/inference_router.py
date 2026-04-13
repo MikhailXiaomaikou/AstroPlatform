@@ -70,6 +70,33 @@ def _normalize_openai_messages(messages: list[dict]) -> list[dict]:
     return normalized
 
 
+def _extract_openai_content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+
+    text_parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            text_parts.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        text_value = item.get("text")
+        if isinstance(text_value, str):
+            text_parts.append(text_value)
+            continue
+        if isinstance(text_value, dict):
+            nested = text_value.get("value")
+            if isinstance(nested, str):
+                text_parts.append(nested)
+                continue
+        if item.get("type") in {"output_text", "text"} and isinstance(item.get("content"), str):
+            text_parts.append(str(item["content"]))
+    return "\n\n".join(part for part in text_parts if part).strip()
+
+
 class LLMBackend(ABC):
     @abstractmethod
     async def complete(
@@ -184,6 +211,7 @@ class OpenAICompatibleBackend(LLMBackend):
                 }
                 for tool in tools
             ]
+            payload["tool_choice"] = "auto"
 
         headers = {"Content-Type": "application/json"}
         if key:
@@ -204,9 +232,22 @@ class OpenAICompatibleBackend(LLMBackend):
                 "name": function.get("name"),
                 "input": json.loads(function.get("arguments") or "{}"),
             })
+        legacy_function_call = message.get("function_call")
+        if isinstance(legacy_function_call, dict):
+            tool_calls.append({
+                "id": str(uuid.uuid4()),
+                "name": legacy_function_call.get("name"),
+                "input": json.loads(legacy_function_call.get("arguments") or "{}"),
+            })
+        content_text = _extract_openai_content_text(message.get("content"))
+        refusal = message.get("refusal")
+        if not content_text and isinstance(refusal, str):
+            content_text = refusal
+        if not content_text and not tool_calls:
+            raise InferenceError(f"{self.backend_label} returned an empty completion")
         usage = data.get("usage") or {}
         return {
-            "content": message.get("content") or "",
+            "content": content_text,
             "tool_calls": tool_calls,
             "usage": {
                 "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
