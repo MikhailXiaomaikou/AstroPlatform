@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "../i18n";
 
 const STEP_KEYS = [
-  { titleKey: "onboard.search_title", descKey: "onboard.search_desc", targetSelector: '.top-nav a:not(.logo)[href="/"]' },
+  { titleKey: "onboard.search_title", descKey: "onboard.search_desc", targetSelector: 'a[href="/search"]' },
   { titleKey: "onboard.chat_title", descKey: "onboard.chat_desc", targetSelector: 'a[href="/chat"]' },
   { titleKey: "onboard.pipeline_title", descKey: "onboard.pipeline_desc", targetSelector: 'a[href="/pipeline"]' },
   { titleKey: "onboard.adql_title", descKey: "onboard.adql_desc", targetSelector: 'a[href="/adql"]' },

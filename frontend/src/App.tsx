@@ -6,6 +6,7 @@ import api from "./api/client";
 import { useTracking } from "./hooks/useTracking";
 import CommandPalette from "./components/CommandPalette";
 import OnboardingOverlay from "./components/OnboardingOverlay";
+import LandingPage from "./pages/Landing/LandingPage";
 import "./App.css";
 
 class ErrorBoundary extends Component<
@@ -82,7 +83,7 @@ function NavBar() {
   return (
     <nav className="top-nav">
       <NavLink to="/" className="logo">Standard Astro</NavLink>
-      <NavLink to="/">{t("nav.data_browser")}</NavLink>
+      <NavLink to="/search">{t("nav.data_browser")}</NavLink>
       <NavLink to="/pipeline">{t("nav.pipeline")}</NavLink>
       <NavLink to="/workspace">{t("nav.workspace")}</NavLink>
       <NavLink to="/adql">{t("nav.adql")}</NavLink>
@@ -238,7 +239,8 @@ function App() {
           <ErrorBoundary>
             <Suspense fallback={<div className="fits-loading">Loading...</div>}>
               <Routes>
-                <Route path="/" element={<DataBrowser />} />
+                <Route path="/" element={<LandingPage />} />
+                <Route path="/search" element={<DataBrowser />} />
                 <Route path="/pipeline" element={<PipelineCanvas />} />
                 <Route path="/workspace" element={<WorkspacePage />} />
                 <Route path="/adql" element={<ADQLPage />} />

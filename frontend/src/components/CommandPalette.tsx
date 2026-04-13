@@ -20,7 +20,7 @@ export default function CommandPalette() {
 
   const commands: Command[] = [
     // Navigation
-    { id: "nav-search", labelKey: "cmd.search_objects", categoryKey: "cmd.cat_nav", action: () => navigate("/"), keywords: "data browser find" },
+    { id: "nav-search", labelKey: "cmd.search_objects", categoryKey: "cmd.cat_nav", action: () => navigate("/search"), keywords: "data browser find" },
     { id: "nav-chat", labelKey: "cmd.ai_assistant", categoryKey: "cmd.cat_nav", action: () => navigate("/chat"), keywords: "ask question" },
     { id: "nav-pipeline", labelKey: "cmd.pipeline_studio", categoryKey: "cmd.cat_nav", action: () => navigate("/pipeline"), keywords: "workflow dag" },
     { id: "nav-adql", labelKey: "cmd.adql_query", categoryKey: "cmd.cat_nav", action: () => navigate("/adql"), keywords: "sql tap" },
