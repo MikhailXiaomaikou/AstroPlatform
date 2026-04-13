@@ -135,6 +135,7 @@ def fit_isochrone(
     n_steps=500,
     n_burn=200,
     seed=42,
+    compute_errors=False,
 ):
     """Fit PARSEC isochrones to observed CMD data.
 
@@ -158,6 +159,8 @@ def fit_isochrone(
         n_steps: MCMC steps (method='mcmc')
         n_burn: MCMC burn-in (method='mcmc')
         seed: random seed
+        compute_errors: if True, run Monte Carlo error propagation (100
+            iterations) after the best fit to estimate parameter uncertainties
 
     Returns:
         dict with keys:
@@ -165,22 +168,26 @@ def fit_isochrone(
             chi2: best-fit chi-squared
             chi2_reduced: chi2 / dof
             method: fitting method used
+            errors_source: 'provided' or 'estimated' (how uncertainties were set)
             (if mcmc) uncertainties: {param: [p16, p50, p84]}
             (if mcmc) corner_fig: matplotlib Figure
             (if mcmc) chain: raw MCMC chain (n_walkers * n_steps, 4)
+            (if compute_errors) uncertainties: {param: [p16, p84], method, n_successful}
     """
     from scipy.optimize import minimize
 
     bp_rp = np.asarray(bp_rp, dtype=float)
     abs_mag = np.asarray(abs_mag, dtype=float)
 
-    # Default uncertainties
+    # Default uncertainties — adaptive estimates if not provided
     if mag_err is None:
-        mag_err = np.full_like(abs_mag, 0.1)
+        mag_err = 0.02 + 0.005 * np.abs(abs_mag - np.median(abs_mag))
+        errors_source = "estimated"
     else:
         mag_err = np.asarray(mag_err, dtype=float)
+        errors_source = "provided"
     if color_err is None:
-        color_err = np.full_like(bp_rp, 0.05)
+        color_err = 0.02 + 0.01 * np.abs(bp_rp - np.median(bp_rp))
     else:
         color_err = np.asarray(color_err, dtype=float)
 
@@ -296,7 +303,71 @@ def fit_isochrone(
         "n_data": n_data,
         "dof": dof,
         "method": method,
+        "errors_source": errors_source,
     }
+
+    # --- Monte Carlo error propagation ---
+    if compute_errors:
+        n_mc = 100
+        mc_params = []
+        rng_mc = np.random.default_rng(seed)
+        for _ in range(n_mc):
+            # Perturb observed data within errors
+            perturbed_mag = abs_mag + rng_mc.normal(0, mag_err)
+            perturbed_color = bp_rp + rng_mc.normal(0, color_err)
+
+            # Build a chi2 function for the perturbed data
+            def _mc_chi2(params, _pmag=perturbed_mag, _pcol=perturbed_color):
+                log_age, met, dm, av = params
+                if not (age_range[0] <= log_age <= age_range[1]):
+                    return 1e12
+                if not (met_range[0] <= met <= met_range[1]):
+                    return 1e12
+                if not (dm_range[0] <= dm <= dm_range[1]):
+                    return 1e12
+                if not (av_range[0] <= av <= av_range[1]):
+                    return 1e12
+                cache_key = (round(log_age, 2), round(met, 2))
+                if cache_key not in _iso_cache:
+                    _iso_cache[cache_key] = _get_model_cmd(cache_key[0], cache_key[1])
+                model_color, model_mag = _iso_cache[cache_key]
+                if model_color is None or len(model_color) < 3:
+                    return 1e12
+                shifted_mag = model_mag + dm + a_g_over_av * av
+                shifted_color = model_color + e_bprp_over_av * av
+                chi2_sum = 0.0
+                for i in range(len(_pmag)):
+                    d_color = (_pcol[i] - shifted_color) / color_err[i]
+                    d_mag = (_pmag[i] - shifted_mag) / mag_err[i]
+                    dist2 = d_color**2 + d_mag**2
+                    chi2_sum += np.min(dist2)
+                return chi2_sum
+
+            try:
+                mc_result = minimize(
+                    _mc_chi2, best_params, method="Nelder-Mead",
+                    options={"maxiter": 2000, "xatol": 0.01, "fatol": 1.0},
+                )
+                mc_params.append(list(mc_result.x))
+            except Exception:
+                continue
+
+        if len(mc_params) >= 10:
+            mc_arr = np.array(mc_params)
+            percentiles = np.percentile(mc_arr, [16, 50, 84], axis=0)
+            fit_result["uncertainties"] = {
+                "log_age": [round(float(percentiles[0, 0]), 3), round(float(percentiles[2, 0]), 3)],
+                "metallicity": [round(float(percentiles[0, 1]), 3), round(float(percentiles[2, 1]), 3)],
+                "distance_modulus": [round(float(percentiles[0, 2]), 3), round(float(percentiles[2, 2]), 3)],
+                "A_V": [round(float(percentiles[0, 3]), 3), round(float(percentiles[2, 3]), 3)],
+                "method": "monte_carlo_100",
+                "n_successful": len(mc_params),
+            }
+        else:
+            logger.warning(
+                "Monte Carlo error estimation failed: only %d/%d iterations succeeded",
+                len(mc_params), n_mc,
+            )
 
     if method == "mcmc":
         try:
@@ -1469,7 +1540,12 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
         n_frequencies: number of frequency grid points
 
     Returns:
-        dict with best_period, best_power, fap, frequencies, powers, top_periods
+        dict with best_period, best_power, fap, fap_level, reliable,
+        n_datapoints, frequencies, powers, top_periods
+
+    Note: For sparse data (<20 points), the analytical FAP may be unreliable.
+    Consider bootstrap FAP estimation for more robust significance assessment.
+    The 'reliable' field in the return dict is True only when FAP < 0.01 AND n >= 20.
     """
     from astropy.timeseries import LombScargle
 
@@ -1500,12 +1576,22 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
     best_period = float(1.0 / best_freq)
     best_power = float(power[best_idx])
 
-    fap = float(ls.false_alarm_probability(best_power))
+    fap_at_best = float(ls.false_alarm_probability(best_power))
+
+    if fap_at_best < 0.01:
+        fap_label = "significant"
+    elif fap_at_best < 0.05:
+        fap_label = "marginal"
+    else:
+        fap_label = "unreliable"
 
     return {
         "best_period": best_period,
         "best_power": best_power,
-        "fap": fap,
+        "fap": fap_at_best,
+        "fap_level": fap_label,
+        "reliable": bool(fap_at_best < 0.01 and len(t) >= 20),
+        "n_datapoints": len(t),
         "frequencies": frequency.tolist(),
         "powers": power.tolist(),
         "top_periods": top_periods,
@@ -1563,7 +1649,8 @@ def plot_periodogram(time, mag, mag_err=None, min_period=0.1, max_period=100,
     m = np.asarray(mag, dtype=float)
     err = np.asarray(mag_err, dtype=float) if mag_err is not None else None
     ls = LombScargle(t, m, dy=err)
-    for fap_level, ls_label, color in [(0.01, "1% FAP", "#FF9F0A"),
+    for fap_level, ls_label, color in [(0.05, "5% FAP", "#FF453A"),
+                                       (0.01, "1% FAP", "#FF9F0A"),
                                        (0.001, "0.1% FAP", "#30D158")]:
         try:
             power_level = ls.false_alarm_level(fap_level)

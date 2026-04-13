@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, useCallback } from "react";
+import { useEffect, useId, useRef, useState, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 
 /* ── Aladin Lite type declarations ── */
 
@@ -130,6 +130,81 @@ export default function AladinViewer(props: AladinViewerProps) {
   const [selectedSurvey, setSelectedSurvey] = useState(surveyProp ?? "P/DSS2/color");
   const [coordDisplay, setCoordDisplay] = useState({ ra: resolvedRa, dec: resolvedDec });
   const initDoneRef = useRef(false);
+
+  /* ── Annotation state ── */
+  interface AnnotationCircle {
+    ra: number;
+    dec: number;
+    radius_deg: number;
+  }
+  const [drawingMode, setDrawingMode] = useState(false);
+  const [annotations, setAnnotations] = useState<AnnotationCircle[]>([]);
+  const [radiusArcmin, setRadiusArcmin] = useState(1.0);
+  const overlayRef = useRef<AladinInstance>(null);
+
+  /** Create (or retrieve) the annotation graphic overlay. */
+  const getOverlay = useCallback(() => {
+    const aladin = aladinRef.current;
+    if (!aladin || !window.A) return null;
+    if (overlayRef.current) return overlayRef.current;
+    const ov = window.A.graphicOverlay({ color: "#00ff88", lineWidth: 2 });
+    aladin.addOverlay(ov);
+    overlayRef.current = ov;
+    return ov;
+  }, []);
+
+  /** Handle click on the Aladin container when drawing mode is active. */
+  const handleViewerClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      if (!drawingMode) return;
+      const aladin = aladinRef.current;
+      if (!aladin) return;
+
+      // Convert pixel coords to sky coords
+      const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const lonlat: [number, number] | null = aladin.pix2world(x, y);
+      if (!lonlat) return;
+      const [ra, dec] = lonlat;
+      const radDeg = radiusArcmin / 60;
+
+      const ov = getOverlay();
+      if (!ov || !window.A) return;
+      ov.add(window.A.circle(ra, dec, radDeg, { color: "#00ff88", lineWidth: 2 }));
+
+      setAnnotations((prev) => [...prev, { ra, dec, radius_deg: radDeg }]);
+    },
+    [drawingMode, radiusArcmin, getOverlay],
+  );
+
+  /** Clear all user annotations. */
+  const handleClear = useCallback(() => {
+    if (overlayRef.current) {
+      overlayRef.current.removeAll();
+    }
+    setAnnotations([]);
+  }, []);
+
+  /** Export annotations as DS9 .reg file and trigger download. */
+  const handleExportReg = useCallback(() => {
+    if (annotations.length === 0) return;
+    const lines = [
+      "# Region file format: DS9 version 4.1",
+      "global color=green",
+      "fk5",
+      ...annotations.map(
+        (c) => `circle(${c.ra.toFixed(6)},${c.dec.toFixed(6)},${c.radius_deg.toFixed(6)}d)`,
+      ),
+    ];
+    const blob = new Blob([lines.join("\n") + "\n"], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "annotations.reg";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [annotations]);
 
   // Load the Aladin Lite script (once)
   useEffect(() => {
@@ -440,6 +515,7 @@ export default function AladinViewer(props: AladinViewerProps) {
       <div
         id={containerId}
         ref={containerRef}
+        onClick={handleViewerClick}
         style={{
           width: "100%",
           height: typeof height === "number" ? height : height,
@@ -447,6 +523,7 @@ export default function AladinViewer(props: AladinViewerProps) {
           overflow: "hidden",
           border: "1px solid var(--color-separator)",
           background: "#111",
+          cursor: drawingMode ? "crosshair" : undefined,
         }}
       />
 
@@ -462,7 +539,6 @@ export default function AladinViewer(props: AladinViewerProps) {
             fontFamily: "monospace",
             color: "var(--color-text-secondary)",
             background: "var(--color-bg-secondary, #1a1a1a)",
-            borderRadius: "0 0 var(--radius-md) var(--radius-md)",
             border: "1px solid var(--color-separator)",
             borderTop: "none",
             marginTop: -1,
@@ -474,6 +550,113 @@ export default function AladinViewer(props: AladinViewerProps) {
           <span>
             Dec: {formatDec(coordDisplay.dec)} ({coordDisplay.dec.toFixed(5)}&deg;)
           </span>
+        </div>
+      )}
+
+      {/* Annotation toolbar */}
+      {status === "ready" && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "4px 10px",
+            fontSize: "0.75rem",
+            background: "var(--color-bg-secondary, #1a1a1a)",
+            borderRadius: "0 0 var(--radius-md) var(--radius-md)",
+            border: "1px solid var(--color-separator)",
+            borderTop: "none",
+            marginTop: -1,
+          }}
+        >
+          <button
+            className={`btn-secondary btn-small${drawingMode ? " active" : ""}`}
+            onClick={() => setDrawingMode((m) => !m)}
+            style={drawingMode ? { background: "rgba(0,255,136,0.18)", color: "#00ff88" } : undefined}
+          >
+            {drawingMode ? "Drawing..." : "Draw Circle"}
+          </button>
+
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 3,
+              color: "var(--color-text-secondary)",
+              fontSize: "0.72rem",
+            }}
+          >
+            r&nbsp;
+            <input
+              type="number"
+              min={0.01}
+              step={0.1}
+              value={radiusArcmin}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (!isNaN(v) && v > 0) setRadiusArcmin(v);
+              }}
+              style={{
+                width: 48,
+                padding: "1px 4px",
+                borderRadius: 4,
+                border: "1px solid var(--color-separator)",
+                background: "var(--color-bg-tertiary, #222)",
+                color: "var(--color-text)",
+                fontSize: "0.72rem",
+                textAlign: "right",
+              }}
+            />
+            &prime;
+          </label>
+
+          <button
+            className="btn-secondary btn-small"
+            onClick={handleClear}
+            disabled={annotations.length === 0}
+          >
+            Clear
+          </button>
+          <button
+            className="btn-secondary btn-small"
+            onClick={handleExportReg}
+            disabled={annotations.length === 0}
+          >
+            Export .reg
+          </button>
+
+          {annotations.length > 0 && (
+            <span style={{ marginLeft: "auto", color: "var(--color-text-secondary)", fontSize: "0.7rem" }}>
+              {annotations.length} region{annotations.length !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Region info list */}
+      {status === "ready" && annotations.length > 0 && (
+        <div
+          style={{
+            maxHeight: 90,
+            overflowY: "auto",
+            padding: "4px 10px",
+            fontSize: "0.7rem",
+            fontFamily: "monospace",
+            color: "var(--color-text-secondary)",
+            background: "var(--color-bg-secondary, #1a1a1a)",
+            borderRadius: "0 0 var(--radius-md) var(--radius-md)",
+            border: "1px solid var(--color-separator)",
+            borderTop: "none",
+            marginTop: -1,
+            lineHeight: 1.6,
+          }}
+        >
+          {annotations.map((c, i) => (
+            <div key={i}>
+              Circle: RA={c.ra.toFixed(2)}&deg;, Dec={c.dec.toFixed(2)}&deg;, r=
+              {c.radius_deg.toFixed(4)}&deg; ({(c.radius_deg * 60).toFixed(1)}&prime;)
+            </div>
+          ))}
         </div>
       )}
     </div>

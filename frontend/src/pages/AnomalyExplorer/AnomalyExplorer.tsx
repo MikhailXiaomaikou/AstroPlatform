@@ -478,6 +478,13 @@ export default function AnomalyExplorer() {
   const [sort, setSort] = useState("score");
   const [page, setPage] = useState(1);
 
+  // Detection threshold settings
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [ifContamination, setIfContamination] = useState(0.05);
+  const [aeThreshold, setAeThreshold] = useState(95);
+  const [dbscanMinSamples, setDbscanMinSamples] = useState(5);
+  const [votingThreshold, setVotingThreshold] = useState(2);
+
   // Dismissed IDs (local state)
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
 
@@ -502,6 +509,10 @@ export default function AnomalyExplorer() {
         min_score: minScore > 0 ? minScore : undefined,
         source: sourceParam,
         sort,
+        if_contamination: ifContamination,
+        ae_threshold_percentile: aeThreshold,
+        dbscan_min_samples: dbscanMinSamples,
+        voting_threshold: votingThreshold,
       });
       setFeed(data);
     } catch (err: unknown) {
@@ -510,7 +521,7 @@ export default function AnomalyExplorer() {
     } finally {
       setLoading(false);
     }
-  }, [page, minScore, sourceParam, sort]);
+  }, [page, minScore, sourceParam, sort, ifContamination, aeThreshold, dbscanMinSamples, votingThreshold]);
 
   // Fetch stats
   const fetchStats = useCallback(async () => {
@@ -621,6 +632,84 @@ export default function AnomalyExplorer() {
             {stats.high_confidence.toLocaleString()}
           </span>
         </div>
+      </div>
+
+      {/* Detection settings toggle + collapsible panel */}
+      <div style={{ marginBottom: "1rem" }}>
+        <button
+          className="btn-secondary"
+          onClick={() => setSettingsOpen((v) => !v)}
+          style={{ fontSize: "0.82rem", padding: "0.4rem 0.85rem" }}
+        >
+          {settingsOpen ? "Hide Settings" : "Settings"}
+        </button>
+        {settingsOpen && (
+          <div style={{ ...styles.filterSection, marginTop: "0.75rem" }}>
+            <div style={styles.filterTitle}>Detection Thresholds</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem 1.25rem" }}>
+              {/* IF Contamination */}
+              <label style={{ display: "block" }}>
+                <span style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", fontWeight: 500 }}>
+                  IF Contamination
+                </span>
+                <input
+                  type="number"
+                  min={0.01}
+                  max={0.5}
+                  step={0.01}
+                  value={ifContamination}
+                  onChange={(e) => { setIfContamination(Number(e.target.value)); setPage(1); }}
+                  style={{ ...styles.select, display: "block", marginTop: "0.25rem" }}
+                />
+              </label>
+              {/* AE Threshold */}
+              <label style={{ display: "block" }}>
+                <span style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", fontWeight: 500 }}>
+                  AE Threshold Percentile
+                </span>
+                <input
+                  type="number"
+                  min={80}
+                  max={99}
+                  step={1}
+                  value={aeThreshold}
+                  onChange={(e) => { setAeThreshold(Number(e.target.value)); setPage(1); }}
+                  style={{ ...styles.select, display: "block", marginTop: "0.25rem" }}
+                />
+              </label>
+              {/* DBSCAN Min Samples */}
+              <label style={{ display: "block" }}>
+                <span style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", fontWeight: 500 }}>
+                  DBSCAN Min Samples
+                </span>
+                <input
+                  type="number"
+                  min={2}
+                  max={20}
+                  step={1}
+                  value={dbscanMinSamples}
+                  onChange={(e) => { setDbscanMinSamples(Number(e.target.value)); setPage(1); }}
+                  style={{ ...styles.select, display: "block", marginTop: "0.25rem" }}
+                />
+              </label>
+              {/* Voting Threshold */}
+              <label style={{ display: "block" }}>
+                <span style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", fontWeight: 500 }}>
+                  Voting Threshold
+                </span>
+                <select
+                  value={votingThreshold}
+                  onChange={(e) => { setVotingThreshold(Number(e.target.value)); setPage(1); }}
+                  style={{ ...styles.select, display: "block", marginTop: "0.25rem" }}
+                >
+                  <option value={1}>1</option>
+                  <option value={2}>2</option>
+                  <option value={3}>3</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Error banner */}

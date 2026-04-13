@@ -54,6 +54,12 @@ const NODE_PARAM_DEFS: Record<string, ParamDef[]> = {
     { key: "fits_path", label: "FITS Path (optional)", type: "text", placeholder: "Uses upstream output_path or fits_path if blank" },
     { key: "aperture_radii", label: "Aperture Radii", type: "text", default: "3,5,7" },
   ],
+  PSFPhotometry: [
+    { key: "fits_path", label: "FITS Path (optional)", type: "text", placeholder: "Uses upstream image if blank" },
+    { key: "fwhm", label: "FWHM (pixels)", type: "number", default: 3.0 },
+    { key: "threshold_sigma", label: "Detection Threshold (\u03c3)", type: "number", default: 5.0 },
+    { key: "aperture_radii", label: "Aperture Radii (px)", type: "text", default: "3,5,7" },
+  ],
   Denoise: [
     { key: "sigma", label: "Sigma", type: "number", default: 3.0 },
     { key: "max_iters", label: "Max Iterations", type: "number", default: 5 },
@@ -126,6 +132,9 @@ const NODE_PARAM_DEFS: Record<string, ParamDef[]> = {
       ],
       default: "spectrum_overlay",
     },
+  ],
+  Condition: [
+    { key: "expression", label: "Condition", type: "text", required: true, placeholder: "row_count > 100" },
   ],
   CustomScript: [
     {

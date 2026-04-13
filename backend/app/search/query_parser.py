@@ -561,6 +561,8 @@ def suggest_sources(parsed: dict) -> list[str]:
         "2mass": 0.5,
         "chandra": 0.5,
         "allwise": 0.5,
+        "panstarrs": 0.5,
+        "xmm": 0.5,
     }
 
     obs_type = parsed.get("observation_type", "")
@@ -589,9 +591,16 @@ def suggest_sources(parsed: dict) -> list[str]:
     if obs_type in ("spectroscopy", "optical"):
         scores["sdss"] += 2.0
 
-    # Boost Chandra for X-ray
+    # Boost Pan-STARRS for optical imaging and stellar objects
+    if obs_type in ("optical", "imaging"):
+        scores["panstarrs"] += 3.0
+    if obj_type in ("star", "main sequence star", "white dwarf", "cepheid", "RR Lyrae"):
+        scores["panstarrs"] += 2.0
+
+    # Boost Chandra and XMM-Newton for X-ray
     if obs_type == "X-ray":
         scores["chandra"] += 8.0
+        scores["xmm"] += 6.0
 
     # Boost MAST for UV/optical/IR imaging and HST data
     if obs_type in ("ultraviolet", "imaging", "near-infrared"):

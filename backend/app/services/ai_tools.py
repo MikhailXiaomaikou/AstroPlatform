@@ -6,18 +6,22 @@ handles the tool_use → result → next message cycle automatically.
 
 import asyncio
 import logging
+import math
 import re
+from datetime import datetime, timezone
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 # ── Tool Definitions (Anthropic tool_use format) ──
 
-# In-memory cache for last search results per user session (keyed by a simple token)
-_search_result_cache: dict[str, list[dict]] = {}
+# In-memory cache for search/query results per runtime session (keyed by a simple token)
+_search_result_cache: dict[str, Any] = {}
+MAX_ADQL_RESULT_HISTORY = 8
 
 
-def store_search_results(key: str, results: list[dict]) -> None:
+def store_search_results(key: str, results: Any) -> None:
     """Cache search results so AI can access full data later."""
     _search_result_cache[key] = results
     # Keep only last 20 sessions
@@ -26,8 +30,128 @@ def store_search_results(key: str, results: list[dict]) -> None:
         del _search_result_cache[oldest]
 
 
-def get_cached_results(key: str) -> list[dict] | None:
+def get_cached_results(key: str) -> Any | None:
     return _search_result_cache.get(key)
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        numeric = float(value)
+        if numeric != numeric:  # NaN
+            return None
+        return numeric
+    except (TypeError, ValueError):
+        return None
+
+
+def _augment_adql_row(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    if "bp_rp" not in enriched or enriched.get("bp_rp") is None:
+        bp = _coerce_float(enriched.get("phot_bp_mean_mag"))
+        rp = _coerce_float(enriched.get("phot_rp_mean_mag"))
+        if bp is not None and rp is not None:
+            enriched["bp_rp"] = bp - rp
+    if "abs_g_mag" not in enriched or enriched.get("abs_g_mag") is None:
+        g_mag = _coerce_float(enriched.get("phot_g_mean_mag"))
+        parallax = _coerce_float(enriched.get("parallax"))
+        if g_mag is not None and parallax is not None and parallax > 0:
+            distance_pc = 1000.0 / parallax
+            enriched["abs_g_mag"] = g_mag - 5.0 * (math.log10(distance_pc) - 1.0)
+    return enriched
+
+
+def build_adql_rows(
+    columns: list[str],
+    data: dict[str, list[Any]],
+    row_count: int,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index in range(min(row_count, limit)):
+        row = {
+            col: (data.get(col, [None] * row_count)[index] if index < len(data.get(col, [])) else None)
+            for col in columns
+        }
+        rows.append(_augment_adql_row(row))
+    return rows
+
+
+def augment_adql_payload(
+    columns: list[str],
+    data: dict[str, list[Any]],
+    row_count: int,
+    limit: int = 1000,
+) -> tuple[list[str], dict[str, list[Any]], list[dict[str, Any]]]:
+    rows = build_adql_rows(columns, data, row_count, limit=limit)
+    augmented_columns = list(columns)
+    derived_columns = ["bp_rp", "abs_g_mag"]
+    for col in derived_columns:
+        if col not in augmented_columns and any(row.get(col) is not None for row in rows):
+            augmented_columns.append(col)
+            data[col] = [row.get(col) for row in rows]
+    return augmented_columns, data, rows
+
+
+def build_adql_result_set(
+    *,
+    service: str,
+    query: str,
+    columns: list[str],
+    data: dict[str, list[Any]],
+    row_count: int,
+    limit: int = 1000,
+) -> dict[str, Any]:
+    augmented_columns, augmented_data, rows = augment_adql_payload(
+        list(columns),
+        dict(data),
+        row_count,
+        limit=limit,
+    )
+    return {
+        "service": service,
+        "query": query,
+        "row_count": row_count,
+        "columns": augmented_columns,
+        "rows": rows,
+        "data": {col: augmented_data.get(col, [])[: min(row_count, limit)] for col in augmented_columns},
+        "stored_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _session_cache_key(prefix: str, session_id: str | None) -> str | None:
+    sid = str(session_id or "").strip()
+    if not sid or sid == "default":
+        return None
+    return f"{prefix}:{sid}"
+
+
+def replace_adql_result_sets(session_id: str | None, result_sets: list[dict[str, Any]]) -> None:
+    normalized = [dict(item) for item in result_sets[-MAX_ADQL_RESULT_HISTORY:] if isinstance(item, dict)]
+    latest = normalized[-1] if normalized else None
+    latest_rows = list(latest.get("rows", [])) if latest else []
+
+    store_search_results("latest_adql_sets", normalized)
+    if latest is not None:
+        store_search_results("latest_adql_set", latest)
+        store_search_results("latest_adql", latest_rows)
+
+    session_sets_key = _session_cache_key("latest_adql_sets", session_id)
+    session_set_key = _session_cache_key("latest_adql_set", session_id)
+    session_rows_key = _session_cache_key("latest_adql", session_id)
+    if session_sets_key:
+        store_search_results(session_sets_key, normalized)
+    if latest is not None and session_set_key and session_rows_key:
+        store_search_results(session_set_key, latest)
+        store_search_results(session_rows_key, latest_rows)
+
+
+def store_adql_result_set(session_id: str | None, result_set: dict[str, Any]) -> None:
+    existing = get_cached_results(_session_cache_key("latest_adql_sets", session_id) or "latest_adql_sets")
+    history = list(existing) if isinstance(existing, list) else []
+    history.append(dict(result_set))
+    replace_adql_result_sets(session_id, history)
 
 
 TOOLS = [
@@ -225,6 +349,8 @@ TOOLS = [
             "The Standard Astro helper toolkit is preloaded as `astro` and may also be imported as `astro`. "
             "Helper functions: load_fits(path) returns astropy HDUList, "
             "get_search_results() returns the latest search results as a list of dicts, "
+            "get_adql_results() returns only the latest ADQL rows as list[dict], "
+            "get_adql_result_sets() returns recent ADQL result sets with query/service metadata, "
             "load_votable(path) loads a VOTable as an astropy Table, "
             "load_csv(path) loads a CSV as a pandas DataFrame, "
             "process_in_chunks(data, chunk_size, func) processes large data in memory-safe chunks, "
@@ -328,7 +454,9 @@ TOOLS = [
         "name": "estimate_photo_z",
         "description": (
             "Estimate photometric redshift from multi-band photometry. "
-            "Use when users ask about galaxy distances or redshifts for objects without spectra."
+            "Use when users ask about galaxy distances or redshifts for objects without spectra. "
+            "NOTE: This is a demo-quality implementation (7 templates, no dust). "
+            "For publication, use dedicated photo-z codes like EAZY."
         ),
         "input_schema": {
             "type": "object",
@@ -744,13 +872,14 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
         "showing": min(100, row_count),
     }
 
-    # Auto-inject full result into Python sandbox for immediate use
-    adql_rows = [
-        {col: data.get(col, [None] * row_count)[i] for col in adql_result["columns"]}
-        for i in range(min(row_count, 1000))
-    ] if data else []
-    store_search_results("latest_adql", adql_rows)
-    store_search_results(f"latest_adql:{python_session_id}", adql_rows)
+    result_set = build_adql_result_set(
+        service=req.service,
+        query=req.query,
+        columns=result.get("columns", []) if isinstance(result, dict) else [],
+        data=data,
+        row_count=row_count,
+    )
+    store_adql_result_set(python_session_id, result_set)
 
     return adql_result
 

@@ -22,6 +22,8 @@ def _init():
         from app.connectors.irsa import IRSAConnector
         from app.connectors.jwst import JWSTConnector
         from app.connectors.lamost import LAMOSTConnector
+        from app.connectors.panstarrs import PanSTARRSConnector
+        from app.connectors.xmm import XMMConnector
         from app.connectors.desi import DESIConnector
         _connectors = {
             "sdss": SDSSConnector(),
@@ -39,12 +41,14 @@ def _init():
             "jwst": JWSTConnector(),
             "lamost": LAMOSTConnector(),
             "desi": DESIConnector(),
+            "panstarrs": PanSTARRSConnector(),
+            "xmm": XMMConnector(),
         }
 
 
 CONNECTORS_KEYS = [
     "sdss", "gaia", "simbad", "vizier", "mast", "ned", "2mass", "chandra", "allwise", "alma",
-    "eso", "irsa", "jwst", "lamost", "desi",
+    "eso", "irsa", "jwst", "lamost", "desi", "panstarrs", "xmm",
 ]
 
 

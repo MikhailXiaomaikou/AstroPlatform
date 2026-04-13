@@ -26,6 +26,8 @@ def _get_registry() -> dict[str, Callable]:
     from app.pipeline.nodes.cosmic_ray_reject import cosmic_ray_reject_node
     from app.pipeline.nodes.astrometric_solve import astrometric_solve
     from app.pipeline.nodes.source_extract import source_extract
+    from app.pipeline.nodes.psf_photometry import psf_photometry
+    from app.pipeline.nodes.condition import condition
 
     return {
         "QueryData": query_data,
@@ -37,6 +39,7 @@ def _get_registry() -> dict[str, Callable]:
         "CosmicRayReject": cosmic_ray_reject_node,
         "AstrometricSolve": astrometric_solve,
         "SourceExtract": source_extract,
+        "PSFPhotometry": psf_photometry,
         "Denoise": denoise,
         "SpectralFit": spectral_fit,
         "CoordTransform": coord_transform,
@@ -50,6 +53,7 @@ def _get_registry() -> dict[str, Callable]:
         "InteractivePlot": interactive_plot_node,
         "CustomScript": custom_script,
         "TimeSeriesAnalysis": timeseries_analysis,
+        "Condition": condition,
     }
 
 

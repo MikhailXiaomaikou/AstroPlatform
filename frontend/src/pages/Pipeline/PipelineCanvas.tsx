@@ -204,6 +204,7 @@ export default function PipelineCanvas() {
           { type: "PhotCalibrate", label: "Phot. Calibrate", description: "Apply photometric calibration", inputs: 1, outputs: 1 },
           { type: "ImageStack", label: "Image Stack", description: "Stack/combine images", inputs: 1, outputs: 1 },
           { type: "InteractivePlot", label: "Interactive Plot", description: "Generate interactive Plotly chart", inputs: 1, outputs: 1 },
+          { type: "Condition", label: "Condition", description: "Branch pipeline based on a condition", inputs: 1, outputs: 2 },
         ])
       );
     getTemplates().then(setTemplates).catch(() => {});
@@ -325,6 +326,7 @@ export default function PipelineCanvas() {
       id: e.id,
       source: e.source,
       target: e.target,
+      sourceHandle: e.sourceHandle,
       animated: true,
     }));
     setNodes(flowNodes);
@@ -348,7 +350,7 @@ export default function PipelineCanvas() {
         position: n.position,
         data: { label: n.data.label, params: n.data.params || {} },
       })),
-      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}) })),
     };
     try {
       await saveTemplateVersion(activeTemplateId, dag, changeNote);
@@ -412,6 +414,7 @@ export default function PipelineCanvas() {
         id: e.id,
         source: e.source,
         target: e.target,
+        ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}),
       })),
     };
 
@@ -799,7 +802,7 @@ export default function PipelineCanvas() {
                         position: n.position,
                         data: { label: n.data.label, params: n.data.params || {} },
                       })),
-                      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+                      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}) })),
                     };
                     try {
                       const s = await createSchedule(scheduleName, dag, inputDataId, scheduleCron);

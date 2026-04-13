@@ -15,7 +15,9 @@ const TYPE_COLORS: Record<string, string> = {
   CrossMatch: "#5AC8FA",
   PhotCalibrate: "#FF9500",
   ImageStack: "#AF52DE",
+  PSFPhotometry: "#10b981",
   InteractivePlot: "#8b5cf6",
+  Condition: "#f59e0b",
 };
 
 const SOURCE_NODE_TYPES = new Set(["QueryData", "ImportWorkspace", "LoadData"]);
@@ -91,11 +93,36 @@ function PipelineNode({ data, selected }: NodeProps<PipelineNodeData>) {
       {!SOURCE_NODE_TYPES.has(data.nodeType) && (
         <Handle type="target" position={Position.Left} className="pipeline-handle pipeline-handle-target" />
       )}
-      {!TERMINAL_NODE_TYPES.has(data.nodeType) && (
-        <Handle type="source" position={Position.Right} className="pipeline-handle pipeline-handle-source" />
-      )}
-      {TERMINAL_NODE_TYPES.has(data.nodeType) && (
-        <Handle type="source" position={Position.Right} className="pipeline-handle" style={{ opacity: 0.3 }} />
+      {data.nodeType === "Condition" ? (
+        <>
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="true"
+            className="pipeline-handle pipeline-handle-source"
+            style={{ top: "35%", background: "#30D158" }}
+            title="True branch"
+          />
+          <span className="condition-handle-label condition-handle-true" style={{ position: "absolute", right: -18, top: "28%", fontSize: "0.6rem", color: "#30D158", fontWeight: 700 }}>T</span>
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="false"
+            className="pipeline-handle pipeline-handle-source"
+            style={{ top: "65%", background: "#FF453A" }}
+            title="False branch"
+          />
+          <span className="condition-handle-label condition-handle-false" style={{ position: "absolute", right: -18, top: "58%", fontSize: "0.6rem", color: "#FF453A", fontWeight: 700 }}>F</span>
+        </>
+      ) : (
+        <>
+          {!TERMINAL_NODE_TYPES.has(data.nodeType) && (
+            <Handle type="source" position={Position.Right} className="pipeline-handle pipeline-handle-source" />
+          )}
+          {TERMINAL_NODE_TYPES.has(data.nodeType) && (
+            <Handle type="source" position={Position.Right} className="pipeline-handle" style={{ opacity: 0.3 }} />
+          )}
+        </>
       )}
       {SOURCE_NODE_TYPES.has(data.nodeType) && (
         <Handle type="target" position={Position.Left} className="pipeline-handle" style={{ opacity: 0.3 }} />

@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import re
 from functools import partial
 
 import numpy as np
@@ -18,6 +19,19 @@ DEFAULT_CATALOGS = [
     "I/355",    # Gaia DR3
 ]
 
+# Pattern matching a VizieR catalog identifier such as II/246, I/355,
+# J/A+A/674/A1, V/50, B/eso, VI/135, etc.
+_CATALOG_ID_RE = re.compile(
+    r"^(?:[IVB]{1,3}|J)/[A-Za-z0-9+_.]+(?:/[A-Za-z0-9+_.]+)*$"
+)
+
+# Pattern to extract explicit catalog references embedded in a query string,
+# e.g. "VizieR:II/246" or "catalog:J/A+A/674/A1".
+_CATALOG_PREFIX_RE = re.compile(
+    r"(?:vizier|catalog):([IVB]{1,3}|J)/([A-Za-z0-9+_.]+(?:/[A-Za-z0-9+_.]+)*)",
+    re.IGNORECASE,
+)
+
 
 class VizierConnector(BaseConnector):
     """Connector for VizieR catalog service via astroquery."""
@@ -31,21 +45,73 @@ class VizierConnector(BaseConnector):
             viz.catalog = catalogs
         return viz
 
+    @staticmethod
+    def _extract_catalogs(query: str) -> tuple[list[str] | None, str]:
+        """Extract catalog IDs from the query string.
+
+        Returns a tuple of (catalog_list, cleaned_query).  If no catalog
+        identifiers are found in *query*, catalog_list is ``None`` and the
+        query is returned unchanged.
+
+        Supported forms:
+        * ``"VizieR:II/246"`` or ``"catalog:J/A+A/674/A1"`` embedded in a
+          longer query.
+        * The query itself is a bare catalog ID such as ``"II/246"``.
+        """
+        # 1. Look for explicit "VizieR:<id>" / "catalog:<id>" patterns.
+        matches = _CATALOG_PREFIX_RE.findall(query)
+        if matches:
+            catalogs = [f"{roman}/{rest}" for roman, rest in matches]
+            # Strip the matched tokens so the remaining text can be used for
+            # coordinate / name resolution.
+            cleaned = _CATALOG_PREFIX_RE.sub("", query).strip()
+            return catalogs, cleaned
+
+        # 2. Check if the entire query is a catalog ID.
+        stripped = query.strip()
+        if _CATALOG_ID_RE.match(stripped):
+            return [stripped], ""
+
+        return None, query
+
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
     async def search(
-        self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
+        self,
+        query: str,
+        ra: float | None = None,
+        dec: float | None = None,
+        radius: float = 0.1,
+        catalog: list[str] | str | None = None,
     ) -> list[AstroObject]:
         loop = asyncio.get_event_loop()
 
+        # --- Determine which catalogs to query ---
+        # Priority: explicit *catalog* parameter > IDs parsed from query > defaults.
+        parsed_catalogs, cleaned_query = self._extract_catalogs(query)
+
+        if catalog is not None:
+            if isinstance(catalog, str):
+                catalog = [catalog]
+            use_catalogs = catalog
+        elif parsed_catalogs is not None:
+            use_catalogs = parsed_catalogs
+        else:
+            use_catalogs = DEFAULT_CATALOGS
+
+        # Use cleaned_query for name resolution; fall back to original query
+        # when the cleaned version is empty (i.e. the whole query was a catalog
+        # ID) and no explicit coordinates were given.
+        resolve_query = cleaned_query or query
+
         if ra is None or dec is None:
             coord = await loop.run_in_executor(
-                None, partial(SkyCoord.from_name, query)
+                None, partial(SkyCoord.from_name, resolve_query)
             )
             ra, dec = coord.ra.deg, coord.dec.deg
 
         coord = SkyCoord(ra=ra, dec=dec, unit=(u.degree, u.degree), frame="icrs")
         radius_qty = radius * u.degree
-        vizier = self._make_vizier(catalogs=DEFAULT_CATALOGS)
+        vizier = self._make_vizier(catalogs=use_catalogs)
 
         table_list = await loop.run_in_executor(
             None,

@@ -276,6 +276,7 @@ class TransientClassifier:
     # Class-level cache (shared across instances).
     _model: RandomForestClassifier | None = None
     _feature_names: list[str] = FEATURE_NAMES
+    _feature_medians: list[float] = []
     _is_trained: bool = False
 
     # ------------------------------------------------------------------
@@ -476,12 +477,15 @@ class TransientClassifier:
             n_estimators=200,
             max_depth=12,
             min_samples_split=5,
-            min_samples_leaf=2,
+            min_samples_leaf=5,
             class_weight="balanced",
             random_state=42,
             n_jobs=-1,
         )
         model.fit(X, y)
+
+        # Store per-feature medians for imputing missing values at classify time.
+        cls._feature_medians = [float(np.median(X[:, i])) for i in range(X.shape[1])]
 
         cls._model = model
         cls._label_list = label_list
@@ -523,10 +527,10 @@ class TransientClassifier:
 
         # Build feature vector in the canonical order.
         feature_vector = []
-        for fname in cls._feature_names:
+        for i, fname in enumerate(cls._feature_names):
             val = features.get(fname)
             if val is None or not np.isfinite(float(val)):
-                val = 0.0
+                val = cls._feature_medians[i]
             feature_vector.append(float(val))
 
         X = np.array(feature_vector).reshape(1, -1)
@@ -549,7 +553,7 @@ class TransientClassifier:
         }
 
         # If confidence is very low, flag as Unknown.
-        if confidence < 0.25:
+        if confidence < 0.60:
             classification = "Unknown"
 
         features_used = {
@@ -562,6 +566,7 @@ class TransientClassifier:
             "probabilities": probabilities,
             "feature_importance": feature_importance,
             "features_used": features_used,
+            "warning": "Trained on synthetic data — verify with spectroscopy",
         }
 
     # ------------------------------------------------------------------
@@ -667,6 +672,7 @@ class TransientClassifier:
             else 0.0,
             "source_id": alert_data.get("source_id"),
         }
+        result["data_quality"] = {"n_photometry_points": len(t_use)}
         return result
 
 

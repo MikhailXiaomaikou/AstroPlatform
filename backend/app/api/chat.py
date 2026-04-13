@@ -204,14 +204,17 @@ The Standard Astro helper toolkit is available as the preloaded `astro` variable
 Do NOT import os, sys, subprocess, requests, urllib, or any networking/filesystem modules — they are blocked.
 Use it for ANY task that requires computation: statistical analysis, curve fitting, plotting, data manipulation.
 
-**Variables persist between code blocks** (like Jupyter cells). You can define variables in one
-run_python call and use them in the next. No need to put everything in one giant code block.
+**Variables persist between code blocks** inside the same active chat runtime (like Jupyter cells).
+You can define variables in one run_python call and use them in the next. No need to put everything
+in one giant code block, but do not assume variables survive after opening a brand-new chat or page refresh.
 Complex objects such as astropy cosmology instances, scipy functions, and custom classes also persist.
 Do not probe for availability with `eval`, `sys`, or fragile introspection hacks. These helpers are guaranteed.
 
 Key patterns:
 - `results = get_search_results()` — access the user's latest search results
 - `hdul = load_fits("path/to/file.fits")` — load a FITS file
+- `rows = get_adql_results()` — latest ADQL rows only
+- `result_sets = get_adql_result_sets()` — recent ADQL result-set history, each with `service`, `query`, `columns`, `row_count`, and `rows`
 - `available_functions()` — list the preloaded astronomy helpers with signatures/doc summaries
 - Print results with `print()` — output shown to user
 - Matplotlib figures auto-captured and displayed in chat
@@ -220,8 +223,14 @@ Pre-imported (available without import):
 - `np` (numpy), `plt` (matplotlib.pyplot), `pd` (pandas), `scipy`
 - `u` (astropy.units), `Table`, `SkyCoord` (astropy)
 - `FlatLambdaCDM`, `Planck18` (astropy.cosmology) — use directly for cosmology calculations
-- `get_adql_results()` — get latest ADQL query results as list of dicts (auto-injected)
+- `get_adql_results()` — get only the latest ADQL query rows as `list[dict]` (auto-injected)
+- `get_latest_adql_result()` — get the latest ADQL result set with metadata
+- `get_adql_result_sets()` — get recent ADQL result sets for multi-query workflows
 - `available_functions()` — list all pre-loaded helper functions with signatures and docs
+
+When combining multiple ADQL queries, use `get_adql_result_sets()` instead of assuming `get_adql_results()` contains every prior query.
+ADQL page tables are columnar in the UI, but Python helpers always expose row-wise `list[dict]`.
+If `bp_rp` is missing but `phot_bp_mean_mag` and `phot_rp_mean_mag` exist, the helper may derive it automatically.
 
 Pre-imported astronomy toolkit (available as `astro`, whether used directly or imported):
 - `pub_figure()` / `pub_style()` — publication-quality figure setup (ApJ/MNRAS fonts)
@@ -477,8 +486,6 @@ async def chat_message_stream(
         # Reuse the same logic but yield intermediate results
         provider_api_keys = _provider_api_keys(req.context, user)
 
-        from app.services.ai_tools import store_search_results
-
         claude_messages: list[dict] = _normalize_messages(req.messages)
         runtime = await _build_runtime(req, user, db)
         agent_names = list(runtime.get("agent_names") or ["orchestrator"])
@@ -486,11 +493,7 @@ async def chat_message_stream(
         yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
 
         python_session_id = (req.context or {}).get("python_session_id", "default")
-        last_adql_rows = (req.context or {}).get("last_adql_rows")
-        if isinstance(last_adql_rows, list):
-            store_search_results(
-                f"latest_adql:{python_session_id}", last_adql_rows[:1000]
-            )
+        _prime_adql_context_cache(req.context, python_session_id)
 
         try:
             if len(agent_names) > 1:
@@ -524,6 +527,52 @@ def _strip_actions_from_reply(text: str) -> str:
     import re
 
     return re.sub(r"<actions>.*?</actions>", "", text, flags=re.DOTALL).strip()
+
+
+def _prime_adql_context_cache(context: dict | None, python_session_id: str) -> None:
+    if not isinstance(context, dict):
+        return
+    from app.services.ai_tools import build_adql_result_set, replace_adql_result_sets, store_adql_result_set
+
+    last_adql_result_sets = context.get("last_adql_result_sets")
+    if isinstance(last_adql_result_sets, list) and last_adql_result_sets:
+        replace_adql_result_sets(python_session_id, [item for item in last_adql_result_sets if isinstance(item, dict)])
+        return
+
+    last_adql_rows = context.get("last_adql_rows")
+    last_adql = context.get("last_adql")
+    if not isinstance(last_adql_rows, list) or not last_adql_rows:
+        return
+
+    if isinstance(last_adql, dict):
+        service = str(last_adql.get("service") or "gaia")
+        query = str(last_adql.get("query") or "")
+        columns = [
+            str(col)
+            for col in (last_adql.get("columns") or [])
+            if isinstance(col, str)
+        ]
+    else:
+        service = "gaia"
+        query = ""
+        columns = []
+
+    if not columns and isinstance(last_adql_rows[0], dict):
+        columns = [str(col) for col in last_adql_rows[0].keys()]
+
+    data = {
+        col: [row.get(col) if isinstance(row, dict) else None for row in last_adql_rows]
+        for col in columns
+    }
+    result_set = build_adql_result_set(
+        service=service,
+        query=query,
+        columns=columns,
+        data=data,
+        row_count=len(last_adql_rows),
+        limit=len(last_adql_rows),
+    )
+    store_adql_result_set(python_session_id, result_set)
 
 
 async def _llm_messages_create(
@@ -750,14 +799,10 @@ async def chat_message(
     """
     provider_api_keys = _provider_api_keys(req.context, user)
 
-    from app.services.ai_tools import store_search_results
-
     claude_messages: list[dict] = _normalize_messages(req.messages)
     runtime = await _build_runtime(req, user, db)
     python_session_id = (req.context or {}).get("python_session_id", "default")
-    last_adql_rows = (req.context or {}).get("last_adql_rows")
-    if isinstance(last_adql_rows, list):
-        store_search_results(f"latest_adql:{python_session_id}", last_adql_rows[:1000])
+    _prime_adql_context_cache(req.context, python_session_id)
 
     try:
         response = await _run_orchestrated_chat(

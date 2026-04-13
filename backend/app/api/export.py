@@ -1,10 +1,11 @@
-"""Export endpoints for pipeline run results (CSV, VOTable, PDF)."""
+"""Export endpoints for pipeline run results (CSV, VOTable, FITS, PDF)."""
 
 import csv
 import io
 import uuid
 from datetime import datetime, timezone
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -50,6 +51,35 @@ async def _get_run_and_results(
     return run, list(results)
 
 
+def _node_type_map(run: PipelineRun) -> dict[str, str]:
+    """Build {node_id: node_type} from the DAG definition."""
+    dag = run.dag or {}
+    return {n["id"]: n.get("type", "unknown") for n in dag.get("nodes", [])}
+
+
+def _extract_tabular_nodes(
+    results_json: dict | None,
+) -> list[tuple[str, dict[str, list]]]:
+    """Return [(node_id, {col_name: [values]})] for nodes with tabular data.
+
+    A node result qualifies as tabular when it has a ``"data"`` key whose
+    value is a dict where every value is a list (columns of equal length).
+    """
+    if not results_json:
+        return []
+    tabular: list[tuple[str, dict[str, list]]] = []
+    for node_id, node_out in results_json.items():
+        if not isinstance(node_out, dict):
+            continue
+        data = node_out.get("data")
+        if not isinstance(data, dict) or not data:
+            continue
+        # Every value must be a list (column arrays)
+        if all(isinstance(v, list) for v in data.values()):
+            tabular.append((node_id, data))
+    return tabular
+
+
 # ── CSV Export ──
 
 
@@ -61,9 +91,12 @@ async def export_run_csv(
 ):
     """Export pipeline run results as a CSV file download."""
     run, results = await _get_run_and_results(run_id, user, db)
+    type_map = _node_type_map(run)
 
     buf = io.StringIO()
     writer = csv.writer(buf)
+
+    # ── Run metadata header ──
     writer.writerow(["run_id", "status", "created_at", "completed_at"])
     writer.writerow([
         str(run.id),
@@ -72,9 +105,26 @@ async def export_run_csv(
         run.completed_at.isoformat() if run.completed_at else "",
     ])
     writer.writerow([])
+
+    # ── Per-node metadata from RunResult rows ──
     writer.writerow(["node_id", "output_path", "logs"])
     for r in results:
         writer.writerow([r.node_id, r.output_path or "", r.logs or ""])
+
+    # ── Per-node tabular data from PipelineRun.results ──
+    tabular = _extract_tabular_nodes(run.results)
+    for node_id, data in tabular:
+        node_type = type_map.get(node_id, "unknown")
+        writer.writerow([])
+        writer.writerow([f"# Node: {node_id} ({node_type})"])
+        columns = list(data.keys())
+        writer.writerow(columns)
+        n_rows = max(len(v) for v in data.values()) if data else 0
+        for i in range(n_rows):
+            writer.writerow([
+                data[col][i] if i < len(data[col]) else ""
+                for col in columns
+            ])
 
     buf.seek(0)
     return StreamingResponse(
@@ -97,10 +147,13 @@ async def export_run_votable(
 ):
     """Export pipeline run results as a VOTable XML file (astronomy standard)."""
     run, results = await _get_run_and_results(run_id, user, db)
+    type_map = _node_type_map(run)
 
     from astropy.table import Table
     from astropy.io.votable import from_table, writeto
+    from astropy.io.votable.tree import VOTableFile, Resource
 
+    # ── Metadata TABLE (existing behaviour) ──
     rows = []
     for r in results:
         rows.append({
@@ -110,7 +163,7 @@ async def export_run_votable(
         })
 
     if rows:
-        astro_table = Table(
+        meta_table = Table(
             {
                 "node_id": [row["node_id"] for row in rows],
                 "output_path": [row["output_path"] for row in rows],
@@ -118,22 +171,44 @@ async def export_run_votable(
             }
         )
     else:
-        astro_table = Table(
+        meta_table = Table(
             names=["node_id", "output_path", "logs"],
             dtype=["U256", "U1024", "U4096"],
         )
 
-    # Add run metadata as table params
-    astro_table.meta["run_id"] = str(run.id)
-    astro_table.meta["status"] = run.status
-    astro_table.meta["created_at"] = (
+    meta_table.meta["run_id"] = str(run.id)
+    meta_table.meta["status"] = run.status
+    meta_table.meta["created_at"] = (
         run.created_at.isoformat() if run.created_at else ""
     )
-    astro_table.meta["completed_at"] = (
+    meta_table.meta["completed_at"] = (
         run.completed_at.isoformat() if run.completed_at else ""
     )
 
-    votable = from_table(astro_table)
+    # Build the VOTable with the metadata table first
+    votable = from_table(meta_table)
+
+    # ── Data TABLEs from PipelineRun.results ──
+    tabular = _extract_tabular_nodes(run.results)
+    if tabular:
+        resource = votable.resources[0] if votable.resources else votable.resources.append(Resource())
+
+        for node_id, data in tabular:
+            node_type = type_map.get(node_id, "unknown")
+            col_data = {}
+            for col_name, values in data.items():
+                arr = np.array(values)
+                col_data[col_name] = arr
+            data_table = Table(col_data)
+            data_table.meta["node_id"] = node_id
+            data_table.meta["node_type"] = node_type
+
+            vot_from = from_table(data_table)
+            # Move the TABLE element into our existing resource
+            if vot_from.resources:
+                for tbl in vot_from.resources[0].tables:
+                    resource.tables.append(tbl)
+
     buf = io.BytesIO()
     writeto(votable, buf)
     buf.seek(0)
@@ -143,6 +218,63 @@ async def export_run_votable(
         media_type="application/xml",
         headers={
             "Content-Disposition": f'attachment; filename="run_{run_id}.votable.xml"'
+        },
+    )
+
+
+# ── FITS Export ──
+
+
+@router.get("/run/{run_id}/fits")
+async def export_run_fits(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export pipeline run results as a FITS file with binary table extensions."""
+    from astropy.io import fits
+    from astropy.table import Table
+
+    run, results = await _get_run_and_results(run_id, user, db)
+    type_map = _node_type_map(run)
+
+    hdu_list = [fits.PrimaryHDU()]
+    # Store run metadata in the primary header
+    hdu_list[0].header["RUN_ID"] = str(run.id)
+    hdu_list[0].header["STATUS"] = run.status or ""
+    hdu_list[0].header["CREATED"] = (
+        run.created_at.isoformat() if run.created_at else ""
+    )
+    hdu_list[0].header["COMPLETE"] = (
+        run.completed_at.isoformat() if run.completed_at else ""
+    )
+
+    tabular = _extract_tabular_nodes(run.results)
+    for node_id, data in tabular:
+        node_type = type_map.get(node_id, "unknown")
+        col_data = {}
+        for col_name, values in data.items():
+            col_data[col_name] = np.array(values)
+        astro_table = Table(col_data)
+        bin_hdu = fits.BinTableHDU(astro_table, name=node_id[:68])
+        bin_hdu.header["NODEID"] = node_id
+        bin_hdu.header["NODETYPE"] = node_type
+        hdu_list.append(bin_hdu)
+
+    if len(hdu_list) == 1:
+        # No tabular data — add an empty extension so the file is valid
+        hdu_list.append(fits.BinTableHDU.from_columns([]))
+
+    hdul = fits.HDUList(hdu_list)
+    buf = io.BytesIO()
+    hdul.writeto(buf)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/fits",
+        headers={
+            "Content-Disposition": f'attachment; filename="run_{run_id}.fits"'
         },
     )
 

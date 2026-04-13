@@ -147,36 +147,65 @@ def _planck_flux_ratio(wavelength_um: float, T: float) -> float:
 def _fit_blackbody(
     wavelengths_um: list[float],
     fluxes: list[float],
-) -> tuple[float, float, int]:
+    flux_errors: list[float] | None = None,
+) -> tuple[float, float, int, float]:
     """Fit a single-temperature blackbody to observed SED points.
 
-    Returns (best_T, chi2, dof).
+    Uses a two-stage grid search (coarse then fine) for improved
+    temperature precision and reports a temperature uncertainty
+    derived from the delta-chi2 = 1 interval.
+
+    Returns (best_T, chi2, dof, T_err).
     """
     wavelengths_um_arr = np.array(wavelengths_um)
     fluxes_arr = np.array(fluxes)
     n = len(fluxes_arr)
 
-    best_chi2 = np.inf
-    best_T = 5000.0
+    # --- Determine per-point uncertainties ---
+    if flux_errors is not None and len(flux_errors) == len(fluxes_arr):
+        sigma = np.asarray(flux_errors, dtype=float)
+        sigma = np.where(sigma > 0, sigma, 0.1 * fluxes_arr)  # fallback for zero errors
+    else:
+        sigma = 0.1 * fluxes_arr  # 10% relative error fallback
+    sigma = np.where(sigma > 0, sigma, 1.0e-30)
 
-    # Coarse grid search over temperature
-    for T in np.arange(1000, 50001, 500):
+    def _chi2_at(T: float) -> float:
         model = np.array([_planck_flux_ratio(w, T) for w in wavelengths_um_arr])
         if model.max() == 0:
-            continue
-        # Scale factor (least-squares)
+            return np.inf
         scale = np.dot(fluxes_arr, model) / np.dot(model, model)
         residuals = fluxes_arr - scale * model
-        # Use fractional residuals for chi2 (relative error ~10%)
-        sigma = 0.1 * fluxes_arr
-        sigma = np.where(sigma > 0, sigma, 1.0e-30)
-        chi2 = np.sum((residuals / sigma) ** 2)
-        if chi2 < best_chi2:
-            best_chi2 = chi2
+        return float(np.sum((residuals / sigma) ** 2))
+
+    # --- Stage 1: coarse grid search ---
+    coarse_temps = np.arange(1000, 50001, 500)
+    best_chi2 = np.inf
+    best_T_coarse = 5000.0
+    for T in coarse_temps:
+        c2 = _chi2_at(T)
+        if c2 < best_chi2:
+            best_chi2 = c2
+            best_T_coarse = T
+
+    # --- Stage 2: fine grid search around coarse best ---
+    fine_lo = max(500, best_T_coarse - 1500)
+    fine_hi = best_T_coarse + 1500
+    fine_temps = np.arange(fine_lo, fine_hi, 100)
+    fine_chi2s = [_chi2_at(T) for T in fine_temps]
+
+    best_T = best_T_coarse
+    for T, c2 in zip(fine_temps, fine_chi2s):
+        if c2 < best_chi2:
+            best_chi2 = c2
             best_T = T
 
+    # --- Temperature uncertainty (delta-chi2 < 1 interval) ---
+    chi2_threshold = best_chi2 + 1.0
+    valid_temps = [T for T, c in zip(fine_temps, fine_chi2s) if c <= chi2_threshold]
+    T_err = (max(valid_temps) - min(valid_temps)) / 2 if len(valid_temps) > 1 else 500.0
+
     dof = max(n - 2, 1)  # 2 free params: T and scale
-    return float(best_T), float(best_chi2), dof
+    return float(best_T), float(best_chi2), dof, float(T_err)
 
 
 # ---------------------------------------------------------------------------
@@ -557,11 +586,11 @@ def _check_sed_shape(dossier: dict) -> dict[str, Any]:
     fluxes = [b[2] for b in bands_data]
     band_names = [b[0] for b in bands_data]
 
-    best_T, chi2, dof = _fit_blackbody(wavelengths, fluxes)
+    best_T, chi2, dof, T_err = _fit_blackbody(wavelengths, fluxes)
     chi2_dof = chi2 / dof
 
     observed_str = (
-        f"Blackbody fit: T = {best_T:.0f} K, chi2/dof = {chi2_dof:.1f} "
+        f"Blackbody fit: T = {best_T:.0f} +/- {T_err:.0f} K, chi2/dof = {chi2_dof:.1f} "
         f"({len(bands_data)} bands: {', '.join(band_names)})"
     )
 
@@ -572,6 +601,7 @@ def _check_sed_shape(dossier: dict) -> dict[str, Any]:
             "observed": observed_str,
             "expected": "chi2/dof < 5 for single-temperature blackbody",
             "significance": f"chi2/dof = {chi2_dof:.1f}",
+            "T_err": T_err,
             "possible_causes": [
                 "non-stellar SED (composite source)",
                 "AGN power-law continuum",
@@ -590,6 +620,7 @@ def _check_sed_shape(dossier: dict) -> dict[str, Any]:
         "observed": observed_str,
         "expected": "chi2/dof < 5 for single-temperature blackbody",
         "significance": f"chi2/dof = {chi2_dof:.1f}",
+        "T_err": T_err,
         "possible_causes": None,
         "recommended_followup": None,
     }

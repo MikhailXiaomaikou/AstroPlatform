@@ -60,6 +60,59 @@ def build_parent_map(dag: dict) -> dict[str, list[str]]:
     return parents
 
 
+def build_edge_index(dag: dict) -> dict[str, list[dict]]:
+    """Map source node ID -> list of outgoing edges (with sourceHandle metadata)."""
+    index: dict[str, list[dict]] = {n["id"]: [] for n in dag["nodes"]}
+    for edge in dag.get("edges", []):
+        index[edge["source"]].append(edge)
+    return index
+
+
+def _compute_skipped_nodes(
+    node_id: str,
+    condition_result: bool,
+    edge_index: dict[str, list[dict]],
+    parent_map: dict[str, list[str]],
+    node_map: dict[str, dict],
+) -> set[str]:
+    """After a Condition node executes, determine which downstream nodes to skip.
+
+    Edges from a Condition node carry a ``sourceHandle`` of ``"true"`` or
+    ``"false"``.  The branch whose handle does NOT match the condition result
+    is pruned.  Pruning propagates: if every parent of a node is either
+    skipped or on the pruned branch, that node is skipped too.
+    """
+    skipped: set[str] = set()
+    taken_handle = "true" if condition_result else "false"
+
+    # Direct children on the NOT-taken branch
+    for edge in edge_index.get(node_id, []):
+        if edge.get("sourceHandle") and edge["sourceHandle"] != taken_handle:
+            skipped.add(edge["target"])
+
+    # Propagate: BFS from initially-skipped nodes
+    queue = deque(skipped)
+    while queue:
+        sid = queue.popleft()
+        for edge in edge_index.get(sid, []):
+            child = edge["target"]
+            if child in skipped:
+                continue
+            # Skip child only if ALL its parents are skipped
+            if all(p in skipped or p == node_id for p in parent_map.get(child, [])):
+                # … but not if the child is also reachable on the taken branch
+                reachable_from_taken = any(
+                    e["target"] == child
+                    for e in edge_index.get(node_id, [])
+                    if e.get("sourceHandle") == taken_handle
+                )
+                if not reachable_from_taken:
+                    skipped.add(child)
+                    queue.append(child)
+
+    return skipped
+
+
 def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
     """Run the pipeline synchronously (local mode, no Celery needed).
 
@@ -68,11 +121,23 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
     levels = topological_sort(dag)
     node_map = build_node_map(dag)
     parent_map = build_parent_map(dag)
+    edge_index = build_edge_index(dag)
 
     node_results: dict[str, dict] = {}
+    skipped_nodes: set[str] = set()
 
     for level in levels:
         for node_id in level:
+            # Skip nodes on un-taken condition branches
+            if node_id in skipped_nodes:
+                node_results[node_id] = {
+                    "skipped": True,
+                    "node_id": node_id,
+                    "reason": "Condition branch not taken",
+                }
+                logger.info(f"[{run_id}] Skipping node {node_id} (condition branch not taken)")
+                continue
+
             node_def = node_map[node_id]
             node_type = node_def["type"]
             params = node_def.get("data", {}).get("params", {})
@@ -110,6 +175,14 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
                 result = {"error": str(e), "node_id": node_id}
 
             node_results[node_id] = result
+
+            # After a Condition node, compute which branch to skip
+            if node_type == "Condition" and "error" not in result:
+                new_skips = _compute_skipped_nodes(
+                    node_id, result["_condition_result"],
+                    edge_index, parent_map, node_map,
+                )
+                skipped_nodes |= new_skips
 
     return node_results
 
@@ -186,14 +259,32 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
         levels = topological_sort(dag_dict)
         node_map = build_node_map(dag_dict)
         parent_map = build_parent_map(dag_dict)
+        edge_index = build_edge_index(dag_dict)
         total_nodes = sum(len(lvl) for lvl in levels)
 
         node_results: dict[str, dict] = {}
         completed_count = 0
         has_errors = False
+        skipped_nodes: set[str] = set()
 
         for level in levels:
             for node_id in level:
+                # Skip nodes on un-taken condition branches
+                if node_id in skipped_nodes:
+                    node_results[node_id] = {
+                        "skipped": True,
+                        "node_id": node_id,
+                        "reason": "Condition branch not taken",
+                    }
+                    completed_count += 1
+                    logger.info(f"[{run_id}] Skipping node {node_id} (condition branch not taken)")
+                    _publish_progress(run_id, {
+                        "type": "node_skipped",
+                        "node_id": node_id,
+                        "progress": completed_count / total_nodes,
+                    })
+                    continue
+
                 node_def = node_map[node_id]
                 node_type = node_def["type"]
                 params = node_def.get("data", {}).get("params", {})
@@ -257,6 +348,14 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                 node_results[node_id] = result
                 completed_count += 1
 
+                # After a Condition node, compute which branch to skip
+                if node_type == "Condition" and "error" not in result:
+                    new_skips = _compute_skipped_nodes(
+                        node_id, result["_condition_result"],
+                        edge_index, parent_map, node_map,
+                    )
+                    skipped_nodes |= new_skips
+
                 # Store per-node result
                 run_result = RunResult(
                     run_id=uuid.UUID(run_id),
@@ -275,24 +374,24 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                     "progress": completed_count / total_nodes,
                 })
 
-        # 3. Trim and store final results
-        safe_results = _trim_results(node_results)
+        # 3. Store full results to DB; trim only for API responses
         final_status = "completed" if not has_errors else "failed"
+        api_results = _trim_for_api(node_results)
 
         run.status = final_status
-        run.results = safe_results
+        run.results = node_results
         run.completed_at = datetime.now(timezone.utc)
         session.commit()
 
-        # 4. Notify completion
+        # 4. Notify completion (trimmed for WebSocket)
         _publish_progress(run_id, {
             "type": "run_complete",
             "status": final_status,
-            "results": safe_results,
+            "results": api_results,
         })
 
         logger.info(f"[{run_id}] Pipeline {final_status}")
-        return {"run_id": run_id, "status": final_status, "results": safe_results}
+        return {"run_id": run_id, "status": final_status, "results": api_results}
 
     except Exception as exc:
         logger.exception(f"[{run_id}] Pipeline execution failed with exception")
@@ -319,17 +418,22 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
         engine.dispose()
 
 
-def _trim_results(node_results: dict) -> dict:
+def _trim_for_api(node_results: dict) -> dict:
+    """Trim large arrays for API/WebSocket responses (not for DB storage)."""
     safe_results = {}
     for nid, res in node_results.items():
         safe = dict(res)
         if "data" in safe and isinstance(safe["data"], dict):
             trimmed = {}
+            truncated = False
             for k, v in safe["data"].items():
-                if isinstance(v, list) and len(v) > 20:
-                    trimmed[k] = v[:10] + ["..."] + v[-10:]
+                if isinstance(v, list) and len(v) > 50:
+                    trimmed[k] = v[:25] + ["..."] + v[-25:]
+                    truncated = True
                 else:
                     trimmed[k] = v
+            if truncated:
+                trimmed["_truncated"] = True
             safe["data"] = trimmed
         safe_results[nid] = safe
     return safe_results

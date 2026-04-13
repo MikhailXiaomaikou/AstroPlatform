@@ -141,6 +141,32 @@ class GaiaConnector(BaseConnector):
             if rv is not None:
                 extra["radial_velocity_km_s"] = round(rv, 2)
 
+            # Additional Gaia columns: uncertainties, proper motions, photometry, quality
+            _extra_columns = [
+                ("parallax_error", "parallax_error"),
+                ("pmra", "pmra"),
+                ("pmdec", "pmdec"),
+                ("pmra_error", "pmra_error"),
+                ("pmdec_error", "pmdec_error"),
+                ("radial_velocity_error", "radial_velocity_error"),
+                ("phot_bp_mean_mag", "phot_bp_mean_mag"),
+                ("phot_rp_mean_mag", "phot_rp_mean_mag"),
+                ("bp_rp", "bp_rp"),
+                ("astrometric_excess_noise", "astrometric_excess_noise"),
+                ("ruwe", "ruwe"),
+                ("phot_g_mean_flux_over_error", "phot_g_mean_flux_over_error"),
+            ]
+            for gaia_col, extra_key in _extra_columns:
+                for col in (gaia_col, gaia_col.upper()):
+                    if col in row.colnames:
+                        try:
+                            v = float(row[col])
+                            if v == v:  # NaN check (masked values become nan)
+                                extra[extra_key] = v
+                        except (ValueError, TypeError):
+                            pass
+                        break
+
             objects.append(
                 AstroObject(
                     source="gaia",

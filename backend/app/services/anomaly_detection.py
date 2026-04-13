@@ -337,6 +337,10 @@ def detect_anomalies(
     data: pd.DataFrame,
     features: Optional[list[str]] = None,
     methods: str | list[str] = "all",
+    if_contamination: float = 0.05,
+    ae_threshold_percentile: float = 95,
+    dbscan_min_samples: int = 5,
+    voting_threshold: int = 2,
 ) -> pd.DataFrame:
     """Run ensemble anomaly detection and combine results.
 
@@ -349,6 +353,14 @@ def detect_anomalies(
     methods : str or list[str]
         ``'all'`` to run every method, or a list like
         ``['isolation_forest', 'autoencoder', 'dbscan']``.
+    if_contamination : float
+        Contamination parameter for Isolation Forest (0, 0.5].
+    ae_threshold_percentile : float
+        Percentile threshold for the autoencoder reconstruction error.
+    dbscan_min_samples : int
+        Minimum samples for DBSCAN dense region formation.
+    voting_threshold : int
+        Minimum number of methods that must flag a sample for ensemble agreement.
 
     Returns
     -------
@@ -398,7 +410,7 @@ def detect_anomalies(
 
     if "isolation_forest" in run_methods:
         try:
-            result = isolation_forest_detect(result, features)
+            result = isolation_forest_detect(result, features, contamination=if_contamination)
         except Exception:
             logger.exception("Isolation Forest failed")
             result["if_anomaly"] = False
@@ -406,7 +418,7 @@ def detect_anomalies(
 
     if "autoencoder" in run_methods:
         try:
-            result = autoencoder_detect(result, features)
+            result = autoencoder_detect(result, features, threshold_percentile=ae_threshold_percentile)
         except Exception:
             logger.exception("Autoencoder failed")
             result["ae_anomaly"] = False
@@ -414,7 +426,7 @@ def detect_anomalies(
 
     if "dbscan" in run_methods:
         try:
-            result = dbscan_outlier_detect(result, features)
+            result = dbscan_outlier_detect(result, features, min_samples=dbscan_min_samples)
         except Exception:
             logger.exception("DBSCAN failed")
             result["dbscan_anomaly"] = False
@@ -445,9 +457,9 @@ def detect_anomalies(
 
     vote_count = votes[active_methods].sum(axis=1)
 
-    # Ensemble anomaly: flagged by >= 2 methods (or >= 1 if only 1 method ran)
-    threshold = 2 if len(active_methods) >= 2 else 1
-    result["is_anomaly"] = vote_count >= threshold
+    # Ensemble anomaly: flagged by >= voting_threshold methods (or >= 1 if only 1 method ran)
+    effective_threshold = voting_threshold if len(active_methods) >= voting_threshold else 1
+    result["is_anomaly"] = vote_count >= effective_threshold
 
     # Normalised ensemble score in [0, 1]
     # Blend: proportion of methods that flagged + normalised per-method scores

@@ -75,6 +75,73 @@ function extractRows(result: ADQLResult, limit = 1000): Array<Record<string, unk
   });
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function enrichAdqlRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return rows.map((row) => {
+    const next = { ...row };
+    if (next.bp_rp == null) {
+      const bp = toFiniteNumber(next.phot_bp_mean_mag);
+      const rp = toFiniteNumber(next.phot_rp_mean_mag);
+      if (bp != null && rp != null) next.bp_rp = bp - rp;
+    }
+    if (next.abs_g_mag == null) {
+      const g = toFiniteNumber(next.phot_g_mean_mag);
+      const parallax = toFiniteNumber(next.parallax);
+      if (g != null && parallax != null && parallax > 0) {
+        const distancePc = 1000 / parallax;
+        next.abs_g_mag = g - 5 * (Math.log10(distancePc) - 1);
+      }
+    }
+    return next;
+  });
+}
+
+type StoredAdqlResultSet = {
+  service: string;
+  query: string;
+  row_count: number;
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  stored_at: string;
+};
+
+const ADQL_RESULT_SET_STORAGE_KEY = "astro_adql_result_sets";
+const MAX_STORED_ADQL_RESULT_SETS = 6;
+const MAX_STORED_ADQL_ROWS = 500;
+
+function readStoredAdqlResultSets(): StoredAdqlResultSet[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ADQL_RESULT_SET_STORAGE_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed as StoredAdqlResultSet[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistAdqlResultSet(service: string, query: string, result: ADQLResult) {
+  const rows = enrichAdqlRows(extractRows(result, MAX_STORED_ADQL_ROWS));
+  const derivedColumns = new Set(result.columns);
+  if (rows.some((row) => row.bp_rp != null)) derivedColumns.add("bp_rp");
+  if (rows.some((row) => row.abs_g_mag != null)) derivedColumns.add("abs_g_mag");
+  const nextSet: StoredAdqlResultSet = {
+    service,
+    query,
+    row_count: result.row_count,
+    columns: Array.from(derivedColumns),
+    rows,
+    stored_at: new Date().toISOString(),
+  };
+  const existing = readStoredAdqlResultSets().filter((item) => item.query !== query || item.service !== service);
+  existing.push(nextSet);
+  localStorage.setItem(
+    ADQL_RESULT_SET_STORAGE_KEY,
+    JSON.stringify(existing.slice(-MAX_STORED_ADQL_RESULT_SETS))
+  );
+}
+
 function preferredChartType(_result: ADQLResult | null): string {
   return "scatter_custom";
 }
@@ -120,6 +187,7 @@ export default function ADQLPage() {
         query_time_ms: Math.round(performance.now() - started),
       });
       const rows = extractRows(res);
+      persistAdqlResultSet(svc, query, res);
       try {
         localStorage.setItem("astro_last_adql", JSON.stringify({
           service: svc,
@@ -128,7 +196,7 @@ export default function ADQLPage() {
           columns: res.columns,
           sample: rows.slice(0, 5),
         }));
-        localStorage.setItem("astro_last_adql_rows", JSON.stringify(rows));
+        localStorage.setItem("astro_last_adql_rows", JSON.stringify(enrichAdqlRows(rows)));
       } catch { /* ignore */ }
       addHistory(query); setHistory(getHistory());
       logOperation("adql", `${svc}: ${query.slice(0, 80)}`);
@@ -291,11 +359,12 @@ export default function ADQLPage() {
               Jupyter Notebook
             </button>
             <button className="btn-secondary" onClick={() => {
+              const resultSets = readStoredAdqlResultSets();
               localStorage.setItem(
                 "astro_chat_draft",
-                `Use get_adql_results() to analyze the ADQL result set that is already loaded from this ${svc.toUpperCase()} query. Explain the schema, summarize the sample, and suggest the next Python analysis steps:\n\n${query}`
+                `Use get_adql_result_sets() to inspect the ADQL result history already loaded from the ADQL page. The latest result is from ${svc.toUpperCase()}. If you only need the newest rows, use get_adql_results(). Explain the schema, summarize the sample, and then continue with Python analysis defensively (check keys, empty arrays, and row counts before plotting).\n\nLatest query:\n${query}`
               );
-              localStorage.setItem("astro_chat_new_session", "1");
+              localStorage.setItem("astro_last_adql_result_set_count", String(resultSets.length));
               navigate("/chat");
             }}>
               Send to AI

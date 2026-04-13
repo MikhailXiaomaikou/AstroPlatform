@@ -1472,7 +1472,6 @@ export default function ChatPage() {
     }));
     const saved = await saveChatSession(data, currentSessionId || undefined);
     setCurrentSessionId(saved.id);
-    pythonSessionIdRef.current = saved.id;
     refreshSessions();
     return saved.id;
   }, [currentSessionId, messages, refreshSessions, user]);
@@ -1501,7 +1500,6 @@ export default function ChatPage() {
       const saved = await saveChatSession(sessionData, currentSessionId || undefined);
       setCurrentSessionId(saved.id);
       setPaperSessionId(saved.id);
-      pythonSessionIdRef.current = saved.id;
       refreshSessions();
 
       const validation = await validatePaperSession(saved.id);
@@ -1614,7 +1612,6 @@ export default function ChatPage() {
       const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
       const res = await persistSession(data, currentSessionId);
       setCurrentSessionId(res.id);
-      pythonSessionIdRef.current = res.id;
       refreshSessions();
       showToast(user ? "Chat saved" : "Chat saved locally");
     } catch { /* ignore */ }
@@ -1630,7 +1627,6 @@ export default function ChatPage() {
       persistSession(data, currentSessionId)
         .then((res) => {
           setCurrentSessionId(res.id);
-          pythonSessionIdRef.current = res.id;
           refreshSessions();
         })
         .catch(() => {});
@@ -1649,7 +1645,7 @@ export default function ChatPage() {
       }));
       setMessages(loaded);
       setCurrentSessionId(id);
-      pythonSessionIdRef.current = id;
+      pythonSessionIdRef.current = crypto.randomUUID();
       setShowSessions(false);
       saveChatHistory(loaded);
     } catch { /* ignore */ }
@@ -1689,7 +1685,7 @@ export default function ChatPage() {
         }));
         setMessages(loaded);
         setCurrentSessionId(pendingSessionId);
-        pythonSessionIdRef.current = pendingSessionId;
+        pythonSessionIdRef.current = crypto.randomUUID();
         saveChatHistory(loaded);
       })
       .catch(() => {
@@ -1896,6 +1892,10 @@ export default function ChatPage() {
       try {
         const lastAdqlRows = localStorage.getItem("astro_last_adql_rows");
         if (lastAdqlRows) wsContext.last_adql_rows = JSON.parse(lastAdqlRows);
+      } catch { /* ignore */ }
+      try {
+        const lastAdqlResultSets = localStorage.getItem("astro_adql_result_sets");
+        if (lastAdqlResultSets) wsContext.last_adql_result_sets = JSON.parse(lastAdqlResultSets);
       } catch { /* ignore */ }
       wsContext.python_session_id = pythonSessionIdRef.current;
       wsContext.current_session_id = currentSessionId;

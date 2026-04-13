@@ -1,5 +1,10 @@
 """Template-based photometric redshift estimation.
 
+WARNING: This is a simplified demo implementation with only 7 SED templates
+and no dust extinction modeling. NOT suitable for scientific publication.
+For research-grade photo-z, use EAZY (https://github.com/gbrammer/eazy-py)
+or Le Phare (https://www.cfht.hawaii.edu/~arnouts/LEPHARE/).
+
 Fits broadband photometry against a library of 7 simplified SED templates
 (E, Sbc, Scd, Im, SB1, SB2, SB3) over a redshift grid to produce z_phot,
 uncertainties, and the full P(z).  Uses only numpy/scipy — no external SED
@@ -297,6 +302,8 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict) -> dict:
         "z_grid": z_grid.tolist(),
         "best_template": best_template,
         "chi2_min": float(chi2_min),
+        "reliability": "demo",
+        "note": "Simplified template fitting with 7 SEDs. Use EAZY or Le Phare for publication-quality photo-z.",
     }
 
 
@@ -425,6 +432,8 @@ def estimate_photo_z_ml(magnitudes: dict, mag_errors: dict | None = None) -> dic
         "z_grid": z_grid.tolist(),
         "method": "empirical_colors",
         "colors_used": n_valid,
+        "reliability": "demo",
+        "note": "Simplified template fitting with 7 SEDs. Use EAZY or Le Phare for publication-quality photo-z.",
     }
 
 
@@ -531,4 +540,6 @@ def estimate_photo_z(
             "template": template_result,
             "ml": ml_result,
         },
+        "reliability": "demo",
+        "note": "Simplified template fitting with 7 SEDs. Use EAZY or Le Phare for publication-quality photo-z.",
     }

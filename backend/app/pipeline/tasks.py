@@ -64,33 +64,38 @@ def finalize_run_task(self, node_results_list: list, run_id: str,
     for node_id, result in zip(node_ids, node_results_list):
         results[node_id] = result
 
+    api_results = _trim_for_api(results)
     notify_progress_sync(run_id, {
         "type": "run_complete",
         "status": "completed",
-        "results": _trim_results(results),
+        "results": api_results,
     })
 
-    # Store in database (sync)
+    # Store full (untrimmed) results in database
     try:
         _store_results_sync(run_id, results)
     except Exception as e:
         logger.error(f"Failed to store results for run {run_id}: {e}")
 
-    return {"run_id": run_id, "status": "completed", "results": _trim_results(results)}
+    return {"run_id": run_id, "status": "completed", "results": api_results}
 
 
-def _trim_results(node_results: dict) -> dict:
-    """Make results JSON-serializable by trimming large arrays."""
+def _trim_for_api(node_results: dict) -> dict:
+    """Trim large arrays for API/WebSocket responses (not for DB storage)."""
     safe = {}
     for nid, res in node_results.items():
         r = dict(res)
         if "data" in r and isinstance(r["data"], dict):
             trimmed = {}
+            truncated = False
             for k, v in r["data"].items():
-                if isinstance(v, list) and len(v) > 20:
-                    trimmed[k] = v[:10] + ["..."] + v[-10:]
+                if isinstance(v, list) and len(v) > 50:
+                    trimmed[k] = v[:25] + ["..."] + v[-25:]
+                    truncated = True
                 else:
                     trimmed[k] = v
+            if truncated:
+                trimmed["_truncated"] = True
             r["data"] = trimmed
         safe[nid] = r
     return safe
@@ -116,7 +121,7 @@ def _store_results_sync(run_id: str, results: dict):
                 .where(PipelineRun.id == uuid.UUID(run_id))
                 .values(
                     status="completed",
-                    results=_trim_results(results),
+                    results=results,
                     completed_at=datetime.now(timezone.utc),
                 )
             )

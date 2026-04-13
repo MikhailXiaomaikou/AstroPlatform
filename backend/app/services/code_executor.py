@@ -264,14 +264,34 @@ def _make_data_accessor(session_id: str):
         return get_cached_results(f"latest:{session_id}") or get_cached_results("latest") or []
 
     def get_adql_results():
-        """Get the latest ADQL query results as a list of dicts."""
+        """Get the latest ADQL query results as a row-wise list of dicts."""
         from app.services.ai_tools import get_cached_results
         return get_cached_results(f"latest_adql:{session_id}") or get_cached_results("latest_adql") or []
+
+    def get_latest_adql_result():
+        """Get the latest ADQL result set with service/query metadata and rows."""
+        from app.services.ai_tools import get_cached_results
+        return (
+            get_cached_results(f"latest_adql_set:{session_id}")
+            or get_cached_results("latest_adql_set")
+            or {}
+        )
+
+    def get_adql_result_sets():
+        """Get recent ADQL result sets for multi-query workflows."""
+        from app.services.ai_tools import get_cached_results
+        return (
+            get_cached_results(f"latest_adql_sets:{session_id}")
+            or get_cached_results("latest_adql_sets")
+            or []
+        )
 
     return {
         "load_fits": load_fits,
         "get_search_results": get_search_results,
         "get_adql_results": get_adql_results,
+        "get_latest_adql_result": get_latest_adql_result,
+        "get_adql_result_sets": get_adql_result_sets,
     }
 
 

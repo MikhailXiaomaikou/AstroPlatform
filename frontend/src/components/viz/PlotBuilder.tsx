@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 
+declare global {
+  interface Window {
+    Plotly?: {
+      downloadImage: (gd: HTMLElement, opts: Record<string, unknown>) => Promise<string>;
+    };
+  }
+}
+
 interface Props {
   initialData?: Record<string, unknown>;
   initialChartType?: string;
@@ -162,7 +170,7 @@ function buildPlot(
   data: Record<string, unknown>,
   showFit: boolean,
   showStats: boolean,
-  customScatterOpts?: { xCol: string; yCol: string; colorCol: string; flipY: boolean },
+  customScatterOpts?: { xCol: string; yCol: string; colorCol: string; flipY: boolean; errorYCol: string | null; errorXCol: string | null },
 ): { data: Record<string, unknown>[]; layout: Record<string, unknown> } {
   const ra = (data.ra || []) as number[];
   const dec = (data.dec || []) as number[];
@@ -376,13 +384,15 @@ function buildPlot(
   }
 
   if (chartType === "scatter_custom" && customScatterOpts) {
-    const { xCol, yCol, colorCol, flipY } = customScatterOpts;
+    const { xCol, yCol, colorCol, flipY, errorYCol, errorXCol } = customScatterOpts;
     const xArr = (data[xCol] || []) as number[];
     const yArr = (data[yCol] || []) as number[];
     const n = Math.min(xArr.length, yArr.length);
     if (n === 0) return { data: [], layout: mkLayout("No data for selected columns", mkAxis(""), mkAxis("")) };
     const hasColor = colorCol && colorCol !== "" && data[colorCol];
     const colorArr = hasColor ? (data[colorCol] as number[]).slice(0, n) : undefined;
+    const errorYArr = errorYCol && data[errorYCol] ? (data[errorYCol] as number[]).slice(0, n) : undefined;
+    const errorXArr = errorXCol && data[errorXCol] ? (data[errorXCol] as number[]).slice(0, n) : undefined;
     const traces: Record<string, unknown>[] = [{
       type: "scattergl", mode: "markers",
       x: xArr.slice(0, n), y: yArr.slice(0, n),
@@ -395,6 +405,22 @@ function buildPlot(
         line: { width: 0.5, color: "rgba(0,0,0,0.12)" },
         opacity: 0.82,
       },
+      error_y: errorYArr ? {
+        type: "data" as const,
+        array: errorYArr,
+        visible: true,
+        color: "rgba(0,0,0,0.3)",
+        thickness: 1,
+        width: 2,
+      } : undefined,
+      error_x: errorXArr ? {
+        type: "data" as const,
+        array: errorXArr,
+        visible: true,
+        color: "rgba(0,0,0,0.3)",
+        thickness: 1,
+        width: 2,
+      } : undefined,
     }];
     if (showFit && n >= 2) {
       const fit = linearFit(xArr.slice(0, n), yArr.slice(0, n));
@@ -477,6 +503,8 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
   const [customY, setCustomY] = useState("");
   const [customColor, setCustomColor] = useState("");
   const [flipY, setFlipY] = useState(false);
+  const [errorYCol, setErrorYCol] = useState<string | null>(null);
+  const [errorXCol, setErrorXCol] = useState<string | null>(null);
 
   useEffect(() => {
     if (chartType !== "scatter_custom" || numericColumns.length === 0) return;
@@ -523,7 +551,7 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
   const plotResult = useMemo(() => {
     if (!initialData) return null;
     const scatterOpts = chartType === "scatter_custom" && customX && customY
-      ? { xCol: customX, yCol: customY, colorCol: customColor, flipY }
+      ? { xCol: customX, yCol: customY, colorCol: customColor, flipY, errorYCol, errorXCol }
       : undefined;
     const result = buildPlot(chartType, initialData, showFit, showStats, scatterOpts);
 
@@ -565,7 +593,44 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
     }
 
     return result;
-  }, [chartType, initialData, showFit, showStats, xMin, xMax, yMin, yMax, coordFormat, customX, customY, customColor, flipY]);
+  }, [chartType, initialData, showFit, showStats, xMin, xMax, yMin, yMax, coordFormat, customX, customY, customColor, flipY, errorYCol, errorXCol]);
+
+  const handleExportSVG = () => {
+    const plotDiv = document.querySelector(".js-plotly-plot") as HTMLElement | null;
+    if (plotDiv && window.Plotly) {
+      window.Plotly.downloadImage(plotDiv, {
+        format: "svg",
+        width: 800,
+        height: 600,
+        filename: "astro_plot",
+      });
+    }
+  };
+
+  const handleExportPDF = () => {
+    const plotDiv = document.querySelector(".js-plotly-plot") as HTMLElement | null;
+    if (plotDiv && window.Plotly) {
+      window.Plotly.downloadImage(plotDiv, {
+        format: "pdf",
+        width: 800,
+        height: 600,
+        filename: "astro_plot",
+      });
+    }
+  };
+
+  const handleExportPNG = () => {
+    const plotDiv = document.querySelector(".js-plotly-plot") as HTMLElement | null;
+    if (plotDiv && window.Plotly) {
+      window.Plotly.downloadImage(plotDiv, {
+        format: "png",
+        width: 2400,
+        height: 1800,
+        filename: "astro_plot_hires",
+        scale: 1,
+      });
+    }
+  };
 
   return (
     <div className="plot-builder">
@@ -632,6 +697,20 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
             <input type="checkbox" checked={flipY} onChange={(e) => setFlipY(e.target.checked)} />
             Flip Y
           </label>
+          <label className="plot-range-label">
+            Y Error{" "}
+            <select value={errorYCol ?? ""} onChange={(e) => setErrorYCol(e.target.value || null)} className="plot-range-input" style={{ width: "auto", minWidth: 120 }}>
+              <option value="">None</option>
+              {numericColumns.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="plot-range-label">
+            X Error{" "}
+            <select value={errorXCol ?? ""} onChange={(e) => setErrorXCol(e.target.value || null)} className="plot-range-input" style={{ width: "auto", minWidth: 120 }}>
+              <option value="">None</option>
+              {numericColumns.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
         </div>
       )}
 
@@ -653,6 +732,12 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
           {plotResult ? "No data available for this chart type" : "No data to visualize"}
         </div>
       )}
+
+      <div className="plot-export-toolbar" style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end" }}>
+        <button className="btn-secondary btn-small" onClick={handleExportSVG}>Export SVG</button>
+        <button className="btn-secondary btn-small" onClick={handleExportPDF}>Export PDF</button>
+        <button className="btn-secondary btn-small" onClick={handleExportPNG}>Export Hi-Res PNG</button>
+      </div>
     </div>
   );
 }

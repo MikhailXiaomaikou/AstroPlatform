@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_optional_user
 from app.models.database import get_db
 from app.models.schemas import PipelineRun, PipelineTemplateDB, User
-from app.services.ai_tools import store_search_results
+from app.services.ai_tools import augment_adql_payload, build_adql_result_set, store_adql_result_set
 from app.storage import download_fits
 
 router = APIRouter(prefix="/api/integration", tags=["integration"])
@@ -381,17 +381,23 @@ async def adql_query(req: ADQLRequest):
             except Exception:
                 data[col] = [str(v) for v in arr]
 
-        store_search_results(
-            "latest_adql",
-            [
-                {col: data.get(col, [None] * len(table))[i] for col in columns}
-                for i in range(min(len(table), 1000))
-            ],
+        augmented_columns, augmented_data, _rows = augment_adql_payload(
+            columns,
+            data,
+            len(table),
         )
+        result_set = build_adql_result_set(
+            service=req.service,
+            query=req.query,
+            columns=augmented_columns,
+            data=augmented_data,
+            row_count=len(table),
+        )
+        store_adql_result_set(None, result_set)
 
         return {
-            "columns": columns,
-            "data": data,
+            "columns": augmented_columns,
+            "data": augmented_data,
             "row_count": len(table),
             "service": req.service,
         }

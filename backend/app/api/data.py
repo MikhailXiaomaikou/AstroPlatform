@@ -209,6 +209,54 @@ def _search_timeout_for_source(source: str) -> float:
     return SOURCE_TIMEOUTS.get(source, 20.0)
 
 
+_CONNECTOR_CACHE_TTL = 600  # 10 minutes
+
+
+async def _cached_search(connector, source: str, query: str, ra: float | None, dec: float | None, radius: float, **kwargs):
+    """Search a connector with per-connector Redis caching.
+
+    Returns ``(results, from_cache)`` where *from_cache* indicates whether the
+    results were served from Redis.  If Redis is unavailable the connector is
+    called directly and ``from_cache`` is always ``False``.
+    """
+    cache_ra = f"{ra:.4f}" if ra is not None else "none"
+    cache_dec = f"{dec:.4f}" if dec is not None else "none"
+    ck = f"connector:{source}:{query}:{cache_ra}:{cache_dec}:{radius:.2f}"
+
+    # Try cache first
+    cached = await cache_get(ck)
+    if cached is not None:
+        logger.debug("Connector cache hit for %s (key=%s)", source, ck)
+        return cached, True
+
+    # Cache miss — call the connector
+    results = await connector.search(query, ra=ra, dec=dec, radius=radius, **kwargs)
+
+    # Serialise AstroObject list to dicts for storage
+    serialised = [
+        {
+            "source": obj.source,
+            "object_id": obj.object_id,
+            "name": obj.name,
+            "ra": obj.ra,
+            "dec": obj.dec,
+            "object_type": obj.object_type,
+            "magnitude": obj.magnitude,
+            "redshift": obj.redshift,
+            "extra": obj.extra if obj.extra else {},
+        }
+        for obj in results
+    ]
+    await cache_set(ck, serialised, ttl=_CONNECTOR_CACHE_TTL)
+
+    return results, False
+
+
+def _rebuild_astro_objects(cached_dicts: list[dict]) -> list[AstroObject]:
+    """Re-hydrate a list of cached dicts back into AstroObject instances."""
+    return [AstroObject(**d) for d in cached_dicts]
+
+
 def _build_source_error_name(source_name: str, error_type: str, result: Exception) -> str:
     """Format a user-facing per-source search error."""
     if source_name == "ned" and error_type == "timeout":
@@ -326,14 +374,16 @@ async def search_data(
     async def _search_with_timeout(source: str):
         source_ra = search_ra if source in COORD_REQUIRED_SOURCES else ra
         source_dec = search_dec if source in COORD_REQUIRED_SOURCES else dec
+        connector = get_connector(source)
         return await asyncio.wait_for(
-            get_connector(source).search(q, ra=source_ra, dec=source_dec, radius=radius),
+            _cached_search(connector, source, q, source_ra, source_dec, radius),
             timeout=_search_timeout_for_source(source),
         )
 
     tasks = [_search_with_timeout(s) for s in source_list]
     results_per_source = await asyncio.gather(*tasks, return_exceptions=True)
 
+    any_cached = False
     all_results: list[SearchResult] = []
     for source_name, result in zip(source_list, results_per_source):
         if isinstance(result, Exception):
@@ -354,7 +404,11 @@ async def search_data(
                 )
             )
             continue
-        all_results.extend(_astro_to_result(obj) for obj in result)
+        objects, from_cache = result
+        if from_cache:
+            any_cached = True
+            objects = _rebuild_astro_objects(objects)
+        all_results.extend(_astro_to_result(obj) for obj in objects)
 
     # Deduplicate by position across sources
     all_results = _dedup_by_position(all_results)
@@ -439,6 +493,7 @@ class AdvancedSearchMeta(BaseModel):
     observed_freq_max_ghz: Optional[float] = None
     observed_wavelength_min_um: Optional[float] = None
     observed_wavelength_max_um: Optional[float] = None
+    cached: bool = False
 
 
 class AdvancedSearchResponse(BaseModel):
@@ -661,11 +716,11 @@ async def advanced_search(
                     radius=body.radius,
                 ),
                 timeout=20.0,
-            )
+            ), False  # search_by_criteria bypasses connector cache
 
         return await asyncio.wait_for(
-            connector.search(
-                query_text, ra=search_ra, dec=search_dec, radius=body.radius
+            _cached_search(
+                connector, source, query_text, search_ra, search_dec, body.radius
             ),
             timeout=20.0,
         )
@@ -673,6 +728,7 @@ async def advanced_search(
     tasks = [_search_source(s) for s in source_list]
     results_per_source = await asyncio.gather(*tasks, return_exceptions=True)
 
+    any_cached = False
     all_results: list[SearchResult] = []
     for source_name, result in zip(source_list, results_per_source):
         if isinstance(result, Exception):
@@ -693,8 +749,13 @@ async def advanced_search(
             )
             continue
 
+        objects, from_cache = result
+        if from_cache:
+            any_cached = True
+            objects = _rebuild_astro_objects(objects)
+
         # Post-filter results by science criteria
-        filtered = _post_filter_results(result, body, source=source_name)
+        filtered = _post_filter_results(objects, body, source=source_name)
         all_results.extend(_astro_to_result(obj) for obj in filtered)
 
     meta = AdvancedSearchMeta(
@@ -708,6 +769,7 @@ async def advanced_search(
         observed_freq_max_ghz=parsed.get("observed_freq_max_ghz"),
         observed_wavelength_min_um=parsed.get("observed_wavelength_min_um"),
         observed_wavelength_max_um=parsed.get("observed_wavelength_max_um"),
+        cached=any_cached,
     )
 
     response = AdvancedSearchResponse(results=all_results, meta=meta)

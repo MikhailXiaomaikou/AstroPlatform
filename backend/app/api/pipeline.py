@@ -352,15 +352,14 @@ async def run_pipeline(
         await db.commit()
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {type(e).__name__}: {e}")
 
-    # Trim results
-    safe_results = _trim_results(node_results)
-
+    # Store full results to DB; trim only for API response
     run.status = "completed"
-    run.results = safe_results
+    run.results = node_results
     run.completed_at = datetime.now(timezone.utc)
     await db.commit()
 
-    return RunResponse(run_id=run_id_str, status="completed", results=safe_results, warnings=dag_warnings)
+    api_results = _trim_for_api(node_results)
+    return RunResponse(run_id=run_id_str, status="completed", results=api_results, warnings=dag_warnings)
 
 
 class BatchRunRequest(BaseModel):
@@ -408,7 +407,7 @@ async def batch_run_pipeline(
             node_results = await loop.run_in_executor(
                 None, execute_dag, req.dag, input_id, run_id
             )
-            safe = _trim_results(node_results)
+            safe = _trim_for_api(node_results)
             results.append({"input": input_id, "run_id": run_id, "status": "completed", "results": safe})
             succeeded += 1
         except Exception as e:
@@ -630,17 +629,22 @@ def _compute_dag_diff(dag1: dict, dag2: dict) -> DiffResult:
     )
 
 
-def _trim_results(node_results: dict) -> dict:
+def _trim_for_api(node_results: dict) -> dict:
+    """Trim large arrays for API responses (not for DB storage)."""
     safe_results = {}
     for nid, res in node_results.items():
         safe = dict(res)
         if "data" in safe and isinstance(safe["data"], dict):
             trimmed = {}
+            truncated = False
             for k, v in safe["data"].items():
-                if isinstance(v, list) and len(v) > 20:
-                    trimmed[k] = v[:10] + ["..."] + v[-10:]
+                if isinstance(v, list) and len(v) > 50:
+                    trimmed[k] = v[:25] + ["..."] + v[-25:]
+                    truncated = True
                 else:
                     trimmed[k] = v
+            if truncated:
+                trimmed["_truncated"] = True
             safe["data"] = trimmed
         safe_results[nid] = safe
     return safe_results

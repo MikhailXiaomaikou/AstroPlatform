@@ -418,6 +418,7 @@ export interface DagEdge {
   id: string;
   source: string;
   target: string;
+  sourceHandle?: string;
 }
 
 export interface RunResponse {
@@ -1835,12 +1836,24 @@ export interface AnomalyStats {
 
 export async function getAnomalyFeed(
   page = 1,
-  filters?: { min_score?: number; source?: string; sort?: string },
+  filters?: {
+    min_score?: number;
+    source?: string;
+    sort?: string;
+    if_contamination?: number;
+    ae_threshold_percentile?: number;
+    dbscan_min_samples?: number;
+    voting_threshold?: number;
+  },
 ): Promise<AnomalyFeedResponse> {
   const params: Record<string, string | number> = { page };
   if (filters?.min_score !== undefined) params.min_score = filters.min_score;
   if (filters?.source) params.source = filters.source;
   if (filters?.sort) params.sort = filters.sort;
+  if (filters?.if_contamination !== undefined) params.if_contamination = filters.if_contamination;
+  if (filters?.ae_threshold_percentile !== undefined) params.ae_threshold_percentile = filters.ae_threshold_percentile;
+  if (filters?.dbscan_min_samples !== undefined) params.dbscan_min_samples = filters.dbscan_min_samples;
+  if (filters?.voting_threshold !== undefined) params.voting_threshold = filters.voting_threshold;
   const { data } = await api.get<AnomalyFeedResponse>("/api/anomalies/feed", { params });
   return data;
 }
