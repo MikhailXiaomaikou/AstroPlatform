@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback, lazy, Suspense } fro
 import {
   sendChatMessage,
   executeChatAction,
-  getStoredApiKey,
+  getStoredApiKeys,
   searchADS,
   getBibTeX,
   logOperation,
@@ -50,6 +50,47 @@ interface DisplayMessage {
   content: string;
   actions?: ChatAction[];
   actionResults?: Map<number, Record<string, unknown>>;
+}
+
+function hasStoredAiKey(): boolean {
+  const keys = getStoredApiKeys();
+  return ["anthropic", "openai", "deepseek", "local"].some((provider) => Boolean(keys[provider]));
+}
+
+function buildMinimalChatHistory(messages: DisplayMessage[]): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "assistant" || !message.actions?.length) {
+      return { role: message.role, content: message.content };
+    }
+
+    const pythonReplayActions = message.actions
+      .filter((action) => action.action === "run_python")
+      .map((action) => {
+        const raw = action as unknown as Record<string, unknown>;
+        const toolInput = (raw.tool_input && typeof raw.tool_input === "object")
+          ? raw.tool_input as Record<string, unknown>
+          : (raw.params && typeof raw.params === "object" ? raw.params as Record<string, unknown> : {});
+        const code = typeof toolInput.code === "string" ? toolInput.code : "";
+        if (!code.trim()) {
+          return null;
+        }
+        const rawResult = raw.tool_result && typeof raw.tool_result === "object"
+          ? raw.tool_result as Record<string, unknown>
+          : undefined;
+        return {
+          action: "run_python",
+          tool_input: { code },
+          tool_result: rawResult ? { success: rawResult.success !== false } : { success: true },
+        } as unknown as ChatAction;
+      })
+      .filter((action): action is ChatAction => action !== null);
+
+    return {
+      role: message.role,
+      content: message.content,
+      actions: pythonReplayActions.length > 0 ? pythonReplayActions : undefined,
+    };
+  });
 }
 
 function ActionCard({
@@ -1316,7 +1357,7 @@ export default function ChatPage() {
   const { user } = useAuth();
   const { t } = useI18n();
   const { track } = useTracking();
-  const [hasKey, setHasKey] = useState(() => !!getStoredApiKey("anthropic"));
+  const [hasKey, setHasKey] = useState(() => hasStoredAiKey());
   const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
   const [input, setInput] = useState("");
   const [pageError, _setPageError] = useState<string | null>(null);
@@ -1912,11 +1953,7 @@ export default function ChatPage() {
         prompt_length_words: text.split(/\s+/).filter(Boolean).length,
         topic_keywords: text.split(/[\s,.;:!?，。；：！？]+/).filter(Boolean).slice(0, 8),
       });
-      const chatHistory: ChatMessage[] = updatedMessages.map((m) => ({
-        role: m.role,
-        content: m.content,
-        actions: m.actions,
-      }));
+      const chatHistory = buildMinimalChatHistory(updatedMessages);
 
       logOperation("chat", `Search: ${text}`);
 
@@ -1979,6 +2016,9 @@ export default function ChatPage() {
         }
       } else if (err instanceof Error) {
         errorDetail = err.message;
+      }
+      if (errorDetail.includes("Could not reach the backend server")) {
+        errorDetail = "The request payload was likely rejected before the app server handled it. This usually happens when the previous tool results made the second-round chat request too large.";
       }
       const errorMsg: DisplayMessage = {
         id: crypto.randomUUID(),
