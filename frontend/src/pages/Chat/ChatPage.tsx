@@ -54,7 +54,7 @@ interface DisplayMessage {
 
 function hasStoredAiKey(): boolean {
   const keys = getStoredApiKeys();
-  return ["anthropic", "openai", "deepseek", "local"].some((provider) => Boolean(keys[provider]));
+  return Object.values(keys).some((v) => typeof v === "string" && v.trim().length > 0);
 }
 
 function buildMinimalChatHistory(messages: DisplayMessage[]): ChatMessage[] {
@@ -1358,6 +1358,12 @@ export default function ChatPage() {
   const { t } = useI18n();
   const { track } = useTracking();
   const [hasKey, setHasKey] = useState(() => hasStoredAiKey());
+
+  // Re-check API key on mount (picks up keys set in Settings page)
+  useEffect(() => {
+    if (!hasKey && hasStoredAiKey()) setHasKey(true);
+  }); // intentionally no deps — runs every render but only sets state once
+
   const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
   const [input, setInput] = useState("");
   const [pageError, _setPageError] = useState<string | null>(null);
