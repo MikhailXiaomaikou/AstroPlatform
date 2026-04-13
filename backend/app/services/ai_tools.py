@@ -606,6 +606,7 @@ async def execute_tool(
     tool_name: str,
     tool_input: dict,
     api_key: str = "",
+    provider_api_keys: dict[str, str] | None = None,
     python_session_id: str = "default",
 ) -> dict:
     """Execute a tool call and return the result as a dict."""
@@ -617,7 +618,7 @@ async def execute_tool(
         elif tool_name == "get_object_info":
             return await _exec_object_info(tool_input)
         elif tool_name == "analyze_spectrum":
-            return await _exec_analyze(tool_input, api_key)
+            return await _exec_analyze(tool_input, api_key, provider_api_keys)
         elif tool_name == "generate_pipeline":
             return _exec_pipeline(tool_input)
         elif tool_name == "search_literature":
@@ -780,8 +781,8 @@ async def _exec_object_info(inp: dict) -> dict:
     }
 
 
-async def _exec_analyze(inp: dict, api_key: str) -> dict:
-    from app.services.spectrum_analyzer import extract_spectrum_from_fits, analyze_spectrum, build_claude_prompt
+async def _exec_analyze(inp: dict, api_key: str, provider_api_keys: dict[str, str] | None = None) -> dict:
+    from app.services.spectrum_analyzer import extract_spectrum_from_fits, analyze_spectrum, ai_interpret
     from app.pipeline.nodes.redshift import redshift_estimate
 
     spec = extract_spectrum_from_fits(inp["fits_path"])
@@ -798,15 +799,25 @@ async def _exec_analyze(inp: dict, api_key: str) -> dict:
         except Exception:
             pass
 
-    return {
+    result = {
         "continuum_shape": summary.continuum_shape,
         "n_peaks": len(summary.peaks),
         "emission_peaks": [{"wavelength": p.wavelength, "snr": p.snr} for p in summary.peaks if p.is_emission][:10],
         "absorption_features": [{"wavelength": p.wavelength, "snr": p.snr} for p in summary.peaks if not p.is_emission][:10],
         "wavelength_range": [summary.wavelength_min, summary.wavelength_max],
         "redshift_estimate": rz_result,
-        "prompt_summary": build_claude_prompt(summary, rz_result),
     }
+    if api_key or provider_api_keys:
+        try:
+            result["ai_interpretation"] = await ai_interpret(
+                summary,
+                rz_result,
+                api_key,
+                provider_api_keys=provider_api_keys,
+            )
+        except Exception as exc:
+            result["ai_interpretation_error"] = str(exc)
+    return result
 
 
 def _exec_pipeline(inp: dict) -> dict:

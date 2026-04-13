@@ -105,6 +105,7 @@ def full_reduction(
     science_data, header = _read_fits_array(science_fits_path)
     reduction_log: list[str] = []
     science_exptime = float(header.get("EXPTIME", 1.0) or 1.0)
+    bias_frames: list[np.ndarray] = []
 
     if bias_paths:
         bias_frames = [_read_fits_array(path)[0] for path in bias_paths]
@@ -117,6 +118,8 @@ def full_reduction(
         dark_exptime = science_exptime
         for path in dark_paths:
             dark_data, dark_header = _read_fits_array(path)
+            if bias_frames:
+                dark_data = bias_subtract(dark_data, bias_frames)
             dark_arrays.append(dark_data)
             dark_exptime = float(dark_header.get("EXPTIME", dark_exptime) or dark_exptime)
         science_data = dark_subtract(science_data, dark_arrays, science_exptime=science_exptime, dark_exptime=dark_exptime)
@@ -124,7 +127,20 @@ def full_reduction(
         header.add_history(reduction_log[-1])
 
     if flat_paths:
-        flat_frames = [_read_fits_array(path)[0] for path in flat_paths]
+        flat_frames = []
+        for path in flat_paths:
+            flat_data, flat_header = _read_fits_array(path)
+            if bias_frames:
+                flat_data = bias_subtract(flat_data, bias_frames)
+            if dark_paths:
+                flat_exptime = float(flat_header.get("EXPTIME", science_exptime) or science_exptime)
+                flat_data = dark_subtract(
+                    flat_data,
+                    dark_arrays,
+                    science_exptime=flat_exptime,
+                    dark_exptime=dark_exptime,
+                )
+            flat_frames.append(flat_data)
         science_data = flat_correct(science_data, flat_frames)
         reduction_log.append(f"Flat-field correction using {len(flat_paths)} frame(s)")
         header.add_history(reduction_log[-1])
@@ -193,10 +209,30 @@ async def solve_astrometry(fits_path: str) -> dict:
             return {"solved": False, "error": "No astrometric calibration returned"}
 
     data, header = _read_fits_array(fits_path)
+    height, width = data.shape[:2]
+    pixscale_arcsec = calibration.get("pixscale")
+    orientation_deg = calibration.get("orientation")
+    parity = str(calibration.get("parity", "")).lower()
     if "ra" in calibration:
         header["CRVAL1"] = float(calibration["ra"])
     if "dec" in calibration:
         header["CRVAL2"] = float(calibration["dec"])
+    header["CRPIX1"] = float(width) / 2.0
+    header["CRPIX2"] = float(height) / 2.0
+    header["CTYPE1"] = "RA---TAN"
+    header["CTYPE2"] = "DEC--TAN"
+    header["CUNIT1"] = "deg"
+    header["CUNIT2"] = "deg"
+
+    if pixscale_arcsec:
+        scale_deg = float(pixscale_arcsec) / 3600.0
+        theta = np.deg2rad(float(orientation_deg or 0.0))
+        mirror = -1.0 if parity == "pos" else 1.0
+        header["CD1_1"] = -scale_deg * np.cos(theta)
+        header["CD1_2"] = mirror * scale_deg * np.sin(theta)
+        header["CD2_1"] = scale_deg * np.sin(theta)
+        header["CD2_2"] = mirror * scale_deg * np.cos(theta)
+
     header.add_history("Astrometric solution added via astrometry.net")
     solved_path = f"processed/{uuid.uuid4().hex}_wcs.fits"
     _write_fits_array(data, header, solved_path)

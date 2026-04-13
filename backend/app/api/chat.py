@@ -111,9 +111,9 @@ main_id, ra, dec, otype, otype_txt, rvz_redshift, rvz_radvel, rvz_type, sp_type,
 
 Available node types and their params:
 - **LoadData**: Load FITS file. params: {}
-- **BiasSubtract**: Subtract master bias from CCD image. params: {"bias_frames": [[...], [...]]}
-- **DarkCorrect**: Subtract scaled master dark. params: {"dark_frames": [[...], [...]], "science_exptime": float, "dark_exptime": float}
-- **FlatField**: Divide by normalized master flat. params: {"flat_frames": [[...], [...]]}
+- **BiasSubtract**: Subtract master bias from CCD image. params: {"science_fits_path": "optional/path.fits", "bias_paths": ["workspace/bias_1.fits", "workspace/bias_2.fits"]}
+- **DarkCorrect**: Subtract scaled master dark. params: {"science_fits_path": "optional/path.fits", "dark_paths": ["workspace/dark_1.fits"], "science_exptime": float, "dark_exptime": float}
+- **FlatField**: Divide by normalized master flat. params: {"science_fits_path": "optional/path.fits", "flat_paths": ["workspace/flat_1.fits"]}
 - **CosmicRayReject**: Clean cosmic rays. params: {"sigclip": 5.0, "sigfrac": 0.3, "objlim": 5.0}
 - **AstrometricSolve**: Solve WCS for an image. params: {"fits_path": "processed/file.fits"}
 - **SourceExtract**: Extract sources and aperture photometry. params: {"fits_path": "processed/file.fits", "aperture_radii": [3,5,7]}
@@ -466,9 +466,6 @@ async def chat_message_stream(
     async def generate():
         # Reuse the same logic but yield intermediate results
         provider_api_keys = _provider_api_keys(req.context, user)
-        if not provider_api_keys.get("anthropic"):
-            yield f"data: {json.dumps({'type': 'error', 'message': 'No API key configured'})}\n\n"
-            return
 
         from app.services.ai_tools import TOOLS, store_search_results
 
@@ -524,7 +521,10 @@ async def chat_message_stream(
 
                 tool_result_blocks = []
                 executed_tools = await _execute_tool_calls(
-                    tool_calls, provider_api_keys.get("anthropic", ""), python_session_id
+                    tool_calls,
+                    provider_api_keys.get("anthropic", ""),
+                    provider_api_keys,
+                    python_session_id,
                 )
                 for tc in executed_tools:
                     result = tc["result"]
@@ -581,7 +581,6 @@ async def _llm_messages_create(
         system=system,
         tools=tools,
         provider_api_keys=provider_api_keys,
-        api_key=provider_api_keys.get("anthropic"),
         max_tokens=4096,
         temperature=0.0,
         backend_timeout=180.0,
@@ -589,13 +588,13 @@ async def _llm_messages_create(
 
 
 async def _execute_tool_calls(
-    tool_calls: list[dict], api_key: str, python_session_id: str
+    tool_calls: list[dict], api_key: str, provider_api_keys: dict[str, str], python_session_id: str
 ) -> list[dict]:
     """Execute one model turn's tool calls concurrently while preserving order."""
     from app.services.ai_tools import execute_tool
 
     coroutines = [
-        execute_tool(tc["name"], tc["input"], api_key, python_session_id)
+        execute_tool(tc["name"], tc["input"], api_key, provider_api_keys, python_session_id)
         for tc in tool_calls
     ]
     results = await asyncio.gather(*coroutines)
@@ -625,11 +624,6 @@ async def chat_message(
     Falls back to single-turn with <actions> tags if tool_use is unavailable.
     """
     provider_api_keys = _provider_api_keys(req.context, user)
-    if not provider_api_keys.get("anthropic"):
-        raise HTTPException(
-            status_code=503,
-            detail="AI assistant not configured — set your API key in Settings or ask the admin to configure ANTHROPIC_API_KEY",
-        )
 
     from app.services.ai_tools import TOOLS, store_search_results
 
@@ -685,7 +679,10 @@ async def chat_message(
             # Execute tools and build tool_result messages
             tool_result_blocks = []
             executed_tools = await _execute_tool_calls(
-                tool_calls_in_turn, provider_api_keys.get("anthropic", ""), python_session_id
+                tool_calls_in_turn,
+                provider_api_keys.get("anthropic", ""),
+                provider_api_keys,
+                python_session_id,
             )
             for tc in executed_tools:
                 result = tc["result"]
@@ -765,7 +762,7 @@ async def execute_action(
 
     if action_type == "search":
         from app.connectors.registry import CONNECTORS_KEYS, get_connector
-        from app.api.data import SearchResult, _astro_to_result
+        from app.api.data import SearchResult, _astro_to_result, _resolve_search_coordinates
         from app.search.query_parser import parse_natural_query
 
         query = action.get("query", "")
@@ -787,26 +784,14 @@ async def execute_action(
             [redshift_min, redshift_max, object_type, required_fields]
         )
 
-        # Try to resolve coordinates from an object name in the query
-        import re
-
         search_ra = None
         search_dec = None
-        obj_match = re.search(
-            r"\b(M\s*\d+|NGC\s*\d+|IC\s*\d+|Mrk\s*\d+|3C\s*\d+|"
-            r"UGC\s*\d+|SDSS\s*J[\d.+-]+)\b",
-            query,
-            re.IGNORECASE,
-        )
-        resolved_name = obj_match.group(0) if obj_match else None
-        if resolved_name:
-            try:
-                from astropy.coordinates import SkyCoord
-
-                coord = SkyCoord.from_name(resolved_name)
-                search_ra, search_dec = coord.ra.deg, coord.dec.deg
-            except Exception:
-                pass
+        resolved_name = None
+        candidate_name = query.strip()
+        if candidate_name:
+            search_ra, search_dec = await _resolve_search_coordinates(candidate_name, None, None)
+            if search_ra is not None and search_dec is not None:
+                resolved_name = candidate_name
 
         async def _search_one(source: str):
             connector = get_connector(source)

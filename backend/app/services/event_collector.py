@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 import uuid
@@ -122,7 +123,7 @@ def track_event(event_type: str) -> Callable:
     """Decorator for async/sync functions that should emit tracking events."""
 
     def decorator(func: Callable):
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
                 started = time.perf_counter()

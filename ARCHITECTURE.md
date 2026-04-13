@@ -1,383 +1,270 @@
-# Astro Research Platform — Architecture
+# Standard Astro Architecture
 
-## System Overview
+## 1. System Shape
 
-```
-                                    Astro Research Platform v0.3.0
-                                    61 API Routes | 9 Connectors | 11 Pipeline Nodes
+Standard Astro is a full-stack astronomy platform with four main runtime layers:
 
-    +-------------------------------------------------------------------------------------------+
-    |                                      FRONTEND (React 19)                                   |
-    |                           TypeScript + Vite + ReactFlow + Axios                            |
-    |                                                                                           |
-    |  +-------------+ +-------------+ +-----------+ +--------+ +------+ +---------+ +--------+ |
-    |  | DataBrowser | |  Pipeline   | | Workspace | |  ADQL  | | Team | | Billing | |  Chat  | |
-    |  |  SearchBar  | |   Canvas    | |  Files    | | Query  | | Mgmt | |  Plans  | |   AI   | |
-    |  | ResultsTable| | (ReactFlow) | |  Tags     | | Editor | | Share| | Upgrade | | Claude | |
-    |  | FITSPreview | | NodePalette | |  Notes    | |        | |Comment| |  Usage | | Actions| |
-    |  |  ImageView  | |  Scheduler  | |  Batch    | |        | |      | |        | |        | |
-    |  |  Spectrum   | | VersionHist | |  Export   | |        | |      | |        | |        | |
-    |  |  WCS Grid   | |  DiffView   | |  SAMP     | |        | |      | |        | |        | |
-    |  |  Blink      | |  ExportBtns | |           | |        | |      | |        | |        | |
-    |  +------+------+ +------+------+ +-----+-----+ +---+----+ +--+---+ +---+----+ +---+----+ |
-    |         |               |              |            |         |         |           |      |
-    +---------+---------------+--------------+------------+---------+---------+-----------+------+
-              |               |              |            |         |         |           |
-              +-------+-------+------+-------+-----+-----+---------+---------+-----------+
-                      |              |              |
-                      v              v              v
-    +===================================================================================+
-    |                            API Client (Axios + JWT)                                |
-    |              80+ type-safe functions | Auto auth token injection                  |
-    +===================================================================================+
-                                         |
-                                    HTTP / WebSocket
-                                         |
-    +===================================================================================+
-    |                                   NGINX                                           |
-    |                    Reverse proxy | SPA routing | WebSocket proxy                  |
-    +===================================================================================+
-                                         |
-    +====================================|==============================================+
-    |                          BACKEND (FastAPI 0.3.0)                                  |
-    |                    Python 3.11 | Async | 61 Routes                                |
-    |                                                                                   |
-    |  +------------------+  +------------------+  +--------------------+               |
-    |  |   Middleware      |  |   Security       |  |    Infrastructure  |               |
-    |  |  +--------------+ |  |  +-----------+   |  |  +--------------+  |               |
-    |  |  | CORS         | |  |  | JWT Auth  |   |  |  | Rate Limit   |  |               |
-    |  |  | (env-based)  | |  |  | (bcrypt)  |   |  |  | (slowapi)    |  |               |
-    |  |  +--------------+ |  |  +-----------+   |  |  +--------------+  |               |
-    |  +------------------+  |  | Stripe Sub |   |  |  | Redis Cache  |  |               |
-    |                        |  +-----------+   |  |  | (5min TTL)   |  |               |
-    |                        +------------------+  |  +--------------+  |               |
-    |                                              +--------------------+               |
-    |                                                                                   |
-    |  +===========================================================================+   |
-    |  |                         API ROUTERS (10)                                   |   |
-    |  |                                                                           |   |
-    |  |  /api/auth/*          Auth, register, login, subscribe, Stripe webhook    |   |
-    |  |  /api/data/*          Search, fetch, FITS header/spectrum/WCS             |   |
-    |  |  /api/pipeline/*      Run, templates, versioning, diff, node types        |   |
-    |  |  /api/workspace/*     Batch search, tags, notes, export                   |   |
-    |  |  /api/scheduler/*     CRUD scheduled pipeline runs (cron)                 |   |
-    |  |  /api/team/*          Invite, members, share pipelines/datasets, comments |   |
-    |  |  /api/export/*        CSV, VOTable, PDF report export                     |   |
-    |  |  /api/integration/*   SAMP, VOTable, ADQL/TAP, Jupyter export             |   |
-    |  |  /api/chat/*          AI assistant (Claude) message + action execution     |   |
-    |  |  /health/*            Basic + detailed (DB/Redis/MinIO checks)             |   |
-    |  |  /ws/pipeline/{id}    WebSocket real-time pipeline progress                |   |
-    |  +===========================================================================+   |
-    |                                                                                   |
-    |  +==================================+  +=====================================+   |
-    |  |      DATA CONNECTORS (9)         |  |       PIPELINE ENGINE               |   |
-    |  |      (with retry decorator)      |  |  (Celery async + sync fallback)     |   |
-    |  |                                  |  |                                     |   |
-    |  |  +------+ +------+ +----------+ |  |  +-------------------------------+  |   |
-    |  |  | SDSS | | Gaia | | SIMBAD   | |  |  |      DAG Validator            |  |   |
-    |  |  +------+ +------+ +----------+ |  |  |  Cycle detection, type check  |  |   |
-    |  |  +--------+ +------+ +--------+ |  |  +-------------------------------+  |   |
-    |  |  | VizieR | | MAST | |  NED   | |  |                                     |   |
-    |  |  +--------+ +------+ +--------+ |  |  +-------------------------------+  |   |
-    |  |  +-------+ +---------+ +------+ |  |  |    Topological Sort & Execute  |  |   |
-    |  |  | 2MASS | | Chandra | |AllWISE| |  |  |    Redis pub/sub progress     |  |   |
-    |  |  +-------+ +---------+ +------+ |  |  +-------------------------------+  |   |
-    |  |                                  |  |                                     |   |
-    |  |  BaseConnector interface:        |  |  +-------------------------------+  |   |
-    |  |    search(q, ra, dec, radius)    |  |  |     PROCESSING NODES (11)     |  |   |
-    |  |    fetch(object_id) -> FITS      |  |  |                               |  |   |
-    |  |    normalize() -> astropy Table  |  |  |  LoadData    | Denoise        |  |   |
-    |  |                                  |  |  |  SpectralFit | CoordTransform |  |   |
-    |  |  Retry: 3x exponential backoff   |  |  |  Plot        | Redshift       |  |   |
-    |  |  Cache: Redis 5-min TTL          |  |  |  EquivWidth  | SEDFit         |  |   |
-    |  +==================================+  |  |  CrossMatch  | PhotCalibrate  |  |   |
-    |                                        |  |  ImageStack  |                |  |   |
-    |                                        |  +-------------------------------+  |   |
-    |                                        +=====================================+   |
-    |                                                                                   |
-    |  +===========================================================================+   |
-    |  |                        DATA MODELS (13 tables)                             |   |
-    |  |                   SQLAlchemy 2.0 Async | Alembic migrations                |   |
-    |  |                                                                           |   |
-    |  |  User              DataFile           PipelineRun        RunResult         |   |
-    |  |  PipelineTemplateDB PipelineVersion   DataTag            DataNote          |   |
-    |  |  TeamMember         SharedPipeline    PipelineComment    SharedDataset     |   |
-    |  |  ScheduledRun                                                             |   |
-    |  |                                                                           |   |
-    |  |  Portable types: UUIDType (SQLite/PostgreSQL), JSONType (TEXT/JSONB)       |   |
-    |  +===========================================================================+   |
-    |                                                                                   |
-    +===================================|===============================================+
-                                        |
-              +-------------------------+-------------------------+
-              |                         |                         |
-              v                         v                         v
-    +-------------------+   +--------------------+   +------------------------+
-    |    PostgreSQL      |   |      Redis         |   |        MinIO           |
-    |   (metadata)       |   |  (cache + pubsub   |   |   (FITS file storage)  |
-    |                    |   |   + Celery broker)  |   |                        |
-    |  13 tables         |   |  Query cache 5min   |   |  S3-compatible         |
-    |  Alembic managed   |   |  WS progress relay  |   |  Local FS fallback     |
-    |  SQLite dev mode   |   |  Task queue         |   |                        |
-    +-------------------+   +--------------------+   +------------------------+
-                                        |
-                                        v
-                            +--------------------+
-                            |   Celery Worker    |
-                            |  Pipeline executor |
-                            |  + Scheduler Beat  |
-                            |  (60s poll cycle)  |
-                            +--------------------+
+1. `Frontend SPA`
+   React + TypeScript application that hosts Data Browser, Chat, Pipeline, Workspace, ADQL, Alerts, Anomaly Explorer, Research History, and shared-session pages.
 
+2. `FastAPI application`
+   Single backend process exposing domain routers for auth, data, AI chat, pipelines, exports, collaboration, research memory, alerts, and admin analytics.
 
-    +===========================================================================================+
-    |                              EXTERNAL SERVICES                                             |
-    |                                                                                           |
-    |  Astronomical Databases:                                                                  |
-    |  +------+ +--------+ +--------+ +--------+ +------+ +-----+ +-------+ +---------+ +----+ |
-    |  | SDSS | | Gaia   | | SIMBAD | | VizieR | | MAST | | NED | | 2MASS | | Chandra | |WISE| |
-    |  | DR18 | | DR3    | |        | |        | | HST  | |     | |       | | CSC2    | |    | |
-    |  |      | |        | |        | |        | | JWST | |     | |       | |         | |    | |
-    |  +------+ +--------+ +--------+ +--------+ +------+ +-----+ +-------+ +---------+ +----+ |
-    |                                                                                           |
-    |  Third-party APIs:                                                                        |
-    |  +-----------+ +------------------+ +-------------------+                                 |
-    |  | Stripe    | | Claude API       | | SAMP Hub          |                                 |
-    |  | Payments  | | (AI Assistant)   | | (DS9/TOPCAT/Aladin)|                                 |
-    |  +-----------+ +------------------+ +-------------------+                                 |
-    |                                                                                           |
-    |  TAP Services (ADQL):                                                                     |
-    |  +-----------+ +------------------+ +-------------------+                                 |
-    |  | Gaia TAP  | | VizieR TAP       | | CADC TAP          |                                 |
-    |  +-----------+ +------------------+ +-------------------+                                 |
-    +===========================================================================================+
-```
+3. `Execution + storage services`
+   SQL database for metadata, object/file storage for FITS and exports, optional Redis + Celery for async pipelines and background execution.
 
-## Data Flow
+4. `External astronomy and LLM services`
+   Archive connectors, ADS/arXiv, astrometry.net, and routed LLM backends.
 
-```
-    User Request                    Pipeline Execution Flow
-    ============                    =======================
+The platform is designed so users can move between search, chat, pipeline, workspace, and export without leaving the same data context.
 
-    Browser                         1. User builds DAG in ReactFlow canvas
-      |                             2. POST /api/pipeline/run
-      v                                |
-    React App                       3. DAG Validator
-      |                                |-- Cycle detection
-      v                                |-- Node type validation
-    Axios + JWT                        |-- Duplicate ID check
-      |                                |
-      v                             4. async_mode?
-    FastAPI                            |
-      |                             YES --> Celery task dispatched
-      +-- Rate Limit check              |    (returns run_id immediately)
-      |                                 |    Worker executes nodes
-      +-- JWT Auth verify               |    in topological order
-      |                                 |    Redis pub/sub progress
-      +-- Redis Cache check             |    WebSocket relay to frontend
-      |                                 |
-      +-- Connector query           NO  --> Synchronous execution
-      |   (with retry x3)               |    Direct result return
-      |                                 |
-      +-- Response                   5. Results stored in MinIO
-                                     6. Metadata in PostgreSQL
-                                     7. Export as CSV/VOTable/PDF
+## 2. Frontend Architecture
 
+Main entrypoint: [App.tsx](/Users/chenkexuan/.openclaw/workspace/astro-platform/frontend/src/App.tsx)
 
-    AI Chat Flow
-    =============
+### Top-level pages
 
-    User: "Find bright stars near M31 and estimate their redshifts"
-      |
-      v
-    POST /api/chat/message
-      |
-      v
-    Claude API (claude-sonnet-4-20250514)
-      |-- System prompt: platform capabilities + available actions
-      |-- User conversation history
-      |
-      v
-    Response with <actions> tags parsed:
-      |-- reply: "I'll search for bright stars near M31..."
-      |-- actions: [
-      |     {action: "search", query: "M31", sources: ["gaia","sdss"], radius: 0.1},
-      |     {action: "adql", query: "SELECT ... FROM gaiadr3...", service: "gaia"}
-      |   ]
-      |
-      v
-    Frontend renders action cards --> User clicks --> POST /api/chat/execute-action
-      |
-      v
-    Results displayed inline in chat
-```
+- `Data Browser`
+  Multi-source search UI, FITS preview, result actions, object detail flows.
+- `Chat`
+  AI assistant, export actions, session save/load, sharing, snapshots, collaboration controls.
+- `Pipeline`
+  React Flow canvas, node palette, parameter editor, template/version management, execution progress.
+- `Workspace`
+  User files and cross-module asset reuse.
+- `ADQL`
+  Raw query editor and result forwarding into chat.
+- `Research History`
+  Memory/profile/history management.
+- `Shared Session`
+  Read-only or comment/fork view for shared analysis sessions.
+- `Alerts` and `Anomaly Explorer`
+  Time-domain and anomaly workflows.
 
-## Subscription Tiers
+### Shared frontend infrastructure
 
-```
-    +---------------------+------------------------+---------------------------+
-    |       Solo          |         Lab            |       Institution         |
-    |      $29/mo         |       $99/mo           |         Custom            |
-    +---------------------+------------------------+---------------------------+
-    | 1 user              | 5 users (team)         | Unlimited users           |
-    | 5 connectors        | All 9 connectors       | All + custom connectors   |
-    | 10 runs/day         | Unlimited runs         | Unlimited + priority      |
-    | 5 GB storage        | 50 GB storage          | Unlimited storage         |
-    | Basic export        | All exports + SAMP     | All + priority support    |
-    | --                  | Team collaboration     | SSO/SAML                  |
-    | --                  | Pipeline sharing       | Dedicated infrastructure  |
-    | --                  | Comments               | SLA guarantee             |
-    +---------------------+------------------------+---------------------------+
-```
+- `src/api/client.ts`
+  Central typed API client, auth header injection, page tracking headers, and helper wrappers.
+- `src/context/AuthContext.tsx`
+  JWT-based auth state and profile lifecycle.
+- `src/hooks/useTracking.ts`
+  Session-scoped event tracking for analytics.
+- `src/components/nodes/*`
+  Pipeline palette, node renderer, and node parameter editing.
 
-## Tech Stack Summary
+## 3. Backend Architecture
 
-```
-    Frontend                    Backend                     Infrastructure
-    --------                    -------                     --------------
-    React 19.2                  FastAPI 0.109               PostgreSQL
-    TypeScript 5.9              Python 3.11                 Redis
-    Vite 7.3                    SQLAlchemy 2.0 (async)      MinIO (S3)
-    ReactFlow 11.11             Celery 5.3 + Beat           Docker Compose
-    Axios                       Alembic (migrations)        GitHub Actions CI
-    React Router 7              Pydantic v2                 nginx (reverse proxy)
-    React Query v5              astropy + numpy + scipy
-                                anthropic SDK
-                                slowapi (rate limiting)
-                                reportlab (PDF export)
+Backend entrypoint: [main.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/main.py)
 
-    Testing                     Security
-    -------                     --------
-    pytest (88 tests)           JWT + bcrypt
-    pytest-asyncio              Rate limiting (slowapi)
-    vitest (12 tests)           CORS (env-configured)
-    100 total tests             Non-root containers
-                                Resource limits
-                                Env-based secrets
-```
+### API domains
 
-## Directory Structure
+- `auth`
+  Username/password login, JWTs, optional Google login, profile/settings operations.
+- `data`
+  Multi-archive search, advanced search, FITS upload, preview, download, and fetch flows.
+- `chat`
+  AI chat endpoint, tool loop, session persistence, legacy action execution.
+- `pipeline`
+  DAG validation, sync/async execution, template/version APIs, batch run.
+- `workspace`
+  File metadata, tags, notes, export integration.
+- `integration`
+  ADQL/TAP and other interoperability endpoints.
+- `export`
+  Markdown/report/notebook/LaTeX/BibTeX and chat-based export flows.
+- `paper`
+  Paper draft generation and manuscript artifact download.
+- `sessions`
+  Share links, comments, session forking, snapshots, restore, diff.
+- `research`
+  Opt-in memory profile and history APIs.
+- `alerts`, `anomalies`, `followup`, `dossier`
+  Time-domain and anomaly features.
+- `events`, `admin/events`, `admin/inference`
+  Analytics and inference monitoring.
 
-```
-    standard-astro/
-    ├── .github/workflows/ci.yml          # CI: pytest + tsc + vitest + ruff
-    ├── docker-compose.yml                # 6 services with resource limits
-    ├── CLAUDE.md                         # Project documentation
-    ├── ARCHITECTURE.md                   # This file
-    │
-    ├── backend/
-    │   ├── Dockerfile                    # Python 3.11-slim, non-root USER
-    │   ├── requirements.txt              # 30+ dependencies
-    │   ├── alembic.ini                   # Migration config
-    │   ├── celery_worker.py              # Celery app + Beat schedule
-    │   ├── pytest.ini                    # Test config
-    │   │
-    │   ├── alembic/
-    │   │   ├── env.py                    # Async migration support
-    │   │   └── versions/001_initial.py   # 13-table initial migration
-    │   │
-    │   ├── app/
-    │   │   ├── main.py                   # FastAPI app (v0.3.0, 61 routes)
-    │   │   ├── auth.py                   # JWT create/verify, password hashing
-    │   │   ├── config.py                 # Settings (env-based, secure defaults)
-    │   │   ├── cache.py                  # Redis async cache (get/set/key)
-    │   │   ├── cors.py                   # CORS origin configuration
-    │   │   ├── rate_limit.py             # slowapi limiter
-    │   │   ├── storage.py                # MinIO + local FS fallback
-    │   │   ├── scheduler_worker.py       # Standalone cron scheduler
-    │   │   │
-    │   │   ├── api/                      # 10 API routers
-    │   │   │   ├── auth.py               #   Auth + Stripe (5 endpoints)
-    │   │   │   ├── chat.py               #   AI assistant (2 endpoints)
-    │   │   │   ├── data.py               #   Data search + FITS (6 endpoints)
-    │   │   │   ├── export.py             #   CSV/VOTable/PDF (3 endpoints)
-    │   │   │   ├── health.py             #   Health checks (1 endpoint)
-    │   │   │   ├── integration.py        #   SAMP/ADQL/VOTable (7 endpoints)
-    │   │   │   ├── pipeline.py           #   Pipeline CRUD + versioning (10 endpoints)
-    │   │   │   ├── scheduler.py          #   Scheduled runs (4 endpoints)
-    │   │   │   ├── team.py               #   Collaboration (10 endpoints)
-    │   │   │   ├── workspace.py          #   File management (8 endpoints)
-    │   │   │   └── ws.py                 #   WebSocket relay (1 endpoint)
-    │   │   │
-    │   │   ├── connectors/               # 9 data source connectors
-    │   │   │   ├── base.py               #   BaseConnector + AstroObject
-    │   │   │   ├── registry.py           #   Lazy connector registry
-    │   │   │   ├── retry.py              #   Exponential backoff decorator
-    │   │   │   ├── sdss.py               #   SDSS DR18 (SkyServer API)
-    │   │   │   ├── gaia.py               #   Gaia DR3 (astroquery)
-    │   │   │   ├── simbad.py             #   SIMBAD (astroquery)
-    │   │   │   ├── vizier.py             #   VizieR catalogs (astroquery)
-    │   │   │   ├── mast.py               #   MAST HST/JWST (astroquery)
-    │   │   │   ├── ned.py                #   NED extragalactic (httpx)
-    │   │   │   ├── twomass.py            #   2MASS infrared (VizieR)
-    │   │   │   ├── chandra.py            #   Chandra X-ray (CSC2 API)
-    │   │   │   └── allwise.py            #   AllWISE infrared (VizieR)
-    │   │   │
-    │   │   ├── pipeline/
-    │   │   │   ├── engine.py             #   DAG executor (sync + Celery async)
-    │   │   │   ├── validate.py           #   DAG validation (cycles, types)
-    │   │   │   └── nodes/                #   11 processing nodes
-    │   │   │       ├── load_data.py      #     Load FITS file
-    │   │   │       ├── denoise.py        #     Sigma-clip noise removal
-    │   │   │       ├── spectral_fit.py   #     Gaussian/Lorentzian fitting
-    │   │   │       ├── coord_transform.py#     ICRS/Galactic/FK5 transforms
-    │   │   │       ├── plot.py           #     Matplotlib visualization
-    │   │   │       ├── redshift.py       #     Redshift estimation
-    │   │   │       ├── equivalent_width.py#    Spectral line EW measurement
-    │   │   │       ├── sed_fit.py        #     SED fitting (blackbody/power-law)
-    │   │   │       ├── crossmatch.py     #     Catalog cross-matching
-    │   │   │       ├── phot_calibrate.py #     Photometric calibration
-    │   │   │       └── image_stack.py    #     Image stacking (mean/median/sigma)
-    │   │   │
-    │   │   └── models/
-    │   │       ├── database.py           #   Async engine + session factory
-    │   │       └── schemas.py            #   13 SQLAlchemy models
-    │   │
-    │   └── tests/                        # 88 backend tests
-    │       ├── conftest.py               #   Fixtures (in-memory SQLite, test client)
-    │       ├── test_api.py               #   API endpoint tests (32 tests)
-    │       ├── test_connectors.py        #   Retry decorator tests (9 tests)
-    │       ├── test_models.py            #   Model + type tests (23 tests)
-    │       └── test_pipeline_nodes.py    #   Node function tests (24 tests)
-    │
-    └── frontend/
-        ├── Dockerfile                    # Node 20 build + nginx-unprivileged
-        ├── nginx.conf                    # SPA routing + API/WS proxy
-        ├── package.json                  # React 19, TypeScript 5.9, vitest
-        ├── vite.config.ts                # Vite + vitest config
-        │
-        └── src/
-            ├── App.tsx                   # Router: 8 routes + NavBar
-            ├── App.css                   # 2400+ lines, dark theme
-            ├── main.tsx                  # Entry point
-            │
-            ├── api/
-            │   └── client.ts            # 80+ typed API functions
-            │
-            ├── context/
-            │   └── AuthContext.tsx       # Auth state + JWT management
-            │
-            ├── components/
-            │   ├── fits/
-            │   │   └── FITSPreview.tsx   # Image viewer (DS9-like) + spectrum + WCS + blink
-            │   └── nodes/
-            │       ├── PipelineNode.tsx  # ReactFlow node component
-            │       └── NodePalette.tsx   # Draggable node palette
-            │
-            ├── pages/
-            │   ├── ADQL/ADQLPage.tsx         # ADQL query editor
-            │   ├── Auth/AuthPage.tsx         # Login/register
-            │   ├── Billing/BillingPage.tsx   # Subscription management
-            │   ├── Chat/ChatPage.tsx         # AI assistant chat UI
-            │   ├── DataBrowser/              # Search + results + FITS preview
-            │   │   ├── DataBrowser.tsx
-            │   │   ├── SearchBar.tsx
-            │   │   └── ResultsTable.tsx
-            │   ├── Pipeline/
-            │   │   └── PipelineCanvas.tsx    # ReactFlow canvas + versioning + scheduler
-            │   ├── Team/TeamPage.tsx         # Team management + sharing
-            │   └── Workspace/WorkspacePage.tsx # File management + batch
-            │
-            └── __tests__/
-                └── client.test.ts       # 12 frontend tests
-```
+### Key backend subsystems
+
+#### AI layer
+
+- [app/ai/orchestrator.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/ai/orchestrator.py)
+  Classifies request intent, assembles specialist-agent context, and chooses tool subsets.
+- [app/ai/inference_router.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/ai/inference_router.py)
+  Routes inference to Claude/OpenAI/DeepSeek/local backends and records cost/latency logs.
+- `app/ai/agents/*`
+  Specialist prompt definitions for data, analysis, literature, observation, and visualization work.
+- [app/services/ai_tools.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/services/ai_tools.py)
+  Tool catalog and execution layer used by chat.
+
+#### Data access layer
+
+- `app/connectors/*`
+  Archive-specific adapters normalized behind a common search/fetch interface.
+- [app/connectors/registry.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/connectors/registry.py)
+  Lazy registry for 15 live connectors.
+- `app/search/*`
+  Natural-query parsing and filter extraction for advanced search.
+
+#### Analysis layer
+
+- [app/services/astro_analysis.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/services/astro_analysis.py)
+  Astronomy helper functions exposed to the Python sandbox and AI tools.
+- [app/services/code_executor.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/services/code_executor.py)
+  Sandboxed Python execution with session-scoped variable persistence.
+- [app/analysis/image_reduction.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/analysis/image_reduction.py)
+  CCD reduction and source extraction helpers.
+
+#### Pipeline layer
+
+- [app/pipeline/engine.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/pipeline/engine.py)
+  DAG validation, topological execution, sync fallback, Celery execution entrypoint.
+- `app/pipeline/nodes/*`
+  Query/import, spectroscopy, plotting, crossmatch, and CCD reduction nodes.
+
+#### Collaboration and memory
+
+- [app/api/sessions.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/api/sessions.py)
+  Share tokens, comments, snapshots, fork flows.
+- [app/services/memory_service.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/services/memory_service.py)
+  Research profile generation, lightweight embedding store, history retrieval.
+
+#### Analytics
+
+- [app/services/event_collector.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/services/event_collector.py)
+  Buffered event collection and bulk flush.
+- [app/middleware/event_tracking.py](/Users/chenkexuan/.openclaw/workspace/astro-platform/backend/app/middleware/event_tracking.py)
+  Automatic API-level tracking on core routes.
+
+## 4. Persistence Model
+
+Core persistent entities currently include:
+
+- `User`
+- `DataFile`
+- `PipelineRun`, `RunResult`, `PipelineTemplateDB`, `PipelineVersion`
+- `ChatSession`
+- `PaperDraft`
+- `UserEvent`
+- `SharedSession`, `SessionFork`, `SessionComment`, `SessionSnapshot`
+- `UserResearchProfile`, `SessionEmbedding`
+- `InferenceLog`
+- Additional collaboration, alerting, and scheduler tables already in the schema layer
+
+The project keeps SQLite compatibility in development through custom `UUIDType` and `JSONType`, while still working with PostgreSQL in production.
+
+## 5. Runtime Flows
+
+### Search flow
+
+1. User submits a query in the frontend.
+2. Frontend calls `/api/data/search` or `/api/data/advanced-search`.
+3. Backend resolves coordinates when needed.
+4. Selected connectors run concurrently.
+5. Results are normalized into a shared response model.
+6. Files fetched from search results land in Workspace storage and become reusable elsewhere.
+
+### AI chat flow
+
+1. Frontend sends message history plus current context to `/api/chat/message`.
+2. Backend builds runtime context:
+   - user profile context if memory is enabled
+   - specialist-agent prompt fragments
+   - filtered tool list
+3. Inference router calls the configured LLM backend.
+4. Tool calls are executed concurrently.
+5. Tool results are appended back into the model loop until the turn completes.
+6. Saved sessions can later feed paper generation, collaboration, and research memory.
+
+### Pipeline flow
+
+1. User edits a DAG in the React Flow canvas.
+2. Frontend posts the DAG to `/api/pipeline/run`.
+3. Backend validates nodes, edges, and execution order.
+4. Execution happens either:
+   - asynchronously via Celery worker, or
+   - synchronously in a thread executor
+5. Node outputs are merged and trimmed for API return.
+6. Run metadata is stored in `PipelineRun` and `RunResult`.
+
+### Collaboration flow
+
+1. A saved chat session can be shared with `view`, `fork`, or `comment` access.
+2. Shared sessions are loaded via tokenized URLs.
+3. Forking creates a new `ChatSession` under the collaborator’s account.
+4. Snapshots serialize current chat-session state for point-in-time restore/diff.
+
+### Memory flow
+
+1. User opts into memory.
+2. Saved chat sessions are summarized into profile features and hashed embeddings.
+3. Future chat requests ask the memory service for relevant prior summaries.
+4. Research History UI exposes searchable summaries and editable profile metadata.
+
+### CCD reduction flow
+
+1. User uploads or imports FITS data.
+2. AI tools or pipeline nodes call CCD reduction helpers.
+3. Bias, dark, flat, cosmic-ray, astrometry, and source extraction steps run on stored FITS assets.
+4. Reduced products are written back to workspace-style storage and can re-enter Pipeline, Chat, or export flows.
+
+## 6. External Integrations
+
+### Astronomy archives
+
+- SIMBAD
+- Gaia
+- SDSS
+- VizieR
+- MAST
+- NED
+- 2MASS
+- Chandra
+- AllWISE
+- ALMA
+- ESO
+- IRSA
+- JWST
+- LAMOST
+- DESI
+
+### Other external services
+
+- NASA ADS / arXiv
+- astrometry.net
+- Anthropic, OpenAI, DeepSeek, or local OpenAI-compatible model servers
+- Redis/Celery for optional async execution
+
+## 7. Deployment Profiles
+
+### Minimal development
+
+- FastAPI
+- React/Vite
+- SQLite
+- local file storage
+
+### Standard production
+
+- FastAPI web service
+- PostgreSQL
+- object/file storage backend
+- React static frontend
+- Redis
+- Celery worker + beat
+
+### AI backend choices
+
+- Claude-only deployment
+- mixed Claude/OpenAI/DeepSeek routing
+- local model fallback via OpenAI-compatible endpoint
+
+## 8. Current Design Constraints
+
+These are implementation realities worth keeping explicit:
+
+- Research memory is opt-in and based on lightweight hashed embeddings, not heavyweight vector infrastructure.
+- Celery is optional; the backend still supports synchronous pipeline execution.
+- The orchestrator currently builds routed specialist context on top of a single chat turn loop; the backend is prepared for richer multi-agent execution, but the current production path is still centered on one coordinated tool loop per turn.
+- Workspace files are the handoff boundary between search, chat, export, and pipeline modules.
+
+This document is intended to stay aligned with the current repository, not an aspirational roadmap. Update it when modules, flows, or deployment assumptions materially change.

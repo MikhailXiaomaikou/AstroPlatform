@@ -274,7 +274,6 @@ async def ai_interpret(
         "spectrum_agent",
         [{"role": "user", "content": prompt_text}],
         system=SPECTRUM_SYSTEM_PROMPT,
-        api_key=api_key,
         provider_api_keys=provider_api_keys,
         max_tokens=1500,
     )

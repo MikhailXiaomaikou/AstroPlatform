@@ -82,6 +82,7 @@ class LLMBackend(ABC):
         temperature: float = 0.0,
         api_key: str | None = None,
         provider_api_keys: dict[str, str] | None = None,
+        request_timeout: float | None = None,
     ) -> dict:
         raise NotImplementedError
 
@@ -96,7 +97,7 @@ class ClaudeBackend(LLMBackend):
     def __init__(self):
         self._model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
-    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None):
+    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None):
         try:
             import anthropic
         except ImportError as exc:
@@ -151,7 +152,7 @@ class OpenAICompatibleBackend(LLMBackend):
 
     provider_name = ""
 
-    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None):
+    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None):
         key = (
             api_key
             or (provider_api_keys or {}).get(self.provider_name)
@@ -188,7 +189,7 @@ class OpenAICompatibleBackend(LLMBackend):
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=request_timeout or 60.0) as client:
             response = await client.post(f"{self._base_url}/chat/completions", json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
@@ -237,10 +238,10 @@ class LocalBackend(OpenAICompatibleBackend):
     def __init__(self):
         super().__init__(model_env="LOCAL_MODEL_NAME", key_env="LOCAL_MODEL_API_KEY", base_url=os.getenv("LOCAL_MODEL_BASE_URL", "http://localhost:8000/v1"))
 
-    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None):
+    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None):
         if not os.getenv("LOCAL_MODEL_ENABLED", ""):
             raise InferenceError("Local model backend is not enabled. Set LOCAL_MODEL_ENABLED=1 and provide an OpenAI-compatible server.")
-        return await super().complete(messages, system=system, tools=tools, max_tokens=max_tokens, temperature=temperature, api_key=api_key, provider_api_keys=provider_api_keys)
+        return await super().complete(messages, system=system, tools=tools, max_tokens=max_tokens, temperature=temperature, api_key=api_key, provider_api_keys=provider_api_keys, request_timeout=request_timeout)
 
     def model_name(self) -> str:
         return os.getenv("LOCAL_MODEL_NAME", "local-model")
@@ -288,7 +289,7 @@ class InferenceRouter:
             started = time.perf_counter()
             try:
                 result = await asyncio.wait_for(
-                    backend.complete(messages, system=system, tools=tools, api_key=api_key, provider_api_keys=provider_api_keys, **kwargs),
+                    backend.complete(messages, system=system, tools=tools, api_key=api_key, provider_api_keys=provider_api_keys, request_timeout=backend_timeout, **kwargs),
                     timeout=backend_timeout,
                 )
                 latency_ms = int((time.perf_counter() - started) * 1000)

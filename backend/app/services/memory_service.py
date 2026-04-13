@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 import uuid
+import hashlib
 from collections import Counter
 
 import numpy as np
@@ -34,7 +35,8 @@ def _tokenize(text: str) -> list[str]:
 def _hash_embed(text: str, dim: int = 256) -> list[float]:
     vec = np.zeros(dim, dtype=float)
     for token in _tokenize(text):
-        idx = hash(token) % dim
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        idx = int.from_bytes(digest[:8], "big") % dim
         vec[idx] += 1.0
     norm = float(np.linalg.norm(vec))
     if norm:
@@ -300,6 +302,8 @@ class MemoryService:
             profile.preferred_analysis_methods = []
             profile.research_interests = []
             profile.past_hypotheses = []
+            profile.expertise_level = "beginner"
+            profile.memory_enabled = False
 
 
 memory_service = MemoryService()

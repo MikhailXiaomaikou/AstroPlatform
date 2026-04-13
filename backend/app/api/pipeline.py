@@ -384,6 +384,8 @@ async def batch_run_pipeline(
     user: User | None = Depends(get_optional_user),
 ):
     """Run the same pipeline on multiple input files. Max 20 per batch."""
+    import asyncio
+
     if len(req.input_data_ids) > 20:
         raise HTTPException(status_code=400, detail="Maximum 20 inputs per batch")
 
@@ -398,11 +400,14 @@ async def batch_run_pipeline(
     results = []
     succeeded = 0
     failed = 0
+    loop = asyncio.get_running_loop()
 
     for input_id in req.input_data_ids:
         run_id = str(uuid.uuid4())
         try:
-            node_results = execute_dag(req.dag, input_id, run_id)
+            node_results = await loop.run_in_executor(
+                None, execute_dag, req.dag, input_id, run_id
+            )
             safe = _trim_results(node_results)
             results.append({"input": input_id, "run_id": run_id, "status": "completed", "results": safe})
             succeeded += 1

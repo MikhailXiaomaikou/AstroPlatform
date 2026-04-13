@@ -15,7 +15,7 @@ interface ParamDef {
 const NODE_PARAM_DEFS: Record<string, ParamDef[]> = {
   QueryData: [
     { key: "query", label: "Target Name", type: "text", required: true, placeholder: "M31, Pleiades, Crab Nebula, 10.68 41.27" },
-    { key: "sources", label: "Sources", type: "checkboxes", default: "simbad,gaia", options: ["simbad", "gaia", "sdss", "vizier", "mast", "ned", "2mass", "chandra", "allwise"] },
+    { key: "sources", label: "Sources", type: "checkboxes", default: "simbad,gaia", options: ["simbad", "gaia", "sdss", "vizier", "mast", "ned", "2mass", "chandra", "allwise", "alma", "eso", "irsa", "jwst", "lamost", "desi"] },
     { key: "radius", label: "Search Radius (deg)", type: "number", default: 0.1 },
     { key: "max_results", label: "Max Results", type: "number", default: 100 },
     { key: "ra", label: "RA (optional, deg)", type: "number", placeholder: "Auto-resolved from target name" },
@@ -48,7 +48,7 @@ const NODE_PARAM_DEFS: Record<string, ParamDef[]> = {
     { key: "objlim", label: "Object Limit", type: "number", default: 5.0 },
   ],
   AstrometricSolve: [
-    { key: "fits_path", label: "FITS Path", type: "text", required: true },
+    { key: "fits_path", label: "FITS Path", type: "text", placeholder: "Uses upstream output_path or fits_path if blank" },
   ],
   SourceExtract: [
     { key: "fits_path", label: "FITS Path (optional)", type: "text", placeholder: "Uses upstream output_path or fits_path if blank" },
