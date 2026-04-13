@@ -42,7 +42,7 @@ function degToDMS(deg: number): string {
 }
 
 /* ── Publication style constants ── */
-const FONT = "'CMU Serif', 'STIX Two Text', 'Times New Roman', 'STIXGeneral', Georgia, serif";
+const FONT = "'STIX Two Text', 'Times New Roman', 'STIXGeneral', Georgia, 'Noto Serif', serif";
 const MONO = "'CMU Typewriter Text', 'Courier New', monospace";
 
 const COLORS = {
@@ -152,7 +152,7 @@ function statsAnnotation(values: number[], _label: string, xRef = "paper", yRef 
   const med = median(values);
   const std = Math.sqrt(values.reduce((a, v) => a + (v - mean) ** 2, 0) / n);
   return {
-    text: `<i>N</i> = ${n}<br>μ = ${mean.toFixed(4)}<br>med = ${med.toFixed(4)}<br>σ = ${std.toFixed(4)}`,
+    text: `<i>N</i> = ${n}<br>mean = ${mean.toFixed(4)}<br>med = ${med.toFixed(4)}<br>std = ${std.toFixed(4)}`,
     showarrow: false,
     xref: xRef, yref: yRef, x, y,
     xanchor: "right", yanchor: "top",
@@ -193,7 +193,7 @@ function buildPlot(
         line: { width: 0.5, color: "rgba(0,0,0,0.15)" },
         opacity: 0.85,
       },
-      hovertemplate: "<b>%{text}</b><br>α = %{x:.5f}°<br>δ = %{y:.5f}°" + (hasZ ? "<br><i>z</i> = %{marker.color:.4f}" : "") + "<extra></extra>",
+      hovertemplate: "<b>%{text}</b><br>RA = %{x:.5f} deg<br>Dec = %{y:.5f} deg" + (hasZ ? "<br><i>z</i> = %{marker.color:.4f}" : "") + "<extra></extra>",
     }];
     if (showFit && ra.length >= 2) {
       const fit = linearFit(ra, dec);
@@ -202,7 +202,7 @@ function buildPlot(
         type: "scatter", mode: "lines",
         x: [x0, x1], y: [fit.slope * x0 + fit.intercept, fit.slope * x1 + fit.intercept],
         line: { color: COLORS.red, width: 2, dash: "dash" },
-        name: `Linear: R² = ${fit.r2.toFixed(4)}`, showlegend: true,
+        name: `Linear: R2 = ${fit.r2.toFixed(4)}`, showlegend: true,
       });
     }
     const annotations: Record<string, unknown>[] = [];
@@ -210,8 +210,8 @@ function buildPlot(
     return {
       data: traces,
       layout: mkLayout(`Sky Distribution (<i>N</i> = ${ra.length})`,
-        mkAxis("Right Ascension α (deg)", { autorange: "reversed" }),
-        mkAxis("Declination δ (deg)"),
+        mkAxis("RA (deg)", { autorange: "reversed" }),
+        mkAxis("Dec (deg)"),
         { hasColorbar: hasZ, showlegend: showFit, annotations, legend: { font: { family: FONT, size: 12 }, bgcolor: "rgba(255,255,255,0.8)", bordercolor: COLORS.grid, borderwidth: 1, x: 0.02, y: 0.98 } }),
     };
   }
@@ -294,11 +294,11 @@ function buildPlot(
           line: { width: 0.5, color: "rgba(0,0,0,0.12)" },
           opacity: 0.88,
         },
-        hovertemplate: "<b>%{text}</b><br>α = %{x:.5f}°<br>δ = %{y:.5f}°<br><i>z</i> = %{marker.color:.4f}<extra></extra>",
+        hovertemplate: "<b>%{text}</b><br>RA = %{x:.5f} deg<br>Dec = %{y:.5f} deg<br><i>z</i> = %{marker.color:.4f}<extra></extra>",
       }],
       layout: mkLayout(`Sky Position by Redshift (<i>N</i> = ${n})`,
-        mkAxis("Right Ascension α (deg)", { autorange: "reversed" }),
-        mkAxis("Declination δ (deg)"),
+        mkAxis("RA (deg)", { autorange: "reversed" }),
+        mkAxis("Dec (deg)"),
         { hasColorbar: true }),
     };
   }
@@ -311,7 +311,7 @@ function buildPlot(
       type: "scattergl", mode: "markers",
       x: xd, y: yd, text: names.slice(0, n),
       marker: { size: 5, color: COLORS.green, symbol: "circle", line: { width: 0.5, color: "rgba(0,0,0,0.12)" }, opacity: 0.82 },
-      hovertemplate: "<b>%{text}</b><br>α = %{x:.5f}°<br><i>z</i> = %{y:.4f}<extra></extra>",
+      hovertemplate: "<b>%{text}</b><br>RA = %{x:.5f} deg<br><i>z</i> = %{y:.4f}<extra></extra>",
     }];
     if (showFit && n >= 2) {
       const fit = linearFit(xd, yd);
@@ -328,7 +328,7 @@ function buildPlot(
     return {
       data: traces,
       layout: mkLayout(`Redshift vs Right Ascension (<i>N</i> = ${n})`,
-        mkAxis("Right Ascension α (deg)"),
+        mkAxis("RA (deg)"),
         mkAxis("Redshift <i>z</i>"),
         { showlegend: showFit, annotations }),
     };
@@ -342,7 +342,7 @@ function buildPlot(
       type: "scattergl", mode: "markers",
       x: xd, y: yd, text: names.slice(0, n),
       marker: { size: 5, color: COLORS.purple, symbol: "circle", line: { width: 0.5, color: "rgba(0,0,0,0.12)" }, opacity: 0.82 },
-      hovertemplate: "<b>%{text}</b><br>δ = %{x:.5f}°<br><i>z</i> = %{y:.4f}<extra></extra>",
+      hovertemplate: "<b>%{text}</b><br>Dec = %{x:.5f} deg<br><i>z</i> = %{y:.4f}<extra></extra>",
     }];
     if (showFit && n >= 2) {
       const fit = linearFit(xd, yd);
@@ -359,7 +359,7 @@ function buildPlot(
     return {
       data: traces,
       layout: mkLayout(`Redshift vs Declination (<i>N</i> = ${n})`,
-        mkAxis("Declination δ (deg)"),
+        mkAxis("Dec (deg)"),
         mkAxis("Redshift <i>z</i>"),
         { showlegend: showFit, annotations }),
     };
@@ -377,8 +377,8 @@ function buildPlot(
         nbinsy: Math.min(30, Math.max(8, Math.ceil(Math.sqrt(ra.length)))),
       }],
       layout: mkLayout(`Sky Density Map (<i>N</i> = ${ra.length})`,
-        mkAxis("Right Ascension α (deg)", { autorange: "reversed" }),
-        mkAxis("Declination δ (deg)"),
+        mkAxis("RA (deg)", { autorange: "reversed" }),
+        mkAxis("Dec (deg)"),
         { hasColorbar: true }),
     };
   }
@@ -578,15 +578,15 @@ function buildPlot(
       type: "scatter", mode: "lines",
       x: validX, y: validY,
       line: { color: COLORS.blue, width: 1.2 },
-      hovertemplate: "λ = %{x:.1f} \u00C5<br>Flux = %{y:.4g}<extra></extra>",
+      hovertemplate: "Wavelength = %{x:.1f} A<br>Flux = %{y:.4g}<extra></extra>",
     }];
     // Spectral reference lines
     const spectralLines: { name: string; wave: number; color: string }[] = [
-      { name: "Ly\u03B1", wave: 1216, color: "rgba(100,100,200,0.5)" },
+      { name: "Ly-a", wave: 1216, color: "rgba(100,100,200,0.5)" },
       { name: "Mg II", wave: 2800, color: "rgba(200,100,100,0.5)" },
-      { name: "H\u03B2", wave: 4861, color: "rgba(100,180,100,0.5)" },
+      { name: "H-b", wave: 4861, color: "rgba(100,180,100,0.5)" },
       { name: "[OIII]", wave: 5007, color: "rgba(100,180,100,0.5)" },
-      { name: "H\u03B1", wave: 6563, color: "rgba(200,80,80,0.5)" },
+      { name: "H-a", wave: 6563, color: "rgba(200,80,80,0.5)" },
       { name: "[NII]", wave: 6584, color: "rgba(200,150,80,0.5)" },
     ];
     const waveLo = arrMin(validX), waveHi = arrMax(validX);
@@ -617,7 +617,7 @@ function buildPlot(
     return {
       data: traces,
       layout: mkLayout(`Spectrum (<i>N</i> = ${validX.length} pts)`,
-        mkAxis("Wavelength (\u00C5)"),
+        mkAxis("Wavelength (A)"),
         mkAxis("Flux"),
         { shapes, annotations }),
     };
@@ -669,7 +669,7 @@ function buildPlot(
         type: "scatter", mode: "lines",
         x: [x0, x1], y: [fit.slope * x0 + fit.intercept, fit.slope * x1 + fit.intercept],
         line: { color: COLORS.red, width: 2, dash: "dash" },
-        name: `Linear: <i>R</i>\u00B2 = ${fit.r2.toFixed(4)}`, showlegend: true,
+        name: `Linear: R2 = ${fit.r2.toFixed(4)}`, showlegend: true,
       });
     }
     const annotations: Record<string, unknown>[] = [];
