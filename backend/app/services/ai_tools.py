@@ -528,6 +528,16 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Auto-extract bp_rp and abs_mag from the last search results cache",
                 },
+                "dm_range": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Distance modulus range [min, max]. Auto-estimated from parallax if not set.",
+                },
+                "av_range": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Extinction A_V range [min, max]. Default [0.0, 3.0].",
+                },
             },
         },
     },
@@ -2310,14 +2320,30 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
     """Execute isochrone fitting on observed CMD data."""
     import math
 
+    import numpy as np
+
     bp_rp = inp.get("bp_rp", [])
     abs_mag = inp.get("abs_mag", [])
     method = inp.get("method", "grid")
 
-    # Auto-extract from cached search results if requested
-    if inp.get("use_cached_results") and (not bp_rp or not abs_mag):
+    # Type validation — reject string expressions
+    if bp_rp and isinstance(bp_rp[0], str):
+        return {
+            "error": "bp_rp must be a numeric array, not strings. "
+            "Pass actual numbers: bp_rp=[0.5, 0.8, 1.2, ...] "
+            "or set use_cached_results=true."
+        }
+    if abs_mag and isinstance(abs_mag[0], str):
+        return {
+            "error": "abs_mag must be a numeric array, not strings. "
+            "Pass actual numbers: abs_mag=[3.0, 4.5, 5.2, ...] "
+            "or set use_cached_results=true."
+        }
+
+    # Auto-extract from cached search results if requested or if arrays are empty
+    if inp.get("use_cached_results") or (not bp_rp and not abs_mag):
         cached = get_cached_results("latest")
-        if cached:
+        if cached and (not bp_rp or not abs_mag):
             bp_rp_list, abs_mag_list = [], []
             for r in cached:
                 extra = r.get("extra", {}) if isinstance(r, dict) else {}
@@ -2342,8 +2368,34 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
             "abs_mag = magnitude - 5*log10(1000/parallax) + 5. "
             "Or set use_cached_results=true to auto-extract from the last search."
         }
-    if len(bp_rp) != len(abs_mag):
-        return {"error": f"bp_rp ({len(bp_rp)}) and abs_mag ({len(abs_mag)}) must have the same length"}
+
+    # Synchronous NaN/Inf filtering — ensure both arrays match
+    bp_arr = np.asarray(bp_rp, dtype=float)
+    mag_arr = np.asarray(abs_mag, dtype=float)
+    min_len = min(len(bp_arr), len(mag_arr))
+    bp_arr = bp_arr[:min_len]
+    mag_arr = mag_arr[:min_len]
+    valid = np.isfinite(bp_arr) & np.isfinite(mag_arr)
+    bp_rp = bp_arr[valid].tolist()
+    abs_mag = mag_arr[valid].tolist()
+
+    if len(bp_rp) < 5:
+        return {"error": f"Need at least 5 valid data points after NaN filtering, got {len(bp_rp)}"}
+
+    # Extract optional parameters
+    dm_range = tuple(inp.get("dm_range", [0.0, 20.0]))
+    av_range = tuple(inp.get("av_range", [0.0, 3.0]))
+
+    # Auto-estimate distance modulus range from median parallax if available
+    cached = get_cached_results("latest")
+    if cached and dm_range == (0.0, 20.0):
+        plx_vals = [r.get("extra", {}).get("parallax") for r in cached
+                    if isinstance(r, dict) and r.get("extra", {}).get("parallax")]
+        plx_vals = [p for p in plx_vals if p and p > 0.1]
+        if plx_vals:
+            med_plx = float(np.median(plx_vals))
+            dm_est = 5 * math.log10(1000.0 / med_plx) - 5
+            dm_range = (max(0.0, dm_est - 2.0), dm_est + 2.0)
 
     import asyncio
     from app.services.astro_analysis import fit_isochrone
@@ -2356,12 +2408,16 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
                 lambda: fit_isochrone(
                     bp_rp, abs_mag,
                     method=method,
+                    dm_range=dm_range,
+                    av_range=av_range,
                 ),
             ),
             timeout=120.0,
         )
     except asyncio.TimeoutError:
         return {"error": "Isochrone fitting timed out after 120 seconds"}
+    except Exception as exc:
+        return {"error": f"Isochrone fitting failed: {exc}"}
 
     # Remove non-serializable items (matplotlib Figure)
     if "corner_fig" in result:

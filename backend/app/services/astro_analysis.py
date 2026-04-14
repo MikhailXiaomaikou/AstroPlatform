@@ -179,21 +179,27 @@ def fit_isochrone(
     bp_rp = np.asarray(bp_rp, dtype=float)
     abs_mag = np.asarray(abs_mag, dtype=float)
 
+    # Synchronously filter NaN/Inf from both arrays
+    valid = np.isfinite(bp_rp) & np.isfinite(abs_mag)
+    bp_rp = bp_rp[valid]
+    abs_mag = abs_mag[valid]
+    if mag_err is not None:
+        mag_err = np.asarray(mag_err, dtype=float)[valid]
+    if color_err is not None:
+        color_err = np.asarray(color_err, dtype=float)[valid]
+
     # Default uncertainties — adaptive estimates if not provided
     if mag_err is None:
-        mag_err = 0.02 + 0.005 * np.abs(abs_mag - np.median(abs_mag))
+        mag_err = 0.02 + 0.005 * np.abs(abs_mag - np.nanmedian(abs_mag))
         errors_source = "estimated"
     else:
-        mag_err = np.asarray(mag_err, dtype=float)
         errors_source = "provided"
     if color_err is None:
-        color_err = 0.02 + 0.01 * np.abs(bp_rp - np.median(bp_rp))
-    else:
-        color_err = np.asarray(color_err, dtype=float)
+        color_err = 0.02 + 0.01 * np.abs(bp_rp - np.nanmedian(bp_rp))
 
     n_data = len(bp_rp)
     if n_data < 5:
-        raise ValueError(f"Need at least 5 data points, got {n_data}")
+        raise ValueError(f"Need at least 5 data points after NaN filtering, got {n_data}")
 
     # Extinction coefficients for Gaia: A_G / A_V and E(BP-RP) / A_V
     # From Casagrande & VandenBerg (2018)

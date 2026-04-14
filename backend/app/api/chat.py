@@ -78,6 +78,18 @@ RULES:
 - For teff_gspphot, also add "phot_g_mean_mag < 18"
 - Always use "SELECT TOP N" to limit results (default TOP 200)
 
+## Open cluster / star cluster analysis workflow
+When analyzing a star cluster (e.g. NGC 1647, Pleiades, Hyades):
+1. First use search_objects to get cluster center coordinates and distance from SIMBAD
+2. Then use run_adql on Gaia DR3 with BOTH spatial AND parallax constraints:
+   SELECT source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, parallax, parallax_error, pmra, pmdec, ruwe
+   FROM gaiadr3.gaia_source
+   WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', center_ra, center_dec, search_radius)) = 1
+   AND parallax BETWEEN plx_low AND plx_high AND parallax IS NOT NULL AND ruwe < 1.4
+3. Use sklearn (DBSCAN or GaussianMixture) in run_python for membership selection on (pmra, pmdec, parallax)
+4. Use fit_isochrone with use_cached_results=true (auto-extracts bp_rp and abs_mag, auto-estimates distance modulus from parallax)
+5. The fit_isochrone tool uses REAL PARSEC CMD 3.9 isochrones with extinction fitting (av_range parameter)
+
 ## CRITICAL: Data integrity rules
 - NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and suggest alternatives (different database, different query, retry).
 - NEVER silently fall back to mock data. Every data point shown to the user MUST come from a real astronomical database or the user's own uploaded files.
