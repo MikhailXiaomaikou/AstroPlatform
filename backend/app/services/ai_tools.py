@@ -1031,6 +1031,53 @@ TOOLS = [
             "required": ["data", "format"],
         },
     },
+    {
+        "name": "classify_transient_spectrum",
+        "description": "Classify a transient using spectroscopic template matching. Matches against SN Ia, SN II, SN Ib/c, TDE, AGN, and Nova templates. Also enriches with host galaxy info.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wavelength": {"type": "array", "items": {"type": "number"}, "description": "Wavelength array (Angstrom)"},
+                "flux": {"type": "array", "items": {"type": "number"}, "description": "Flux array"},
+                "redshift": {"type": "number", "description": "Known redshift (default 0)"},
+                "ra": {"type": "number", "description": "RA for host galaxy lookup"},
+                "dec": {"type": "number", "description": "Dec for host galaxy lookup"},
+            },
+            "required": ["wavelength", "flux"],
+        },
+    },
+    {
+        "name": "literature_review",
+        "description": "Build a citation network and synthesize a bibliography for a research topic. Returns relevant papers, citation graph, and AI-ready context for literature review writing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Research topic or object name"},
+                "findings": {"type": "string", "description": "User's findings to contextualize"},
+                "max_papers": {"type": "integer", "description": "Maximum papers to include (default 10)"},
+                "build_network": {"type": "boolean", "description": "Build citation network graph (default false)"},
+                "seed_bibcodes": {"type": "array", "items": {"type": "string"}, "description": "Seed papers for citation network"},
+            },
+            "required": ["topic"],
+        },
+    },
+    {
+        "name": "radio_analysis",
+        "description": "Radio astronomy analysis: compute spectral index, radio luminosity, and cross-match across radio surveys (NVSS, FIRST).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "operation": {"type": "string", "enum": ["spectral_index", "luminosity", "crossmatch"],
+                             "description": "Analysis operation"},
+                "ra": {"type": "number"}, "dec": {"type": "number"},
+                "flux_mJy": {"type": "number"}, "redshift": {"type": "number"},
+                "freq_MHz": {"type": "number"},
+                "flux_1_mJy": {"type": "number"}, "freq_1_MHz": {"type": "number"},
+                "flux_2_mJy": {"type": "number"}, "freq_2_MHz": {"type": "number"},
+            },
+            "required": ["operation"],
+        },
+    },
 ]
 
 
@@ -1268,6 +1315,28 @@ async def execute_tool(
                 lines.extend(["</TABLE></RESOURCE>", "</VOTABLE>"])
                 return {"format": "votable", "content": "\n".join(lines), "row_count": len(rows)}
             return {"error": f"Unsupported format: {fmt}"}
+        elif tool_name == "classify_transient_spectrum":
+            from app.services.transient_classifier import classify_with_spectroscopy, enrich_with_host_galaxy
+            result = classify_with_spectroscopy(tool_input.get("wavelength", []), tool_input.get("flux", []), tool_input.get("redshift", 0))
+            if tool_input.get("ra") is not None and tool_input.get("dec") is not None:
+                result["host_galaxy"] = enrich_with_host_galaxy(tool_input["ra"], tool_input["dec"])
+            return result
+        elif tool_name == "literature_review":
+            from app.services.literature_engine import synthesize_bibliography, build_citation_network
+            result = synthesize_bibliography(tool_input.get("topic", ""), tool_input.get("findings", ""), tool_input.get("max_papers", 10))
+            if tool_input.get("build_network") and tool_input.get("seed_bibcodes"):
+                result["citation_network"] = build_citation_network(tool_input["seed_bibcodes"], depth=1)
+            return result
+        elif tool_name == "radio_analysis":
+            from app.connectors.radio import RadioAnalysis
+            op = tool_input.get("operation")
+            if op == "spectral_index":
+                return RadioAnalysis.spectral_index(tool_input.get("flux_1_mJy", 0), tool_input.get("freq_1_MHz", 0), tool_input.get("flux_2_mJy", 0), tool_input.get("freq_2_MHz", 0))
+            elif op == "luminosity":
+                return RadioAnalysis.radio_luminosity(tool_input.get("flux_mJy", 0), tool_input.get("redshift", 0), tool_input.get("freq_MHz", 1400))
+            elif op == "crossmatch":
+                return RadioAnalysis.multi_frequency_crossmatch(tool_input.get("ra", 0), tool_input.get("dec", 0))
+            return {"error": f"Unknown operation: {op}"}
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:

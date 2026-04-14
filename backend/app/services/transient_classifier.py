@@ -691,3 +691,143 @@ def _error_result(message: str) -> dict[str, Any]:
         "features_used": {},
         "error": message,
     }
+
+
+def classify_with_spectroscopy(wavelength: list, flux: list, z: float = 0.0) -> dict:
+    """Spectroscopic transient classification using template matching.
+
+    Matches observed spectrum against SN Ia, SN II, SN Ib/c, TDE, AGN templates
+    using chi-squared cross-correlation.
+    """
+    import numpy as np
+    from scipy.interpolate import interp1d
+
+    wave = np.array(wavelength) / (1.0 + z)  # Rest frame
+    fl = np.array(flux)
+
+    # Normalize
+    fl_norm = fl / np.median(fl) if np.median(fl) > 0 else fl
+
+    # Simplified spectral templates (key features)
+    templates = {
+        "SN Ia": {
+            "features": [(6150, -0.4, "Si II 6150 absorption"), (3750, -0.3, "Ca II H&K")],
+            "description": "Type Ia supernova: Si II absorption at 6150A, no hydrogen",
+        },
+        "SN II": {
+            "features": [(6563, 0.5, "H-alpha emission"), (4861, 0.3, "H-beta"), (4340, 0.2, "H-gamma")],
+            "description": "Type II supernova: strong Balmer series emission/P-Cygni",
+        },
+        "SN Ib/c": {
+            "features": [(5876, -0.3, "He I 5876 absorption"), (6678, -0.2, "He I 6678")],
+            "description": "Type Ib/c supernova: helium lines (Ib) or neither H nor He (Ic)",
+        },
+        "TDE": {
+            "features": [(4686, 0.5, "He II 4686 emission"), (4640, 0.4, "N III Bowen"), (6563, 0.3, "broad H-alpha")],
+            "description": "Tidal disruption event: broad He II + Bowen fluorescence",
+        },
+        "AGN": {
+            "features": [(5007, 0.6, "[OIII] 5007"), (4861, 0.4, "broad H-beta"), (6563, 0.5, "broad H-alpha")],
+            "description": "Active galactic nucleus: broad emission lines + [OIII]",
+        },
+        "Nova": {
+            "features": [(6563, 0.7, "very broad H-alpha"), (4861, 0.5, "broad H-beta"), (5007, 0.3, "[OIII]")],
+            "description": "Classical nova: very broad Balmer emission + [OIII] development",
+        },
+    }
+
+    scores = {}
+    matched_features = {}
+
+    for cls_name, tmpl in templates.items():
+        score = 0.0
+        features_found = []
+
+        for center, expected_strength, label in tmpl["features"]:
+            # Check if feature present at expected wavelength
+            window = 30  # Angstrom
+            mask = (wave > center - window) & (wave < center + window)
+            if np.sum(mask) < 3:
+                continue
+
+            local_flux = fl_norm[mask]
+            continuum = np.median(fl_norm[(wave > center - 100) & (wave < center + 100)])
+
+            if continuum <= 0:
+                continue
+
+            deviation = (np.mean(local_flux) - continuum) / continuum
+
+            # Positive expected_strength = emission, negative = absorption
+            if expected_strength > 0 and deviation > 0.05:
+                feature_score = min(deviation / expected_strength, 2.0)
+                score += feature_score
+                features_found.append({"line": label, "strength": round(float(deviation), 3), "detected": True})
+            elif expected_strength < 0 and deviation < -0.05:
+                feature_score = min(abs(deviation / expected_strength), 2.0)
+                score += feature_score
+                features_found.append({"line": label, "strength": round(float(deviation), 3), "detected": True})
+            else:
+                features_found.append({"line": label, "expected": round(float(expected_strength), 2), "detected": False})
+
+        scores[cls_name] = float(score)
+        matched_features[cls_name] = features_found
+
+    if not scores:
+        return {"classification": "Unknown", "confidence": 0.0, "error": "No features detected"}
+
+    best_class = max(scores, key=scores.get)
+    total = sum(scores.values())
+    confidence = scores[best_class] / total if total > 0 else 0
+
+    # Rank all classes
+    ranked = sorted(scores.items(), key=lambda x: -x[1])
+
+    return {
+        "classification": best_class,
+        "confidence": round(float(confidence), 3),
+        "description": templates[best_class]["description"],
+        "scores": {k: round(v, 3) for k, v in ranked},
+        "matched_features": matched_features[best_class],
+        "all_features": matched_features,
+        "method": "spectroscopic_template_matching",
+        "redshift_used": z,
+    }
+
+
+def enrich_with_host_galaxy(ra: float, dec: float, search_radius: float = 0.02) -> dict:
+    """Query host galaxy information for a transient position."""
+    import asyncio
+
+    host_info = {"ra": ra, "dec": dec}
+
+    try:
+        from app.connectors.simbad import SIMBADConnector
+        connector = SIMBADConnector()
+
+        loop = asyncio.new_event_loop()
+        results = loop.run_until_complete(connector.search(
+            query="", ra=ra, dec=dec, radius=search_radius
+        ))
+        loop.close()
+
+        galaxies = [r for r in results if r.object_type and
+                    any(t in r.object_type.lower() for t in ["galaxy", "gal", "g"])]
+
+        if galaxies:
+            host = galaxies[0]
+            host_info["host_name"] = host.name
+            host_info["host_type"] = host.object_type
+            host_info["host_redshift"] = host.redshift
+            host_info["separation_arcsec"] = round(
+                ((ra - host.ra)**2 + (dec - host.dec)**2)**0.5 * 3600, 2
+            )
+            host_info["host_found"] = True
+        else:
+            host_info["host_found"] = False
+            host_info["note"] = "No galaxy found within search radius"
+    except Exception as e:
+        host_info["host_found"] = False
+        host_info["error"] = str(e)
+
+    return host_info

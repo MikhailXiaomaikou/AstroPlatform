@@ -117,6 +117,8 @@ ALLOWED_MODULES = {
     "matplotlib", "matplotlib.pyplot", "plt",
     # Tables
     "pandas",
+    # Distributed / large-data
+    "dask", "dask.dataframe", "dask.array", "dask.bag",
 }
 
 # Blocked operations
@@ -298,11 +300,28 @@ def _make_sandbox_helpers():
         """Return approximate process memory usage in megabytes."""
         return _get_memory_usage_bytes() / (1024 * 1024)
 
+    def lazy_load_table(path: str, format: str = "auto"):
+        """Load a large table lazily with Dask for out-of-core processing."""
+        try:
+            import dask.dataframe as dd
+            if format == "csv" or path.endswith(".csv"):
+                return dd.read_csv(path)
+            elif format == "parquet" or path.endswith(".parquet"):
+                return dd.read_parquet(path)
+            else:
+                # Fall back to pandas for small files
+                import pandas as pd
+                return pd.read_csv(path)
+        except ImportError:
+            import pandas as pd
+            return pd.read_csv(path)
+
     return {
         "process_in_chunks": process_in_chunks,
         "load_votable": load_votable,
         "load_csv": load_csv,
         "memory_usage_mb": memory_usage_mb,
+        "lazy_load_table": lazy_load_table,
     }
 
 

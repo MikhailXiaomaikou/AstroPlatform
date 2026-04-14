@@ -43,6 +43,7 @@ batman-package>=2.4,<3
 celerite2>=0.3,<1
 reproject>=0.14,<1
 photutils>=2.0,<3
+dask[dataframe]>=2024.1
 # Optional (not installed by default — requires ~1GB model grids + multinest):
 #   isochrones>=2.2  # stellar isochrone fitting with MESA/MIST grids
 pytest>=8.0.0,<9

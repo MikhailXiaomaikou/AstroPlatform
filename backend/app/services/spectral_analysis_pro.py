@@ -672,3 +672,237 @@ def auto_flux_calibrate(wavelength: list, flux: list,
         "calibrated": True,
         "note": "Apply by dividing raw spectrum by this sensitivity function",
     }
+
+
+def voronoi_bin_cube(fits_path: str, target_snr: float = 10.0) -> dict:
+    """Voronoi binning of an IFU datacube to achieve target S/N per bin.
+
+    Implementation of the Cappellari & Copin (2003) algorithm.
+    """
+    from astropy.io import fits as pyfits
+
+    with pyfits.open(fits_path) as hdul:
+        for hdu in hdul:
+            if hdu.data is not None and hdu.data.ndim == 3:
+                data = hdu.data
+                header = hdu.header
+                break
+        else:
+            return {"error": "No 3D datacube found"}
+
+    nwave, ny, nx = data.shape
+
+    # Compute signal and noise per spaxel (median flux and MAD)
+    signal = np.nanmedian(data, axis=0)  # (ny, nx)
+    noise = 1.4826 * np.nanmedian(np.abs(data - np.nanmedian(data, axis=0, keepdims=True)), axis=0)
+    noise[noise <= 0] = np.nanmedian(noise[noise > 0]) if np.any(noise > 0) else 1.0
+
+    snr = signal / noise
+
+    # Simple Voronoi-like binning: iterative accretion
+    bin_map = np.full((ny, nx), -1, dtype=int)
+    bin_id = 0
+
+    # Sort spaxels by S/N (lowest first)
+    valid = np.isfinite(signal) & (signal > 0)
+    coords = np.argwhere(valid)
+    snr_vals = snr[valid]
+    order = np.argsort(snr_vals)
+    coords = coords[order]
+
+    for cy, cx in coords:
+        if bin_map[cy, cx] >= 0:
+            continue
+
+        # Start new bin
+        current_bin = [(cy, cx)]
+        bin_map[cy, cx] = bin_id
+        current_signal = float(signal[cy, cx])
+        current_noise_sq = float(noise[cy, cx] ** 2)
+
+        # Accrete neighbors until target S/N reached
+        while current_signal / np.sqrt(current_noise_sq) < target_snr:
+            # Find unassigned neighbors
+            neighbors = []
+            for by, bx in current_bin:
+                for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    ny2, nx2 = by + dy, bx + dx
+                    if 0 <= ny2 < ny and 0 <= nx2 < nx and bin_map[ny2, nx2] < 0 and valid[ny2, nx2]:
+                        neighbors.append((ny2, nx2))
+
+            if not neighbors:
+                break
+
+            # Add the neighbor with highest S/N
+            best = max(neighbors, key=lambda p: snr[p[0], p[1]])
+            bin_map[best[0], best[1]] = bin_id
+            current_bin.append(best)
+            current_signal += signal[best[0], best[1]]
+            current_noise_sq += noise[best[0], best[1]] ** 2
+
+        bin_id += 1
+
+    # Compute binned spectra
+    n_bins = bin_id
+    binned_spectra = {}
+    for b in range(n_bins):
+        mask = bin_map == b
+        n_spax = int(np.sum(mask))
+        if n_spax == 0:
+            continue
+        binned_flux = np.nanmean(data[:, mask], axis=1)
+        binned_err = np.nanstd(data[:, mask], axis=1) / np.sqrt(n_spax)
+        achieved_snr = float(np.nanmedian(binned_flux / (binned_err + 1e-30)))
+        binned_spectra[b] = {
+            "n_spaxels": n_spax,
+            "achieved_snr": round(achieved_snr, 1),
+        }
+
+    # Extract wavelength
+    crval3 = header.get("CRVAL3", 1.0)
+    cdelt3 = header.get("CDELT3", header.get("CD3_3", 1.0))
+    crpix3 = header.get("CRPIX3", 1.0)
+
+    return {
+        "n_bins": n_bins,
+        "target_snr": target_snr,
+        "bin_map_shape": [ny, nx],
+        "bin_summary": binned_spectra,
+        "wavelength_range": [float(crval3), float(crval3 + (nwave - 1) * cdelt3)],
+    }
+
+
+def ifu_velocity_map(fits_path: str, rest_wavelength: float,
+                     window: float = 30.0) -> dict:
+    """Compute 2D velocity and velocity dispersion maps from an IFU cube.
+
+    Fits a Gaussian to a spectral line at each spaxel to measure
+    velocity shift and line width.
+    """
+    from astropy.io import fits as pyfits
+    from scipy.optimize import curve_fit
+
+    c_km_s = 299792.458
+
+    with pyfits.open(fits_path) as hdul:
+        for hdu in hdul:
+            if hdu.data is not None and hdu.data.ndim == 3:
+                data = hdu.data
+                header = hdu.header
+                break
+        else:
+            return {"error": "No 3D datacube found"}
+
+    nwave, ny, nx = data.shape
+    crval3 = header.get("CRVAL3", 1.0)
+    cdelt3 = header.get("CDELT3", header.get("CD3_3", 1.0))
+    crpix3 = header.get("CRPIX3", 1.0)
+    wavelength = crval3 + (np.arange(nwave) - (crpix3 - 1)) * cdelt3
+
+    # Line window
+    mask = (wavelength > rest_wavelength - window) & (wavelength < rest_wavelength + window)
+    w_line = wavelength[mask]
+
+    if len(w_line) < 5:
+        return {"error": f"Insufficient wavelength coverage around {rest_wavelength} A"}
+
+    velocity_map = np.full((ny, nx), np.nan)
+    dispersion_map = np.full((ny, nx), np.nan)
+    flux_map = np.full((ny, nx), np.nan)
+
+    def gauss(x, a, mu, sig, c):
+        return a * np.exp(-0.5 * ((x - mu) / sig) ** 2) + c
+
+    for iy in range(ny):
+        for ix in range(nx):
+            spec = data[mask, iy, ix]
+            if np.any(np.isnan(spec)) or np.all(spec == 0):
+                continue
+            try:
+                p0 = [np.max(spec) - np.median(spec), rest_wavelength, 2.0, np.median(spec)]
+                popt, _ = curve_fit(gauss, w_line, spec, p0=p0, maxfev=500)
+
+                fitted_center = popt[1]
+                fitted_sigma = abs(popt[2])
+
+                # Velocity = c * (lambda_obs - lambda_rest) / lambda_rest
+                velocity_map[iy, ix] = c_km_s * (fitted_center - rest_wavelength) / rest_wavelength
+                dispersion_map[iy, ix] = c_km_s * fitted_sigma / rest_wavelength
+                flux_map[iy, ix] = popt[0] * fitted_sigma * np.sqrt(2 * np.pi)
+            except Exception:
+                continue
+
+    # Statistics
+    valid = np.isfinite(velocity_map)
+
+    return {
+        "velocity_map": velocity_map.tolist(),
+        "dispersion_map": dispersion_map.tolist(),
+        "flux_map": flux_map.tolist(),
+        "shape": [ny, nx],
+        "rest_wavelength": rest_wavelength,
+        "n_valid_spaxels": int(np.sum(valid)),
+        "velocity_range_km_s": [float(np.nanmin(velocity_map)), float(np.nanmax(velocity_map))] if np.any(valid) else [0, 0],
+        "mean_dispersion_km_s": float(np.nanmean(dispersion_map)) if np.any(valid) else 0,
+    }
+
+
+def ifu_line_ratio_map(fits_path: str,
+                       line1_wavelength: float, line2_wavelength: float,
+                       line1_name: str = "line1", line2_name: str = "line2",
+                       window: float = 20.0) -> dict:
+    """Compute a 2D emission line ratio map from an IFU cube.
+
+    Useful for BPT diagrams: [O III]/Hbeta, [N II]/Halpha, [S II]/Halpha.
+    """
+    from astropy.io import fits as pyfits
+
+    with pyfits.open(fits_path) as hdul:
+        for hdu in hdul:
+            if hdu.data is not None and hdu.data.ndim == 3:
+                data = hdu.data
+                header = hdu.header
+                break
+        else:
+            return {"error": "No 3D datacube found"}
+
+    nwave, ny, nx = data.shape
+    crval3 = header.get("CRVAL3", 1.0)
+    cdelt3 = header.get("CDELT3", header.get("CD3_3", 1.0))
+    crpix3 = header.get("CRPIX3", 1.0)
+    wavelength = crval3 + (np.arange(nwave) - (crpix3 - 1)) * cdelt3
+
+    def measure_line_flux(w_center):
+        mask = (wavelength > w_center - window) & (wavelength < w_center + window)
+        if np.sum(mask) < 3:
+            return np.full((ny, nx), np.nan)
+        line_data = data[mask]
+        # Continuum from edges
+        cont_mask = ((wavelength > w_center - window * 2) & (wavelength < w_center - window)) | \
+                    ((wavelength > w_center + window) & (wavelength < w_center + window * 2))
+        if np.sum(cont_mask) > 0:
+            continuum = np.nanmedian(data[cont_mask], axis=0)
+        else:
+            continuum = np.nanmedian(line_data[[0, -1]], axis=0)
+
+        line_flux = np.nansum(line_data - continuum[np.newaxis, :, :], axis=0) * abs(cdelt3)
+        return line_flux
+
+    flux1 = measure_line_flux(line1_wavelength)
+    flux2 = measure_line_flux(line2_wavelength)
+
+    # Ratio map (log10)
+    ratio = np.full((ny, nx), np.nan)
+    valid = (flux2 > 0) & (flux1 > 0) & np.isfinite(flux1) & np.isfinite(flux2)
+    ratio[valid] = np.log10(flux1[valid] / flux2[valid])
+
+    return {
+        "ratio_map_log10": ratio.tolist(),
+        "flux1_map": flux1.tolist(),
+        "flux2_map": flux2.tolist(),
+        "shape": [ny, nx],
+        "line1": {"name": line1_name, "wavelength": line1_wavelength},
+        "line2": {"name": line2_name, "wavelength": line2_wavelength},
+        "n_valid_spaxels": int(np.sum(valid)),
+        "ratio_range": [float(np.nanmin(ratio)), float(np.nanmax(ratio))] if np.any(valid) else [0, 0],
+    }

@@ -259,6 +259,46 @@ async def get_literature_context(
     return result
 
 
+def search_literature(topic: str, max_papers: int = 10) -> list[dict]:
+    """Synchronous wrapper to search ADS for papers on a topic.
+
+    Returns a list of paper dicts with bibcode, title, authors, year, abstract.
+    """
+    ads_api_key = os.getenv("ADS_API_KEY", "")
+    if not ads_api_key:
+        return []
+
+    query = _build_ads_query(topic)
+    headers = {"Authorization": f"Bearer {ads_api_key}"}
+    params = {
+        "q": query,
+        "fl": ADS_FIELDS,
+        "rows": min(max_papers * 3, 50),
+        "sort": "citation_count desc",
+    }
+
+    try:
+        resp = httpx.get(ADS_API_BASE, params=params, headers=headers, timeout=15.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return []
+
+    docs = data.get("response", {}).get("docs", [])
+    papers = []
+    for doc in docs[:max_papers]:
+        papers.append({
+            "bibcode": doc.get("bibcode", ""),
+            "title": (doc.get("title") or [""])[0],
+            "authors": doc.get("author", []),
+            "year": doc.get("year", ""),
+            "abstract": doc.get("abstract", ""),
+            "citation_count": doc.get("citation_count", 0),
+            "doi": (doc.get("doi") or [None])[0],
+        })
+    return papers
+
+
 async def compare_with_literature(user_results: dict, literature: dict) -> dict:
     """Prepare a structured comparison between user results and literature.
 
@@ -318,3 +358,114 @@ async def compare_with_literature(user_results: dict, literature: dict) -> dict:
         "literature_context": lit_papers,
         "comparison_prompt": comparison_prompt,
     }
+
+
+def build_citation_network(bibcodes: list[str], depth: int = 1) -> dict:
+    """Build a citation network from a list of seed papers.
+
+    Returns nodes (papers) and edges (citations) for visualization.
+    """
+
+    ads_key = os.environ.get("ADS_API_KEY", "")
+    if not ads_key:
+        return {"error": "ADS_API_KEY not configured", "nodes": [], "edges": []}
+
+    nodes = {}
+    edges = []
+    to_process = list(bibcodes)
+    processed = set()
+
+    for level in range(depth + 1):
+        next_batch = []
+        for bib in to_process:
+            if bib in processed:
+                continue
+            processed.add(bib)
+
+            try:
+                resp = httpx.get(
+                    "https://api.adsabs.harvard.edu/v1/search/query",
+                    params={"q": f"bibcode:{bib}", "fl": "bibcode,title,author,year,citation_count,reference,citation"},
+                    headers={"Authorization": f"Bearer {ads_key}"},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    docs = resp.json().get("response", {}).get("docs", [])
+                    if docs:
+                        doc = docs[0]
+                        nodes[bib] = {
+                            "bibcode": bib,
+                            "title": doc.get("title", [""])[0],
+                            "authors": doc.get("author", [])[:3],
+                            "year": doc.get("year", ""),
+                            "citations": doc.get("citation_count", 0),
+                            "level": level,
+                        }
+
+                        # Add citation edges (papers this one cites)
+                        for ref in (doc.get("reference", []) or [])[:20]:
+                            edges.append({"from": bib, "to": ref, "type": "cites"})
+                            if level < depth and ref not in processed:
+                                next_batch.append(ref)
+
+                        # Add cited-by edges
+                        for citer in (doc.get("citation", []) or [])[:10]:
+                            edges.append({"from": citer, "to": bib, "type": "cites"})
+                            if level < depth and citer not in processed:
+                                next_batch.append(citer)
+            except Exception:
+                continue
+
+        to_process = next_batch[:50]  # Limit breadth
+
+    return {
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "n_papers": len(nodes),
+        "n_edges": len(edges),
+        "depth": depth,
+    }
+
+
+def synthesize_bibliography(topic: str, findings: str = "", max_papers: int = 10) -> dict:
+    """AI-powered bibliography synthesis: find relevant papers and generate
+    a contextualized literature review paragraph."""
+
+    # First search for papers
+    papers = search_literature(topic, max_papers=max_papers)
+
+    if not papers:
+        return {"text": "No relevant papers found.", "papers": []}
+
+    # Build context for AI synthesis
+    paper_summaries = []
+    for i, p in enumerate(papers[:max_papers]):
+        authors = p.get("authors", ["Unknown"])
+        first_author = authors[0].split(",")[0] if authors else "Unknown"
+        year = p.get("year", "")
+        title = p.get("title", "")
+        abstract = p.get("abstract", "")[:200]
+        paper_summaries.append(
+            f"[{i+1}] {first_author} et al. ({year}): {title}. {abstract}..."
+        )
+
+    context = "\n".join(paper_summaries)
+
+    synthesis = {
+        "topic": topic,
+        "papers": papers[:max_papers],
+        "paper_count": len(papers),
+        "context_for_ai": (
+            f"The following {len(papers)} papers are relevant to the topic '{topic}':\n\n"
+            f"{context}\n\n"
+            f"User's findings: {findings}\n\n"
+            f"Please synthesize a brief literature review paragraph citing these papers "
+            f"and contextualizing the user's findings within the existing literature."
+        ),
+        "suggested_citations": [
+            {"bibcode": p.get("bibcode", ""), "citation": f"{p.get('authors', [''])[0].split(',')[0]} et al. ({p.get('year', '')})"}
+            for p in papers[:max_papers] if p.get("bibcode")
+        ],
+    }
+
+    return synthesis

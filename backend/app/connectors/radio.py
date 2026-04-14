@@ -422,3 +422,142 @@ class FIRSTConnector(BaseConnector):
                 )
             )
         return objects
+
+
+class RadioAnalysis:
+    """Radio astronomy analysis utilities."""
+
+    @staticmethod
+    def spectral_index(flux_1: float, freq_1: float, flux_2: float, freq_2: float) -> dict:
+        """Compute radio spectral index alpha where S ~ nu^alpha.
+
+        Args:
+            flux_1, flux_2: Flux densities in mJy
+            freq_1, freq_2: Frequencies in MHz
+        """
+        import math
+
+        if flux_1 <= 0 or flux_2 <= 0 or freq_1 <= 0 or freq_2 <= 0:
+            return {"error": "All values must be positive"}
+        if freq_1 == freq_2:
+            return {"error": "Frequencies must be different"}
+
+        alpha = math.log(flux_1 / flux_2) / math.log(freq_1 / freq_2)
+
+        # Classification
+        if alpha > -0.1:
+            classification = "flat-spectrum (compact/AGN core)"
+        elif alpha > -0.5:
+            classification = "moderately steep (young source)"
+        elif alpha > -0.8:
+            classification = "steep-spectrum (extended lobes)"
+        else:
+            classification = "ultra-steep (aged plasma/high-z)"
+
+        return {
+            "spectral_index": round(alpha, 3),
+            "classification": classification,
+            "flux_1_mJy": flux_1,
+            "freq_1_MHz": freq_1,
+            "flux_2_mJy": flux_2,
+            "freq_2_MHz": freq_2,
+        }
+
+    @staticmethod
+    def radio_luminosity(flux_mJy: float, redshift: float, freq_MHz: float = 1400,
+                         spectral_index: float = -0.7) -> dict:
+        """Compute radio luminosity from flux density and redshift.
+
+        Uses standard cosmology (H0=70, Om=0.3, Ol=0.7).
+        """
+        from astropy.cosmology import FlatLambdaCDM
+        import astropy.units as u
+
+        cosmo = FlatLambdaCDM(H0=70, Om0=0.3)
+        dl = cosmo.luminosity_distance(redshift).to(u.cm).value
+
+        # Convert mJy to erg/s/cm^2/Hz
+        flux_cgs = flux_mJy * 1e-26  # 1 mJy = 1e-26 erg/s/cm^2/Hz
+
+        # K-correction
+        k_corr = (1 + redshift) ** (1 + spectral_index)
+
+        # Luminosity in W/Hz
+        luminosity = 4 * 3.14159 * dl**2 * flux_cgs * k_corr / 1e7  # erg/s/Hz to W/Hz
+
+        import math
+        log_l = math.log10(luminosity) if luminosity > 0 else 0
+
+        # Classification
+        if log_l > 25:
+            agn_class = "FR II / Radio-loud AGN"
+        elif log_l > 23:
+            agn_class = "FR I / Radio-intermediate AGN"
+        elif log_l > 21:
+            agn_class = "Star-forming galaxy"
+        else:
+            agn_class = "Radio-quiet"
+
+        return {
+            "luminosity_W_Hz": float(luminosity),
+            "log_luminosity": round(log_l, 2),
+            "classification": agn_class,
+            "redshift": redshift,
+            "freq_MHz": freq_MHz,
+            "spectral_index_assumed": spectral_index,
+        }
+
+    @staticmethod
+    def multi_frequency_crossmatch(ra: float, dec: float, radius: float = 0.01) -> dict:
+        """Cross-match a source across radio surveys at different frequencies."""
+
+        results = {}
+        surveys = {
+            "NVSS_1400MHz": ("nvss", 1400),
+            "FIRST_1400MHz": ("first", 1400),
+        }
+
+        for survey_name, (connector_name, freq) in surveys.items():
+            try:
+                if connector_name == "nvss":
+                    conn = NVSSConnector()
+                elif connector_name == "first":
+                    conn = FIRSTConnector()
+                else:
+                    continue
+
+                loop = asyncio.new_event_loop()
+                objs = loop.run_until_complete(conn.search("", ra=ra, dec=dec, radius=radius))
+                loop.close()
+
+                if objs:
+                    best = objs[0]
+                    flux = best.extra.get("flux_1.4ghz") or best.extra.get("Fint")
+                    results[survey_name] = {
+                        "detected": True,
+                        "flux_mJy": float(flux) if flux else None,
+                        "freq_MHz": freq,
+                        "name": best.name,
+                        "separation_arcsec": round(((ra - best.ra)**2 + (dec - best.dec)**2)**0.5 * 3600, 2),
+                    }
+                else:
+                    results[survey_name] = {"detected": False, "freq_MHz": freq}
+            except Exception as e:
+                results[survey_name] = {"detected": False, "error": str(e)}
+
+        # Compute spectral index if multiple detections
+        detected = {k: v for k, v in results.items() if v.get("detected") and v.get("flux_mJy")}
+        if len(detected) >= 2:
+            freqs = list(detected.values())
+            if freqs[0]["freq_MHz"] != freqs[1]["freq_MHz"]:
+                si = RadioAnalysis.spectral_index(
+                    freqs[0]["flux_mJy"], freqs[0]["freq_MHz"],
+                    freqs[1]["flux_mJy"], freqs[1]["freq_MHz"],
+                )
+                results["spectral_index"] = si
+
+        return {
+            "ra": ra, "dec": dec,
+            "surveys": results,
+            "n_detections": sum(1 for v in results.values() if isinstance(v, dict) and v.get("detected")),
+        }
