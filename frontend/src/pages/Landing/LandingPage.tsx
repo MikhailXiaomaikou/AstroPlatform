@@ -41,9 +41,9 @@ const FEATURES = [
 ];
 
 const STATS = [
-  { value: "21", label: "Databases" },
-  { value: "28", label: "AI Tools" },
-  { value: "25", label: "Pipeline Nodes" },
+  { value: "19+", label: "Databases" },
+  { value: "48", label: "AI Tools" },
+  { value: "35", label: "Pipeline Nodes" },
   { value: "4", label: "Languages" },
 ];
 
