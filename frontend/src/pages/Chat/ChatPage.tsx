@@ -44,6 +44,49 @@ import { useTracking } from "../../hooks/useTracking";
 import { registerWorkspaceExport } from "../../utils/workspaceCache";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
+/* Fullscreen image/plot modal */
+function FullscreenModal({ src, onClose }: { src: string; onClose: () => void }) {
+  const handleDownload = () => {
+    const a = document.createElement("a");
+    a.href = src;
+    a.download = `astro_figure_${Date.now()}.png`;
+    a.click();
+  };
+  return (
+    <div className="figure-modal-backdrop" onClick={onClose}>
+      <div className="figure-modal" onClick={(e) => e.stopPropagation()}>
+        <img src={src} alt="Full-size figure" className="figure-modal-img" />
+        <div className="figure-modal-toolbar">
+          <button className="btn-secondary btn-small" onClick={handleDownload}>Download PNG</button>
+          <button className="btn-secondary btn-small" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClickableFigure({ src, alt }: { src: string; alt: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const handleDownload = () => {
+    const a = document.createElement("a");
+    a.href = src;
+    a.download = `astro_figure_${Date.now()}.png`;
+    a.click();
+  };
+  return (
+    <>
+      <div className="code-figure-wrapper">
+        <img src={src} alt={alt} className="code-figure" onClick={() => setExpanded(true)} title="Click to expand" />
+        <div className="code-figure-actions">
+          <button className="btn-secondary btn-small" onClick={() => setExpanded(true)}>Expand</button>
+          <button className="btn-secondary btn-small" onClick={handleDownload}>Download</button>
+        </div>
+      </div>
+      {expanded && <FullscreenModal src={src} onClose={() => setExpanded(false)} />}
+    </>
+  );
+}
+
 interface DisplayMessage {
   id: string;
   role: "user" | "assistant";
@@ -218,12 +261,14 @@ function ActionCard({
         )}
       </div>
       {action.action === "plot" && (
-        <Suspense fallback={<div className="fits-loading">Loading plot...</div>}>
-          <PlotBuilder
-            initialData={action.data as Record<string, unknown>}
-            initialChartType={action.chart_type as string}
-          />
-        </Suspense>
+        <div className="chat-plot-wrapper">
+          <Suspense fallback={<div className="fits-loading">Loading plot...</div>}>
+            <PlotBuilder
+              initialData={action.data as Record<string, unknown>}
+              initialChartType={action.chart_type as string}
+            />
+          </Suspense>
+        </div>
       )}
       {result && <ActionResult result={result} />}
       {isAutoExecuted && autoResult && !result && (
@@ -847,12 +892,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
 
         {/* Figures */}
         {figures.map((b64, i) => (
-          <img
-            key={i}
-            src={`data:image/png;base64,${b64}`}
-            alt={`Figure ${i + 1}`}
-            className="code-figure"
-          />
+          <ClickableFigure key={i} src={`data:image/png;base64,${b64}`} alt={`Figure ${i + 1}`} />
         ))}
 
         {/* Variables */}
