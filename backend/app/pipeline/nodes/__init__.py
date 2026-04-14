@@ -28,6 +28,11 @@ def _get_registry() -> dict[str, Callable]:
     from app.pipeline.nodes.source_extract import source_extract
     from app.pipeline.nodes.psf_photometry import psf_photometry
     from app.pipeline.nodes.condition import condition
+    from app.pipeline.nodes.flux_calibrate import flux_calibrate
+    from app.pipeline.nodes.telluric_correct import telluric_correct
+    from app.pipeline.nodes.spectra_stack import spectra_stack
+    from app.pipeline.nodes.photo_z_pro import photo_z_pro
+    from app.pipeline.nodes.bayesian_fit import bayesian_fit
 
     return {
         "QueryData": query_data,
@@ -54,6 +59,11 @@ def _get_registry() -> dict[str, Callable]:
         "CustomScript": custom_script,
         "TimeSeriesAnalysis": timeseries_analysis,
         "Condition": condition,
+        "FluxCalibrate": flux_calibrate,
+        "TelluricCorrect": telluric_correct,
+        "SpectraStack": spectra_stack,
+        "PhotoZPro": photo_z_pro,
+        "BayesianFit": bayesian_fit,
     }
 
 

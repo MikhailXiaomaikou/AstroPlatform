@@ -445,6 +445,7 @@ def estimate_photo_z(
     magnitudes: dict,
     mag_errors: dict | None = None,
     method: str = "hybrid",
+    **kwargs,
 ) -> dict:
     """Estimate photometric redshift from multi-band photometry.
 
@@ -455,16 +456,22 @@ def estimate_photo_z(
     mag_errors : dict, optional
         1-sigma magnitude uncertainties.
     method : str
-        ``'template'`` — chi-squared template fitting only.
-        ``'ml'``       — empirical colour–redshift polynomial only.
-        ``'hybrid'``   — run both and return an inverse-variance weighted
-                         average, with individual estimates in *details*.
+        ``'template'``          — chi-squared template fitting only.
+        ``'ml'``                — empirical colour–redshift polynomial only.
+        ``'hybrid'``            — run both and return an inverse-variance weighted
+                                  average, with individual estimates in *details*.
+        ``'enhanced_template'`` — research-grade 30+ template fitting with dust,
+                                  emission lines, IGM absorption, and Bayesian priors.
 
     Returns
     -------
     dict
         z_phot, z_err, pdf_z, z_grid, method, and (for hybrid) details.
     """
+    if method == "enhanced_template":
+        from app.services.photo_z_pro import fit_template_enhanced
+        return fit_template_enhanced(magnitudes, mag_errors, **kwargs)
+
     if mag_errors is None:
         mag_errors = {}
 

@@ -2618,6 +2618,66 @@ def extract_sources(image_data, threshold_sigma=3.0, min_area=5):
     return {'n_sources': len(sources), 'sources': sources}
 
 
+# ── Professional spectral analysis (specutils) ──
+
+
+def pro_load_spectrum(fits_path: str) -> dict:
+    """Load spectrum from FITS file with specutils."""
+    from app.services.spectral_analysis_pro import load_spectrum
+    return load_spectrum(fits_path)
+
+
+def pro_identify_lines(wavelength, flux, flux_err=None, threshold_snr=3.0, redshift=0.0):
+    """Identify spectral lines against NIST catalog."""
+    from app.services.spectral_analysis_pro import identify_lines
+    return identify_lines(wavelength, flux, flux_err, threshold_snr, redshift=redshift)
+
+
+def pro_fit_lines(wavelength, flux, line_centers=None, model="gaussian"):
+    """Fit spectral lines with Gaussian/Lorentzian/Voigt profiles via specutils."""
+    from app.services.spectral_analysis_pro import fit_lines
+    return fit_lines(wavelength, flux, line_centers=line_centers, model=model)
+
+
+def pro_measure_ew(wavelength, flux, line_center, window=20.0):
+    """Measure equivalent width via specutils."""
+    from app.services.spectral_analysis_pro import measure_equivalent_width
+    return measure_equivalent_width(wavelength, flux, line_center, window)
+
+
+def pro_heliocentric(wavelength, flux, ra, dec, obstime, observatory="greenwich"):
+    """Apply heliocentric velocity correction."""
+    from app.services.spectral_analysis_pro import heliocentric_correction
+    return heliocentric_correction(wavelength, flux, ra, dec, obstime, observatory)
+
+
+# ── Bayesian inference (dynesty/arviz) ──
+
+
+def pro_nested_sampling(log_likelihood, prior_transform, ndim, nlive=500, method="dynesty"):
+    """Run nested sampling for Bayesian evidence computation."""
+    from app.services.bayesian_inference import nested_sampling
+    return nested_sampling(log_likelihood, prior_transform, ndim, nlive=nlive, method=method)
+
+
+def pro_bayes_factor(logZ1, logZ2):
+    """Compute Bayes factor between two models."""
+    from app.services.bayesian_inference import compute_bayes_factor
+    return compute_bayes_factor(logZ1, logZ2)
+
+
+def pro_chain_diagnostics(samples, parameter_names=None):
+    """Compute MCMC chain diagnostics (R-hat, ESS, MCSE) via ArviZ."""
+    from app.services.bayesian_inference import chain_diagnostics
+    return chain_diagnostics(samples, parameter_names)
+
+
+def pro_model_comparison(models):
+    """Compare models using BIC/AIC and/or Bayesian evidence."""
+    from app.services.bayesian_inference import model_comparison_table
+    return model_comparison_table(models)
+
+
 def available_functions():
     """Return signatures and one-line docs for sandbox preloaded helpers."""
     exported = [
@@ -2665,6 +2725,15 @@ def available_functions():
         download_and_clean_lightcurve,
         transit_search,
         extract_sources,
+        pro_load_spectrum,
+        pro_identify_lines,
+        pro_fit_lines,
+        pro_measure_ew,
+        pro_heliocentric,
+        pro_nested_sampling,
+        pro_bayes_factor,
+        pro_chain_diagnostics,
+        pro_model_comparison,
     ]
 
     # Lazy-import photo-z so its numpy-heavy globals aren't loaded at

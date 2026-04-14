@@ -104,6 +104,10 @@ ALLOWED_MODULES = {
     "astropy.coordinates", "astropy.units", "astropy.cosmology",
     "astropy.wcs", "astropy.stats", "astropy.modeling",
     "astropy.convolution",
+    "specutils", "specutils.fitting", "specutils.analysis", "specutils.manipulation",
+    "dynesty", "dynesty.utils",
+    "ultranest",
+    "arviz",
     "astro",
     # Visualization
     "matplotlib", "matplotlib.pyplot", "plt",

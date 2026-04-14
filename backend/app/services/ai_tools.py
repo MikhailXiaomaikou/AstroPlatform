@@ -772,6 +772,35 @@ TOOLS = [
         },
     },
     {
+        "name": "analyze_spectrum_pro",
+        "description": (
+            "Professional spectral analysis: line identification against NIST catalogs (60+ lines), "
+            "Gaussian/Voigt fitting with specutils, equivalent width measurements, heliocentric "
+            "correction, and flux calibration. Use this for research-grade spectral analysis."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fits_path": {"type": "string", "description": "Path to FITS spectrum file"},
+                "operations": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": [
+                        "identify_lines", "fit_lines", "equivalent_width",
+                        "heliocentric_correct", "flux_calibrate", "telluric_correct"
+                    ]},
+                    "description": "Operations to perform (default: identify_lines)",
+                },
+                "redshift": {"type": "number", "description": "Known redshift for line matching"},
+                "ra": {"type": "number", "description": "RA in degrees (for heliocentric)"},
+                "dec": {"type": "number", "description": "Dec in degrees (for heliocentric)"},
+                "obstime": {"type": "string", "description": "Observation time ISO format"},
+                "line_centers": {"type": "array", "items": {"type": "number"}, "description": "Specific line centers to fit"},
+                "model": {"type": "string", "enum": ["gaussian", "lorentzian", "voigt"]},
+            },
+            "required": ["fits_path"],
+        },
+    },
+    {
         "name": "sensitivity_analysis",
         "description": (
             "Run sensitivity analysis by perturbing parameters and observing result changes. "
@@ -867,6 +896,8 @@ async def execute_tool(
             return await _exec_extract_sources(tool_input)
         elif tool_name == "classify_transient":
             return await _exec_classify_transient(tool_input)
+        elif tool_name == "analyze_spectrum_pro":
+            return await _exec_analyze_spectrum_pro(tool_input)
         elif tool_name == "sensitivity_analysis":
             return await _exec_sensitivity_analysis(tool_input, python_session_id)
         else:
@@ -1137,6 +1168,136 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         response["auto_fix_note"] = auto_fix_note
 
     return response
+
+
+async def _exec_analyze_spectrum_pro(inp: dict) -> dict:
+    """Run professional spectral analysis operations on a FITS spectrum."""
+    import os
+    from app.services.spectral_analysis_pro import (
+        load_spectrum, identify_lines, fit_lines,
+        measure_equivalent_width, heliocentric_correction,
+        flux_calibrate, telluric_correct,
+    )
+
+    fits_path = inp.get("fits_path", "")
+    if not fits_path:
+        return {"error": "fits_path is required"}
+
+    # Resolve path relative to data directory
+    base_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+    full_path = os.path.normpath(os.path.join(base_dir, fits_path))
+    if not os.path.isfile(full_path):
+        full_path = fits_path
+    if not os.path.isfile(full_path):
+        return {"error": f"FITS file not found: {fits_path}"}
+
+    operations = inp.get("operations", ["identify_lines"])
+    redshift = inp.get("redshift", 0.0)
+    model = inp.get("model", "gaussian")
+    line_centers = inp.get("line_centers")
+
+    loop = asyncio.get_running_loop()
+
+    def _run():
+        result = {}
+        # Load spectrum
+        try:
+            spec = load_spectrum(full_path)
+            result["spectrum_loaded"] = True
+            result["n_pixels"] = len(spec.get("wavelength", []))
+            result["wave_range"] = [
+                float(min(spec["wavelength"])),
+                float(max(spec["wavelength"])),
+            ] if spec.get("wavelength") else []
+        except Exception as e:
+            return {"error": f"Failed to load spectrum: {e}"}
+
+        wave = spec["wavelength"]
+        flux = spec["flux"]
+        flux_err = spec.get("flux_err")
+
+        if "identify_lines" in operations:
+            try:
+                result["identified_lines"] = identify_lines(
+                    wave, flux, flux_err,
+                    redshift=redshift,
+                )
+            except Exception as e:
+                result["identify_lines_error"] = str(e)
+
+        if "fit_lines" in operations:
+            try:
+                result["fitted_lines"] = fit_lines(
+                    wave, flux, flux_err,
+                    line_centers=line_centers,
+                    model=model,
+                )
+            except Exception as e:
+                result["fit_lines_error"] = str(e)
+
+        if "equivalent_width" in operations:
+            try:
+                centers = line_centers or []
+                if not centers and "identified_lines" in result:
+                    centers = [
+                        l["observed_wavelength"]
+                        for l in result["identified_lines"]
+                        if l.get("identification") != "unidentified"
+                    ][:10]
+                ew_results = []
+                for c in centers:
+                    ew_results.append(measure_equivalent_width(wave, flux, c))
+                result["equivalent_widths"] = ew_results
+            except Exception as e:
+                result["equivalent_width_error"] = str(e)
+
+        if "heliocentric_correct" in operations:
+            ra = inp.get("ra")
+            dec = inp.get("dec")
+            obstime = inp.get("obstime")
+            if ra is not None and dec is not None and obstime:
+                try:
+                    hc = heliocentric_correction(wave, flux, ra, dec, obstime)
+                    result["heliocentric"] = {
+                        "v_correction_km_s": hc["v_correction_km_s"],
+                        "applied": hc["applied"],
+                    }
+                except Exception as e:
+                    result["heliocentric_error"] = str(e)
+            else:
+                result["heliocentric_error"] = "ra, dec, and obstime required"
+
+        if "flux_calibrate" in operations:
+            try:
+                fc = flux_calibrate(wave, flux)
+                result["flux_calibration"] = {
+                    "calibrated": fc["calibrated"],
+                    "note": fc.get("note", ""),
+                }
+            except Exception as e:
+                result["flux_calibrate_error"] = str(e)
+
+        if "telluric_correct" in operations:
+            try:
+                tc = telluric_correct(wave, flux)
+                result["telluric_correction"] = {
+                    "corrected": tc["corrected"],
+                    "model": tc["model"],
+                }
+            except Exception as e:
+                result["telluric_correct_error"] = str(e)
+
+        return result
+
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, _run),
+            timeout=120.0,
+        )
+    except asyncio.TimeoutError:
+        return {"error": "Spectral analysis timed out after 120 seconds"}
+
+    return result
 
 
 async def _exec_sensitivity_analysis(inp: dict, python_session_id: str = "default") -> dict:
