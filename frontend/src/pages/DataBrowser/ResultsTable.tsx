@@ -78,6 +78,7 @@ export default function ResultsTable({
   const [sortAsc, setSortAsc] = useState(true);
   const [page, setPage] = useState(0);
   const [showColumnHelp, setShowColumnHelp] = useState(false);
+  const tableRef = useRef<HTMLDivElement>(null);
 
   // ── Column visibility ──
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => {
@@ -207,7 +208,7 @@ export default function ResultsTable({
   const colCount = (onSelectionChange ? 1 : 0) + visibleCoreCount + visibleExtraCount + 1;
 
   return (
-    <>
+    <div ref={tableRef}>
       <div className="column-controls-row">
         <div className="column-explainer">
           <button
@@ -320,7 +321,7 @@ export default function ResultsTable({
               {visibleColumns.has("dec") && <th className="th-sortable" onClick={() => handleSort("dec")}>Dec (&deg;){sortIndicator("dec")}</th>}
               {visibleColumns.has("type") && <th className="th-sortable" onClick={() => handleSort("object_type")}>{t("data.type")}{sortIndicator("object_type")}</th>}
               {visibleColumns.has("magnitude") && <th className="th-sortable" onClick={() => handleSort("magnitude")}>{t("data.magnitude")}{sortIndicator("magnitude")}</th>}
-              {visibleColumns.has("redshift") && <th className="th-sortable" onClick={() => handleSort("redshift")}>{t("data.redshift")}{sortIndicator("redshift")}</th>}
+              {visibleColumns.has("redshift") && <th className="th-sortable" onClick={() => handleSort("redshift")} title="Photometric redshift estimate — verify with spectroscopic data when available">{t("data.redshift")}{sortIndicator("redshift")}</th>}
               {extraColumns.filter((c) => visibleColumns.has(c)).map((c) => (
                 <th key={c}>{c}</th>
               ))}
@@ -428,17 +429,17 @@ export default function ResultsTable({
       </div>
       {totalPages > 1 && (
         <div className="results-pagination">
-          <button className="btn-secondary btn-small" disabled={page === 0} onClick={() => setPage(page - 1)}>
+          <button className="btn-secondary btn-small" disabled={page === 0} onClick={() => { setPage(page - 1); if (typeof tableRef.current?.scrollIntoView === "function") tableRef.current.scrollIntoView({ behavior: "smooth", block: "start" }); }}>
             {t("common.previous")}
           </button>
           <span className="results-page-info">
             {page + 1} / {totalPages} ({sorted.length} {t("search.results")})
           </span>
-          <button className="btn-secondary btn-small" disabled={page >= totalPages - 1} onClick={() => setPage(page + 1)}>
+          <button className="btn-secondary btn-small" disabled={page >= totalPages - 1} onClick={() => { setPage(page + 1); if (typeof tableRef.current?.scrollIntoView === "function") tableRef.current.scrollIntoView({ behavior: "smooth", block: "start" }); }}>
             {t("common.next")}
           </button>
         </div>
       )}
-    </>
+    </div>
   );
 }

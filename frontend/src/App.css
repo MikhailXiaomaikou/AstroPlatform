@@ -6188,3 +6188,42 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .observations-tab { padding: 10px 20px; border: none; background: none; color: var(--color-muted); font-size: 0.95rem; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
 .observations-tab.active { color: var(--color-text); border-bottom-color: var(--color-accent); font-weight: 600; }
 .observations-tab:hover { color: var(--color-text); }
+
+/* ══════════════════════════════════════
+   Mobile Nav (Hamburger)
+   ══════════════════════════════════════ */
+
+.nav-hamburger {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+}
+.nav-hamburger span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--color-text);
+  transition: transform 0.2s;
+}
+
+@media (max-width: 768px) {
+  .nav-hamburger { display: flex; }
+  .nav-links {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--color-bg);
+    flex-direction: column;
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--color-border);
+    z-index: 100;
+  }
+  .nav-links.open { display: flex; }
+  .nav-links a { padding: 0.5rem 1rem; }
+}

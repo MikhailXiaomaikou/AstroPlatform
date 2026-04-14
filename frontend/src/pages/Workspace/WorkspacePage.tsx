@@ -44,6 +44,7 @@ export default function WorkspacePage() {
   const [batchTargets, setBatchTargets] = useState<BatchTarget[]>([]);
   const [batchResults, setBatchResults] = useState<Record<string, unknown[]> | null>(null);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [batchStatus, setBatchStatus] = useState<Record<string, "pending" | "done" | "error">>({});
   const [sampConnected, setSampConnected] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -128,11 +129,34 @@ export default function WorkspacePage() {
   const handleBatchSearch = async () => {
     if (batchTargets.length === 0) return;
     setBatchLoading(true);
+    // Initialize all targets as pending
+    const initialStatus: Record<string, "pending" | "done" | "error"> = {};
+    for (const target of batchTargets) {
+      initialStatus[target.name] = "pending";
+    }
+    setBatchStatus(initialStatus);
     try {
       const results = await batchSearch(batchTargets);
       setBatchResults(results);
+      // Update status per target based on results
+      const updatedStatus: Record<string, "pending" | "done" | "error"> = {};
+      for (const target of batchTargets) {
+        const targetResults = results[target.name];
+        if (targetResults && (targetResults as unknown[]).length > 0) {
+          updatedStatus[target.name] = "done";
+        } else {
+          updatedStatus[target.name] = "error";
+        }
+      }
+      setBatchStatus(updatedStatus);
     } catch {
       setBatchResults(null);
+      // Mark all as error
+      const errorStatus: Record<string, "pending" | "done" | "error"> = {};
+      for (const target of batchTargets) {
+        errorStatus[target.name] = "error";
+      }
+      setBatchStatus(errorStatus);
     } finally {
       setBatchLoading(false);
     }
@@ -179,7 +203,27 @@ export default function WorkspacePage() {
               {batchLoading ? "Searching..." : "Search All"}
             </button>
           </div>
-          {batchResults && (
+          {batchTargets.length > 0 && Object.keys(batchStatus).length > 0 && (
+            <div className="batch-results" style={{ marginTop: "0.75rem" }}>
+              <h4 style={{ margin: "0 0 0.5rem" }}>Target Status</h4>
+              {batchTargets.map((target) => {
+                const status = batchStatus[target.name];
+                const statusIcon = status === "done" ? "\u2705" : status === "error" ? "\u274C" : "\u23F3";
+                const statusColor = status === "done" ? "#4ade80" : status === "error" ? "#f87171" : "#facc15";
+                const resultCount = batchResults?.[target.name] ? (batchResults[target.name] as unknown[]).length : 0;
+                return (
+                  <div key={target.name} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.25rem 0", fontSize: "0.85rem" }}>
+                    <span>{statusIcon}</span>
+                    <span style={{ color: statusColor, fontWeight: 500 }}>{target.name}</span>
+                    {status === "done" && <span style={{ color: "var(--color-text-secondary)", fontSize: "0.78rem" }}>({resultCount} results)</span>}
+                    {status === "error" && <span style={{ color: "#f87171", fontSize: "0.78rem" }}>(no results)</span>}
+                    {status === "pending" && <span style={{ color: "#facc15", fontSize: "0.78rem" }}>(searching...)</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {batchResults && Object.keys(batchStatus).length === 0 && (
             <div className="batch-results">
               {Object.entries(batchResults).map(([target, results]) => (
                 <div key={target} className="batch-result-group">

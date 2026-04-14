@@ -89,6 +89,29 @@ export default function DataBrowser() {
   // Search history state
   const [recentSearches, setRecentSearches] = useState<SearchHistoryItem[]>([]);
 
+  // Saved searches state
+  const [savedSearches, setSavedSearches] = useState<{name: string, query: string, sources: string[], timestamp: number}[]>(() => {
+    try { return JSON.parse(localStorage.getItem("astro_saved_searches") || "[]"); } catch { return []; }
+  });
+
+  const handleSaveSearch = () => {
+    if (!lastSearchRef.current) return;
+    const { query, sources } = lastSearchRef.current;
+    if (!query.trim()) return;
+    const name = prompt("Name this search:", query);
+    if (!name) return;
+    const entry = { name, query, sources, timestamp: Date.now() };
+    const updated = [entry, ...savedSearches].slice(0, 20);
+    setSavedSearches(updated);
+    localStorage.setItem("astro_saved_searches", JSON.stringify(updated));
+  };
+
+  const handleLoadSavedSearch = (idx: number) => {
+    const saved = savedSearches[idx];
+    if (!saved) return;
+    handleSearch(saved.query, saved.sources, 0.1);
+  };
+
   useEffect(() => {
     getSearchHistory()
       .then((items) => setRecentSearches(items.slice(0, 5)))
@@ -629,6 +652,37 @@ ${rows}
 
       {activeTab === "search" && <>
       <SearchBar onSearch={handleSearch} onAdvancedSearch={handleAdvancedSearch} loading={loading} />
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", margin: "0.5rem 0" }}>
+        {lastSearchRef.current && (
+          <button className="btn-secondary btn-small" onClick={handleSaveSearch} title="Save current search">
+            Save Search
+          </button>
+        )}
+        {savedSearches.length > 0 && (
+          <select
+            style={{
+              background: "var(--color-bg-secondary, #1e1e1e)",
+              color: "var(--color-text, #e0e0e0)",
+              border: "1px solid var(--color-border, #444)",
+              borderRadius: 6,
+              padding: "0.3rem 0.5rem",
+              fontSize: "0.82rem",
+            }}
+            value=""
+            onChange={(e) => {
+              const idx = parseInt(e.target.value, 10);
+              if (!isNaN(idx)) handleLoadSavedSearch(idx);
+            }}
+          >
+            <option value="" disabled>Saved Searches...</option>
+            {savedSearches.map((s, i) => (
+              <option key={s.timestamp} value={i}>
+                {s.name} ({s.sources.join(", ")})
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
 
       {loading && (
         <div
@@ -698,7 +752,15 @@ ${rows}
         </div>
       )}
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <div className="error-banner">{
+        error.toLowerCase().includes("timeout")
+          ? "Search timed out \u2014 try reducing the search radius or selecting fewer databases"
+          : error.includes("401") || error.toLowerCase().includes("auth")
+          ? "Authentication required \u2014 please sign in"
+          : error.toLowerCase().includes("network")
+          ? "Network error \u2014 check your connection"
+          : error
+      }</div>}
       {bulkMsg && (
         <div className={bulkMsg.type === "ok" ? "success-banner" : "error-banner"}>
           {bulkMsg.text}

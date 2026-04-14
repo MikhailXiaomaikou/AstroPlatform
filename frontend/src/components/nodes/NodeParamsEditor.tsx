@@ -183,6 +183,7 @@ export default function NodeParamsEditor({
 
   // Initialise local form state from currentParams + defaults
   const [formValues, setFormValues] = useState<Record<string, string | number>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const initial: Record<string, string | number> = {};
@@ -207,6 +208,7 @@ export default function NodeParamsEditor({
   }, [currentParams, nodeId, nodeType, paramDefs, workspacePaths]);
 
   const handleChange = (key: string, value: string, type: "text" | "number" | "select" | "checkboxes") => {
+    setTouched((prev) => ({ ...prev, [key]: true }));
     if (type === "number") {
       // Allow empty string while typing; store parsed number otherwise
       setFormValues((prev) => ({
@@ -216,6 +218,25 @@ export default function NodeParamsEditor({
     } else {
       setFormValues((prev) => ({ ...prev, [key]: value }));
     }
+  };
+
+  const handleBlur = (key: string) => {
+    setTouched((prev) => ({ ...prev, [key]: true }));
+  };
+
+  const getFieldError = (def: ParamDef): string | null => {
+    if (!touched[def.key]) return null;
+    const val = formValues[def.key];
+    if (def.required && (val === "" || val === undefined || val === null)) {
+      return "This field is required";
+    }
+    if (def.type === "number" && val !== "" && val !== undefined) {
+      const numVal = typeof val === "string" ? Number(val) : val;
+      if (isNaN(numVal as number)) {
+        return "Must be a valid number";
+      }
+    }
+    return null;
   };
 
   const handleApply = () => {
@@ -250,7 +271,9 @@ export default function NodeParamsEditor({
       )}
 
       <div className="node-params-fields">
-        {paramDefs.map((def) => (
+        {paramDefs.map((def) => {
+          const fieldError = getFieldError(def);
+          return (
           <div className="node-params-field" key={def.key}>
             <label htmlFor={`param-${nodeId}-${def.key}`}>
               {def.label}
@@ -296,8 +319,13 @@ export default function NodeParamsEditor({
                 step={def.type === "number" ? "any" : undefined}
                 value={formValues[def.key] ?? ""}
                 onChange={(e) => handleChange(def.key, e.target.value, def.type)}
+                onBlur={() => handleBlur(def.key)}
                 placeholder={def.placeholder || (def.default !== undefined ? `Default: ${def.default}` : undefined)}
+                style={fieldError ? { borderColor: "#f44336", boxShadow: "0 0 0 1px #f44336" } : undefined}
               />
+            )}
+            {fieldError && (
+              <span style={{ color: "#f44336", fontSize: "0.72rem", marginTop: 2, display: "block" }}>{fieldError}</span>
             )}
             {nodeType === "ImportWorkspace" && def.key === "path" && workspacePaths.length === 0 && (
               <div className="node-params-empty" style={{ marginTop: 6 }}>
@@ -305,7 +333,8 @@ export default function NodeParamsEditor({
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="node-params-actions">

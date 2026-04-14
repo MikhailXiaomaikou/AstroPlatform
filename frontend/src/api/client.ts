@@ -276,10 +276,10 @@ export async function getWorkspace(): Promise<Record<string, unknown>[]> {
   return data;
 }
 
-export async function getFITSHeader(fitsPath: string): Promise<FITSHeader> {
-  const { data } = await api.get<FITSHeader>("/api/data/fits-header", {
-    params: { fits_path: fitsPath },
-  });
+export async function getFITSHeader(fitsPath: string, hdu?: number): Promise<FITSHeader> {
+  const params: Record<string, string | number> = { fits_path: fitsPath };
+  if (hdu !== undefined) params.hdu = hdu;
+  const { data } = await api.get<FITSHeader>("/api/data/fits-header", { params });
   return data;
 }
 
@@ -357,13 +357,19 @@ export interface FITSFileInfo {
 
 export async function uploadFITS(
   file: File,
-  objectId?: string
+  objectId?: string,
+  onProgress?: (percent: number) => void,
 ): Promise<FITSFileInfo> {
   const form = new FormData();
   form.append("file", file);
   const params: Record<string, string> = {};
   if (objectId) params.object_id = objectId;
-  const { data } = await api.post<FITSFileInfo>("/api/data/fits/upload", form, { params });
+  const { data } = await api.post<FITSFileInfo>("/api/data/fits/upload", form, {
+    params,
+    onUploadProgress: (e) => {
+      if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
+    },
+  });
   return data;
 }
 

@@ -78,19 +78,25 @@ function NavBar() {
   const { theme, toggle } = useTheme();
   const { user, logout } = useAuth();
   const { lang, setLang, t } = useI18n();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <nav className="top-nav">
       <NavLink to="/" className="logo">Standard Astro</NavLink>
-      <NavLink to="/search">{t("nav.data_browser")}</NavLink>
-      <NavLink to="/pipeline">{t("nav.pipeline")}</NavLink>
-      <NavLink to="/workspace">{t("nav.workspace")}</NavLink>
-      <NavLink to="/adql">{t("nav.adql")}</NavLink>
-      <NavLink to="/team">{t("nav.team")}</NavLink>
-      <NavLink to="/chat">{t("nav.ai_assistant")}</NavLink>
+      <button className="nav-hamburger" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation" aria-expanded={menuOpen}>
+        <span /><span /><span />
+      </button>
+      <div className={`nav-links${menuOpen ? " open" : ""}`}>
+      <NavLink to="/search" onClick={() => setMenuOpen(false)}>{t("nav.data_browser")}</NavLink>
+      <NavLink to="/pipeline" onClick={() => setMenuOpen(false)}>{t("nav.pipeline")}</NavLink>
+      <NavLink to="/workspace" onClick={() => setMenuOpen(false)}>{t("nav.workspace")}</NavLink>
+      <NavLink to="/adql" onClick={() => setMenuOpen(false)}>{t("nav.adql")}</NavLink>
+      <NavLink to="/team" onClick={() => setMenuOpen(false)}>{t("nav.team")}</NavLink>
+      <NavLink to="/chat" onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
       <HelpDrawer />
-      <NavLink to="/observations">{t("nav.observations")}</NavLink>
-      <NavLink to="/account">{t("nav.account")}</NavLink>
+      <NavLink to="/observations" onClick={() => setMenuOpen(false)}>{t("nav.observations")}</NavLink>
+      <NavLink to="/account" onClick={() => setMenuOpen(false)}>{t("nav.account")}</NavLink>
+      </div>
       <div className="nav-spacer" />
       <button
         className="theme-toggle"
@@ -98,7 +104,15 @@ function NavBar() {
         title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
         aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
       >
-        {theme === "dark" ? "\u2600\uFE0F" : "\uD83C\uDF19"}
+        {theme === "dark" ? (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+          </svg>
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        )}
       </button>
       <select
         className="lang-select"

@@ -375,6 +375,7 @@ export default function CitationGraph({ bibcodes, depth = 1, height = 500 }: Pro
               onClick={() =>
                 window.open(`https://ui.adsabs.harvard.edu/abs/${encodeURIComponent(n.id)}`, "_blank")
               }
+              onTouchEnd={(e) => { e.preventDefault(); window.open(`https://ui.adsabs.harvard.edu/abs/${encodeURIComponent(n.id)}`, "_blank"); }}
             />
           ))}
         </g>

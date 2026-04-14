@@ -5,13 +5,23 @@
 
 import { type ReactNode } from "react";
 
-/** Parse inline markdown: **bold**, *italic*, `code`, [link](url) */
+/** Parse inline markdown: **bold**, *italic*, ~~strikethrough~~, `code`, [link](url) */
 function parseInline(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
   let i = 0;
   let key = 0;
 
   while (i < text.length) {
+    // Strikethrough: ~~text~~
+    if (text[i] === "~" && text[i + 1] === "~") {
+      const end = text.indexOf("~~", i + 2);
+      if (end !== -1) {
+        parts.push(<del key={key++}>{text.substring(i + 2, end)}</del>);
+        i = end + 2;
+        continue;
+      }
+    }
+
     // Bold: **text** or __text__
     if ((text[i] === "*" && text[i + 1] === "*") || (text[i] === "_" && text[i + 1] === "_")) {
       const delim = text.substring(i, i + 2);
@@ -65,7 +75,7 @@ function parseInline(text: string): ReactNode[] {
 
     // Plain text — consume until next special character
     let next = i + 1;
-    while (next < text.length && !"*_`[".includes(text[next])) next++;
+    while (next < text.length && !"*_`[~".includes(text[next])) next++;
     parts.push(text.substring(i, next));
     i = next;
   }
@@ -100,8 +110,9 @@ export default function MarkdownText({ content }: { content: string }) {
       continue;
     }
 
-    // Code block: ```
+    // Code block: ```lang
     if (trimmed.startsWith("```")) {
+      const lang = trimmed.slice(3).trim() || null;
       const codeLines: string[] = [];
       i++;
       while (i < lines.length && !lines[i].trimStart().startsWith("```")) {
@@ -110,9 +121,49 @@ export default function MarkdownText({ content }: { content: string }) {
       }
       i++; // skip closing ```
       elements.push(
-        <pre key={key++} className="md-code-block"><code>{codeLines.join("\n")}</code></pre>
+        <pre key={key++} className="md-code-block">
+          {lang && <span className="md-code-lang">{lang}</span>}
+          <code>{codeLines.join("\n")}</code>
+        </pre>
       );
       continue;
+    }
+
+    // GFM Table: lines starting with |
+    if (trimmed.startsWith("|") && i + 1 < lines.length && /^\|[\s-:|]+\|$/.test(lines[i + 1].trim())) {
+      const tableLines: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith("|")) {
+        tableLines.push(lines[i].trim());
+        i++;
+      }
+      if (tableLines.length >= 2) {
+        const parseRow = (row: string) =>
+          row.split("|").slice(1, -1).map((cell) => cell.trim());
+        const headerCells = parseRow(tableLines[0]);
+        // tableLines[1] is the separator row — skip it
+        const bodyRows = tableLines.slice(2).map(parseRow);
+        elements.push(
+          <table key={key++} className="md-table">
+            <thead>
+              <tr>
+                {headerCells.map((cell, ci) => (
+                  <th key={ci}>{parseInline(cell)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, ri) => (
+                <tr key={ri}>
+                  {row.map((cell, ci) => (
+                    <td key={ci}>{parseInline(cell)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        );
+        continue;
+      }
     }
 
     // Bullet list: - or *

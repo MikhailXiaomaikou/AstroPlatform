@@ -70,12 +70,12 @@ export default function OnboardingOverlay() {
           }}
         />
       )}
-      <div className="onboarding-tooltip" style={tooltipStyle} role="dialog" aria-modal="true">
+      <div className="onboarding-tooltip" style={tooltipStyle} role="dialog" aria-modal="true" aria-labelledby="onboarding-title" aria-describedby="onboarding-desc">
         <div className="onboarding-step-indicator">
           {t("onboard.step_of")} {step + 1} {t("onboard.of")} {STEP_KEYS.length}
         </div>
-        <h3>{t(current.titleKey)}</h3>
-        <p>{t(current.descKey)}</p>
+        <h3 id="onboarding-title">{t(current.titleKey)}</h3>
+        <p id="onboarding-desc">{t(current.descKey)}</p>
         <div className="onboarding-actions">
           <button className="btn-ghost btn-small" onClick={handleComplete}>
             {t("onboard.skip")}

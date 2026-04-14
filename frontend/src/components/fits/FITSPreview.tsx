@@ -94,14 +94,19 @@ export default function FITSPreview({ filename, fitsPath, source, objectId }: Pr
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
+  // Fetch header on mount so HDU selector is available on all tabs
   useEffect(() => {
-    if (tab === "header" && !header && !headerLoading) {
+    if (!header && !headerLoading) {
       setHeaderLoading(true);
-      getFITSHeader(fitsPath)
+      getFITSHeader(fitsPath, selectedHdu)
         .then(setHeader)
         .catch(() => {})
         .finally(() => setHeaderLoading(false));
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitsPath]);
+
+  useEffect(() => {
     if ((tab === "data" || tab === "image") && !spectrum && !spectrumLoading) {
       setSpectrumLoading(true);
       getFITSSpectrum(fitsPath)
@@ -109,7 +114,16 @@ export default function FITSPreview({ filename, fitsPath, source, objectId }: Pr
         .catch(() => {})
         .finally(() => setSpectrumLoading(false));
     }
-  }, [tab, fitsPath, header, spectrum, headerLoading, spectrumLoading]);
+  }, [tab, fitsPath, spectrum, spectrumLoading]);
+
+  const handleHduChange = (hduIdx: number) => {
+    setSelectedHdu(hduIdx);
+    setHeaderLoading(true);
+    getFITSHeader(fitsPath, hduIdx)
+      .then(setHeader)
+      .catch(() => {})
+      .finally(() => setHeaderLoading(false));
+  };
 
   const tabs: Tab[] = ["info", "header", "data"];
   if (spectrum?.type === "image" || spectrum?.thumbnail) tabs.push("image");
@@ -139,6 +153,27 @@ export default function FITSPreview({ filename, fitsPath, source, objectId }: Pr
     <div className="fits-preview">
       <div className="fits-preview-header">
         <h3>FITS File</h3>
+        {header && header.hdus.length > 1 && (
+          <select
+            value={selectedHdu}
+            onChange={(e) => handleHduChange(Number(e.target.value))}
+            style={{
+              background: "var(--color-bg-secondary, #2a2a2e)",
+              color: "var(--color-text, #e0e0e0)",
+              border: "1px solid var(--color-border, #555)",
+              borderRadius: 4,
+              padding: "0.2rem 0.5rem",
+              fontSize: "0.78rem",
+            }}
+            title="Select HDU (Header Data Unit)"
+          >
+            {header.hdus.map((hdu) => (
+              <option key={hdu.index} value={hdu.index}>
+                HDU {hdu.index}: {hdu.name} ({hdu.type})
+              </option>
+            ))}
+          </select>
+        )}
         <a
           href={`${import.meta.env.VITE_API_URL || (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : "https://astro-backend-h4x1.onrender.com")}/api/data/fits/download?fits_path=${encodeURIComponent(fitsPath)}`}
           download

@@ -22,6 +22,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
   const [files, setFiles] = useState<FITSFileInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("");
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -53,16 +54,25 @@ export default function FITSBrowser({ onSelectFile }: Props) {
   const handleUpload = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     setUploading(true);
+    setUploadProgress(0);
     setError(null);
     try {
-      for (const file of Array.from(fileList)) {
-        await uploadFITS(file);
+      const fileArr = Array.from(fileList);
+      for (let i = 0; i < fileArr.length; i++) {
+        await uploadFITS(fileArr[i], undefined, (pct) => {
+          // For multi-file: blend per-file progress with overall progress
+          const base = Math.round((i / fileArr.length) * 100);
+          const portion = Math.round(pct / fileArr.length);
+          setUploadProgress(base + portion);
+        });
       }
+      setUploadProgress(100);
       await loadFiles();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -122,7 +132,14 @@ export default function FITSBrowser({ onSelectFile }: Props) {
           onChange={(e) => handleUpload(e.target.files)}
         />
         {uploading ? (
-          <span style={{ color: "#4fc3f7" }}>Uploading...</span>
+          <div style={{ width: "100%" }}>
+            <span style={{ color: "#4fc3f7" }}>Uploading... {uploadProgress != null ? `${uploadProgress}%` : ""}</span>
+            {uploadProgress != null && (
+              <div style={{ width: "100%", background: "#333", borderRadius: 4, height: 6, marginTop: 8, overflow: "hidden" }}>
+                <div style={{ width: `${uploadProgress}%`, background: "#4fc3f7", height: "100%", borderRadius: 4, transition: "width 0.3s ease" }} />
+              </div>
+            )}
+          </div>
         ) : (
           <span style={{ color: "#999" }}>
             Drop FITS files here or click to browse

@@ -827,6 +827,7 @@ async def list_workspace(
 @router.get("/fits-header", response_model=FITSHeaderResponse)
 async def get_fits_header(
     fits_path: str = Query(..., description="Storage path to FITS file"),
+    hdu: int = Query(0, description="HDU index to focus on (0-based, default 0). All HDUs are always returned."),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):

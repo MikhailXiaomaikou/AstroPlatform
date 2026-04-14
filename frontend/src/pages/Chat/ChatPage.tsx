@@ -1666,6 +1666,7 @@ export default function ChatPage() {
       setCurrentSessionId(null);
       pythonSessionIdRef.current = crypto.randomUUID();
       localStorage.removeItem("astro_chat_history");
+      localStorage.removeItem("astro_chat_autosave_draft");
     }
 
     const draft = localStorage.getItem("astro_chat_draft");
@@ -1673,7 +1674,34 @@ export default function ChatPage() {
       setInput(draft);
       localStorage.removeItem("astro_chat_draft");
     }
+
+    // Recover autosaved draft if current session is empty
+    if (!newSession && !draft) {
+      try {
+        const autosaved = localStorage.getItem("astro_chat_autosave_draft");
+        if (autosaved) {
+          const parsed = JSON.parse(autosaved) as DisplayMessage[];
+          if (parsed.length > 0 && loadChatHistory().length === 0) {
+            setMessages(parsed.map((m) => ({
+              ...m,
+              actionResults: new Map(),
+            })));
+          }
+        }
+      } catch { /* ignore */ }
+    }
   }, []);
+
+  // Autosave draft to localStorage (debounced)
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem("astro_chat_autosave_draft", JSON.stringify(messages.slice(-50)));
+      } catch { /* quota exceeded -- ignore */ }
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [messages]);
 
   const handleSaveSession = async () => {
     if (messages.length === 0) return;
@@ -1725,6 +1753,7 @@ export default function ChatPage() {
     setCurrentSessionId(null);
     pythonSessionIdRef.current = crypto.randomUUID();
     localStorage.removeItem("astro_chat_history");
+    localStorage.removeItem("astro_chat_autosave_draft");
     setShowSessions(false);
   };
 

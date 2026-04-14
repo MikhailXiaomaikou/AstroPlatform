@@ -87,11 +87,13 @@ function mkAxis(label: string, extra?: Record<string, unknown>): Record<string, 
 function mkLayout(title: string, xa: Record<string, unknown>, ya: Record<string, unknown>, extra?: Record<string, unknown>): Record<string, unknown> {
   const hasColorbar = extra?.hasColorbar;
   const cleanExtra = extra ? Object.fromEntries(Object.entries(extra).filter(([k]) => k !== "hasColorbar")) : {};
+  const w = typeof window !== "undefined" ? window.innerWidth : 800;
+  const compact = w < 500;
   return {
     paper_bgcolor: COLORS.bg,
     plot_bgcolor: COLORS.plot,
     font: { family: FONT, color: COLORS.text, size: 13 },
-    margin: { l: 90, r: hasColorbar ? 110 : 40, t: 65, b: 80, pad: 4 },
+    margin: { l: compact ? 50 : 90, r: compact ? 20 : (hasColorbar ? 110 : 40), t: 50, b: compact ? 40 : 80, pad: 4 },
     autosize: true,
     showlegend: false,
     title: { text: title, font: { family: FONT, size: 18, color: COLORS.title }, x: 0.5, xanchor: "center", y: 0.97 },

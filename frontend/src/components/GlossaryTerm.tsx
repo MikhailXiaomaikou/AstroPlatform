@@ -41,6 +41,7 @@ export default function GlossaryTerm({ term, children }: Props) {
       onMouseLeave={() => setVisible(false)}
       onFocus={() => setVisible(true)}
       onBlur={() => setVisible(false)}
+      onClick={() => setVisible(v => !v)}
       tabIndex={0}
       style={{ position: "relative", display: "inline" }}
     >
