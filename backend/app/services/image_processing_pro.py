@@ -166,7 +166,8 @@ def psf_match(fits_path: str, target_fwhm: float,
                 current_fwhm = float(np.median(sources['fwhm']))
             else:
                 current_fwhm = 3.0
-        except Exception:
+        except Exception as e:
+            logger.debug("FWHM auto-detection failed, using default: %s", e)
             current_fwhm = 3.0
 
     if target_fwhm <= current_fwhm:

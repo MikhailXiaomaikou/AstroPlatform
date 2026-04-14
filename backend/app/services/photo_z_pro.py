@@ -235,9 +235,9 @@ def _synthetic_mag(wave: np.ndarray, flux: np.ndarray, band: str) -> float:
     sigma = fwhm / 2.3548
 
     response = np.exp(-0.5 * ((wave - center) / sigma) ** 2)
-    response /= np.trapz(response, wave) + 1e-30
+    response /= np.trapezoid(response, wave) + 1e-30
 
-    f_nu = np.trapz(flux * response * wave**2, wave) / np.trapz(response * wave**2 / wave, wave)
+    f_nu = np.trapezoid(flux * response * wave**2, wave) / np.trapezoid(response * wave**2 / wave, wave)
 
     if f_nu <= 0:
         return 99.0
@@ -347,7 +347,7 @@ def fit_template_enhanced(
         pz *= prior_pz
 
     # Normalize P(z)
-    pz_sum = np.trapz(pz, z_grid)
+    pz_sum = np.trapezoid(pz, z_grid)
     if pz_sum > 0:
         pz /= pz_sum
 

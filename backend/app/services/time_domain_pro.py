@@ -48,14 +48,15 @@ def gp_detrend(time: list, flux: list, flux_err: list | None = None,
             try:
                 gp.compute(t, yerr=ferr)
                 return -gp.log_likelihood(f_norm)
-            except Exception:
+            except Exception as e:
+                logger.debug("GP hyperparameter optimization failed: %s", e)
                 return 1e10
 
-        initial = np.append([0.0], gp.get_parameter_vector())
+        initial = np.array([0.0])
         try:
-            soln = minimize(neg_log_like, initial[:1], method="L-BFGS-B")
-        except Exception:
-            pass
+            soln = minimize(neg_log_like, initial, method="L-BFGS-B")
+        except Exception as e:
+            logger.debug("GP hyperparameter optimization failed: %s", e)
 
         # Predict GP trend
         gp.compute(t, yerr=ferr)

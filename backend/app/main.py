@@ -1,7 +1,12 @@
 import asyncio
 import logging
+import os as _os
 
 from contextlib import asynccontextmanager
+
+if _os.getenv("ENV") == "production":
+    from app.logging_config import setup_logging
+    setup_logging(json_format=True, level="INFO")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -159,6 +164,18 @@ def _migrate_add_columns(connection):
             try:
                 connection.execute(sqlalchemy.text("ALTER TABLE pipeline_runs ADD COLUMN environment TEXT"))
                 logger.info("Added column pipeline_runs.environment")
+            except Exception:
+                pass
+
+    # --- PipelineComment parent_comment_id column ---
+    if "pipeline_comments" in inspector.get_table_names():
+        existing_pc = {c["name"] for c in inspector.get_columns("pipeline_comments")}
+        if "parent_comment_id" not in existing_pc:
+            try:
+                connection.execute(sqlalchemy.text(
+                    "ALTER TABLE pipeline_comments ADD COLUMN parent_comment_id VARCHAR(36)"
+                ))
+                logger.info("Added column pipeline_comments.parent_comment_id")
             except Exception:
                 pass
 

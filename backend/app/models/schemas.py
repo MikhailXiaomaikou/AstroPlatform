@@ -228,6 +228,7 @@ class PipelineComment(Base):
     template_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("pipeline_templates.id"), nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(UUIDType(), ForeignKey("users.id"), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_comment_id: Mapped[uuid.UUID | None] = mapped_column(UUIDType(), ForeignKey("pipeline_comments.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

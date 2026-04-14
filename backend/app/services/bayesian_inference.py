@@ -151,7 +151,7 @@ def chain_diagnostics(
             samples_reshaped = samples.reshape(1, -1, 1)
 
         data_dict = {name: samples_reshaped[:, :, i] for i, name in enumerate(parameter_names)}
-        idata = az.from_dict(posterior=data_dict)
+        idata = az.from_dict({"posterior": data_dict})
 
         rhat = az.rhat(idata)
         ess = az.ess(idata)
@@ -215,7 +215,8 @@ def posterior_predictive_check(
         try:
             pred = model_func(samples[idx])
             predictions.append(np.array(pred))
-        except Exception:
+        except Exception as e:
+            logger.debug("Posterior prediction failed for sample %d: %s", idx, e)
             continue
 
     if not predictions:
