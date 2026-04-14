@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import { useI18n } from "../../i18n";
 
 type AuthMode = "login" | "register" | "setup-key";
 
@@ -104,6 +105,7 @@ function GoogleSignInButton({ onSuccess, disabled }: { onSuccess: (credential: s
 }
 
 export default function AuthPage() {
+  const { t } = useI18n();
   const [mode, setMode] = useState<AuthMode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -129,9 +131,9 @@ export default function AuthPage() {
     } catch (err: unknown) {
       if (err && typeof err === "object" && "response" in err) {
         const resp = (err as { response: { data: { detail: string } } }).response;
-        setError(resp?.data?.detail || "Authentication failed");
+        setError(resp?.data?.detail || t("auth.failed"));
       } else {
-        setError("Authentication failed");
+        setError(t("auth.failed"));
       }
     } finally {
       setLoading(false);
@@ -147,9 +149,9 @@ export default function AuthPage() {
     } catch (err: unknown) {
       if (err && typeof err === "object" && "response" in err) {
         const resp = (err as { response: { data: { detail: string } } }).response;
-        setError(resp?.data?.detail || "Google login failed");
+        setError(resp?.data?.detail || t("auth.google_failed"));
       } else {
-        setError("Google login failed");
+        setError(t("auth.google_failed"));
       }
     } finally {
       setLoading(false);
@@ -165,14 +167,14 @@ export default function AuthPage() {
     <div className="auth-page">
       <div className="auth-card">
         <h2>
-          {mode === "login" && "Sign In"}
-          {mode === "register" && "Create Account"}
-          {mode === "setup-key" && "Setup Key"}
+          {mode === "login" && t("auth.sign_in")}
+          {mode === "register" && t("auth.create_account")}
+          {mode === "setup-key" && t("auth.setup_key")}
         </h2>
         <p className="auth-subtitle">
-          {mode === "login" && "Welcome back to Standard Astro"}
-          {mode === "register" && "Start exploring the universe"}
-          {mode === "setup-key" && "Enter your setup key to get started"}
+          {mode === "login" && t("auth.welcome")}
+          {mode === "register" && t("auth.start")}
+          {mode === "setup-key" && t("auth.enter_setup_key")}
         </p>
 
         {error && <div className="error-banner">{error}</div>}
@@ -183,7 +185,7 @@ export default function AuthPage() {
             <GoogleSignInButton onSuccess={handleGoogleSuccess} disabled={loading} />
             {GOOGLE_CLIENT_ID && (
               <div className="auth-divider">
-                <span>or</span>
+                <span>{t("auth.or")}</span>
               </div>
             )}
           </>
@@ -192,7 +194,7 @@ export default function AuthPage() {
         <form onSubmit={handleSubmit} className="auth-form">
           {mode === "setup-key" ? (
             <label className="auth-label">
-              Setup Key
+              {t("auth.setup_key")}
               <input
                 type="text"
                 value={setupKey}
@@ -207,7 +209,7 @@ export default function AuthPage() {
           ) : (
             <>
               <label className="auth-label">
-                Username
+                {t("auth.username")}
                 <input
                   type="text"
                   value={username}
@@ -220,12 +222,12 @@ export default function AuthPage() {
               </label>
 
               <label className="auth-label">
-                Password
+                {t("auth.password")}
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={mode === "login" ? "Your password" : "Min 8 characters"}
+                  placeholder={mode === "login" ? t("auth.your_password") : t("auth.min_8_chars")}
                   required
                   minLength={8}
                   className="auth-input"
@@ -236,16 +238,16 @@ export default function AuthPage() {
 
           <button type="submit" className="btn-primary auth-submit" disabled={loading}>
             {loading ? <span className="spinner" /> : null}
-            {mode === "login" && "Sign In"}
-            {mode === "register" && "Create Account"}
-            {mode === "setup-key" && "Activate"}
+            {mode === "login" && t("auth.sign_in")}
+            {mode === "register" && t("auth.create_account")}
+            {mode === "setup-key" && t("auth.activate")}
           </button>
         </form>
 
         <div className="auth-toggles">
           {mode !== "setup-key" && (
             <button className="auth-toggle" onClick={() => switchMode(mode === "login" ? "register" : "login")}>
-              {mode === "login" ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
+              {mode === "login" ? t("auth.no_account") : t("auth.has_account")}
             </button>
           )}
 
@@ -253,7 +255,7 @@ export default function AuthPage() {
             className="auth-toggle auth-toggle-key"
             onClick={() => switchMode(mode === "setup-key" ? "login" : "setup-key")}
           >
-            {mode === "setup-key" ? "Use username & password instead" : "Have a setup key?"}
+            {mode === "setup-key" ? t("auth.use_password") : t("auth.have_setup_key")}
           </button>
         </div>
       </div>

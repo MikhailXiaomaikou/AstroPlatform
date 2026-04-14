@@ -7,6 +7,7 @@ import {
 } from "../../api/client";
 import type { FITSFileInfo } from "../../api/client";
 import FITSPreviewComponent from "./FITSPreview";
+import { useI18n } from "../../i18n";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -19,6 +20,7 @@ interface Props {
 }
 
 export default function FITSBrowser({ onSelectFile }: Props) {
+  const { t } = useI18n();
   const [files, setFiles] = useState<FITSFileInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -36,9 +38,9 @@ export default function FITSBrowser({ onSelectFile }: Props) {
       const data = await browseFITS(filter || undefined);
       setFiles(data);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to load files";
+      const msg = e instanceof Error ? e.message : t("fits.failed_to_load");
       if (msg.includes("401") || msg.includes("Unauthorized")) {
-        setError("Sign in to manage your FITS files.");
+        setError(t("fits.sign_in_required"));
       } else {
         setError(msg);
       }
@@ -69,7 +71,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
       setUploadProgress(100);
       await loadFiles();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
+      setError(e instanceof Error ? e.message : t("fits.upload_failed"));
     } finally {
       setUploading(false);
       setUploadProgress(null);
@@ -77,7 +79,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
   };
 
   const handleDelete = async (fileId: string) => {
-    if (!confirm("Delete this file?")) return;
+    if (!confirm(t("fits.delete_confirm"))) return;
     try {
       await deleteFITS(fileId);
       setFiles((prev) => prev.filter((f) => f.id !== fileId));
@@ -88,7 +90,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
         }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete failed");
+      setError(e instanceof Error ? e.message : t("fits.delete_failed"));
     }
   };
 
@@ -104,7 +106,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
 
   return (
     <div style={{ padding: "1rem" }}>
-      <h3 style={{ margin: "0 0 1rem", color: "#e0e0e0" }}>FITS File Manager</h3>
+      <h3 style={{ margin: "0 0 1rem", color: "#e0e0e0" }}>{t("fits.manager_title")}</h3>
 
       {/* Upload area */}
       <div
@@ -133,7 +135,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
         />
         {uploading ? (
           <div style={{ width: "100%" }}>
-            <span style={{ color: "#4fc3f7" }}>Uploading... {uploadProgress != null ? `${uploadProgress}%` : ""}</span>
+            <span style={{ color: "#4fc3f7" }}>{t("fits.uploading")} {uploadProgress != null ? `${uploadProgress}%` : ""}</span>
             {uploadProgress != null && (
               <div style={{ width: "100%", background: "#333", borderRadius: 4, height: 6, marginTop: 8, overflow: "hidden" }}>
                 <div style={{ width: `${uploadProgress}%`, background: "#4fc3f7", height: "100%", borderRadius: 4, transition: "width 0.3s ease" }} />
@@ -142,7 +144,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
           </div>
         ) : (
           <span style={{ color: "#999" }}>
-            Drop FITS files here or click to browse
+            {t("fits.drop_files")}
           </span>
         )}
       </div>
@@ -166,8 +168,8 @@ export default function FITSBrowser({ onSelectFile }: Props) {
             padding: "0.3rem 0.5rem",
           }}
         >
-          <option value="">All sources</option>
-          <option value="upload">Uploaded</option>
+          <option value="">{t("fits.all_sources")}</option>
+          <option value="upload">{t("fits.uploaded")}</option>
           <option value="sdss">SDSS</option>
           <option value="gaia">Gaia</option>
           <option value="simbad">SIMBAD</option>
@@ -185,7 +187,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
             cursor: "pointer",
           }}
         >
-          {loading ? "Loading..." : "Refresh"}
+          {loading ? t("common.loading") : t("fits.refresh")}
         </button>
       </div>
 
@@ -193,7 +195,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
       <div style={{ maxHeight: 400, overflowY: "auto" }}>
         {files.length === 0 && !loading && (
           <div style={{ color: "#777", textAlign: "center", padding: "2rem" }}>
-            No FITS files yet. Upload one to get started.
+            {t("fits.no_files")}
           </div>
         )}
         {files.map((f) => (
@@ -242,7 +244,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
                     cursor: "pointer",
                   }}
                 >
-                  Use
+                  {t("fits.use")}
                 </button>
               )}
               <button
@@ -257,7 +259,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
                   cursor: "pointer",
                 }}
               >
-                Preview
+                {t("fits.preview")}
               </button>
               <a
                 href={downloadFITSUrl(f.fits_path)}
@@ -274,7 +276,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
                   display: "inline-block",
                 }}
               >
-                Download
+                {t("common.download")}
               </a>
               <button
                 onClick={() => handleDelete(f.id)}
@@ -288,7 +290,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
                   cursor: "pointer",
                 }}
               >
-                Delete
+                {t("common.delete")}
               </button>
             </div>
           </div>

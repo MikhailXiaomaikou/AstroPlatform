@@ -1,4 +1,5 @@
 import axios from "axios";
+import { t } from "../i18n";
 
 const DEFAULT_PRODUCTION_API_URL = "https://astro-backend-h4x1.onrender.com";
 export const API_BASE_URL =
@@ -187,7 +188,7 @@ export async function searchData(
         throw new Error(String(err.response.data.detail));
       }
       if (err.code === "ECONNABORTED") {
-        throw new Error("request timed out");
+        throw new Error(t("error.request_timed_out"));
       }
       if (err.message === "Network Error") {
         try {
@@ -196,9 +197,9 @@ export async function searchData(
         } catch {
           const sourceList = sources.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
           if (sourceList.length > 0 && sourceList.every((s) => s === "mast" || s === "jwst")) {
-            throw new Error("MAST/JWST search failed before the server returned per-source results. Try again, reduce the search radius, or add SIMBAD to resolve coordinates first.");
+            throw new Error(t("error.mast_jwst_failed"));
           }
-          throw new Error("Search failed before the server returned per-source results. Try again, reduce the search radius, or add SIMBAD / coordinates for name resolution.");
+          throw new Error(t("error.search_failed"));
         }
       }
     }
@@ -1627,7 +1628,7 @@ export async function sendChatMessage(
     }
 
     const reader = resp.body?.getReader();
-    if (!reader) throw new Error("Streaming not supported by browser");
+    if (!reader) throw new Error(t("error.streaming_unsupported"));
 
     const decoder = new TextDecoder();
     const replyParts: string[] = [];
@@ -1682,9 +1683,9 @@ export async function sendChatMessage(
         backendReachable = false;
       }
       if (backendReachable) {
-        throw new Error("Connection to AI provider was interrupted. This may be a timeout — try a shorter prompt.");
+        throw new Error(t("error.ai_connection_interrupted"));
       }
-      throw new Error("Could not reach the backend server. Check whether the API service is up.");
+      throw new Error(t("error.backend_unreachable"));
     }
     throw err;
   }
@@ -1923,7 +1924,7 @@ async function normalizeAlertApiError(err: unknown, fallback: string): Promise<n
       throw new Error(String(err.response.data.detail));
     }
     if (err.code === "ECONNABORTED") {
-      throw new Error("Alert request timed out. The transient service may be slow; try again in a moment.");
+      throw new Error(t("error.alert_timed_out"));
     }
     if (err.message === "Network Error") {
       let backendReachable = false;
@@ -1934,9 +1935,9 @@ async function normalizeAlertApiError(err: unknown, fallback: string): Promise<n
         backendReachable = false;
       }
       if (backendReachable) {
-        throw new Error("The backend did not return a valid alerts response. Check the alerts API route and server logs.");
+        throw new Error(t("error.alert_bad_response"));
       }
-      throw new Error("Could not reach the backend server while loading alerts. Check whether the API service is up and the frontend API URL is correct.");
+      throw new Error(t("error.alert_backend_unreachable"));
     }
     throw new Error(err.message || fallback);
   }

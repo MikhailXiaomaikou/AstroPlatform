@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { getObjectDetail, saveObject } from "../api/client";
 import type { ObjectDetail } from "../api/client";
+import { useI18n } from "../i18n";
 
 interface Props {
   objectName: string;
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose }: Props) {
+  const { t } = useI18n();
   const [data, setData] = useState<ObjectDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +27,7 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
     setTab("overview");
     getObjectDetail(objectName, ra, dec)
       .then(setData)
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
+      .catch((e) => setError(e instanceof Error ? e.message : t("odp.failed_to_load")))
       .finally(() => setLoading(false));
   }, [isOpen, objectName, ra, dec]);
 
@@ -55,9 +57,9 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
                     }).then(() => setSaved(true)).catch(() => {});
                   }}
                   disabled={saved}
-                  title={saved ? "Saved to bookmarks" : "Save to bookmarks"}
+                  title={saved ? t("odp.saved_to_bookmarks") : t("odp.save_to_bookmarks")}
                 >
-                  {saved ? "Saved" : "Save"}
+                  {saved ? t("common.saved") : t("common.save")}
                 </button>
               </div>
             </>
@@ -66,15 +68,15 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
           )}
         </div>
 
-        {loading && <div className="odp-loading">Loading object data...</div>}
+        {loading && <div className="odp-loading">{t("odp.loading")}</div>}
         {error && <div className="odp-error">{error}</div>}
 
         {data && (
           <>
             <div className="odp-tabs">
-              {(["overview", "surveys", "refs", "data"] as const).map((t) => (
-                <button key={t} className={`odp-tab${tab === t ? " active" : ""}`} onClick={() => setTab(t)}>
-                  {t === "overview" ? "Overview" : t === "surveys" ? "Surveys" : t === "refs" ? `References${data.references.length ? ` (${data.references.length})` : ""}` : "Raw Data"}
+              {(["overview", "surveys", "refs", "data"] as const).map((tabKey) => (
+                <button key={tabKey} className={`odp-tab${tab === tabKey ? " active" : ""}`} onClick={() => setTab(tabKey)}>
+                  {tabKey === "overview" ? t("odp.overview") : tabKey === "surveys" ? t("odp.surveys") : tabKey === "refs" ? `${t("odp.references")}${data.references.length ? ` (${data.references.length})` : ""}` : t("odp.raw_data")}
                 </button>
               ))}
             </div>
@@ -84,19 +86,19 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
                 <div className="odp-overview">
                   <table className="odp-info-table">
                     <tbody>
-                      {data.spectral_type && <tr><td className="odp-label">Spectral Type</td><td>{data.spectral_type}</td></tr>}
-                      {data.morphology && <tr><td className="odp-label">Morphology</td><td>{data.morphology}</td></tr>}
-                      {data.redshift != null && <tr><td className="odp-label">Redshift</td><td>{data.redshift.toFixed(6)}</td></tr>}
-                      {data.radial_velocity != null && <tr><td className="odp-label">Radial Velocity</td><td>{data.radial_velocity.toFixed(1)} km/s</td></tr>}
-                      {data.parallax != null && <tr><td className="odp-label">Parallax</td><td>{data.parallax.toFixed(2)} mas</td></tr>}
-                      {data.proper_motion_ra != null && <tr><td className="odp-label">PM RA</td><td>{data.proper_motion_ra.toFixed(2)} mas/yr</td></tr>}
-                      {data.proper_motion_dec != null && <tr><td className="odp-label">PM Dec</td><td>{data.proper_motion_dec.toFixed(2)} mas/yr</td></tr>}
+                      {data.spectral_type && <tr><td className="odp-label">{t("odp.spectral_type")}</td><td>{data.spectral_type}</td></tr>}
+                      {data.morphology && <tr><td className="odp-label">{t("odp.morphology")}</td><td>{data.morphology}</td></tr>}
+                      {data.redshift != null && <tr><td className="odp-label">{t("odp.redshift")}</td><td>{data.redshift.toFixed(6)}</td></tr>}
+                      {data.radial_velocity != null && <tr><td className="odp-label">{t("odp.radial_velocity")}</td><td>{data.radial_velocity.toFixed(1)} km/s</td></tr>}
+                      {data.parallax != null && <tr><td className="odp-label">{t("odp.parallax")}</td><td>{data.parallax.toFixed(2)} mas</td></tr>}
+                      {data.proper_motion_ra != null && <tr><td className="odp-label">{t("odp.pm_ra")}</td><td>{data.proper_motion_ra.toFixed(2)} mas/yr</td></tr>}
+                      {data.proper_motion_dec != null && <tr><td className="odp-label">{t("odp.pm_dec")}</td><td>{data.proper_motion_dec.toFixed(2)} mas/yr</td></tr>}
                     </tbody>
                   </table>
 
                   {data.cross_ids.length > 0 && (
                     <div className="odp-section">
-                      <h4 className="odp-section-title">Cross-Identifications ({data.cross_ids.length})</h4>
+                      <h4 className="odp-section-title">{t("odp.cross_ids")} ({data.cross_ids.length})</h4>
                       <div className="odp-cross-ids">
                         {data.cross_ids.map((ci, i) => (
                           <span key={i} className="odp-cross-id">{ci.name}</span>
@@ -109,12 +111,12 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
 
               {tab === "surveys" && (
                 <div className="odp-surveys">
-                  {data.surveys.length === 0 && <p className="odp-empty">No survey data queried yet.</p>}
+                  {data.surveys.length === 0 && <p className="odp-empty">{t("odp.no_survey_data")}</p>}
                   {data.surveys.map((s) => (
                     <div key={s.source} className={`odp-survey-row${s.has_data ? "" : " no-data"}`}>
                       <span className={`badge badge-${s.source}`}>{s.source.toUpperCase()}</span>
                       <span className="odp-survey-count">
-                        {s.has_data ? `${s.count} object${s.count !== 1 ? "s" : ""}` : "No data"}
+                        {s.has_data ? `${s.count} object${s.count !== 1 ? "s" : ""}` : t("odp.no_data")}
                       </span>
                     </div>
                   ))}
@@ -123,7 +125,7 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
 
               {tab === "refs" && (
                 <div className="odp-refs">
-                  {data.references.length === 0 && <p className="odp-empty">No references found. (ADS API key may not be configured.)</p>}
+                  {data.references.length === 0 && <p className="odp-empty">{t("odp.no_refs")}</p>}
                   {data.references.map((ref) => (
                     <div key={ref.bibcode} className="odp-ref">
                       <a href={`https://ui.adsabs.harvard.edu/abs/${ref.bibcode}`} target="_blank" rel="noopener noreferrer" className="odp-ref-title">
@@ -139,12 +141,12 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
 
               {tab === "data" && (
                 <div className="odp-raw-data">
-                  {Object.keys(data.all_data).length === 0 && <p className="odp-empty">No raw data available.</p>}
+                  {Object.keys(data.all_data).length === 0 && <p className="odp-empty">{t("odp.no_raw_data")}</p>}
                   {Object.entries(data.all_data).map(([source, items]) => (
                     <details key={source} className="odp-data-section">
                       <summary>
                         <span className={`badge badge-${source}`}>{source.toUpperCase()}</span>
-                        {" "}{items.length} results
+                        {" "}{items.length} {t("odp.results")}
                       </summary>
                       <div className="odp-data-list">
                         {items.map((item, i) => {

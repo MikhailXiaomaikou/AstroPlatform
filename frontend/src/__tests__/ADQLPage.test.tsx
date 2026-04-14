@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter } from "react-router-dom";
+import { I18nProvider } from "../i18n";
 
 // ── Mock tracking hook ──
 vi.mock("../hooks/useTracking", () => ({
@@ -48,9 +49,11 @@ import { listADQLServices } from "../api/client";
 
 function renderADQLPage() {
   return render(
-    <BrowserRouter>
-      <ADQLPage />
-    </BrowserRouter>,
+    <I18nProvider>
+      <BrowserRouter>
+        <ADQLPage />
+      </BrowserRouter>
+    </I18nProvider>,
   );
 }
 

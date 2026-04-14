@@ -4,6 +4,7 @@ import { adqlQuery, listADQLServices, logOperation, exportSearchNotebook } from 
 import type { ADQLResult } from "../../api/client";
 import { useTracking } from "../../hooks/useTracking";
 import ADQLEditor from "../../components/ADQLEditor";
+import { useI18n } from "../../i18n";
 
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
@@ -148,11 +149,26 @@ function preferredChartType(_result: ADQLResult | null): string {
   return "scatter_custom";
 }
 
+const TEMPLATE_LABEL_I18N: Record<string, string> = {
+  "Photometry": "adql.template_photometry",
+  "Stellar params": "adql.template_stellar_params",
+  "Radial velocity": "adql.template_radial_velocity",
+  "Nearby (plx>50)": "adql.template_nearby",
+  "z>4 galaxies": "adql.template_z4_galaxies",
+  "QSOs": "adql.template_qsos",
+  "Seyfert galaxies": "adql.template_seyfert",
+  "2MASS catalog": "adql.template_2mass",
+  "SDSS DR16 photo": "adql.template_sdss_photo",
+  "JWST observations": "adql.template_jwst",
+  "By target": "adql.template_by_target",
+};
+
 const PAGE_SIZE = 25;
 
 /* ── Component ── */
 export default function ADQLPage() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const { track } = useTracking();
   const [services, setServices] = useState<Array<{ id: string; name: string }>>([]);
   const [svc, setSvc] = useState("gaia");
@@ -205,8 +221,8 @@ export default function ADQLPage() {
     } catch (err: unknown) {
       const detail =
         err && typeof err === "object" && "response" in err
-          ? ((err as { response?: { data?: { detail?: string } } }).response?.data?.detail || "Query failed")
-          : (err instanceof Error ? err.message : "Query failed");
+          ? ((err as { response?: { data?: { detail?: string } } }).response?.data?.detail || t("adql.query_failed"))
+          : (err instanceof Error ? err.message : t("adql.query_failed"));
       track("search.adql", {
         query_text: query,
         database: svc,
@@ -222,9 +238,9 @@ export default function ADQLPage() {
       });
       if (err && typeof err === "object" && "response" in err) {
         const resp = (err as { response?: { data?: { detail?: string } } }).response;
-        setError(resp?.data?.detail || "Query failed");
+        setError(resp?.data?.detail || t("adql.query_failed"));
       } else {
-        setError(err instanceof Error ? err.message : "Query failed");
+        setError(err instanceof Error ? err.message : t("adql.query_failed"));
       }
     } finally { setLoading(false); }
   }
@@ -291,7 +307,7 @@ export default function ADQLPage() {
 
   return (
     <div className="adql-page">
-      <h1>ADQL Query</h1>
+      <h1>{t("adql.title")}</h1>
 
       {/* Service selector */}
       <div className="adql-controls">
@@ -306,10 +322,10 @@ export default function ADQLPage() {
       {/* Templates — filtered by current service */}
       {(TEMPLATES[svc] || []).length > 0 && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0" }}>
-          {(TEMPLATES[svc] || []).map((t) => (
-            <button key={t.label} className="btn-secondary btn-small" title={t.tip}
+          {(TEMPLATES[svc] || []).map((tmpl) => (
+            <button key={tmpl.label} className="btn-secondary btn-small" title={tmpl.tip}
               style={{ fontSize: "0.72rem" }}
-              onClick={() => setQuery(t.q)}>{t.label}</button>
+              onClick={() => setQuery(tmpl.q)}>{TEMPLATE_LABEL_I18N[tmpl.label] ? t(TEMPLATE_LABEL_I18N[tmpl.label]) : tmpl.label}</button>
           ))}
         </div>
       )}
@@ -317,7 +333,7 @@ export default function ADQLPage() {
       {/* History */}
       {history.length > 0 && (
         <div style={{ display: "flex", gap: 5, flexWrap: "wrap", margin: "4px 0 8px" }}>
-          <span style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)", lineHeight: "24px" }}>Recent:</span>
+          <span style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)", lineHeight: "24px" }}>{t("adql.recent")}</span>
           {history.map((q, i) => (
             <button key={i} className="btn-secondary btn-small"
               style={{ fontSize: "0.65rem", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
@@ -329,35 +345,35 @@ export default function ADQLPage() {
       )}
 
       {/* Editor */}
-      <ADQLEditor value={query} onChange={setQuery} placeholder="Enter ADQL query..." />
+      <ADQLEditor value={query} onChange={setQuery} placeholder={t("adql.placeholder")} />
 
       <div style={{ display: "flex", gap: 8, margin: "8px 0" }}>
         <button className="btn-primary" onClick={run} disabled={loading || !query.trim()}>
-          {loading ? "Running…" : "Run Query"}
+          {loading ? t("adql.running") : t("adql.run_query")}
         </button>
         {result && (
           <>
             <button className="btn-secondary" onClick={downloadCSV}>
-              Download CSV ({result.row_count} rows)
+              {t("adql.download_csv")} ({result.row_count} {t("adql.rows")})
             </button>
             <button className="btn-secondary" onClick={async () => {
               try {
-                setExportMsg("Generating notebook…");
+                setExportMsg(t("adql.generating_notebook"));
                 const rows = extractRows(result, 200);
                 const blob = await exportSearchNotebook(query, rows);
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a"); a.href = url;
                 a.download = `adql_${result.row_count}_rows.ipynb`; a.click();
                 URL.revokeObjectURL(url);
-                setExportMsg("Notebook exported successfully");
+                setExportMsg(t("adql.notebook_exported"));
                 track("export.notebook", { cell_count: 3 + rows.length });
                 setTimeout(() => setExportMsg(null), 2500);
               } catch (e) {
-                setError(e instanceof Error ? e.message : "Notebook export failed");
+                setError(e instanceof Error ? e.message : t("adql.notebook_export_failed"));
                 setExportMsg(null);
               }
             }}>
-              Jupyter Notebook
+              {t("adql.jupyter_notebook")}
             </button>
             <button className="btn-secondary" onClick={() => {
               localStorage.setItem(
@@ -366,10 +382,10 @@ export default function ADQLPage() {
               );
               navigate("/chat");
             }}>
-              Send to AI
+              {t("adql.send_to_ai")}
             </button>
             <button className="btn-secondary" onClick={() => setShowViz(!showViz)}>
-              {showViz ? "Hide Chart" : "Visualize"}
+              {showViz ? t("adql.hide_chart") : t("adql.visualize")}
             </button>
           </>
         )}
@@ -377,7 +393,7 @@ export default function ADQLPage() {
 
       {showViz && result && (
         <div style={{ marginBottom: "1rem" }}>
-          <Suspense fallback={<div className="fits-loading">Loading visualization...</div>}>
+          <Suspense fallback={<div className="fits-loading">{t("fits.loading_viz")}</div>}>
             <PlotBuilder
               initialData={result.data as Record<string, unknown>}
               initialChartType={preferredChartType(result)}
@@ -395,15 +411,15 @@ export default function ADQLPage() {
         <div className="adql-results">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <span style={{ fontSize: "0.82rem", color: "var(--color-text-secondary)" }}>
-              {result.row_count} rows from {result.service} · {result.columns.length} columns
+              {result.row_count} {t("adql.rows_from")} {result.service} · {result.columns.length} {t("adql.columns")}
             </span>
             {totalPages > 1 && (
               <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: "0.78rem" }}>
                 <button className="btn-secondary btn-small" disabled={page === 0}
-                  onClick={() => setPage(page - 1)}>Prev</button>
+                  onClick={() => setPage(page - 1)}>{t("adql.prev")}</button>
                 <span>{page + 1}/{totalPages}</span>
                 <button className="btn-secondary btn-small" disabled={page >= totalPages - 1}
-                  onClick={() => setPage(page + 1)}>Next</button>
+                  onClick={() => setPage(page + 1)}>{t("common.next")}</button>
               </div>
             )}
           </div>
