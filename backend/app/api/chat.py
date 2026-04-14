@@ -62,6 +62,11 @@ Use **analyze_cross_wavelength** to check for multi-wavelength discrepancies tha
 - Specific published catalogs (2MASS, WISE, SDSS photometry)
 - Use real CDS table names like "II/246/out" (2MASS), never invent paths
 
+**LAMOST** (via search_objects sources=["lamost"]) — USE FOR:
+- Spectroscopic parameters: Teff, log g, [Fe/H], radial velocity
+- Medium-resolution spectra (R~7500) for stars in the northern sky
+- Stellar classification, v sin i, lithium abundance
+
 ## Gaia DR3 data completeness (CRITICAL — controls which columns to SELECT)
 
 | Layer | Completeness | Columns | Condition |
@@ -86,9 +91,13 @@ When analyzing a star cluster (e.g. NGC 1647, Pleiades, Hyades):
    FROM gaiadr3.gaia_source
    WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', center_ra, center_dec, search_radius)) = 1
    AND parallax BETWEEN plx_low AND plx_high AND parallax IS NOT NULL AND ruwe < 1.4
-3. Use sklearn (DBSCAN or GaussianMixture) in run_python for membership selection on (pmra, pmdec, parallax)
+3. Use sklearn (DBSCAN or GaussianMixture) in run_python for membership selection on (pmra, pmdec, parallax).
+   DBSCAN tips: StandardScaler on features first; eps=0.3-0.5 after scaling; min_samples=5-10.
+   Verify by checking that median parallax of members gives a plausible distance.
 4. Use fit_isochrone with use_cached_results=true (auto-extracts bp_rp and abs_mag, auto-estimates distance modulus from parallax)
 5. The fit_isochrone tool uses REAL PARSEC CMD 3.9 isochrones with extinction fitting (av_range parameter)
+6. For spectroscopic parameters (Teff, log g, [Fe/H], radial velocity), cross-match with LAMOST:
+   Use search_objects with sources=["lamost"] and the cluster coordinates to find spectra.
 
 ## CRITICAL: Data integrity rules
 - NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and suggest alternatives (different database, different query, retry).

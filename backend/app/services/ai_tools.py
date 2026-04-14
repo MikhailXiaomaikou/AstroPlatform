@@ -175,9 +175,10 @@ TOOLS = [
         "name": "search_objects",
         "description": (
             "Search astronomical databases for objects by name, coordinates, or scientific criteria. "
-            "Searches SIMBAD, Gaia, SDSS, NED, etc. Returns object names, positions, types, magnitudes, redshifts. "
+            "Searches SIMBAD, Gaia, SDSS, NED, LAMOST, etc. Returns object names, positions, types, magnitudes, redshifts. "
             "Gaia results include extra fields: extra.bp_rp, extra.parallax, extra.pmra, extra.pmdec, "
             "extra.ruwe, extra.phot_bp_mean_mag, extra.phot_rp_mean_mag. "
+            "LAMOST results include spectroscopic parameters in extra fields. "
             "Use these for HR diagrams, membership selection, and isochrone fitting."
         ),
         "input_schema": {
