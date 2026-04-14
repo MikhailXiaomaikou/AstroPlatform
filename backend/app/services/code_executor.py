@@ -113,6 +113,11 @@ ALLOWED_MODULES = {
     "reproject", "photutils", "photutils.segmentation", "photutils.detection",
     "photutils.aperture", "photutils.psf",
     "pyvo", "pyvo.dal", "pyvo.sia2", "pyvo.ssa",
+    # ML & statistics
+    "sklearn", "sklearn.cluster", "sklearn.mixture", "sklearn.preprocessing",
+    "sklearn.decomposition", "sklearn.neighbors", "sklearn.metrics",
+    "sklearn.model_selection", "sklearn.ensemble",
+    "emcee", "corner",
     # Visualization
     "matplotlib", "matplotlib.pyplot", "plt",
     # Tables

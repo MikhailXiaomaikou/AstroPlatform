@@ -175,7 +175,10 @@ TOOLS = [
         "name": "search_objects",
         "description": (
             "Search astronomical databases for objects by name, coordinates, or scientific criteria. "
-            "Searches SIMBAD, Gaia, SDSS, NED, etc. Returns object names, positions, types, magnitudes, redshifts."
+            "Searches SIMBAD, Gaia, SDSS, NED, etc. Returns object names, positions, types, magnitudes, redshifts. "
+            "Gaia results include extra fields: extra.bp_rp, extra.parallax, extra.pmra, extra.pmdec, "
+            "extra.ruwe, extra.phot_bp_mean_mag, extra.phot_rp_mean_mag. "
+            "Use these for HR diagrams, membership selection, and isochrone fitting."
         ),
         "input_schema": {
             "type": "object",
@@ -498,7 +501,10 @@ TOOLS = [
             "Fit PARSEC isochrones to observed colour-magnitude data to determine "
             "cluster age, metallicity, distance, and extinction. Use this when the user "
             "asks about the age of a star cluster, wants to fit isochrones, or asks "
-            "'how old is this cluster'. Requires observed BP-RP colours and G magnitudes."
+            "'how old is this cluster'. Requires observed BP-RP colours and G magnitudes. "
+            "Extract bp_rp from Gaia search results: [r['extra']['bp_rp'] for r in results if 'bp_rp' in r.get('extra',{})]. "
+            "For abs_mag, compute from apparent G mag and parallax: G - 5*log10(1000/parallax) + 5. "
+            "Or set use_cached_results=true to auto-extract from the last search."
         ),
         "input_schema": {
             "type": "object",
@@ -506,20 +512,23 @@ TOOLS = [
                 "bp_rp": {
                     "type": "array",
                     "items": {"type": "number"},
-                    "description": "Observed BP-RP colour array",
+                    "description": "Observed BP-RP colour array (from Gaia extra.bp_rp)",
                 },
                 "abs_mag": {
                     "type": "array",
                     "items": {"type": "number"},
-                    "description": "Observed G magnitude array (apparent or absolute)",
+                    "description": "Absolute G magnitude array (compute: G - 5*log10(1000/parallax) + 5)",
                 },
                 "method": {
                     "type": "string",
                     "enum": ["grid", "mcmc"],
                     "description": "Fitting method: 'grid' for fast grid+Nelder-Mead, 'mcmc' for full MCMC with uncertainties",
                 },
+                "use_cached_results": {
+                    "type": "boolean",
+                    "description": "Auto-extract bp_rp and abs_mag from the last search results cache",
+                },
             },
-            "required": ["bp_rp", "abs_mag"],
         },
     },
     {
@@ -1103,6 +1112,7 @@ async def execute_tool(
     provider_api_keys: dict[str, str] | None = None,
     python_session_id: str = "default",
     user_id: str | None = None,
+    chat_session_id: str | None = None,
 ) -> dict:
     """Execute a tool call and return the result as a dict."""
     try:
@@ -1123,9 +1133,9 @@ async def execute_tool(
         elif tool_name == "get_last_search_results":
             return _exec_get_cached_results(tool_input)
         elif tool_name == "validate_analysis":
-            return await _exec_validate_analysis(tool_input, python_session_id)
+            return await _exec_validate_analysis(tool_input, chat_session_id or python_session_id)
         elif tool_name == "generate_paper_draft":
-            return await _exec_generate_paper_draft(tool_input, python_session_id)
+            return await _exec_generate_paper_draft(tool_input, chat_session_id or python_session_id)
         elif tool_name == "run_pipeline":
             return await _exec_run_pipeline(tool_input)
         elif tool_name == "generate_proposal":
@@ -1476,9 +1486,9 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
 
 
 async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
-    from app.api.integration import adql_query, ADQLRequest
+    from app.api.integration import execute_adql_query, ADQLRequest
     req = ADQLRequest(query=inp.get("query", ""), service=inp.get("service", "gaia"))
-    result = await adql_query(req)
+    result = await execute_adql_query(req)
     # Normalize column names to lowercase so AI-generated code like
     # data['source_id'] works even when TAP returns 'SOURCE_ID'
     raw_data = result.get("data", {}) if isinstance(result, dict) else {}
@@ -2298,12 +2308,40 @@ async def _exec_estimate_photo_z(inp: dict) -> dict:
 
 async def _exec_fit_isochrone(inp: dict) -> dict:
     """Execute isochrone fitting on observed CMD data."""
+    import math
+
     bp_rp = inp.get("bp_rp", [])
     abs_mag = inp.get("abs_mag", [])
     method = inp.get("method", "grid")
 
+    # Auto-extract from cached search results if requested
+    if inp.get("use_cached_results") and (not bp_rp or not abs_mag):
+        cached = get_cached_results("latest")
+        if cached:
+            bp_rp_list, abs_mag_list = [], []
+            for r in cached:
+                extra = r.get("extra", {}) if isinstance(r, dict) else {}
+                color = extra.get("bp_rp")
+                gmag = r.get("magnitude") if isinstance(r, dict) else None
+                plx = extra.get("parallax")
+                if color is not None and gmag is not None and plx is not None and plx > 0:
+                    try:
+                        abs_g = float(gmag) - 5 * math.log10(1000.0 / float(plx)) + 5
+                        bp_rp_list.append(float(color))
+                        abs_mag_list.append(abs_g)
+                    except (ValueError, TypeError):
+                        pass
+            if bp_rp_list:
+                bp_rp = bp_rp_list
+                abs_mag = abs_mag_list
+
     if not bp_rp or not abs_mag:
-        return {"error": "bp_rp and abs_mag arrays are required"}
+        return {
+            "error": "bp_rp and abs_mag arrays are required. "
+            "Extract from Gaia results: bp_rp from result.extra.bp_rp, "
+            "abs_mag = magnitude - 5*log10(1000/parallax) + 5. "
+            "Or set use_cached_results=true to auto-extract from the last search."
+        }
     if len(bp_rp) != len(abs_mag):
         return {"error": f"bp_rp ({len(bp_rp)}) and abs_mag ({len(abs_mag)}) must have the same length"}
 
@@ -2472,7 +2510,7 @@ async def _exec_cross_wavelength(inp: dict) -> dict:
 async def _exec_crossmatch_catalogs(inp: dict, python_session_id: str = "default") -> dict:
     """Cross-match two catalogs obtained via ADQL queries."""
     import pandas as pd
-    from app.api.integration import adql_query, ADQLRequest
+    from app.api.integration import execute_adql_query, ADQLRequest
     from app.services.crossmatch_engine import get_crossmatch_engine
 
     q1 = inp.get("table1_query", "")
@@ -2487,7 +2525,7 @@ async def _exec_crossmatch_catalogs(inp: dict, python_session_id: str = "default
 
     # Run both ADQL queries concurrently
     async def _run_adql(query: str, service: str) -> pd.DataFrame:
-        result = await adql_query(ADQLRequest(query=query, service=service))
+        result = await execute_adql_query(ADQLRequest(query=query, service=service))
         data = result.get("data", {}) if isinstance(result, dict) else {}
         if not data:
             raise ValueError(f"ADQL query returned no data: {query[:80]}...")

@@ -442,10 +442,8 @@ ADQL_SERVICES = {
     "simbad": "https://simbad.cds.unistra.fr/simbad/sim-tap",
 }
 
-@router.post("/adql/query")
-@limiter.limit("20/minute")
-async def adql_query(request: Request, req: ADQLRequest):
-    """Execute an ADQL query against a TAP service."""
+async def execute_adql_query(req: ADQLRequest) -> dict:
+    """Core ADQL query execution (callable from AI tools without Request)."""
     import asyncio
 
     if req.service not in ADQL_SERVICES:
@@ -543,6 +541,13 @@ async def adql_query(request: Request, req: ADQLRequest):
         if any(hint in err_lower for hint in ("syntax", "parse", "unknown column", "unknown table", "not found", "400", "bad request", "adql")):
             raise HTTPException(status_code=400, detail=f"ADQL query error: {err_msg}")
         raise HTTPException(status_code=502, detail=f"ADQL service error: {err_msg}")
+
+
+@router.post("/adql/query")
+@limiter.limit("20/minute")
+async def adql_query(request: Request, req: ADQLRequest):
+    """Execute an ADQL query against a TAP service (HTTP endpoint)."""
+    return await execute_adql_query(req)
 
 
 @router.get("/adql/services")

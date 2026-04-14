@@ -78,6 +78,13 @@ RULES:
 - For teff_gspphot, also add "phot_g_mean_mag < 18"
 - Always use "SELECT TOP N" to limit results (default TOP 200)
 
+## CRITICAL: Data integrity rules
+- NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and suggest alternatives (different database, different query, retry).
+- NEVER silently fall back to mock data. Every data point shown to the user MUST come from a real astronomical database or the user's own uploaded files.
+- When data is unavailable, say so clearly: "I could not retrieve data from [source] because [reason]. Here are alternatives: ..."
+- For star cluster analysis: use run_adql with Gaia DR3 to get real photometry and astrometry. Use fit_isochrone (which uses real PARSEC CMD 3.9 isochrones) for age determination.
+- For extinction: use the lookup_ebv tool or query Gaia's ag_gspphot/ebpminrp_gspphot columns.
+
 ## SIMBAD basic table columns
 main_id, ra, dec, otype, otype_txt, rvz_redshift, rvz_radvel, rvz_type, sp_type, morph_type, plx_value, pmra, pmdec, nbref
 - For redshift queries: always add "rvz_redshift IS NOT NULL"
@@ -584,6 +591,7 @@ async def chat_message_stream(
         yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
 
         python_session_id = (req.context or {}).get("python_session_id", "default")
+        chat_session_id = (req.context or {}).get("current_session_id")
         _prime_adql_context_cache(req.context, python_session_id)
         await _prime_python_session_from_history(req.messages, python_session_id)
 
@@ -598,6 +606,7 @@ async def chat_message_stream(
                 provider_api_keys=provider_api_keys,
                 python_session_id=python_session_id,
                 preferred_backend=preferred_backend,
+                chat_session_id=chat_session_id,
             )
             if response["reply"]:
                 yield f"data: {json.dumps({'type': 'text', 'content': response['reply']})}\n\n"
@@ -731,13 +740,14 @@ async def _llm_messages_create(
 
 async def _execute_tool_calls(
     tool_calls: list[dict], api_key: str, provider_api_keys: dict[str, str], python_session_id: str,
-    user_id: str | None = None,
+    user_id: str | None = None, chat_session_id: str | None = None,
 ) -> list[dict]:
     """Execute one model turn's tool calls concurrently while preserving order."""
     from app.services.ai_tools import execute_tool
 
     coroutines = [
-        execute_tool(tc["name"], tc["input"], api_key, provider_api_keys, python_session_id, user_id=user_id)
+        execute_tool(tc["name"], tc["input"], api_key, provider_api_keys, python_session_id,
+                     user_id=user_id, chat_session_id=chat_session_id)
         for tc in tool_calls
     ]
     results = await asyncio.gather(*coroutines)
@@ -762,6 +772,7 @@ async def _run_agent_loop(
     python_session_id: str,
     preferred_backend: str | None = None,
     user_id: str | None = None,
+    chat_session_id: str | None = None,
 ) -> dict:
     working_messages = deepcopy(messages)
     all_tool_results: list[dict] = []
@@ -806,6 +817,7 @@ async def _run_agent_loop(
             provider_api_keys,
             python_session_id,
             user_id=user_id,
+            chat_session_id=chat_session_id,
         )
         for tc in executed_tools:
             result = tc["result"]
@@ -869,6 +881,7 @@ async def _run_orchestrated_chat(
     python_session_id: str,
     preferred_backend: str | None = None,
     user_id: str | None = None,
+    chat_session_id: str | None = None,
 ) -> dict:
     agent_names = list(runtime.get("agent_names") or [])
     if not agent_names:
@@ -884,6 +897,7 @@ async def _run_orchestrated_chat(
             python_session_id=python_session_id,
             preferred_backend=preferred_backend,
             user_id=user_id,
+            chat_session_id=chat_session_id,
         )
         return {"reply": single["reply"], "actions": single["actions"]}
 
@@ -906,6 +920,7 @@ async def _run_orchestrated_chat(
             python_session_id=python_session_id,
             preferred_backend=preferred_backend,
             user_id=user_id,
+            chat_session_id=chat_session_id,
         )
         agent_results.append(
             {
@@ -948,6 +963,7 @@ async def chat_message(
     claude_messages: list[dict] = _normalize_messages(req.messages)
     runtime = await _build_runtime(req, user, db)
     python_session_id = (req.context or {}).get("python_session_id", "default")
+    chat_session_id = (req.context or {}).get("current_session_id")
     _prime_adql_context_cache(req.context, python_session_id)
     await _prime_python_session_from_history(req.messages, python_session_id)
 
@@ -959,6 +975,7 @@ async def chat_message(
             python_session_id=python_session_id,
             preferred_backend=preferred_backend,
             user_id=str(user.id) if user else None,
+            chat_session_id=chat_session_id,
         )
         return ChatResponse(reply=response["reply"], actions=response["actions"])
 
