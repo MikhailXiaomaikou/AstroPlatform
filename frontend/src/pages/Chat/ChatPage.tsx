@@ -1353,6 +1353,25 @@ function deleteLocalChatSession(id: string): void {
   writeLocalChatSessions(readLocalChatSessions().filter((session) => session.id !== id));
 }
 
+function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
+  const steps = [
+    { label: "Generate paper draft", prompt: "Generate a paper draft from this analysis" },
+    { label: "Export as notebook", prompt: "Export this session as a Jupyter notebook" },
+    { label: "Run sensitivity analysis", prompt: "Run a sensitivity analysis on these results" },
+    { label: "Search related literature", prompt: "Search for related papers on ADS" },
+  ];
+
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "8px 0", borderTop: "1px solid var(--color-border)" }}>
+      {steps.map((s, i) => (
+        <button key={i} className="btn-ghost btn-small" onClick={() => onSend(s.prompt)} style={{ fontSize: "0.75rem" }}>
+          {s.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function ChatPage() {
   const { user } = useAuth();
   const { t } = useI18n();
@@ -2730,6 +2749,13 @@ export default function ChatPage() {
             )}
           </div>
         </div>
+      )}
+
+      {messages.length > 0 && !loading && (
+        <NextStepsPanel onSend={(msg) => {
+          pendingSendRef.current = true;
+          setInput(msg);
+        }} />
       )}
 
       <div

@@ -88,6 +88,8 @@ class FITSHeaderResponse(BaseModel):
     fits_path: str
     headers: list[dict]
     hdus: list[dict]
+    fits_type: str | None = None
+    suggested_analysis: str | None = None
 
 
 def _safe_float(val: float | None) -> float | None:
@@ -97,6 +99,34 @@ def _safe_float(val: float | None) -> float | None:
     if val != val or val == float("inf") or val == float("-inf"):
         return None
     return val
+
+
+def detect_fits_type(hdul) -> dict:
+    """Auto-classify FITS file type from header and data structure."""
+    primary = hdul[0]
+
+    if primary.data is not None:
+        if primary.data.ndim == 3:
+            return {"fits_type": "ifu_cube", "suggested_analysis": "IFU cube analysis: extract spectra, velocity maps"}
+        if primary.data.ndim == 2:
+            return {"fits_type": "image", "suggested_analysis": "CCD reduction, source extraction, photometry"}
+        if primary.data.ndim == 1:
+            header = primary.header
+            ctype1 = str(header.get("CTYPE1", ""))
+            if "WAVE" in ctype1.upper() or "AWAV" in ctype1.upper() or "CRVAL1" in header:
+                return {"fits_type": "spectrum", "suggested_analysis": "Spectral analysis: line identification, fitting, redshift"}
+
+    # Check extensions
+    for hdu in hdul[1:]:
+        if hasattr(hdu, "columns") and hdu.columns:
+            cols = [c.name.upper() for c in hdu.columns]
+            if any(w in cols for w in ["WAVE", "WAVELENGTH", "LOGLAM", "LAMBDA"]):
+                return {"fits_type": "spectrum", "suggested_analysis": "Spectral analysis: line identification, fitting, redshift"}
+            if any(w in cols for w in ["MJD", "TIME", "BJD", "JD", "BARYTIME"]):
+                return {"fits_type": "lightcurve", "suggested_analysis": "Time-domain: period search, transit fit, flare detection"}
+            return {"fits_type": "catalog", "suggested_analysis": "Catalog analysis: cross-match, photometric calibration"}
+
+    return {"fits_type": "unknown", "suggested_analysis": None}
 
 
 def _sanitize_extra(d: dict) -> dict:
@@ -849,6 +879,9 @@ async def get_fits_header(
         headers = []
         hdus = []
 
+        # Phase 2A: Auto-detect FITS file type
+        fits_type_info = detect_fits_type(hdul)
+
         for i, hdu in enumerate(hdul):
             # Collect header key-value pairs
             header_items = []
@@ -885,7 +918,13 @@ async def get_fits_header(
     finally:
         hdul.close()
 
-    return FITSHeaderResponse(fits_path=fits_path, headers=headers, hdus=hdus)
+    return FITSHeaderResponse(
+        fits_path=fits_path,
+        headers=headers,
+        hdus=hdus,
+        fits_type=fits_type_info.get("fits_type"),
+        suggested_analysis=fits_type_info.get("suggested_analysis"),
+    )
 
 
 @router.get("/fits-spectrum")
@@ -1299,10 +1338,13 @@ async def upload_fits_file(
 
     # Validate it's actually a FITS file
     from astropy.io import fits
+    fits_type_info = {}
     try:
         hdul = fits.open(io.BytesIO(contents))
         n_hdus = len(hdul)
         primary_header = dict(hdul[0].header) if hdul[0].header else {}
+        # Phase 2A: Auto-detect FITS file type
+        fits_type_info = detect_fits_type(hdul)
         hdul.close()
     except Exception:
         raise HTTPException(status_code=400, detail="File is not a valid FITS file")
@@ -1329,7 +1371,13 @@ async def upload_fits_file(
         source="upload",
         object_id=object_id or safe_name,
         fits_path=fits_path,
-        metadata_={"n_hdus": n_hdus, "size_bytes": len(contents), "original_filename": safe_name, **meta},
+        metadata_={
+            "n_hdus": n_hdus,
+            "size_bytes": len(contents),
+            "original_filename": safe_name,
+            **fits_type_info,
+            **meta,
+        },
     )
     db.add(data_file)
     await db.commit()

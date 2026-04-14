@@ -382,11 +382,11 @@ async def batch_run_pipeline(
     db: AsyncSession = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
-    """Run the same pipeline on multiple input files. Max 20 per batch."""
+    """Run the same pipeline on multiple input files. Max 200 per batch."""
     import asyncio
 
-    if len(req.input_data_ids) > 20:
-        raise HTTPException(status_code=400, detail="Maximum 20 inputs per batch")
+    if len(req.input_data_ids) > 200:
+        raise HTTPException(status_code=400, detail="Maximum 200 inputs per batch")
 
     if "nodes" not in req.dag or "edges" not in req.dag:
         raise HTTPException(status_code=400, detail="DAG must have 'nodes' and 'edges'")

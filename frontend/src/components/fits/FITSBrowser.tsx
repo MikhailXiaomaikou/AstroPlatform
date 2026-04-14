@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   uploadFITS,
   browseFITS,
@@ -21,6 +22,7 @@ interface Props {
 
 export default function FITSBrowser({ onSelectFile }: Props) {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [files, setFiles] = useState<FITSFileInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -29,6 +31,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
   const [filter, setFilter] = useState<string>("");
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [lastUploadType, setLastUploadType] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadFiles = useCallback(async () => {
@@ -70,6 +73,19 @@ export default function FITSBrowser({ onSelectFile }: Props) {
       }
       setUploadProgress(100);
       await loadFiles();
+      // Detect FITS type from filename for auto-suggestion
+      const lastName = fileArr[fileArr.length - 1].name.toLowerCase();
+      if (lastName.includes("spec") || lastName.includes("spectrum")) {
+        setLastUploadType("Spectrum");
+      } else if (lastName.includes("image") || lastName.includes("img")) {
+        setLastUploadType("Image");
+      } else if (lastName.includes("cube")) {
+        setLastUploadType("Data Cube");
+      } else if (lastName.includes("table") || lastName.includes("cat")) {
+        setLastUploadType("Catalog/Table");
+      } else {
+        setLastUploadType("FITS Data");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : t("fits.upload_failed"));
     } finally {
@@ -152,6 +168,19 @@ export default function FITSBrowser({ onSelectFile }: Props) {
       {error && (
         <div style={{ color: "#f44", marginBottom: "0.5rem", fontSize: "0.85rem" }}>
           {error}
+        </div>
+      )}
+
+      {lastUploadType && (
+        <div style={{ padding: "8px 12px", background: "var(--color-accent-subtle, rgba(79,195,247,0.08))", borderRadius: 8, margin: "8px 0", fontSize: "0.85rem" }}>
+          Detected: <strong>{lastUploadType}</strong>
+          {" — "}
+          <button className="btn-primary btn-small" onClick={() => {
+            localStorage.setItem("astro_chat_draft", "Analyze the uploaded file");
+            navigate("/chat");
+          }}>
+            Auto-analyze
+          </button>
         </div>
       )}
 

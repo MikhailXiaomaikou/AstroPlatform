@@ -84,6 +84,10 @@ export default function DataBrowser() {
   const [detailObject, setDetailObject] = useState<{ name: string; ra: number; dec: number } | null>(null);
   const [showSkyView, setShowSkyView] = useState(false);
 
+  // Batch search mode
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchTargets, setBatchTargets] = useState("");
+
   const lastSearchRef = useRef<{ query: string; sources: string[]; radius: number } | null>(null);
 
   // Search history state
@@ -249,6 +253,28 @@ export default function DataBrowser() {
       setRetryingSource(null);
     }
   }, []);
+
+  const handleBatchSearch = async () => {
+    const targets = batchTargets.split("\n").filter(t => t.trim());
+    if (targets.length === 0) return;
+    setLoading(true);
+    setError(null);
+    setFetched(null);
+    setSearchMeta(null);
+    setSelectedKeys(new Set());
+    const allResults: SearchResult[] = [];
+    for (const target of targets) {
+      try {
+        const res = await searchData(target.trim(), "", undefined, undefined, 0.05);
+        if (res) {
+          allResults.push(...res);
+        }
+      } catch { /* skip failed targets */ }
+    }
+    setResults(allResults);
+    setLoading(false);
+    setSearched(true);
+  };
 
   const handleFetch = async (source: string, objectId: string) => {
     const key = `${source}-${objectId}`;
@@ -653,6 +679,13 @@ ${rows}
       {activeTab === "search" && <>
       <SearchBar onSearch={handleSearch} onAdvancedSearch={handleAdvancedSearch} loading={loading} />
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", margin: "0.5rem 0" }}>
+        <button
+          className={`btn-secondary btn-small${batchMode ? " active" : ""}`}
+          onClick={() => setBatchMode(!batchMode)}
+          style={{ fontWeight: batchMode ? 700 : 400 }}
+        >
+          Batch Mode
+        </button>
         {lastSearchRef.current && (
           <button className="btn-secondary btn-small" onClick={handleSaveSearch} title="Save current search">
             Save Search
@@ -683,6 +716,22 @@ ${rows}
           </select>
         )}
       </div>
+
+      {batchMode && (
+        <div className="batch-input" style={{ marginTop: 8 }}>
+          <textarea
+            value={batchTargets}
+            onChange={e => setBatchTargets(e.target.value)}
+            placeholder={"Enter one target per line:\nM31\nNGC 1068\nSirius"}
+            rows={5}
+            style={{ width: "100%", fontFamily: "monospace", fontSize: "0.85rem" }}
+          />
+          <button className="btn-primary btn-small" style={{ marginTop: 4 }}
+            onClick={handleBatchSearch}>
+            Search {batchTargets.split("\n").filter(t => t.trim()).length} targets
+          </button>
+        </div>
+      )}
 
       {loading && (
         <div
@@ -1053,6 +1102,32 @@ ${rows}
           </div>
         );
       })()}
+
+      {validResults.length > 0 && (
+        <div className="quick-actions" style={{ display: "flex", gap: 8, margin: "8px 0", flexWrap: "wrap" }}>
+          <button className="btn-secondary btn-small"
+            onClick={() => {
+              localStorage.setItem("astro_chat_draft", `Plot an HR diagram of these ${validResults.length} search results`);
+              navigate("/chat");
+            }}>
+            Quick Plot
+          </button>
+          <button className="btn-secondary btn-small"
+            onClick={() => {
+              localStorage.setItem("astro_chat_draft", `Get a full dossier for ${validResults[0]?.name || "the top result"}`);
+              navigate("/chat");
+            }}>
+            Dossier
+          </button>
+          <button className="btn-secondary btn-small"
+            onClick={() => {
+              localStorage.setItem("astro_chat_draft", `Cross-match these ${validResults.length} results with Gaia DR3`);
+              navigate("/chat");
+            }}>
+            Cross-match
+          </button>
+        </div>
+      )}
 
       <ResultsTable
         results={validResults}

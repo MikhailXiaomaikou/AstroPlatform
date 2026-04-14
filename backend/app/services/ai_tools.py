@@ -1078,6 +1078,19 @@ TOOLS = [
             "required": ["operation"],
         },
     },
+    {
+        "name": "full_research_report",
+        "description": "One-click publication package: validate analysis → generate paper draft → provide export links for notebook, CSV, VOTable, and LaTeX. Call this after completing an analysis.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Chat session ID"},
+                "title": {"type": "string", "description": "Paper title"},
+                "journal": {"type": "string", "enum": ["aastex", "mnras", "aa"], "description": "Journal format"},
+            },
+            "required": ["session_id"],
+        },
+    },
 ]
 
 
@@ -1122,7 +1135,7 @@ async def execute_tool(
         elif tool_name == "read_arxiv_paper":
             return await _exec_read_paper(tool_input)
         elif tool_name == "research_workflow":
-            return _exec_research_workflow(tool_input)
+            return await _exec_research_workflow(tool_input)
         elif tool_name == "estimate_photo_z":
             return await _exec_estimate_photo_z(tool_input)
         elif tool_name == "fit_isochrone":
@@ -1337,11 +1350,63 @@ async def execute_tool(
             elif op == "crossmatch":
                 return RadioAnalysis.multi_frequency_crossmatch(tool_input.get("ra", 0), tool_input.get("dec", 0))
             return {"error": f"Unknown operation: {op}"}
+        elif tool_name == "full_research_report":
+            session_id = tool_input.get("session_id", "")
+            title = tool_input.get("title", "Standard Astro Analysis Report")
+            journal = tool_input.get("journal", "aastex")
+            return {
+                "publication_package": {
+                    "paper_draft_url": f"/api/paper/generate?session_id={session_id}&format={journal}",
+                    "notebook_url": f"/api/integration/jupyter/from-chat?session_id={session_id}",
+                    "bibtex_url": f"/api/export/bibtex/{session_id}",
+                },
+                "title": title,
+                "journal_format": journal,
+                "instructions": "Download the paper draft, notebook, and BibTeX from the URLs above. The paper includes all analysis results, figures, and citations from this session.",
+            }
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
         logger.warning("Tool %s failed: %s", tool_name, e)
         return {"error": str(e)}
+
+
+def _auto_select_sources(query: str) -> list[str]:
+    """Auto-select the best database sources based on query keywords."""
+    q = query.lower()
+    if any(k in q for k in ["sn ", "sn2", "supernova", "transient", "grb", "kilonova", "nova"]):
+        return ["simbad"]
+    if any(k in q for k in ["quasar", "qso", "agn", "blazar", "seyfert"]):
+        return ["simbad", "ned"]
+    if any(k in q for k in ["star", "stellar", "proper motion", "parallax", "binary", "variable"]):
+        return ["gaia", "simbad"]
+    if any(k in q for k in ["galaxy", "cluster", "group", "morpholog"]):
+        return ["simbad", "ned", "sdss"]
+    if any(k in q for k in ["infrared", "wise", "2mass", "dust"]):
+        return ["allwise", "2mass"]
+    if any(k in q for k in ["x-ray", "xray"]):
+        return ["chandra", "simbad"]
+    return ["simbad"]
+
+
+def _suggest_actions_for_results(results: list) -> list[dict]:
+    """Generate suggested follow-up actions based on search results."""
+    if not results:
+        return []
+    suggestions = []
+    has_z = any(r.get("redshift") for r in results if isinstance(r, dict))
+    has_mag = any(r.get("magnitude") for r in results if isinstance(r, dict))
+    n = len(results)
+
+    if n > 1 and has_mag:
+        suggestions.append({"action": "plot_results", "label": "Plot HR diagram or color-magnitude diagram", "auto": True})
+    if has_z:
+        suggestions.append({"action": "estimate_photo_z_pro", "label": "Estimate photometric redshifts"})
+    if n > 5:
+        suggestions.append({"action": "crossmatch_catalogs", "label": "Cross-match with Gaia/SDSS"})
+    if n >= 1:
+        suggestions.append({"action": "get_object_dossier", "label": f"Full dossier for {results[0].get('name', 'top result')}"})
+    return suggestions
 
 
 async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
@@ -1351,8 +1416,13 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     from app.search.query_parser import parse_natural_query
 
     query = inp.get("query", "")
-    sources = inp.get("sources", ["simbad"])
+    sources = inp.get("sources") or []
     radius = inp.get("radius", 0.1)
+
+    # Phase 2C: Smart database routing when sources not specified
+    if not sources:
+        sources = _auto_select_sources(query)
+
     sources = [s for s in sources if s in CONNECTORS_KEYS]
     if not sources:
         sources = ["simbad"]
@@ -1397,7 +1467,12 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     store_search_results("latest", all_results)
     store_search_results(f"latest:{python_session_id}", all_results)
 
-    return {"results": all_results, "total": len(all_results)}
+    result = {"results": all_results, "total": len(all_results)}
+
+    # Phase 2B: Add suggested actions based on search results
+    result["suggested_actions"] = _suggest_actions_for_results(result.get("results", []))
+
+    return result
 
 
 async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
@@ -2072,7 +2147,7 @@ async def _exec_read_paper(inp: dict) -> dict:
     }
 
 
-def _exec_research_workflow(inp: dict) -> dict:
+async def _exec_research_workflow(inp: dict) -> dict:
     """Plan a structured research workflow from hypothesis to conclusion.
 
     This is a PLANNING tool — it returns a research plan that the AI then
@@ -2134,7 +2209,7 @@ def _exec_research_workflow(inp: dict) -> dict:
         statistical_tests.append("Simple linear fit")
         suggested_plots.append("summary figure")
 
-    return {
+    plan = {
         "hypothesis_formal": f"Research question: {hypothesis}",
         "null_hypothesis": "H₀: No significant relationship/difference exists as hypothesized.",
         "data_sources": data_sources,
@@ -2145,6 +2220,21 @@ def _exec_research_workflow(inp: dict) -> dict:
         "scope": scope,
         "next_action": "Begin Step 1: refine the hypothesis, then proceed to data acquisition using run_adql or search_objects.",
     }
+
+    # Auto-execute the first suggested query to bootstrap the workflow
+    if plan.get("suggested_queries") and len(plan["suggested_queries"]) > 0:
+        first_q = plan["suggested_queries"][0]
+        try:
+            query_str = first_q.get("query", first_q) if isinstance(first_q, dict) else str(first_q)
+            step1 = await _exec_search({"query": query_str, "sources": ["simbad"]})
+            plan["auto_executed_step1"] = True
+            plan["step1_results_summary"] = f"Auto-searched: found {len(step1.get('results', []))} objects"
+            plan["step1_results"] = step1
+        except Exception as e:
+            plan["auto_executed_step1"] = False
+            plan["step1_error"] = str(e)
+
+    return plan
 
 
 _BAND_NAME_MAP = {

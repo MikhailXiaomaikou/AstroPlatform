@@ -1566,3 +1566,38 @@ async def export_search_as_notebook(req: NotebookFromSearchRequest):
         media_type="application/x-ipynb+json",
         headers={"Content-Disposition": f'attachment; filename="astro_search_{len(req.results)}_results.ipynb"'},
     )
+
+
+@router.get("/run/{run_id}/publication-package")
+async def publication_package(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """One-click publication package with all export format URLs."""
+    # Verify the run exists and belongs to the user
+    run_uuid = uuid.UUID(run_id)
+    run = (
+        await db.execute(
+            select(PipelineRun).where(
+                PipelineRun.id == run_uuid,
+                PipelineRun.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if run is None:
+        raise HTTPException(status_code=404, detail="Pipeline run not found")
+
+    return {
+        "run_id": run_id,
+        "exports": {
+            "notebook": f"/api/export/run/{run_id}/notebook",
+            "csv": f"/api/export/run/{run_id}/csv",
+            "votable": f"/api/export/run/{run_id}/votable",
+            "fits": f"/api/export/run/{run_id}/fits",
+            "provenance": f"/api/provenance/{run_id}/lineage",
+            "requirements": f"/api/provenance/{run_id}/requirements.txt",
+        },
+        "note": "Download each format from the URLs above.",
+    }

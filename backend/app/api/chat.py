@@ -345,6 +345,69 @@ If they seem to be students, explain statistical concepts as you go.
 Always end each step with what comes next."""
 
 
+def _generate_next_steps(tool_results: list[dict]) -> str:
+    """Analyze tool results and generate suggested next steps for the AI to offer."""
+    if not tool_results:
+        return ""
+
+    suggestions = []
+    for result in tool_results:
+        if not isinstance(result, dict):
+            continue
+
+        # Spectral data detected
+        if "wavelength" in result and "flux" in result:
+            suggestions.append("Fit emission/absorption lines in this spectrum")
+            suggestions.append("Estimate the redshift from spectral features")
+            suggestions.append("Measure equivalent widths of key lines")
+
+        # Search results
+        if "results" in result and isinstance(result.get("results"), list) and len(result.get("results", [])) > 0:
+            n = len(result["results"])
+            if n > 1:
+                suggestions.append(f"Plot these {n} objects (HR diagram, sky distribution, etc.)")
+                suggestions.append("Cross-match with another catalog (Gaia, SDSS, etc.)")
+            suggestions.append("Get a detailed dossier on the most interesting object")
+
+        # Fitted parameters
+        if "fitted_params" in result or "parameter_summary" in result:
+            suggestions.append("Generate a paper draft from this analysis")
+            suggestions.append("Run a sensitivity analysis on the fitted parameters")
+            suggestions.append("Export results as a Jupyter notebook")
+
+        # Light curve
+        if "time" in result and "flux" in result:
+            suggestions.append("Search for periodicity (Lomb-Scargle or BLS)")
+            suggestions.append("Detrend with Gaussian Process and look for transits/flares")
+
+        # Photo-z
+        if "z_phot" in result or "pz_values" in result:
+            suggestions.append("Compare photo-z with spectroscopic redshift if available")
+            suggestions.append("Plot the P(z) probability distribution")
+
+        # Pipeline run
+        if "run_id" in result:
+            suggestions.append("Download the publication package (notebook + CSV + provenance)")
+
+        # Image
+        if "output_path" in result and any(k in result for k in ["shape", "coverage_fraction"]):
+            suggestions.append("Extract sources from this image")
+            suggestions.append("Run aperture photometry on detected sources")
+
+    if not suggestions:
+        return ""
+
+    # Deduplicate and limit
+    seen = set()
+    unique = []
+    for s in suggestions:
+        if s not in seen:
+            seen.add(s)
+            unique.append(s)
+
+    return "\n".join(f"- {s}" for s in unique[:6])
+
+
 class ChatMessage(BaseModel):
     role: str  # "user" or "assistant"
     content: str
@@ -431,6 +494,7 @@ async def _build_runtime(
     normalized_messages = _normalize_messages(req.messages)
     safe_context = _safe_context(req.context)
     system = SYSTEM_PROMPT
+    system += "\n\nIMPORTANT: After completing the user's request, always suggest 2-3 concrete next steps the user could take. Format them as a brief list at the end of your response."
     if safe_context:
         ctx_str = json.dumps(safe_context, indent=2, default=str)[:2000]
         system += f"\n\nCurrent user context:\n{ctx_str}"
