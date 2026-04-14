@@ -6193,6 +6193,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
    Mobile Nav (Hamburger)
    ══════════════════════════════════════ */
 
+.nav-links {
+  display: contents;
+}
+
 .nav-hamburger {
   display: none;
   flex-direction: column;
