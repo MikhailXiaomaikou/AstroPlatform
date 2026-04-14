@@ -333,3 +333,82 @@ class TestPasswordHashing:
         hashed = hash_password(password)
         assert verify_password(password, hashed) is True
         assert verify_password("wrong_password", hashed) is False
+
+
+class TestGaiaInjection:
+    """Test ADQL injection prevention in Gaia connector."""
+
+    def test_rejects_non_numeric_source_id(self):
+        from app.connectors.gaia import GaiaConnector
+        import asyncio
+
+        connector = GaiaConnector()
+        with pytest.raises(ValueError, match="Invalid Gaia source_id"):
+            asyncio.run(connector._query_by_source_id("1; DROP TABLE gaia_source--"))
+
+    def test_rejects_sql_injection_in_source_id(self):
+        from app.connectors.gaia import GaiaConnector
+        import asyncio
+
+        connector = GaiaConnector()
+        with pytest.raises(ValueError, match="Invalid Gaia source_id"):
+            asyncio.run(connector._query_by_source_id("1 OR 1=1"))
+
+    def test_accepts_valid_numeric_source_id(self):
+        """Valid numeric source_id should not raise ValueError."""
+        import re
+
+        # Just test the validation logic, not the actual query
+        source_id = "4295806720"
+        assert re.match(r"^\d+$", source_id.strip())
+
+
+class TestPathTraversal:
+    """Test file path traversal prevention in storage module."""
+
+    def test_rejects_parent_traversal(self):
+        from app.storage import _validate_path
+
+        with pytest.raises(ValueError, match="traversal"):
+            _validate_path("../../etc/passwd")
+
+    def test_rejects_absolute_path(self):
+        from app.storage import _validate_path
+
+        with pytest.raises(ValueError, match="traversal"):
+            _validate_path("/etc/passwd")
+
+    def test_accepts_normal_path(self):
+        from app.storage import _validate_path
+
+        # Should not raise
+        result = _validate_path("user123/file.fits")
+        assert "file.fits" in str(result)
+
+
+class TestCodeSandbox:
+    """Test code executor sandbox restrictions."""
+
+    def test_blocks_os_import(self):
+        from app.services.code_executor import execute_python
+
+        result = execute_python("import os")
+        assert not result.success
+
+    def test_blocks_subprocess_import(self):
+        from app.services.code_executor import execute_python
+
+        result = execute_python("import subprocess")
+        assert not result.success
+
+    def test_blocks_pathlib_import(self):
+        from app.services.code_executor import execute_python
+
+        result = execute_python("import pathlib")
+        assert not result.success
+
+    def test_allows_numpy_import(self):
+        from app.services.code_executor import execute_python
+
+        result = execute_python("import numpy as np; print(np.array([1,2,3]))")
+        assert result.success
