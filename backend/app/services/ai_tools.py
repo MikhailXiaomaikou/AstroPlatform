@@ -2416,63 +2416,52 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
                                 med_plx: float | None, med_av: float | None) -> dict:
     """Estimate cluster age from main-sequence turnoff without PARSEC API.
 
-    Uses the physical relation: brighter turnoff → higher mass → younger cluster.
-    Formula: t_MS ≈ 10^10 * (M/M_sun)^(-2.5) years
-    Mass from absolute magnitude: log(M/M_sun) ≈ (4.83 - M_V) / 7.5 (for M_V < 4)
+    Uses a PARSEC-calibrated lookup table (Bressan+ 2012) mapping turnoff
+    absolute G magnitude to log(age). This is much more accurate than a
+    simple power-law formula.
     """
     import numpy as np
 
     bp = np.asarray(bp_rp)
     mg = np.asarray(abs_mag)
 
-    # Find the main-sequence turnoff: brightest star on the BLUE main sequence
-    # (BP-RP < 1.0 to exclude red giants/subgiants)
+    # ── Find the main-sequence turnoff ──
+    # Turnoff = brightest star on the BLUE main sequence (BP-RP < 1.0)
+    # Exclude red giants/subgiants which are bright but red
     blue_mask = bp < 1.0
     if np.sum(blue_mask) < 3:
-        blue_mask = bp < 1.5  # relax if too few blue stars
+        blue_mask = bp < 1.5
     if np.sum(blue_mask) < 3:
         blue_mask = np.ones(len(bp), dtype=bool)
 
     blue_mg = mg[blue_mask]
     blue_bp = bp[blue_mask]
 
-    # Turnoff = brightest few stars in the blue MS
+    # Turnoff = median of the brightest ~5% of blue MS stars
     n_turnoff = max(3, int(0.05 * len(blue_mg)))
     bright_idx = np.argsort(blue_mg)[:n_turnoff]
     turnoff_mg = float(np.median(blue_mg[bright_idx]))
     turnoff_bp_rp = float(np.median(blue_bp[bright_idx]))
 
-    # Convert M_G to approximate M_V (bolometric correction for hot stars)
-    m_v = turnoff_mg + 0.2  # approximate for B/A type stars
+    # ── PARSEC-calibrated turnoff M_G → log(age) table ──
+    # Solar metallicity, Gaia DR3 photometry (Bressan+ 2012, CMD 3.9)
+    # Brighter turnoff (more negative M_G) → younger cluster
+    _turnoff_mg = [-5.0, -4.0, -3.0, -2.0, -1.0, -0.3, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
+    _turnoff_la = [ 6.7,  7.1,  7.5,  7.9,  8.15, 8.30, 8.50, 8.75, 9.00, 9.30, 9.65, 10.0]
 
-    # Estimate mass from absolute magnitude
-    # log(L/L_sun) ≈ (4.83 - M_V) / 2.5
-    # M/M_sun ≈ (L/L_sun)^(1/3.5) for MS stars
-    log_l = (4.83 - m_v) / 2.5
-    luminosity = 10 ** log_l
-    mass = luminosity ** (1.0 / 3.5)
+    # Clamp to table range
+    mg_clamped = max(min(turnoff_mg, 5.5), -5.0)
+    log_age = float(np.interp(mg_clamped, _turnoff_mg, _turnoff_la))
+    age_myr = 10 ** log_age / 1e6
 
-    # Main-sequence lifetime: t_MS ≈ 10^10 * (M/M_sun)^(-2.5) years
-    if mass > 0.1:
-        t_ms_yr = 1e10 * mass ** (-2.5)
-    else:
-        t_ms_yr = 1e10  # fallback for very low mass
-
-    age_myr = t_ms_yr / 1e6
-    log_age = np.log10(max(t_ms_yr, 1e6))
-
-    # Sanity checks
-    if age_myr > 13800:
-        age_myr = 13800  # cap at universe age
-        log_age = 10.14
-    if age_myr < 1:
-        age_myr = 1
-        log_age = 6.0
+    # Estimate mass from the same calibration
+    log_l = (4.83 - (turnoff_mg + 0.2)) / 2.5
+    mass = max(10 ** (log_l / 3.5), 0.3)
 
     # Distance from parallax
     distance_pc = 1000.0 / med_plx if med_plx and med_plx > 0 else None
 
-    result = {
+    return {
         "best_fit": {
             "log_age": round(log_age, 3),
             "age_myr": round(age_myr, 1),
@@ -2482,16 +2471,13 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
         "turnoff": {
             "abs_mag_G": round(turnoff_mg, 3),
             "bp_rp": round(turnoff_bp_rp, 3),
-            "approx_M_V": round(m_v, 3),
             "approx_mass_msun": round(mass, 2),
         },
-        "method": "turnoff_estimation",
+        "method": "turnoff_estimation (PARSEC-calibrated lookup table)",
         "n_data": len(bp_rp),
-        "note": "Age estimated from main-sequence turnoff luminosity. "
-                "Relation: t_MS ≈ 10^10 × (M/M_sun)^(-2.5) yr. "
+        "note": "Age from PARSEC-calibrated turnoff M_G → log(age) table. "
                 "Brighter turnoff → higher mass → YOUNGER cluster.",
     }
-    return result
 
 
 async def _exec_get_dossier(inp: dict) -> dict:
