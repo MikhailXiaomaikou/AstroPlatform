@@ -33,6 +33,12 @@ def _get_registry() -> dict[str, Callable]:
     from app.pipeline.nodes.spectra_stack import spectra_stack
     from app.pipeline.nodes.photo_z_pro import photo_z_pro
     from app.pipeline.nodes.bayesian_fit import bayesian_fit
+    from app.pipeline.nodes.transit_fit import transit_fit
+    from app.pipeline.nodes.gp_detrend import gp_detrend_node
+    from app.pipeline.nodes.reproject_node import reproject_node
+    from app.pipeline.nodes.mosaic import mosaic_node
+    from app.pipeline.nodes.psf_match import psf_match_node
+    from app.pipeline.nodes.deblend import deblend_node
 
     return {
         "QueryData": query_data,
@@ -64,6 +70,12 @@ def _get_registry() -> dict[str, Callable]:
         "SpectraStack": spectra_stack,
         "PhotoZPro": photo_z_pro,
         "BayesianFit": bayesian_fit,
+        "TransitFit": transit_fit,
+        "GPDetrend": gp_detrend_node,
+        "Reproject": reproject_node,
+        "Mosaic": mosaic_node,
+        "PSFMatch": psf_match_node,
+        "Deblend": deblend_node,
     }
 
 

@@ -4,16 +4,16 @@ import io
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import get_optional_user
+from app.auth import get_current_user, get_optional_user
 from app.models.database import get_db
 from app.models.schemas import PipelineRun, PipelineTemplateDB, User
 from app.services.ai_tools import augment_adql_payload, build_adql_result_set, store_adql_result_set
-from app.storage import download_fits
+from app.storage import download_fits, upload_fits
 
 router = APIRouter(prefix="/api/integration", tags=["integration"])
 
@@ -117,12 +117,32 @@ async def convert_to_votable(
 
 
 @router.post("/votable/upload")
-async def upload_votable(
-    db: AsyncSession = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
-):
-    """Placeholder for VOTable import — converts VOTable to FITS and stores."""
-    return {"status": "not_implemented", "message": "VOTable upload coming soon"}
+async def upload_votable(file: UploadFile = File(...), user: User = Depends(get_current_user)):
+    """Upload a VOTable file and convert to FITS for browsing."""
+    from astropy.io.votable import parse as parse_votable
+    from astropy.table import Table as AstropyTable
+
+    content = await file.read()
+    try:
+        votable = parse_votable(io.BytesIO(content))
+        table = votable.get_first_table().to_table()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid VOTable: {e}")
+
+    # Convert to FITS
+    fits_buf = io.BytesIO()
+    table.write(fits_buf, format='fits', overwrite=True)
+    fits_buf.seek(0)
+
+    path = f"votable_imports/{uuid.uuid4()}.fits"
+    upload_fits(path, fits_buf.read())
+
+    return {
+        "path": path,
+        "rows": len(table),
+        "columns": list(table.colnames),
+        "filename": file.filename,
+    }
 
 
 # ══════════════════════════════════════

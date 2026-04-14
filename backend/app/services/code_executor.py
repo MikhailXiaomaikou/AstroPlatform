@@ -108,7 +108,11 @@ ALLOWED_MODULES = {
     "dynesty", "dynesty.utils",
     "ultranest",
     "arviz",
+    "celerite2", "batman",
     "astro",
+    "reproject", "photutils", "photutils.segmentation", "photutils.detection",
+    "photutils.aperture", "photutils.psf",
+    "pyvo", "pyvo.dal", "pyvo.sia2", "pyvo.ssa",
     # Visualization
     "matplotlib", "matplotlib.pyplot", "plt",
     # Tables
@@ -534,6 +538,10 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         exec_globals["target_visibility"] = astro.target_visibility
         exec_globals["airmass_plot"] = astro.airmass_plot
         exec_globals["exposure_time_estimate"] = astro.exposure_time_estimate
+        exec_globals["pro_gp_detrend"] = astro.pro_gp_detrend
+        exec_globals["pro_fit_transit"] = astro.pro_fit_transit
+        exec_globals["pro_detect_flares"] = astro.pro_detect_flares
+        exec_globals["pro_bls_search"] = astro.pro_bls_search
     except ImportError:
         pass
 

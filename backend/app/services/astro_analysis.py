@@ -2678,6 +2678,54 @@ def pro_model_comparison(models):
     return model_comparison_table(models)
 
 
+# ── Time-domain astronomy (celerite2/batman) ──
+
+
+def pro_gp_detrend(time, flux, flux_err=None, kernel="matern32"):
+    """GP detrend a light curve via celerite2."""
+    from app.services.time_domain_pro import gp_detrend
+    return gp_detrend(time, flux, flux_err, kernel)
+
+
+def pro_fit_transit(time, flux, flux_err=None, period=1.0, t0=0.0, rp_rs=0.1):
+    """Fit a transit model via batman."""
+    from app.services.time_domain_pro import fit_transit
+    return fit_transit(time, flux, flux_err, period, t0, rp_rs)
+
+
+def pro_detect_flares(time, flux, flux_err=None, nsigma=3.0):
+    """Detect stellar flares in a light curve."""
+    from app.services.time_domain_pro import detect_flares
+    return detect_flares(time, flux, flux_err, nsigma)
+
+
+def pro_bls_search(time, flux, period_range=(0.5, 20.0)):
+    """BLS transit search."""
+    from app.services.time_domain_pro import transit_search_bls
+    return transit_search_bls(time, flux, period_range)
+
+
+# ── Advanced image processing (reproject/photutils) ──
+
+
+def pro_reproject(fits_path, target_ra=None, target_dec=None, pixscale=1.0):
+    """Reproject a FITS image."""
+    from app.services.image_processing_pro import reproject_image
+    return reproject_image(fits_path, target_ra=target_ra, target_dec=target_dec, pixscale=pixscale)
+
+
+def pro_deblend(fits_path, threshold_sigma=2.0):
+    """Detect and deblend sources in a FITS image."""
+    from app.services.image_processing_pro import deblend_sources
+    return deblend_sources(fits_path, threshold_sigma)
+
+
+def pro_cutout(fits_path, ra, dec, size_arcsec=60.0):
+    """Extract a postage stamp cutout from a FITS image."""
+    from app.services.image_processing_pro import cutout_service
+    return cutout_service(fits_path, ra, dec, size_arcsec)
+
+
 def available_functions():
     """Return signatures and one-line docs for sandbox preloaded helpers."""
     exported = [
@@ -2734,6 +2782,13 @@ def available_functions():
         pro_bayes_factor,
         pro_chain_diagnostics,
         pro_model_comparison,
+        pro_gp_detrend,
+        pro_fit_transit,
+        pro_detect_flares,
+        pro_bls_search,
+        pro_reproject,
+        pro_deblend,
+        pro_cutout,
     ]
 
     # Lazy-import photo-z so its numpy-heavy globals aren't loaded at

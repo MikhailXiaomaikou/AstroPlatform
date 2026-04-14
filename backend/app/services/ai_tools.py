@@ -828,6 +828,39 @@ TOOLS = [
             "required": ["code", "parameter", "base_value"],
         },
     },
+    {
+        "name": "query_vo_service",
+        "description": "Query Virtual Observatory services: SIA (images), SSA (spectra), federated TAP (multi-archive ADQL), or discover services. Use for accessing professional astronomical archives beyond the built-in connectors.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "protocol": {"type": "string", "enum": ["sia", "ssa", "tap", "discover"],
+                            "description": "VO protocol to use"},
+                "ra": {"type": "number", "description": "RA in degrees"},
+                "dec": {"type": "number", "description": "Dec in degrees"},
+                "radius": {"type": "number", "description": "Search radius in degrees"},
+                "adql": {"type": "string", "description": "ADQL query (for TAP)"},
+                "services": {"type": "array", "items": {"type": "string"},
+                            "description": "TAP services to query (gaia, simbad, vizier, cadc, ned)"},
+                "service_url": {"type": "string", "description": "Custom SIA/SSA service URL"},
+                "keyword": {"type": "string", "description": "Keyword for service discovery"},
+            },
+            "required": ["protocol"],
+        },
+    },
+    {
+        "name": "process_image",
+        "description": "Advanced astronomical image processing: reprojection, mosaicking, PSF matching, source deblending, and cutout extraction.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fits_path": {"type": "string", "description": "Path to FITS image"},
+                "operation": {"type": "string", "enum": ["reproject", "mosaic", "psf_match", "deblend", "cutout"]},
+                "params": {"type": "object", "description": "Operation-specific parameters"},
+            },
+            "required": ["fits_path", "operation"],
+        },
+    },
 ]
 
 
@@ -900,6 +933,36 @@ async def execute_tool(
             return await _exec_analyze_spectrum_pro(tool_input)
         elif tool_name == "sensitivity_analysis":
             return await _exec_sensitivity_analysis(tool_input, python_session_id)
+        elif tool_name == "query_vo_service":
+            from app.services.vo_services import query_sia, query_ssa, federated_tap, discover_services
+            protocol = tool_input.get("protocol", "tap")
+            if protocol == "sia":
+                url = tool_input.get("service_url", "https://irsa.ipac.caltech.edu/SIA")
+                return query_sia(url, tool_input.get("ra", 0), tool_input.get("dec", 0), tool_input.get("radius", 0.1))
+            elif protocol == "ssa":
+                url = tool_input.get("service_url", "https://archive.stsci.edu/ssap/search")
+                return query_ssa(url, tool_input.get("ra", 0), tool_input.get("dec", 0), tool_input.get("radius", 0.01))
+            elif protocol == "tap":
+                return federated_tap(tool_input.get("adql", ""), tool_input.get("services"))
+            elif protocol == "discover":
+                return discover_services(tool_input.get("keyword", ""), tool_input.get("service_type", "tap"))
+            return {"error": f"Unknown protocol: {protocol}"}
+        elif tool_name == "process_image":
+            from app.services import image_processing_pro as ipp
+            op = tool_input.get("operation")
+            path = tool_input.get("fits_path", "")
+            p = tool_input.get("params", {})
+            if op == "reproject":
+                return ipp.reproject_image(path, **p)
+            elif op == "mosaic":
+                return ipp.mosaic_images(tool_input.get("fits_paths", [path]), **p)
+            elif op == "psf_match":
+                return ipp.psf_match(path, **p)
+            elif op == "deblend":
+                return ipp.deblend_sources(path, **p)
+            elif op == "cutout":
+                return ipp.cutout_service(path, p.get("ra", 0), p.get("dec", 0), p.get("size_arcsec", 60))
+            return {"error": f"Unknown operation: {op}"}
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
