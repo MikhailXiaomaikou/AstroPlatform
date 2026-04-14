@@ -1239,7 +1239,7 @@ async def execute_tool(
             from app.services.time_domain_pro import transit_search_bls as _bls
             return _bls(
                 tool_input["time"], tool_input["flux"],
-                tool_input.get("period_min", 0.5), tool_input.get("period_max", 20.0),
+                period_range=(tool_input.get("period_min", 0.5), tool_input.get("period_max", 20.0)),
             )
         # ── Team/Workspace Tools ──
         elif tool_name == "share_with_team":
@@ -2327,22 +2327,14 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
     abs_mag = inp.get("abs_mag", [])
     method = inp.get("method", "grid")
 
-    # Type validation — reject string expressions
+    # If strings were passed instead of numbers, discard and use cache
     if bp_rp and isinstance(bp_rp[0], str):
-        return {
-            "error": "bp_rp must be a numeric array, not strings. "
-            "Pass actual numbers: bp_rp=[0.5, 0.8, 1.2, ...] "
-            "or set use_cached_results=true."
-        }
+        bp_rp = []
     if abs_mag and isinstance(abs_mag[0], str):
-        return {
-            "error": "abs_mag must be a numeric array, not strings. "
-            "Pass actual numbers: abs_mag=[3.0, 4.5, 5.2, ...] "
-            "or set use_cached_results=true."
-        }
+        abs_mag = []
 
-    # Auto-extract from cached search results if requested or if arrays are empty
-    if inp.get("use_cached_results") or (not bp_rp and not abs_mag):
+    # Auto-extract from cached search results when arrays are missing/invalid
+    if inp.get("use_cached_results") or not bp_rp or not abs_mag:
         cached = get_cached_results("latest")
         if cached and (not bp_rp or not abs_mag):
             bp_rp_list, abs_mag_list = [], []

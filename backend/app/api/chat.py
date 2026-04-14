@@ -85,19 +85,24 @@ RULES:
 
 ## Open cluster / star cluster analysis workflow
 When analyzing a star cluster (e.g. NGC 1647, Pleiades, Hyades):
-1. First use search_objects to get cluster center coordinates and distance from SIMBAD
-2. Then use run_adql on Gaia DR3 with BOTH spatial AND parallax constraints:
-   SELECT source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, parallax, parallax_error, pmra, pmdec, ruwe
+1. First use search_objects to get cluster center coordinates and DISTANCE from SIMBAD. Note the parallax (plx = 1000/distance_pc).
+2. Then use run_adql on Gaia DR3 with TIGHT spatial AND parallax AND proper motion constraints:
+   SELECT source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, parallax, parallax_error, pmra, pmdec, ruwe, teff_gspphot, logg_gspphot, mh_gspphot, ag_gspphot, ebpminrp_gspphot
    FROM gaiadr3.gaia_source
-   WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', center_ra, center_dec, search_radius)) = 1
-   AND parallax BETWEEN plx_low AND plx_high AND parallax IS NOT NULL AND ruwe < 1.4
+   WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', center_ra, center_dec, 0.5)) = 1
+   AND parallax BETWEEN (expected_plx - 1.0) AND (expected_plx + 1.0) AND parallax IS NOT NULL
+   AND ruwe < 1.4 AND phot_g_mean_mag < 18
+   CRITICAL: The parallax constraint is ESSENTIAL. Without it, 80%+ of returned stars will be unrelated field stars at wrong distances, making all downstream analysis (distance, age, HR diagram) unreliable.
+   Example: NGC 1647 at ~450 pc → parallax ~2.2 mas → use "parallax BETWEEN 1.2 AND 3.2"
+   Example: Pleiades at ~136 pc → parallax ~7.4 mas → use "parallax BETWEEN 5.5 AND 9.5"
 3. Use sklearn (DBSCAN or GaussianMixture) in run_python for membership selection on (pmra, pmdec, parallax).
    DBSCAN tips: StandardScaler on features first; eps=0.3-0.5 after scaling; min_samples=5-10.
-   Verify by checking that median parallax of members gives a plausible distance.
-4. Use fit_isochrone with use_cached_results=true (auto-extracts bp_rp and abs_mag, auto-estimates distance modulus from parallax)
-5. The fit_isochrone tool uses REAL PARSEC CMD 3.9 isochrones with extinction fitting (av_range parameter)
-6. For spectroscopic parameters (Teff, log g, [Fe/H], radial velocity), cross-match with LAMOST:
-   Use search_objects with sources=["lamost"] and the cluster coordinates to find spectra.
+   VERIFY: median parallax of selected members must match the known cluster parallax within ~20%. If not, the selection is too contaminated.
+4. Use fit_isochrone with use_cached_results=true — it auto-extracts bp_rp and abs_mag from the last search, auto-estimates distance modulus from parallax, and fits extinction (A_V).
+   NEVER pass variable names as strings (e.g. "bp_rp_array.tolist()"). Always use use_cached_results=true or pass actual number arrays.
+5. The fit_isochrone tool uses REAL PARSEC CMD 3.9 isochrones with extinction fitting (av_range parameter).
+6. Apply extinction correction: query Gaia's ag_gspphot/ebpminrp_gspphot columns, or use the lookup_ebv tool for E(B-V) from IRSA dust maps. Correct CMD before analysis: M_G_corrected = M_G - A_G, (BP-RP)_corrected = (BP-RP) - E(BP-RP).
+7. For spectroscopic parameters (Teff, log g, [Fe/H], radial velocity), cross-match with LAMOST: Use search_objects with sources=["lamost"] and the cluster coordinates.
 
 ## CRITICAL: Data integrity rules
 - NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and suggest alternatives (different database, different query, retry).
