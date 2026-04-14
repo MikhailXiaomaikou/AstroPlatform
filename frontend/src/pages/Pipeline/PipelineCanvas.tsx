@@ -50,11 +50,11 @@ import { mergeWorkspaceFiles, readWorkspaceCache, type WorkspaceCacheFile } from
 const nodeTypes = { pipeline: PipelineNode };
 
 const QUICK_TEMPLATES = [
-  { value: "spectrum", label: "Spectrum Analysis", prompt: "Create a pipeline: LoadData \u2192 Denoise \u2192 SpectralFit \u2192 RedshiftEstimate \u2192 Plot" },
-  { value: "photometry", label: "CCD Photometry", prompt: "Create a pipeline: BiasSubtract \u2192 DarkCorrect \u2192 FlatField \u2192 CosmicRayReject \u2192 SourceExtract \u2192 PSFPhotometry \u2192 PhotCalibrate \u2192 Plot" },
-  { value: "transient", label: "Transient Triage", prompt: "Create a pipeline: LoadData \u2192 Denoise \u2192 TimeSeriesAnalysis \u2192 Plot" },
-  { value: "photoz", label: "Photo-z Estimation", prompt: "Create a pipeline: QueryData \u2192 CrossMatch \u2192 PhotoZPro \u2192 Plot" },
-  { value: "transit", label: "Transit Search", prompt: "Create a pipeline: LoadData \u2192 GPDetrend \u2192 TransitFit \u2192 Plot" },
+  { value: "spectrum", labelKey: "pipeline.template_spectrum", prompt: "Create a pipeline: LoadData \u2192 Denoise \u2192 SpectralFit \u2192 RedshiftEstimate \u2192 Plot" },
+  { value: "photometry", labelKey: "pipeline.template_ccd", prompt: "Create a pipeline: BiasSubtract \u2192 DarkCorrect \u2192 FlatField \u2192 CosmicRayReject \u2192 SourceExtract \u2192 PSFPhotometry \u2192 PhotCalibrate \u2192 Plot" },
+  { value: "transient", labelKey: "pipeline.template_transient", prompt: "Create a pipeline: LoadData \u2192 Denoise \u2192 TimeSeriesAnalysis \u2192 Plot" },
+  { value: "photoz", labelKey: "pipeline.template_photoz", prompt: "Create a pipeline: QueryData \u2192 CrossMatch \u2192 PhotoZPro \u2192 Plot" },
+  { value: "transit", labelKey: "pipeline.template_transit", prompt: "Create a pipeline: LoadData \u2192 GPDetrend \u2192 TransitFit \u2192 Plot" },
 ];
 
 let idCounter = Date.now();
@@ -646,7 +646,7 @@ export default function PipelineCanvas() {
           </button>
           <select className="btn-secondary btn-small" style={{ fontSize: "0.8rem", marginTop: 8, width: "100%" }}
             onChange={e => {
-              const tmpl = QUICK_TEMPLATES.find(t => t.value === e.target.value);
+              const tmpl = QUICK_TEMPLATES.find(qt => qt.value === e.target.value);
               if (tmpl) {
                 localStorage.setItem("astro_chat_draft", tmpl.prompt);
                 navigate("/chat");
@@ -654,8 +654,8 @@ export default function PipelineCanvas() {
               e.target.value = "";
             }}
             defaultValue="">
-            <option value="" disabled>Quick Templates...</option>
-            {QUICK_TEMPLATES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            <option value="" disabled>{t("pipeline.quick_templates")}...</option>
+            {QUICK_TEMPLATES.map(tmpl => <option key={tmpl.value} value={tmpl.value}>{t(tmpl.labelKey)}</option>)}
           </select>
         </div>
 

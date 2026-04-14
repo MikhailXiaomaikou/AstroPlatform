@@ -23,6 +23,23 @@ const translations: Record<string, Record<Lang, string>> = {
   "nav.sign_in":       { en: "Sign in",         zh: "登录",          fr: "Connexion",       es: "Iniciar sesión" },
   "nav.sign_out":      { en: "Sign out",        zh: "退出",          fr: "Déconnexion",     es: "Cerrar sesión" },
 
+  // Landing Page
+  "landing.subtitle":        { en: "AI-powered research platform \u2014 query 19 databases, analyze spectra, build pipelines, and draft papers with one conversation.", zh: "AI 驱动的研究平台 \u2014 对话即可查询 19 个数据库、分析光谱、构建流水线、撰写论文。", fr: "Plateforme de recherche pilotée par l'IA \u2014 interrogez 19 bases de données, analysez des spectres et rédigez des articles en une conversation.", es: "Plataforma de investigación impulsada por IA \u2014 consulte 19 bases de datos, analice espectros, construya pipelines y redacte artículos en una conversación." },
+  "landing.feat_ai":         { en: "AI Research Assistant",   zh: "AI 研究助手",         fr: "Assistant de recherche IA",   es: "Asistente de investigación IA" },
+  "landing.feat_ai_desc":    { en: "Chat with an AI that queries 21 databases, writes ADQL, builds pipelines, runs Python, and drafts papers.", zh: "与 AI 对话：查询 21 个数据库、编写 ADQL、构建流水线、运行 Python、撰写论文。", fr: "Discutez avec une IA qui interroge 21 bases de données, écrit des requêtes ADQL, construit des pipelines et rédige des articles.", es: "Converse con una IA que consulta 21 bases de datos, escribe ADQL, construye pipelines, ejecuta Python y redacta artículos." },
+  "landing.feat_search":     { en: "Multi-Source Search",     zh: "多源搜索",            fr: "Recherche multi-sources",     es: "Búsqueda multifuente" },
+  "landing.feat_search_desc": { en: "Search SDSS, Gaia, SIMBAD, and 18 more databases simultaneously with natural language or coordinates.", zh: "使用自然语言或坐标同时搜索 SDSS、Gaia、SIMBAD 等 18+ 个数据库。", fr: "Recherchez simultanément dans SDSS, Gaia, SIMBAD et 18 autres bases de données en langage naturel ou par coordonnées.", es: "Busque simultáneamente en SDSS, Gaia, SIMBAD y 18+ bases de datos con lenguaje natural o coordenadas." },
+  "landing.feat_pipeline":   { en: "Visual Pipeline Builder", zh: "可视化流水线构建器",    fr: "Constructeur visuel de pipeline", es: "Constructor visual de pipelines" },
+  "landing.feat_pipeline_desc": { en: "Build analysis workflows by connecting nodes \u2014 denoise, fit spectra, cross-match catalogs, and plot results.", zh: "通过连接节点构建分析工作流 \u2014 降噪、光谱拟合、交叉匹配、绘制结果。", fr: "Construisez des workflows d'analyse en connectant des n\u0153uds \u2014 débruitez, ajustez des spectres, croisez des catalogues et tracez les résultats.", es: "Construya flujos de análisis conectando nodos \u2014 elimine ruido, ajuste espectros, cruce catálogos y grafique resultados." },
+  "landing.feat_adql":       { en: "ADQL Direct Query",       zh: "ADQL 直接查询",       fr: "Requête ADQL directe",        es: "Consulta ADQL directa" },
+  "landing.feat_adql_desc":  { en: "Write TAP queries with syntax highlighting against Gaia, SIMBAD, VizieR, and CADC services.", zh: "使用语法高亮对 Gaia、SIMBAD、VizieR 和 CADC 服务编写 TAP 查询。", fr: "Écrivez des requêtes TAP avec coloration syntaxique sur les services Gaia, SIMBAD, VizieR et CADC.", es: "Escriba consultas TAP con resaltado de sintaxis en los servicios Gaia, SIMBAD, VizieR y CADC." },
+  "landing.cta_ai":          { en: "Start with AI Assistant",  zh: "开始使用 AI 助手",   fr: "Commencer avec l'assistant IA", es: "Empezar con el asistente IA" },
+  "landing.cta_browse":      { en: "Browse Data",             zh: "浏览数据",            fr: "Explorer les données",         es: "Explorar datos" },
+  "landing.stat_ai_tools":   { en: "AI Tools",                zh: "AI 工具",             fr: "Outils IA",                    es: "Herramientas IA" },
+  "landing.stat_databases":  { en: "Databases",               zh: "数据库",              fr: "Bases de données",             es: "Bases de datos" },
+  "landing.stat_pipeline_nodes": { en: "Pipeline Nodes",      zh: "流水线节点",          fr: "N\u0153uds de pipeline",       es: "Nodos de pipeline" },
+  "landing.stat_languages":  { en: "Languages",               zh: "语言",                fr: "Langues",                      es: "Idiomas" },
+
   // Search
   "search.placeholder": { en: "Object name or coordinates (e.g. M31, 10.68 41.27)", zh: "天体名称或坐标（如 M31, 10.68 41.27）", fr: "Nom d'objet ou coordonnées (ex. M31)", es: "Nombre u coordenadas (ej. M31)" },
   "search.quick":       { en: "Quick Search",    zh: "快速搜索",      fr: "Recherche rapide", es: "Búsqueda rápida" },
@@ -301,6 +318,45 @@ const translations: Record<string, Record<Lang, string>> = {
   "error.alert_timed_out":       { en: "Alert request timed out. The transient service may be slow; try again in a moment.", zh: "警报请求超时。瞬变事件服务可能较慢，请稍后重试。", fr: "La requête d'alerte a expiré. Le service transitoire peut être lent.", es: "La solicitud de alertas ha expirado. El servicio de transitorios puede ser lento." },
   "error.alert_bad_response":    { en: "The backend did not return a valid alerts response. Check the alerts API route and server logs.", zh: "后端未返回有效的警报响应。请检查警报 API 路由和服务器日志。", fr: "Le backend n'a pas renvoyé de réponse d'alertes valide. Vérifiez la route API.", es: "El backend no devolvió una respuesta de alertas válida. Verifique la ruta API." },
   "error.alert_backend_unreachable": { en: "Could not reach the backend server while loading alerts. Check whether the API service is up and the frontend API URL is correct.", zh: "加载警报时无法连接后端服务器。请检查 API 服务是否运行以及前端 API URL 是否正确。", fr: "Impossible de joindre le backend lors du chargement des alertes. Vérifiez le service API et l'URL.", es: "No se pudo conectar al backend al cargar alertas. Verifique el servicio API y la URL del frontend." },
+
+  // Data Browser actions
+  "data.batch_mode":       { en: "Batch Mode",         zh: "批量模式",        fr: "Mode lot",             es: "Modo lote" },
+  "data.save_search":      { en: "Save Search",        zh: "保存搜索",        fr: "Sauvegarder la recherche", es: "Guardar búsqueda" },
+  "data.saved_searches":   { en: "Saved Searches...",   zh: "已保存的搜索...", fr: "Recherches sauvegardées...", es: "Búsquedas guardadas..." },
+  "data.quick_plot":       { en: "Quick Plot",          zh: "快速绘图",        fr: "Graphique rapide",     es: "Gráfico rápido" },
+  "data.dossier":          { en: "Dossier",             zh: "档案",            fr: "Dossier",              es: "Expediente" },
+  "data.cross_match":      { en: "Cross-match...",      zh: "交叉匹配...",     fr: "Correspondance croisée...", es: "Correspondencia cruzada..." },
+  "data.cross_match_title": { en: "Cross-match selected objects", zh: "交叉匹配选中的天体", fr: "Croiser les objets sélectionnés", es: "Cruzar los objetos seleccionados" },
+  "data.run_cross_match":  { en: "Run Cross-match",    zh: "执行交叉匹配",    fr: "Exécuter la correspondance", es: "Ejecutar correspondencia" },
+  "data.matching":         { en: "Matching...",         zh: "匹配中...",       fr: "En cours...",          es: "Buscando..." },
+  "data.retry":            { en: "Retry",               zh: "重试",            fr: "Réessayer",            es: "Reintentar" },
+  "data.retrying":         { en: "Retrying...",         zh: "重试中...",       fr: "Nouvelle tentative...", es: "Reintentando..." },
+  "data.export_notebook":  { en: "Export Notebook",     zh: "导出笔记本",      fr: "Exporter le notebook", es: "Exportar notebook" },
+  "data.share_to_friend":  { en: "Share to Friend",    zh: "分享给好友",      fr: "Partager avec un ami", es: "Compartir con amigo" },
+  "data.share_with_team":  { en: "Share with Team",    zh: "分享给团队",      fr: "Partager avec l'équipe", es: "Compartir con equipo" },
+  "data.sharing":          { en: "Sharing...",          zh: "分享中...",       fr: "Partage en cours...",  es: "Compartiendo..." },
+  "data.share":            { en: "Share",               zh: "分享",            fr: "Partager",             es: "Compartir" },
+  "data.share_objects":    { en: "Share objects to a friend", zh: "将天体分享给好友", fr: "Partager des objets avec un ami", es: "Compartir objetos con un amigo" },
+  "data.select_all":       { en: "Select All",          zh: "全选",            fr: "Tout sélectionner",    es: "Seleccionar todo" },
+  "data.deselect_all":     { en: "Deselect All",        zh: "取消全选",        fr: "Tout désélectionner",  es: "Deseleccionar todo" },
+  "data.send_to_pipeline": { en: "Send to Pipeline",   zh: "发送到流水线",    fr: "Envoyer au pipeline",  es: "Enviar al pipeline" },
+  "data.copy_link":        { en: "Copy Link",           zh: "复制链接",        fr: "Copier le lien",       es: "Copiar enlace" },
+  "data.selected":         { en: "selected",            zh: "已选择",          fr: "sélectionné(s)",       es: "seleccionado(s)" },
+
+  // Pipeline templates
+  "pipeline.quick_templates":  { en: "Quick Templates",      zh: "快速模板",          fr: "Modèles rapides",      es: "Plantillas rápidas" },
+  "pipeline.template_spectrum": { en: "Spectrum Analysis",   zh: "光谱分析",          fr: "Analyse spectrale",    es: "Análisis espectral" },
+  "pipeline.template_ccd":    { en: "CCD Photometry",       zh: "CCD 测光",          fr: "Photométrie CCD",      es: "Fotometría CCD" },
+  "pipeline.template_transient": { en: "Transient Triage",  zh: "瞬变事件分类",      fr: "Triage de transitoires", es: "Triaje de transitorios" },
+  "pipeline.template_photoz": { en: "Photo-z Estimation",   zh: "光度红移估计",      fr: "Estimation photo-z",   es: "Estimación photo-z" },
+  "pipeline.template_transit": { en: "Transit Search",      zh: "凌星搜索",          fr: "Recherche de transits", es: "Búsqueda de tránsitos" },
+  "pipeline.pub_package":     { en: "Publication Package",  zh: "发布包",            fr: "Package de publication", es: "Paquete de publicación" },
+
+  // Chat next steps
+  "chat.next_steps":       { en: "Next Steps",          zh: "下一步",          fr: "Prochaines étapes",    es: "Próximos pasos" },
+  "chat.generate_paper":   { en: "Generate Paper",      zh: "生成论文",        fr: "Générer un article",   es: "Generar artículo" },
+  "chat.export_notebook":  { en: "Export Notebook",      zh: "导出笔记本",     fr: "Exporter le notebook", es: "Exportar notebook" },
+  "chat.sensitivity":      { en: "Sensitivity Analysis", zh: "敏感性分析",     fr: "Analyse de sensibilité", es: "Análisis de sensibilidad" },
 
   // Common
   // Errors

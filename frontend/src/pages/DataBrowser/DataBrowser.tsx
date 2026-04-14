@@ -691,11 +691,11 @@ ${rows}
           onClick={() => setBatchMode(!batchMode)}
           style={{ fontWeight: batchMode ? 700 : 400 }}
         >
-          Batch Mode
+          {t("data.batch_mode")}
         </button>
         {lastSearchRef.current && (
           <button className="btn-secondary btn-small" onClick={handleSaveSearch} title="Save current search">
-            Save Search
+            {t("data.save_search")}
           </button>
         )}
         {savedSearches.length > 0 && (
@@ -714,7 +714,7 @@ ${rows}
               if (!isNaN(idx)) handleLoadSavedSearch(idx);
             }}
           >
-            <option value="" disabled>Saved Searches...</option>
+            <option value="" disabled>{t("data.saved_searches")}</option>
             {savedSearches.map((s, i) => (
               <option key={s.timestamp} value={i}>
                 {s.name} ({s.sources.join(", ")})
@@ -858,7 +858,7 @@ ${rows}
                   onClick={() => handleRetrySource(entry.source)}
                 >
                   {retryingSource === entry.source ? <span className="spinner" /> : null}
-                  {retryingSource === entry.source ? "Retrying..." : "Retry"}
+                  {retryingSource === entry.source ? t("data.retrying") : t("data.retry")}
                 </button>
               </div>
             );
@@ -933,7 +933,7 @@ ${rows}
                     URL.revokeObjectURL(url);
                   } catch { /* */ }
                 }}>
-                  Export Notebook
+                  {t("data.export_notebook")}
                 </button>
                 <button className="btn-secondary btn-small" onClick={handleSendToAI}>
                   Ask AI
@@ -953,19 +953,19 @@ ${rows}
                   {bulkAction === "fetch" ? "Saving..." : "Save to Workspace"}
                 </button>
                 <button className="btn-secondary btn-small" onClick={() => setShowCrossMatch(!showCrossMatch)}>
-                  Cross-match...
+                  {t("data.cross_match")}
                 </button>
                 {user && (
                   <>
                     <button className="btn-secondary btn-small" onClick={openSharePanel}>
-                      Share to Friend
+                      {t("data.share_to_friend")}
                     </button>
                     <button
                       className="btn-secondary btn-small"
                       onClick={handleShareWithTeam}
                       disabled={sharingToTeam}
                     >
-                      {sharingToTeam ? "Sharing..." : "Share with Team"}
+                      {sharingToTeam ? t("data.sharing") : t("data.share_with_team")}
                     </button>
                   </>
                 )}
@@ -1018,7 +1018,7 @@ ${rows}
                 onClick={handleShareToFriend}
                 disabled={!shareTargetId || sharing}
               >
-                {sharing ? "Sharing..." : "Share"}
+                {sharing ? t("data.sharing") : t("data.share")}
               </button>
             </div>
           )}
@@ -1029,7 +1029,7 @@ ${rows}
       {showCrossMatch && (
         <div className="share-panel">
           <div className="share-panel-header">
-            <h3>Cross-match selected objects</h3>
+            <h3>{t("data.cross_match_title")}</h3>
             <button className="btn-close" onClick={() => { setShowCrossMatch(false); setCrossMatchResults(null); }}>Close</button>
           </div>
           <div style={{ padding: "8px 0" }}>
@@ -1054,7 +1054,7 @@ ${rows}
                 />
               </label>
               <button className="btn-primary" onClick={handleCrossMatch} disabled={crossMatchLoading || !crossMatchInput.trim()}>
-                {crossMatchLoading ? "Matching..." : "Run Cross-match"}
+                {crossMatchLoading ? t("data.matching") : t("data.run_cross_match")}
               </button>
             </div>
             {crossMatchResults !== null && (
@@ -1117,21 +1117,21 @@ ${rows}
               localStorage.setItem("astro_chat_draft", `Plot an HR diagram of these ${validResults.length} search results`);
               navigate("/chat");
             }}>
-            Quick Plot
+            {t("data.quick_plot")}
           </button>
           <button className="btn-secondary btn-small"
             onClick={() => {
               localStorage.setItem("astro_chat_draft", `Get a full dossier for ${validResults[0]?.name || "the top result"}`);
               navigate("/chat");
             }}>
-            Dossier
+            {t("data.dossier")}
           </button>
           <button className="btn-secondary btn-small"
             onClick={() => {
               localStorage.setItem("astro_chat_draft", `Cross-match these ${validResults.length} results with Gaia DR3`);
               navigate("/chat");
             }}>
-            Cross-match
+            {t("data.cross_match")}
           </button>
         </div>
       )}
