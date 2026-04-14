@@ -415,3 +415,260 @@ def telluric_correct(wavelength: list, flux: list,
         "corrected": True,
         "model": "custom" if telluric_wavelength else "simplified",
     }
+
+
+def velocity_dispersion_xcorr(wavelength: list, flux: list,
+                               template_wavelength: list, template_flux: list,
+                               z: float = 0.0) -> dict:
+    """Measure velocity dispersion via cross-correlation.
+
+    Uses log-wavelength rebinning for uniform velocity bins,
+    continuum normalization, and Gaussian fit to CCF peak.
+    """
+    wave = np.array(wavelength) / (1.0 + z)
+    fl = np.array(flux)
+    tw = np.array(template_wavelength)
+    tf = np.array(template_flux)
+
+    # Common wavelength range
+    w_min = max(wave.min(), tw.min())
+    w_max = min(wave.max(), tw.max())
+    if w_max <= w_min:
+        return {"error": "No overlapping wavelength range"}
+
+    mask_s = (wave >= w_min) & (wave <= w_max)
+    mask_t = (tw >= w_min) & (tw <= w_max)
+
+    # Rebin to log-wavelength (uniform velocity bins)
+    c_km_s = 299792.458
+    ln_w_min = np.log(w_min)
+    ln_w_max = np.log(w_max)
+    n_pix = min(len(wave[mask_s]), len(tw[mask_t]), 2048)
+    dln = (ln_w_max - ln_w_min) / n_pix
+    vel_scale = c_km_s * dln  # km/s per pixel
+
+    ln_grid = np.linspace(ln_w_min, ln_w_max, n_pix)
+    w_grid = np.exp(ln_grid)
+
+    from scipy.interpolate import interp1d
+    spec_interp = interp1d(wave[mask_s], fl[mask_s], bounds_error=False, fill_value=0)
+    temp_interp = interp1d(tw[mask_t], tf[mask_t], bounds_error=False, fill_value=0)
+
+    spec_rebinned = spec_interp(w_grid)
+    temp_rebinned = temp_interp(w_grid)
+
+    # Continuum normalize
+    from scipy.ndimage import median_filter
+    for arr in [spec_rebinned, temp_rebinned]:
+        cont = median_filter(arr, size=min(len(arr) // 5, 101))
+        cont[cont <= 0] = 1.0
+        arr /= cont
+
+    # Subtract mean
+    spec_rebinned -= np.mean(spec_rebinned)
+    temp_rebinned -= np.mean(temp_rebinned)
+
+    # Cross-correlate
+    from scipy.signal import correlate
+    ccf = correlate(spec_rebinned, temp_rebinned, mode='full')
+    ccf /= np.max(np.abs(ccf)) if np.max(np.abs(ccf)) > 0 else 1
+
+    n = len(spec_rebinned)
+    lags = np.arange(-n + 1, n) * vel_scale  # velocity in km/s
+
+    # Fit Gaussian to CCF peak
+    peak_idx = np.argmax(ccf)
+    half_width = min(50, n // 4)
+    lo = max(0, peak_idx - half_width)
+    hi = min(len(ccf), peak_idx + half_width)
+
+    from scipy.optimize import curve_fit
+    def gauss(x, a, mu, sig):
+        return a * np.exp(-0.5 * ((x - mu) / sig) ** 2)
+
+    try:
+        popt, pcov = curve_fit(gauss, lags[lo:hi], ccf[lo:hi],
+                               p0=[ccf[peak_idx], lags[peak_idx], 100.0])
+        perr = np.sqrt(np.diag(pcov))
+
+        sigma_v = abs(popt[2])
+        sigma_v_err = perr[2]
+        v_shift = popt[1]
+
+        return {
+            "sigma_v_km_s": float(sigma_v),
+            "sigma_v_err_km_s": float(sigma_v_err),
+            "velocity_shift_km_s": float(v_shift),
+            "ccf_peak": float(popt[0]),
+            "vel_scale_km_s_per_pixel": float(vel_scale),
+            "method": "cross_correlation",
+        }
+    except Exception as e:
+        return {"error": f"CCF fit failed: {e}", "ccf_peak_velocity": float(lags[peak_idx])}
+
+
+def load_ifu_cube(fits_path: str) -> dict:
+    """Load an IFU datacube from FITS (3D: wavelength x spatial x spatial)."""
+    from astropy.io import fits as pyfits
+    from astropy.wcs import WCS
+
+    with pyfits.open(fits_path) as hdul:
+        # Find the 3D data HDU
+        data = None
+        header = None
+        for hdu in hdul:
+            if hdu.data is not None and hdu.data.ndim == 3:
+                data = hdu.data
+                header = hdu.header
+                break
+
+        if data is None:
+            return {"error": "No 3D datacube found in FITS file"}
+
+        wcs = WCS(header)
+        nwave, ny, nx = data.shape
+
+        # Extract wavelength axis
+        crval3 = header.get("CRVAL3", 1.0)
+        cdelt3 = header.get("CDELT3", header.get("CD3_3", 1.0))
+        crpix3 = header.get("CRPIX3", 1.0)
+        wavelength = crval3 + (np.arange(nwave) - (crpix3 - 1)) * cdelt3
+
+        # Spatial info
+        pixscale = abs(header.get("CDELT1", header.get("CD1_1", 1.0))) * 3600  # arcsec
+
+        return {
+            "shape": [nwave, ny, nx],
+            "wavelength_range": [float(wavelength[0]), float(wavelength[-1])],
+            "n_wavelength": nwave,
+            "spatial_size": [ny, nx],
+            "pixel_scale_arcsec": float(pixscale),
+            "wavelength_unit": header.get("CUNIT3", "Angstrom"),
+            "has_wcs": wcs.has_celestial,
+        }
+
+
+def extract_spaxel_spectrum(fits_path: str, x: int, y: int) -> dict:
+    """Extract 1D spectrum from a single spaxel in an IFU cube."""
+    from astropy.io import fits as pyfits
+
+    with pyfits.open(fits_path) as hdul:
+        for hdu in hdul:
+            if hdu.data is not None and hdu.data.ndim == 3:
+                data = hdu.data
+                header = hdu.header
+                break
+        else:
+            return {"error": "No 3D datacube found"}
+
+        nwave, ny, nx = data.shape
+        if x < 0 or x >= nx or y < 0 or y >= ny:
+            return {"error": f"Spaxel ({x},{y}) out of range ({nx},{ny})"}
+
+        flux = data[:, y, x]
+        crval3 = header.get("CRVAL3", 1.0)
+        cdelt3 = header.get("CDELT3", header.get("CD3_3", 1.0))
+        crpix3 = header.get("CRPIX3", 1.0)
+        wavelength = crval3 + (np.arange(nwave) - (crpix3 - 1)) * cdelt3
+
+        return {
+            "wavelength": wavelength.tolist(),
+            "flux": flux.tolist(),
+            "spaxel_x": x,
+            "spaxel_y": y,
+        }
+
+
+def extract_aperture_spectrum(fits_path: str, center_x: int, center_y: int,
+                               radius_pix: int = 3) -> dict:
+    """Extract coadded spectrum from a circular aperture in an IFU cube."""
+    from astropy.io import fits as pyfits
+
+    with pyfits.open(fits_path) as hdul:
+        for hdu in hdul:
+            if hdu.data is not None and hdu.data.ndim == 3:
+                data = hdu.data
+                header = hdu.header
+                break
+        else:
+            return {"error": "No 3D datacube found"}
+
+        nwave, ny, nx = data.shape
+        yy, xx = np.ogrid[:ny, :nx]
+        mask = ((xx - center_x)**2 + (yy - center_y)**2) <= radius_pix**2
+        n_spaxels = int(np.sum(mask))
+
+        if n_spaxels == 0:
+            return {"error": "Aperture contains no spaxels"}
+
+        flux = np.nanmean(data[:, mask], axis=1)
+        flux_err = np.nanstd(data[:, mask], axis=1) / np.sqrt(n_spaxels)
+
+        crval3 = header.get("CRVAL3", 1.0)
+        cdelt3 = header.get("CDELT3", header.get("CD3_3", 1.0))
+        crpix3 = header.get("CRPIX3", 1.0)
+        wavelength = crval3 + (np.arange(nwave) - (crpix3 - 1)) * cdelt3
+
+        return {
+            "wavelength": wavelength.tolist(),
+            "flux": flux.tolist(),
+            "flux_err": flux_err.tolist(),
+            "n_spaxels": n_spaxels,
+            "center": [center_x, center_y],
+            "radius_pix": radius_pix,
+        }
+
+
+# Standard star reference fluxes (simplified tabulations)
+_STANDARD_STARS = {
+    "feige34": {
+        "wavelength": [3200, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000, 9000, 10000],
+        "flux_erg": [4.84e-13, 5.53e-13, 5.81e-13, 5.55e-13, 5.03e-13, 4.53e-13, 4.01e-13, 3.55e-13, 3.13e-13, 2.75e-13, 2.42e-13, 1.87e-13, 1.47e-13],
+    },
+    "hz44": {
+        "wavelength": [3200, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000, 9000, 10000],
+        "flux_erg": [2.90e-13, 3.39e-13, 3.65e-13, 3.51e-13, 3.20e-13, 2.89e-13, 2.58e-13, 2.29e-13, 2.03e-13, 1.79e-13, 1.58e-13, 1.23e-13, 9.74e-14],
+    },
+    "gd71": {
+        "wavelength": [3200, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000, 9000, 10000],
+        "flux_erg": [1.82e-13, 2.06e-13, 2.15e-13, 2.03e-13, 1.83e-13, 1.63e-13, 1.44e-13, 1.27e-13, 1.12e-13, 9.84e-14, 8.65e-14, 6.65e-14, 5.21e-14],
+    },
+}
+
+def auto_flux_calibrate(wavelength: list, flux: list,
+                        standard_star_name: str = "feige34") -> dict:
+    """Auto flux calibration using standard star reference spectra."""
+    star_key = standard_star_name.lower().replace(" ", "").replace("-", "")
+    if star_key not in _STANDARD_STARS:
+        available = ", ".join(_STANDARD_STARS.keys())
+        return {"error": f"Unknown standard star. Available: {available}"}
+
+    ref = _STANDARD_STARS[star_key]
+    wave = np.array(wavelength)
+    fl = np.array(flux)
+
+    from scipy.interpolate import interp1d
+    ref_interp = interp1d(ref["wavelength"], ref["flux_erg"],
+                          bounds_error=False, fill_value="extrapolate")
+    ref_flux = ref_interp(wave)
+
+    # Sensitivity = observed_counts / reference_flux
+    sensitivity = np.where(ref_flux > 0, fl / ref_flux, 1.0)
+
+    # Smooth sensitivity with Savitzky-Golay
+    from scipy.signal import savgol_filter
+    window = min(len(sensitivity) // 4 * 2 + 1, 51)
+    if window >= 5:
+        sensitivity_smooth = savgol_filter(sensitivity, window, 3)
+    else:
+        sensitivity_smooth = sensitivity
+
+    sensitivity_smooth = np.where(sensitivity_smooth > 0, sensitivity_smooth, 1.0)
+
+    return {
+        "wavelength": wavelength,
+        "sensitivity": sensitivity_smooth.tolist(),
+        "standard_star": standard_star_name,
+        "calibrated": True,
+        "note": "Apply by dividing raw spectrum by this sensitivity function",
+    }

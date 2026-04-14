@@ -28,6 +28,15 @@ async def doi_metadata(entity_id: str, title: str = ""):
     return generate_doi_metadata(entity_id, title=title)
 
 
+@router.get("/{entity_id}/requirements.txt")
+async def export_requirements(entity_id: str):
+    """Export pinned requirements.txt for reproducibility."""
+    from app.services.provenance import export_requirements_pinned
+    content = export_requirements_pinned(entity_id)
+    return Response(content=content, media_type="text/plain",
+                   headers={"Content-Disposition": f"attachment; filename=requirements-{entity_id[:8]}.txt"})
+
+
 @router.get("/{entity_id}/reproduce")
 async def reproduce(entity_id: str):
     """Get reproducibility package."""

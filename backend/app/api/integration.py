@@ -2,18 +2,25 @@
 
 import io
 import json
+import logging
+import threading
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
 
 from app.auth import get_current_user, get_optional_user
 from app.models.database import get_db
 from app.models.schemas import PipelineRun, PipelineTemplateDB, User
+from app.rate_limit import limiter
 from app.services.ai_tools import augment_adql_payload, build_adql_result_set, store_adql_result_set
 from app.storage import download_fits, upload_fits
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/integration", tags=["integration"])
 
@@ -73,6 +80,97 @@ async def samp_send(req: SAMPSendRequest):
         return {"sent": True, "url": file_url, "message_type": req.message_type}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"SAMP send failed: {e}")
+
+
+class SAMPReceiver:
+    """Bidirectional SAMP client that can receive messages from DS9/TOPCAT/Aladin."""
+
+    _instance = None
+    _received: list[dict] = []
+    _client = None
+    _connected = False
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def connect_and_subscribe(self):
+        """Connect to SAMP hub and subscribe to common MTypes."""
+        if self._connected:
+            return {"status": "already_connected"}
+        try:
+            from astropy.samp import SAMPIntegratedClient
+            self._client = SAMPIntegratedClient(name="StandardAstro")
+            self._client.connect()
+
+            # Subscribe to MTypes
+            mtypes = [
+                "table.load.fits", "table.load.votable",
+                "image.load.fits", "coord.pointAt.sky",
+                "table.highlight.row",
+            ]
+            for mtype in mtypes:
+                self._client.bind_receive_notification(mtype, self._on_notification)
+                self._client.bind_receive_call(mtype, self._on_call)
+
+            self._connected = True
+            return {"status": "connected", "subscribed_mtypes": mtypes}
+        except Exception as e:
+            return {"status": "error", "detail": str(e)}
+
+    def _on_notification(self, private_key, sender_id, mtype, params, extra):
+        self._received.append({
+            "sender": sender_id, "mtype": mtype,
+            "params": {k: str(v) for k, v in (params or {}).items()},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        if len(self._received) > 50:
+            self._received.pop(0)
+
+    def _on_call(self, private_key, sender_id, msg_id, mtype, params, extra):
+        self._on_notification(private_key, sender_id, mtype, params, extra)
+        # Acknowledge the call
+        if self._client:
+            self._client.reply(msg_id, {"samp.status": "samp.ok", "samp.result": {}})
+
+    def disconnect(self):
+        if self._client and self._connected:
+            try:
+                self._client.disconnect()
+            except Exception:
+                pass
+            self._connected = False
+        return {"status": "disconnected"}
+
+    def get_received(self) -> list[dict]:
+        return list(self._received)
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+
+@router.post("/samp/subscribe")
+async def samp_subscribe():
+    """Connect to SAMP hub and subscribe to receive messages."""
+    receiver = SAMPReceiver.get_instance()
+    return receiver.connect_and_subscribe()
+
+
+@router.get("/samp/received")
+async def samp_received():
+    """List messages received via SAMP from external clients."""
+    receiver = SAMPReceiver.get_instance()
+    return {"messages": receiver.get_received(), "connected": receiver.is_connected}
+
+
+@router.post("/samp/unsubscribe")
+async def samp_unsubscribe():
+    """Disconnect from SAMP hub."""
+    receiver = SAMPReceiver.get_instance()
+    return receiver.disconnect()
 
 
 # ══════════════════════════════════════
@@ -343,7 +441,8 @@ ADQL_SERVICES = {
 }
 
 @router.post("/adql/query")
-async def adql_query(req: ADQLRequest):
+@limiter.limit("20/minute")
+async def adql_query(request: Request, req: ADQLRequest):
     """Execute an ADQL query against a TAP service."""
     import asyncio
 

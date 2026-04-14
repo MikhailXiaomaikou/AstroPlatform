@@ -864,6 +864,173 @@ TOOLS = [
             "required": ["fits_path", "operation"],
         },
     },
+    # ── Time-Domain Tools ──
+    {
+        "name": "gp_detrend_lightcurve",
+        "description": "Detrend a light curve using Gaussian Process regression (celerite2). Removes stellar variability to reveal transits and flares.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "time": {"type": "array", "items": {"type": "number"}, "description": "Time array"},
+                "flux": {"type": "array", "items": {"type": "number"}, "description": "Flux array"},
+                "flux_err": {"type": "array", "items": {"type": "number"}},
+                "kernel": {"type": "string", "enum": ["matern32", "sho", "rotation"]},
+            },
+            "required": ["time", "flux"],
+        },
+    },
+    {
+        "name": "fit_transit_model",
+        "description": "Fit an exoplanet transit model (batman) to light curve data. Returns planet-to-star radius ratio, semi-major axis, inclination.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "time": {"type": "array", "items": {"type": "number"}},
+                "flux": {"type": "array", "items": {"type": "number"}},
+                "flux_err": {"type": "array", "items": {"type": "number"}},
+                "period": {"type": "number", "description": "Orbital period"},
+                "t0": {"type": "number", "description": "Mid-transit time"},
+                "rp_rs": {"type": "number", "description": "Planet/star radius ratio initial guess (default 0.1)"},
+            },
+            "required": ["time", "flux", "period"],
+        },
+    },
+    {
+        "name": "detect_stellar_flares",
+        "description": "Detect stellar flares in a light curve. Returns flare times, amplitudes, durations, and energies.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "time": {"type": "array", "items": {"type": "number"}},
+                "flux": {"type": "array", "items": {"type": "number"}},
+                "flux_err": {"type": "array", "items": {"type": "number"}},
+                "nsigma": {"type": "number", "description": "Detection threshold in sigma (default 3.0)"},
+            },
+            "required": ["time", "flux"],
+        },
+    },
+    {
+        "name": "transit_search_bls",
+        "description": "Search for periodic transits using Box Least Squares (BLS) periodogram. Returns best period, depth, and signal-to-noise.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "time": {"type": "array", "items": {"type": "number"}},
+                "flux": {"type": "array", "items": {"type": "number"}},
+                "period_min": {"type": "number", "description": "Min period to search (default 0.5)"},
+                "period_max": {"type": "number", "description": "Max period to search (default 20.0)"},
+            },
+            "required": ["time", "flux"],
+        },
+    },
+    # ── Team/Workspace Tools ──
+    {
+        "name": "share_with_team",
+        "description": "Share a pipeline template or dataset with a team member by email.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "resource_type": {"type": "string", "enum": ["pipeline", "dataset", "results"]},
+                "resource_id": {"type": "string"},
+                "email": {"type": "string"},
+                "permission": {"type": "string", "enum": ["view", "edit"]},
+            },
+            "required": ["resource_type", "resource_id", "email"],
+        },
+    },
+    {
+        "name": "invite_team_member",
+        "description": "Invite a new member to your team workspace by email. Returns actionable instructions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "email": {"type": "string", "description": "Email address to invite"},
+                "role": {"type": "string", "enum": ["viewer", "editor", "admin"], "description": "Role for the new member (default: viewer)"},
+            },
+            "required": ["email"],
+        },
+    },
+    # ── FITS/Export/Provenance Tools ──
+    {
+        "name": "read_fits_header",
+        "description": "Read FITS file headers, HDU structure, and column names. Use to inspect uploaded FITS files.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fits_path": {"type": "string", "description": "Storage path to FITS file"},
+                "hdu": {"type": "integer", "description": "HDU index (default 0)"},
+            },
+            "required": ["fits_path"],
+        },
+    },
+    {
+        "name": "export_results",
+        "description": "Export pipeline run results as CSV, VOTable, FITS, or Jupyter notebook.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string"},
+                "format": {"type": "string", "enum": ["csv", "votable", "notebook", "fits"]},
+            },
+            "required": ["run_id", "format"],
+        },
+    },
+    {
+        "name": "get_provenance",
+        "description": "Get data provenance lineage or reproducibility package for a pipeline entity.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string"},
+                "action": {"type": "string", "enum": ["lineage", "reproduce", "doi_metadata"]},
+            },
+            "required": ["entity_id"],
+        },
+    },
+    # ── Photo-Z Pro + Batch Tools ──
+    {
+        "name": "estimate_photo_z_pro",
+        "description": (
+            "Professional photometric redshift with 30 SED templates, Calzetti dust, Madau IGM, "
+            "emission lines, and Bayesian priors. Superior to basic photo-z."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "magnitudes": {"type": "object", "description": "Band name to magnitude mapping (e.g. {g: 22.1, r: 21.5})"},
+                "mag_errors": {"type": "object"},
+                "prior": {"type": "string", "enum": ["flat", "magnitude"]},
+                "z_max": {"type": "number"},
+            },
+            "required": ["magnitudes"],
+        },
+    },
+    {
+        "name": "batch_object_search",
+        "description": "Search multiple astronomical targets simultaneously across databases.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "targets": {"type": "array", "items": {"type": "string"}, "description": "List of target names"},
+                "sources": {"type": "array", "items": {"type": "string"}, "description": "Databases to query"},
+                "radius": {"type": "number"},
+            },
+            "required": ["targets"],
+        },
+    },
+    {
+        "name": "workspace_export",
+        "description": "Export workspace data in CSV or VOTable format.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data": {"type": "array", "description": "Data rows to export"},
+                "format": {"type": "string", "enum": ["csv", "votable"]},
+                "columns": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["data", "format"],
+        },
+    },
 ]
 
 
@@ -875,6 +1042,7 @@ async def execute_tool(
     api_key: str = "",
     provider_api_keys: dict[str, str] | None = None,
     python_session_id: str = "default",
+    user_id: str | None = None,
 ) -> dict:
     """Execute a tool call and return the result as a dict."""
     try:
@@ -966,6 +1134,140 @@ async def execute_tool(
             elif op == "cutout":
                 return ipp.cutout_service(path, p.get("ra", 0), p.get("dec", 0), p.get("size_arcsec", 60))
             return {"error": f"Unknown operation: {op}"}
+        # ── Time-Domain Tools ──
+        elif tool_name == "gp_detrend_lightcurve":
+            from app.services.time_domain_pro import gp_detrend
+            return gp_detrend(
+                tool_input["time"], tool_input["flux"],
+                tool_input.get("flux_err"), tool_input.get("kernel", "matern32"),
+            )
+        elif tool_name == "fit_transit_model":
+            from app.services.time_domain_pro import fit_transit
+            return fit_transit(
+                tool_input["time"], tool_input["flux"],
+                tool_input.get("flux_err"), tool_input["period"],
+                tool_input.get("t0"), tool_input.get("rp_rs", 0.1),
+            )
+        elif tool_name == "detect_stellar_flares":
+            from app.services.time_domain_pro import detect_flares
+            return detect_flares(
+                tool_input["time"], tool_input["flux"],
+                tool_input.get("flux_err"), tool_input.get("nsigma", 3.0),
+            )
+        elif tool_name == "transit_search_bls":
+            from app.services.time_domain_pro import transit_search_bls as _bls
+            return _bls(
+                tool_input["time"], tool_input["flux"],
+                tool_input.get("period_min", 0.5), tool_input.get("period_max", 20.0),
+            )
+        # ── Team/Workspace Tools ──
+        elif tool_name == "share_with_team":
+            return {
+                "action": "share",
+                "resource_type": tool_input["resource_type"],
+                "resource_id": tool_input["resource_id"],
+                "target_email": tool_input["email"],
+                "permission": tool_input.get("permission", "view"),
+                "user_id": user_id,
+                "note": "Use the Team page to complete this sharing action.",
+            }
+        elif tool_name == "invite_team_member":
+            return {
+                "action": "invite",
+                "email": tool_input["email"],
+                "role": tool_input.get("role", "viewer"),
+                "user_id": user_id,
+                "note": "Use the Team page to send the invitation.",
+            }
+        # ── FITS/Export/Provenance Tools ──
+        elif tool_name == "read_fits_header":
+            from astropy.io import fits as pyfits
+            from app.storage import download_fits
+            import io
+            data = download_fits(tool_input["fits_path"])
+            with pyfits.open(io.BytesIO(data)) as hdul:
+                hdu_idx = tool_input.get("hdu", 0)
+                info: dict[str, Any] = {"n_hdus": len(hdul), "hdus": []}
+                for i, h in enumerate(hdul):
+                    hdu_info: dict[str, Any] = {"index": i, "name": h.name, "type": type(h).__name__}
+                    if hasattr(h, "columns") and h.columns:
+                        hdu_info["columns"] = [c.name for c in h.columns]
+                    if h.data is not None:
+                        hdu_info["shape"] = list(h.data.shape)
+                    if i == hdu_idx:
+                        hdu_info["header"] = {k: str(v) for k, v in h.header.items() if k}
+                    info["hdus"].append(hdu_info)
+                return info
+        elif tool_name == "export_results":
+            return {
+                "export_url": f"/api/export/run/{tool_input['run_id']}/{tool_input['format']}",
+                "note": "Download from this URL",
+            }
+        elif tool_name == "get_provenance":
+            from app.services.provenance import get_lineage, get_reproducibility_package, generate_doi_metadata
+            action = tool_input.get("action", "lineage")
+            eid = tool_input["entity_id"]
+            if action == "lineage":
+                return get_lineage(eid)
+            elif action == "reproduce":
+                return get_reproducibility_package(eid)
+            elif action == "doi_metadata":
+                return generate_doi_metadata(eid)
+            return {"error": f"Unknown provenance action: {action}"}
+        # ── Photo-Z Pro + Batch Tools ──
+        elif tool_name == "estimate_photo_z_pro":
+            from app.services.photo_z_pro import fit_template_enhanced
+            return fit_template_enhanced(
+                tool_input["magnitudes"],
+                tool_input.get("mag_errors"),
+                z_range=(0, tool_input.get("z_max", 6.0)),
+                prior=tool_input.get("prior", "flat"),
+            )
+        elif tool_name == "batch_object_search":
+            targets = tool_input.get("targets", [])
+            sources = tool_input.get("sources", ["simbad"])
+            radius = tool_input.get("radius", 0.1)
+            aggregated = []
+            for target in targets:
+                res = await _exec_search({"query": target, "sources": sources, "radius": radius}, python_session_id)
+                aggregated.append({"target": target, "results": res.get("results", []), "total": res.get("total", 0)})
+            return {"searches": aggregated, "total_targets": len(targets)}
+        elif tool_name == "workspace_export":
+            import csv as _csv
+            import io as _io
+            rows = tool_input.get("data", [])
+            fmt = tool_input.get("format", "csv")
+            columns = tool_input.get("columns")
+            if fmt == "csv":
+                buf = _io.StringIO()
+                if rows:
+                    cols = columns or (list(rows[0].keys()) if isinstance(rows[0], dict) else None)
+                    if cols:
+                        writer = _csv.DictWriter(buf, fieldnames=cols)
+                        writer.writeheader()
+                        for r in rows:
+                            writer.writerow({c: r.get(c, "") if isinstance(r, dict) else "" for c in cols})
+                    else:
+                        writer_list = _csv.writer(buf)
+                        for r in rows:
+                            writer_list.writerow(r if isinstance(r, list) else [r])
+                return {"format": "csv", "content": buf.getvalue(), "row_count": len(rows)}
+            elif fmt == "votable":
+                lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                         '<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.4">',
+                         '<RESOURCE><TABLE>']
+                if rows and isinstance(rows[0], dict):
+                    cols = columns or list(rows[0].keys())
+                    for c in cols:
+                        lines.append(f'<FIELD name="{c}" datatype="char" arraysize="*"/>')
+                    lines.append("<DATA><TABLEDATA>")
+                    for r in rows:
+                        cells = "".join(f"<TD>{r.get(c, '')}</TD>" for c in cols)
+                        lines.append(f"<TR>{cells}</TR>")
+                    lines.append("</TABLEDATA></DATA>")
+                lines.extend(["</TABLE></RESOURCE>", "</VOTABLE>"])
+                return {"format": "votable", "content": "\n".join(lines), "row_count": len(rows)}
+            return {"error": f"Unsupported format: {fmt}"}
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:

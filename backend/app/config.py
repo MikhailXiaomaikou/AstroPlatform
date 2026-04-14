@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
+    # Docker image digest for reproducibility
+    docker_image_digest: str = ""
+
     model_config = {"env_file": ".env"}
 
     def __init__(self, **kwargs):

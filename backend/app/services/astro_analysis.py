@@ -1429,6 +1429,42 @@ def estimate_ebv(observed_color, intrinsic_color, Rv=3.1):
     return obs - intr
 
 
+def lookup_ebv_irsa(ra: float, dec: float) -> dict:
+    """Look up E(B-V) from IRSA Galactic Dust Reddening and Extinction service."""
+    import httpx
+
+    url = "https://irsa.ipac.caltech.edu/cgi-bin/DUST/nph-dust"
+    params = {"locstr": f"{ra:.6f} {dec:.6f} equ j2000"}
+
+    try:
+        resp = httpx.get(url, params=params, timeout=15.0)
+        resp.raise_for_status()
+        text = resp.text
+
+        # Parse E(B-V) from the XML/text response
+        import re
+        # Look for SFD value
+        match = re.search(r'<meanValueSandF[^>]*>([\d.]+)</meanValueSandF>', text)
+        if match:
+            ebv_sfd = float(match.group(1))
+        else:
+            # Fallback: look for any E(B-V) value
+            match = re.search(r'E\(B-V\)\s*=?\s*([\d.]+)', text)
+            ebv_sfd = float(match.group(1)) if match else None
+
+        if ebv_sfd is not None:
+            return {
+                "ebv_sfd": ebv_sfd,
+                "ra": ra,
+                "dec": dec,
+                "source": "IRSA/SFD",
+                "A_V": round(ebv_sfd * 3.1, 4),
+            }
+        return {"error": "Could not parse E(B-V) from IRSA response", "raw": text[:500]}
+    except Exception as e:
+        return {"error": f"IRSA dust query failed: {e}"}
+
+
 # ── Error Propagation / Monte Carlo ──
 
 def monte_carlo_propagate(func, params, errors, n_samples=1000, seed=42):
@@ -2753,6 +2789,7 @@ def available_functions():
         extinction_curve,
         deredden,
         estimate_ebv,
+        lookup_ebv_irsa,
         monte_carlo_propagate,
         bootstrap_statistic,
         error_weighted_mean,

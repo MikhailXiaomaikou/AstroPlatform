@@ -147,6 +147,42 @@ def generate_doi_metadata(entity_id: str, title: str = "",
     }
 
 
+def capture_environment() -> dict:
+    """Capture current Python environment for reproducibility."""
+    import sys
+    import platform
+
+    packages = {}
+    try:
+        import importlib.metadata
+        for dist in importlib.metadata.distributions():
+            packages[dist.metadata["Name"]] = dist.version
+    except Exception:
+        try:
+            import pkg_resources
+            packages = {pkg.key: pkg.version for pkg in pkg_resources.working_set}
+        except Exception:
+            pass
+
+    return {
+        "python_version": sys.version,
+        "platform": platform.platform(),
+        "packages": packages,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def export_requirements_pinned(entity_id: str | None = None) -> str:
+    """Export current environment as pinned requirements.txt format."""
+    env = capture_environment()
+    lines = [f"# Standard Astro environment snapshot"]
+    lines.append(f"# Python {env['python_version'].split()[0]}")
+    lines.append(f"# Generated: {env['timestamp']}")
+    for pkg, ver in sorted(env["packages"].items()):
+        lines.append(f"{pkg}=={ver}")
+    return "\n".join(lines)
+
+
 def get_reproducibility_package(entity_id: str) -> dict:
     """Generate a reproducibility package for a pipeline run."""
     lineage = get_lineage(entity_id)
@@ -158,6 +194,7 @@ def get_reproducibility_package(entity_id: str) -> dict:
         "lineage": lineage,
         "parameters": {r["activity"]: r["params"] for r in records},
         "environment": records[0]["environment"] if records else {},
+        "captured_environment": capture_environment(),
         "reproduction_instructions": [
             "1. Install Standard Astro platform",
             "2. Import the pipeline DAG from this package",

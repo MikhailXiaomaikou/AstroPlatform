@@ -666,13 +666,14 @@ async def _llm_messages_create(
 
 
 async def _execute_tool_calls(
-    tool_calls: list[dict], api_key: str, provider_api_keys: dict[str, str], python_session_id: str
+    tool_calls: list[dict], api_key: str, provider_api_keys: dict[str, str], python_session_id: str,
+    user_id: str | None = None,
 ) -> list[dict]:
     """Execute one model turn's tool calls concurrently while preserving order."""
     from app.services.ai_tools import execute_tool
 
     coroutines = [
-        execute_tool(tc["name"], tc["input"], api_key, provider_api_keys, python_session_id)
+        execute_tool(tc["name"], tc["input"], api_key, provider_api_keys, python_session_id, user_id=user_id)
         for tc in tool_calls
     ]
     results = await asyncio.gather(*coroutines)
@@ -696,6 +697,7 @@ async def _run_agent_loop(
     agent_name: str,
     python_session_id: str,
     preferred_backend: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     working_messages = deepcopy(messages)
     all_tool_results: list[dict] = []
@@ -739,6 +741,7 @@ async def _run_agent_loop(
             provider_api_keys.get("anthropic", ""),
             provider_api_keys,
             python_session_id,
+            user_id=user_id,
         )
         for tc in executed_tools:
             result = tc["result"]
@@ -801,6 +804,7 @@ async def _run_orchestrated_chat(
     provider_api_keys: dict[str, str],
     python_session_id: str,
     preferred_backend: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     agent_names = list(runtime.get("agent_names") or [])
     if not agent_names:
@@ -815,6 +819,7 @@ async def _run_orchestrated_chat(
             agent_name=agent_names[0],
             python_session_id=python_session_id,
             preferred_backend=preferred_backend,
+            user_id=user_id,
         )
         return {"reply": single["reply"], "actions": single["actions"]}
 
@@ -836,6 +841,7 @@ async def _run_orchestrated_chat(
             agent_name=agent_name,
             python_session_id=python_session_id,
             preferred_backend=preferred_backend,
+            user_id=user_id,
         )
         agent_results.append(
             {
@@ -888,6 +894,7 @@ async def chat_message(
             provider_api_keys=provider_api_keys,
             python_session_id=python_session_id,
             preferred_backend=preferred_backend,
+            user_id=str(user.id) if user else None,
         )
         return ChatResponse(reply=response["reply"], actions=response["actions"])
 
