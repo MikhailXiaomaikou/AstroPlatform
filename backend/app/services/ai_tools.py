@@ -2313,15 +2313,17 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
     if abs_mag and isinstance(abs_mag, list) and abs_mag and isinstance(abs_mag[0], str):
         abs_mag = []
 
-    # ── Always try cache extraction when arrays are missing ──
-    cached = get_cached_results("latest")
+    # ── Auto-extract from ALL available caches ──
     med_plx = None
     med_av = None
 
     if not bp_rp or not abs_mag:
-        if cached:
-            bp_rp_list, abs_mag_list, plx_list, av_list = [], [], [], []
-            for r in cached:
+        bp_rp_list, abs_mag_list, plx_list, av_list = [], [], [], []
+
+        # Source 1: search_objects cache ("latest")
+        search_cache = get_cached_results("latest")
+        if search_cache:
+            for r in search_cache:
                 extra = r.get("extra", {}) if isinstance(r, dict) else {}
                 color = extra.get("bp_rp")
                 gmag = r.get("magnitude") if isinstance(r, dict) else None
@@ -2337,18 +2339,68 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
                             av_list.append(float(av))
                     except (ValueError, TypeError):
                         pass
-            if bp_rp_list:
-                bp_rp = bp_rp_list
-                abs_mag = abs_mag_list
-                if plx_list:
-                    med_plx = float(np.median(plx_list))
-                if av_list:
-                    med_av = float(np.median(av_list))
+
+        # Source 2: ADQL result cache (run_adql stores here, NOT in "latest")
+        if not bp_rp_list:
+            adql_cache = get_cached_results("latest_adql")
+            if not adql_cache:
+                adql_set = get_cached_results("latest_adql_set")
+                if isinstance(adql_set, dict):
+                    adql_cache = adql_set.get("rows") or adql_set.get("data")
+            if isinstance(adql_cache, dict):
+                # ADQL data is columnar: {"col_name": [val1, val2, ...]}
+                bp_col = adql_cache.get("bp_rp", [])
+                g_col = adql_cache.get("phot_g_mean_mag", [])
+                plx_col = adql_cache.get("parallax", [])
+                ag_col = adql_cache.get("ag_gspphot", [])
+                n_rows = max(len(bp_col), len(g_col))
+                for i in range(n_rows):
+                    try:
+                        color = float(bp_col[i]) if i < len(bp_col) and bp_col[i] is not None else None
+                        gmag = float(g_col[i]) if i < len(g_col) and g_col[i] is not None else None
+                        plx = float(plx_col[i]) if i < len(plx_col) and plx_col[i] is not None else None
+                        if color is not None and gmag is not None and plx is not None and plx > 0:
+                            abs_g = gmag - 5 * math.log10(1000.0 / plx) + 5
+                            bp_rp_list.append(color)
+                            abs_mag_list.append(abs_g)
+                            plx_list.append(plx)
+                            if i < len(ag_col) and ag_col[i] is not None:
+                                av_list.append(float(ag_col[i]))
+                    except (ValueError, TypeError, IndexError):
+                        pass
+            elif isinstance(adql_cache, list):
+                # Row-based format
+                for row in adql_cache:
+                    if not isinstance(row, dict):
+                        continue
+                    color = row.get("bp_rp")
+                    gmag = row.get("phot_g_mean_mag")
+                    plx = row.get("parallax")
+                    if color is not None and gmag is not None and plx is not None and plx > 0:
+                        try:
+                            abs_g = float(gmag) - 5 * math.log10(1000.0 / float(plx)) + 5
+                            bp_rp_list.append(float(color))
+                            abs_mag_list.append(abs_g)
+                            plx_list.append(float(plx))
+                            av = row.get("ag_gspphot")
+                            if av is not None:
+                                av_list.append(float(av))
+                        except (ValueError, TypeError):
+                            pass
+
+        if bp_rp_list:
+            bp_rp = bp_rp_list
+            abs_mag = abs_mag_list
+            if plx_list:
+                med_plx = float(np.median(plx_list))
+            if av_list:
+                med_av = float(np.median(av_list))
 
     if not bp_rp or not abs_mag:
         return {
-            "error": "No data available. Run a search first (e.g. search_objects or run_adql for Gaia data), "
-            "then call fit_isochrone again — it will auto-extract bp_rp and abs_mag from the search results."
+            "error": "No data available for isochrone fitting. "
+            "Run a Gaia query first (search_objects with sources=['gaia'] or run_adql), "
+            "then call fit_isochrone again."
         }
 
     # ── Synchronized NaN/Inf filtering ──
@@ -2368,12 +2420,15 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
     dm_range = tuple(inp.get("dm_range", [0.0, 20.0]))
     av_range = tuple(inp.get("av_range", [0.0, 3.0]))
 
-    if med_plx is None and cached:
-        plx_vals = [r.get("extra", {}).get("parallax") for r in cached
-                    if isinstance(r, dict) and r.get("extra", {}).get("parallax")]
-        plx_vals = [p for p in plx_vals if p and p > 0.1]
-        if plx_vals:
-            med_plx = float(np.median(plx_vals))
+    if med_plx is None:
+        # Try search cache for parallax
+        sc = get_cached_results("latest")
+        if sc:
+            plx_vals = [r.get("extra", {}).get("parallax") for r in sc
+                        if isinstance(r, dict) and r.get("extra", {}).get("parallax")]
+            plx_vals = [p for p in plx_vals if p and p > 0.1]
+            if plx_vals:
+                med_plx = float(np.median(plx_vals))
 
     if med_plx and dm_range == (0.0, 20.0):
         dm_est = 5 * math.log10(1000.0 / med_plx) - 5
@@ -2426,19 +2481,29 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
     mg = np.asarray(abs_mag)
 
     # ── Find the main-sequence turnoff ──
-    # Turnoff = brightest star on the BLUE main sequence (BP-RP < 1.0)
-    # Exclude red giants/subgiants which are bright but red
+    # Turnoff = brightest concentration on the BLUE main sequence (BP-RP < 1.0)
+    # Exclude red giants/subgiants and outlier blue stragglers
     blue_mask = bp < 1.0
-    if np.sum(blue_mask) < 3:
+    if np.sum(blue_mask) < 5:
         blue_mask = bp < 1.5
-    if np.sum(blue_mask) < 3:
+    if np.sum(blue_mask) < 5:
         blue_mask = np.ones(len(bp), dtype=bool)
 
     blue_mg = mg[blue_mask]
     blue_bp = bp[blue_mask]
 
-    # Turnoff = median of the brightest ~5% of blue MS stars
-    n_turnoff = max(3, int(0.05 * len(blue_mg)))
+    # Sigma-clip the brightest end to remove blue stragglers / foreground stars
+    # The turnoff is where the main-sequence star density drops off at the bright end
+    med_blue = float(np.median(blue_mg))
+    std_blue = float(np.std(blue_mg))
+    # Remove stars brighter than 2.5σ from median (likely outliers)
+    clip_mask = blue_mg > (med_blue - 2.5 * std_blue)
+    if np.sum(clip_mask) >= 5:
+        blue_mg = blue_mg[clip_mask]
+        blue_bp = blue_bp[clip_mask]
+
+    # Turnoff = the brightest ~10% of the clipped blue MS
+    n_turnoff = max(3, int(0.10 * len(blue_mg)))
     bright_idx = np.argsort(blue_mg)[:n_turnoff]
     turnoff_mg = float(np.median(blue_mg[bright_idx]))
     turnoff_bp_rp = float(np.median(blue_bp[bright_idx]))
