@@ -238,9 +238,12 @@ TOOLS = [
         "name": "generate_pipeline",
         "description": (
             "Create a data processing pipeline DAG from a workflow description. "
-            "Available nodes: LoadData, Denoise, SpectralFit, RedshiftEstimate, "
-            "EquivalentWidth, SEDFit, CoordTransform, CrossMatch, PhotCalibrate, "
-            "ImageStack, Plot, InteractivePlot."
+            "Available nodes: LoadData, ImportWorkspace, Denoise, SpectralFit, FluxCalibrate, "
+            "TelluricCorrect, SpectraStack, RedshiftEstimate, EquivalentWidth, SEDFit, "
+            "PhotoZPro, BayesianFit, CoordTransform, CrossMatch, PhotCalibrate, PSFPhotometry, "
+            "SourceExtract, ImageStack, CosmicRayReject, BiasSubtract, DarkCorrect, FlatField, "
+            "AstrometricSolve, TransitFit, GPDetrend, Reproject, Mosaic, PSFMatch, Deblend, "
+            "TimeSeriesAnalysis, Plot, InteractivePlot, Condition, CustomScript."
         ),
         "input_schema": {
             "type": "object",

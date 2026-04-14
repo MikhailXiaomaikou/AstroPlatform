@@ -309,6 +309,20 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
             result["_execution_time_ms"] = execution_time_ms
             node_results[node_id] = result
 
+            # Record provenance for this node execution
+            try:
+                from app.services.provenance import record_activity
+                record_activity(
+                    entity_type="pipeline_node",
+                    entity_id=f"{run_id}:{node_id}",
+                    activity=node_type,
+                    params=params,
+                    parent_ids=[f"{run_id}:{p}" for p in parents],
+                    agent="pipeline",
+                )
+            except Exception:
+                pass  # Provenance recording is non-critical
+
             # Store successful results in cache
             if cache_key and "error" not in result:
                 try:
@@ -560,6 +574,20 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                 result["_execution_time_ms"] = execution_time_ms
                 node_results[node_id] = result
                 completed_count += 1
+
+                # Record provenance for this node execution
+                try:
+                    from app.services.provenance import record_activity
+                    record_activity(
+                        entity_type="pipeline_node",
+                        entity_id=f"{run_id}:{node_id}",
+                        activity=node_type,
+                        params=params,
+                        parent_ids=[f"{run_id}:{p}" for p in parents],
+                        agent="pipeline",
+                    )
+                except Exception:
+                    pass  # Provenance recording is non-critical
 
                 # Store successful results in cache
                 if cache_key and "error" not in result:

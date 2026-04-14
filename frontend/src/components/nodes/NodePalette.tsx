@@ -26,6 +26,17 @@ const TYPE_COLORS: Record<string, string> = {
   PhotCalibrate: "#FF9500",
   ImageStack: "#AF52DE",
   InteractivePlot: "#8b5cf6",
+  FluxCalibrate: "#06b6d4",
+  TelluricCorrect: "#06b6d4",
+  SpectraStack: "#06b6d4",
+  PhotoZPro: "#8b5cf6",
+  BayesianFit: "#ec4899",
+  TransitFit: "#f59e0b",
+  GPDetrend: "#f59e0b",
+  Reproject: "#14b8a6",
+  Mosaic: "#14b8a6",
+  PSFMatch: "#14b8a6",
+  Deblend: "#14b8a6",
 };
 
 const TYPE_ORDER = [
@@ -61,6 +72,17 @@ const NODE_TYPE_I18N_KEY: Record<string, string> = {
   PhotCalibrate: "pipeline.node_phot_calibrate",
   ImageStack: "pipeline.node_image_stack",
   InteractivePlot: "pipeline.node_interactive_plot",
+  FluxCalibrate: "pipeline.node_flux_calibrate",
+  TelluricCorrect: "pipeline.node_telluric_correct",
+  SpectraStack: "pipeline.node_spectra_stack",
+  PhotoZPro: "pipeline.node_photoz_pro",
+  BayesianFit: "pipeline.node_bayesian_fit",
+  TransitFit: "pipeline.node_transit_fit",
+  GPDetrend: "pipeline.node_gp_detrend",
+  Reproject: "pipeline.node_reproject",
+  Mosaic: "pipeline.node_mosaic",
+  PSFMatch: "pipeline.node_psf_match",
+  Deblend: "pipeline.node_deblend",
 };
 
 export default function NodePalette({ nodeTypes }: Props) {

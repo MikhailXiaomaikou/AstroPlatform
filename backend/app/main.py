@@ -35,6 +35,7 @@ from app.api.citations import router as citations_router
 from app.api.crossmatch import router as crossmatch_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router, redis_subscriber
+from app.api.provenance import router as provenance_router
 from app.cors import get_cors_origins
 from app.logging_config import CorrelationIdMiddleware
 from app.models.database import engine, Base
@@ -332,6 +333,7 @@ app.include_router(shared_sessions_router)
 app.include_router(team_router)
 app.include_router(viz_router)
 app.include_router(workspace_router)
+app.include_router(provenance_router)
 app.include_router(ws_router)
 
 
