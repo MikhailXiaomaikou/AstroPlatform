@@ -499,45 +499,20 @@ TOOLS = [
     {
         "name": "fit_isochrone",
         "description": (
-            "Fit PARSEC isochrones to observed colour-magnitude data to determine "
-            "cluster age, metallicity, distance, and extinction. Use this when the user "
-            "asks about the age of a star cluster, wants to fit isochrones, or asks "
-            "'how old is this cluster'. Requires observed BP-RP colours and G magnitudes. "
-            "Extract bp_rp from Gaia search results: [r['extra']['bp_rp'] for r in results if 'bp_rp' in r.get('extra',{})]. "
-            "For abs_mag, compute from apparent G mag and parallax: G - 5*log10(1000/parallax) + 5. "
-            "Or set use_cached_results=true to auto-extract from the last search."
+            "Fit isochrones to determine star cluster age, metallicity, distance, and extinction. "
+            "JUST CALL THIS TOOL with no parameters after running a Gaia search — it automatically "
+            "extracts bp_rp and absolute magnitudes from the last search results, estimates distance "
+            "modulus from parallax, and fits extinction. If PARSEC API is slow, it falls back to "
+            "turnoff-based age estimation (brighter turnoff → higher mass → YOUNGER cluster). "
+            "DO NOT pass bp_rp or abs_mag as parameters — let the tool extract them automatically."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "bp_rp": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "Observed BP-RP colour array (from Gaia extra.bp_rp)",
-                },
-                "abs_mag": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "Absolute G magnitude array (compute: G - 5*log10(1000/parallax) + 5)",
-                },
                 "method": {
                     "type": "string",
                     "enum": ["grid", "mcmc"],
-                    "description": "Fitting method: 'grid' for fast grid+Nelder-Mead, 'mcmc' for full MCMC with uncertainties",
-                },
-                "use_cached_results": {
-                    "type": "boolean",
-                    "description": "Auto-extract bp_rp and abs_mag from the last search results cache",
-                },
-                "dm_range": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "Distance modulus range [min, max]. Auto-estimated from parallax if not set.",
-                },
-                "av_range": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "Extinction A_V range [min, max]. Default [0.0, 3.0].",
+                    "description": "Fitting method: 'grid' (default, fast) or 'mcmc' (slow, with uncertainties)",
                 },
             },
         },
@@ -2318,7 +2293,12 @@ async def _exec_estimate_photo_z(inp: dict) -> dict:
 
 
 async def _exec_fit_isochrone(inp: dict) -> dict:
-    """Execute isochrone fitting on observed CMD data."""
+    """Execute isochrone fitting on observed CMD data.
+
+    Always auto-extracts data from cached search results if arrays are not
+    provided or are invalid. Falls back to turnoff-based age estimation if
+    the PARSEC API is unreachable.
+    """
     import math
 
     import numpy as np
@@ -2327,17 +2307,20 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
     abs_mag = inp.get("abs_mag", [])
     method = inp.get("method", "grid")
 
-    # If strings were passed instead of numbers, discard and use cache
-    if bp_rp and isinstance(bp_rp[0], str):
+    # Discard string values (AI sometimes passes variable names)
+    if bp_rp and isinstance(bp_rp, list) and bp_rp and isinstance(bp_rp[0], str):
         bp_rp = []
-    if abs_mag and isinstance(abs_mag[0], str):
+    if abs_mag and isinstance(abs_mag, list) and abs_mag and isinstance(abs_mag[0], str):
         abs_mag = []
 
-    # Auto-extract from cached search results when arrays are missing/invalid
-    if inp.get("use_cached_results") or not bp_rp or not abs_mag:
-        cached = get_cached_results("latest")
-        if cached and (not bp_rp or not abs_mag):
-            bp_rp_list, abs_mag_list = [], []
+    # ── Always try cache extraction when arrays are missing ──
+    cached = get_cached_results("latest")
+    med_plx = None
+    med_av = None
+
+    if not bp_rp or not abs_mag:
+        if cached:
+            bp_rp_list, abs_mag_list, plx_list, av_list = [], [], [], []
             for r in cached:
                 extra = r.get("extra", {}) if isinstance(r, dict) else {}
                 color = extra.get("bp_rp")
@@ -2348,21 +2331,27 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
                         abs_g = float(gmag) - 5 * math.log10(1000.0 / float(plx)) + 5
                         bp_rp_list.append(float(color))
                         abs_mag_list.append(abs_g)
+                        plx_list.append(float(plx))
+                        av = extra.get("ag_gspphot")
+                        if av is not None:
+                            av_list.append(float(av))
                     except (ValueError, TypeError):
                         pass
             if bp_rp_list:
                 bp_rp = bp_rp_list
                 abs_mag = abs_mag_list
+                if plx_list:
+                    med_plx = float(np.median(plx_list))
+                if av_list:
+                    med_av = float(np.median(av_list))
 
     if not bp_rp or not abs_mag:
         return {
-            "error": "bp_rp and abs_mag arrays are required. "
-            "Extract from Gaia results: bp_rp from result.extra.bp_rp, "
-            "abs_mag = magnitude - 5*log10(1000/parallax) + 5. "
-            "Or set use_cached_results=true to auto-extract from the last search."
+            "error": "No data available. Run a search first (e.g. search_objects or run_adql for Gaia data), "
+            "then call fit_isochrone again — it will auto-extract bp_rp and abs_mag from the search results."
         }
 
-    # Synchronous NaN/Inf filtering — ensure both arrays match
+    # ── Synchronized NaN/Inf filtering ──
     bp_arr = np.asarray(bp_rp, dtype=float)
     mag_arr = np.asarray(abs_mag, dtype=float)
     min_len = min(len(bp_arr), len(mag_arr))
@@ -2375,21 +2364,25 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
     if len(bp_rp) < 5:
         return {"error": f"Need at least 5 valid data points after NaN filtering, got {len(bp_rp)}"}
 
-    # Extract optional parameters
+    # ── Auto-estimate distance modulus from parallax ──
     dm_range = tuple(inp.get("dm_range", [0.0, 20.0]))
     av_range = tuple(inp.get("av_range", [0.0, 3.0]))
 
-    # Auto-estimate distance modulus range from median parallax if available
-    cached = get_cached_results("latest")
-    if cached and dm_range == (0.0, 20.0):
+    if med_plx is None and cached:
         plx_vals = [r.get("extra", {}).get("parallax") for r in cached
                     if isinstance(r, dict) and r.get("extra", {}).get("parallax")]
         plx_vals = [p for p in plx_vals if p and p > 0.1]
         if plx_vals:
             med_plx = float(np.median(plx_vals))
-            dm_est = 5 * math.log10(1000.0 / med_plx) - 5
-            dm_range = (max(0.0, dm_est - 2.0), dm_est + 2.0)
 
+    if med_plx and dm_range == (0.0, 20.0):
+        dm_est = 5 * math.log10(1000.0 / med_plx) - 5
+        dm_range = (max(0.0, dm_est - 1.5), dm_est + 1.5)
+
+    if med_av is not None and av_range == (0.0, 3.0):
+        av_range = (max(0.0, med_av - 0.5), med_av + 1.0)
+
+    # ── Try PARSEC isochrone fitting ──
     import asyncio
     from app.services.astro_analysis import fit_isochrone
 
@@ -2403,19 +2396,101 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
                     method=method,
                     dm_range=dm_range,
                     av_range=av_range,
+                    n_grid_age=12,
+                    n_grid_met=3,
                 ),
             ),
-            timeout=120.0,
+            timeout=180.0,
         )
-    except asyncio.TimeoutError:
-        return {"error": "Isochrone fitting timed out after 120 seconds"}
-    except Exception as exc:
-        return {"error": f"Isochrone fitting failed: {exc}"}
+        if "corner_fig" in result:
+            del result["corner_fig"]
+        return result
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning("PARSEC isochrone fitting failed (%s), using turnoff estimation", exc)
 
-    # Remove non-serializable items (matplotlib Figure)
-    if "corner_fig" in result:
-        del result["corner_fig"]
+    # ── Fallback: turnoff-based age estimation ──
+    return _estimate_age_from_turnoff(bp_rp, abs_mag, med_plx, med_av)
 
+
+def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
+                                med_plx: float | None, med_av: float | None) -> dict:
+    """Estimate cluster age from main-sequence turnoff without PARSEC API.
+
+    Uses the physical relation: brighter turnoff → higher mass → younger cluster.
+    Formula: t_MS ≈ 10^10 * (M/M_sun)^(-2.5) years
+    Mass from absolute magnitude: log(M/M_sun) ≈ (4.83 - M_V) / 7.5 (for M_V < 4)
+    """
+    import numpy as np
+
+    bp = np.asarray(bp_rp)
+    mg = np.asarray(abs_mag)
+
+    # Find the main-sequence turnoff: brightest star on the BLUE main sequence
+    # (BP-RP < 1.0 to exclude red giants/subgiants)
+    blue_mask = bp < 1.0
+    if np.sum(blue_mask) < 3:
+        blue_mask = bp < 1.5  # relax if too few blue stars
+    if np.sum(blue_mask) < 3:
+        blue_mask = np.ones(len(bp), dtype=bool)
+
+    blue_mg = mg[blue_mask]
+    blue_bp = bp[blue_mask]
+
+    # Turnoff = brightest few stars in the blue MS
+    n_turnoff = max(3, int(0.05 * len(blue_mg)))
+    bright_idx = np.argsort(blue_mg)[:n_turnoff]
+    turnoff_mg = float(np.median(blue_mg[bright_idx]))
+    turnoff_bp_rp = float(np.median(blue_bp[bright_idx]))
+
+    # Convert M_G to approximate M_V (bolometric correction for hot stars)
+    m_v = turnoff_mg + 0.2  # approximate for B/A type stars
+
+    # Estimate mass from absolute magnitude
+    # log(L/L_sun) ≈ (4.83 - M_V) / 2.5
+    # M/M_sun ≈ (L/L_sun)^(1/3.5) for MS stars
+    log_l = (4.83 - m_v) / 2.5
+    luminosity = 10 ** log_l
+    mass = luminosity ** (1.0 / 3.5)
+
+    # Main-sequence lifetime: t_MS ≈ 10^10 * (M/M_sun)^(-2.5) years
+    if mass > 0.1:
+        t_ms_yr = 1e10 * mass ** (-2.5)
+    else:
+        t_ms_yr = 1e10  # fallback for very low mass
+
+    age_myr = t_ms_yr / 1e6
+    log_age = np.log10(max(t_ms_yr, 1e6))
+
+    # Sanity checks
+    if age_myr > 13800:
+        age_myr = 13800  # cap at universe age
+        log_age = 10.14
+    if age_myr < 1:
+        age_myr = 1
+        log_age = 6.0
+
+    # Distance from parallax
+    distance_pc = 1000.0 / med_plx if med_plx and med_plx > 0 else None
+
+    result = {
+        "best_fit": {
+            "log_age": round(log_age, 3),
+            "age_myr": round(age_myr, 1),
+            "distance_pc": round(distance_pc, 1) if distance_pc else None,
+            "A_V": round(med_av, 3) if med_av else None,
+        },
+        "turnoff": {
+            "abs_mag_G": round(turnoff_mg, 3),
+            "bp_rp": round(turnoff_bp_rp, 3),
+            "approx_M_V": round(m_v, 3),
+            "approx_mass_msun": round(mass, 2),
+        },
+        "method": "turnoff_estimation",
+        "n_data": len(bp_rp),
+        "note": "Age estimated from main-sequence turnoff luminosity. "
+                "Relation: t_MS ≈ 10^10 × (M/M_sun)^(-2.5) yr. "
+                "Brighter turnoff → higher mass → YOUNGER cluster.",
+    }
     return result
 
 
