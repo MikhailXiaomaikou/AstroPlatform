@@ -96,6 +96,7 @@ function ensureAladinCSS() {
   link.id = "aladin-css";
   link.rel = "stylesheet";
   link.href = "https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.min.css";
+  link.crossOrigin = "anonymous";
   document.head.appendChild(link);
   cssInjected = true;
 }
@@ -222,6 +223,7 @@ export default function AladinViewer(props: AladinViewerProps) {
         script.src = "https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js";
         script.async = true;
         script.charset = "utf-8";
+        script.crossOrigin = "anonymous";
         document.head.appendChild(script);
       }
 

@@ -61,6 +61,7 @@ function GoogleSignInButton({ onSuccess, disabled }: { onSuccess: (credential: s
     script.src = "https://accounts.google.com/gsi/client";
     script.async = true;
     script.defer = true;
+    script.crossOrigin = "anonymous";
     script.onload = () => setScriptLoaded(true);
     script.onerror = () => setScriptError(true);
     document.head.appendChild(script);

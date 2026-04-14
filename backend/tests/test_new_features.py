@@ -121,7 +121,7 @@ class TestCodeExecutor:
         from app.services.code_executor import execute_python
         r = execute_python('import os')
         assert not r.success
-        assert "not allowed" in r.error
+        assert "not allowed" in r.error or "blocked" in r.error
 
     def test_blocked_os_path(self):
         from app.services.code_executor import execute_python

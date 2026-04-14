@@ -1653,7 +1653,7 @@ class TestCodeExecutor:
     def test_safe_import_blocked(self):
         from app.services.code_executor import _safe_import
 
-        with pytest.raises(ImportError, match="not allowed"):
+        with pytest.raises(ImportError, match="blocked|not allowed"):
             _safe_import("os")
 
     def test_safe_import_numpy(self):

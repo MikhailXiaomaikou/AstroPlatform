@@ -7,7 +7,9 @@ function highlightADQL(code: string): string {
   let html = code
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 
   // Comments (-- to end of line)
   html = html.replace(/(--.*?)$/gm, '<span class="adql-hl-comment">$1</span>');
