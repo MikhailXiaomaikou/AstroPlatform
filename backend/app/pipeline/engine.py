@@ -1,6 +1,5 @@
 """Pipeline execution engine — topologically sorts a DAG and runs nodes synchronously (local mode)."""
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -9,39 +8,53 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 
+from app.config import settings
 from app.pipeline.nodes import registry
+
+try:
+    from redis.exceptions import RedisError
+except ImportError:
+    RedisError = Exception
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Sync wrappers for async cache helpers (used in sync execute_dag & Celery)
+# Sync cache helpers (used in sync execute_dag & Celery)
 # ---------------------------------------------------------------------------
 
 def _cache_get_sync(key: str):
-    """Synchronously fetch a cached value.  Returns None on any failure."""
+    """Get value from Redis cache using sync client."""
     try:
-        from app.cache import cache_get
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(cache_get(key))
-        finally:
-            loop.close()
-    except Exception:
+        if not settings.redis_url:
+            return None
+        import redis
+        r = redis.Redis.from_url(settings.redis_url, decode_responses=True,
+                                  socket_connect_timeout=2, socket_timeout=2)
+        val = r.get(key)
+        r.close()
+        if val:
+            return json.loads(val)
+        return None
+    except (RedisError, ConnectionError, json.JSONDecodeError) as e:
+        logger.debug("Cache get failed for key %s: %s", key, e)
         return None
 
 
-def _cache_set_sync(key: str, value, ttl: int = 300):
-    """Synchronously store a value in the cache.  Silently ignores errors."""
+def _cache_set_sync(key: str, value, ttl: int | None = None):
+    """Set value in Redis cache using sync client."""
+    if ttl is None:
+        ttl = settings.pipeline_cache_ttl
     try:
-        from app.cache import cache_set
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(cache_set(key, value, ttl=ttl))
-        finally:
-            loop.close()
-    except Exception:
-        pass
+        if not settings.redis_url:
+            return
+        import redis
+        r = redis.Redis.from_url(settings.redis_url, decode_responses=True,
+                                  socket_connect_timeout=2, socket_timeout=2)
+        r.setex(key, ttl, json.dumps(value, default=str))
+        r.close()
+    except (RedisError, ConnectionError, TypeError) as e:
+        logger.debug("Cache set failed for key %s: %s", key, e)
 
 
 def _build_node_cache_key(node_type: str, params: dict, parents: list[str], node_results: dict) -> str | None:
@@ -60,7 +73,8 @@ def _build_node_cache_key(node_type: str, params: dict, parents: list[str], node
             sort_keys=True, default=str,
         )
         return f"pipeline_node:{node_type}:{hashlib.sha256(cache_payload.encode()).hexdigest()}"
-    except Exception:
+    except (TypeError, ValueError) as e:
+        logger.debug("Could not build cache key for node %s: %s", node_type, e)
         return None
 
 
@@ -271,8 +285,8 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
                             )
                             skipped_nodes |= new_skips
                         continue
-                except Exception:
-                    pass  # cache miss or error — proceed with normal execution
+                except (RedisError, ConnectionError, json.JSONDecodeError) as e:
+                    logger.debug("[%s] Cache lookup failed for node %s: %s", run_id, node_id, e)
             # -- End cache lookup --------------------------------------------------
 
             logger.info(f"[{run_id}] Running node {node_id} ({node_type})")
@@ -283,7 +297,7 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
             try:
                 result = node_fn(input_data, params)
             except Exception as e:
-                logger.error(f"[{run_id}] Node {node_id} failed: {e}")
+                logger.exception(f"[{run_id}] Node {node_id} ({node_type}) failed")
                 result = {"error": str(e), "node_id": node_id}
             execution_time_ms = int((time.monotonic() - t0) * 1000)
             output_checksum = hashlib.sha256(
@@ -295,12 +309,12 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
             result["_execution_time_ms"] = execution_time_ms
             node_results[node_id] = result
 
-            # Store successful results in cache (24h TTL)
+            # Store successful results in cache
             if cache_key and "error" not in result:
                 try:
-                    _cache_set_sync(cache_key, result, ttl=86400)
-                except Exception:
-                    pass
+                    _cache_set_sync(cache_key, result, ttl=settings.pipeline_cache_ttl)
+                except (RedisError, ConnectionError, TypeError) as e:
+                    logger.debug("[%s] Cache store failed for node %s: %s", run_id, node_id, e)
 
             # After a Condition node, compute which branch to skip
             if node_type == "Condition" and "error" not in result:
@@ -514,8 +528,8 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                                 "cached": True,
                             })
                             continue
-                    except Exception:
-                        pass  # cache miss or error — proceed with normal execution
+                    except (RedisError, ConnectionError, json.JSONDecodeError) as e:
+                        logger.debug("[%s] Cache lookup failed for node %s: %s", run_id, node_id, e)
                 # -- End cache lookup -----------------------------------------------
 
                 # Notify node start
@@ -533,7 +547,7 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                 try:
                     result = node_fn(input_data, params)
                 except Exception as e:
-                    logger.error(f"[{run_id}] Node {node_id} failed: {e}")
+                    logger.exception(f"[{run_id}] Node {node_id} ({node_type}) failed")
                     result = {"error": str(e), "node_id": node_id}
                     has_errors = True
                 execution_time_ms = int((time.monotonic() - t0) * 1000)
@@ -547,12 +561,12 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                 node_results[node_id] = result
                 completed_count += 1
 
-                # Store successful results in cache (24h TTL)
+                # Store successful results in cache
                 if cache_key and "error" not in result:
                     try:
-                        _cache_set_sync(cache_key, result, ttl=86400)
-                    except Exception:
-                        pass
+                        _cache_set_sync(cache_key, result, ttl=settings.pipeline_cache_ttl)
+                    except (RedisError, ConnectionError, TypeError) as e:
+                        logger.debug("[%s] Cache store failed for node %s: %s", run_id, node_id, e)
 
                 # After a Condition node, compute which branch to skip
                 if node_type == "Condition" and "error" not in result:
@@ -612,8 +626,8 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                 run.status = "failed"
                 run.completed_at = datetime.now(timezone.utc)
                 session.commit()
-        except Exception:
-            logger.error(f"[{run_id}] Failed to update run status after error")
+        except Exception as db_err:
+            logger.exception(f"[{run_id}] Failed to update run status after error: {db_err}")
 
         _publish_progress(run_id, {
             "type": "run_error",

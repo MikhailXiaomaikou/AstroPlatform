@@ -795,6 +795,8 @@ async def list_spectral_lines():
 
 @router.get("/workspace")
 async def list_workspace(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
@@ -805,7 +807,8 @@ async def list_workspace(
         select(DataFile)
         .where(DataFile.user_id == user.id)
         .order_by(DataFile.created_at.desc())
-        .limit(100)
+        .offset(skip)
+        .limit(limit)
     )
     files = result.scalars().all()
     return [
@@ -1441,6 +1444,8 @@ async def analyze_fits_spectrum(
 @router.get("/fits/browse", response_model=list[FITSFileInfo])
 async def browse_fits_files(
     source: str | None = Query(None, description="Filter by source (upload, sdss, gaia, ...)"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1448,7 +1453,7 @@ async def browse_fits_files(
     query = select(DataFile).where(DataFile.user_id == user.id)
     if source:
         query = query.where(DataFile.source == source)
-    query = query.order_by(DataFile.created_at.desc()).limit(200)
+    query = query.order_by(DataFile.created_at.desc()).offset(skip).limit(limit)
 
     result = await db.execute(query)
     files = result.scalars().all()

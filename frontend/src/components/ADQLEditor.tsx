@@ -1,4 +1,4 @@
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useMemo } from "react";
 
 /* ── Syntax highlighting ── */
 
@@ -71,7 +71,7 @@ export default function ADQLEditor({
 
   // Append a trailing newline so the pre element always has space for the
   // last line cursor (browsers collapse trailing whitespace in pre).
-  const highlighted = highlightADQL(value) + "\n";
+  const highlighted = useMemo(() => highlightADQL(value) + "\n", [value]);
 
   return (
     <div className="adql-syn-editor">

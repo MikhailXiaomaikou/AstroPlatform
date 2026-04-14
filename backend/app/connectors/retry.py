@@ -1,14 +1,46 @@
-"""Retry decorator for external API calls in connectors."""
+"""Retry decorator with circuit breaker for external API calls in connectors."""
 import asyncio
 import logging
 import functools
+import time
 from typing import TypeVar, Callable, Any
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# ---------------------------------------------------------------------------
+# Circuit breaker — tracks per-function failure state
+# ---------------------------------------------------------------------------
+_circuit_state: dict[str, dict] = {}
 
+# Configurable thresholds
+CIRCUIT_FAILURE_THRESHOLD = 5   # failures before opening the circuit
+CIRCUIT_RECOVERY_TIMEOUT = 60   # seconds before trying half-open
+
+
+def _get_circuit(func_name: str) -> dict:
+    """Return (or initialise) circuit breaker state for *func_name*."""
+    if func_name not in _circuit_state:
+        _circuit_state[func_name] = {
+            "failures": 0,
+            "last_failure": 0.0,
+            "state": "closed",  # closed | open | half-open
+        }
+    return _circuit_state[func_name]
+
+
+def reset_circuit(func_name: str | None = None) -> None:
+    """Reset circuit breaker state.  Pass *None* to reset all circuits."""
+    if func_name is None:
+        _circuit_state.clear()
+    else:
+        _circuit_state.pop(func_name, None)
+
+
+# ---------------------------------------------------------------------------
+# Retry decorator
+# ---------------------------------------------------------------------------
 def with_retry(
     max_retries: int = 2,
     base_delay: float = 0.5,
@@ -16,14 +48,37 @@ def with_retry(
     backoff_factor: float = 2.0,
     retryable_exceptions: tuple = (Exception,),
 ):
-    """Decorator that retries async functions with exponential backoff."""
+    """Decorator that retries async functions with exponential backoff.
+
+    Includes a circuit breaker: after ``CIRCUIT_FAILURE_THRESHOLD``
+    consecutive failures the circuit opens and calls are rejected
+    immediately for ``CIRCUIT_RECOVERY_TIMEOUT`` seconds, after which a
+    single probe call is allowed (half-open).
+    """
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            circuit = _get_circuit(func.__qualname__)
+
+            # --- Circuit breaker gate ---
+            if circuit["state"] == "open":
+                if time.monotonic() - circuit["last_failure"] > CIRCUIT_RECOVERY_TIMEOUT:
+                    circuit["state"] = "half-open"
+                    logger.info("Circuit half-open for %s — allowing probe call", func.__name__)
+                else:
+                    raise ConnectionError(
+                        f"Circuit breaker open for {func.__name__} "
+                        f"— service temporarily unavailable"
+                    )
+
             last_exception = None
             for attempt in range(max_retries + 1):
                 try:
-                    return await func(*args, **kwargs)
+                    result = await func(*args, **kwargs)
+                    # Success — reset circuit
+                    circuit["failures"] = 0
+                    circuit["state"] = "closed"
+                    return result
                 except retryable_exceptions as e:
                     last_exception = e
                     if attempt < max_retries:
@@ -38,6 +93,17 @@ def with_retry(
                             "All %d retries failed for %s: %s",
                             max_retries, func.__name__, str(e)
                         )
-            raise last_exception
+
+            # All retries exhausted — update circuit breaker
+            circuit["failures"] += 1
+            circuit["last_failure"] = time.monotonic()
+            if circuit["failures"] >= CIRCUIT_FAILURE_THRESHOLD:
+                circuit["state"] = "open"
+                logger.warning(
+                    "Circuit breaker OPEN for %s after %d consecutive failures",
+                    func.__name__, circuit["failures"],
+                )
+
+            raise last_exception  # type: ignore[misc]
         return wrapper
     return decorator

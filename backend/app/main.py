@@ -36,6 +36,7 @@ from app.api.crossmatch import router as crossmatch_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router, redis_subscriber
 from app.cors import get_cors_origins
+from app.logging_config import CorrelationIdMiddleware
 from app.models.database import engine, Base
 from app.rate_limit import limiter
 from app.middleware.event_tracking import EventTrackingMiddleware
@@ -266,6 +267,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Page-Name", "X-Tracking-Session"],
 )
 app.add_middleware(EventTrackingMiddleware)
+app.add_middleware(CorrelationIdMiddleware)
 
 # ── Security response headers ──
 MAX_REQUEST_BODY = 1_048_576  # 1 MB for non-upload endpoints

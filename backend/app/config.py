@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     # Max FITS upload size in bytes (default 100 MB)
     max_upload_size: int = 100 * 1024 * 1024
 
+    # Database connection pool settings
+    db_pool_size: int = 10
+    db_max_overflow: int = 5
+    db_pool_timeout: int = 10
+    db_pool_recycle: int = 300
+
+    # Pipeline node cache TTL in seconds (default 24 hours)
+    pipeline_cache_ttl: int = 86400
+
     # Google OAuth
     google_client_id: str = ""
     google_client_secret: str = ""

@@ -8,6 +8,7 @@ import asyncio
 import logging
 import math
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,14 +17,21 @@ logger = logging.getLogger(__name__)
 
 # ── Tool Definitions (Anthropic tool_use format) ──
 
-# In-memory cache for search/query results per runtime session (keyed by a simple token)
-_search_result_cache: dict[str, Any] = {}
+# In-memory cache for search/query results per runtime session (keyed by a simple token).
+# Stores tuples of (value, timestamp) for TTL-based expiry.
+_search_result_cache: dict[str, tuple[Any, float]] = {}
 MAX_ADQL_RESULT_HISTORY = 8
+_CACHE_TTL_SECONDS = 1800  # 30 minutes
 
 
 def store_search_results(key: str, results: Any) -> None:
     """Cache search results so AI can access full data later."""
-    _search_result_cache[key] = results
+    _search_result_cache[key] = (results, time.time())
+    # Evict expired entries first
+    now = time.time()
+    expired = [k for k, (_, ts) in _search_result_cache.items() if now - ts > _CACHE_TTL_SECONDS]
+    for k in expired:
+        del _search_result_cache[k]
     # Keep only the latest cache entries; multiple keys are used per runtime session.
     if len(_search_result_cache) > 200:
         oldest = list(_search_result_cache.keys())[0]
@@ -31,7 +39,14 @@ def store_search_results(key: str, results: Any) -> None:
 
 
 def get_cached_results(key: str) -> Any | None:
-    return _search_result_cache.get(key)
+    entry = _search_result_cache.get(key)
+    if entry is None:
+        return None
+    value, timestamp = entry
+    if time.time() - timestamp > _CACHE_TTL_SECONDS:
+        del _search_result_cache[key]
+        return None
+    return value
 
 
 def _coerce_float(value: Any) -> float | None:

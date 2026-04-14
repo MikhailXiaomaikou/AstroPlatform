@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useI18n } from "../i18n";
 
@@ -18,7 +18,7 @@ export default function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
-  const commands: Command[] = [
+  const commands = useMemo<Command[]>(() => [
     // Navigation
     { id: "nav-search", labelKey: "cmd.search_objects", categoryKey: "cmd.cat_nav", action: () => navigate("/search"), keywords: "data browser find" },
     { id: "nav-chat", labelKey: "cmd.ai_assistant", categoryKey: "cmd.cat_nav", action: () => navigate("/chat"), keywords: "ask question" },
@@ -33,19 +33,18 @@ export default function CommandPalette() {
     // Actions
     { id: "act-new-chat", labelKey: "cmd.new_chat", categoryKey: "cmd.cat_action", action: () => { localStorage.setItem("astro_chat_new_session", "1"); navigate("/chat"); }, keywords: "create conversation" },
     { id: "act-new-pipeline", labelKey: "cmd.new_pipeline", categoryKey: "cmd.cat_action", action: () => navigate("/pipeline"), keywords: "create workflow" },
-  ];
+  ], [navigate]);
 
   // Filter commands by substring match on translated label, keywords, and category
-  const filtered = query
-    ? commands.filter((c) => {
-        const search = query.toLowerCase();
-        return (
-          t(c.labelKey).toLowerCase().includes(search) ||
-          (c.keywords || "").toLowerCase().includes(search) ||
-          t(c.categoryKey).toLowerCase().includes(search)
-        );
-      })
-    : commands;
+  const filtered = useMemo(() => {
+    if (!query) return commands;
+    const search = query.toLowerCase();
+    return commands.filter((c) =>
+      t(c.labelKey).toLowerCase().includes(search) ||
+      (c.keywords || "").toLowerCase().includes(search) ||
+      t(c.categoryKey).toLowerCase().includes(search)
+    );
+  }, [query, commands, t]);
 
   // Global Cmd+K / Ctrl+K handler
   useEffect(() => {
