@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import logging
 from functools import partial
 import re
 
@@ -13,6 +14,8 @@ from astropy.table import Table
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 CSC2_CONE_URL = "https://cda.cfa.harvard.edu/csc21scs/coneSearch"
 

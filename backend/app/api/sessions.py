@@ -90,24 +90,35 @@ def _summarize_artifacts(messages: list[dict]) -> dict:
     }
 
 
-async def _serialize_session(session: ChatSession, db: AsyncSession) -> dict:
+async def _serialize_session(
+    session: ChatSession,
+    db: AsyncSession,
+    message_limit: int = 100,
+) -> dict:
     paper_drafts = (
         await db.execute(
             select(PaperDraft)
             .where(PaperDraft.session_id == session.id)
             .order_by(PaperDraft.updated_at.desc(), PaperDraft.created_at.desc())
+            .limit(20)
         )
     ).scalars().all()
-    messages = deepcopy(session.messages or [])
+    all_messages = session.messages or []
+    total_messages = len(all_messages)
+    if message_limit > 0 and total_messages > message_limit:
+        messages = deepcopy(all_messages[-message_limit:])
+    else:
+        messages = deepcopy(all_messages)
     return {
         "schema_version": 2,
         "id": str(session.id),
         "title": session.title,
         "messages": messages,
+        "total_messages": total_messages,
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
         "paper_drafts": [_serialize_paper_draft(draft) for draft in paper_drafts],
-        "artifact_summary": _summarize_artifacts(messages),
+        "artifact_summary": _summarize_artifacts(all_messages),
     }
 
 
@@ -485,7 +496,7 @@ async def create_snapshot(
     snapshot = SessionSnapshot(
         session_id=session.id,
         name=req.name,
-        snapshot_data=await _serialize_session(session, db),
+        snapshot_data=await _serialize_session(session, db, message_limit=0),
     )
     db.add(snapshot)
     await db.commit()

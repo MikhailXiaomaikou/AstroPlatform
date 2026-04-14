@@ -1,10 +1,13 @@
 """DESI (Dark Energy Spectroscopic Instrument) connector via NOIRLab TAP."""
 
 import asyncio
+import logging
 from functools import partial
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 
 DESI_TAP_URL = "https://datalab.noirlab.edu/tap"
@@ -24,7 +27,8 @@ class DESIConnector(BaseConnector):
                 from astropy.coordinates import SkyCoord
                 coord = SkyCoord.from_name(query)
                 ra, dec = coord.ra.deg, coord.dec.deg
-            except Exception:
+            except (ValueError, Exception) as e:
+                logger.debug("SkyCoord.from_name failed for '%s': %s", query, e)
                 return []
 
         # Query DESI Early Data Release via DataLab
@@ -43,7 +47,8 @@ class DESIConnector(BaseConnector):
             tap = TapPlus(url=DESI_TAP_URL)
             job = await loop.run_in_executor(None, partial(tap.launch_job, adql))
             table = job.get_results()
-        except Exception:
+        except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+            logger.debug("DESI TAP query failed: %s", e)
             return []
 
         if table is None or len(table) == 0:

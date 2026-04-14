@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 from functools import partial
 
 import numpy as np
@@ -13,6 +14,8 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 NVSS_CATALOG = "VIII/65"   # NVSS 1.4 GHz source catalog
 FIRST_CATALOG = "VIII/92"  # FIRST 1.4 GHz source catalog
@@ -97,8 +100,8 @@ class NVSSConnector(BaseConnector):
                     None,
                     partial(vizier2.query_region, coord, radius=small_radius),
                 )
-            except Exception:
-                pass
+            except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+                logger.debug("NVSS fetch fallback failed for '%s': %s", object_id, e)
 
         if table_list is None or len(table_list) == 0:
             raise ValueError(f"No NVSS data found for '{object_id}'")
@@ -146,7 +149,8 @@ class NVSSConnector(BaseConnector):
             if table[c].dtype == object:
                 try:
                     table[c] = [str(v) for v in table[c]]
-                except Exception:
+                except (ValueError, TypeError) as e:
+                    logger.debug("Dropping unconvertible column '%s': %s", c, e)
                     table.remove_column(c)
         return table
 
@@ -187,7 +191,7 @@ class NVSSConnector(BaseConnector):
             if "NVSS" in row.colnames:
                 try:
                     name = str(row["NVSS"]).strip()
-                except Exception:
+                except (ValueError, TypeError, KeyError):
                     pass
             if not name:
                 name = f"NVSS J{ra:.4f}{dec:+.4f}"
@@ -300,8 +304,8 @@ class FIRSTConnector(BaseConnector):
                     None,
                     partial(vizier2.query_region, coord, radius=small_radius),
                 )
-            except Exception:
-                pass
+            except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+                logger.debug("FIRST fetch fallback failed for '%s': %s", object_id, e)
 
         if table_list is None or len(table_list) == 0:
             raise ValueError(f"No FIRST data found for '{object_id}'")
@@ -349,7 +353,8 @@ class FIRSTConnector(BaseConnector):
             if table[c].dtype == object:
                 try:
                     table[c] = [str(v) for v in table[c]]
-                except Exception:
+                except (ValueError, TypeError) as e:
+                    logger.debug("Dropping unconvertible column '%s': %s", c, e)
                     table.remove_column(c)
         return table
 
@@ -390,7 +395,7 @@ class FIRSTConnector(BaseConnector):
             if "FIRST" in row.colnames:
                 try:
                     name = str(row["FIRST"]).strip()
-                except Exception:
+                except (ValueError, TypeError, KeyError):
                     pass
             if not name:
                 name = f"FIRST J{ra:.4f}{dec:+.4f}"
@@ -542,7 +547,8 @@ class RadioAnalysis:
                     }
                 else:
                     results[survey_name] = {"detected": False, "freq_MHz": freq}
-            except Exception as e:
+            except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+                logger.warning("Radio crossmatch failed for %s: %s", survey_name, e)
                 results[survey_name] = {"detected": False, "error": str(e)}
 
         # Compute spectral index if multiple detections

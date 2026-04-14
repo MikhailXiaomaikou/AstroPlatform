@@ -11,12 +11,17 @@ import os
 def get_cors_origins() -> list[str]:
     """Return the list of allowed CORS origins."""
     raw = os.getenv("CORS_ORIGINS", "")
+    env = os.getenv("ENV", "dev")
 
     origins = []
     if raw.strip():
         origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
 
-    # Always include common origins
+    # In production, only use explicitly configured origins
+    if env == "production":
+        return origins
+
+    # Dev/test: include common dev and staging origins
     defaults = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",

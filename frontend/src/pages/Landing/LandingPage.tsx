@@ -41,8 +41,8 @@ const FEATURES = [
 ];
 
 const STATS = [
-  { value: "19+", label: "Databases" },
   { value: "48", label: "AI Tools" },
+  { value: "19+", label: "Databases" },
   { value: "35", label: "Pipeline Nodes" },
   { value: "4", label: "Languages" },
 ];
@@ -60,14 +60,14 @@ export default function LandingPage() {
         <p className="landing-subtitle">
           {t("landing.subtitle") !== "landing.subtitle"
             ? t("landing.subtitle")
-            : "AI-Native Astronomical Research Platform"}
+            : "AI-powered research platform \u2014 query 19 databases, analyze spectra, build pipelines, and draft papers with one conversation."}
         </p>
         <div className="landing-cta">
-          <button className="btn-primary btn-landing" onClick={() => navigate("/search")}>
-            Start Exploring
-          </button>
           <button className="btn-landing btn-landing-ai" onClick={() => navigate("/chat")}>
-            Talk to AI
+            Start with AI Assistant
+          </button>
+          <button className="btn-primary btn-landing" onClick={() => navigate("/search")}>
+            Browse Data
           </button>
         </div>
       </section>

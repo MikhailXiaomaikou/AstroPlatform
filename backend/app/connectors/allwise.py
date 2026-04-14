@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import logging
 from functools import partial
 
 import numpy as np
@@ -11,6 +12,8 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 ALLWISE_CATALOG = "II/328/allwise"
 
@@ -79,8 +82,8 @@ class AllWISEConnector(BaseConnector):
                 result2 = v.query_region(coord, radius=3 * u.arcsec, catalog=ALLWISE_CATALOG)
                 if result2 and len(result2) > 0:
                     return result2[0]
-            except Exception:
-                pass
+            except (ValueError, Exception) as e:
+                logger.debug("SkyCoord.from_name fallback failed for %r: %s", object_id, e)
             return None
 
         table = await loop.run_in_executor(None, _query)
@@ -130,7 +133,8 @@ class AllWISEConnector(BaseConnector):
             if table[c].dtype == object:
                 try:
                     table[c] = [str(v) for v in table[c]]
-                except Exception:
+                except (ValueError, TypeError) as e:
+                    logger.debug("Dropping column %r due to conversion error: %s", c, e)
                     table.remove_column(c)
         return table
 
@@ -160,8 +164,8 @@ class AllWISEConnector(BaseConnector):
             if "AllWISE" in row.colnames:
                 try:
                     name = str(row["AllWISE"]).strip()
-                except Exception:
-                    pass
+                except (ValueError, TypeError, KeyError) as e:
+                    logger.debug("Failed to extract AllWISE designation: %s", e)
             if not name:
                 name = f"AllWISE-{ra:.5f}{dec:+.5f}"
 
@@ -185,8 +189,8 @@ class AllWISEConnector(BaseConnector):
                 if flag in row.colnames:
                     try:
                         extra[flag] = str(row[flag]).strip()
-                    except Exception:
-                        pass
+                    except (ValueError, TypeError, KeyError) as e:
+                        logger.debug("Failed to extract flag %r: %s", flag, e)
 
             objects.append(
                 AstroObject(

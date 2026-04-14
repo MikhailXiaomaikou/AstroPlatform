@@ -38,7 +38,8 @@ class JWSTConnector(BaseConnector):
                 coord = SkyCoord.from_name(query)
                 ra = coord.ra.deg
                 dec = coord.dec.deg
-            except Exception:
+            except (ValueError, Exception) as e:
+                logger.debug("SkyCoord.from_name failed for '%s': %s", query, e)
                 parts = query.replace(",", " ").split()
                 if len(parts) >= 2:
                     try:

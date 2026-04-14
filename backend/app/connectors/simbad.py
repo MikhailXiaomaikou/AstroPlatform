@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import logging
 import re
 from functools import partial
 
@@ -11,6 +12,8 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 
 class SIMBADConnector(BaseConnector):
@@ -71,16 +74,17 @@ class SIMBADConnector(BaseConnector):
                     None,
                     partial(SkyCoord.from_name, canonical_query),
                 )
-            except Exception:
+            except (ValueError, Exception) as e:
                 # Sesame failed for canonical — try the original query too
+                logger.debug("SkyCoord.from_name failed for %r: %s", canonical_query, e)
                 if canonical_query != query:
                     try:
                         resolved_coord = await loop.run_in_executor(
                             None,
                             partial(SkyCoord.from_name, query),
                         )
-                    except Exception:
-                        pass
+                    except (ValueError, Exception) as e2:
+                        logger.debug("SkyCoord.from_name failed for original query %r: %s", query, e2)
 
             # Step 3: check hardcoded coords for well-known extended objects
             if resolved_coord is None and query_lower in self.KNOWN_COORDS:
@@ -114,8 +118,8 @@ class SIMBADConnector(BaseConnector):
                     )
                     if table is not None and len(table) > 0:
                         return self._table_to_objects(table)
-            except Exception:
-                pass
+            except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+                logger.debug("SIMBAD query_objectids failed for %r: %s", canonical_query, e)
 
         if ra is not None and dec is not None:
             coord = SkyCoord(ra=ra, dec=dec, unit=(u.degree, u.degree), frame="icrs")
@@ -217,7 +221,8 @@ class SIMBADConnector(BaseConnector):
                 None,
                 partial(Simbad.query_tap, adql),
             )
-        except Exception:
+        except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+            logger.warning("SIMBAD TAP search_by_criteria failed: %s", e)
             return []
 
         if table is None or len(table) == 0:
@@ -237,7 +242,8 @@ class SIMBADConnector(BaseConnector):
             oid_table = await loop.run_in_executor(
                 None, partial(Simbad.query_tap, f"SELECT oidref FROM ident WHERE id = '{safe_name}'")
             )
-        except Exception:
+        except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+            logger.warning("SIMBAD TAP ident lookup failed for %r: %s", safe_name, e)
             return []
         if oid_table is None or len(oid_table) == 0:
             return []
@@ -249,7 +255,8 @@ class SIMBADConnector(BaseConnector):
             id_table = await loop.run_in_executor(
                 None, partial(Simbad.query_tap, f"SELECT id FROM ident WHERE oidref = {oid}")
             )
-        except Exception:
+        except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+            logger.warning("SIMBAD TAP ident query failed for oid=%d: %s", oid, e)
             return []
         if id_table is None or len(id_table) == 0:
             return []
@@ -271,7 +278,8 @@ class SIMBADConnector(BaseConnector):
         loop = asyncio.get_running_loop()
         try:
             table = await loop.run_in_executor(None, partial(Simbad.query_tap, adql))
-        except Exception:
+        except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+            logger.warning("SIMBAD TAP object detail query failed for %r: %s", safe_name, e)
             return None
 
         if table is None or len(table) == 0:
@@ -339,7 +347,8 @@ class SIMBADConnector(BaseConnector):
             if table[col].dtype == object:
                 try:
                     table[col] = [str(v) for v in table[col]]
-                except Exception:
+                except (ValueError, TypeError) as e:
+                    logger.debug("Dropping column %r due to conversion error: %s", col, e)
                     table.remove_column(col)
 
         # Fill masked values
@@ -454,8 +463,8 @@ class SIMBADConnector(BaseConnector):
                     if hasattr(val, "mask") or str(val) == "--":
                         continue
                     extra[col] = val
-                except Exception:
-                    pass
+                except (ValueError, TypeError, KeyError) as e:
+                    logger.debug("Skipping extra column %r: %s", col, e)
 
             objects.append(
                 AstroObject(

@@ -89,6 +89,7 @@ export default function DataBrowser() {
   const [batchTargets, setBatchTargets] = useState("");
 
   const lastSearchRef = useRef<{ query: string; sources: string[]; radius: number } | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
 
   // Search history state
   const [recentSearches, setRecentSearches] = useState<SearchHistoryItem[]>([]);
@@ -120,6 +121,7 @@ export default function DataBrowser() {
     getSearchHistory()
       .then((items) => setRecentSearches(items.slice(0, 5)))
       .catch(() => setRecentSearches([]));
+    return () => { searchAbortRef.current?.abort(); };
   }, []);
 
   // Helpers: get selected SearchResult objects from keys
@@ -143,6 +145,9 @@ export default function DataBrowser() {
 
   const handleSearch = async (query: string, sources: string[], radius: number) => {
     const started = performance.now();
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
     setLoading(true);
     setLoadingSources(sources);
     setError(null);
@@ -151,7 +156,7 @@ export default function DataBrowser() {
     setSelectedKeys(new Set());
     lastSearchRef.current = { query, sources, radius };
     try {
-      const data = await searchData(query, sources.join(","), undefined, undefined, radius);
+      const data = await searchData(query, sources.join(","), undefined, undefined, radius, controller.signal);
       setResults(data);
       const sourceErrors = data.filter((r) => r.object_id === "error");
       const validCount = data.length - sourceErrors.length;
@@ -179,6 +184,8 @@ export default function DataBrowser() {
         sample: data.slice(0, 5).map(r => ({ name: r.name, source: r.source, type: r.object_type, z: r.redshift })),
       })); } catch { /* */ }
     } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (typeof err === "object" && err !== null && "code" in err && (err as Record<string, unknown>).code === "ERR_CANCELED") return;
       const msg = err instanceof Error ? err.message : "Search failed";
       setError(msg);
       track("error.query_failed", {

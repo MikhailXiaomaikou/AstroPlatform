@@ -186,6 +186,8 @@ def _migrate_add_columns(connection):
         ("idx_datafile_user_source", "data_files", "(user_id, source)"),
         ("idx_pipelinerun_status", "pipeline_runs", "(status)"),
         ("idx_pipelinerun_user_status", "pipeline_runs", "(user_id, status)"),
+        ("idx_chatsession_user", "chat_sessions", "(user_id)"),
+        ("idx_chatsession_user_created", "chat_sessions", "(user_id, created_at)"),
     ]
     for idx_name, table, cols in perf_indexes:
         if table in inspector.get_table_names():
@@ -202,7 +204,9 @@ async def lifespan(app: FastAPI):
     # Create tables on startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_migrate_add_columns)
+        # In production use Alembic migrations; keep runtime migration for SQLite dev
+        if _os.getenv("ENV", "dev") != "production":
+            await conn.run_sync(_migrate_add_columns)
     logger.info("Database tables created")
 
     # Start Redis subscriber for WebSocket relay (best-effort)

@@ -15,7 +15,9 @@ def _validate_path(path: str) -> Path:
     """Validate that path stays within storage root (prevent traversal)."""
     full = (_storage_root / path).resolve()
     root = _storage_root.resolve()
-    if not str(full).startswith(str(root) + "/") and full != root:
+    try:
+        full.relative_to(root)
+    except ValueError:
         raise ValueError(f"Path traversal detected: {path}")
     return full
 

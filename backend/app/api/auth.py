@@ -129,6 +129,8 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
 
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if len(req.password) > 128:
+        raise HTTPException(status_code=400, detail="Password must be at most 128 characters")
 
     user = User(
         username=username,

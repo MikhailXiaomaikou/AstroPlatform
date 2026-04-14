@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import logging
 from functools import partial
 
 import httpx
@@ -10,6 +11,8 @@ from astropy.table import Table
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 PANSTARRS_API_URL = "https://catalogs.mast.stsci.edu/api/v0.1/panstarrs/dr2/stack"
 

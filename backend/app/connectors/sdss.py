@@ -3,6 +3,7 @@
 import asyncio
 import csv
 import io
+import logging
 from functools import partial
 
 import httpx
@@ -12,6 +13,8 @@ from astropy.table import Table
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 SKYSERVER_SQL_URLS = [
     "https://skyserver.sdss.org/dr18/SkyServerWS/SearchTools/SqlSearch",
@@ -40,7 +43,8 @@ class SDSSConnector(BaseConnector):
                     resp = await client.get(url, params={"cmd": sql, "format": "csv"})
                     resp.raise_for_status()
                     return resp.text
-            except Exception as e:
+            except (ValueError, TimeoutError, ConnectionError, OSError, httpx.HTTPStatusError) as e:
+                logger.debug("SkyServer mirror %s failed: %s", url, e)
                 last_err = e
                 continue
         raise last_err or ConnectionError("All SDSS SkyServer mirrors unavailable")
@@ -90,7 +94,8 @@ class SDSSConnector(BaseConnector):
         try:
             text = await self._query_skyserver(sql)
             table = self._parse_csv(text)
-        except Exception:
+        except (ValueError, TimeoutError, ConnectionError, OSError, httpx.HTTPStatusError) as e:
+            logger.debug("SkyServer SQL query failed, falling back to astroquery: %s", e)
             table = await self._query_region_fallback(ra, dec, effective_radius)
         return self._table_to_objects(table)
 
@@ -131,7 +136,8 @@ class SDSSConnector(BaseConnector):
                         resp = await client.get(url)
                         resp.raise_for_status()
                         break
-                except Exception as e:
+                except (ValueError, TimeoutError, ConnectionError, OSError, httpx.HTTPStatusError) as e:
+                    logger.debug("SDSS spectrum mirror %s failed: %s", base_url, e)
                     last_err = e
                     resp = None
             if resp is None:

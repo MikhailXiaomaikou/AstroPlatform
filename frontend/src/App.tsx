@@ -87,12 +87,12 @@ function NavBar() {
         <span /><span /><span />
       </button>
       <div className={`nav-links${menuOpen ? " open" : ""}`}>
+      <NavLink to="/chat" className="nav-ai" onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
       <NavLink to="/search" onClick={() => setMenuOpen(false)}>{t("nav.data_browser")}</NavLink>
       <NavLink to="/pipeline" onClick={() => setMenuOpen(false)}>{t("nav.pipeline")}</NavLink>
       <NavLink to="/workspace" onClick={() => setMenuOpen(false)}>{t("nav.workspace")}</NavLink>
       <NavLink to="/adql" onClick={() => setMenuOpen(false)}>{t("nav.adql")}</NavLink>
       <NavLink to="/team" onClick={() => setMenuOpen(false)}>{t("nav.team")}</NavLink>
-      <NavLink to="/chat" onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
       <HelpDrawer />
       <NavLink to="/observations" onClick={() => setMenuOpen(false)}>{t("nav.observations")}</NavLink>
       <NavLink to="/account" onClick={() => setMenuOpen(false)}>{t("nav.account")}</NavLink>

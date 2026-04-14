@@ -23,16 +23,39 @@ logger = logging.getLogger(__name__)
 # Sync cache helpers (used in sync execute_dag & Celery)
 # ---------------------------------------------------------------------------
 
+_sync_pool = None
+
+
+def _get_sync_redis():
+    """Return a sync Redis client backed by a shared connection pool."""
+    global _sync_pool
+    if not settings.redis_url:
+        return None
+    try:
+        import redis
+
+        if _sync_pool is None:
+            kwargs: dict = {
+                "decode_responses": True,
+                "socket_connect_timeout": 2,
+                "socket_timeout": 2,
+            }
+            if settings.redis_ssl:
+                kwargs["ssl_cert_reqs"] = "none"
+            _sync_pool = redis.ConnectionPool.from_url(settings.redis_url, **kwargs)
+        return redis.Redis(connection_pool=_sync_pool)
+    except Exception as e:
+        logger.debug("Failed to create sync Redis client: %s", e)
+        return None
+
+
 def _cache_get_sync(key: str):
     """Get value from Redis cache using sync client."""
     try:
-        if not settings.redis_url:
+        r = _get_sync_redis()
+        if r is None:
             return None
-        import redis
-        r = redis.Redis.from_url(settings.redis_url, decode_responses=True,
-                                  socket_connect_timeout=2, socket_timeout=2)
         val = r.get(key)
-        r.close()
         if val:
             return json.loads(val)
         return None
@@ -46,13 +69,10 @@ def _cache_set_sync(key: str, value, ttl: int | None = None):
     if ttl is None:
         ttl = settings.pipeline_cache_ttl
     try:
-        if not settings.redis_url:
+        r = _get_sync_redis()
+        if r is None:
             return
-        import redis
-        r = redis.Redis.from_url(settings.redis_url, decode_responses=True,
-                                  socket_connect_timeout=2, socket_timeout=2)
         r.setex(key, ttl, json.dumps(value, default=str))
-        r.close()
     except (RedisError, ConnectionError, TypeError) as e:
         logger.debug("Cache set failed for key %s: %s", key, e)
 

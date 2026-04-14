@@ -1,12 +1,15 @@
 """NED (NASA/IPAC Extragalactic Database) connector via HTTP API."""
 
 import io
+import logging
 
 import numpy as np
 from astropy.table import Table
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 NED_LOOKUP_URL = "https://ned.ipac.caltech.edu/srs/ObjectLookup"
 NED_SEARCH_URL = "https://ned.ipac.caltech.edu/cgi-bin/objsearch"
@@ -119,8 +122,9 @@ class NEDConnector(BaseConnector):
         try:
             data = resp.json()
             return self._parse_search_response(data)
-        except Exception:
+        except (ValueError, TypeError, KeyError) as e:
             # NED may return non-JSON for some queries; return empty
+            logger.debug("NED coord search response parsing failed: %s", e)
             return []
 
     def _parse_lookup_response(self, data: dict) -> list[AstroObject]:

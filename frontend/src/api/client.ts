@@ -174,13 +174,14 @@ export async function searchData(
   sources = "sdss,gaia,simbad",
   ra?: number,
   dec?: number,
-  radius = 0.1
+  radius = 0.1,
+  signal?: AbortSignal,
 ): Promise<SearchResult[]> {
   const params: Record<string, string | number> = { q, sources, radius };
   if (ra !== undefined) params.ra = ra;
   if (dec !== undefined) params.dec = dec;
   try {
-    const { data } = await api.get<SearchResult[]>("/api/data/search", { params });
+    const { data } = await api.get<SearchResult[]>("/api/data/search", { params, signal });
     return data;
   } catch (err: unknown) {
     if (axios.isAxiosError(err)) {

@@ -55,7 +55,7 @@
 .landing-feature-card:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.15); }
 .landing-feature-icon { font-size: 2rem; display: block; margin-bottom: 12px; }
 .landing-feature-card h3 { margin: 0 0 8px; font-size: 1.1rem; }
-.landing-feature-card p { margin: 0; font-size: 0.85rem; color: var(--color-muted); line-height: 1.5; }
+.landing-feature-card p { margin: 0; font-size: 0.85rem; color: var(--color-text-secondary); line-height: 1.5; }
 
 .landing-stats {
   display: flex; gap: 40px; justify-content: center; padding: 32px 24px 48px;
@@ -63,7 +63,7 @@
 }
 .landing-stat { text-align: center; }
 .landing-stat-value { display: block; font-size: 2rem; font-weight: 800; color: var(--color-accent); }
-.landing-stat-label { font-size: 0.85rem; color: var(--color-muted); }
+.landing-stat-label { font-size: 0.85rem; color: var(--color-text-secondary); }
 
 @media (max-width: 640px) {
   .landing-title { font-size: 2rem; }
@@ -6196,6 +6196,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .nav-links {
   display: contents;
 }
+
+.nav-ai {
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+  color: #fff !important;
+  border-radius: 6px;
+  padding: 4px 12px !important;
+  font-weight: 600;
+}
+.nav-ai:hover { opacity: 0.9; }
+.nav-ai.active { background: linear-gradient(135deg, #7c3aed, #5b21b6); }
 
 .nav-hamburger {
   display: none;

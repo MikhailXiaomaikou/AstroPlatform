@@ -332,10 +332,14 @@ function CitationModal({ objectName, onClose }: { objectName: string; onClose: (
   const [copiedBib, setCopiedBib] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
     searchADS(objectName)
-      .then(setRefs)
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to query ADS"))
-      .finally(() => setLoading(false));
+      .then((data) => { if (!cancelled) setRefs(data); })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to query ADS"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [objectName]);
 
   async function handleCopyBib(bibcode: string) {

@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import logging
 from functools import partial
 
 import numpy as np
@@ -11,6 +12,8 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 TWOMASS_CATALOG = "II/246"  # 2MASS All-Sky Point Source Catalog
 
@@ -96,8 +99,8 @@ class TwoMASSConnector(BaseConnector):
                     None,
                     partial(vizier2.query_region, coord, radius=small_radius),
                 )
-            except Exception:
-                pass
+            except (ValueError, TimeoutError, ConnectionError, OSError) as e:
+                logger.debug("2MASS fetch fallback failed for '%s': %s", object_id, e)
 
         if table_list is None or len(table_list) == 0:
             raise ValueError(f"No 2MASS data found for '{object_id}'")
@@ -141,7 +144,8 @@ class TwoMASSConnector(BaseConnector):
             if table[c].dtype == object:
                 try:
                     table[c] = [str(v) for v in table[c]]
-                except Exception:
+                except (ValueError, TypeError) as e:
+                    logger.debug("Dropping unconvertible column '%s': %s", c, e)
                     table.remove_column(c)
         return table
 
@@ -172,7 +176,7 @@ class TwoMASSConnector(BaseConnector):
                     try:
                         name = str(row[id_col]).strip()
                         break
-                    except Exception:
+                    except (ValueError, TypeError, KeyError):
                         pass
             if not name:
                 name = f"2MASS-{ra:.5f}{dec:+.5f}"
@@ -196,7 +200,7 @@ class TwoMASSConnector(BaseConnector):
             if "Qflg" in row.colnames:
                 try:
                     extra["quality_flag"] = str(row["Qflg"]).strip()
-                except Exception:
+                except (ValueError, TypeError, KeyError):
                     pass
 
             objects.append(

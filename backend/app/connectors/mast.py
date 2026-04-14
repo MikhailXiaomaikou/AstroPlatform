@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import logging
 import tempfile
 from functools import partial
 from pathlib import Path
@@ -13,6 +14,8 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 
 class MASTConnector(BaseConnector):
@@ -26,7 +29,8 @@ class MASTConnector(BaseConnector):
 
         try:
             return SkyCoord.from_name(query)
-        except Exception:
+        except (ValueError, Exception) as e:
+            logger.debug("SkyCoord.from_name failed for '%s': %s", query, e)
             parts = query.replace(",", " ").split()
             if len(parts) >= 2:
                 try:
@@ -220,7 +224,8 @@ class MASTConnector(BaseConnector):
             if table[c].dtype == object:
                 try:
                     table[c] = [str(v) for v in table[c]]
-                except Exception:
+                except (ValueError, TypeError) as e:
+                    logger.debug("Dropping unconvertible column '%s': %s", c, e)
                     table.remove_column(c)
         return table
 

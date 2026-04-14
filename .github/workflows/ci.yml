@@ -17,10 +17,11 @@ jobs:
         run: |
           cd backend
           pip install -r requirements.txt
-      - name: Run tests
+      - name: Run tests with coverage
         run: |
           cd backend
-          python -m pytest tests/ -v --tb=short
+          pip install pytest-cov
+          python -m pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
 
   frontend-test:
     runs-on: ubuntu-latest

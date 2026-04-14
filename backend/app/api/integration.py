@@ -35,7 +35,7 @@ class SAMPStatus(BaseModel):
     registered_clients: list[str] = []
 
 @router.get("/samp/status")
-async def samp_status():
+async def samp_status(_user: User | None = Depends(get_optional_user)):
     """Check if a SAMP hub is available."""
     try:
         from astropy.samp import SAMPIntegratedClient
@@ -54,7 +54,7 @@ class SAMPSendRequest(BaseModel):
     message_type: str = "table.load.fits"  # or "image.load.fits"
 
 @router.post("/samp/send")
-async def samp_send(req: SAMPSendRequest):
+async def samp_send(req: SAMPSendRequest, _user: User = Depends(get_current_user)):
     """Send a FITS file to connected SAMP clients (DS9, Aladin, TOPCAT)."""
     from pathlib import Path
 
@@ -153,21 +153,21 @@ class SAMPReceiver:
 
 
 @router.post("/samp/subscribe")
-async def samp_subscribe():
+async def samp_subscribe(_user: User = Depends(get_current_user)):
     """Connect to SAMP hub and subscribe to receive messages."""
     receiver = SAMPReceiver.get_instance()
     return receiver.connect_and_subscribe()
 
 
 @router.get("/samp/received")
-async def samp_received():
+async def samp_received(_user: User | None = Depends(get_optional_user)):
     """List messages received via SAMP from external clients."""
     receiver = SAMPReceiver.get_instance()
     return {"messages": receiver.get_received(), "connected": receiver.is_connected}
 
 
 @router.post("/samp/unsubscribe")
-async def samp_unsubscribe():
+async def samp_unsubscribe(_user: User = Depends(get_current_user)):
     """Disconnect from SAMP hub."""
     receiver = SAMPReceiver.get_instance()
     return receiver.disconnect()
@@ -180,6 +180,7 @@ async def samp_unsubscribe():
 @router.get("/votable/convert")
 async def convert_to_votable(
     fits_path: str = Query(..., description="Storage path to FITS file"),
+    _user: User = Depends(get_current_user),
 ):
     """Convert a FITS table to VOTable format."""
     from astropy.io import fits
@@ -255,6 +256,7 @@ class JupyterExportRequest(BaseModel):
 async def export_jupyter(
     req: JupyterExportRequest,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     """Export a pipeline template or run as a Jupyter notebook."""
     dag = None

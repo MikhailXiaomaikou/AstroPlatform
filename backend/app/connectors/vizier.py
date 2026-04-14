@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import logging
 import re
 from functools import partial
 
@@ -12,6 +13,8 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 # Default catalogs to search when none specified
 DEFAULT_CATALOGS = [
@@ -187,7 +190,8 @@ class VizierConnector(BaseConnector):
         for c in drop_cols:
             try:
                 table[c] = [str(v) for v in table[c]]
-            except Exception:
+            except (ValueError, TypeError) as e:
+                logger.debug("Dropping unconvertible column '%s': %s", c, e)
                 table.remove_column(c)
         return table
 
@@ -218,7 +222,7 @@ class VizierConnector(BaseConnector):
                     try:
                         name = str(row[id_col]).strip()
                         break
-                    except Exception:
+                    except (ValueError, TypeError, KeyError):
                         pass
             if not name:
                 name = f"VizieR-{ra:.5f}{dec:+.5f}"

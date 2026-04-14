@@ -1,5 +1,6 @@
 import asyncio
 import io
+import logging
 from functools import partial
 
 from astropy.coordinates import SkyCoord
@@ -8,6 +9,8 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 
 class GaiaConnector(BaseConnector):

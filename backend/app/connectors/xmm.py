@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import logging
 from functools import partial
 
 import numpy as np
@@ -11,6 +12,8 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+
+logger = logging.getLogger(__name__)
 
 XMM_CATALOG = "IX/68"  # 4XMM-DR14 serendipitous source catalog
 
@@ -97,8 +100,8 @@ class XMMConnector(BaseConnector):
                     None,
                     partial(vizier2.query_region, coord, radius=small_radius),
                 )
-            except Exception:
-                pass
+            except (ValueError, Exception) as e:
+                logger.debug("SkyCoord.from_name fallback failed for %r: %s", object_id, e)
 
         if table_list is None or len(table_list) == 0:
             raise ValueError(f"No XMM-Newton data found for '{object_id}'")
@@ -146,7 +149,8 @@ class XMMConnector(BaseConnector):
             if table[c].dtype == object:
                 try:
                     table[c] = [str(v) for v in table[c]]
-                except Exception:
+                except (ValueError, TypeError) as e:
+                    logger.debug("Dropping column %r due to conversion error: %s", c, e)
                     table.remove_column(c)
         return table
 
@@ -187,8 +191,8 @@ class XMMConnector(BaseConnector):
             if "IAUNAME" in row.colnames:
                 try:
                     name = str(row["IAUNAME"]).strip()
-                except Exception:
-                    pass
+                except (ValueError, TypeError, KeyError) as e:
+                    logger.debug("Failed to extract IAUNAME: %s", e)
             if not name:
                 name = f"4XMM J{ra:.4f}{dec:+.4f}"
 
@@ -218,8 +222,8 @@ class XMMConnector(BaseConnector):
                 except (ValueError, TypeError):
                     try:
                         extra["SC_SUM_FLAG"] = str(row["SC_SUM_FLAG"]).strip()
-                    except Exception:
-                        pass
+                    except (ValueError, TypeError, KeyError) as e:
+                        logger.debug("Failed to extract SC_SUM_FLAG: %s", e)
 
             objects.append(
                 AstroObject(
