@@ -309,7 +309,7 @@ async def get_profile(user: User = Depends(get_current_user)):
 
 
 @router.post("/setup-key-login", response_model=TokenResponse)
-@limiter.limit("10/minute")
+@limiter.limit("3/minute")
 async def setup_key_login(request: Request, req: SetupKeyRequest, db: AsyncSession = Depends(get_db)):
     """Log in (or auto-register) using a setup key."""
     import secrets
@@ -362,14 +362,28 @@ async def setup_key_login(request: Request, req: SetupKeyRequest, db: AsyncSessi
     return TokenResponse(access_token=token)
 
 
+async def _require_admin(request: Request):
+    """Check admin authorization via X-Admin-Secret header."""
+    import os
+    _env = os.getenv("ENV", "dev")
+    if not settings.admin_secret:
+        # No admin secret configured — allow in dev, block in production
+        if _env != "dev":
+            raise HTTPException(status_code=403, detail="Admin endpoints disabled (ADMIN_SECRET not configured)")
+        return
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not provided or provided != settings.admin_secret:
+        raise HTTPException(status_code=403, detail="Invalid admin secret")
+
+
 @router.post("/generate-setup-keys", response_model=list[str])
 async def generate_setup_keys(
+    request: Request,
     req: GenerateKeysRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate batch of setup keys for beta distribution.
-    NOTE: In production, protect this with admin auth.
-    """
+    """Generate batch of setup keys for beta distribution."""
+    await _require_admin(request)
     import secrets
 
     if req.count < 1 or req.count > 100:
@@ -387,10 +401,9 @@ async def generate_setup_keys(
 
 
 @router.get("/setup-keys", response_model=list[SetupKeyInfo])
-async def list_setup_keys(db: AsyncSession = Depends(get_db)):
-    """List all setup keys and their usage status.
-    NOTE: In production, protect this with admin auth.
-    """
+async def list_setup_keys(request: Request, db: AsyncSession = Depends(get_db)):
+    """List all setup keys and their usage status."""
+    await _require_admin(request)
     from sqlalchemy.orm import aliased
     UserAlias = aliased(User)
 

@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24  # 24 hours
+    fernet_key: str = ""
+    admin_secret: str = ""
 
     # Local-mode: use filesystem instead of MinIO
     # In Docker: /app is WORKDIR, so use /app/data/fits
@@ -66,12 +68,18 @@ class Settings(BaseSettings):
             )
         if not self.jwt_secret:
             if _ENV == "dev":
-                self.jwt_secret = "dev-secret-change-me"
+                import secrets as _s
+                self.jwt_secret = _s.token_hex(32)
+                import logging as _log
+                _log.getLogger(__name__).warning("JWT_SECRET not set — using random dev secret (tokens won't survive restarts)")
             else:
                 raise ValueError(
                     "JWT_SECRET environment variable must be set in production. "
                     "Set ENV=dev to use the development fallback."
                 )
+        if not self.fernet_key:
+            import secrets as _s
+            self.fernet_key = _s.token_urlsafe(32)
 
     @property
     def redis_ssl(self) -> bool:

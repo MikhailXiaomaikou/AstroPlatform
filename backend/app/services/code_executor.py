@@ -118,6 +118,15 @@ BLOCKED_BUILTINS = {
     "exit", "quit",
 }
 
+# Blocked modules — security-sensitive system access
+BLOCKED_MODULES = {
+    "os", "sys", "subprocess", "shutil", "pathlib", "glob",
+    "socket", "http", "urllib", "requests", "httpx",
+}
+
+# Hard memory limit (1 GB) — raises MemoryError if exceeded
+MEMORY_HARD_LIMIT = 1024 * 1024 * 1024
+
 
 class CodeExecutionResult:
     def __init__(self):
@@ -160,6 +169,11 @@ def _safe_import(name, *args, **kwargs):
     if name == "astro":
         return _get_astro_module()
     top_level = name.split(".")[0]
+    if top_level in BLOCKED_MODULES:
+        raise ImportError(
+            f"Import of '{name}' is blocked for security. "
+            f"System modules like os, sys, subprocess are not available in the sandbox."
+        )
     if top_level not in ALLOWED_MODULES and name not in ALLOWED_MODULES:
         hint = ""
         if name == "astro":
@@ -187,9 +201,17 @@ def _get_memory_usage_bytes() -> int:
 def _check_memory(warn_stream: io.StringIO | None = None) -> int:
     """Check memory usage; write a warning if approaching the threshold.
 
+    Raises MemoryError if usage exceeds MEMORY_HARD_LIMIT.
     Returns current usage in bytes.
     """
     usage = _get_memory_usage_bytes()
+    if usage > MEMORY_HARD_LIMIT:
+        mb = usage / (1024 * 1024)
+        limit_mb = MEMORY_HARD_LIMIT / (1024 * 1024)
+        raise MemoryError(
+            f"Code execution exceeded memory hard limit: ~{mb:.0f} MB in use (limit {limit_mb:.0f} MB). "
+            "Reduce data size or use process_in_chunks()."
+        )
     if usage > MEMORY_WARN_THRESHOLD and warn_stream is not None:
         mb = usage / (1024 * 1024)
         limit_mb = MEMORY_WARN_THRESHOLD / (1024 * 1024)

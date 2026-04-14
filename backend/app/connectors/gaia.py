@@ -84,8 +84,11 @@ class GaiaConnector(BaseConnector):
 
     async def _query_by_source_id(self, source_id: str) -> Table:
         from astroquery.gaia import Gaia
+        import re
 
-        adql = f"SELECT * FROM gaiadr3.gaia_source WHERE source_id = {source_id}"
+        if not re.match(r'^\d+$', str(source_id).strip()):
+            raise ValueError(f"Invalid Gaia source_id: must be numeric, got {source_id!r}")
+        adql = f"SELECT * FROM gaiadr3.gaia_source WHERE source_id = {int(source_id)}"
         loop = asyncio.get_event_loop()
         job = await loop.run_in_executor(
             None,

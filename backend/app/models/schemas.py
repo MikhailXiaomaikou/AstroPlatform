@@ -1,7 +1,10 @@
+import base64
+import hashlib
 import json
 import uuid
 from datetime import datetime
 
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, TypeDecorator, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +33,38 @@ class JSONType(TypeDecorator):
             from sqlalchemy.dialects.postgresql import JSONB
             return dialect.type_descriptor(JSONB())
         return dialect.type_descriptor(Text())
+
+
+def _get_fernet():
+    from app.config import settings
+    # Derive a valid Fernet key from arbitrary string
+    key = hashlib.sha256(settings.fernet_key.encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
+class EncryptedJSONType(TypeDecorator):
+    """Stores JSON encrypted with Fernet. Falls back to plain JSON on read (migration compat)."""
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is not None:
+            plaintext = json.dumps(value).encode("utf-8")
+            return _get_fernet().encrypt(plaintext).decode("utf-8")
+        return None
+
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            try:
+                decrypted = _get_fernet().decrypt(value.encode("utf-8"))
+                return json.loads(decrypted)
+            except (InvalidToken, Exception):
+                # Fallback: old plaintext data (migration compat)
+                try:
+                    return json.loads(value)
+                except (json.JSONDecodeError, Exception):
+                    return None
+        return None
 
 
 class UUIDType(TypeDecorator):
@@ -66,7 +101,7 @@ class User(Base):
     subscription_tier: Mapped[str] = mapped_column(String(50), default="solo")
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255))
     anthropic_api_key: Mapped[str | None] = mapped_column(Text)  # legacy, kept for migration compat
-    api_keys: Mapped[dict | None] = mapped_column(JSONType())  # {"anthropic": "sk-...", "openai": "sk-...", ...}
+    api_keys: Mapped[dict | None] = mapped_column(EncryptedJSONType())  # {"anthropic": "sk-...", "openai": "sk-...", ...}
     google_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     avatar_url: Mapped[str | None] = mapped_column(Text)
     display_name: Mapped[str | None] = mapped_column(String(255))
