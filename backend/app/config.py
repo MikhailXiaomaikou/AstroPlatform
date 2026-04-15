@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     sandbox_memory_bytes: int = 1024 * 1024 * 1024  # 1 GB per call
     sandbox_timeout_seconds: int = 75
 
+    # Raw connector response cache backend:
+    # "auto" picks Redis → SQLite → Null based on availability,
+    # "null" disables the cache entirely.
+    connector_cache_backend: str = "auto"
+
     # Max FITS upload size in bytes (default 100 MB)
     max_upload_size: int = 100 * 1024 * 1024
 
