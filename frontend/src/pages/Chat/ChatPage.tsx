@@ -9,6 +9,7 @@ import {
   uploadFITS,
   uploadGeneralFile,
   saveChatSession,
+  renameChatSession,
   listChatSessions,
   loadChatSession,
   deleteChatSession,
@@ -1457,7 +1458,14 @@ export default function ChatPage() {
   // Session management
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [showSessions, setShowSessions] = useState(false);
+  const [currentSessionTitle, setCurrentSessionTitle] = useState<string>("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem("astro_chat_sidebar_collapsed") === "1";
+  });
+  const [sessionSearch, setSessionSearch] = useState("");
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "unsaved" | "idle">("idle");
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [shareAccessLevel, setShareAccessLevel] = useState<ShareAccessLevel>("view");
   const [shareExpiryHours, setShareExpiryHours] = useState<number>(72);
@@ -1755,6 +1763,10 @@ export default function ChatPage() {
     }
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem("astro_chat_sidebar_collapsed", sidebarCollapsed ? "1" : "0");
+  }, [sidebarCollapsed]);
+
   // Autosave draft to localStorage (debounced)
   useEffect(() => {
     if (messages.length === 0) return;
@@ -1784,14 +1796,26 @@ export default function ChatPage() {
     prevLoadingRef.current = loading;
     if (wasLoading && !loading && messages.length >= 2) {
       const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+      setSaveStatus("saving");
       persistSession(data, currentSessionId)
-        .then((res) => {
+        .then((res: { id: string; title?: string }) => {
           setCurrentSessionId(res.id);
+          if (res.title) setCurrentSessionTitle(res.title);
+          setSaveStatus("saved");
           refreshSessions();
         })
-        .catch(() => {});
+        .catch(() => {
+          setSaveStatus("unsaved");
+        });
     }
   }, [currentSessionId, loading, messages, persistSession, refreshSessions]);
+
+  // Mark as unsaved when messages change without saving
+  useEffect(() => {
+    if (messages.length > 0 && !loading) {
+      setSaveStatus((prev) => (prev === "saved" ? "saved" : "unsaved"));
+    }
+  }, [messages.length, loading]);
 
   const handleLoadSession = async (id: string) => {
     try {
@@ -1805,19 +1829,47 @@ export default function ChatPage() {
       }));
       setMessages(loaded);
       setCurrentSessionId(id);
+      setCurrentSessionTitle((session as { title?: string }).title || "");
+      setSaveStatus("saved");
       pythonSessionIdRef.current = crypto.randomUUID();
-      setShowSessions(false);
       saveChatHistory(loaded);
     } catch { /* ignore */ }
   };
 
   const handleNewChat = () => {
+    // Confirm if there are unsaved messages
+    if (messages.length >= 3 && saveStatus === "unsaved") {
+      if (!window.confirm("Start a new chat? Your current conversation has unsaved changes.")) {
+        return;
+      }
+    }
     setMessages([]);
     setCurrentSessionId(null);
+    setCurrentSessionTitle("");
+    setSaveStatus("idle");
     pythonSessionIdRef.current = crypto.randomUUID();
     localStorage.removeItem("astro_chat_history");
     localStorage.removeItem("astro_chat_autosave_draft");
-    setShowSessions(false);
+  };
+
+  const handleRenameSession = async (newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed || !currentSessionId) {
+      setEditingTitle(false);
+      return;
+    }
+    const prevTitle = currentSessionTitle;
+    setCurrentSessionTitle(trimmed);
+    setEditingTitle(false);
+    try {
+      if (user) {
+        await renameChatSession(currentSessionId, trimmed);
+      }
+      refreshSessions();
+    } catch {
+      setCurrentSessionTitle(prevTitle);
+      showToast("Failed to rename session", "error");
+    }
   };
 
   const handleDeleteSession = async (id: string) => {
@@ -1853,7 +1905,6 @@ export default function ChatPage() {
         setMessages(loaded);
         setCurrentSessionId(result.id);
         pythonSessionIdRef.current = crypto.randomUUID();
-        setShowSessions(false);
         saveChatHistory(loaded);
         refreshSessions();
         showToast(`Imported "${result.title}" (${result.message_count} messages)`, "success");
@@ -2204,28 +2255,132 @@ export default function ChatPage() {
     }
   };
 
+  // Filter sessions by search query
+  const filteredSessions = sessions.filter((s) =>
+    !sessionSearch.trim() || s.title.toLowerCase().includes(sessionSearch.toLowerCase())
+  );
+
   return (
-    <div className="chat-page">
+    <div className={`chat-page chat-page-with-sidebar${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       {toast && (
         <div className="chat-toast" style={{
           background: toast.tone === "error" ? "#ef4444" : toast.tone === "info" ? "#0ea5e9" : "#22c55e",
         }}>{toast.message}</div>
       )}
+
+      {/* Persistent session sidebar (like Claude desktop) */}
+      <aside className="chat-sidebar" aria-label="Chat sessions">
+        <div className="chat-sidebar-header">
+          <button
+            type="button"
+            className="chat-sidebar-new"
+            onClick={handleNewChat}
+            title="New chat"
+          >
+            <span style={{ fontSize: "1.1rem" }}>+</span> New chat
+          </button>
+          <button
+            type="button"
+            className="chat-sidebar-toggle"
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {sidebarCollapsed ? "»" : "«"}
+          </button>
+        </div>
+        {!sidebarCollapsed && (
+          <>
+            <div className="chat-sidebar-search">
+              <input
+                type="search"
+                placeholder="Search chats..."
+                value={sessionSearch}
+                onChange={(e) => setSessionSearch(e.target.value)}
+                className="chat-sidebar-search-input"
+              />
+            </div>
+            <div className="chat-sidebar-list" role="list">
+              {sessions.length === 0 && (
+                <p className="chat-sidebar-empty">
+                  {user ? "No saved chats yet." : "Sign in to sync chats across devices."}
+                </p>
+              )}
+              {filteredSessions.map((s) => (
+                <div
+                  key={s.id}
+                  className={`chat-sidebar-item${s.id === currentSessionId ? " active" : ""}`}
+                  role="listitem"
+                >
+                  <button
+                    className="chat-sidebar-item-load"
+                    onClick={() => handleLoadSession(s.id)}
+                    title={s.title}
+                  >
+                    <span className="chat-sidebar-item-title">{s.title || "New Chat"}</span>
+                    <span className="chat-sidebar-item-meta">
+                      {s.message_count} msg · {new Date(s.updated_at).toLocaleDateString()}
+                    </span>
+                  </button>
+                  <button
+                    className="chat-sidebar-item-delete"
+                    onClick={(e) => { e.stopPropagation(); handleDeleteSession(s.id); }}
+                    title="Delete"
+                    aria-label={`Delete ${s.title}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              {filteredSessions.length === 0 && sessions.length > 0 && (
+                <p className="chat-sidebar-empty">No chats match your search.</p>
+              )}
+            </div>
+          </>
+        )}
+      </aside>
+
+      <div className="chat-main">
       <div className="chat-header">
         <div className="chat-header-row">
-          <div>
-            <h2>{t("nav.ai_assistant")}</h2>
-            <p>
-              Ask about astronomical objects, build pipelines, or run ADQL queries
+          <div className="chat-header-title-block">
+            {currentSessionId && !editingTitle ? (
+              <h2
+                className="chat-header-title-editable"
+                onClick={() => { setTitleDraft(currentSessionTitle || "New Chat"); setEditingTitle(true); }}
+                title="Click to rename"
+              >
+                {currentSessionTitle || "New Chat"}
+                <span className="chat-header-rename-hint">✎</span>
+              </h2>
+            ) : editingTitle ? (
+              <input
+                autoFocus
+                className="chat-header-title-input"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={() => handleRenameSession(titleDraft)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRenameSession(titleDraft);
+                  else if (e.key === "Escape") setEditingTitle(false);
+                }}
+                maxLength={200}
+              />
+            ) : (
+              <h2>{t("nav.ai_assistant")}</h2>
+            )}
+            <p className="chat-header-subtitle">
+              {currentSessionId && saveStatus !== "idle" && (
+                <span className={`chat-save-indicator chat-save-${saveStatus}`}>
+                  {saveStatus === "saving" && "● Saving..."}
+                  {saveStatus === "saved" && "● Saved"}
+                  {saveStatus === "unsaved" && "● Unsaved changes"}
+                </span>
+              )}
+              {!currentSessionId && "Ask about astronomical objects, build pipelines, or run ADQL queries"}
             </p>
           </div>
           <div style={{ display: "flex", gap: "0.4rem" }}>
-            <button type="button" className="btn-secondary btn-small" onClick={() => {
-              setShowSessions(!showSessions);
-              if (!showSessions) refreshSessions();
-            }}>
-              {t("chat.history")}
-            </button>
             {messages.length > 0 && (
               <button type="button" className="btn-secondary btn-small" onClick={handleSaveSession}>
                 {t("chat.save")}
@@ -2333,30 +2488,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {showSessions && (
-        <div className="chat-sessions-panel">
-          <div className="chat-sessions-header">
-            <strong>Chat History</strong>
-            <button className="btn-secondary btn-small" onClick={() => setShowSessions(false)}>Close</button>
-          </div>
-          {sessions.length === 0 && (
-            <p style={{ color: "var(--color-text-tertiary)", fontSize: "0.82rem", padding: "0.5rem 0" }}>
-              {user
-                ? 'No saved sessions yet. Completed chats are auto-saved, and you can also click "Save" anytime.'
-                : 'No saved sessions yet. Completed chats are saved locally in this browser; sign in to sync them to your account.'}
-            </p>
-          )}
-          {sessions.map(s => (
-            <div key={s.id} className="chat-session-item">
-              <button className="chat-session-load" onClick={() => handleLoadSession(s.id)}>
-                <span className="chat-session-title">{s.title}</span>
-                <span className="chat-session-meta">{s.message_count} messages · {new Date(s.updated_at).toLocaleDateString()}</span>
-              </button>
-              <button className="chat-session-delete" onClick={() => handleDeleteSession(s.id)} title="Delete">X</button>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Old modal session panel removed — replaced by persistent sidebar */}
 
       {shareModalOpen && (
         <div className="viz-overlay" onClick={() => setShareModalOpen(false)}>
@@ -2833,6 +2965,7 @@ export default function ChatPage() {
         <span className="chat-input-hint">
           {t("chat.hint")}
         </span>
+      </div>
       </div>
     </div>
   );

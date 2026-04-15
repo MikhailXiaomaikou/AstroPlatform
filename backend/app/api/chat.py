@@ -1320,8 +1320,23 @@ async def execute_action(
 
 class SaveSessionRequest(BaseModel):
     session_id: str | None = None
-    title: str = "New Chat"
+    title: str | None = None
     messages: list[dict]
+
+
+class RenameSessionRequest(BaseModel):
+    title: str
+
+
+def _auto_title_from_messages(messages: list[dict]) -> str:
+    """Generate a concise title from the first user message."""
+    for m in messages:
+        if m.get("role") == "user":
+            raw = str(m.get("content", "")).strip()
+            # Use first line, truncated to 60 chars
+            first_line = raw.split("\n", 1)[0].strip()
+            return (first_line[:60] or "New Chat")
+    return "New Chat"
 
 
 class SessionSummary(BaseModel):
@@ -1355,22 +1370,22 @@ async def save_chat_session(
         session = result.scalar_one_or_none()
         if session:
             session.messages = req.messages
-            session.title = req.title
+            # Only update title if explicitly provided AND not empty.
+            # Don't overwrite a meaningful title with "New Chat" on auto-save.
+            if req.title and req.title.strip() and req.title != "New Chat":
+                session.title = req.title
+            elif session.title == "New Chat" and req.messages:
+                # If session still has default title, auto-generate from first message
+                session.title = _auto_title_from_messages(req.messages)
             from datetime import datetime, timezone
 
             session.updated_at = datetime.now(timezone.utc)
             await memory_service.refresh_session_memory(user.id, session.id, db)
             await db.commit()
-            return {"id": str(session.id), "saved": True}
+            return {"id": str(session.id), "saved": True, "title": session.title}
 
-    # Create new session
-    # Auto-title from first user message
-    title = req.title
-    if title == "New Chat" and req.messages:
-        for m in req.messages:
-            if m.get("role") == "user":
-                title = m["content"][:60]
-                break
+    # Create new session — auto-generate title from first user message if not provided
+    title = req.title if (req.title and req.title.strip() and req.title != "New Chat") else _auto_title_from_messages(req.messages)
 
     session = ChatSession(
         user_id=user.id,
@@ -1382,7 +1397,45 @@ async def save_chat_session(
     await memory_service.refresh_session_memory(user.id, session.id, db)
     await db.commit()
     await db.refresh(session)
-    return {"id": str(session.id), "saved": True}
+    return {"id": str(session.id), "saved": True, "title": session.title}
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_chat_session(
+    session_id: str,
+    req: RenameSessionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Rename a chat session."""
+    from app.models.schemas import ChatSession
+    from sqlalchemy import select
+    from datetime import datetime, timezone
+
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID")
+
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    if len(title) > 200:
+        title = title[:200]
+
+    result = await db.execute(
+        select(ChatSession).where(
+            ChatSession.id == sid, ChatSession.user_id == user.id
+        )
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session.title = title
+    session.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"id": str(session.id), "title": title}
 
 
 @router.get("/sessions", response_model=list[SessionSummary])

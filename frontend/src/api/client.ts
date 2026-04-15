@@ -1293,12 +1293,20 @@ export async function saveChatSession(
   messages: Array<{ role: string; content: string; actions?: unknown[] }>,
   sessionId?: string,
   title?: string,
-): Promise<{ id: string }> {
+): Promise<{ id: string; title?: string }> {
   const { data } = await api.post("/api/chat/sessions/save", {
     session_id: sessionId,
-    title: title || "New Chat",
+    title: title,  // backend auto-generates if omitted/default
     messages,
   });
+  return data;
+}
+
+export async function renameChatSession(
+  sessionId: string,
+  title: string,
+): Promise<{ id: string; title: string }> {
+  const { data } = await api.patch(`/api/chat/sessions/${sessionId}`, { title });
   return data;
 }
 
