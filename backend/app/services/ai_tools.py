@@ -1472,34 +1472,102 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
 
 
 async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
+    """Execute ADQL query with automatic retry on timeout.
+
+    On timeout (408/502/503), automatically retries with progressively
+    reduced cone search radius. Stores full result set in cache so
+    downstream Python can access all rows via get_cached_results.
+    """
     from app.api.integration import execute_adql_query, ADQLRequest
-    req = ADQLRequest(query=inp.get("query", ""), service=inp.get("service", "gaia"))
-    result = await execute_adql_query(req)
-    # Normalize column names to lowercase so AI-generated code like
-    # data['source_id'] works even when TAP returns 'SOURCE_ID'
+    import asyncio as _aio
+    import re as _re
+
+    query = inp.get("query", "")
+    service = inp.get("service", "gaia")
+
+    async def _try_query(q: str) -> dict | None:
+        """Attempt one ADQL query. Return result dict or None on timeout."""
+        try:
+            return await execute_adql_query(ADQLRequest(query=q, service=service))
+        except Exception as exc:
+            msg = str(exc).lower()
+            if any(h in msg for h in ("timeout", "408", "502", "503", "aborted", "deadline")):
+                return None
+            raise
+
+    result = await _try_query(query)
+
+    # On timeout, retry with reduced cone radius (halve, then quarter)
+    retry_log = []
+    if result is None:
+        # Find CIRCLE('ICRS', ra, dec, radius) and halve the radius
+        def _halve_radius(q: str, factor: float = 0.5) -> str | None:
+            pattern = _re.compile(
+                r"(CIRCLE\s*\(\s*'ICRS'\s*,\s*[-+]?\d+\.?\d*\s*,\s*[-+]?\d+\.?\d*\s*,\s*)([-+]?\d+\.?\d*)",
+                _re.IGNORECASE,
+            )
+            m = pattern.search(q)
+            if m:
+                old_r = float(m.group(2))
+                new_r = old_r * factor
+                return pattern.sub(lambda _m: f"{_m.group(1)}{new_r}", q, count=1)
+            return None
+
+        for attempt, factor in enumerate([0.5, 0.25], start=1):
+            reduced = _halve_radius(query, factor)
+            if reduced is None:
+                break
+            retry_log.append(f"attempt {attempt}: radius × {factor}")
+            await _aio.sleep(1.0)
+            result = await _try_query(reduced)
+            if result is not None:
+                query = reduced  # remember the successful query
+                break
+
+    if result is None:
+        return {
+            "error": (
+                "ADQL query timed out even after retrying with reduced cone radius. "
+                "Try: (a) a smaller initial cone (<0.3 deg), (b) tighter parallax/magnitude cuts, "
+                "(c) selecting fewer columns, or (d) using VizieR for pre-computed catalogs."
+            ),
+            "retries": retry_log,
+        }
+
+    # Normalize column names to lowercase for consistent AI code
     raw_data = result.get("data", {}) if isinstance(result, dict) else {}
     data = {col.lower(): vals for col, vals in raw_data.items()}
     raw_columns = result.get("columns", []) if isinstance(result, dict) else []
     columns = [c.lower() for c in raw_columns]
     row_count = result.get("row_count", 0) if isinstance(result, dict) else 0
-    truncated = {}
-    for col, vals in data.items():
-        truncated[col] = vals[:100] if isinstance(vals, list) else vals
+
+    # AI view: first 100 rows to fit in context. Full data goes to cache.
+    VIEW_ROWS = 100
+    truncated = {col: (vals[:VIEW_ROWS] if isinstance(vals, list) else vals)
+                 for col, vals in data.items()}
     adql_result = {
         "columns": columns,
         "data": truncated,
         "row_count": row_count,
-        "showing": min(100, row_count),
+        "showing": min(VIEW_ROWS, row_count),
+        "note": (
+            f"Showing first {VIEW_ROWS} of {row_count} rows. Full data is cached — "
+            "in run_python you can access it via get_cached_results('latest_adql')."
+        ) if row_count > VIEW_ROWS else None,
     }
+    if retry_log:
+        adql_result["retry_log"] = retry_log
 
+    # Store full result set in cache (indexed for get_cached_results)
     result_set = build_adql_result_set(
-        service=req.service,
-        query=req.query,
+        service=service,
+        query=query,
         columns=columns,
         data=data,
         row_count=row_count,
     )
     store_adql_result_set(python_session_id, result_set)
+    store_search_results("latest_adql", data)
 
     return adql_result
 

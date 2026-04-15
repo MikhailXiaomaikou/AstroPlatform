@@ -103,6 +103,46 @@ The default `gaiadr3.gaia_source` is NOT the only Gaia DR3 table. For specialize
 ALWAYS join to `gaia_source` for sky position when using a specialized table:
 `FROM gaiadr3.vari_rrlyrae rr JOIN gaiadr3.gaia_source gs ON rr.source_id = gs.source_id`
 
+## CRITICAL: Extinction for low-E(B-V) targets (ROUTE TO SFD, NOT fit_isochrone)
+For ANY of these cases, do NOT use Gaia ag_gspphot or fit_isochrone's av_range
+to estimate extinction — they systematically OVER-estimate A_V by factors of 5-6
+for genuinely low-extinction targets:
+- Galactic latitude |b| > 20° (e.g. Pleiades at b=-24°, M53 at b=+80°)
+- Distance < 500 pc
+- Globular clusters (high latitude, typical E(B-V) < 0.1)
+
+Instead: call `lookup_ebv_irsa(ra, dec)` (IRSA SFD 1998 / Schlafly 2011) as the
+PRIMARY extinction source. Report E(B-V) and convert: A_V = 3.1 * E(B-V).
+For R-band, R_V=3.1 (standard ISM); for starburst galaxies R_V=4.05 (Calzetti+ 2000).
+Only fall back to ag_gspphot if the target is in the galactic plane (|b| < 10°)
+AND beyond 1 kpc, where SFD is known to saturate.
+
+Benchmark checks (if these are off by >2×, your extinction is wrong):
+- Pleiades: E(B-V) = 0.04, A_V = 0.12 mag
+- M53 (NGC 5024): E(B-V) = 0.02, A_V = 0.06 mag
+- Hyades: E(B-V) = 0.01, A_V = 0.03 mag
+- NGC 1647: E(B-V) = 0.37, A_V = 1.15 mag  (genuinely obscured!)
+
+## CRITICAL: Blue straggler (BSS) identification in star clusters
+BSS are MS stars that appear BRIGHTER and BLUER than the MSTO (main-sequence
+turnoff) — not stars with BP-RP<0 absolutely. The correct selection:
+
+1. First find the cluster MSTO (M_G_turnoff, BP-RP_turnoff) from fit_isochrone
+   or from the blue edge of the MS near the bright end.
+2. BSS candidates satisfy:
+   - M_G < M_G_turnoff - 0.3  (at least 0.3 mag brighter than MSTO)
+   - BP-RP < BP-RP_turnoff    (bluer than MSTO color)
+   - BUT BP-RP > BP-RP_turnoff - 0.5  (not unreasonably blue; excludes HB,
+     blue HB pulsators, or photometric outliers)
+   - Not too bright: M_G > M_G_turnoff - 3.0 (excludes bright RGB scatterers)
+3. Typical numbers: open clusters have 0-20 BSS, globular clusters 20-200.
+   If you find <5 BSS for a well-populated cluster, your cuts are too strict
+   — relax the BP-RP constraint (do NOT require BP-RP < 0).
+4. For published catalogs, cross-match with known BSS: Ahumada & Lapasset 2007
+   (BSS in open clusters) or Simunovic & Puzia 2016 (BSS in globular clusters).
+
+Reference: Rain+ 2021 A&A 650, A67 (modern Gaia DR3 BSS selection for open clusters).
+
 ## CRITICAL: Gaia GSP-Phot data quality warnings
 The convenience columns in `gaia_source` (teff_gspphot, mh_gspphot, ag_gspphot, ebpminrp_gspphot) are MODEL fits and have major systematics in:
 - **Distant objects (>5 kpc)**: ag_gspphot becomes unreliable → use `lookup_ebv` (SFD/IRSA) or Bayestar 3D dust maps instead
@@ -1298,6 +1338,32 @@ async def _run_agent_loop(
                 "_auto_executed": True,
             }
         )
+
+    # Fallback: if the LLM returned zero text (empty text_parts) but did
+    # execute tools, synthesise a minimal human-readable summary so the user
+    # never sees a blank AI bubble. Root cause of the empty-response bug
+    # observed in the WD LF test (first attempt).
+    if not clean_reply.strip():
+        if all_tool_results:
+            tool_names = ", ".join({tr["tool"] for tr in all_tool_results})
+            clean_reply = (
+                f"I ran the following tools: {tool_names}. "
+                f"The results are shown below. "
+                f"(Note: the language model did not return a written summary — "
+                f"please review the tool outputs directly or ask me to explain them.)"
+            )
+        else:
+            clean_reply = (
+                "The language model returned an empty response. This may be a "
+                "transient API issue or a prompt length problem. Please try "
+                "again with a shorter prompt, or contact support if it persists."
+            )
+        logger.warning(
+            "Empty AI reply detected in %s agent loop; synthesised fallback. "
+            "tool_results=%d iterations=%d",
+            agent_name, len(all_tool_results), _iteration + 1,
+        )
+
     return {
         "reply": clean_reply,
         "actions": actions,
