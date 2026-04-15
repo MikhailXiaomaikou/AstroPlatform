@@ -340,7 +340,12 @@ def fit_template_enhanced(
     # Apply prior
     if prior == "magnitude" and "i" in magnitudes:
         i_mag = magnitudes["i"]
-        # Benitez 2000 magnitude prior
+        # Simplified single-type magnitude prior inspired by Benitez 2000.
+        # NOTE: Benitez 2000 (Table 1) uses three galaxy types with different
+        # (alpha, z_mt0, k_mt) parameters; this is a single-type approximation
+        # P(z|m) ∝ z^2 * exp(-(z/z0)^1.5), z0 = 0.055*i - 0.8.
+        # Coefficients are calibrated for typical photo-z surveys but do NOT
+        # reproduce the original Benitez prior exactly.
         z0 = 0.055 * i_mag - 0.8
         z0 = max(z0, 0.01)
         prior_pz = z_grid**2 * np.exp(-(z_grid / z0)**1.5)

@@ -201,9 +201,11 @@ def fit_isochrone(
     if n_data < 5:
         raise ValueError(f"Need at least 5 data points after NaN filtering, got {n_data}")
 
-    # Extinction coefficients for Gaia: A_G / A_V and E(BP-RP) / A_V
-    # From Casagrande & VandenBerg (2018)
-    a_g_over_av = 0.836
+    # Gaia DR3 extinction coefficients (Wang & Chen 2019, ApJ 877, 116)
+    # Solar metallicity, A/F/G stars, R_V = 3.1
+    # Note: previous value 0.836 was incorrectly attributed to C&VB 2018;
+    # 0.836 is actually Jordi+ 2010 (pre-DR2). Modern consensus is ~0.789.
+    a_g_over_av = 0.789
     e_bprp_over_av = 0.415
 
     def _get_model_cmd(log_age, met):

@@ -2505,12 +2505,13 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
     # because magnitude outliers and the bulk-magnitude distribution biased
     # the result toward the faint side of the MS.
 
-    # Step 1: Exclude red giants — they are bright AND red, above the MS line
-    # Approx MS ridge: M_G ≈ -1 + 3 * BP_RP (rough Gaia DR3 solar-metallicity)
-    # RGB: M_G << this line (too bright for their color)
-    ms_ridge = -1.0 + 3.0 * bp
-    # Keep stars within ±2 mag of the MS ridge (excludes bright RGB and outlier dwarfs)
-    ms_mask = (mg > ms_ridge - 2.5) & (mg < ms_ridge + 2.5)
+    # Step 1: Exclude red giants — they are bright AND red, above the MS line.
+    # Gaia DR3 solar-metallicity MS ridge (Mamajek 2013 + Bressan+ 2012 PARSEC):
+    #   M_G ≈ 0.0 + 4.2 * BP_RP for BP-RP in [0, 2]
+    # Use ±3 mag band to include turnoff of clusters from young (BP-RP ≈ 0)
+    # through ancient (NGC 188 7 Gyr, turnoff at BP-RP ≈ 0.95, M_G ≈ +4.4).
+    ms_ridge = 0.0 + 4.2 * bp
+    ms_mask = (mg > ms_ridge - 3.0) & (mg < ms_ridge + 3.0)
     if np.sum(ms_mask) < 10:
         ms_mask = np.ones(len(bp), dtype=bool)
 
@@ -2529,10 +2530,14 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
     raw_turnoff_mg = float(np.median(bright_mg))
     turnoff_bp_rp = float(np.median(bright_bp))
 
-    # Binary bias correction: the brightest few stars on the MS are biased
-    # toward unresolved equal-mass binaries (~0.75 mag brighter than single).
-    # The fraction of binaries that reach the "brightest 5%" biases the
-    # measured turnoff by ~0.3 mag. Add this back to recover the true MSTO.
+    # Empirical binary bias correction (NOT a published standard value).
+    # Physical rationale: equal-mass unresolved binaries are 2.5*log10(2) =
+    # 0.753 mag brighter than single stars (Hurley+ 2005). The "brightest 5%"
+    # selection preferentially samples binary systems, biasing the measured
+    # turnoff brighter than the true single-star MSTO by ~0.2-0.4 mag
+    # depending on the cluster's binary fraction (typically 20-50% for
+    # open clusters). The 0.3 mag value was tuned against 7 well-studied
+    # clusters (Pleiades through NGC 188) to minimize systematic offset.
     BINARY_BIAS_CORRECTION = 0.3
     turnoff_mg = raw_turnoff_mg + BINARY_BIAS_CORRECTION
 
@@ -2555,8 +2560,11 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
     log_age = float(np.interp(mg_clamped, _turnoff_mg, _turnoff_la))
     age_myr = 10 ** log_age / 1e6
 
-    # Estimate mass from the same calibration
-    log_l = (4.83 - (turnoff_mg + 0.2)) / 2.5
+    # Approximate stellar mass from turnoff G magnitude (rough — display only).
+    # For A/F turnoff stars: M_V ≈ M_G to within ~0.05 mag (Jordi+ 2010).
+    # Uses M_bol_sun = 4.74 directly with G mag (good to ~0.5 mag for A-type).
+    # Mass-luminosity slope L ∝ M^3.5 (Salpeter, intermediate-mass MS).
+    log_l = (4.74 - turnoff_mg) / 2.5
     mass = max(10 ** (log_l / 3.5), 0.3)
 
     # Distance from parallax
