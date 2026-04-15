@@ -27,8 +27,13 @@ export default function LightCurveViewer({ time, flux, fluxErr: _fluxErr, modelF
   }, [time, phaseFold, customPeriod]);
 
   const traces = useMemo<PlotData[]>(() => {
+    // D1: auto-upgrade to WebGL backend when N > 5000 so Kepler / TESS
+    // light curves with 60k+ cadences render at 30+ FPS instead of
+    // locking the browser. Overlays (trend/model) stay on SVG because
+    // they're already short line plots.
+    const pointType = flux.length > 5000 ? "scattergl" : "scatter";
     const t: PlotData[] = [{
-      x: xData, y: flux, type: "scatter", mode: "markers",
+      x: xData, y: flux, type: pointType, mode: "markers",
       name: "Flux", marker: { color: "#2563eb", size: 3 },
     }];
     if (showTrend && trend) {

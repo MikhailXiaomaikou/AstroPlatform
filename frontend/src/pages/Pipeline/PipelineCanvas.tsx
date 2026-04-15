@@ -19,6 +19,7 @@ import "reactflow/dist/style.css";
 import PipelineNode from "../../components/nodes/PipelineNode";
 import NodePalette from "../../components/nodes/NodePalette";
 import NodeParamsEditor from "../../components/nodes/NodeParamsEditor";
+import { computeLayeredLayout } from "../../components/pipeline/autoLayout";
 import {
   connectPipelineWS,
   createSchedule,
@@ -635,6 +636,19 @@ export default function PipelineCanvas() {
             disabled={nodes.length === 0}
           >
             Clear All
+          </button>
+          <button
+            className="btn-secondary btn-small"
+            onClick={() => {
+              if (nodes.length === 0) return;
+              setNodes(computeLayeredLayout(nodes, edges));
+              setTimeout(() => rfInstance?.fitView({ padding: 0.1 }), 50);
+            }}
+            disabled={nodes.length === 0}
+            style={{ marginTop: 8 }}
+            title="Re-arrange nodes using topological level layout"
+          >
+            Auto Layout
           </button>
           <button
             className="btn-secondary btn-small"

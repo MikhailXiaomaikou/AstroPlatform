@@ -29,8 +29,12 @@ export default function SpectrumViewer({ wavelength, flux, fluxErr, lines, redsh
   const [showLines, setShowLines] = useState(true);
 
   const traces = useMemo<PlotData[]>(() => {
+    // D1: use WebGL for high-resolution spectra (> 5000 points). A DESI
+    // or MUSE spectrum can have 10-20k samples and the SVG backend
+    // stalls the UI at zoom/pan time.
+    const lineType = wavelength.length > 5000 ? "scattergl" : "scatter";
     const t: PlotData[] = [{
-      x: wavelength, y: flux, type: "scatter", mode: "lines",
+      x: wavelength, y: flux, type: lineType, mode: "lines",
       name: "Flux", line: { color: "#2563eb", width: 1 },
     }];
     if (fluxErr && fluxErr.length === flux.length) {

@@ -503,4 +503,6 @@ docker compose up -d
 
 ## License
 
-This project is proprietary software. All rights reserved.
+Released under the MIT License. See [LICENSE](./LICENSE) for details.
+
+Contributions, issues, and pull requests are welcome.
