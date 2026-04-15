@@ -427,6 +427,17 @@ For WD cooling age estimation:
 4. Cooling age formula: WD luminosity ∝ t^(-7/5) asymptotically (Mestel 1952);
    for accurate ages use Bédard+ 2020 tables, not the analytic formula.
 5. For mass-radius: Fontaine, Brassard & Bergeron 2001 PASP 113, 409 tables.
+6. Luminosity function: the 1/V_max method (Schmidt 1968 ApJ 151, 393) is
+   the standard way to correct for distance-limited completeness. Each
+   WD contributes 1/V_max to its magnitude bin where V_max is the volume
+   within which that star would have been detected given the survey
+   magnitude limit: V_max = (4π/3) × d_max³ with d_max = 10^((m_lim − M)/5 + 1) pc.
+   Without this correction the derived space density will be biased LOW by
+   a factor of ~10-30 because faint WDs are over-represented in volume-
+   limited samples at small distances. Typical solar-neighborhood WD density
+   from Harris+ 2006 AJ 131, 571 and Limoges+ 2015 ApJS 219, 19 is
+   (4.5-5.0) × 10⁻³ pc⁻³ total for M_G 10-16 — any result an order of
+   magnitude below this suggests missing V_max correction.
 
 ## Brown dwarf (substellar) classification
 For L, T, Y dwarf identification and characterization:
@@ -680,6 +691,20 @@ You can define variables in one run_python call and use them in the next. No nee
 in one giant code block, but do not assume variables survive after opening a brand-new chat or page refresh.
 Complex objects such as astropy cosmology instances, scipy functions, and custom classes also persist.
 Do not probe for availability with `eval`, `sys`, or fragile introspection hacks. These helpers are guaranteed.
+
+**Variable-name consistency rule (IMPORTANT):** When a later script references
+a variable defined in an earlier script, you MUST verify the variable was
+actually created with that exact name. Do NOT guess names like `abs_g_corrected`,
+`distance_from_center`, `v_tan`, etc. after a pause — re-derive from `df` or
+from `get_adql_results()` at the top of each new script, or print the keys of
+the prior result before referencing them. Test report 2026-04-15 found multiple
+KeyErrors caused by renamed variables across scripts. The safe pattern is:
+```python
+# At the top of every run_python script that continues prior work
+rows = get_adql_results()
+df = pd.DataFrame(rows)
+print("columns:", list(df.columns))  # sanity check before indexing
+```
 
 Key patterns:
 - `results = get_search_results()` — access the user's latest search results

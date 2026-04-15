@@ -734,11 +734,16 @@ def plot_hr_diagram(bp_rp, gmag, parallax=None, distance_pc=None,
         fig = ax.figure
         pub_style()
 
-    # Fix D8: robust array conversion (handles inhomogeneous / nested inputs)
+    # Fix D8 + R8: robust element-wise conversion that preserves row count.
+    # Each top-level element of `arr` becomes exactly one output float.
+    # Non-scalar entries (nested lists, arrays, objects) become NaN — that
+    # way a dataframe column with some ragged cells still produces a vector
+    # of the same length as its siblings and the plot can be drawn with NaN
+    # holes rather than raising an inhomogeneous-shape ValueError.
     def _clean(arr):
-        """Convert to flat numeric ndarray, filtering out non-scalar entries."""
         if arr is None:
             return None
+        # Fast path: already a clean numeric ndarray or plain scalar
         try:
             a = np.asarray(arr, dtype=float)
             if a.ndim == 0:
@@ -747,14 +752,45 @@ def plot_hr_diagram(bp_rp, gmag, parallax=None, distance_pc=None,
                 a = a.flatten()
             return a
         except (ValueError, TypeError):
-            # Fallback: iterate and keep only convertible scalars
-            out = []
-            for x in arr:
+            pass
+
+        # Slow path: iterate top level, one output per input element
+        out: list[float] = []
+        try:
+            iterator = iter(arr)
+        except TypeError:
+            try:
+                return np.array([float(arr)], dtype=float)
+            except (TypeError, ValueError):
+                return np.array([float("nan")], dtype=float)
+
+        for x in iterator:
+            if x is None:
+                out.append(float("nan"))
+                continue
+            if isinstance(x, (int, float, np.integer, np.floating)):
+                out.append(float(x))
+                continue
+            if isinstance(x, np.ndarray):
+                if x.ndim == 0:
+                    out.append(float(x))
+                    continue
+                # Non-scalar array in a cell — cannot collapse to one value
+                out.append(float("nan"))
+                continue
+            if isinstance(x, str):
                 try:
                     out.append(float(x))
-                except (TypeError, ValueError):
+                except ValueError:
                     out.append(float("nan"))
-            return np.array(out, dtype=float)
+                continue
+            # Generic iterable / object — best effort single float, else NaN
+            try:
+                out.append(float(x))
+            except (TypeError, ValueError):
+                out.append(float("nan"))
+
+        return np.array(out, dtype=float) if out else np.array([], dtype=float)
 
     bp_rp = _clean(bp_rp)
     gmag = _clean(gmag)
