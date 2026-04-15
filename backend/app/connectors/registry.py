@@ -26,6 +26,10 @@ def _init():
         from app.connectors.xmm import XMMConnector
         from app.connectors.desi import DESIConnector
         from app.connectors.radio import NVSSConnector, FIRSTConnector
+        from app.connectors.jpl import JPLHorizonsConnector
+        from app.connectors.atnf_pulsar import ATNFPulsarConnector
+        from app.connectors.sparc import SPARCConnector
+        from app.connectors.frbstats import FRBStatsConnector
         _connectors = {
             "sdss": SDSSConnector(),
             "gaia": GaiaConnector(),
@@ -46,12 +50,17 @@ def _init():
             "xmm": XMMConnector(),
             "nvss": NVSSConnector(),
             "first": FIRSTConnector(),
+            "jpl": JPLHorizonsConnector(),
+            "atnf_pulsar": ATNFPulsarConnector(),
+            "sparc": SPARCConnector(),
+            "frbstats": FRBStatsConnector(),
         }
 
 
 CONNECTORS_KEYS = [
     "sdss", "gaia", "simbad", "vizier", "mast", "ned", "2mass", "chandra", "allwise", "alma",
     "eso", "irsa", "jwst", "lamost", "desi", "panstarrs", "xmm", "nvss", "first",
+    "jpl", "atnf_pulsar", "sparc", "frbstats",
 ]
 
 
