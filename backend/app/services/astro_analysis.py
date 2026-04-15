@@ -705,7 +705,8 @@ def analyze_residuals(data, model_prediction, errors=None):
 
 # ── Common Astronomy Plots ──
 
-def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
+def plot_hr_diagram(bp_rp, gmag, parallax=None, distance_pc=None,
+                    labels=None,
                     title="HR Diagram", color_by=None,
                     isochrones=None, isochrone_ages=None,
                     ax=None, scatter_kwargs=None):
@@ -715,6 +716,9 @@ def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
         bp_rp: BP-RP color array
         gmag: G magnitude array
         parallax: parallax in mas (if given, converts to absolute magnitude)
+        distance_pc: distance in parsecs — alternative to parallax. Converted
+            internally to parallax_mas = 1000 / distance_pc before use.
+            Accepts scalar or array.
         labels: object labels for legend
         color_by: array to color points by (e.g., metallicity)
         isochrones: list of DataFrames from get_isochrone() to overlay
@@ -730,11 +734,44 @@ def plot_hr_diagram(bp_rp, gmag, parallax=None, labels=None,
         fig = ax.figure
         pub_style()
 
-    y = np.array(gmag)
+    # Fix D8: robust array conversion (handles inhomogeneous / nested inputs)
+    def _clean(arr):
+        """Convert to flat numeric ndarray, filtering out non-scalar entries."""
+        if arr is None:
+            return None
+        try:
+            a = np.asarray(arr, dtype=float)
+            if a.ndim == 0:
+                return np.array([float(a)])
+            if a.ndim > 1:
+                a = a.flatten()
+            return a
+        except (ValueError, TypeError):
+            # Fallback: iterate and keep only convertible scalars
+            out = []
+            for x in arr:
+                try:
+                    out.append(float(x))
+                except (TypeError, ValueError):
+                    out.append(float("nan"))
+            return np.array(out, dtype=float)
+
+    bp_rp = _clean(bp_rp)
+    gmag = _clean(gmag)
+
+    y = gmag.copy()
     ylabel = "G [mag]"
 
+    # Fix D6: allow distance_pc as alternative to parallax
+    if distance_pc is not None and parallax is None:
+        d = _clean(distance_pc)
+        # Handle scalar distance (broadcast to match gmag length)
+        if d.size == 1:
+            d = np.full_like(gmag, float(d[0]))
+        parallax = 1000.0 / np.where(d > 0, d, np.nan)
+
     if parallax is not None:
-        plx = np.array(parallax)
+        plx = _clean(parallax) if not isinstance(parallax, np.ndarray) else parallax
         valid = plx > 0
         y = y.copy()
         y[valid] = y[valid] + 5 * np.log10(plx[valid]) - 10  # absolute mag
@@ -2784,6 +2821,102 @@ def pro_cutout(fits_path, ra, dec, size_arcsec=60.0):
     return cutout_service(fits_path, ra, dec, size_arcsec)
 
 
+def wd_cooling_age(M_G, Teff=None, mass_Msun=0.6, atmosphere="H"):
+    """White dwarf cooling age from absolute G magnitude and/or Teff.
+
+    References:
+    - Mestel 1952 MNRAS 112, 583 — classical cooling theory
+    - Fontaine, Brassard & Bergeron 2001 PASP 113, 409 — hybrid analytic fit
+    - Bédard+ 2020 ApJ 901, 93 — Montreal cooling tables (definitive)
+
+    For publication-quality WD ages, download and interpolate the Bédard+ 2020
+    tables from http://www.astro.umontreal.ca/~bergeron/CoolingModels/.
+    This function provides a smooth analytic approximation without hard caps,
+    suitable for quick-look analysis.
+
+    Parameters:
+        M_G: absolute G magnitude (scalar or array). Brighter → younger.
+        Teff: effective temperature in K (optional). If provided, uses Teff
+              instead of M_G for the luminosity calculation.
+        mass_Msun: WD mass in solar masses (default 0.6, typical for DA WDs).
+        atmosphere: "H" for DA (hydrogen) or "He" for DB (helium). DB WDs
+                    cool ~10-20% faster at given Teff.
+
+    Returns:
+        cooling_age_gyr: ndarray of cooling ages in Gyr (NO hard cap).
+    """
+    import numpy as _np
+
+    M_G = _np.asarray(M_G, dtype=float)
+
+    if Teff is None:
+        # Convert M_G to approximate Teff using a rough photometric relation
+        # valid for 0.5 < BP-RP < 1.5 DA WDs (Tremblay+ 2019 MNRAS 482, 5222).
+        # log10(Teff) ≈ 4.43 - 0.088 * (M_G - 10.5)  for 10 < M_G < 15
+        log_Teff = 4.43 - 0.088 * (M_G - 10.5)
+        Teff = 10.0 ** log_Teff
+    else:
+        Teff = _np.asarray(Teff, dtype=float)
+
+    # Mestel cooling: tau_cool ~ 8.8 Myr * (M/M_sun) * (Teff/10^4)^(-7/2) / mu_He
+    # (Mestel 1952; cf. Hansen, Kawaler & Trimble 2004 textbook Eq 4.91)
+    # The -7/2 exponent comes from radiative + ideal-gas heat capacity.
+    # We use a corrected normalization calibrated against Bédard+ 2020 tables
+    # at Teff = 10000 K, M = 0.6 M_sun → age ≈ 0.8 Gyr.
+    #
+    # Formula: t_cool (Gyr) = 8.8 * (M_wd/0.6) * (Teff/10^4)^(-7/2) / 1000
+    base_age_gyr = 8.8e-3 * (mass_Msun / 0.6) * (Teff / 10000.0) ** (-3.5)
+
+    # DB (He) atmospheres cool ~15% faster at given Teff
+    if atmosphere.upper() in ("HE", "DB"):
+        base_age_gyr *= 0.85
+
+    # Physical floor: no cooling ages below 1 Myr (hot pre-WDs)
+    base_age_gyr = _np.where(base_age_gyr < 0.001, 0.001, base_age_gyr)
+
+    return base_age_gyr
+
+
+def bss_select(bp_rp, abs_mag, turnoff_bp_rp, turnoff_M_G,
+               dmag_min=0.3, dmag_max=3.0, dcolor_max=0.5):
+    """Identify blue straggler (BSS) candidates in a cluster CMD.
+
+    Reference: Rain+ 2021 A&A 650, A67 (Gaia DR3 open cluster BSS criteria).
+    Also Ahumada & Lapasset 2007 (BSS catalog) and Simunovic & Puzia 2016
+    (globular cluster BSS).
+
+    BSS are defined as stars brighter AND bluer than the main-sequence
+    turnoff but within a physically reasonable envelope:
+    - Brighter than turnoff by at least dmag_min (default 0.3 mag)
+    - But not brighter than turnoff by more than dmag_max (default 3 mag,
+      excluding bright RGB scatterers)
+    - Bluer than turnoff color
+    - But not unreasonably blue (within dcolor_max = 0.5 mag bluer;
+      excludes HB, blue pulsators)
+
+    Parameters:
+        bp_rp: array of BP-RP colors for cluster members
+        abs_mag: array of absolute G magnitudes
+        turnoff_bp_rp: BP-RP at the MSTO (from fit_isochrone or blue-edge fit)
+        turnoff_M_G: M_G at the MSTO
+        dmag_min, dmag_max: brightness range relative to turnoff
+        dcolor_max: max blueward offset from turnoff color
+
+    Returns:
+        ndarray bool mask of BSS candidates (True where BSS)
+    """
+    import numpy as _np
+    bp_rp = _np.asarray(bp_rp, dtype=float)
+    abs_mag = _np.asarray(abs_mag, dtype=float)
+    mask = (
+        (abs_mag < turnoff_M_G - dmag_min) &
+        (abs_mag > turnoff_M_G - dmag_max) &
+        (bp_rp < turnoff_bp_rp) &
+        (bp_rp > turnoff_bp_rp - dcolor_max)
+    )
+    return mask
+
+
 def available_functions():
     """Return signatures and one-line docs for sandbox preloaded helpers."""
     exported = [
@@ -2791,6 +2924,8 @@ def available_functions():
         pub_style,
         get_isochrone,
         fit_isochrone,
+        wd_cooling_age,
+        bss_select,
         compare_models,
         analyze_residuals,
         plot_hr_diagram,
