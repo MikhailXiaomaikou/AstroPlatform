@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     # refuse to run in sync mode to avoid blocking the FastAPI event loop.
     pipeline_mode: str = "celery"
 
+    # Sandbox backend for run_python: "inprocess" (default, Jupyter-like
+    # session state) or "subprocess" (crash-isolated, no cross-call state).
+    # Subprocess mode contains OOM / infinite loops / SIGSEGV in user code
+    # so the FastAPI worker stays alive.
+    sandbox_backend: str = "inprocess"
+    sandbox_memory_bytes: int = 1024 * 1024 * 1024  # 1 GB per call
+    sandbox_timeout_seconds: int = 75
+
     # Max FITS upload size in bytes (default 100 MB)
     max_upload_size: int = 100 * 1024 * 1024
 

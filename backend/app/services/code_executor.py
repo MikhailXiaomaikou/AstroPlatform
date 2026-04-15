@@ -479,6 +479,42 @@ def _should_persist_value(val) -> bool:
     return True
 
 
+def _dispatch_subprocess(code: str) -> CodeExecutionResult | None:
+    """Run `code` in the subprocess sandbox backend.
+
+    Returns a CodeExecutionResult on success, or None if the backend could
+    not be used (import failure, unsupported platform). Falls back caller
+    to the in-process path on None.
+    """
+    try:
+        from app.config import settings as _settings
+        from app.services.sandbox.subprocess_backend import SubprocessBackend
+    except ImportError as e:
+        logger.warning("subprocess sandbox backend unavailable: %s", e)
+        return None
+
+    backend = SubprocessBackend()
+    try:
+        raw = backend.execute(
+            code,
+            timeout=_settings.sandbox_timeout_seconds,
+            memory_bytes=_settings.sandbox_memory_bytes,
+        )
+    except Exception as e:
+        logger.warning("subprocess sandbox backend raised: %s", e)
+        return None
+
+    result = CodeExecutionResult()
+    result.stdout = raw.stdout
+    result.stderr = raw.stderr
+    result.error = raw.error
+    result.figures = list(raw.figures)
+    result.variables = dict(raw.variables)
+    result.variable_types = dict(raw.variable_types)
+    result.success = raw.success
+    return result
+
+
 def execute_python(code: str, context: dict | None = None, session_id: str = "default") -> CodeExecutionResult:
     """Execute Python code in a sandboxed environment.
 
@@ -489,6 +525,17 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     Returns:
         CodeExecutionResult with stdout, stderr, figures, and key variables
     """
+    # Crash-isolated backend path: fresh subprocess per call, no session state.
+    # Callers who need Jupyter-like persistence stay on the in-process path.
+    try:
+        from app.config import settings as _settings
+        if _settings.sandbox_backend == "subprocess" and not context:
+            sub_result = _dispatch_subprocess(_normalize_code(code))
+            if sub_result is not None:
+                return sub_result
+    except Exception as e:
+        logger.debug("subprocess dispatch failed, using in-process: %s", e)
+
     result = CodeExecutionResult()
     code = _normalize_code(code)
 
