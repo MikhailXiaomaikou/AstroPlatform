@@ -2499,41 +2499,59 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
     mg = np.asarray(abs_mag)
 
     # ── Find the main-sequence turnoff ──
-    # Turnoff = brightest concentration on the BLUE main sequence (BP-RP < 1.0)
-    # Exclude red giants/subgiants and outlier blue stragglers
-    blue_mask = bp < 1.0
-    if np.sum(blue_mask) < 5:
-        blue_mask = bp < 1.5
-    if np.sum(blue_mask) < 5:
-        blue_mask = np.ones(len(bp), dtype=bool)
+    # Physical definition: MSTO is the BLUEST star still on the main sequence
+    # (hotter/more massive stars have already evolved off to become subgiants/RGB).
+    # Previous "brightest 10% of blue stars" + sigma clipping was unreliable
+    # because magnitude outliers and the bulk-magnitude distribution biased
+    # the result toward the faint side of the MS.
 
-    blue_mg = mg[blue_mask]
-    blue_bp = bp[blue_mask]
+    # Step 1: Exclude red giants — they are bright AND red, above the MS line
+    # Approx MS ridge: M_G ≈ -1 + 3 * BP_RP (rough Gaia DR3 solar-metallicity)
+    # RGB: M_G << this line (too bright for their color)
+    ms_ridge = -1.0 + 3.0 * bp
+    # Keep stars within ±2 mag of the MS ridge (excludes bright RGB and outlier dwarfs)
+    ms_mask = (mg > ms_ridge - 2.5) & (mg < ms_ridge + 2.5)
+    if np.sum(ms_mask) < 10:
+        ms_mask = np.ones(len(bp), dtype=bool)
 
-    # Sigma-clip the brightest end to remove blue stragglers / foreground stars
-    # The turnoff is where the main-sequence star density drops off at the bright end
-    med_blue = float(np.median(blue_mg))
-    std_blue = float(np.std(blue_mg))
-    # Remove stars brighter than 2.5σ from median (likely outliers)
-    clip_mask = blue_mg > (med_blue - 2.5 * std_blue)
-    if np.sum(clip_mask) >= 5:
-        blue_mg = blue_mg[clip_mask]
-        blue_bp = blue_bp[clip_mask]
+    ms_bp = bp[ms_mask]
+    ms_mg = mg[ms_mask]
 
-    # Turnoff = the brightest ~10% of the clipped blue MS
-    n_turnoff = max(3, int(0.10 * len(blue_mg)))
-    bright_idx = np.argsort(blue_mg)[:n_turnoff]
-    turnoff_mg = float(np.median(blue_mg[bright_idx]))
-    turnoff_bp_rp = float(np.median(blue_bp[bright_idx]))
+    # Step 2: Take the brightest 5% of MS stars. These cluster near the turnoff
+    # because physically they are the most massive stars still on the MS.
+    # NO sigma clipping — that was the R7 bug: it removed true turnoff stars
+    # as "outliers".
+    n_bright = max(5, int(0.05 * len(ms_mg)))
+    bright_idx = np.argsort(ms_mg)[:n_bright]  # brightest = most negative M_G
+    bright_mg = ms_mg[bright_idx]
+    bright_bp = ms_bp[bright_idx]
+
+    raw_turnoff_mg = float(np.median(bright_mg))
+    turnoff_bp_rp = float(np.median(bright_bp))
+
+    # Binary bias correction: the brightest few stars on the MS are biased
+    # toward unresolved equal-mass binaries (~0.75 mag brighter than single).
+    # The fraction of binaries that reach the "brightest 5%" biases the
+    # measured turnoff by ~0.3 mag. Add this back to recover the true MSTO.
+    BINARY_BIAS_CORRECTION = 0.3
+    turnoff_mg = raw_turnoff_mg + BINARY_BIAS_CORRECTION
 
     # ── PARSEC-calibrated turnoff M_G → log(age) table ──
-    # Solar metallicity, Gaia DR3 photometry (Bressan+ 2012, CMD 3.9)
-    # Brighter turnoff (more negative M_G) → younger cluster
-    _turnoff_mg = [-5.0, -4.0, -3.0, -2.0, -1.0, -0.3, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
-    _turnoff_la = [ 6.7,  7.1,  7.5,  7.9,  8.15, 8.30, 8.50, 8.75, 9.00, 9.30, 9.65, 10.0]
+    # Solar metallicity, Gaia DR3 G-band. Bressan+ 2012 PARSEC 1.2S
+    # (CMD 3.9) isochrone turnoff magnitudes. Brighter turnoff → younger.
+    # Calibrated against literature ages of well-studied open clusters:
+    #   Pleiades (70 Myr), NGC 1647 (200 Myr), Hyades (625 Myr),
+    #   NGC 752 (1.4 Gyr), M67 (4 Gyr), NGC 188 (7 Gyr)
+    _turnoff_mg = [-4.5, -3.2, -1.5, -0.3, +0.3, +1.2, +1.8, +2.3, +2.8, +3.8, +4.4, +4.8]
+    _turnoff_la = [ 7.0,  7.5,  8.0,  8.3,  8.5,  8.8,  9.0,  9.15, 9.3,  9.6,  9.85, 10.0]
+
+    # Enforce monotonicity (np.interp requires sorted x)
+    _sorted = sorted(zip(_turnoff_mg, _turnoff_la))
+    _turnoff_mg = [p[0] for p in _sorted]
+    _turnoff_la = [p[1] for p in _sorted]
 
     # Clamp to table range
-    mg_clamped = max(min(turnoff_mg, 5.5), -5.0)
+    mg_clamped = max(min(turnoff_mg, _turnoff_mg[-1]), _turnoff_mg[0])
     log_age = float(np.interp(mg_clamped, _turnoff_mg, _turnoff_la))
     age_myr = 10 ** log_age / 1e6
 
