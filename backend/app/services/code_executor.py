@@ -95,6 +95,7 @@ ALLOWED_MODULES = {
     "math", "statistics", "collections", "itertools", "functools",
     "json", "csv", "re", "datetime", "io",
     "inspect",
+    "warnings",  # Safe stdlib — astronomical packages emit many warnings
     # Data science
     "numpy", "np",
     "scipy", "scipy.optimize", "scipy.signal", "scipy.stats",
@@ -156,7 +157,8 @@ ALLOWED_MODULES = {
     # Microlensing fits (Poleski & Yee 2019 Astronomy & Computing 26, 35)
     "MulensModel",
     # 2-point correlation / BAO (Sinha & Garrison 2020 MNRAS 491, 3022)
-    "Corrfunc", "treecorr",
+    # Note: "Corrfunc" requires C build which fails on Python 3.14 — use treecorr instead
+    "treecorr",
     # N-body / hydrodynamic simulation post-processing (Turk+ 2011 ApJS 192, 9)
     "yt",
     # Pulsar timing (Luo+ 2021 ApJ 911, 45)
