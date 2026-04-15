@@ -124,6 +124,47 @@ ALLOWED_MODULES = {
     "pandas",
     # Distributed / large-data
     "dask", "dask.dataframe", "dask.array", "dask.bag",
+    # X-ray spectral fitting (Doe+ 2007 ASP 376, 543)
+    "sherpa", "sherpa.astro", "sherpa.astro.ui",
+    # RV orbit fitting (Fulton+ 2018 PASP 130, 044504)
+    "radvel",
+    # Sparse RV sampling for binaries (Price-Whelan+ 2017 ApJ 837, 20)
+    "thejoker",
+    # Galactic dynamics (Bovy 2015 ApJS 216, 29)
+    "galpy", "galpy.potential", "galpy.orbit", "galpy.util", "galpy.df",
+    "galpy.actionAngle",
+    # Stellar parameters from spectra (Piskunov & Valenti 2017 A&A 597, A16)
+    "pysme",
+    # Integrated spectroscopic analysis (Blanco-Cuaresma+ 2014 A&A 569, A111)
+    "ispec",
+    # Galaxy morphology (Rodriguez-Gomez+ 2019 MNRAS 483, 4140)
+    "statmorph",
+    # Voronoi 2D binning (Cappellari & Copin 2003 MNRAS 342, 345)
+    "vorbin",
+    # Kinematic fitting of stellar spectra (Cappellari 2017 MNRAS 466, 798)
+    "ppxf",
+    # IVOA/astropy database queries (Ginsburg+ 2019 AJ 157, 98)
+    "astroquery", "astroquery.jplhorizons", "astroquery.mpc",
+    "astroquery.vizier", "astroquery.simbad", "astroquery.ned",
+    "astroquery.gaia", "astroquery.mast", "astroquery.irsa",
+    # 3D dust maps (Green 2018 JOSS 3, 695)
+    "dustmaps", "dustmaps.sfd", "dustmaps.bayestar", "dustmaps.planck",
+    # HEALPix spherical data (Górski+ 2005 ApJ 622, 759)
+    "healpy",
+    # Strong gravitational lensing (Birrer & Amara 2018 Phys Dark Univ 22, 189)
+    "lenstronomy",
+    # Microlensing fits (Poleski & Yee 2019 Astronomy & Computing 26, 35)
+    "MulensModel",
+    # 2-point correlation / BAO (Sinha & Garrison 2020 MNRAS 491, 3022)
+    "Corrfunc", "treecorr",
+    # N-body / hydrodynamic simulation post-processing (Turk+ 2011 ApJS 192, 9)
+    "yt",
+    # Pulsar timing (Luo+ 2021 ApJ 911, 45)
+    "pint",
+    # ATNF Pulsar catalogue Python interface (Pitkin 2018 JOSS 3, 538)
+    "psrqpy",
+    # Image restoration / PSF deconvolution
+    "skimage", "skimage.restoration",
 }
 
 # Blocked operations
