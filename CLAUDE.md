@@ -39,28 +39,38 @@ Common pitfalls:
 
 **Full-stack astronomy research platform**: React SPA (Vite) + FastAPI backend + SQLite (dev) / PostgreSQL (prod).
 
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data flows.
+
 ### Backend (`backend/app/`)
 
-- `api/` — 17 FastAPI routers (auth, chat, data, arxiv, citations, crossmatch, team, settings, pipeline, etc.)
-- `connectors/` — 14 astronomical database connectors (SDSS, Gaia, SIMBAD, MAST, VizieR, NED, 2MASS, Chandra, ALMA, AllWISE, ESO, IRSA, JWST, LAMOST). All extend `BaseConnector` in `base.py` with `search()` and `fetch()` methods
-- `pipeline/nodes/` — 12 processing nodes (denoise, spectral_fit, coord_transform, redshift, sed_fit, crossmatch, image_stack, phot_calibrate, plot, plot_interactive, load_data, equivalent_width)
-- `models/schemas.py` — 16 SQLAlchemy models. Uses custom `UUIDType` and `JSONType` for SQLite/PostgreSQL portability
+- `api/` — **28 FastAPI routers** (auth, chat, data, pipeline, export, paper, sessions, team, research, alerts, anomalies, citations, crossmatch, integration, arxiv, workspace, settings, followup, provenance, visualization, scheduler, isochrones, inference, events, health, ws, ...)
+- `connectors/` — **23 astronomical database connectors** (SDSS, Gaia, SIMBAD, VizieR, MAST, NED, 2MASS, Chandra, AllWISE, ALMA, ESO, IRSA, JWST, LAMOST, DESI, Pan-STARRS, XMM, NVSS, FIRST, JPL Horizons, ATNF Pulsar, SPARC, FRBSTATS). All extend `BaseConnector` in `base.py` with `search()` / `fetch()` / `normalize()` methods
+- `pipeline/nodes/` — **35 processing nodes** (CCD reduction, spectroscopy, photometry, time-domain, image processing, Bayesian inference, ML clustering, custom scripts, plotting)
+- `services/` — 30 service modules: ai_tools (52 tools), astro_analysis, spectral_analysis_pro, photo_z_pro, bayesian_inference, time_domain_pro, image_processing_pro, parsec_fetcher, transient_classifier, literature_engine, memory_service, code_executor, provenance, dossier_generator, vo_services, ...
+- `models/schemas.py` — 20+ SQLAlchemy models. Uses custom `UUIDType` and `JSONType` for SQLite/PostgreSQL portability
+- `ai/` — Orchestrator + inference router + specialist agent prompts (Claude / OpenAI / DeepSeek routing)
 - `auth.py` — JWT with bcrypt + Google OAuth. `get_current_user()` (required) and `get_optional_user()` (optional) as FastAPI dependencies
+- `api/chat.py` — SYSTEM_PROMPT is now ~51 KB / ~12.8 K tokens with 16+ literature-cited object-class workflows
 
 ### Frontend (`frontend/src/`)
 
-- `pages/` — 9 page components: DataBrowser, Pipeline, Chat (AI assistant), ADQL, Team, Workspace, Settings, Billing, Auth
-- `components/viz/PlotBuilder.tsx` — Publication-quality Plotly charts generated client-side. White paper background, CMU Serif fonts, colorblind-safe palette
-- `api/client.ts` — Axios client. Base URL from `VITE_API_URL` env var, falls back to `localhost:8000`. JWT auto-attached via interceptor
+- `pages/` — Main pages: DataBrowser, Pipeline, Chat (AI assistant with persistent sidebar), ADQL, Workspace, Team, Account, Observations, Auth, Landing, Help, SharedSession
+- `components/viz/` — SpectrumViewer, LightCurveViewer, ImageCutoutViewer, MCMCDiagnostics, PlotBuilder (Plotly, publication-quality), AladinViewer, ProvenanceGraph
+- `components/nodes/` — 35-node palette + parameter editor + validation
+- `components/chat/` — Claude-desktop-style MarkdownText, chat sidebar, figure expand modal
+- `api/client.ts` — Axios client with SSE streaming support. Base URL from `VITE_API_URL`, JWT auto-attached, `AbortController` on search
 - `context/AuthContext.tsx` — Auth state with login/register/setupKeyLogin/logout
+- `i18n/index.tsx` — 4 languages (en/zh/fr/es)
 
 ### Key Data Flow
 
-1. **Search**: User query → `parse_natural_query()` extracts science criteria (redshift, spectral lines, object type) → routes to SIMBAD TAP `search_by_criteria()` for science queries, or direct `connector.search()` for name/coordinate queries
-2. **AI Chat**: Frontend sends messages + API key (from localStorage) → backend calls Claude API → response parsed for `<actions>` tags → actions executable inline (search, ADQL, arXiv extraction, plot, **generate_pipeline**, **modify_pipeline**, **comment_pipeline**)
-3. **NaN safety**: Astronomy data often contains masked/NaN values. `_safe_float()` and `_sanitize_extra()` in `data.py` sanitize all connector output before JSON serialization. SIMBAD connector also checks NaN in `_table_to_objects()`
-4. **FITS Upload**: Users upload FITS files via `POST /api/data/fits/upload` → stored in `data/fits/uploads/` → browseable via `GET /api/data/fits/browse` → usable as pipeline input
-5. **AI Pipeline Generation**: User describes workflow in chat ("denoise then fit lines") → AI returns `generate_pipeline` action with full DAG → saved as template → loadable in Pipeline Editor
+1. **Search**: User query → Data Browser → connector.search() across selected sources → concurrent dispatch with per-source timeout → normalize via `_astro_to_result()` → sanitize NaN via `_safe_float()` / `_sanitize_extra()` → cache full results under `"latest"` key
+2. **ADQL**: User/AI writes ADQL → `execute_adql_query()` (standalone function, not route-handler-only) → **auto-retry on 408/502/503 with halved cone radius** → full result under `"latest_adql"` cache key, AI sees first 100 rows + note
+3. **AI Chat**: Frontend sends messages + `current_session_id` + `python_session_id` → backend builds runtime context (system prompt + specialist agents + filtered tool list) → inference_router calls LLM → `_run_agent_loop` dispatches tool calls concurrently (max 12 iterations) → **empty-reply fallback** synthesizes summary from tool results if model returns blank → SSE stream → auto-save after each turn → auto-title from first user message
+4. **NaN safety**: Every path from connector to API response MUST go through `_astro_to_result()` which uses `_safe_float()`. ADQL query results separately handled in `execute_adql_query()` — masked astropy values → None, not NaN
+5. **FITS Upload**: `POST /api/data/fits/upload` → `_validate_path()` (uses `relative_to()` not string prefix) → `data/fits/uploads/` → browseable via `GET /api/data/fits/browse` → usable as pipeline input
+6. **AI Pipeline Generation**: User describes workflow in chat → AI returns `generate_pipeline` action with full DAG → saved as template → loadable in Pipeline Editor
+7. **fit_isochrone**: AI calls with no params → tool auto-extracts `bp_rp`+`abs_mag` from search/ADQL cache → auto-estimates DM from median parallax → 4-D grid search over age/met/DM/A_V → PARSEC CMD 3.9 lookup → falls back to turnoff M_G → log(age) table (Bressan+ 2012 calibrated) on PARSEC timeout
 
 ## Critical Patterns
 
