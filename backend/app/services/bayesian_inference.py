@@ -142,16 +142,25 @@ def chain_diagnostics(
     try:
         import arviz as az
 
+        # Ensure samples are float (newer arviz is strict about dtypes)
+        samples = np.asarray(samples, dtype=float)
+
         if samples.ndim == 2:
-            # Reshape to (n_chains, n_samples, n_params)
+            # Reshape to (n_chains, n_samples_per_chain, n_params)
             n_total = samples.shape[0]
             chain_len = n_total // n_chains
             samples_reshaped = samples[:chain_len * n_chains].reshape(n_chains, chain_len, -1)
         else:
             samples_reshaped = samples.reshape(1, -1, 1)
 
-        data_dict = {name: samples_reshaped[:, :, i] for i, name in enumerate(parameter_names)}
-        idata = az.from_dict({"posterior": data_dict})
+        # arviz.from_dict expects {name: array of shape (chains, draws)}
+        # i.e. each parameter is a 2D array, not 3D
+        data_dict = {
+            name: np.ascontiguousarray(samples_reshaped[:, :, i], dtype=float)
+            for i, name in enumerate(parameter_names)
+        }
+        # New arviz API: pass the dict as posterior= keyword, not wrapped
+        idata = az.from_dict(posterior=data_dict)
 
         rhat = az.rhat(idata)
         ess = az.ess(idata)
