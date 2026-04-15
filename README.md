@@ -314,6 +314,28 @@ The AI assistant has explicit guardrails against common pitfalls:
 
 7. **Empty AI response fallback**: If the language model returns zero text, the chat loop synthesizes a minimal summary from executed tool results so the user never sees a blank AI bubble.
 
+## Reliability & Infrastructure Hardening
+
+A dedicated tech-debt pass (Tiers A–D) added the following, all on stdlib-only or lightweight dependencies:
+
+### Tier A — Core stability
+- **Async-by-default pipelines** — `PIPELINE_MODE=celery` is the default; heavy node types (`BayesianFit`, `TransitFit`, `GPDetrend`, `PhotoZPro`, `SEDFit`, `ImageStack`, `Mosaic`, `PSFMatch`, `Deblend`, `CosmicRayReject`, `CustomScript`, ...) are annotated with a `cost` tag. `/api/pipeline/run` returns `503` with an explicit message when a DAG contains heavy nodes but no Celery worker is available.
+- **Crash-isolated Python sandbox** (`app/services/sandbox/subprocess_backend.py`) — `multiprocessing` *spawn* child with `resource.setrlimit` (RLIMIT_AS / RLIMIT_CPU / RLIMIT_NPROC), `setsid` process group, and `killpg(SIGKILL)` on timeout. A segfault, memory bomb, or infinite loop in user code **cannot crash the FastAPI worker**. Eight isolation tests cover infinite loop, memory bomb, `sys.exit`, hard kill, traceback capture, Matplotlib figure round-trip, and parent survival across repeated crashes.
+- **Raw connector response cache** (`app/services/connector_cache.py`) — SHA-256 content-addressed cache with Null / SQLite / Redis backends, `asyncio.Future`-based singleflight dedup, and tiered TTLs (24 h for metadata, 1 h for cone searches, 15 min for ADQL).
+- **Upstream rate-limiting** (`app/connectors/throttle.py`) — per-connector `asyncio.Semaphore` + stdlib token bucket. Default policies follow each archive's published ToS (Gaia 5 req/s 2-concurrent, SDSS 2 req/s, VizieR 10 req/s, SIMBAD 10 req/s, MAST 5 req/s 2-concurrent, etc.).
+
+### Tier B — AI correctness
+- **Router golden set** (`tests/test_orchestrator_routing.py`) — 32 hand-written query / expected-agent pairs, asserting ≥ 90 % precision across specialist agents. Widened `literature_agent` / `observation_agent` regex patterns to catch compound queries.
+- **Workflow checkpoint store** (`app/services/workflow_checkpoint.py`) — in-memory `CheckpointStep` records with 2-hour TTL and 32-step cap. Provides the substrate for resumable multi-step AI workflows (chat-loop wiring is deferred to a follow-up).
+
+### Tier C — Observability
+- **Prometheus `/metrics` endpoint** (`app/observability/metrics.py`) — stdlib-only `MetricsRegistry` with thread-safe counters and histograms; renders a subset of the OpenMetrics 0.0.4 text format compatible with Prometheus / Grafana scrapers. No external dependency.
+- **Versioned provenance** (`app/services/provenance.py`) — each recorded activity captures a `environment_manifest` (Python version, platform, pinned package versions + SHA-256 fingerprint, system-prompt hash) so old results can be reproduced exactly.
+
+### Tier D — Frontend performance
+- **Auto-WebGL viewers** — `LightCurveViewer` and `SpectrumViewer` switch to Plotly `scattergl` when `N > 5000`, fixing browser lockups on Kepler / TESS 60 k-cadence curves and DESI / MUSE high-resolution spectra. Overlays (fit lines, models) stay on SVG.
+- **Pipeline auto-layout** (`components/pipeline/autoLayout.ts`) — pure-stdlib layered DAG layout via Kahn's longest-path algorithm. A new **Auto Layout** button re-positions large DAGs deterministically with no `elkjs` / `dagre` dependency.
+
 ## Physics Formulas — Literature Audit Status
 
 All astronomy formulas in the codebase have been audited against published references. Each formula is cited in the code comments (author + year + journal + page). Notable entries:
@@ -354,7 +376,8 @@ The audit specifically removed LLM-hallucinated values (e.g. the old "Casagrande
 | Auth | JWT + bcrypt + Google OAuth, Fernet-encrypted API keys |
 | Deployment | Render blueprint (render.yaml), Docker Compose |
 | i18n | 4 languages (English, Chinese, French, Spanish) |
-| Testing | 750 tests (697 passing backend pytest + 29 E2E integration + frontend vitest) |
+| Testing | 800+ tests (767 backend pytest + 29 E2E integration + frontend vitest) |
+| Reliability | Subprocess-isolated Python sandbox, connector response cache, upstream rate-limiting, Prometheus `/metrics` endpoint |
 
 ## Repository Layout
 

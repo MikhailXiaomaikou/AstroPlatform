@@ -1,6 +1,6 @@
 # Standard Astro Architecture
 
-**Current as of the knowledge-base expansion (Phase A–G + post-bugfix loop).**
+**Current as of the knowledge-base expansion (Phase A–G) and the Tier A–D tech-debt hardening pass.**
 
 ## 1. System Shape
 
@@ -88,6 +88,8 @@ Backend entrypoint: [`backend/app/main.py`](./backend/app/main.py)
 
 - `app/connectors/*` — 23 archive-specific adapters normalized behind a common `BaseConnector.search()` / `fetch()` / `normalize()` interface.
 - [`app/connectors/registry.py`](./backend/app/connectors/registry.py) — Lazy registry for all 23 connectors.
+- [`app/connectors/throttle.py`](./backend/app/connectors/throttle.py) — **Per-connector upstream rate limiter**: combines `asyncio.Semaphore` (concurrency cap) with a stdlib token bucket (rate cap). Default policies follow each archive's published ToS (Gaia 5 req/s / 2 concurrent, SDSS 2 req/s, VizieR 10 req/s, SIMBAD 10 req/s, MAST 5 req/s / 2 concurrent, ...). Raises `ThrottleTimeout` on sustained overflow so callers fail fast instead of hanging.
+- [`app/services/connector_cache.py`](./backend/app/services/connector_cache.py) — **Content-addressed response cache** keyed on `sha256(connector + endpoint + sorted(params))`. Three backends with auto-select: `RedisBackend` (when Redis is reachable), `SQLiteBackend` (local `data/cache.db` fallback), `NullBackend` (disabled). Tiered TTLs: 24 h for metadata (SIMBAD / NED single-object), 1 h for cone searches (Gaia / SDSS), 15 min for ADQL. `asyncio.Future`-based singleflight dedup collapses concurrent duplicate queries into a single upstream request.
 - `app/search/*` — Natural-query parsing and filter extraction.
 
 **Connector list:**
@@ -115,6 +117,7 @@ Backend entrypoint: [`backend/app/main.py`](./backend/app/main.py)
 - [`app/services/time_domain_pro.py`](./backend/app/services/time_domain_pro.py) — GP detrending, BLS transit search, flare detection, transit fitting.
 - [`app/services/image_processing_pro.py`](./backend/app/services/image_processing_pro.py) — Reprojection, mosaicking, PSF matching, deblending, cutouts.
 - [`app/services/transient_classifier.py`](./backend/app/services/transient_classifier.py) — Random Forest light-curve classifier + spectral template matching.
+- [`app/services/sandbox/subprocess_backend.py`](./backend/app/services/sandbox/subprocess_backend.py) — **Crash-isolated Python sandbox**. User code runs in a `multiprocessing` *spawn* child guarded by `resource.setrlimit` (RLIMIT_AS, RLIMIT_CPU, RLIMIT_NPROC), `setsid` process-group isolation, and `killpg(SIGKILL)` on timeout. A segfault, memory bomb, or infinite loop in user code cannot crash the FastAPI worker. `code_executor.py` dispatches to this backend when `SANDBOX_BACKEND=subprocess`. See `tests/test_sandbox_isolation.py` for the eight containment test cases (infinite loop, memory bomb, sys.exit, hard kill, traceback capture, Matplotlib figure round-trip, and parent survival across repeated crashes).
 - [`app/services/code_executor.py`](./backend/app/services/code_executor.py) — **Sandboxed Python execution** with session-scoped variables. The `ALLOWED_MODULES` whitelist now includes:
   - **Original:** numpy, scipy, astropy, specutils, photutils, dynesty, arviz, celerite2, batman, matplotlib, pandas, dask, pyvo, sklearn
   - **New (Phase B/C):** sherpa, radvel, thejoker, galpy, pysme, statmorph, vorbin, ppxf, astroquery, dustmaps, healpy, lenstronomy, MulensModel, treecorr, yt, pint, psrqpy, skimage, warnings
@@ -122,6 +125,7 @@ Backend entrypoint: [`backend/app/main.py`](./backend/app/main.py)
 #### Pipeline layer
 
 - [`app/pipeline/engine.py`](./backend/app/pipeline/engine.py) — DAG validation, topological execution, Redis caching (shared connection pool), sync fallback, Celery execution entrypoint, provenance recording per node.
+- [`app/pipeline/nodes/__init__.py`](./backend/app/pipeline/nodes/__init__.py) — **Node cost registry** (`NODE_COST`, `node_cost()`, `dag_has_heavy_nodes()`). Each of 17 expensive node types (`BayesianFit`, `TransitFit`, `GPDetrend`, `PhotoZPro`, `SEDFit`, `ImageStack`, `Mosaic`, `PSFMatch`, `Deblend`, `CosmicRayReject`, `SourceExtract`, `PSFPhotometry`, `AstrometricSolve`, `SpectraStack`, `TelluricCorrect`, `TimeSeriesAnalysis`, `CustomScript`) is tagged `heavy`; `/api/pipeline/run` returns `503` with an explicit message if a DAG contains heavy nodes but `PIPELINE_MODE != "celery"` (no worker attached).
 - `app/pipeline/nodes/*` — **35 node types**:
   - **Data input:** QueryData, ImportWorkspace, LoadData
   - **CCD reduction:** BiasSubtract, DarkCorrect, FlatField, CosmicRayReject
@@ -145,6 +149,12 @@ Backend entrypoint: [`backend/app/main.py`](./backend/app/main.py)
 
 - [`app/services/event_collector.py`](./backend/app/services/event_collector.py) — Buffered event collection and bulk flush.
 - [`app/middleware/event_tracking.py`](./backend/app/middleware/event_tracking.py) — Automatic API-level tracking on core routes.
+
+#### Observability
+
+- [`app/observability/metrics.py`](./backend/app/observability/metrics.py) — **Stdlib-only Prometheus-compatible metrics registry**. Thread-safe counters and histograms with default latency buckets; `render_prometheus()` emits a subset of the OpenMetrics 0.0.4 text format. Exposed at `GET /metrics` in `app/main.py` for Prometheus / Grafana / Tempo scrapers. No external dependency — deliberately avoids `opentelemetry-*` / `prometheus-client` to keep the hot path and install surface small.
+- [`app/services/workflow_checkpoint.py`](./backend/app/services/workflow_checkpoint.py) — **In-memory workflow checkpoint store**. Records each step of a multi-tool AI workflow (`tool_name`, `inputs_hash`, `outputs_ref`, `status`) with a 2-hour TTL and 32-step cap per session, providing the substrate for resumable failed workflows. Chat-loop wiring is deferred to a follow-up (the store exists and is tested; `chat.py` does not yet emit checkpoints).
+- [`app/services/provenance.py`](./backend/app/services/provenance.py) — **Versioned provenance**. Each recorded activity now auto-captures an `environment_manifest` (Python version, platform, pinned package versions + SHA-256 fingerprint, active system-prompt hash) so old results can be reproduced deterministically. The manifest is merged into `record_activity()` output and exported alongside IVOA ProvDM lineage.
 
 ## 4. Persistence Model
 
@@ -200,16 +210,17 @@ The project keeps SQLite compatibility in development via custom `UUIDType` and 
 
 ### Pipeline flow
 
-1. User edits a DAG in the React Flow canvas.
+1. User edits a DAG in the React Flow canvas. The **Auto Layout** button (`components/pipeline/autoLayout.ts`) re-positions nodes deterministically via a pure-stdlib Kahn longest-path layered layout — no `elkjs` / `dagre` dependency.
 2. Frontend posts the DAG to `/api/pipeline/run`.
 3. Backend validates nodes, edges, topological order.
-4. Execution happens either:
-   - **Asynchronously** via Celery worker (if `PIPELINE_MODE=celery`), or
-   - **Synchronously** in a thread executor
-5. Each node's output is cached in Redis (shared connection pool) with a content hash key.
-6. Provenance recorded per node (IVOA ProvDM format).
-7. Node outputs merged and trimmed for API return.
-8. Run metadata stored in `PipelineRun` + `RunResult`.
+4. **Heavy-node guard**: `dag_has_heavy_nodes()` scans the DAG; if it contains any `heavy`-tagged nodes (`BayesianFit`, `TransitFit`, `ImageStack`, ...) and `PIPELINE_MODE != "celery"`, the endpoint returns `503` with an explicit "start a Celery worker" message instead of blocking the FastAPI event loop.
+5. Execution happens either:
+   - **Asynchronously** via Celery worker (`PIPELINE_MODE=celery`, now the default), or
+   - **Synchronously** in a thread executor (`PIPELINE_MODE=sync`, dev/test only).
+6. Each node's output is cached in Redis (shared connection pool) with a content hash key.
+7. Provenance recorded per node (IVOA ProvDM format) with the versioned environment manifest.
+8. Node outputs merged and trimmed for API return.
+9. Run metadata stored in `PipelineRun` + `RunResult`.
 
 ### Collaboration flow
 
@@ -315,7 +326,9 @@ Every formula, constant, and table in the prompt is cited (author + year + journ
 These are implementation realities worth keeping explicit:
 
 - **Research memory** is opt-in and based on lightweight hashed embeddings, not heavyweight vector infrastructure.
-- **Celery is optional**; the backend supports synchronous pipeline execution as a fallback.
+- **Celery is now the default** pipeline mode. Sync fallback remains for dev/test, but DAGs containing `heavy`-tagged nodes are rejected with `503` when no worker is attached.
+- **Python sandbox is process-isolated by default**. The subprocess backend (`app/services/sandbox/subprocess_backend.py`) is engineered for *stability* (crashing user code can never take down the FastAPI worker) rather than adversarial-grade security. `seccomp`/`gVisor`/`Firecracker`-level isolation is out of scope until a hardened deployment profile is added.
+- **Connector cache and upstream throttle are opt-in at the call site**: the new infrastructure exists and is tested, but `BaseConnector.search()` only begins using them as each connector is migrated (incremental rollout). The `/metrics` endpoint is likewise emitted in stdlib Prometheus format, but not all hot paths have been instrumented yet.
 - **Orchestrator** currently builds routed specialist context on top of a single chat-turn loop; the backend is prepared for richer multi-agent execution but the production path is still centered on one coordinated tool loop per turn.
 - **Workspace files** are the handoff boundary between search, chat, export, and pipeline modules.
 - **ADQL cache** stores full result sets but the AI model only sees the first 100 rows by default; downstream Python can retrieve the rest via `get_cached_results('latest_adql')`.
@@ -340,7 +353,7 @@ All formulas in the codebase now either:
 
 ## 11. Testing Strategy
 
-- **Unit + integration tests** — 697 pytest tests covering connectors, services, pipeline nodes, analysis, security, models.
+- **Unit + integration tests** — 767 pytest tests covering connectors, services, pipeline nodes, analysis, security, models, sandbox isolation (8), connector cache (8), upstream throttle (5), router golden set (32), workflow checkpoints (7), environment manifest (5), and Prometheus metrics (5).
 - **End-to-end tests** — 29 integration tests in `tests/test_e2e_full.py` (marked `integration and not network`) covering AI tool dispatch, run_python sandbox, pipeline DAG execution, session state.
 - **Smoke tests** — Post-bugfix loop verifies new tool/connector/sandbox imports + physical validation (Crab pulsar, K&E 2012 SFR, Bédard WD cooling).
 - **CI** — GitHub Actions runs backend pytest + frontend vitest + TypeScript type check + ruff lint on every push.

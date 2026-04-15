@@ -46,7 +46,10 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data 
 - `api/` — **28 FastAPI routers** (auth, chat, data, pipeline, export, paper, sessions, team, research, alerts, anomalies, citations, crossmatch, integration, arxiv, workspace, settings, followup, provenance, visualization, scheduler, isochrones, inference, events, health, ws, ...)
 - `connectors/` — **23 astronomical database connectors** (SDSS, Gaia, SIMBAD, VizieR, MAST, NED, 2MASS, Chandra, AllWISE, ALMA, ESO, IRSA, JWST, LAMOST, DESI, Pan-STARRS, XMM, NVSS, FIRST, JPL Horizons, ATNF Pulsar, SPARC, FRBSTATS). All extend `BaseConnector` in `base.py` with `search()` / `fetch()` / `normalize()` methods
 - `pipeline/nodes/` — **35 processing nodes** (CCD reduction, spectroscopy, photometry, time-domain, image processing, Bayesian inference, ML clustering, custom scripts, plotting)
-- `services/` — 30 service modules: ai_tools (52 tools), astro_analysis, spectral_analysis_pro, photo_z_pro, bayesian_inference, time_domain_pro, image_processing_pro, parsec_fetcher, transient_classifier, literature_engine, memory_service, code_executor, provenance, dossier_generator, vo_services, ...
+- `services/` — 30+ service modules: ai_tools (52 tools), astro_analysis, spectral_analysis_pro, photo_z_pro, bayesian_inference, time_domain_pro, image_processing_pro, parsec_fetcher, transient_classifier, literature_engine, memory_service, code_executor, provenance (**versioned environment manifest**), dossier_generator, vo_services, **connector_cache** (content-addressed, Null/SQLite/Redis, singleflight), **workflow_checkpoint** (resumable multi-step AI workflows), **sandbox/subprocess_backend** (crash-isolated `multiprocessing` spawn + rlimit + killpg), ...
+- `connectors/throttle.py` — Per-connector upstream rate limiter (`asyncio.Semaphore` + stdlib token bucket), per-archive ToS policies
+- `observability/metrics.py` — Stdlib-only Prometheus registry exposed at `GET /metrics`
+- `pipeline/nodes/__init__.py` — `NODE_COST` registry; `dag_has_heavy_nodes()` gates `/api/pipeline/run` with `503` when `PIPELINE_MODE != "celery"` and heavy nodes are present
 - `models/schemas.py` — 20+ SQLAlchemy models. Uses custom `UUIDType` and `JSONType` for SQLite/PostgreSQL portability
 - `ai/` — Orchestrator + inference router + specialist agent prompts (Claude / OpenAI / DeepSeek routing)
 - `auth.py` — JWT with bcrypt + Google OAuth. `get_current_user()` (required) and `get_optional_user()` (optional) as FastAPI dependencies
@@ -55,8 +58,9 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data 
 ### Frontend (`frontend/src/`)
 
 - `pages/` — Main pages: DataBrowser, Pipeline, Chat (AI assistant with persistent sidebar), ADQL, Workspace, Team, Account, Observations, Auth, Landing, Help, SharedSession
-- `components/viz/` — SpectrumViewer, LightCurveViewer, ImageCutoutViewer, MCMCDiagnostics, PlotBuilder (Plotly, publication-quality), AladinViewer, ProvenanceGraph
+- `components/viz/` — SpectrumViewer, LightCurveViewer (**both auto-upgrade to Plotly `scattergl` when N > 5000**), ImageCutoutViewer, MCMCDiagnostics, PlotBuilder (Plotly, publication-quality), AladinViewer, ProvenanceGraph
 - `components/nodes/` — 35-node palette + parameter editor + validation
+- `components/pipeline/autoLayout.ts` — Pure-stdlib layered DAG layout via Kahn longest-path; `PipelineCanvas` exposes it as the **Auto Layout** button (no `elkjs` / `dagre`)
 - `components/chat/` — Claude-desktop-style MarkdownText, chat sidebar, figure expand modal
 - `api/client.ts` — Axios client with SSE streaming support. Base URL from `VITE_API_URL`, JWT auto-attached, `AbortController` on search
 - `context/AuthContext.tsx` — Auth state with login/register/setupKeyLogin/logout
@@ -133,7 +137,11 @@ ANTHROPIC_API_KEY=sk-ant-...     # server-wide default for AI assistant
 ADS_API_KEY=...                  # NASA ADS citation search
 REDIS_URL=redis://...            # for caching (graceful fallback if unavailable)
                                  # supports rediss:// (TLS) for Upstash
-PIPELINE_MODE=celery             # "sync" (default) or "celery" for async execution
+PIPELINE_MODE=celery             # "celery" (default) or "sync" for dev/test only.
+                                 # DAGs containing heavy nodes (BayesianFit, TransitFit,
+                                 # ImageStack, ...) return 503 in sync mode.
+SANDBOX_BACKEND=subprocess       # "subprocess" (default, crash-isolated) or "inproc"
+CONNECTOR_CACHE_BACKEND=auto     # "auto" (Redis if available, else SQLite), "null", "sqlite", "redis"
 MAX_UPLOAD_SIZE=104857600        # max FITS upload size in bytes (default 100MB)
 GOOGLE_CLIENT_ID=...             # Google OAuth client ID (from Google Cloud Console)
 GOOGLE_CLIENT_SECRET=...         # Google OAuth client secret
