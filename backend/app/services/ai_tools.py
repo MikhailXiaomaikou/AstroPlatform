@@ -2403,9 +2403,24 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
             "then call fit_isochrone again."
         }
 
-    # ── Synchronized NaN/Inf filtering ──
-    bp_arr = np.asarray(bp_rp, dtype=float)
-    mag_arr = np.asarray(abs_mag, dtype=float)
+    # ── Synchronized NaN/Inf filtering (robust to "null"/"nan" strings) ──
+    def _safe_to_float(x):
+        if x is None:
+            return float("nan")
+        if isinstance(x, str):
+            if x.strip().lower() in ("null", "nan", "none", "na", ""):
+                return float("nan")
+            try:
+                return float(x)
+            except ValueError:
+                return float("nan")
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return float("nan")
+
+    bp_arr = np.array([_safe_to_float(x) for x in bp_rp], dtype=float)
+    mag_arr = np.array([_safe_to_float(x) for x in abs_mag], dtype=float)
     min_len = min(len(bp_arr), len(mag_arr))
     bp_arr = bp_arr[:min_len]
     mag_arr = mag_arr[:min_len]
@@ -2416,25 +2431,17 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
     if len(bp_rp) < 5:
         return {"error": f"Need at least 5 valid data points after NaN filtering, got {len(bp_rp)}"}
 
-    # ── Auto-estimate distance modulus from parallax ──
-    dm_range = tuple(inp.get("dm_range", [0.0, 20.0]))
-    av_range = tuple(inp.get("av_range", [0.0, 3.0]))
+    # ── Range setup ──
+    # We pass ABSOLUTE magnitudes (computed from G - 5*log10(1000/plx) + 5),
+    # so the dm parameter in fit_isochrone becomes a small residual correction
+    # around zero (accounting for parallax zero-point errors etc).
+    # DO NOT let dm_range default to (0, 20) — that would let grid search wander
+    # into unphysical territory and return dm=10 as a spurious best.
+    dm_range = tuple(inp.get("dm_range", [-0.5, 0.5]))
+    av_range = tuple(inp.get("av_range", [0.0, 2.5]))
 
-    if med_plx is None:
-        # Try search cache for parallax
-        sc = get_cached_results("latest")
-        if sc:
-            plx_vals = [r.get("extra", {}).get("parallax") for r in sc
-                        if isinstance(r, dict) and r.get("extra", {}).get("parallax")]
-            plx_vals = [p for p in plx_vals if p and p > 0.1]
-            if plx_vals:
-                med_plx = float(np.median(plx_vals))
-
-    if med_plx and dm_range == (0.0, 20.0):
-        dm_est = 5 * math.log10(1000.0 / med_plx) - 5
-        dm_range = (max(0.0, dm_est - 1.5), dm_est + 1.5)
-
-    if med_av is not None and av_range == (0.0, 3.0):
+    if med_av is not None and av_range == (0.0, 2.5):
+        # Center av_range on observed median extinction
         av_range = (max(0.0, med_av - 0.5), med_av + 1.0)
 
     # ── Try PARSEC isochrone fitting ──
@@ -2457,8 +2464,19 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
             ),
             timeout=180.0,
         )
-        if "corner_fig" in result:
-            del result["corner_fig"]
+        # Sanity check: if chi2 is astronomically large, the fit didn't converge
+        chi2_red = result.get("chi2_reduced", 0)
+        if chi2_red is not None and chi2_red > 1e6:
+            logger.warning("PARSEC fit chi2_reduced=%.2e is unreasonable, using turnoff estimation", chi2_red)
+            raise RuntimeError(f"fit did not converge (chi2_reduced={chi2_red:.2e})")
+        # Strip bulky fields to prevent response truncation downstream
+        for key in ("corner_fig", "chain", "samples", "posterior_samples"):
+            if key in result:
+                del result[key]
+        # Truncate any remaining large arrays > 100 elements
+        for k, v in list(result.items()):
+            if isinstance(v, list) and len(v) > 100:
+                result[k] = f"[truncated: {len(v)} elements]"
         return result
     except (asyncio.TimeoutError, Exception) as exc:
         logger.warning("PARSEC isochrone fitting failed (%s), using turnoff estimation", exc)

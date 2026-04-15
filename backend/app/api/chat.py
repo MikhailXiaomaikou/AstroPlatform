@@ -848,11 +848,28 @@ async def _run_agent_loop(
         for tc in executed_tools:
             result = tc["result"]
             result_str = json.dumps(result, default=str)
-            if len(result_str) > 8000:
-                result_str = json.dumps(
-                    {"truncated": True, "summary": str(result)[:2000]},
-                    default=str,
-                )
+            if len(result_str) > 16000:
+                # Field-level truncation: recursively shrink long strings/lists
+                # while preserving dict structure so the AI can keep analyzing.
+                def _truncate_value(v, depth=0):
+                    if depth > 4:
+                        return "[depth-limit]"
+                    if isinstance(v, str) and len(v) > 2000:
+                        return v[:2000] + f"... [truncated {len(v) - 2000} chars]"
+                    if isinstance(v, list):
+                        if len(v) > 50:
+                            return [_truncate_value(x, depth + 1) for x in v[:50]] + [
+                                f"... [truncated {len(v) - 50} items]"
+                            ]
+                        return [_truncate_value(x, depth + 1) for x in v]
+                    if isinstance(v, dict):
+                        return {k: _truncate_value(val, depth + 1) for k, val in v.items()}
+                    return v
+                truncated_result = _truncate_value(result) if isinstance(result, (dict, list)) else result
+                result_str = json.dumps(truncated_result, default=str)
+                # If still too large, do a hard cap but keep JSON valid
+                if len(result_str) > 24000:
+                    result_str = result_str[:24000] + '..."__truncated__":true}'
             tool_result_blocks.append(
                 {
                     "type": "tool_result",

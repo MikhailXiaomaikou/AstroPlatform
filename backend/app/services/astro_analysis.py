@@ -267,26 +267,40 @@ def fit_isochrone(
 
         return chi2_sum
 
-    # --- Grid search ---
+    # --- 4-D Grid search (age × metallicity × dm × av) ---
     logger.info("Starting isochrone fit: method=%s, n_data=%d", method, n_data)
 
     age_grid = np.linspace(age_range[0], age_range[1], n_grid_age)
     met_grid = np.linspace(met_range[0], met_range[1], n_grid_met)
+    # Coarse 3-point sweep over dm and av (min, center, max of range)
+    dm_grid = np.linspace(dm_range[0], dm_range[1], 3)
+    av_grid = np.linspace(av_range[0], av_range[1], 3)
 
+    # Initialize best_params from range midpoints, not hardcoded values
     best_chi2 = 1e12
-    best_params = [8.0, 0.0, 10.0, 0.1]
+    best_params = [
+        float((age_range[0] + age_range[1]) / 2),
+        float((met_range[0] + met_range[1]) / 2),
+        float((dm_range[0] + dm_range[1]) / 2),
+        float((av_range[0] + av_range[1]) / 2),
+    ]
 
     for log_age in age_grid:
         for met in met_grid:
-            # Quick search with fixed dm=median(mag)-5 and av=0
-            dm_init = float(np.median(abs_mag)) - 5.0
-            c2 = _chi2([log_age, met, dm_init, 0.0])
-            if c2 < best_chi2:
-                best_chi2 = c2
-                best_params = [log_age, met, dm_init, 0.0]
+            for dm in dm_grid:
+                for av in av_grid:
+                    c2 = _chi2([log_age, met, dm, av])
+                    if c2 < best_chi2:
+                        best_chi2 = c2
+                        best_params = [float(log_age), float(met), float(dm), float(av)]
 
-    logger.info("Grid search best: log_age=%.2f, [M/H]=%.2f, chi2=%.1f",
-                best_params[0], best_params[1], best_chi2)
+    logger.info("Grid search best: log_age=%.2f, [M/H]=%.2f, dm=%.2f, A_V=%.2f, chi2=%.1f",
+                best_params[0], best_params[1], best_params[2], best_params[3], best_chi2)
+
+    # If best_chi2 is still the sentinel value, no model isochrone could be fetched
+    # (e.g. PARSEC API unavailable). Raise so the caller can fall back.
+    if best_chi2 >= 1e11:
+        raise RuntimeError("Grid search failed — no valid isochrone model fetched (PARSEC API may be unavailable)")
 
     # --- Nelder-Mead refinement ---
     result = minimize(_chi2, best_params, method="Nelder-Mead",
