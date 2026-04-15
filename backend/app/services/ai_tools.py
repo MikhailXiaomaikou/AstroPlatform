@@ -2625,9 +2625,27 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
     dm_range = tuple(inp.get("dm_range", [-0.5, 0.5]))
     av_range = tuple(inp.get("av_range", [0.0, 2.5]))
 
+    av_warning = None
     if med_av is not None and av_range == (0.0, 2.5):
-        # Center av_range on observed median extinction
-        av_range = (max(0.0, med_av - 0.5), med_av + 1.0)
+        # Gaia GSP-Phot ag_gspphot is known to be biased high (~3-5×) for
+        # low-extinction directions |b| > 15° (Andrae+ 2023 A&A 674, A27).
+        # Pleiades 4-branch test 2026-04-15: per-star median A_V = 0.6,
+        # literature = 0.12, so a 5× overestimate. If we center av_range on
+        # this biased value the fit locks onto a wrong extinction.
+        #
+        # Policy: only tighten av_range when med_av is small (< 0.3 mag). For
+        # larger values, keep the full (0, 2.5) range and let the grid search
+        # find the real minimum. Emit a warning so the caller knows the
+        # GSP-Phot prior was not trusted.
+        if med_av < 0.3:
+            av_range = (max(0.0, med_av - 0.2), med_av + 0.6)
+        else:
+            av_warning = (
+                f"Gaia GSP-Phot median A_V = {med_av:.2f} ignored as prior "
+                "(known to be biased high by 3-5× for low-extinction lines "
+                "of sight). Using full av_range = (0, 2.5). For clusters at "
+                "|b| > 15°, verify extinction via lookup_ebv_irsa."
+            )
 
     # ── Try PARSEC isochrone fitting ──
     import asyncio
@@ -2662,6 +2680,8 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
         for k, v in list(result.items()):
             if isinstance(v, list) and len(v) > 100:
                 result[k] = f"[truncated: {len(v)} elements]"
+        if av_warning:
+            result.setdefault("warnings", []).append(av_warning)
         return result
     except (asyncio.TimeoutError, Exception) as exc:
         logger.warning("PARSEC isochrone fitting failed (%s), using turnoff estimation", exc)
@@ -2703,17 +2723,45 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
     ms_bp = bp[ms_mask]
     ms_mg = mg[ms_mask]
 
-    # Step 2: Take the brightest 5% of MS stars. These cluster near the turnoff
-    # because physically they are the most massive stars still on the MS.
-    # NO sigma clipping — that was the R7 bug: it removed true turnoff stars
-    # as "outliers".
-    n_bright = max(5, int(0.05 * len(ms_mg)))
-    bright_idx = np.argsort(ms_mg)[:n_bright]  # brightest = most negative M_G
-    bright_mg = ms_mg[bright_idx]
-    bright_bp = ms_bp[bright_idx]
+    # Step 2: Find the MSTO by color, not magnitude.
+    # The MSTO is physically defined as the BLUEST unevolved main-sequence
+    # star — for clusters of any age, the bluest MS member IS the turnoff.
+    # Using "brightest 5%" fails when the input sample is pre-filtered for
+    # low-mass stars (e.g., a brown-dwarf-focused Pleiades query): the bright
+    # tail contains only A-type stars even though the real MSTO is B-type.
+    # The color-based method is robust to this selection bias (R8 fix;
+    # Pleiades 4-branch test report 2026-04-15).
+    n_blue = max(5, int(0.05 * len(ms_bp)))
+    blue_idx = np.argsort(ms_bp)[:n_blue]  # bluest = smallest BP-RP
+    blue_mg = ms_mg[blue_idx]
+    blue_bp = ms_bp[blue_idx]
 
-    raw_turnoff_mg = float(np.median(bright_mg))
-    turnoff_bp_rp = float(np.median(bright_bp))
+    raw_turnoff_mg = float(np.median(blue_mg))
+    turnoff_bp_rp = float(np.median(blue_bp))
+
+    # ── Guard: refuse to fit when the sample lacks a real turnoff population ──
+    # If even the "bluest" stars are redder than BP-RP ≈ 0.9 the sample is
+    # almost certainly a low-mass selection with no MSTO coverage. Returning
+    # an age from such a sample is scientifically meaningless and was the
+    # cause of the Pleiades 125→1193 Myr regression.
+    if turnoff_bp_rp > 0.9 and len(bp) > 30:
+        return {
+            "error": "turnoff_not_sampled",
+            "message": (
+                f"The input sample's bluest MS stars have BP-RP ≈ "
+                f"{turnoff_bp_rp:.2f} — no B/A-type turnoff population. "
+                "Age cannot be estimated without a sample that includes the "
+                "main-sequence turnoff. Re-query without magnitude / color "
+                "pre-filters, or provide an external age constraint."
+            ),
+            "diagnostics": {
+                "bluest_bp_rp_median": round(turnoff_bp_rp, 3),
+                "n_stars": len(bp),
+                "n_bluest_used": n_blue,
+                "hint": "Young clusters need stars with BP-RP < 0.3; "
+                        "Gyr-old clusters need BP-RP < 0.7.",
+            },
+        }
 
     # Empirical binary bias correction (NOT a published standard value).
     # Physical rationale: equal-mass unresolved binaries are 2.5*log10(2) =
@@ -2755,12 +2803,27 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
     # Distance from parallax
     distance_pc = 1000.0 / med_plx if med_plx and med_plx > 0 else None
 
+    warnings_list: list[str] = []
+    reported_av: float | None = None
+    if med_av is not None:
+        # Gaia GSP-Phot A_V is biased high by 3-5× for |b|>15° (Andrae+ 2023).
+        # If the turnoff fallback is being used we have no chi² to fit A_V
+        # against, so don't report an unreliable GSP-Phot-derived value.
+        if med_av < 0.3:
+            reported_av = round(med_av, 3)
+        else:
+            warnings_list.append(
+                f"Gaia GSP-Phot median A_V = {med_av:.2f} suppressed "
+                "(known high bias for low-extinction lines of sight). "
+                "Use lookup_ebv_irsa to get the true SFD/Planck A_V."
+            )
+
     return {
         "best_fit": {
             "log_age": round(log_age, 3),
             "age_myr": round(age_myr, 1),
             "distance_pc": round(distance_pc, 1) if distance_pc else None,
-            "A_V": round(med_av, 3) if med_av else None,
+            "A_V": reported_av,
         },
         "turnoff": {
             "abs_mag_G": round(turnoff_mg, 3),
@@ -2771,6 +2834,7 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
         "n_data": len(bp_rp),
         "note": "Age from PARSEC-calibrated turnoff M_G → log(age) table. "
                 "Brighter turnoff → higher mass → YOUNGER cluster.",
+        "warnings": warnings_list,
     }
 
 

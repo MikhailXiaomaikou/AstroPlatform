@@ -79,6 +79,52 @@ def _get_registry() -> dict[str, Callable]:
     }
 
 
+# Node cost classification — consumed by engine to decide whether a DAG can
+# run in the sync path. "heavy" nodes run samplers / fits / ML / image stacks
+# that can take minutes and must go through Celery. Unlisted nodes default to
+# "light". This lookup is deliberately static so the API layer can check cost
+# before any node code is imported.
+NODE_COST: dict[str, str] = {
+    # samplers and Bayesian fits — minute-to-hour scale
+    "BayesianFit": "heavy",
+    "TransitFit": "heavy",
+    "GPDetrend": "heavy",
+    "PhotoZPro": "heavy",
+    "SEDFit": "heavy",
+    # image processing — large FITS arrays
+    "ImageStack": "heavy",
+    "Mosaic": "heavy",
+    "Reproject": "heavy",
+    "PSFMatch": "heavy",
+    "Deblend": "heavy",
+    "CosmicRayReject": "heavy",
+    # photometry/astrometry over full frames
+    "SourceExtract": "heavy",
+    "PSFPhotometry": "heavy",
+    "AstrometricSolve": "heavy",
+    # spectra batch operations
+    "SpectraStack": "heavy",
+    "TelluricCorrect": "heavy",
+    # time-domain can be heavy on long baselines
+    "TimeSeriesAnalysis": "heavy",
+    # CustomScript can be anything; treat as heavy so it goes through Celery
+    "CustomScript": "heavy",
+}
+
+
+def node_cost(node_type: str) -> str:
+    """Return "light" or "heavy" for a node type. Unknown types default to light."""
+    return NODE_COST.get(node_type, "light")
+
+
+def dag_has_heavy_nodes(dag: dict) -> list[str]:
+    """Return the list of heavy node IDs in a DAG (empty if all light)."""
+    return [
+        n["id"] for n in dag.get("nodes", [])
+        if node_cost(n.get("type", "")) == "heavy"
+    ]
+
+
 class _LazyRegistry:
     """Dict-like that defers imports until first access."""
 

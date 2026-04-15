@@ -47,8 +47,10 @@ class Settings(BaseSettings):
     # In Docker: /app is WORKDIR, so use /app/data/fits
     local_storage_dir: str = str(Path("/app/data/fits") if os.getenv("ENV") == "production" else _PROJECT_DIR / "data" / "fits")
 
-    # Pipeline execution mode: "sync" or "celery"
-    pipeline_mode: str = "sync"
+    # Pipeline execution mode: "sync" (dev only) or "celery" (default).
+    # Heavy nodes (MCMC / nested sampling / IFU kinematics / image stacking)
+    # refuse to run in sync mode to avoid blocking the FastAPI event loop.
+    pipeline_mode: str = "celery"
 
     # Max FITS upload size in bytes (default 100 MB)
     max_upload_size: int = 100 * 1024 * 1024

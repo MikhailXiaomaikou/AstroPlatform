@@ -15,6 +15,7 @@ from app.rate_limit import limiter
 from app.models.database import get_db
 from app.models.schemas import PipelineRun, PipelineTemplateDB, PipelineVersion, RunResult, User
 from app.pipeline.engine import execute_dag, execute_pipeline_task, topological_sort
+from app.pipeline.nodes import dag_has_heavy_nodes
 from app.pipeline.nodes import registry
 from app.pipeline.validate import DAGValidationError, validate_dag
 from app.utils.usernames import internal_email_for_username
@@ -338,6 +339,17 @@ async def run_pipeline(
             return RunResponse(run_id=run_id_str, status="running", warnings=dag_warnings)
         except Exception as e:
             logger.warning(f"Celery dispatch failed, falling back to sync: {e}")
+
+    heavy_ids = dag_has_heavy_nodes(req.dag)
+    if heavy_ids:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"This DAG contains heavy nodes ({', '.join(heavy_ids)}) that must "
+                "run through Celery. Start a Celery worker (PIPELINE_MODE=celery) "
+                "or remove the heavy nodes before running in sync mode."
+            ),
+        )
 
     # Synchronous execution in thread executor (avoids blocking async event loop)
     import asyncio
