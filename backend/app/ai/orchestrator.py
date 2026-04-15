@@ -37,11 +37,17 @@ class Orchestrator:
             "visualization_agent": VISUALIZATION_AGENT,
         }
         self.intent_patterns = {
-            "data_agent": [r"\b(query|catalog|gaia|sdss|simbad|adql|search|cone|archive)\b"],
-            "analysis_agent": [r"\b(fit|analy[sz]e|correlation|regression|python|pipeline|model|validate|paper)\b"],
-            "literature_agent": [r"\b(literature|paper|ads|arxiv|citation|prior work)\b"],
-            "observation_agent": [r"\b(observation|proposal|exposure|visibility|airmass|follow-up|followup|transient)\b"],
-            "visualization_agent": [r"\b(plot|figure|visuali[sz]e|diagram|lightcurve|sed|hr diagram|bpt)\b"],
+            "data_agent": [r"\b(query|catalog|gaia|sdss|simbad|adql|cone|archive|download|photometry)\b"],
+            "analysis_agent": [r"\b(fit|analy[sz]e|correlation|regression|python|pipeline|model|validate|residual)\b"],
+            # Note: `paper(s)` belongs to literature, not analysis — analysis
+            # handles `validate` for paper-reproduction workflows.
+            "literature_agent": [r"\b(literature|paper|papers|ads|arxiv|citation|citations|cite|prior work)\b"],
+            "observation_agent": [
+                r"\b(observation|observations|observable|observing|proposal|exposure|"
+                r"visibility|airmass|follow-up|followup|transient|telescope|paranal|"
+                r"keck|subaru|hst|jwst|alma)\b"
+            ],
+            "visualization_agent": [r"\b(plot|figure|visuali[sz]e|diagram|lightcurve|sed|hr diagram|bpt|draw)\b"],
         }
 
     def _collapse_fast_path(self, agents: list[str], user_message: str) -> tuple[list[str], str | None]:
