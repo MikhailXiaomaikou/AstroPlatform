@@ -212,6 +212,292 @@ For galactic plane sources or HII regions: use Bayestar/Marshall to capture dist
 ## Open cluster / star cluster analysis workflow (legacy alias)
 See "Open cluster workflow" above. The same applies for Hyades-class objects.
 
+## X-ray spectral analysis workflow
+For Chandra, XMM-Newton, NuSTAR, eROSITA data:
+1. Query the Chandra or XMM connector for observations (event files, source lists, archive products).
+2. For spectral fitting, use Sherpa (Freeman, Doe & Siemiginowska 2001 SPIE 4477, 76; Doe+ 2007 ASP 376, 543)
+   or PyXspec (HEASARC) — do NOT reimplement spectral models from scratch.
+3. Standard model components and typical use cases:
+   - phabs * powerlaw — AGN continuum. NH in 10^22 cm^-2, Gamma = photon index (1.5-2.5 for type 1 AGN)
+   - phabs * apec — galaxy cluster / hot ISM thermal plasma. kT in keV, Z in solar units
+     APEC atomic data: Smith, Brickhouse, Liedahl & Raymond 2001 ApJL 556, L91
+   - phabs * (diskbb + powerlaw) — X-ray binary, soft state. Mitsuda+ 1984 PASJ 36, 741
+   - tbabs * (thermal + nonthermal) — supernova remnants, galactic plane
+4. Absorption column density (NH):
+   - Use HI4PI 21-cm survey (HI4PI Collaboration 2016 A&A 594, A116) for total galactic NH at source coords.
+   - For z > 0, add intrinsic absorption: phabs*zphabs*powerlaw with z fixed from optical spectroscopy.
+5. Abundances for tbabs: use Wilms, Allen & McCray 2000 ApJ 542, 914 (abundance table "wilm") —
+   this is the current community standard, replacing the older "angr" Anders & Grevesse 1989.
+6. Statistics: use C-stat (Cash 1979 ApJ 228, 939) for low-count Poisson data,
+   chi2 for binned high-count data (>25 cts/bin).
+7. Report best-fit parameters with 90% confidence limits from `conf` or MCMC.
+
+## Galaxy star formation rate estimators
+When computing SFR from luminosities, use ONLY published calibrations, never invent coefficients.
+
+Authoritative reference: Kennicutt & Evans 2012 ARA&A 50, 531 Table 1 (Kroupa IMF, 0.1-100 Msun).
+All calibrations are of the form: log(SFR / M_sun/yr) = log(L) - log C, where:
+- H-alpha:        log C = 41.27 (L_Hα in erg/s)
+- FUV (1500 A):   log C = 43.35 (νL_ν in erg/s)
+- NUV (2300 A):   log C = 43.17 (νL_ν in erg/s)
+- TIR (8-1000μm): log C = 43.41 (L_TIR in erg/s)
+- 24 μm:          log C = 42.69 (νL_ν in erg/s)
+- 70 μm:          log C = 43.23 (νL_ν in erg/s)
+- 1.4 GHz radio:  log C = 28.20 (L_ν in erg/s/Hz)
+
+Dust correction BEFORE applying calibrations:
+- Balmer decrement (optical): E(B-V)_gas = 1.97 × log10[(Hα/Hβ)_obs / 2.86]
+  Intrinsic ratio 2.86 from Case B recombination (Osterbrock 1989, T=10^4 K).
+- UV slope method: A_FUV = 4.43 + 1.99 × β_UV (Meurer, Heckman & Calzetti 1999 ApJ 521, 64)
+  Valid only for starburst galaxies, not normal star-forming disks.
+- Stellar continuum attenuation: Calzetti+ 2000 PASP 112, 1547 (R_V = 4.05)
+- For high-z galaxies, use same calibrations but add K-correction and luminosity distance.
+
+## Radial velocity orbit fitting
+For Keplerian orbit fits to radial velocity curves (exoplanets, binary stars):
+
+1. For exoplanets (often well-sampled): use radvel (Fulton+ 2018 PASP 130, 044504).
+2. For sparse-sampling binary stars: use the-joker (Price-Whelan+ 2017 ApJ 837, 20) —
+   rejection sampling over (P, e, omega, K, M_0) handles multi-modal posteriors.
+3. Standard 5 Keplerian parameters: P (period), K (semi-amplitude),
+   t_p (time of periastron), e (eccentricity), omega (argument of periastron).
+4. Mass function (Hilditch 2001 "An Introduction to Close Binary Stars" Eq. 2.53):
+     f(m) = (M_2 sin i)^3 / (M_1 + M_2)^2 = P K^3 (1-e^2)^(3/2) / (2π G)
+5. For N-planet systems: radvel supports simultaneous fits; report MAP and MCMC posteriors.
+6. Always report jitter (σ_jit) as a free parameter alongside K to capture
+   instrumental and stellar activity noise.
+
+## Galaxy rotation curves and dark matter halos
+For rotation curve decomposition and halo fitting:
+
+1. Gold-standard data: SPARC database (Lelli, McGaugh & Schombert 2016 AJ 152, 157) —
+   175 nearby disks with 3.6μm Spitzer photometry, HI/Hα kinematics.
+   Access via VizieR catalog "J/AJ/152/157".
+2. Decomposition: V_obs^2(r) = V_gas^2 + ϒ_disk × V_disk^2 + ϒ_bulge × V_bulge^2 + V_halo^2
+   where ϒ are stellar mass-to-light ratios (free or fixed from IMF/SPS).
+3. Baryonic disk contribution (exponential thin disk, Freeman 1970 ApJ 160, 811):
+     V_disk^2(r) = 4πG Σ_0 R_d × y^2 × [I_0(y)K_0(y) - I_1(y)K_1(y)]
+   where y = r/(2 R_d), Σ_0 = central surface density, R_d = scale length.
+4. Dark matter halo models:
+   - NFW (Navarro, Frenk & White 1996 ApJ 462, 563): universal CDM profile, 2 params
+       ρ(r) = ρ_s / [(r/r_s)(1 + r/r_s)^2]
+       V^2(r) = (4πG ρ_s r_s^3 / r) × [ln(1+x) - x/(1+x)], x = r/r_s
+   - Burkert (1995 ApJL 447, L25): cored profile, 2 params
+       ρ(r) = ρ_0 / [(1 + r/r_0)(1 + (r/r_0)^2)]
+   - Einasto (1965 Trudy Alma-Ata 5, 87): 3 params (n, r_s, ρ_s),
+       ln(ρ/ρ_s) = -(2/α)[(r/r_s)^α - 1]
+5. For standard implementations, use galpy (Bovy 2015 ApJS 216, 29) —
+   do NOT reinvent NFW/Burkert/Einasto potentials.
+6. Fit with emcee (Foreman-Mackey+ 2013) or dynesty (Speagle 2020);
+   report 16/50/84 percentile credible intervals.
+
+## Stellar atmosphere models and synthetic spectra
+For precision stellar parameters (Teff, log g, [Fe/H], v sin i) from high-res spectra:
+
+1. Analysis framework: pysme (Piskunov & Valenti 2017 A&A 597, A16) or
+   iSpec (Blanco-Cuaresma+ 2014 A&A 569, A111) — do NOT implement synthesis from scratch.
+2. Model atmosphere grids (choose based on stellar type):
+   - Castelli & Kurucz 2003 (ATLAS9): F/G/K dwarfs and giants, 3500-50000 K, standard
+     for solar-type and warmer stars. IAU Symp 210, A20.
+   - MARCS: Gustafsson+ 2008 A&A 486, 951 — 2500-8000 K, preferred for cool giants/dwarfs
+   - BT-Settl/PHOENIX: Husser+ 2013 A&A 553, A6 — M/L dwarfs, including dust clouds
+3. Line lists: VALD3 (Ryabchikova+ 2015 Phys. Scr. 90, 054005) is the standard
+   atomic+molecular database for optical spectroscopy.
+4. NLTE corrections (important for low-gravity giants, hot stars, low-metallicity):
+   - Fe I/II: Mashonkina+ 2011, A&A 528, A87
+   - Multi-element grids: Amarsi+ 2020 A&A 642, A62
+5. Solar reference abundances:
+   - Photospheric: Asplund, Grevesse, Sauval & Scott 2009 ARA&A 47, 481
+   - Updated: Asplund, Amarsi & Grevesse 2021 A&A 653, A141
+   - Meteoritic: Lodders 2021 Space Science Reviews 217, 44
+
+## Galaxy morphology: Sersic profile fitting
+For 2D surface brightness decomposition:
+
+1. Sersic profile (Sérsic 1963 Bol. AAA 6, 41):
+     I(R) = I_e × exp{-b_n × [(R/R_e)^(1/n) - 1]}
+   where R_e is half-light radius, I_e is intensity at R_e, n is Sersic index,
+   b_n ≈ 2n - 0.327 (Capaccioli 1989 approximation; exact form: Ciotti & Bertin 1999).
+2. Tools:
+   - galfit (Peng+ 2002 AJ 124, 266; Peng+ 2010 AJ 139, 2097) — industry standard,
+     supports PSF convolution, multi-component bulge+disk fits.
+   - statmorph (Rodriguez-Gomez+ 2019 MNRAS 483, 4140) — pure Python,
+     also computes non-parametric morphology (Gini, M20, concentration, asymmetry).
+3. Typical Sersic indices: n=1 (exponential disk), n=4 (de Vaucouleurs elliptical),
+   n=0.5 (Gaussian). Report n, R_e (kpc), axis ratio, position angle.
+
+## Stellar initial mass function (IMF)
+Three standard IMF parametrizations — cite explicitly:
+
+- Salpeter 1955 ApJ 121, 161: single power law dN/dm ∝ m^(-α) with α = 2.35.
+  Valid for 0.4 < m/M_sun < 10 only; overestimates low-mass stars.
+- Kroupa 2001 MNRAS 322, 231: broken power law
+    α₁ = 0.3 (0.01 ≤ m/M_sun < 0.08)
+    α₂ = 1.3 (0.08 ≤ m/M_sun < 0.5)
+    α₃ = 2.3 (0.5 ≤ m/M_sun)
+- Chabrier 2003 PASP 115, 763: lognormal for m < 1 M_sun + Salpeter above
+    ξ(log m) ∝ exp[-(log m - log 0.22)^2 / (2 × 0.57^2)] for m < 1
+    ξ(log m) ∝ m^(-1.3) for m ≥ 1
+  This is the most commonly used IMF in current extragalactic work.
+
+For cluster mass function fitting, use PARSEC/MIST mass-luminosity relation
++ MCMC fit to the observed CMD star counts.
+
+## Galaxy cluster virial and scaling relations
+For mass estimation and scaling relations:
+
+1. Virial theorem (Biviano 2006 astro-ph/0609034 review):
+     M_vir ≈ 3 σ_v^2 R_vir / G  (for isotropic velocity dispersion)
+2. X-ray scaling relations:
+   - L_X - T: Arnaud & Evrard 1999 MNRAS 305, 631 (L_X ∝ T^2.88 for hot clusters)
+   - M - T: Finoguenov, Reiprich & Böhringer 2001 A&A 368, 749
+     M_500 ≈ 3.57×10^13 (T/keV)^1.58 h_70^-1 M_sun
+3. NFW concentration-mass relation for clusters:
+   Bartelmann 1996 A&A 313, 697; updated by Duffy+ 2008 MNRAS 390, L64.
+4. Cluster member selection: iterative 3σ-clipping around BCG velocity + red-sequence.
+
+## Pulsar analysis
+For pulsar timing and physics:
+
+1. Data source: ATNF Pulsar Catalogue (Manchester, Hobbs, Teoh & Hobbs 2005 AJ 129, 1993),
+   current version v1.70+. Access via `psrqpy` Python package or HTTP API.
+2. DM → distance: use YMW16 electron density model (Yao, Manchester & Wang 2017 ApJ 835, 29)
+   or the older NE2001 (Cordes & Lazio 2002 astro-ph/0207156). YMW16 is the modern default.
+3. Derived quantities from P and P-dot (Lorimer & Kramer 2004, "Handbook of Pulsar Astronomy"):
+   - Characteristic age: τ_c = P / (2 Ṗ)  (Eq. 3.16)
+   - Surface dipole B field: B_s ≈ 3.2 × 10^19 × √(P Ṗ) Gauss  (Eq. 3.18)
+     (assumes I = 10^45 g cm^2, R = 10 km, alpha = 90°)
+   - Spin-down luminosity: Ė = 4π^2 I Ṗ / P^3, I ≈ 10^45 g cm^2  (Eq. 3.14)
+4. For timing residuals and full TOA analysis: use PINT (Luo+ 2021 ApJ 911, 45)
+   — NANOGrav's modern Python-based timing package.
+5. P-Ṗ diagram classification: radio pulsars, millisecond pulsars, magnetars occupy
+   distinct regions (see Lorimer & Kramer 2004 Fig. 1.13).
+
+## White dwarf cooling ages
+For WD cooling age estimation:
+
+1. Montreal cooling models (Bédard, Bergeron, Brassard & Fontaine 2020 ApJ 901, 93) —
+   download grids from http://www.astro.umontreal.ca/~bergeron/CoolingModels/
+   Do NOT refit the cooling curves.
+2. Photometric WD identification from Gaia:
+   Gentile Fusillo+ 2019 MNRAS 482, 4570 (Gaia DR2 catalog of 260k WD candidates),
+   updated by Gentile Fusillo+ 2021 for DR3.
+3. Hydrogen-atmosphere (DA) vs helium-atmosphere (DB) classification via
+   Balmer vs He I lines in optical spectra.
+4. Cooling age formula: WD luminosity ∝ t^(-7/5) asymptotically (Mestel 1952);
+   for accurate ages use Bédard+ 2020 tables, not the analytic formula.
+5. For mass-radius: Fontaine, Brassard & Bergeron 2001 PASP 113, 409 tables.
+
+## Brown dwarf (substellar) classification
+For L, T, Y dwarf identification and characterization:
+
+1. Spectral classification scheme: Kirkpatrick 2005 ARA&A 43, 195 (review).
+   Primary defining features:
+   - L dwarfs: VO/TiO absorption, metal hydrides (FeH, CrH)
+   - T dwarfs: deep CH4 bands in H and K
+   - Y dwarfs: NH3 absorption, Teff < ~500 K
+2. 2MASS J-K_s color-spectral-type relation:
+   Burgasser 2007 ApJ 659, 655 — polynomial fits for L0-T8
+3. Gravity-sensitive indices (for young, low-gravity objects):
+   Allers & Liu 2013 ApJ 772, 79 — VO index, FeH index, K I equivalent width
+4. Spectral indices (literal definitions):
+   - H2O index (Burgasser+ 2006): flux ratio at 1.14/1.165 μm, 1.48/1.23 μm
+   - CH4 index: flux ratio at 1.56/1.66 μm
+5. For LT/Y evolutionary models: Saumon & Marley 2008 ApJ 689, 1327.
+
+## IFU 2D kinematics and Voronoi binning
+For integral field spectroscopy (MaNGA, CALIFA, SAMI, MUSE):
+
+1. Spatial binning: Voronoi binning (Cappellari & Copin 2003 MNRAS 342, 345) —
+   use the `vorbin` package. Bin to target S/N (typically 30-50 per bin).
+2. Kinematic fitting: pPXF (Cappellari 2017 MNRAS 466, 798) — industry standard
+   for extracting v_los, σ_los, h_3, h_4 from absorption-line spectra via
+   penalized pixel fitting with stellar templates.
+3. Stellar template libraries for pPXF:
+   - MILES: Sánchez-Blázquez+ 2006 MNRAS 371, 703 (optical, ~1000 stars)
+   - XSL: Chen+ 2014 A&A 565, A117 (UV/optical/NIR)
+4. Gas emission line fitting: pPXF can fit gas and stars simultaneously
+   with `gas_component=True`.
+5. Survey data access:
+   - MaNGA (SDSS IV): Bundy+ 2015 ApJ 798, 7 — 10,000 galaxies
+   - CALIFA: Sánchez+ 2012 A&A 538, A8 — 600 local galaxies
+   - SAMI: Croom+ 2012 MNRAS 421, 872 — 3000+ galaxies
+
+## AGN SED decomposition
+For separating AGN and host galaxy contributions:
+
+1. Full SED fitting: CIGALE (Boquien+ 2019 A&A 622, A103) — Bayesian SED fitting
+   with AGN + stellar + dust components, Python package.
+2. QSO composite template: Vanden Berk+ 2001 AJ 122, 549 (SDSS median composite).
+3. Dust torus models:
+   - Smooth torus: Fritz, Franceschini & Hatziminaoglou 2006 MNRAS 366, 767
+   - Clumpy torus: Nenkova+ 2008 ApJ 685, 147 (CLUMPY code)
+4. QSO property catalogs:
+   - Shen+ 2011 ApJS 194, 45 — SDSS DR7 quasar properties (BH mass, L_bol, etc.)
+   - Rakshit+ 2020 ApJS 249, 17 — SDSS DR14 QSO catalog
+5. BH mass via single-epoch virial estimator (Vestergaard & Peterson 2006 ApJ 641, 689):
+     log(M_BH/M_sun) = a + b log(L_λ / 10^44) + 2 log(FWHM / km/s)
+   Line-dependent coefficients: Hβ (a=6.91, b=0.5), Mg II (a=6.86, b=0.5), C IV (a=6.66, b=0.53).
+
+## Galactic streams and substructure
+For identifying stellar streams in Gaia DR3:
+
+1. Known major streams:
+   - GD-1: Grillmair & Dionatos 2006 ApJL 643, L17 — thin cold stream from SDSS
+   - Sagittarius: Ibata, Gilmore & Irwin 1994 Nature 370, 194; mapped extensively
+     by Majewski+ 2003 ApJ 599, 1082 with 2MASS M giants.
+   - Palomar 5 tidal tails: Odenkirchen+ 2001 ApJL 548, L165
+2. In situ accretion remnants:
+   - Gaia-Enceladus/Sausage: Helmi+ 2018 Nature 563, 85; Belokurov+ 2018 MNRAS 478, 611
+     Identified via retrograde metal-poor halo stars with high eccentricity.
+   - Sequoia: Myeong+ 2019 MNRAS 488, 1235
+3. Analysis in action-angle space:
+   Helmi & de Zeeuw 2000 MNRAS 319, 657 — integrals of motion (E, L_z, L_⊥)
+   for identifying common-origin groups.
+4. Use galpy.actionAngle for computing actions in Milky Way potentials.
+
+## Solar system objects
+For asteroids, comets, TNOs:
+
+1. Ephemeris: JPL Horizons (Giorgini+ 1996 BAAS 28, 1158) —
+   authoritative solar system ephemeris, access via `astroquery.jplhorizons`.
+2. Minor Planet Center (MPC): IAU official designation and orbit database.
+3. H-G magnitude system (asteroid absolute magnitude):
+   Bowell+ 1989 in "Asteroids II", Univ. Arizona Press —
+     H = V(α) + 2.5 log10[(1-G) Φ_1(α) + G Φ_2(α)]
+   where α is phase angle, G is slope parameter (default 0.15).
+4. Proper vs osculating orbital elements: osculating from Horizons, proper
+   from AstDyS (Knežević & Milani 2003) for dynamical family membership.
+5. NEO collision probability: Öpik 1951 Proc. Royal Irish Academy 54A, 165
+   (modern formulations in Morbidelli+ 2002 Icarus 158, 329).
+
+## Specialized domains (entry-point references)
+The following domains are not fully instrumented but the AI can use run_python
+with the listed packages + references as starting points for user-specific analyses:
+
+- Fast radio bursts (FRB): CHIME/FRB Collaboration 2021 ApJS 257, 59 (Catalog 1).
+  DM→distance via YMW16/NE2001 (same as pulsars). Use astroquery for database access.
+- Gravitational wave EM counterparts: LVK GraceDB for alerts; GW170817 reference
+  Abbott+ 2017 ApJL 848, L12; kilonova templates Kasen+ 2017 Nature 551, 80.
+- Weak lensing: Mandelbaum 2018 ARA&A 56, 393 (review).
+  HSC shape catalog: Mandelbaum+ 2018 PASJ 70, S25. Use TreeCorr for 2PCF.
+- Strong lensing modeling: lenstronomy (Birrer & Amara 2018 Physics of the Dark
+  Universe 22, 189) — use for mass model fits, time delays, source reconstruction.
+- BAO / 2-point correlation functions: Corrfunc (Sinha & Garrison 2020 MNRAS 491,
+  3022) or TreeCorr (Jarvis 2015). Landy-Szalay estimator standard.
+- CMB map analysis: healpy (Górski+ 2005 ApJ 622, 759) for HEALPix operations.
+  Planck Legacy Archive for public maps (no automated access — user must download).
+- N-body simulations: yt (Turk+ 2011 ApJS 192, 9) for post-processing.
+  IllustrisTNG public data: Pillepich+ 2018 MNRAS 475, 648.
+- Microlensing modeling: MulensModel (Poleski & Yee 2019 Astronomy & Computing 26, 35)
+  for PSPL/FSPL fits to OGLE/KMTNet events.
+- Galactic chemical evolution: NuPyCEE (Côté+ 2018), textbook reference
+  Matteucci 2012 "Chemical Evolution of Galaxies" (Springer).
+- Adaptive optics PSF deconvolution: Richardson-Lucy method (Richardson 1972
+  JOSA 62, 55; Lucy 1974 AJ 79, 745) via scikit-image.restoration.
+- VLBI interferometry: CASA (McMullin+ 2007 ASP 376, 127) — not pip-installable,
+  requires external install. Reference only.
+
 ## CRITICAL: Data integrity rules
 - NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and suggest alternatives (different database, different query, retry).
 - NEVER silently fall back to mock data. Every data point shown to the user MUST come from a real astronomical database or the user's own uploaded files.
