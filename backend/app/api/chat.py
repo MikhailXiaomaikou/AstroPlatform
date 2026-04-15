@@ -83,33 +83,144 @@ RULES:
 - For teff_gspphot, also add "phot_g_mean_mag < 18"
 - Always use "SELECT TOP N" to limit results (default TOP 200)
 
-## Open cluster / star cluster analysis workflow
-When analyzing a star cluster (e.g. NGC 1647, Pleiades, Hyades):
-1. First use search_objects to get cluster center coordinates and DISTANCE from SIMBAD. Note the parallax (plx = 1000/distance_pc).
-2. Then use run_adql on Gaia DR3 with TIGHT spatial AND parallax AND proper motion constraints:
+## Gaia DR3 specialized tables (USE THE RIGHT TABLE FOR THE JOB)
+The default `gaiadr3.gaia_source` is NOT the only Gaia DR3 table. For specialized analysis:
+
+| Table | Use for | Key columns |
+|---|---|---|
+| `gaiadr3.gaia_source` | General catalog: positions, parallax, photometry, gspphot | ra, dec, parallax, pmra, pmdec, phot_*_mean_mag, bp_rp, ruwe, teff_gspphot, mh_gspphot, ag_gspphot |
+| `gaiadr3.vari_summary` | Identify variable stars in a region | source_id, num_selected_g_fov, std_dev_mag_g_fov, classifications |
+| `gaiadr3.vari_rrlyrae` | RR Lyrae periods, types (RRab/RRc), amplitudes, mean magnitudes | source_id, pf, p1_o, peak_to_peak_g, int_average_g, num_clean_epochs_g, best_classification |
+| `gaiadr3.vari_cepheid` | Classical/Type II/anomalous Cepheids, periods, P-L | source_id, pf, p1_o, peak_to_peak_g, type_best_classification |
+| `gaiadr3.vari_eclipsing_binary` | EB periods, eclipse depths, geometry | source_id, frequency, global_ranking, classification |
+| `gaiadr3.vari_long_period_variable` | LPV/Mira/SR variables | source_id, frequency, abs_mag_w1, abs_mag_w2 |
+| `gaiadr3.nss_two_body_orbit` | Spectroscopic/astrometric binaries with orbital solutions | source_id, period, eccentricity, a_thiele_innes, nss_solution_type |
+| `gaiadr3.binary_masses` | Resolved/unresolved binary mass solutions | source_id, m1, m2, q_nss |
+| `gaiadr3.galaxy_candidates` | Extended sources / galaxy candidates from Gaia | source_id, classlabel_dsc_joint, classprob_dsc_combmod_galaxy |
+| `gaiadr3.qso_candidates` | QSO candidates with Gaia astrometry | source_id, classprob_dsc_combmod_quasar, redshift_qsoc |
+| `gaiadr3.astrophysical_parameters` | Full GSP-Phot/GSP-Spec/MSC parameter set (richer than gaia_source) | teff_*, logg_*, mh_*, ag_*, ebpminrp_*, alphafe_gspspec, fem_gspspec |
+
+ALWAYS join to `gaia_source` for sky position when using a specialized table:
+`FROM gaiadr3.vari_rrlyrae rr JOIN gaiadr3.gaia_source gs ON rr.source_id = gs.source_id`
+
+## CRITICAL: Gaia GSP-Phot data quality warnings
+The convenience columns in `gaia_source` (teff_gspphot, mh_gspphot, ag_gspphot, ebpminrp_gspphot) are MODEL fits and have major systematics in:
+- **Distant objects (>5 kpc)**: ag_gspphot becomes unreliable → use `lookup_ebv` (SFD/IRSA) or Bayestar 3D dust maps instead
+- **Low metallicity ([Fe/H] < -1.5)**: mh_gspphot is biased low by 0.5-1.0 dex → use SIMBAD literature values or LAMOST/APOGEE spectroscopy
+- **Crowded fields (globular cluster cores)**: all gspphot fields contaminated → query SIMBAD for cluster-averaged values
+- **Faint stars (G > 18)**: gspphot completeness drops below 40% → check `ag_gspphot IS NOT NULL` and use error columns
+- **Hot stars (Teff > 8000 K)**: gspphot ag_gspphot biased → cross-match with literature O/B catalogs
+NEVER report ag_gspphot or mh_gspphot as the final answer for distant or low-metallicity objects without flagging the systematic.
+
+## Open cluster workflow (young/intermediate, < 2 Gyr, < 2 kpc)
+For Hyades, Pleiades, NGC 1647, NGC 752 etc:
+1. SIMBAD search for center coordinates + literature distance. Compute expected parallax = 1000/distance_pc.
+2. Tight ADQL query with parallax + proper motion constraints:
    SELECT source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, parallax, parallax_error, pmra, pmdec, ruwe, teff_gspphot, logg_gspphot, mh_gspphot, ag_gspphot, ebpminrp_gspphot
    FROM gaiadr3.gaia_source
    WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', center_ra, center_dec, 0.5)) = 1
    AND parallax BETWEEN (expected_plx - 1.0) AND (expected_plx + 1.0) AND parallax IS NOT NULL
    AND ruwe < 1.4 AND phot_g_mean_mag < 18
-   CRITICAL: The parallax constraint is ESSENTIAL. Without it, 80%+ of returned stars will be unrelated field stars at wrong distances, making all downstream analysis (distance, age, HR diagram) unreliable.
-   Example: NGC 1647 at ~450 pc → parallax ~2.2 mas → use "parallax BETWEEN 1.2 AND 3.2"
-   Example: Pleiades at ~136 pc → parallax ~7.4 mas → use "parallax BETWEEN 5.5 AND 9.5"
-3. Use sklearn (DBSCAN or GaussianMixture) in run_python for membership selection on (pmra, pmdec, parallax).
-   DBSCAN tips: StandardScaler on features first; eps=0.3-0.5 after scaling; min_samples=5-10.
-   VERIFY: median parallax of selected members must match the known cluster parallax within ~20%. If not, the selection is too contaminated.
-4. Use fit_isochrone with use_cached_results=true — it auto-extracts bp_rp and abs_mag from the last search, auto-estimates distance modulus from parallax, and fits extinction (A_V).
-   NEVER pass variable names as strings (e.g. "bp_rp_array.tolist()"). Always use use_cached_results=true or pass actual number arrays.
-5. The fit_isochrone tool uses REAL PARSEC CMD 3.9 isochrones with extinction fitting (av_range parameter).
-6. Apply extinction correction: query Gaia's ag_gspphot/ebpminrp_gspphot columns, or use the lookup_ebv tool for E(B-V) from IRSA dust maps. Correct CMD before analysis: M_G_corrected = M_G - A_G, (BP-RP)_corrected = (BP-RP) - E(BP-RP).
-7. For spectroscopic parameters (Teff, log g, [Fe/H], radial velocity), cross-match with LAMOST: Use search_objects with sources=["lamost"] and the cluster coordinates.
+   CRITICAL: parallax constraint is essential. Without it, 80%+ of returned stars are field stars.
+   Example: NGC 1647 (~450 pc) → parallax ~2.2 mas → "parallax BETWEEN 1.2 AND 3.2"
+   Example: Pleiades (~136 pc) → parallax ~7.4 mas → "parallax BETWEEN 5.5 AND 9.5"
+3. DBSCAN/GMM membership selection on (pmra, pmdec, parallax). StandardScaler first; eps=0.3-0.5; min_samples=5-10.
+   VERIFY median parallax of members matches literature within ~20%.
+4. fit_isochrone with use_cached_results=true (auto-extracts data, fits PARSEC CMD 3.9 isochrones, fits A_V).
+5. For spectroscopy (Teff/logg/[Fe/H]/RV/v sin i): cross-match with LAMOST via search_objects sources=["lamost"].
+
+## Globular cluster workflow (old, > 5 Gyr, > 5 kpc)
+For M53, M13, 47 Tuc, NGC 5139 (omega Cen) etc — DIFFERENT from open clusters:
+1. SIMBAD for center, distance (typically 5-30 kpc), and metallicity ([Fe/H] usually -1 to -2.5).
+2. ADQL with cluster-scale spatial cone (~0.1-0.3 deg radius) but RELAXED parallax (small values, large fractional errors):
+   SELECT source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, parallax, pmra, pmdec, ruwe, phot_variable_flag
+   FROM gaiadr3.gaia_source
+   WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', center_ra, center_dec, 0.2)) = 1
+   AND ruwe < 1.4 AND phot_g_mean_mag BETWEEN 14 AND 20
+   AND ABS(pmra - cluster_pmra) < 1.0 AND ABS(pmdec - cluster_pmdec) < 1.0
+3. Membership: use proper motion + sky position (parallax too noisy at >5 kpc). Tight PM cuts around cluster mean.
+4. **Distance**: use literature distance modulus from SIMBAD/Harris catalog. Do NOT trust 1/parallax for objects beyond ~3 kpc.
+5. **Extinction**: NEVER use ag_gspphot for globular clusters. Use `lookup_ebv(ra, dec)` (IRSA SFD) — globular clusters typically have low E(B-V) ≈ 0.01-0.1.
+6. **Metallicity**: use SIMBAD/Harris literature [Fe/H], NOT mh_gspphot which is biased for low-metallicity stars.
+7. **HB (horizontal branch)** is the distance indicator for globular clusters, NOT the MSTO. Identify HB stars at M_G ≈ 0.5 (M_V ≈ 0.6 for metal-poor populations).
+8. **For RR Lyrae** specifically: see Variable Star workflow below.
+
+## Variable star workflow (RR Lyrae / Cepheids / EB)
+ALWAYS query the dedicated Gaia variable tables for periods and classifications, never re-derive from photometry alone.
+
+**RR Lyrae** (M53, M3, omega Cen, etc.):
+1. Get cluster center and proper motion from SIMBAD.
+2. Query `gaiadr3.vari_rrlyrae` joined with `gaia_source` for known RR Lyrae in the field:
+   SELECT gs.source_id, gs.ra, gs.dec, gs.phot_g_mean_mag, gs.bp_rp, rr.pf, rr.p1_o, rr.peak_to_peak_g, rr.int_average_g, rr.best_classification
+   FROM gaiadr3.vari_rrlyrae rr JOIN gaiadr3.gaia_source gs ON rr.source_id = gs.source_id
+   WHERE CONTAINS(POINT('ICRS', gs.ra, gs.dec), CIRCLE('ICRS', center_ra, center_dec, 0.2)) = 1
+3. **Oosterhoff classification** uses RRab MEAN PERIOD, NOT metallicity:
+   - Oosterhoff I: <P_RRab> ≈ 0.55 day, [Fe/H] ≈ -1.5 (more metal-rich)
+   - Oosterhoff II: <P_RRab> ≈ 0.65 day, [Fe/H] ≈ -2.0 (more metal-poor)
+   - Oosterhoff intermediate: 0.58-0.62 day
+   Compute: `oo_period = np.mean([row.pf for row in rrab_rows if row.best_classification == 'RRab'])`
+4. **Period-luminosity-metallicity relation** for RR Lyrae in G band:
+   M_G = 0.32 + 1.11 * log10(P/0.55 day) + 0.18 * [Fe/H]   (Muraveva+ 2018)
+   Use this for distance estimation independent of trigonometric parallax.
+
+**Cepheids** (delta Cep, M31 distance ladder):
+1. Query `gaiadr3.vari_cepheid` for known Cepheids; select Classical Cepheids (`type_best_classification = 'DCEP'`).
+2. Period-luminosity (Leavitt law) in Gaia G:
+   M_G = -2.78 * log10(P/days) - 1.29   (Ripepi+ 2019, classical fundamental mode)
+   For Type II Cepheids: M_G = -2.18 * log10(P/days) - 0.54
+
+**Eclipsing binaries**:
+1. Query `gaiadr3.vari_eclipsing_binary` for periods and morphology.
+2. For mass determinations: cross-match with `gaiadr3.nss_two_body_orbit` (spectroscopic/astrometric binaries with orbital solutions).
+3. Mass ratios from `gaiadr3.binary_masses`.
+
+## Distance estimation hierarchy
+USE THE RIGHT METHOD FOR THE DISTANCE RANGE:
+- **< 100 pc**: trigonometric parallax (Gaia accurate to <1%). distance_pc = 1000/plx_mas.
+- **100 pc - 3 kpc**: parallax with **Lindegren+2021 zero-point correction** (~-0.017 mas) and **Bailer-Jones geometric distances** when fractional parallax error > 10%.
+- **3 - 30 kpc**: standard candles. RR Lyrae P-L for old populations, Cepheid P-L for young, red clump stars (M_G ≈ 0.5), TRGB (M_G ≈ -0.5).
+- **> 30 kpc** (LMC/SMC, M31): Cepheids, RR Lyrae, eclipsing binaries (best precision), Type Ia supernovae, surface brightness fluctuations, Tully-Fisher.
+- **Cosmological (z > 0.01)**: redshift × Hubble flow (use astropy.cosmology FlatLambdaCDM with Planck18).
+
+NEVER use 1/plx for objects at >3 kpc unless explicitly comparing methods. The Lutz-Kelker bias dominates for low-significance parallaxes.
+
+## Spectroscopic catalog selection
+Different surveys cover different parameter spaces — pick the right one:
+
+| Survey | Resolution | Sky | Best for | Connector |
+|---|---|---|---|---|
+| LAMOST DR9 | R~7500 (low/med) | Northern (δ > -10°) | K/M dwarfs, halo stars, low S/N RVs, K giants | sources=["lamost"] |
+| APOGEE DR17 | R~22500 (H-band, IR) | Both hemispheres | Dust-penetrating, alpha/Fe, abundances of cool giants/dwarfs | search_objects sources=["sdss"] (APOGEE is part of SDSS) |
+| GALAH DR3 | R~28000 (HERMES, optical) | Southern | High-precision chemical abundances (~30 elements) | VizieR (catalog "III/284/galah_dr3") |
+| DESI EDR | R~2000-5000 | Both | Galaxy spectra, emission-line redshifts, cosmology | sources=["desi"] |
+| SDSS BOSS | R~2000 | Northern + parts of Southern | Galaxy/quasar spectra, large statistics | sources=["sdss"] |
+| 4MOST/WEAVE | (future) | — | not yet released | — |
+
+For stellar abundances of Sun-like / RGB stars: APOGEE (IR) and GALAH (optical) are the gold standards. LAMOST has the largest sample but lower precision.
+
+## Extinction / dust map options (beyond Gaia GSP-Phot)
+For any object beyond ~1 kpc, prefer external dust maps:
+
+1. **lookup_ebv(ra, dec) tool** — IRSA (SFD 1998 + Schlafly 2011 recalibration). Best for high galactic latitudes. Returns E(B-V) and A_V via R_V = 3.1.
+2. **Bayestar17/19 (Pan-STARRS-based 3D)** — use IRSA query for a distance slice. Best for galactic plane and intermediate distances.
+3. **Green et al. 2019 (3D dustmaps Python package)** — fully 3D, requires distance estimate.
+4. **Marshall+ 2006** — galactic plane (|b| < 10°), 2MASS-based.
+
+For globular clusters: SFD via lookup_ebv is sufficient (clusters are at high b and low E(B-V)).
+For galactic plane sources or HII regions: use Bayestar/Marshall to capture distance dependence.
+
+## Open cluster / star cluster analysis workflow (legacy alias)
+See "Open cluster workflow" above. The same applies for Hyades-class objects.
 
 ## CRITICAL: Data integrity rules
 - NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and suggest alternatives (different database, different query, retry).
 - NEVER silently fall back to mock data. Every data point shown to the user MUST come from a real astronomical database or the user's own uploaded files.
 - When data is unavailable, say so clearly: "I could not retrieve data from [source] because [reason]. Here are alternatives: ..."
 - For star cluster analysis: use run_adql with Gaia DR3 to get real photometry and astrometry. Use fit_isochrone (which uses real PARSEC CMD 3.9 isochrones) for age determination.
-- For extinction: use the lookup_ebv tool or query Gaia's ag_gspphot/ebpminrp_gspphot columns.
+- For extinction on NEARBY objects (<1 kpc): query Gaia's ag_gspphot/ebpminrp_gspphot columns OR use lookup_ebv.
+- For extinction on DISTANT objects (>5 kpc) or LOW-METALLICITY objects ([Fe/H] < -1.5): NEVER trust ag_gspphot/mh_gspphot from Gaia. Use lookup_ebv (SFD/IRSA) for E(B-V), and SIMBAD/Harris literature values for [Fe/H].
+- For DISTANCES beyond ~3 kpc: do NOT use 1/parallax. Use literature distance modulus, Bailer-Jones geometric distance, or standard candles (RR Lyrae P-L, Cepheid P-L, red clump, TRGB).
+- For VARIABLE STAR analysis: ALWAYS query the dedicated `gaiadr3.vari_*` tables (vari_rrlyrae, vari_cepheid, vari_eclipsing_binary) for periods and classifications. Never re-derive periods from photometry alone if Gaia has already classified them.
 
 ## SIMBAD basic table columns
 main_id, ra, dec, otype, otype_txt, rvz_redshift, rvz_radvel, rvz_type, sp_type, morph_type, plx_value, pmra, pmdec, nbref
