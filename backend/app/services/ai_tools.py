@@ -1933,9 +1933,9 @@ async def _exec_analyze_spectrum_pro(inp: dict) -> dict:
                 centers = line_centers or []
                 if not centers and "identified_lines" in result:
                     centers = [
-                        l["observed_wavelength"]
-                        for l in result["identified_lines"]
-                        if l.get("identification") != "unidentified"
+                        line["observed_wavelength"]
+                        for line in result["identified_lines"]
+                        if line.get("identification") != "unidentified"
                     ][:10]
                 ew_results = []
                 for c in centers:
