@@ -363,6 +363,14 @@ async def health():
     return {"status": "ok", "version": "0.4.0"}
 
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus text-format exposition of stdlib metrics registry."""
+    from fastapi.responses import PlainTextResponse
+    from app.observability import render_prometheus
+    return PlainTextResponse(render_prometheus(), media_type="text/plain; version=0.0.4")
+
+
 @app.get("/health/stats")
 async def health_stats():
     """API usage statistics and recent errors."""
