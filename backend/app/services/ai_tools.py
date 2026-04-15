@@ -3195,7 +3195,9 @@ async def _exec_fit_rv_orbit(inp: dict) -> dict:
     if len(times) < 5 or len(rvs) != len(times) or len(rv_errs) != len(times):
         return {"error": f"Need ≥5 observations with matching rvs/rv_errs arrays. Got times={len(times)}, rvs={len(rvs)}, errs={len(rv_errs)}"}
 
-    method = inp.get("method") or "radvel"
+    # `method` is reserved for future switching between radvel and thejoker;
+    # current implementation only supports radvel.
+    _ = inp.get("method") or "radvel"
     p_min = float(inp.get("period_min") or 1.0)
     p_max = float(inp.get("period_max") or 1000.0)
 
@@ -3445,7 +3447,7 @@ def _exec_pulsar_derived(inp: dict) -> dict:
     if Pdot <= 0:
         return {"error": "period_dot must be positive (spin-down)"}
 
-    I = float(inp.get("moment_of_inertia_g_cm2") or 1e45)  # default NS MoI
+    I_moi = float(inp.get("moment_of_inertia_g_cm2") or 1e45)  # default NS MoI
 
     tau_c_sec = P / (2.0 * Pdot)
     tau_c_yr = tau_c_sec / (365.25 * 86400)
@@ -3453,7 +3455,7 @@ def _exec_pulsar_derived(inp: dict) -> dict:
     B_s_Gauss = 3.2e19 * math.sqrt(P * Pdot)
 
     # Ė = 4π² I Ṗ / P³  in erg/s (I in g·cm²)
-    E_dot = 4.0 * (math.pi ** 2) * I * Pdot / (P ** 3)
+    E_dot = 4.0 * (math.pi ** 2) * I_moi * Pdot / (P ** 3)
 
     return {
         "characteristic_age_yr": float(f"{tau_c_yr:.3e}"),
@@ -3463,7 +3465,7 @@ def _exec_pulsar_derived(inp: dict) -> dict:
         "spin_down_luminosity_erg_s": float(f"{E_dot:.3e}"),
         "period_s": P,
         "period_dot": Pdot,
-        "moment_of_inertia_g_cm2": I,
+        "moment_of_inertia_g_cm2": I_moi,
         "reference": "Lorimer & Kramer 2004 Handbook of Pulsar Astronomy Eq 3.14, 3.16, 3.18",
     }
 
