@@ -7,7 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     gfortran \
-    && rm -rf /var/lib/apt/lists/*
+    fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -fv
 
 # Optional: Install Java for STILTS cross-match backend.
 # Uncomment the line below and set STILTS_JAR_PATH env var to enable.

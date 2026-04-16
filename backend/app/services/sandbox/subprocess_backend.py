@@ -79,6 +79,11 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int) -> None:
         # Matplotlib must be Agg before the first import of pyplot
         import matplotlib
         matplotlib.use("Agg")
+        matplotlib.rcParams["font.sans-serif"] = [
+            "Noto Sans CJK SC", "Noto Sans CJK", "WenQuanYi Micro Hei",
+            "PingFang SC", "Microsoft YaHei", "SimHei", "DejaVu Sans",
+        ]
+        matplotlib.rcParams["axes.unicode_minus"] = False
         import matplotlib.pyplot as plt
         import numpy as np
 

@@ -552,6 +552,17 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     import numpy as np
     import matplotlib
     matplotlib.use("Agg")  # Non-interactive backend
+    # Configure font fallback for CJK characters (avoids □□□ in labels)
+    matplotlib.rcParams["font.sans-serif"] = [
+        "Noto Sans CJK SC",    # Docker (fonts-noto-cjk)
+        "Noto Sans CJK",       # Alternative naming
+        "WenQuanYi Micro Hei", # Linux fallback
+        "PingFang SC",         # macOS
+        "Microsoft YaHei",     # Windows
+        "SimHei",              # Windows fallback
+        "DejaVu Sans",         # Final ASCII fallback
+    ]
+    matplotlib.rcParams["axes.unicode_minus"] = False  # Fix minus sign rendering
     import matplotlib.pyplot as plt
 
     exec_globals = {
