@@ -211,13 +211,18 @@ def posterior_predictive_check(
     posterior_samples: np.ndarray | list,
     observed_data: np.ndarray | list,
     n_samples: int = 100,
+    random_seed: int | None = None,
 ) -> dict:
-    """Generate posterior predictive samples and compute p-values."""
+    """Generate posterior predictive samples and compute p-values.
+
+    R5: ``random_seed`` makes the predictive draw reproducible.  Uses
+    numpy's modern Generator for isolation from global state.
+    """
     samples = np.array(posterior_samples)
     obs = np.array(observed_data)
 
-    # Draw n_samples from posterior
-    indices = np.random.choice(len(samples), size=min(n_samples, len(samples)), replace=False)
+    rng = np.random.default_rng(random_seed)
+    indices = rng.choice(len(samples), size=min(n_samples, len(samples)), replace=False)
 
     predictions = []
     for idx in indices:

@@ -215,6 +215,15 @@ function ActionCard({
   const isAutoExecuted = !!(action as Record<string, unknown>)._auto_executed;
   const autoResult = (action as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
 
+  // R3: surface numeric_sanity_warnings on the card as a ⚠ chip.  The
+  // warnings list is attached by normalize_tool_result in the backend.
+  const rawWarnings = autoResult && typeof autoResult === "object" && "warnings" in autoResult
+    ? (autoResult as { warnings?: unknown }).warnings
+    : null;
+  const sanityWarnings: string[] = Array.isArray(rawWarnings)
+    ? rawWarnings.filter((w): w is string => typeof w === "string")
+    : [];
+
   return (
     <div className={`chat-action-card${isAutoExecuted ? " auto-executed" : ""}`}>
       <div className="chat-action-header">
@@ -224,6 +233,24 @@ function ActionCard({
         <span className="chat-action-label">
           {labels[action.action] || action.action}
           {isAutoExecuted && <span className="auto-badge">auto</span>}
+          {sanityWarnings.length > 0 && (
+            <span
+              className="sanity-warning-chip"
+              title={sanityWarnings.join("\n")}
+              style={{
+                marginLeft: 6,
+                padding: "1px 6px",
+                border: "1px solid #b8860b",
+                borderRadius: 4,
+                background: "#fff7e6",
+                color: "#8a6a00",
+                fontSize: "0.75em",
+                cursor: "help",
+              }}
+            >
+              ⚠ {sanityWarnings.length} sanity warning{sanityWarnings.length === 1 ? "" : "s"}
+            </span>
+          )}
         </span>
         {!isAutoExecuted && action.action !== "explain" && action.action !== "comment_pipeline" && !result && (
           <button

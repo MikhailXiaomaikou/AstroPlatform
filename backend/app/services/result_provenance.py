@@ -4,11 +4,23 @@ The chat agent must distinguish between real archive data, cached real data,
 user-supplied data, synthetic demonstrations, and unavailable data.  These
 helpers keep that contract consistent across tools and make it harder for a
 simulated example to be presented as a scientific measurement.
+
+Phase 1 / R1 — reproducibility envelope:
+Every tool return additionally carries a minimal reproducibility envelope
+(`run_id`, `tool_version`, `query_hash`, `timestamp_utc`, optional
+`random_seed`).  A user who later wants to replay an analysis can feed
+these fields back in and get the same result (modulo archive updates
+captured in `archive_version`).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import os
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 REAL_ARCHIVE = "real_archive"
@@ -24,6 +36,53 @@ FAILED = "failed"
 
 _VALID_ORIGINS = {REAL_ARCHIVE, CACHED_REAL, USER_UPLOADED, SYNTHETIC, UNAVAILABLE}
 _VALID_STATUS = {COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED}
+
+# Build-time tool version; populated by the Dockerfile via
+# `ARG TOOL_VERSION` / `ENV TOOL_VERSION=...`.  Falls back to "dev" when
+# running uvicorn locally.  Accessed lazily so tests can monkeypatch.
+def _tool_version() -> str:
+    return os.getenv("TOOL_VERSION", "dev")
+
+
+def _now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def compute_query_hash(tool_name: str, tool_input: Any) -> str:
+    """Deterministic short SHA256 of (tool_name, tool_input)."""
+    try:
+        payload = json.dumps({"tool": tool_name, "input": tool_input},
+                              sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        payload = repr((tool_name, tool_input))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def reproducibility_envelope(
+    tool_name: str,
+    tool_input: Any,
+    *,
+    random_seed: int | None = None,
+    archive_version: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """Return the minimal metadata needed to replay a tool call.
+
+    Every tool result carries this so later analyses (golden-path tests,
+    user-triggered replays, audit-log inspection) can verify that the same
+    input against the same archive version would produce the same output.
+    """
+    envelope: dict[str, Any] = {
+        "run_id": run_id or str(uuid.uuid4()),
+        "tool_version": _tool_version(),
+        "query_hash": compute_query_hash(tool_name, tool_input),
+        "timestamp_utc": _now_utc_iso(),
+    }
+    if random_seed is not None:
+        envelope["random_seed"] = int(random_seed)
+    if archive_version:
+        envelope["archive_version"] = str(archive_version)
+    return envelope
 
 
 def result_contract(
@@ -115,10 +174,67 @@ _REFERENCE_TOOLS = {
 ALL_KNOWN_TOOLS = _DATA_TOOLS | _COMPUTE_TOOLS | _REFERENCE_TOOLS
 
 
-def normalize_tool_result(tool_name: str, result: Any) -> dict[str, Any]:
-    """Ensure every tool result is a dict with provenance metadata."""
+def normalize_tool_result(
+    tool_name: str,
+    result: Any,
+    *,
+    tool_input: Any = None,
+    random_seed: int | None = None,
+    archive_version: str | None = None,
+) -> dict[str, Any]:
+    """Ensure every tool result is a dict with provenance metadata + envelope.
+
+    The reproducibility envelope is added once per call so the payload
+    always carries run_id / tool_version / query_hash / timestamp and (when
+    supplied) random_seed + archive_version.  Existing envelope fields on
+    the result are respected (idempotent — called multiple times on the
+    same payload does not re-stamp).
+    """
     if not isinstance(result, dict):
         result = {"value": result}
+
+    # Attach envelope if not already present.  Tools that construct their
+    # own envelope (e.g., pipeline-executed runs with upstream run_ids) win.
+    if "reproducibility" not in result:
+        result = dict(result)
+        result["reproducibility"] = reproducibility_envelope(
+            tool_name,
+            tool_input if tool_input is not None else result.get("_tool_input"),
+            random_seed=random_seed,
+            archive_version=archive_version,
+        )
+
+    # R4: best-effort unit + frame annotation for well-known astronomical
+    # column names (ra/dec → deg + ICRS, parallax → mas, teff → K, …).
+    # Idempotent; pre-existing `*_unit` siblings win.
+    try:
+        from app.services.measurement import annotate_known_fields
+        annotate_known_fields(result)
+    except Exception:
+        pass
+
+    # R3: automatically run sanity checks and fold them into the result's
+    # warnings list so the UI can surface a ⚠ chip per offending field.
+    # We also emit a Prometheus counter per warning class so ops can see
+    # the rate of physically-suspicious values at a glance.
+    sanity = numeric_sanity_warnings(result)
+    if sanity:
+        existing = result.get("warnings") or []
+        if isinstance(existing, str):
+            existing = [existing]
+        existing_set = {str(w) for w in existing}
+        for w in sanity:
+            if w not in existing_set:
+                existing.append(w)
+        result["warnings"] = existing
+        try:
+            from app.observability.metrics import record_counter
+            record_counter(
+                "sanity_warning_total", float(len(sanity)), tool=tool_name,
+            )
+        except Exception:
+            pass
+
     if "data_origin" in result and "analysis_status" in result:
         return result
 
@@ -146,7 +262,22 @@ def normalize_tool_result(tool_name: str, result: Any) -> dict[str, Any]:
 
 
 def numeric_sanity_warnings(payload: Any) -> list[str]:
-    """Find common physically suspicious numeric outputs."""
+    """Find common physically suspicious numeric outputs.
+
+    Phase 1 / R3 extends the original two checks (zero uncertainty, zero
+    abundance) with:
+    - negative parallax (unphysical; Gaia allows it but the derived
+      distance is meaningless without a prior)
+    - RA out of [0, 360)
+    - Dec out of [-90, 90]
+    - redshift below -0.01 (blueshifts inside the Local Group are ~-0.001;
+      anything more negative is usually a unit error)
+    - log g outside [0, 6] (stars span ~0-5; WDs up to ~9 but flagged)
+    - absolute magnitudes fainter than +20 (likely error-bar leak)
+    - negative masses / radii / luminosities
+    Each warning references the dotted path so the UI can highlight the
+    exact offending field.
+    """
     warnings: list[str] = []
 
     def _walk(value: Any, path: str = "") -> None:
@@ -154,13 +285,39 @@ def numeric_sanity_warnings(payload: Any) -> list[str]:
             for key, item in value.items():
                 child_path = f"{path}.{key}" if path else str(key)
                 key_l = str(key).lower()
-                if isinstance(item, (int, float)):
+                if isinstance(item, (int, float)) and not isinstance(item, bool):
                     num = float(item)
                     if math.isfinite(num):
+                        # Zero-valued uncertainty (original check)
                         if num == 0.0 and any(token in key_l for token in ("noise", "sigma", "uncert", "error")):
                             warnings.append(f"{child_path} is exactly zero; check units and noise propagation.")
+                        # Zero abundance ratios
                         if num == 0.0 and key_l in {"c_o", "n_o", "c/o", "n/o"}:
                             warnings.append(f"{child_path} is exactly zero; check abundance accounting.")
+                        # Negative parallax (physical but suspicious)
+                        if "parallax" in key_l and num < 0:
+                            warnings.append(
+                                f"{child_path} = {num} is negative; Gaia allows it but derived distance is meaningless without a prior."
+                            )
+                        # RA range
+                        if key_l in {"ra", "ra_deg", "raj2000"} and not (0.0 <= num < 360.0):
+                            warnings.append(f"{child_path} = {num} is outside [0, 360).")
+                        # Dec range
+                        if key_l in {"dec", "dec_deg", "dej2000"} and not (-90.0 <= num <= 90.0):
+                            warnings.append(f"{child_path} = {num} is outside [-90, 90].")
+                        # Redshift floor
+                        if key_l in {"z", "redshift", "rvz_redshift"} and num < -0.01:
+                            warnings.append(f"{child_path} = {num}: blueshift this large is usually a unit or sign error.")
+                        # log g
+                        if key_l in {"log_g", "logg"} and not (0.0 <= num <= 6.5):
+                            warnings.append(f"{child_path} = {num} is outside [0, 6.5]; likely a unit mistake.")
+                        # Magnitudes: sanity not strictly bounded, but
+                        # absolute magnitudes > 20 or < -30 are unphysical
+                        if "abs_mag" in key_l and (num < -30 or num > 20):
+                            warnings.append(f"{child_path} = {num} is outside [-30, 20]; check distance modulus.")
+                        # Negative physical scalars
+                        if key_l in {"mass", "mass_solar", "radius_solar", "radius", "luminosity", "l_bol"} and num < 0:
+                            warnings.append(f"{child_path} = {num} is negative; unphysical.")
                 _walk(item, child_path)
         elif isinstance(value, list):
             for index, item in enumerate(value[:200]):

@@ -8,6 +8,7 @@ import os
 import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -27,6 +28,19 @@ logger = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 SYSTEM_PROMPT = """You are an AI research assistant for Standard Astro. Users ask you questions in natural language and you translate them into database queries automatically. Users should NEVER need to write ADQL/SQL themselves — that's YOUR job.
+
+## ZERO-FABRICATION CONTRACT (non-negotiable)
+Every numeric value in your reply — redshift, log g, [Fe/H], E(B−V), A_V,
+mass, luminosity, age, T_eff, distance, parallax, proper motion, radial
+velocity, period, magnitude, RA/Dec coordinates — MUST appear verbatim or
+within ±1% of a number present in the tool_result JSON you received
+this turn.  If you cannot find a tool-sourced value for a number, you
+MUST say "not determined by the tools I ran" instead of guessing.
+Citing a number from general knowledge / training data is a contract
+violation; the system will detect it and reject your reply.  When in
+doubt, call a tool (search_literature for published values,
+get_object_info / run_adql for catalog values).
+
 
 ## Your role
 When a user describes what data they want, you:
@@ -1127,8 +1141,30 @@ async def chat_message_stream(
             # Cloudflare free-tier idle timers (~30-100s) can't kill the
             # connection.
             event_queue: asyncio.Queue[dict] = asyncio.Queue()
+            # R7: capture a compact audit trail of every thinking-stream
+            # event so we can persist it to ChatSession.audit_log.  Raw
+            # tool_result payloads may be huge; we store a shallow preview
+            # in the audit log, keeping the full result in the actions list.
+            audit_trail: list[dict] = []
 
             async def _emit(evt: dict) -> None:
+                # R7 — persist a capped copy of the event for post-hoc audit.
+                try:
+                    audit_entry = dict(evt)
+                    if audit_entry.get("type") == "tool_result":
+                        raw_preview = json.dumps(audit_entry.get("result"), default=str)
+                        if len(raw_preview) > 2000:
+                            audit_entry["result"] = {
+                                "__preview__": True,
+                                "preview": raw_preview[:2000],
+                                "size": len(raw_preview),
+                            }
+                    audit_entry["ts"] = datetime.now(timezone.utc).isoformat()
+                    audit_trail.append(audit_entry)
+                    if len(audit_trail) > 500:  # bounded per-turn
+                        audit_trail[:] = audit_trail[-500:]
+                except Exception:
+                    pass
                 # Truncate tool_result payloads that could bloat the SSE
                 # frame — the full (truncated) JSON is already delivered
                 # to the model through the normal tool_result_blocks path.
@@ -1588,6 +1624,89 @@ async def _run_agent_loop(
     full_reply = "\n\n".join(text_parts)
     actions = _parse_actions(full_reply)
     clean_reply = _strip_actions_from_reply(full_reply)
+
+    # R2: zero-fabrication gate.  Validate every numeric claim in the reply
+    # against the tool_results collected this turn; if any claim can't be
+    # cited, push the LLM to regenerate.  After two failures, block.
+    fabrication_stats = {"pass": 0, "blocked": False, "regenerations": 0}
+    if clean_reply.strip():
+        from app.services.claim_validator import (
+            validate_claims,
+            build_regeneration_prompt,
+            blocked_reply_text,
+        )
+        for attempt in range(2):
+            validation = validate_claims(clean_reply, all_tool_results)
+            if validation.ok:
+                break
+            fabrication_stats["pass"] = attempt + 1
+            fabrication_stats["regenerations"] += 1
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "fabrication_detected_total",
+                    1.0,
+                    agent=agent_name,
+                    attempt=str(attempt + 1),
+                )
+            except Exception:
+                pass
+            logger.warning(
+                "Fabrication detected in %s reply (attempt %d): %d uncited claim(s): %s",
+                agent_name, attempt + 1, len(validation.uncited),
+                [c.label for c in validation.uncited],
+            )
+            # Push the correction as a follow-up user message; no tools.
+            working_messages.append({
+                "role": "assistant",
+                "content": clean_reply,
+            })
+            working_messages.append({
+                "role": "user",
+                "content": build_regeneration_prompt(validation),
+            })
+            try:
+                regen = await _llm_messages_create(
+                    system=system,
+                    messages=working_messages,
+                    tools=[],  # no tools — prose rewrite only
+                    provider_api_keys=provider_api_keys,
+                    agent_name=agent_name,
+                    preferred_backend=preferred_backend,
+                )
+                regenerated = str(regen.get("content", "") or "").strip()
+            except Exception as exc:
+                logger.warning("Regeneration call failed: %s", exc)
+                break
+            if not regenerated:
+                break
+            clean_reply = regenerated
+            text_parts.append("\n[regenerated]\n" + regenerated)
+        else:
+            # Two attempts did not cure it — block the reply entirely.
+            validation = validate_claims(clean_reply, all_tool_results)
+            if not validation.ok:
+                try:
+                    from app.observability.metrics import record_counter
+                    record_counter("fabrication_blocked_total", 1.0, agent=agent_name)
+                except Exception:
+                    pass
+                logger.error(
+                    "Fabrication gate BLOCKED reply from %s (%d uncited)",
+                    agent_name, len(validation.uncited),
+                )
+                clean_reply = blocked_reply_text(validation)
+                fabrication_stats["blocked"] = True
+        if fabrication_stats["regenerations"]:
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "reply_regeneration_total", float(fabrication_stats["regenerations"]),
+                    agent=agent_name,
+                )
+            except Exception:
+                pass
+
     for tr in all_tool_results:
         actions.append(
             {
@@ -2055,6 +2174,10 @@ class SaveSessionRequest(BaseModel):
     session_id: str | None = None
     title: str | None = None
     messages: list[dict]
+    # R7: optional audit trail uploaded by the frontend.  Captures the
+    # thinking-stream events (agent_text / tool_call / tool_result) for
+    # the session so we can reconstruct "what did the AI actually do?"
+    audit_log: list[dict] | None = None
 
 
 class RenameSessionRequest(BaseModel):
@@ -2103,6 +2226,8 @@ async def save_chat_session(
         session = result.scalar_one_or_none()
         if session:
             session.messages = req.messages
+            if req.audit_log is not None:
+                session.audit_log = req.audit_log  # R7
             # Only update title if explicitly provided AND not empty.
             # Don't overwrite a meaningful title with "New Chat" on auto-save.
             if req.title and req.title.strip() and req.title != "New Chat":
@@ -2110,10 +2235,14 @@ async def save_chat_session(
             elif session.title == "New Chat" and req.messages:
                 # If session still has default title, auto-generate from first message
                 session.title = _auto_title_from_messages(req.messages)
-            from datetime import datetime, timezone
-
             session.updated_at = datetime.now(timezone.utc)
-            await memory_service.refresh_session_memory(user.id, session.id, db)
+            # R13: wrap memory refresh in try/except so its failure does not
+            # abort the message save.  Partial success is preferable to the
+            # user silently losing their chat because memory service hiccuped.
+            try:
+                await memory_service.refresh_session_memory(user.id, session.id, db)
+            except Exception as mem_exc:
+                logger.warning("memory_service.refresh_session_memory failed: %s", mem_exc)
             await db.commit()
             return {"id": str(session.id), "saved": True, "title": session.title}
 

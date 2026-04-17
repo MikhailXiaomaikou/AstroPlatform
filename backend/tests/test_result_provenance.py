@@ -139,3 +139,41 @@ def test_attach_provenance_merges_warnings():
 def test_result_contract_invariants(origin, status, expected_status):
     c = result_contract(data_origin=origin, analysis_status=status)
     assert c["analysis_status"] == expected_status
+
+
+# --------------------------------------------------------------------
+# R1 — reproducibility envelope
+# --------------------------------------------------------------------
+
+
+def test_reproducibility_envelope_is_attached_on_normalize():
+    r = normalize_tool_result("search_objects", {"results": []}, tool_input={"q": "M31"})
+    env = r["reproducibility"]
+    assert "run_id" in env and len(env["run_id"]) >= 32  # uuid4
+    assert "tool_version" in env
+    assert "query_hash" in env and len(env["query_hash"]) == 16
+    assert "timestamp_utc" in env
+
+
+def test_query_hash_deterministic_same_input():
+    from app.services.result_provenance import compute_query_hash
+    h1 = compute_query_hash("run_adql", {"query": "SELECT * FROM gaia"})
+    h2 = compute_query_hash("run_adql", {"query": "SELECT * FROM gaia"})
+    h3 = compute_query_hash("run_adql", {"query": "SELECT 1"})
+    assert h1 == h2
+    assert h1 != h3
+
+
+def test_reproducibility_envelope_is_idempotent():
+    """normalize_tool_result must not re-stamp an existing envelope."""
+    first = normalize_tool_result("run_python", {"value": 1}, tool_input={"code": "x=1"})
+    original_run_id = first["reproducibility"]["run_id"]
+    second = normalize_tool_result("run_python", first, tool_input={"code": "x=1"})
+    assert second["reproducibility"]["run_id"] == original_run_id
+
+
+def test_reproducibility_envelope_records_seed_when_supplied():
+    r = normalize_tool_result(
+        "fit_isochrone", {"age_gyr": 0.1}, tool_input={}, random_seed=42,
+    )
+    assert r["reproducibility"]["random_seed"] == 42

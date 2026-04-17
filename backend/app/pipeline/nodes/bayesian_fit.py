@@ -4,8 +4,29 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 def bayesian_fit(input_data: dict, params: dict) -> dict:
-    """Perform Bayesian model fitting on input data."""
+    """Perform Bayesian model fitting on input data.
+
+    Phase 1 / R5 — determinism: respects an optional ``random_seed`` param.
+    When supplied, we seed numpy *and* derive an emcee-compatible RNG so
+    running the same input twice yields identical samples (modulo library
+    versions).  The effective seed is recorded in the returned result so
+    audit logs / replays can reproduce it.
+    """
     method = params.get("method", "mcmc")
+
+    # R5: deterministic seed.  A caller can pass their own seed, or we
+    # derive one from the hash of the input signature so repeated runs with
+    # the same data+params replay bit-exact.
+    user_seed = params.get("random_seed")
+    if user_seed is None:
+        import hashlib, json as _json
+        sig_bytes = _json.dumps(
+            {"method": method, "params": params, "x_len": len(input_data.get("x", []))},
+            sort_keys=True, default=str,
+        ).encode()
+        user_seed = int.from_bytes(hashlib.sha256(sig_bytes).digest()[:4], "big")
+    rng = np.random.default_rng(int(user_seed))
+    np.random.seed(int(user_seed) & 0xFFFF_FFFF)  # legacy calls inside emcee
 
     # Get data
     x = np.array(input_data.get("x", input_data.get("wavelength", [])))
@@ -73,7 +94,7 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
                     return -np.inf
                 return lp + log_likelihood(theta)
 
-            p0 = prior_transform(np.random.rand(n_walkers, ndim))
+            p0 = prior_transform(rng.random((n_walkers, ndim)))
             # M22: reject starts where too many walkers begin at -inf log-prob.
             # emcee silently produces garbage chains when walkers are stuck in
             # a region of zero likelihood.  We retry once with a fresh seed
@@ -84,7 +105,7 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
                 return float(finite.sum()) / max(1, len(logs))
 
             if _initial_finite_ratio(p0) < 0.5:
-                p0 = prior_transform(np.random.rand(n_walkers, ndim))
+                p0 = prior_transform(rng.random((n_walkers, ndim)))
                 if _initial_finite_ratio(p0) < 0.5:
                     raise ValueError(
                         "BayesianFit: fewer than half of the initial walkers "
@@ -100,6 +121,7 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
                 "samples": flat_samples.tolist(),
                 "n_samples": len(flat_samples),
                 "method": "mcmc",
+                "random_seed": int(user_seed),  # R5: replay key
             }
 
             # Add chain diagnostics

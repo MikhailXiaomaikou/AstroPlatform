@@ -167,6 +167,18 @@ def _migrate_add_columns(connection):
             except Exception:
                 pass
 
+    # --- ChatSession audit_log column (R7 thinking-stream audit) ---
+    if "chat_sessions" in inspector.get_table_names():
+        existing_cs = {c["name"] for c in inspector.get_columns("chat_sessions")}
+        if "audit_log" not in existing_cs:
+            try:
+                connection.execute(sqlalchemy.text(
+                    "ALTER TABLE chat_sessions ADD COLUMN audit_log TEXT"
+                ))
+                logger.info("Added column chat_sessions.audit_log")
+            except Exception:
+                pass
+
     # --- PipelineComment parent_comment_id column ---
     if "pipeline_comments" in inspector.get_table_names():
         existing_pc = {c["name"] for c in inspector.get_columns("pipeline_comments")}

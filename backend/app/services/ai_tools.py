@@ -1238,7 +1238,9 @@ async def execute_tool(
         tool_name, tool_input, api_key, provider_api_keys,
         python_session_id, user_id, chat_session_id,
     )
-    return normalize_tool_result(tool_name, result)
+    # R1: pass the caller's tool_input so the reproducibility envelope can
+    # hash the exact invocation parameters.
+    return normalize_tool_result(tool_name, result, tool_input=tool_input)
 
 
 async def _execute_tool_inner(
