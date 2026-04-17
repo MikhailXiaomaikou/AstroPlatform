@@ -1126,7 +1126,7 @@ async def chat_message_stream(
                         preferred_backend=preferred_backend,
                         chat_session_id=chat_session_id,
                     ),
-                    timeout=180.0,
+                    timeout=420.0,  # 7-min hard ceiling — heartbeat keeps SSE alive
                 )
             )
             _hb_count = 0
@@ -1142,7 +1142,7 @@ async def chat_message_stream(
             for action in response["actions"]:
                 yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result')})}\n\n"
         except (TimeoutError, asyncio.TimeoutError):
-            yield f"data: {json.dumps({'type': 'error', 'message': 'AI workflow timed out after 180s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': 'AI workflow timed out after 420s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
         except InferenceError as e:
             msg = str(e) or e.__class__.__name__
             yield f"data: {json.dumps({'type': 'error', 'message': msg})}\n\n"
@@ -1265,11 +1265,13 @@ async def _llm_messages_create(
         preferred_backend=preferred_backend,
         max_tokens=4096,
         temperature=0.0,
-        # Timeout budget (H1): outer endpoint 180s -> agent loop 150s ->
-        # single LLM call 90s.  Individual tool calls (45s) fit inside each
-        # iteration.  Ordering guarantees the backend surrenders before the
-        # SSE stream is cut by the outer wrapper.
-        backend_timeout=90.0,
+        # Timeout budget (step 0 bump after c6504c9 shipped SSE heartbeat):
+        #   outer endpoint 420s -> agent loop 360s -> single LLM call 150s.
+        # Individual tool calls (45s) still fit inside each iteration.  The
+        # heartbeat prevents proxy idle-kill, so the higher ceiling is safe
+        # on Render free tier (5-min HTTP limit is per-request start, not
+        # per streaming body).
+        backend_timeout=150.0,
     )
 
 
@@ -1326,9 +1328,10 @@ async def _run_agent_loop(
     all_tool_results: list[dict] = []
     text_parts: list[str] = []
     max_iterations = 12
-    # H1: Agent-loop deadline sits between the outer endpoint (180s) and the
-    # per-LLM-call timeout (90s).  150s leaves ~15s of buffer either side.
-    _loop_deadline = _time.monotonic() + 150.0
+    # H1 / step 0 bump: agent-loop deadline sits between the outer endpoint
+    # (420s) and the per-LLM-call timeout (150s).  360s leaves ~60s of
+    # buffer on each side for tool execution + response assembly.
+    _loop_deadline = _time.monotonic() + 360.0
 
     hit_iteration_cap = False
     hit_deadline = False
@@ -1337,7 +1340,7 @@ async def _run_agent_loop(
             hit_deadline = True
             summary = " ".join(text_parts) if text_parts else "AI workflow timed out."
             return {
-                "reply": summary + "\n\n(Agent loop timed out after 2 minutes. Results above are partial.)",
+                "reply": summary + "\n\n(Agent loop timed out after 6 minutes. Results above are partial.)",
                 "actions": all_tool_results,
                 "hit_deadline": True,
                 "hit_iteration_cap": False,
