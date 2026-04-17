@@ -105,8 +105,8 @@ db.commit()
 ## Deployment
 
 **Production**: Render.com (backend Docker + PostgreSQL) + Render static site (frontend)
-- Backend: `https://standard-astro-backend-h4x1.onrender.com`
-- Frontend: `https://standard-astro-frontend-tyfr.onrender.com`
+- Backend: `https://astro-backend-h4x1.onrender.com`
+- Frontend: `https://astro-frontend-tyfr.onrender.com`
 - Backend auto-converts `postgresql://` to `postgresql+asyncpg://` in `config.py`
 - Render free tier sleeps after 15min — `BackendBanner` component in `App.tsx` shows "waking up" notice
 - CORS origins configured in `cors.py` — includes both localhost and Render URLs

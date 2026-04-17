@@ -7,7 +7,6 @@ and cutout extraction for professional astronomical imaging.
 import io
 import logging
 import uuid
-from pathlib import Path
 
 import numpy as np
 

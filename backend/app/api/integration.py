@@ -3,7 +3,6 @@
 import io
 import json
 import logging
-import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -226,7 +225,6 @@ async def convert_to_votable(
 async def upload_votable(file: UploadFile = File(...), user: User = Depends(get_current_user)):
     """Upload a VOTable file and convert to FITS for browsing."""
     from astropy.io.votable import parse as parse_votable
-    from astropy.table import Table as AstropyTable
 
     content = await file.read()
     try:

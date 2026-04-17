@@ -11,9 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from astropy.io import fits
-from astropy.table import Table
 
-from app.config import settings
 from app.storage import download_fits, upload_fits
 
 

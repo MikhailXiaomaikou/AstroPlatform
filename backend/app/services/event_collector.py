@@ -7,7 +7,7 @@ import inspect
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from functools import wraps
 
 from sqlalchemy import func, insert, select

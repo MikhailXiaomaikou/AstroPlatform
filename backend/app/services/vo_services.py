@@ -4,10 +4,7 @@ Provides SIA v2 (image access), SSA (spectral access), federated TAP queries,
 and VO registry service discovery.
 """
 
-import asyncio
 import logging
-from typing import Any
-from functools import partial
 
 logger = logging.getLogger(__name__)
 

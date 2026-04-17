@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
 from app.models.database import get_db
-from app.models.schemas import ChatSession, User, UserResearchProfile
+from app.models.schemas import ChatSession, User
 from app.services.memory_service import memory_service
 
 router = APIRouter(prefix="/api/research", tags=["research"])

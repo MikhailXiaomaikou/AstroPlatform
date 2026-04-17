@@ -6,7 +6,6 @@ flare detection, BLS transit search, and injection-recovery tests.
 
 import logging
 import numpy as np
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

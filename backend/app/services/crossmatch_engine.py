@@ -107,7 +107,7 @@ class CrossMatchEngine:
                 result = result.rename(
                     columns={"ra_2": f"ra_{i}", "dec_2": f"dec_{i}"}
                 )
-            if f"separation_arcsec" in result.columns:
+            if "separation_arcsec" in result.columns:
                 result = result.rename(
                     columns={"separation_arcsec": f"separation_arcsec_{i - 1}_{i}"}
                 )
@@ -457,8 +457,8 @@ class CrossMatchEngine:
                 f"in2={in2}",
                 "ifmt2=csv",
                 f"matcher={match_type}",
-                f"values1=ra dec",
-                f"values2=ra dec",
+                "values1=ra dec",
+                "values2=ra dec",
                 f"params={radius_arcsec}",
                 f"join={join}",
                 f"find={find_param}",
@@ -517,8 +517,8 @@ class CrossMatchEngine:
                 "-jar",
                 jar_path,
                 "tmatchn",
-                f"multimode=pairs",
-                f"matcher=sky",
+                "multimode=pairs",
+                "matcher=sky",
                 f"params={radius_arcsec}",
                 f"out={out}",
                 "ofmt=csv",

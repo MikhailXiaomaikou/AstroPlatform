@@ -151,7 +151,7 @@ async def export_run_votable(
 
     from astropy.table import Table
     from astropy.io.votable import from_table, writeto
-    from astropy.io.votable.tree import VOTableFile, Resource
+    from astropy.io.votable.tree import Resource
 
     # ── Metadata TABLE (existing behaviour) ──
     rows = []

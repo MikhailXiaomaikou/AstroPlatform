@@ -8,7 +8,6 @@ heliocentric/barycentric correction, flux calibration, and telluric correction.
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 

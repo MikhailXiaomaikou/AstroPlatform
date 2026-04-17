@@ -8,7 +8,7 @@ import math
 from typing import Literal
 
 import pandas as pd
-from fastapi import APIRouter, Query
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.services.crossmatch_engine import get_crossmatch_engine

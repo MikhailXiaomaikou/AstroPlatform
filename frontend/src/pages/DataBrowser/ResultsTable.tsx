@@ -153,8 +153,9 @@ export default function ResultsTable({
   // H17: reset page when the data set OR the sort order changes.  Previously
   // only `results` was tracked, so clicking a column header to sort left the
   // user on "page 2 of 3" looking at a freshly-sorted data set — a confusing
-  // way to lose rows.
-  useMemo(() => { setPage(0); }, [results, sortKey, sortAsc]);
+  // way to lose rows.  Must be useEffect — calling setState from useMemo is
+  // illegal under React 18+ (triggers an infinite-render warning / loop).
+  useEffect(() => { setPage(0); }, [results, sortKey, sortAsc]);
 
   if (!loading && results.length === 0) {
     if (searched) {

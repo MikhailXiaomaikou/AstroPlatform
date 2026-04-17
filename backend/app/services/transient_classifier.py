@@ -700,7 +700,6 @@ def classify_with_spectroscopy(wavelength: list, flux: list, z: float = 0.0) -> 
     using chi-squared cross-correlation.
     """
     import numpy as np
-    from scipy.interpolate import interp1d
 
     wave = np.array(wavelength) / (1.0 + z)  # Rest frame
     fl = np.array(flux)

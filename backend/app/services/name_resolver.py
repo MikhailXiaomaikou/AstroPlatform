@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from dataclasses import dataclass, field
@@ -100,9 +101,6 @@ def _parse_sesame_xml(text: str) -> tuple[str | None, float | None, float | None
     if ra_text is None or dec_text is None:
         return oname, None, None
     return oname, float(ra_text), float(dec_text)
-
-
-import asyncio
 
 
 async def _resolve_name_impl(name: str, per_request_timeout: float) -> "ResolvedName":

@@ -7,7 +7,7 @@ as a fast-path cache and by adql_dialect for column validation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

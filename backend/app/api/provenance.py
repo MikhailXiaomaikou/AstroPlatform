@@ -1,6 +1,6 @@
 """Provenance API endpoints."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import Response
 
 router = APIRouter(prefix="/api/provenance", tags=["provenance"])
