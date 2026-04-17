@@ -1754,6 +1754,17 @@ export async function sendChatMessage(
       }
     }
 
+    // Defensive: stream ended with no text AND no tool_result AND no error
+    // event.  This happens when an upstream proxy (Render free tier,
+    // Cloudflare) drops the SSE connection before the backend finishes,
+    // so the browser sees `done` without any payload.  Without this guard
+    // the caller would render a blank assistant bubble with no explanation.
+    if (replyParts.length === 0 && actions.length === 0) {
+      throw new Error(
+        "AI 回复中断 — 响应流在收到任何内容前被关闭（可能是上游代理超时或网络问题）。请重试；若反复出现，改用更简短的问题或稍后再试。"
+      );
+    }
+
     return {
       reply: replyParts.join("\n\n"),
       actions,

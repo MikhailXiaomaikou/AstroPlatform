@@ -1109,27 +1109,46 @@ async def chat_message_stream(
                 yield f"data: {json.dumps({'type': 'status', 'message': f'Routing across {len(agent_names)} specialist agents...'})}\n\n"
             for agent_name in agent_names:
                 yield f"data: {json.dumps({'type': 'status', 'message': f'{agent_name} working...'})}\n\n"
-            response = await asyncio.wait_for(
-                _run_orchestrated_chat(
-                    runtime=runtime,
-                    messages=claude_messages,
-                    provider_api_keys=provider_api_keys,
-                    python_session_id=python_session_id,
-                    preferred_backend=preferred_backend,
-                    chat_session_id=chat_session_id,
-                ),
-                timeout=180.0,  # 3-minute hard limit for entire chat response
+
+            # Fire-and-await with heartbeat — Render / Cloudflare free tiers
+            # kill idle SSE connections after ~30-100s.  The LLM round can
+            # easily exceed that before backend_timeout (90s) or the outer
+            # 180s hits, so the proxy cuts the stream silently and the
+            # client sees "done" with zero text/error events → empty bubble.
+            # Emit a status heartbeat every 12s so the connection stays hot.
+            work_task = asyncio.create_task(
+                asyncio.wait_for(
+                    _run_orchestrated_chat(
+                        runtime=runtime,
+                        messages=claude_messages,
+                        provider_api_keys=provider_api_keys,
+                        python_session_id=python_session_id,
+                        preferred_backend=preferred_backend,
+                        chat_session_id=chat_session_id,
+                    ),
+                    timeout=180.0,
+                )
             )
+            _hb_count = 0
+            while not work_task.done():
+                await asyncio.wait([work_task], timeout=12.0)
+                if not work_task.done():
+                    _hb_count += 1
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'still thinking... ({_hb_count * 12}s)'})}\n\n"
+            response = work_task.result()
+
             if response["reply"]:
                 yield f"data: {json.dumps({'type': 'text', 'content': response['reply']})}\n\n"
             for action in response["actions"]:
                 yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result')})}\n\n"
         except (TimeoutError, asyncio.TimeoutError):
-            yield f"data: {json.dumps({'type': 'error', 'message': 'The AI workflow took too long. Try a narrower query or split the task into query and analysis steps.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': 'AI workflow timed out after 180s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
         except InferenceError as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            msg = str(e) or e.__class__.__name__
+            yield f"data: {json.dumps({'type': 'error', 'message': msg})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            msg = str(e) or e.__class__.__name__
+            yield f"data: {json.dumps({'type': 'error', 'message': msg})}\n\n"
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
