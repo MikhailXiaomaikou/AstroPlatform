@@ -96,6 +96,11 @@ interface DisplayMessage {
   content: string;
   actions?: ChatAction[];
   actionResults?: Map<number, Record<string, unknown>>;
+  // Pending-marker set while the SSE stream is in flight.  A bubble with
+  // _pending set is rendered as a spinner; on successful reply we replace
+  // it with the real content, on error we rewrite it to an error bubble,
+  // and on page reload we reconcile against the server copy or offer retry.
+  _pending?: { started_at: number };
 }
 
 function hasStoredAiKey(): boolean {
@@ -1181,6 +1186,11 @@ interface StoredMessage {
   content: string;
   actions?: ChatAction[];
   actionResults?: [number, Record<string, unknown>][];
+  // Marker written before the stream starts; replaced in place with the real
+  // reply on success, or with an error bubble on failure.  If the page is
+  // refreshed mid-stream, loadChatHistory reconciles against the server copy
+  // or surfaces a "retry" CTA instead of a blank bubble.
+  _pending?: { started_at: number };
 }
 
 function loadChatHistory(): DisplayMessage[] {
@@ -1831,11 +1841,59 @@ export default function ChatPage() {
       } catch { /* ignore */ }
       localStorage.removeItem("astro_chat_autosave_draft");
     }
+
+    // Refresh-resume: if the last restored message is a pending marker, try
+    // to reconcile against the server copy (which may have completed after
+    // the client lost the stream).  Falls through to the in-UI "interrupted,
+    // retry" bubble if the server has no newer reply either.
+    if (!newSession) {
+      const restored = loadChatHistory();
+      const last = restored[restored.length - 1];
+      if (last && last._pending && last.role === "assistant") {
+        const sid = localStorage.getItem("astro_current_chat_session_id");
+        if (sid && user) {
+          void loadChatSession(sid)
+            .then((session) => {
+              const srvMsgs = session.messages || [];
+              const prevUser = restored[restored.length - 2];
+              // Look for an assistant reply AFTER the corresponding user
+              // message on the server.
+              if (prevUser) {
+                const idx = srvMsgs.findIndex(
+                  (sm) => sm.role === "user" && sm.content === prevUser.content,
+                );
+                if (idx >= 0 && idx + 1 < srvMsgs.length && srvMsgs[idx + 1].role === "assistant") {
+                  const adopted: DisplayMessage = {
+                    id: last.id,
+                    role: "assistant",
+                    content: srvMsgs[idx + 1].content,
+                    actions: srvMsgs[idx + 1].actions as ChatAction[] | undefined,
+                    actionResults: new Map(),
+                  };
+                  setMessages((prev) => prev.map((m) => (m.id === last.id ? adopted : m)));
+                }
+              }
+            })
+            .catch(() => { /* keep the pending/retry UI on failure */ });
+        }
+      }
+    }
   }, []);
 
   useEffect(() => {
     localStorage.setItem("astro_chat_sidebar_collapsed", sidebarCollapsed ? "1" : "0");
   }, [sidebarCollapsed]);
+
+  // Mirror the current session id to localStorage so boot-time reconciliation
+  // (refresh-resume) can ask the server about the right session without
+  // waiting for the sidebar list to hydrate.
+  useEffect(() => {
+    if (currentSessionId) {
+      localStorage.setItem("astro_current_chat_session_id", currentSessionId);
+    } else {
+      localStorage.removeItem("astro_current_chat_session_id");
+    }
+  }, [currentSessionId]);
 
   // Chat persistence: a single debounced scheduler replaces the old three-path
   // write (astro_chat_history on every setMessages + astro_chat_autosave_draft
@@ -2176,8 +2234,8 @@ export default function ChatPage() {
     }
   };
 
-  const handleSend = async () => {
-    const text = input.trim();
+  const handleSend = async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if (!text || loading) return;
 
     const userMsg: DisplayMessage = {
@@ -2185,10 +2243,20 @@ export default function ChatPage() {
       role: "user",
       content: text,
     };
+    // Pending-marker for the assistant bubble — persisted immediately so that
+    // a mid-stream reload knows "a reply was expected here".  Replaced with
+    // the real reply on success (or an error bubble on failure) below.
+    const pendingMarker: DisplayMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "",
+      _pending: { started_at: Date.now() },
+    };
+    const pendingId = pendingMarker.id;
 
-    const updatedMessages = [...messages, userMsg];
+    const updatedMessages = [...messages, userMsg, pendingMarker];
     setMessages(updatedMessages);
-    setInput("");
+    if (!overrideText) setInput("");
     setLoading(true);
 
     try {
@@ -2240,7 +2308,7 @@ export default function ChatPage() {
       const response = await sendChatMessage(chatHistory, wsContext);
 
       const assistantMsg: DisplayMessage = {
-        id: crypto.randomUUID(),
+        id: pendingId,
         role: "assistant",
         content: response.reply,
         actions:
@@ -2248,7 +2316,8 @@ export default function ChatPage() {
         actionResults: new Map(),
       };
 
-      setMessages((prev) => [...prev, assistantMsg]);
+      // Replace the pending marker in place (keep its id for stable React keys).
+      setMessages((prev) => prev.map((m) => (m.id === pendingId ? assistantMsg : m)));
     } catch (err: unknown) {
       let errorDetail = "Unknown error";
       if (err && typeof err === "object" && "response" in err) {
@@ -2265,11 +2334,11 @@ export default function ChatPage() {
         errorDetail = "The request payload was likely rejected before the app server handled it. This usually happens when the previous tool results made the second-round chat request too large.";
       }
       const errorMsg: DisplayMessage = {
-        id: crypto.randomUUID(),
+        id: pendingId,
         role: "assistant",
         content: `Sorry, I encountered an error: ${errorDetail}`,
       };
-      setMessages((prev) => [...prev, errorMsg]);
+      setMessages((prev) => prev.map((m) => (m.id === pendingId ? errorMsg : m)));
       track("error.ai_failed", {
         agent_name: "chat_assistant",
         backend: "anthropic",
@@ -2778,12 +2847,35 @@ export default function ChatPage() {
             </div>
             <div className="chat-message-body">
               <div className="chat-message-content">
-                {msg.role === "assistant" ? (
+                {msg._pending ? (
+                  <em style={{ opacity: 0.7 }}>
+                    {Date.now() - msg._pending.started_at > 60_000
+                      ? "The previous reply was interrupted before the backend responded."
+                      : "Reconnecting to your in-flight reply…"}
+                  </em>
+                ) : msg.role === "assistant" ? (
                   <MarkdownText content={msg.content} />
                 ) : (
                   msg.content.split("\n").map((line, i) => (
                     <p key={i}>{line || "\u00A0"}</p>
                   ))
+                )}
+                {msg._pending && Date.now() - msg._pending.started_at > 60_000 && (
+                  <button
+                    className="btn-secondary btn-small"
+                    style={{ marginTop: 8 }}
+                    onClick={() => {
+                      const priorUser = messages
+                        .slice(0, messages.indexOf(msg))
+                        .reverse()
+                        .find((m) => m.role === "user");
+                      if (!priorUser) return;
+                      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                      void handleSend(priorUser.content);
+                    }}
+                  >
+                    Retry
+                  </button>
                 )}
               </div>
               {msg.actions && msg.actions.length > 0 && (
@@ -3049,7 +3141,7 @@ export default function ChatPage() {
           />
           <button
             className="btn-chat-send"
-            onClick={handleSend}
+            onClick={() => handleSend()}
             disabled={!input.trim() || loading}
             title="Send message (Enter)"
             aria-label="Send message"

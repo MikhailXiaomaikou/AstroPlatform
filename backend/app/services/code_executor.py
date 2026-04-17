@@ -31,22 +31,82 @@ MEMORY_WARN_THRESHOLD = 512 * 1024 * 1024
 # Maximum array/table rows allowed in a single variable repr
 MAX_REPR_ROWS = 2000
 
-# Session-scoped variable store — persists between code executions
+# Session-scoped variable store — persists between code executions.
+# Without eviction this grew unbounded: every unique python_session_id seen
+# over the life of the Render process kept its locals and imported-module
+# references alive.  Long-running instances leaked hundreds of MB.
+# _session_last_access tracks monotonic-clock last touch; _sweep_idle_sessions
+# evicts entries older than MAX_SESSION_IDLE_SECONDS when the registry grows
+# past MAX_TRACKED_SESSIONS.
+import time as _session_time
+
 _session_vars: dict[str, dict] = {}
 _session_replay_signatures: dict[str, str] = {}
+_session_last_access: dict[str, float] = {}
 _astro_module: ModuleType | None = None
+
+MAX_SESSION_IDLE_SECONDS: float = 24 * 60 * 60  # 24 hours
+MAX_TRACKED_SESSIONS: int = 64
+
+
+def _touch_session(session_id: str) -> None:
+    """Update the last-access timestamp for eviction bookkeeping."""
+    _session_last_access[session_id] = _session_time.monotonic()
+
+
+def _sweep_idle_sessions() -> int:
+    """Drop stale sessions.  Runs lazily on writes to keep the registry bounded.
+
+    Returns the number of evicted sessions (0 when nothing to do).
+    """
+    now = _session_time.monotonic()
+    evicted = 0
+
+    # Pass 1: evict anything idle beyond the TTL.
+    stale = [
+        sid for sid, last in _session_last_access.items()
+        if (now - last) > MAX_SESSION_IDLE_SECONDS
+    ]
+    for sid in stale:
+        _session_vars.pop(sid, None)
+        _session_replay_signatures.pop(sid, None)
+        _session_last_access.pop(sid, None)
+        evicted += 1
+
+    # Pass 2: if we're still over the cap, evict oldest-first until we're under.
+    if len(_session_vars) > MAX_TRACKED_SESSIONS:
+        over = len(_session_vars) - MAX_TRACKED_SESSIONS
+        by_age = sorted(_session_last_access.items(), key=lambda kv: kv[1])
+        for sid, _ts in by_age[:over]:
+            _session_vars.pop(sid, None)
+            _session_replay_signatures.pop(sid, None)
+            _session_last_access.pop(sid, None)
+            evicted += 1
+
+    if evicted:
+        logger.info(
+            "code_executor swept %d idle session(s); %d remain",
+            evicted, len(_session_vars),
+        )
+    return evicted
 
 
 def get_session_vars(session_id: str = "default") -> dict:
     """Get or create a session variable store."""
     if session_id not in _session_vars:
         _session_vars[session_id] = {}
+        # Sweep on new-session creation so the registry can't grow forever
+        # even if every request uses a fresh session id.
+        if len(_session_vars) > MAX_TRACKED_SESSIONS:
+            _sweep_idle_sessions()
+    _touch_session(session_id)
     return _session_vars[session_id]
 
 
 def clear_session_vars(session_id: str = "default") -> None:
     _session_vars.pop(session_id, None)
     _session_replay_signatures.pop(session_id, None)
+    _session_last_access.pop(session_id, None)
 
 
 def has_session_state(session_id: str = "default") -> bool:
