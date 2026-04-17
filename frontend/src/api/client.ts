@@ -1266,6 +1266,15 @@ export interface ChatResponse {
   actions: ChatAction[];
 }
 
+// Real-time "thinking process" events emitted by the backend during the
+// agent loop.  Consumers can subscribe via sendChatMessage's onThinking
+// callback to render a live timeline of what the model is doing.
+export type ThinkingEvent =
+  | { type: "agent_text"; agent?: string; content: string }
+  | { type: "tool_call"; agent?: string; tool: string; input: unknown }
+  | { type: "tool_result"; agent?: string; tool: string; result: unknown }
+  | { type: "status"; message: string };
+
 // ── Chat Session Persistence ──
 
 export interface ChatSessionSummary {
@@ -1664,7 +1673,8 @@ export function getPreferredAiProvider(): string | null {
 
 export async function sendChatMessage(
   messages: ChatMessage[],
-  context?: Record<string, unknown>
+  context?: Record<string, unknown>,
+  onThinking?: (evt: ThinkingEvent) => void,
 ): Promise<ChatResponse> {
   const apiKeys = getStoredApiKeys();
   const apiProvider = getPreferredAiProvider();
@@ -1735,15 +1745,54 @@ export async function sendChatMessage(
           if (evt.type === "text" && typeof evt.content === "string") {
             replyParts.push(evt.content);
           } else if (evt.type === "tool_result") {
-            actions.push({
-              action: String(evt.tool || ""),
-              tool_result: evt.result,
-              _auto_executed: true,
-            } as ChatAction);
+            // Backend emits tool_result twice: once inline (live:true) during
+            // the agent loop for thinking-timeline updates, once at the end
+            // with the full consolidated actions list.  Route each to the
+            // right sink so the actions array stays deduplicated.
+            if (evt.live === true) {
+              if (onThinking) {
+                onThinking({
+                  type: "tool_result",
+                  agent: typeof evt.agent === "string" ? evt.agent : undefined,
+                  tool: String(evt.tool || ""),
+                  result: evt.result,
+                });
+              }
+            } else {
+              actions.push({
+                action: String(evt.tool || ""),
+                tool_result: evt.result,
+                _auto_executed: true,
+              } as ChatAction);
+            }
+          } else if (evt.type === "agent_text" && typeof evt.content === "string") {
+            // Intermediate prose the LLM produced between tool calls —
+            // does NOT go into replyParts; the final consolidated `text`
+            // event still provides the canonical reply.
+            if (onThinking) {
+              onThinking({
+                type: "agent_text",
+                agent: typeof evt.agent === "string" ? evt.agent : undefined,
+                content: evt.content,
+              });
+            }
+          } else if (evt.type === "tool_call" && typeof evt.tool === "string") {
+            if (onThinking) {
+              onThinking({
+                type: "tool_call",
+                agent: typeof evt.agent === "string" ? evt.agent : undefined,
+                tool: evt.tool,
+                input: evt.input,
+              });
+            }
+          } else if (evt.type === "status" && typeof evt.message === "string") {
+            if (onThinking) {
+              onThinking({ type: "status", message: evt.message });
+            }
           } else if (evt.type === "error" && typeof evt.message === "string") {
             throw new Error(evt.message);
           }
-          // "status" and "done" events are ignored (no UI for them yet)
+          // "done" event is ignored (stream terminator).
         }
       }
     } finally {

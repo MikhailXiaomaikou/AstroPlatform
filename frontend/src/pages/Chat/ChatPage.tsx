@@ -29,6 +29,7 @@ import {
   generatePaperDraft,
   type ChatMessage,
   type ChatAction,
+  type ThinkingEvent,
   type ADSReference,
   type ChatSessionSummary,
   type SessionShareItem,
@@ -90,6 +91,15 @@ function ClickableFigure({ src, alt }: { src: string; alt: string }) {
   );
 }
 
+interface ThinkingStep {
+  kind: "agent_text" | "tool_call" | "tool_result" | "status";
+  agent?: string;
+  tool?: string;
+  text?: string;
+  input?: unknown;
+  result?: unknown;
+}
+
 interface DisplayMessage {
   id: string;
   role: "user" | "assistant";
@@ -101,6 +111,11 @@ interface DisplayMessage {
   // it with the real content, on error we rewrite it to an error bubble,
   // and on page reload we reconcile against the server copy or offer retry.
   _pending?: { started_at: number };
+  // Live thinking timeline accumulated while _pending is true.  The user
+  // sees what the agent is doing in real time (tool calls, intermediate
+  // text between tool rounds).  Cleared when the message is replaced with
+  // the final reply.
+  _thinking?: ThinkingStep[];
 }
 
 function hasStoredAiKey(): boolean {
@@ -2251,8 +2266,31 @@ export default function ChatPage() {
       role: "assistant",
       content: "",
       _pending: { started_at: Date.now() },
+      _thinking: [],
     };
     const pendingId = pendingMarker.id;
+
+    // Live thinking timeline — backend emits agent_text / tool_call /
+    // tool_result events during the agent loop; we append each to the
+    // pending bubble so the user sees what the AI is doing in real time.
+    const onThinking = (evt: ThinkingEvent) => {
+      if (evt.type === "status") return; // heartbeat, ignore in UI
+      const step: ThinkingStep = {
+        kind: evt.type,
+        agent: "agent" in evt ? evt.agent : undefined,
+        tool: evt.type === "tool_call" || evt.type === "tool_result" ? evt.tool : undefined,
+        text: evt.type === "agent_text" ? evt.content : undefined,
+        input: evt.type === "tool_call" ? evt.input : undefined,
+        result: evt.type === "tool_result" ? evt.result : undefined,
+      };
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === pendingId
+            ? { ...m, _thinking: [...(m._thinking || []), step] }
+            : m,
+        ),
+      );
+    };
 
     const updatedMessages = [...messages, userMsg, pendingMarker];
     setMessages(updatedMessages);
@@ -2305,7 +2343,7 @@ export default function ChatPage() {
       wsContext.python_session_id = pythonSessionIdRef.current;
       wsContext.current_session_id = currentSessionId;
 
-      const response = await sendChatMessage(chatHistory, wsContext);
+      const response = await sendChatMessage(chatHistory, wsContext, onThinking);
 
       const assistantMsg: DisplayMessage = {
         id: pendingId,
@@ -2848,11 +2886,53 @@ export default function ChatPage() {
             <div className="chat-message-body">
               <div className="chat-message-content">
                 {msg._pending ? (
-                  <em style={{ opacity: 0.7 }}>
-                    {Date.now() - msg._pending.started_at > 60_000
-                      ? "The previous reply was interrupted before the backend responded."
-                      : "Reconnecting to your in-flight reply…"}
-                  </em>
+                  <div>
+                    <em style={{ opacity: 0.7 }}>
+                      {Date.now() - msg._pending.started_at > 60_000
+                        ? "The previous reply was interrupted before the backend responded."
+                        : msg._thinking && msg._thinking.length > 0
+                          ? "Thinking…"
+                          : "Reconnecting to your in-flight reply…"}
+                    </em>
+                    {msg._thinking && msg._thinking.length > 0 && (
+                      <ul className="chat-thinking-timeline" style={{
+                        listStyle: "none",
+                        padding: 0,
+                        margin: "8px 0 0 0",
+                        fontSize: "0.85em",
+                        opacity: 0.85,
+                      }}>
+                        {msg._thinking.map((step, i) => (
+                          <li key={i} style={{ padding: "3px 0", borderLeft: "2px solid #ccc", paddingLeft: 8, marginBottom: 2 }}>
+                            {step.kind === "agent_text" && (
+                              <span>💭 {step.text}</span>
+                            )}
+                            {step.kind === "tool_call" && (
+                              <span>
+                                🔧 <strong>{step.tool}</strong>
+                                {step.input && typeof step.input === "object" ? (
+                                  <code style={{ marginLeft: 6, fontSize: "0.9em", color: "#666" }}>
+                                    {JSON.stringify(step.input).slice(0, 140)}
+                                  </code>
+                                ) : null}
+                              </span>
+                            )}
+                            {step.kind === "tool_result" && (
+                              <span>
+                                ✓ <strong>{step.tool}</strong>
+                                {(() => {
+                                  const r = step.result as { error?: string } | null;
+                                  return r && typeof r === "object" && "error" in r && r.error
+                                    ? <em style={{ color: "#b00020", marginLeft: 6 }}>{String(r.error).slice(0, 120)}</em>
+                                    : <span style={{ marginLeft: 6, color: "#2e7d32" }}>done</span>;
+                                })()}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 ) : msg.role === "assistant" ? (
                   <MarkdownText content={msg.content} />
                 ) : (

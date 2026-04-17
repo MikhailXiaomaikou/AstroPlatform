@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import uuid
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -1110,12 +1111,33 @@ async def chat_message_stream(
             for agent_name in agent_names:
                 yield f"data: {json.dumps({'type': 'status', 'message': f'{agent_name} working...'})}\n\n"
 
-            # Fire-and-await with heartbeat — Render / Cloudflare free tiers
-            # kill idle SSE connections after ~30-100s.  The LLM round can
-            # easily exceed that before backend_timeout (90s) or the outer
-            # 180s hits, so the proxy cuts the stream silently and the
-            # client sees "done" with zero text/error events → empty bubble.
-            # Emit a status heartbeat every 12s so the connection stays hot.
+            # Thinking-process streaming: an asyncio.Queue bridges
+            # intermediate events from _run_agent_loop up to the SSE stream.
+            # The agent pushes `agent_text`, `tool_call`, and `tool_result`
+            # events; we drain the queue here and serialise them to SSE.
+            # Heartbeats still fire when the queue is quiet so Render /
+            # Cloudflare free-tier idle timers (~30-100s) can't kill the
+            # connection.
+            event_queue: asyncio.Queue[dict] = asyncio.Queue()
+
+            async def _emit(evt: dict) -> None:
+                # Truncate tool_result payloads that could bloat the SSE
+                # frame — the full (truncated) JSON is already delivered
+                # to the model through the normal tool_result_blocks path.
+                if evt.get("type") == "tool_result":
+                    try:
+                        raw = json.dumps(evt.get("result"), default=str)
+                        if len(raw) > 8000:
+                            evt = dict(evt)
+                            evt["result"] = {
+                                "__preview__": True,
+                                "preview": raw[:6000],
+                                "size": len(raw),
+                            }
+                    except (TypeError, ValueError):
+                        pass
+                await event_queue.put(evt)
+
             work_task = asyncio.create_task(
                 asyncio.wait_for(
                     _run_orchestrated_chat(
@@ -1125,22 +1147,43 @@ async def chat_message_stream(
                         python_session_id=python_session_id,
                         preferred_backend=preferred_backend,
                         chat_session_id=chat_session_id,
+                        on_event=_emit,
                     ),
                     timeout=420.0,  # 7-min hard ceiling — heartbeat keeps SSE alive
                 )
             )
             _hb_count = 0
             while not work_task.done():
-                await asyncio.wait([work_task], timeout=12.0)
-                if not work_task.done():
+                try:
+                    # Drain available events with a 12s ceiling before the
+                    # heartbeat fires.  One event per iteration keeps frames
+                    # small; if more events are buffered we'll grab them on
+                    # subsequent passes without blocking.
+                    evt = await asyncio.wait_for(event_queue.get(), timeout=12.0)
+                    yield f"data: {json.dumps(evt, default=str)}\n\n"
+                    _hb_count = 0
+                except asyncio.TimeoutError:
                     _hb_count += 1
                     yield f"data: {json.dumps({'type': 'status', 'message': f'still thinking... ({_hb_count * 12}s)'})}\n\n"
+
+            # Drain any events emitted after the task finished but not yet pulled.
+            while not event_queue.empty():
+                try:
+                    evt = event_queue.get_nowait()
+                    yield f"data: {json.dumps(evt, default=str)}\n\n"
+                except asyncio.QueueEmpty:
+                    break
+
             response = work_task.result()
 
             if response["reply"]:
                 yield f"data: {json.dumps({'type': 'text', 'content': response['reply']})}\n\n"
+            # Keep emitting the final consolidated tool_result events too —
+            # downstream clients that only know the old protocol still work,
+            # and the live-stream tool_result events above carry a __preview__
+            # only, so the final ones deliver the full actions list.
             for action in response["actions"]:
-                yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result')})}\n\n"
+                yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result')}, default=str)}\n\n"
         except (TimeoutError, asyncio.TimeoutError):
             yield f"data: {json.dumps({'type': 'error', 'message': 'AI workflow timed out after 420s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
         except InferenceError as e:
@@ -1321,8 +1364,27 @@ async def _run_agent_loop(
     preferred_backend: str | None = None,
     user_id: str | None = None,
     chat_session_id: str | None = None,
+    on_event: Callable[[dict], Awaitable[None]] | None = None,
 ) -> dict:
+    """Run the agent's multi-turn loop.
+
+    When `on_event` is provided, intermediate thinking-process events are
+    emitted so the SSE endpoint can stream them to the UI in real time:
+    - {"type": "agent_text", "agent": <name>, "content": <str>}  — LLM text
+      produced between tool calls (the model's "thinking out loud").
+    - {"type": "tool_call", "agent": <name>, "tool": <name>, "input": <dict>}
+      — fires before each tool starts executing.
+    - {"type": "tool_result", "agent": <name>, "tool": <name>, "result": <dict>}
+      — fires when each tool completes.
+    """
     import time as _time
+
+    async def _emit(evt: dict) -> None:
+        if on_event is not None:
+            try:
+                await on_event(evt)
+            except Exception as exc:  # never let event-pump errors kill the loop
+                logger.debug("on_event failed for %s: %s", evt.get("type"), exc)
 
     working_messages = deepcopy(messages)
     all_tool_results: list[dict] = []
@@ -1357,6 +1419,7 @@ async def _run_agent_loop(
         text = str(response.get("content", "") or "")
         if text:
             text_parts.append(text)
+            await _emit({"type": "agent_text", "agent": agent_name, "content": text})
         tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
         if not tool_calls_in_turn:
             break
@@ -1373,6 +1436,14 @@ async def _run_agent_loop(
                     "input": tool_call["input"],
                 }
             )
+            # Emit the tool_call event *before* dispatch so the UI can show
+            # "Calling <tool>..." while the tool is still executing.
+            await _emit({
+                "type": "tool_call",
+                "agent": agent_name,
+                "tool": tool_call["name"],
+                "input": tool_call["input"],
+            })
         working_messages.append({"role": "assistant", "content": assistant_content})
 
         tool_result_blocks = []
@@ -1431,6 +1502,18 @@ async def _run_agent_loop(
                     "result": result,
                 }
             )
+            # Stream the result immediately so the UI can update inline.
+            # `live: true` distinguishes this from the final consolidated
+            # tool_result events the SSE generator emits at the end — the
+            # frontend uses the flag to deduplicate (live -> thinking UI,
+            # final -> actions list).
+            await _emit({
+                "type": "tool_result",
+                "agent": agent_name,
+                "tool": tc["name"],
+                "result": result,
+                "live": True,
+            })
         working_messages.append({"role": "user", "content": tool_result_blocks})
         # Claude uses "tool_use", OpenAI uses "tool_calls" as stop reason
         if response.get("stop_reason") not in ("tool_use", "tool_calls"):
@@ -1506,6 +1589,7 @@ async def _run_orchestrated_chat(
     preferred_backend: str | None = None,
     user_id: str | None = None,
     chat_session_id: str | None = None,
+    on_event: Callable[[dict], Awaitable[None]] | None = None,
 ) -> dict:
     agent_names = list(runtime.get("agent_names") or [])
     if not agent_names:
@@ -1522,6 +1606,7 @@ async def _run_orchestrated_chat(
             preferred_backend=preferred_backend,
             user_id=user_id,
             chat_session_id=chat_session_id,
+            on_event=on_event,
         )
         return {"reply": single["reply"], "actions": single["actions"]}
 
@@ -1545,6 +1630,7 @@ async def _run_orchestrated_chat(
             preferred_backend=preferred_backend,
             user_id=user_id,
             chat_session_id=chat_session_id,
+            on_event=on_event,
         )
         agent_results.append(
             {
