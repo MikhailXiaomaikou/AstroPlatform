@@ -1197,19 +1197,76 @@ function loadChatHistory(): DisplayMessage[] {
   }
 }
 
-function saveChatHistory(messages: DisplayMessage[]) {
-  try {
-    const stored: StoredMessage[] = messages.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      actions: m.actions,
-      actionResults: m.actionResults ? Array.from(m.actionResults.entries()) : undefined,
-    }));
-    localStorage.setItem("astro_chat_history", JSON.stringify(stored));
-  } catch {
-    // storage full or unavailable — silently ignore
+// Soft cap for serialized chat history (localStorage limit is typically 5 MB).
+// When we cross this threshold we prune in two passes: first strip the heavy
+// `tool_result` blobs off the oldest messages, then drop entire oldest
+// messages if we still overflow.  Keeps user-visible text + action names.
+const CHAT_HISTORY_SOFT_CAP_BYTES = 4 * 1024 * 1024;
+
+function serializeStored(messages: DisplayMessage[]): StoredMessage[] {
+  return messages.map((m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    actions: m.actions,
+    actionResults: m.actionResults ? Array.from(m.actionResults.entries()) : undefined,
+  }));
+}
+
+function _pruneToolResults(stored: StoredMessage[]): boolean {
+  // Walk from oldest to newest; replace the first heavy tool_result we find.
+  // Returns true if anything was changed.
+  for (let i = 0; i < stored.length; i++) {
+    const actions = stored[i].actions;
+    if (!actions) continue;
+    for (const action of actions) {
+      const tr = (action as { tool_result?: unknown }).tool_result;
+      if (tr && typeof tr === "object" && !(tr as { __offloaded__?: true }).__offloaded__) {
+        (action as { tool_result?: unknown }).tool_result = { __offloaded__: true };
+        return true;
+      }
+    }
   }
+  return false;
+}
+
+function safeSetChatHistory(messages: DisplayMessage[]): { written: boolean; droppedMessages: number } {
+  let stored = serializeStored(messages);
+  let payload = JSON.stringify(stored);
+  let droppedMessages = 0;
+
+  // Pass 1: if over cap, strip heavy tool_result payloads oldest-first.
+  while (payload.length > CHAT_HISTORY_SOFT_CAP_BYTES && _pruneToolResults(stored)) {
+    payload = JSON.stringify(stored);
+  }
+  // Pass 2: if still over, drop oldest messages entirely.
+  while (payload.length > CHAT_HISTORY_SOFT_CAP_BYTES && stored.length > 2) {
+    stored.shift();
+    droppedMessages++;
+    payload = JSON.stringify(stored);
+  }
+
+  try {
+    localStorage.setItem("astro_chat_history", payload);
+    return { written: true, droppedMessages };
+  } catch {
+    // QuotaExceededError — fall back to keeping only the last 20 messages
+    // with tool_results stripped.
+    try {
+      stored = serializeStored(messages.slice(-20));
+      while (_pruneToolResults(stored)) {
+        /* strip all tool results */
+      }
+      localStorage.setItem("astro_chat_history", JSON.stringify(stored));
+      return { written: true, droppedMessages: Math.max(droppedMessages, messages.length - 20) };
+    } catch {
+      return { written: false, droppedMessages };
+    }
+  }
+}
+
+function saveChatHistory(messages: DisplayMessage[]): void {
+  safeSetChatHistory(messages);
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -1758,20 +1815,21 @@ export default function ChatPage() {
       localStorage.removeItem("astro_chat_draft");
     }
 
-    // Recover autosaved draft if current session is empty
+    // One-time migration: legacy `astro_chat_autosave_draft` is retired; fold
+    // its content into astro_chat_history if the latter is empty, then clean up.
     if (!newSession && !draft) {
       try {
         const autosaved = localStorage.getItem("astro_chat_autosave_draft");
         if (autosaved) {
           const parsed = JSON.parse(autosaved) as DisplayMessage[];
           if (parsed.length > 0 && loadChatHistory().length === 0) {
-            setMessages(parsed.map((m) => ({
-              ...m,
-              actionResults: new Map(),
-            })));
+            const recovered = parsed.map((m) => ({ ...m, actionResults: new Map() }));
+            setMessages(recovered);
+            safeSetChatHistory(recovered);
           }
         }
       } catch { /* ignore */ }
+      localStorage.removeItem("astro_chat_autosave_draft");
     }
   }, []);
 
@@ -1779,48 +1837,73 @@ export default function ChatPage() {
     localStorage.setItem("astro_chat_sidebar_collapsed", sidebarCollapsed ? "1" : "0");
   }, [sidebarCollapsed]);
 
-  // Autosave draft to localStorage (debounced)
-  useEffect(() => {
-    if (messages.length === 0) return;
-    const timer = setTimeout(() => {
-      try {
-        localStorage.setItem("astro_chat_autosave_draft", JSON.stringify(messages.slice(-50)));
-      } catch { /* quota exceeded -- ignore */ }
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, [messages]);
+  // Chat persistence: a single debounced scheduler replaces the old three-path
+  // write (astro_chat_history on every setMessages + astro_chat_autosave_draft
+  // at 3s + immediate server POST on loading-false).  localStorage is
+  // quota-guarded; server save is debounced 5s and flushed on tab hide/unload
+  // so we never lose the latest state but also don't hammer the API.
+  const serverSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSavePayloadRef = useRef<{ data: Array<{ role: string; content: string; actions?: ChatAction[] }>; sessionId: string | null } | null>(null);
+
+  const flushServerSaveRef = useRef<() => Promise<void>>(async () => {});
+  flushServerSaveRef.current = async () => {
+    const pending = pendingSavePayloadRef.current;
+    if (!pending) return;
+    pendingSavePayloadRef.current = null;
+    if (serverSaveTimerRef.current) {
+      clearTimeout(serverSaveTimerRef.current);
+      serverSaveTimerRef.current = null;
+    }
+    setSaveStatus("saving");
+    try {
+      const res = await persistSession(pending.data, pending.sessionId) as { id: string; title?: string };
+      setCurrentSessionId(res.id);
+      if (res.title) setCurrentSessionTitle(res.title);
+      setSaveStatus("saved");
+      refreshSessions();
+    } catch {
+      setSaveStatus("unsaved");
+    }
+  };
 
   const handleSaveSession = async () => {
     if (messages.length === 0) return;
-    try {
-      const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
-      const res = await persistSession(data, currentSessionId);
-      setCurrentSessionId(res.id);
-      refreshSessions();
-      showToast(user ? "Chat saved" : "Chat saved locally");
-    } catch { /* ignore */ }
+    await flushServerSaveRef.current();
+    showToast(user ? "Chat saved" : "Chat saved locally");
   };
 
-  // Auto-save after each AI response completes (loading transitions false)
+  // Auto-save: queue a debounced server save after each AI response completes
+  // (loading transitions true -> false).  Previously this fired an immediate
+  // POST on every turn; now a 5s window lets rapid successive turns coalesce
+  // into a single request.
   const prevLoadingRef = useRef(false);
   useEffect(() => {
     const wasLoading = prevLoadingRef.current;
     prevLoadingRef.current = loading;
     if (wasLoading && !loading && messages.length >= 2) {
       const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+      pendingSavePayloadRef.current = { data, sessionId: currentSessionId };
       setSaveStatus("saving");
-      persistSession(data, currentSessionId)
-        .then((res: { id: string; title?: string }) => {
-          setCurrentSessionId(res.id);
-          if (res.title) setCurrentSessionTitle(res.title);
-          setSaveStatus("saved");
-          refreshSessions();
-        })
-        .catch(() => {
-          setSaveStatus("unsaved");
-        });
+      if (serverSaveTimerRef.current) clearTimeout(serverSaveTimerRef.current);
+      serverSaveTimerRef.current = setTimeout(() => {
+        void flushServerSaveRef.current();
+      }, 5000);
     }
-  }, [currentSessionId, loading, messages, persistSession, refreshSessions]);
+  }, [currentSessionId, loading, messages]);
+
+  // Flush the debounced save on tab hide / unload so we never lose state.
+  useEffect(() => {
+    const flush = () => { void flushServerSaveRef.current(); };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   // Mark as unsaved when messages change without saving
   useEffect(() => {
