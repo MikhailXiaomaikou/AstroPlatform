@@ -1098,6 +1098,14 @@ async def chat_message_stream(
         runtime = await _build_runtime(req, user, db)
         agent_names = list(runtime.get("agent_names") or ["orchestrator"])
 
+        # 2 KB padding comment as the very first SSE frame.  SSE comments
+        # start with `:` and are ignored by EventSource / the fetch-based
+        # parser.  The bulk bytes force Cloudflare + Render proxies to
+        # flush their output buffer immediately; without it, the first
+        # dozen small `data:` frames can sit in the proxy buffer for
+        # minutes during a long LLM round, which looked like "the AI is
+        # doing nothing" even though events were being produced.
+        yield ": " + (" " * 2048) + "\n\n"
         yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
 
         python_session_id = (req.context or {}).get("python_session_id", "default")
@@ -1155,16 +1163,16 @@ async def chat_message_stream(
             _hb_count = 0
             while not work_task.done():
                 try:
-                    # Drain available events with a 12s ceiling before the
-                    # heartbeat fires.  One event per iteration keeps frames
-                    # small; if more events are buffered we'll grab them on
-                    # subsequent passes without blocking.
-                    evt = await asyncio.wait_for(event_queue.get(), timeout=12.0)
+                    # Drain with a 6s ceiling before the heartbeat fires.
+                    # Short interval + proxy-buffer-breaking padding above
+                    # means the user sees motion within seconds even when
+                    # the agent is making a long LLM call.
+                    evt = await asyncio.wait_for(event_queue.get(), timeout=6.0)
                     yield f"data: {json.dumps(evt, default=str)}\n\n"
                     _hb_count = 0
                 except asyncio.TimeoutError:
                     _hb_count += 1
-                    yield f"data: {json.dumps({'type': 'status', 'message': f'still thinking... ({_hb_count * 12}s)'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'still thinking... ({_hb_count * 6}s)'})}\n\n"
 
             # Drain any events emitted after the task finished but not yet pulled.
             while not event_queue.empty():
@@ -1195,7 +1203,19 @@ async def chat_message_stream(
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            # Tell every known proxy not to buffer this response.  Without
+            # these headers Cloudflare + Render's edge hold small SSE frames
+            # until their write buffers fill, which on a quiet agent loop
+            # can be minutes — looking identical to "the AI is stuck".
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 def _strip_actions_from_reply(text: str) -> str:
@@ -1321,21 +1341,47 @@ async def _llm_messages_create(
 async def _execute_tool_calls(
     tool_calls: list[dict], api_key: str, provider_api_keys: dict[str, str], python_session_id: str,
     user_id: str | None = None, chat_session_id: str | None = None,
+    on_event: Callable[[dict], Awaitable[None]] | None = None,
 ) -> list[dict]:
     """Execute one model turn's tool calls concurrently while preserving order.
 
     Uses return_exceptions=True (H2) so that a single raising tool does not
     abort the whole turn; raised exceptions are converted into error-shaped
     result dicts that flow through normalize_tool_result downstream.
+
+    If `on_event` is provided, each tool also gets a per-tool progress
+    heartbeat (`status: running <tool>... (Ns)`) every 6s while it executes.
+    Without this heartbeat a slow single tool looks indistinguishable from
+    "the whole agent is stuck" in the UI.
     """
+    import time as _time
     from app.services.ai_tools import execute_tool
 
-    coroutines = [
-        execute_tool(tc["name"], tc["input"], api_key, provider_api_keys, python_session_id,
-                     user_id=user_id, chat_session_id=chat_session_id)
-        for tc in tool_calls
-    ]
-    raw_results = await asyncio.gather(*coroutines, return_exceptions=True)
+    async def _run_one(tc: dict) -> dict:
+        task = asyncio.create_task(execute_tool(
+            tc["name"], tc["input"], api_key, provider_api_keys, python_session_id,
+            user_id=user_id, chat_session_id=chat_session_id,
+        ))
+        start = _time.monotonic()
+        while not task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=6.0)
+            except asyncio.TimeoutError:
+                if on_event is not None:
+                    elapsed = int(_time.monotonic() - start)
+                    try:
+                        await on_event({
+                            "type": "status",
+                            "message": f"running {tc['name']}… ({elapsed}s)",
+                        })
+                    except Exception:
+                        pass
+        return task.result()
+
+    raw_results = await asyncio.gather(
+        *(_run_one(tc) for tc in tool_calls),
+        return_exceptions=True,
+    )
     executed = []
     for tc, result in zip(tool_calls, raw_results):
         if isinstance(result, BaseException):
@@ -1454,6 +1500,7 @@ async def _run_agent_loop(
             python_session_id,
             user_id=user_id,
             chat_session_id=chat_session_id,
+            on_event=on_event,
         )
         for tc in executed_tools:
             result = tc["result"]
