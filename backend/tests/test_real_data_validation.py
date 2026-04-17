@@ -237,9 +237,9 @@ class TestDeploymentReadiness:
             assert mod is not None, f"Failed to import {svc}"
 
     def test_all_ai_tools_have_handlers(self):
-        from app.services.ai_tools import TOOLS, execute_tool
+        from app.services.ai_tools import TOOLS, _execute_tool_inner
         import inspect
-        source = inspect.getsource(execute_tool)
+        source = inspect.getsource(_execute_tool_inner)
         missing = []
         for tool in TOOLS:
             name = tool["name"]

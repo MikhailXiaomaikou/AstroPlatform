@@ -68,40 +68,26 @@ Use **analyze_cross_wavelength** to check for multi-wavelength discrepancies tha
 - Stellar classification, v sin i, lithium abundance
 
 ## Gaia DR3 data completeness (CRITICAL — controls which columns to SELECT)
-
-| Layer | Completeness | Columns | Condition |
-|-------|-------------|---------|-----------|
-| 1 | ~100% | ra, dec, source_id, phot_g_mean_mag | Always available |
-| 2 | ~98% | phot_bp_mean_mag, phot_rp_mean_mag, bp_rp | G < 21 |
-| 3 | ~87% | parallax, pmra, pmdec, ruwe, parallax_error | Multi-epoch astrometry |
-| 4 | ~40% | teff_gspphot, logg_gspphot, mh_gspphot, ag_gspphot, ebpminrp_gspphot | BP/RP spectra, mostly G < 18 |
-| 5 | ~5% | radial_velocity, radial_velocity_error | RVS, only G < 14 |
-
-RULES:
-- For columns in Layer 3+, ALWAYS add "column IS NOT NULL" to WHERE clause
-- For radial_velocity, also add "phot_g_mean_mag < 14"
-- For teff_gspphot, also add "phot_g_mean_mag < 18"
-- Always use "SELECT TOP N" to limit results (default TOP 200)
+- Layer 1 (~100%): ra, dec, source_id, phot_g_mean_mag — always available
+- Layer 2 (~98%): phot_bp_mean_mag, phot_rp_mean_mag, bp_rp — G < 21
+- Layer 3 (~87%): parallax, pmra, pmdec, ruwe — multi-epoch astrometry
+- Layer 4 (~40%): teff_gspphot, logg_gspphot, mh_gspphot, ag_gspphot — BP/RP spectra, mostly G < 18
+- Layer 5 (~5%): radial_velocity — RVS, only G < 14
+RULES: For Layer 3+ columns, ALWAYS add "column IS NOT NULL". For radial_velocity, add "phot_g_mean_mag < 14". Always use "SELECT TOP N" (default TOP 200).
+Use describe_tap_table for full column details of any Gaia or VizieR table.
 
 ## Gaia DR3 specialized tables (USE THE RIGHT TABLE FOR THE JOB)
-The default `gaiadr3.gaia_source` is NOT the only Gaia DR3 table. For specialized analysis:
-
-| Table | Use for | Key columns |
-|---|---|---|
-| `gaiadr3.gaia_source` | General catalog: positions, parallax, photometry, gspphot | ra, dec, parallax, pmra, pmdec, phot_*_mean_mag, bp_rp, ruwe, teff_gspphot, mh_gspphot, ag_gspphot |
-| `gaiadr3.vari_summary` | Identify variable stars in a region | source_id, num_selected_g_fov, std_dev_mag_g_fov, classifications |
-| `gaiadr3.vari_rrlyrae` | RR Lyrae periods, types (RRab/RRc), amplitudes, mean magnitudes | source_id, pf, p1_o, peak_to_peak_g, int_average_g, num_clean_epochs_g, best_classification |
-| `gaiadr3.vari_cepheid` | Classical/Type II/anomalous Cepheids, periods, P-L | source_id, pf, p1_o, peak_to_peak_g, type_best_classification |
-| `gaiadr3.vari_eclipsing_binary` | EB periods, eclipse depths, geometry | source_id, frequency, global_ranking, classification |
-| `gaiadr3.vari_long_period_variable` | LPV/Mira/SR variables | source_id, frequency, abs_mag_w1, abs_mag_w2 |
-| `gaiadr3.nss_two_body_orbit` | Spectroscopic/astrometric binaries with orbital solutions | source_id, period, eccentricity, a_thiele_innes, nss_solution_type |
-| `gaiadr3.binary_masses` | Resolved/unresolved binary mass solutions | source_id, m1, m2, q_nss |
-| `gaiadr3.galaxy_candidates` | Extended sources / galaxy candidates from Gaia | source_id, classlabel_dsc_joint, classprob_dsc_combmod_galaxy |
-| `gaiadr3.qso_candidates` | QSO candidates with Gaia astrometry | source_id, classprob_dsc_combmod_quasar, redshift_qsoc |
-| `gaiadr3.astrophysical_parameters` | Full GSP-Phot/GSP-Spec/MSC parameter set (richer than gaia_source) | teff_*, logg_*, mh_*, ag_*, ebpminrp_*, alphafe_gspspec, fem_gspspec |
-
-ALWAYS join to `gaia_source` for sky position when using a specialized table:
-`FROM gaiadr3.vari_rrlyrae rr JOIN gaiadr3.gaia_source gs ON rr.source_id = gs.source_id`
+| Table | Use for |
+|---|---|
+| `gaiadr3.gaia_source` | General catalog: positions, parallax, photometry, gspphot |
+| `gaiadr3.vari_rrlyrae` | RR Lyrae periods, types (RRab/RRc), amplitudes |
+| `gaiadr3.vari_cepheid` | Cepheid periods, P-L relations |
+| `gaiadr3.vari_eclipsing_binary` | Eclipsing binary periods and geometry |
+| `gaiadr3.nss_two_body_orbit` | Spectroscopic/astrometric binary orbits |
+| `gaiadr3.astrophysical_parameters` | Full GSP-Phot/GSP-Spec parameters |
+| `gaiadr3.qso_candidates` | QSO candidates with photometric redshift |
+Use describe_tap_table to get exact column names before writing ADQL.
+ALWAYS join to gaia_source for sky position: `FROM gaiadr3.vari_rrlyrae rr JOIN gaiadr3.gaia_source gs ON rr.source_id = gs.source_id`
 
 ## CRITICAL: Extinction for low-E(B-V) targets (ROUTE TO SFD, NOT fit_isochrone)
 For ANY of these cases, do NOT use Gaia ag_gspphot or fit_isochrone's av_range
@@ -549,10 +535,26 @@ with the listed packages + references as starting points for user-specific analy
 - VLBI interferometry: CASA (McMullin+ 2007 ASP 376, 127) — not pip-installable,
   requires external install. Reference only.
 
+## ADQL Usage Rules (CRITICAL)
+1. SDSS does NOT support ADQL. To query SDSS data, use search_objects(sources=["sdss"]).
+2. Before writing any ADQL query, use describe_tap_table to confirm column names exist.
+3. Common table name mappings:
+   - Gaia DR3 main table: gaiadr3.gaia_source (service="gaia")
+   - Gaia DR3 variable RR Lyrae: gaiadr3.vari_rrlyrae (service="gaia")
+   - Gaia DR3 variable Cepheids: gaiadr3.vari_cepheid (service="gaia")
+   - TESS Input Catalog (TIC): "IV/39/tic82" (service="vizier"), columns: TIC, RAJ2000, DEJ2000, Tmag, Teff, logg, rad, mass, plx, ...
+   - 2MASS Point Source Catalog: "II/246/out" (service="vizier")
+   - AllWISE Source Catalog: "II/328/allwise" (service="vizier")
+   - SDSS DR18: does NOT support ADQL — use search_objects(sources=["sdss"])
+4. NEVER guess column names. If unsure, call describe_tap_table first.
+
 ## CRITICAL: Data integrity rules
 - NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and suggest alternatives (different database, different query, retry).
 - NEVER silently fall back to mock data. Every data point shown to the user MUST come from a real astronomical database or the user's own uploaded files.
 - When data is unavailable, say so clearly: "I could not retrieve data from [source] because [reason]. Here are alternatives: ..."
+- Every data tool returns a data_origin field. ONLY use data with data_origin="real_archive" for scientific analysis.
+- When data_origin="unavailable", tell the user explicitly. Do NOT fabricate replacement data.
+- When using run_python for scientific analysis, ALL input data must come from prior tool calls (get_search_results / get_adql_results). NEVER hardcode astronomical values in Python code.
 - For star cluster analysis: use run_adql with Gaia DR3 to get real photometry and astrometry. Use fit_isochrone (which uses real PARSEC CMD 3.9 isochrones) for age determination.
 - For extinction on NEARBY objects (<1 kpc): query Gaia's ag_gspphot/ebpminrp_gspphot columns OR use lookup_ebv.
 - For extinction on DISTANT objects (>5 kpc) or LOW-METALLICITY objects ([Fe/H] < -1.5): NEVER trust ag_gspphot/mh_gspphot from Gaia. Use lookup_ebv (SFD/IRSA) for E(B-V), and SIMBAD/Harris literature values for [Fe/H].
@@ -793,6 +795,25 @@ When you use the search_literature tool, cite papers in your response using the 
 Reference specific findings from the abstracts to support your analysis.
 
 Always respond in the same language the user uses.
+
+## Transient Source Temporal Awareness (CRITICAL)
+- Supernovae, GRBs, novae, and other transient events fade within weeks to months.
+  Before suggesting "apply for telescope time to observe [transient]", check its discovery date.
+  If the event is older than ~2 years, it is almost certainly too faint to observe.
+  Use archival data (MAST, ESO Archive, IRSA) instead of proposing new observations.
+- When the user asks about a specific transient, first use get_object_dossier or query_transients
+  to retrieve the discovery date, then decide: archival data analysis vs. new observation proposal.
+
+## Parameter Sensitivity (CRITICAL for scaling-law analyses)
+When your analysis involves:
+- Multiple quantities spanning several orders of magnitude (e.g., atmospheric density, viscosity, wind speed)
+- Scaling laws where the dominant mechanism depends on parameter choices
+- Extreme physical environments (T > 2000K, supersonic flows, degenerate matter)
+You MUST:
+1. Identify which parameters have the largest uncertainty
+2. Use the sensitivity_analysis tool to test how conclusions change across plausible parameter ranges
+3. Explicitly state when qualitative conclusions (e.g., "which mechanism dominates") could flip with different parameter choices
+4. Never present a single scaling estimate as definitive when parameter uncertainties span >1 order of magnitude
 
 ## Research Mode (研究模式)
 
@@ -1088,19 +1109,22 @@ async def chat_message_stream(
                 yield f"data: {json.dumps({'type': 'status', 'message': f'Routing across {len(agent_names)} specialist agents...'})}\n\n"
             for agent_name in agent_names:
                 yield f"data: {json.dumps({'type': 'status', 'message': f'{agent_name} working...'})}\n\n"
-            response = await _run_orchestrated_chat(
-                runtime=runtime,
-                messages=claude_messages,
-                provider_api_keys=provider_api_keys,
-                python_session_id=python_session_id,
-                preferred_backend=preferred_backend,
-                chat_session_id=chat_session_id,
+            response = await asyncio.wait_for(
+                _run_orchestrated_chat(
+                    runtime=runtime,
+                    messages=claude_messages,
+                    provider_api_keys=provider_api_keys,
+                    python_session_id=python_session_id,
+                    preferred_backend=preferred_backend,
+                    chat_session_id=chat_session_id,
+                ),
+                timeout=180.0,  # 3-minute hard limit for entire chat response
             )
             if response["reply"]:
                 yield f"data: {json.dumps({'type': 'text', 'content': response['reply']})}\n\n"
             for action in response["actions"]:
                 yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result')})}\n\n"
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             yield f"data: {json.dumps({'type': 'error', 'message': 'The AI workflow took too long. Try a narrower query or split the task into query and analysis steps.'})}\n\n"
         except InferenceError as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -1222,7 +1246,7 @@ async def _llm_messages_create(
         preferred_backend=preferred_backend,
         max_tokens=4096,
         temperature=0.0,
-        backend_timeout=300.0,
+        backend_timeout=120.0,
     )
 
 
@@ -1262,12 +1286,21 @@ async def _run_agent_loop(
     user_id: str | None = None,
     chat_session_id: str | None = None,
 ) -> dict:
+    import time as _time
+
     working_messages = deepcopy(messages)
     all_tool_results: list[dict] = []
     text_parts: list[str] = []
     max_iterations = 12
+    _loop_deadline = _time.monotonic() + 120.0  # 2-minute wall-clock limit
 
     for _iteration in range(max_iterations):
+        if _time.monotonic() > _loop_deadline:
+            summary = " ".join(text_parts) if text_parts else "AI workflow timed out."
+            return {
+                "reply": summary + "\n\n(Agent loop timed out after 2 minutes. Results above are partial.)",
+                "actions": all_tool_results,
+            }
         response = await _llm_messages_create(
             system=system,
             messages=working_messages,

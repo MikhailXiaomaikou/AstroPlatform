@@ -96,6 +96,9 @@ ALLOWED_MODULES = {
     "json", "csv", "re", "datetime", "io",
     "inspect",
     "warnings",  # Safe stdlib — astronomical packages emit many warnings
+    "time",  # stdlib timing utilities (sleep, perf_counter, etc.)
+    # Scientific visualization
+    "seaborn",
     # Data science
     "numpy", "np",
     "scipy", "scipy.optimize", "scipy.signal", "scipy.stats",

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 PUB_STYLE = {
     "font.family": "serif",
-    "font.serif": ["Computer Modern Roman", "DejaVu Serif", "Times New Roman"],
+    "font.serif": ["Noto Serif CJK SC", "Noto Serif", "DejaVu Serif", "Times New Roman"],
     "font.size": 12,
     "axes.labelsize": 14,
     "axes.titlesize": 14,
@@ -473,7 +473,7 @@ def fit_isochrone(
             show_titles=True,
             title_kwargs={"fontsize": 10},
         )
-        fig.suptitle("Isochrone Fit — MCMC Posterior", fontsize=12, y=1.02)
+        fig.suptitle("Isochrone Fit - MCMC Posterior", fontsize=12, y=1.02)
         fit_result["corner_fig"] = fig
         plt.close(fig)
 

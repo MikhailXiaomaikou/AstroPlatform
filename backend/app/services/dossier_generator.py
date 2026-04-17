@@ -243,7 +243,7 @@ async def _query_sdss(ra: float, dec: float) -> dict:
     params = {
         "ra": ra,
         "dec": dec,
-        "radius": 0.05,  # arcmin
+        "radius": 0.15,  # arcmin
         "format": "json",
     }
     async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:

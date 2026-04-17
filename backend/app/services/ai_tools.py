@@ -1192,6 +1192,32 @@ TOOLS = [
             "required": ["period_s", "period_dot"],
         },
     },
+    {
+        "name": "describe_tap_table",
+        "description": (
+            "List columns of a TAP table. Use BEFORE writing ADQL to verify column names exist. "
+            "Returns column name, datatype, and description for each column. "
+            "Supports services: gaia, simbad, vizier, cadc."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "service": {
+                    "type": "string",
+                    "enum": ["gaia", "simbad", "vizier", "cadc"],
+                    "description": "TAP service to query",
+                },
+                "table_name": {
+                    "type": "string",
+                    "description": (
+                        "Full table name, e.g. 'gaiadr3.gaia_source', 'basic' (SIMBAD), "
+                        "'\"IV/39/tic82\"' (VizieR TIC), '\"II/246/out\"' (VizieR 2MASS)"
+                    ),
+                },
+            },
+            "required": ["service", "table_name"],
+        },
+    },
 ]
 
 
@@ -1207,6 +1233,24 @@ async def execute_tool(
     chat_session_id: str | None = None,
 ) -> dict:
     """Execute a tool call and return the result as a dict."""
+    from app.services.result_provenance import normalize_tool_result
+    result = await _execute_tool_inner(
+        tool_name, tool_input, api_key, provider_api_keys,
+        python_session_id, user_id, chat_session_id,
+    )
+    return normalize_tool_result(tool_name, result)
+
+
+async def _execute_tool_inner(
+    tool_name: str,
+    tool_input: dict,
+    api_key: str = "",
+    provider_api_keys: dict[str, str] | None = None,
+    python_session_id: str = "default",
+    user_id: str | None = None,
+    chat_session_id: str | None = None,
+) -> dict:
+    """Inner dispatch — called by execute_tool, result wrapped with provenance."""
     try:
         if tool_name == "search_objects":
             return await _exec_search(tool_input, python_session_id)
@@ -1477,6 +1521,8 @@ async def execute_tool(
             return await _exec_x_ray_spectral_fit(tool_input)
         elif tool_name == "pulsar_derived_quantities":
             return _exec_pulsar_derived(tool_input)
+        elif tool_name == "describe_tap_table":
+            return await _exec_describe_tap_table(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -1546,7 +1592,12 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     redshift_max = parsed.get("redshift_max")
     has_criteria = any([object_type, redshift_min, redshift_max])
 
-    search_ra, search_dec = await _resolve_search_coordinates(query, None, None)
+    # Skip coordinate resolution for scientific criteria queries (e.g. "emission line galaxies z<0.1")
+    # to avoid SkyCoord.from_name() sending the criteria string to Sesame as an object name
+    if has_criteria:
+        search_ra, search_dec = None, None
+    else:
+        search_ra, search_dec = await _resolve_search_coordinates(query, None, None)
 
     async def _search_one(source: str):
         connector = get_connector(source)
@@ -1601,6 +1652,14 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
 
     query = inp.get("query", "")
     service = inp.get("service", "gaia")
+
+    # Validate and rewrite ADQL before sending to TAP service
+    from app.services.adql_dialect import normalize_adql
+    dialect = normalize_adql(query, service)
+    if not dialect.ok:
+        return {"error": "; ".join(dialect.errors)}
+    query = dialect.rewritten_query
+    _dialect_warnings = dialect.warnings
 
     async def _try_query(q: str) -> dict | None:
         """Attempt one ADQL query. Return result dict or None on timeout."""
@@ -1667,6 +1726,7 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
         "data": truncated,
         "row_count": row_count,
         "showing": min(VIEW_ROWS, row_count),
+        "has_data": row_count > 0,
         "note": (
             f"Showing first {VIEW_ROWS} of {row_count} rows. Full data is cached — "
             "in run_python you can access it via get_cached_results('latest_adql')."
@@ -1674,6 +1734,8 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     }
     if retry_log:
         adql_result["retry_log"] = retry_log
+    if _dialect_warnings:
+        adql_result["dialect_warnings"] = _dialect_warnings
 
     # Store full result set in cache (indexed for get_cached_results)
     result_set = build_adql_result_set(
@@ -1687,6 +1749,72 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     store_search_results("latest_adql", data)
 
     return adql_result
+
+
+async def _exec_describe_tap_table(inp: dict) -> dict:
+    """Query TAP_SCHEMA to list columns of a table."""
+    from app.api.integration import execute_adql_query, ADQLRequest
+
+    service = inp.get("service", "gaia")
+    table_name = inp.get("table_name", "")
+
+    if not table_name:
+        return {"error": "table_name is required"}
+
+    # Fast-path: check local catalog registry before hitting TAP_SCHEMA
+    from app.services.catalog_registry import get_catalog
+    cached = get_catalog(table_name)
+    if cached:
+        return {
+            "table": table_name,
+            "service": service,
+            "column_count": len(cached.columns),
+            "columns": [{"name": c.name, "datatype": c.datatype, "description": c.description} for c in cached.columns],
+            "source": "local_registry",
+        }
+
+    # Sanitize table_name to prevent SQL injection (allow alphanumeric, dots, slashes, quotes, underscores)
+    import re as _re
+    if not _re.match(r'^["\w./+-]+$', table_name):
+        return {"error": f"Invalid table_name: {table_name}"}
+
+    query = (
+        f"SELECT column_name, datatype, description "
+        f"FROM TAP_SCHEMA.columns "
+        f"WHERE table_name = '{table_name}' "
+        f"ORDER BY column_name"
+    )
+
+    try:
+        result = await execute_adql_query(ADQLRequest(query=query, service=service))
+    except Exception as exc:
+        return {"error": f"Failed to query TAP_SCHEMA for {table_name}: {exc}"}
+
+    if not result or not result.get("data"):
+        return {
+            "error": f"No columns found for table '{table_name}' on {service}. "
+            "Check the table name — for VizieR use quoted names like '\"IV/39/tic82\"'.",
+        }
+
+    data = result.get("data", {})
+    columns = []
+    names = data.get("column_name", data.get("COLUMN_NAME", []))
+    dtypes = data.get("datatype", data.get("DATATYPE", []))
+    descs = data.get("description", data.get("DESCRIPTION", []))
+
+    for i in range(len(names)):
+        columns.append({
+            "name": names[i] if i < len(names) else "",
+            "datatype": dtypes[i] if i < len(dtypes) else "",
+            "description": descs[i] if i < len(descs) else "",
+        })
+
+    return {
+        "table": table_name,
+        "service": service,
+        "column_count": len(columns),
+        "columns": columns[:200],  # Cap at 200 to fit context
+    }
 
 
 async def _exec_object_info(inp: dict) -> dict:
@@ -2157,16 +2285,21 @@ async def _exec_generate_proposal(inp: dict) -> dict:
         "requested_exposure_hours": exposure_hours,
     }
 
-    # 1. Resolve target coordinates via SIMBAD
+    # 1. Resolve target coordinates
     ra, dec = None, None
     target_mag = None
     try:
-        from astropy.coordinates import SkyCoord
-        coord = SkyCoord.from_name(target_name)
-        ra, dec = float(coord.ra.deg), float(coord.dec.deg)
-        proposal["coordinates"] = {"ra_deg": round(ra, 6), "dec_deg": round(dec, 6),
-                                   "ra_hms": coord.ra.to_string(unit="hour", sep=":"),
-                                   "dec_dms": coord.dec.to_string(sep=":")}
+        from app.services.name_resolver import resolve_name
+        resolved = await resolve_name(target_name)
+        if resolved.resolved:
+            ra, dec = resolved.ra, resolved.dec
+            from astropy.coordinates import SkyCoord
+            coord = SkyCoord(ra, dec, unit="deg")
+            proposal["coordinates"] = {"ra_deg": round(ra, 6), "dec_deg": round(dec, 6),
+                                       "ra_hms": coord.ra.to_string(unit="hour", sep=":"),
+                                       "dec_dms": coord.dec.to_string(sep=":")}
+        else:
+            proposal["coordinates"] = {"error": f"Could not resolve '{target_name}': tried {resolved.aliases_tried}"}
     except Exception as e:
         proposal["coordinates"] = {"error": f"Could not resolve '{target_name}': {e}"}
 
@@ -2847,15 +2980,12 @@ async def _exec_get_dossier(inp: dict) -> dict:
     name = inp.get("name")
 
     if ra is None or dec is None:
-        # Try to resolve from name via SIMBAD
         if name:
-            try:
-                from astropy.coordinates import SkyCoord
-                coord = SkyCoord.from_name(name)
-                ra = float(coord.ra.deg)
-                dec = float(coord.dec.deg)
-            except Exception as e:
-                return {"error": f"ra and dec required (name resolution failed: {e})"}
+            from app.services.name_resolver import resolve_name
+            resolved = await resolve_name(name)
+            if not resolved.resolved:
+                return {"error": f"Could not resolve '{name}': tried {resolved.aliases_tried}"}
+            ra, dec = resolved.ra, resolved.dec
         else:
             return {"error": "ra and dec are required (or provide a name for resolution)"}
 
@@ -2959,15 +3089,12 @@ async def _exec_cross_wavelength(inp: dict) -> dict:
     name = inp.get("name")
 
     if ra is None or dec is None:
-        # Try to resolve from name via SIMBAD
         if name:
-            try:
-                from astropy.coordinates import SkyCoord
-                coord = SkyCoord.from_name(name)
-                ra = float(coord.ra.deg)
-                dec = float(coord.dec.deg)
-            except Exception as e:
-                return {"error": f"ra and dec required (name resolution failed: {e})"}
+            from app.services.name_resolver import resolve_name
+            resolved = await resolve_name(name)
+            if not resolved.resolved:
+                return {"error": f"Could not resolve '{name}': tried {resolved.aliases_tried}"}
+            ra, dec = resolved.ra, resolved.dec
         else:
             return {"error": "ra and dec are required (or provide a name for resolution)"}
 

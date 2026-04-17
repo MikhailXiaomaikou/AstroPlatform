@@ -63,7 +63,7 @@ def _escape_latex(text: str) -> str:
 
 def _format_table_cell(value: object) -> str:
     if value is None:
-        return "—"
+        return "-"
     if isinstance(value, float):
         if value != value:
             return "NaN"
