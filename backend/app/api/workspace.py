@@ -30,8 +30,15 @@ class BatchQueryRequest(BaseModel):
     radius: float = 0.1
 
 @router.post("/batch-search")
-async def batch_search(req: BatchQueryRequest):
-    """Search multiple targets across multiple sources."""
+async def batch_search(
+    req: BatchQueryRequest,
+    _user: User = Depends(get_current_user),
+):
+    """Search multiple targets across multiple sources.
+
+    M20: auth-gated so unauthenticated clients cannot exhaust connector
+    pools by hammering this with 50 targets × N sources.
+    """
     import asyncio
 
     for s in req.sources:
@@ -220,14 +227,34 @@ async def export_data(
 # ── Batch Target Upload ──
 
 @router.post("/batch-upload")
-async def batch_upload_targets(file: UploadFile = File(...)):
-    """Parse a CSV file of targets (name, ra, dec) for batch search."""
+async def batch_upload_targets(
+    file: UploadFile = File(...),
+    _user: User = Depends(get_current_user),
+):
+    """Parse a CSV file of targets (name, ra, dec) for batch search.
+
+    M21: enforce a 1 MB / 10k-row ceiling.  Without this, a user could
+    upload a 1 MB CSV with millions of rows (global request size allows it)
+    and block the worker while csv.DictReader churns through them.
+    """
+    _MAX_BYTES = 1_000_000
+    _MAX_ROWS = 10_000
     content = await file.read()
+    if len(content) > _MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"CSV too large ({len(content)} bytes); max {_MAX_BYTES} bytes.",
+        )
     text = content.decode("utf-8")
     reader = csv.DictReader(io.StringIO(text))
 
     targets = []
-    for row in reader:
+    for row_idx, row in enumerate(reader):
+        if row_idx >= _MAX_ROWS:
+            raise HTTPException(
+                status_code=413,
+                detail=f"CSV exceeds row limit ({_MAX_ROWS}).",
+            )
         name = row.get("name", row.get("Name", row.get("target", "")))
         ra = None
         dec = None
@@ -241,5 +268,6 @@ async def batch_upload_targets(file: UploadFile = File(...)):
             pass
         if name:
             targets.append({"name": name, "ra": ra, "dec": dec})
+        # End of the per-row loop (M21 counter advances above).
 
     return {"targets": targets, "count": len(targets)}

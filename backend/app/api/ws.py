@@ -155,6 +155,31 @@ async def redis_subscriber():
 _collab_connections: dict[str, list[tuple]] = defaultdict(list)  # team_id -> [(ws, user_info)]
 _team_presence: dict[str, dict[str, dict]] = defaultdict(dict)   # team_id -> {user_id: info}
 
+# M29: presence TTL in seconds — entries not seen within this window are swept
+# on each new connection.  5 minutes is generous for a WebSocket heartbeat
+# but short enough to avoid months-long ghosts.
+_PRESENCE_TTL_SECONDS = 300
+
+
+def _sweep_stale_presence(team_id: str) -> None:
+    """Drop presence entries whose last_seen is older than PRESENCE_TTL."""
+    now_iso = datetime.now(timezone.utc)
+    room = _team_presence.get(team_id)
+    if not room:
+        return
+    stale: list[str] = []
+    for uid, info in room.items():
+        last_seen = info.get("last_seen", "")
+        try:
+            ts = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            stale.append(uid)
+            continue
+        if (now_iso - ts).total_seconds() > _PRESENCE_TTL_SECONDS:
+            stale.append(uid)
+    for uid in stale:
+        room.pop(uid, None)
+
 
 @router.websocket("/ws/collab/{team_id}")
 async def collab_websocket(websocket: WebSocket, team_id: str):
@@ -169,6 +194,10 @@ async def collab_websocket(websocket: WebSocket, team_id: str):
     # always the token subject.
     user_info = {"user_id": str(auth_user_id), "name": "User"}
     _collab_connections[team_id].append((websocket, user_info))
+    # M29: sweep stale presence every time someone joins so ghost entries
+    # (ungraceful disconnects before this fix shipped, or slow heartbeats)
+    # don't accumulate.
+    _sweep_stale_presence(team_id)
 
     try:
         # Wait for initial identify message (display name only; user_id fixed).

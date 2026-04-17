@@ -4,8 +4,11 @@ import logging
 import os
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
+
+from app.auth import get_current_user
+from app.models.schemas import User
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +32,13 @@ async def _probe_url(url: str, timeout: float = 2.0) -> tuple[str, int]:
 
 
 @router.get("/health/detailed")
-async def health_detailed():
-    """Return granular health status for database, Redis, object storage, and external services."""
+async def health_detailed(_user: User = Depends(get_current_user)):
+    """Return granular health status for database, Redis, object storage, and external services.
+
+    M31: auth-gated.  Previous behaviour leaked internal URL / credential
+    prefixes via error messages to any unauthenticated caller probing
+    for hosting details (MinIO endpoint, Redis URL shape, etc.).
+    """
     checks: dict[str, dict] = {}
     overall = "ok"
 

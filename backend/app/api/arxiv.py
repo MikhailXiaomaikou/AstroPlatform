@@ -4,8 +4,11 @@ import logging
 import re
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from app.auth import get_current_user
+from app.models.schemas import User
 
 router = APIRouter(prefix="/api/arxiv", tags=["arxiv"])
 logger = logging.getLogger(__name__)
@@ -147,8 +150,15 @@ def _parse_latex_tables(source: str) -> list[dict]:
 
 
 @router.post("/extract-tables", response_model=ArxivTableResponse)
-async def extract_arxiv_tables(req: ArxivTableRequest):
-    """Extract data tables from an arXiv paper."""
+async def extract_arxiv_tables(
+    req: ArxivTableRequest,
+    _user: User = Depends(get_current_user),
+):
+    """Extract data tables from an arXiv paper.
+
+    M19: gated with get_current_user so this endpoint cannot be used as a
+    DoS amplifier against ar5iv / arxiv.org by unauthenticated clients.
+    """
     arxiv_id = _clean_arxiv_id(req.arxiv_id)
     if not arxiv_id:
         raise HTTPException(status_code=400, detail="Invalid arXiv ID")

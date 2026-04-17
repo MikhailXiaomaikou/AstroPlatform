@@ -1531,19 +1531,32 @@ async def _execute_tool_inner(
 
 
 def _auto_select_sources(query: str) -> list[str]:
-    """Auto-select the best database sources based on query keywords."""
+    """Auto-select the best database sources based on query keywords.
+
+    M11: switched from substring matching to word-boundary regex so that
+    `supernova` no longer triggers the `star` branch, `nova` doesn't match
+    inside `renovation`, etc.  Also extended the stellar branch with an
+    explicit `kinematics`/`hr diagram` lead so parallax-relevant queries
+    include Gaia even when the word `star` isn't present.
+    """
+    import re as _re
     q = query.lower()
-    if any(k in q for k in ["sn ", "sn2", "supernova", "transient", "grb", "kilonova", "nova"]):
+
+    def _has(*keywords: str) -> bool:
+        pattern = r"\b(" + "|".join(_re.escape(k) for k in keywords) + r")\b"
+        return bool(_re.search(pattern, q))
+
+    if _has("supernova", "sn", "sn2024", "sn2023", "transient", "grb", "kilonova", "nova", "tns"):
         return ["simbad"]
-    if any(k in q for k in ["quasar", "qso", "agn", "blazar", "seyfert"]):
+    if _has("quasar", "qso", "agn", "blazar", "seyfert"):
         return ["simbad", "ned"]
-    if any(k in q for k in ["star", "stellar", "proper motion", "parallax", "binary", "variable"]):
+    if _has("star", "stellar", "parallax", "binary", "variable", "hr diagram", "cmd") or "proper motion" in q:
         return ["gaia", "simbad"]
-    if any(k in q for k in ["galaxy", "cluster", "group", "morpholog"]):
+    if _has("galaxy", "galaxies", "cluster", "group") or "morpholog" in q:
         return ["simbad", "ned", "sdss"]
-    if any(k in q for k in ["infrared", "wise", "2mass", "dust"]):
+    if _has("infrared", "wise", "2mass", "dust"):
         return ["allwise", "2mass"]
-    if any(k in q for k in ["x-ray", "xray"]):
+    if _has("x-ray", "xray"):
         return ["chandra", "simbad"]
     return ["simbad"]
 
@@ -1619,19 +1632,40 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     results_per = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_results = []
+    # M15: surface per-source truncation so the LLM (and the user) can see
+    # that each archive's row cap was hit instead of believing the returned
+    # set is the complete archive response.
+    per_source_counts: list[dict] = []
+    total_truncated = False
     for src, res in zip(sources, results_per):
         if isinstance(res, Exception):
             all_results.append({"source": src, "error": str(res)})
+            per_source_counts.append({"source": src, "error": str(res)})
         else:
+            archive_count = len(res)
+            truncated_here = archive_count > 25
+            if truncated_here:
+                total_truncated = True
             for obj in res[:25]:
                 r = _astro_to_result(obj).model_dump()
                 all_results.append(r)
+            per_source_counts.append({
+                "source": src,
+                "returned": min(archive_count, 25),
+                "archive_total": archive_count,
+                "truncated": truncated_here,
+            })
 
     # Cache results for later retrieval by get_last_search_results
     store_search_results("latest", all_results)
     store_search_results(f"latest:{python_session_id}", all_results)
 
-    result = {"results": all_results, "total": len(all_results)}
+    result = {
+        "results": all_results,
+        "total": len(all_results),
+        "per_source": per_source_counts,
+        "truncated": total_truncated,
+    }
 
     # Phase 2B: Add suggested actions based on search results
     result["suggested_actions"] = _suggest_actions_for_results(result.get("results", []))
@@ -2018,7 +2052,14 @@ async def _exec_analyze_spectrum_pro(inp: dict) -> dict:
     if not os.path.isfile(full_path):
         return {"error": f"FITS file not found: {fits_path}"}
 
-    operations = inp.get("operations", ["identify_lines"])
+    # M13: explicitly-empty operations list used to load the spectrum and
+    # return only metadata, which was surprising.  Fall back to the default
+    # single-op pipeline when the caller passes [].
+    operations = inp.get("operations")
+    if operations is None:
+        operations = ["identify_lines"]
+    elif isinstance(operations, list) and len(operations) == 0:
+        operations = ["identify_lines"]
     redshift = inp.get("redshift", 0.0)
     model = inp.get("model", "gaussian")
     line_centers = inp.get("line_centers")
@@ -3130,7 +3171,19 @@ async def _exec_crossmatch_catalogs(inp: dict, python_session_id: str = "default
         data = result.get("data", {}) if isinstance(result, dict) else {}
         if not data:
             raise ValueError(f"ADQL query returned no data: {query[:80]}...")
-        return pd.DataFrame(data)
+        # M17: TAP responses occasionally have ragged columns when optional
+        # fields are sparsely populated.  pd.DataFrame() raises a cryptic
+        # "All arrays must be of the same length" in that case; pad the
+        # shorter columns with None so the caller gets a helpful error
+        # downstream (or the data flows through unchanged).
+        max_len = max((len(v) for v in data.values() if isinstance(v, list)), default=0)
+        padded = {}
+        for col, values in data.items():
+            if isinstance(values, list) and len(values) < max_len:
+                padded[col] = values + [None] * (max_len - len(values))
+            else:
+                padded[col] = values
+        return pd.DataFrame(padded)
 
     try:
         t1, t2 = await asyncio.gather(
@@ -3139,6 +3192,14 @@ async def _exec_crossmatch_catalogs(inp: dict, python_session_id: str = "default
         )
     except Exception as e:
         return {"error": f"Failed to fetch catalogs: {e}"}
+
+    # M16: ADQL TAP responses commonly return uppercase column names (RA,
+    # DEC).  Normalise to lowercase before the cross-match engine sees them
+    # so a valid query doesn't get rejected over casing alone.
+    for tbl in (t1, t2):
+        rename_map = {c: c.lower() for c in tbl.columns if c != c.lower()}
+        if rename_map:
+            tbl.rename(columns=rename_map, inplace=True)
 
     # Validate required columns
     for label, tbl in [("table1", t1), ("table2", t2)]:

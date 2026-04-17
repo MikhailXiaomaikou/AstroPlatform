@@ -5,6 +5,11 @@ __pycache__/
 .venv/
 *.egg-info/
 .pytest_cache/
+# Coverage artifacts (L7)
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
 
 # Node
 node_modules/

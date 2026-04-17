@@ -398,8 +398,11 @@ function CitationModal({ objectName, onClose }: { objectName: string; onClose: (
       await navigator.clipboard.writeText(bib);
       setCopiedBib(bibcode);
       setTimeout(() => setCopiedBib(null), 2000);
-    } catch {
-      // fallback: ignore
+    } catch (e) {
+      // L5: previously silent.  Tell the user the copy failed so they can
+      // try again (e.g., grant clipboard permission) or copy manually.
+      const msg = e instanceof Error ? e.message : String(e);
+      alert(`Could not copy BibTeX: ${msg}`);
     }
   }
 

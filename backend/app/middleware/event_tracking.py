@@ -31,7 +31,14 @@ class EventTrackingMiddleware(BaseHTTPMiddleware):
         if auth_header.startswith("Bearer "):
             try:
                 request.state.user_id = str(decode_token(auth_header.split(" ", 1)[1]))
-            except Exception:
+            except Exception as decode_exc:
+                # M30: previously silent.  Log at DEBUG so malformed tokens
+                # (expired, tampered, truncated-by-proxy) are visible when
+                # investigating attribution gaps, without flooding INFO.
+                logger.debug(
+                    "event_tracking: token decode failed for %s %s: %s",
+                    request.method, request.url.path, decode_exc,
+                )
                 request.state.user_id = None
         else:
             request.state.user_id = None
