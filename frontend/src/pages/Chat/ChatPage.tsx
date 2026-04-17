@@ -1527,6 +1527,10 @@ export default function ChatPage() {
   const [pageError, _setPageError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [loading, setLoading] = useState(false);
+  // R0d: abort controller for the in-flight chat stream.  A Stop button in
+  // the composer calls abort() to cancel the fetch + let the backend task
+  // observe the disconnect and unwind.
+  const chatAbortRef = useRef<AbortController | null>(null);
   const [exporting, setExporting] = useState<Record<ExportAction, boolean>>({
     markdown: false,
     notebook: false,
@@ -2343,7 +2347,11 @@ export default function ChatPage() {
       wsContext.python_session_id = pythonSessionIdRef.current;
       wsContext.current_session_id = currentSessionId;
 
-      const response = await sendChatMessage(chatHistory, wsContext, onThinking);
+      // R0d: create a fresh AbortController per request so the Stop button
+      // can cancel this stream specifically.
+      const abort = new AbortController();
+      chatAbortRef.current = abort;
+      const response = await sendChatMessage(chatHistory, wsContext, onThinking, abort.signal);
 
       const assistantMsg: DisplayMessage = {
         id: pendingId,
@@ -2357,6 +2365,17 @@ export default function ChatPage() {
       // Replace the pending marker in place (keep its id for stable React keys).
       setMessages((prev) => prev.map((m) => (m.id === pendingId ? assistantMsg : m)));
     } catch (err: unknown) {
+      // R0d: user-initiated abort is not an error — rewrite the pending
+      // bubble to a cancelled state and exit the catch early.
+      if (err instanceof DOMException && err.name === "AbortError") {
+        const cancelledMsg: DisplayMessage = {
+          id: pendingId,
+          role: "assistant",
+          content: "⏹ Reply cancelled by user.",
+        };
+        setMessages((prev) => prev.map((m) => (m.id === pendingId ? cancelledMsg : m)));
+        return;
+      }
       let errorDetail = "Unknown error";
       if (err && typeof err === "object" && "response" in err) {
         const resp = (err as { response?: { data?: { detail?: string }; status?: number } }).response;
@@ -2383,8 +2402,14 @@ export default function ChatPage() {
         error_type: "chat_failed",
       });
     } finally {
+      chatAbortRef.current = null;
       setLoading(false);
     }
+  };
+
+  const handleStop = () => {
+    // R0d: user-triggered cancel of the in-flight chat stream.
+    chatAbortRef.current?.abort();
   };
 
   const handleExecuteAction = async (
@@ -3219,6 +3244,17 @@ export default function ChatPage() {
             disabled={loading}
             aria-label="Message input"
           />
+          {loading ? (
+            <button
+              className="btn-secondary"
+              onClick={handleStop}
+              style={{ background: "#b00020", color: "#fff", marginRight: 4 }}
+              title="Abort this reply (R0d)"
+              aria-label="Stop"
+            >
+              ■ Stop
+            </button>
+          ) : null}
           <button
             className="btn-chat-send"
             onClick={() => handleSend()}

@@ -1675,6 +1675,7 @@ export async function sendChatMessage(
   messages: ChatMessage[],
   context?: Record<string, unknown>,
   onThinking?: (evt: ThinkingEvent) => void,
+  signal?: AbortSignal,
 ): Promise<ChatResponse> {
   const apiKeys = getStoredApiKeys();
   const apiProvider = getPreferredAiProvider();
@@ -1699,6 +1700,7 @@ export async function sendChatMessage(
           : {}),
       },
       body: JSON.stringify(body),
+      signal,  // R0d: user-triggered abort closes the fetch + stream
     });
 
     if (!resp.ok) {

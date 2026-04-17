@@ -1328,13 +1328,14 @@ async def _llm_messages_create(
         preferred_backend=preferred_backend,
         max_tokens=4096,
         temperature=0.0,
-        # Timeout budget (step 0 bump after c6504c9 shipped SSE heartbeat):
-        #   outer endpoint 420s -> agent loop 360s -> single LLM call 150s.
-        # Individual tool calls (45s) still fit inside each iteration.  The
-        # heartbeat prevents proxy idle-kill, so the higher ceiling is safe
-        # on Render free tier (5-min HTTP limit is per-request start, not
-        # per streaming body).
-        backend_timeout=150.0,
+        # Timeout budget (R0c tightens single-LLM cap after R0b added
+        # per-tool deadlines):
+        #   outer endpoint 420s -> agent loop 360s -> single LLM call 90s
+        #   -> per-tool 45s.
+        # Two back-to-back 90s LLM rounds + tools still fit in 360s, and a
+        # 90s single-call cap means a hung LLM can't silently eat half the
+        # loop budget the way the old 150s cap did.
+        backend_timeout=90.0,
     )
 
 
@@ -1357,6 +1358,11 @@ async def _execute_tool_calls(
     import time as _time
     from app.services.ai_tools import execute_tool
 
+    # R0b: per-tool hard deadline so one slow connector cannot burn the
+    # entire agent-loop budget.  Agent-loop total is 360s; 45s per tool
+    # means at least 8 tools can fail/slow before the loop has to abort.
+    _TOOL_DEADLINE_S = 45.0
+
     async def _run_one(tc: dict) -> dict:
         task = asyncio.create_task(execute_tool(
             tc["name"], tc["input"], api_key, provider_api_keys, python_session_id,
@@ -1364,15 +1370,28 @@ async def _execute_tool_calls(
         ))
         start = _time.monotonic()
         while not task.done():
+            elapsed = _time.monotonic() - start
+            if elapsed > _TOOL_DEADLINE_S:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                return {
+                    "error": (
+                        f"Tool {tc['name']} exceeded the {int(_TOOL_DEADLINE_S)}s per-tool "
+                        f"deadline and was cancelled. Retry with narrower parameters."
+                    ),
+                    "success": False,
+                }
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=6.0)
             except asyncio.TimeoutError:
                 if on_event is not None:
-                    elapsed = int(_time.monotonic() - start)
                     try:
                         await on_event({
                             "type": "status",
-                            "message": f"running {tc['name']}… ({elapsed}s)",
+                            "message": f"running {tc['name']}… ({int(elapsed) + 6}s)",
                         })
                     except Exception:
                         pass
