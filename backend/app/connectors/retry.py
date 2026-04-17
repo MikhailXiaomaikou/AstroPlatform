@@ -92,6 +92,18 @@ def with_retry(
                     return result
                 except retryable_exceptions as e:
                     last_exception = e
+                    # R10: structured connector_error metric so operators see
+                    # transient-failure rate per connector in /metrics.
+                    try:
+                        from app.observability.metrics import record_counter
+                        record_counter(
+                            "connector_error_total", 1.0,
+                            connector=func.__qualname__.split(".")[0],
+                            kind=type(e).__name__,
+                            retryable="true",
+                        )
+                    except Exception:
+                        pass
                     if attempt < max_retries:
                         delay = min(base_delay * (backoff_factor ** attempt), max_delay)
                         logger.warning(
@@ -114,7 +126,25 @@ def with_retry(
                     "Circuit breaker OPEN for %s after %d consecutive failures",
                     func.__name__, circuit["failures"],
                 )
+                try:
+                    from app.observability.metrics import record_counter
+                    record_counter(
+                        "circuit_breaker_open_total", 1.0,
+                        connector=func.__qualname__.split(".")[0],
+                    )
+                except Exception:
+                    pass
 
             raise last_exception  # type: ignore[misc]
         return wrapper
     return decorator
+
+
+def get_all_circuit_states() -> dict[str, dict]:
+    """R10: expose circuit state so /metrics can emit a gauge per connector.
+
+    Returns a shallow copy keyed by fully-qualified function name; values
+    contain ``state`` (closed|half-open|open), ``failures`` count, and
+    ``last_failure`` monotonic timestamp.
+    """
+    return {name: dict(state) for name, state in _circuit_state.items()}

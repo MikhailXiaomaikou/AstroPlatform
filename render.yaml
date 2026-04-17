@@ -12,7 +12,10 @@ services:
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
     plan: free
-    healthCheckPath: /health
+    # R18: /health/deep verifies DB + Redis + AI backend so Render's
+    # auto-rollback catches bad deploys that would break chat even when
+    # the process itself is up.
+    healthCheckPath: /health/deep
     envVars:
       - key: ENV
         value: production

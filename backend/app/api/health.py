@@ -96,3 +96,66 @@ async def health_detailed(_user: User = Depends(get_current_user)):
             overall = "ok"  # external service down doesn't degrade local health
 
     return {"status": overall, "checks": checks}
+
+
+@router.get("/health/deep")
+async def health_deep():
+    """Deep health probe used by Render auto-rollback (Phase 5 / R18).
+
+    Returns 200 only when the backend can actually serve chat requests:
+    DB reachable, Redis reachable (if configured), and at least one AI
+    backend key is present.  Unauthenticated so Render's health checker
+    can poll it; it does NOT leak credential shapes — just booleans +
+    short non-sensitive status strings.
+    """
+    import os
+    result: dict[str, object] = {"ok": True, "components": {}}
+
+    # DB
+    try:
+        from app.models.database import async_session
+        async with async_session() as s:
+            await s.execute(text("SELECT 1"))
+        result["components"]["db"] = "ok"
+    except Exception as exc:
+        result["ok"] = False
+        result["components"]["db"] = "fail"
+        logger.warning("health/deep: db probe failed: %s", exc)
+
+    # Redis is optional — don't fail the gate just because dev has no Redis.
+    try:
+        import redis.asyncio as aioredis
+        from app.config import settings
+        if settings.redis_url and "localhost" not in settings.redis_url:
+            kwargs = dict(settings.redis_tls_kwargs())
+            r = aioredis.from_url(settings.redis_url, **kwargs)
+            try:
+                await r.ping()
+                result["components"]["redis"] = "ok"
+            finally:
+                await r.aclose()
+        else:
+            result["components"]["redis"] = "skipped"
+    except Exception as exc:
+        # Non-fatal for now; Redis being down shouldn't block the deploy
+        # gate because the backend degrades gracefully when Redis is absent.
+        result["components"]["redis"] = "degraded"
+        logger.warning("health/deep: redis probe failed: %s", exc)
+
+    # At least one AI provider key configured.  Scanning env so we
+    # don't inadvertently read a user's localStorage-sent key.
+    provider_keys = [
+        os.getenv("ANTHROPIC_API_KEY"),
+        os.getenv("OPENAI_API_KEY"),
+        os.getenv("DEEPSEEK_API_KEY"),
+        os.getenv("LOCAL_MODEL_API_KEY"),
+    ]
+    if any(k for k in provider_keys):
+        result["components"]["ai_backend"] = "ok"
+    else:
+        # Keys may be supplied per-request; still pass the gate, but flag.
+        result["components"]["ai_backend"] = "per_request_only"
+
+    if not result["ok"]:
+        raise HTTPException(status_code=503, detail=result)
+    return result

@@ -144,6 +144,28 @@ def render_prometheus(registry: MetricsRegistry | None = None) -> str:
             lines.append(f"{name}_sum{base_labels_str} {entry['sum']}")
             lines.append(f"{name}_count{base_labels_str} {entry['count']}")
 
+    # R10: expose connector circuit-breaker state as a gauge.  0=closed
+    # (healthy), 1=half-open (probing after cooldown), 2=open (failing).
+    # Only inject into the default (global) registry — callers passing
+    # a custom MetricsRegistry (e.g. unit tests for the renderer itself)
+    # should see exactly what they put in.
+    if registry is None:
+        try:
+            from app.connectors.retry import get_all_circuit_states
+            state_map = {"closed": 0, "half-open": 1, "open": 2}
+            circuits = get_all_circuit_states()
+            if circuits:
+                lines.append("# HELP circuit_breaker_state 0=closed 1=half-open 2=open")
+                lines.append("# TYPE circuit_breaker_state gauge")
+                for qual_name, state in sorted(circuits.items()):
+                    connector = qual_name.split(".")[0]
+                    lbls = _format_labels((("connector", connector),))
+                    lines.append(
+                        f"circuit_breaker_state{lbls} {state_map.get(state.get('state', 'closed'), 0)}"
+                    )
+        except Exception:
+            pass
+
     if not lines:
         lines.append("# HELP empty_registry placeholder")
         lines.append("# TYPE empty_registry gauge")

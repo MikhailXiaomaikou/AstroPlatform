@@ -29,6 +29,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 SYSTEM_PROMPT = """You are an AI research assistant for Standard Astro. Users ask you questions in natural language and you translate them into database queries automatically. Users should NEVER need to write ADQL/SQL themselves — that's YOUR job.
 
+## DATA RELEASE PINS (do not confuse)
+When citing data you MUST name the exact release.  Current pins:
+__ARCHIVE_MANIFEST__
+Never silently mix releases.
+
 ## ZERO-FABRICATION CONTRACT (non-negotiable)
 Every numeric value in your reply — redshift, log g, [Fe/H], E(B−V), A_V,
 mass, luminosity, age, T_eff, distance, parallax, proper motion, radial
@@ -874,6 +879,15 @@ If more than one model or hypothesis is plausible, use compare_models() to rank 
 IMPORTANT: Adapt language to the user's level. If they write in Chinese, respond in Chinese.
 If they seem to be students, explain statistical concepts as you go.
 Always end each step with what comes next."""
+
+# R17: resolve the archive-version placeholder inserted above.  Done as a
+# post-assignment .replace so we don't have to escape every {…} in the
+# enormous multi-line system prompt.
+try:
+    from app.archive_versions import archive_manifest_text as _archive_mf
+    SYSTEM_PROMPT = SYSTEM_PROMPT.replace("__ARCHIVE_MANIFEST__", _archive_mf())
+except Exception:
+    SYSTEM_PROMPT = SYSTEM_PROMPT.replace("__ARCHIVE_MANIFEST__", "gaia=DR3, sdss=DR18")
 
 
 def _generate_next_steps(tool_results: list[dict]) -> str:
@@ -2205,13 +2219,27 @@ class SessionSummary(BaseModel):
 @router.post("/sessions/save")
 async def save_chat_session(
     req: SaveSessionRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Save or update a chat session."""
+    """Save or update a chat session.
+
+    R11: respects the ``Idempotency-Key`` header.  If we've already
+    executed this key for this user, we return the cached response
+    without re-running the save — safe for accidental retries / network
+    flakes that lead the frontend to post twice.
+    """
     from app.models.schemas import ChatSession
     from sqlalchemy import select
     from app.services.memory_service import memory_service
+    from app.services import idempotency as _idemp
+
+    idempotency_key = request.headers.get("idempotency-key")
+    if idempotency_key:
+        cached = await _idemp.lookup(db, idempotency_key, str(user.id))
+        if cached is not None:
+            return cached
 
     if req.session_id:
         try:
@@ -2244,7 +2272,13 @@ async def save_chat_session(
             except Exception as mem_exc:
                 logger.warning("memory_service.refresh_session_memory failed: %s", mem_exc)
             await db.commit()
-            return {"id": str(session.id), "saved": True, "title": session.title}
+            response = {"id": str(session.id), "saved": True, "title": session.title}
+            if idempotency_key:
+                try:
+                    await _idemp.store(db, idempotency_key, str(user.id), response)
+                except Exception as exc:
+                    logger.debug("Idempotency store failed: %s", exc)
+            return response
 
     # Create new session — auto-generate title from first user message if not provided
     title = req.title if (req.title and req.title.strip() and req.title != "New Chat") else _auto_title_from_messages(req.messages)
@@ -2253,13 +2287,23 @@ async def save_chat_session(
         user_id=user.id,
         title=title,
         messages=req.messages,
+        audit_log=req.audit_log,
     )
     db.add(session)
     await db.flush()
-    await memory_service.refresh_session_memory(user.id, session.id, db)
+    try:
+        await memory_service.refresh_session_memory(user.id, session.id, db)
+    except Exception as mem_exc:
+        logger.warning("memory_service.refresh_session_memory failed: %s", mem_exc)
     await db.commit()
     await db.refresh(session)
-    return {"id": str(session.id), "saved": True, "title": session.title}
+    response = {"id": str(session.id), "saved": True, "title": session.title}
+    if idempotency_key:
+        try:
+            await _idemp.store(db, idempotency_key, str(user.id), response)
+        except Exception as exc:
+            logger.debug("Idempotency store failed: %s", exc)
+    return response
 
 
 @router.patch("/sessions/{session_id}")
