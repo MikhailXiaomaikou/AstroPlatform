@@ -150,8 +150,11 @@ export default function ResultsTable({
   const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
   const displayed = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-  // Reset page when results change
-  useMemo(() => { setPage(0); }, [results]);
+  // H17: reset page when the data set OR the sort order changes.  Previously
+  // only `results` was tracked, so clicking a column header to sort left the
+  // user on "page 2 of 3" looking at a freshly-sorted data set — a confusing
+  // way to lose rows.
+  useMemo(() => { setPage(0); }, [results, sortKey, sortAsc]);
 
   if (!loading && results.length === 0) {
     if (searched) {

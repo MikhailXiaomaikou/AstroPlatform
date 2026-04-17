@@ -21,7 +21,7 @@ class NEDConnector(BaseConnector):
 
     source_name = "ned"
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
@@ -42,7 +42,7 @@ class NEDConnector(BaseConnector):
         data = resp.json()
         return self._parse_lookup_response(data)
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
         """Fetch NED summary data for an object and return as FITS table.
 

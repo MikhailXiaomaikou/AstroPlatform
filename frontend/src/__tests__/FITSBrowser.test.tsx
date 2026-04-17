@@ -6,7 +6,15 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import type { ReactElement } from "react";
 import type { FITSFileInfo } from "../api/client";
+
+// H9: FITSBrowser uses useNavigate(); wrap renders in a MemoryRouter so
+// the Router context is available in tests.
+function renderWithRouter(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 // ── Mock i18n — pass keys through as-is ──
 vi.mock("../i18n", () => ({
@@ -71,7 +79,7 @@ describe("FITSBrowser", () => {
   // ── Title ──
 
   it("renders the FITS file manager title", async () => {
-    render(<FITSBrowser />);
+    renderWithRouter(<FITSBrowser />);
     await waitFor(() => {
       expect(screen.getByText("fits.manager_title")).toBeInTheDocument();
     });
@@ -81,7 +89,7 @@ describe("FITSBrowser", () => {
 
   it("shows empty state when no files", async () => {
     mockBrowseFITS.mockResolvedValue([]);
-    render(<FITSBrowser />);
+    renderWithRouter(<FITSBrowser />);
     await waitFor(() => {
       expect(screen.getByText("fits.no_files")).toBeInTheDocument();
     });
@@ -96,7 +104,7 @@ describe("FITSBrowser", () => {
     ];
     mockBrowseFITS.mockResolvedValue(files);
 
-    render(<FITSBrowser />);
+    renderWithRouter(<FITSBrowser />);
 
     await waitFor(() => {
       expect(screen.getByText("star-field.fits")).toBeInTheDocument();

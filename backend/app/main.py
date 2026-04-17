@@ -201,13 +201,19 @@ def _migrate_add_columns(connection):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables on startup
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # In production use Alembic migrations; keep runtime migration for SQLite dev
-        if _os.getenv("ENV", "dev") != "production":
+    # M8: gate create_all on non-production environments.  In production the
+    # schema is managed via Alembic; re-running create_all on every startup
+    # takes DDL locks (noticeable stalls on PostgreSQL with a large schema)
+    # and can mask drift between the model layer and the migration history.
+    _env = _os.getenv("ENV", "dev")
+    if _env != "production":
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            # Runtime migration is only needed for SQLite dev servers.
             await conn.run_sync(_migrate_add_columns)
-    logger.info("Database tables created")
+        logger.info("Database tables created (dev)")
+    else:
+        logger.info("Skipping create_all in production; use `alembic upgrade head`")
 
     # Start Redis subscriber for WebSocket relay (best-effort)
     subscriber_task = asyncio.create_task(redis_subscriber())

@@ -32,6 +32,22 @@ def coord_transform(input_data: dict, params: dict) -> dict:
     if not ra_vals or not dec_vals:
         raise ValueError("CoordTransform: no coordinate data found")
 
+    # M26: validate ranges up front so users get an actionable error instead of
+    # SkyCoord silently wrapping RA modulo 360 and clamping Dec to ±90.
+    import numpy as _np
+    _ra_arr = _np.asarray(ra_vals, dtype=float)
+    _dec_arr = _np.asarray(dec_vals, dtype=float)
+    if _ra_arr.size and (_np.nanmin(_ra_arr) < 0.0 or _np.nanmax(_ra_arr) >= 360.0):
+        raise ValueError(
+            f"CoordTransform: RA values must be in [0, 360); got "
+            f"[{float(_np.nanmin(_ra_arr)):.3f}, {float(_np.nanmax(_ra_arr)):.3f}]."
+        )
+    if _dec_arr.size and (_np.nanmin(_dec_arr) < -90.0 or _np.nanmax(_dec_arr) > 90.0):
+        raise ValueError(
+            f"CoordTransform: Dec values must be in [-90, 90]; got "
+            f"[{float(_np.nanmin(_dec_arr)):.3f}, {float(_np.nanmax(_dec_arr)):.3f}]."
+        )
+
     coords = SkyCoord(ra=ra_vals, dec=dec_vals, unit=(u.degree, u.degree), frame=from_frame)
     transformed = coords.transform_to(to_frame)
 

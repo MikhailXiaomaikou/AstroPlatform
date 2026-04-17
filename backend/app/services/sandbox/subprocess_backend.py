@@ -87,8 +87,20 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int) -> None:
         import matplotlib.pyplot as plt
         import numpy as np
 
+        # H4: Filter the truly dangerous builtins (open/exec/eval/compile) from
+        # user code.  Previously the subprocess backend exposed the full
+        # builtins module — a weaker posture than the in-proc sandbox it was
+        # meant to harden.  Note: subprocess mode is still "crash isolation,
+        # not full security isolation", so we preserve native __import__ (the
+        # child has its own OS process; module-level restrictions that the
+        # in-proc sandbox relies on are not needed here and would break
+        # legitimate `import sys` / `import time` usage).
+        import builtins as _builtins
+        _BLOCKED = {"exec", "eval", "compile", "open"}
+        _safe_builtins = {k: v for k, v in vars(_builtins).items() if k not in _BLOCKED}
+
         exec_globals: dict = {
-            "__builtins__": __builtins__,
+            "__builtins__": _safe_builtins,
             "np": np,
             "numpy": np,
             "plt": plt,

@@ -77,7 +77,7 @@ class VizierConnector(BaseConnector):
 
         return None, query
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def search(
         self,
         query: str,
@@ -130,7 +130,7 @@ class VizierConnector(BaseConnector):
 
         return objects
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
         """Fetch a VizieR catalog table as FITS.
 

@@ -176,6 +176,14 @@ def _fit_single_model(input_data, model_name, wavelength, flux, sigma):
     derived = {}
     if model_name in ("blackbody", "modified_blackbody", "composite"):
         temp = popt[0]
+        # M23: curve_fit occasionally walks outside the stated bounds on
+        # degenerate fits, producing temp ≤ 0.  Refuse rather than divide
+        # by zero / produce a negative peak wavelength.
+        if not (temp > 0) or not np.isfinite(temp):
+            raise ValueError(
+                f"SEDFit: fitted temperature {temp!r} is non-positive; "
+                f"fit did not converge."
+            )
         # Wien's displacement law: lambda_peak = b / T
         wien_b = 2.8977719e7  # Angstroms * Kelvin
         derived["peak_wavelength_angstrom"] = float(wien_b / temp)

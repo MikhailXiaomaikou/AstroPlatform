@@ -50,9 +50,7 @@ async def health_detailed():
     try:
         import redis.asyncio as aioredis
         from app.config import settings
-        kwargs = {}
-        if settings.redis_ssl:
-            kwargs["ssl_cert_reqs"] = "none"
+        kwargs = dict(settings.redis_tls_kwargs())
         r = aioredis.from_url(settings.redis_url, **kwargs)
         try:
             await r.ping()

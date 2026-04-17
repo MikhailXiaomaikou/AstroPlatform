@@ -33,14 +33,22 @@ export default function FITSBrowser({ onSelectFile }: Props) {
   const [dragOver, setDragOver] = useState(false);
   const [lastUploadType, setLastUploadType] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // H18: monotonic counter guards against stale-fetch races when the user
+  // changes the filter quickly — only the most recent load's response may
+  // update state.  (browseFITS does not currently accept an AbortSignal,
+  // so we drop the stale response instead of cancelling the request.)
+  const loadSeqRef = useRef(0);
 
   const loadFiles = useCallback(async () => {
+    const mySeq = ++loadSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const data = await browseFITS(filter || undefined);
+      if (mySeq !== loadSeqRef.current) return;  // stale — newer request in flight
       setFiles(data);
     } catch (e) {
+      if (mySeq !== loadSeqRef.current) return;
       const msg = e instanceof Error ? e.message : t("fits.failed_to_load");
       if (msg.includes("401") || msg.includes("Unauthorized")) {
         setError(t("fits.sign_in_required"));
@@ -48,7 +56,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
         setError(msg);
       }
     } finally {
-      setLoading(false);
+      if (mySeq === loadSeqRef.current) setLoading(false);
     }
   }, [filter]);
 

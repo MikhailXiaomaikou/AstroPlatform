@@ -16,8 +16,7 @@ async def get_redis() -> aioredis.Redis | None:
         try:
             from app.config import settings
             kwargs: dict = {"decode_responses": True}
-            if settings.redis_ssl:
-                kwargs["ssl_cert_reqs"] = "none"
+            kwargs.update(settings.redis_tls_kwargs())
             _redis = aioredis.from_url(settings.redis_url, **kwargs)
             await _redis.ping()
         except (RedisError, ConnectionError, OSError) as e:

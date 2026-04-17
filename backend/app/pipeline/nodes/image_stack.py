@@ -28,6 +28,15 @@ def image_stack(input_data: dict, params: dict) -> dict:
     if len(images_raw) < 2:
         raise ValueError("ImageStack: need at least 2 images to stack")
 
+    # H14: pre-check shapes so the failure message tells the user what went
+    # wrong instead of numpy's cryptic "setting an array element with a
+    # sequence".
+    shapes = {tuple(np.asarray(img).shape) for img in images_raw}
+    if len(shapes) > 1:
+        raise ValueError(
+            f"ImageStack: all images must share the same shape; got {sorted(shapes)}"
+        )
+
     # Convert to 3D numpy array: (N_images, rows, cols)
     try:
         cube = np.array(images_raw, dtype=float)

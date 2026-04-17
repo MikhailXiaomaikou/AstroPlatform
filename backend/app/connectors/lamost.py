@@ -24,7 +24,7 @@ LAMOST_API_BASE = "http://www.lamost.org/dr9/v2.0/api"
 class LAMOSTConnector(BaseConnector):
     source_name = "lamost"
 
-    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
@@ -154,7 +154,7 @@ class LAMOSTConnector(BaseConnector):
             return data["rows"]
         return []
 
-    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
         """Create metadata FITS for a LAMOST spectrum.
 

@@ -1246,7 +1246,11 @@ async def _llm_messages_create(
         preferred_backend=preferred_backend,
         max_tokens=4096,
         temperature=0.0,
-        backend_timeout=120.0,
+        # Timeout budget (H1): outer endpoint 180s -> agent loop 150s ->
+        # single LLM call 90s.  Individual tool calls (45s) fit inside each
+        # iteration.  Ordering guarantees the backend surrenders before the
+        # SSE stream is cut by the outer wrapper.
+        backend_timeout=90.0,
     )
 
 
@@ -1254,7 +1258,12 @@ async def _execute_tool_calls(
     tool_calls: list[dict], api_key: str, provider_api_keys: dict[str, str], python_session_id: str,
     user_id: str | None = None, chat_session_id: str | None = None,
 ) -> list[dict]:
-    """Execute one model turn's tool calls concurrently while preserving order."""
+    """Execute one model turn's tool calls concurrently while preserving order.
+
+    Uses return_exceptions=True (H2) so that a single raising tool does not
+    abort the whole turn; raised exceptions are converted into error-shaped
+    result dicts that flow through normalize_tool_result downstream.
+    """
     from app.services.ai_tools import execute_tool
 
     coroutines = [
@@ -1262,16 +1271,22 @@ async def _execute_tool_calls(
                      user_id=user_id, chat_session_id=chat_session_id)
         for tc in tool_calls
     ]
-    results = await asyncio.gather(*coroutines)
-    return [
-        {
+    raw_results = await asyncio.gather(*coroutines, return_exceptions=True)
+    executed = []
+    for tc, result in zip(tool_calls, raw_results):
+        if isinstance(result, BaseException):
+            logger.warning("Tool %s raised: %s", tc.get("name"), result)
+            result = {
+                "error": f"Tool {tc.get('name', '?')} raised {type(result).__name__}: {result}",
+                "success": False,
+            }
+        executed.append({
             "id": tc["id"],
             "name": tc["name"],
             "input": tc["input"],
             "result": result,
-        }
-        for tc, result in zip(tool_calls, results)
-    ]
+        })
+    return executed
 
 
 async def _run_agent_loop(
@@ -1292,14 +1307,21 @@ async def _run_agent_loop(
     all_tool_results: list[dict] = []
     text_parts: list[str] = []
     max_iterations = 12
-    _loop_deadline = _time.monotonic() + 120.0  # 2-minute wall-clock limit
+    # H1: Agent-loop deadline sits between the outer endpoint (180s) and the
+    # per-LLM-call timeout (90s).  150s leaves ~15s of buffer either side.
+    _loop_deadline = _time.monotonic() + 150.0
 
+    hit_iteration_cap = False
+    hit_deadline = False
     for _iteration in range(max_iterations):
         if _time.monotonic() > _loop_deadline:
+            hit_deadline = True
             summary = " ".join(text_parts) if text_parts else "AI workflow timed out."
             return {
                 "reply": summary + "\n\n(Agent loop timed out after 2 minutes. Results above are partial.)",
                 "actions": all_tool_results,
+                "hit_deadline": True,
+                "hit_iteration_cap": False,
             }
         response = await _llm_messages_create(
             system=system,
@@ -1362,9 +1384,17 @@ async def _run_agent_loop(
                     return v
                 truncated_result = _truncate_value(result) if isinstance(result, (dict, list)) else result
                 result_str = json.dumps(truncated_result, default=str)
-                # If still too large, do a hard cap but keep JSON valid
+                # If still too large, emit a valid JSON envelope with a text preview.
+                # The previous hard cap spliced raw bytes onto a JSON string, which
+                # breaks whenever the cut falls inside a string literal or escape
+                # sequence — corrupting the LLM's tool-result input.
                 if len(result_str) > 24000:
-                    result_str = result_str[:24000] + '..."__truncated__":true}'
+                    result_str = json.dumps({
+                        "__truncated__": True,
+                        "original_size": len(result_str),
+                        "preview": result_str[:20000],
+                        "note": "Result exceeded 24 KB after field-level truncation; see preview.",
+                    })
             tool_result_blocks.append(
                 {
                     "type": "tool_result",
@@ -1422,10 +1452,18 @@ async def _run_agent_loop(
             agent_name, len(all_tool_results), _iteration + 1,
         )
 
+    # M7: telemetry so the UI can surface "hit iteration cap" to the user
+    # (previously silent — a 13-step workflow just got truncated with no
+    # indication why).
+    if _iteration + 1 >= max_iterations:
+        hit_iteration_cap = True
+
     return {
         "reply": clean_reply,
         "actions": actions,
         "tool_results": all_tool_results,
+        "hit_iteration_cap": hit_iteration_cap,
+        "hit_deadline": hit_deadline,
     }
 
 

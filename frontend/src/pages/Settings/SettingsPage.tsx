@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { getOperationLog, clearOperationLog } from "../../api/client";
+import {
+  getOperationLog,
+  clearOperationLog,
+  getStoredApiKeys,
+  writeStoredApiKeys,
+  getStoredAiProvider,
+} from "../../api/client";
 import type { ProviderMeta } from "../../api/client";
 
 const PROVIDERS: Record<string, ProviderMeta> = {
@@ -11,28 +17,33 @@ const PROVIDERS: Record<string, ProviderMeta> = {
 };
 const CHAT_PROVIDERS = ["anthropic", "openai", "deepseek"] as const;
 
+// M9: delegate to the sessionStorage-first helpers in client.ts so that keys
+// don't silently leak across browser restarts.  A "Remember this browser"
+// toggle below flips the astro_api_keys_persist flag to opt into localStorage.
 function getStoredKeys(): Record<string, string> {
-  try {
-    return JSON.parse(localStorage.getItem("astro_api_keys") || "{}");
-  } catch {
-    return {};
-  }
+  return getStoredApiKeys();
 }
 
 function saveStoredKeys(keys: Record<string, string>) {
-  localStorage.setItem("astro_api_keys", JSON.stringify(keys));
+  writeStoredApiKeys(keys);
 }
 
 function getStoredPreferredProvider(): string {
-  try {
-    return localStorage.getItem("astro_ai_provider") || "anthropic";
-  } catch {
-    return "anthropic";
-  }
+  return getStoredAiProvider() || "anthropic";
 }
 
 function saveStoredPreferredProvider(provider: string) {
-  localStorage.setItem("astro_ai_provider", provider);
+  try {
+    sessionStorage.setItem("astro_ai_provider", provider);
+    // Mirror to localStorage only when the user has opted into persistence.
+    if (localStorage.getItem("astro_api_keys_persist") === "1") {
+      localStorage.setItem("astro_ai_provider", provider);
+    } else {
+      localStorage.removeItem("astro_ai_provider");
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 export default function SettingsPage() {

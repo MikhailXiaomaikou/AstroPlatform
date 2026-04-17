@@ -365,14 +365,27 @@ async def setup_key_login(request: Request, req: SetupKeyRequest, db: AsyncSessi
 
 
 async def _require_admin(request: Request):
-    """Check admin authorization via X-Admin-Secret header."""
+    """Check admin authorization via X-Admin-Secret header.
+
+    H11: fail closed.  Previously, if both ADMIN_SECRET and ENV were unset the
+    function returned successfully (because _env defaulted to "dev").  A
+    production deployment that forgot ENV=production would therefore expose
+    the admin surface.  Now we allow the open path ONLY when ENV is the
+    literal string "dev" — the default/unset case blocks.
+    """
     import os
-    _env = os.getenv("ENV", "dev")
+    _env = os.getenv("ENV", "").strip().lower()
     if not settings.admin_secret:
-        # No admin secret configured — allow in dev, block in production
-        if _env != "dev":
-            raise HTTPException(status_code=403, detail="Admin endpoints disabled (ADMIN_SECRET not configured)")
-        return
+        if _env == "dev":
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "Admin endpoint accessed without ADMIN_SECRET (dev bypass active)"
+            )
+            return
+        raise HTTPException(
+            status_code=403,
+            detail="Admin endpoints disabled (ADMIN_SECRET not configured)",
+        )
     provided = request.headers.get("X-Admin-Secret", "")
     if not provided or provided != settings.admin_secret:
         raise HTTPException(status_code=403, detail="Invalid admin secret")

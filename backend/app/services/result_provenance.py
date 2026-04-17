@@ -82,10 +82,14 @@ def attach_provenance(
 
 
 # Tool-name → default classification mapping for current HEAD tools (53 tools).
+# Keep in sync with TOOLS in app/services/ai_tools.py.  The union of the three
+# sets MUST equal the tool registry, or unclassified tools silently fall
+# through to UNAVAILABLE/PARTIAL and the LLM downgrades their results.
 _DATA_TOOLS = {
     "search_objects", "run_adql", "get_object_info", "get_object_dossier",
     "query_transients", "search_lightcurve", "crossmatch_catalogs",
     "batch_object_search", "describe_tap_table", "query_vo_service",
+    "get_last_search_results", "read_fits_header", "get_provenance",
 }
 _COMPUTE_TOOLS = {
     "run_python", "generate_pipeline", "run_pipeline", "validate_analysis",
@@ -98,12 +102,17 @@ _COMPUTE_TOOLS = {
     "compute_galaxy_sfr", "fit_rv_orbit", "fit_sersic_morphology",
     "x_ray_spectral_fit", "pulsar_derived_quantities",
     "analyze_cross_wavelength", "radio_analysis", "process_image",
+    "share_with_team", "invite_team_member", "export_results",
+    "workspace_export",
 }
 _REFERENCE_TOOLS = {
     "search_literature", "read_arxiv_paper", "literature_review",
     "research_workflow", "generate_proposal", "get_followup_recommendation",
     "full_research_report",
 }
+
+# Introspection helper for tests / CI: full known tool set.
+ALL_KNOWN_TOOLS = _DATA_TOOLS | _COMPUTE_TOOLS | _REFERENCE_TOOLS
 
 
 def normalize_tool_result(tool_name: str, result: Any) -> dict[str, Any]:
@@ -121,7 +130,12 @@ def normalize_tool_result(tool_name: str, result: Any) -> dict[str, Any]:
 
     if tool_name in _COMPUTE_TOOLS:
         success = bool(result.get("success", True))
-        origin = USER_UPLOADED if success else UNAVAILABLE
+        # Compute tools almost always operate on data that originated in a real
+        # archive (e.g. run_python analyzes the Gaia cache; fit_isochrone reads
+        # SDSS photometry).  Default the origin to REAL_ARCHIVE; any tool that
+        # genuinely operates on user-uploaded data (read_fits_header, FITS
+        # reduction pipeline) should set data_origin explicitly in its result.
+        origin = REAL_ARCHIVE if success else UNAVAILABLE
         status = COMPLETED if success else FAILED
         return attach_provenance(result, data_origin=origin, analysis_status=status)
 

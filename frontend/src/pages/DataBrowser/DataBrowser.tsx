@@ -32,6 +32,7 @@ import LiteraturePanel from "./LiteraturePanel";
 import FITSPreview from "../../components/fits/FITSPreview";
 import ObjectDetailPanel from "../../components/ObjectDetailPanel";
 import AladinViewer from "../../components/viz/AladinViewer";
+import ErrorBoundary from "../../components/ErrorBoundary";
 import { buildPipelineDraft, findWorkspaceFile, upsertWorkspaceFile } from "../../utils/workspaceCache";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
@@ -1196,13 +1197,15 @@ ${rows}
       {showViz && vizData && (
         <div className="viz-overlay">
           <div className="viz-overlay-content">
-            <Suspense fallback={<div className="fits-loading">Loading visualization...</div>}>
-              <PlotBuilder
-                initialData={vizData}
-                initialChartType="sky_coverage"
-                onClose={() => setShowViz(false)}
-              />
-            </Suspense>
+            <ErrorBoundary label="the visualization plot">
+              <Suspense fallback={<div className="fits-loading">Loading visualization...</div>}>
+                <PlotBuilder
+                  initialData={vizData}
+                  initialChartType="sky_coverage"
+                  onClose={() => setShowViz(false)}
+                />
+              </Suspense>
+            </ErrorBoundary>
           </div>
         </div>
       )}

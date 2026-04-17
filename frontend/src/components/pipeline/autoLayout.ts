@@ -30,6 +30,25 @@ const DEFAULTS: Required<LayoutOptions> = {
 };
 
 /**
+ * Thrown when computeLayeredLayout is called on a graph that contains
+ * a cycle. `nodeIds` lists the nodes that could not be assigned a level
+ * (i.e., participate in at least one cycle). Callers should surface this
+ * to the user so the pipeline cycle becomes visible instead of being
+ * silently stacked at level 0.
+ */
+export class PipelineCycleError extends Error {
+  nodeIds: string[];
+  constructor(nodeIds: string[]) {
+    super(
+      `Pipeline contains a cycle; ${nodeIds.length} node(s) could not be ` +
+        `placed: ${nodeIds.join(", ")}`,
+    );
+    this.name = "PipelineCycleError";
+    this.nodeIds = nodeIds;
+  }
+}
+
+/**
  * Return a new node array with {position} fields overwritten by a
  * layered left-to-right layout. Other node fields are preserved.
  */
@@ -82,8 +101,13 @@ export function computeLayeredLayout(
     }
   }
 
-  // Any node still without a level (cycle remnant) defaults to 0
-  for (const n of nodes) if (!level.has(n.id)) level.set(n.id, 0);
+  // H6: surface cycles instead of silently stacking unreachable nodes at
+  // level 0.  If any node never got a level, it participates in a cycle;
+  // throw so the UI can show the user which nodes are involved.
+  const unreachable = nodes.filter((n) => !level.has(n.id)).map((n) => n.id);
+  if (unreachable.length > 0) {
+    throw new PipelineCycleError(unreachable);
+  }
 
   // Group by level
   const byLevel = new Map<number, string[]>();

@@ -25,7 +25,7 @@ class IRSAConnector(BaseConnector):
     # Default catalog for cone searches (AllWISE Source Catalog)
     DEFAULT_CATALOG = "allwise_p3as_psd"
 
-    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
@@ -138,7 +138,7 @@ class IRSAConnector(BaseConnector):
 
         return results
 
-    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
         """Create metadata FITS for an IRSA catalog source.
 

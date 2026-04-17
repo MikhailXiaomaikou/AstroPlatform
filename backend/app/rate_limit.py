@@ -52,8 +52,7 @@ def _get_quota_redis():
         import redis
 
         kwargs: dict = {"decode_responses": True, "socket_connect_timeout": 2, "socket_timeout": 2}
-        if settings.redis_ssl:
-            kwargs["ssl_cert_reqs"] = "none"
+        kwargs.update(settings.redis_tls_kwargs())
         return redis.Redis.from_url(settings.redis_url, **kwargs)
     except Exception:
         return None

@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # Pipeline node cache TTL in seconds (default 24 hours)
     pipeline_cache_ttl: int = 86400
 
+    # H3: Redis TLS verification.  Default to verified TLS on rediss:// (safe);
+    # set REDIS_TLS_INSECURE=1 only when working with a hosted Redis that uses
+    # a self-signed certificate and you accept the MITM risk.
+    redis_tls_insecure: bool = False
+
     # Google OAuth
     google_client_id: str = ""
     google_client_secret: str = ""
@@ -113,12 +118,25 @@ class Settings(BaseSettings):
         """True when Redis URL uses TLS (rediss://, e.g. Upstash)."""
         return self.redis_url.startswith("rediss://")
 
+    def redis_tls_kwargs(self) -> dict:
+        """Return the connection kwargs callers should merge for TLS behaviour.
+
+        H3: centralised so that CERT_REQUIRED is the default and opting into
+        insecure TLS (CERT_NONE) requires an explicit env flag.
+        """
+        if not self.redis_ssl:
+            return {}
+        if self.redis_tls_insecure:
+            return {"ssl_cert_reqs": "none"}
+        return {"ssl_cert_reqs": "required"}
+
     @property
     def celery_broker_url(self) -> str:
         """Celery broker URL with TLS query params for Upstash/rediss."""
         if self.redis_ssl:
             sep = "&" if "?" in self.redis_url else "?"
-            return f"{self.redis_url}{sep}ssl_cert_reqs=CERT_NONE"
+            mode = "CERT_NONE" if self.redis_tls_insecure else "CERT_REQUIRED"
+            return f"{self.redis_url}{sep}ssl_cert_reqs={mode}"
         return self.redis_url
 
 

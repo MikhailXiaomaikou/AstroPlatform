@@ -18,7 +18,7 @@ class GaiaConnector(BaseConnector):
 
     source_name = "gaia"
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
@@ -32,7 +32,7 @@ class GaiaConnector(BaseConnector):
         table = await self._cone_search(ra, dec, radius)
         return self._table_to_objects(table)
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
         """Fetch Gaia source data as a FITS-format table."""
         import numpy as np

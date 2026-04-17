@@ -43,6 +43,8 @@ TTL_DEFAULT = TTL_CONE
 # Singleflight registry — one asyncio.Future per in-flight key
 _inflight: dict[str, asyncio.Future] = {}
 _inflight_lock: asyncio.Lock | None = None
+# Strong refs to running _runner tasks so they cannot be garbage-collected mid-run
+_runner_tasks: set[asyncio.Task] = set()
 
 
 def _lock() -> asyncio.Lock:
@@ -138,7 +140,8 @@ class RedisBackend:
         import redis as _redis
         kwargs: dict = {"socket_connect_timeout": 2, "socket_timeout": 2}
         if url.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = "none"
+            from app.config import settings as _s
+            kwargs.update(_s.redis_tls_kwargs())
         self._client = _redis.Redis.from_url(url, **kwargs)
         # Probe
         self._client.ping()
@@ -257,6 +260,8 @@ async def get_or_compute(
                 finally:
                     _inflight.pop(key, None)
 
-            asyncio.create_task(_runner())
+            task = asyncio.create_task(_runner())
+            _runner_tasks.add(task)
+            task.add_done_callback(_runner_tasks.discard)
 
     return await fut

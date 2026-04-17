@@ -29,9 +29,28 @@ def custom_script(input_data: dict, params: dict) -> dict:
 
     import numpy as np
 
+    # H15: subject user code to the same BLOCKED_BUILTINS filter used by
+    # run_python.  Previously this node passed the full builtins module,
+    # exposing open/exec/__import__ to the user script — a sandbox escape
+    # when the inproc backend runs inside the FastAPI worker.  Pair the
+    # filtered builtins with _safe_import so legitimate imports (numpy,
+    # scipy, astropy) still work.
+    try:
+        from app.services.code_executor import (
+            BLOCKED_BUILTINS as _BLOCKED,
+            _safe_import,
+        )
+    except Exception:  # pragma: no cover
+        _BLOCKED = {"exec", "eval", "compile", "__import__", "open", "exit", "quit"}
+        _safe_import = None
+    import builtins as _builtins
+    _safe_builtins = {k: v for k, v in vars(_builtins).items() if k not in _BLOCKED}
+    if _safe_import is not None:
+        _safe_builtins["__import__"] = _safe_import
+
     # Build execution environment
     exec_globals: dict = {
-        "__builtins__": __builtins__,
+        "__builtins__": _safe_builtins,
         "input_data": input_data,
         "np": np,
         "numpy": np,

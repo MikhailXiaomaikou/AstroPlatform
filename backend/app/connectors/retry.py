@@ -41,12 +41,23 @@ def reset_circuit(func_name: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 # Retry decorator
 # ---------------------------------------------------------------------------
+# H12: restrict the default retry set to transient I/O so that user errors
+# (bad ADQL syntax, invalid coordinates → ValueError / HTTPStatusError) are
+# NOT retried and do NOT count toward the circuit breaker.  Callers that want
+# to widen the set pass their own tuple.
+_DEFAULT_RETRYABLE: tuple = (
+    ConnectionError,
+    TimeoutError,
+    OSError,
+)
+
+
 def with_retry(
     max_retries: int = 2,
     base_delay: float = 0.5,
     max_delay: float = 10.0,
     backoff_factor: float = 2.0,
-    retryable_exceptions: tuple = (Exception,),
+    retryable_exceptions: tuple = _DEFAULT_RETRYABLE,
 ):
     """Decorator that retries async functions with exponential backoff.
 

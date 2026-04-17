@@ -102,11 +102,14 @@ def _parse_sesame_xml(text: str) -> tuple[str | None, float | None, float | None
     return oname, float(ra_text), float(dec_text)
 
 
-async def resolve_name(name: str, timeout: float = 8.0) -> ResolvedName:
-    """Resolve an object name using Sesame, then NED, then coordinate syntax."""
+import asyncio
+
+
+async def _resolve_name_impl(name: str, per_request_timeout: float) -> "ResolvedName":
+    """Actual resolver body, split out so the global timeout wrapper can cancel it."""
     aliases = candidate_names(name)
     warnings: list[str] = []
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=per_request_timeout, follow_redirects=True) as client:
         for alias in aliases:
             try:
                 url = f"https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp/SNV?{quote_plus(alias)}"
@@ -126,14 +129,26 @@ async def resolve_name(name: str, timeout: float = 8.0) -> ResolvedName:
                 )
                 resp.raise_for_status()
                 text = resp.text
-                ra_match = re.search(r"<RA[^>]*>([-+]?\d+(?:\.\d+)?)</RA>", text)
-                dec_match = re.search(r"<DEC[^>]*>([-+]?\d+(?:\.\d+)?)</DEC>", text)
-                if ra_match and dec_match:
+                # M2: validate the response looks like a real NED record.  We
+                # parse with ElementTree (same as Sesame) so a malformed HTML
+                # error page cannot slip through the loose regex and yield a
+                # spurious (0, 0) hit.
+                try:
+                    tree = ElementTree.fromstring(text)
+                    ra_text = tree.findtext(".//RA")
+                    dec_text = tree.findtext(".//DEC")
+                    if ra_text is None or dec_text is None:
+                        raise ValueError("NED response missing RA/DEC elements")
+                    ra_val = float(ra_text)
+                    dec_val = float(dec_text)
+                    if ra_val == 0.0 and dec_val == 0.0:
+                        raise ValueError("NED returned (0, 0); likely an error page")
                     return ResolvedName(
-                        name, alias,
-                        float(ra_match.group(1)), float(dec_match.group(1)),
+                        name, alias, ra_val, dec_val,
                         "ned", aliases, warnings,
                     )
+                except (ElementTree.ParseError, ValueError) as parse_exc:
+                    warnings.append(f"NED unparseable for {alias}: {parse_exc}")
             except (httpx.HTTPError, ValueError) as exc:
                 warnings.append(f"NED failed for {alias}: {exc}")
 
@@ -142,8 +157,38 @@ async def resolve_name(name: str, timeout: float = 8.0) -> ResolvedName:
         if parsed is None:
             continue
         ra, dec = parsed
-        if math.isfinite(ra) and math.isfinite(dec):
-            warnings.append("Coordinates were inferred from the object name; verify before precision work.")
-            return ResolvedName(name, alias, ra, dec, "coordinate_name", aliases, warnings)
+        # M5: reject parses that produced nonsensical coordinates before
+        # returning them as a user-visible result.
+        if not (math.isfinite(ra) and math.isfinite(dec)):
+            continue
+        if not (0.0 <= ra < 360.0 and -90.0 <= dec <= 90.0):
+            warnings.append(f"Parsed coords for {alias} out of range; skipping.")
+            continue
+        warnings.append("Coordinates were inferred from the object name; verify before precision work.")
+        return ResolvedName(name, alias, ra, dec, "coordinate_name", aliases, warnings)
 
     return ResolvedName(name, aliases[0] if aliases else name, None, None, "unresolved", aliases, warnings)
+
+
+async def resolve_name(name: str, timeout: float = 8.0) -> ResolvedName:
+    """Resolve an object name using Sesame, then NED, then coordinate syntax.
+
+    M1: `timeout` is now a *global* wall-clock budget.  Previously it was
+    applied per HTTP request, so the worst case (~8 aliases × 2 providers)
+    was ~128s.  We wrap the whole coroutine in `asyncio.wait_for` and give
+    each HTTP request a smaller slice so the overall latency stays bounded
+    even when upstream services are slow or half-timed-out.
+    """
+    aliases_count = max(1, len(candidate_names(name)))
+    per_request_budget = max(1.0, timeout / (aliases_count * 2))
+    try:
+        return await asyncio.wait_for(
+            _resolve_name_impl(name, per_request_budget),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        aliases = candidate_names(name) or [name]
+        return ResolvedName(
+            name, aliases[0], None, None, "unresolved", aliases,
+            [f"Name resolution timed out after {timeout:.1f}s."],
+        )

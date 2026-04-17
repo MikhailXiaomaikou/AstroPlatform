@@ -1773,15 +1773,21 @@ async def _exec_describe_tap_table(inp: dict) -> dict:
             "source": "local_registry",
         }
 
-    # Sanitize table_name to prevent SQL injection (allow alphanumeric, dots, slashes, quotes, underscores)
+    # H5: VizieR paths may arrive double-quoted (e.g. '"IV/39/tic82"').
+    # TAP_SCHEMA stores names un-quoted, so strip the outer pair before
+    # matching.  The regex refuses single quotes so SQL interpolation cannot
+    # break out of the literal even if the allow-list is loosened in future.
+    cleaned_name = table_name.strip()
+    if cleaned_name.startswith('"') and cleaned_name.endswith('"') and len(cleaned_name) >= 2:
+        cleaned_name = cleaned_name[1:-1]
     import re as _re
-    if not _re.match(r'^["\w./+-]+$', table_name):
+    if not _re.match(r'^[\w./+-]+$', cleaned_name):
         return {"error": f"Invalid table_name: {table_name}"}
 
     query = (
         f"SELECT column_name, datatype, description "
         f"FROM TAP_SCHEMA.columns "
-        f"WHERE table_name = '{table_name}' "
+        f"WHERE table_name = '{cleaned_name}' "
         f"ORDER BY column_name"
     )
 

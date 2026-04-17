@@ -4,6 +4,7 @@ import { adqlQuery, listADQLServices, logOperation, exportSearchNotebook } from 
 import type { ADQLResult } from "../../api/client";
 import { useTracking } from "../../hooks/useTracking";
 import ADQLEditor from "../../components/ADQLEditor";
+import ErrorBoundary from "../../components/ErrorBoundary";
 import { useI18n } from "../../i18n";
 
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
@@ -393,13 +394,15 @@ export default function ADQLPage() {
 
       {showViz && result && (
         <div style={{ marginBottom: "1rem" }}>
-          <Suspense fallback={<div className="fits-loading">{t("fits.loading_viz")}</div>}>
-            <PlotBuilder
-              initialData={result.data as Record<string, unknown>}
-              initialChartType={preferredChartType(result)}
-              onClose={() => setShowViz(false)}
-            />
-          </Suspense>
+          <ErrorBoundary label="the ADQL plot">
+            <Suspense fallback={<div className="fits-loading">{t("fits.loading_viz")}</div>}>
+              <PlotBuilder
+                initialData={result.data as Record<string, unknown>}
+                initialChartType={preferredChartType(result)}
+                onClose={() => setShowViz(false)}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       )}
 

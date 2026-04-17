@@ -3106,19 +3106,33 @@ class TestAPIEndpointsAuth:
         resp = await app_client.get("/api/auth/usage", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
 
-    async def test_generate_setup_keys(self, app_client, test_user):
+    async def test_generate_setup_keys(self, app_client, test_user, monkeypatch):
+        # H11: admin endpoints now fail-closed when ADMIN_SECRET is unset and
+        # ENV is not the literal "dev".  Opt into the dev path explicitly.
+        monkeypatch.setenv("ENV", "dev")
         user, token = test_user
         resp = await app_client.post("/api/auth/generate-setup-keys",
                                      json={},
                                      headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
 
-    async def test_list_setup_keys(self, app_client, test_user):
+    async def test_list_setup_keys(self, app_client, test_user, monkeypatch):
+        monkeypatch.setenv("ENV", "dev")
         user, token = test_user
         resp = await app_client.get("/api/auth/setup-keys", headers={
             "Authorization": f"Bearer {token}",
         })
         assert resp.status_code == 200
+
+    async def test_generate_setup_keys_fails_closed_without_env_dev(self, app_client, test_user, monkeypatch):
+        """H11 regression: admin endpoints must block when ENV is not 'dev'."""
+        monkeypatch.delenv("ENV", raising=False)
+        monkeypatch.setattr("app.api.auth.settings.admin_secret", "", raising=False)
+        user, token = test_user
+        resp = await app_client.post("/api/auth/generate-setup-keys",
+                                     json={},
+                                     headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
 
 
 class TestAPIEndpointsSettings:

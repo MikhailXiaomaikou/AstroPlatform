@@ -74,6 +74,23 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
                 return lp + log_likelihood(theta)
 
             p0 = prior_transform(np.random.rand(n_walkers, ndim))
+            # M22: reject starts where too many walkers begin at -inf log-prob.
+            # emcee silently produces garbage chains when walkers are stuck in
+            # a region of zero likelihood.  We retry once with a fresh seed
+            # before surfacing the bad starting position to the caller.
+            def _initial_finite_ratio(p):
+                logs = np.asarray([log_prob(row) for row in p])
+                finite = np.isfinite(logs)
+                return float(finite.sum()) / max(1, len(logs))
+
+            if _initial_finite_ratio(p0) < 0.5:
+                p0 = prior_transform(np.random.rand(n_walkers, ndim))
+                if _initial_finite_ratio(p0) < 0.5:
+                    raise ValueError(
+                        "BayesianFit: fewer than half of the initial walkers "
+                        "have finite log-probability. Check prior bounds and "
+                        "likelihood definition — the fit would not converge."
+                    )
             sampler = emcee.EnsembleSampler(n_walkers, ndim, log_prob)
             sampler.run_mcmc(p0, n_steps, progress=False)
 

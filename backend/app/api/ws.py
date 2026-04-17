@@ -6,10 +6,42 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
+
+from app.auth import decode_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# WebSocket close codes: 4401 = unauthorized (RFC 6455 private range).
+_WS_CLOSE_UNAUTHORIZED = 4401
+
+
+async def _authenticate_ws(websocket: WebSocket):
+    """Verify the JWT carried on the WS upgrade (query string or Sec-WebSocket-Protocol).
+
+    Returns the authenticated user_id, or closes the socket and returns None.
+    Browsers cannot set custom Authorization headers on WebSocket upgrades, so
+    callers pass the token as `?token=<jwt>` or via `Sec-WebSocket-Protocol`.
+    """
+    token = websocket.query_params.get("token")
+    if not token:
+        proto = websocket.headers.get("sec-websocket-protocol", "")
+        # Accept "bearer, <jwt>" / "jwt.<jwt>" patterns for flexibility.
+        for part in (p.strip() for p in proto.split(",")):
+            if part and part.lower() not in ("bearer", "jwt"):
+                token = part
+                break
+    if not token:
+        await websocket.close(code=_WS_CLOSE_UNAUTHORIZED, reason="missing token")
+        return None
+    try:
+        user_id = decode_token(token)
+    except HTTPException:
+        await websocket.close(code=_WS_CLOSE_UNAUTHORIZED, reason="invalid token")
+        return None
+    return user_id
 
 # Active WebSocket connections per run_id
 _connections: dict[str, list[WebSocket]] = defaultdict(list)
@@ -29,31 +61,52 @@ async def broadcast_progress(run_id: str, data: dict):
         clients.remove(ws)
 
 
+_sync_publish_client = None
+
+
+def _get_sync_publish_client():
+    """H13: Reuse one sync Redis client across progress events.
+
+    Previously `notify_progress_sync` opened and closed a connection per call
+    (every Celery task emitting progress), which exhausted Redis connection
+    limits under load.  Now the client is lazily created once and the
+    connection pool is reused.
+    """
+    global _sync_publish_client
+    if _sync_publish_client is None:
+        import redis as redis_lib
+        from app.config import settings
+        kwargs = {"socket_connect_timeout": 2, "socket_timeout": 2}
+        kwargs.update(settings.redis_tls_kwargs())
+        _sync_publish_client = redis_lib.Redis.from_url(settings.redis_url, **kwargs)
+    return _sync_publish_client
+
+
 def notify_progress_sync(run_id: str, data: dict):
     """Synchronous helper to queue a progress broadcast (for use from Celery tasks).
 
     Publishes to Redis pub/sub so the FastAPI process can relay to WebSockets.
     """
     try:
-        import redis as redis_lib
-        from app.config import settings
-        kwargs = {}
-        if settings.redis_ssl:
-            kwargs["ssl_cert_reqs"] = "none"
-        r = redis_lib.Redis.from_url(settings.redis_url, **kwargs)
+        r = _get_sync_publish_client()
         message = json.dumps({"run_id": run_id, **data})
         r.publish("pipeline_progress", message)
-        r.close()
     except Exception as e:
         logger.warning(f"Failed to publish progress: {e}")
+        # Drop the cached client; next call will rebuild it.
+        global _sync_publish_client
+        _sync_publish_client = None
 
 
 @router.websocket("/ws/pipeline/{run_id}")
 async def pipeline_ws(websocket: WebSocket, run_id: str):
     """WebSocket endpoint for real-time pipeline progress."""
+    user_id = await _authenticate_ws(websocket)
+    if user_id is None:
+        return
     await websocket.accept()
     _connections[run_id].append(websocket)
-    logger.info(f"WebSocket connected for run {run_id}")
+    logger.info("WebSocket connected for run %s (user %s)", run_id, user_id)
 
     try:
         while True:
@@ -76,10 +129,7 @@ async def redis_subscriber():
         import redis.asyncio as aioredis
         from app.config import settings
 
-        kwargs = {}
-        if settings.redis_ssl:
-            import ssl as _ssl
-            kwargs["ssl_cert_reqs"] = _ssl.CERT_NONE
+        kwargs = dict(settings.redis_tls_kwargs())
         r = aioredis.from_url(settings.redis_url, **kwargs)
         pubsub = r.pubsub()
         await pubsub.subscribe("pipeline_progress")
@@ -109,16 +159,21 @@ _team_presence: dict[str, dict[str, dict]] = defaultdict(dict)   # team_id -> {u
 @router.websocket("/ws/collab/{team_id}")
 async def collab_websocket(websocket: WebSocket, team_id: str):
     """Real-time collaboration channel for team pipeline editing."""
+    auth_user_id = await _authenticate_ws(websocket)
+    if auth_user_id is None:
+        return
     await websocket.accept()
 
-    user_info = {"user_id": "anonymous", "name": "User"}
+    # Trust the JWT for user identity — never the payload.  The optional
+    # `identify` message may still carry a display name, but user_id is
+    # always the token subject.
+    user_info = {"user_id": str(auth_user_id), "name": "User"}
     _collab_connections[team_id].append((websocket, user_info))
 
     try:
-        # Wait for initial identify message
+        # Wait for initial identify message (display name only; user_id fixed).
         init_msg = await asyncio.wait_for(websocket.receive_json(), timeout=10)
         if init_msg.get("type") == "identify":
-            user_info["user_id"] = init_msg.get("user_id", "anonymous")
             user_info["name"] = init_msg.get("name", "User")
 
         # Update presence

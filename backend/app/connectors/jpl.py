@@ -37,9 +37,15 @@ class JPLHorizonsConnector(BaseConnector):
         def _query():
             try:
                 from astroquery.jplhorizons import Horizons
-                from datetime import datetime, timezone
-                now = datetime.now(timezone.utc).isoformat()[:10]
-                stop = datetime.now(timezone.utc).replace(day=1).isoformat()[:10]
+                from datetime import datetime, timedelta, timezone
+                # Horizons requires start < stop.  Use now -> now+1d so a single
+                # ephemeris row is returned.  Previous code set stop to the 1st
+                # of the current month, which was earlier than start on every
+                # day except the 1st — producing an empty/error response for
+                # ~30 days every month.
+                now_dt = datetime.now(timezone.utc)
+                now = now_dt.isoformat()[:10]
+                stop = (now_dt + timedelta(days=1)).isoformat()[:10]
                 obj = Horizons(
                     id=query,
                     location="500@10",  # heliocenter

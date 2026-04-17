@@ -45,17 +45,36 @@ class TestWithRetry:
     async def test_exhausts_retries_and_raises(self):
         call_count = 0
 
+        # Default retryable set is transient I/O (ConnectionError/TimeoutError/OSError)
+        # as of H12.  Use ConnectionError to exercise the retry path; ValueError
+        # now correctly bypasses retries since it indicates a user error.
         @with_retry(max_retries=2, base_delay=0.01)
         async def always_fail():
             nonlocal call_count
             call_count += 1
-            raise ValueError("permanent failure")
+            raise ConnectionError("permanent transient failure")
 
-        with pytest.raises(ValueError, match="permanent failure"):
+        with pytest.raises(ConnectionError, match="permanent transient failure"):
             await always_fail()
 
         # 1 initial + 2 retries = 3 total
         assert call_count == 3
+
+    async def test_non_transient_exception_is_not_retried(self):
+        """H12 regression: user errors (ValueError etc.) must NOT be retried."""
+        call_count = 0
+
+        @with_retry(max_retries=3, base_delay=0.01)
+        async def user_error():
+            nonlocal call_count
+            call_count += 1
+            raise ValueError("bad input")
+
+        with pytest.raises(ValueError, match="bad input"):
+            await user_error()
+
+        # No retries — this would previously have been 4.
+        assert call_count == 1
 
     async def test_only_retries_specified_exceptions(self):
         call_count = 0

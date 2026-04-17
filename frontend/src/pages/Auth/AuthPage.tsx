@@ -66,6 +66,16 @@ function GoogleSignInButton({ onSuccess, disabled }: { onSuccess: (credential: s
     script.onload = () => setScriptLoaded(true);
     script.onerror = () => setScriptError(true);
     document.head.appendChild(script);
+
+    // H19: clean up on unmount.  The script tag was previously leaked every
+    // time the user visited the auth page; repeated nav would append
+    // duplicate <script> tags and orphan callbacks.
+    return () => {
+      const stillMounted = document.getElementById("google-gsi-script");
+      if (stillMounted) {
+        stillMounted.remove();
+      }
+    };
   }, []);
 
   // Initialize and render button once script is loaded

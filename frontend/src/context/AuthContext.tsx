@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import axios from "axios";
 import {
   getProfile,
   isAuthenticated,
@@ -38,9 +39,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (isAuthenticated()) {
       getProfile()
         .then(setUser)
-        .catch(() => {
-          apiLogout();
-          setUser(null);
+        .catch((err: unknown) => {
+          // H16: only clear the session when the server actually rejects
+          // the token.  Transient errors (network drop, 5xx) must not log
+          // the user out — previously any failure caused apiLogout() and
+          // forced the user back to the landing page.
+          const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+          if (status === 401 || status === 403) {
+            apiLogout();
+            setUser(null);
+          }
+          // For transient errors we leave the token in place; the next
+          // authenticated request will retry via the axios client.
         })
         .finally(() => setLoading(false));
     } else {

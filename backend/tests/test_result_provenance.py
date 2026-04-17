@@ -1,0 +1,141 @@
+"""Unit tests for app.services.result_provenance.
+
+Locks two contracts the chat agent depends on:
+
+1. Every tool declared in app.services.ai_tools.TOOLS has a default
+   classification (_DATA / _COMPUTE / _REFERENCE).  Unclassified tools
+   silently fall through to UNAVAILABLE/PARTIAL, which tells the LLM the
+   data is unreliable — a subtle regression that's easy to introduce
+   when adding a new tool.
+
+2. Compute tools default to REAL_ARCHIVE origin on success (not
+   USER_UPLOADED).  Most compute tools analyze archive-sourced data;
+   labelling their output "user_uploaded" subverts the anti-fabrication
+   contract the whole module exists to enforce.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.services.ai_tools import TOOLS
+from app.services.result_provenance import (
+    ALL_KNOWN_TOOLS,
+    COMPLETED,
+    FAILED,
+    REAL_ARCHIVE,
+    UNAVAILABLE,
+    _COMPUTE_TOOLS,
+    _DATA_TOOLS,
+    _REFERENCE_TOOLS,
+    attach_provenance,
+    normalize_tool_result,
+    result_contract,
+)
+
+
+def test_all_registered_tools_are_classified():
+    """Every name in TOOLS must appear in exactly one classification set."""
+    tool_names = {t["name"] for t in TOOLS}
+    missing = tool_names - ALL_KNOWN_TOOLS
+    assert not missing, (
+        f"{len(missing)} tool(s) in TOOLS are unclassified in "
+        f"result_provenance.py — they will fall through to UNAVAILABLE/"
+        f"PARTIAL. Add to _DATA_TOOLS, _COMPUTE_TOOLS, or _REFERENCE_TOOLS: "
+        f"{sorted(missing)}"
+    )
+
+
+def test_classification_sets_disjoint():
+    """No tool should appear in multiple classification sets."""
+    assert not (_DATA_TOOLS & _COMPUTE_TOOLS), _DATA_TOOLS & _COMPUTE_TOOLS
+    assert not (_DATA_TOOLS & _REFERENCE_TOOLS), _DATA_TOOLS & _REFERENCE_TOOLS
+    assert not (_COMPUTE_TOOLS & _REFERENCE_TOOLS), _COMPUTE_TOOLS & _REFERENCE_TOOLS
+
+
+def test_no_stale_classifications():
+    """Classification sets should not contain names that no longer exist."""
+    tool_names = {t["name"] for t in TOOLS}
+    stale = ALL_KNOWN_TOOLS - tool_names
+    assert not stale, (
+        f"Classification set contains {len(stale)} stale tool(s) not in "
+        f"TOOLS registry: {sorted(stale)}. Remove them from "
+        f"result_provenance.py."
+    )
+
+
+def test_compute_tool_success_defaults_to_real_archive():
+    """Compute-tool successes should be tagged REAL_ARCHIVE, not USER_UPLOADED.
+
+    Most compute tools (run_python, fit_isochrone, analyze_spectrum, …)
+    operate on archive data; labelling their output as user-uploaded
+    misleads the LLM about provenance.
+    """
+    result = normalize_tool_result("run_python", {"value": 42})
+    assert result["data_origin"] == REAL_ARCHIVE
+    assert result["analysis_status"] == COMPLETED
+
+
+def test_compute_tool_failure_is_unavailable_failed():
+    result = normalize_tool_result("run_python", {"success": False, "error": "boom"})
+    assert result["data_origin"] == UNAVAILABLE
+    assert result["analysis_status"] == FAILED
+
+
+def test_data_tool_success_is_real_archive_completed():
+    result = normalize_tool_result("search_objects", {"results": [{"name": "M31"}]})
+    assert result["data_origin"] == REAL_ARCHIVE
+    assert result["analysis_status"] == COMPLETED
+
+
+def test_reference_tool_success_is_real_archive_completed():
+    result = normalize_tool_result("search_literature", {"papers": []})
+    assert result["data_origin"] == REAL_ARCHIVE
+    assert result["analysis_status"] == COMPLETED
+
+
+def test_explicit_origin_on_payload_is_preserved():
+    """Tools may override the inferred default by setting data_origin."""
+    result = normalize_tool_result(
+        "run_python",
+        {"value": 1, "data_origin": "user_uploaded", "analysis_status": "completed"},
+    )
+    assert result["data_origin"] == "user_uploaded"
+    assert result["analysis_status"] == "completed"
+
+
+def test_error_payload_is_unavailable_failed():
+    result = normalize_tool_result("search_objects", {"error": "timeout"})
+    assert result["data_origin"] == UNAVAILABLE
+    assert result["analysis_status"] == FAILED
+
+
+def test_non_dict_result_is_wrapped():
+    result = normalize_tool_result("search_objects", 42)
+    assert result["value"] == 42
+    assert "data_origin" in result
+
+
+def test_attach_provenance_merges_warnings():
+    payload = {"warnings": ["prior warning"]}
+    out = attach_provenance(
+        payload,
+        data_origin=REAL_ARCHIVE,
+        analysis_status=COMPLETED,
+        warnings=["new warning"],
+    )
+    assert "prior warning" in out["warnings"]
+    assert "new warning" in out["warnings"]
+
+
+@pytest.mark.parametrize(
+    "origin, status, expected_status",
+    [
+        ("synthetic", "completed", "simulated_demo"),
+        ("unavailable", "completed", "failed"),
+        ("real_archive", "completed", "completed"),
+    ],
+)
+def test_result_contract_invariants(origin, status, expected_status):
+    c = result_contract(data_origin=origin, analysis_status=status)
+    assert c["analysis_status"] == expected_status

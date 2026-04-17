@@ -40,8 +40,7 @@ def _get_sync_redis():
                 "socket_connect_timeout": 2,
                 "socket_timeout": 2,
             }
-            if settings.redis_ssl:
-                kwargs["ssl_cert_reqs"] = "none"
+            kwargs.update(settings.redis_tls_kwargs())
             _sync_pool = redis.ConnectionPool.from_url(settings.redis_url, **kwargs)
         return redis.Redis(connection_pool=_sync_pool)
     except Exception as e:
@@ -387,9 +386,7 @@ def _publish_progress(run_id: str, data: dict):
     try:
         import redis as redis_lib
         from app.config import settings
-        kwargs = {}
-        if settings.redis_ssl:
-            kwargs["ssl_cert_reqs"] = "none"
+        kwargs = dict(settings.redis_tls_kwargs())
         r = redis_lib.Redis.from_url(settings.redis_url, **kwargs)
         message = json.dumps({"run_id": run_id, **data})
         r.publish("pipeline_progress", message)

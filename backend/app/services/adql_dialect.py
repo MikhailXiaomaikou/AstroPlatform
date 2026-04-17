@@ -43,10 +43,19 @@ def normalize_adql(query: str, service: str) -> ADQLDialectResult:
         )
 
         def _replace_like(match: re.Match) -> str:
-            value = sanitize_simbad_otype(match.group(2))
-            warnings.append(
-                "SIMBAD TAP may reject LIKE on otype; rewritten to an exact otype predicate."
-            )
+            raw = match.group(2)
+            # M3: translate glob-style '*' into SQL '%' and keep LIKE, rather
+            # than collapsing to '=' which would never match a prefix (SIMBAD
+            # stores compact tokens like 'G*', 'SB*', 'EB*' — dropping the
+            # wildcard turned a valid prefix query into a zero-row query).
+            if "*" in raw:
+                translated = raw.replace("*", "%")
+                warnings.append(
+                    "SIMBAD otype wildcard '*' rewritten to SQL '%' for LIKE compatibility."
+                )
+                return f"otype LIKE '{translated}'"
+            # No wildcard: a plain equality is what the caller meant.
+            value = sanitize_simbad_otype(raw)
             return f"otype = '{value}'"
 
         rewritten = like_pattern.sub(_replace_like, rewritten)
@@ -56,13 +65,28 @@ def normalize_adql(query: str, service: str) -> ADQLDialectResult:
             )
 
     if service_l == "vizier":
-        # VizieR table names with slashes need double-quoting in ADQL
-        table_pattern = re.compile(r'\bFROM\s+(["\']?)(\w+/\w+/\w+)\1', flags=re.IGNORECASE)
-        match = table_pattern.search(rewritten)
-        if match and not match.group(1):
-            old = match.group(2)
-            rewritten = rewritten.replace(f"FROM {old}", f'FROM "{old}"')
-            warnings.append(f"VizieR table name '{old}' auto-quoted for ADQL compatibility.")
+        # M4: VizieR table names with slashes need double-quoting in ADQL.
+        # Use re.sub with a callback instead of str.replace so we only
+        # rewrite the matched FROM clause — str.replace would otherwise
+        # touch the name wherever it appeared (comments, string literals).
+        table_pattern = re.compile(
+            r'\bFROM\s+(["\']?)(\w+/\w+/\w+)\1',
+            flags=re.IGNORECASE,
+        )
+        rewrote_table = {"flag": False, "name": ""}
+
+        def _quote_table(match: re.Match) -> str:
+            if match.group(1):  # already quoted
+                return match.group(0)
+            rewrote_table["flag"] = True
+            rewrote_table["name"] = match.group(2)
+            return f'FROM "{match.group(2)}"'
+
+        rewritten = table_pattern.sub(_quote_table, rewritten)
+        if rewrote_table["flag"]:
+            warnings.append(
+                f"VizieR table name '{rewrote_table['name']}' auto-quoted for ADQL compatibility."
+            )
 
     if not re.search(r"\bSELECT\s+TOP\s+\d+", rewritten, flags=re.IGNORECASE):
         warnings.append("Add SELECT TOP N for interactive AI queries to avoid large TAP jobs.")

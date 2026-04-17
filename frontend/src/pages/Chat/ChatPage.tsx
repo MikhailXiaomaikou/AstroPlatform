@@ -3,6 +3,7 @@ import {
   sendChatMessage,
   executeChatAction,
   getStoredApiKeys,
+  writeStoredApiKeys,
   searchADS,
   getBibTeX,
   logOperation,
@@ -39,6 +40,7 @@ import {
   validatePaperSession,
 } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
+import ErrorBoundary from "../../components/ErrorBoundary";
 import { useI18n } from "../../i18n";
 import { useAuth } from "../../context/AuthContext";
 import { useTracking } from "../../hooks/useTracking";
@@ -263,12 +265,14 @@ function ActionCard({
       </div>
       {action.action === "plot" && (
         <div className="chat-plot-wrapper">
-          <Suspense fallback={<div className="fits-loading">Loading plot...</div>}>
-            <PlotBuilder
-              initialData={action.data as Record<string, unknown>}
-              initialChartType={action.chart_type as string}
-            />
-          </Suspense>
+          <ErrorBoundary label="the chat plot">
+            <Suspense fallback={<div className="fits-loading">Loading plot...</div>}>
+              <PlotBuilder
+                initialData={action.data as Record<string, unknown>}
+                initialChartType={action.chart_type as string}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       )}
       {result && <ActionResult result={result} />}
@@ -738,13 +742,15 @@ ${trs}
       {vizData && (
         <div className="viz-overlay">
           <div className="viz-overlay-content">
-            <Suspense fallback={<div className="fits-loading">Loading visualization...</div>}>
-              <PlotBuilder
-                initialData={vizData}
-                initialChartType="sky_coverage"
-                onClose={() => setVizData(null)}
-              />
-            </Suspense>
+            <ErrorBoundary label="the visualization">
+              <Suspense fallback={<div className="fits-loading">Loading visualization...</div>}>
+                <PlotBuilder
+                  initialData={vizData}
+                  initialChartType="sky_coverage"
+                  onClose={() => setVizData(null)}
+                />
+              </Suspense>
+            </ErrorBoundary>
           </div>
         </div>
       )}
@@ -1113,14 +1119,17 @@ function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
     e.preventDefault();
     const key = keyInput.trim();
     if (!key) return;
+    // M9: route through the sessionStorage-first helper instead of writing
+    // straight to localStorage.  Keys no longer leak across browser
+    // restarts unless the user opts in via the persist flag.
+    const keys = getStoredApiKeys();
+    keys[provider] = key;
+    writeStoredApiKeys(keys);
     try {
-      const keys = JSON.parse(localStorage.getItem("astro_api_keys") || "{}");
-      keys[provider] = key;
-      localStorage.setItem("astro_api_keys", JSON.stringify(keys));
+      sessionStorage.setItem("astro_ai_provider", provider);
     } catch {
-      localStorage.setItem("astro_api_keys", JSON.stringify({ [provider]: key }));
+      /* ignore */
     }
-    localStorage.setItem("astro_ai_provider", provider);
     onSaved();
   }
 

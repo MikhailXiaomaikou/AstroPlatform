@@ -60,6 +60,15 @@ def _denoise_wavelet(arr: np.ndarray, wavelet: str, level: int | None, threshold
         # Fallback: use scipy's basic wavelet (less capable but always available)
         return _denoise_savgol(arr, window_length=11, polyorder=3)
 
+    # M25: refuse to operate on arrays shorter than the minimum wavelet
+    # decomposition window — otherwise `pywt.dwt_max_level` returns 0 and we
+    # later force level=1, producing an all-NaN or degenerate reconstruction.
+    if len(arr) < 16:
+        raise ValueError(
+            f"Denoise (wavelet): array too short ({len(arr)} samples) for "
+            f"decomposition — use a simpler method like savgol for small arrays."
+        )
+
     # Determine decomposition level
     max_level = pywt.dwt_max_level(len(arr), pywt.Wavelet(wavelet))
     use_level = min(level or max_level, max_level)

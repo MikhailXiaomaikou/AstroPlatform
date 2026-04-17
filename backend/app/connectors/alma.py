@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class ALMAConnector(BaseConnector):
     source_name = "alma"
 
-    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
@@ -96,7 +96,7 @@ class ALMAConnector(BaseConnector):
 
         return results
 
-    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
         """Create metadata FITS for an ALMA observation.
 

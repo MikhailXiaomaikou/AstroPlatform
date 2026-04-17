@@ -45,7 +45,7 @@ class SIMBADConnector(BaseConnector):
         simbad.add_votable_fields("otype", "V", "rvz_redshift")
         return simbad
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
@@ -320,7 +320,7 @@ class SIMBADConnector(BaseConnector):
             "n_references": safe("nbref"),
         }
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
         """Fetch SIMBAD data as a FITS table."""
         from astroquery.simbad import Simbad

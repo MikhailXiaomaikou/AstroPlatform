@@ -60,12 +60,19 @@ async def samp_send(req: SAMPSendRequest, _user: User = Depends(get_current_user
 
     from app.config import settings
 
-    # Resolve local file path
-    full_path = Path(settings.local_storage_dir) / req.fits_path
+    # H10: enforce that fits_path stays within the storage root.  `exists()`
+    # alone is bypassable with `../../../etc/passwd`; resolve then verify the
+    # resolved path is a descendant of local_storage_dir.
+    storage_root = Path(settings.local_storage_dir).resolve()
+    full_path = (Path(settings.local_storage_dir) / req.fits_path).resolve()
+    try:
+        full_path.relative_to(storage_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid fits_path: outside storage root")
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="FITS file not found")
 
-    file_url = f"file://{full_path.resolve()}"
+    file_url = f"file://{full_path}"
 
     try:
         from astropy.samp import SAMPIntegratedClient

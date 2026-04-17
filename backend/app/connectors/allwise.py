@@ -23,7 +23,7 @@ class AllWISEConnector(BaseConnector):
 
     source_name = "allwise"
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
@@ -60,7 +60,7 @@ class AllWISEConnector(BaseConnector):
 
         return self._table_to_objects(table_list[0])
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, Exception))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
         """Fetch AllWISE photometric data for a source and return as FITS table.
 

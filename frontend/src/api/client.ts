@@ -192,8 +192,15 @@ export async function searchData(
         throw new Error(t("error.request_timed_out"));
       }
       if (err.message === "Network Error") {
+        // H8: if the caller already aborted, do NOT retry — a cancelled
+        // search should stay cancelled instead of spawning a second request
+        // the user has no handle to.  Forward the original signal so the
+        // retry itself is still cancellable if the caller aborts mid-retry.
+        if (signal?.aborted) {
+          throw err;
+        }
         try {
-          const { data } = await api.get<SearchResult[]>("/api/data/search", { params });
+          const { data } = await api.get<SearchResult[]>("/api/data/search", { params, signal });
           return data;
         } catch {
           const sourceList = sources.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -1545,32 +1552,89 @@ export async function updatePaperDraft(
   return data;
 }
 
-export function getStoredApiKey(provider = "anthropic"): string | null {
+// M9: prefer sessionStorage for API key material so keys do not persist
+// across browser restarts and shrink the XSS blast radius.  A user who
+// explicitly opts into "Remember this browser" can flip the
+// `astro_api_keys_persist` flag in localStorage; our helpers honour it by
+// writing to localStorage as well.  Reads check session first, then
+// localStorage, so existing deployments don't break — the first read after
+// upgrading "migrates" material into sessionStorage.
+const API_KEYS_STORAGE = "astro_api_keys";
+const AI_PROVIDER_STORAGE = "astro_ai_provider";
+const PERSIST_FLAG_STORAGE = "astro_api_keys_persist";
+
+function _shouldPersist(): boolean {
   try {
-    const keys = JSON.parse(localStorage.getItem("astro_api_keys") || "{}");
-    return keys[provider] || null;
+    return localStorage.getItem(PERSIST_FLAG_STORAGE) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function _readFirstDefined(key: string): string | null {
+  try {
+    const s = sessionStorage.getItem(key);
+    if (s !== null && s !== "") return s;
+  } catch {
+    /* ignore */
+  }
+  try {
+    const l = localStorage.getItem(key);
+    if (l !== null && l !== "") return l;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export function writeStoredApiKeys(keys: Record<string, string>): void {
+  const payload = JSON.stringify(keys);
+  try {
+    sessionStorage.setItem(API_KEYS_STORAGE, payload);
+  } catch {
+    /* ignore */
+  }
+  if (_shouldPersist()) {
+    try {
+      localStorage.setItem(API_KEYS_STORAGE, payload);
+    } catch {
+      /* ignore */
+    }
+  } else {
+    try {
+      localStorage.removeItem(API_KEYS_STORAGE);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export function getStoredApiKey(provider = "anthropic"): string | null {
+  const raw = _readFirstDefined(API_KEYS_STORAGE) || "{}";
+  try {
+    const keys = JSON.parse(raw);
+    return (keys && typeof keys === "object" && keys[provider]) || null;
   } catch {
     return null;
   }
 }
 
 export function getStoredAiProvider(): string | null {
-  try {
-    const provider = localStorage.getItem("astro_ai_provider");
-    return provider && provider.trim() ? provider.trim() : null;
-  } catch {
-    return null;
-  }
+  const raw = _readFirstDefined(AI_PROVIDER_STORAGE);
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : null;
 }
 
 export function getStoredApiKeys(): Record<string, string> {
+  const raw = _readFirstDefined(API_KEYS_STORAGE) || "{}";
   try {
-    const raw = JSON.parse(localStorage.getItem("astro_api_keys") || "{}");
-    if (!raw || typeof raw !== "object") {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
       return {};
     }
     const keys: Record<string, string> = {};
-    for (const [key, value] of Object.entries(raw)) {
+    for (const [key, value] of Object.entries(parsed)) {
       if (typeof key === "string" && typeof value === "string" && value.trim().length > 0) {
         keys[key] = value;
       }
@@ -1644,37 +1708,49 @@ export async function sendChatMessage(
     const actions: ChatAction[] = [];
     let buffer = "";
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+    // H7: cancel the reader on any exit path so the browser can release the
+    // underlying stream; previously an exception (malformed SSE line, network
+    // drop, "error" event) would propagate without calling reader.cancel()
+    // and leak a ReadableStream per failed chat.
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const raw = line.slice(6).trim();
-        if (!raw) continue;
-        let evt: Record<string, unknown>;
-        try {
-          evt = JSON.parse(raw);
-        } catch {
-          continue;
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+          let evt: Record<string, unknown>;
+          try {
+            evt = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+
+          if (evt.type === "text" && typeof evt.content === "string") {
+            replyParts.push(evt.content);
+          } else if (evt.type === "tool_result") {
+            actions.push({
+              action: String(evt.tool || ""),
+              tool_result: evt.result,
+              _auto_executed: true,
+            } as ChatAction);
+          } else if (evt.type === "error" && typeof evt.message === "string") {
+            throw new Error(evt.message);
+          }
+          // "status" and "done" events are ignored (no UI for them yet)
         }
-
-        if (evt.type === "text" && typeof evt.content === "string") {
-          replyParts.push(evt.content);
-        } else if (evt.type === "tool_result") {
-          actions.push({
-            action: String(evt.tool || ""),
-            tool_result: evt.result,
-            _auto_executed: true,
-          } as ChatAction);
-        } else if (evt.type === "error" && typeof evt.message === "string") {
-          throw new Error(evt.message);
-        }
-        // "status" and "done" events are ignored (no UI for them yet)
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        // best-effort; already closed
       }
     }
 

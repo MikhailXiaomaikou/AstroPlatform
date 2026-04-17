@@ -19,7 +19,7 @@ import "reactflow/dist/style.css";
 import PipelineNode from "../../components/nodes/PipelineNode";
 import NodePalette from "../../components/nodes/NodePalette";
 import NodeParamsEditor from "../../components/nodes/NodeParamsEditor";
-import { computeLayeredLayout } from "../../components/pipeline/autoLayout";
+import { computeLayeredLayout, PipelineCycleError } from "../../components/pipeline/autoLayout";
 import {
   connectPipelineWS,
   createSchedule,
@@ -641,8 +641,21 @@ export default function PipelineCanvas() {
             className="btn-secondary btn-small"
             onClick={() => {
               if (nodes.length === 0) return;
-              setNodes(computeLayeredLayout(nodes, edges));
-              setTimeout(() => rfInstance?.fitView({ padding: 0.1 }), 50);
+              // H6: Kahn's layout silently swallowed cycles — now it throws,
+              // so we surface the cycle to the user instead of re-stacking
+              // all cyclic nodes at level 0.
+              try {
+                setNodes(computeLayeredLayout(nodes, edges));
+                setTimeout(() => rfInstance?.fitView({ padding: 0.1 }), 50);
+              } catch (err) {
+                if (err instanceof PipelineCycleError) {
+                  alert(
+                    `Cannot auto-layout: pipeline contains a cycle.\n\nAffected node(s): ${err.nodeIds.join(", ")}\n\nRemove the cyclic edge before running Auto Layout.`,
+                  );
+                } else {
+                  throw err;
+                }
+              }
             }}
             disabled={nodes.length === 0}
             style={{ marginTop: 8 }}
