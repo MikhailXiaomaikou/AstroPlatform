@@ -1283,3 +1283,363 @@ table.keys td a { color: var(--accent-2); font-style: italic; cursor: pointer; }
   .chat-sidebar { max-height: 240px; }
   .chat-input-wrapper { padding: 10px 16px 18px; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   DATA BROWSER (/search) — restyle existing DOM to match demo Browse.
+   Targets .data-browser / .page-tabs / .search-bar / .search-input-wrap
+   / .segmented-control / .segment-btn / .radius-label / .btn-search
+   ══════════════════════════════════════════════════════════════════════ */
+.data-browser {
+  max-width: 1340px; margin: 0 auto;
+  padding: 8px 0 48px;
+  font-family: var(--font-serif);
+}
+.data-browser > h1 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 36px;
+  letter-spacing: -0.01em; line-height: 1.15;
+  padding-bottom: 14px; margin-bottom: 18px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+}
+
+/* Search/Files/Literature tabs → Journal small-caps tabs */
+.data-browser > .page-tabs {
+  display: flex; gap: 0;
+  border: none;
+  background: transparent;
+  padding: 0; margin: 10px 0 18px;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+}
+.data-browser > .page-tabs > .page-tab {
+  padding: 9px 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-2);
+  font-family: var(--font-serif);
+  font-variant: small-caps;
+  letter-spacing: 0.1em;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0;
+}
+.data-browser > .page-tabs > .page-tab:hover { color: var(--ink); border-bottom-color: var(--ink-3); }
+.data-browser > .page-tabs > .page-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Search bar container */
+.search-bar-container { margin-bottom: 14px; }
+
+/* Search mode toggle (Quick/Advanced) — small Journal tabs */
+.search-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  margin-bottom: 12px;
+  background: var(--paper-2);
+}
+.search-mode-toggle button {
+  padding: 6px 16px;
+  border: none;
+  background: transparent;
+  font-family: var(--font-serif);
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.search-mode-toggle button.active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* The search form card — match demo .browse-searchbar */
+.search-bar {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  align-items: stretch;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid var(--ink);
+  margin-bottom: 14px;
+  box-shadow: none;
+  border-radius: 0;
+}
+.search-input-wrap {
+  flex: 1 1 300px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  min-width: 240px;
+}
+.search-icon {
+  width: 20px; height: 20px;
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+.search-input {
+  flex: 1;
+  border: none !important;
+  outline: none;
+  background: transparent !important;
+  font-family: var(--font-serif) !important;
+  font-size: 18px !important;
+  color: var(--ink) !important;
+  padding: 4px 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+.search-input::placeholder { color: var(--ink-3); font-style: italic; }
+
+/* Search options wrap */
+.search-options {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  width: 100%;
+}
+
+/* Source selector — demo source-chips look */
+.segmented-control {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  border-radius: 0;
+}
+.segment-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--rule) !important;
+  background: #fff !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  transition: all 0.12s;
+}
+.segment-btn:hover {
+  border-color: var(--ink-2) !important;
+  color: var(--ink) !important;
+  background: var(--paper-2) !important;
+}
+.segment-btn.active {
+  border-color: var(--accent) !important;
+  background: #fdf7f5 !important;
+  color: var(--ink) !important;
+}
+
+/* Radius field — demo bs-radius look */
+.radius-label {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--rule);
+  background: var(--paper-2);
+  font-family: var(--font-serif);
+  font-size: 11px;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-variant: small-caps;
+}
+.radius-input {
+  width: 80px;
+  border: none !important;
+  background: transparent !important;
+  outline: none;
+  font-family: var(--font-mono) !important;
+  font-size: 14px !important;
+  color: var(--ink) !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Submit / Search button */
+.btn-search {
+  padding: 10px 24px;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-variant: small-caps;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  border-radius: 0;
+  box-shadow: none;
+}
+.btn-search:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
+.btn-search:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Suggestion chips inside the search */
+.search-suggestions-hint {
+  width: 100%;
+  padding: 8px 4px 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.search-suggestions-label {
+  font-variant: small-caps;
+  letter-spacing: 0.1em;
+  display: block; margin-bottom: 6px;
+  color: var(--ink-3);
+}
+.search-suggestions-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.search-suggestion-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  background: #fff;
+  color: var(--ink-2);
+  font-family: var(--font-serif);
+  font-size: 12.5px;
+  cursor: pointer;
+  border-radius: 0;
+}
+.search-suggestion-chip:hover { border-color: var(--accent); color: var(--ink); }
+
+/* Batch input block */
+.batch-input { margin: 12px 0; }
+.batch-input textarea {
+  width: 100%;
+  border: 1px solid var(--rule);
+  background: #fff;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  border-radius: 0;
+  outline: none;
+}
+.batch-input textarea:focus { border-color: var(--accent); }
+
+/* Common buttons across pages — Journal style */
+.btn-primary {
+  padding: 10px 24px !important;
+  background: var(--ink) !important;
+  color: var(--paper) !important;
+  border: 1px solid var(--ink) !important;
+  font-family: var(--font-serif) !important;
+  font-size: 15px !important;
+  font-variant: small-caps !important;
+  letter-spacing: 0.1em !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+.btn-primary:hover:not(:disabled) { background: var(--accent) !important; border-color: var(--accent) !important; }
+.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary.btn-small { padding: 6px 14px !important; font-size: 12.5px !important; }
+
+.btn-secondary {
+  padding: 8px 18px !important;
+  background: transparent !important;
+  color: var(--ink) !important;
+  border: 1px solid var(--ink) !important;
+  font-family: var(--font-serif) !important;
+  font-size: 14px !important;
+  font-variant: small-caps !important;
+  letter-spacing: 0.08em !important;
+  border-radius: 0 !important;
+  cursor: pointer;
+}
+.btn-secondary:hover:not(:disabled) { background: var(--paper-2) !important; }
+.btn-secondary.btn-small {
+  padding: 4px 10px !important;
+  font-size: 11.5px !important;
+  border-color: var(--rule) !important;
+  color: var(--ink-2) !important;
+}
+.btn-secondary.btn-small:hover { border-color: var(--ink-2) !important; color: var(--ink) !important; }
+
+/* Results table (generic) */
+.results-table-wrap { overflow-x: auto; border: 1px solid var(--rule); background: #fff; }
+.results-table {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-sans); font-size: 13px;
+}
+.results-table th {
+  border-top: 1.5px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  padding: 9px 12px; text-align: left;
+  font-weight: 500; font-size: 11.5px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-2);
+  background: var(--paper-2);
+}
+.results-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule-2);
+  font-family: var(--font-mono);
+  font-size: 12.5px; color: var(--ink);
+  white-space: nowrap;
+}
+.results-table tr:hover td { background: var(--paper-2); }
+
+/* Error / success banners — Journal style */
+.error-banner {
+  padding: 10px 14px;
+  background: #fff;
+  border: 1px solid var(--color-red);
+  color: var(--color-red);
+  font-style: italic;
+  margin: 10px 0;
+  border-radius: 0;
+  border-left: 4px solid var(--color-red);
+}
+.success-banner {
+  padding: 10px 14px;
+  background: #fff;
+  border: 1px solid var(--accent-3);
+  color: var(--accent-3);
+  font-style: italic;
+  margin: 10px 0;
+  border-radius: 0;
+  border-left: 4px solid var(--accent-3);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ADQL EDITOR page — restyle existing DOM
+   ══════════════════════════════════════════════════════════════════════ */
+.adql-page {
+  max-width: 1340px; margin: 0 auto;
+  padding: 8px 0 48px;
+  font-family: var(--font-serif);
+}
+.adql-page > h1 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 36px;
+  letter-spacing: -0.01em; line-height: 1.15;
+  padding-bottom: 14px; margin-bottom: 18px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+}
+.adql-controls {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  align-items: center;
+  margin: 10px 0 12px;
+}
+.adql-page .error-banner,
+.adql-page .success-banner { margin: 12px 0; }
+.adql-results {
+  margin-top: 16px;
+  border: 1px solid var(--rule);
+  background: #fff;
+  padding: 14px 16px;
+}
+
+/* ADQL editor component styling — syntax colors + monospace */
+.adql-editor-wrapper,
+.adql-editor,
+textarea.adql-editor-textarea {
+  border: 1px solid var(--ink) !important;
+  background: #fff !important;
+  font-family: var(--font-mono) !important;
+  font-size: 14px !important;
+  line-height: 1.6 !important;
+  color: var(--ink) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
