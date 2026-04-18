@@ -595,14 +595,20 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     """
     # Crash-isolated backend path: fresh subprocess per call, no session state.
     # Callers who need Jupyter-like persistence stay on the in-process path.
+    # F0.4: log the chosen backend + fallback path so failed runs can be
+    # triaged from Render logs without guessing which backend ran.
     try:
         from app.config import settings as _settings
         if _settings.sandbox_backend == "subprocess" and not context:
+            logger.info("sandbox: using backend=subprocess (no context)")
             sub_result = _dispatch_subprocess(_normalize_code(code))
             if sub_result is not None:
                 return sub_result
+            logger.warning(
+                "sandbox: subprocess dispatch returned None; falling back to in-process"
+            )
     except Exception as e:
-        logger.debug("subprocess dispatch failed, using in-process: %s", e)
+        logger.warning("sandbox: subprocess dispatch raised %s, using in-process", e)
 
     result = CodeExecutionResult()
     code = _normalize_code(code)

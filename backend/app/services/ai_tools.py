@@ -2034,8 +2034,32 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         "stdout": result.stdout[:50_000] if result.stdout else "",
     }
 
+    # F0.2: error-field tripwire.  Previously we only populated `error` when
+    # `result.error` was truthy — so a sandbox that returned success=False
+    # with an empty/None error (e.g. subprocess was SIGKILLed before it
+    # could serialize its error message) produced a response dict with no
+    # error key, surfacing on the frontend as the generic "Python sandbox
+    # returned no message (check backend logs)" fallback.  Guarantee that
+    # any failure carries a concrete, user-actionable message plus an
+    # error_class the UI can chip-render.
     if result.error:
         response["error"] = result.error
+        response["error_class"] = _classify_sandbox_error(result.error)
+    elif not result.success:
+        response["error"] = (
+            f"Sandbox reported failure without a specific error message. "
+            f"stdout_len={len(result.stdout or '')}, "
+            f"stderr_len={len(result.stderr or '')}, "
+            f"figures={len(result.figures or [])}.  This usually means the "
+            f"sandbox subprocess was killed (OOM / SIGKILL / wall-clock "
+            f"timeout) before it could send its result back."
+        )
+        response["error_class"] = "sandbox_crash"
+        try:
+            from app.observability.metrics import record_counter
+            record_counter("sandbox_silent_failure_total", 1.0, tool="run_python")
+        except Exception:
+            pass
     if result.stderr and not result.success:
         response["traceback"] = result.stderr[:10_000]
     if result.figures:
@@ -2049,6 +2073,31 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         response["auto_fix_note"] = auto_fix_note
 
     return response
+
+
+def _classify_sandbox_error(err: str) -> str:
+    """F0.2: map a sandbox error string to a short class so the UI can
+    render a status chip (e.g. "oom", "timeout", "sandbox_crash").
+    """
+    if not err:
+        return "unknown"
+    low = err.lower()
+    if "timed out" in low or "timeout" in low:
+        return "timeout"
+    if "memoryerror" in low or "address-space" in low or "oom" in low:
+        return "oom"
+    if "incomplete payload" in low or "terminated without result" in low \
+            or "without an error message" in low:
+        return "sandbox_crash"
+    if "nameerror" in low:
+        return "name_error"
+    if "importerror" in low or "modulenotfounderror" in low:
+        return "import_error"
+    if "systemexit" in low:
+        return "system_exit"
+    if "syntaxerror" in low or "indentationerror" in low:
+        return "syntax_error"
+    return "runtime_error"
 
 
 async def _exec_analyze_spectrum_pro(inp: dict) -> dict:

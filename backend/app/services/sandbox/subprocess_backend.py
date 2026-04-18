@@ -167,11 +167,33 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int) -> None:
         if extra_stderr and not result["stderr"]:
             result["stderr"] = extra_stderr[:500_000]
 
+        sent_ok = False
         try:
             conn.send(result)
-        except Exception:
-            pass
+            sent_ok = True
+        except Exception as send_err:
+            # F0.3: if conn.send fails (broken pipe, parent gone, serialization
+            # error), we need the stderr of the child to carry a breadcrumb.
+            # Log via the child's own stderr (which Render captures) since
+            # logger might not be configured in the spawn context.
+            try:
+                os.write(
+                    2,
+                    f"[sandbox-child] conn.send failed: "
+                    f"{type(send_err).__name__}: {send_err}\n".encode("utf-8"),
+                )
+            except Exception:
+                pass
         finally:
+            try:
+                os.write(
+                    2,
+                    f"[sandbox-child] exit; sent_ok={sent_ok} "
+                    f"success={result.get('success')} "
+                    f"error={result.get('error')!r}\n".encode("utf-8"),
+                )
+            except Exception:
+                pass
             try:
                 conn.close()
             except Exception:
@@ -218,9 +240,16 @@ class SubprocessBackend:
                 pass
 
         duration_ms = int((time.monotonic() - t0) * 1000)
+        exit_code = proc.exitcode if hasattr(proc, "exitcode") else None
 
+        # F0.1: payload-completeness guard.  `parent_conn.recv()` can deliver
+        # a non-None but empty / non-dict / missing-keys payload when the
+        # child died mid-serialization (OOM, SIGKILL, pipe truncation).
+        # Previously we fell through to `payload.get(...)` which yielded
+        # success=False, error=None and the downstream tool wrapper then
+        # dropped the error field entirely, surfacing as "sandbox returned
+        # no message" to the user.  Fail loudly instead.
         if payload is None:
-            exit_code = proc.exitcode if hasattr(proc, "exitcode") else None
             return SandboxResult(
                 success=False,
                 error=(
@@ -232,15 +261,40 @@ class SubprocessBackend:
                 exit_code=exit_code,
             )
 
+        if not isinstance(payload, dict) or not payload:
+            return SandboxResult(
+                success=False,
+                error=(
+                    f"sandbox subprocess returned incomplete payload "
+                    f"(type={type(payload).__name__}, "
+                    f"keys={list(payload) if isinstance(payload, dict) else 'n/a'}, "
+                    f"exit code {exit_code}).  The child likely crashed during "
+                    f"result serialization (OOM / SIGKILL / broken pipe)."
+                ),
+                backend=self.name,
+                duration_ms=duration_ms,
+                exit_code=exit_code,
+            )
+
+        reported_success = bool(payload.get("success"))
+        reported_error = payload.get("error")
+        if not reported_success and not reported_error:
+            reported_error = (
+                f"sandbox reported failure without an error message "
+                f"(payload keys={list(payload)}, exit code {exit_code}).  "
+                f"This usually means the child died before populating the "
+                f"error field (SIGKILL / OOM / fast exit)."
+            )
+
         return SandboxResult(
-            stdout=payload.get("stdout", ""),
-            stderr=payload.get("stderr", ""),
-            error=payload.get("error"),
-            figures=payload.get("figures", []),
-            variables=payload.get("variables", {}),
-            variable_types=payload.get("variable_types", {}),
-            success=payload.get("success", False),
+            stdout=payload.get("stdout", "") or "",
+            stderr=payload.get("stderr", "") or "",
+            error=reported_error,
+            figures=payload.get("figures", []) or [],
+            variables=payload.get("variables", {}) or {},
+            variable_types=payload.get("variable_types", {}) or {},
+            success=reported_success,
             backend=self.name,
             duration_ms=duration_ms,
-            exit_code=proc.exitcode,
+            exit_code=exit_code,
         )

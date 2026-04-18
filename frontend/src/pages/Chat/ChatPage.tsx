@@ -925,26 +925,59 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const success = result.success as boolean;
     const stdout = result.stdout as string || "";
     const error = result.error as string | undefined;
+    const errorClass = result.error_class as string | undefined;
     const figures = (result.figures as string[]) || [];
     const variables = result.variables as Record<string, string> | undefined;
     const variableTypes = result.variable_types as Record<string, string> | undefined;
     const tb = result.traceback as string | undefined;
 
-    // E0.2: surface the backend's typed error (e.g. "NameError: members_clean
-    // is not defined") rather than the generic "unknown" fallback.  If we
-    // got nothing back at all, show the tool name + hint so the user
-    // can still act on it.
+    // F0.6: surface the backend's typed error.  The old "Python sandbox
+    // returned no message (check backend logs)" fallback is gone — F0.2
+    // on the backend guarantees every failure carries a concrete error
+    // message.  If we still see no error for a failed call, the tool
+    // response itself is malformed.
     const errorDisplay = success
       ? "Executed successfully"
       : error && error.trim()
         ? `Error: ${error}`
-        : "Error: Python sandbox returned no message (check backend logs)";
+        : "Error: run_python returned an empty response (tool response malformed; check backend logs)";
+
+    // Map F0.2 error_class to a short chip label.
+    const errorClassLabel: Record<string, string> = {
+      sandbox_crash: "Sandbox crash",
+      oom: "Out of memory",
+      timeout: "Timed out",
+      name_error: "NameError",
+      import_error: "ImportError",
+      system_exit: "SystemExit",
+      syntax_error: "SyntaxError",
+      runtime_error: "Runtime error",
+      empty_input: "Empty code",
+      unknown: "Unknown",
+    };
 
     return (
       <div className="code-result">
         {/* Status */}
-        <div style={{ fontSize: "0.72rem", color: success ? "var(--color-green)" : "var(--color-red)", marginBottom: 4 }}>
-          {errorDisplay}
+        <div style={{ fontSize: "0.72rem", color: success ? "var(--color-green)" : "var(--color-red)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span>{errorDisplay}</span>
+          {!success && errorClass && errorClassLabel[errorClass] && (
+            <span
+              title={`error_class: ${errorClass}`}
+              style={{
+                fontSize: "0.65rem",
+                padding: "1px 6px",
+                borderRadius: 3,
+                border: "1px solid var(--color-red)",
+                color: "var(--color-red)",
+                background: "rgba(255, 69, 58, 0.08)",
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+              }}
+            >
+              {errorClassLabel[errorClass]}
+            </span>
+          )}
         </div>
 
         {/* Stdout */}
