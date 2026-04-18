@@ -1899,28 +1899,6 @@ textarea.adql-editor-textarea {
 .config-panel textarea:focus,
 .node-config-panel textarea:focus { border-bottom-color: var(--accent); }
 
-/* ReactFlow node wrapper */
-.react-flow__node-default,
-.react-flow__node-input,
-.react-flow__node-output {
-  background: #fff !important;
-  border: 1px solid var(--ink) !important;
-  border-radius: 0 !important;
-  color: var(--ink) !important;
-  font-family: var(--font-serif) !important;
-  font-size: 13px !important;
-  padding: 8px 12px !important;
-  box-shadow: var(--shadow-sm) !important;
-}
-.react-flow__node.selected .react-flow__node-default,
-.react-flow__node.selected .react-flow__node-input,
-.react-flow__node.selected .react-flow__node-output,
-.react-flow__node-default.selected,
-.react-flow__node-input.selected,
-.react-flow__node-output.selected {
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 2px rgba(123, 45, 38, 0.15) !important;
-}
 .react-flow__attribution {
   background: transparent !important;
   color: var(--ink-3) !important;
@@ -1936,6 +1914,129 @@ textarea.adql-editor-textarea {
 }
 .react-flow__background {
   background: var(--paper) !important;
+}
+
+/* ── Pipeline node cards (on the canvas) ── */
+.pipeline-node {
+  background: #fff !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid var(--ink) !important;
+  border-radius: 0 !important;
+  min-width: 170px;
+  box-shadow: var(--shadow-sm) !important;
+  font-family: var(--font-serif) !important;
+  color: var(--ink);
+  overflow: hidden;
+  /* The colored borderColor inline-style becomes a thin LEFT accent stripe */
+  border-left-width: 4px !important;
+}
+.pipeline-node.selected,
+.pipeline-node:focus {
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow-sm) !important;
+  border-color: var(--accent) !important;
+}
+.pipeline-node-header {
+  /* Inline style={{background: color}} wins, so we dim it to a thin top strip */
+  padding: 5px 12px !important;
+  color: #fff !important;
+  font-family: var(--font-serif) !important;
+  font-weight: 500 !important;
+  font-size: 12px !important;
+  font-variant: small-caps !important;
+  letter-spacing: 0.1em !important;
+  border-radius: 0 !important;
+  border-bottom: 1px solid var(--rule);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.12);
+}
+/* When header background is ink (Plot / InteractivePlot), keep white text —
+   otherwise the dark inline-bg + ink text would vanish. */
+.pipeline-node-body {
+  padding: 8px 12px !important;
+  background: #fff;
+  color: var(--ink);
+}
+.pipeline-node-type {
+  display: block;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  margin-bottom: 3px;
+}
+.pipeline-node-summary {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  font-size: 12px; margin-top: 2px;
+  font-family: var(--font-serif);
+}
+.pipeline-node-summary .param-summary-target {
+  color: var(--ink);
+  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  max-width: 140px;
+}
+.pipeline-node-summary .param-summary-sources {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.pipeline-node-summary .param-summary-detail {
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-style: italic;
+}
+.pipeline-node-params {
+  list-style: none; padding: 0; margin: 0;
+  font-size: 11px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+}
+.pipeline-node-params .param-key {
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+/* Handles — Journal look */
+.pipeline-handle {
+  width: 9px !important;
+  height: 9px !important;
+  border: 1.5px solid var(--ink) !important;
+  background: var(--paper) !important;
+  border-radius: 50% !important;
+  transition: all 0.12s ease;
+}
+.pipeline-handle:hover,
+.pipeline-handle.connecting {
+  width: 12px !important;
+  height: 12px !important;
+  border-color: var(--accent) !important;
+  background: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(123, 45, 38, 0.18) !important;
+}
+
+/* Progress indicators (inline colored dot when node is running/done/errored) */
+.node-progress-indicator {
+  border-radius: 0 !important;
+}
+.pipeline-node.node-running {
+  border-color: var(--warn) !important;
+}
+.pipeline-node.node-completed {
+  border-color: var(--accent-3) !important;
+}
+.pipeline-node.node-error {
+  border-color: var(--color-red) !important;
+}
+.node-error-msg {
+  padding: 6px 10px;
+  background: #fff4f3;
+  border-top: 1px solid var(--color-red);
+  color: var(--color-red);
+  font-size: 11.5px;
+  font-style: italic;
+  font-family: var(--font-serif);
 }
 
 /* ══════════════════════════════════════════════════════════════════════

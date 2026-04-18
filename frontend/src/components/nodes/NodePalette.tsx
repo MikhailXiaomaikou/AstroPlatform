@@ -5,38 +5,47 @@ interface Props {
   nodeTypes: NodeType[];
 }
 
+// Journal-edition palette — muted editorial tones, grouped by node family.
+// Kept in sync with components/nodes/PipelineNode.tsx.
 const TYPE_COLORS: Record<string, string> = {
-  QueryData: "#2563eb",
-  ImportWorkspace: "#3b82f6",
-  LoadData: "#0A84FF",
-  BiasSubtract: "#1d4ed8",
-  DarkCorrect: "#2563eb",
-  FlatField: "#3b82f6",
-  CosmicRayReject: "#0ea5e9",
-  AstrometricSolve: "#38bdf8",
-  SourceExtract: "#60a5fa",
-  Denoise: "#BF5AF2",
-  SpectralFit: "#64D2FF",
-  CoordTransform: "#FF9F0A",
-  Plot: "#30D158",
-  RedshiftEstimate: "#FF6961",
-  EquivalentWidth: "#FFD60A",
-  SEDFit: "#AC8E68",
-  CrossMatch: "#5AC8FA",
-  PhotCalibrate: "#FF9500",
-  ImageStack: "#AF52DE",
-  InteractivePlot: "#8b5cf6",
-  FluxCalibrate: "#06b6d4",
-  TelluricCorrect: "#06b6d4",
-  SpectraStack: "#06b6d4",
-  PhotoZPro: "#8b5cf6",
-  BayesianFit: "#ec4899",
-  TransitFit: "#f59e0b",
-  GPDetrend: "#f59e0b",
-  Reproject: "#14b8a6",
-  Mosaic: "#14b8a6",
-  PSFMatch: "#14b8a6",
-  Deblend: "#14b8a6",
+  // Ingest — deep blue
+  QueryData:        "#2a5d7b",
+  ImportWorkspace:  "#2a5d7b",
+  LoadData:         "#2a5d7b",
+  // Reduction — deep blue (still ingest-adjacent)
+  BiasSubtract:     "#2a5d7b",
+  DarkCorrect:      "#2a5d7b",
+  FlatField:        "#2a5d7b",
+  CosmicRayReject:  "#2a5d7b",
+  AstrometricSolve: "#2a5d7b",
+  SourceExtract:    "#2a5d7b",
+  // Transform — ochre
+  Denoise:          "#a06500",
+  CoordTransform:   "#a06500",
+  EquivalentWidth:  "#a06500",
+  // Analyse — burgundy
+  SpectralFit:      "#7b2d26",
+  RedshiftEstimate: "#7b2d26",
+  SEDFit:           "#7b2d26",
+  BayesianFit:      "#7b2d26",
+  TransitFit:       "#7b2d26",
+  GPDetrend:        "#7b2d26",
+  PhotoZPro:        "#7b2d26",
+  // Photometry / calibration — plum
+  PhotCalibrate:    "#6b4a7e",
+  FluxCalibrate:    "#6b4a7e",
+  TelluricCorrect:  "#6b4a7e",
+  // Cross / merge — forest green
+  CrossMatch:       "#2e6a4e",
+  ImageStack:       "#2e6a4e",
+  SpectraStack:     "#2e6a4e",
+  Reproject:        "#2e6a4e",
+  Mosaic:           "#2e6a4e",
+  PSFMatch:         "#2e6a4e",
+  Deblend:          "#2e6a4e",
+  // Output / plot — ink
+  Plot:             "#1a1a1a",
+  InteractivePlot:  "#1a1a1a",
 };
 
 const TYPE_ORDER = [

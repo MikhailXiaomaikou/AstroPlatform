@@ -1,33 +1,52 @@
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
 
+// Journal-edition palette — muted editorial tones, grouped by node family.
 const TYPE_COLORS: Record<string, string> = {
-  QueryData: "#2563eb",
-  ImportWorkspace: "#3b82f6",
-  LoadData: "#0A84FF",
-  Denoise: "#BF5AF2",
-  SpectralFit: "#64D2FF",
-  CoordTransform: "#FF9F0A",
-  Plot: "#30D158",
-  RedshiftEstimate: "#FF6961",
-  EquivalentWidth: "#FFD60A",
-  SEDFit: "#AC8E68",
-  CrossMatch: "#5AC8FA",
-  PhotCalibrate: "#FF9500",
-  ImageStack: "#AF52DE",
-  PSFPhotometry: "#10b981",
-  InteractivePlot: "#8b5cf6",
-  Condition: "#f59e0b",
+  // Ingest — deep blue
+  QueryData:        "#2a5d7b",
+  ImportWorkspace:  "#2a5d7b",
+  LoadData:         "#2a5d7b",
+  // Transform — ochre
+  Denoise:          "#a06500",
+  CoordTransform:   "#a06500",
+  EquivalentWidth:  "#a06500",
+  // Analyse — burgundy (accent)
+  SpectralFit:      "#7b2d26",
+  RedshiftEstimate: "#7b2d26",
+  SEDFit:           "#7b2d26",
+  BayesianFit:      "#7b2d26",
+  TransitFit:       "#7b2d26",
+  GPDetrend:        "#7b2d26",
+  PhotoZPro:        "#7b2d26",
+  // Photometry / calibration — plum
+  PhotCalibrate:    "#6b4a7e",
+  FluxCalibrate:    "#6b4a7e",
+  TelluricCorrect:  "#6b4a7e",
+  PSFPhotometry:    "#6b4a7e",
+  // Cross / merge — forest green
+  CrossMatch:       "#2e6a4e",
+  ImageStack:       "#2e6a4e",
+  SpectraStack:     "#2e6a4e",
+  Reproject:        "#2e6a4e",
+  Mosaic:           "#2e6a4e",
+  PSFMatch:         "#2e6a4e",
+  Deblend:          "#2e6a4e",
+  // Output / plot — ink
+  Plot:             "#1a1a1a",
+  InteractivePlot:  "#1a1a1a",
+  // Control flow — warn ochre
+  Condition:        "#a06500",
 };
 
 const SOURCE_NODE_TYPES = new Set(["QueryData", "ImportWorkspace", "LoadData"]);
 const TERMINAL_NODE_TYPES = new Set(["Plot"]);
 
 const PROGRESS_COLORS: Record<string, string> = {
-  pending: "rgba(255,255,255,0.1)",
-  running: "#FF9F0A",
-  completed: "#30D158",
-  error: "#FF453A",
+  pending:   "rgba(26, 26, 26, 0.08)",
+  running:   "#a06500",
+  completed: "#2e6a4e",
+  error:     "#b23a2e",
 };
 
 interface PipelineNodeData {
