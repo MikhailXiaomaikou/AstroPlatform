@@ -73,6 +73,20 @@
   --journal-accent:   #7b2d26;
   --journal-accent-2: #2a5d7b;
   --journal-accent-3: #2e6a4e;
+
+  /* ── Short-name aliases so the demo stylesheet copies 1:1 ── */
+  --paper:    var(--color-bg);
+  --paper-2:  var(--journal-paper-2);
+  --paper-3:  var(--journal-paper-3);
+  --rule:     var(--color-separator);
+  --rule-2:   var(--journal-rule-2);
+  --ink:      var(--color-text);
+  --ink-2:    var(--color-text-secondary);
+  --ink-3:    var(--color-text-tertiary);
+  --accent:   var(--color-accent);
+  --accent-2: var(--color-accent-2);
+  --accent-3: var(--color-accent-3);
+  --warn:     var(--color-orange);
 }
 
 /* Dark mode — keep as "reading lamp" dark journal (not Apple-dark anymore).
@@ -120,6 +134,19 @@
   --journal-paper-3: #2a2723;
   --journal-rule:    #3a362f;
   --journal-rule-2:  #2e2a24;
+
+  --paper:    var(--color-bg);
+  --paper-2:  var(--journal-paper-2);
+  --paper-3:  var(--journal-paper-3);
+  --rule:     var(--color-separator);
+  --rule-2:   var(--journal-rule-2);
+  --ink:      var(--color-text);
+  --ink-2:    var(--color-text-secondary);
+  --ink-3:    var(--color-text-tertiary);
+  --accent:   var(--color-accent);
+  --accent-2: var(--color-accent-2);
+  --accent-3: var(--color-accent-3);
+  --warn:     var(--color-orange);
 }
 
 *,
