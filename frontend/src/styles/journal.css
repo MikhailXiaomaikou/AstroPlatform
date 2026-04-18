@@ -1742,6 +1742,202 @@ textarea.adql-editor-textarea {
   .pipeline-sidebar { max-height: 280px; }
 }
 
+/* Pipeline sidebar internals — node palette + templates + action buttons */
+.pipeline-sidebar .node-palette {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.pipeline-sidebar .palette-item {
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--rule);
+  border-radius: 0;
+  font-family: var(--font-serif);
+  font-size: 14px;
+  cursor: grab;
+  transition: border-color 0.12s, background 0.12s;
+  box-shadow: none;
+}
+.pipeline-sidebar .palette-item:hover {
+  border-left-color: var(--accent);
+  background: var(--paper-2);
+  transform: none;
+  box-shadow: none;
+}
+.pipeline-sidebar .palette-item strong {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 14px;
+  color: var(--ink);
+}
+.pipeline-sidebar .palette-desc {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-style: italic;
+  font-family: var(--font-serif);
+}
+
+.pipeline-sidebar .template-list { gap: 2px; }
+.pipeline-sidebar .template-btn {
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--rule);
+  border-radius: 0;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 14px;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+  cursor: pointer;
+}
+.pipeline-sidebar .template-btn:hover {
+  border-left-color: var(--accent);
+  background: var(--paper-2);
+  transform: none;
+}
+.pipeline-sidebar .template-btn.active {
+  border-left-color: var(--accent);
+  background: var(--paper-2);
+  color: var(--accent);
+}
+
+.pipeline-sidebar .canvas-actions { gap: 6px; }
+.pipeline-sidebar .delete-btn,
+.pipeline-sidebar .clear-btn,
+.pipeline-sidebar button.run-btn,
+.pipeline-sidebar .run-section button {
+  padding: 8px 12px;
+  border-radius: 0;
+  font-family: var(--font-serif);
+  font-size: 13px;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.pipeline-sidebar .delete-btn {
+  background: #fff;
+  border: 1px solid var(--color-red);
+  color: var(--color-red);
+  font-weight: 500;
+}
+.pipeline-sidebar .delete-btn:hover:not(:disabled) {
+  background: var(--color-red);
+  color: var(--paper);
+  transform: none;
+}
+.pipeline-sidebar .clear-btn {
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--ink-2);
+}
+.pipeline-sidebar .clear-btn:hover:not(:disabled) {
+  border-color: var(--ink);
+  color: var(--ink);
+  background: var(--paper-2);
+  transform: none;
+}
+.pipeline-sidebar .run-section button,
+.pipeline-sidebar button.run-btn {
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+  padding: 10px 14px;
+  font-size: 14px;
+}
+.pipeline-sidebar .run-section button:hover:not(:disabled),
+.pipeline-sidebar button.run-btn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.pipeline-sidebar .version-actions {
+  display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px;
+}
+
+/* Config panel on the right of the canvas */
+.node-config-panel,
+.config-panel {
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 14px 16px;
+  font-family: var(--font-serif);
+  box-shadow: none;
+}
+.node-config-panel h3,
+.config-panel h3 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 14px;
+  font-variant: small-caps; letter-spacing: 0.12em;
+  padding-bottom: 6px; margin-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+}
+.config-panel input,
+.node-config-panel input,
+.config-panel select,
+.node-config-panel select,
+.config-panel textarea,
+.node-config-panel textarea {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  border: none;
+  border-bottom: 1px solid var(--ink-3);
+  background: transparent;
+  color: var(--ink);
+  padding: 5px 0;
+  width: 100%;
+  border-radius: 0;
+  outline: none;
+}
+.config-panel input:focus,
+.node-config-panel input:focus,
+.config-panel select:focus,
+.node-config-panel select:focus,
+.config-panel textarea:focus,
+.node-config-panel textarea:focus { border-bottom-color: var(--accent); }
+
+/* ReactFlow node wrapper */
+.react-flow__node-default,
+.react-flow__node-input,
+.react-flow__node-output {
+  background: #fff !important;
+  border: 1px solid var(--ink) !important;
+  border-radius: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-serif) !important;
+  font-size: 13px !important;
+  padding: 8px 12px !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+.react-flow__node.selected .react-flow__node-default,
+.react-flow__node.selected .react-flow__node-input,
+.react-flow__node.selected .react-flow__node-output,
+.react-flow__node-default.selected,
+.react-flow__node-input.selected,
+.react-flow__node-output.selected {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px rgba(123, 45, 38, 0.15) !important;
+}
+.react-flow__attribution {
+  background: transparent !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-serif) !important;
+  font-size: 10px !important;
+}
+.react-flow__panel {
+  background: transparent !important;
+}
+.react-flow__minimap {
+  background: var(--paper-2) !important;
+  border: 1px solid var(--rule) !important;
+}
+.react-flow__background {
+  background: var(--paper) !important;
+}
+
 /* ══════════════════════════════════════════════════════════════════════
    SESSIONS (workspace) — Journal card grid
    ══════════════════════════════════════════════════════════════════════ */
