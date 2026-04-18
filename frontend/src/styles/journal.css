@@ -1643,3 +1643,257 @@ textarea.adql-editor-textarea {
   border-radius: 0 !important;
   box-shadow: none !important;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PIPELINE (/pipeline) — restyle existing DOM
+   ══════════════════════════════════════════════════════════════════════ */
+.pipeline-page {
+  max-width: 1400px; margin: 0 auto;
+  padding: 8px 0 48px;
+  font-family: var(--font-serif);
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 24px;
+}
+.pipeline-page > h1 {
+  grid-column: 1 / -1;
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 36px;
+  letter-spacing: -0.01em; line-height: 1.15;
+  padding-bottom: 14px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.pipeline-sidebar {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  padding: 14px 16px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+}
+.pipeline-sidebar h2,
+.pipeline-sidebar h3 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 13.5px;
+  font-variant: small-caps; letter-spacing: 0.14em;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--rule);
+  margin: 14px 0 10px; color: var(--ink);
+}
+.pipeline-sidebar h3:first-child { margin-top: 0; }
+.pipeline-canvas {
+  border: 1px solid var(--rule);
+  background: #fff;
+  border-radius: 0;
+}
+.pipeline-results-panel {
+  margin-top: 14px;
+  background: #fff;
+  border: 1px solid var(--rule);
+  padding: 14px 16px;
+}
+.pipeline-results-panel h3,
+.pipeline-results-panel h4 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 14px;
+  font-variant: small-caps; letter-spacing: 0.12em;
+  margin-bottom: 8px;
+}
+.node-result-panel {
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  box-shadow: var(--shadow-lg);
+}
+.node-result-panel-header {
+  padding: 10px 16px;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-serif);
+  font-variant: small-caps; letter-spacing: 0.08em;
+}
+.node-result-panel-body { padding: 14px 16px; font-family: var(--font-serif); }
+
+/* ReactFlow overrides — match journal palette */
+.react-flow__node {
+  font-family: var(--font-serif) !important;
+}
+.react-flow__handle {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+.react-flow__edge-path {
+  stroke: var(--accent) !important;
+  stroke-width: 1.2 !important;
+}
+.react-flow__controls {
+  background: var(--paper-2) !important;
+  border: 1px solid var(--rule) !important;
+  box-shadow: none !important;
+}
+.react-flow__controls-button {
+  background: #fff !important;
+  border: 1px solid var(--rule) !important;
+  color: var(--ink) !important;
+}
+.react-flow__controls-button:hover { background: var(--paper-2) !important; }
+
+@media (max-width: 900px) {
+  .pipeline-page { grid-template-columns: 1fr; }
+  .pipeline-sidebar { max-height: 280px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   SESSIONS (workspace) — Journal card grid
+   ══════════════════════════════════════════════════════════════════════ */
+.workspace-page {
+  max-width: 1340px; margin: 0 auto;
+  padding: 8px 0 48px;
+  font-family: var(--font-serif);
+}
+.workspace-header {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  padding-bottom: 14px; margin-bottom: 22px;
+  border-bottom: 1px solid var(--rule);
+  gap: 16px; flex-wrap: wrap;
+}
+.workspace-page h1,
+.workspace-header h1 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 36px;
+  letter-spacing: -0.01em; line-height: 1.15;
+  margin: 0;
+}
+.workspace-actions-top { display: flex; gap: 8px; flex-wrap: wrap; }
+.workspace-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+.workspace-file-list {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  padding: 12px;
+  max-height: calc(100vh - 240px);
+  overflow-y: auto;
+}
+.workspace-file-list h3 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 13.5px;
+  font-variant: small-caps; letter-spacing: 0.14em;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 12px; color: var(--ink);
+}
+.workspace-file-list .file-item,
+.workspace-file-list li {
+  padding: 9px 10px;
+  border-bottom: 1px dotted var(--rule);
+  font-size: 14px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.workspace-file-list .file-item:hover { background: #fff; }
+.workspace-file-list .file-item.active {
+  background: #fff;
+  border-left-color: var(--accent);
+}
+.workspace-detail {
+  background: #fff;
+  border: 1px solid var(--rule);
+  padding: 18px 22px;
+  min-height: 400px;
+}
+.workspace-detail h2,
+.workspace-detail h3 {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+.workspace-detail h2 { font-size: 24px; margin-bottom: 10px; }
+.workspace-detail h3 { font-size: 16px; font-variant: small-caps; letter-spacing: 0.08em; margin: 18px 0 8px; }
+
+@media (max-width: 900px) {
+  .workspace-layout { grid-template-columns: 1fr; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ACCOUNT (/account) — Journal settings
+   ══════════════════════════════════════════════════════════════════════ */
+.account-page {
+  max-width: 1000px; margin: 0 auto;
+  padding: 8px 0 48px;
+  font-family: var(--font-serif);
+}
+.account-page > h1 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 36px;
+  letter-spacing: -0.01em; line-height: 1.15;
+  padding-bottom: 14px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+}
+.account-page > .page-tabs {
+  display: flex; gap: 0;
+  border: none;
+  background: transparent;
+  padding: 0; margin: 10px 0 18px;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+}
+.account-page > .page-tabs > .page-tab {
+  padding: 9px 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-2);
+  font-family: var(--font-serif);
+  font-variant: small-caps;
+  letter-spacing: 0.1em;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0;
+}
+.account-page > .page-tabs > .page-tab:hover { color: var(--ink); border-bottom-color: var(--ink-3); }
+.account-page > .page-tabs > .page-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Existing settings cards inside .account-page */
+.account-page .settings-section,
+.account-page .settings-card {
+  background: #fff;
+  border: 1px solid var(--rule);
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  border-radius: 0;
+}
+.account-page .settings-section h2,
+.account-page .settings-section h3,
+.account-page .settings-card h3 {
+  font-family: var(--font-serif);
+  font-weight: 500; font-size: 15px;
+  font-variant: small-caps; letter-spacing: 0.12em;
+  padding-bottom: 8px; margin-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+}
+
+/* Form fields across the app — Journal underline style */
+.account-page input[type="text"],
+.account-page input[type="email"],
+.account-page input[type="password"],
+.account-page input[type="url"],
+.account-page textarea,
+.account-page select {
+  font-family: var(--font-serif);
+  font-size: 14.5px;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--ink-3);
+  padding: 6px 0;
+  border-radius: 0;
+  outline: none;
+}
+.account-page input:focus,
+.account-page textarea:focus,
+.account-page select:focus { border-bottom-color: var(--accent); }
