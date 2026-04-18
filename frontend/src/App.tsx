@@ -9,6 +9,8 @@ import OnboardingOverlay from "./components/OnboardingOverlay";
 import HelpDrawer from "./components/HelpDrawer";
 import LandingPage from "./pages/Landing/LandingPage";
 import "./App.css";
+// Journal edition overrides — MUST come after App.css so it wins the cascade.
+import "./styles/journal.css";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
