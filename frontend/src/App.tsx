@@ -57,6 +57,7 @@ const ChatPage = lazy(() => import("./pages/Chat/ChatPage"));
 const SharedSessionPage = lazy(() => import("./pages/SharedSession/SharedSessionPage"));
 const ObservationsPage = lazy(() => import("./pages/Observations/ObservationsPage"));
 const AccountPage = lazy(() => import("./pages/Account/AccountPage"));
+const PapersPage = lazy(() => import("./pages/Papers/PapersPage"));
 
 function useTheme() {
   // Journal edition: default to light. We use a new key (astro_theme_v2) so
@@ -81,80 +82,111 @@ function useTheme() {
   return { theme, toggle };
 }
 
+function LangSwitch() {
+  const { lang, setLang } = useI18n();
+  const label: Record<Lang, string> = { en: "EN", zh: "中文", fr: "FR", es: "ES" };
+  return (
+    <div className="lang-switch" role="group" aria-label="Language">
+      {ALL_LANGS.map((l) => (
+        <button
+          key={l}
+          type="button"
+          className={`lang-btn${lang === l ? " active" : ""}`}
+          onClick={() => setLang(l)}
+          title={LANG_NAMES[l]}
+        >
+          {label[l]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function NavBar() {
   const { theme, toggle } = useTheme();
   const { user, logout } = useAuth();
-  const { lang, setLang, t } = useI18n();
+  const { t } = useI18n();
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <nav className="top-nav">
-      <NavLink to="/" className="logo" aria-label="Standard Astro home">
-        Standard · Astro
-      </NavLink>
-      <button className="nav-hamburger" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation" aria-expanded={menuOpen}>
-        <span /><span /><span />
-      </button>
-      <div className={`nav-links${menuOpen ? " open" : ""}`}>
-      <NavLink to="/chat" className="nav-ai" onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
-      <NavLink to="/search" onClick={() => setMenuOpen(false)}>{t("nav.data_browser")}</NavLink>
-      <NavLink to="/pipeline" onClick={() => setMenuOpen(false)}>{t("nav.pipeline")}</NavLink>
-      <NavLink to="/workspace" onClick={() => setMenuOpen(false)}>{t("nav.workspace")}</NavLink>
-      <NavLink to="/adql" onClick={() => setMenuOpen(false)}>{t("nav.adql")}</NavLink>
-      <NavLink to="/team" onClick={() => setMenuOpen(false)}>{t("nav.team")}</NavLink>
-      <HelpDrawer />
-      <NavLink to="/observations" onClick={() => setMenuOpen(false)}>{t("nav.observations")}</NavLink>
-      <NavLink to="/account" onClick={() => setMenuOpen(false)}>{t("nav.account")}</NavLink>
-      </div>
-      <div className="nav-spacer" />
-      <button
-        className="theme-toggle"
-        onClick={toggle}
-        title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-      >
-        {theme === "dark" ? (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-          </svg>
-        ) : (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-          </svg>
-        )}
-      </button>
-      <select
-        className="lang-select"
-        value={lang}
-        onChange={(e) => setLang(e.target.value as Lang)}
-        title="Language"
-        aria-label="Select language"
-      >
-        {ALL_LANGS.map((l) => (
-          <option key={l} value={l}>{LANG_NAMES[l]}</option>
-        ))}
-      </select>
-      {user ? (
-        <div className="nav-user">
-          {user.avatar_url ? (
-            <img src={user.avatar_url} alt="" className="nav-avatar" referrerPolicy="no-referrer" />
-          ) : (
-            <span className="nav-avatar nav-avatar-placeholder">
-              {(user.display_name || user.username || user.email)[0].toUpperCase()}
-            </span>
-          )}
-          <span className="nav-user-name" title={user.username || user.email}>
-            {user.display_name || user.username || user.email.split("@")[0]}
-          </span>
-          <button className="nav-logout" onClick={logout} title={t("nav.sign_out")}>
-            {t("nav.sign_out")}
-          </button>
+    <header className="journal-masthead">
+      {/* Row 1 — brand + 8-tab nav, matches demo masthead-row */}
+      <div className="journal-masthead-row">
+        <div className="journal-masthead-brand">
+          <NavLink to="/" className="journal-masthead-title" aria-label="Standard Astro home">
+            Standard · Astro
+          </NavLink>
+          <div className="journal-masthead-sub">{t("brand.sub")}</div>
         </div>
-      ) : (
-        <NavLink to="/auth" className="nav-auth-link">{t("nav.sign_in")}</NavLink>
-      )}
-      <span className="tier-badge tier-beta">beta</span>
-    </nav>
+
+        <button
+          className="nav-hamburger"
+          onClick={() => setMenuOpen(!menuOpen)}
+          aria-label="Toggle navigation"
+          aria-expanded={menuOpen}
+        >
+          <span /><span /><span />
+        </button>
+
+        <nav
+          className={`journal-masthead-nav${menuOpen ? " open" : ""}`}
+          aria-label="Primary"
+        >
+          <NavLink to="/"          end onClick={() => setMenuOpen(false)}>{t("nav.home")}</NavLink>
+          <NavLink to="/chat"          onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
+          <NavLink to="/search"        onClick={() => setMenuOpen(false)}>{t("nav.browse")}</NavLink>
+          <NavLink to="/adql"          onClick={() => setMenuOpen(false)}>{t("nav.adql")}</NavLink>
+          <NavLink to="/pipeline"      onClick={() => setMenuOpen(false)}>{t("nav.pipeline")}</NavLink>
+          <NavLink to="/workspace"     onClick={() => setMenuOpen(false)}>{t("nav.sessions")}</NavLink>
+          <NavLink to="/papers"        onClick={() => setMenuOpen(false)}>{t("nav.papers")}</NavLink>
+          <NavLink to="/account"       onClick={() => setMenuOpen(false)}>{t("nav.account")}</NavLink>
+        </nav>
+      </div>
+
+      {/* Row 2 — issue meta + language chips + theme + user controls */}
+      <div className="journal-issue-meta">
+        <span className="journal-issue-line">{t("issue.line1")}</span>
+        <div className="journal-issue-right">
+          <LangSwitch />
+          <button
+            className="journal-icon-btn"
+            onClick={toggle}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          >
+            {theme === "dark" ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+              </svg>
+            )}
+          </button>
+          {user ? (
+            <div className="journal-user">
+              {user.avatar_url ? (
+                <img src={user.avatar_url} alt="" className="journal-avatar" referrerPolicy="no-referrer" />
+              ) : (
+                <span className="journal-avatar journal-avatar-placeholder">
+                  {(user.display_name || user.username || user.email)[0].toUpperCase()}
+                </span>
+              )}
+              <span className="journal-user-name" title={user.username || user.email}>
+                {user.display_name || user.username || user.email.split("@")[0]}
+              </span>
+              <button className="journal-user-logout" onClick={logout}>
+                {t("nav.sign_out")}
+              </button>
+            </div>
+          ) : (
+            <NavLink to="/auth" className="journal-auth-link">{t("nav.sign_in")}</NavLink>
+          )}
+          <HelpDrawer />
+        </div>
+      </div>
+    </header>
   );
 }
 
@@ -306,6 +338,7 @@ function App() {
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/account" element={<AccountPage />} />
+                <Route path="/papers" element={<PapersPage />} />
                 <Route path="/research" element={<Navigate to="/account" replace />} />
                 <Route path="/settings" element={<Navigate to="/account" replace />} />
                 <Route path="/shared/:token" element={<SharedSessionPage />} />

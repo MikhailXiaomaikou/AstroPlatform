@@ -15,6 +15,10 @@ const translations: Record<string, Record<Lang, string>> = {
   "nav.adql":          { en: "ADQL",            zh: "ADQL 查询",     fr: "ADQL",            es: "ADQL" },
   "nav.team":          { en: "Team",            zh: "团队",          fr: "Équipe",          es: "Equipo" },
   "nav.ai_assistant":  { en: "AI Assistant",    zh: "AI 助手",       fr: "Assistant IA",    es: "Asistente IA" },
+  "nav.home":          { en: "Home",            zh: "首页",          fr: "Accueil",         es: "Inicio" },
+  "nav.browse":        { en: "Browse",          zh: "数据浏览",      fr: "Parcourir",       es: "Explorar" },
+  "nav.sessions":      { en: "Sessions",        zh: "会话存档",      fr: "Sessions",        es: "Sesiones" },
+  "nav.papers":        { en: "Papers",          zh: "论文",          fr: "Articles",        es: "Artículos" },
   "nav.settings":      { en: "Settings",        zh: "设置",          fr: "Paramètres",      es: "Ajustes" },
   "nav.account":       { en: "Account",         zh: "账户",          fr: "Compte",          es: "Cuenta" },
   "nav.alerts":        { en: "Alerts",          zh: "警报",          fr: "Alertes",         es: "Alertas" },
@@ -410,6 +414,7 @@ const translations: Record<string, Record<Lang, string>> = {
 
   // ── Journal edition (Phase J1: masthead + footer) ─────────────────────
   "brand.sub":        { en: "Reproducible workflows for observational astronomy", zh: "可复现的观测天文学工作流",                    fr: "Flux de travail reproductibles pour l'astronomie observationnelle",               es: "Flujos de trabajo reproducibles para la astronomía observacional" },
+  "issue.line1":      { en: "Volume 4 · Issue 18 · April 2026", zh: "第 4 卷 · 第 18 期 · 2026 年 4 月", fr: "Volume 4 · Numéro 18 · Avril 2026", es: "Volumen 4 · Número 18 · Abril de 2026" },
   "footer.sub":       { en: "Reproducible workflows for observational astronomy · Est. 2026", zh: "可复现的观测天文学工作流 · 自 2026 年创建", fr: "Flux de travail reproductibles pour l'astronomie observationnelle · Depuis 2026", es: "Flujos de trabajo reproducibles para la astronomía observacional · Desde 2026" },
   "footer.col.platform":  { en: "Platform",   zh: "平台",  fr: "Plateforme",  es: "Plataforma" },
   "footer.col.science":   { en: "Science",    zh: "科学",  fr: "Science",     es: "Ciencia" },

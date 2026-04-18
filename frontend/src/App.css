@@ -6553,53 +6553,172 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   Journal Edition — masthead + footer overrides
-   These take the existing .top-nav / .logo / .main-content and give
-   them the Journal treatment. Per-page redesigns come in phases J2–J4.
+   Journal Edition — masthead + footer
+   Two-row masthead matching the demo: brand + 8 nav tabs on row 1,
+   issue meta + language chips + theme/user controls on row 2.
    ══════════════════════════════════════════════════════════════════════ */
 
-.top-nav {
+.journal-masthead {
   background: var(--color-bg);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   border-top: 4px double var(--color-text);
   border-bottom: 1px solid var(--color-separator);
-  padding: 0.85rem 1.5rem;
+  position: sticky; top: 0; z-index: 100;
   font-family: var(--font-serif);
-  font-size: 15px;
 }
 
-.top-nav .logo {
+/* Row 1: brand + nav */
+.journal-masthead-row {
+  max-width: 1400px; margin: 0 auto;
+  padding: 18px 40px 14px;
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 20px;
+}
+.journal-masthead-brand { display: flex; flex-direction: column; }
+.journal-masthead-title {
   font-family: var(--font-serif);
-  font-weight: 600;
-  font-style: italic;
-  font-variant: small-caps;
-  font-size: 1.5rem;
+  font-weight: 600; font-size: 30px;
+  font-style: italic; font-variant: small-caps;
   letter-spacing: 0.02em;
   color: var(--color-text) !important;
-  margin-right: 1.5rem;
+  text-decoration: none;
+  line-height: 1;
 }
-
-.top-nav a {
-  font-family: var(--font-serif);
+.journal-masthead-sub {
+  color: var(--color-text-secondary);
+  font-size: 13px; font-style: italic;
+  letter-spacing: 0.03em;
+  margin-top: 4px;
+}
+.journal-masthead-nav {
+  display: flex; gap: 2px; flex-wrap: wrap;
+  font-size: 15px;
+}
+.journal-masthead-nav a {
+  padding: 6px 14px;
+  color: var(--color-text);
+  text-decoration: none;
   font-variant: small-caps;
   letter-spacing: 0.08em;
-  font-size: 0.95rem;
-  font-weight: 500;
-  color: var(--color-text);
-  border-radius: 0;
   border-bottom: 2px solid transparent;
-  padding: 0.3rem 0.75rem;
+  font-weight: 500;
 }
-.top-nav a:hover {
-  color: var(--color-text);
-  background: transparent;
+.journal-masthead-nav a:hover {
   border-bottom-color: var(--color-text-tertiary);
 }
-.top-nav a.active {
+.journal-masthead-nav a.active {
   color: var(--color-accent);
-  background: transparent;
   border-bottom-color: var(--color-accent);
+}
+
+/* Row 2: issue meta */
+.journal-issue-meta {
+  max-width: 1400px; margin: 0 auto;
+  padding: 9px 40px;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 16px; flex-wrap: wrap;
+  font-size: 13px;
+  border-top: 1px solid var(--journal-rule-2);
+}
+.journal-issue-line {
+  color: var(--color-text-tertiary);
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+.journal-issue-right {
+  display: flex; align-items: center; gap: 14px;
+}
+
+/* Language chip switcher */
+.lang-switch {
+  display: flex; gap: 2px;
+  border: 1px solid var(--color-separator);
+  background: var(--color-surface);
+  padding: 2px;
+}
+.lang-btn {
+  padding: 3px 10px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  font-style: normal;
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  font-family: var(--font-serif);
+}
+.lang-btn:hover { color: var(--color-text); background: var(--color-hover); }
+.lang-btn.active {
+  color: var(--color-bg);
+  background: var(--color-accent);
+}
+body[data-lang="zh"] .lang-btn { font-size: 12px; font-variant: normal; letter-spacing: 0; }
+
+/* Icon button (theme toggle) */
+.journal-icon-btn {
+  width: 28px; height: 28px;
+  border: 1px solid var(--color-separator);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.journal-icon-btn:hover { color: var(--color-text); border-color: var(--color-text-tertiary); }
+
+/* User pill */
+.journal-user { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.journal-avatar {
+  width: 24px; height: 24px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  object-fit: cover;
+  background: var(--color-accent); color: var(--color-bg);
+  font-weight: 500; font-size: 11px; font-family: var(--font-sans);
+}
+.journal-avatar-placeholder { font-style: normal; }
+.journal-user-name { font-style: italic; color: var(--color-text-secondary); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.journal-user-logout {
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--color-separator);
+  color: var(--color-text-secondary);
+  font-family: var(--font-serif); font-size: 11.5px;
+  font-variant: small-caps; letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.journal-user-logout:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.journal-auth-link {
+  padding: 3px 12px;
+  border: 1px solid var(--color-text);
+  color: var(--color-text) !important;
+  font-variant: small-caps; letter-spacing: 0.08em;
+  font-size: 11.5px;
+  text-decoration: none;
+}
+.journal-auth-link:hover { background: var(--color-text); color: var(--color-bg) !important; }
+
+/* Hamburger */
+.journal-masthead .nav-hamburger { display: none; }
+
+@media (max-width: 900px) {
+  .journal-masthead-row { padding: 14px 16px; align-items: center; }
+  .journal-masthead-nav {
+    display: none; position: absolute; top: 100%; left: 0; right: 0;
+    flex-direction: column; background: var(--color-bg);
+    border-bottom: 1px solid var(--color-separator);
+    padding: 6px 16px;
+  }
+  .journal-masthead-nav.open { display: flex; }
+  .journal-masthead-nav a { padding: 8px 10px; }
+  .journal-masthead .nav-hamburger {
+    display: inline-flex; flex-direction: column; gap: 3px;
+    background: transparent; border: none; cursor: pointer;
+    padding: 8px; margin-left: auto;
+  }
+  .journal-masthead .nav-hamburger span {
+    display: block; width: 22px; height: 2px; background: var(--color-text);
+  }
+  .journal-issue-meta { padding: 6px 16px; }
+  .journal-user-name { display: none; }
 }
 
 .main-content {
