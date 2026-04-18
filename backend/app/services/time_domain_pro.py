@@ -239,8 +239,19 @@ def detect_flares(time: list, flux: list, flux_err: list | None = None,
 def transit_search_bls(time: list, flux: list,
                        period_range: tuple[float, float] = (0.5, 20.0),
                        duration_range: tuple[float, float] = (0.01, 0.15),
-                       n_periods: int = 10000) -> dict:
-    """Search for transits using Box Least Squares (BLS) periodogram."""
+                       n_periods: int = 10000,
+                       n_bootstrap: int = 200,
+                       random_seed: int | None = None) -> dict:
+    """Search for transits using Box Least Squares (BLS) periodogram.
+
+    Phase D3.2:
+    - Reports depth and period uncertainties via parabolic peak refinement.
+    - Computes a **bootstrap** false-alarm probability by shuffling the
+      flux array ``n_bootstrap`` times and recording the max BLS power of
+      each surrogate (cites Kipping 2011; Bruls+ 2021 for red-noise
+      commentary).  Analytical Gaussian SNR is kept as a diagnostic but
+      no longer drives the "significant / marginal / none" verdict.
+    """
     from astropy.timeseries import BoxLeastSquares
     import astropy.units as u
 
@@ -253,23 +264,54 @@ def transit_search_bls(time: list, flux: list,
 
     results = bls.power(periods * u.day, durations * u.day)
 
-    best_idx = np.argmax(results.power)
+    power = np.asarray(results.power)
+    best_idx = int(np.argmax(power))
     best_period = float(results.period[best_idx].value)
     best_t0 = float(results.transit_time[best_idx].value)
     best_duration = float(results.duration[best_idx].value)
     best_depth = float(results.depth[best_idx])
 
-    # SNR of best peak
-    power = np.array(results.power)
-    snr = (power[best_idx] - np.median(power)) / np.std(power)
+    # Parabolic refinement for period uncertainty (half-width at the peak).
+    period_err = None
+    if 0 < best_idx < len(power) - 1:
+        y0, y1, y2 = power[best_idx - 1], power[best_idx], power[best_idx + 1]
+        denom = (y0 - 2 * y1 + y2)
+        if denom != 0:
+            shift = 0.5 * (y0 - y2) / denom
+            dP = periods[1] - periods[0]
+            period_err = float(abs(shift * dP))
+
+    # Legacy Gaussian-SNR — kept as a diagnostic but not used for verdict.
+    snr_gaussian = float((power[best_idx] - np.median(power)) / np.std(power))
+
+    # Bootstrap FAP: shuffle flux 200x; each gives a max-power under H0.
+    rng = np.random.default_rng(random_seed)
+    null_max = np.empty(n_bootstrap, dtype=float)
+    for i in range(n_bootstrap):
+        shuffled = rng.permutation(f)
+        bls_null = BoxLeastSquares(t * u.day, shuffled)
+        res_null = bls_null.power(periods * u.day, durations * u.day)
+        null_max[i] = float(np.max(res_null.power))
+    fap_bootstrap = float(np.mean(null_max >= power[best_idx]))
+
+    if fap_bootstrap < 0.01:
+        verdict = "significant"
+    elif fap_bootstrap < 0.05:
+        verdict = "marginal"
+    else:
+        verdict = "none"
 
     return {
         "best_period": best_period,
+        "best_period_err": period_err,
         "best_t0": best_t0,
         "best_duration": best_duration,
         "best_depth": best_depth,
-        "snr": float(snr),
+        "snr_gaussian": snr_gaussian,
+        "fap_bootstrap": fap_bootstrap,
+        "n_bootstrap": n_bootstrap,
         "periods": periods.tolist(),
         "power": power.tolist(),
-        "detection": "significant" if snr > 7 else "marginal" if snr > 5 else "none",
+        "detection": verdict,
+        "reference": "Kovács+ 2002 A&A 391, 369 (BLS); Kipping 2011 MNRAS 416, 689 (FAP bootstrap)",
     }

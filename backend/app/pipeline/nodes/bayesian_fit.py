@@ -43,6 +43,15 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
     model_type = params.get("model", "polynomial")
     n_params_model = params.get("n_params", 3)
 
+    # D1.2 — caller-supplied priors override the default flat priors.
+    # Schema: priors = {param_name: {type: "normal"|"uniform"|"lognormal",
+    #                                 mean|low|mu, std|high|sigma}}
+    # Priors are applied in ADDITION to the default prior_transform during
+    # MCMC (as extra log-prior terms) so the caller can keep one param
+    # uniform and tighten another with a normal prior without rewriting
+    # the transform.
+    priors_spec = params.get("priors") or {}
+
     if model_type == "polynomial":
         def model_func(theta):
             return np.polyval(theta, x)
@@ -75,6 +84,37 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
     else:
         return {**input_data, "error": f"Unknown model: {model_type}", "node_type": "BayesianFit"}
 
+    # Build a closure that evaluates extra prior log-probability from
+    # the caller's ``priors`` dict, keyed by positional parameter index.
+    _param_names_for_priors = params.get("param_names", [f"p{i}" for i in range(ndim)])
+
+    def _extra_log_prior(theta: np.ndarray) -> float:
+        lp = 0.0
+        for i, pname in enumerate(_param_names_for_priors):
+            spec = priors_spec.get(pname)
+            if not spec:
+                continue
+            ptype = str(spec.get("type", "uniform")).lower()
+            val = float(theta[i])
+            if ptype == "normal":
+                mean = float(spec.get("mean", spec.get("mu", 0.0)))
+                std = float(spec.get("std", spec.get("sigma", 1.0)))
+                if std <= 0:
+                    continue
+                lp += -0.5 * ((val - mean) / std) ** 2 - 0.5 * np.log(2 * np.pi * std * std)
+            elif ptype == "lognormal":
+                mean = float(spec.get("mean", spec.get("mu", 0.0)))
+                std = float(spec.get("std", spec.get("sigma", 1.0)))
+                if val <= 0 or std <= 0:
+                    return -np.inf
+                lp += -0.5 * ((np.log(val) - mean) / std) ** 2 - np.log(val * std * np.sqrt(2 * np.pi))
+            elif ptype == "uniform":
+                low = float(spec.get("low", -np.inf))
+                high = float(spec.get("high", np.inf))
+                if val < low or val > high:
+                    return -np.inf
+        return float(lp)
+
     if method in ("nested", "dynesty", "ultranest"):
         from app.services.bayesian_inference import nested_sampling
         ns_method = "ultranest" if method == "ultranest" else "dynesty"
@@ -89,7 +129,8 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
             n_burn = params.get("n_burn", 500)
 
             def log_prob(theta):
-                lp = 0.0  # flat prior
+                # D1.2 — proper prior term from caller-supplied dict.
+                lp = _extra_log_prior(theta)
                 if not np.isfinite(lp):
                     return -np.inf
                 return lp + log_likelihood(theta)
@@ -137,19 +178,45 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
     # Compute parameter summaries
     samples = np.array(result["samples"])
     param_names = params.get("param_names", [f"p{i}" for i in range(ndim)])
+    # D1.1 — report HDI (highest-density interval) alongside quantile
+    # percentiles.  For symmetric posteriors the two agree; for
+    # asymmetric ones HDI is the tighter, more honest credible interval.
+    try:
+        import arviz as _az
+    except ImportError:
+        _az = None
+
     summary = {}
     for i, name in enumerate(param_names):
         col = samples[:, i]
-        summary[name] = {
+        row = {
             "median": float(np.median(col)),
             "mean": float(np.mean(col)),
             "std": float(np.std(col)),
             "q16": float(np.percentile(col, 16)),
             "q84": float(np.percentile(col, 84)),
         }
+        if _az is not None:
+            try:
+                hdi68 = _az.hdi(col, hdi_prob=0.68).tolist()
+                hdi94 = _az.hdi(col, hdi_prob=0.94).tolist()
+                row["hdi_68"] = [float(hdi68[0]), float(hdi68[1])]
+                row["hdi_94"] = [float(hdi94[0]), float(hdi94[1])]
+            except Exception:
+                pass
+        summary[name] = row
 
     result["parameter_summary"] = summary
     result["model_type"] = model_type
     result["node_type"] = "BayesianFit"
+    # D1.2 — record which priors were applied so downstream audit /
+    # reproducibility-envelope consumers can see them.
+    if priors_spec:
+        result["priors_applied"] = priors_spec
+
+    # D1.1 — expose the publication-readiness flag at the node level.
+    diags = result.get("diagnostics") or {}
+    if isinstance(diags, dict):
+        result["publication_ready"] = bool(diags.get("publication_ready", False))
 
     return {**input_data, **result}

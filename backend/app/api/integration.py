@@ -209,8 +209,25 @@ async def convert_to_votable(
     if table is None:
         raise HTTPException(status_code=400, detail="No table data in FITS file")
 
-    buf = io.BytesIO()
+    # D4.2 — annotate the VOTable with IVOA UCDs + units so it is
+    # self-describing in TOPCAT / Aladin / STILTS.  Write to an
+    # intermediate BytesIO, parse, annotate, re-serialise.
+    import io as _io
+    buf = _io.BytesIO()
     table.write(buf, format="votable", overwrite=True)
+    try:
+        from astropy.io.votable import parse as _vo_parse
+        from app.services.vo_standards import apply_votable_metadata
+        buf.seek(0)
+        vot = _vo_parse(buf)
+        n_annotated = apply_votable_metadata(vot)
+        buf = _io.BytesIO()
+        vot.to_xml(buf)
+        logger.debug("VOTable: annotated %d fields with UCD/unit", n_annotated)
+    except Exception as exc:
+        logger.debug("VOTable UCD annotation failed, using raw export: %s", exc)
+        buf = _io.BytesIO()
+        table.write(buf, format="votable", overwrite=True)
     buf.seek(0)
 
     from fastapi.responses import Response

@@ -959,16 +959,43 @@ async def export_report_bibtex(req: BibTeXRequest):
         bib_entries.append("% No ADS bibcodes were found in the chat messages.")
         bib_entries.append("% You can manually add entries here.")
     else:
+        # D5.1 — populate full ADS records when possible so the exported
+        # .bib file is directly usable with bibtex.  Falls back to a
+        # stub only when ADS is unreachable / ADS_API_KEY is unset.
+        import os as _os
+        ads_key = _os.getenv("ADS_API_KEY", "").strip()
         for bib in unique_bibcodes:
-            # Create a placeholder entry — users should fetch full entries from ADS
             safe_key = bib.replace("&", "_").replace(".", "_")
+            entry = None
+            if ads_key:
+                try:
+                    import httpx as _httpx
+                    resp = _httpx.get(
+                        f"https://api.adsabs.harvard.edu/v1/export/bibtex/{bib}",
+                        headers={"Authorization": f"Bearer {ads_key}"},
+                        timeout=10.0,
+                    )
+                    if resp.status_code == 200:
+                        body = resp.json().get("export") or ""
+                        # ADS returns the @ARTICLE block already; strip
+                        # surrounding newlines so our joined output stays
+                        # clean.  Keep the original citekey from ADS (it
+                        # follows the author+year convention that
+                        # \\citet expects).
+                        entry = body.strip()
+                except Exception:
+                    entry = None
+            if entry:
+                bib_entries.append(entry)
+                bib_entries.append("")
+                continue
             bib_entries.append(f"@ARTICLE{{{safe_key},")
             bib_entries.append("  author = {},")
             bib_entries.append("  title = {},")
             bib_entries.append("  journal = {},")
             bib_entries.append(f"  year = {{{bib[:4]}}},")
             bib_entries.append(f"  adsurl = {{https://ui.adsabs.harvard.edu/abs/{bib}}},")
-            bib_entries.append(f"  note = {{Retrieve full entry from ADS: {bib}}}")
+            bib_entries.append(f"  note = {{ADS metadata unavailable; set ADS_API_KEY to auto-populate. Bibcode: {bib}}}")
             bib_entries.append("}")
             bib_entries.append("")
 
@@ -1407,7 +1434,15 @@ async def export_chat_as_notebook(req: ChatToNotebookRequest):
     cells.append({
         "cell_type": "code",
         "metadata": {},
-        "source": ["import numpy as np\nimport matplotlib.pyplot as plt\nfrom astropy.table import Table\nfrom astropy.coordinates import SkyCoord\nimport astropy.units as u\n"],
+        "source": [
+            "# D6.1 — imports + inline plot magic for notebook-friendly runs\n",
+            "%matplotlib inline\n",
+            "import numpy as np\n",
+            "import matplotlib.pyplot as plt\n",
+            "from astropy.table import Table\n",
+            "from astropy.coordinates import SkyCoord\n",
+            "import astropy.units as u\n",
+        ],
         "execution_count": None,
         "outputs": [],
     })

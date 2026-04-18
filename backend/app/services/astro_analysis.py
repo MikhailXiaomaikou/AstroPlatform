@@ -1456,25 +1456,41 @@ def _extinction_curve_manual(wavelength_angstrom, ebv, Rv=3.1):
 
 
 def extinction_curve(wavelength_angstrom, ebv, Rv=3.1, model='ccm89'):
-    """Compute extinction A_lambda using CCM89 or F99.
+    """Compute extinction A_lambda using a published parameter-averages law.
+
+    D2.5: supported models span the full UV→NIR range; users should pick
+    the law matching their sightline:
+
+    - ``ccm89`` (Cardelli+ 1989 ApJ 345, 245): Milky Way diffuse ISM, R_V=3.1
+    - ``f99``   (Fitzpatrick 1999 PASP 111, 63): improved UV over CCM89
+    - ``g03``   (Gordon+ 2003 ApJ 594, 279): SMC-bar / LMC, low-metallicity galaxies
+    - ``g16``   (Gordon+ 2016 ApJ 826, 104): Milky Way, R_V dependence covers 2.0-6.0
 
     Args:
         wavelength_angstrom: Wavelength(s) in Angstroms (scalar or array).
         ebv: E(B-V) color excess.
         Rv: Ratio of total-to-selective extinction (default 3.1).
-        model: 'ccm89' (Cardelli+1989) or 'f99' (Fitzpatrick 1999, better UV).
+        model: one of {ccm89, f99, g03, g16}.
 
     Returns:
         A_lambda array (extinction in magnitudes at each wavelength).
     """
     try:
-        from dust_extinction.parameter_averages import CCM89, F99
         import astropy.units as u
 
         wave = np.atleast_1d(np.asarray(wavelength_angstrom, dtype=float))
-        if model == 'f99':
+        model_l = (model or "ccm89").lower()
+        if model_l == "f99":
+            from dust_extinction.parameter_averages import F99
             ext_model = F99(Rv=Rv)
+        elif model_l in ("g03", "g03_smcbar"):
+            from dust_extinction.averages import G03_SMCBar
+            ext_model = G03_SMCBar()
+        elif model_l == "g16":
+            from dust_extinction.parameter_averages import G16
+            ext_model = G16(RvA=Rv)
         else:
+            from dust_extinction.parameter_averages import CCM89
             ext_model = CCM89(Rv=Rv)
         # dust_extinction returns A(lambda)/A(V); multiply by A(V) = Rv * E(B-V)
         Av = Rv * ebv
@@ -1482,9 +1498,51 @@ def extinction_curve(wavelength_angstrom, ebv, Rv=3.1, model='ccm89'):
         return np.asarray(A_lambda, dtype=float)
     except ImportError:
         logger.debug("dust_extinction not installed, using manual CCM89 fallback")
-        if model == 'f99':
-            logger.warning("F99 model requires dust_extinction package; falling back to CCM89")
+        if model != "ccm89":
+            logger.warning(
+                "%s model requires dust_extinction package; falling back to CCM89",
+                model,
+            )
         return _extinction_curve_manual(wavelength_angstrom, ebv, Rv=Rv)
+    except Exception as exc:
+        logger.warning("extinction_curve model=%s failed (%s); falling back to CCM89", model, exc)
+        return _extinction_curve_manual(wavelength_angstrom, ebv, Rv=Rv)
+
+
+def dust_ebv_at_position(ra_deg, dec_deg, source="sfd"):
+    """Look up E(B-V) at a sky coordinate (Phase D2.5).
+
+    Uses the optional ``dustmaps`` package; returns ``None`` if the map
+    data is not present on disk (first-time users see a clear log line
+    about how to download it).  Supported sources: ``sfd`` (Schlegel-
+    Finkbeiner 1998, the Planck-revised version), ``planck``
+    (Planck Collab XI 2014 thermal dust), ``bayestar`` (Green 2019 3D,
+    requires distance — not exposed here yet).
+    """
+    try:
+        import astropy.units as u
+        from astropy.coordinates import SkyCoord
+        coord = SkyCoord(float(ra_deg) * u.degree, float(dec_deg) * u.degree, frame="icrs")
+        src = (source or "sfd").lower()
+        if src == "planck":
+            from dustmaps.planck import PlanckQuery
+            return float(PlanckQuery()(coord))
+        # Default: SFD (E(B-V))
+        from dustmaps.sfd import SFDQuery
+        return float(SFDQuery()(coord))
+    except FileNotFoundError as exc:
+        logger.warning(
+            "Dust map data not found (%s).  First-time install: "
+            "python -c 'from dustmaps.%s import fetch; fetch()'",
+            exc, source,
+        )
+        return None
+    except ImportError:
+        logger.warning("dustmaps package not installed; run: pip install dustmaps")
+        return None
+    except Exception as exc:
+        logger.warning("dust_ebv_at_position failed: %s", exc)
+        return None
 
 
 def deredden(wavelength_angstrom, flux, ebv, Rv=3.1, model='ccm89'):
@@ -1669,24 +1727,29 @@ def error_weighted_mean(values, errors):
 # ── Time-Series / Variability Analysis ──
 
 def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
-                        n_frequencies=10000):
+                        n_frequencies=10000, fap_method="auto", n_bootstrap=200,
+                        random_seed=None):
     """Detect periodic signal using Lomb-Scargle periodogram.
 
     Args:
-        time: observation times array
-        mag: magnitude array
-        mag_err: magnitude uncertainties (optional)
-        min_period: minimum period to search (days)
-        max_period: maximum period to search (days)
-        n_frequencies: number of frequency grid points
+        time, mag, mag_err: observation series.
+        min_period / max_period: search bounds (days).
+        n_frequencies: number of frequency grid points.
+        fap_method: ``"auto"`` (bootstrap when n<200, else Baluev 2008
+            analytic), ``"bootstrap"``, or ``"baluev"``.
+        n_bootstrap: number of shuffle iterations when bootstrapping.
+        random_seed: deterministic reproducibility for bootstrap.
 
     Returns:
-        dict with best_period, best_power, fap, fap_level, reliable,
-        n_datapoints, frequencies, powers, top_periods
+        dict with best_period, best_period_err, best_power, fap,
+        fap_level, fap_method, reliable, n_datapoints, frequencies,
+        powers, top_periods, window_function, spectral_resolution,
+        nyquist_pseudo.
 
-    Note: For sparse data (<20 points), the analytical FAP may be unreliable.
-    Consider bootstrap FAP estimation for more robust significance assessment.
-    The 'reliable' field in the return dict is True only when FAP < 0.01 AND n >= 20.
+    D2.6: refuses n<20 (FAP is not calibratable for such sparse data);
+    computes spectral resolution 1/T, a pseudo-Nyquist frequency, and a
+    bootstrap FAP when the analytic one is unreliable.  References:
+    Baluev 2008 MNRAS 385, 1279; VanderPlas & Ivezic 2015 ApJ 812, 18.
     """
     from astropy.timeseries import LombScargle
 
@@ -1697,6 +1760,11 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
         raise ValueError("lomb_scargle_period: empty input arrays")
     if len(t) != len(m):
         raise ValueError("lomb_scargle_period: time and mag must have same length")
+    if len(t) < 20:
+        raise ValueError(
+            f"lomb_scargle_period: n={len(t)} < 20; FAP cannot be calibrated. "
+            "Use a longer time series or bootstrap a null-hypothesis surrogate."
+        )
 
     err = np.asarray(mag_err, dtype=float) if mag_err is not None else None
 
@@ -1707,7 +1775,6 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
     ls = LombScargle(t, m, dy=err)
     power = ls.power(frequency)
 
-    # Top 5 periods by power
     sorted_idx = np.argsort(power)[::-1]
     top_indices = sorted_idx[:5]
     top_periods = (1.0 / frequency[top_indices]).tolist()
@@ -1717,7 +1784,47 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
     best_period = float(1.0 / best_freq)
     best_power = float(power[best_idx])
 
-    fap_at_best = float(ls.false_alarm_probability(best_power))
+    # Spectral resolution + pseudo-Nyquist
+    t_span = float(np.max(t) - np.min(t))
+    spectral_resolution = 1.0 / t_span if t_span > 0 else np.nan
+    sorted_t = np.sort(t)
+    dt_median = float(np.median(np.diff(sorted_t))) if len(sorted_t) > 1 else np.nan
+    nyquist_pseudo = 0.5 / dt_median if dt_median and np.isfinite(dt_median) and dt_median > 0 else np.nan
+
+    # Window function: LS of a constant series on the same times.
+    try:
+        window_power = LombScargle(t, np.ones_like(m)).power(frequency)
+        window_max_off = float(np.max(window_power[1:]))  # skip zero freq
+    except Exception:
+        window_max_off = float("nan")
+
+    # Parabolic refinement around the peak for best_period_err.
+    best_period_err = None
+    if 0 < best_idx < len(power) - 1:
+        y0, y1, y2 = power[best_idx - 1], power[best_idx], power[best_idx + 1]
+        denom = (y0 - 2 * y1 + y2)
+        if denom != 0:
+            shift = 0.5 * (y0 - y2) / denom
+            refined_freq = best_freq + shift * (frequency[1] - frequency[0])
+            if refined_freq > 0:
+                refined_period = 1.0 / refined_freq
+                best_period_err = float(abs(refined_period - best_period))
+
+    # FAP computation.
+    method = fap_method
+    if method == "auto":
+        method = "bootstrap" if len(t) < 200 else "baluev"
+
+    if method == "bootstrap":
+        rng = np.random.default_rng(random_seed)
+        null_max_power = np.zeros(n_bootstrap, dtype=float)
+        for i in range(n_bootstrap):
+            shuffled = rng.permutation(m)
+            null_power = LombScargle(t, shuffled, dy=err).power(frequency)
+            null_max_power[i] = float(np.max(null_power))
+        fap_at_best = float(np.mean(null_max_power >= best_power))
+    else:
+        fap_at_best = float(ls.false_alarm_probability(best_power))
 
     if fap_at_best < 0.01:
         fap_label = "significant"
@@ -1728,14 +1835,20 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
 
     return {
         "best_period": best_period,
+        "best_period_err": best_period_err,
         "best_power": best_power,
         "fap": fap_at_best,
         "fap_level": fap_label,
+        "fap_method": method,
         "reliable": bool(fap_at_best < 0.01 and len(t) >= 20),
         "n_datapoints": len(t),
+        "spectral_resolution_per_day": spectral_resolution,
+        "nyquist_pseudo_per_day": nyquist_pseudo,
+        "window_function_max_sidelobe": window_max_off,
         "frequencies": frequency.tolist(),
         "powers": power.tolist(),
         "top_periods": top_periods,
+        "reference": "Baluev 2008 MNRAS 385, 1279; VanderPlas & Ivezic 2015",
     }
 
 

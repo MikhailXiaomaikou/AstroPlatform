@@ -127,8 +127,11 @@ class GaiaConnector(BaseConnector):
                     except (ValueError, TypeError):
                         pass
 
-            # Convert radial_velocity (km/s) to redshift: z = v / c
-            redshift = None
+            # D2.2 — Gaia RV is STELLAR KINEMATIC radial velocity (km/s),
+            # NOT cosmological redshift.  Previous code wrote z = v/c into
+            # AstroObject.redshift which mislabelled kinematic drift as a
+            # cosmological quantity.  We now expose it only as
+            # radial_velocity_km_s and never as ``redshift``.
             rv = None
             for col in ("radial_velocity", "RADIAL_VELOCITY"):
                 if col in row.colnames:
@@ -136,16 +139,33 @@ class GaiaConnector(BaseConnector):
                         v = float(row[col])
                         if v == v:  # NaN check
                             rv = v
-                            redshift = v / 299792.458  # c in km/s
                     except (ValueError, TypeError):
                         pass
                     break
+            # redshift remains None so AstroObject.redshift stays empty
+            # rather than being filled with a stellar-kinematic misnomer.
+            redshift = None
 
             extra: dict = {}
             if parallax is not None:
                 extra["parallax"] = parallax
+                # D7.14 — auto-compute distance when parallax is positive.
+                # Users often miss that parallax (mas) needs 1000/plx to
+                # become distance (pc); we do it for them and note the
+                # Bailer-Jones caveat (negative or tiny plx → prior
+                # needed, not simple inversion).
+                if parallax > 0:
+                    extra["distance_pc"] = round(1000.0 / parallax, 2)
+                else:
+                    extra["distance_note"] = (
+                        "Parallax ≤ 0; simple 1/plx inversion is meaningless. "
+                        "Use a Bayesian distance prior (Bailer-Jones+ 2021)."
+                    )
             if rv is not None:
                 extra["radial_velocity_km_s"] = round(rv, 2)
+                extra["radial_velocity_note"] = (
+                    "Stellar kinematic radial velocity (km/s); NOT cosmological redshift."
+                )
 
             # Additional Gaia columns: uncertainties, proper motions, photometry, quality
             _extra_columns = [

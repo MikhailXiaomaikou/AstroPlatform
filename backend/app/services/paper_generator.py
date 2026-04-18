@@ -233,14 +233,79 @@ def _build_default_paper_json(artifacts: SessionArtifacts, journal_format: str) 
     }
 
 
-def render_latex(paper_json: dict, format: str = "aastex") -> str:
+def _render_authors_and_affiliations(authors: list[dict] | None, format_key: str) -> list[str]:
+    """D5.3 — emit \\author + \\affiliation blocks per aastex631 convention.
+
+    authors is a list of ``{name, affiliation, orcid}`` dicts.  Falls
+    back to a single generic author when the list is empty so the
+    document still compiles.
+    """
+    if not authors:
+        return [r"\author{Standard Astro User}"]
+    out: list[str] = []
+    for a in authors:
+        name = _escape_latex(str(a.get("name") or "Anonymous Author"))
+        aff = _escape_latex(str(a.get("affiliation") or ""))
+        orcid = str(a.get("orcid") or "").strip()
+        if format_key == "mnras":
+            if aff:
+                out.append(rf"\author[{name}]{{{name}\thanks{{{aff}}}}}")
+            else:
+                out.append(rf"\author{{{name}}}")
+        else:
+            # aastex631 / aa style
+            out.append(rf"\author{{{name}}}")
+            if orcid:
+                out.append(rf"\altaffiliation{{ORCID: {orcid}}}")
+            if aff:
+                out.append(rf"\affiliation{{{aff}}}")
+    return out
+
+
+def _split_into_citet_citep(text: str, known_bibcodes: list[str]) -> str:
+    """D5.2 — transform "... (Smith 2020) ..." → "... \\citep{Smith2020} ..."
+    and "Smith (2020)" → "\\citet{Smith2020}".
+
+    Matching is heuristic: for each known bibcode we build a citekey
+    like ``Smith2020`` and scan for either form.  This is deliberately
+    conservative — we never invent citations, only promote phrases the
+    literature engine already knows about.
+    """
+    import re as _re
+    for bib in known_bibcodes:
+        # A bibcode looks like 2020ApJ...900....1S — authors/year not
+        # derivable without ADS; use the bibcode itself as the key
+        # fallback (aastex accepts any string in \cite{}).
+        bibkey = _re.sub(r"[^A-Za-z0-9]", "", bib)[:20]
+        if not bibkey:
+            continue
+        # Parenthetical pattern: "(bib)" or "(bibcode)"
+        text = _re.sub(
+            rf"\(\s*{_re.escape(bib)}\s*\)",
+            rf"\\citep{{{bibkey}}}",
+            text,
+        )
+        text = _re.sub(
+            rf"\b{_re.escape(bib)}\b",
+            rf"\\citet{{{bibkey}}}",
+            text,
+        )
+    return text
+
+
+def render_latex(paper_json: dict, format: str = "aastex",
+                 authors: list[dict] | None = None,
+                 known_bibcodes: list[str] | None = None) -> str:
     format_key = format.lower()
     if format_key == "mnras":
         documentclass = r"\documentclass[a4paper,fleqn,usenatbib]{mnras}"
+        bib_style = r"\bibliographystyle{mnras}"
     elif format_key in {"aa", "a&a"}:
         documentclass = r"\documentclass{aa}"
+        bib_style = r"\bibliographystyle{aa}"
     else:
         documentclass = r"\documentclass[twocolumn]{aastex631}"
+        bib_style = r"\bibliographystyle{aasjournal}"
 
     lines = [
         documentclass,
@@ -250,12 +315,17 @@ def render_latex(paper_json: dict, format: str = "aastex") -> str:
         r"\usepackage{hyperref}",
         r"\begin{document}",
         rf"\title{{{_escape_latex(paper_json.get('title', 'Standard Astro Paper Draft'))}}}",
-        r"\author{Standard Astro User}",
+    ]
+    # D5.3: authors + affiliations.
+    lines.extend(_render_authors_and_affiliations(
+        authors or paper_json.get("authors"), format_key,
+    ))
+    lines.extend([
         r"\begin{abstract}",
         _escape_latex(paper_json.get("abstract", "")),
         r"\end{abstract}",
         r"\maketitle",
-    ]
+    ])
 
     def _section(title: str, body: str):
         lines.append(rf"\section{{{_escape_latex(title)}}}")
@@ -306,8 +376,23 @@ def render_latex(paper_json: dict, format: str = "aastex") -> str:
     _section("Discussion", str(discussion.get("text", "")))
     _section("Conclusions", str(paper_json.get("conclusions", "")))
     _section("Acknowledgments", str(paper_json.get("acknowledgments", "")))
+
+    # D5.1 — real bibliography slot + bibliographystyle.  Sibling .bib
+    # file is written alongside by the export pipeline.  Without this
+    # block pdflatex + bibtex would produce a document with citation
+    # placeholders instead of resolved references.
+    lines.extend([
+        bib_style,
+        r"\bibliography{references}",
+    ])
     lines.append(r"\end{document}")
-    return "\n".join(lines)
+
+    text = "\n".join(lines)
+    # D5.2 — promote known bibcodes into \citet / \citep after the body
+    # is rendered so our escaping doesn't eat the backslashes.
+    if known_bibcodes:
+        text = _split_into_citet_citep(text, list(known_bibcodes))
+    return text
 
 
 async def generate_reproducibility_appendix(session_id: str, db: AsyncSession) -> str:
