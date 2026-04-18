@@ -375,6 +375,14 @@ const translations: Record<string, Record<Lang, string>> = {
   "common.download":   { en: "Download",          zh: "下载",          fr: "Télécharger",      es: "Descargar" },
   "common.previous":   { en: "Previous",          zh: "上一页",        fr: "Précédent",        es: "Anterior" },
   "common.next":       { en: "Next",              zh: "下一页",        fr: "Suivant",          es: "Siguiente" },
+
+  // ── Journal edition (Phase J1: masthead + footer) ─────────────────────
+  "brand.sub":        { en: "Reproducible workflows for observational astronomy", zh: "可复现的观测天文学工作流",                    fr: "Flux de travail reproductibles pour l'astronomie observationnelle",               es: "Flujos de trabajo reproducibles para la astronomía observacional" },
+  "footer.sub":       { en: "Reproducible workflows for observational astronomy · Est. 2026", zh: "可复现的观测天文学工作流 · 自 2026 年创建", fr: "Flux de travail reproductibles pour l'astronomie observationnelle · Depuis 2026", es: "Flujos de trabajo reproducibles para la astronomía observacional · Desde 2026" },
+  "footer.col.platform":  { en: "Platform",   zh: "平台",  fr: "Plateforme",  es: "Plataforma" },
+  "footer.col.science":   { en: "Science",    zh: "科学",  fr: "Science",     es: "Ciencia" },
+  "footer.col.community": { en: "Community",  zh: "社群",  fr: "Communauté",  es: "Comunidad" },
+  "footer.link.docs":     { en: "Docs",       zh: "文档",  fr: "Docs",        es: "Docs" },
 };
 
 // ── Language detection ──

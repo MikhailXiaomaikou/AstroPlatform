@@ -61,7 +61,7 @@ const AccountPage = lazy(() => import("./pages/Account/AccountPage"));
 function useTheme() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("astro_theme");
-    return saved === "light" ? "light" : "dark";
+    return saved === "dark" ? "dark" : "light";
   });
 
   useEffect(() => {
@@ -82,7 +82,9 @@ function NavBar() {
 
   return (
     <nav className="top-nav">
-      <NavLink to="/" className="logo">Standard Astro</NavLink>
+      <NavLink to="/" className="logo" aria-label="Standard Astro home">
+        Standard · Astro
+      </NavLink>
       <button className="nav-hamburger" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation" aria-expanded={menuOpen}>
         <span /><span /><span />
       </button>
@@ -235,6 +237,44 @@ function TrackingBridge() {
   return null;
 }
 
+function JournalFooter() {
+  const { t } = useI18n();
+  return (
+    <footer className="journal-footer">
+      <div className="journal-footer-row">
+        <div>
+          <div className="journal-footer-title">Standard · Astro</div>
+          <div className="journal-footer-sub">{t("footer.sub")}</div>
+        </div>
+        <div className="journal-footer-cols">
+          <div>
+            <strong>{t("footer.col.platform")}</strong>
+            <NavLink to="/help">{t("footer.link.docs")}</NavLink>
+            <a href="https://github.com/MikhailXiaomaikou/Standard-Astro" target="_blank" rel="noreferrer">GitHub</a>
+            <NavLink to="/observations">{t("nav.observations")}</NavLink>
+          </div>
+          <div>
+            <strong>{t("footer.col.science")}</strong>
+            <NavLink to="/search">{t("nav.data_browser")}</NavLink>
+            <NavLink to="/adql">{t("nav.adql")}</NavLink>
+            <NavLink to="/pipeline">{t("nav.pipeline")}</NavLink>
+          </div>
+          <div>
+            <strong>{t("footer.col.community")}</strong>
+            <NavLink to="/team">{t("nav.team")}</NavLink>
+            <NavLink to="/chat">{t("nav.ai_assistant")}</NavLink>
+            <NavLink to="/account">{t("nav.account")}</NavLink>
+          </div>
+        </div>
+      </div>
+      <div className="journal-footer-base">
+        <span>© 2026 Standard Astro</span>
+        <span>claude-opus-4-7 · Planck18 · Gaia DR3 · PARSEC 3.9</span>
+      </div>
+    </footer>
+  );
+}
+
 function App() {
   return (
     <I18nProvider>
@@ -270,6 +310,7 @@ function App() {
             </Suspense>
           </ErrorBoundary>
         </main>
+        <JournalFooter />
       </BrowserRouter>
     </AuthProvider>
     </I18nProvider>

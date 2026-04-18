@@ -1,85 +1,125 @@
-/* ── CSS Variables ── */
+/* ══════════════════════════════════════════════════════════════════════
+   Standard Astro — Journal Edition design tokens
+   Journal palette injected over the existing CSS variable names, so
+   every component that reads `--color-bg`/`--color-text`/`--color-accent`
+   inherits the new look with zero per-component edits.
+   ══════════════════════════════════════════════════════════════════════ */
+
 :root,
-[data-theme="dark"] {
-  --color-bg: #1c1c1e;
-  --color-surface: #2c2c2e;
-  --color-surface-2: #3a3a3c;
-  --color-separator: rgba(255, 255, 255, 0.1);
-  --color-text: #f5f5f7;
-  --color-text-secondary: rgba(255, 255, 255, 0.6);
-  --color-text-tertiary: rgba(255, 255, 255, 0.35);
-  --color-accent: #0A84FF;
-  --color-accent-hover: #409CFF;
-  --color-green: #30D158;
-  --color-red: #FF453A;
-  --color-orange: #FF9F0A;
-  --color-purple: #BF5AF2;
-  --color-cyan: #64D2FF;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+[data-theme="light"] {
+  /* ── Journal paper surfaces ── */
+  --color-bg:        #fbfaf5;  /* paper */
+  --color-surface:   #ffffff;
+  --color-surface-2: #f4f2ea;  /* paper-2 */
+  --color-separator: #d9d4c7;  /* rule */
+
+  /* ── Ink + text ── */
+  --color-text:            #1a1a1a;
+  --color-text-secondary:  #555555;
+  --color-text-tertiary:   #8b8680;
+
+  /* ── Journal accent (burgundy) + secondary inks ── */
+  --color-accent:       #7b2d26;
+  --color-accent-hover: #5f211c;
+  --color-accent-2:     #2a5d7b;   /* deep blue — hyperlinks */
+  --color-accent-3:     #2e6a4e;   /* forest green — verified */
+
+  /* Keep status colors (used across the app) ── muted for journal feel */
+  --color-green:  #2e6a4e;
+  --color-red:    #b23a2e;
+  --color-orange: #a06500;
+  --color-purple: #6b4a7e;
+  --color-cyan:   #2a5d7b;
+
+  /* ── Radii + shadows ── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   --radius-pill: 20px;
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
-  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
-  --transition: all 0.2s ease;
-  /* Semi-transparent utility colors */
-  --color-hover: rgba(255, 255, 255, 0.06);
-  --color-hover-strong: rgba(255, 255, 255, 0.12);
-  --color-active: rgba(255, 255, 255, 0.08);
-  --color-subtle: rgba(255, 255, 255, 0.04);
-  --color-muted: rgba(255, 255, 255, 0.03);
-  --color-overlay: rgba(28, 28, 30, 0.72);
-  --color-overlay-solid: rgba(28, 28, 30, 0.96);
-  --color-placeholder: rgba(255, 255, 255, 0.25);
-  --color-scrollbar: rgba(255, 255, 255, 0.15);
-  --color-scrollbar-hover: rgba(255, 255, 255, 0.25);
-  --color-accent-subtle: rgba(10, 132, 255, 0.12);
-  --color-border: rgba(255, 255, 255, 0.08);
-  --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+  --shadow-sm: 0 1px 3px rgba(26, 26, 26, 0.06);
+  --shadow-md: 0 2px 10px rgba(26, 26, 26, 0.06), 0 1px 3px rgba(26, 26, 26, 0.04);
+  --shadow-lg: 0 6px 24px rgba(26, 26, 26, 0.08), 0 2px 6px rgba(26, 26, 26, 0.05);
+
+  --transition: all 0.18s ease;
+
+  /* ── Utility hovers / overlays ── */
+  --color-hover:        rgba(26, 26, 26, 0.04);
+  --color-hover-strong: rgba(26, 26, 26, 0.08);
+  --color-active:       rgba(26, 26, 26, 0.06);
+  --color-subtle:       rgba(26, 26, 26, 0.02);
+  --color-muted:        rgba(26, 26, 26, 0.015);
+  --color-overlay:       rgba(251, 250, 245, 0.92);
+  --color-overlay-solid: rgba(251, 250, 245, 0.98);
+  --color-placeholder:     rgba(26, 26, 26, 0.32);
+  --color-scrollbar:       rgba(26, 26, 26, 0.14);
+  --color-scrollbar-hover: rgba(26, 26, 26, 0.28);
+  --color-accent-subtle:   rgba(123, 45, 38, 0.10);
+  --color-border:          #d9d4c7;
+
+  /* ── Fonts ── */
+  --font-serif: 'EB Garamond', 'Noto Serif SC', Georgia, 'Songti SC', serif;
+  --font-sans:  'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono:  'IBM Plex Mono', 'SF Mono', 'JetBrains Mono', monospace;
+
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── Journal-specific helpers (for redesigned pages) ── */
+  --journal-paper:    #fbfaf5;
+  --journal-paper-2:  #f4f2ea;
+  --journal-paper-3:  #eceadd;
+  --journal-rule:     #d9d4c7;
+  --journal-rule-2:   #e8e3d5;
+  --journal-accent:   #7b2d26;
+  --journal-accent-2: #2a5d7b;
+  --journal-accent-3: #2e6a4e;
 }
 
-[data-theme="light"] {
-  --color-bg: #f5f5f7;
-  --color-surface: #ffffff;
-  --color-surface-2: #e5e5ea;
-  --color-separator: rgba(0, 0, 0, 0.1);
-  --color-text: #1c1c1e;
-  --color-text-secondary: rgba(0, 0, 0, 0.6);
-  --color-text-tertiary: rgba(0, 0, 0, 0.35);
-  --color-accent: #007AFF;
-  --color-accent-hover: #0056CC;
-  --color-green: #30D158;
-  --color-red: #FF453A;
-  --color-orange: #FF9F0A;
-  --color-purple: #BF5AF2;
-  --color-cyan: #64D2FF;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-pill: 20px;
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
-  --transition: all 0.2s ease;
-  /* Semi-transparent utility colors */
-  --color-hover: rgba(0, 0, 0, 0.04);
-  --color-hover-strong: rgba(0, 0, 0, 0.08);
-  --color-active: rgba(0, 0, 0, 0.06);
-  --color-subtle: rgba(0, 0, 0, 0.02);
-  --color-muted: rgba(0, 0, 0, 0.015);
-  --color-overlay: rgba(255, 255, 255, 0.85);
-  --color-overlay-solid: rgba(255, 255, 255, 0.97);
-  --color-placeholder: rgba(0, 0, 0, 0.3);
-  --color-scrollbar: rgba(0, 0, 0, 0.15);
-  --color-scrollbar-hover: rgba(0, 0, 0, 0.3);
-  --color-accent-subtle: rgba(0, 122, 255, 0.1);
-  --color-border: rgba(0, 0, 0, 0.06);
-  --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+/* Dark mode — keep as "reading lamp" dark journal (not Apple-dark anymore).
+   Inks invert, but burgundy accent stays for brand continuity. */
+[data-theme="dark"] {
+  --color-bg:        #1a1713;
+  --color-surface:   #22201b;
+  --color-surface-2: #2a2723;
+  --color-separator: #3a362f;
+
+  --color-text:            #ebe7dc;
+  --color-text-secondary:  rgba(235, 231, 220, 0.62);
+  --color-text-tertiary:   rgba(235, 231, 220, 0.38);
+
+  --color-accent:       #d67a73;
+  --color-accent-hover: #e99a94;
+  --color-accent-2:     #7aa8c8;
+  --color-accent-3:     #7fb89b;
+
+  --color-green:  #7fb89b;
+  --color-red:    #d67a73;
+  --color-orange: #d6a768;
+  --color-purple: #b89ac5;
+  --color-cyan:   #7aa8c8;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+
+  --color-hover:        rgba(235, 231, 220, 0.06);
+  --color-hover-strong: rgba(235, 231, 220, 0.12);
+  --color-active:       rgba(235, 231, 220, 0.08);
+  --color-subtle:       rgba(235, 231, 220, 0.04);
+  --color-muted:        rgba(235, 231, 220, 0.03);
+  --color-overlay:       rgba(26, 23, 19, 0.85);
+  --color-overlay-solid: rgba(26, 23, 19, 0.97);
+  --color-placeholder:     rgba(235, 231, 220, 0.28);
+  --color-scrollbar:       rgba(235, 231, 220, 0.16);
+  --color-scrollbar-hover: rgba(235, 231, 220, 0.30);
+  --color-accent-subtle:   rgba(214, 122, 115, 0.14);
+  --color-border:          #3a362f;
+
+  --journal-paper:   #1a1713;
+  --journal-paper-2: #22201b;
+  --journal-paper-3: #2a2723;
+  --journal-rule:    #3a362f;
+  --journal-rule-2:  #2e2a24;
 }
 
 *,
@@ -90,42 +130,69 @@
   padding: 0;
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif;
+html, body {
   background: var(--color-bg);
   color: var(--color-text);
-  line-height: 1.5;
+}
+
+body {
+  font-family: var(--font-serif);
+  font-size: 17px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 h1 {
-  font-size: 1.75rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  margin-bottom: 1.5rem;
+  font-family: var(--font-serif);
+  font-size: 2.1rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  margin-bottom: 1.2rem;
+}
+h2 {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: 1.5rem;
+  letter-spacing: -0.005em;
+  line-height: 1.25;
+  margin-bottom: 0.8rem;
+}
+h3, h4, h5, h6 {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  letter-spacing: -0.002em;
+}
+
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
 }
 
 /* Global transition baseline */
-a,
-button,
-input,
-select,
-textarea {
+a, button, input, select, textarea {
   transition: var(--transition);
 }
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--color-scrollbar);
-  border-radius: 3px;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-scrollbar-hover);
+}
+
+/* ── Language rendering adjustments ── */
+html[lang="zh"] body,
+body[data-lang="zh"] {
+  font-family: 'EB Garamond', 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', Georgia, serif;
 }

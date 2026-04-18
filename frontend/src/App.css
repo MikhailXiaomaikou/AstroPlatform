@@ -6551,3 +6551,134 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .nav-links.open { display: flex; }
   .nav-links a { padding: 0.5rem 1rem; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Journal Edition — masthead + footer overrides
+   These take the existing .top-nav / .logo / .main-content and give
+   them the Journal treatment. Per-page redesigns come in phases J2–J4.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.top-nav {
+  background: var(--color-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-top: 4px double var(--color-text);
+  border-bottom: 1px solid var(--color-separator);
+  padding: 0.85rem 1.5rem;
+  font-family: var(--font-serif);
+  font-size: 15px;
+}
+
+.top-nav .logo {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-style: italic;
+  font-variant: small-caps;
+  font-size: 1.5rem;
+  letter-spacing: 0.02em;
+  color: var(--color-text) !important;
+  margin-right: 1.5rem;
+}
+
+.top-nav a {
+  font-family: var(--font-serif);
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--color-text);
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  padding: 0.3rem 0.75rem;
+}
+.top-nav a:hover {
+  color: var(--color-text);
+  background: transparent;
+  border-bottom-color: var(--color-text-tertiary);
+}
+.top-nav a.active {
+  color: var(--color-accent);
+  background: transparent;
+  border-bottom-color: var(--color-accent);
+}
+
+.main-content {
+  max-width: 1340px;
+  padding: 1.5rem 2rem 3rem;
+  font-family: var(--font-serif);
+}
+
+/* ── Journal footer ── */
+.journal-footer {
+  margin-top: 3rem;
+  border-top: 4px double var(--color-text);
+  background: var(--color-bg);
+  padding: 1.75rem 0 0.75rem;
+  font-family: var(--font-serif);
+}
+.journal-footer-row {
+  max-width: 1340px;
+  margin: 0 auto;
+  padding: 0 2rem 1.25rem;
+  display: flex; justify-content: space-between;
+  align-items: flex-start; gap: 2rem;
+  border-bottom: 1px solid var(--color-separator);
+  flex-wrap: wrap;
+}
+.journal-footer-title {
+  font-weight: 600; font-size: 1.35rem;
+  font-style: italic; font-variant: small-caps;
+  letter-spacing: 0.03em; color: var(--color-text);
+}
+.journal-footer-sub {
+  font-size: 0.85rem; font-style: italic;
+  color: var(--color-text-secondary);
+  margin-top: 0.3rem;
+}
+.journal-footer-cols {
+  display: grid; grid-template-columns: repeat(3, auto); gap: 2.5rem;
+}
+.journal-footer-cols > div {
+  display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem;
+}
+.journal-footer-cols strong {
+  font-weight: 500; font-variant: small-caps;
+  letter-spacing: 0.1em; color: var(--color-text);
+  margin-bottom: 0.3rem;
+}
+.journal-footer-cols a {
+  color: var(--color-text-secondary);
+  text-decoration: none;
+}
+.journal-footer-cols a:hover { color: var(--color-accent); }
+.journal-footer-base {
+  max-width: 1340px;
+  margin: 0 auto;
+  padding: 0.65rem 2rem;
+  display: flex; justify-content: space-between;
+  font-size: 0.75rem; color: var(--color-text-tertiary);
+  font-style: italic; gap: 1rem; flex-wrap: wrap;
+}
+
+/* Soften the old dark-mode-specific primary button to the journal pill */
+.btn-primary {
+  font-family: var(--font-serif);
+}
+
+/* Tier badge looks better as journal italic note */
+.tier-badge.tier-beta {
+  background: transparent;
+  color: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.72rem;
+  padding: 1px 7px;
+  border-radius: 2px;
+  letter-spacing: 0.05em;
+}
+
+@media (max-width: 720px) {
+  .journal-footer-row { flex-direction: column; }
+  .journal-footer-cols { grid-template-columns: repeat(2, auto); gap: 1.5rem; }
+}
