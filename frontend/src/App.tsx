@@ -59,14 +59,21 @@ const ObservationsPage = lazy(() => import("./pages/Observations/ObservationsPag
 const AccountPage = lazy(() => import("./pages/Account/AccountPage"));
 
 function useTheme() {
+  // Journal edition: default to light. We use a new key (astro_theme_v2) so
+  // any prior "dark" value from the Apple-style design is ignored on first
+  // load — users who actively prefer dark can toggle it again.
   const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const saved = localStorage.getItem("astro_theme");
+    const saved = localStorage.getItem("astro_theme_v2");
     return saved === "dark" ? "dark" : "light";
   });
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("astro_theme", theme);
+    localStorage.setItem("astro_theme_v2", theme);
+    // Clear the legacy key so it can't override again if it was "dark".
+    if (localStorage.getItem("astro_theme")) {
+      localStorage.removeItem("astro_theme");
+    }
   }, [theme]);
 
   const toggle = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
