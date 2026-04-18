@@ -45,8 +45,13 @@ _session_replay_signatures: dict[str, str] = {}
 _session_last_access: dict[str, float] = {}
 _astro_module: ModuleType | None = None
 
-MAX_SESSION_IDLE_SECONDS: float = 24 * 60 * 60  # 24 hours
-MAX_TRACKED_SESSIONS: int = 64
+# E0.2: a NGC 752 reviewer saw 7/8 run_python calls fail partly because
+# intermediate DataFrames evicted mid-chat.  Raise the cap so a long
+# research session (multiple chat turns × concurrent tool runs) can keep
+# its state; shrink idle TTL to 2 h so production instances don't
+# accumulate stale sessions over multi-day uptime.
+MAX_SESSION_IDLE_SECONDS: float = 2 * 60 * 60  # 2 hours
+MAX_TRACKED_SESSIONS: int = 512
 
 
 def _touch_session(session_id: str) -> None:

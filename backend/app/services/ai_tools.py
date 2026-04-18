@@ -1982,7 +1982,25 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
 
     code = inp.get("code", "")
     if not code.strip():
-        return {"error": "No code provided"}
+        # E2.3: previously returned a bare "No code provided" which the AI
+        # would retry as another empty call.  Track via Prometheus so we
+        # can see how often the LLM leaks this and surface an actionable
+        # hint the AI can react to.
+        try:
+            from app.observability.metrics import record_counter
+            record_counter("empty_tool_call_total", 1.0, tool="run_python")
+        except Exception:
+            pass
+        return {
+            "error": "run_python called with empty code — skipping.",
+            "error_class": "empty_input",
+            "success": False,
+            "hint": (
+                "Include the code to run in the `code` field.  If you meant to "
+                "refer to a prior variable, include a short snippet like "
+                "`print(members.head())` so the sandbox can execute it."
+            ),
+        }
 
     # Run in executor with timeout to not block the event loop
     loop = asyncio.get_running_loop()
@@ -2247,7 +2265,37 @@ async def _exec_generate_paper_draft(inp: dict, python_session_id: str = "defaul
         try:
             generated = await generate_paper_draft(session_id, journal_format, db)
         except Exception as exc:
-            return {"error": str(exc)}
+            # E0.3: classify common upstream failures (ADS DNS, timeout,
+            # LLM backend outage) into a typed, user-friendly error so the
+            # chat shows "AI backend temporarily unreachable" instead of
+            # a raw "Errno -2 Name or service not known" traceback.
+            import socket as _socket
+            msg = str(exc)
+            if isinstance(exc, _socket.gaierror) or "Name or service not known" in msg or "Temporary failure in name resolution" in msg:
+                err_text = (
+                    "External service (ADS / LLM backend) is currently unreachable "
+                    "from this deploy. Your session and data are fine; retry once "
+                    "network connectivity recovers, or export the raw chat/pipeline "
+                    "via the Export menu."
+                )
+                return {
+                    "error": err_text,
+                    "error_class": "network_unreachable",
+                    "detail": msg[:500],
+                    "success": False,
+                }
+            if "timeout" in msg.lower() or "timed out" in msg.lower():
+                return {
+                    "error": "Paper draft generation timed out while fetching external metadata.",
+                    "error_class": "timeout",
+                    "detail": msg[:500],
+                    "success": False,
+                }
+            return {
+                "error": f"Paper draft generation failed: {msg[:300]}",
+                "error_class": "unknown",
+                "success": False,
+            }
 
     paper_json = generated["paper_json"]
     return {
@@ -2829,36 +2877,58 @@ async def _exec_fit_isochrone(inp: dict) -> dict:
                 "|b| > 15°, verify extinction via lookup_ebv_irsa."
             )
 
-    # ── Try PARSEC isochrone fitting ──
+    # ── Try PARSEC isochrone fitting (E0.1: two-stage grid) ──
+    # Stage 1 — coarse grid (6 × 3 × 6 × 5 = 540 points ≈ 25-40 s) finds
+    # the best cell; Stage 2 — fine grid (12 × 5 × 8 × 5 = 2400 points
+    # ≈ 60-90 s) zooms in.  Even on a 200-member CMD the total stays
+    # under 150 s, well inside E0.1's new 180 s fit_isochrone deadline.
     import asyncio
     from app.services.astro_analysis import fit_isochrone
 
     loop = asyncio.get_running_loop()
-    try:
-        result = await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                lambda: fit_isochrone(
-                    bp_rp, abs_mag,
-                    method=method,
-                    dm_range=dm_range,
-                    av_range=av_range,
-                    n_grid_age=12,
-                    n_grid_met=3,
-                ),
-            ),
-            timeout=180.0,
+
+    def _run_stage(n_age, n_met, dm_r=None, av_r=None):
+        return fit_isochrone(
+            bp_rp, abs_mag,
+            method=method,
+            dm_range=dm_r if dm_r is not None else dm_range,
+            av_range=av_r if av_r is not None else av_range,
+            n_grid_age=n_age,
+            n_grid_met=n_met,
         )
-        # Sanity check: if chi2 is astronomically large, the fit didn't converge
+
+    try:
+        # Stage 1: coarse pass.
+        coarse = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: _run_stage(6, 3)),
+            timeout=60.0,
+        )
+        # Narrow the grid around the coarse best-fit.  Use the coarse
+        # result's DM/AV as anchor when available; otherwise fall back
+        # to a tight window around the caller's ranges.
+        best_logage = coarse.get("best_log_age")
+        best_dm = coarse.get("best_dm", (dm_range[0] + dm_range[1]) / 2 if dm_range else None)
+        best_av = coarse.get("best_av", (av_range[0] + av_range[1]) / 2 if av_range else None)
+        dm_window = (best_dm - 0.3, best_dm + 0.3) if best_dm is not None else dm_range
+        av_window = (max(0.0, best_av - 0.2), best_av + 0.2) if best_av is not None else av_range
+
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: _run_stage(12, 5, dm_window, av_window)),
+            timeout=100.0,
+        )
+        result["fit_stages"] = {
+            "coarse_best_log_age": best_logage,
+            "refined_dm_range": dm_window,
+            "refined_av_range": av_window,
+        }
+        # Sanity check.
         chi2_red = result.get("chi2_reduced", 0)
         if chi2_red is not None and chi2_red > 1e6:
             logger.warning("PARSEC fit chi2_reduced=%.2e is unreasonable, using turnoff estimation", chi2_red)
             raise RuntimeError(f"fit did not converge (chi2_reduced={chi2_red:.2e})")
-        # Strip bulky fields to prevent response truncation downstream
         for key in ("corner_fig", "chain", "samples", "posterior_samples"):
             if key in result:
                 del result[key]
-        # Truncate any remaining large arrays > 100 elements
         for k, v in list(result.items()):
             if isinstance(v, list) and len(v) > 100:
                 result[k] = f"[truncated: {len(v)} elements]"
@@ -2905,21 +2975,53 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
     ms_bp = bp[ms_mask]
     ms_mg = mg[ms_mask]
 
-    # Step 2: Find the MSTO by color, not magnitude.
-    # The MSTO is physically defined as the BLUEST unevolved main-sequence
-    # star — for clusters of any age, the bluest MS member IS the turnoff.
-    # Using "brightest 5%" fails when the input sample is pre-filtered for
-    # low-mass stars (e.g., a brown-dwarf-focused Pleiades query): the bright
-    # tail contains only A-type stars even though the real MSTO is B-type.
-    # The color-based method is robust to this selection bias (R8 fix;
-    # Pleiades 4-branch test report 2026-04-15).
-    n_blue = max(5, int(0.05 * len(ms_bp)))
-    blue_idx = np.argsort(ms_bp)[:n_blue]  # bluest = smallest BP-RP
-    blue_mg = ms_mg[blue_idx]
-    blue_bp = ms_bp[blue_idx]
-
-    raw_turnoff_mg = float(np.median(blue_mg))
-    turnoff_bp_rp = float(np.median(blue_bp))
+    # Step 2: Find the MSTO via MS-locus binning (PART E3 fix).
+    # The previous "bluest 5%" method was biased high for old clusters:
+    # for NGC 752 (1.56 Gyr literature) it returned 3.65 Gyr because
+    # blue stragglers + unresolved binaries contaminate the extreme blue
+    # tail of the CMD. The true MSTO is the bluest BIN of the MS where
+    # the locus is still monotonically populated — isolated blue outliers
+    # (stragglers, foreground, photometric errors) don't form a bin.
+    #
+    # Algorithm:
+    #   1. Bin BP-RP in 0.10-mag-wide bins across the MS sample.
+    #   2. Require ≥3 stars per valid bin — isolated outliers excluded.
+    #   3. The bluest valid bin defines the turnoff: its median BP-RP is
+    #      the turnoff color, its median M_G is the turnoff luminosity.
+    #
+    # Falls back to the older "bluest 5%" method when the sample is
+    # too small (<30 stars) to bin reliably.
+    if len(ms_bp) >= 30:
+        bin_width = 0.10
+        bp_min = float(np.min(ms_bp))
+        bp_max = float(np.max(ms_bp))
+        edges = np.arange(bp_min, bp_max + bin_width, bin_width)
+        # For each bin find count + median M_G; keep only bins with ≥3 stars
+        valid_bins: list[tuple[float, float]] = []  # (bin_center_bp_rp, median_m_g)
+        for i in range(len(edges) - 1):
+            lo, hi = edges[i], edges[i + 1]
+            in_bin = (ms_bp >= lo) & (ms_bp < hi)
+            if int(np.sum(in_bin)) >= 3:
+                valid_bins.append((
+                    float(np.median(ms_bp[in_bin])),
+                    float(np.median(ms_mg[in_bin])),
+                ))
+        if len(valid_bins) >= 3:
+            # Bluest valid bin = MSTO
+            valid_bins.sort(key=lambda p: p[0])  # by BP-RP ascending
+            turnoff_bp_rp, raw_turnoff_mg = valid_bins[0]
+        else:
+            # Too few valid bins — fall back to "bluest 5%"
+            n_blue = max(5, int(0.05 * len(ms_bp)))
+            blue_idx = np.argsort(ms_bp)[:n_blue]
+            raw_turnoff_mg = float(np.median(ms_mg[blue_idx]))
+            turnoff_bp_rp = float(np.median(ms_bp[blue_idx]))
+    else:
+        # Small sample — legacy behaviour
+        n_blue = max(5, int(0.05 * len(ms_bp)))
+        blue_idx = np.argsort(ms_bp)[:n_blue]
+        raw_turnoff_mg = float(np.median(ms_mg[blue_idx]))
+        turnoff_bp_rp = float(np.median(ms_bp[blue_idx]))
 
     # ── Guard: refuse to fit when the sample lacks a real turnoff population ──
     # If even the "bluest" stars are redder than BP-RP ≈ 0.9 the sample is
@@ -3012,9 +3114,10 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
             "bp_rp": round(turnoff_bp_rp, 3),
             "approx_mass_msun": round(mass, 2),
         },
-        "method": "turnoff_estimation (PARSEC-calibrated lookup table)",
+        "method": "turnoff_fallback (MS-locus binning + PARSEC-calibrated lookup)",
         "n_data": len(bp_rp),
         "note": "Age from PARSEC-calibrated turnoff M_G → log(age) table. "
+                "Turnoff colour = bluest BP-RP bin (0.10-mag width, ≥3 stars). "
                 "Brighter turnoff → higher mass → YOUNGER cluster.",
         "warnings": warnings_list,
     }

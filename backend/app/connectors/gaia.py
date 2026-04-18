@@ -74,16 +74,50 @@ class GaiaConnector(BaseConnector):
         coord = SkyCoord(ra=ra, dec=dec, unit=(u.degree, u.degree), frame="icrs")
         radius_qty = radius * u.degree
 
+        # E1.2: the sync cone search times out often on well-known
+        # targets (NGC / Messier / Gaia-rich clusters).  We give it a
+        # 45 s window, then fall back to the async TAP path which can
+        # poll in the background.  The fallback writes the result into
+        # an astropy Table the same shape as cone_search_async.
         loop = asyncio.get_event_loop()
-        job = await loop.run_in_executor(
-            None,
-            partial(
-                Gaia.cone_search_async,
-                coordinate=coord,
-                radius=radius_qty,
-            ),
+        try:
+            job = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    partial(
+                        Gaia.cone_search_async,
+                        coordinate=coord,
+                        radius=radius_qty,
+                    ),
+                ),
+                timeout=45.0,
+            )
+            return job.get_results()
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.info(
+                "Gaia cone_search sync path failed/timed out (%s); falling back to async TAP job",
+                exc,
+            )
+
+        # Async fallback via an explicit ADQL job — tolerates 5-min
+        # run times because the client keeps polling.
+        adql = (
+            f"SELECT TOP 500 source_id, ra, dec, "
+            f"       phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, "
+            f"       parallax, parallax_error, pmra, pmdec, radial_velocity, ruwe "
+            f"FROM gaiadr3.gaia_source "
+            f"WHERE 1=CONTAINS(POINT('ICRS', ra, dec), "
+            f"                 CIRCLE('ICRS', {ra}, {dec}, {radius}))"
         )
-        return job.get_results()
+        try:
+            job = await asyncio.wait_for(
+                loop.run_in_executor(None, partial(Gaia.launch_job_async, adql)),
+                timeout=180.0,
+            )
+            return job.get_results()
+        except Exception as exc2:
+            logger.warning("Gaia async TAP fallback also failed: %s", exc2)
+            raise
 
     async def _query_by_source_id(self, source_id: str) -> Table:
         from astroquery.gaia import Gaia

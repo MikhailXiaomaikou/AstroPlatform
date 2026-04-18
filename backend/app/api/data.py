@@ -873,30 +873,56 @@ async def get_fits_header(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="FITS file not found")
 
-    hdul = fits.open(io.BytesIO(raw))
+    # E1.3: wrap the full parse in try/except so the reviewer sees a
+    # typed 422 (with the actual astropy exception message) instead of
+    # a generic "Failed to load headers" when the file is truncated,
+    # has unusual HDU types, or triggers a known astropy bug.
+    try:
+        hdul = fits.open(io.BytesIO(raw))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not parse FITS file: {type(exc).__name__}: {exc}",
+        )
 
     try:
         headers = []
         hdus = []
 
         # Phase 2A: Auto-detect FITS file type
-        fits_type_info = detect_fits_type(hdul)
+        try:
+            fits_type_info = detect_fits_type(hdul)
+        except Exception as exc:
+            logger.warning("detect_fits_type failed on %s: %s", fits_path, exc)
+            fits_type_info = {"fits_type": None, "suggested_analysis": None}
 
         for i, hdu in enumerate(hdul):
             # Collect header key-value pairs
             header_items = []
-            for key in hdu.header:
-                if key:
-                    val = hdu.header[key]
+            try:
+                for key in hdu.header:
+                    if not key:
+                        continue
+                    try:
+                        val = hdu.header[key]
+                    except Exception:
+                        val = "(unreadable)"
                     try:
                         comment = hdu.header.comments[key]
-                    except (KeyError, IndexError):
+                    except (KeyError, IndexError, Exception):
                         comment = ""
                     header_items.append({
-                        "key": key,
+                        "key": str(key),
                         "value": str(val),
                         "comment": str(comment) if comment else "",
                     })
+            except Exception as exc:
+                logger.warning("Header walk failed for HDU %d in %s: %s", i, fits_path, exc)
+                header_items.append({
+                    "key": "_ERROR",
+                    "value": f"{type(exc).__name__}: {exc}",
+                    "comment": "",
+                })
             headers.append({"hdu_index": i, "cards": header_items})
 
             # HDU summary
@@ -905,18 +931,24 @@ async def get_fits_header(
                 "name": hdu.name or f"HDU{i}",
                 "type": type(hdu).__name__,
             }
-            if hdu.data is not None:
-                if hasattr(hdu.data, "shape"):
-                    hdu_info["shape"] = list(hdu.data.shape)
-                    hdu_info["dtype"] = str(hdu.data.dtype)
-                if hasattr(hdu, "columns") and hdu.columns is not None:
-                    hdu_info["columns"] = [
-                        {"name": col.name, "format": col.format}
-                        for col in hdu.columns
-                    ]
+            try:
+                if hdu.data is not None:
+                    if hasattr(hdu.data, "shape"):
+                        hdu_info["shape"] = list(hdu.data.shape)
+                        hdu_info["dtype"] = str(hdu.data.dtype)
+                    if hasattr(hdu, "columns") and hdu.columns is not None:
+                        hdu_info["columns"] = [
+                            {"name": col.name, "format": col.format}
+                            for col in hdu.columns
+                        ]
+            except Exception as exc:
+                hdu_info["data_error"] = f"{type(exc).__name__}: {exc}"
             hdus.append(hdu_info)
     finally:
-        hdul.close()
+        try:
+            hdul.close()
+        except Exception:
+            pass
 
     return FITSHeaderResponse(
         fits_path=fits_path,

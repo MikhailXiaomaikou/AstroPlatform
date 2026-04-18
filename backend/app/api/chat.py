@@ -1408,20 +1408,38 @@ async def _execute_tool_calls(
     import time as _time
     from app.services.ai_tools import execute_tool
 
-    # R0b: per-tool hard deadline so one slow connector cannot burn the
-    # entire agent-loop budget.  Agent-loop total is 360s; 45s per tool
-    # means at least 8 tools can fail/slow before the loop has to abort.
-    _TOOL_DEADLINE_S = 45.0
+    # E0.1: per-tool hard deadline.  A flat 45 s cap is too tight for
+    # compute-heavy analysis tools — the NGC 752 reviewer saw
+    # fit_isochrone time out at 45 s and the AI fell back to a biased
+    # estimator (age 3.65 Gyr vs literature 1.4-1.9 Gyr).  The table
+    # below gives compute-heavy tools a realistic budget while keeping
+    # the default 45 s for fast search/metadata calls so one slow
+    # connector still can't burn the whole 360 s agent-loop.
+    _TOOL_DEADLINE_TABLE: dict[str, float] = {
+        "fit_isochrone": 180.0,
+        "fit_transit_model": 120.0,
+        "transit_search_bls": 120.0,
+        "estimate_photo_z_pro": 90.0,
+        "gp_detrend_lightcurve": 90.0,
+        "x_ray_spectral_fit": 90.0,
+        "fit_rv_orbit": 120.0,
+        "fit_sersic_morphology": 90.0,
+        "analyze_spectrum_pro": 90.0,
+        "compute_galaxy_sfr": 60.0,
+    }
+    _TOOL_DEADLINE_DEFAULT = 45.0
 
     async def _run_one(tc: dict) -> dict:
+        tool_name = tc.get("name") or ""
+        deadline_s = _TOOL_DEADLINE_TABLE.get(tool_name, _TOOL_DEADLINE_DEFAULT)
         task = asyncio.create_task(execute_tool(
-            tc["name"], tc["input"], api_key, provider_api_keys, python_session_id,
+            tool_name, tc["input"], api_key, provider_api_keys, python_session_id,
             user_id=user_id, chat_session_id=chat_session_id,
         ))
         start = _time.monotonic()
         while not task.done():
             elapsed = _time.monotonic() - start
-            if elapsed > _TOOL_DEADLINE_S:
+            if elapsed > deadline_s:
                 task.cancel()
                 try:
                     await task
@@ -1429,7 +1447,7 @@ async def _execute_tool_calls(
                     pass
                 return {
                     "error": (
-                        f"Tool {tc['name']} exceeded the {int(_TOOL_DEADLINE_S)}s per-tool "
+                        f"Tool {tool_name} exceeded the {int(deadline_s)}s per-tool "
                         f"deadline and was cancelled. Retry with narrower parameters."
                     ),
                     "success": False,
@@ -1441,6 +1459,7 @@ async def _execute_tool_calls(
                     try:
                         await on_event({
                             "type": "status",
+                            "tool": tool_name,
                             "message": f"running {tc['name']}… ({int(elapsed) + 6}s)",
                         })
                     except Exception:

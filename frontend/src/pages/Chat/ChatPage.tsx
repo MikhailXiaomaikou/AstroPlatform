@@ -930,11 +930,21 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const variableTypes = result.variable_types as Record<string, string> | undefined;
     const tb = result.traceback as string | undefined;
 
+    // E0.2: surface the backend's typed error (e.g. "NameError: members_clean
+    // is not defined") rather than the generic "unknown" fallback.  If we
+    // got nothing back at all, show the tool name + hint so the user
+    // can still act on it.
+    const errorDisplay = success
+      ? "Executed successfully"
+      : error && error.trim()
+        ? `Error: ${error}`
+        : "Error: Python sandbox returned no message (check backend logs)";
+
     return (
       <div className="code-result">
         {/* Status */}
         <div style={{ fontSize: "0.72rem", color: success ? "var(--color-green)" : "var(--color-red)", marginBottom: 4 }}>
-          {success ? "Executed successfully" : `Error: ${error || "unknown"}`}
+          {errorDisplay}
         </div>
 
         {/* Stdout */}
@@ -2940,10 +2950,18 @@ export default function ChatPage() {
                 {msg._pending ? (
                   <div>
                     <em style={{ opacity: 0.7 }}>
-                      {Date.now() - msg._pending.started_at > 60_000
-                        ? "The previous reply was interrupted before the backend responded."
-                        : msg._thinking && msg._thinking.length > 0
-                          ? "Thinking…"
+                      {/* E2.4: three-state banner.  (a) still receiving
+                          events ⇒ "Thinking"; (b) old marker with no
+                          events ever seen ⇒ "interrupted" (true error);
+                          (c) fresh marker with no events yet ⇒
+                          "Reconnecting" (likely just reloaded during
+                          stream).  Previously a false "interrupted"
+                          flashed whenever the page remounted during a
+                          healthy stream. */}
+                      {msg._thinking && msg._thinking.length > 0
+                        ? "Thinking…"
+                        : Date.now() - msg._pending.started_at > 60_000
+                          ? "The previous reply was interrupted before the backend responded."
                           : "Reconnecting to your in-flight reply…"}
                     </em>
                     {msg._thinking && msg._thinking.length > 0 && (

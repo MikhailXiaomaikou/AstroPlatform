@@ -125,6 +125,50 @@ function readStoredAdqlResultSets(): StoredAdqlResultSet[] {
   }
 }
 
+// E1.1: localStorage soft cap shared with the chat-history guard.  A
+// 200x14 Gaia query easily pushes past the browser's typical 5 MB
+// quota when combined with chat + workspace state; without trimming,
+// setItem throws QuotaExceededError and the UI silently loses history.
+const ADQL_STORAGE_SOFT_CAP_BYTES = 3 * 1024 * 1024;
+
+function _safeSetAdqlResultSets(sets: StoredAdqlResultSet[]): { written: boolean; dropped: number } {
+  let working = [...sets];
+  let dropped = 0;
+  let payload = JSON.stringify(working);
+  // Pass 1 — trim oldest entries until under cap.
+  while (payload.length > ADQL_STORAGE_SOFT_CAP_BYTES && working.length > 1) {
+    working.shift();
+    dropped++;
+    payload = JSON.stringify(working);
+  }
+  // Pass 2 — if a single remaining entry is still too large, halve its
+  // row list and try again.
+  while (payload.length > ADQL_STORAGE_SOFT_CAP_BYTES && working.length > 0) {
+    const head = working[0];
+    if (head.rows.length <= 10) break;
+    head.rows = head.rows.slice(0, Math.max(10, Math.floor(head.rows.length / 2)));
+    payload = JSON.stringify(working);
+  }
+  try {
+    localStorage.setItem(ADQL_RESULT_SET_STORAGE_KEY, payload);
+    return { written: true, dropped };
+  } catch {
+    // QuotaExceededError despite trimming — keep only the latest entry
+    // with a short row slice so the UI never loses *everything*.
+    try {
+      const latest = working[working.length - 1];
+      if (latest) {
+        latest.rows = latest.rows.slice(0, 50);
+        localStorage.setItem(ADQL_RESULT_SET_STORAGE_KEY, JSON.stringify([latest]));
+        return { written: true, dropped: Math.max(dropped, working.length - 1) };
+      }
+    } catch {
+      /* localStorage genuinely full */
+    }
+    return { written: false, dropped };
+  }
+}
+
 function persistAdqlResultSet(service: string, query: string, result: ADQLResult) {
   const rows = enrichAdqlRows(extractRows(result, MAX_STORED_ADQL_ROWS));
   const derivedColumns = new Set(result.columns);
@@ -140,10 +184,7 @@ function persistAdqlResultSet(service: string, query: string, result: ADQLResult
   };
   const existing = readStoredAdqlResultSets().filter((item) => item.query !== query || item.service !== service);
   existing.push(nextSet);
-  localStorage.setItem(
-    ADQL_RESULT_SET_STORAGE_KEY,
-    JSON.stringify(existing.slice(-MAX_STORED_ADQL_RESULT_SETS))
-  );
+  _safeSetAdqlResultSets(existing.slice(-MAX_STORED_ADQL_RESULT_SETS));
 }
 
 function preferredChartType(_result: ADQLResult | null): string {
