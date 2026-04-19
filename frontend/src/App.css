@@ -4803,6 +4803,22 @@
   padding-left: 0.6rem;
 }
 
+/* F3.1: loud-failure styling for tool cards.
+   When a tool fails or returns empty, the natural reading order puts the
+   model's prose reply first and the card second; by the time the user
+   spots the red text inside the card, they've already trusted the reply.
+   Switch the whole card's left border to red/amber so it's loud at a
+   glance. */
+.chat-action-card.tool-failed {
+  border-left: 3px solid var(--color-red) !important;
+  background: rgba(255, 69, 58, 0.05);
+}
+
+.chat-action-card.tool-empty {
+  border-left: 3px solid #a06500 !important;
+  background: rgba(160, 101, 0, 0.06);
+}
+
 .auto-badge {
   font-size: 0.6rem;
   background: rgba(48, 209, 88, 0.15);
@@ -4815,8 +4831,88 @@
   letter-spacing: 0.03em;
 }
 
+.auto-badge.failed {
+  background: rgba(255, 69, 58, 0.15);
+  color: var(--color-red);
+}
+
+.auto-badge.empty {
+  background: rgba(160, 101, 0, 0.15);
+  color: #a06500;
+}
+
 .auto-result {
   border-top-color: rgba(48, 209, 88, 0.2);
+}
+
+/* F3.2: Honest abstention bubble — pale blue, ✓ icon, welcoming tone.
+   This is the UI celebration of the model's honesty. */
+.chat-abstention-card {
+  border: 1px solid rgba(42, 93, 123, 0.3);
+  border-left: 3px solid var(--accent-2, #2a5d7b);
+  background: rgba(42, 93, 123, 0.05);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.1rem;
+  margin: 0.4rem 0;
+}
+
+.chat-abstention-card .abstention-header {
+  color: var(--accent-2, #2a5d7b);
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.chat-abstention-card .abstention-rationale {
+  font-style: italic;
+  color: var(--color-text-secondary);
+  margin: 0.3rem 0 0.6rem 0;
+}
+
+.chat-abstention-card .abstention-tools {
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.4rem;
+}
+
+.chat-abstention-card .abstention-tools code {
+  background: rgba(0, 0, 0, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.chat-abstention-card .abstention-next-step {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.chat-abstention-card button.abstention-retry {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  background: var(--accent-2, #2a5d7b);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.chat-abstention-card button.abstention-retry:hover {
+  opacity: 0.9;
+}
+
+/* F3.3: ⚠ preamble strip for prose replies where some tools failed. */
+.chat-reply-failure-preamble {
+  border-left: 3px solid #a06500;
+  background: rgba(160, 101, 0, 0.06);
+  padding: 0.5rem 0.7rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.82rem;
+  color: #6b4500;
+  border-radius: var(--radius-sm);
 }
 
 /* ── Code execution results ── */

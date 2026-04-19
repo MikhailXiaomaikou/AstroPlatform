@@ -1273,7 +1273,17 @@ export type ThinkingEvent =
   | { type: "agent_text"; agent?: string; content: string }
   | { type: "tool_call"; agent?: string; tool: string; input: unknown }
   | { type: "tool_result"; agent?: string; tool: string; result: unknown }
-  | { type: "status"; message: string };
+  | { type: "status"; message: string }
+  // F3.2: emitted by chat.py when the model responds with a structured
+  // abstention tag.  Frontend renders as HonestAbstentionCard.
+  | { type: "honest_abstention"; payload: {
+      failed_tools?: string;
+      empty_tools?: string;
+      rationale?: string;
+      suggested_next_step?: string;
+      reason?: string;
+      agent?: string;
+    } };
 
 // ── Chat Session Persistence ──
 
@@ -1790,6 +1800,23 @@ export async function sendChatMessage(
           } else if (evt.type === "status" && typeof evt.message === "string") {
             if (onThinking) {
               onThinking({ type: "status", message: evt.message });
+            }
+          } else if (evt.type === "honest_abstention" && evt.payload && typeof evt.payload === "object") {
+            // F3.2: structured abstention card.  Payload keys match the
+            // attributes of <tools_returned_nothing/> as parsed by the backend.
+            if (onThinking) {
+              const p = evt.payload as Record<string, unknown>;
+              onThinking({
+                type: "honest_abstention",
+                payload: {
+                  failed_tools: typeof p.failed_tools === "string" ? p.failed_tools : undefined,
+                  empty_tools: typeof p.empty_tools === "string" ? p.empty_tools : undefined,
+                  rationale: typeof p.rationale === "string" ? p.rationale : undefined,
+                  suggested_next_step: typeof p.suggested_next_step === "string" ? p.suggested_next_step : undefined,
+                  reason: typeof p.reason === "string" ? p.reason : undefined,
+                  agent: typeof p.agent === "string" ? p.agent : undefined,
+                },
+              });
             }
           } else if (evt.type === "error" && typeof evt.message === "string") {
             throw new Error(evt.message);

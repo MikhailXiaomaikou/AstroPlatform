@@ -116,6 +116,15 @@ interface DisplayMessage {
   // text between tool rounds).  Cleared when the message is replaced with
   // the final reply.
   _thinking?: ThinkingStep[];
+  // F3.2: populated when the backend emits an honest_abstention SSE event.
+  // Rendered as a distinctive pale-blue ✓ card instead of raw markdown.
+  _abstention?: {
+    failed_tools?: string;
+    empty_tools?: string;
+    rationale?: string;
+    suggested_next_step?: string;
+    reason?: string;
+  };
 }
 
 function hasStoredAiKey(): boolean {
@@ -157,6 +166,69 @@ function buildMinimalChatHistory(messages: DisplayMessage[]): ChatMessage[] {
       actions: pythonReplayActions.length > 0 ? pythonReplayActions : undefined,
     };
   });
+}
+
+// F3.2: Honest-abstention card.  Rendered instead of raw markdown when
+// the backend emitted <tools_returned_nothing/> as the model's reply.
+// This is the UI celebration of model honesty — pale-blue ✓ bubble,
+// lists failed/empty tools, shows rationale and suggested next step,
+// and offers a single-click retry that pre-fills the suggestion.
+function HonestAbstentionCard({
+  abstention,
+  onRetry,
+}: {
+  abstention: NonNullable<DisplayMessage["_abstention"]>;
+  onRetry?: (suggestedInput: string) => void;
+}) {
+  const failed = (abstention.failed_tools || "").trim();
+  const empty = (abstention.empty_tools || "").trim();
+  const rationale = (abstention.rationale || "").trim();
+  const nextStep = (abstention.suggested_next_step || "").trim();
+  const reason = abstention.reason || "no_tools";
+
+  const header: Record<string, string> = {
+    empty: "Honest reply — tools returned no data",
+    failed: "Honest reply — tools failed to run",
+    mixed: "Honest reply — tools returned no data and some failed",
+    no_tools: "Honest reply — no claims to make",
+  };
+
+  return (
+    <div className="chat-abstention-card" role="note" aria-label="honest abstention">
+      <div className="abstention-header">
+        <span aria-hidden="true">✓</span>
+        <span>{header[reason] || header.no_tools}</span>
+      </div>
+      {(failed || empty) && (
+        <div className="abstention-tools">
+          {failed && <span>Failed: <code>{failed}</code> </span>}
+          {empty && <span>Empty: <code>{empty}</code></span>}
+        </div>
+      )}
+      {rationale && <div className="abstention-rationale">{rationale}</div>}
+      {nextStep && (
+        <div className="abstention-next-step">
+          <strong>Suggested next step:</strong> {nextStep}
+        </div>
+      )}
+      {!rationale && !nextStep && (
+        <div className="abstention-rationale">
+          No numerical claims are made because no tool produced data this
+          turn.  Please rephrase your question, provide target values
+          explicitly, or try the suggested next step above.
+        </div>
+      )}
+      {onRetry && nextStep && (
+        <button
+          className="abstention-retry"
+          onClick={() => onRetry(nextStep)}
+          title="Pre-fill the input with the suggested next step"
+        >
+          Try it
+        </button>
+      )}
+    </div>
+  );
 }
 
 function ActionCard({
@@ -224,15 +296,39 @@ function ActionCard({
     ? rawWarnings.filter((w): w is string => typeof w === "string")
     : [];
 
+  // F3.1: loud failure/empty surfacing.  The backend stamps
+  // __tool_status__ = FAILED or EMPTY (F2.1), and analysis_status =
+  // failed / empty on dead/no-data tool returns.  Turn the whole card
+  // red / amber so the user sees it alongside the model's prose.
+  const toolStatus = autoResult && typeof autoResult === "object"
+    ? String((autoResult as Record<string, unknown>).__tool_status__ || (autoResult as Record<string, unknown>).analysis_status || "").toUpperCase()
+    : "";
+  const hasErrorField = autoResult && typeof autoResult === "object"
+    && typeof (autoResult as Record<string, unknown>).error === "string"
+    && ((autoResult as Record<string, unknown>).error as string).trim() !== "";
+  const explicitFail = autoResult && typeof autoResult === "object"
+    && (autoResult as Record<string, unknown>).success === false;
+  const isToolFailed = toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField;
+  const isToolEmpty = !isToolFailed && toolStatus === "EMPTY";
+
   return (
-    <div className={`chat-action-card${isAutoExecuted ? " auto-executed" : ""}`}>
+    <div
+      className={`chat-action-card${isAutoExecuted ? " auto-executed" : ""}${isToolFailed ? " tool-failed" : ""}${isToolEmpty ? " tool-empty" : ""}`}
+    >
       <div className="chat-action-header">
         <span className="chat-action-icon">
           {icons[action.action] || "▶"}
         </span>
         <span className="chat-action-label">
           {labels[action.action] || action.action}
-          {isAutoExecuted && <span className="auto-badge">auto</span>}
+          {isAutoExecuted && (
+            <span
+              className={`auto-badge${isToolFailed ? " failed" : ""}${isToolEmpty ? " empty" : ""}`}
+              title={isToolFailed ? "Tool failed" : isToolEmpty ? "Tool returned no data" : "Auto-executed"}
+            >
+              {isToolFailed ? "❌ Failed" : isToolEmpty ? "∅ Empty" : "auto"}
+            </span>
+          )}
           {sanityWarnings.length > 0 && (
             <span
               className="sanity-warning-chip"
@@ -2349,6 +2445,18 @@ export default function ChatPage() {
     // pending bubble so the user sees what the AI is doing in real time.
     const onThinking = (evt: ThinkingEvent) => {
       if (evt.type === "status") return; // heartbeat, ignore in UI
+      if (evt.type === "honest_abstention") {
+        // F3.2: stash the abstention payload on the pending message so
+        // the final render path can show HonestAbstentionCard.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === pendingId
+              ? { ...m, _abstention: evt.payload }
+              : m,
+          ),
+        );
+        return;
+      }
       const step: ThinkingStep = {
         kind: evt.type,
         agent: "agent" in evt ? evt.agent : undefined,
@@ -2423,17 +2531,20 @@ export default function ChatPage() {
       chatAbortRef.current = abort;
       const response = await sendChatMessage(chatHistory, wsContext, onThinking, abort.signal);
 
-      const assistantMsg: DisplayMessage = {
-        id: pendingId,
-        role: "assistant",
-        content: response.reply,
-        actions:
-          response.actions.length > 0 ? response.actions : undefined,
-        actionResults: new Map(),
-      };
-
-      // Replace the pending marker in place (keep its id for stable React keys).
-      setMessages((prev) => prev.map((m) => (m.id === pendingId ? assistantMsg : m)));
+      // F3.2: carry forward any _abstention that arrived on a thinking event
+      // before the final reply.  Without this the card would flash and
+      // disappear when the pending marker is replaced.
+      setMessages((prev) => prev.map((m) => {
+        if (m.id !== pendingId) return m;
+        return {
+          id: pendingId,
+          role: "assistant" as const,
+          content: response.reply,
+          actions: response.actions.length > 0 ? response.actions : undefined,
+          actionResults: new Map(),
+          _abstention: m._abstention,
+        };
+      }));
     } catch (err: unknown) {
       // R0d: user-initiated abort is not an error — rewrite the pending
       // bubble to a cancelled state and exit the catch early.
@@ -3037,7 +3148,50 @@ export default function ChatPage() {
                     )}
                   </div>
                 ) : msg.role === "assistant" ? (
-                  <MarkdownText content={msg.content} />
+                  msg._abstention ? (
+                    <HonestAbstentionCard
+                      abstention={msg._abstention}
+                      onRetry={(suggestion) => { setInput(suggestion); }}
+                    />
+                  ) : (
+                    <>
+                      {/* F3.3: ⚠ preamble when any auto-executed tool failed
+                          or returned empty, even if the prose passed the
+                          claim gate.  Keeps the validation signal visible. */}
+                      {(() => {
+                        const acts = msg.actions || [];
+                        const failed = acts.filter((a) => {
+                          const r = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
+                          if (!r || typeof r !== "object") return false;
+                          const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
+                          return st === "FAILED" || st === "UNAVAILABLE" || r.success === false
+                            || (typeof r.error === "string" && r.error.trim() !== "");
+                        });
+                        const empty = acts.filter((a) => {
+                          const r = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
+                          if (!r || typeof r !== "object") return false;
+                          const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
+                          return st === "EMPTY";
+                        });
+                        const total = acts.filter((a) => !!(a as Record<string, unknown>)._auto_executed).length;
+                        if ((failed.length + empty.length) > 0 && total > 0) {
+                          return (
+                            <details className="chat-reply-failure-preamble">
+                              <summary>
+                                ⚠ {failed.length + empty.length} of {total} tool{total === 1 ? "" : "s"} this turn returned no data{failed.length > 0 ? ` (${failed.length} failed)` : ""}. Reply below is based on the remaining tools.
+                              </summary>
+                              <div style={{ marginTop: 6, fontSize: "0.78rem" }}>
+                                {failed.length > 0 && <div>Failed: {failed.map((a) => a.action).join(", ")}</div>}
+                                {empty.length > 0 && <div>Empty: {empty.map((a) => a.action).join(", ")}</div>}
+                              </div>
+                            </details>
+                          );
+                        }
+                        return null;
+                      })()}
+                      <MarkdownText content={msg.content} />
+                    </>
+                  )
                 ) : (
                   msg.content.split("\n").map((line, i) => (
                     <p key={i}>{line || "\u00A0"}</p>
