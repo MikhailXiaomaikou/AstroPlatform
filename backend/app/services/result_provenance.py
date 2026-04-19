@@ -327,6 +327,35 @@ def _is_empty_payload(tool_name: str, result: dict[str, Any]) -> bool:
     return False
 
 
+# G1.5c: "retry"/"fallback"/"simulate" etc. appearing in a tool error string
+# can be read by the LLM as instructions ("prompt injection via error text").
+# Sanitise them before we splice error messages into __message_to_model__.
+_INSTRUCTION_LIKE_TOKENS = {
+    r"\bretry\b": "(the tool failed; you cannot retry it this turn)",
+    r"\btry\s+again\b": "(the tool failed; you cannot try it again this turn)",
+    r"\bnarrower\s+parameters\b": "(the call was rejected)",
+    r"\bfall[-\s]?back\b": "(the call failed)",
+    r"\bfallback\b": "(the call failed)",
+    r"\bsimulat(?:e|ed|ion)\b": "[REDACTED — generating synthetic data is forbidden]",
+    r"\bsynthetic\b": "[REDACTED]",
+    r"\bmock(?:\s+data)?\b": "[REDACTED]",
+    r"\bgenerate\s+(?:realistic|example|synthetic|fake)\b": "[REDACTED]",
+}
+
+
+def _sanitize_error_message(err: str) -> str:
+    """G1.5c: neutralise error-string phrasings that the LLM might read as
+    instructions.  Preserves the original error if sanitization is a no-op.
+    """
+    import re as _re
+    if not err:
+        return ""
+    cleaned = str(err)
+    for pat, replacement in _INSTRUCTION_LIKE_TOKENS.items():
+        cleaned = _re.sub(pat, replacement, cleaned, flags=_re.IGNORECASE)
+    return cleaned
+
+
 def _inject_empty_banner(result: dict[str, Any], tool_name: str) -> dict[str, Any]:
     """F2.1: prepend a machine-readable banner so the LLM cannot miss it.
 
@@ -338,10 +367,9 @@ def _inject_empty_banner(result: dict[str, Any], tool_name: str) -> dict[str, An
         "__do_not_claim__": True,
         "__message_to_model__": (
             f"Tool `{tool_name}` ran but returned no data (0 rows / empty "
-            f"result).  You MUST NOT claim any numerical result derived from "
-            f"this call.  Either (a) retry with different parameters, or "
-            f"(b) emit a <tools_returned_nothing/> structured abstention — "
-            f"see system prompt."
+            f"result). You MUST NOT claim any numerical result derived from "
+            f"this call. Emit a <tools_returned_nothing/> structured "
+            f"abstention instead of generating synthetic data to substitute."
         ),
         "__suggested_next_step__": _suggest_next_step(tool_name),
     }
@@ -353,16 +381,20 @@ def _inject_empty_banner(result: dict[str, Any], tool_name: str) -> dict[str, An
 
 
 def _inject_failed_banner(result: dict[str, Any], tool_name: str) -> dict[str, Any]:
-    """F2.1: same idea as empty, but for explicit tool failures."""
-    err = str(result.get("error") or "unknown").strip()
+    """F2.1 + G1.5c: same idea as empty, but for explicit tool failures.
+    Error strings are passed through _sanitize_error_message to remove
+    instruction-like tokens that could be read by the LLM as commands.
+    """
+    raw_err = str(result.get("error") or "unknown").strip()
+    err = _sanitize_error_message(raw_err)
     banner = {
         "__tool_status__": "FAILED",
         "__do_not_claim__": True,
         "__message_to_model__": (
-            f"Tool `{tool_name}` failed with: {err!r}.  You MUST NOT claim any "
-            f"numerical result derived from this call.  Either (a) retry with "
-            f"different parameters, or (b) emit a <tools_returned_nothing/> "
-            f"structured abstention — see system prompt."
+            f"Tool `{tool_name}` failed with: {err!r}. You MUST NOT claim "
+            f"any numerical result derived from this call, and you MUST "
+            f"NOT substitute synthetic data to 'complete' the analysis. "
+            f"Emit a <tools_returned_nothing/> structured abstention instead."
         ),
         "__suggested_next_step__": _suggest_next_step(tool_name, error=err),
     }
@@ -373,24 +405,31 @@ def _inject_failed_banner(result: dict[str, Any], tool_name: str) -> dict[str, A
 
 def _suggest_next_step(tool_name: str, error: str | None = None) -> str:
     """Tool-specific next-step hint that the model can echo into a
-    <tools_returned_nothing suggested_next_step="..."/> tag."""
+    <tools_returned_nothing suggested_next_step="..."/> tag.
+
+    G1.5c: avoid the word "retry" in these strings — the LLM reads
+    tool error text as context and can interpret "retry" as an
+    instruction to just try again (often with synthetic data). Use
+    neutral phrasing that describes what the USER should do, not what
+    the model can do.
+    """
     if error:
         lower = error.lower()
         if "timed out" in lower or "timeout" in lower:
-            return f"Retry `{tool_name}` with a tighter scope (e.g. smaller radius, fewer sources) or ask for a slower async variant."
+            return f"The user can narrow the scope (smaller radius, fewer sources) and submit again, or wait for the service to recover."
         if "oom" in lower or "memoryerror" in lower:
-            return f"Reduce the data volume before calling `{tool_name}` again."
+            return f"The user can reduce the data volume before calling `{tool_name}` again."
         if "import" in lower:
-            return f"The requested library is not available in this sandbox; rewrite without it."
+            return f"The requested library is not available in this sandbox."
     if tool_name == "run_adql":
-        return "Widen the query (larger cone radius / looser quality cuts), verify the table + column names exist, or try a different archive."
+        return "The user can widen the query (larger cone radius / looser quality cuts), verify the table + column names exist, or try a different archive."
     if tool_name == "run_python":
-        return "Ensure the code produces at least one print statement or figure; check that required inputs are present."
+        return "The user should check that required inputs are present and that the code produces a print statement or figure."
     if tool_name in {"search_objects", "crossmatch_catalogs", "query_transients"}:
-        return "Widen the cone radius, relax magnitude cuts, or confirm the target name / coordinates."
+        return "The user can widen the cone radius, relax magnitude cuts, or confirm the target name / coordinates."
     if tool_name == "search_literature":
-        return "Broaden the keyword list or try a different archive (ADS vs arXiv)."
-    return "Retry with different parameters, or ask the user to provide the target values explicitly."
+        return "The user can broaden the keyword list or try a different archive (ADS vs arXiv)."
+    return "The user can adjust parameters or provide the target values explicitly."
 
 
 def numeric_sanity_warnings(payload: Any) -> list[str]:

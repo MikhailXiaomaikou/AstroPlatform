@@ -379,7 +379,12 @@ TOOLS = [
             "process_in_chunks(data, chunk_size, func) processes large data in memory-safe chunks, "
             "memory_usage_mb() returns current memory usage in MB. "
             "Use print() to output results. Matplotlib figures are automatically captured. "
-            "Max execution time: 75 seconds."
+            "Max execution time: 75 seconds. "
+            "REQUIRED: You MUST declare `data_source` — where the code's input data comes from. "
+            "If you are NOT analyzing real observational data (e.g. demonstrating a formula, "
+            "generating a plot template, Monte Carlo / MCMC / bootstrap), declare "
+            "`data_source=\"none_not_analyzing_real_data\"`. The system will mark the output as "
+            "SYNTHETIC and the zero-fabrication gate will block citing its numbers."
         ),
         "input_schema": {
             "type": "object",
@@ -392,8 +397,24 @@ TOOLS = [
                     "type": "string",
                     "description": "Brief description of what the code does",
                 },
+                "data_source": {
+                    "type": "string",
+                    "description": (
+                        "G1: where this code's data comes from. REQUIRED. One of: "
+                        "'latest_adql' (uses get_adql_results / get_adql_result_sets), "
+                        "'latest_search' (uses get_search_results), "
+                        "'latest_lightcurve' / 'cached:<key>' (other cached real data), "
+                        "'fits:<path>' (loads a specific FITS file via load_fits), "
+                        "'none_not_analyzing_real_data' (intentionally generating synthetic / "
+                        "pedagogical / Monte-Carlo data — output will be marked SYNTHETIC and "
+                        "forbidden from citation). "
+                        "If a real data-fetch tool FAILED earlier this turn, choosing "
+                        "'none_not_analyzing_real_data' to replace it is forbidden — emit "
+                        "<tools_returned_nothing/> instead."
+                    ),
+                },
             },
-            "required": ["code"],
+            "required": ["code", "data_source"],
         },
     },
     {
@@ -2292,11 +2313,123 @@ async def _exec_literature(inp: dict) -> dict:
         return {"error": str(e)}
 
 
+_VALID_DATA_SOURCES = {
+    "latest_adql", "latest_search", "latest_lightcurve",
+    "none_not_analyzing_real_data",
+}
+_REAL_DATA_SOURCE_PATTERNS = {
+    # G1.2: for each declared data_source, these substrings must appear in
+    # the code — else the declaration is inconsistent with the code and
+    # we reject it.
+    "latest_adql": ("get_adql_results", "get_adql_result_sets", "get_cached_results"),
+    "latest_search": ("get_search_results", "get_cached_results"),
+    "latest_lightcurve": ("get_cached_results", "lightkurve", "search_lightcurve"),
+}
+
+
 async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dict:
     """Execute Python code in sandboxed environment."""
     from app.services.code_executor import execute_python
 
     code = inp.get("code", "")
+    # G1.1: data_source contract.  AI must declare where the data comes
+    # from.  Treatment of missing / unknown declarations:
+    # - Missing entirely: default to SYNTHETIC (safer than rejection;
+    #   older tests and clients keep working but output is marked SYNTHETIC).
+    #   A counter fires so we can see how often the LLM forgets.
+    # - Known real source (latest_adql/search/lightcurve): validate that
+    #   the code actually reads from it; mismatch → reject.
+    # - "none_not_analyzing_real_data": explicit synthetic, marked SYNTHETIC.
+    # - cached:<key> / fits:<path>: free-form, no static check.
+    data_source = str(inp.get("data_source", "")).strip()
+    if not data_source:
+        try:
+            from app.observability.metrics import record_counter
+            record_counter("run_python_missing_data_source_total", 1.0)
+        except Exception:
+            pass
+        # Default to synthetic — safer posture. The claim gate will block
+        # any numbers cited from this output.
+        data_source = "none_not_analyzing_real_data"
+
+    is_synthetic_declared = data_source == "none_not_analyzing_real_data"
+
+    # G1.2: if declared a real source, the code should reference the
+    # matching helper.  Skip validation for cached:... and fits:... which
+    # carry the target inline.
+    if data_source in _REAL_DATA_SOURCE_PATTERNS:
+        expected_tokens = _REAL_DATA_SOURCE_PATTERNS[data_source]
+        if not any(tok in code for tok in expected_tokens):
+            return {
+                "success": False,
+                "error": (
+                    f"data_source='{data_source}' declared but the code does not "
+                    f"call any of {list(expected_tokens)}. Either (a) update your "
+                    f"code to actually read that cache, or (b) declare "
+                    f"data_source='none_not_analyzing_real_data' if you are "
+                    f"intentionally generating synthetic data (which will be "
+                    f"marked SYNTHETIC and forbidden from citation)."
+                ),
+                "error_class": "data_source_mismatch",
+            }
+
+    # G2: AST static analysis to catch contract violations where the AI
+    # declares `latest_adql` but the code actually does np.random.normal().
+    # Run detector early; if verdict=synthetic AND declared a real source,
+    # reject; if verdict=suspicious, downgrade output to SYNTHETIC.
+    detector_verdict: str | None = None
+    try:
+        from app.services.synthetic_code_detector import analyze as _analyze
+        detection = _analyze(code)
+        detector_verdict = detection.verdict
+        if detection.verdict == "synthetic" and not is_synthetic_declared:
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "synthetic_detected_total", 1.0,
+                    trigger="ast_contract_mismatch",
+                    declared=data_source,
+                )
+            except Exception:
+                pass
+            return {
+                "success": False,
+                "error": (
+                    f"G2 static-analysis detected this code fabricates data "
+                    f"(np.random / suspicious keywords / no real-data readers) "
+                    f"but data_source='{data_source}' was declared. "
+                    f"Signals: has_np_random={detection.has_np_random}, "
+                    f"has_time_linspace={detection.has_time_linspace}, "
+                    f"suspicious_keywords={detection.suspicious_keywords}, "
+                    f"reads_real_data={detection.reads_real_data}. "
+                    f"Either fix the code to read real data, declare "
+                    f"data_source='none_not_analyzing_real_data', or emit "
+                    f"<tools_returned_nothing/> if you intended to abstain."
+                ),
+                "error_class": "synthetic_declared_as_real",
+                "detection": {
+                    "verdict": detection.verdict,
+                    "suspicious_keywords": detection.suspicious_keywords,
+                    "has_np_random": detection.has_np_random,
+                    "has_time_linspace": detection.has_time_linspace,
+                    "reads_real_data": detection.reads_real_data,
+                },
+            }
+        elif detection.verdict == "suspicious" and not is_synthetic_declared:
+            # Downgrade to synthetic at response time (below).  Record why.
+            is_synthetic_declared = True
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "synthetic_detected_total", 1.0,
+                    trigger="ast_suspicious",
+                    declared=data_source,
+                )
+            except Exception:
+                pass
+    except Exception as det_exc:
+        logger.debug("synthetic_code_detector failed: %s", det_exc)
+
     if not code.strip():
         # E2.3: previously returned a bare "No code provided" which the AI
         # would retry as another empty call.  Track via Prometheus so we
@@ -2387,6 +2520,46 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         response["variable_types"] = dict(list(result.variable_types.items())[:50])
     if auto_fix_note:
         response["auto_fix_note"] = auto_fix_note
+
+    # G1.3: SYNTHETIC banner.  If the AI declared that this run_python call
+    # is NOT analyzing real data, prepend a banner and mark data_origin so
+    # the zero-fabrication gate refuses to cite numbers from this run.
+    if is_synthetic_declared:
+        banner = {
+            "__tool_status__": "SYNTHETIC",
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "This run_python call was declared data_source="
+                "'none_not_analyzing_real_data'. Its numerical output is NOT "
+                "from real observations. You MUST NOT cite any number from "
+                "this call's stdout/variables/figures in your final reply. "
+                "If the user asked for real data analysis, emit "
+                "<tools_returned_nothing/> instead — do not use this synthetic "
+                "run to stand in for a failed data fetch."
+            ),
+            "__suggested_next_step__": (
+                "If the user wants real data, retry with a real data source "
+                "(latest_adql / fits:<path> / etc.) or emit the abstention tag."
+            ),
+            "data_origin": "synthetic",
+            "analysis_status": "simulated_demo",
+        }
+        # Banner keys go FIRST so the model reads them before payload
+        combined = dict(banner)
+        combined.update(response)
+        # But preserve the banner-level data_origin override (response may
+        # have its own; we want the SYNTHETIC tag to win)
+        combined["data_origin"] = "synthetic"
+        combined["analysis_status"] = "simulated_demo"
+        try:
+            from app.observability.metrics import record_counter
+            record_counter(
+                "synthetic_declared_total", 1.0,
+                trigger="contract",
+            )
+        except Exception:
+            pass
+        return combined
 
     return response
 
