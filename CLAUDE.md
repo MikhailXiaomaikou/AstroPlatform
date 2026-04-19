@@ -96,6 +96,10 @@ UI: tool_result with `__tool_status__="SYNTHETIC"` or `data_origin="synthetic"` 
 
 Tests: `tests/test_synthetic_code_detector.py` (12 fixtures), `tests/test_synthetic_fallback_regression.py` (end-to-end), `tests/test_result_provenance.py` (sanitizer). Token-level CI regression + debug endpoint `/api/chat/_debug_last_prompt` (env-gated) for verifying the guard reaches the LLM.
 
+### Figure persistence (DO NOT regress)
+
+`run_python` matplotlib figures (base64 PNGs in `tool_result.figures`) MUST survive page reload. The localStorage soft cap is 4 MB (`CHAT_HISTORY_SOFT_CAP_BYTES` in `ChatPage.tsx`); a single four-panel CMD is ~400 KB, so a typical multi-figure session hits the cap fast. `_pruneToolResults` strips in tiered order: `rows`/`data`/`traceback` → `variables` → `stdout` → figures (replaced with `{__figures_offloaded__: N}` marker, NOT wiped). On mount, if any message carries `__offloaded__` / `__figures_offloaded__` AND the user has a `currentSessionId`, ChatPage calls `loadChatSession(sid)` asynchronously and merges server-side actions back (server never prunes). UI shows an amber "📊 N figures were offloaded — reloading from server" placeholder while the fetch is in flight. Anonymous users still rely purely on the tiered pruner — IndexedDB migration is the long-term fix.
+
 ### Zero-fabrication architecture (Phase F core — DO NOT regress)
 
 Three layers of defence + one positive incentive, every layer tested:

@@ -139,6 +139,18 @@ layers:
 
 **Debug endpoint.** `/api/chat/_debug_last_prompt` (gated by env `DEBUG_LAST_PROMPT=1`) returns the last prompt `inference_router.route` received so reviewers can confirm in-browser that the zero-fabrication + anti-reflection rules are actually present in the LLM's context.
 
+### Figure persistence (post-G fix)
+
+Reviewer flagged that `run_python`-generated matplotlib figures displayed correctly during a session but vanished on reload or tab switch — `<img>` / base64 / `Expand` / `Download` all gone, leaving only `print` text output. Root cause: `_pruneToolResults` in `ChatPage.tsx` replaced the entire `tool_result` with `{__offloaded__: true}` whenever the `astro_chat_history` localStorage blob exceeded its 4 MB soft cap. A single CMD four-panel figure (~400 KB base64) plus a few supporting plots easily crosses that cap, and figures were always the first victim.
+
+Three-layer fix:
+
+1. **Tiered pruning** (`_pruneToolResults` rewritten). Figures are the last thing stripped. Pass A removes assistant-internal heavy fields (`rows`, `data`, `raw_data`, `results`, `traceback`) that the AI can re-fetch via `get_cached_results`; Pass B removes `variables` / `variable_types`; Pass C removes `stdout`; Pass D (last resort) replaces the `figures` array with a `{__figures_offloaded__: N}` marker carrying the count but not the bytes.
+2. **Server rehydrate** (new boot-time `useEffect`). When the restored local copy has any `__offloaded__` or `__figures_offloaded__` markers, and the user is logged in with a `currentSessionId`, ChatPage asynchronously fetches the full session from `/api/chat/sessions/{id}` (the server blob was never pruned — `save_chat_session` writes `session.messages` as-is) and merges `actions` back into matching messages by `(role + content[:200])` prefix key, preserving local-only state like `_abstention` and `_pending`.
+3. **UI placeholder** (`AutoToolResult`). When `figures.length === 0` but `__figures_offloaded__ > 0`, renders an amber dashed-border placeholder reading "📊 N figures were generated here but were offloaded from browser cache to save space. Reloading from the server now…". On successful rehydrate this placeholder disappears and the real figures render.
+
+**Known limit**: anonymous users have no server copy; the tiered pruner extends figure survival in localStorage but extreme sessions can still lose figures. Future fix: migrate figure storage to IndexedDB (GB scale) keyed on `(sessionId, messageId, figureIndex)`.
+
 ### Zero-fabrication architecture (Phase F core)
 
 This is the load-bearing trust layer. Three layers of defence + one positive incentive.
