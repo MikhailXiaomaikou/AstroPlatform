@@ -177,3 +177,96 @@ def test_reproducibility_envelope_records_seed_when_supplied():
         "fit_isochrone", {"age_gyr": 0.1}, tool_input={}, random_seed=42,
     )
     assert r["reproducibility"]["random_seed"] == 42
+
+
+# ---------- F2.1: EMPTY status + upstream banner ----------
+
+
+def test_adql_zero_rows_stamped_as_empty():
+    """run_adql with row_count=0 should be analysis_status=EMPTY, not
+    COMPLETED, and carry the __tool_status__ banner."""
+    r = normalize_tool_result(
+        "run_adql",
+        {"row_count": 0, "rows": [], "columns": ["ra", "dec"]},
+        tool_input={"query": "SELECT * FROM t"},
+    )
+    assert r["analysis_status"] == "empty"
+    assert r["__tool_status__"] == "EMPTY"
+    assert r["__do_not_claim__"] is True
+    assert "MUST NOT claim" in r["__message_to_model__"]
+    assert "next step" in r["__suggested_next_step__"].lower() or r["__suggested_next_step__"]
+
+
+def test_search_objects_empty_results_stamped_as_empty():
+    r = normalize_tool_result(
+        "search_objects",
+        {"results": []},
+        tool_input={"query": "M31"},
+    )
+    assert r["analysis_status"] == "empty"
+    assert r["__tool_status__"] == "EMPTY"
+
+
+def test_run_python_no_output_stamped_as_empty():
+    r = normalize_tool_result(
+        "run_python",
+        {"success": True, "stdout": "", "figures": [], "variables": {}},
+        tool_input={"code": "pass"},
+    )
+    assert r["analysis_status"] == "empty"
+    assert r["__tool_status__"] == "EMPTY"
+
+
+def test_tool_failure_stamped_as_failed_with_banner():
+    r = normalize_tool_result(
+        "run_python",
+        {"success": False, "error": "NameError: foo"},
+        tool_input={"code": "print(foo)"},
+    )
+    assert r["analysis_status"] == "failed"
+    assert r["__tool_status__"] == "FAILED"
+    assert "NameError" in r["__message_to_model__"]
+    assert r["__do_not_claim__"] is True
+
+
+def test_successful_adql_not_stamped_empty():
+    r = normalize_tool_result(
+        "run_adql",
+        {"row_count": 3, "rows": [[1], [2], [3]], "columns": ["x"]},
+        tool_input={"query": "SELECT x FROM t"},
+    )
+    assert r["analysis_status"] == "completed"
+    assert "__tool_status__" not in r or r.get("__tool_status__") != "EMPTY"
+
+
+def test_banner_keys_appear_before_payload_in_dict_iter():
+    """F2.1: banner keys must be at the FRONT of the dict so the LLM sees
+    them first when streaming JSON left-to-right."""
+    r = normalize_tool_result(
+        "run_adql",
+        {"row_count": 0, "rows": [], "columns": ["ra"]},
+        tool_input={},
+    )
+    keys = list(r.keys())
+    assert keys[0] == "__tool_status__", f"banner should be first key; got {keys[:5]}"
+
+
+def test_suggested_next_step_is_tool_specific():
+    from app.services.result_provenance import _suggest_next_step
+    assert "cone radius" in _suggest_next_step("run_adql").lower()
+    assert "print" in _suggest_next_step("run_python").lower()
+    assert "keyword" in _suggest_next_step("search_literature").lower()
+
+
+def test_is_empty_payload_detects_common_shapes():
+    from app.services.result_provenance import _is_empty_payload
+
+    assert _is_empty_payload("run_adql", {"row_count": 0})
+    assert _is_empty_payload("search_objects", {"results": []})
+    assert _is_empty_payload(
+        "run_python",
+        {"success": True, "stdout": "", "figures": [], "variables": {}},
+    )
+    # Non-empty payloads must NOT be flagged
+    assert not _is_empty_payload("run_adql", {"row_count": 5})
+    assert not _is_empty_payload("run_python", {"success": True, "stdout": "hi"})

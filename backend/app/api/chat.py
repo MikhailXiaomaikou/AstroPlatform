@@ -37,7 +37,8 @@ Never silently mix releases.
 ## ZERO-FABRICATION CONTRACT (non-negotiable)
 Every numeric value in your reply — redshift, log g, [Fe/H], E(B−V), A_V,
 mass, luminosity, age, T_eff, distance, parallax, proper motion, radial
-velocity, period, magnitude, RA/Dec coordinates — MUST appear verbatim or
+velocity, period, magnitude, RA/Dec coordinates, AND any cardinality
+(e.g. "N stars", "N members", "N sources") — MUST appear verbatim or
 within ±1% of a number present in the tool_result JSON you received
 this turn.  If you cannot find a tool-sourced value for a number, you
 MUST say "not determined by the tools I ran" instead of guessing.
@@ -45,6 +46,30 @@ Citing a number from general knowledge / training data is a contract
 violation; the system will detect it and reject your reply.  When in
 doubt, call a tool (search_literature for published values,
 get_object_info / run_adql for catalog values).
+
+## STRUCTURED ABSTENTION (preferred response when tools have no data)
+When tool_results for this turn are marked `__tool_status__` = EMPTY or
+FAILED, you MUST NOT attempt a prose answer.  Instead, output a SINGLE
+XML tag as your entire reply and nothing else:
+
+<tools_returned_nothing failed_tools="tool_a,tool_b" empty_tools="tool_c"
+  rationale="why the tools could not produce data"
+  suggested_next_step="what the user should try next"/>
+
+Rules:
+- No prose before or after the tag.  The entire reply IS the tag.
+- `failed_tools` = comma-separated list of tools whose `__tool_status__`
+  was FAILED this turn.  Empty string if none.
+- `empty_tools` = same idea for EMPTY.  Empty string if none.
+- `rationale` = one sentence, plain English, citing the `__message_to_model__`
+  you saw.  Do NOT invent values.
+- `suggested_next_step` = echo or refine the `__suggested_next_step__`
+  the banner gave you.
+
+This is the REQUIRED response when tools have no data.  You will NOT be
+penalised — the system renders this as a well-formatted "honest
+abstention" card and counts it as success.  Inventing a prose answer to
+look helpful IS penalised and blocked.
 
 
 ## Your role
@@ -1275,6 +1300,96 @@ def _strip_actions_from_reply(text: str) -> str:
     return re.sub(r"<actions>.*?</actions>", "", text, flags=re.DOTALL).strip()
 
 
+# F2.3: <tools_returned_nothing/> structured abstention parser.
+# The model's entire reply is supposed to be a single self-closing XML tag
+# when tools had no data.  We parse permissively: attribute order doesn't
+# matter, quotes can be " or ', and whitespace may surround the tag.
+_ABSTENTION_RE = __import__("re").compile(
+    r"""^\s*<tools_returned_nothing
+        (?P<attrs>[^>]*)
+        /?\s*>\s*(?:</tools_returned_nothing>\s*)?$""",
+    __import__("re").VERBOSE | __import__("re").DOTALL,
+)
+_ATTR_RE = __import__("re").compile(
+    r"""(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)')""",
+)
+
+
+def _parse_abstention_tag(reply: str) -> dict | None:
+    """Return attrs dict if reply is a single <tools_returned_nothing/> tag,
+    else None.  Tolerates a trailing newline or surrounding whitespace."""
+    if not reply or "tools_returned_nothing" not in reply:
+        return None
+    m = _ABSTENTION_RE.match(reply.strip())
+    if not m:
+        return None
+    attrs_raw = m.group("attrs") or ""
+    attrs: dict = {}
+    for match in _ATTR_RE.finditer(attrs_raw):
+        key = match.group(1).lower()
+        val = match.group(2) if match.group(2) is not None else match.group(3) or ""
+        attrs[key] = val.strip()
+    return attrs
+
+
+def _classify_abstention_reason(all_tool_results: list[dict]) -> str:
+    """Was this an empty-tools turn, a failed-tools turn, or a mix?"""
+    statuses: list[str] = []
+    for entry in all_tool_results or []:
+        inner = entry.get("result") if isinstance(entry.get("result"), dict) else entry
+        st = inner.get("__tool_status__") or inner.get("analysis_status")
+        if isinstance(st, str):
+            statuses.append(st.upper())
+    has_empty = any(s == "EMPTY" for s in statuses)
+    has_failed = any(s in ("FAILED", "UNAVAILABLE") for s in statuses)
+    if has_empty and has_failed:
+        return "mixed"
+    if has_empty:
+        return "empty"
+    if has_failed:
+        return "failed"
+    return "no_tools"
+
+
+def _render_abstention_card(attrs: dict, reason: str) -> str:
+    """F2.3: canonical Markdown card rendered from the abstention tag.
+    The model does NOT write this prose — we do, so we control the
+    quality and tone.
+    """
+    failed = (attrs.get("failed_tools") or "").strip()
+    empty = (attrs.get("empty_tools") or "").strip()
+    rationale = (attrs.get("rationale") or "").strip()
+    next_step = (attrs.get("suggested_next_step") or "").strip()
+
+    header_map = {
+        "empty": "✓ Honest reply — tools returned no data",
+        "failed": "✓ Honest reply — tools failed to run",
+        "mixed": "✓ Honest reply — tools returned no data and some failed",
+        "no_tools": "✓ Honest reply — no claims to make",
+    }
+    header = header_map.get(reason, header_map["no_tools"])
+
+    lines = [f"**{header}**", ""]
+    if failed:
+        lines.append(f"**Failed tools:** `{failed}`")
+    if empty:
+        lines.append(f"**Empty tools:** `{empty}`")
+    if failed or empty:
+        lines.append("")
+    if rationale:
+        lines.append(f"_{rationale}_")
+        lines.append("")
+    if next_step:
+        lines.append(f"**Suggested next step:** {next_step}")
+    if not rationale and not next_step:
+        lines.append(
+            "No numerical claims are made because no tool produced data "
+            "this turn.  Please rephrase your question, provide target "
+            "values explicitly, or try the suggested next step above."
+        )
+    return "\n".join(lines)
+
+
 def _prime_adql_context_cache(context: dict | None, python_session_id: str) -> None:
     if not isinstance(context, dict):
         return
@@ -1657,6 +1772,59 @@ async def _run_agent_loop(
     full_reply = "\n\n".join(text_parts)
     actions = _parse_actions(full_reply)
     clean_reply = _strip_actions_from_reply(full_reply)
+
+    # F2.3: structured abstention parser.  If the model emitted a single
+    # <tools_returned_nothing/> tag as its reply, that IS the expected
+    # response for empty/failed turns — skip the claim validator entirely
+    # and render a canonical abstention card.
+    abstention_payload = _parse_abstention_tag(clean_reply)
+    if abstention_payload is not None:
+        reason = _classify_abstention_reason(all_tool_results)
+        try:
+            from app.observability.metrics import record_counter
+            record_counter(
+                "honest_abstention_total", 1.0,
+                agent=agent_name, reason=reason,
+            )
+            record_counter("structured_abstention_emitted_total", 1.0, agent=agent_name)
+        except Exception:
+            pass
+        logger.info(
+            "Honest abstention emitted by %s (reason=%s): failed=%s empty=%s",
+            agent_name, reason,
+            abstention_payload.get("failed_tools", ""),
+            abstention_payload.get("empty_tools", ""),
+        )
+        clean_reply = _render_abstention_card(abstention_payload, reason)
+        if on_event is not None:
+            try:
+                await on_event({
+                    "type": "honest_abstention",
+                    "payload": {
+                        **abstention_payload,
+                        "reason": reason,
+                        "agent": agent_name,
+                    },
+                })
+            except Exception:
+                pass
+        # Attach tool-result action cards as usual, then short-circuit out.
+        for tr in all_tool_results:
+            actions.append({
+                "action": tr["tool"],
+                "tool_input": tr["input"],
+                "tool_result": tr["result"],
+                "_auto_executed": True,
+            })
+        return {
+            "reply": clean_reply,
+            "actions": actions,
+            "tool_results": all_tool_results,
+            "hit_iteration_cap": False,
+            "hit_deadline": hit_deadline,
+            "honest_abstention": True,
+            "abstention_reason": reason,
+        }
 
     # R2: zero-fabrication gate.  Validate every numeric claim in the reply
     # against the tool_results collected this turn; if any claim can't be

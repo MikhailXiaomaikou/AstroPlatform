@@ -33,9 +33,14 @@ COMPLETED = "completed"
 PARTIAL = "partial"
 SIMULATED_DEMO = "simulated_demo"
 FAILED = "failed"
+# F2.1: explicit status for a tool that ran cleanly but produced no data
+# (e.g. ADQL returned 0 rows, search_objects returned [], run_python had
+# empty stdout and no figures).  Distinct from FAILED so the UI / LLM /
+# metrics can tell the two apart.
+EMPTY = "empty"
 
 _VALID_ORIGINS = {REAL_ARCHIVE, CACHED_REAL, USER_UPLOADED, SYNTHETIC, UNAVAILABLE}
-_VALID_STATUS = {COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED}
+_VALID_STATUS = {COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED, EMPTY}
 
 # Build-time tool version; populated by the Dockerfile via
 # `ARG TOOL_VERSION` / `ENV TOOL_VERSION=...`.  Falls back to "dev" when
@@ -235,11 +240,36 @@ def normalize_tool_result(
         except Exception:
             pass
 
+    # F2.1: detect empty tool returns BEFORE we stamp COMPLETED. An ADQL
+    # query that returned 0 rows is a legitimate "no data" outcome, not a
+    # success — the LLM must not derive any claims from it.  We inject a
+    # machine-readable banner so the model literally cannot miss it.
+    is_empty = _is_empty_payload(tool_name, result)
+    if is_empty:
+        result = _inject_empty_banner(result, tool_name)
+        try:
+            from app.observability.metrics import record_counter
+            record_counter("empty_tool_result_total", 1.0, tool=tool_name)
+        except Exception:
+            pass
+
     if "data_origin" in result and "analysis_status" in result:
+        # Still inject the banner if we detected empty, even on a pre-stamped result
         return result
 
     if result.get("error"):
+        result = _inject_failed_banner(result, tool_name)
         return attach_provenance(result, data_origin=UNAVAILABLE, analysis_status=FAILED)
+
+    if is_empty:
+        # Clean-ran-but-no-data path
+        if tool_name in _COMPUTE_TOOLS:
+            origin = REAL_ARCHIVE
+        elif tool_name in _DATA_TOOLS or tool_name in _REFERENCE_TOOLS:
+            origin = REAL_ARCHIVE
+        else:
+            origin = UNAVAILABLE
+        return attach_provenance(result, data_origin=origin, analysis_status=EMPTY)
 
     if tool_name in _DATA_TOOLS:
         return attach_provenance(result, data_origin=REAL_ARCHIVE, analysis_status=COMPLETED)
@@ -253,12 +283,112 @@ def normalize_tool_result(
         # reduction pipeline) should set data_origin explicitly in its result.
         origin = REAL_ARCHIVE if success else UNAVAILABLE
         status = COMPLETED if success else FAILED
+        if not success:
+            result = _inject_failed_banner(result, tool_name)
         return attach_provenance(result, data_origin=origin, analysis_status=status)
 
     if tool_name in _REFERENCE_TOOLS:
         return attach_provenance(result, data_origin=REAL_ARCHIVE, analysis_status=COMPLETED)
 
     return attach_provenance(result, data_origin=UNAVAILABLE, analysis_status=PARTIAL)
+
+
+def _is_empty_payload(tool_name: str, result: dict[str, Any]) -> bool:
+    """F2.1: decide whether a tool return has no data to back any claim.
+
+    Conservative — we mark empty only on signals that are unambiguously
+    "no result", not on merely small results.
+    """
+    if result.get("error"):
+        return False  # FAILED path handles this
+    # ADQL / VO / TAP
+    if "row_count" in result:
+        try:
+            if int(result["row_count"]) == 0:
+                return True
+        except (ValueError, TypeError):
+            pass
+    rows = result.get("rows")
+    if isinstance(rows, list) and not rows and result.get("row_count", 0) == 0:
+        return True
+    # search_objects / crossmatch / query_transients
+    results_field = result.get("results")
+    if isinstance(results_field, list) and not results_field:
+        return True
+    # run_python — empty stdout and no figures and no variables
+    if tool_name == "run_python":
+        stdout = result.get("stdout", "") or ""
+        figures = result.get("figures") or []
+        variables = result.get("variables") or {}
+        if result.get("success") is True and not stdout.strip() and not figures and not variables:
+            return True
+    return False
+
+
+def _inject_empty_banner(result: dict[str, Any], tool_name: str) -> dict[str, Any]:
+    """F2.1: prepend a machine-readable banner so the LLM cannot miss it.
+
+    Model sees __tool_status__, __do_not_claim__, __message_to_model__,
+    __suggested_next_step__ as the first keys of the tool_result dict.
+    """
+    banner = {
+        "__tool_status__": "EMPTY",
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            f"Tool `{tool_name}` ran but returned no data (0 rows / empty "
+            f"result).  You MUST NOT claim any numerical result derived from "
+            f"this call.  Either (a) retry with different parameters, or "
+            f"(b) emit a <tools_returned_nothing/> structured abstention — "
+            f"see system prompt."
+        ),
+        "__suggested_next_step__": _suggest_next_step(tool_name),
+    }
+    # Banner keys go FIRST so anything the model reads left-to-right hits
+    # them before the actual (empty) payload.
+    new_result = dict(banner)
+    new_result.update(result)
+    return new_result
+
+
+def _inject_failed_banner(result: dict[str, Any], tool_name: str) -> dict[str, Any]:
+    """F2.1: same idea as empty, but for explicit tool failures."""
+    err = str(result.get("error") or "unknown").strip()
+    banner = {
+        "__tool_status__": "FAILED",
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            f"Tool `{tool_name}` failed with: {err!r}.  You MUST NOT claim any "
+            f"numerical result derived from this call.  Either (a) retry with "
+            f"different parameters, or (b) emit a <tools_returned_nothing/> "
+            f"structured abstention — see system prompt."
+        ),
+        "__suggested_next_step__": _suggest_next_step(tool_name, error=err),
+    }
+    new_result = dict(banner)
+    new_result.update(result)
+    return new_result
+
+
+def _suggest_next_step(tool_name: str, error: str | None = None) -> str:
+    """Tool-specific next-step hint that the model can echo into a
+    <tools_returned_nothing suggested_next_step="..."/> tag."""
+    if error:
+        lower = error.lower()
+        if "timed out" in lower or "timeout" in lower:
+            return f"Retry `{tool_name}` with a tighter scope (e.g. smaller radius, fewer sources) or ask for a slower async variant."
+        if "oom" in lower or "memoryerror" in lower:
+            return f"Reduce the data volume before calling `{tool_name}` again."
+        if "import" in lower:
+            return f"The requested library is not available in this sandbox; rewrite without it."
+    if tool_name == "run_adql":
+        return "Widen the query (larger cone radius / looser quality cuts), verify the table + column names exist, or try a different archive."
+    if tool_name == "run_python":
+        return "Ensure the code produces at least one print statement or figure; check that required inputs are present."
+    if tool_name in {"search_objects", "crossmatch_catalogs", "query_transients"}:
+        return "Widen the cone radius, relax magnitude cuts, or confirm the target name / coordinates."
+    if tool_name == "search_literature":
+        return "Broaden the keyword list or try a different archive (ADS vs arXiv)."
+    return "Retry with different parameters, or ask the user to provide the target values explicitly."
 
 
 def numeric_sanity_warnings(payload: Any) -> list[str]:
