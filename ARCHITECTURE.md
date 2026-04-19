@@ -1,368 +1,333 @@
 # Standard Astro Architecture
 
-**Current as of the knowledge-base expansion (Phase A–G) and the Tier A–D tech-debt hardening pass.**
+**Current as of Phase F (reward-for-honesty architecture) + the Journal Edition UI overhaul.** Reflects the actual checked-in code, not an aspirational roadmap. Update when modules, flows, or deployment assumptions materially change.
 
 ## 1. System Shape
 
-Standard Astro is a full-stack astronomy platform with four runtime layers:
+Standard Astro is a full-stack astronomy research platform with four runtime layers:
 
-1. **Frontend SPA** — React + TypeScript application hosting Data Browser, AI Chat, Pipeline Studio, Workspace, ADQL editor, Observations, Account/Settings, Help, and shared-session pages.
+1. **Frontend SPA** — React 19 + TypeScript (strict) served by Vite. Pages: Data Browser, AI Chat (assistant), Pipeline Studio, ADQL, Workspace, Papers, Observations, Team, Account, Billing, Settings, Research History, Alert Dashboard, Anomaly Explorer, Landing, Help, Auth, Shared Session.
 
-2. **FastAPI application** — Single backend process exposing 28 domain routers for auth, data, AI chat (with SSE streaming), pipelines, exports, collaboration, research memory, alerts, provenance, and admin analytics.
+2. **FastAPI backend** — Single process, 28 domain routers. SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
 
-3. **Execution + storage services** — SQL database for metadata (PostgreSQL in prod, SQLite in dev), local filesystem for FITS, optional Redis + Celery for async pipelines and background execution.
+3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem or S3 for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines.
 
-4. **External astronomy + LLM services** — 23 archive connectors, NASA ADS / arXiv, astrometry.net, and routed LLM backends (Claude, OpenAI, DeepSeek, local).
+4. **External services** — 22 astronomy archive connectors, NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local).
 
-The platform is designed so users can move between search → chat → pipeline → workspace → export without leaving the same data context. The AI assistant bridges all modules by being able to call any backend capability via its 52-tool catalog.
+Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **55-tool catalog** (§3).
 
 ## 2. Frontend Architecture
 
-Main entrypoint: [App.tsx](./frontend/src/App.tsx)
+Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; the two-row **journal-masthead** holds an 8-tab primary nav (Home / AI Assistant / Browse / ADQL / Pipeline / Sessions / Papers / Account) plus a chip-style 4-language switcher (EN / 中文 / FR / ES), theme toggle, and user menu.
 
-### Top-level pages
+### Pages (18)
 
-- **Data Browser** — Multi-source search UI, FITS preview, result actions, object-detail flows, batch mode, saved searches.
-- **Chat** — AI assistant with persistent sidebar (Claude-desktop style), session save/load/rename, export actions, sharing, snapshots, collaboration controls, Plotly chart expand/download.
-- **Pipeline Studio** — React Flow canvas, node palette (35 types), parameter editor, template/version management, execution progress, quick-start templates.
-- **ADQL** — Multi-service TAP editor with syntax highlighting, template library, and result forwarding into chat.
-- **Workspace** — User files (FITS, VOTable, results) with tags, notes, batch upload, export.
-- **Observations** — Transient alert feed (TNS/Lasair/ZTF), anomaly explorer, follow-up recommendations.
-- **Team** — Collaboration hub: friends, shared datasets, shared pipelines, comments, activity feed.
-- **Account** — Profile, API keys (Fernet-encrypted), subscription tier, usage stats.
-- **Shared Session** — Read-only / comment / fork view for shared analysis sessions (tokenized URLs).
-- **Landing / Help / Auth** — Public entry, onboarding documentation, login/register flows.
+| Page | Purpose |
+|---|---|
+| `Landing` | Journal-style hero + 5-stat strip + 6-card TOC grid + editorial rail |
+| `DataBrowser` | Multi-source search, FITS preview, batch mode, saved searches |
+| `Chat` | AI assistant with persistent sidebar (claude.ai style); thinking timeline, action cards, honest-abstention bubble |
+| `Pipeline` | React Flow canvas, 35-node palette, quick templates (6 including open-cluster), template/version store |
+| `ADQL` | Multi-service TAP editor, syntax highlight, result forwarding into chat, plot builder |
+| `Workspace` | User files (FITS / VOTable / result sets), tags, notes, batch upload/export |
+| `Papers` | Three-column LaTeX manuscript editor (manuscripts / editor / figures & refs) |
+| `Observations` | Transient feed, alerts, anomalies, follow-up recommendations |
+| `Team` | Friends, shared datasets, shared pipelines, activity feed, comments |
+| `Account` / `Settings` / `Billing` / `ResearchHistory` | Profile, keys (Fernet-encrypted), subscription, opt-in memory |
+| `AlertDashboard`, `AnomalyExplorer` | Dedicated alerts + anomaly triage views |
+| `SharedSession` | Tokenized read / comment / fork view of any saved chat session |
+| `Auth`, `Help` | Login / register; onboarding docs |
 
-### Shared frontend infrastructure
+### Shared infrastructure
 
-- [`src/api/client.ts`](./frontend/src/api/client.ts) — Central typed API client, auth header injection, page-tracking headers, helper wrappers, SSE streaming support.
-- [`src/context/AuthContext.tsx`](./frontend/src/context/AuthContext.tsx) — JWT-based auth state and profile lifecycle.
-- [`src/hooks/useTracking.ts`](./frontend/src/hooks/useTracking.ts) — Session-scoped event tracking for analytics.
-- [`src/components/nodes/*`](./frontend/src/components/nodes) — Pipeline palette, node renderer, node parameter editing.
-- [`src/components/viz/*`](./frontend/src/components/viz) — SpectrumViewer, LightCurveViewer, ImageCutoutViewer, MCMCDiagnostics, PlotBuilder, AladinViewer, ProvenanceGraph.
-- [`src/i18n/index.tsx`](./frontend/src/i18n/index.tsx) — 4-language translations (English, Chinese, French, Spanish).
+- [`src/api/client.ts`](./frontend/src/api/client.ts) — Axios + typed SSE streaming. `ThinkingEvent` union covers `agent_text` / `tool_call` / `tool_result` / `status` / **`honest_abstention`** / `error`. `getAIBackendStatus()` feeds the F4 pre-send gate.
+- [`src/context/AuthContext.tsx`](./frontend/src/context/AuthContext.tsx) — JWT lifecycle; logout only on 401/403, not transient errors.
+- [`src/components/viz/*`](./frontend/src/components/viz) — PlotBuilder (Plotly publication-grade; Fit checkbox now shows ✓ / "(not supported)" per chart type), SpectrumViewer, LightCurveViewer (both auto-promote to `scattergl` at N > 5000), ImageCutoutViewer, MCMCDiagnostics, AladinViewer, ProvenanceGraph.
+- [`src/components/nodes/*`](./frontend/src/components/nodes) — 35-node palette + parameter editor; Journal-palette accent stripes per node family.
+- [`src/components/pipeline/autoLayout.ts`](./frontend/src/components/pipeline/autoLayout.ts) — Pure-stdlib Kahn longest-path layered DAG layout (no `elkjs` / `dagre`).
+- [`src/components/chat/*`](./frontend/src/components/chat) — MarkdownText, chat sidebar, figure-expand modal.
+- [`src/i18n/index.tsx`](./frontend/src/i18n/index.tsx) — 4-language flat dictionary; ~200+ keys.
+- [`src/styles/journal.css`](./frontend/src/styles/journal.css) — 2 k-line Journal-Edition stylesheet overriding chat / pipeline / browse / ADQL / sessions / account to the newspaper palette; loaded **after** `App.css` so same-specificity rules win the cascade.
+
+### Chat UI specifics (Phase F3)
+
+- **`HonestAbstentionCard`** (`ChatPage.tsx`) renders the pale-blue ✓ bubble when the SSE `honest_abstention` event arrives. Shows failed/empty tool list, model's rationale, suggested next step, and a "Try it" button that prefills the chat input.
+- **`AutoToolResult` status chips** — action card switches left border to red (`.tool-failed`) or amber (`.tool-empty`) based on `__tool_status__` / `analysis_status` / `success` / `error` from the provenance envelope. The `auto` badge swaps to "❌ Failed" or "∅ Empty" for failed/empty turns.
+- **`.chat-reply-failure-preamble`** — collapsible ⚠ strip above a prose reply when any tool that turn failed/empty, preserving the validation signal for happy-path replies.
+- **`ActionCard`** is memoized (`React.memo`) keyed on `reproducibility.run_id`, so streaming SSE events don't remount earlier cards and invalidate refs.
+- **Pending marker** — an assistant bubble with `_pending: { started_at }` renders a spinner; after 60 s it offers Retry; reconciled against `getChatSession` on page reload.
+- **F4 no-LLM gate** — Send button is disabled when neither browser-stored keys nor server-side backends are configured; red banner links to `/account`.
+
+### TypeScript constraints
+
+Strict build (`tsc -b && vite build`) is non-negotiable: `strict`, `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`, `erasableSyntaxOnly`. Types must be imported with `import type`. 8 test files × **118 vitest tests** currently green.
 
 ## 3. Backend Architecture
 
-Backend entrypoint: [`backend/app/main.py`](./backend/app/main.py)
+Entrypoint: [`backend/app/main.py`](./backend/app/main.py). FastAPI app factory + middleware stack (CORS, rate limit, event tracking, observability); migrates any missing columns at startup via `_migrate_add_columns` (SQLite/PG safe).
 
 ### API domains (28 routers)
 
-| Router | Responsibility |
+| Router | Role |
 |---|---|
-| `auth` | Username/password, JWT, Google OAuth, profile/settings |
-| `data` | Multi-archive search, advanced search, FITS upload/preview/download |
-| `chat` | AI chat endpoint, tool loop, session persistence, rename, sharing |
-| `pipeline` | DAG validation, sync/async execution, template/version APIs, batch |
-| `workspace` | File metadata, tags, notes, export integration |
-| `integration` | ADQL/TAP (with timeout retry), SAMP, VOTable, Jupyter export |
-| `export` | Markdown/report/notebook/LaTeX/BibTeX + chat-based export |
-| `paper` | Paper draft generation and manuscript download |
-| `sessions` | Share links, comments, session forking, snapshots, restore, diff |
-| `research` | Opt-in memory profile and history APIs |
-| `alerts`, `anomalies`, `followup`, `dossier` | Time-domain and anomaly features |
-| `citations`, `citation_graph` | NASA ADS + arXiv literature search |
-| `arxiv` | arXiv full-text extraction |
+| `auth` | Username/password, JWT, Google OAuth, setup keys |
+| `data` | Search, advanced search, FITS upload/browse/preview/download |
+| `chat` | Agent loop, SSE streaming, sessions CRUD, export actions, **`/api/chat/ai_backend_status`** |
+| `pipeline` | DAG validation, sync/async execution, template + version APIs, batch |
+| `integration` | ADQL/TAP with radius-halving retry, VOTable, Jupyter export, SAMP |
+| `workspace` | File metadata, tags, notes, batch upload/export |
+| `export` | Markdown / report / notebook / LaTeX / BibTeX |
+| `paper` | Paper draft generation + manuscript download |
+| `sessions` | Share tokens, comments, snapshots, forks, diffs |
+| `research` | Opt-in memory profile + history |
+| `team` | Friends, shared resources, activity feed |
+| `ws` | WebSocket relay (presence, pipeline progress, collab channels) |
+| `alerts`, `anomalies`, `followup`, `dossier` | Time-domain + anomaly features |
+| `citations`, `citation_graph`, `arxiv` | ADS + arXiv search / extract |
 | `crossmatch` | Position + probabilistic cross-matching |
-| `visualization` | Interactive plot generation |
+| `visualization` | Plotly chart generation |
 | `provenance` | IVOA ProvDM lineage export |
-| `team` | Friends, team members, shared resources, activity feed |
 | `scheduler` | Scheduled analysis jobs |
 | `isochrones` | Cached PARSEC isochrone delivery |
 | `inference` | Inference routing, model health, cost tracking |
-| `settings` | Encrypted API key storage |
-| `health` | Liveness, readiness, service stats |
+| `settings` | Encrypted API-key storage |
+| `health` | Liveness, `/health/deep` verifies DB + Redis + AI backend |
 | `events` | Analytics event ingestion |
 
-### Key backend subsystems
+### AI layer
 
-#### AI layer
+- [`app/ai/orchestrator.py`](./backend/app/ai/orchestrator.py) — Intent classification, specialist-context assembly, tool-subset filtering.
+- [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Routes to Claude / OpenAI / DeepSeek / local, logs cost/latency, falls back across backends on failure. Raises `InferenceError("No configured AI backends are available…")` on no-key paths (now surfaced pre-send by F4.2).
+- `app/ai/agents/*` — Specialist prompt fragments (data, analysis, literature, observation, visualization, spectrum).
+- [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **55-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
+- [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), ~57 KB / ~14 k-token `SYSTEM_PROMPT` (46 sections), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser.
 
-- [`app/ai/orchestrator.py`](./backend/app/ai/orchestrator.py) — Classifies request intent, assembles specialist-agent context, chooses tool subsets.
-- [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Routes inference to Claude / OpenAI / DeepSeek / local backends, records cost/latency.
-- `app/ai/agents/*` — Specialist prompt definitions (data, analysis, literature, observation, visualization).
-- [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **52-tool catalog** and execution layer. Each tool has a literature-cited docstring and input schema.
-- [`app/api/chat.py`](./backend/app/api/chat.py) — Chat loop, empty-reply fallback, `chat_session_id` threading, SSE streaming, ~51 KB literature-cited `SYSTEM_PROMPT` covering 16 astronomy domains.
+#### Tool catalogue (55)
 
-#### Data access layer
+Newly added in Phase F6:
+- **`query_gaia_cluster`** — Composes Gaia DR3 member-selection ADQL from structured params (center name → Sesame/SIMBAD resolve → parallax + PM + RUWE + G-mag cuts). Keeps SQL out of the LLM's hot path so F2.1 EMPTY banners fire cleanly on 0-row returns.
+- **`get_extinction`** — A_V / E(B-V) at a sky position. Primary path SFD98 via `dustmaps.sfd`; exp-disk analytic fallback when `dustmaps` unavailable. Band-specific A_band via Cardelli+ 1989 ratios.
 
-- `app/connectors/*` — 23 archive-specific adapters normalized behind a common `BaseConnector.search()` / `fetch()` / `normalize()` interface.
-- [`app/connectors/registry.py`](./backend/app/connectors/registry.py) — Lazy registry for all 23 connectors.
-- [`app/connectors/throttle.py`](./backend/app/connectors/throttle.py) — **Per-connector upstream rate limiter**: combines `asyncio.Semaphore` (concurrency cap) with a stdlib token bucket (rate cap). Default policies follow each archive's published ToS (Gaia 5 req/s / 2 concurrent, SDSS 2 req/s, VizieR 10 req/s, SIMBAD 10 req/s, MAST 5 req/s / 2 concurrent, ...). Raises `ThrottleTimeout` on sustained overflow so callers fail fast instead of hanging.
-- [`app/services/connector_cache.py`](./backend/app/services/connector_cache.py) — **Content-addressed response cache** keyed on `sha256(connector + endpoint + sorted(params))`. Three backends with auto-select: `RedisBackend` (when Redis is reachable), `SQLiteBackend` (local `data/cache.db` fallback), `NullBackend` (disabled). Tiered TTLs: 24 h for metadata (SIMBAD / NED single-object), 1 h for cone searches (Gaia / SDSS), 15 min for ADQL. `asyncio.Future`-based singleflight dedup collapses concurrent duplicate queries into a single upstream request.
-- `app/search/*` — Natural-query parsing and filter extraction.
+The rest of the catalogue is organized (see `result_provenance.py` `_DATA_TOOLS` / `_COMPUTE_TOOLS` / `_REFERENCE_TOOLS`):
 
-**Connector list:**
-- **Core optical/NIR:** `sdss`, `gaia`, `simbad`, `vizier`, `mast`, `ned`, `2mass`, `allwise`, `panstarrs`, `lamost`, `desi`
-- **Space / multi-wavelength:** `chandra`, `xmm`, `alma`, `eso`, `irsa`, `jwst`
-- **Radio:** `nvss`, `first`
-- **Specialized (new):** `jpl` (Horizons), `atnf_pulsar` (ATNF PSRCAT), `sparc` (rotation curves), `frbstats` (FRB catalog)
+- **Data tools (15)**: `search_objects`, `run_adql`, `get_object_info`, `get_object_dossier`, `query_transients`, `search_lightcurve`, `crossmatch_catalogs`, `batch_object_search`, `describe_tap_table`, `query_vo_service`, `get_last_search_results`, `read_fits_header`, `get_provenance`, `query_gaia_cluster`, `get_extinction`.
+- **Compute tools (31)**: `run_python`, `generate_pipeline`, `run_pipeline`, `validate_analysis`, `generate_paper_draft`, `fit_isochrone`, `estimate_photo_z[_pro]`, `analyze_spectrum[_pro]`, `sensitivity_analysis`, `fit_transit_model`, `gp_detrend_lightcurve`, `detect_stellar_flares`, `transit_search_bls`, `reduce_ccd_image`, `solve_astrometry`, `extract_photometry`, `extract_sources`, `classify_transient[_spectrum]`, `compute_galaxy_sfr`, `fit_rv_orbit`, `fit_sersic_morphology`, `x_ray_spectral_fit`, `pulsar_derived_quantities`, `analyze_cross_wavelength`, `radio_analysis`, `process_image`, `share_with_team`, `invite_team_member`, `export_results`, `workspace_export`.
+- **Reference tools (9)**: `search_literature`, `read_arxiv_paper`, `literature_review`, `research_workflow`, `generate_proposal`, `get_followup_recommendation`, `full_research_report`, `analyze_spectrum`, `estimate_photo_z`.
 
-#### Analysis layer
+`result_provenance.ALL_KNOWN_TOOLS` is asserted to equal `{t["name"] for t in TOOLS}` in `tests/test_result_provenance.py`; adding a tool without classifying it breaks CI.
 
-- [`app/services/astro_analysis.py`](./backend/app/services/astro_analysis.py) — Astronomy helper functions (60+ public functions) exposed to the Python sandbox and AI tools:
-  - Distance/magnitude conversion
-  - `fit_isochrone` (PARSEC CMD 3.9 + turnoff fallback)
-  - `wd_cooling_age` (Bédard+ 2020 lookup table)
-  - `bss_select` (blue straggler criteria from Rain+ 2021)
-  - CCM89 extinction, IRSA dust lookup
-  - Lomb-Scargle period, phase folding
-  - Voigt / multi-Gaussian fitting
-  - `plot_hr_diagram` (accepts both `parallax` and `distance_pc`)
-  - `target_visibility`, `exposure_time_estimate`
-  - Bootstrap / Monte Carlo error propagation
-- [`app/services/spectral_analysis_pro.py`](./backend/app/services/spectral_analysis_pro.py) — NIST line identification, heliocentric correction, IFU kinematics.
+### Zero-fabrication architecture (Phase F core)
+
+This is the load-bearing trust layer. Three layers of defence + one positive incentive.
+
+1. **Upstream banners** — [`app/services/result_provenance.py`](./backend/app/services/result_provenance.py).
+   - `normalize_tool_result(...)` wraps every tool return with a reproducibility envelope (`run_id`, `tool_version`, `query_hash`, `timestamp_utc`, optional `random_seed` + `archive_version`), plus a **provenance contract** (`data_origin ∈ {real_archive, cached_real, user_uploaded, synthetic, unavailable}`, `analysis_status ∈ {completed, partial, simulated_demo, failed, empty}`).
+   - New in F2.1: `_is_empty_payload` detects `row_count==0`, empty `results`/`rows`, run_python with no stdout + no figures + no variables. `_inject_empty_banner` / `_inject_failed_banner` prepend `{__tool_status__, __do_not_claim__, __message_to_model__, __suggested_next_step__}` to the dict so the LLM sees them first when streaming left-to-right. `_suggest_next_step(tool_name, error=...)` is tool-specific.
+   - Numeric sanity checks (`numeric_sanity_warnings`) still fire: negative parallax, RA ∉ [0, 360), Dec ∉ [-90, 90], |redshift| absurd, log g ∉ [0, 6.5], negative mass/radius/luminosity, impossible absolute magnitudes.
+
+2. **Claim validator** — [`app/services/claim_validator.py`](./backend/app/services/claim_validator.py).
+   - Regex catalogue: `redshift_z`, `redshift_word`, `log_g`, `metallicity`, `e_bv`, `a_v`, `mass_solar`, `luminosity_solar`, `age_gyr`, `age_myr`, `teff_k`, `distance_pc|kpc|mpc`, `period_days`, `parallax_mas`, `proper_motion`, `radial_velocity`, `magnitude`, plus Phase F1 additions: `label_colon` (`Mean Parallax: 7.353`), `count_with_noun` (`776 stars`), `value_with_error` (`7.353 ± 0.001 mas` → extracts both value and error), `ra_dec_pair`.
+   - `validate_claims(reply, tool_results)` harvests the numeric universe from `tool_results` recursively and matches each claim at ±1 % (default). F1.3 strict mode: if the universe has < 10 entries, tolerance tightens to 0.1 % to prevent accidental index / row-count matches.
+   - `is_empty_turn(tool_results)` + `zero_data_but_quantitative(reply, tool_results)` implement the F1.4 hard block — if every tool this turn is empty/failed and the reply still contains any numeric claim, skip straight to the block path.
+   - `blocked_reply_text(...)` renders a user-facing block message that includes the tool-universe snapshot (F1.5) so failures are legible.
+
+3. **Structured abstention** — parser in [`app/api/chat.py`](./backend/app/api/chat.py).
+   - System prompt (§ STRUCTURED ABSTENTION) instructs the LLM: when every tool's `__tool_status__` is EMPTY or FAILED, the entire reply must be a single `<tools_returned_nothing failed_tools="..." empty_tools="..." rationale="..." suggested_next_step="..."/>` tag.
+   - `_parse_abstention_tag` (permissive: self-closing / open-close, single/double quotes, surrounding whitespace; rejects prose before/after), `_classify_abstention_reason` (empty / failed / mixed / no_tools), `_render_abstention_card` emits canonical Markdown — model never generates prose here, so no fabrication pressure.
+   - Backend emits an SSE `{"type": "honest_abstention", "payload": {...}}` event that the frontend routes into `DisplayMessage._abstention` → renders `HonestAbstentionCard`.
+   - Claim validator is bypassed on this path (there's nothing to validate).
+
+4. **Agent-loop integration**: F1.4 zero-data hard block fires first; otherwise the regeneration loop runs up to 2 attempts, then block with the full universe snapshot. Fallback synthesis for empty LLM replies is now also gated through `validate_claims` (F1.2). Counter `fabrication_blocked_total{reason=zero_data|regen_exhausted|fallback_synthesis}` + `fabrication_detected_total{attempt}` + `reply_regeneration_total` track the punishment side; `honest_abstention_total{reason}` + `structured_abstention_emitted_total` track the reward side.
+
+### Data access layer
+
+- `app/connectors/*` — **22 archive adapters** (sdss, gaia, simbad, vizier, mast, ned, 2mass/twomass, allwise, chandra, xmm, alma, eso, irsa, jwst, lamost, desi, panstarrs, jpl, atnf_pulsar, sparc, frbstats, radio). Common interface `BaseConnector.search()` / `fetch()` / `normalize()`.
+- [`app/connectors/registry.py`](./backend/app/connectors/registry.py) — Lazy registry.
+- [`app/connectors/throttle.py`](./backend/app/connectors/throttle.py) — Per-connector `asyncio.Semaphore` + stdlib token bucket; per-archive ToS defaults (Gaia 5 req/s & 2 concurrent, SDSS 2 req/s, VizieR 10 req/s, SIMBAD 10 req/s, MAST 5 req/s & 2 concurrent, …). Raises `ThrottleTimeout` on sustained overflow.
+- [`app/connectors/retry.py`](./backend/app/connectors/retry.py) — Transient-only retry set (`httpx.TimeoutException`, `httpx.ConnectError`, `ConnectionError`, `TimeoutError`) + circuit breaker with closed/half-open/open states; `circuit_breaker_open_total` + `connector_error_total` counters.
+- [`app/services/connector_cache.py`](./backend/app/services/connector_cache.py) — Content-addressed cache keyed on `sha256(connector + endpoint + sorted(params))`. Backends: `RedisBackend` → `SQLiteBackend` → `NullBackend` (auto-select). Tiered TTLs: 24 h metadata, 1 h cones, 15 min ADQL. Singleflight dedup via a module-level `set[asyncio.Task]` with `task.add_done_callback(_tasks.discard)` so GC can't drop the shared future.
+
+### Analysis layer
+
+- [`app/services/astro_analysis.py`](./backend/app/services/astro_analysis.py) — 60+ exposed helpers: distance/DM conversions, `fit_isochrone` (PARSEC CMD 3.9 + turnoff fallback with Bressan+2012 calibration), `wd_cooling_age` (Bédard+2020 interpolation), `bss_select` (Rain+2021), CCM89 extinction, IRSA dust lookup, Lomb-Scargle + phase folding, Voigt / multi-Gauss fitting, `plot_hr_diagram` accepting parallax OR distance, `target_visibility`, `exposure_time_estimate`, bootstrap/MC error propagation.
+- [`app/services/spectral_analysis_pro.py`](./backend/app/services/spectral_analysis_pro.py) — NIST line ID, heliocentric correction, IFU kinematics.
 - [`app/services/photo_z_pro.py`](./backend/app/services/photo_z_pro.py) — 30 SED templates + Calzetti dust + Madau IGM + Bayesian priors.
-- [`app/services/bayesian_inference.py`](./backend/app/services/bayesian_inference.py) — MCMC chain diagnostics (R-hat, ESS, MCSE via ArviZ), Bayes factors, nested sampling.
-- [`app/services/time_domain_pro.py`](./backend/app/services/time_domain_pro.py) — GP detrending, BLS transit search, flare detection, transit fitting.
-- [`app/services/image_processing_pro.py`](./backend/app/services/image_processing_pro.py) — Reprojection, mosaicking, PSF matching, deblending, cutouts.
-- [`app/services/transient_classifier.py`](./backend/app/services/transient_classifier.py) — Random Forest light-curve classifier + spectral template matching.
-- [`app/services/sandbox/subprocess_backend.py`](./backend/app/services/sandbox/subprocess_backend.py) — **Crash-isolated Python sandbox**. User code runs in a `multiprocessing` *spawn* child guarded by `resource.setrlimit` (RLIMIT_AS, RLIMIT_CPU, RLIMIT_NPROC), `setsid` process-group isolation, and `killpg(SIGKILL)` on timeout. A segfault, memory bomb, or infinite loop in user code cannot crash the FastAPI worker. `code_executor.py` dispatches to this backend when `SANDBOX_BACKEND=subprocess`. See `tests/test_sandbox_isolation.py` for the eight containment test cases (infinite loop, memory bomb, sys.exit, hard kill, traceback capture, Matplotlib figure round-trip, and parent survival across repeated crashes).
-- [`app/services/code_executor.py`](./backend/app/services/code_executor.py) — **Sandboxed Python execution** with session-scoped variables. The `ALLOWED_MODULES` whitelist now includes:
-  - **Original:** numpy, scipy, astropy, specutils, photutils, dynesty, arviz, celerite2, batman, matplotlib, pandas, dask, pyvo, sklearn
-  - **New (Phase B/C):** sherpa, radvel, thejoker, galpy, pysme, statmorph, vorbin, ppxf, astroquery, dustmaps, healpy, lenstronomy, MulensModel, treecorr, yt, pint, psrqpy, skimage, warnings
+- [`app/services/bayesian_inference.py`](./backend/app/services/bayesian_inference.py) — ArviZ-based ESS / R-hat / HDI / WAIC / LOO; `mcmc_insufficient_sampling_total` counter flags `ess_bulk<400` or `rhat>1.05`.
+- [`app/services/time_domain_pro.py`](./backend/app/services/time_domain_pro.py) — GP detrending, `BoxLeastSquares` + bootstrap FAP, flare detection, transit fitting with covariance matrix.
+- [`app/services/image_processing_pro.py`](./backend/app/services/image_processing_pro.py) — Reproject, mosaic, PSF match, deblend, cutouts.
+- [`app/services/transient_classifier.py`](./backend/app/services/transient_classifier.py) — Random-forest light-curve classifier + template spectral matching.
 
-#### Pipeline layer
+### Python sandbox
 
-- [`app/pipeline/engine.py`](./backend/app/pipeline/engine.py) — DAG validation, topological execution, Redis caching (shared connection pool), sync fallback, Celery execution entrypoint, provenance recording per node.
-- [`app/pipeline/nodes/__init__.py`](./backend/app/pipeline/nodes/__init__.py) — **Node cost registry** (`NODE_COST`, `node_cost()`, `dag_has_heavy_nodes()`). Each of 17 expensive node types (`BayesianFit`, `TransitFit`, `GPDetrend`, `PhotoZPro`, `SEDFit`, `ImageStack`, `Mosaic`, `PSFMatch`, `Deblend`, `CosmicRayReject`, `SourceExtract`, `PSFPhotometry`, `AstrometricSolve`, `SpectraStack`, `TelluricCorrect`, `TimeSeriesAnalysis`, `CustomScript`) is tagged `heavy`; `/api/pipeline/run` returns `503` with an explicit message if a DAG contains heavy nodes but `PIPELINE_MODE != "celery"` (no worker attached).
-- `app/pipeline/nodes/*` — **35 node types**:
-  - **Data input:** QueryData, ImportWorkspace, LoadData
-  - **CCD reduction:** BiasSubtract, DarkCorrect, FlatField, CosmicRayReject
-  - **Astrometry/photometry:** AstrometricSolve, SourceExtract, PSFPhotometry, PhotCalibrate, ImageStack
-  - **Image processing:** Reproject, Mosaic, PSFMatch, Deblend
-  - **Spectroscopy:** Denoise, SpectralFit, RedshiftEstimate, EquivalentWidth, FluxCalibrate, TelluricCorrect, SpectraStack
-  - **Time-domain:** TimeSeriesAnalysis, GPDetrend, TransitFit
-  - **Statistical inference:** BayesianFit, PhotoZPro, SEDFit, CrossMatch
-  - **Transforms:** CoordTransform, Condition
-  - **Custom:** CustomScript
-  - **Output:** Plot, InteractivePlot
+- [`app/services/sandbox/subprocess_backend.py`](./backend/app/services/sandbox/subprocess_backend.py) — `multiprocessing` spawn child, `resource.setrlimit` (RLIMIT_AS/CPU/NPROC), `os.setsid` + `os.killpg(SIGKILL)` on timeout. Blocked builtins: `exec`, `eval`, `compile`, `open`. Seg-faults, OOM, infinite loops cannot take down the FastAPI worker.
+- **Phase F0 hardening** — payload-completeness guard: if the child dies mid-serialisation (`parent_conn.recv()` returns `None`, `{}`, non-dict, or `success=False` with no error), the backend now returns an explicit error message describing the failure mode + exit code; the child writes breadcrumbs (`conn.send success/failure`, `exit` line) to its stderr so Render logs can diagnose. `_exec_run_python` in `ai_tools.py` has an error-field tripwire: any failure carries both `error` and an `error_class` chip (`sandbox_crash`, `oom`, `timeout`, `name_error`, `import_error`, `syntax_error`, …). `sandbox_silent_failure_total` fires when the synthesized-error path is hit.
+- [`app/services/code_executor.py`](./backend/app/services/code_executor.py) — In-process fallback with session-scoped variables; TTL sweep evicts entries > 2 h old when the registry exceeds 64 sessions. `ALLOWED_MODULES` whitelist includes numpy / scipy / astropy / specutils / photutils / dynesty / arviz / celerite2 / batman / matplotlib / pandas / dask / pyvo / sklearn / sherpa / radvel / thejoker / galpy / pysme / statmorph / vorbin / ppxf / astroquery / dustmaps / healpy / lenstronomy / MulensModel / treecorr / yt / pint / psrqpy / skimage.
 
-#### Collaboration and memory
+### Pipeline layer
 
-- [`app/api/sessions.py`](./backend/app/api/sessions.py) — Share tokens, comments, snapshots, fork flows. Now with message-limit pagination.
-- [`app/services/memory_service.py`](./backend/app/services/memory_service.py) — Research profile generation, lightweight embedding store, history retrieval.
-- [`app/api/team.py`](./backend/app/api/team.py) — Friends, team members, shared results, activity feed.
-- [`app/api/ws.py`](./backend/app/api/ws.py) — WebSocket relay for real-time presence, cursor tracking, live comments.
+- [`app/pipeline/engine.py`](./backend/app/pipeline/engine.py) — DAG validation, topological execution, Redis caching, sync fallback, Celery entrypoint, per-node provenance with the environment manifest.
+- [`app/pipeline/nodes/__init__.py`](./backend/app/pipeline/nodes/__init__.py) — **`NODE_COST` registry + `dag_has_heavy_nodes()`**. 17 heavy nodes (`BayesianFit`, `TransitFit`, `GPDetrend`, `PhotoZPro`, `SEDFit`, `ImageStack`, `Mosaic`, `PSFMatch`, `Deblend`, `CosmicRayReject`, `SourceExtract`, `PSFPhotometry`, `AstrometricSolve`, `SpectraStack`, `TelluricCorrect`, `TimeSeriesAnalysis`, `CustomScript`); `/api/pipeline/run` returns 503 if heavy nodes present and `PIPELINE_MODE != "celery"`.
+- **35 node types** by family:
+  - Data input: QueryData, ImportWorkspace, LoadData
+  - CCD reduction: BiasSubtract, DarkCorrect, FlatField, CosmicRayReject
+  - Astrometry / photometry: AstrometricSolve, SourceExtract, PSFPhotometry, PhotCalibrate, ImageStack
+  - Image processing: Reproject, Mosaic, PSFMatch, Deblend
+  - Spectroscopy: Denoise, SpectralFit, RedshiftEstimate, EquivalentWidth, FluxCalibrate, TelluricCorrect, SpectraStack
+  - Time-domain: TimeSeriesAnalysis, GPDetrend, TransitFit
+  - Statistical inference: BayesianFit, PhotoZPro, SEDFit, CrossMatch
+  - Transforms: CoordTransform, Condition
+  - Custom: CustomScript
+  - Output: Plot, InteractivePlot
 
-#### Analytics
+### Collaboration + memory
 
-- [`app/services/event_collector.py`](./backend/app/services/event_collector.py) — Buffered event collection and bulk flush.
-- [`app/middleware/event_tracking.py`](./backend/app/middleware/event_tracking.py) — Automatic API-level tracking on core routes.
+- [`app/api/sessions.py`](./backend/app/api/sessions.py) — Share tokens, comments, snapshots, forks, diffs.
+- [`app/services/memory_service.py`](./backend/app/services/memory_service.py) — Opt-in research profile + hashed-embedding store.
+- [`app/api/team.py`](./backend/app/api/team.py) — Friends, shared resources, activity feed.
+- [`app/api/ws.py`](./backend/app/api/ws.py) — WebSocket relay for presence / pipeline progress / collab channels (auth-gated after PART C).
 
-#### Observability
+### Observability
 
-- [`app/observability/metrics.py`](./backend/app/observability/metrics.py) — **Stdlib-only Prometheus-compatible metrics registry**. Thread-safe counters and histograms with default latency buckets; `render_prometheus()` emits a subset of the OpenMetrics 0.0.4 text format. Exposed at `GET /metrics` in `app/main.py` for Prometheus / Grafana / Tempo scrapers. No external dependency — deliberately avoids `opentelemetry-*` / `prometheus-client` to keep the hot path and install surface small.
-- [`app/services/workflow_checkpoint.py`](./backend/app/services/workflow_checkpoint.py) — **In-memory workflow checkpoint store**. Records each step of a multi-tool AI workflow (`tool_name`, `inputs_hash`, `outputs_ref`, `status`) with a 2-hour TTL and 32-step cap per session, providing the substrate for resumable failed workflows. Chat-loop wiring is deferred to a follow-up (the store exists and is tested; `chat.py` does not yet emit checkpoints).
-- [`app/services/provenance.py`](./backend/app/services/provenance.py) — **Versioned provenance**. Each recorded activity now auto-captures an `environment_manifest` (Python version, platform, pinned package versions + SHA-256 fingerprint, active system-prompt hash) so old results can be reproduced deterministically. The manifest is merged into `record_activity()` output and exported alongside IVOA ProvDM lineage.
+- [`app/observability/metrics.py`](./backend/app/observability/metrics.py) — Stdlib-only Prometheus-compatible registry (no `prometheus-client` dep). Thread-safe counters + histograms; `GET /metrics` emits OpenMetrics text.
+- **Counter inventory** (production currently emits):
+  - Connector: `connector_requests_total{source}`, `connector_error_total{connector,source,kind}`, `circuit_breaker_open_total{connector}`, `astro_object_invalid_total`.
+  - Fabrication gate: `fabrication_detected_total{agent,attempt}`, `fabrication_blocked_total{agent,reason}`, `reply_regeneration_total{agent}`, `zero_data_but_claims_total{agent,claim_count}`.
+  - Honest path: `honest_abstention_total{agent,reason}`, `structured_abstention_emitted_total{agent}`.
+  - Tool health: `empty_tool_result_total{tool}`, `empty_tool_call_total{tool}`, `sandbox_silent_failure_total{tool}`.
+  - Science quality: `sanity_warning_total{tool}`, `mcmc_insufficient_sampling_total`.
+- [`app/services/workflow_checkpoint.py`](./backend/app/services/workflow_checkpoint.py) — Resumable-workflow store (32-step cap, 2 h TTL). Wiring into chat.py is a follow-up.
+- [`app/services/provenance.py`](./backend/app/services/provenance.py) — Versioned environment manifest (Python version, platform, pinned packages + SHA-256 fingerprint, system-prompt hash) merged into every recorded activity.
 
-## 4. Persistence Model
+## 4. Persistence
 
-Core persistent entities:
+Core entities (see `app/models/schemas.py`):
 
-- `User` — Auth profile with JWT, username, Google OAuth binding, subscription tier, Fernet-encrypted API keys
-- `DataFile` — FITS/VOTable/CSV metadata with user/source indexes
-- `PipelineRun`, `RunResult`, `PipelineTemplateDB`, `PipelineVersion` — Pipeline execution history with content-addressable caching
-- `ChatSession` — Chat history with indexes on `user_id` and `(user_id, created_at)` for fast session list queries
-- `PaperDraft` — Generated paper drafts in structured JSON form
-- `SharedSession`, `SessionFork`, `SessionComment`, `SessionSnapshot` — Collaboration primitives
-- `UserResearchProfile`, `SessionEmbedding` — Opt-in research memory
-- `UserEvent` — Analytics events with buffered flush
-- `InferenceLog` — Cost / latency / model tracking
-- Additional tables for alerts, anomalies, teams, setup keys, schedules
+- `User` — Auth + Fernet-encrypted API keys + subscription tier.
+- `DataFile` — FITS/VOTable/CSV metadata, user-scoped.
+- `PipelineRun`, `RunResult`, `PipelineTemplateDB`, `PipelineVersion` — Pipeline lineage.
+- `ChatSession` — Chat history; indexed on `(user_id, created_at)`.
+- `PaperDraft` — Generated paper drafts in structured JSON.
+- `SharedSession`, `SessionFork`, `SessionComment`, `SessionSnapshot` — Collaboration.
+- `UserResearchProfile`, `SessionEmbedding` — Opt-in memory.
+- `UserEvent`, `InferenceLog` — Analytics + cost.
+- Tables for alerts, anomalies, teams, setup keys, schedules.
 
-The project keeps SQLite compatibility in development via custom `UUIDType` and `JSONType`, while running PostgreSQL in production.
+SQLite (dev) portability via custom `UUIDType` + `JSONType`. Alembic-managed migrations (2 versions tracked); runtime `_migrate_add_columns` smooths over SQLite's inability to add columns via `create_all()`.
 
-## 5. Runtime Flows
+## 5. Runtime flows
 
-### Search flow
+### Search
 
-1. User submits a query in the Data Browser.
-2. Frontend calls `/api/data/search` or `/api/data/advanced-search` with an `AbortController` to cancel stale requests.
-3. Backend routes to selected connectors; some searches auto-select sources based on query keywords (e.g. "quasar" → SIMBAD + Gaia qso_candidates).
-4. Connectors run concurrently with per-source timeouts.
-5. Results are normalized into a shared `SearchResult` response model with a sanitized `extra` dict (NaN→None via `_safe_float`).
-6. Full results stored under the `"latest"` cache key; AI can retrieve them via `get_last_search_results`.
-7. Files fetched from search results land in Workspace storage and become reusable elsewhere.
+1. `/api/data/search` or `/advanced-search` → connectors dispatch concurrently with per-source timeouts.
+2. Normalize via `_astro_to_result()` + `_safe_float()` (masked astropy → None, never NaN).
+3. Full results cache under `"latest"` key; AI retrieves via `get_last_search_results`.
 
-### AI chat flow
+### ADQL
 
-1. Frontend sends message history plus context to `/api/chat/message/stream` (SSE).
-2. Backend builds runtime context:
-   - System prompt (~51 KB, 16 object-class workflows + data quality guardrails + Gaia DR3 tables reference)
-   - Specialist-agent prompt fragments based on intent classification
-   - Filtered tool list (52 tools available)
-   - Chat session ID from `current_session_id` (for tools that need session state)
-3. Inference router calls the configured LLM backend (Claude by default).
-4. **Tool calls execute concurrently** in a Python `asyncio` loop; each tool is a wrapper around analysis/data functions.
-5. Tool results are appended back into the model loop until the turn completes (max ~12 iterations).
-6. **Empty-reply fallback**: if the model returns zero text but executed tools, chat.py synthesizes a minimal summary so users never see a blank bubble.
-7. Reply + actions returned via SSE; auto-save after each turn; session auto-titled from first user message.
-8. Saved sessions can later feed paper generation, collaboration, and research memory.
+1. User or `run_adql` → `execute_adql_query` (standalone, not route-only).
+2. 408/502/503 → radius halved, then quartered.
+3. Full result (≤2000 rows) cached under `"latest_adql"`; AI sees first 100 rows + note; downstream Python gets the full set via `get_cached_results('latest_adql')`.
 
-### ADQL flow
+### AI chat
 
-1. User writes ADQL or AI generates it via `run_adql` tool.
-2. Backend calls `execute_adql_query` (standalone function, extracted from the FastAPI route handler so AI tools can use it directly).
-3. On timeout (408/502/503), the system **automatically retries** with cone radius halved, then quartered.
-4. Full result (up to 2000 rows from TAP) cached under `"latest_adql"` key; AI view shows first 100 rows + note.
-5. AI can retrieve full data in `run_python` via `get_cached_results('latest_adql')`.
+1. SSE POST `/api/chat/message/stream` with messages + context (`python_session_id`, `current_session_id`, last search / ADQL result set / uploaded FITS, etc.).
+2. Runtime = `SYSTEM_PROMPT` (57 KB, 46 sections) + specialist-agent fragments + filtered tool list.
+3. `inference_router.route(...)` → tool loop (max 12 iterations). Per-tool deadlines: `fit_isochrone` 180 s, `fit_transit_model`/`transit_search_bls` 120 s, `estimate_photo_z_pro` 90 s, rest 45 s. Agent-loop outer 360 s; connection heartbeats every 12 s to defeat proxy idle-kill.
+4. Tool returns flow through `normalize_tool_result` → `__tool_status__` banner + reproducibility envelope + sanity warnings.
+5. Final reply goes through:
+   1. `_parse_abstention_tag` → if `<tools_returned_nothing/>` → render card, emit SSE, return.
+   2. `zero_data_but_quantitative(reply, tool_results)` → if empty turn + numeric claim → hard block.
+   3. `validate_claims(...)` with `strict_when_empty` → up to 2 regeneration attempts; then block.
+   4. Fallback synthesis (empty LLM reply) — also validated.
+6. SSE events: `text` (final reply), `agent_text` (live thinking), `tool_call`, `tool_result` (`live: true` during loop + final consolidated), `status` (heartbeats), `honest_abstention`, `error`, `done`.
+7. Auto-save after each turn; auto-title from first user message; F4 pre-send gate blocks `Send` when no AI backend is configured.
 
-### Pipeline flow
+### Pipeline
 
-1. User edits a DAG in the React Flow canvas. The **Auto Layout** button (`components/pipeline/autoLayout.ts`) re-positions nodes deterministically via a pure-stdlib Kahn longest-path layered layout — no `elkjs` / `dagre` dependency.
-2. Frontend posts the DAG to `/api/pipeline/run`.
-3. Backend validates nodes, edges, topological order.
-4. **Heavy-node guard**: `dag_has_heavy_nodes()` scans the DAG; if it contains any `heavy`-tagged nodes (`BayesianFit`, `TransitFit`, `ImageStack`, ...) and `PIPELINE_MODE != "celery"`, the endpoint returns `503` with an explicit "start a Celery worker" message instead of blocking the FastAPI event loop.
-5. Execution happens either:
-   - **Asynchronously** via Celery worker (`PIPELINE_MODE=celery`, now the default), or
-   - **Synchronously** in a thread executor (`PIPELINE_MODE=sync`, dev/test only).
-6. Each node's output is cached in Redis (shared connection pool) with a content hash key.
-7. Provenance recorded per node (IVOA ProvDM format) with the versioned environment manifest.
-8. Node outputs merged and trimmed for API return.
-9. Run metadata stored in `PipelineRun` + `RunResult`.
+1. User edits DAG in React Flow. **Auto Layout** = Kahn longest-path.
+2. POST `/api/pipeline/run`. If heavy + `PIPELINE_MODE != celery` → 503.
+3. Celery worker (default) or sync thread executor (dev/test) executes; Redis cache keyed on content hash; per-node provenance with environment manifest.
 
-### Collaboration flow
+### Collaboration
 
-1. A saved chat session can be shared with `view`, `fork`, or `comment` access.
-2. Shared sessions loaded via tokenized URLs (`/shared/{token}`).
-3. Forking creates a new `ChatSession` under the collaborator's account.
-4. Snapshots serialize current chat-session state for point-in-time restore/diff.
-5. Real-time presence via WebSocket (`/api/ws`).
+Session share tokens → read / comment / fork URLs. Snapshots serialise current state for point-in-time restore + `difflib` diff. Presence via WebSocket (`/api/ws`, auth required).
 
-### CCD reduction flow
+## 6. AI knowledge base (`SYSTEM_PROMPT`)
 
-1. User uploads or imports FITS data.
-2. AI tools or pipeline nodes call CCD reduction helpers.
-3. Bias → dark → flat → cosmic-ray → astrometry → source extraction steps run on stored FITS assets.
-4. Reduced products written back to workspace storage and can re-enter Pipeline, Chat, or export flows.
+~57 KB / ~14 k tokens / **46 sections**. Highlights (top-of-prompt first):
 
-## 6. AI Knowledge Base (system prompt)
+1. **DATA RELEASE PINS** — Gaia DR3, SDSS DR18, 2MASS PSC, etc. Never mix releases silently.
+2. **ZERO-FABRICATION CONTRACT** — ±1 % tool-cited rule, now extended to cardinalities ("N stars").
+3. **STRUCTURED ABSTENTION** — when all tools this turn are EMPTY/FAILED, the entire reply must be a single `<tools_returned_nothing.../>` tag; the system renders a card. Inventing prose is penalised.
+4. **ADQL aggregate-function semantics (F7.1)** — STDDEV/VAR are population, not sample; σ/√N for SEM.
+5. **Cluster / association idioms (F7.2)** — prefer `query_gaia_cluster` + `get_extinction` over hand-written SQL; on EMPTY emit abstention instead of inventing member counts.
+6-46. Domain workflows: database decision tree, Gaia column completeness + specialised tables, GSP-Phot quality flags, extinction routing (SFD for low-E(B-V)), open / globular cluster, variable star (RR Lyrae / Cepheid / EB), distance hierarchy, spectroscopic catalog choice, dust maps (SFD / Bayestar / Green / Marshall), X-ray spectral fitting (Sherpa, HI4PI, Wilms abundances), SFR estimators (K&E 2012), RV orbit fitting, rotation curves (SPARC + galpy), stellar atmospheres (ATLAS9/MARCS/PHOENIX), galaxy morphology (Sérsic / galfit / statmorph), IMF, cluster virial scaling, pulsars (YMW16 DM, Lorimer & Kramer), WD cooling (Bédard+2020), brown dwarfs (Kirkpatrick 2005), IFU kinematics (Voronoi + pPXF), AGN SED decomposition (CIGALE, Vestergaard-Peterson BH mass), Galactic streams (GD-1, Sgr, Gaia-Enceladus), solar system (JPL Horizons), specialised-domain references (FRB, GW, lensing, BAO, CMB, N-body, microlensing, chemical evolution, adaptive optics, VLBI), data-integrity rules (no simulated data), pipeline DAG generation, action JSON format, SIMBAD basic-table columns.
 
-The `SYSTEM_PROMPT` constant in [`app/api/chat.py`](./backend/app/api/chat.py) is ~51 KB of literature-cited workflow guidance organized as:
+Every formula/constant is cited to author + year + journal + page. A prior audit removed LLM-hallucinated values (e.g. corrected Gaia `A_G/A_V=0.789` per Wang & Chen 2019; rewrote `wd_cooling_age` as 13-point Bédard+2020 interpolation).
 
-1. **Role and action types** — agent persona, JSON action schema, examples.
-2. **Database decision tree** — which archive for which object class.
-3. **Gaia DR3 data completeness** — 5-layer column availability by G magnitude.
-4. **Gaia DR3 specialized tables** — 11 specialized tables (vari_rrlyrae, vari_cepheid, vari_eclipsing_binary, nss_two_body_orbit, galaxy_candidates, qso_candidates, astrophysical_parameters, ...).
-5. **Gaia GSP-Phot data quality warnings** — explicit rules for when `ag_gspphot`, `mh_gspphot`, `teff_gspphot` are unreliable (distant, low-Z, crowded, faint, hot).
-6. **Extinction routing for low-E(B-V) targets** — force `lookup_ebv_irsa` (SFD 1998) for |b|>20°, d<500pc, globular clusters. Hardcoded benchmark values (Pleiades A_V=0.12, M53 A_V=0.06).
-7. **Blue straggler identification** — correct BSS criteria from Rain+ 2021 (not requiring BP-RP<0).
-8. **Open cluster workflow** — Pleiades/NGC 1647/Hyades-class.
-9. **Globular cluster workflow** — M53/M13/47 Tuc-class.
-10. **Variable star workflow** — RR Lyrae (Muraveva+ 2018), Cepheids (Ripepi+ 2019), EB.
-11. **Distance estimation hierarchy** — by distance range, with Lindegren+ 2021 ZP correction.
-12. **Spectroscopic catalog selection** — LAMOST / APOGEE / GALAH / DESI / SDSS.
-13. **Extinction / dust map options** — SFD/Bayestar/Green2019/Marshall.
-14. **X-ray spectral analysis workflow** — Sherpa models, HI4PI NH, Wilms+ 2000 abundances.
-15. **Galaxy SFR estimators** — K&E 2012 Table 1 (7 bands), Balmer decrement / UV slope dust correction.
-16. **RV orbit fitting** — radvel/thejoker, Keplerian parameters, mass function.
-17. **Galaxy rotation curves** — SPARC, NFW/Burkert/Einasto halos, galpy.
-18. **Stellar atmospheres** — ATLAS9/MARCS/PHOENIX, pysme/ispec, VALD3.
-19. **Galaxy morphology** — Sérsic profiles, galfit/statmorph.
-20. **IMF** — Salpeter/Kroupa/Chabrier.
-21. **Cluster virial / scaling** — Biviano 2006, Arnaud & Evrard 1999.
-22. **Pulsars** — ATNF PSRCAT, YMW16 DM, Lorimer & Kramer 2004 formulas.
-23. **White dwarf cooling** — Bédard+ 2020 Montreal tables.
-24. **Brown dwarfs** — Kirkpatrick 2005 L/T/Y.
-25. **IFU kinematics** — Voronoi binning, pPXF.
-26. **AGN SED decomposition** — CIGALE, Shen+ 2011, Vestergaard & Peterson 2006 BH mass.
-27. **Galactic streams** — GD-1, Sgr, Gaia-Enceladus.
-28. **Solar system** — JPL Horizons, MPC, Bowell H-G system.
-29. **P3 specialized domains (reference-only)** — FRB, GW counterparts, weak/strong lensing, BAO, CMB, N-body sims, microlensing, chemical evolution, adaptive optics, VLBI.
-30. **Data integrity rules** — no simulated data, explicit failure reporting.
-31. **Pipeline DAG generation** — node types with parameters, example workflows.
-32. **Action JSON format** — SSE action delivery spec.
+## 7. External integrations
 
-Every formula, constant, and table in the prompt is cited (author + year + journal + page). The earlier formula audit removed LLM-hallucinated values.
+### Astronomy archives (22)
 
-## 7. External Integrations
+- **Optical / NIR**: SDSS, Gaia DR3, SIMBAD, VizieR, MAST, NED, 2MASS, AllWISE, Pan-STARRS, LAMOST DR9, DESI EDR.
+- **Space / multi-wavelength**: Chandra, XMM-Newton, JWST, ESO, IRSA, ALMA.
+- **Radio**: `radio.py` (NVSS + FIRST).
+- **Specialised**: JPL Horizons, ATNF PSRCAT, SPARC, FRBSTATS.
 
-### Astronomy archives (23)
+### Other
 
-- **Core optical/NIR:** SDSS, Gaia DR3, SIMBAD, VizieR, MAST, NED, 2MASS, AllWISE, Pan-STARRS, LAMOST DR9, DESI EDR
-- **Space observatories:** HST/Kepler/TESS (via MAST), JWST, ESO (VLT/VISTA), IRSA, Chandra, XMM-Newton
-- **Sub-mm/radio:** ALMA, NVSS, FIRST
-- **Specialized:** JPL Horizons (ephemerides), ATNF Pulsar Catalogue, SPARC rotation curves, FRBSTATS
+- NASA ADS + arXiv for literature.
+- astrometry.net for WCS solving.
+- IRSA dust map service.
+- Anthropic / OpenAI / DeepSeek (LLM inference).
+- PARSEC CMD 3.9 for live isochrones (with turnoff-table fallback).
+- Optional: Redis + Celery.
 
-### Other external services
+## 8. Deployment
 
-- NASA ADS (citation search) and arXiv (full-text extraction)
-- astrometry.net (WCS solving)
-- IRSA dust map service (E(B-V) lookup)
-- Anthropic / OpenAI / DeepSeek (LLM inference)
-- Optional: Redis / Celery for async execution
-- Optional: PARSEC CMD 3.9 (for live isochrones) — falls back to turnoff lookup on timeout
+### Dev
 
-## 8. Deployment Profiles
+Uvicorn `--reload` + Vite dev server + SQLite + local files + no Redis (sync pipeline mode; heavy nodes rejected).
 
-### Minimal development
+### Prod (Render blueprint `render.yaml`)
 
-- FastAPI (uvicorn --reload)
-- React / Vite dev server
-- SQLite
-- Local file storage
-- No Redis / no Celery (sync pipeline mode)
+Six services:
 
-### Standard production
+1. `standard-astro-backend` — FastAPI, `/health/deep` healthcheck.
+2. `standard-astro-celery-worker` — concurrency=2.
+3. `standard-astro-celery-beat` — scheduler.
+4. `standard-astro-frontend` — Vite build, SPA rewrites.
+5. `standard-astro-redis` — cache + queue + pub/sub (allkeys-lru).
+6. `standard-astro-db` — PostgreSQL.
 
-- FastAPI web service
-- PostgreSQL database
-- Local filesystem or S3 for FITS
-- React static frontend (built by Vite)
-- Redis (cache + pub/sub)
-- Celery worker + beat
-- Uvicorn workers behind a load balancer
-- Render.com blueprint available in `render.yaml`
+`backend/Dockerfile` is Python 3.11-slim; installs gfortran, libpq, fontconfig, fonts-noto-cjk (CJK matplotlib). Non-root `app:app` user. Live URLs: `astro-backend-h4x1.onrender.com`, `astro-frontend-tyfr.onrender.com`.
 
-### AI backend choices
+### Auto-deploy
 
-- Claude-only deployment (recommended)
-- Mixed Claude / OpenAI / DeepSeek routing via inference_router
-- Local model fallback via OpenAI-compatible endpoint
+Push to `main` → Render auto-deploy. Render free tier sleeps after 15 min idle — the frontend `BackendBanner` component shows a "waking up" notice on first load.
 
-## 9. Current Design Constraints
+## 9. Current constraints
 
-These are implementation realities worth keeping explicit:
+- Python sandbox is **stability-hardened**, not adversarial-grade. `seccomp` / `gVisor` / `Firecracker` are out of scope.
+- Connector cache + upstream throttle are opt-in at the call site; migration to every connector is incremental.
+- Orchestrator still runs one tool-loop per turn; multi-agent execution is prepared but not yet the production path.
+- Opt-in research memory uses hashed embeddings, not a vector DB.
+- ADQL cache stores full result sets; the AI sees 100 rows; Python gets the rest via the cache key.
+- System prompt is ~14 k tokens. Further growth will require a jump-to section index.
+- API keys live in browser `localStorage` in beta mode; F4 gates the Send button but a full per-user session-storage migration is still backlog (PART C M9).
 
-- **Research memory** is opt-in and based on lightweight hashed embeddings, not heavyweight vector infrastructure.
-- **Celery is now the default** pipeline mode. Sync fallback remains for dev/test, but DAGs containing `heavy`-tagged nodes are rejected with `503` when no worker is attached.
-- **Python sandbox is process-isolated by default**. The subprocess backend (`app/services/sandbox/subprocess_backend.py`) is engineered for *stability* (crashing user code can never take down the FastAPI worker) rather than adversarial-grade security. `seccomp`/`gVisor`/`Firecracker`-level isolation is out of scope until a hardened deployment profile is added.
-- **Connector cache and upstream throttle are opt-in at the call site**: the new infrastructure exists and is tested, but `BaseConnector.search()` only begins using them as each connector is migrated (incremental rollout). The `/metrics` endpoint is likewise emitted in stdlib Prometheus format, but not all hot paths have been instrumented yet.
-- **Orchestrator** currently builds routed specialist context on top of a single chat-turn loop; the backend is prepared for richer multi-agent execution but the production path is still centered on one coordinated tool loop per turn.
-- **Workspace files** are the handoff boundary between search, chat, export, and pipeline modules.
-- **ADQL cache** stores full result sets but the AI model only sees the first 100 rows by default; downstream Python can retrieve the rest via `get_cached_results('latest_adql')`.
-- **Python sandbox** has a whitelist + memory limit; packages requiring compiled C extensions are restricted to those that install cleanly on Python 3.14 (Corrfunc failed; treecorr works).
-- **Some packages require external install** and can't be pip-installed alone (e.g. `sherpa.astro.xspec` needs HEASOFT; `CASA` needs separate distribution). The system prompt references these as "reference only" where necessary.
-- **System prompt is ~51 KB / ~12.8 K tokens**. Further growth will require structural refactoring into jump-to sections.
+## 10. Testing
 
-## 10. Physics Formula Audit
+- **Backend**: 35 `.py` test files, **907 pytest cases pass**. Major modules: `test_api`, `test_claim_validator` (25 tests), `test_abstention_parser` (15), `test_sandbox_crash_paths` (9), `test_sandbox_isolation` (8), `test_result_provenance` (with EMPTY banner + ALL_KNOWN_TOOLS assertion), `test_connector_cache`, `test_connector_throttle`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, `test_e2e_full`, `test_e2e_pleiades`. Golden-path fixtures under `backend/tests/golden/`.
+- **Frontend**: 8 `.test.tsx` files, **118 vitest cases pass**. Coverage: ChatPage, ActionCard, PlotBuilder, DataBrowser, ADQLPage, FITSBrowser, ProvenanceGraph, common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
+- **CI**: GitHub Actions runs backend pytest + frontend `tsc + vite build + vitest` + ruff lint on every push.
+- **Physical-regression targets** (manual): NGC 1647 (open cluster, Frasca+2026), M53 (globular + RR Lyrae), Tom 2 blue stragglers (Rain+2021), Vel OB1, white dwarf LF, Pleiades IMF, NGC 752 isochrone age ∈ [1.2, 2.0] Gyr.
 
-A full audit of all astronomy formulas was performed, removing LLM-hallucinated values and citing each formula to its published source. Highlights:
+## 11. Physics formula provenance
 
-- **Corrected** Gaia extinction coefficient: `A_G/A_V = 0.789` (Wang & Chen 2019) replacing the earlier `0.836` which was incorrectly attributed to Casagrande & VandenBerg 2018 (actual source: Jordi+ 2010).
-- **Removed** an incorrect `+0.2` bolometric correction (wrong sign for A-type turnoff stars).
-- **Fixed** the main-sequence ridge slope for MS-vs-RGB separation in `_estimate_age_from_turnoff`.
-- **Annotated** the empirical binary bias correction (+0.3 mag) as empirical, not a standard literature value.
-- **Rewrote** `wd_cooling_age` from a Mestel power-law to a 13-point log-log interpolation of Bédard+ 2020 Montreal cooling tables (validated: Crab pulsar τ_c matches literature).
-- **Corrected** `chain_diagnostics` for the newer ArviZ API (explicit float cast + `from_dict(posterior=...)` keyword).
+Every formula in the codebase either:
 
-All formulas in the codebase now either:
-1. Cite a specific published paper (author + year + journal + page) in code comments, or
-2. Directly wrap a widely-used package (sherpa, galpy, radvel, pysme, statmorph, etc.) and the package handles the physics.
+1. Cites a specific published paper (author + year + journal + page) in comments, or
+2. Wraps a widely-used package (sherpa, galpy, radvel, pysme, statmorph, arviz, dustmaps, …) and the package handles the physics.
 
-## 11. Testing Strategy
-
-- **Unit + integration tests** — 767 pytest tests covering connectors, services, pipeline nodes, analysis, security, models, sandbox isolation (8), connector cache (8), upstream throttle (5), router golden set (32), workflow checkpoints (7), environment manifest (5), and Prometheus metrics (5).
-- **End-to-end tests** — 29 integration tests in `tests/test_e2e_full.py` (marked `integration and not network`) covering AI tool dispatch, run_python sandbox, pipeline DAG execution, session state.
-- **Smoke tests** — Post-bugfix loop verifies new tool/connector/sandbox imports + physical validation (Crab pulsar, K&E 2012 SFR, Bédard WD cooling).
-- **CI** — GitHub Actions runs backend pytest + frontend vitest + TypeScript type check + ruff lint on every push.
-- **Manual regression** — 7 rounds of real paper reproduction tests against:
-  - NGC 1647 (open cluster, Frasca+ 2026) — age 199.5 vs 200 Myr (<1% error after fit_isochrone rewrite)
-  - M53 (globular cluster + RR Lyrae)
-  - Tom 2 blue stragglers (Rain+ 2021)
-  - Vel OB1 OB runaway stars
-  - White dwarf luminosity function
-  - Pleiades IMF
-
-This document tracks the **current repository state**, not an aspirational roadmap. Update it when modules, flows, or deployment assumptions materially change.
+A full audit corrected Gaia `A_G/A_V=0.789` (Wang & Chen 2019), removed an incorrect `+0.2` bolometric correction, fixed the MS-vs-RGB ridge slope in `_estimate_age_from_turnoff`, annotated the empirical `+0.3 mag` binary bias as empirical, rewrote `wd_cooling_age` against Bédard+2020 tables (validated on Crab), and refreshed `chain_diagnostics` for the current ArviZ API. Subsequent F1 / F2 work layered claim-time validation + upstream banner enforcement on top, so any regression would now be caught by the zero-fabrication gate before reaching the user.
