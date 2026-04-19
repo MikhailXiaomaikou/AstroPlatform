@@ -1667,78 +1667,124 @@ async def _run_agent_loop(
             validate_claims,
             build_regeneration_prompt,
             blocked_reply_text,
+            zero_data_but_quantitative,
+            is_empty_turn,
         )
-        for attempt in range(2):
-            validation = validate_claims(clean_reply, all_tool_results)
-            if validation.ok:
-                break
-            fabrication_stats["pass"] = attempt + 1
-            fabrication_stats["regenerations"] += 1
+
+        # F1.4: zero-data hard block.  If every tool call this turn was
+        # failed / empty / errored but the reply still makes numeric
+        # claims, short-circuit to the block path.  Pleiades case: AI
+        # wrote "776 stars, 7.353 ± 0.001 mas" after run_adql returned
+        # 0 rows and run_python crashed — the regen loop would have
+        # laundered the claim by rewriting with different phrasing.
+        zero_data_claims = zero_data_but_quantitative(clean_reply, all_tool_results)
+        if zero_data_claims:
             try:
                 from app.observability.metrics import record_counter
                 record_counter(
-                    "fabrication_detected_total",
+                    "zero_data_but_claims_total",
                     1.0,
                     agent=agent_name,
-                    attempt=str(attempt + 1),
+                    claim_count=str(len(zero_data_claims)),
                 )
             except Exception:
                 pass
-            logger.warning(
-                "Fabrication detected in %s reply (attempt %d): %d uncited claim(s): %s",
-                agent_name, attempt + 1, len(validation.uncited),
-                [c.label for c in validation.uncited],
+            logger.error(
+                "Zero-data turn with %d quantitative claim(s) from %s — "
+                "hard-blocking: %s",
+                len(zero_data_claims), agent_name,
+                [c.label for c in zero_data_claims],
             )
-            # Push the correction as a follow-up user message; no tools.
-            working_messages.append({
-                "role": "assistant",
-                "content": clean_reply,
-            })
-            working_messages.append({
-                "role": "user",
-                "content": build_regeneration_prompt(validation),
-            })
-            try:
-                regen = await _llm_messages_create(
-                    system=system,
-                    messages=working_messages,
-                    tools=[],  # no tools — prose rewrite only
-                    provider_api_keys=provider_api_keys,
-                    agent_name=agent_name,
-                    preferred_backend=preferred_backend,
-                )
-                regenerated = str(regen.get("content", "") or "").strip()
-            except Exception as exc:
-                logger.warning("Regeneration call failed: %s", exc)
-                break
-            if not regenerated:
-                break
-            clean_reply = regenerated
-            text_parts.append("\n[regenerated]\n" + regenerated)
-        else:
-            # Two attempts did not cure it — block the reply entirely.
+            # Run validate_claims once so we get the universe snapshot
+            # for the block message (F1.5).
             validation = validate_claims(clean_reply, all_tool_results)
-            if not validation.ok:
-                try:
-                    from app.observability.metrics import record_counter
-                    record_counter("fabrication_blocked_total", 1.0, agent=agent_name)
-                except Exception:
-                    pass
-                logger.error(
-                    "Fabrication gate BLOCKED reply from %s (%d uncited)",
-                    agent_name, len(validation.uncited),
-                )
-                clean_reply = blocked_reply_text(validation)
-                fabrication_stats["blocked"] = True
-        if fabrication_stats["regenerations"]:
+            clean_reply = blocked_reply_text(validation)
+            fabrication_stats["blocked"] = True
             try:
                 from app.observability.metrics import record_counter
-                record_counter(
-                    "reply_regeneration_total", float(fabrication_stats["regenerations"]),
-                    agent=agent_name,
-                )
+                record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="zero_data")
             except Exception:
                 pass
+
+        elif True:
+            for attempt in range(2):
+                validation = validate_claims(clean_reply, all_tool_results)
+                if validation.ok:
+                    break
+                fabrication_stats["pass"] = attempt + 1
+                fabrication_stats["regenerations"] += 1
+                try:
+                    from app.observability.metrics import record_counter
+                    record_counter(
+                        "fabrication_detected_total",
+                        1.0,
+                        agent=agent_name,
+                        attempt=str(attempt + 1),
+                    )
+                except Exception:
+                    pass
+                logger.warning(
+                    "Fabrication detected in %s reply (attempt %d): %d uncited claim(s): %s",
+                    agent_name, attempt + 1, len(validation.uncited),
+                    [c.label for c in validation.uncited],
+                )
+                # Push the correction as a follow-up user message; no tools.
+                working_messages.append({
+                    "role": "assistant",
+                    "content": clean_reply,
+                })
+                working_messages.append({
+                    "role": "user",
+                    "content": build_regeneration_prompt(validation),
+                })
+                try:
+                    regen = await _llm_messages_create(
+                        system=system,
+                        messages=working_messages,
+                        tools=[],  # no tools — prose rewrite only
+                        provider_api_keys=provider_api_keys,
+                        agent_name=agent_name,
+                        preferred_backend=preferred_backend,
+                    )
+                    regenerated = str(regen.get("content", "") or "").strip()
+                except Exception as exc:
+                    logger.warning("Regeneration call failed: %s", exc)
+                    break
+                if not regenerated:
+                    break
+                clean_reply = regenerated
+                text_parts.append("\n[regenerated]\n" + regenerated)
+            else:
+                # Two attempts did not cure it — block the reply entirely.
+                validation = validate_claims(clean_reply, all_tool_results)
+                if not validation.ok:
+                    try:
+                        from app.observability.metrics import record_counter
+                        record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="regen_exhausted")
+                    except Exception:
+                        pass
+                    logger.error(
+                        "Fabrication gate BLOCKED reply from %s (%d uncited)",
+                        agent_name, len(validation.uncited),
+                    )
+                    clean_reply = blocked_reply_text(validation)
+                    fabrication_stats["blocked"] = True
+            if fabrication_stats["regenerations"]:
+                try:
+                    from app.observability.metrics import record_counter
+                    record_counter(
+                        "reply_regeneration_total", float(fabrication_stats["regenerations"]),
+                        agent=agent_name,
+                    )
+                except Exception:
+                    pass
+        # F1.2: track whether this turn ran the claim gate so the
+        # fallback-synthesis branch below knows to apply it too.
+        _claim_gate_ran = True
+    else:
+        _claim_gate_ran = False
+        # Still need is_empty_turn for the fallback branch below.
+        from app.services.claim_validator import is_empty_turn  # noqa: F401
 
     for tr in all_tool_results:
         actions.append(
@@ -1774,6 +1820,37 @@ async def _run_agent_loop(
             "tool_results=%d iterations=%d",
             agent_name, len(all_tool_results), _iteration + 1,
         )
+
+        # F1.2: even the synthesised fallback must not smuggle numbers past
+        # the validation gate.  The summary above is tool-name-only so it
+        # should pass trivially, but if any downstream change adds
+        # numerics to this branch, run validate_claims so it gets caught.
+        try:
+            from app.services.claim_validator import (
+                validate_claims,
+                blocked_reply_text,
+            )
+            fallback_validation = validate_claims(clean_reply, all_tool_results)
+            if not fallback_validation.ok:
+                logger.error(
+                    "Fallback synthesis contained %d uncited claim(s); "
+                    "replacing with block message",
+                    len(fallback_validation.uncited),
+                )
+                try:
+                    from app.observability.metrics import record_counter
+                    record_counter(
+                        "fabrication_blocked_total",
+                        1.0,
+                        agent=agent_name,
+                        reason="fallback_synthesis",
+                    )
+                except Exception:
+                    pass
+                clean_reply = blocked_reply_text(fallback_validation)
+                fabrication_stats["blocked"] = True
+        except Exception as e:
+            logger.debug("Fallback synthesis validation skipped: %s", e)
 
     # M7: telemetry so the UI can surface "hit iteration cap" to the user
     # (previously silent — a 13-step workflow just got truncated with no

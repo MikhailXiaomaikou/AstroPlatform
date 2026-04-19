@@ -70,6 +70,54 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("proper_motion", re.compile(rf"\bproper\s*motion\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*mas", re.I)),
     ("radial_velocity", re.compile(rf"\b(?:radial\s*velocity|RV)\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*km/?s", re.I)),
     ("magnitude", re.compile(rf"\b(?:V|G|B|R|J|H|K)\s*[=≈~]\s*{_NUM}\s*(?:mag)?\b", re.I)),
+
+    # F1.1: labelled colon form — e.g. "Mean Parallax: 7.353 ± 0.001 mas",
+    # "Distance: 136.0 ± 0.0 pc", "Member Star Count: 776 stars".  The
+    # Pleiades reviewer saw every fabricated number rendered this way;
+    # the original regex only handled equals / prose prefixes.
+    ("label_colon", re.compile(
+        rf"\b(?:mean\s+parallax|weighted\s+mean|parallax|distance|redshift|age|"
+        rf"mass|luminosity|metallicity|log\s*g|temperature|T_?eff|period|"
+        rf"proper\s+motion|pmra|pmdec|RV|radial\s+velocity|magnitude|mag|"
+        rf"member\s+(?:count|star\s+count|number)|star\s+count|sample\s+size|"
+        rf"source\s+count|row\s+count|N_(?:stars|members|sources)|"
+        rf"fap|false\s+alarm\s+probability|chi[-\s]?squared?|reduced\s+chi2|"
+        rf"r\^?2|ess|rhat|hdi)\s*[:=]\s*{_NUM}",
+        re.I,
+    )),
+
+    # F1.1: integer cardinal counts with a noun.  Captures "776 stars",
+    # "1000 members", "250 sources" — the Pleiades fabrication included
+    # "Member Star Count: 776 stars" which the old patterns missed
+    # entirely (they only looked at physical quantities, not cardinalities).
+    ("count_with_noun", re.compile(
+        r"\b(\d{2,7})\s+(?:stars?|members?|sources?|objects?|galaxies?|"
+        r"candidates?|rows?|targets?|samples?|points?|detections?|"
+        r"quasars?|AGNs?|supernovae?|transients?|variables?|cepheids?|"
+        r"eclipsing\s+binaries|clusters?|pulsars?|exoplanets?|planets?)\b",
+        re.I,
+    )),
+
+    # F1.1: ± uncertainty pair — both the central value AND the error
+    # are claims that must be backed by tool results.  The reviewer's
+    # "7.353 ± 0.001 mas" exposed the gap: an error bar of 0.001 mas on
+    # 776 stars is physically impossible, but the value 7.353 alone
+    # could still match a tool output at ±1%.  Forcing both-match
+    # tightens the gate by the second decimal.
+    ("value_with_error", re.compile(
+        rf"{_NUM}\s*(?:±|\+/-|\+-)\s*([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)"
+        rf"\s*(?:mas|pc|kpc|Mpc|deg|arcmin|arcsec|km/?s|mag|dex|Gyr|Myr|yr|days?|K|"
+        rf"M_sun|L_sun|AU|Hz|GHz|MHz|erg(?:/s)?|Jy|mJy|μJy)\b",
+        re.I,
+    )),
+
+    # F1.1: coordinate pairs "RA = X, Dec = Y".  Previously the
+    # `distance`/`parallax` regexes covered many things but RA/Dec
+    # could slip through if the model invented them.
+    ("ra_dec_pair", re.compile(
+        rf"\bRA\s*[=:]\s*{_NUM}[,\s]+Dec\s*[=:]\s*{_NUM}",
+        re.I,
+    )),
 ]
 
 
@@ -87,6 +135,11 @@ class ValidationResult:
     ok: bool
     claims: list[Claim] = field(default_factory=list)
     uncited: list[Claim] = field(default_factory=list)
+    # F1.5: snapshot of the numeric universe harvested from tool_results
+    # so the block message can show the user what tools actually produced.
+    universe_sample: list[float] = field(default_factory=list)
+    universe_size: int = 0
+    strict_mode: bool = False
 
     def describe(self) -> str:
         """Human-readable summary used for the LLM regeneration prompt."""
@@ -96,36 +149,65 @@ class ValidationResult:
             f"- {c.label} = {c.value} (phrase: \"{c.raw}\")"
             for c in self.uncited
         ]
+        universe_note = (
+            f"Tools returned {self.universe_size} distinct numeric values this turn"
+            + (f" (sample: {self.universe_sample[:20]})" if self.universe_sample else " (empty)")
+        )
+        strict_note = (
+            "\n\n[Strict mode is ON — tolerance tightened to 0.1% because the "
+            "tool-result universe was thin (<10 entries).]"
+            if self.strict_mode else ""
+        )
         return (
             "The following numeric claims were NOT found in any tool_result "
             "this turn and must be removed or replaced with "
             "'not determined by my tools':\n" + "\n".join(lines)
+            + "\n\n" + universe_note + strict_note
         )
 
 
 def extract_claims(text: str) -> list[Claim]:
-    """Scan a reply for astronomical numeric claims."""
+    """Scan a reply for astronomical numeric claims.
+
+    F1.1: multi-group patterns (value_with_error, ra_dec_pair) emit one
+    Claim per captured group so both the central value AND the error bar
+    (or both RA AND Dec) must match tool output.
+    """
     claims: list[Claim] = []
-    seen_spans: set[tuple[int, int]] = set()
+    seen: set[tuple[int, int, float]] = set()
     for label, pattern in _PATTERNS:
         for match in pattern.finditer(text):
             span = match.span()
-            if span in seen_spans:
-                continue
-            seen_spans.add(span)
-            try:
-                value = float(match.group(1))
-            except (ValueError, IndexError):
-                continue
-            if not math.isfinite(value):
-                continue
-            claims.append(Claim(
-                label=label,
-                raw=match.group(0).strip(),
-                value=value,
-                start=span[0],
-                end=span[1],
-            ))
+            # Figure out how many capturing groups contain numeric values.
+            # All patterns have group(1); value_with_error + ra_dec_pair
+            # also have group(2).
+            for grp_idx in range(1, (pattern.groups or 1) + 1):
+                try:
+                    raw_num = match.group(grp_idx)
+                except IndexError:
+                    continue
+                if raw_num is None:
+                    continue
+                try:
+                    value = float(raw_num)
+                except ValueError:
+                    continue
+                if not math.isfinite(value):
+                    continue
+                key = (span[0], span[1], value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                claim_label = label
+                if pattern.groups and pattern.groups > 1:
+                    claim_label = f"{label}.g{grp_idx}"
+                claims.append(Claim(
+                    label=claim_label,
+                    raw=match.group(0).strip(),
+                    value=value,
+                    start=span[0],
+                    end=span[1],
+                ))
     return claims
 
 
@@ -170,11 +252,21 @@ def _matches_any(value: float, universe: set[float], tolerance: float) -> bool:
     return False
 
 
+# F1.3: when the tool-result universe is thin, switch to a tight tolerance
+# so an invented number cannot accidentally match some stray column index
+# or row count.  10 entries was chosen to be larger than the typical
+# `row_count`/`shape`/`len` scalars a successful tool response contains
+# beyond its actual data, and smaller than any real cone-search result.
+STRICT_TOLERANCE = 0.001  # 0.1 %
+STRICT_UNIVERSE_THRESHOLD = 10
+
+
 def validate_claims(
     reply: str,
     tool_results: Any,
     *,
     tolerance: float = DEFAULT_TOLERANCE,
+    strict_when_empty: bool = True,
 ) -> ValidationResult:
     """Check every numeric claim in `reply` against `tool_results`.
 
@@ -182,14 +274,42 @@ def validate_claims(
     accumulator), a single dict, or any nested structure.  We harvest all
     numeric scalars into a set and test each claim for a match within
     `tolerance`.
+
+    F1.3: if `strict_when_empty` and the harvested universe has fewer than
+    `STRICT_UNIVERSE_THRESHOLD` entries, tighten tolerance to
+    `STRICT_TOLERANCE` (0.1 %) to prevent accidental matches against
+    indices / row counts / offsets.
     """
     claims = extract_claims(reply)
-    if not claims:
-        return ValidationResult(ok=True, claims=[], uncited=[])
-
     universe: set[float] = set(_iter_numeric_values(tool_results))
-    uncited = [c for c in claims if not _matches_any(c.value, universe, tolerance)]
-    return ValidationResult(ok=not uncited, claims=claims, uncited=uncited)
+    universe_size = len(universe)
+    universe_sample = sorted(universe)[:50]
+
+    strict_mode = False
+    effective_tol = tolerance
+    if strict_when_empty and universe_size < STRICT_UNIVERSE_THRESHOLD:
+        effective_tol = STRICT_TOLERANCE
+        strict_mode = True
+
+    if not claims:
+        return ValidationResult(
+            ok=True,
+            claims=[],
+            uncited=[],
+            universe_sample=universe_sample,
+            universe_size=universe_size,
+            strict_mode=strict_mode,
+        )
+
+    uncited = [c for c in claims if not _matches_any(c.value, universe, effective_tol)]
+    return ValidationResult(
+        ok=not uncited,
+        claims=claims,
+        uncited=uncited,
+        universe_sample=universe_sample,
+        universe_size=universe_size,
+        strict_mode=strict_mode,
+    )
 
 
 def build_regeneration_prompt(result: ValidationResult) -> str:
@@ -209,15 +329,97 @@ def build_regeneration_prompt(result: ValidationResult) -> str:
 def blocked_reply_text(result: ValidationResult) -> str:
     """Fallback shown to the user when the LLM cannot stop fabricating."""
     lines = [f"- {c.label} = {c.value}" for c in result.uncited]
+    universe_snippet = (
+        f"Tools returned {result.universe_size} distinct numeric values this turn"
+        + (f" (sample: {result.universe_sample[:10]})" if result.universe_sample else " (empty).")
+    )
+    strict_note = (
+        "\nStrict validation was on (tool-result universe was thin)."
+        if result.strict_mode else ""
+    )
     return (
         "⚠ Reply withheld: the model attempted to cite values that were not "
         "produced by any tool this turn, and failed to correct itself after "
         "two attempts. The uncited values were:\n\n"
         + "\n".join(lines)
+        + f"\n\n{universe_snippet}{strict_note}"
         + "\n\nPlease rephrase your question — for example, ask me to "
         "search literature for the value, or provide it explicitly in "
         "your prompt."
     )
+
+
+def is_empty_turn(tool_results: Any) -> bool:
+    """F1.4: was this turn's tool output effectively empty?
+
+    Used to hard-block any quantitative claim when the agent ran tools but
+    none of them produced real data (e.g., ADQL returned 0 rows, Python
+    sandbox crashed, search_objects returned []).  Any status string
+    containing EMPTY / FAILED / UNAVAILABLE counts a tool as empty.
+
+    The agent loop accumulator shape is:
+        [{"tool": "run_adql", "input": {...}, "result": {...}}, ...]
+    We look at each entry's ``result`` (if present) AND at the entry
+    itself, so both shapes work.
+    """
+    if tool_results is None:
+        return True
+    if isinstance(tool_results, (list, tuple)):
+        items = list(tool_results)
+    elif isinstance(tool_results, dict):
+        items = [tool_results]
+    else:
+        return False
+    if not items:
+        return True
+    for entry in items:
+        if not isinstance(entry, dict):
+            return False
+        # Prefer the inner result when the entry is an accumulator record.
+        inner = entry.get("result") if isinstance(entry.get("result"), dict) else entry
+        outer = entry  # outer may still hold status/error for orchestrator records
+
+        status_tokens: list[str] = []
+        for src in (inner, outer):
+            for key in ("analysis_status", "__tool_status__", "status"):
+                v = src.get(key)
+                if isinstance(v, str):
+                    status_tokens.append(v.upper())
+
+        row_count = inner.get("row_count")
+        if row_count is None:
+            row_count = outer.get("row_count")
+
+        explicit_fail = (
+            inner.get("success") is False
+            or outer.get("success") is False
+            or bool(inner.get("error"))
+            or bool(outer.get("error"))
+            or any(tok in {"EMPTY", "FAILED", "UNAVAILABLE"} for tok in status_tokens)
+            or row_count == 0
+        )
+        # Also empty: a dict with only the tool/input keys and no meaningful
+        # result payload at all.
+        has_payload = bool(inner.get("rows") or inner.get("data")
+                           or inner.get("stdout") or inner.get("results")
+                           or inner.get("figures"))
+        if explicit_fail:
+            continue
+        if inner is entry and not has_payload and not outer.get("result"):
+            # Raw entry with no explicit failure but no data either.
+            continue
+        return False
+    return True
+
+
+def zero_data_but_quantitative(reply: str, tool_results: Any) -> list[Claim]:
+    """F1.4: when every tool is empty/failed, return the numeric claims
+    the reply still makes.  Callers short-circuit to the block path
+    without letting the regen loop launder the claim.
+    """
+    if not is_empty_turn(tool_results):
+        return []
+    return extract_claims(reply)
 
 
 def dump_tool_universe(tool_results: Any, limit: int = 50) -> str:
