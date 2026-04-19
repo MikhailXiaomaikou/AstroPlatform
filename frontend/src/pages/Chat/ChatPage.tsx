@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect, useCallback, lazy, Suspense } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback, lazy, memo, Suspense } from "react";
 import {
   sendChatMessage,
   executeChatAction,
@@ -231,7 +231,7 @@ function HonestAbstentionCard({
   );
 }
 
-function ActionCard({
+function ActionCardInner({
   action,
   index,
   result,
@@ -427,6 +427,27 @@ function ActionCard({
     </div>
   );
 }
+
+// F5.2: harden action-card identity across streaming re-renders.  Without
+// React.memo, every SSE tool_result event re-renders the ENTIRE message
+// tree and remounts earlier cards, which invalidates refs held by ongoing
+// focus/keyboard interactions (the "ref_60/ref_116 not found" error the
+// reviewer saw).  Memo keyed on stable identity: tool name + reproducibility
+// run_id when present, else the action index.
+const ActionCard = memo(ActionCardInner, (prev, next) => {
+  if (prev.action !== next.action) return false;
+  if (prev.index !== next.index) return false;
+  if (prev.executing !== next.executing) return false;
+  // Result may mutate in-place when a deferred tool finishes — compare by
+  // reproducibility.run_id when present (stable for the lifetime of the
+  // tool call), otherwise by identity.
+  const prevResult = prev.result as Record<string, unknown> | undefined;
+  const nextResult = next.result as Record<string, unknown> | undefined;
+  const prevRunId = (prevResult?.reproducibility as Record<string, unknown> | undefined)?.run_id as string | undefined;
+  const nextRunId = (nextResult?.reproducibility as Record<string, unknown> | undefined)?.run_id as string | undefined;
+  if (prevRunId || nextRunId) return prevRunId === nextRunId;
+  return prevResult === nextResult;
+});
 
 function StatsPanel({ rows, extraCols, onClose }: {
   rows: Array<Record<string, unknown>>;
@@ -996,8 +1017,13 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
         <div style={{ marginTop: 4 }}>
           <button
             className="btn-secondary btn-small"
-            onClick={() => {
-              // Store the generated DAG so Pipeline Editor can load it
+            type="button"
+            onClick={(e) => {
+              // F5.1: guard against stray bubbling events auto-clicking this
+              // button (user reported spontaneous /pipeline navigation mid
+              // chat-input).  Require explicit, deliberate click.
+              e.preventDefault();
+              e.stopPropagation();
               if (dag) {
                 localStorage.setItem("pipeline_autosave", JSON.stringify({
                   nodes: (dag as Record<string, unknown>).nodes,
