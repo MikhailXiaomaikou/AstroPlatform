@@ -2116,6 +2116,52 @@ async def _run_orchestrated_chat(
     return {"reply": merged_reply, "actions": merged_actions}
 
 
+@router.get("/ai_backend_status")
+async def ai_backend_status(
+    request: Request,
+    user: User | None = Depends(get_optional_user),
+):
+    """F4.2: report which AI backends are configured so the frontend can
+    disable Send and show a setup CTA when nothing is available.
+
+    Response is shape:
+      {
+        "configured_backends": ["anthropic", "openai"],
+        "needs_setup": false,
+      }
+    We check (a) env vars set server-side and (b) any per-user keys the
+    authenticated user has stored.  Never returns the keys themselves.
+    """
+    configured: list[str] = []
+    if os.getenv("ANTHROPIC_API_KEY", ""):
+        configured.append("anthropic")
+    if os.getenv("OPENAI_API_KEY", ""):
+        configured.append("openai")
+    if os.getenv("DEEPSEEK_API_KEY", ""):
+        configured.append("deepseek")
+    if os.getenv("LOCAL_MODEL_ENABLED", ""):
+        configured.append("local")
+
+    # Also check user's stored keys if authenticated.
+    if user is not None:
+        try:
+            if getattr(user, "anthropic_api_key", None):
+                if "anthropic" not in configured:
+                    configured.append("anthropic")
+            api_keys = getattr(user, "api_keys", None) or {}
+            if isinstance(api_keys, dict):
+                for provider in ("anthropic", "openai", "deepseek"):
+                    if api_keys.get(provider) and provider not in configured:
+                        configured.append(provider)
+        except Exception:
+            pass
+
+    return {
+        "configured_backends": configured,
+        "needs_setup": len(configured) == 0,
+    }
+
+
 @router.post("/message", response_model=ChatResponse)
 @limiter.limit("15/minute")
 async def chat_message(

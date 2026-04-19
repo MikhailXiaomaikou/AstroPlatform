@@ -1683,6 +1683,29 @@ export default function ChatPage() {
   const { track } = useTracking();
   const [hasKey, setHasKey] = useState(() => hasStoredAiKey());
 
+  // F4.1: in addition to the browser-side stored key, ask the backend
+  // which server-side backends are configured (env vars + user's stored
+  // server keys).  Either-or is enough to enable the Send button.
+  const [serverBackendReady, setServerBackendReady] = useState<boolean | null>(null);
+  const [serverBackendList, setServerBackendList] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { getAIBackendStatus } = await import("../../api/client");
+        const status = await getAIBackendStatus();
+        if (cancelled) return;
+        setServerBackendReady(!status.needs_setup);
+        setServerBackendList(status.configured_backends);
+      } catch {
+        if (cancelled) return;
+        setServerBackendReady(null); // unknown — don't block
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const aiBackendReady = hasKey || serverBackendReady === true;
+
   // Re-check API key on mount (picks up keys set in Settings page)
   useEffect(() => {
     if (!hasKey && hasStoredAiKey()) setHasKey(true);
@@ -3049,6 +3072,66 @@ export default function ChatPage() {
 
       <div className="chat-messages">
         {pageError && <div className="error-banner">{pageError}</div>}
+        {/* F4.1: top-of-chat banner when NEITHER a browser-stored key
+            NOR a server-side backend is configured.  Using the same
+            ApiKeyPrompt body below handles the key entry — this banner
+            just surfaces the state loudly + links to the Settings page. */}
+        {!aiBackendReady && serverBackendReady === false && (
+          <div
+            style={{
+              background: "rgba(255, 69, 58, 0.08)",
+              border: "1px solid rgba(255, 69, 58, 0.3)",
+              borderLeft: "3px solid var(--color-red)",
+              padding: "0.7rem 0.9rem",
+              borderRadius: 6,
+              margin: "0.5rem 0",
+              fontSize: "0.9rem",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <strong>AI backend not configured.</strong> Add an API key
+              below (stays in this browser) or configure one server-side
+              before sending messages.
+            </div>
+            <a
+              href="/account"
+              style={{
+                padding: "0.35rem 0.8rem",
+                background: "var(--color-red)",
+                color: "white",
+                borderRadius: 4,
+                textDecoration: "none",
+                fontSize: "0.82rem",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Open Settings →
+            </a>
+          </div>
+        )}
+        {/* When the server has a backend but the browser does not, Send
+            still works (falls back to server env).  Show a subtle note. */}
+        {!hasKey && serverBackendReady === true && serverBackendList.length > 0 && (
+          <div
+            style={{
+              background: "rgba(42, 93, 123, 0.07)",
+              border: "1px solid rgba(42, 93, 123, 0.25)",
+              borderLeft: "3px solid #2a5d7b",
+              padding: "0.5rem 0.8rem",
+              borderRadius: 6,
+              margin: "0.4rem 0",
+              fontSize: "0.82rem",
+            }}
+          >
+            Using server-side AI backend ({serverBackendList.join(", ")}).
+            You can add your own key below for better rate limits.
+          </div>
+        )}
         {!hasKey && (
           <ApiKeyPrompt onSaved={() => setHasKey(true)} />
         )}
@@ -3490,8 +3573,12 @@ export default function ChatPage() {
           <button
             className="btn-chat-send"
             onClick={() => handleSend()}
-            disabled={!input.trim() || loading}
-            title="Send message (Enter)"
+            disabled={!input.trim() || loading || !aiBackendReady}
+            title={
+              !aiBackendReady
+                ? "No AI backend configured — add an API key in Settings"
+                : "Send message (Enter)"
+            }
             aria-label="Send message"
           >
             &#x2191;

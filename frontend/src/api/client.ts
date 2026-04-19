@@ -1328,6 +1328,20 @@ export async function saveChatSession(
   return data;
 }
 
+// F4.2: report which AI backends (Claude/OpenAI/DeepSeek/local) are
+// configured so the chat UI can disable Send + show a setup banner when
+// nothing is available.  Checks server env vars + the authenticated
+// user's stored keys.  Never returns the key material itself.
+export interface AIBackendStatus {
+  configured_backends: string[];
+  needs_setup: boolean;
+}
+
+export async function getAIBackendStatus(): Promise<AIBackendStatus> {
+  const { data } = await api.get("/api/chat/ai_backend_status");
+  return data;
+}
+
 export async function renameChatSession(
   sessionId: string,
   title: string,
