@@ -6,6 +6,8 @@ pytest process. They exercise the backend directly; the in-process
 backend has its own coverage in test_code_executor.py.
 """
 
+import os
+import signal
 import sys
 
 import pytest
@@ -52,6 +54,15 @@ class TestSubprocessSandboxIsolation:
         assert r.success is False
         assert "SystemExit" in (r.error or "")
 
+    @pytest.mark.skipif(
+        sys.platform == "darwin" and not os.environ.get("RUN_CRASH_TESTS"),
+        reason=(
+            "On macOS, an in-process SIGSEGV is logged by ReportCrash as a "
+            ".ips file under ~/Library/Logs/DiagnosticReports/. Set "
+            "RUN_CRASH_TESTS=1 to opt in; otherwise rely on "
+            "test_abrupt_child_death_is_contained for the same invariant."
+        ),
+    )
     def test_segfault_is_contained(self):
         # ctypes is a builtin module so it IS importable in subprocess mode;
         # dereferencing NULL should abort the child, not the parent.
@@ -60,6 +71,14 @@ class TestSubprocessSandboxIsolation:
         # Either the child reported an error or died without sending one —
         # both outcomes are acceptable; the key property is the parent is
         # still alive to make this assertion.
+
+    def test_abrupt_child_death_is_contained(self):
+        # SIGKILL is delivered by the kernel without a Mach exception, so
+        # macOS ReportCrash does NOT write a .ips file — unlike SIGSEGV.
+        # Exercises the same parent-survival invariant as the segfault test.
+        r = _run("import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
+        assert r.success is False
+        assert r.error is not None
 
     def test_exception_traceback_captured(self):
         r = _run("raise ValueError('boom')")
