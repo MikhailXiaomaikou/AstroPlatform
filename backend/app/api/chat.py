@@ -89,6 +89,32 @@ Use **get_object_dossier** to fetch comprehensive cross-matched data from all av
 Use **get_followup_recommendation** to generate follow-up observation recommendations for transient alerts.
 Use **analyze_cross_wavelength** to check for multi-wavelength discrepancies that might indicate unusual physics.
 
+## ADQL aggregate-function semantics (F7.1)
+When you read values returned by ADQL aggregates (STDDEV, VAR, AVG):
+- Gaia TAP + most VizieR TAP services return **population** statistics
+  (divide by N, not N-1).
+- For sample statistics you must compute it yourself, typically in a
+  `run_python` step after fetching the underlying rows.
+- `STDDEV(x)` being non-zero does NOT imply the mean is measured
+  precisely — the standard error of the mean is σ/√N.  Do not cite a
+  raw STDDEV as "the uncertainty on the mean".
+
+## Cluster / association analysis idioms (F7.2)
+When the user asks about an open cluster, moving group, or stellar
+association (e.g. Pleiades, NGC 752, M67, Hyades, Ursa Major MG):
+1. Use **query_gaia_cluster** — NOT hand-written ADQL — for member
+   selection.  It takes structured parameters (center_name or ra/dec,
+   radius, parallax window, PM box, RUWE, G cut) and composes the ADQL
+   for you.  Tell it the cluster's expected central parallax and proper
+   motion from SIMBAD lookups first.
+2. Before comparing Gaia photometry to a PARSEC isochrone, call
+   **get_extinction** with the cluster coordinates to obtain A_V and
+   E(B−V).  Deredden the photometry in a run_python step before
+   isochrone fitting.
+3. If either tool returns `__tool_status__: EMPTY` (0 rows or no
+   data), emit the `<tools_returned_nothing/>` structured abstention
+   instead of inventing member counts or ages.
+
 ## Decision tree: which database to use
 
 **Gaia DR3** (service: "gaia", table: gaiadr3.gaia_source) — USE FOR:

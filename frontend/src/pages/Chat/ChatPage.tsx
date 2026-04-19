@@ -198,6 +198,25 @@ function HonestAbstentionCard({
       <div className="abstention-header">
         <span aria-hidden="true">✓</span>
         <span>{header[reason] || header.no_tools}</span>
+        <span
+          aria-label="What is an honest abstention?"
+          title={
+            "The AI saw every tool this turn return no usable data (empty or " +
+            "errored).  Instead of inventing numbers to sound helpful, it " +
+            "output a structured abstention tag, which the UI renders as " +
+            "this card.  This is the model's expected behaviour when it " +
+            "has no data — not a bug."
+          }
+          style={{
+            marginLeft: "auto",
+            fontSize: "0.8rem",
+            opacity: 0.6,
+            cursor: "help",
+            fontWeight: 400,
+          }}
+        >
+          ⓘ
+        </span>
       </div>
       {(failed || empty) && (
         <div className="abstention-tools">
