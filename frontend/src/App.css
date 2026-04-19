@@ -4819,6 +4819,30 @@
   background: rgba(160, 101, 0, 0.06);
 }
 
+/* G4: SYNTHETIC output — loudest visual treatment, because a synthetic
+   run_python result is more dangerous than a failed tool: the user might
+   mistake plausible-looking fake numbers for real results. */
+.chat-action-card.tool-synthetic {
+  border: 2px solid var(--color-red) !important;
+  border-left: 4px solid var(--color-red) !important;
+  background: rgba(255, 69, 58, 0.08);
+  position: relative;
+}
+
+.chat-action-card.tool-synthetic::before {
+  content: "⚠ SYNTHETIC DATA — NOT FROM OBSERVATIONS";
+  display: block;
+  background: var(--color-red);
+  color: white;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  margin: -0.75rem -0.75rem 0.6rem -0.75rem;
+  border-radius: 4px 4px 0 0;
+  text-transform: uppercase;
+}
+
 .auto-badge {
   font-size: 0.6rem;
   background: rgba(48, 209, 88, 0.15);

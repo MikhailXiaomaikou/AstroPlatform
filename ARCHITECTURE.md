@@ -116,6 +116,29 @@ The rest of the catalogue is organized (see `result_provenance.py` `_DATA_TOOLS`
 
 `result_provenance.ALL_KNOWN_TOOLS` is asserted to equal `{t["name"] for t in TOOLS}` in `tests/test_result_provenance.py`; adding a tool without classifying it breaks CI.
 
+### Anti-synthetic-fallback defenses (Phase G core, closes F's gap)
+
+PART F blocked the model from citing numbers not in `tool_results`. PART G
+closes the loophole: the AI can still **generate** fake numbers inside a
+`run_python` call (which itself succeeds), and then cite those. Four new
+layers:
+
+1. **G1 — Data-source contract.** `run_python` tool schema now has a required `data_source` field. Declared values: `latest_adql | latest_search | latest_lightcurve | cached:<key> | fits:<path> | none_not_analyzing_real_data`. Declared real source is validated against the code body (the code must call the matching helper like `get_adql_results()`); mismatch → reject. Declared `none_not_analyzing_real_data` → output is tagged SYNTHETIC.
+
+2. **G2 — AST static analysis.** [`app/services/synthetic_code_detector.py`](./backend/app/services/synthetic_code_detector.py) parses the Python code, flags `np.random.*` + time-axis `np.linspace` + suspicious keyword phrases ("simulate", "based on known parameters", "mock data", "generate realistic X") + var names (`synthetic_*`, `fake_*`). Legitimate random-use contexts are whitelisted (`emcee`, `dynesty`, `arviz`, `bootstrap`, `jackknife`). Verdict `synthetic` + declared real source → reject; `suspicious` → downgrade output to SYNTHETIC.
+
+3. **G3 / G3.4 — Upstream tool-failure tracking + physical tool removal.** [`api/chat.py` `_run_agent_loop`](./backend/app/api/chat.py) maintains a per-turn `tool_failure_counts`. When a data-fetch tool fails ≥ `DISABLE_AFTER_FAILURES=2` times, it is **removed from the `tools` parameter** on the next LLM call — the model literally cannot call it any more. A runtime note in the system prompt for that turn tells the model which tools were disabled and why. Also: when data-fetch failed earlier AND a subsequent `run_python` doesn't declare a real source, its output is tainted SYNTHETIC regardless of what was declared.
+
+4. **G1.5 — Guard reaches the model.** Error-string sanitization (`result_provenance._sanitize_error_message`) replaces instruction-like tokens ("retry", "fallback", "simulate", "narrower parameters") with neutral phrasings before the text is fed back to the LLM, closing the "prompt injection via error strings" vector the reviewer identified. SYSTEM_PROMPT has a dedicated ANTI-INSTRUCTION-REFLECTION section + an explicit rule banning `np.random` fallback after any data-fetch failure. System prompt is always built fresh per request (not cached per session).
+
+**UI visibility** (G4). Action cards with `__tool_status__="SYNTHETIC"` or `data_origin="synthetic"` render with a red border, a full-width "⚠ SYNTHETIC DATA — NOT FROM OBSERVATIONS" header ribbon, and a `⚠ SYNTHETIC` chip. Reply preamble flags synthetic tools separately from failed/empty. `tools_disabled` SSE event surfaces tool-removal to the thinking timeline.
+
+**Sandbox hardening** (G0.3). The "nine consecutive empty responses" pattern the reviewer reported is now instrumented: child writes breadcrumbs (`start exec` / `exec done; fignums=...` / `figure N serialized OK` / `about to send; pickled size=...` / `exit; sent_ok=True`) to stderr for Render log diagnostics. Per-variable repr caps (5000 chars, ndarray/DataFrame → shape+mean summary), per-figure size cap (8 MB base64), total-vars cap (512 KB), stdout truncation with explicit marker, 32 MB total payload ceiling before send with fallback to minimal-error payload. New Prometheus histogram `sandbox_duration_seconds{backend,exit_code}`.
+
+**VizieR catalog registry.** Paper 5 failed with "unresolved identifier RAJ2000" on SDSS `V/147/sdss12`. Registry now contains `V/147/sdss12`, `V/139/sdss9`, `I/355/gaiadr3`, `II/335/galex_ais` with real column lists (SDSS uses `RA_ICRS`/`DE_ICRS`, not `RAJ2000`). `suggest_for_missing_column()` maps common mistakes to hints; `_exec_adql` auto-attaches the hint to TAP error messages.
+
+**Debug endpoint.** `/api/chat/_debug_last_prompt` (gated by env `DEBUG_LAST_PROMPT=1`) returns the last prompt `inference_router.route` received so reviewers can confirm in-browser that the zero-fabrication + anti-reflection rules are actually present in the LLM's context.
+
 ### Zero-fabrication architecture (Phase F core)
 
 This is the load-bearing trust layer. Three layers of defence + one positive incentive.

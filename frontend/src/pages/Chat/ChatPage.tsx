@@ -319,20 +319,26 @@ function ActionCardInner({
   // __tool_status__ = FAILED or EMPTY (F2.1), and analysis_status =
   // failed / empty on dead/no-data tool returns.  Turn the whole card
   // red / amber so the user sees it alongside the model's prose.
+  // G4: __tool_status__ = "SYNTHETIC" / data_origin = "synthetic" gets
+  // the loudest treatment — synthetic data is the most dangerous case.
   const toolStatus = autoResult && typeof autoResult === "object"
     ? String((autoResult as Record<string, unknown>).__tool_status__ || (autoResult as Record<string, unknown>).analysis_status || "").toUpperCase()
+    : "";
+  const dataOrigin = autoResult && typeof autoResult === "object"
+    ? String((autoResult as Record<string, unknown>).data_origin || "").toLowerCase()
     : "";
   const hasErrorField = autoResult && typeof autoResult === "object"
     && typeof (autoResult as Record<string, unknown>).error === "string"
     && ((autoResult as Record<string, unknown>).error as string).trim() !== "";
   const explicitFail = autoResult && typeof autoResult === "object"
     && (autoResult as Record<string, unknown>).success === false;
-  const isToolFailed = toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField;
-  const isToolEmpty = !isToolFailed && toolStatus === "EMPTY";
+  const isToolSynthetic = toolStatus === "SYNTHETIC" || dataOrigin === "synthetic";
+  const isToolFailed = !isToolSynthetic && (toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField);
+  const isToolEmpty = !isToolSynthetic && !isToolFailed && toolStatus === "EMPTY";
 
   return (
     <div
-      className={`chat-action-card${isAutoExecuted ? " auto-executed" : ""}${isToolFailed ? " tool-failed" : ""}${isToolEmpty ? " tool-empty" : ""}`}
+      className={`chat-action-card${isAutoExecuted ? " auto-executed" : ""}${isToolFailed ? " tool-failed" : ""}${isToolEmpty ? " tool-empty" : ""}${isToolSynthetic ? " tool-synthetic" : ""}`}
     >
       <div className="chat-action-header">
         <span className="chat-action-icon">
@@ -342,10 +348,10 @@ function ActionCardInner({
           {labels[action.action] || action.action}
           {isAutoExecuted && (
             <span
-              className={`auto-badge${isToolFailed ? " failed" : ""}${isToolEmpty ? " empty" : ""}`}
-              title={isToolFailed ? "Tool failed" : isToolEmpty ? "Tool returned no data" : "Auto-executed"}
+              className={`auto-badge${isToolFailed ? " failed" : ""}${isToolEmpty ? " empty" : ""}${isToolSynthetic ? " failed" : ""}`}
+              title={isToolSynthetic ? "Synthetic data — not from real observations" : isToolFailed ? "Tool failed" : isToolEmpty ? "Tool returned no data" : "Auto-executed"}
             >
-              {isToolFailed ? "❌ Failed" : isToolEmpty ? "∅ Empty" : "auto"}
+              {isToolSynthetic ? "⚠ SYNTHETIC" : isToolFailed ? "❌ Failed" : isToolEmpty ? "∅ Empty" : "auto"}
             </span>
           )}
           {sanityWarnings.length > 0 && (
@@ -2256,6 +2262,17 @@ export default function ChatPage() {
     pythonSessionIdRef.current = crypto.randomUUID();
     localStorage.removeItem("astro_chat_history");
     localStorage.removeItem("astro_chat_autosave_draft");
+    // G6.1: also clear the workspace-context keys that the chat request
+    // auto-injects.  Without this the old session's ADQL / search / FITS
+    // results follow the user into the "new" session, which is exactly
+    // what the reviewer reported as "+ New chat doesn't truly reset".
+    // Reviewers saw Paper 2 and Paper 5 sharing context; these four
+    // keys were the culprit.
+    localStorage.removeItem("astro_last_adql");
+    localStorage.removeItem("astro_last_adql_rows");
+    localStorage.removeItem("astro_adql_result_sets");
+    localStorage.removeItem("astro_last_search");
+    localStorage.removeItem("astro_current_chat_session_id");
   };
 
   const handleRenameSession = async (newTitle: string) => {
@@ -3288,7 +3305,16 @@ export default function ChatPage() {
                           claim gate.  Keeps the validation signal visible. */}
                       {(() => {
                         const acts = msg.actions || [];
+                        const isSynthetic = (a: typeof acts[number]) => {
+                          const r = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
+                          if (!r || typeof r !== "object") return false;
+                          const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
+                          const origin = String(r.data_origin || "").toLowerCase();
+                          return st === "SYNTHETIC" || origin === "synthetic";
+                        };
+                        const synthetic = acts.filter(isSynthetic);
                         const failed = acts.filter((a) => {
+                          if (isSynthetic(a)) return false;
                           const r = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
                           if (!r || typeof r !== "object") return false;
                           const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
@@ -3296,19 +3322,42 @@ export default function ChatPage() {
                             || (typeof r.error === "string" && r.error.trim() !== "");
                         });
                         const empty = acts.filter((a) => {
+                          if (isSynthetic(a)) return false;
                           const r = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
                           if (!r || typeof r !== "object") return false;
                           const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
                           return st === "EMPTY";
                         });
                         const total = acts.filter((a) => !!(a as Record<string, unknown>)._auto_executed).length;
-                        if ((failed.length + empty.length) > 0 && total > 0) {
+                        if ((failed.length + empty.length + synthetic.length) > 0 && total > 0) {
+                          const extreme = synthetic.length > 0;
                           return (
-                            <details className="chat-reply-failure-preamble">
+                            <details
+                              className="chat-reply-failure-preamble"
+                              style={extreme ? {
+                                borderLeftColor: "var(--color-red)",
+                                background: "rgba(255, 69, 58, 0.1)",
+                              } : undefined}
+                              open={extreme}
+                            >
                               <summary>
-                                ⚠ {failed.length + empty.length} of {total} tool{total === 1 ? "" : "s"} this turn returned no data{failed.length > 0 ? ` (${failed.length} failed)` : ""}. Reply below is based on the remaining tools.
+                                {extreme ? "⚠⚠ " : "⚠ "}
+                                {synthetic.length > 0 && (
+                                  <strong>{synthetic.length} SYNTHETIC{synthetic.length === 1 ? "" : ""}</strong>
+                                )}
+                                {synthetic.length > 0 && (failed.length + empty.length > 0) ? " + " : ""}
+                                {(failed.length + empty.length) > 0 && (
+                                  <span>{failed.length + empty.length} no-data</span>
+                                )}
+                                {` of ${total} tool${total === 1 ? "" : "s"} this turn. `}
+                                {extreme && <strong>Numbers from synthetic tools are NOT from observations — do NOT cite them.</strong>}
                               </summary>
                               <div style={{ marginTop: 6, fontSize: "0.78rem" }}>
+                                {synthetic.length > 0 && (
+                                  <div style={{ color: "var(--color-red)" }}>
+                                    <strong>Synthetic:</strong> {synthetic.map((a) => a.action).join(", ")}
+                                  </div>
+                                )}
                                 {failed.length > 0 && <div>Failed: {failed.map((a) => a.action).join(", ")}</div>}
                                 {empty.length > 0 && <div>Empty: {empty.map((a) => a.action).join(", ")}</div>}
                               </div>

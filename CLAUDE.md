@@ -82,6 +82,20 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data 
 
 ## Critical Patterns
 
+### Anti-synthetic-fallback defenses (Phase G core — DO NOT regress)
+
+Closes the gap PART F left: AI generating fake data inside a *successful*
+run_python call. Four layers, every one tested:
+
+1. **Data-source contract** (`ai_tools.py` `_exec_run_python`): `run_python` tool schema has a required `data_source` field declaring `latest_adql` / `latest_search` / `latest_lightcurve` / `cached:<key>` / `fits:<path>` / `none_not_analyzing_real_data`. Declared real source must be reflected in the code (calls `get_adql_results` etc.) or the call is rejected.
+2. **Static AST detection** (`services/synthetic_code_detector.py`): parses the Python code, finds `np.random.*` + time-axis `np.linspace` + keyword phrases ("simulate", "based on known parameters") + suspicious var names (`synthetic_*`, `fake_*`). Whitelists legitimate MCMC / bootstrap via `emcee`, `dynesty`, `arviz`, `bootstrap`, `jackknife` identifiers. Three verdicts: `clean` / `suspicious` / `synthetic`. Verdict `synthetic` with a declared real source = reject; `suspicious` = downgrade output to SYNTHETIC.
+3. **Upstream dependency tracking + physical tool removal** (`api/chat.py` `_run_agent_loop`): per-turn `tool_failure_counts` — when a data-fetch tool fails ≥ `DISABLE_AFTER_FAILURES=2` times, it is **removed from the `tools` parameter** sent to the LLM (AI literally cannot call it). A runtime note is appended to the system prompt for that iteration explaining the disable. When data-fetch failed earlier this turn and a subsequent `run_python` does not declare a real source, its output is tainted `SYNTHETIC` regardless of what the AI declared.
+4. **Error-string sanitization** (`result_provenance._sanitize_error_message`): words like "retry" / "fallback" / "simulate" / "narrower parameters" in tool errors are replaced with neutral phrasings before being fed back to the LLM, so error text can't be read as instructions ("prompt injection via error strings"). The system prompt also has an ANTI-INSTRUCTION-REFLECTION section explicitly telling the model to ignore those words inside tool results.
+
+UI: tool_result with `__tool_status__="SYNTHETIC"` or `data_origin="synthetic"` renders with a loud red warning header ("⚠ SYNTHETIC DATA — NOT FROM OBSERVATIONS") on the action card. Reply preamble also flags synthetic tools separately from failed/empty.
+
+Tests: `tests/test_synthetic_code_detector.py` (12 fixtures), `tests/test_synthetic_fallback_regression.py` (end-to-end), `tests/test_result_provenance.py` (sanitizer). Token-level CI regression + debug endpoint `/api/chat/_debug_last_prompt` (env-gated) for verifying the guard reaches the LLM.
+
 ### Zero-fabrication architecture (Phase F core — DO NOT regress)
 
 Three layers of defence + one positive incentive, every layer tested:

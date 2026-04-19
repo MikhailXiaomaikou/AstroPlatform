@@ -379,7 +379,8 @@ TOOLS = [
             "process_in_chunks(data, chunk_size, func) processes large data in memory-safe chunks, "
             "memory_usage_mb() returns current memory usage in MB. "
             "Use print() to output results. Matplotlib figures are automatically captured. "
-            "Max execution time: 75 seconds. "
+            "Max execution time: 75s (normal), 30s (fast), 300s (slow — declare mode='slow' "
+            "for BLS / MCMC / large bootstrap / grid searches). "
             "REQUIRED: You MUST declare `data_source` — where the code's input data comes from. "
             "If you are NOT analyzing real observational data (e.g. demonstrating a formula, "
             "generating a plot template, Monte Carlo / MCMC / bootstrap), declare "
@@ -411,6 +412,15 @@ TOOLS = [
                         "If a real data-fetch tool FAILED earlier this turn, choosing "
                         "'none_not_analyzing_real_data' to replace it is forbidden — emit "
                         "<tools_returned_nothing/> instead."
+                    ),
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["fast", "normal", "slow"],
+                    "description": (
+                        "G5: execution-time budget. `fast` = 30s (small string / table "
+                        "manipulation), `normal` = 75s (default), `slow` = 300s (BLS, MCMC, "
+                        "bootstrap, PARSEC grid, large cross-matches). Default normal if omitted."
                     ),
                 },
             },
@@ -2451,15 +2461,28 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             ),
         }
 
+    # G5: mode-dependent timeout.  fast=30s / normal=75s (default) / slow=300s.
+    mode = str(inp.get("mode") or "normal").lower()
+    mode_timeout = {"fast": 30.0, "normal": 75.0, "slow": 300.0}.get(mode, 75.0)
+
     # Run in executor with timeout to not block the event loop
     loop = asyncio.get_running_loop()
     try:
         result = await asyncio.wait_for(
             loop.run_in_executor(None, execute_python, code, None, python_session_id),
-            timeout=90.0,
+            timeout=mode_timeout,
         )
     except asyncio.TimeoutError:
-        return {"success": False, "error": "Code execution timed out after 90 seconds", "stdout": ""}
+        return {
+            "success": False,
+            "error": (
+                f"Code execution timed out after {int(mode_timeout)}s (mode={mode}). "
+                f"For long computations (BLS / MCMC / bootstrap / PARSEC grid), "
+                f"declare mode='slow' to get a 300s budget."
+            ),
+            "error_class": "timeout",
+            "stdout": "",
+        }
 
     auto_fix_note = None
     if not result.success and result.error:
@@ -2469,7 +2492,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             try:
                 retry_result = await asyncio.wait_for(
                     loop.run_in_executor(None, execute_python, fixed_code, None, python_session_id),
-                    timeout=90.0,
+                    timeout=mode_timeout,
                 )
                 if retry_result.success:
                     result = retry_result

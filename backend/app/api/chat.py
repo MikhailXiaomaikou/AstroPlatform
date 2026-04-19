@@ -636,8 +636,15 @@ with the listed packages + references as starting points for user-specific analy
 4. NEVER guess column names. If unsure, call describe_tap_table first.
 
 ## CRITICAL: Data integrity rules
-- NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and suggest alternatives (different database, different query, retry).
+- NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and emit `<tools_returned_nothing/>`. Do NOT fall back to "example data", "realistic values based on known parameters", "for methodology demonstration", or any variant.
 - NEVER silently fall back to mock data. Every data point shown to the user MUST come from a real astronomical database or the user's own uploaded files.
+- When ANY data-fetch tool (search_lightcurve / run_adql / search_objects / crossmatch_catalogs / query_gaia_cluster / get_object_dossier) failed or returned EMPTY this turn, you are FORBIDDEN from:
+  * Using `np.random.*` to generate replacement data in `run_python`
+  * Using `np.linspace` / `np.arange` to build a synthetic time / wavelength / distance axis
+  * Writing code that starts with `# Since X is timing out, let's simulate ...`
+  * Declaring `data_source=none_not_analyzing_real_data` in `run_python` as a way to proceed past a failed data fetch
+  You MUST instead emit `<tools_returned_nothing failed_tools="X,Y"/>`. Fabricating data "to demonstrate the methodology" IS the behaviour this rule exists to block.
+- If a tool has been removed from your toolkit with the `[RUNTIME: tools [...] have been removed ...]` note, accept it and respond with the abstention tag or pivot to a different approach. Do not pretend the tool is still available.
 - When data is unavailable, say so clearly: "I could not retrieve data from [source] because [reason]. Here are alternatives: ..."
 - Every data tool returns a data_origin field. ONLY use data with data_origin="real_archive" for scientific analysis.
 - When data_origin="unavailable", tell the user explicitly. Do NOT fabricate replacement data.
@@ -1096,6 +1103,62 @@ def _filter_tools(tool_names: list[str] | None, tools: list[dict]) -> list[dict]
     return selected or tools
 
 
+def _trim_large_tool_results(messages: list[dict]) -> list[dict]:
+    """G6.2: shrink oversized tool_result / assistant content so the full
+    message array stays under Anthropic's ~200 KB prompt cap.
+
+    Rule: any single content block whose JSON serialization exceeds 30 KB
+    is replaced with a summary stub {shape, preview, note}.  Preserves the
+    structural role/content shape so the downstream LLM still sees a valid
+    tool_result — just much smaller.
+    """
+    import json as _json
+
+    PER_BLOCK_MAX = 30_000
+
+    def _shrink_string(s: str) -> str:
+        if len(s) <= PER_BLOCK_MAX:
+            return s
+        return (
+            s[:8000]
+            + f"\n...[TRIMMED by pre-flight: {len(s) - 8000} chars dropped; "
+            + f"original was {len(s)} chars. This tool_result was from a "
+            + f"previous turn. If you need to re-read it, ask the user to "
+            + f"re-run the tool or start a new chat.]"
+        )
+
+    out: list[dict] = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            out.append({**m, "content": _shrink_string(content)})
+            continue
+        if isinstance(content, list):
+            new_blocks = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "tool_result":
+                        raw = block.get("content")
+                        if isinstance(raw, str) and len(raw) > PER_BLOCK_MAX:
+                            new_blocks.append({**block, "content": _shrink_string(raw)})
+                            continue
+                    block_str = _json.dumps(block, default=str)
+                    if len(block_str) > PER_BLOCK_MAX:
+                        new_blocks.append({
+                            "type": block.get("type", "text"),
+                            "text": (
+                                f"[TRIMMED content block, original size "
+                                f"{len(block_str)} bytes; see session history for full data]"
+                            ),
+                        })
+                        continue
+                new_blocks.append(block)
+            out.append({**m, "content": new_blocks})
+            continue
+        out.append(m)
+    return out
+
+
 async def _build_runtime(
     req: ChatRequest,
     user: User | None,
@@ -1190,6 +1253,35 @@ async def chat_message_stream(
         preferred_backend = _preferred_backend(req.context)
 
         claude_messages: list[dict] = _normalize_messages(req.messages)
+
+        # G6.2 / G6.3: payload pre-flight.  The reviewer reported the chat
+        # endpoint returning "payload likely rejected before the app server
+        # handled it" — a symptom of the previous turn's giant tool_result
+        # being forwarded verbatim into this request.  Trim oversized tool
+        # result blocks (>30 KB each) down to a shape+size+preview summary
+        # so the LLM's context stays under Anthropic's 200 KB cap.
+        claude_messages = _trim_large_tool_results(claude_messages)
+
+        # If after trimming we're still > 180 KB, reject with a clear
+        # structured error instead of letting the upstream LLM API 413.
+        import json as _json
+        total_bytes = sum(len(_json.dumps(m, default=str)) for m in claude_messages)
+        if total_bytes > 180_000:
+            yield (
+                f"data: "
+                + _json.dumps({
+                    "type": "error",
+                    "message": (
+                        f"Previous tool results are too large ({total_bytes} bytes). "
+                        f"Start a new chat with '+ New chat' or ask a shorter question. "
+                        f"(Server-side payload pre-flight / G6.3)"
+                    ),
+                    "error_class": "payload_too_large",
+                })
+                + "\n\n"
+            )
+            return
+
         runtime = await _build_runtime(req, user, db)
         agent_names = list(runtime.get("agent_names") or ["orchestrator"])
 
@@ -1526,6 +1618,33 @@ async def _llm_messages_create(
     preferred_backend: str | None = None,
 ):
     """Route one model turn through the inference router."""
+    # G7.3: if debug-prompt capture is on, snapshot the system + first
+    # messages for the /api/chat/_debug_last_prompt endpoint.
+    if os.getenv("DEBUG_LAST_PROMPT", "").strip():
+        from datetime import datetime as _dt
+        try:
+            _LAST_PROMPT_DEBUG.update({
+                "enabled": True,
+                "system": system,
+                "message_count": len(messages),
+                "first_messages_preview": [
+                    {
+                        "role": m.get("role"),
+                        "content_preview": (
+                            str(m.get("content"))[:500]
+                            if not isinstance(m.get("content"), list)
+                            else f"[{len(m.get('content', []))} content blocks]"
+                        ),
+                    }
+                    for m in messages[:3]
+                ],
+                "timestamp": _dt.utcnow().isoformat() + "Z",
+                "agent": agent_name,
+                "tools_count": len(tools),
+                "tool_names": [t.get("name") for t in tools],
+            })
+        except Exception:
+            pass
     return await inference_router.route(
         agent_name,
         messages,
@@ -1583,6 +1702,10 @@ async def _execute_tool_calls(
         "fit_sersic_morphology": 90.0,
         "analyze_spectrum_pro": 90.0,
         "compute_galaxy_sfr": 60.0,
+        # G5: run_python ceiling is the `slow` mode budget + a little
+        # slack. The inner `_exec_run_python` picks the real per-call
+        # timeout based on the AI's declared mode.
+        "run_python": 310.0,
     }
     _TOOL_DEADLINE_DEFAULT = 45.0
 
@@ -1686,6 +1809,21 @@ async def _run_agent_loop(
     # buffer on each side for tool execution + response assembly.
     _loop_deadline = _time.monotonic() + 360.0
 
+    # G3.1: track which data-fetch tools have failed this turn so we can
+    # taint subsequent run_python outputs + physically remove the failed
+    # tools from future LLM turns (G3.4).
+    _DATA_FETCH_TOOLS = {
+        "search_objects", "run_adql", "search_lightcurve", "query_transients",
+        "crossmatch_catalogs", "query_gaia_cluster", "get_object_info",
+        "get_object_dossier", "get_extinction", "search_literature",
+    }
+    # G3.4: tool → failure count this turn.  When ≥ DISABLE_AFTER_FAILURES,
+    # the tool is removed from the `tools` parameter sent to the LLM on the
+    # next iteration — the model literally cannot call it any more.
+    tool_failure_counts: dict[str, int] = {}
+    DISABLE_AFTER_FAILURES = 2
+    synthetic_run_python_count = 0  # G3.3 counter
+
     hit_iteration_cap = False
     hit_deadline = False
     for _iteration in range(max_iterations):
@@ -1698,10 +1836,46 @@ async def _run_agent_loop(
                 "hit_deadline": True,
                 "hit_iteration_cap": False,
             }
+
+        # G3.4: filter tools that have failed too many times this turn.
+        visible_tools = [
+            t for t in tools
+            if tool_failure_counts.get(t.get("name", ""), 0) < DISABLE_AFTER_FAILURES
+        ]
+        disabled_this_turn = [
+            t.get("name") for t in tools
+            if tool_failure_counts.get(t.get("name", ""), 0) >= DISABLE_AFTER_FAILURES
+        ]
+
+        # Append a runtime note to the system message when any tools are
+        # disabled this iteration, so the model understands why its previous
+        # calls "disappeared" from the schema.
+        if disabled_this_turn:
+            system_this_call = (
+                system
+                + "\n\n[RUNTIME: the following tools have been removed from "
+                + "your toolkit this turn because they failed "
+                + f"{DISABLE_AFTER_FAILURES}+ times already: "
+                + f"{disabled_this_turn}. Do NOT attempt to call them by "
+                + "name (they are not in your schema). Either use a DIFFERENT "
+                + "tool with DIFFERENT parameters, or emit "
+                + "<tools_returned_nothing failed_tools='"
+                + ",".join(disabled_this_turn) + "' ...>.]"
+            )
+            # G3.5: tell the frontend, via SSE, that tools have been disabled
+            await _emit({
+                "type": "tools_disabled",
+                "agent": agent_name,
+                "disabled": disabled_this_turn,
+                "iteration": _iteration,
+            })
+        else:
+            system_this_call = system
+
         response = await _llm_messages_create(
-            system=system,
+            system=system_this_call,
             messages=working_messages,
-            tools=tools,
+            tools=visible_tools,
             provider_api_keys=provider_api_keys,
             agent_name=agent_name,
             preferred_backend=preferred_backend,
@@ -1749,6 +1923,68 @@ async def _run_agent_loop(
         )
         for tc in executed_tools:
             result = tc["result"]
+            tool_name = tc.get("name", "")
+
+            # G3.1: mark data-fetch failures for the G3.4 disable gate.
+            if tool_name in _DATA_FETCH_TOOLS and isinstance(result, dict):
+                status_tokens: list[str] = []
+                for key in ("analysis_status", "__tool_status__", "status"):
+                    v = result.get(key)
+                    if isinstance(v, str):
+                        status_tokens.append(v.upper())
+                is_failure = (
+                    result.get("success") is False
+                    or bool(result.get("error"))
+                    or any(s in {"EMPTY", "FAILED", "UNAVAILABLE"} for s in status_tokens)
+                    or result.get("row_count") == 0
+                )
+                if is_failure:
+                    tool_failure_counts[tool_name] = tool_failure_counts.get(tool_name, 0) + 1
+
+            # G3.2: if any data-fetch failed this turn and the AI now runs
+            # run_python without declaring a real source, taint its output.
+            if tool_name == "run_python" and isinstance(result, dict):
+                failed_data_fetches = {
+                    n for n, c in tool_failure_counts.items() if c > 0
+                }
+                declared = str(tc.get("input", {}).get("data_source", "")).strip()
+                is_real_source_declared = declared in {
+                    "latest_adql", "latest_search", "latest_lightcurve",
+                } or declared.startswith(("cached:", "fits:"))
+                if failed_data_fetches and not is_real_source_declared:
+                    # Override result to add SYNTHETIC taint + banner.
+                    taint_banner = {
+                        "__tool_status__": "SYNTHETIC",
+                        "__do_not_claim__": True,
+                        "__message_to_model__": (
+                            f"This run_python output has been marked SYNTHETIC "
+                            f"because data-fetch tools {sorted(failed_data_fetches)} "
+                            f"failed earlier this turn and this call did NOT declare "
+                            f"a real data source.  You MUST NOT cite any number from "
+                            f"it.  If you were trying to complete the user's analysis "
+                            f"after a data-fetch failed, emit <tools_returned_nothing/> "
+                            f"instead."
+                        ),
+                        "data_origin": "synthetic",
+                        "analysis_status": "simulated_demo",
+                    }
+                    new_result = dict(taint_banner)
+                    new_result.update(result if isinstance(result, dict) else {})
+                    new_result["data_origin"] = "synthetic"
+                    new_result["analysis_status"] = "simulated_demo"
+                    result = new_result
+                    tc = {**tc, "result": result}
+                    synthetic_run_python_count += 1
+                    try:
+                        from app.observability.metrics import record_counter
+                        record_counter(
+                            "synthetic_after_failure_total", 1.0,
+                            failed_tool=",".join(sorted(failed_data_fetches))[:80],
+                            agent=agent_name,
+                        )
+                    except Exception:
+                        pass
+
             result_str = json.dumps(result, default=str)
             if len(result_str) > 16000:
                 # Field-level truncation: recursively shrink long strings/lists
@@ -2156,6 +2392,43 @@ async def _run_orchestrated_chat(
     for result in agent_results:
         merged_actions.extend(result["actions"])
     return {"reply": merged_reply, "actions": merged_actions}
+
+
+# G7.3: debug store for the last LLM prompt.  Populated by the agent-loop
+# `_llm_messages_create` when DEBUG_LAST_PROMPT env is set.  Admin-only
+# endpoint returns it so the reviewer can verify in the browser that
+# the anti-sim rule + anti-reflection rule + structured-abstention spec
+# actually reach the model.
+_LAST_PROMPT_DEBUG: dict[str, object] = {
+    "enabled": False,
+    "system": "",
+    "message_count": 0,
+    "first_messages_preview": [],
+    "timestamp": "",
+    "agent": "",
+}
+
+
+@router.get("/_debug_last_prompt")
+async def debug_last_prompt(
+    request: Request,
+    user: User | None = Depends(get_optional_user),
+):
+    """G7.3: return the last LLM prompt seen by the inference router.
+
+    Only active when DEBUG_LAST_PROMPT=1 is set in the env (prod default
+    is off — this is a diagnostic aid, not a production feature).
+    """
+    if not os.getenv("DEBUG_LAST_PROMPT", "").strip():
+        return {
+            "enabled": False,
+            "note": (
+                "Set DEBUG_LAST_PROMPT=1 in the backend env to enable this "
+                "endpoint. Designed for confirming the zero-fabrication / "
+                "anti-simulation rules actually appear in the LLM's prompt."
+            ),
+        }
+    return dict(_LAST_PROMPT_DEBUG)
 
 
 @router.get("/ai_backend_status")
