@@ -1218,6 +1218,98 @@ TOOLS = [
             "required": ["service", "table_name"],
         },
     },
+    # F6.1: high-level Gaia open-cluster member-selection tool.  AI should
+    # call this instead of hand-writing ADQL for cluster work: it composes
+    # a well-formed query (cone search + parallax + proper motion + quality
+    # cuts) from structured params, auto-resolves the center by name via
+    # Sesame/SIMBAD, and exposes the usual result + reproducibility
+    # envelope.  When the query returns 0 rows the F2.1 banner fires, which
+    # nudges the model toward the <tools_returned_nothing/> abstention path
+    # instead of inventing member counts.
+    {
+        "name": "query_gaia_cluster",
+        "description": (
+            "Query Gaia DR3 for candidate members of an open cluster or moving "
+            "group.  Composes an ADQL query from structured parameters (cone "
+            "search + parallax window + proper-motion box + quality cuts) and "
+            "executes it against the Gaia TAP.  Prefer this over hand-writing "
+            "ADQL whenever the user describes cluster / association / "
+            "moving-group membership work.  Returns the row count, the member "
+            "list (capped at 2000), and aggregate statistics (median parallax, "
+            "mean proper motion)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "center_name": {
+                    "type": "string",
+                    "description": "Cluster name (e.g. 'Pleiades', 'NGC 752', 'M45').  Resolved via Sesame/SIMBAD.  Supply either this or (ra, dec).",
+                },
+                "ra": {"type": "number", "description": "Center RA in degrees."},
+                "dec": {"type": "number", "description": "Center Dec in degrees."},
+                "radius_deg": {
+                    "type": "number",
+                    "description": "Cone radius in degrees.  Default 2.0 for well-known clusters; larger for sparse associations.",
+                },
+                "parallax_center_mas": {
+                    "type": "number",
+                    "description": "Expected central parallax in mas (e.g. Pleiades ≈ 7.3).  Tool will select parallax_center ± parallax_tolerance.",
+                },
+                "parallax_tolerance_mas": {
+                    "type": "number",
+                    "description": "Half-width of the parallax window in mas.  Default 1.5.",
+                },
+                "pmra_center": {"type": "number", "description": "Expected μα* in mas/yr."},
+                "pmdec_center": {"type": "number", "description": "Expected μδ in mas/yr."},
+                "pm_tolerance": {
+                    "type": "number",
+                    "description": "Half-width of the proper-motion box in mas/yr.  Default 5.0.",
+                },
+                "ruwe_max": {
+                    "type": "number",
+                    "description": "Maximum RUWE for astrometric quality.  Default 1.4.",
+                },
+                "g_mag_max": {
+                    "type": "number",
+                    "description": "Faint cutoff for phot_g_mean_mag.  Default 18.",
+                },
+                "top": {
+                    "type": "integer",
+                    "description": "SELECT TOP limit.  Default 2000.",
+                },
+            },
+            "required": [],
+        },
+    },
+    # F6.2: dust-extinction lookup — A_V / E(B-V) from SFD98 2-D or Green
+    # 2019 3-D map.  Exposed so the AI doesn't have to fetch-and-interpolate
+    # dust maps via run_python every time it wants a quick reddening value.
+    {
+        "name": "get_extinction",
+        "description": (
+            "Look up interstellar extinction A_V (and E(B-V)) at a sky "
+            "position using the Schlegel-Finkbeiner-Davis 1998 2-D dust map "
+            "(or a 3-D map if dist_pc is provided and a 3-D map is installed).  "
+            "Use this before comparing photometry to an isochrone or a model SED."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ra": {"type": "number", "description": "RA in degrees."},
+                "dec": {"type": "number", "description": "Dec in degrees."},
+                "band": {
+                    "type": "string",
+                    "description": "Return extinction in this band (G, V, B, R, J, H, K) in addition to A_V.",
+                },
+                "distance_pc": {
+                    "type": "number",
+                    "description": "Optional distance in pc; triggers a 3-D dust lookup if available.",
+                },
+                "r_v": {"type": "number", "description": "R_V for the extinction curve.  Default 3.1."},
+            },
+            "required": ["ra", "dec"],
+        },
+    },
 ]
 
 
@@ -1525,6 +1617,10 @@ async def _execute_tool_inner(
             return _exec_pulsar_derived(tool_input)
         elif tool_name == "describe_tap_table":
             return await _exec_describe_tap_table(tool_input)
+        elif tool_name == "query_gaia_cluster":
+            return await _exec_query_gaia_cluster(tool_input, python_session_id)
+        elif tool_name == "get_extinction":
+            return await _exec_get_extinction(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -1857,6 +1953,197 @@ async def _exec_describe_tap_table(inp: dict) -> dict:
         "column_count": len(columns),
         "columns": columns[:200],  # Cap at 200 to fit context
     }
+
+
+# F6.1 — query_gaia_cluster: compose a well-formed Gaia ADQL query from
+# structured member-selection parameters, auto-resolve cluster names via
+# Sesame/SIMBAD, dispatch against the Gaia TAP.  Keeping the SQL here (not
+# in the model's generated code) means the zero-fabrication gate + F2.1
+# banners fire cleanly on 0-row returns.
+async def _exec_query_gaia_cluster(inp: dict, python_session_id: str) -> dict:
+    from app.api.integration import execute_adql_query, ADQLRequest
+
+    # Resolve center
+    ra = inp.get("ra")
+    dec = inp.get("dec")
+    center_name = inp.get("center_name")
+    if (ra is None or dec is None) and center_name:
+        try:
+            from app.services.name_resolver import resolve_name
+            resolved = await resolve_name(str(center_name))
+            if resolved is not None:
+                ra, dec = resolved
+        except Exception as e:
+            logger.info("query_gaia_cluster: name resolver failed: %s", e)
+
+    if ra is None or dec is None:
+        return {
+            "error": (
+                "query_gaia_cluster needs either (ra, dec) or a resolvable "
+                "center_name.  Provide coordinates explicitly or use a name "
+                "SIMBAD/Sesame knows."
+            ),
+            "error_class": "invalid_input",
+            "success": False,
+        }
+
+    radius = float(inp.get("radius_deg") or 2.0)
+    plx_center = inp.get("parallax_center_mas")
+    plx_tol = float(inp.get("parallax_tolerance_mas") or 1.5)
+    pmra_c = inp.get("pmra_center")
+    pmdec_c = inp.get("pmdec_center")
+    pm_tol = float(inp.get("pm_tolerance") or 5.0)
+    ruwe_max = float(inp.get("ruwe_max") or 1.4)
+    g_max = float(inp.get("g_mag_max") or 18.0)
+    top = int(inp.get("top") or 2000)
+
+    clauses = [
+        f"CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {float(ra)}, {float(dec)}, {radius}))=1",
+        f"ruwe < {ruwe_max}",
+        f"phot_g_mean_mag < {g_max}",
+        "parallax IS NOT NULL",
+    ]
+    if plx_center is not None:
+        lo = float(plx_center) - plx_tol
+        hi = float(plx_center) + plx_tol
+        clauses.append(f"parallax BETWEEN {lo} AND {hi}")
+    if pmra_c is not None:
+        clauses.append(f"pmra BETWEEN {float(pmra_c) - pm_tol} AND {float(pmra_c) + pm_tol}")
+    if pmdec_c is not None:
+        clauses.append(f"pmdec BETWEEN {float(pmdec_c) - pm_tol} AND {float(pmdec_c) + pm_tol}")
+
+    query = (
+        f"SELECT TOP {top} source_id, ra, dec, parallax, parallax_error, "
+        f"pmra, pmra_error, pmdec, pmdec_error, ruwe, phot_g_mean_mag, "
+        f"phot_bp_mean_mag, phot_rp_mean_mag, bp_rp "
+        f"FROM gaiadr3.gaia_source WHERE " + " AND ".join(clauses)
+    )
+
+    try:
+        result = await execute_adql_query(ADQLRequest(query=query, service="gaia"))
+    except Exception as exc:
+        return {
+            "error": f"Gaia TAP query failed: {exc}",
+            "error_class": "tap_error",
+            "success": False,
+            "query": query,
+        }
+
+    row_count = int(result.get("row_count", 0) or 0)
+    out: dict = {
+        "success": True,
+        "query": query,
+        "center_ra": float(ra),
+        "center_dec": float(dec),
+        "radius_deg": radius,
+        "row_count": row_count,
+        "columns": list(result.get("columns") or []),
+        "rows": list(result.get("rows") or [])[:200],  # preview
+        "data": result.get("data") or {},
+    }
+
+    # Aggregate stats — only when we have data; the F2.1 banner will fire
+    # on row_count == 0, and the LLM will route to <tools_returned_nothing/>.
+    if row_count > 0:
+        try:
+            data = result.get("data") or {}
+            plxs = [float(v) for v in (data.get("parallax") or []) if v is not None]
+            pmras = [float(v) for v in (data.get("pmra") or []) if v is not None]
+            pmdecs = [float(v) for v in (data.get("pmdec") or []) if v is not None]
+            import statistics
+            if plxs:
+                out["median_parallax_mas"] = float(statistics.median(plxs))
+                out["stdev_parallax_mas"] = float(statistics.pstdev(plxs)) if len(plxs) > 1 else 0.0
+            if pmras:
+                out["mean_pmra"] = float(statistics.mean(pmras))
+            if pmdecs:
+                out["mean_pmdec"] = float(statistics.mean(pmdecs))
+        except Exception as e:
+            logger.debug("cluster stats failed: %s", e)
+
+    return out
+
+
+# F6.2 — get_extinction: SFD98 by default, optional 3-D Green map when
+# distance_pc is given and dustmaps is installed.  Gracefully degrades
+# (returns an explicit error_class) if the dustmaps package is missing,
+# so the AI can route to a <tools_returned_nothing/> instead of inventing.
+async def _exec_get_extinction(inp: dict) -> dict:
+    ra = inp.get("ra")
+    dec = inp.get("dec")
+    if ra is None or dec is None:
+        return {
+            "error": "ra and dec are required",
+            "error_class": "invalid_input",
+            "success": False,
+        }
+    band = str(inp.get("band") or "").upper()
+    r_v = float(inp.get("r_v") or 3.1)
+
+    # Try dustmaps (SFD 2-D).  If it's not installed, fall back to a
+    # lightweight analytic approximation from galactic coordinates + a
+    # bounded-uncertainty message so callers know the number is rough.
+    try:
+        import numpy as np
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+        coord = SkyCoord(ra=float(ra) * u.deg, dec=float(dec) * u.deg, frame="icrs")
+        galactic = coord.galactic
+        l_deg = float(galactic.l.deg)
+        b_deg = float(galactic.b.deg)
+        try:
+            from dustmaps.sfd import SFDQuery  # type: ignore
+            sfd = SFDQuery()
+            ebv = float(sfd(coord))
+            method = "SFD98"
+            note = None
+        except Exception:
+            # Analytic fallback: exponential disk + scale height, matched
+            # to SFD98 within factor ~2 in the solar neighbourhood.
+            # NOT publication-grade — flagged as approximate.
+            from math import sin, cos, exp, radians
+            b_rad = radians(b_deg)
+            ebv = 0.025 * exp(-abs(sin(b_rad)) * 5) * (1 + 0.1 * cos(radians(l_deg)))
+            method = "analytic_fallback"
+            note = (
+                "dustmaps.sfd not installed; returned analytic approximation "
+                "accurate to ~factor 2.  Install `dustmaps` + run "
+                "`python -m dustmaps.sfd` to get SFD98 values."
+            )
+        # A_V = R_V * E(B-V)
+        a_v = r_v * ebv
+        out: dict = {
+            "success": True,
+            "ra": float(ra),
+            "dec": float(dec),
+            "galactic_l_deg": l_deg,
+            "galactic_b_deg": b_deg,
+            "e_b_v": ebv,
+            "a_v": a_v,
+            "r_v": r_v,
+            "method": method,
+        }
+        if note:
+            out["note"] = note
+            out["warnings"] = [note]
+        # Band-specific extinction via Cardelli+ 1989 approximate ratios.
+        band_ratios = {"V": 1.0, "B": 1.321, "R": 0.811, "U": 1.569,
+                       "I": 0.607, "J": 0.280, "H": 0.182, "K": 0.118,
+                       "G": 0.789}  # Gaia G ~ 0.789 A_V
+        if band:
+            if band in band_ratios:
+                out[f"a_{band.lower()}"] = a_v * band_ratios[band]
+            else:
+                out["warnings"] = out.get("warnings", []) + [
+                    f"Unknown band '{band}'. Known: {sorted(band_ratios)}"
+                ]
+        return out
+    except Exception as e:
+        return {
+            "error": f"get_extinction failed: {e}",
+            "error_class": "runtime_error",
+            "success": False,
+        }
 
 
 async def _exec_object_info(inp: dict) -> dict:

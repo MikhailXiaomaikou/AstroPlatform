@@ -154,6 +154,8 @@ _DATA_TOOLS = {
     "query_transients", "search_lightcurve", "crossmatch_catalogs",
     "batch_object_search", "describe_tap_table", "query_vo_service",
     "get_last_search_results", "read_fits_header", "get_provenance",
+    # F6.1 / F6.2: new high-level astro helpers
+    "query_gaia_cluster", "get_extinction",
 }
 _COMPUTE_TOOLS = {
     "run_python", "generate_pipeline", "run_pipeline", "validate_analysis",

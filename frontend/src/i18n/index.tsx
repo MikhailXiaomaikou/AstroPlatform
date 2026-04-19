@@ -354,6 +354,7 @@ const translations: Record<string, Record<Lang, string>> = {
   "pipeline.template_transient": { en: "Transient Triage",  zh: "瞬变事件分类",      fr: "Triage de transitoires", es: "Triaje de transitorios" },
   "pipeline.template_photoz": { en: "Photo-z Estimation",   zh: "光度红移估计",      fr: "Estimation photo-z",   es: "Estimación photo-z" },
   "pipeline.template_transit": { en: "Transit Search",      zh: "凌星搜索",          fr: "Recherche de transits", es: "Búsqueda de tránsitos" },
+  "pipeline.template_open_cluster": { en: "Open Cluster HR + Isochrone Age", zh: "疏散星团 HR 图 + 等龄线测年", fr: "Amas ouvert HR + isochrone", es: "Cúmulo abierto HR + isócrona" },
   "pipeline.pub_package":     { en: "Publication Package",  zh: "发布包",            fr: "Package de publication", es: "Paquete de publicación" },
 
   // Chat next steps

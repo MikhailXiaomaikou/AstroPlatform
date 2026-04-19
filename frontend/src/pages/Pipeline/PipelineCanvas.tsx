@@ -56,6 +56,9 @@ const QUICK_TEMPLATES = [
   { value: "transient", labelKey: "pipeline.template_transient", prompt: "Create a pipeline: LoadData \u2192 Denoise \u2192 TimeSeriesAnalysis \u2192 Plot" },
   { value: "photoz", labelKey: "pipeline.template_photoz", prompt: "Create a pipeline: QueryData \u2192 CrossMatch \u2192 PhotoZPro \u2192 Plot" },
   { value: "transit", labelKey: "pipeline.template_transit", prompt: "Create a pipeline: LoadData \u2192 GPDetrend \u2192 TransitFit \u2192 Plot" },
+  // F6.3: open-cluster HR + isochrone age — the single most common
+  // undergraduate astronomy exercise the reviewer flagged as missing.
+  { value: "open_cluster", labelKey: "pipeline.template_open_cluster", prompt: "Create a pipeline for open-cluster HR + isochrone age estimation: QueryData (Gaia DR3 cone search with parallax + proper-motion + RUWE cuts for member selection) \u2192 CoordTransform \u2192 Plot (CMD: bp_rp vs abs_G, Y flipped) with PARSEC isochrone overlay. Prefer the query_gaia_cluster tool for member selection, and get_extinction to deredden the photometry." },
 ];
 
 let idCounter = Date.now();

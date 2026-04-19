@@ -927,9 +927,33 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
               <option key={key} value={key}>{label}</option>
             ))}
           </select>
-          <label className="fit-toggle">
+          <label
+            className="fit-toggle"
+            title={
+              showFit
+                ? "Linear fit shown for scatter / custom_scatter / mag_color / hr_diagram charts with N ≥ 2. Other chart types draw reference lines (Gaussian, PDF overlay) instead."
+                : "Add a linear fit (scatter) or Gaussian overlay (histogram)."
+            }
+          >
             <input type="checkbox" checked={showFit} onChange={(e) => setShowFit(e.target.checked)} />
             Fit
+            {showFit && (
+              <span
+                style={{
+                  marginLeft: 4,
+                  fontSize: "0.72em",
+                  color: /scatter|hr_diagram|mag_color|custom/i.test(chartType)
+                    ? "var(--color-green)"
+                    : /hist|pdf/i.test(chartType)
+                      ? "var(--color-green)"
+                      : "var(--color-red)",
+                }}
+              >
+                {/scatter|hr_diagram|mag_color|custom|hist|pdf/i.test(chartType)
+                  ? "✓"
+                  : "(not supported for this chart type)"}
+              </span>
+            )}
           </label>
           <label className="fit-toggle">
             <input type="checkbox" checked={showStats} onChange={(e) => setShowStats(e.target.checked)} />
