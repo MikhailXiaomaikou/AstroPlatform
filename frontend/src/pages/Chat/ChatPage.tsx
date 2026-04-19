@@ -1077,6 +1077,15 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const variables = result.variables as Record<string, string> | undefined;
     const variableTypes = result.variable_types as Record<string, string> | undefined;
     const tb = result.traceback as string | undefined;
+    // When localStorage was over its soft cap, figures may have been
+    // replaced with {__figures_offloaded__: N}.  Show a placeholder so the
+    // user knows the figures existed + why they're gone right now.  The
+    // boot-time rehydrate (see "Figure-rehydrate" useEffect) fetches the
+    // full session from the server asynchronously, so this placeholder
+    // will normally flash briefly then disappear.
+    const figuresOffloaded = typeof result.__figures_offloaded__ === "number"
+      ? (result.__figures_offloaded__ as number)
+      : undefined;
 
     // F0.6: surface the backend's typed error.  The old "Python sandbox
     // returned no message (check backend logs)" fallback is gone — F0.2
@@ -1141,6 +1150,30 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
         {figures.map((b64, i) => (
           <ClickableFigure key={i} src={`data:image/png;base64,${b64}`} alt={`Figure ${i + 1}`} />
         ))}
+
+        {/* Offloaded-figure placeholder.  The localStorage pruner had to
+            drop N figures to stay under the 4 MB cap; the boot-time
+            rehydrate should replace this with the real figures as soon
+            as the server responds. */}
+        {figuresOffloaded !== undefined && figuresOffloaded > 0 && figures.length === 0 && (
+          <div
+            style={{
+              padding: "0.7rem 0.9rem",
+              border: "1px dashed var(--color-scrollbar)",
+              borderRadius: 6,
+              background: "rgba(160, 101, 0, 0.06)",
+              fontSize: "0.82rem",
+              color: "var(--color-text-secondary)",
+              margin: "0.4rem 0",
+            }}
+          >
+            📊 {figuresOffloaded} figure{figuresOffloaded === 1 ? "" : "s"} were
+            generated here but were offloaded from browser cache to save space.
+            {" "}
+            Reloading from the server now — if they don't appear in a few
+            seconds, the session may not be saved server-side.
+          </div>
+        )}
 
         {/* Variables */}
         {variables && Object.keys(variables).length > 0 && (
@@ -1455,9 +1488,65 @@ function serializeStored(messages: DisplayMessage[]): StoredMessage[] {
   }));
 }
 
+// Heavy non-figure fields we strip first under memory pressure.  Figures
+// are the USER-VISIBLE product of run_python and must not be stripped
+// until absolutely necessary (the reviewer found plots vanishing from
+// history on reload — they were collateral damage of this pruner).
+const _STRIP_ORDER: string[][] = [
+  // Pass A: strip the heaviest non-user-visible fields.  These are
+  // assistant-facing caches (e.g. full ADQL rows, verbose variable
+  // reprs) that the AI can re-fetch via get_cached_results.
+  ["rows", "data", "raw_data", "results", "traceback"],
+  // Pass B: trim variables (can carry large ndarray reprs even after
+  // our sandbox-side _safe_var_repr cap).
+  ["variables", "variable_types"],
+  // Pass C: stdout (usually small, but can be 50 KB).
+  ["stdout"],
+  // Pass D: figures — LAST resort.  We replace the array with a marker
+  // dict {__figures_offloaded__: N} so the UI can render a
+  // "N figures were offloaded to save space" placeholder + trigger a
+  // server rehydrate via getChatSession.
+  ["figures"],
+];
+
 function _pruneToolResults(stored: StoredMessage[]): boolean {
-  // Walk from oldest to newest; replace the first heavy tool_result we find.
-  // Returns true if anything was changed.
+  // Walk from oldest to newest; strip the heaviest field from the first
+  // un-pruned tool_result we find. Returns true if anything was changed.
+  // New order: strip non-figure fields FIRST; figures only as last resort.
+  // This fixes the reviewer-reported regression where every tool_result
+  // (including its figures) was collapsed to {__offloaded__: true} on the
+  // first pruning pass, losing user-visible plots on page reload.
+  for (const keySet of _STRIP_ORDER) {
+    for (let i = 0; i < stored.length; i++) {
+      const actions = stored[i].actions;
+      if (!actions) continue;
+      for (const action of actions) {
+        const tr = (action as { tool_result?: unknown }).tool_result;
+        if (!tr || typeof tr !== "object") continue;
+        const trObj = tr as Record<string, unknown>;
+        if (trObj.__offloaded__) continue;  // already fully offloaded
+        let changed = false;
+        for (const key of keySet) {
+          if (key in trObj) {
+            if (key === "figures" && Array.isArray(trObj[key])) {
+              const n = (trObj[key] as unknown[]).length;
+              if (n > 0) {
+                trObj.__figures_offloaded__ = n;
+                trObj.figures = [];
+                changed = true;
+              }
+            } else if (trObj[key] !== undefined) {
+              delete trObj[key];
+              changed = true;
+            }
+          }
+        }
+        if (changed) return true;
+      }
+    }
+  }
+  // Final fallback: nothing left to strip selectively — fall back to the
+  // old behaviour of collapsing the whole result.
   for (let i = 0; i < stored.length; i++) {
     const actions = stored[i].actions;
     if (!actions) continue;
@@ -2135,6 +2224,57 @@ export default function ChatPage() {
             })
             .catch(() => { /* keep the pending/retry UI on failure */ });
         }
+      }
+    }
+
+    // Figure-rehydrate: if localStorage has __offloaded__ or
+    // __figures_offloaded__ markers (from the quota pruner), fetch the
+    // full session from the server where the blob was never pruned.
+    // This fixes the "all plots disappear after reload" bug: the localStorage
+    // cap (4 MB) is tiny compared to base64 figure payloads, so the pruner
+    // was silently wiping figures on every page reload for any session with
+    // >~5 plots.
+    if (!newSession) {
+      const restored = loadChatHistory();
+      const hasOffloadedFigures = restored.some((m) =>
+        (m.actions || []).some((a) => {
+          const tr = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
+          if (!tr || typeof tr !== "object") return false;
+          return tr.__offloaded__ === true || tr.__figures_offloaded__ !== undefined;
+        }),
+      );
+      const sid = localStorage.getItem("astro_current_chat_session_id");
+      if (hasOffloadedFigures && sid && user) {
+        void loadChatSession(sid)
+          .then((session) => {
+            const srvMsgs = session.messages || [];
+            // Rehydrate: match by (role + content prefix) and if the server
+            // version has figures, use its actions/tool_result.  Preserves
+            // local UI-only state (_abstention, _pending, etc.) from the
+            // current in-memory messages.
+            setMessages((prev) => prev.map((m) => {
+              if (m.role !== "assistant" || !m.actions?.length) return m;
+              const locallyOffloaded = m.actions.some((a) => {
+                const tr = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
+                return tr && typeof tr === "object" && (
+                  tr.__offloaded__ === true || tr.__figures_offloaded__ !== undefined
+                );
+              });
+              if (!locallyOffloaded) return m;
+              // Find matching server message by content prefix (first 200
+              // chars) to be robust to minor client-side transforms.
+              const srvMatch = srvMsgs.find(
+                (sm) => sm.role === "assistant"
+                  && typeof sm.content === "string"
+                  && sm.content.slice(0, 200) === m.content.slice(0, 200),
+              ) as { actions?: ChatAction[] } | undefined;
+              if (srvMatch?.actions?.length) {
+                return { ...m, actions: srvMatch.actions };
+              }
+              return m;
+            }));
+          })
+          .catch(() => { /* keep locally-pruned state if server unreachable */ });
       }
     }
   }, []);
