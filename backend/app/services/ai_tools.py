@@ -1794,13 +1794,42 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     _dialect_warnings = dialect.warnings
 
     async def _try_query(q: str) -> dict | None:
-        """Attempt one ADQL query. Return result dict or None on timeout."""
+        """Attempt one ADQL query. Return result dict or None on timeout.
+
+        G0.1: on "unresolved identifier" / "unknown column" errors, augment
+        the exception with a hint from the catalog registry so the AI gets
+        a concrete correction instead of bouncing off the error again.
+        """
         try:
             return await execute_adql_query(ADQLRequest(query=q, service=service))
         except Exception as exc:
             msg = str(exc).lower()
             if any(h in msg for h in ("timeout", "408", "502", "503", "aborted", "deadline")):
                 return None
+            # G0.1: column-name rescue.  The Pleiades/Coma reviewer hit
+            # "unresolved identifier: RAJ2000" in SDSS V/147 because the
+            # real name is RA_ICRS.  Grep the raw error for quoted /
+            # colon-separated identifiers and suggest the right name.
+            if any(h in msg for h in ("unresolved identifier", "unknown column", "invalid identifier")):
+                from app.services.catalog_registry import suggest_for_missing_column
+                suggestions: list[str] = []
+                try:
+                    tokens = _re.findall(r"[A-Za-z][A-Za-z0-9_]{2,32}", str(exc))
+                except Exception:
+                    tokens = []
+                seen: set[str] = set()
+                for tok in tokens:
+                    if tok in seen:
+                        continue
+                    seen.add(tok)
+                    hint = suggest_for_missing_column(tok)
+                    if hint:
+                        suggestions.append(f"`{tok}` → {hint}")
+                if suggestions:
+                    raise type(exc)(
+                        f"{exc}\n\n[auto-suggestion] "
+                        + " ".join(suggestions)
+                    ) from exc
             raise
 
     result = await _try_query(query)

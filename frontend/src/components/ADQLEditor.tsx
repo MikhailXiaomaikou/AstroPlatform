@@ -3,13 +3,24 @@ import { useRef, useCallback, useMemo } from "react";
 /* ── Syntax highlighting ── */
 
 function highlightADQL(code: string): string {
-  // Escape HTML entities first
+  // G0.2: escape HTML entities — but DON'T escape `'`.
+  //
+  // The old code mapped `'` → `&#039;`, which looked safe.  But the
+  // `\b(\d+)\b` number regex below then matched `039` INSIDE that
+  // entity and wrapped it in a <span>.  Net result: `'x'` rendered as
+  // the literal text `&#039;x&#039;` in the browser (because the entity
+  // had been split apart by spans and was no longer a valid entity).
+  // The reviewer's screenshot of `POINT(&#039;ICRS&#039;,...)` was this
+  // bug — the <textarea>.value was always correct, but the display
+  // overlay was garbled, which made them worry the submit was corrupted
+  // too.  Single quotes don't require HTML escaping in text contexts
+  // (they only need escaping in single-quoted attribute values, which
+  // is not our scenario).  Leave them alone.
   let html = code
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+    .replace(/"/g, "&quot;");
 
   // Comments (-- to end of line)
   html = html.replace(/(--.*?)$/gm, '<span class="adql-hl-comment">$1</span>');

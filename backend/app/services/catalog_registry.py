@@ -258,7 +258,135 @@ CATALOG_REGISTRY: dict[str, CatalogEntry] = {
         ),
         common_queries=("MIR photometry", "WISE color selection", "YSO/AGN identification"),
     ),
+    # G0.1: SDSS DR12 photometry — reviewer hit this catalog in Paper 5 (Coma
+    # red sequence).  Real columns use RA_ICRS/DE_ICRS (NOT RAJ2000/DEJ2000,
+    # which the AI kept guessing and getting rejected).  `_RAJ2000` / `_DEJ2000`
+    # with leading underscore are VizieR-computed positional columns that
+    # work for ANY table — these are a safe fallback the AI can always use.
+    '"V/147/sdss12"': CatalogEntry(
+        table_name='"V/147/sdss12"',
+        service="vizier",
+        description="SDSS DR12 Photometric Catalog (primary sources)",
+        columns=_cols(
+            ("RA_ICRS", "DOUBLE", "Right ascension (ICRS, epoch 2000) [deg]"),
+            ("DE_ICRS", "DOUBLE", "Declination (ICRS, epoch 2000) [deg]"),
+            ("_RAJ2000", "DOUBLE", "VizieR-computed RA J2000 [deg] — always available"),
+            ("_DEJ2000", "DOUBLE", "VizieR-computed Dec J2000 [deg] — always available"),
+            ("mode", "INTEGER", "1=primary, 2=secondary source"),
+            ("q_mode", "CHAR", "Quality (+ for primary)"),
+            ("class", "INTEGER", "Object class (3=galaxy, 6=star, ...)"),
+            ("SDSS12", "VARCHAR", "SDSS-DR12 name (JHHMMSS.ss+DDMMSS.s)"),
+            ("ObjID", "BIGINT", "Object ID"),
+            ("umag", "FLOAT", "Model u magnitude [mag] — CMODEL preferred for galaxies"),
+            ("e_umag", "FLOAT", "umag error [mag]"),
+            ("gmag", "FLOAT", "Model g magnitude [mag]"),
+            ("e_gmag", "FLOAT", "gmag error [mag]"),
+            ("rmag", "FLOAT", "Model r magnitude [mag]"),
+            ("e_rmag", "FLOAT", "rmag error [mag]"),
+            ("imag", "FLOAT", "Model i magnitude [mag]"),
+            ("e_imag", "FLOAT", "imag error [mag]"),
+            ("zmag", "FLOAT", "Model z magnitude [mag]"),
+            ("e_zmag", "FLOAT", "zmag error [mag]"),
+            ("zsp", "FLOAT", "Spectroscopic redshift (if observed)"),
+            ("e_zsp", "FLOAT", "zsp error"),
+            ("zph", "FLOAT", "Photometric redshift (KD-tree method)"),
+            ("e_zph", "FLOAT", "zph error"),
+            ("photoFlags", "BIGINT", "Photometric flags"),
+        ),
+        common_queries=(
+            "Red-sequence CMD (g-r vs r)",
+            "SDSS galaxy selection with class=3",
+            "Photometric redshift selection",
+        ),
+    ),
+    # V/139/sdss9 — still widely referenced in legacy papers (earlier DR).
+    '"V/139/sdss9"': CatalogEntry(
+        table_name='"V/139/sdss9"',
+        service="vizier",
+        description="SDSS DR9 Photometric Catalog",
+        columns=_cols(
+            ("RA_ICRS", "DOUBLE", "Right ascension (ICRS, epoch 2000) [deg]"),
+            ("DE_ICRS", "DOUBLE", "Declination (ICRS, epoch 2000) [deg]"),
+            ("_RAJ2000", "DOUBLE", "VizieR-computed RA J2000 [deg]"),
+            ("_DEJ2000", "DOUBLE", "VizieR-computed Dec J2000 [deg]"),
+            ("mode", "INTEGER", "1=primary, 2=secondary"),
+            ("class", "INTEGER", "Object class (3=galaxy, 6=star)"),
+            ("umag", "FLOAT", "u magnitude [mag]"),
+            ("gmag", "FLOAT", "g magnitude [mag]"),
+            ("rmag", "FLOAT", "r magnitude [mag]"),
+            ("imag", "FLOAT", "i magnitude [mag]"),
+            ("zmag", "FLOAT", "z magnitude [mag]"),
+            ("zph", "FLOAT", "Photometric redshift"),
+            ("e_zph", "FLOAT", "Photometric redshift error"),
+        ),
+        common_queries=("SDSS DR9 color-magnitude", "Star/galaxy separation"),
+    ),
+    # I/355/gaiadr3 — VizieR mirror of Gaia DR3 (useful when Gaia TAP is down)
+    '"I/355/gaiadr3"': CatalogEntry(
+        table_name='"I/355/gaiadr3"',
+        service="vizier",
+        description="Gaia DR3 main source catalog (VizieR mirror)",
+        columns=_cols(
+            ("RA_ICRS", "DOUBLE", "RA (ICRS) at epoch 2016.0 [deg]"),
+            ("DE_ICRS", "DOUBLE", "Dec (ICRS) at epoch 2016.0 [deg]"),
+            ("_RAJ2000", "DOUBLE", "VizieR-computed RA at J2000 [deg]"),
+            ("_DEJ2000", "DOUBLE", "VizieR-computed Dec at J2000 [deg]"),
+            ("Source", "BIGINT", "Gaia source_id"),
+            ("Plx", "DOUBLE", "Parallax [mas]"),
+            ("pmRA", "DOUBLE", "Proper motion in RA [mas/yr]"),
+            ("pmDE", "DOUBLE", "Proper motion in Dec [mas/yr]"),
+            ("Gmag", "FLOAT", "G magnitude [mag]"),
+            ("BPmag", "FLOAT", "BP magnitude [mag]"),
+            ("RPmag", "FLOAT", "RP magnitude [mag]"),
+            ("BP-RP", "FLOAT", "BP-RP colour [mag]"),
+            ("RUWE", "FLOAT", "Renormalised unit-weight error"),
+            ("Teff", "FLOAT", "GSP-Phot effective temperature [K]"),
+        ),
+        common_queries=("Gaia fallback when TAP is overloaded",),
+    ),
+    # II/335/galex_ais — UV photometry, commonly used for SED + YSO work
+    '"II/335/galex_ais"': CatalogEntry(
+        table_name='"II/335/galex_ais"',
+        service="vizier",
+        description="GALEX All-Sky Imaging Survey (AIS), GR6+GR7",
+        columns=_cols(
+            ("RAJ2000", "DOUBLE", "Right ascension J2000 [deg]"),
+            ("DEJ2000", "DOUBLE", "Declination J2000 [deg]"),
+            ("_RAJ2000", "DOUBLE", "VizieR-computed RA J2000 [deg]"),
+            ("_DEJ2000", "DOUBLE", "VizieR-computed Dec J2000 [deg]"),
+            ("FUV", "FLOAT", "FUV magnitude [AB mag]"),
+            ("e_FUV", "FLOAT", "FUV error [mag]"),
+            ("NUV", "FLOAT", "NUV magnitude [AB mag]"),
+            ("e_NUV", "FLOAT", "NUV error [mag]"),
+        ),
+    ),
 }
+
+# G0.1: common column-name mistakes — helpful for the TAP error path.  When a
+# VizieR query fails with "unresolved identifier", describe_tap_table /
+# run_adql can grep this list and suggest the right column name.
+VIZIER_COMMON_MISTAKES: dict[str, dict[str, str]] = {
+    # Wrong → Right (or a note).  Keys are common AI/user guesses; values
+    # point to the real canonical column in most VizieR tables or give a
+    # safe fallback.
+    "RAJ2000": (
+        "Check the specific catalog — in SDSS V/147 and V/139 the column "
+        "is `RA_ICRS`, not `RAJ2000`.  You can always use the VizieR-"
+        "computed `_RAJ2000` (with leading underscore) for any table."
+    ),
+    "DEJ2000": (
+        "Check the specific catalog — in SDSS V/147 and V/139 the column "
+        "is `DE_ICRS`, not `DEJ2000`.  You can always use the VizieR-"
+        "computed `_DEJ2000` (with leading underscore) for any table."
+    ),
+    "ra": "VizieR tables almost always use `RAJ2000` or `RA_ICRS` rather than lowercase `ra`.",
+    "dec": "VizieR tables almost always use `DEJ2000` or `DE_ICRS` rather than lowercase `dec`.",
+}
+
+
+def suggest_for_missing_column(column: str) -> str | None:
+    """If `column` is a well-known wrong name, return a hint string."""
+    return VIZIER_COMMON_MISTAKES.get(column)
 
 
 def get_catalog(table_name: str) -> CatalogEntry | None:
