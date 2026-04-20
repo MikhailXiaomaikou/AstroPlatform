@@ -8,7 +8,7 @@ _connectors = None
 def _init():
     global _connectors
     if _connectors is None:
-        from app.connectors.sdss import SDSSConnector
+        from app.connectors.sdss import SDSSConnector, SDSSSpecOnlyConnector
         from app.connectors.gaia import GaiaConnector
         from app.connectors.simbad import SIMBADConnector
         from app.connectors.vizier import VizierConnector
@@ -32,6 +32,7 @@ def _init():
         from app.connectors.frbstats import FRBStatsConnector
         _connectors = {
             "sdss": SDSSConnector(),
+            "sdss_spec": SDSSSpecOnlyConnector(),  # Bug 11 path C
             "gaia": GaiaConnector(),
             "simbad": SIMBADConnector(),
             "vizier": VizierConnector(),
@@ -58,8 +59,9 @@ def _init():
 
 
 CONNECTORS_KEYS = [
-    "sdss", "gaia", "simbad", "vizier", "mast", "ned", "2mass", "chandra", "allwise", "alma",
-    "eso", "irsa", "jwst", "lamost", "desi", "panstarrs", "xmm", "nvss", "first",
+    "sdss", "sdss_spec", "gaia", "simbad", "vizier", "mast", "ned", "2mass",
+    "chandra", "allwise", "alma", "eso", "irsa", "jwst", "lamost", "desi",
+    "panstarrs", "xmm", "nvss", "first",
     "jpl", "atnf_pulsar", "sparc", "frbstats",
 ]
 

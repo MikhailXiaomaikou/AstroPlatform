@@ -80,14 +80,24 @@ class SDSSConnector(BaseConnector):
             ra, dec = await self._resolve_name(query)
 
         effective_radius = min(max(radius, 0.001), 0.05)
+        # Bug 11 path A: LEFT JOIN Photoz so galaxy/QSO photometric redshifts
+        # are returned alongside the spectroscopic ones.  SDSS has ~400 M
+        # photo-z estimates vs ~4 M spec-z, so a typical cone search jumps
+        # from ~20% coverage (spec-z only) to ~75% coverage (spec-z OR
+        # photo-z for galaxies).  Downstream `_table_to_objects` decides
+        # which z to expose based on availability + object type, and
+        # labels `z_source` as "spectroscopic" / "photometric" so the UI
+        # can distinguish them.
         sql = f"""SELECT TOP 50
             p.objid, p.ra, p.dec, p.r AS mag_r, p.type,
             dbo.fPhotoTypeN(p.type) AS type_name,
             s.z AS spec_z, s.class AS spec_class,
+            pz.z AS photo_z, pz.zerr AS photo_z_err,
             n.distance
         FROM dbo.fGetNearbyObjEq({ra}, {dec}, {effective_radius * 60}) AS n
         JOIN PhotoObj AS p ON n.objID = p.objID
         LEFT JOIN SpecObj AS s ON s.bestobjid = p.objid
+        LEFT JOIN Photoz AS pz ON pz.objid = p.objid
         WHERE p.mode = 1
         ORDER BY n.distance"""
 
@@ -229,17 +239,64 @@ class SDSSConnector(BaseConnector):
 
             type_name = str(row["type_name"]) if "type_name" in row.colnames else ""
 
-            # Spectroscopic redshift from SpecObj LEFT JOIN
-            redshift = None
+            # Bug 11 path A: pick the best available redshift.
+            # - spec_z (from SpecObj LEFT JOIN) always wins when present.
+            # - Otherwise fall back to photo_z (from Photoz LEFT JOIN), but
+            #   ONLY for galaxy-type objects — SDSS photo-z is trained on
+            #   galaxy SEDs and produces meaningless numbers for stars
+            #   (type=6, "STAR") since stars don't have a cosmological z.
+            # - z_source labels which one we used so the UI can show a
+            #   "spec" vs "photo" chip and the downstream zero-fabrication
+            #   gate can treat photo-z as lower-precision.
+            spec_z: float | None = None
+            photo_z: float | None = None
+            photo_z_err: float | None = None
+
             if "spec_z" in row.colnames:
                 try:
                     z = float(row["spec_z"])
-                    if z == z and z > -1:  # NaN check and sanity
-                        redshift = z
+                    if z == z and z > -1:  # NaN + sanity
+                        spec_z = z
                 except (ValueError, TypeError):
                     pass
 
+            if "photo_z" in row.colnames:
+                try:
+                    zp = float(row["photo_z"])
+                    # SDSS Photoz returns -9999 for objects with no fit
+                    if zp == zp and zp > -1 and zp < 10:
+                        photo_z = zp
+                except (ValueError, TypeError):
+                    pass
+            if "photo_z_err" in row.colnames:
+                try:
+                    zpe = float(row["photo_z_err"])
+                    if zpe == zpe and zpe >= 0:
+                        photo_z_err = zpe
+                except (ValueError, TypeError):
+                    pass
+
+            # Is this object galaxy-like?  In SDSS PhotoObj.type:
+            # 3 = GALAXY, 6 = STAR.  Normalize via type_name (e.g.
+            # "GALAXY") produced by dbo.fPhotoTypeN for robustness.
+            is_galaxy_like = type_name.upper() == "GALAXY"
+
+            redshift: float | None = None
+            z_source: str | None = None
+            if spec_z is not None:
+                redshift = spec_z
+                z_source = "spectroscopic"
+            elif photo_z is not None and is_galaxy_like:
+                redshift = photo_z
+                z_source = "photometric"
+
             extra: dict = {}
+            if z_source:
+                extra["z_source"] = z_source
+            if photo_z is not None:
+                extra["photo_z"] = photo_z
+            if photo_z_err is not None:
+                extra["photo_z_err"] = photo_z_err
             if "spec_class" in row.colnames:
                 sc = str(row["spec_class"]).strip()
                 if sc and sc != "":
@@ -260,6 +317,124 @@ class SDSSConnector(BaseConnector):
                     object_type=type_name,
                     magnitude=mag,
                     redshift=redshift,
+                    extra=extra,
+                )
+            )
+        return objects
+
+
+class SDSSSpecOnlyConnector(SDSSConnector):
+    """Bug 11 path C: 'only spectroscopically confirmed' SDSS variant.
+
+    Queries `SpecObj` directly instead of joining from `PhotoObj`.  Every
+    row returned has a real spec_z (100 % coverage) — useful when the
+    user explicitly wants "objects with known redshift only" instead of
+    a generic cone search.
+
+    Trade-off vs the default SDSS connector:
+    - Coverage: 100 % spec_z (vs ~20 % on PhotoObj cones).
+    - Sample size: smaller — `SpecObj` has ~4 M entries vs `PhotoObj`'s
+      ~10 B, so dim / non-spectroscopic objects won't appear.
+    - Best for: statistical samples where redshift is mandatory
+      (galaxy cluster membership, QSO selection, luminosity functions).
+    - Worst for: finding every photometric source near a target.
+    """
+
+    source_name = "sdss_spec"
+
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
+    async def search(
+        self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
+    ) -> list[AstroObject]:
+        if ra is None or dec is None:
+            ra, dec = await self._resolve_name(query)
+
+        effective_radius = min(max(radius, 0.001), 0.1)  # slightly wider
+        # SpecObj stores its own ra/dec; a plain bounding-box / cone filter
+        # suffices.  Using dbo.fGetNearbyObjEq would hit PhotoObj first,
+        # defeating the purpose.  JOIN PhotoObj only to retrieve r-band
+        # magnitude + type_name for display (LEFT JOIN so a spec without
+        # a phot match still appears — rare but possible for legacy IDs).
+        sql = f"""SELECT TOP 200
+            s.bestobjid AS objid, s.ra, s.dec, s.z AS spec_z,
+            s.zerr AS spec_z_err, s.class AS spec_class,
+            s.subclass AS spec_subclass, s.plate, s.mjd, s.fiberid,
+            p.r AS mag_r, dbo.fPhotoTypeN(p.type) AS type_name
+        FROM SpecObj AS s
+        LEFT JOIN PhotoObj AS p ON p.objid = s.bestobjid
+        WHERE s.ra BETWEEN {ra - effective_radius} AND {ra + effective_radius}
+          AND s.dec BETWEEN {dec - effective_radius} AND {dec + effective_radius}
+          AND s.zwarning = 0
+        ORDER BY ABS(s.ra - {ra}) + ABS(s.dec - {dec})"""
+
+        try:
+            text = await self._query_skyserver(sql)
+            table = self._parse_csv(text)
+        except (ValueError, TimeoutError, ConnectionError, OSError, httpx.HTTPStatusError) as e:
+            logger.debug("SDSS spec-only query failed: %s", e)
+            return []
+        return self._spec_table_to_objects(table)
+
+    def _spec_table_to_objects(self, table: Table) -> list[AstroObject]:
+        """Build AstroObjects from a SpecObj-primary query result."""
+        objects: list[AstroObject] = []
+        for row in table:
+            try:
+                ra = float(row["ra"])
+                dec = float(row["dec"])
+            except (ValueError, TypeError, KeyError):
+                continue
+            obj_id = str(row["objid"]).strip() if "objid" in row.colnames else ""
+            try:
+                spec_z = float(row["spec_z"])
+                if not (spec_z == spec_z and spec_z > -1):
+                    continue
+            except (ValueError, TypeError, KeyError):
+                continue
+
+            mag = None
+            if "mag_r" in row.colnames:
+                try:
+                    m = float(row["mag_r"])
+                    if m == m:
+                        mag = m
+                except (ValueError, TypeError):
+                    pass
+
+            type_name = ""
+            if "type_name" in row.colnames:
+                type_name = str(row["type_name"]).strip() or ""
+            # If PhotoObj didn't match, fall back to spec_class as type.
+            if not type_name and "spec_class" in row.colnames:
+                type_name = str(row["spec_class"]).strip().upper()
+
+            extra: dict = {"z_source": "spectroscopic"}
+            for col in ("spec_z_err", "spec_class", "spec_subclass",
+                        "plate", "mjd", "fiberid"):
+                if col in row.colnames:
+                    val = row[col]
+                    if isinstance(val, str):
+                        val = val.strip()
+                        if val:
+                            extra[col] = val
+                    else:
+                        try:
+                            fv = float(val)
+                            if fv == fv:
+                                extra[col] = fv
+                        except (ValueError, TypeError):
+                            pass
+
+            objects.append(
+                AstroObject(
+                    source="sdss_spec",
+                    object_id=obj_id,
+                    name=obj_id,
+                    ra=ra,
+                    dec=dec,
+                    object_type=type_name,
+                    magnitude=mag,
+                    redshift=spec_z,
                     extra=extra,
                 )
             )

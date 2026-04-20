@@ -45,6 +45,7 @@ class ThrottleConfig:
 _POLICIES: dict[str, ThrottleConfig] = {
     "gaia": ThrottleConfig(rate_per_sec=5.0, max_concurrent=2),
     "sdss": ThrottleConfig(rate_per_sec=2.0, max_concurrent=1),
+    "sdss_spec": ThrottleConfig(rate_per_sec=2.0, max_concurrent=1),  # Bug 11 path C
     "vizier": ThrottleConfig(rate_per_sec=10.0, max_concurrent=4),
     "simbad": ThrottleConfig(rate_per_sec=10.0, max_concurrent=4),
     "mast": ThrottleConfig(rate_per_sec=5.0, max_concurrent=2),
