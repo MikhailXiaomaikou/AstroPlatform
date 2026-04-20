@@ -518,9 +518,34 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool):
                 job = tap.launch_job(query)
             return job.get_results()
         except Exception as e:
+            # L17 (audit 2026-04-20): 区分 4xx (permanent, 不换 mirror) vs
+            # 5xx / 网络错 (transient, 换 mirror).  404 = 表不存在 /
+            # 400 = SQL 语法错, 下一个 mirror 也会返回同样错, 浪费
+            # wall-clock.  只对 5xx / timeout / connection 错试下一个.
+            err_str = str(e).lower()
+            is_permanent = any(
+                hint in err_str
+                for hint in (
+                    "404", "400", "422", "403", "401",
+                    "syntax", "parse", "unknown column", "unknown table",
+                    "bad request", "forbidden",
+                )
+            )
+            # 408 / 429 虽是 4xx 但属 transient (rate-limit / 超时), 仍换
+            # mirror; 这里从 "permanent" 里排除
+            if "408" in err_str or "429" in err_str:
+                is_permanent = False
+            if is_permanent:
+                logger.info(
+                    "TAP mirror %s returned permanent error (%s: %s); NOT "
+                    "trying other mirrors — raising immediately",
+                    url, type(e).__name__, str(e)[:200],
+                )
+                raise
             last_err = e
             logger.info(
-                "TAP mirror %s failed (%s: %s); trying next mirror",
+                "TAP mirror %s failed with transient error (%s: %s); "
+                "trying next mirror",
                 url, type(e).__name__, str(e)[:200],
             )
             continue
@@ -677,7 +702,17 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
                 if hasattr(arr, "mask"):
                     mask = arr.mask
                 if hasattr(arr, "filled"):
-                    arr = arr.filled(0)  # fill with 0, we use mask to detect nulls
+                    # L16 (audit 2026-04-20): float 列用 np.nan 填充 masked
+                    # 比 0 更语义干净 — 下面的 isnan 分支能捕获, 不依赖
+                    # mask 数组也能走到 None.  整数列 masked 仍然靠 mask[idx]
+                    # 追踪 (filled(0) 对整数 masked 是必要的, 因为
+                    # np.nan 不能赋给 int 数组).
+                    try:
+                        is_float_dtype = np.issubdtype(arr.dtype, np.floating)
+                    except Exception:
+                        is_float_dtype = False
+                    fill_value = np.nan if is_float_dtype else 0
+                    arr = arr.filled(fill_value)
                 vals = []
                 for idx, v in enumerate(arr):
                     # Use mask to detect missing values

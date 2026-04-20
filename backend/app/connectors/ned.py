@@ -179,20 +179,31 @@ class NEDConnector(BaseConnector):
 
         ra = 0.0
         dec = 0.0
+        # L19 (audit 2026-04-20): log 实际命中的列名方便未来 NED API 改
+        # schema 时定位问题 (列名 fallback 顺序硬编码, 没 schema 版本 pin).
+        ra_source_col = None
         for ra_key in ("RA", "ra", "RA(deg)"):
             if ra_key in preferred:
                 try:
                     ra = float(preferred[ra_key])
+                    ra_source_col = ra_key
                     break
                 except (ValueError, TypeError):
                     pass
+        dec_source_col = None
         for dec_key in ("DEC", "dec", "Dec(deg)"):
             if dec_key in preferred:
                 try:
                     dec = float(preferred[dec_key])
+                    dec_source_col = dec_key
                     break
                 except (ValueError, TypeError):
                     pass
+        if ra_source_col or dec_source_col:
+            logger.debug(
+                "NED column resolution: ra via %s, dec via %s",
+                ra_source_col, dec_source_col,
+            )
 
         # Fallback: try Position sub-dict
         pos = preferred.get("Position", {})

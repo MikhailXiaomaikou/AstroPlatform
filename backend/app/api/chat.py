@@ -251,6 +251,13 @@ association (e.g. Pleiades, NGC 752, M67, Hyades, Ursa Major MG):
 - Stellar classification, v sin i, lithium abundance
 
 ## Gaia DR3 data completeness (CRITICAL — controls which columns to SELECT)
+**These percentages are accurate as of Gaia DR3 2022 initial release + any
+focused-product updates through 2024-Q1.  If you are uncertain whether a
+column is still available (or the completeness has shifted), call
+`describe_tap_table` first to get the ACTUAL schema before writing ADQL —
+don't assume the percentages below are authoritative for every future
+release.** (audit L23)
+
 - Layer 1 (~100%): ra, dec, source_id, phot_g_mean_mag — always available
 - Layer 2 (~98%): phot_bp_mean_mag, phot_rp_mean_mag, bp_rp — G < 21
 - Layer 3 (~87%): parallax, pmra, pmdec, ruwe — multi-epoch astrometry

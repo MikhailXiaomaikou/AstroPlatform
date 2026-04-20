@@ -411,3 +411,23 @@ def test_nested_data_rows_still_get_harvested():
     # 引用 5.366154 应该匹配 → 通过
     r = validate_claims("Gaia period 5.366154 days", tool_results)
     assert r.ok, f"嵌套数据行里的数字被误拦: {r.uncited}"
+
+
+# -------------------- L24 (audit 2026-04-20): 科学计数法容差 --------------------
+
+
+def test_scientific_notation_does_not_cross_orders_of_magnitude():
+    """L24: ±1% 相对容差已经能正确拒绝跨数量级的假匹配 (1.23e-24 vs
+    1.25e-23 差 10 倍).  这条测试锁定: 未来任何人改 _matches_any
+    不能把指数级错配当成"相近"."""
+    tool_results = [{"result": {"mass_kg": 1.23e-24}}]
+    # claim 里是正确数量级 → 应通过
+    r1 = validate_claims("mass = 1.23e-24 kg", tool_results)
+    assert r1.ok, "相同数量级内 1.23e-24 应匹配"
+
+    # claim 里差一个数量级 → 不该通过
+    r2 = validate_claims("mass = 1.23e-23 kg", tool_results)
+    assert not r2.ok, (
+        "1.23e-23 跟 tool 的 1.23e-24 差 10 倍, 不该匹配 (相对容差"
+        "的物理意义)"
+    )

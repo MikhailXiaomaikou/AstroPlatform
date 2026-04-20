@@ -79,7 +79,28 @@ class SDSSConnector(BaseConnector):
         if ra is None or dec is None:
             ra, dec = await self._resolve_name(query)
 
-        effective_radius = min(max(radius, 0.001), 0.05)
+        # L18 (audit 2026-04-20): radius clamp 不再静默.  之前 min(max(r,
+        # 0.001), 0.05) 把用户要求的 1° 默默压成 0.05° (3 arcmin), 用户
+        # 看到结果只有少数目标但不知道被 clamp 了, 样本偏差却无提示.
+        # 改成: clamp 发生时 logger.warning, 稍后在返回对象的 extra 里
+        # 记录 radius_clamped=True 让调用方/UI 能 propagate.
+        requested_radius = float(radius)
+        effective_radius = min(max(requested_radius, 0.001), 0.05)
+        self._last_radius_clamp: dict | None = None
+        if abs(effective_radius - requested_radius) > 1e-9:
+            self._last_radius_clamp = {
+                "radius_clamped": True,
+                "radius_requested_deg": requested_radius,
+                "radius_actual_deg": effective_radius,
+                "radius_min_allowed_deg": 0.001,
+                "radius_max_allowed_deg": 0.05,
+            }
+            logger.warning(
+                "SDSSConnector: radius %.4f° clamped to %.4f° "
+                "(SkyServer enforces 0.001-0.05° cone); sample size will "
+                "reflect the smaller cone",
+                requested_radius, effective_radius,
+            )
         # Bug 11 path A: LEFT JOIN Photoz so galaxy/QSO photometric redshifts
         # are returned alongside the spectroscopic ones.  SDSS has ~400 M
         # photo-z estimates vs ~4 M spec-z, so a typical cone search jumps

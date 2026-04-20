@@ -63,6 +63,19 @@ def compute_query_hash(tool_name: str, tool_input: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+# L20 (audit 2026-04-20): 所有随机性 tool 必须有 seed 才能 bit-exact 复现.
+# 这个集合定义哪些 tool 属于 stochastic; 若传 random_seed=None 自动从
+# query_hash 推导一个确定 seed 并在 envelope 里标
+# random_seed_source="auto_from_input".  AI/用户跑 2 次相同输入会得到
+# 同样 seed → 同样 chain / bootstrap 结果, 复现性不靠用户记.
+_STOCHASTIC_TOOLS: frozenset[str] = frozenset({
+    "bayesian_fit", "fit_transit_model", "transit_search_bls",
+    "gp_detrend_lightcurve", "fit_rv_orbit", "estimate_photo_z_pro",
+    "lomb_scargle_period", "fit_sersic_morphology",
+    "analyze_spectrum_pro", "sensitivity_analysis",
+})
+
+
 def reproducibility_envelope(
     tool_name: str,
     tool_input: Any,
@@ -76,6 +89,10 @@ def reproducibility_envelope(
     Every tool result carries this so later analyses (golden-path tests,
     user-triggered replays, audit-log inspection) can verify that the same
     input against the same archive version would produce the same output.
+
+    L20: 随机性工具 (bayesian_fit, bootstrap, GP, emcee 等) 若 random_seed
+    缺失, 自动从 query_hash 推导确定 seed + 在 envelope 标
+    random_seed_source="auto_from_input".  同样输入两次跑结果 bit-exact.
     """
     envelope: dict[str, Any] = {
         "run_id": run_id or str(uuid.uuid4()),
@@ -85,6 +102,11 @@ def reproducibility_envelope(
     }
     if random_seed is not None:
         envelope["random_seed"] = int(random_seed)
+        envelope["random_seed_source"] = "user_provided"
+    elif tool_name in _STOCHASTIC_TOOLS:
+        # 从 query_hash 前 8 char (hex) 推 32-bit seed
+        envelope["random_seed"] = int(envelope["query_hash"][:8], 16)
+        envelope["random_seed_source"] = "auto_from_input"
     if archive_version:
         envelope["archive_version"] = str(archive_version)
     return envelope
