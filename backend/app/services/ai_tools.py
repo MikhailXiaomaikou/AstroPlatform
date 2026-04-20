@@ -2395,13 +2395,59 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     # carry the target inline.
     if data_source in _REAL_DATA_SOURCE_PATTERNS:
         expected_tokens = _REAL_DATA_SOURCE_PATTERNS[data_source]
-        if not any(tok in code for tok in expected_tokens):
+        # H3.1: AST-based check instead of naive substring.
+        # - String `in` picked up tokens in comments / docstrings, leaving
+        #   false positives that Paper 1 reviewer hit (AI legitimate code
+        #   failing because a helper was aliased).
+        # - AST walk catches:
+        #     * Direct calls: get_adql_results()
+        #     * Aliased: helper = get_adql_results; helper()
+        #     * Imports: from x import get_adql_results as fetch
+        #     * Attribute calls: astro.get_adql_results()
+        # Plus we always accept `get_cached_results(...)` as a valid
+        # signal for any real data_source (the generic cache reader
+        # from G6.2 can fetch any handle).
+        import ast as _ast
+        tokens_to_match = set(expected_tokens) | {"get_cached_results"}
+        found_in_ast = False
+        try:
+            tree = _ast.parse(code)
+            for node in _ast.walk(tree):
+                # Any Name node matching
+                if isinstance(node, _ast.Name) and node.id in tokens_to_match:
+                    found_in_ast = True
+                    break
+                # Attribute access (foo.bar or module.helper)
+                if isinstance(node, _ast.Attribute) and node.attr in tokens_to_match:
+                    found_in_ast = True
+                    break
+                # Import "from x import <token>" or "import <token>"
+                if isinstance(node, _ast.ImportFrom):
+                    for alias in node.names:
+                        if alias.name in tokens_to_match or (alias.asname and alias.asname in tokens_to_match):
+                            found_in_ast = True
+                            break
+                if isinstance(node, _ast.Import):
+                    for alias in node.names:
+                        if alias.name in tokens_to_match or (alias.asname and alias.asname in tokens_to_match):
+                            found_in_ast = True
+                            break
+                if found_in_ast:
+                    break
+        except SyntaxError:
+            # Code has SyntaxError; sandbox will surface it next step.
+            # Be permissive here and fall back to string match so we
+            # don't reject on syntax issues alone.
+            found_in_ast = any(tok in code for tok in tokens_to_match)
+
+        if not found_in_ast:
             return {
                 "success": False,
                 "error": (
                     f"data_source='{data_source}' declared but the code does not "
-                    f"call any of {list(expected_tokens)}. Either (a) update your "
-                    f"code to actually read that cache, or (b) declare "
+                    f"call any of {sorted(tokens_to_match)} (checked via AST walk "
+                    f"including aliases + imports). Either (a) update your code to "
+                    f"actually read that cache, or (b) declare "
                     f"data_source='none_not_analyzing_real_data' if you are "
                     f"intentionally generating synthetic data (which will be "
                     f"marked SYNTHETIC and forbidden from citation)."

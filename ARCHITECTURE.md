@@ -139,6 +139,36 @@ layers:
 
 **Debug endpoint.** `/api/chat/_debug_last_prompt` (gated by env `DEBUG_LAST_PROMPT=1`) returns the last prompt `inference_router.route` received so reviewers can confirm in-browser that the zero-fabrication + anti-reflection rules are actually present in the LLM's context.
 
+### Post-H data access & AI coordination (2026-04-20)
+
+Reviewer cycle on 5 reproduction papers surfaced ~20 real issues. PART H fixes concentrate on the data-access layer rather than AI architecture:
+
+- **ADQL async TAP** (`api/integration.py:467-580`). Queries with `TOP > 5000`, cone radius > 1°, or explicit `JOIN` go directly to `launch_job_async` with a 5-minute budget; small queries get a 60 s sync try that auto-falls back to async on timeout. Fixes Paper 5 "Gaia 50000-row query hits 45s hard timeout".
+
+- **ADQL newline normalization** (`api/integration.py:475`). `req.query.replace("\n"/"\r"/"\t", " ")` + whitespace collapse before TAP dispatch. Fixes Paper 4 "Cannot parse query FROM g" when a pasted newline lands mid-identifier.
+
+- **`search_lightcurve` Quantity bug** (`services/astro_analysis.py:2782`). Replaced `if r.exptime` with `if r.exptime is not None` + safe `.value` extraction. Paper 2 `search_lightcurve(mission="tess")` no longer raises "Quantity truthiness is ambiguous". Added Simbad `SkyCoord.from_name` fallback when the direct MAST search returns 0 results (for alias-resolved exoplanet hosts like HD 189733).
+
+- **TOP auto-degradation** (`services/ai_tools.py:_exec_adql`). After cone-radius degradation fails, detects `TOP >= 10000` and retries once with `TOP min(1000, N/10)`, marking `top_auto_reduced_from` / `top_used` in the result so the AI can tell the user about sample-size reduction.
+
+- **Circuit breaker posture** (`api/chat.py:_run_agent_loop`). `DISABLE_AFTER_FAILURES` raised from 2 → 3. Soft failures (timeout / `payload_too_large` / empty result) no longer count toward the disable threshold; only hard connector errors do. Fixes the Paper 5 "two timeouts → `run_adql` removed from toolkit" dead-end.
+
+- **V/154/sdss17 schema injection** (`services/catalog_registry.py`). Real SDSS DR17 VizieR column list (`ra`/`dec`/`u`/`g`/`r`/`i`/`z`/`objID`/`class`/`zsp`/`zph`) replaces the AI's guesses (`RAJ2000`/`petroMag_r`/`redshift`). `VIZIER_COMMON_MISTAKES` has AI-facing hints for each wrong name. ADQL preset buttons updated to use real columns.
+
+- **System prompt SDSS section** (`api/chat.py` SYSTEM_PROMPT). ADQL Usage Rules #1 expanded to document the 3 SDSS paths (`sources=["sdss"]`, `sources=["sdss_spec"]`, VizieR mirror) with fallback recommendation when VizieR returns 503.
+
+- **arXiv fallback for Literature Search** (`api/citations.py`). ADS 401/429 or empty response → automatic arXiv API query (Atom XML parse), returns same shape with `source: "arxiv"`. Fixes Paper 4 "Literature Search EMPTY".
+
+- **`data_source` linter AST-based** (`services/ai_tools.py:_exec_run_python`). Old substring match had false positives when AI aliased helpers. New walk catches direct calls, attributes (`astro.get_adql_results()`), imports, and import aliases. Also always accepts `get_cached_results(...)` as a valid signal for any real source.
+
+- **SYNTHETIC workflow** (SYSTEM_PROMPT section). Explicit two-option framework: Option A (abstain) is default; Option B (synthetic demo) only when user explicitly asked for methodology demo, with mandatory reply prefix. Reduces AI's tendency to convert failed real-data requests into unmarked synthetic runs.
+
+- **Retry button non-destructive** (`ChatPage.tsx:3796-3815`). Old code removed the pending message via `setMessages.filter` before `handleSend`, triggering a localStorage flush that ate all prior successful tool_results. New code clears `_pending` + swaps in a "previous attempt timed out" placeholder — history stays intact.
+
+- **First Send click fix** (`ChatPage.tsx:4107`). Send button onClick now passes `input` explicitly (`handleSend(input)`) instead of relying on closure. Eliminates the stale-closure race that caused the first click to silently drop.
+
+- **User message text color** (`styles/journal.css:1102`). `.chat-message.user .chat-message-content` was inheriting `color: #fff` from App.css (paired with burgundy bg in the old theme); Journal overrides the bg to paper-cream but not the color → white-on-cream unreadable. Explicit `color: var(--ink)` fix.
+
 ### Render cold-start recovery (post-G fix)
 
 Render free-tier dynos sleep after 15 minutes idle. A user who idled and then fired a request (e.g. Advanced Search) would get a 502/503/504 back from the Render edge while the dyno woke, and the existing `BackendBanner` only checked backend health once at App mount — so mid-session sleeps went unflagged. Fixed:

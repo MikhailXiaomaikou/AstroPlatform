@@ -96,6 +96,18 @@ UI: tool_result with `__tool_status__="SYNTHETIC"` or `data_origin="synthetic"` 
 
 Tests: `tests/test_synthetic_code_detector.py` (12 fixtures), `tests/test_synthetic_fallback_regression.py` (end-to-end), `tests/test_result_provenance.py` (sanitizer). Token-level CI regression + debug endpoint `/api/chat/_debug_last_prompt` (env-gated) for verifying the guard reaches the LLM.
 
+### Data access & TAP timeouts (Post-H, 2026-04-20)
+
+**ADQL services**: Gaia (`gaia`), VizieR (`vizier`), CADC (`cadc`), SIMBAD (`simbad`). **SDSS has no native ADQL** — 3 paths instead: `search_objects(sources=["sdss"])` via SkyServer SQL, `sources=["sdss_spec"]` for spec-only, OR `run_adql(service="vizier", query="... V/154/sdss17 ...")`.
+
+**V/154/sdss17 real columns** (not the AI's usual guesses): lowercase `ra`/`dec` (NOT `RAJ2000`), `u`/`g`/`r`/`i`/`z` (NOT `psfMag_*`/`petroMag_*`), `class` (3=galaxy, 6=star), `zsp`/`zph` (NOT `redshift`), `objID` (capital ID). `catalog_registry.py` has the full schema; `VIZIER_COMMON_MISTAKES` has precise hints for AI's common guesses.
+
+**ADQL async TAP** (H0.1): `execute_adql_query` auto-detects "big" queries (TOP > 5000, cone radius > 1°, JOIN) and uses `launch_job_async` with 5 min budget. Small queries go sync 60s, and auto-fall to async on timeout. The old 45s hard cut is gone.
+
+**ADQL newline normalization** (H0.2): `req.query.replace("\\n"/"\\r"/"\\t", " ")` before TAP dispatch — fixes "Cannot parse query FROM g" when a newline lands mid-identifier.
+
+**Gaia retry posture** (from PART G): outer `max_retries=1` (inner `_cone_search` already sync→async fallback). `with_retry` default `base_delay=5s`.
+
 ### Render cold-start recovery (DO NOT regress)
 
 Free-tier dynos sleep after 15 min idle. `api/client.ts` has an axios response interceptor: any 502/503/504 triggers a one-shot 5 s wait + retry, dispatches a `astro:backend-waking` `CustomEvent`, clears `sessionStorage.astro_backend_checked` so `BackendBanner` re-shows. `BackendBanner` in `App.tsx` listens for the event and renders "Waking up backend (Render free tier sleeps after 15 min idle)..." for 12 s. Without this, users who idle and then submit a request see a raw 502 error and assume the app is broken.
