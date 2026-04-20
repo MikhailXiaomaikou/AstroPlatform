@@ -527,9 +527,13 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool):
 
     # All mirrors failed — re-raise the last error with a hint about
     # which URLs were tried so logs make the failure mode obvious.
+    # K3: 'Tried: {tried}' 之前用 f-string 插 list → repr, 出
+    # "Tried: ['url1', 'url2']" 带方括号 + 单引号, 看起来很脏.
+    # 改成普通逗号分隔. 错误消息是用户直接看到的文本, 格式干净比什么
+    # 防御都重要.
     msg = (
         f"All {service} TAP mirrors unavailable after {len(tried)} attempts. "
-        f"Tried: {tried}. Last error: {last_err}"
+        f"Tried: {', '.join(tried)}. Last error: {last_err}"
     )
     if last_err is not None:
         raise type(last_err)(msg) from last_err

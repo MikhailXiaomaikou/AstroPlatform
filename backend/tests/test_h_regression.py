@@ -536,3 +536,44 @@ def test_search_lightcurve_missing_target_returns_actionable_error():
     result = asyncio.run(_exec_search_lightcurve({"target": "HD 189733", "mission": "hubble"}))
     assert result.get("error_class") == "invalid_argument"
     assert result.get("argument") == "mission"
+
+
+# ---------- K3: _launch_on_mirrors 错误消息不再用 list repr ----------
+
+def test_launch_on_mirrors_error_message_comma_separated():
+    """K3: 所有 mirror 都失败时, 错误消息应是逗号分隔的 URL 列表,
+    不带 Python list 的方括号和单引号 ('脏' 字符)."""
+    from app.api import integration as integ
+
+    urls_tried: list[str] = []
+
+    class FakeTapPlus:
+        def __init__(self, url):
+            self.url = url
+            urls_tried.append(url)
+        def launch_job(self, query):
+            raise ConnectionError(f"timeout from {self.url}")
+        def launch_job_async(self, query):
+            return self.launch_job(query)
+
+    with patch("astroquery.utils.tap.core.TapPlus", FakeTapPlus):
+        with pytest.raises(Exception) as excinfo:
+            integ._launch_on_mirrors(
+                "SELECT TOP 1 * FROM \"V/154/sdss17\"",
+                service="vizier",
+                async_mode=False,
+            )
+
+    err_str = str(excinfo.value)
+    # 消息里必须有 "Tried: " 前缀, 且后面跟的不是 Python list repr
+    assert "Tried: " in err_str
+    # 不能有方括号(Python list repr 会带方括号)
+    assert "Tried: [" not in err_str, f"仍是 list repr: {err_str}"
+    # 不能用单引号包住单个 URL
+    assert "Tried: '" not in err_str, f"仍带单引号: {err_str}"
+    # 至少含前两个 mirror (逗号分隔格式)
+    primary = integ.ADQL_SERVICE_MIRRORS["vizier"][0]
+    fallback = integ.ADQL_SERVICE_MIRRORS["vizier"][1]
+    assert primary in err_str and fallback in err_str
+    # 逗号分隔
+    assert f"{primary}, {fallback}" in err_str or f"{primary},{fallback}" in err_str
