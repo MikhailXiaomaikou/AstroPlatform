@@ -92,12 +92,15 @@ function ClickableFigure({ src, alt }: { src: string; alt: string }) {
 }
 
 interface ThinkingStep {
-  kind: "agent_text" | "tool_call" | "tool_result" | "status";
+  kind: "agent_text" | "tool_call" | "tool_result" | "status" | "tools_disabled";
   agent?: string;
   tool?: string;
   text?: string;
   input?: unknown;
   result?: unknown;
+  // G3.5 — backend stripped these tools from the toolkit this iteration.
+  disabled?: string[];
+  iteration?: number;
 }
 
 interface DisplayMessage {
@@ -2689,6 +2692,8 @@ export default function ChatPage() {
         text: evt.type === "agent_text" ? evt.content : undefined,
         input: evt.type === "tool_call" ? evt.input : undefined,
         result: evt.type === "tool_result" ? evt.result : undefined,
+        disabled: evt.type === "tools_disabled" ? evt.disabled : undefined,
+        iteration: evt.type === "tools_disabled" ? evt.iteration : undefined,
       };
       setMessages((prev) =>
         prev.map((m) =>
@@ -3425,6 +3430,15 @@ export default function ChatPage() {
                                     ? <em style={{ color: "#b00020", marginLeft: 6 }}>{String(r.error).slice(0, 120)}</em>
                                     : <span style={{ marginLeft: 6, color: "#2e7d32" }}>done</span>;
                                 })()}
+                              </span>
+                            )}
+                            {step.kind === "tools_disabled" && step.disabled && step.disabled.length > 0 && (
+                              <span style={{ color: "#b8860b" }}>
+                                🚫 <strong>Tools disabled this turn:</strong>{" "}
+                                <code>{step.disabled.join(", ")}</code>
+                                <em style={{ marginLeft: 6, fontSize: "0.85em", color: "#8a6a00" }}>
+                                  — failed ≥2× this turn, removed from toolkit
+                                </em>
                               </span>
                             )}
                           </li>

@@ -1327,7 +1327,12 @@ export type ThinkingEvent =
       suggested_next_step?: string;
       reason?: string;
       agent?: string;
-    } };
+    } }
+  // G3.5: emitted when a data-fetch tool has failed ≥ DISABLE_AFTER_FAILURES
+  // times in the current turn and the agent loop removes it from the
+  // `tools` parameter for subsequent LLM calls.  Frontend shows a
+  // "🚫 <tool> disabled after N failures" chip in the thinking timeline.
+  | { type: "tools_disabled"; agent?: string; disabled: string[]; iteration: number };
 
 // ── Chat Session Persistence ──
 
@@ -1874,6 +1879,20 @@ export async function sendChatMessage(
                   reason: typeof p.reason === "string" ? p.reason : undefined,
                   agent: typeof p.agent === "string" ? p.agent : undefined,
                 },
+              });
+            }
+          } else if (evt.type === "tools_disabled" && Array.isArray(evt.disabled)) {
+            // G3.5: backend disabled one or more tools this turn after
+            // repeated failures.  Forward to the thinking timeline so
+            // users see which tools are no longer available + why.
+            if (onThinking) {
+              const disabled = (evt.disabled as unknown[])
+                .filter((x): x is string => typeof x === "string");
+              onThinking({
+                type: "tools_disabled",
+                agent: typeof evt.agent === "string" ? evt.agent : undefined,
+                disabled,
+                iteration: typeof evt.iteration === "number" ? evt.iteration : 0,
               });
             }
           } else if (evt.type === "error" && typeof evt.message === "string") {

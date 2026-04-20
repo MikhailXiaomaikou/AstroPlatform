@@ -1706,6 +1706,20 @@ async def _execute_tool_calls(
         # slack. The inner `_exec_run_python` picks the real per-call
         # timeout based on the AI's declared mode.
         "run_python": 310.0,
+        # Audit-2026-04-20: the 8 tools below were falling to the 45 s
+        # default but do legitimately slow work (multi-TAP fan-out, LLM
+        # calls, deep cross-matches).  Reviewer-style queries were
+        # hitting false timeouts.  Rough envelope per tool:
+        "query_gaia_cluster": 90.0,   # Gaia TAP cone + agg stats
+        "get_object_dossier": 120.0,  # 6-way parallel TAP (dominant tool for "tell me about X")
+        "crossmatch_catalogs": 120.0, # dual TAP + join
+        "sensitivity_analysis": 120.0,# parameter sweep via run_python
+        "generate_paper_draft": 180.0,# LLM call for full paper sections
+        "research_workflow": 240.0,   # multi-step hypothesis test
+        "full_research_report": 300.0,# validation + paper + exports
+        "solve_astrometry": 90.0,     # astrometry.net can be slow
+        # Note: get_extinction stays at the 45 s default — SFD lookup is
+        # <1 s typical, the 3-D fallback is local analytic.
     }
     _TOOL_DEADLINE_DEFAULT = 45.0
 
