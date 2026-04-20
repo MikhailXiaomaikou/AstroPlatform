@@ -510,3 +510,29 @@ def test_system_prompt_contains_data_source_hard_rule():
     ]
     missing = [kw for kw in required_keywords if kw not in SYSTEM_PROMPT]
     assert not missing, f"K1.A prompt 缺 keyword: {missing}"
+
+
+# ---------- K2: search_lightcurve missing target 错误消息 ----------
+
+def test_search_lightcurve_missing_target_returns_actionable_error():
+    """K2: AI 第一次调用若漏传 target, 后端必须返回带 error_class +
+    示例的清晰错误 (而不是空洞的 'target is required'), 这样 AI 在同
+    一轮的下一次 tool call 里就能补对."""
+    from app.services.ai_tools import _exec_search_lightcurve
+
+    # target 整个缺
+    result = asyncio.run(_exec_search_lightcurve({}))
+    assert result.get("error_class") == "missing_argument"
+    assert result.get("argument") == "target"
+    err = str(result.get("error") or "")
+    # 错误消息里必须带至少一个具体示例, 否则没治本
+    assert any(ex in err for ex in ("HD 189733", "Kepler-10", "TIC", "delta Cep"))
+
+    # 空字符串 / 纯空格也走同一路径
+    result = asyncio.run(_exec_search_lightcurve({"target": "   "}))
+    assert result.get("error_class") == "missing_argument"
+
+    # mission 非法值 → 单独的 invalid_argument 错误
+    result = asyncio.run(_exec_search_lightcurve({"target": "HD 189733", "mission": "hubble"}))
+    assert result.get("error_class") == "invalid_argument"
+    assert result.get("argument") == "mission"

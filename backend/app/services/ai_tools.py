@@ -4048,10 +4048,31 @@ async def _exec_search_lightcurve(inp: dict) -> dict:
     """Execute search_lightcurve from astro_analysis."""
     from app.services.astro_analysis import search_lightcurve
 
-    target = inp.get("target", "")
-    mission = inp.get("mission", "kepler")
+    target = str(inp.get("target") or "").strip()
+    mission = str(inp.get("mission") or "kepler").strip().lower()
+    # K2: 明确的 "target 缺失" 错误 — 第三次回归里 AI 第一次调用时漏了
+    # target 参数, 只看到无信息的 "target is required" 然后第二次才补回.
+    # 把示例直接写进错误消息, AI 第一次就能修对.
     if not target:
-        return {"error": "target is required"}
+        return {
+            "error": (
+                "`target` is required.  Pass the star name or catalog ID — "
+                "e.g. target='HD 189733', 'Kepler-10', 'TIC 261136679', "
+                "'KIC 11904151', 'EPIC 201367065', or 'delta Cep'.  Mission "
+                "can be 'kepler' (default), 'tess', or 'k2'."
+            ),
+            "error_class": "missing_argument",
+            "argument": "target",
+        }
+    if mission not in {"kepler", "tess", "k2"}:
+        return {
+            "error": (
+                f"`mission` must be one of 'kepler' / 'tess' / 'k2' "
+                f"(got {mission!r})."
+            ),
+            "error_class": "invalid_argument",
+            "argument": "mission",
+        }
 
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, lambda: search_lightcurve(target, mission=mission))
