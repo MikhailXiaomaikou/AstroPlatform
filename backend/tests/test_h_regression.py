@@ -883,3 +883,64 @@ def test_transit_fit_chi2_rejects_unphysical_params():
     assert "a < 2.5" in src, (
         "L2-b: Mandel & Agol 2002 的 a/R* >= 2.5 保护丢失"
     )
+
+
+# ---------- L2-c: Isochrone grid 加密 + photo_z z_max 参数化 ----------
+
+def test_isochrone_grid_defaults_denser():
+    """L2-c: fit_isochrone 的默认 n_grid_age 从 20 抬到 40 (Δlog(age)
+    从 0.095 → 0.05, Bressan+ 2012 精密拟合推荐); n_grid_met 从 5 到 9
+    (Δ[M/H] 0.3→0.15 dex); dm/av 子网格从 3 点到 7 点.  用 inspect 检查
+    以防未来回退."""
+    import inspect
+    from app.services import astro_analysis
+
+    src = inspect.getsource(astro_analysis.fit_isochrone)
+    # 默认参数
+    assert "n_grid_age=40" in src, "L2-c: age grid 40 点阈值已被改回"
+    assert "n_grid_met=9" in src, "L2-c: met grid 9 点已被改回"
+    # dm/av 子网格
+    assert "dm_range[1], 7" in src or "dm_range[1],7" in src, (
+        "L2-c: dm 子网格 7 点被改回 3"
+    )
+    assert "av_range[1], 7" in src or "av_range[1],7" in src, (
+        "L2-c: av 子网格 7 点被改回 3"
+    )
+    # 引用 Bressan+ 2012
+    assert "Bressan" in src, "L2-c: 应在注释里引用 Bressan+ 2012 说明阈值"
+
+
+def test_photo_z_template_z_max_parameter():
+    """L2-c: estimate_photo_z_template 接受 z_max 参数, default 2.0.
+    z_max=5.0 时 z_grid 延伸到 5, at_z_max_boundary 反映边界."""
+    from app.services.photo_z import estimate_photo_z_template
+
+    mags = {"u": 22.5, "g": 22.0, "r": 21.5, "i": 21.0, "z": 20.5}
+    errs = {"u": 0.1, "g": 0.1, "r": 0.1, "i": 0.1, "z": 0.1}
+
+    # z_max=5.0 → grid 跨度到 5
+    r = estimate_photo_z_template(mags, errs, z_max=5.0)
+    assert r["z_max_used"] == 5.0
+    assert max(r["z_grid"]) >= 4.9, f"z_grid 未延伸到 z_max=5: max={max(r['z_grid'])}"
+
+    # default 2.0 保持向后兼容
+    r2 = estimate_photo_z_template(mags, errs)
+    assert r2["z_max_used"] == 2.0
+    assert max(r2["z_grid"]) <= 2.01
+
+
+def test_photo_z_boundary_warning_when_zphot_at_edge():
+    """L2-c: 当 best z_phot 接近 z_max 上界 (差 < 0.05) 时 result
+    带 at_z_max_boundary=True + note 里有 WARNING, 提示用户增大."""
+    from app.services.photo_z import estimate_photo_z_template
+
+    # 构造红色大目标让 z_phot 落在 z_max 附近.
+    # z_max=0.3 (很小) → 真实高 z galaxy 色彩必到边界.
+    mags = {"u": 24.0, "g": 23.0, "r": 22.0, "i": 21.0, "z": 20.5}
+    errs = {"u": 0.1, "g": 0.1, "r": 0.1, "i": 0.1, "z": 0.1}
+
+    r = estimate_photo_z_template(mags, errs, z_max=0.3)
+    assert r.get("at_z_max_boundary") is True, (
+        f"z_max=0.3 + 红目标必然撞边界, 但 at_z_max_boundary={r.get('at_z_max_boundary')}"
+    )
+    assert "WARNING" in r["note"] or "boundary" in r["note"].lower()

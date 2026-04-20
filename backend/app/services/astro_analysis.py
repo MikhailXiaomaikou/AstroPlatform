@@ -129,8 +129,11 @@ def fit_isochrone(
     met_range=(-2.0, 0.5),
     dm_range=(0.0, 20.0),
     av_range=(0.0, 2.0),
-    n_grid_age=20,
-    n_grid_met=5,
+    # L2-c (audit 2026-04-20): age_grid 从 20 点加密到 40 点 (dex≈0.095→0.05),
+    # 符合 Bressan+ 2012 PARSEC 推荐的 Δlog(age) ≤ 0.05 精度要求.
+    # met_grid 从 5→9 也让 [M/H] 步长 0.3→0.15 dex, 拟合金属贫星团不再过粗.
+    n_grid_age=40,
+    n_grid_met=9,
     n_walkers=32,
     n_steps=500,
     n_burn=200,
@@ -274,9 +277,10 @@ def fit_isochrone(
 
     age_grid = np.linspace(age_range[0], age_range[1], n_grid_age)
     met_grid = np.linspace(met_range[0], met_range[1], n_grid_met)
-    # Coarse 3-point sweep over dm and av (min, center, max of range)
-    dm_grid = np.linspace(dm_range[0], dm_range[1], 3)
-    av_grid = np.linspace(av_range[0], av_range[1], 3)
+    # L2-c: dm 和 av 从 3 点加到 7 点 — 3 点只覆盖 min/中/max, 错过最佳
+    # 距离模的概率很大.  7 点足够 Nelder-Mead 后期精修的温启动.
+    dm_grid = np.linspace(dm_range[0], dm_range[1], 7)
+    av_grid = np.linspace(av_range[0], av_range[1], 7)
 
     # Initialize best_params from range midpoints, not hardcoded values
     best_chi2 = 1e12

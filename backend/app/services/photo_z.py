@@ -193,7 +193,7 @@ def _mag_to_flux(mag):
 # 4.  Chi-squared template fitting
 # ---------------------------------------------------------------------------
 
-def estimate_photo_z_template(magnitudes: dict, mag_errors: dict) -> dict:
+def estimate_photo_z_template(magnitudes: dict, mag_errors: dict, z_max: float = 2.0) -> dict:
     """Estimate photometric redshift via chi-squared template fitting.
 
     Parameters
@@ -203,6 +203,11 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict) -> dict:
         Use ``None`` or ``float('nan')`` for missing / unobserved bands.
     mag_errors : dict
         1-sigma magnitude uncertainties, same keys as *magnitudes*.
+    z_max : float, default 2.0
+        L2-c (audit 2026-04-20): 搜索红移上界.  之前硬编码 2.0 对
+        LSST/Euclid/Roman 高红移样本不够 (QSO/starburst 常 z>3).  当
+        best z_phot ≥ z_max - 0.05 时返回 `at_z_max_boundary=True`
+        警告用户需增大.
 
     Returns
     -------
@@ -213,6 +218,7 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict) -> dict:
         z_grid       : redshift grid           (list)
         best_template: name of the best-fit SED template
         chi2_min     : minimum chi2 value
+        at_z_max_boundary : True when best z 紧贴 z_max 上界, 用户应增大
     """
     # --- parse observed data, skipping missing bands ---
     bands_used = []
@@ -247,7 +253,10 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict) -> dict:
     wave_rest, template_fluxes = _build_templates(n_wave=80)
 
     # --- redshift grid ---
-    z_grid = np.linspace(0.0, 2.0, 401)
+    # L2-c: z_max 从硬编码 2.0 改参数, default 保持 2.0 兼容老 caller.
+    # n_z 保持 401 → 步长 0.005 在 [0, 2]; 若 z_max=5, n_z=401 → 0.0125
+    # (仍足够 photo-z bias ~0.05 级别的精度).
+    z_grid = np.linspace(0.0, float(z_max), 401)
 
     # --- chi2 cube:  (n_z, n_templates) ---
     chi2_cube = np.full((len(z_grid), len(TEMPLATE_NAMES)), np.inf)
@@ -307,6 +316,10 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict) -> dict:
     else:
         z_err = z_grid[1] - z_grid[0]  # single grid step
 
+    # L2-c: 边界警告.  best z_phot 在 z_max 前 0.05 之内 → 用户可能需要
+    # 把 z_max 开大.  返回 at_z_max_boundary flag.
+    at_boundary = bool(z_phot >= (float(z_max) - 0.05))
+
     return {
         "z_phot": float(z_phot),
         "z_err": float(z_err),
@@ -314,8 +327,14 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict) -> dict:
         "z_grid": z_grid.tolist(),
         "best_template": best_template,
         "chi2_min": float(chi2_min),
+        "z_max_used": float(z_max),
+        "at_z_max_boundary": at_boundary,
         "reliability": "demo",
-        "note": "Simplified template fitting with 7 SEDs. Use EAZY or Le Phare for publication-quality photo-z.",
+        "note": (
+            f"Simplified template fitting with 7 SEDs (z_max={z_max}). "
+            f"Use EAZY or Le Phare for publication-quality photo-z."
+            + (f"  WARNING: best z_phot is at the boundary of the grid; re-run with larger z_max to confirm." if at_boundary else "")
+        ),
     }
 
 
@@ -516,8 +535,11 @@ def estimate_photo_z(
     if mag_errors is None:
         mag_errors = {}
 
+    # L2-c: 透传 z_max (default 2.0 保持向后兼容)
+    z_max = float(kwargs.get("z_max", 2.0))
+
     if method == "template":
-        return estimate_photo_z_template(magnitudes, mag_errors)
+        return estimate_photo_z_template(magnitudes, mag_errors, z_max=z_max)
 
     if method == "ml":
         return estimate_photo_z_ml(magnitudes, mag_errors)
