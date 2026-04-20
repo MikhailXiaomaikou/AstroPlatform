@@ -20,12 +20,17 @@ class TestPhotoZPipeline:
         assert result["best_template"] in ("E", "Sbc", "Scd", "Im", "SB1", "SB2", "SB3")
 
     def test_hybrid_returns_both(self):
-        """Hybrid method returns both template and ML estimates."""
+        """Hybrid method returns both template and ML estimates.
+
+        L5 (audit 2026-04-20): 测试明确 opt-in 到 demo 模式, 因为就是
+        在验证 7 模板 demo 的行为正确 — 用户生产使用必须走
+        method='enhanced_template'.
+        """
         from app.services.photo_z import estimate_photo_z
 
         mags = {"g": 19.5, "r": 18.8, "i": 18.4}
         errs = {"g": 0.1, "r": 0.08, "i": 0.08}
-        result = estimate_photo_z(mags, errs, method="hybrid")
+        result = estimate_photo_z(mags, errs, method="hybrid", allow_demo=True)
         assert "details" in result
         assert "template" in result["details"]
         assert "ml" in result["details"]

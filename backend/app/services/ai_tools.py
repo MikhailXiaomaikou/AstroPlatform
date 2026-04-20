@@ -3496,12 +3496,19 @@ def _normalize_band_names(mags: dict) -> dict:
 
 
 async def _exec_estimate_photo_z(inp: dict) -> dict:
-    """Run the unified photometric redshift estimator."""
+    """Run the unified photometric redshift estimator.
+
+    L5 (audit 2026-04-20): 默认 method='enhanced_template' (photo_z_pro)
+    走研究级路径.  AI 若显式要 demo 模式 (7 templates), 必须传
+    allow_demo=True — 否则返回 demo_mode_blocked 引导到 enhanced.
+    """
     from app.services.photo_z import estimate_photo_z
 
     raw_magnitudes = inp.get("magnitudes", {})
     raw_mag_errors = inp.get("mag_errors", {})
-    method = inp.get("method", "hybrid")
+    # L5: 默认换 enhanced_template, 不再 silent 走 7 模板 hybrid
+    method = inp.get("method", "enhanced_template")
+    allow_demo = bool(inp.get("allow_demo", False))
 
     if not raw_magnitudes:
         return {"error": "magnitudes dict is required (e.g. {'sdss_g': 20.1, 'sdss_r': 19.5})"}
@@ -3514,7 +3521,7 @@ async def _exec_estimate_photo_z(inp: dict) -> dict:
         result = await asyncio.wait_for(
             loop.run_in_executor(
                 None,
-                lambda: estimate_photo_z(magnitudes, mag_errors, method=method),
+                lambda: estimate_photo_z(magnitudes, mag_errors, method=method, allow_demo=allow_demo),
             ),
             timeout=60.0,
         )

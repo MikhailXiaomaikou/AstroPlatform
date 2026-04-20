@@ -9,9 +9,21 @@ Fits broadband photometry against a library of 7 simplified SED templates
 (E, Sbc, Scd, Im, SB1, SB2, SB3) over a redshift grid to produce z_phot,
 uncertainties, and the full P(z).  Uses only numpy/scipy — no external SED
 libraries required.
+
+L5 (audit 2026-04-20): runtime gate 防止演示实现被当成 publication 工具.
+默认 DEMO_MODE = True; estimate_photo_z 的公共入口若没有 allow_demo=True
+显式覆盖, 直接返回 error_class=demo_mode_blocked, 引导调用方用
+estimate_photo_z_pro (enhanced_template: 30+ 模板, 有粉尘, 支持发射线,
+IGM, Bayesian priors) 做真研究.
 """
 
 import numpy as np
+
+# L5: module-level demo flag.  Any 7-template photo-z path is a demo.
+# To disable the gate (e.g., in tests or when the user has accepted the
+# demo limitations in-context), set PHOTO_Z_DEMO_MODE = False globally
+# or pass allow_demo=True to the public entrypoint.
+PHOTO_Z_DEMO_MODE: bool = True
 
 # NumPy 2.0 renamed trapz -> trapezoid
 _trapz = getattr(np, "trapezoid", None) or np.trapz
@@ -445,6 +457,7 @@ def estimate_photo_z(
     magnitudes: dict,
     mag_errors: dict | None = None,
     method: str = "hybrid",
+    allow_demo: bool = False,
     **kwargs,
 ) -> dict:
     """Estimate photometric redshift from multi-band photometry.
@@ -456,12 +469,20 @@ def estimate_photo_z(
     mag_errors : dict, optional
         1-sigma magnitude uncertainties.
     method : str
-        ``'template'``          — chi-squared template fitting only.
-        ``'ml'``                — empirical colour–redshift polynomial only.
+        ``'template'``          — chi-squared template fitting only. (7 templates, demo)
+        ``'ml'``                — empirical colour–redshift polynomial only. (demo)
         ``'hybrid'``            — run both and return an inverse-variance weighted
-                                  average, with individual estimates in *details*.
+                                  average, with individual estimates in *details*. (demo)
         ``'enhanced_template'`` — research-grade 30+ template fitting with dust,
                                   emission lines, IGM absorption, and Bayesian priors.
+                                  (routes to photo_z_pro; always allowed.)
+    allow_demo : bool, default False
+        L5 (audit 2026-04-20): explicit opt-in to the 7-template demo path.
+        Without this flag, any call to ``template`` / ``ml`` / ``hybrid``
+        returns ``error_class='demo_mode_blocked'`` and refuses to run.  The
+        7-template approximation has > 5% photo-z bias and is NOT suitable
+        for publication.  Set allow_demo=True only for UI demos / tutorials
+        / unit tests where you explicitly want the approximate answer.
 
     Returns
     -------
@@ -471,6 +492,26 @@ def estimate_photo_z(
     if method == "enhanced_template":
         from app.services.photo_z_pro import fit_template_enhanced
         return fit_template_enhanced(magnitudes, mag_errors, **kwargs)
+
+    # L5: demo-mode gate.  The 7-template path is clearly labelled "NOT
+    # suitable for scientific publication" at the module docstring, but
+    # that's just a comment — a caller who imports and uses it gets no
+    # runtime feedback.  Fix: require explicit allow_demo=True.
+    if PHOTO_Z_DEMO_MODE and not allow_demo:
+        return {
+            "error": (
+                f"estimate_photo_z(method={method!r}) uses the 7-template "
+                f"demo implementation which has > 5% photo-z bias and is "
+                f"NOT suitable for scientific publication.  To use it for "
+                f"quick demos / tutorials, pass allow_demo=True.  For "
+                f"research-grade photo-z (30+ templates, dust, emission "
+                f"lines, IGM, Bayesian priors), use "
+                f"method='enhanced_template' which routes to photo_z_pro."
+            ),
+            "error_class": "demo_mode_blocked",
+            "requested_method": method,
+            "recommended_method": "enhanced_template",
+        }
 
     if mag_errors is None:
         mag_errors = {}
