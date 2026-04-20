@@ -355,22 +355,24 @@ class SDSSSpecOnlyConnector(SDSSConnector):
             ra, dec = await self._resolve_name(query)
 
         effective_radius = min(max(radius, 0.001), 0.1)  # slightly wider
-        # SpecObj stores its own ra/dec; a plain bounding-box / cone filter
-        # suffices.  Using dbo.fGetNearbyObjEq would hit PhotoObj first,
-        # defeating the purpose.  JOIN PhotoObj only to retrieve r-band
-        # magnitude + type_name for display (LEFT JOIN so a spec without
-        # a phot match still appears — rare but possible for legacy IDs).
+        # L2-d (audit 2026-04-20): 真正的锥搜.  之前用 "ra BETWEEN ra-r AND
+        # ra+r AND dec BETWEEN dec-r AND dec+r" 是方盒子, 在极区 (|dec|
+        # 大) 纬向拉伸 — |dec|=89° / r=0.1° 时 RA 方向实际覆盖 ≈ 5.7°,
+        # 其他区域按方盒收, 样本不一致.  切 dbo.fGetNearbyObjEq 保持跟
+        # PhotoObj 路径一致的锥搜 (radius 单位 arcmin).  SpecObj 的 ra/dec
+        # 就是真实天区坐标 (ICRS), 跟 fGetNearbyObjEq 的锥搜完全相容.
+        radius_arcmin = effective_radius * 60
         sql = f"""SELECT TOP 200
             s.bestobjid AS objid, s.ra, s.dec, s.z AS spec_z,
             s.zerr AS spec_z_err, s.class AS spec_class,
             s.subclass AS spec_subclass, s.plate, s.mjd, s.fiberid,
-            p.r AS mag_r, dbo.fPhotoTypeN(p.type) AS type_name
-        FROM SpecObj AS s
+            p.r AS mag_r, dbo.fPhotoTypeN(p.type) AS type_name,
+            n.distance
+        FROM dbo.fGetNearbyObjEq({ra}, {dec}, {radius_arcmin}) AS n
+        JOIN SpecObj AS s ON s.bestobjid = n.objID
         LEFT JOIN PhotoObj AS p ON p.objid = s.bestobjid
-        WHERE s.ra BETWEEN {ra - effective_radius} AND {ra + effective_radius}
-          AND s.dec BETWEEN {dec - effective_radius} AND {dec + effective_radius}
-          AND s.zwarning = 0
-        ORDER BY ABS(s.ra - {ra}) + ABS(s.dec - {dec})"""
+        WHERE s.zwarning = 0
+        ORDER BY n.distance"""
 
         try:
             text = await self._query_skyserver(sql)

@@ -3,6 +3,7 @@ import io
 import logging
 from functools import partial
 
+import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
 import astropy.units as u
@@ -156,12 +157,17 @@ class GaiaConnector(BaseConnector):
             dec = float(row["dec"]) if "dec" in row.colnames else 0.0
             source_id = str(row.get("source_id", row.get("SOURCE_ID", "")))
 
+            # L2-d (audit 2026-04-20): 用 np.isfinite(v) 取代 `v == v`.
+            # `v == v` 对真 float NaN 确实返回 False (IEEE754), 但对 astropy
+            # masked scalar 会触发 DeprecationWarning (astropy >= 4.1) 且
+            # 未来版本可能改语义.  np.isfinite 对 NaN / +/-Inf 都返回
+            # False, 语义明确.
             mag = None
             for col in ("phot_g_mean_mag", "PHOT_G_MEAN_MAG"):
                 if col in row.colnames:
                     try:
                         v = float(row[col])
-                        if v == v:
+                        if np.isfinite(v):
                             mag = v
                     except (ValueError, TypeError):
                         pass
@@ -172,7 +178,7 @@ class GaiaConnector(BaseConnector):
                 if col in row.colnames:
                     try:
                         v = float(row[col])
-                        if v == v:  # NaN check (masked values become nan)
+                        if np.isfinite(v):
                             parallax = v
                     except (ValueError, TypeError):
                         pass
@@ -187,7 +193,7 @@ class GaiaConnector(BaseConnector):
                 if col in row.colnames:
                     try:
                         v = float(row[col])
-                        if v == v:  # NaN check
+                        if np.isfinite(v):
                             rv = v
                     except (ValueError, TypeError):
                         pass
@@ -266,7 +272,7 @@ class GaiaConnector(BaseConnector):
                     if col in row.colnames:
                         try:
                             v = float(row[col])
-                            if v == v:  # NaN check (masked values become nan)
+                            if np.isfinite(v):
                                 extra[extra_key] = v
                         except (ValueError, TypeError):
                             pass

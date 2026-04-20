@@ -10,13 +10,21 @@ def equivalent_width(input_data: dict, params: dict) -> dict:
     params:
         line_center: float — central wavelength of the line (required)
         continuum_window: list[float, float] — [lo, hi] wavelength range for
-            continuum estimation (default: line_center +/- 50 A, excluding line)
+            continuum estimation (default: line_center +/- 50 A, excluding line).
+            Legacy single-window form; mixes in line wings if user's window
+            is too narrow.
+        continuum_left: list[float, float] — L2-d (audit 2026-04-20): 显式
+            左侧连续谱窗口 [lo, hi].  与 continuum_right 一起使用时取代
+            continuum_window, **不包含** line_window, 符合 Gray 2005 恒星
+            分光惯例 (两段独立连续谱 + polynomial degree ≤ 2).
+        continuum_right: list[float, float] — 显式右侧连续谱窗口.
         line_window: list[float, float] — [lo, hi] wavelength range for
             the line integration (default: line_center +/- 10 A)
         flux_key: str — key for flux array (default "flux")
         wavelength_key: str — key for wavelength array (default "wavelength")
         continuum_method: str — "linear" (default), "median", "polynomial", "spline"
-        poly_order: int — polynomial order for "polynomial" method (default 3)
+        poly_order: int — polynomial order for "polynomial" method (default 3;
+            但 L2-d: 若传 continuum_left/right 则强制改 ≤2 避免越线翼)
     """
     flux_key = params.get("flux_key", "flux")
     wave_key = params.get("wavelength_key", "wavelength")
@@ -38,19 +46,50 @@ def equivalent_width(input_data: dict, params: dict) -> dict:
 
     # Default windows
     line_window = params.get("line_window", [line_center - 10.0, line_center + 10.0])
-    continuum_window = params.get(
-        "continuum_window", [line_center - 50.0, line_center + 50.0]
-    )
-
     line_lo, line_hi = float(line_window[0]), float(line_window[1])
-    cont_lo, cont_hi = float(continuum_window[0]), float(continuum_window[1])
 
-    # Select continuum pixels (in continuum window but outside line window)
-    cont_mask = (
-        (wavelength >= cont_lo)
-        & (wavelength <= cont_hi)
-        & ~((wavelength >= line_lo) & (wavelength <= line_hi))
-    )
+    # L2-d: 显式两段连续谱窗口优先于 legacy continuum_window.  Gray 2005
+    # 推荐双侧多项式拟合 (左+右两段分别选 ~10-20 Å), 不越线翼, polynomial
+    # degree ≤ 2.
+    continuum_left = params.get("continuum_left")
+    continuum_right = params.get("continuum_right")
+    using_two_window = continuum_left is not None and continuum_right is not None
+
+    if using_two_window:
+        left_lo, left_hi = float(continuum_left[0]), float(continuum_left[1])
+        right_lo, right_hi = float(continuum_right[0]), float(continuum_right[1])
+        # 验证两段不与 line_window 重叠
+        if left_hi > line_lo:
+            raise ValueError(
+                f"EquivalentWidth: continuum_left upper bound ({left_hi}) "
+                f"enters line_window ({line_lo}); widen the gap."
+            )
+        if right_lo < line_hi:
+            raise ValueError(
+                f"EquivalentWidth: continuum_right lower bound ({right_lo}) "
+                f"enters line_window ({line_hi}); widen the gap."
+            )
+        cont_mask = (
+            ((wavelength >= left_lo) & (wavelength <= left_hi))
+            | ((wavelength >= right_lo) & (wavelength <= right_hi))
+        )
+        cont_lo, cont_hi = left_lo, right_hi  # for bookkeeping in return
+        # 两段模式下 polynomial degree 强制 ≤ 2 (Gray 2005)
+        if continuum_method == "polynomial":
+            poly_order = min(poly_order, 2)
+    else:
+        # Legacy 单窗口形式 (向后兼容) — 仍然在 continuum_window 内排除
+        # line_window.  默认 continuum_window 是 line_center ± 50 Å, 这
+        # 等价于左右各 40 Å 的带减去中间 20 Å, 行为上跟两段已经是分离的.
+        continuum_window = params.get(
+            "continuum_window", [line_center - 50.0, line_center + 50.0]
+        )
+        cont_lo, cont_hi = float(continuum_window[0]), float(continuum_window[1])
+        cont_mask = (
+            (wavelength >= cont_lo)
+            & (wavelength <= cont_hi)
+            & ~((wavelength >= line_lo) & (wavelength <= line_hi))
+        )
 
     if np.sum(cont_mask) < 2:
         raise ValueError(

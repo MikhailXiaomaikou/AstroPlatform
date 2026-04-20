@@ -944,3 +944,89 @@ def test_photo_z_boundary_warning_when_zphot_at_edge():
         f"z_max=0.3 + 红目标必然撞边界, 但 at_z_max_boundary={r.get('at_z_max_boundary')}"
     )
     assert "WARNING" in r["note"] or "boundary" in r["note"].lower()
+
+
+# ---------- L2-d: EW 双窗口 + gaia masked + SDSS cone ----------
+
+def test_ew_accepts_two_separate_continuum_windows():
+    """L2-d: equivalent_width 新支持 continuum_left / continuum_right
+    两段参数 (Gray 2005 恒星分光惯例), 不吃线翼."""
+    import numpy as np
+    from app.pipeline.nodes.equivalent_width import equivalent_width
+
+    # 构造一条简单的吸收线
+    wave = np.linspace(6500, 6625, 500)
+    flux = np.ones_like(wave) * 1.0
+    line_mask = (wave >= 6558) & (wave <= 6568)
+    flux[line_mask] = 0.5  # 50% 吸收
+
+    result = equivalent_width(
+        {"data": {"wavelength": wave.tolist(), "flux": flux.tolist()}},
+        {
+            "line_center": 6563.0,
+            "line_window": [6555.0, 6571.0],
+            "continuum_left": [6510.0, 6550.0],
+            "continuum_right": [6580.0, 6620.0],
+            "continuum_method": "polynomial",
+            "poly_order": 3,  # 即便用户传 3, L2-d 在双窗口模式强制降到 2
+        },
+    )
+    ew = result["equivalent_window_result"] if "equivalent_window_result" in result else result.get("equivalent_width_result")
+    assert ew is not None
+    assert ew["ew_value"] > 0, "吸收线 EW 应为正值"
+
+
+def test_ew_rejects_overlapping_two_windows():
+    """L2-d: 两段连续谱窗口与 line_window 重叠时必须 raise, 避免选到
+    线翼."""
+    import numpy as np
+    import pytest
+    from app.pipeline.nodes.equivalent_width import equivalent_width
+
+    wave = np.linspace(6500, 6625, 500)
+    flux = np.ones_like(wave) * 1.0
+
+    with pytest.raises(ValueError, match="line_window"):
+        equivalent_width(
+            {"data": {"wavelength": wave.tolist(), "flux": flux.tolist()}},
+            {
+                "line_center": 6563.0,
+                "line_window": [6555.0, 6571.0],
+                "continuum_left": [6540.0, 6560.0],  # 右边界 6560 < 6555? no, 6560 > 6555 命中 line
+                "continuum_right": [6580.0, 6620.0],
+            },
+        )
+
+
+def test_gaia_isfinite_replaces_v_equals_v():
+    """L2-d: gaia.py 所有 masked / NaN 检查必须用 np.isfinite, 不能再有
+    `v == v` 这种 astropy >= 4.1 会 DeprecationWarning 的写法."""
+    import inspect
+    from app.connectors import gaia as gaia_mod
+
+    src = inspect.getsource(gaia_mod)
+    # 不能再出现 v == v 这种 NaN 检查
+    assert "if v == v" not in src, (
+        "L2-d: `if v == v` 对 astropy masked scalar 会触发 "
+        "DeprecationWarning, 必须换 np.isfinite(v)"
+    )
+    # 必须见到 np.isfinite (至少 1 次) 表明换法到位
+    assert "np.isfinite" in src, "L2-d: 必须引入 np.isfinite 替代 v==v"
+
+
+def test_sdss_spec_uses_cone_not_box():
+    """L2-d: SDSSSpecOnlyConnector.search 不能再用 `ra BETWEEN` 方盒搜
+    (极区拉伸严重), 必须切 dbo.fGetNearbyObjEq 的锥搜."""
+    import inspect
+    from app.connectors import sdss as sdss_mod
+
+    src = inspect.getsource(sdss_mod.SDSSSpecOnlyConnector)
+    assert "dbo.fGetNearbyObjEq" in src, (
+        "L2-d: SDSS spec 连接器必须用 dbo.fGetNearbyObjEq 做锥搜, "
+        "不能再用 RA BETWEEN (极区严重偏差)"
+    )
+    # 验证老的 BETWEEN 方盒写法已撤
+    # (注: BETWEEN 关键字在 SQL 里可能还用于其他目的, 检查特定 WHERE s.ra BETWEEN 子句)
+    assert "s.ra BETWEEN" not in src, (
+        "L2-d: 老的 s.ra BETWEEN 方盒搜索必须去掉"
+    )
