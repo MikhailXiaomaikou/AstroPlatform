@@ -998,9 +998,14 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
 
   // Object info
   if (toolName === "get_object_info") {
+    // B-S2: fallback for null / undefined / empty object_type.
+    // Backend SDSS normalization now returns "Unknown" (see
+    // sdss.py), but older cached data may still be empty — render
+    // "—" rather than the literal string "undefined".
+    const objType = result.object_type ? String(result.object_type) : "—";
     return (
       <div style={{ fontSize: "0.78rem" }}>
-        <strong>{String(result.name)}</strong> — {String(result.object_type)}
+        <strong>{String(result.name)}</strong> — {objType}
         {result.redshift != null && <span> z={Number(result.redshift).toFixed(6)}</span>}
         {result.cross_ids ? <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.72rem" }}>
           {(result.cross_ids as string[]).length} known identifiers

@@ -314,7 +314,12 @@ class SDSSConnector(BaseConnector):
                     name=obj_id,
                     ra=ra,
                     dec=dec,
-                    object_type=type_name,
+                    # B-S2: when SDSS fPhotoTypeN returns NULL / empty
+                    # (mode=2 secondary detections), type_name becomes "".
+                    # Frontend renders empty str as literal "undefined" in
+                    # the AutoToolResult JSON path.  Use "Unknown" so
+                    # the UI shows a real label.
+                    object_type=type_name or "Unknown",
                     magnitude=mag,
                     redshift=redshift,
                     extra=extra,
@@ -432,7 +437,8 @@ class SDSSSpecOnlyConnector(SDSSConnector):
                     name=obj_id,
                     ra=ra,
                     dec=dec,
-                    object_type=type_name,
+                    # B-S2: same fallback as SDSSConnector path.
+                    object_type=type_name or "Unknown",
                     magnitude=mag,
                     redshift=spec_z,
                     extra=extra,
