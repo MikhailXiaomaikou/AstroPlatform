@@ -1276,6 +1276,25 @@ async def chat_message_stream(
     from starlette.responses import StreamingResponse
 
     async def generate():
+        # ══════════════════════════════════════════════════════════════
+        # B-R1 FIX (post-regression): flush SSE preamble + initial status
+        # BEFORE any heavy setup.  Previously _build_runtime (orchestrator
+        # intent classification + DB lookup + possibly ADS fetch) ran
+        # first, taking 30-60 s on complex prompts.  Render / Cloudflare
+        # free-tier idle-close the connection before our first yield,
+        # and the client sees "响应流在收到任何内容前被关闭".
+        # First-byte latency must stay < 5 s.
+        # ══════════════════════════════════════════════════════════════
+        import json as _json
+        import asyncio as _aio
+        import time as _time_mod
+
+        # Frame 1: 2 KB padding SSE comment — forces edge proxies to
+        # flush immediately, before any slow backend work.
+        yield ": " + (" " * 2048) + "\n\n"
+        # Frame 2: status so the UI shows "Thinking..." right away.
+        yield f"data: {_json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
+
         # Reuse the same logic but yield intermediate results
         provider_api_keys = _provider_api_keys(req.context, user)
         preferred_backend = _preferred_backend(req.context)
@@ -1296,7 +1315,6 @@ async def chat_message_stream(
         # last 4 turns (8 messages) + the current user query.  Only bail if
         # EVEN after aggressive trimming a single message is still > 180 KB
         # (essentially impossible after _trim_large_tool_results ran).
-        import json as _json
         CAP_BYTES = 180_000
         KEEP_TAIL_MIN = 9  # current user + up to 4 prior turns (4 × 2)
 
@@ -1346,18 +1364,23 @@ async def chat_message_stream(
             )
             return
 
-        runtime = await _build_runtime(req, user, db)
+        # B-R1 FIX: run _build_runtime concurrently with a heartbeat task
+        # that emits a keepalive SSE comment every 8 s.  On a slow
+        # orchestrator call (ADS lookup, user-memory DB scan, etc.) the
+        # connection stays warm and the client keeps seeing bytes.
+        _build_task = _aio.create_task(_build_runtime(req, user, db))
+        _heartbeat_start = _time_mod.monotonic()
+        while not _build_task.done():
+            try:
+                await _aio.wait_for(_aio.shield(_build_task), timeout=8.0)
+            except _aio.TimeoutError:
+                # Still running → emit keepalive + another Thinking
+                # status so the UI timeline doesn't look frozen.
+                elapsed = int(_time_mod.monotonic() - _heartbeat_start)
+                yield ": heartbeat " + str(elapsed) + "s\n\n"
+                yield f"data: {_json.dumps({'type': 'status', 'message': f'Setting up (elapsed {elapsed}s)...'})}\n\n"
+        runtime = _build_task.result()
         agent_names = list(runtime.get("agent_names") or ["orchestrator"])
-
-        # 2 KB padding comment as the very first SSE frame.  SSE comments
-        # start with `:` and are ignored by EventSource / the fetch-based
-        # parser.  The bulk bytes force Cloudflare + Render proxies to
-        # flush their output buffer immediately; without it, the first
-        # dozen small `data:` frames can sit in the proxy buffer for
-        # minutes during a long LLM round, which looked like "the AI is
-        # doing nothing" even though events were being produced.
-        yield ": " + (" " * 2048) + "\n\n"
-        yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
 
         python_session_id = (req.context or {}).get("python_session_id", "default")
         chat_session_id = (req.context or {}).get("current_session_id")

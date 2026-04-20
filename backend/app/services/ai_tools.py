@@ -2399,9 +2399,13 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     code = inp.get("code", "")
     # G1.1: data_source contract.  AI must declare where the data comes
     # from.  Treatment of missing / unknown declarations:
-    # - Missing entirely: default to SYNTHETIC (safer than rejection;
-    #   older tests and clients keep working but output is marked SYNTHETIC).
-    #   A counter fires so we can see how often the LLM forgets.
+    # - Missing entirely: look at the code and auto-classify via AST.
+    #   B-S4 fix: the old default was "none_not_analyzing_real_data" which
+    #   flagged legitimate code reading Gaia ADQL results as SYNTHETIC
+    #   ("Numbers from synthetic tools are NOT from observations" warning
+    #   next to real Gaia DR3 δ Cephei data).  If the code clearly reads
+    #   a real cache (get_adql_results etc.), infer the source.  Otherwise
+    #   fall back to synthetic.  AST walk keeps this precise.
     # - Known real source (latest_adql/search/lightcurve): validate that
     #   the code actually reads from it; mismatch → reject.
     # - "none_not_analyzing_real_data": explicit synthetic, marked SYNTHETIC.
@@ -2413,9 +2417,43 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             record_counter("run_python_missing_data_source_total", 1.0)
         except Exception:
             pass
-        # Default to synthetic — safer posture. The claim gate will block
-        # any numbers cited from this output.
-        data_source = "none_not_analyzing_real_data"
+        # B-S4: AST-based auto-classification instead of blanket SYNTHETIC.
+        # Looks for calls/names that mean the code is reading a real cache.
+        auto_source: str | None = None
+        try:
+            import ast as _ast_auto
+            tree = _ast_auto.parse(code)
+            names_seen: set[str] = set()
+            for node in _ast_auto.walk(tree):
+                if isinstance(node, _ast_auto.Name):
+                    names_seen.add(node.id)
+                if isinstance(node, _ast_auto.Attribute):
+                    names_seen.add(node.attr)
+            if any(t in names_seen for t in ("get_adql_results", "get_adql_result_sets")):
+                auto_source = "latest_adql"
+            elif "get_search_results" in names_seen:
+                auto_source = "latest_search"
+            elif any(t in names_seen for t in ("search_lightcurve", "download_and_clean_lightcurve")):
+                auto_source = "latest_lightcurve"
+            elif "get_cached_results" in names_seen:
+                auto_source = "latest_adql"  # the most common cached source
+            elif any(t in names_seen for t in ("load_fits", "fits")):
+                auto_source = "fits:<autodetected>"
+        except Exception:
+            pass
+
+        if auto_source is not None:
+            data_source = auto_source
+            # Fire a counter so we can see how often AI forgets to declare
+            # but we auto-recovered.
+            try:
+                from app.observability.metrics import record_counter
+                record_counter("run_python_data_source_auto_inferred_total", 1.0, inferred=auto_source)
+            except Exception:
+                pass
+        else:
+            # Still couldn't tell — default to synthetic (safer).
+            data_source = "none_not_analyzing_real_data"
 
     is_synthetic_declared = data_source == "none_not_analyzing_real_data"
 
