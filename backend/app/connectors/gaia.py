@@ -204,13 +204,42 @@ class GaiaConnector(BaseConnector):
                 # become distance (pc); we do it for them and note the
                 # Bailer-Jones caveat (negative or tiny plx → prior
                 # needed, not simple inversion).
+                #
+                # L2-a (audit 2026-04-20): SNR 门控.  当 parallax/parallax_error
+                # < 5 时, 1/plx 点估计高度偏斜 (mode ≠ 1/plx_mode), 不能当
+                # 真距离.  标 partial + 引导用户用 Bayesian 后验.
                 if parallax > 0:
+                    # 尝试从 row 里读 parallax_error 算 SNR
+                    plx_err = None
+                    for err_col in ("parallax_error", "PARALLAX_ERROR"):
+                        if err_col in row.colnames:
+                            try:
+                                plx_err = float(row[err_col])
+                                if not (plx_err == plx_err and plx_err > 0):
+                                    plx_err = None
+                            except (ValueError, TypeError):
+                                plx_err = None
+                            break
                     extra["distance_pc"] = round(1000.0 / parallax, 2)
+                    if plx_err is not None:
+                        snr = parallax / plx_err
+                        extra["parallax_snr"] = round(snr, 2)
+                        if snr < 5:
+                            extra["distance_requires_posterior"] = True
+                            extra["distance_note"] = (
+                                f"parallax_snr = {snr:.2f} < 5; 1/plx point "
+                                f"estimate is highly biased (distance PDF is "
+                                f"strongly skewed).  Use Bailer-Jones+ 2021 "
+                                f"posterior instead of this value for any "
+                                f"quantitative analysis."
+                            )
+                            extra["distance_analysis_status"] = "partial"
                 else:
                     extra["distance_note"] = (
                         "Parallax ≤ 0; simple 1/plx inversion is meaningless. "
                         "Use a Bayesian distance prior (Bailer-Jones+ 2021)."
                     )
+                    extra["distance_requires_posterior"] = True
             if rv is not None:
                 extra["radial_velocity_km_s"] = round(rv, 2)
                 extra["radial_velocity_note"] = (

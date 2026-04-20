@@ -789,3 +789,28 @@ def test_bayesian_fit_walker_init_has_strengthened_retry_logic():
     assert "Gelman" in src or "garbage chains" in src, (
         "L4 的阈值 80% 基于 Gelman & Shirley 2011, 理由必须在 comment 里"
     )
+
+
+# ---------- L2-a: Gaia parallax SNR 门控 ----------
+
+def test_gaia_low_snr_parallax_flagged_partial():
+    """L2-a: 当 parallax_error / parallax < 5 时 1/plx 点估计高度偏斜,
+    应标 distance_requires_posterior=True + analysis_status=partial,
+    引导用户用 Bailer-Jones 后验.  反之 SNR >= 5 直接给 distance_pc.
+
+    用 inspect 断言 gaia.py 源码含新 SNR 门控逻辑, 未来有人去掉
+    `parallax_snr` / `distance_requires_posterior` 字段就会红."""
+    import inspect
+    from app.connectors import gaia as gaia_mod
+
+    src = inspect.getsource(gaia_mod.GaiaConnector)
+    assert "parallax_snr" in src, "Gaia SNR 字段丢失"
+    assert "distance_requires_posterior" in src, (
+        "低 SNR 时引导用户用后验的标记丢失, AI 无法知道 1/plx 不可信"
+    )
+    # 必须有 SNR < 5 的判断
+    assert "< 5" in src or "snr < 5" in src.lower(), (
+        "L2-a 的 SNR=5 阈值 (1/plx bias 分界) 被修改/去掉"
+    )
+    # 必须引用 Bailer-Jones
+    assert "Bailer-Jones" in src
