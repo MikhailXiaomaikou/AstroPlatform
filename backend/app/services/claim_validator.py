@@ -281,8 +281,43 @@ def _is_tainted_synthetic_payload(payload: Any) -> bool:
     )
 
 
-def _iter_numeric_values(payload: Any) -> Iterable[float]:
-    """Yield every finite numeric scalar from claimable tool payloads."""
+# L2 (audit 2026-04-20): 元数据字段黑名单.  Pleiades "776 stars"
+# laundering 的根因 — 工具返回 `{"row_count": 776}`, AI 说 "776 member
+# stars", validator 扫完数字池发现 776 在里面 (来自 row_count 这种系统
+# 字段), 放行.  审计后这些**系统性元数据 key** 上带的数字不进池子.
+# 注: 只跳过 key 一层, 不影响嵌套 value (如果数据列碰巧叫 row_count,
+# 只影响那一层, 影响范围可接受).
+_METADATA_KEYS_BLACKLIST: frozenset[str] = frozenset({
+    # 查询元信息
+    "row_count", "showing", "has_data", "truncated",
+    "elapsed_seconds", "elapsed_ms", "timeout_s",
+    "timestamp", "timestamp_utc", "created_at", "updated_at",
+    # HTTP / retry 元信息
+    "status_code", "http_status", "attempts", "retry_count",
+    # 身份 / 复现 envelope
+    "run_id", "query_hash", "tool_version", "archive_version",
+    "random_seed", "session_id", "user_id", "chat_session_id",
+    "python_session_id",
+    # 结果状态标志 (虽然多数是字符串或 bool, 偶尔是 code)
+    "success", "error_class", "argument", "error_code",
+    "analysis_status", "__tool_status__", "data_origin",
+    # 偏移 / 分页
+    "offset", "limit", "per_page", "page", "total_pages",
+    # 记录数元信息 (跟 row_count 同类)
+    "num_rows", "num_cols", "n_rows", "n_cols", "total_count",
+})
+
+
+def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Iterable[float]:
+    """Yield every finite numeric scalar from claimable tool payloads.
+
+    L2: 跳过 _METADATA_KEYS_BLACKLIST 里的顶层字段 — AI 不应该能引用
+    `row_count` / `timestamp` / `status_code` 这些系统字段里的数字当
+    观测结果.  _in_blacklisted_key 用来 propagate: 如果外层 key 是
+    row_count, 该子树整个不进池.
+    """
+    if _in_blacklisted_key:
+        return
     if isinstance(payload, (int, float)) and not isinstance(payload, bool):
         v = float(payload)
         if math.isfinite(v):
@@ -290,7 +325,11 @@ def _iter_numeric_values(payload: Any) -> Iterable[float]:
     elif isinstance(payload, dict):
         if _is_tainted_synthetic_payload(payload):
             return
-        for val in payload.values():
+        for key, val in payload.items():
+            # L2: 系统性元数据字段整体跳过
+            key_str = str(key).lower() if not isinstance(key, str) else key.lower()
+            if key_str in _METADATA_KEYS_BLACKLIST:
+                continue
             yield from _iter_numeric_values(val)
     elif isinstance(payload, list):
         for val in payload:

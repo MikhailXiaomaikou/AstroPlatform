@@ -340,3 +340,74 @@ def test_existing_parallax_still_dedupped_not_duplicated():
     # 同一 value (9.0) 不应多次计数
     vals_at_9 = [c for c in r.uncited if abs(c.value - 9.0) < 1e-6]
     assert len(vals_at_9) == 1, f"9.00 mas 被重复抽取: {r.uncited}"
+
+
+# -------------------- L2 (audit 2026-04-20): 数字池元数据过滤 --------------------
+
+
+def test_row_count_laundering_blocked_pleiades_776():
+    """L2: 复现 Pleiades 第一次审稿的 laundering.
+    工具返回 row_count=776, AI 声称 "776 member stars".
+    原 validator 把 row_count 当普通数字吃进池, 让 776 通过.
+    审计后 row_count 字段整体跳过 → 776 不进池 → claim 被拦."""
+    tool_results = [{
+        "tool": "run_adql",
+        "result": {
+            # 没有任何真实的 776 数据行, 只有 row_count 这个元字段
+            "row_count": 776,
+            "showing": 100,
+            "columns": ["source_id", "ra", "dec", "parallax"],
+            "data": {
+                "parallax": [7.3, 7.5, 7.4, 7.6, 7.35],  # 真实数据, 无 776
+            },
+        },
+    }]
+    r = validate_claims("Found 776 member stars in the Pleiades.", tool_results)
+    assert not r.ok, "776 不该过 — row_count 是元数据不能 launder 成观测"
+    # 776 应该在 uncited 里
+    assert any(abs(c.value - 776) < 1e-6 for c in r.uncited), \
+        f"776 没被拦下, 说明元数据过滤失效: {r.uncited}"
+
+
+def test_timestamp_not_laundered_as_data():
+    """L2: 工具返回 timestamp=1745136000 之类 UNIX epoch 大整数,
+    AI 不应该能引用它装作真实观测数据."""
+    tool_results = [{"result": {
+        "timestamp_utc": 1745136000,
+        "elapsed_seconds": 12.5,
+        "data": {"parallax": [7.5]},
+    }}]
+    # AI 瞎说距离 1745136000 pc — 应该被拦
+    r = validate_claims("The distance is 1745136000 pc", tool_results)
+    assert not r.ok, "timestamp 作为元数据不应 launder"
+
+
+def test_real_data_still_matches_after_metadata_filter():
+    """L2: 确认 filter 不是把所有数字都砍了.  真实数据字段 (parallax,
+    ra, distance, period 等) 照常进池."""
+    tool_results = [{"result": {
+        "row_count": 1,
+        "timestamp": 1745136000,
+        "data": {"parallax": 7.353, "period": 5.366},
+    }}]
+    # 引用真实数据 7.353 和 5.366 → 应该通过 (都在池里)
+    r = validate_claims("Parallax 7.353 mas and period 5.366 days.", tool_results)
+    assert r.ok, (
+        f"真实数据被误拦: uncited={[c.raw for c in r.uncited]}, "
+        f"universe_size={r.universe_size}"
+    )
+
+
+def test_nested_data_rows_still_get_harvested():
+    """L2: 数据行里的数字不能被 'row_count' 这种 key 误伤.  数字在
+    嵌套 dict/list 的 value 位置时, 按普通值处理."""
+    tool_results = [{"result": {
+        "row_count": 5,
+        "rows": [
+            {"pf": 5.366154, "pf_err": 0.000109},
+            {"pf": 5.366200, "pf_err": 0.000200},
+        ],
+    }}]
+    # 引用 5.366154 应该匹配 → 通过
+    r = validate_claims("Gaia period 5.366154 days", tool_results)
+    assert r.ok, f"嵌套数据行里的数字被误拦: {r.uncited}"
