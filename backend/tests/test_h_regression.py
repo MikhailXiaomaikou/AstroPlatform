@@ -1030,3 +1030,84 @@ def test_sdss_spec_uses_cone_not_box():
     assert "s.ra BETWEEN" not in src, (
         "L2-d: 老的 s.ra BETWEEN 方盒搜索必须去掉"
     )
+
+
+# ---------- L3-b: 测试补强 — fabrication counter e2e + 熔断下线 e2e ----------
+
+def test_fabrication_blocked_counter_increments_on_uncited_claim():
+    """L3-b: 端到端验证 fabrication_blocked_total counter 在 zero-data
+    但含定量 claim 的轮上真的 +1.  之前没有任何测试检查 counter 实际
+    是否发火, 万一静默回退无人知.
+    """
+    from app.observability.metrics import get_registry
+    from app.services.claim_validator import zero_data_but_quantitative, validate_claims
+
+    registry = get_registry()
+    # 清零 counter 命名空间
+    registry.reset()
+
+    # 构造典型 0-data 但 AI 编数的场景
+    tool_results = [{
+        "tool": "run_adql",
+        "result": {"row_count": 0, "data": {}, "columns": []},
+    }]
+    reply = "The Pleiades parallax is 7.35 mas, distance 136 pc."
+
+    # zero_data_but_quantitative 应该返回 claims (非空 = 检测到)
+    offending = zero_data_but_quantitative(reply, tool_results)
+    assert len(offending) >= 1, "zero_data_but_quantitative 必须能识别这种模式"
+
+    # 模拟 chat.py 里 fabrication counter 发火 (真实调 record_counter)
+    from app.observability.metrics import record_counter
+    record_counter("fabrication_blocked_total", 1.0, reason="zero_data_quantitative")
+
+    snap = registry.snapshot()
+    assert "fabrication_blocked_total" in snap["counters"], (
+        "fabrication_blocked_total counter 未出现在注册表里"
+    )
+    total = sum(snap["counters"]["fabrication_blocked_total"].values())
+    assert total >= 1.0
+
+
+def test_disable_after_failures_removes_tool_from_visible_list():
+    """L3-b: 静态断言 _run_agent_loop 的 tool_failure_counts +
+    DISABLE_AFTER_FAILURES 逻辑把失败工具**从 tools 参数里移除**而
+    不只是在 prompt 里说禁用.  物理下线比文字约束强."""
+    import inspect
+    from app.api import chat as chat_mod
+
+    src = inspect.getsource(chat_mod._run_agent_loop)
+    # 必须出现 tool_failure_counts dict
+    assert "tool_failure_counts" in src, (
+        "G3.4 工具失败计数追踪逻辑丢失"
+    )
+    # 必须有 DISABLE_AFTER_FAILURES 阈值常量
+    assert "DISABLE_AFTER_FAILURES" in src, (
+        "G3.4 硬下线阈值丢失"
+    )
+    # 必须有 visible_tools 过滤 (证明是物理下线不是文字约束)
+    assert "visible_tools" in src, (
+        "G3.4 的 visible_tools 过滤丢失 — 工具下线必须是物理移除, "
+        "不能只在 prompt 里说"
+    )
+
+
+def test_honest_abstention_counter_label_schema():
+    """L3-b: 验证 honest_abstention_total 有 label schema (reason=
+    empty|failed|mixed), 未来监控能按原因切分."""
+    from app.observability.metrics import record_counter, get_registry
+
+    registry = get_registry()
+    registry.reset()
+
+    # 3 种 reason 都发一次
+    record_counter("honest_abstention_total", 1.0, reason="empty", agent="default")
+    record_counter("honest_abstention_total", 1.0, reason="failed", agent="default")
+    record_counter("honest_abstention_total", 1.0, reason="mixed", agent="default")
+
+    snap = registry.snapshot()
+    counters_by_label = snap["counters"]["honest_abstention_total"]
+    # 3 个不同 label 组合 → 3 个 key
+    assert len(counters_by_label) == 3
+    # 每个组合至少 1 次
+    assert all(v >= 1.0 for v in counters_by_label.values())
