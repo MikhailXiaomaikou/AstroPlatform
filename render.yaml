@@ -32,6 +32,8 @@ services:
         generateValue: true
       - key: PIPELINE_MODE
         value: celery
+      - key: SANDBOX_BACKEND
+        value: subprocess
       - key: CORS_ORIGINS
         value: https://astro-frontend-tyfr.onrender.com,https://standard-astro-frontend-tyfr.onrender.com
       - key: ANTHROPIC_API_KEY
@@ -61,6 +63,8 @@ services:
           property: connectionString
       - key: JWT_SECRET
         sync: false
+      - key: SANDBOX_BACKEND
+        value: subprocess
 
   # ── Celery Beat (scheduler) ──
   - type: worker

@@ -10,6 +10,7 @@ import hashlib
 import io
 import inspect
 import logging
+import pickle
 import re
 import signal
 import sys
@@ -490,12 +491,22 @@ def _make_data_accessor(session_id: str):
             or []
         )
 
+    def get_cached_results_for_session(key: str):
+        """Get cached platform data, preferring this chat/session scope."""
+        from app.services.ai_tools import get_cached_results
+        scoped_key = f"{key}:{session_id}" if session_id and session_id != "default" else None
+        payload = (get_cached_results(scoped_key) if scoped_key else None) or get_cached_results(key)
+        if key == "latest_adql":
+            return _normalize_adql_rows(payload)
+        return payload
+
     return {
         "load_fits": load_fits,
         "get_search_results": get_search_results,
         "get_adql_results": get_adql_results,
         "get_latest_adql_result": get_latest_adql_result,
         "get_adql_result_sets": get_adql_result_sets,
+        "get_cached_results": get_cached_results_for_session,
     }
 
 
@@ -547,7 +558,34 @@ def _should_persist_value(val) -> bool:
     return True
 
 
-def _dispatch_subprocess(code: str) -> CodeExecutionResult | None:
+def _collect_subprocess_cache_context(session_id: str) -> dict:
+    """Snapshot parent-process tool caches for the fresh subprocess."""
+    try:
+        from app.services import ai_tools
+    except Exception:
+        return {}
+
+    visible: dict = {}
+    session_suffix = f":{session_id}" if session_id and session_id != "default" else ""
+    for key in list(getattr(ai_tools, "_search_result_cache", {}).keys()):
+        value = ai_tools.get_cached_results(key)
+        if value is None:
+            continue
+        try:
+            pickle.dumps(value)
+        except Exception:
+            continue
+        visible[key] = value
+        if session_suffix and key.endswith(session_suffix):
+            visible[key[: -len(session_suffix)]] = value
+    return visible
+
+
+def _dispatch_subprocess(
+    code: str,
+    timeout_seconds: float | None = None,
+    session_id: str = "default",
+) -> CodeExecutionResult | None:
     """Run `code` in the subprocess sandbox backend.
 
     Returns a CodeExecutionResult on success, or None if the backend could
@@ -565,8 +603,9 @@ def _dispatch_subprocess(code: str) -> CodeExecutionResult | None:
     try:
         raw = backend.execute(
             code,
-            timeout=_settings.sandbox_timeout_seconds,
+            timeout=int(timeout_seconds or _settings.sandbox_timeout_seconds),
             memory_bytes=_settings.sandbox_memory_bytes,
+            cache_context=_collect_subprocess_cache_context(session_id),
         )
     except Exception as e:
         logger.warning("subprocess sandbox backend raised: %s", e)
@@ -583,7 +622,12 @@ def _dispatch_subprocess(code: str) -> CodeExecutionResult | None:
     return result
 
 
-def execute_python(code: str, context: dict | None = None, session_id: str = "default") -> CodeExecutionResult:
+def execute_python(
+    code: str,
+    context: dict | None = None,
+    session_id: str = "default",
+    timeout_seconds: float | None = None,
+) -> CodeExecutionResult:
     """Execute Python code in a sandboxed environment.
 
     Args:
@@ -601,7 +645,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         from app.config import settings as _settings
         if _settings.sandbox_backend == "subprocess" and not context:
             logger.info("sandbox: using backend=subprocess (no context)")
-            sub_result = _dispatch_subprocess(_normalize_code(code))
+            sub_result = _dispatch_subprocess(_normalize_code(code), timeout_seconds, session_id)
             if sub_result is not None:
                 return sub_result
             logger.warning(
@@ -639,13 +683,14 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     matplotlib.rcParams["axes.unicode_minus"] = False  # Fix minus sign rendering
     import matplotlib.pyplot as plt
 
+    data_accessors = _make_data_accessor(session_id)
     exec_globals = {
         "__builtins__": safe_builtins,
         "np": np,
         "numpy": np,
         "plt": plt,
         "matplotlib": matplotlib,
-        **_make_data_accessor(session_id),
+        **data_accessors,
         **_make_sandbox_helpers(),
     }
 
@@ -693,6 +738,8 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
     # Pre-import astronomy analysis toolkit
     try:
         astro = _get_astro_module()
+        for name, accessor in data_accessors.items():
+            setattr(astro, name, accessor)
         exec_globals["astro"] = astro
         exec_globals["astro_analysis"] = astro
         # Also expose top-level convenience functions
@@ -802,7 +849,7 @@ def execute_python(code: str, context: dict | None = None, session_id: str = "de
         sys.stdout = stdout_capture
         sys.stderr = stderr_capture
 
-        with _timeout(MAX_EXEC_TIME):
+        with _timeout(int(timeout_seconds or MAX_EXEC_TIME)):
             exec(code, exec_globals)  # noqa: S102
 
         result.success = True

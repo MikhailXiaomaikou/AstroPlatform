@@ -20,7 +20,7 @@ import asyncio
 from unittest.mock import patch
 
 from app.services.ai_tools import _exec_run_python
-from app.services.claim_validator import validate_claims, is_empty_turn
+from app.services.claim_validator import validate_claims, is_empty_turn, zero_data_but_quantitative
 from app.services.synthetic_code_detector import analyze
 
 
@@ -169,16 +169,13 @@ def test_empty_turn_with_synthetic_bait_blocks_claim():
     reply = "Found 776 stars with mean parallax 7.353 mas."
     # is_empty_turn should detect ADQL failed; run_python success but
     # synthetic doesn't rescue the turn: it still counts as "no real data".
-    # Current is_empty_turn doesn't yet recognize synthetic as "empty" —
-    # document that gap for a future tightening.
-    # For now, the validator is the backstop:
+    assert is_empty_turn(tool_results) is True
+    blocked_claims = zero_data_but_quantitative(reply, tool_results)
+    assert {c.value for c in blocked_claims} >= {776.0, 7.353}
+
     result = validate_claims(reply, tool_results)
-    # 776 / 7.353 both appear in stdout text; claim_validator harvests
-    # numbers from stdout string, so they'd match. This is a KNOWN LIMIT.
-    # The real defense is the UI marking the card red + the __do_not_claim__
-    # banner + the system prompt forbidding citation from SYNTHETIC.
-    assert result.ok in (True, False)  # not what we're testing here
-    # What we DO assert: the banner is present and visible.
+    assert result.ok is False
+    assert {c.value for c in result.uncited} >= {776.0, 7.353}
     assert tool_results[1]["result"]["__do_not_claim__"] is True
     assert tool_results[1]["result"]["__tool_status__"] == "SYNTHETIC"
 

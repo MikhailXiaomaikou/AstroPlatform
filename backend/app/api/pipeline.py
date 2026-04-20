@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from app.auth import get_current_user, get_optional_user, hash_password
+from app.config import settings
 from app.rate_limit import limiter
 from app.models.database import get_db
 from app.models.schemas import PipelineRun, PipelineTemplateDB, PipelineVersion, RunResult, User
@@ -332,8 +333,9 @@ async def run_pipeline(
 
     run_id_str = str(run_id)
 
-    # Async execution via Celery (when async_mode=True)
-    if async_mode:
+    # Async execution via Celery only when the deployment mode explicitly
+    # enables Celery.  In sync mode, heavy nodes must fail before dispatch.
+    if async_mode and settings.pipeline_mode == "celery":
         try:
             execute_pipeline_task.delay(run_id_str, req.dag, req.input_data_id)
             return RunResponse(run_id=run_id_str, status="running", warnings=dag_warnings)

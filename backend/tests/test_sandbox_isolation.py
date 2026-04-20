@@ -36,6 +36,19 @@ class TestSubprocessSandboxIsolation:
         assert r.backend == "subprocess"
         assert r.variables.get("result") == "2"
 
+    def test_cache_accessors_are_available(self):
+        r = SubprocessBackend().execute(
+            "rows = get_cached_results('latest_adql')\n"
+            "print(rows[0]['value'])\n"
+            "import astro\n"
+            "print(astro.get_adql_results()[0]['value'])",
+            timeout=SMALL_TIMEOUT,
+            memory_bytes=SMALL_MEMORY,
+            cache_context={"latest_adql": [{"value": "cached"}]},
+        )
+        assert r.success is True
+        assert "cached" in r.stdout
+
     def test_infinite_loop_is_killed(self):
         r = _run("while True:\n    pass", timeout=2)
         assert r.success is False

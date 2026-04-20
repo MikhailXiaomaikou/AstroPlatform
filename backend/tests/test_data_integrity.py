@@ -69,3 +69,29 @@ def test_astroobject_passes_validation_warnings_through_provenance():
     # The dict-level sanity check catches the out-of-range ra.
     warnings = normalised.get("warnings") or []
     assert any("ra" in str(w).lower() for w in warnings)
+
+
+def test_astro_to_result_preserves_sdss_photometric_redshift():
+    """SDSS photo-z fallback must not be mislabeled as spectroscopic."""
+    from app.api.data import _astro_to_result
+
+    obj = AstroObject(
+        source="sdss",
+        object_id="123",
+        name="SDSS J0000",
+        ra=1.0,
+        dec=2.0,
+        object_type="GALAXY",
+        redshift=0.42,
+        extra={
+            "z_source": "photometric",
+            "photo_z": 0.42,
+            "photo_z_err": 0.03,
+        },
+    )
+
+    result = _astro_to_result(obj)
+    assert result.redshift == 0.42
+    assert result.z_source == "photometric"
+    assert result.photo_z == 0.42
+    assert result.photo_z_err == 0.03

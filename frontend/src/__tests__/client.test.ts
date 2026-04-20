@@ -145,7 +145,7 @@ describe("Auth helper functions", () => {
 
     const mockFetch = vi.fn().mockResolvedValueOnce({
       ok: false,
-      status: 502,
+      status: 400,
       json: () => Promise.resolve({ detail: "AI assistant not configured" }),
     });
     vi.stubGlobal("fetch", mockFetch);
@@ -155,6 +155,47 @@ describe("Auth helper functions", () => {
     ).rejects.toThrow("AI assistant not configured");
 
     vi.unstubAllGlobals();
+  });
+
+  it("sendChatMessage retries one cold-start stream failure", async () => {
+    vi.useFakeTimers();
+    const { sendChatMessage } = await import("../api/client");
+
+    const sseBody = 'data: {"type":"text","content":"awake"}\n\n';
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
+    });
+
+    const waking = vi.fn();
+    window.addEventListener("astro:backend-waking", waking);
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        statusText: "Service Unavailable",
+        json: () => Promise.resolve({ detail: "warming" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const pending = sendChatMessage([{ role: "user", content: "hello" }]);
+    await vi.advanceTimersByTimeAsync(5000);
+    const result = await pending;
+
+    expect(result.reply).toBe("awake");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(waking).toHaveBeenCalledTimes(1);
+
+    window.removeEventListener("astro:backend-waking", waking);
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("sendChatMessage explains connectivity failures after fetch errors", async () => {

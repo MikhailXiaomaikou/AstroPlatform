@@ -52,11 +52,13 @@ class Settings(BaseSettings):
     # refuse to run in sync mode to avoid blocking the FastAPI event loop.
     pipeline_mode: str = "celery"
 
-    # Sandbox backend for run_python: "inprocess" (default, Jupyter-like
-    # session state) or "subprocess" (crash-isolated, no cross-call state).
+    # Sandbox backend for run_python: "inprocess" (Jupyter-like session
+    # state) or "subprocess" (crash-isolated, no cross-call state).
+    # Keep local/dev on in-process for interactive state; production defaults
+    # to subprocess so OOM / infinite loops / SIGSEGV stay out of FastAPI.
     # Subprocess mode contains OOM / infinite loops / SIGSEGV in user code
     # so the FastAPI worker stays alive.
-    sandbox_backend: str = "inprocess"
+    sandbox_backend: str = "subprocess" if _ENV == "production" else "inprocess"
     sandbox_memory_bytes: int = 1024 * 1024 * 1024  # 1 GB per call
     sandbox_timeout_seconds: int = 75
 

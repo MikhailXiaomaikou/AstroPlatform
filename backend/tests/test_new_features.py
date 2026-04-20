@@ -186,6 +186,20 @@ print("ok")
         assert r.success
         assert "session" in r.stdout
 
+    def test_generic_cached_results_accessor_is_exposed(self):
+        from app.services.code_executor import execute_python
+        from app.services.ai_tools import store_search_results
+
+        store_search_results("latest_adql:session-cache", [{"value": "session"}])
+
+        r = execute_python(
+            "rows = get_cached_results('latest_adql')\n"
+            "print(rows[0]['value'])",
+            session_id="session-cache",
+        )
+        assert r.success
+        assert "session" in r.stdout
+
     def test_adql_result_sets_accessor_returns_history(self):
         from app.services.ai_tools import replace_adql_result_sets
         from app.services.code_executor import execute_python

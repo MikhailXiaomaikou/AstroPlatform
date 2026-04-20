@@ -1764,7 +1764,8 @@ export async function sendChatMessage(
   // Use SSE streaming endpoint to avoid proxy timeouts (Render kills idle
   // connections after ~30s; streaming keeps the connection alive).
   try {
-    const resp = await fetch(`${API_BASE_URL}/api/chat/message/stream`, {
+    const streamUrl = `${API_BASE_URL}/api/chat/message/stream`;
+    const fetchStream = () => fetch(streamUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1775,6 +1776,18 @@ export async function sendChatMessage(
       body: JSON.stringify(body),
       signal,  // R0d: user-triggered abort closes the fetch + stream
     });
+
+    let resp = await fetchStream();
+    if (!resp.ok && COLD_START_STATUSES.has(resp.status) && !signal?.aborted) {
+      try {
+        sessionStorage.removeItem("astro_backend_checked");
+        window.dispatchEvent(new CustomEvent("astro:backend-waking"));
+      } catch {
+        /* ignore */
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      resp = await fetchStream();
+    }
 
     if (!resp.ok) {
       const errBody = await resp.json().catch(() => ({ detail: resp.statusText }));

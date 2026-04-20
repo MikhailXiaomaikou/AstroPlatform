@@ -1994,7 +1994,6 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
         row_count=row_count,
     )
     store_adql_result_set(python_session_id, result_set)
-    store_search_results("latest_adql", data)
 
     return adql_result
 
@@ -2606,7 +2605,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     loop = asyncio.get_running_loop()
     try:
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, execute_python, code, None, python_session_id),
+            loop.run_in_executor(None, execute_python, code, None, python_session_id, mode_timeout),
             timeout=mode_timeout,
         )
     except asyncio.TimeoutError:
@@ -2628,7 +2627,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             fixed_code, auto_fix_note = retry
             try:
                 retry_result = await asyncio.wait_for(
-                    loop.run_in_executor(None, execute_python, fixed_code, None, python_session_id),
+                    loop.run_in_executor(None, execute_python, fixed_code, None, python_session_id, mode_timeout),
                     timeout=mode_timeout,
                 )
                 if retry_result.success:

@@ -121,6 +121,29 @@ class TestPipelineEndpoints:
             assert "name" in tpl
             assert "dag" in tpl
 
+    async def test_sync_pipeline_mode_blocks_heavy_async_dispatch(self, app_client, monkeypatch):
+        from app.api import pipeline as pipeline_api
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "pipeline_mode", "sync")
+
+        def _fail_delay(*_args, **_kwargs):
+            raise AssertionError("Celery dispatch should not run in sync mode")
+
+        monkeypatch.setattr(pipeline_api.execute_pipeline_task, "delay", _fail_delay)
+        dag = {
+            "nodes": [{"id": "stack", "type": "ImageStack", "params": {}}],
+            "edges": [],
+        }
+
+        resp = await app_client.post(
+            "/api/pipeline/run?async_mode=true",
+            json={"dag": dag, "input_data_id": "test.fits"},
+        )
+
+        assert resp.status_code == 503
+        assert "heavy nodes" in resp.json()["detail"]
+
 
 class TestSchedulerEndpoints:
     async def test_scheduler_crud(self, app_client, test_user):

@@ -211,13 +211,31 @@ def extract_claims(text: str) -> list[Claim]:
     return claims
 
 
+def _is_tainted_synthetic_payload(payload: Any) -> bool:
+    """Return True when a tool payload must not support reply claims."""
+    if not isinstance(payload, dict):
+        return False
+    status_values: list[str] = []
+    for key in ("analysis_status", "__tool_status__", "status", "data_origin"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            status_values.append(value.strip().upper())
+    return (
+        payload.get("__do_not_claim__") is True
+        or "SYNTHETIC" in status_values
+        or "SIMULATED_DEMO" in status_values
+    )
+
+
 def _iter_numeric_values(payload: Any) -> Iterable[float]:
-    """Yield every finite numeric scalar anywhere in a nested structure."""
+    """Yield every finite numeric scalar from claimable tool payloads."""
     if isinstance(payload, (int, float)) and not isinstance(payload, bool):
         v = float(payload)
         if math.isfinite(v):
             yield v
     elif isinstance(payload, dict):
+        if _is_tainted_synthetic_payload(payload):
+            return
         for val in payload.values():
             yield from _iter_numeric_values(val)
     elif isinstance(payload, list):
@@ -390,6 +408,14 @@ def is_empty_turn(tool_results: Any) -> bool:
         if row_count is None:
             row_count = outer.get("row_count")
 
+        synthetic_or_unciteable = (
+            inner.get("__do_not_claim__") is True
+            or outer.get("__do_not_claim__") is True
+            or str(inner.get("data_origin") or "").lower() == "synthetic"
+            or str(outer.get("data_origin") or "").lower() == "synthetic"
+            or any(tok in {"SYNTHETIC", "SIMULATED_DEMO"} for tok in status_tokens)
+        )
+
         explicit_fail = (
             inner.get("success") is False
             or outer.get("success") is False
@@ -397,6 +423,7 @@ def is_empty_turn(tool_results: Any) -> bool:
             or bool(outer.get("error"))
             or any(tok in {"EMPTY", "FAILED", "UNAVAILABLE"} for tok in status_tokens)
             or row_count == 0
+            or synthetic_or_unciteable
         )
         # Also empty: a dict with only the tool/input keys and no meaningful
         # result payload at all.

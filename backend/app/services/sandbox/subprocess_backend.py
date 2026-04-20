@@ -26,6 +26,7 @@ import sys
 import time
 import traceback
 from io import BytesIO, StringIO
+from types import ModuleType
 
 from app.services.sandbox.base import SandboxResult
 
@@ -114,7 +115,62 @@ def _safe_var_repr(val) -> str | None:
     return r
 
 
-def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int) -> None:
+def _normalize_adql_rows(payload):
+    if isinstance(payload, dict):
+        rows = payload.get("rows")
+        return rows if isinstance(rows, list) else []
+    if isinstance(payload, list):
+        if payload and isinstance(payload[0], dict) and "rows" in payload[0] and "columns" in payload[0]:
+            nested_rows = payload[0].get("rows")
+            return nested_rows if isinstance(nested_rows, list) else []
+        return payload
+    return []
+
+
+def _make_cache_accessors(cache_context: dict | None) -> dict:
+    cache = cache_context or {}
+
+    def get_cached_results(key: str):
+        return cache.get(key)
+
+    def get_search_results():
+        return get_cached_results("latest") or []
+
+    def get_adql_results():
+        return _normalize_adql_rows(get_cached_results("latest_adql") or [])
+
+    def get_latest_adql_result():
+        return get_cached_results("latest_adql_set") or {}
+
+    def get_adql_result_sets():
+        return get_cached_results("latest_adql_sets") or []
+
+    return {
+        "get_cached_results": get_cached_results,
+        "get_search_results": get_search_results,
+        "get_adql_results": get_adql_results,
+        "get_latest_adql_result": get_latest_adql_result,
+        "get_adql_result_sets": get_adql_result_sets,
+    }
+
+
+def _make_astro_module(accessors: dict) -> ModuleType | None:
+    try:
+        from app.services import astro_analysis
+    except Exception:
+        return None
+    module = ModuleType("astro")
+    module.__doc__ = astro_analysis.__doc__
+    for name in dir(astro_analysis):
+        if not name.startswith("_"):
+            setattr(module, name, getattr(astro_analysis, name))
+    for name, accessor in accessors.items():
+        setattr(module, name, accessor)
+    sys.modules["astro"] = module
+    return module
+
+
+def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_context: dict | None = None) -> None:
     """Entry point for the sandbox subprocess."""
     _child_set_limits(memory_bytes, cpu_seconds)
     _child_breadcrumb("start exec")
@@ -159,13 +215,26 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int) -> None:
         _BLOCKED = {"exec", "eval", "compile", "open"}
         _safe_builtins = {k: v for k, v in vars(_builtins).items() if k not in _BLOCKED}
 
+        cache_accessors = _make_cache_accessors(cache_context)
+        astro_module = _make_astro_module(cache_accessors)
+
         exec_globals: dict = {
             "__builtins__": _safe_builtins,
             "np": np,
             "numpy": np,
             "plt": plt,
             "matplotlib": matplotlib,
+            **cache_accessors,
         }
+        if astro_module is not None:
+            exec_globals["astro"] = astro_module
+            exec_globals["astro_analysis"] = astro_module
+            for name in (
+                "pub_figure", "pub_style", "get_isochrone", "fit_isochrone",
+                "compare_models", "analyze_residuals", "plot_hr_diagram",
+            ):
+                if hasattr(astro_module, name):
+                    exec_globals[name] = getattr(astro_module, name)
         # Best-effort pre-imports (child-only, skipped if missing)
         for mod_name, alias in (
             ("pandas", "pd"),
@@ -353,11 +422,18 @@ class SubprocessBackend:
 
     name = "subprocess"
 
-    def execute(self, code: str, *, timeout: int, memory_bytes: int) -> SandboxResult:
+    def execute(
+        self,
+        code: str,
+        *,
+        timeout: int,
+        memory_bytes: int,
+        cache_context: dict | None = None,
+    ) -> SandboxResult:
         parent_conn, child_conn = _ctx.Pipe(duplex=False)
         proc = _ctx.Process(
             target=_child_main,
-            args=(code, child_conn, memory_bytes, timeout + 5),
+            args=(code, child_conn, memory_bytes, timeout + 5, cache_context),
         )
         t0 = time.monotonic()
         proc.start()
