@@ -260,3 +260,83 @@ def test_block_message_reports_empty_universe():
     r = validate_claims("z = 1.23", [])
     text = blocked_reply_text(r)
     assert "empty" in text.lower() or "0 distinct" in text.lower()
+
+
+# -------------------- L1 (audit 2026-04-20): 光谱 / X-ray / 射电单位 --------------------
+
+
+def test_wavelength_angstrom_caught():
+    """L1: 'Hα emission at 6563 Å' 之前完全不被抽取 (value_with_error 需
+    要 ± 符号, label_colon 只覆盖距离/红移等, 波长单位 Å 根本不在白名单).
+    审计后波长 claim 进 value_bare_unit."""
+    tool_results = [{"result": {"foo": 1.0}}]
+    r = validate_claims("The Hα emission line is at 6563 Å", tool_results)
+    assert not r.ok
+    values = [c.value for c in r.uncited]
+    assert 6563.0 in values, f"6563 Å 没被抽到: {r.uncited}"
+
+
+def test_xray_luminosity_erg_per_s_caught():
+    """L1: X 射线光度 'L_X = 1.5e44 erg/s' 必须被抽取."""
+    tool_results = [{"result": {"bar": 2.0}}]
+    r = validate_claims("AGN L_X = 1.5e44 erg/s reported", tool_results)
+    assert not r.ok
+    values = [c.value for c in r.uncited]
+    assert 1.5e44 in values, f"1.5e44 erg/s 没被抽到: {r.uncited}"
+
+
+def test_radio_flux_mjy_caught():
+    """L1: 射电流量 '3.2 mJy' 必须被抽取."""
+    tool_results = [{"result": {"qux": 0.5}}]
+    r = validate_claims("FIRST flux 3.2 mJy", tool_results)
+    assert not r.ok
+    values = [c.value for c in r.uncited]
+    assert 3.2 in values
+
+
+def test_xray_energy_kev_caught():
+    """L1: 能量 'E = 5.5 keV' 必须被抽取."""
+    tool_results = [{"result": {"z": 0.1}}]
+    r = validate_claims("Peak at 5.5 keV above continuum", tool_results)
+    assert not r.ok
+    values = [c.value for c in r.uncited]
+    assert 5.5 in values
+
+
+def test_frequency_ghz_caught():
+    """L1: 射电频率 '1.4 GHz' 必须被抽取."""
+    tool_results = [{"result": {"z": 0.1}}]
+    r = validate_claims("Observation at 1.4 GHz", tool_results)
+    assert not r.ok
+    values = [c.value for c in r.uncited]
+    assert 1.4 in values
+
+
+def test_gpc_distance_caught():
+    """L1: 宇宙学距离 '3.2 Gpc' — 之前 distance_pc/kpc/mpc 有但 Gpc 漏."""
+    tool_results = [{"result": {"z": 0.1}}]
+    r = validate_claims("The quasar is at distance 3.2 Gpc", tool_results)
+    assert not r.ok
+    values = [c.value for c in r.uncited]
+    assert 3.2 in values
+
+
+def test_wavelength_with_error_caught():
+    """L1: 带误差的波长 '6563.1 ± 0.5 Å' 必须两个数都被抽取."""
+    tool_results = [{"result": {"z": 0.1}}]
+    r = validate_claims("Line center: 6563.1 ± 0.5 Å", tool_results)
+    assert not r.ok
+    values = [c.value for c in r.uncited]
+    assert 6563.1 in values
+    assert 0.5 in values
+
+
+def test_existing_parallax_still_dedupped_not_duplicated():
+    """L1: 新加的 value_bare_unit 不应让 'parallax is 9.00 mas' 产出
+    两条 claim (同一 value).  span 重叠去重保证只有 1 条."""
+    tool_results = [{"result": {"parallax": 7.5}}]
+    r = validate_claims("The Pleiades parallax is 9.00 mas", tool_results)
+    assert not r.ok
+    # 同一 value (9.0) 不应多次计数
+    vals_at_9 = [c for c in r.uncited if abs(c.value - 9.0) < 1e-6]
+    assert len(vals_at_9) == 1, f"9.00 mas 被重复抽取: {r.uncited}"

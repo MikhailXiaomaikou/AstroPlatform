@@ -98,16 +98,43 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         re.I,
     )),
 
-    # F1.1: ± uncertainty pair — both the central value AND the error
+    # F1.1 + L1: ± uncertainty pair — both the central value AND the error
     # are claims that must be backed by tool results.  The reviewer's
     # "7.353 ± 0.001 mas" exposed the gap: an error bar of 0.001 mas on
     # 776 stars is physically impossible, but the value 7.353 alone
     # could still match a tool output at ±1%.  Forcing both-match
     # tightens the gate by the second decimal.
+    #
+    # L1 (2026-04-20 audit): 补齐光谱/X-ray/射电/高红移单位, 之前漏了
+    # Å / nm / μm / Gpc / keV / eV / MeV / erg·s⁻¹·cm⁻² / μJy / Jy / THz /
+    # kHz.  没有这些单位时整个 "6563 Å ± 1 Å", "L_X = 1e44 erg/s ± 1e42"
+    # 这类光谱 / X 射线 claim 不被抽取, 零幻觉门直接失效.
     ("value_with_error", re.compile(
         rf"{_NUM}\s*(?:±|\+/-|\+-)\s*([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)"
-        rf"\s*(?:mas|pc|kpc|Mpc|deg|arcmin|arcsec|km/?s|mag|dex|Gyr|Myr|yr|days?|K|"
-        rf"M_sun|L_sun|AU|Hz|GHz|MHz|erg(?:/s)?|Jy|mJy|μJy)\b",
+        rf"\s*(?:mas|pc|kpc|Mpc|Gpc|deg|arcmin|arcsec|km/?s|mag|dex|Gyr|Myr|yr|days?|"
+        rf"K|eV|keV|MeV|GeV|"
+        rf"M_sun|L_sun|AU|"
+        rf"Hz|kHz|MHz|GHz|THz|"
+        rf"Å|nm|μm|um|mm|"
+        rf"erg(?:/s)?(?:/cm\^?2)?|Jy|mJy|μJy|uJy)\b",
+        re.I,
+    )),
+
+    # L1 (audit 2026-04-20): 裸单位形式 (无 ± 误差部分, 直接 "数值 单位").
+    # 之前的 label_colon 需要前缀词 (period/distance/...), value_with_error
+    # 需要 ± 符号, 中间这种常见形式没覆盖:
+    #   "Hα emission at 6563 Å", "L_X = 1.5e44 erg/s", "peak at 1.4 GHz",
+    #   "flux 12.3 mJy", "at z=0.5 the luminosity is 3e10 L_sun".
+    # 覆盖范围跟 value_with_error 一致, 确保波长/频率/通量/能量 claim
+    # 统一走匹配.
+    ("value_bare_unit", re.compile(
+        rf"{_NUM}\s*"
+        rf"(mas|pc|kpc|Mpc|Gpc|arcmin|arcsec|km/?s|mag|dex|Gyr|Myr|"
+        rf"eV|keV|MeV|GeV|"
+        rf"M_sun|L_sun|AU|"
+        rf"kHz|MHz|GHz|THz|"
+        rf"Å|nm|μm|um|mm|"
+        rf"erg/s/cm\^?2|erg/s|Jy|mJy|μJy|uJy)\b",
         re.I,
     )),
 
@@ -172,6 +199,12 @@ def extract_claims(text: str) -> list[Claim]:
     F1.1: multi-group patterns (value_with_error, ra_dec_pair) emit one
     Claim per captured group so both the central value AND the error bar
     (or both RA AND Dec) must match tool output.
+
+    L1 (audit 2026-04-20): 后处理去重 — 当两个 pattern 捕获**同一个数值**
+    且 span 有重叠时, 保留"语义更具体"的那一条(通常是 span 更长、包含
+    前缀标签的形式).  例如 "parallax is 9.00 mas" 同时被 parallax_mas
+    (span 4-24) 和 value_bare_unit (span 16-24) 匹到, 只保留前者.
+    避免漏检光谱单位的同时不重复计数.
     """
     claims: list[Claim] = []
     seen: set[tuple[int, int, float]] = set()
@@ -208,7 +241,28 @@ def extract_claims(text: str) -> list[Claim]:
                     start=span[0],
                     end=span[1],
                 ))
-    return claims
+
+    # L1: span-overlap dedup.  Two patterns may both match the same numeric
+    # value at overlapping character ranges ("parallax is 9.00 mas" + "9.00
+    # mas"); keep only the one with the wider span (= more context).
+    if len(claims) <= 1:
+        return claims
+    # Sort by span length descending so the widest-context claim wins.
+    claims_sorted = sorted(claims, key=lambda c: -(c.end - c.start))
+    kept: list[Claim] = []
+    for c in claims_sorted:
+        redundant = False
+        for k in kept:
+            # overlap + same value (<1e-9 absolute diff) → dedup
+            if abs(c.value - k.value) < 1e-9 and not (c.end <= k.start or c.start >= k.end):
+                redundant = True
+                break
+        if not redundant:
+            kept.append(c)
+    # Restore original left-to-right text order so downstream rendering /
+    # user messages remain readable.
+    kept.sort(key=lambda c: c.start)
+    return kept
 
 
 def _is_tainted_synthetic_payload(payload: Any) -> bool:
