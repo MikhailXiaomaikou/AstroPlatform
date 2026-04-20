@@ -1279,13 +1279,140 @@ table.keys td a { color: var(--accent-2); font-style: italic; cursor: pointer; }
   font-size: 14px;
 }
 
-@media (max-width: 1000px) {
+@media (max-width: 1000px) and (min-width: 901px) {
+  /* Tablet — 901-1000 px.  Sidebar stays as a thin column to preserve
+     desktop-like navigation, just narrower. */
+  .chat-page.chat-page-with-sidebar {
+    grid-template-columns: 240px 1fr;
+  }
+  .chat-input-wrapper { padding: 10px 16px 18px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   NARROW / MOBILE (≤900px) — sidebar becomes an overlay drawer instead
+   of eating the top 240px of the screen.  Without this, the "Search
+   chats" input + session list covered the chat header buttons
+   (Save / Share / Generate Paper / etc.) on small screens.
+   ══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  /* Main layout becomes single-column; sidebar is out-of-flow. */
   .chat-page.chat-page-with-sidebar {
     grid-template-columns: 1fr;
-    height: auto;
+    height: calc(100vh - 140px);  /* leave room for masthead */
+    min-height: 480px;
+    border: none;
+    position: relative;
   }
-  .chat-sidebar { max-height: 240px; }
-  .chat-input-wrapper { padding: 10px 16px 18px; }
+  .chat-page.chat-page-with-sidebar .chat-main {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* Sidebar: off-canvas drawer when collapsed; slides in on expand. */
+  .chat-page.chat-page-with-sidebar .chat-sidebar {
+    position: fixed;
+    top: 60px;  /* below the masthead */
+    left: 0;
+    bottom: 0;
+    width: min(320px, 85vw);
+    max-width: none;
+    z-index: 120;
+    background: var(--paper-2);
+    border-right: 1px solid var(--rule);
+    box-shadow: 2px 0 18px rgba(0, 0, 0, 0.08);
+    transform: translateX(0);
+    transition: transform 220ms ease-out;
+  }
+  .chat-page.chat-page-with-sidebar.sidebar-collapsed .chat-sidebar {
+    transform: translateX(-100%);
+    box-shadow: none;
+    width: min(320px, 85vw);  /* keep width for smooth re-open */
+  }
+
+  /* Backdrop when drawer is open — dims chat-main but doesn't block it. */
+  .chat-page.chat-page-with-sidebar:not(.sidebar-collapsed)::before {
+    content: "";
+    position: fixed;
+    top: 60px; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 110;
+    pointer-events: none;  /* click-through falls to main, which closes via JS */
+  }
+
+  /* Floating toggle button (the existing «/» button from chat-sidebar-header
+     isn't visible when sidebar is off-canvas).  We add a small floating
+     button on chat-main's top-left using ::before — but it's cleaner to
+     render it in React.  For now, reposition the existing sidebar toggle
+     so it sits fixed on the edge. */
+  .chat-page.chat-page-with-sidebar.sidebar-collapsed .chat-sidebar-toggle {
+    position: fixed;
+    top: 72px;
+    left: 8px;
+    z-index: 130;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 6px 10px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  }
+
+  /* Tighter chat input + messages on mobile. */
+  .chat-input-wrapper {
+    padding: 8px 12px 14px;
+  }
+  .chat-messages {
+    padding: 12px 14px 16px;
+  }
+  /* Chat header buttons wrap so "Save / Share / Generate Paper / New /
+     Import / Export" don't overflow. */
+  .chat-header-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .chat-header-row .btn-small {
+    font-size: 0.75rem;
+    padding: 4px 8px;
+  }
+  /* Masthead row at narrow widths — gap between issue-meta + nav was
+     making the hamburger overlap the user avatar. */
+  .journal-masthead-row + .journal-masthead-row {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+}
+
+/* Phone (≤480 px) — even tighter paddings + larger tap targets. */
+@media (max-width: 480px) {
+  .chat-page.chat-page-with-sidebar {
+    height: calc(100vh - 120px);
+  }
+  .chat-page.chat-page-with-sidebar .chat-sidebar {
+    width: 88vw;
+    top: 52px;
+  }
+  .chat-page.chat-page-with-sidebar:not(.sidebar-collapsed)::before {
+    top: 52px;
+  }
+  .chat-header-row {
+    padding: 6px 12px;
+  }
+  .chat-header-row h2 {
+    font-size: 18px;
+  }
+  .chat-messages {
+    padding: 8px 10px 12px;
+    font-size: 15px;
+  }
+  .chat-message-content {
+    font-size: 15.5px;
+    line-height: 1.55;
+  }
+  .chat-input-wrapper {
+    padding: 6px 8px 10px;
+  }
+  .chat-input {
+    font-size: 16px;  /* ≥16px prevents iOS Safari auto-zoom on focus */
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════

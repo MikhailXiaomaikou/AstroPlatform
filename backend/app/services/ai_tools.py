@@ -1863,6 +1863,19 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
                     ) from exc
             raise
 
+    # Post-H0.1 hardening: track wall-clock budget.  execute_adql_query
+    # now has 60 s sync + 300 s async fallback per call, so a single
+    # call can already eat 6 minutes.  Cap the TOTAL time spent in the
+    # retry chain at 6 minutes — if we've already burned that, skip
+    # further retries and return the error fast.  Without this, a bad
+    # day on Gaia TAP could chain 3 × 6 min = 18 minutes of silence.
+    import time as _time_mod
+    _start_ts = _time_mod.monotonic()
+    _total_budget_s = 360.0  # 6 min hard cap for the whole retry chain
+
+    def _time_left() -> float:
+        return _total_budget_s - (_time_mod.monotonic() - _start_ts)
+
     result = await _try_query(query)
 
     # On timeout, retry with reduced cone radius (halve, then quarter)
@@ -1882,6 +1895,9 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
             return None
 
         for attempt, factor in enumerate([0.5, 0.25], start=1):
+            if _time_left() < 30:
+                retry_log.append(f"skipped radius×{factor} — budget exhausted")
+                break
             reduced = _halve_radius(query, factor)
             if reduced is None:
                 break
@@ -1898,7 +1914,7 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
         # this on Paper 5: TOP 50000 Gaia query timed out, AI tried
         # TOP 20000 which also timed out, circuit opened.  A smaller
         # sample still gives the AI enough rows for tail statistics.
-        if result is None:
+        if result is None and _time_left() > 30:
             _top_match = _re.search(r"\bTOP\s+(\d+)\b", query, _re.IGNORECASE)
             if _top_match:
                 old_top = int(_top_match.group(1))
@@ -1920,13 +1936,26 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
                             result["top_used"] = new_top
 
     if result is None:
+        _elapsed = int(_time_mod.monotonic() - _start_ts)
         return {
             "error": (
-                "ADQL query timed out even after retrying with reduced cone radius. "
-                "Try: (a) a smaller initial cone (<0.3 deg), (b) tighter parallax/magnitude cuts, "
-                "(c) selecting fewer columns, or (d) using VizieR for pre-computed catalogs."
+                f"ADQL query failed after {_elapsed}s of retries "
+                f"({len(retry_log)} attempt{'s' if len(retry_log) != 1 else ''}).  "
+                "The TAP service is either overloaded or the query is fundamentally "
+                "too large.  Try one of: "
+                "(a) add/tighten TOP (e.g. TOP 500 instead of TOP 50000 — you can "
+                "still get statistics from smaller samples); "
+                "(b) shrink the cone radius to <0.3°; "
+                "(c) add tighter parallax / magnitude / quality cuts (parallax > 1, "
+                "phot_g_mean_mag < 18, ruwe < 1.4); "
+                "(d) query by source_id list if you know your targets; "
+                "(e) for Gaia DR3 mirrors: try VizieR 'I/355/gaiadr3' instead of "
+                "the primary Gaia TAP."
             ),
+            "error_class": "adql_timeout",
             "retries": retry_log,
+            "elapsed_seconds": _elapsed,
+            "service": service,
         }
 
     # Normalize column names to lowercase for consistent AI code

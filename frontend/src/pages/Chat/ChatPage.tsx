@@ -2155,7 +2155,17 @@ export default function ChatPage() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [currentSessionTitle, setCurrentSessionTitle] = useState<string>("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
-    return localStorage.getItem("astro_chat_sidebar_collapsed") === "1";
+    // Narrow-window UX fix: at small viewports (≤900px, the same breakpoint
+    // as the masthead hamburger), default to collapsed so the "Search chats"
+    // + session list don't eat the top of the screen and obscure the
+    // top-left action buttons.  Users can still toggle it open via the «
+    // button, which at narrow widths renders as an overlay drawer.
+    const saved = localStorage.getItem("astro_chat_sidebar_collapsed");
+    if (saved !== null) return saved === "1";
+    if (typeof window !== "undefined" && window.innerWidth <= 900) {
+      return true;
+    }
+    return false;
   });
   const [sessionSearch, setSessionSearch] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
@@ -3247,7 +3257,23 @@ export default function ChatPage() {
         )}
       </aside>
 
-      <div className="chat-main">
+      <div
+        className="chat-main"
+        onClick={(e) => {
+          // Mobile drawer dismiss: if sidebar is open AND viewport is
+          // narrow, clicking anywhere in the main area closes it.  Don't
+          // swallow clicks on interactive elements (they have stopPropagation
+          // where it matters).
+          if (!sidebarCollapsed && typeof window !== "undefined" && window.innerWidth <= 900) {
+            // Only close if the click target isn't inside a control in the
+            // header row — those are real actions.
+            const target = e.target as HTMLElement;
+            if (!target.closest("button") && !target.closest("input") && !target.closest("textarea") && !target.closest("a")) {
+              setSidebarCollapsed(true);
+            }
+          }
+        }}
+      >
       <div className="chat-header">
         <div className="chat-header-row">
           <div className="chat-header-title-block">

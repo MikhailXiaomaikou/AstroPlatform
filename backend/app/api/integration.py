@@ -526,7 +526,10 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
             job = tap.launch_job_async(req.query)
             return job.get_results()
 
-        # Sync first unless we think it'll be big.
+        # Sync first unless we think it'll be big.  H0.1 (post-review):
+        # tightened sync to 30s — healthy Gaia/VizieR responds in <5s, and
+        # a slow sync is usually a sign async will do better.  Async
+        # budget stays at 300s.
         try:
             if _looks_big:
                 logger.info(
@@ -540,7 +543,7 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
             else:
                 table = await asyncio.wait_for(
                     loop.run_in_executor(None, _run_query_sync),
-                    timeout=60.0,
+                    timeout=30.0,
                 )
         except asyncio.TimeoutError as timeout_err:
             # Sync timed out on a query we thought was small.  Fall back
