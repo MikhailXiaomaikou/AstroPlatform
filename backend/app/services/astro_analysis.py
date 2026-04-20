@@ -1882,6 +1882,18 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
     else:
         fap_label = "unreliable"
 
+    # L2-b (audit 2026-04-20): n∈[20,50) 样本太小, Baluev 解析 FAP 偏乐观
+    # (VanderPlas & Ivezic 2015 明确警告).  auto 模式已经在 n<200 时改
+    # bootstrap (好), 但即便 bootstrap 在 n=20-50 也不稳 — 加明确
+    # fap_warning 字段 + reliable 门槛提到 n>=50.
+    fap_warnings: list[str] = []
+    if len(t) < 50:
+        fap_warnings.append(
+            f"n_datapoints={len(t)} < 50; Lomb-Scargle FAP has poor "
+            f"calibration in this regime (VanderPlas & Ivezic 2015). "
+            f"Treat `fap` as an upper bound only and confirm periodicity "
+            f"with a longer time series before publication."
+        )
     return {
         "best_period": best_period,
         "best_period_err": best_period_err,
@@ -1889,7 +1901,9 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
         "fap": fap_at_best,
         "fap_level": fap_label,
         "fap_method": method,
-        "reliable": bool(fap_at_best < 0.01 and len(t) >= 20),
+        "fap_warnings": fap_warnings,
+        # L2-b: reliable 阈值从 n>=20 抬到 n>=50 反映 VanderPlas 2015
+        "reliable": bool(fap_at_best < 0.01 and len(t) >= 50),
         "n_datapoints": len(t),
         "spectral_resolution_per_day": spectral_resolution,
         "nyquist_pseudo_per_day": nyquist_pseudo,

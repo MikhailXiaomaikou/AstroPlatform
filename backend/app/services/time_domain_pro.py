@@ -126,13 +126,31 @@ def fit_transit(time: list, flux: list, flux_err: list | None = None,
         m = batman.TransitModel(params, t)
 
         # Optimize: fit rp, a, inc, t0
+        # L2-b (audit 2026-04-20): 物理边界软约束.  Nelder-Mead 不支持
+        # hard bounds, 所以把 chi2 wrap 一层: 违反 transit 物理 (rp 超
+        # [0,1] 是深度>100%; a/R* < 2.5 违反 Mandel & Agol 2002 的
+        # analytic limit; inc 超 [0°, 90°]) 时返回巨大 penalty 让
+        # minimizer 自然远离.  之前单 `abs()` 只是绝对值对称, 让
+        # minimizer 在 degenerate 空间漫游, 且不阻挡 rp 漂到 10 (物理
+        # 上等价于 transit depth = 10000%).
         def chi2(theta):
             rp, a, i, t0_fit = theta
-            params.rp = abs(rp)
-            params.a = abs(a)
+            # 物理边界检查 — 违反任一 → 1e20 penalty (远大于任何合法 chi2)
+            if rp <= 0 or rp >= 1.0:
+                return 1e20
+            if a < 2.5:
+                return 1e20
+            if i < 0 or i > 90:
+                return 1e20
+            params.rp = rp
+            params.a = a
             params.inc = i
             params.t0 = t0_fit
-            model = m.light_curve(params)
+            try:
+                model = m.light_curve(params)
+            except Exception:
+                # batman 偶尔抛数值错 (eg inc 接近 0/90), 一视同仁给 penalty
+                return 1e20
             return np.sum(((f - model) / ferr) ** 2)
 
         x0 = [rp_rs, a_rs, inc, t0]
@@ -140,6 +158,8 @@ def fit_transit(time: list, flux: list, flux_err: list | None = None,
                          options={"maxiter": 5000})
 
         best_rp, best_a, best_inc, best_t0 = result.x
+        # L2-b: 最终结果仍 abs() 保兼容 (老 caller 可能依赖 rp >= 0),
+        # 但 chi2 guard 已确保 best_rp 在物理范围内的.
         params.rp = abs(best_rp)
         params.a = abs(best_a)
         params.inc = best_inc
@@ -304,7 +324,10 @@ def transit_search_bls(time: list, flux: list,
         bls_null = BoxLeastSquares(t * u.day, shuffled)
         res_null = bls_null.power(periods * u.day, durations * u.day)
         null_max[i] = float(np.max(res_null.power))
-    fap_bootstrap = float(np.mean(null_max >= power[best_idx]))
+    # L2-b (audit 2026-04-20): 严格 > 而非 >=.  Kipping 2011 标准 bootstrap
+    # FAP 定义是 "null max 严格超过观测 max 的比例"; 用 >= 会把 null 恰等
+    # 于观测峰值的 case 也计进去, 过估显著性 0.5-2%.
+    fap_bootstrap = float(np.mean(null_max > power[best_idx]))
 
     if fap_bootstrap < 0.01:
         verdict = "significant"

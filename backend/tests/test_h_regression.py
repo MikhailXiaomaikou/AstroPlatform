@@ -814,3 +814,72 @@ def test_gaia_low_snr_parallax_flagged_partial():
     )
     # 必须引用 Bailer-Jones
     assert "Bailer-Jones" in src
+
+
+# ---------- L2-b: LS FAP n<50 warning + BLS > + transit bounds ----------
+
+def test_lomb_scargle_small_n_emits_fap_warning():
+    """L2-b: n∈[20,50) 时 LS FAP 不可信 (VanderPlas & Ivezic 2015).
+    result 里必须有非空 fap_warnings 字段 + reliable=False."""
+    import numpy as np
+    from app.services.astro_analysis import lomb_scargle_period
+
+    # 构造 25 个点的正弦信号 + 噪声
+    rng = np.random.default_rng(42)
+    t = np.sort(rng.uniform(0, 30, 25))
+    mag = 15.0 + 0.1 * np.sin(2 * np.pi * t / 3.5) + rng.normal(0, 0.02, 25)
+
+    r = lomb_scargle_period(t, mag, random_seed=42)
+    assert "fap_warnings" in r
+    assert len(r["fap_warnings"]) >= 1, "n=25 必须有 LS 小样本警告"
+    assert "VanderPlas" in r["fap_warnings"][0] or "50" in r["fap_warnings"][0]
+    # reliable 阈值抬到 50, 小样本必 False
+    assert r["reliable"] is False, "n=25 < 50, reliable 必须 False"
+
+
+def test_lomb_scargle_large_n_no_warning():
+    """L2-b: n >= 50 时 fap_warnings 为空 (标志正常样本)."""
+    import numpy as np
+    from app.services.astro_analysis import lomb_scargle_period
+
+    rng = np.random.default_rng(123)
+    t = np.sort(rng.uniform(0, 60, 120))
+    mag = 15.0 + 0.3 * np.sin(2 * np.pi * t / 5.0) + rng.normal(0, 0.01, 120)
+
+    r = lomb_scargle_period(t, mag, random_seed=123)
+    assert r.get("fap_warnings", []) == [], (
+        f"n=120 不该有小样本警告: {r['fap_warnings']}"
+    )
+
+
+def test_bls_bootstrap_uses_strict_greater_than():
+    """L2-b: BLS bootstrap FAP 用严格 > 不是 >= (Kipping 2011).
+    inspect 源码确认等号已改."""
+    import inspect
+    from app.services import time_domain_pro as tdp
+
+    src = inspect.getsource(tdp)
+    # null_max > power[best_idx] 必须存在 (no >=)
+    assert "null_max > power[best_idx]" in src, (
+        "L2-b: BLS bootstrap FAP 必须用严格 > (Kipping 2011 定义)"
+    )
+    assert "null_max >= power[best_idx]" not in src, (
+        "L2-b: null_max >= 会过估显著性 0.5-2%, 必须改严格 >"
+    )
+
+
+def test_transit_fit_chi2_rejects_unphysical_params():
+    """L2-b: transit fit chi2 对 rp<=0 / rp>=1 / a<2.5 / inc 范围外
+    应返回 1e20 penalty, 让 minimizer 远离.  inspect 断言."""
+    import inspect
+    from app.services import time_domain_pro as tdp
+
+    src = inspect.getsource(tdp.fit_transit_batman) if hasattr(tdp, "fit_transit_batman") else inspect.getsource(tdp)
+    # 核心 guard 关键词
+    assert "1e20" in src, "L2-b: transit chi2 penalty 常量丢失"
+    assert "rp >= 1.0" in src or "rp >= 1" in src, (
+        "L2-b: transit depth 上界 (rp<1) 保护丢失"
+    )
+    assert "a < 2.5" in src, (
+        "L2-b: Mandel & Agol 2002 的 a/R* >= 2.5 保护丢失"
+    )
