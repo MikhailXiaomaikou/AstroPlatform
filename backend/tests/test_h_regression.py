@@ -340,6 +340,103 @@ def test_search_lightcurve_resolves_via_simbad_tic():
     assert any("TIC" in q.upper() for q in call_log)
 
 
+# ---------- I3 / B-S1: VizieR multi-mirror fallback ----------
+
+def test_vizier_multi_mirror_falls_through_on_first_failure():
+    """I3/B-S1: when the primary VizieR mirror returns 503 / times out,
+    the launch loop must transparently move to the next configured
+    mirror and use its result without surfacing the failure to the
+    caller."""
+    from app.api import integration as integ
+    from astropy.table import Table
+
+    # Confirm at least 2 VizieR mirrors are configured (otherwise the
+    # test exercises nothing).
+    assert len(integ.ADQL_SERVICE_MIRRORS["vizier"]) >= 2
+
+    primary_url = integ.ADQL_SERVICE_MIRRORS["vizier"][0]
+    fallback_url = integ.ADQL_SERVICE_MIRRORS["vizier"][1]
+    urls_tried: list[str] = []
+
+    class _FakeJob:
+        def __init__(self, url):
+            self._url = url
+        def get_results(self):
+            t = Table()
+            t["from_url"] = [self._url]
+            return t
+
+    class FakeTapPlus:
+        def __init__(self, url):
+            self.url = url
+            urls_tried.append(url)
+        def launch_job(self, query):
+            if self.url == primary_url:
+                raise ConnectionError("503 Service Unavailable (simulated)")
+            return _FakeJob(self.url)
+        def launch_job_async(self, query):
+            return self.launch_job(query)
+
+    with patch("astroquery.utils.tap.core.TapPlus", FakeTapPlus):
+        result = integ._launch_on_mirrors(
+            "SELECT TOP 1 * FROM \"V/154/sdss17\"",
+            service="vizier",
+            async_mode=False,
+        )
+
+    assert urls_tried[:2] == [primary_url, fallback_url], (
+        f"Expected primary then fallback; got {urls_tried}"
+    )
+    # Result must be from the fallback URL
+    assert "from_url" in result.colnames
+    assert str(result["from_url"][0]) == fallback_url
+
+
+def test_vizier_all_mirrors_fail_raises_with_url_list():
+    """I3/B-S1: when EVERY VizieR mirror fails, the caller must see an
+    error that names which URLs were tried — so support / users can
+    immediately tell the request reached more than just CDS France."""
+    from app.api import integration as integ
+
+    urls_tried: list[str] = []
+
+    class FakeTapPlus:
+        def __init__(self, url):
+            self.url = url
+            urls_tried.append(url)
+        def launch_job(self, query):
+            raise ConnectionError(f"timeout from {self.url}")
+        def launch_job_async(self, query):
+            return self.launch_job(query)
+
+    with patch("astroquery.utils.tap.core.TapPlus", FakeTapPlus):
+        with pytest.raises(Exception) as excinfo:
+            integ._launch_on_mirrors(
+                "SELECT TOP 1 * FROM \"V/154/sdss17\"",
+                service="vizier",
+                async_mode=False,
+            )
+
+    assert urls_tried == integ.ADQL_SERVICE_MIRRORS["vizier"], (
+        f"Did not try all mirrors; only tried {urls_tried}"
+    )
+    err_str = str(excinfo.value)
+    # Error must name the service and at least the primary URL
+    assert "vizier" in err_str.lower()
+    assert integ.ADQL_SERVICE_MIRRORS["vizier"][0] in err_str
+
+
+def test_adql_services_legacy_dict_still_exists():
+    """I3: ADQL_SERVICES (single-URL view) must remain importable for
+    backward compatibility — list_adql_services() and any external
+    consumer still indexes it directly."""
+    from app.api.integration import ADQL_SERVICES, ADQL_SERVICE_MIRRORS
+
+    for service in ADQL_SERVICE_MIRRORS:
+        assert service in ADQL_SERVICES
+        assert ADQL_SERVICES[service] == ADQL_SERVICE_MIRRORS[service][0]
+
+
 def test_search_lightcurve_picks_kic_for_kepler_mission():
     """I2: prefix priority respects requested mission."""
     from app.services import astro_analysis

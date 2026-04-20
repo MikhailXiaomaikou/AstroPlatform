@@ -457,12 +457,83 @@ class ADQLRequest(BaseModel):
     query: str
     service: str = "gaia"  # "gaia", "vizier", "cadc", "simbad"
 
-ADQL_SERVICES = {
-    "gaia": "https://gea.esac.esa.int/tap-server/tap",
-    "vizier": "https://tapvizier.cds.unistra.fr/TAPVizieR/tap",
-    "cadc": "https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/argus",
-    "simbad": "https://simbad.cds.unistra.fr/simbad/sim-tap",
+# I3/B-S1: Multi-mirror support for each TAP service.  Each service
+# resolves to an ordered list of URLs — the first is the primary, the
+# rest are fallback mirrors tried in order on HTTP 5xx / timeout.
+# VizieR famously has CDS France (Strasbourg) returning 503 during
+# scheduled maintenance windows; the international mirrors stay up.
+ADQL_SERVICE_MIRRORS: dict[str, list[str]] = {
+    "gaia": [
+        "https://gea.esac.esa.int/tap-server/tap",  # ESA Madrid (single, very stable)
+    ],
+    "vizier": [
+        "https://tapvizier.cds.unistra.fr/TAPVizieR/tap",  # Primary CDS France
+        "https://tapvizier.u-strasbg.fr/TAPVizieR/tap",    # Strasbourg backup
+        "http://vizier.china-vo.org/TAPVizieR/tap",        # China-VO mirror
+        "https://vizier.iucaa.in/TAPVizieR/tap",           # IUCAA India mirror
+    ],
+    "cadc": [
+        "https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/argus",
+    ],
+    "simbad": [
+        "https://simbad.cds.unistra.fr/simbad/sim-tap",
+        "https://simbad.u-strasbg.fr/simbad/sim-tap",
+    ],
 }
+
+# Backward-compatible single-URL view of the mirrors.  Anything that
+# imports ADQL_SERVICES sees only the primary URL — same as before I3.
+ADQL_SERVICES = {k: v[0] for k, v in ADQL_SERVICE_MIRRORS.items()}
+
+
+def _launch_on_mirrors(query: str, service: str, async_mode: bool):
+    """I3/B-S1: try each mirror for the service in order.  First success
+    wins; on any failure (timeout / 5xx / connection error) skip to the
+    next mirror.  The error from the LAST attempted mirror is re-raised
+    when nothing succeeds, so the caller's existing exception classifier
+    in execute_adql_query still works.
+
+    NOTE: this is a sync function intended for use inside
+    `loop.run_in_executor`, just like the original `_run_query_sync` /
+    `_run_query_async` it replaces.  The outer asyncio.wait_for budget
+    in execute_adql_query covers the *total* time across all mirrors —
+    we don't add a per-mirror timeout here because individual TAP
+    requests already have astroquery's internal HTTP timeout.
+    """
+    from astroquery.utils.tap.core import TapPlus
+
+    mirrors = ADQL_SERVICE_MIRRORS.get(service, [])
+    if not mirrors:
+        raise ValueError(f"No TAP mirrors configured for service: {service}")
+
+    last_err: Exception | None = None
+    tried: list[str] = []
+    for url in mirrors:
+        tried.append(url)
+        try:
+            tap = TapPlus(url=url)
+            if async_mode:
+                job = tap.launch_job_async(query)
+            else:
+                job = tap.launch_job(query)
+            return job.get_results()
+        except Exception as e:
+            last_err = e
+            logger.info(
+                "TAP mirror %s failed (%s: %s); trying next mirror",
+                url, type(e).__name__, str(e)[:200],
+            )
+            continue
+
+    # All mirrors failed — re-raise the last error with a hint about
+    # which URLs were tried so logs make the failure mode obvious.
+    msg = (
+        f"All {service} TAP mirrors unavailable after {len(tried)} attempts. "
+        f"Tried: {tried}. Last error: {last_err}"
+    )
+    if last_err is not None:
+        raise type(last_err)(msg) from last_err
+    raise ConnectionError(msg)
 
 async def execute_adql_query(req: ADQLRequest) -> dict:
     """Core ADQL query execution (callable from AI tools without Request)."""
@@ -508,23 +579,21 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
     )
 
     try:
-        from astroquery.utils.tap.core import TapPlus
-
         loop = asyncio.get_running_loop()
 
         def _run_query_sync():
-            tap = TapPlus(url=ADQL_SERVICES[req.service])
-            job = tap.launch_job(req.query)
-            return job.get_results()
+            # I3/B-S1: iterate through mirrors instead of hitting only
+            # the primary URL.  When CDS France 503s the international
+            # VizieR mirrors usually still answer.
+            return _launch_on_mirrors(req.query, req.service, async_mode=False)
 
         def _run_query_async():
             # H0.1: TAP async mode — submits PHASE=RUN + polls.
-            # astroquery's launch_job_async blocks the thread until the
-            # remote job finishes, so we still put it in the executor,
-            # but the WAIT time now has a 5-min budget instead of 60 s.
-            tap = TapPlus(url=ADQL_SERVICES[req.service])
-            job = tap.launch_job_async(req.query)
-            return job.get_results()
+            # I3: also iterates mirrors.  astroquery's launch_job_async
+            # blocks the thread until the remote job finishes, so we
+            # still put it in the executor; the outer 5-min budget in
+            # asyncio.wait_for covers all mirrors collectively.
+            return _launch_on_mirrors(req.query, req.service, async_mode=True)
 
         # Sync first unless we think it'll be big.  H0.1 (post-review):
         # tightened sync to 30s — healthy Gaia/VizieR responds in <5s, and
