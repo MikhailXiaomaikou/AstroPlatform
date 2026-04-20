@@ -136,24 +136,47 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
                     return -np.inf
                 return lp + log_likelihood(theta)
 
-            p0 = prior_transform(rng.random((n_walkers, ndim)))
-            # M22: reject starts where too many walkers begin at -inf log-prob.
-            # emcee silently produces garbage chains when walkers are stuck in
-            # a region of zero likelihood.  We retry once with a fresh seed
-            # before surfacing the bad starting position to the caller.
+            # M22 + L4 (audit 2026-04-20): walker 初始化强化.
+            # emcee 会悄悄产出垃圾链 — 若大部分 walker 起始在 -inf
+            # 区域 (违反 prior), chain 永远 explore 不到真的 posterior,
+            # 但 ESS / R̂ 诊断会"虚假通过" (Gelman & Shirley 2011).
+            # 原策略只重试 1 次且阈值 50% 过松, 改成:
+            #   - 3 次重试机会
+            #   - 阈值抬到 80% finite (低于此继续不可信)
+            #   - 终极失败抛 InsufficientPriorSupport, 调用方要么换
+            #     prior 要么告诉用户数据不适合这个模型, 不跑垃圾 MCMC.
             def _initial_finite_ratio(p):
                 logs = np.asarray([log_prob(row) for row in p])
                 finite = np.isfinite(logs)
                 return float(finite.sum()) / max(1, len(logs))
 
-            if _initial_finite_ratio(p0) < 0.5:
-                p0 = prior_transform(rng.random((n_walkers, ndim)))
-                if _initial_finite_ratio(p0) < 0.5:
-                    raise ValueError(
-                        "BayesianFit: fewer than half of the initial walkers "
-                        "have finite log-probability. Check prior bounds and "
-                        "likelihood definition — the fit would not converge."
-                    )
+            MIN_FINITE_RATIO = 0.80
+            MAX_INIT_RETRIES = 3
+            p0 = prior_transform(rng.random((n_walkers, ndim)))
+            best_ratio = _initial_finite_ratio(p0)
+            attempt_history = [best_ratio]
+            for retry_i in range(MAX_INIT_RETRIES):
+                if best_ratio >= MIN_FINITE_RATIO:
+                    break
+                p0_try = prior_transform(rng.random((n_walkers, ndim)))
+                ratio_try = _initial_finite_ratio(p0_try)
+                attempt_history.append(ratio_try)
+                if ratio_try > best_ratio:
+                    best_ratio = ratio_try
+                    p0 = p0_try
+
+            if best_ratio < MIN_FINITE_RATIO:
+                raise ValueError(
+                    f"BayesianFit (InsufficientPriorSupport): after "
+                    f"{MAX_INIT_RETRIES + 1} init attempts, best finite-"
+                    f"log-prob ratio was {best_ratio:.2%} (required "
+                    f"≥{MIN_FINITE_RATIO:.0%}).  Attempt history: "
+                    f"{[f'{r:.2%}' for r in attempt_history]}.  Running MCMC "
+                    f"with walkers stuck in zero-probability region would "
+                    f"produce garbage chains that pass ESS/Rhat diagnostics "
+                    f"falsely (Gelman & Shirley 2011). Fix: tighten priors, "
+                    f"check likelihood sign, or widen the data/model."
+                )
             sampler = emcee.EnsembleSampler(n_walkers, ndim, log_prob)
             sampler.run_mcmc(p0, n_steps, progress=False)
 

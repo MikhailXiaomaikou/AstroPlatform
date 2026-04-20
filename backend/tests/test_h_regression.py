@@ -759,3 +759,33 @@ def test_k_correction_array_input_picks_max_z():
     kcorr_warnings = [x for x in w if "K-correction" in str(x.message)]
     assert len(kcorr_warnings) == 1, "数组含 z=0.8 > 0.5 必须触发一次警告"
     assert astro_analysis.LAST_KCORR_STATUS["max_z"] == 0.8
+
+
+# ---------- L4: MCMC walker 初始化强化 ----------
+
+def test_bayesian_fit_walker_init_has_strengthened_retry_logic():
+    """L4: BayesianFit walker 初始化之前只重试 1 次且阈值 50%, walker
+    卡在 -inf 区会跑出垃圾链而 ESS/Rhat 虚假通过 (Gelman & Shirley 2011).
+    本测试用 inspect 直接检查源码含:
+      - MIN_FINITE_RATIO = 0.80 (阈值提到 80%)
+      - MAX_INIT_RETRIES = 3 (重试 3 次)
+      - InsufficientPriorSupport (失败时抛的具体标识)
+    以便未来有人改弱/取消时 CI 立刻红."""
+    import inspect
+    from app.pipeline.nodes import bayesian_fit as bf_mod
+
+    src = inspect.getsource(bf_mod.bayesian_fit)
+    # 硬阈值与重试次数
+    assert "MIN_FINITE_RATIO" in src, "L4 硬阈值常量名丢失"
+    assert "0.80" in src or "0.8" in src, "L4 阈值 0.80 已被改弱"
+    assert "MAX_INIT_RETRIES" in src, "L4 重试次数常量名丢失"
+    assert "3" in src, "L4 重试次数 3 已被改弱"
+    # 必须抛出带清晰标识的错误
+    assert "InsufficientPriorSupport" in src, (
+        "L4 失败路径必须抛 InsufficientPriorSupport, 以便上游能识别这类"
+        "错误而不是当普通 ValueError 吞掉"
+    )
+    # 必须引用文献让后人知道为什么 80% 不是随便写的
+    assert "Gelman" in src or "garbage chains" in src, (
+        "L4 的阈值 80% 基于 Gelman & Shirley 2011, 理由必须在 comment 里"
+    )
