@@ -480,3 +480,33 @@ def test_search_lightcurve_picks_kic_for_kepler_mission():
     assert result["found"] == 1
     # Must have picked KIC (mission=kepler), not TIC (higher priority only for tess)
     assert "KIC" in (result.get("target_resolved_via") or "").upper()
+
+
+# ---------- K1.A: SYSTEM_PROMPT 必须含 data_source 硬规则 ----------
+
+def test_system_prompt_contains_data_source_hard_rule():
+    """K1.A: 三次回归审稿人定位到 SYNTHETIC 误报其实是 AI 自己把
+    data_source 填成了 none_not_analyzing_real_data (被 'literature
+    comparison' 字样触发).  prompt 必须明确告诉 AI: 用了前一步 real
+    source 的输出就声明 latest_adql, literature 对比不是 synthetic.
+    少任何一条 keyword 就意味着硬规则被改弱/去掉."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    # Rule section must be present
+    assert "K1.A" in SYSTEM_PROMPT, "K1.A 硬规则段已经丢失/被合并覆盖"
+
+    # 关键 keyword: 硬规则必须明确列出正/反两种常见情形
+    required_keywords = [
+        "literature",              # 反例涉及 literature 字样
+        "'latest_adql'",           # 正确声明例
+        "'none_not_analyzing_real_data'",  # 错误声明例
+        "rows",                    # Rule 1 里提到的变量名
+        "np.random",               # Rule 3 里的合法 synthetic 触发条件
+        "np.linspace",             # Rule 3 的另一条
+        "bootstrap",               # Rule 2 里明确不算 synthetic
+        # 反例代码必须在 prompt 里作为 few-shot
+        "WRONG",
+        "CORRECT",
+    ]
+    missing = [kw for kw in required_keywords if kw not in SYSTEM_PROMPT]
+    assert not missing, f"K1.A prompt 缺 keyword: {missing}"

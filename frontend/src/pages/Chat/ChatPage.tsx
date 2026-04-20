@@ -386,6 +386,29 @@ function ActionCardInner({
           </button>
         )}
       </div>
+      {/* K1.C: 当 tool_result 带 __message_to_model__ 时(通常 SYNTHETIC /
+          FAILED / EMPTY 会带), 把前 400 字给用户看一眼 — reviewer 能立刻
+          区分"AI 自己声明错了 data_source"还是"系统检测判定合成".
+          现在只在 SYNTHETIC 情况下展示, 避免每个 FAILED/EMPTY 卡片都多一块. */}
+      {isToolSynthetic && autoResult && typeof (autoResult as Record<string, unknown>).__message_to_model__ === "string" && (
+        <div
+          className="chat-action-system-note"
+          style={{
+            margin: "0 0 0.5rem 0",
+            padding: "6px 10px",
+            fontSize: "0.72rem",
+            lineHeight: 1.45,
+            color: "var(--color-text-secondary, #666)",
+            background: "rgba(255, 69, 58, 0.06)",
+            borderLeft: "2px solid rgba(255, 69, 58, 0.4)",
+            borderRadius: "2px",
+          }}
+        >
+          <strong style={{ opacity: 0.85 }}>系统说明(给 AI 看的):</strong>{" "}
+          {String((autoResult as Record<string, unknown>).__message_to_model__).slice(0, 400)}
+          {String((autoResult as Record<string, unknown>).__message_to_model__).length > 400 ? "…" : ""}
+        </div>
+      )}
       <div className="chat-action-detail">
         {action.action === "search" && (
           <span>
