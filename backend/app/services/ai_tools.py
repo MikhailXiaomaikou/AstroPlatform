@@ -207,6 +207,34 @@ TOOLS = [
         },
     },
     {
+        # J3: SDSS 官方 SkyServer 直连.  VizieR 全部 mirror 不可达或
+        # V/154/sdss17 表 "All mirrors unavailable" 时切到这个工具 —
+        # 不经 VizieR, 直接打 SDSS 原厂 API.  语法是 T-SQL (微软 SQL
+        # Server), 不是 ADQL.
+        "name": "run_sdss_sql",
+        "description": (
+            "Execute a T-SQL query directly against SDSS SkyServer (DR18 by default). "
+            "USE THIS when VizieR mirrors are unavailable, or when you need SDSS-specific "
+            "tables not exposed via VizieR (e.g. GalSpecInfo / GalSpecExtra / Photoz). "
+            "SYNTAX is T-SQL not ADQL: use `TOP N` not `LIMIT`, "
+            "`dbo.fGetNearbyObjEq(ra, dec, radius_arcmin)` for cone search, and ALWAYS "
+            "filter on `mode = 1 AND clean = 1` to drop artefacts. "
+            "Common tables: PhotoObjAll (photometry), SpecObjAll (spectroscopy), "
+            "Photoz (photometric redshifts), GalSpecInfo + GalSpecExtra (MPA-JHU "
+            "galaxy parameters). Columns are `objID`, `ra`, `dec`, `u`/`g`/`r`/`i`/`z` "
+            "(model magnitudes), `petroMag_u..z`, `z` (spec-z in SpecObj), etc. "
+            "Full result rows are cached under key `latest_sdss_sql` for run_python."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "T-SQL query string"},
+                "dr": {"type": "string", "enum": ["18", "17", "16"], "description": "SDSS Data Release (default '18')"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "get_object_info",
         "description": (
             "Get comprehensive information about a specific astronomical object: "
@@ -1381,6 +1409,8 @@ async def _execute_tool_inner(
             return await _exec_search(tool_input, python_session_id)
         elif tool_name == "run_adql":
             return await _exec_adql(tool_input, python_session_id)
+        elif tool_name == "run_sdss_sql":
+            return await _exec_run_sdss_sql(tool_input, python_session_id)
         elif tool_name == "get_object_info":
             return await _exec_object_info(tool_input)
         elif tool_name == "analyze_spectrum":
@@ -1998,6 +2028,100 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     return adql_result
 
 
+async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> dict:
+    """J3: 直接打 SDSS SkyServer SQL API, 不经 VizieR.
+
+    VizieR 四个 mirror 全部返回 404 时 (第三次回归 Paper 3 Coma 星系
+    光度函数案例), SDSS 路径整条废.  这个工具绕开 VizieR, 直接调 SDSS
+    官方 SkyServer (有独立 uptime), 让 AI 能在 VizieR 宕机期继续做
+    PhotoObjAll / SpecObjAll / Photoz / GalSpec 查询.
+
+    结果结构跟 _exec_adql 一致, 并存进 ADQL cache 池 (key `latest_sdss_sql`
+    用额外 alias), run_python 可以通过
+    `get_cached_results('latest_sdss_sql')` 或简单的 `get_adql_results()`
+    拿到完整行.
+    """
+    from app.connectors.sdss_sql import execute_sdss_sql
+
+    query = str(inp.get("query") or "").strip()
+    dr = str(inp.get("dr") or "18").strip()
+
+    if not query:
+        return {
+            "error": (
+                "`query` is required.  Example: "
+                "SELECT TOP 100 objID, ra, dec, r, z FROM SpecObjAll "
+                "WHERE class = 'GALAXY' AND zWarning = 0"
+            ),
+            "error_class": "missing_argument",
+            "argument": "query",
+        }
+    if dr not in {"18", "17", "16"}:
+        return {
+            "error": f"`dr` must be one of '18' / '17' / '16' (got {dr!r})",
+            "error_class": "invalid_argument",
+            "argument": "dr",
+        }
+
+    try:
+        raw = await execute_sdss_sql(query, dr=dr, timeout_s=120.0)
+    except ValueError as e:
+        # SQL 语法错误 / 危险关键词: 用户可见的 4xx 语义
+        return {
+            "error": str(e),
+            "error_class": "sdss_sql_syntax",
+            "service": "sdss",
+            "dr": dr,
+        }
+    except Exception as e:
+        return {
+            "error": f"SDSS SkyServer unavailable: {e}",
+            "error_class": "sdss_unavailable",
+            "service": "sdss",
+            "dr": dr,
+        }
+
+    columns = raw.get("columns", [])
+    data = raw.get("data", {})
+    row_count = raw.get("row_count", 0)
+
+    # AI 视图: 截取前 100 行, 完整数据走 cache.
+    VIEW_ROWS = 100
+    truncated = {col: (vals[:VIEW_ROWS] if isinstance(vals, list) else vals)
+                 for col, vals in data.items()}
+
+    # 存进 ADQL cache 池 — run_python 能用 get_adql_results() 也能用
+    # get_cached_results('latest_sdss_sql').  我们额外存一个 sdss 专用
+    # key 供 AI 按数据源区分.
+    try:
+        result_set = build_adql_result_set(
+            service=f"sdss_dr{dr}",
+            query=query,
+            columns=columns,
+            data=data,
+            row_count=row_count,
+        )
+        store_adql_result_set(python_session_id, result_set)
+        # 显式的 sdss 别名, 让 AI 能 import 时用 `latest_sdss_sql` 标识.
+        store_search_results("latest_sdss_sql", data)
+    except Exception as e:
+        logger.debug("SDSS SQL cache write failed: %s", e)
+
+    return {
+        "service": "sdss",
+        "dr": dr,
+        "columns": columns,
+        "data": truncated,
+        "row_count": row_count,
+        "showing": min(VIEW_ROWS, row_count),
+        "has_data": row_count > 0,
+        "note": (
+            f"Showing first {VIEW_ROWS} of {row_count} rows. Full data is cached — "
+            "in run_python access via get_cached_results('latest_sdss_sql')."
+        ) if row_count > VIEW_ROWS else None,
+    }
+
+
 async def _exec_describe_tap_table(inp: dict) -> dict:
     """Query TAP_SCHEMA to list columns of a table."""
     from app.api.integration import execute_adql_query, ADQLRequest
@@ -2379,6 +2503,7 @@ async def _exec_literature(inp: dict) -> dict:
 
 _VALID_DATA_SOURCES = {
     "latest_adql", "latest_search", "latest_lightcurve",
+    "latest_sdss_sql",  # J3: SDSS SkyServer 直连结果
     "none_not_analyzing_real_data",
 }
 _REAL_DATA_SOURCE_PATTERNS = {
@@ -2388,6 +2513,10 @@ _REAL_DATA_SOURCE_PATTERNS = {
     "latest_adql": ("get_adql_results", "get_adql_result_sets", "get_cached_results"),
     "latest_search": ("get_search_results", "get_cached_results"),
     "latest_lightcurve": ("get_cached_results", "lightkurve", "search_lightcurve"),
+    # J3: latest_sdss_sql 共享 get_cached_results / get_adql_results 的访问接口
+    # (run_sdss_sql 把结果存进 adql_result_sets 池, 复用 getter), 加上显式的
+    # latest_sdss_sql 变量名就能匹配.
+    "latest_sdss_sql": ("get_cached_results", "get_adql_results", "latest_sdss_sql"),
 }
 
 
@@ -2428,7 +2557,12 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                     names_seen.add(node.id)
                 if isinstance(node, _ast_auto.Attribute):
                     names_seen.add(node.attr)
-            if any(t in names_seen for t in ("get_adql_results", "get_adql_result_sets")):
+            # J3: code 里出现 latest_sdss_sql / run_sdss_sql 变量 → SDSS
+            # cache.  这条要放在 get_adql_results 之前 check, 因为 run_sdss_sql
+            # 复用 ADQL cache 池, 变量名才是唯一区分.
+            if any(t in names_seen for t in ("latest_sdss_sql", "run_sdss_sql")):
+                auto_source = "latest_sdss_sql"
+            elif any(t in names_seen for t in ("get_adql_results", "get_adql_result_sets")):
                 auto_source = "latest_adql"
             elif "get_search_results" in names_seen:
                 auto_source = "latest_search"

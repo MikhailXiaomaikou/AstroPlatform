@@ -156,6 +156,8 @@ _DATA_TOOLS = {
     "get_last_search_results", "read_fits_header", "get_provenance",
     # F6.1 / F6.2: new high-level astro helpers
     "query_gaia_cluster", "get_extinction",
+    # J3: SDSS SkyServer 直连 — 和 run_adql 同类, 都是 data fetch
+    "run_sdss_sql",
 }
 _COMPUTE_TOOLS = {
     "run_python", "generate_pipeline", "run_pipeline", "validate_analysis",

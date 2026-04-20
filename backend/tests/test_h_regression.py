@@ -602,3 +602,97 @@ def test_run_adql_deadline_is_300s():
         f"run_adql deadline={deadline}s < 300s, "
         f"integration.py 的 async TAP 跑不满, Paper 5 级大查询会被砍"
     )
+
+
+# ---------- J3: SDSS SkyServer 直连工具 run_sdss_sql ----------
+
+def test_run_sdss_sql_tool_registered():
+    """J3: 新工具必须出现在 TOOLS 列表里, 而且 schema 合法."""
+    from app.services.ai_tools import TOOLS
+
+    names = [t.get("name") for t in TOOLS]
+    assert "run_sdss_sql" in names, "run_sdss_sql 工具没注册进 TOOLS"
+
+    entry = next(t for t in TOOLS if t.get("name") == "run_sdss_sql")
+    assert "T-SQL" in entry["description"], "description 必须强调 T-SQL 语法"
+    assert "SkyServer" in entry["description"]
+    props = entry["input_schema"]["properties"]
+    assert "query" in props and "dr" in props
+    assert entry["input_schema"]["required"] == ["query"]
+
+
+def test_latest_sdss_sql_is_valid_data_source():
+    """J3: run_python 调用要能声明 data_source='latest_sdss_sql'
+    (SDSS cache 的新 source), 否则 Phase G 会拒绝合法 SDSS 分析代码."""
+    from app.services.ai_tools import _VALID_DATA_SOURCES, _REAL_DATA_SOURCE_PATTERNS
+
+    assert "latest_sdss_sql" in _VALID_DATA_SOURCES
+    assert "latest_sdss_sql" in _REAL_DATA_SOURCE_PATTERNS
+    # 匹配 pattern 里至少要含一个能让 run_python 代码常用的 token
+    patterns = _REAL_DATA_SOURCE_PATTERNS["latest_sdss_sql"]
+    assert "get_cached_results" in patterns or "latest_sdss_sql" in patterns
+
+
+def test_system_prompt_has_sdss_skyserver_fallback_rule():
+    """J3: SYSTEM_PROMPT 必须明确告诉 AI 什么时候切 run_sdss_sql:
+    VizieR 挂了 OR 需要 SDSS-only 表 (Photoz / GalSpec*).  少任何
+    keyword 就意味着 prompt 被改弱, AI 又会 stuck 在 VizieR."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    required = [
+        "run_sdss_sql",           # 工具名
+        "T-SQL",                  # 强调方言
+        "dbo.fGetNearbyObjEq",    # 正确的锥搜函数
+        "PhotoObjAll",            # 主表
+        "SpecObjAll",             # 光谱表
+        "GalSpecExtra",           # SDSS-only 表示例
+    ]
+    missing = [kw for kw in required if kw not in SYSTEM_PROMPT]
+    assert not missing, f"SYSTEM_PROMPT 缺 SDSS SkyServer keyword: {missing}"
+    # 必备过滤条件: mode + clean, 写法可能带前缀 (p.mode=1) 也可能不带,
+    # 都接受, 只要两者都在 prompt 里.
+    assert "mode=1" in SYSTEM_PROMPT.replace(" ", "") or "mode = 1" in SYSTEM_PROMPT
+    assert "clean=1" in SYSTEM_PROMPT.replace(" ", "") or "clean = 1" in SYSTEM_PROMPT
+
+
+def test_run_sdss_sql_missing_query_returns_actionable_error():
+    """J3: 缺 query 要返回带示例的错误, 跟 K2 的 search_lightcurve 语义
+    一致, 让 AI 一次就能补对."""
+    from app.services.ai_tools import _exec_run_sdss_sql
+
+    result = asyncio.run(_exec_run_sdss_sql({}))
+    assert result.get("error_class") == "missing_argument"
+    assert result.get("argument") == "query"
+    # 错误消息里必须带一个可 copy-paste 的例子
+    assert "SELECT" in str(result.get("error", ""))
+    assert "FROM" in str(result.get("error", ""))
+
+
+def test_run_sdss_sql_dispatches_to_connector():
+    """J3: execute_tool(run_sdss_sql) 真的调 _exec_run_sdss_sql →
+    execute_sdss_sql, 而不是掉进 'unknown tool' 分支."""
+    from app.services.ai_tools import execute_tool
+
+    fake_conn_result = {
+        "columns": ["objid", "ra", "dec"],
+        "data": {"objid": [111], "ra": [180.0], "dec": [0.0]},
+        "row_count": 1,
+        "service": "sdss",
+        "dr": "18",
+        "query": "SELECT TOP 1 objID, ra, dec FROM PhotoObjAll WHERE mode=1",
+    }
+
+    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0):
+        return fake_conn_result
+
+    with patch("app.connectors.sdss_sql.execute_sdss_sql", side_effect=fake_execute_sdss_sql):
+        res = asyncio.run(execute_tool(
+            "run_sdss_sql",
+            {"query": "SELECT TOP 1 objID, ra, dec FROM PhotoObjAll WHERE mode=1"},
+            api_key="",
+        ))
+
+    # execute_tool 会走 result_provenance 包一层, 原字段应该仍在
+    assert res.get("row_count") == 1
+    assert "objid" in res.get("columns", [])
+    assert res.get("service") == "sdss"

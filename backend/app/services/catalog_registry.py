@@ -464,3 +464,111 @@ def validate_columns(table_name: str, column_names: list[str]) -> list[str]:
         return []
     known = {c.name.lower() for c in entry.columns}
     return [c for c in column_names if c.lower() not in known]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# J3 — SDSS SkyServer T-SQL schema cheatsheet
+# ══════════════════════════════════════════════════════════════════════
+# Shown to the AI in SYSTEM_PROMPT so it doesn't guess column names on
+# the `run_sdss_sql` path.  SDSS uses T-SQL (Microsoft SQL Server), NOT
+# ADQL, and column naming is different from VizieR's `V/154/sdss17` view.
+# Source: https://skyserver.sdss.org/dr18/en/help/browser/browser.aspx
+SDSS_DR18_SCHEMA: dict[str, dict] = {
+    "PhotoObjAll": {
+        "description": (
+            "SDSS photometric catalog (~500 M detections across DR18). "
+            "ALWAYS filter `mode = 1 AND clean = 1` to drop secondary + artefacts."
+        ),
+        "key_columns": [
+            "objID (bigint, primary key)", "ra", "dec",
+            "type (3=galaxy, 6=star, 0=unknown)", "mode (1=primary)", "clean (1=no artefacts)",
+            "u, g, r, i, z (model magnitudes)",
+            "psfMag_u..z (PSF magnitudes, point sources)",
+            "petroMag_u..z (Petrosian magnitudes, extended sources)",
+            "petroR50_r (Petrosian half-light radius in r)",
+            "petroRad_r (Petrosian radius in r, arcsec)",
+            "expRad_r, deVRad_r (exponential / de Vaucouleurs profile scale)",
+            "fracDeV_r (0=pure exponential, 1=pure de Vaucouleurs)",
+        ],
+    },
+    "SpecObjAll": {
+        "description": (
+            "SDSS spectroscopic catalog (~5 M galaxies/QSOs/stars with spec-z). "
+            "Filter `zWarning = 0 AND class = 'GALAXY'` (or 'QSO' / 'STAR')."
+        ),
+        "key_columns": [
+            "specObjID (bigint primary)", "bestObjID (link to PhotoObjAll.objID)",
+            "plate, mjd, fiberID (plate coordinates)",
+            "ra, dec",
+            "z (spec redshift)", "zErr", "zWarning (0 = reliable)",
+            "class ('GALAXY' / 'QSO' / 'STAR')",
+            "subClass (morphology / stellar type)",
+            "snMedian_r (spectrum S/N)",
+        ],
+    },
+    "Photoz": {
+        "description": (
+            "SDSS photometric redshifts (kd-tree kNN, ~200 M objects). "
+            "Join on `objID = PhotoObjAll.objID`."
+        ),
+        "key_columns": [
+            "objID", "z (photo-z estimate)", "zErr",
+            "nnCount (number of neighbours used)", "photoErrorClass (1=best)",
+            "chisq (kNN chi-squared)",
+        ],
+    },
+    "GalSpecInfo": {
+        "description": (
+            "MPA-JHU galaxy properties (Tremonti, Brinchmann et al.). "
+            "Join on `specObjID = SpecObjAll.specObjID`. "
+            "Contains stellar masses, metallicities, SFRs derived from spectra."
+        ),
+        "key_columns": [
+            "specObjID", "plateid, mjd, fiberid",
+            "ra, dec", "z (spec redshift from pipeline)",
+            "reliable (1 = reliable classification)",
+            "spectrotype (e.g. 'GALAXY' / 'STARFORMING' / 'AGN' / 'COMPOSITE')",
+        ],
+    },
+    "GalSpecExtra": {
+        "description": (
+            "MPA-JHU derived quantities (stellar mass, SFR, metallicity)."
+        ),
+        "key_columns": [
+            "specObjID",
+            "lgm_tot_p50 (log10 total stellar mass, p50 percentile)",
+            "lgm_tot_p16, lgm_tot_p84 (1-sigma range)",
+            "sfr_tot_p50 (log10 SFR total, solar/yr)",
+            "specsfr_tot_p50 (log10 specific SFR)",
+            "oh_p50 (metallicity 12+log(O/H))",
+            "bptclass (1=SF, 2=Low S/N SF, 3=Composite, 4=AGN, 5=Low S/N LINER)",
+        ],
+    },
+    "Field": {
+        "description": "SDSS field metadata (run, camcol, rerun, field coords + seeing).",
+        "key_columns": [
+            "fieldID", "run, rerun, camcol, field",
+            "raMin, raMax, decMin, decMax (field footprint)",
+            "psfWidth_u..z (PSF FWHM, arcsec)",
+            "nStars_u..z, nGals_u..z",
+        ],
+    },
+}
+
+
+SDSS_TSQL_IDIOMS: list[str] = [
+    # 常见正确写法, 加在 prompt 里供 AI 参考.
+    "SELECT TOP 1000 objID, ra, dec, r FROM PhotoObjAll "
+    "WHERE mode=1 AND clean=1 AND r BETWEEN 17 AND 21",
+    "SELECT TOP 500 p.objID, p.ra, p.dec, p.r, s.z, s.class "
+    "FROM PhotoObjAll p "
+    "JOIN SpecObjAll s ON s.bestObjID = p.objID "
+    "WHERE p.mode=1 AND s.zWarning=0 AND s.class='GALAXY'",
+    "SELECT TOP 200 p.objID, p.ra, p.dec, p.petroMag_r, pz.z, pz.zErr "
+    "FROM PhotoObjAll p JOIN Photoz pz ON pz.objID = p.objID "
+    "JOIN dbo.fGetNearbyObjEq(194.95, 27.98, 60) AS n ON n.objID = p.objID "
+    "WHERE p.mode=1 AND p.clean=1 AND p.type=3",
+    "SELECT TOP 500 s.specObjID, s.z, g.lgm_tot_p50, g.sfr_tot_p50 "
+    "FROM SpecObjAll s JOIN GalSpecExtra g ON g.specObjID = s.specObjID "
+    "WHERE s.class='GALAXY' AND s.zWarning=0",
+]

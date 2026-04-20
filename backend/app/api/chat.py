@@ -719,11 +719,43 @@ with the listed packages + references as starting points for user-specific analy
   requires external install. Reference only.
 
 ## ADQL Usage Rules (CRITICAL)
-1. SDSS does NOT expose its own ADQL service.  You have THREE paths for SDSS data, pick based on the query:
+1. SDSS does NOT expose its own ADQL service.  You have FOUR paths for SDSS data, pick based on the query:
    - **search_objects(sources=["sdss"])** — direct SkyServer SQL, best for cone searches, returns photometry + spec_z + photo_z with galaxy/star class.
    - **search_objects(sources=["sdss_spec"])** — spec-only variant, 100% redshift coverage, smaller sample.
    - **run_adql(service="vizier", query="SELECT ... FROM \"V/154/sdss17\" ...")** — VizieR mirror, supports arbitrary ADQL.  Column names in `V/154/sdss17` are lowercase `ra`, `dec`, `u`, `g`, `r`, `i`, `z`, `class` (3=galaxy, 6=star), `zsp` (spec redshift), `zph` (photo-z), `objID`.  NOT `RAJ2000`/`DEJ2000`/`petroMag_r`/`psfMag_r`/`redshift` — those are common mistakes.  `V/154/sdss16` / `V/147/sdss12` are older DRs; prefer DR17 unless the paper specifically used an earlier release.
-   If VizieR returns 503 (unstable mirror), fall back to `search_objects(sources=["sdss"])` which goes direct to SkyServer.
+   - **run_sdss_sql(query="SELECT TOP N ... FROM PhotoObjAll ...")** — J3: direct SkyServer T-SQL, bypasses VizieR entirely.  USE THIS when `run_adql(service="vizier")` on a SDSS table returns "All mirrors unavailable" or any 4xx/5xx.  ALSO USE for SDSS-specific tables VizieR doesn't expose: Photoz, GalSpecInfo, GalSpecExtra, Field, emissionLinesPort, stellarMassPort.  SYNTAX IS T-SQL, NOT ADQL:
+     * `TOP N` not `LIMIT N`
+     * `dbo.fGetNearbyObjEq(ra_deg, dec_deg, radius_arcmin)` for cone search (radius is arcmin, not degrees)
+     * ALWAYS add `WHERE p.mode = 1 AND p.clean = 1` on PhotoObjAll to drop secondary detections + artefacts
+     * column names are CamelCase-ish: `objID` (capital ID), `ra`, `dec`, `u`/`g`/`r`/`i`/`z` (model mags), `petroMag_u..z`, `type` (3=galaxy, 6=star), `z` (spec redshift inside SpecObjAll), `zErr`, `zWarning`
+   Decision tree: "simple cone search" → search_objects(sources=sdss); "custom JOIN or aggregation, VizieR healthy" → run_adql(vizier, V/154/sdss17); "VizieR down OR need SDSS-only table" → run_sdss_sql.
+
+   **run_sdss_sql example queries** (copy-paste + modify; all produce real results):
+   ```
+   -- SDSS galaxy luminosity function sample (Paper 3 style):
+   SELECT TOP 10000 p.objID, p.ra, p.dec, p.petroMag_r, s.z
+   FROM PhotoObjAll p
+   JOIN SpecObjAll s ON s.bestObjID = p.objID
+   WHERE p.mode=1 AND p.clean=1 AND p.type=3
+     AND s.zWarning=0 AND s.class='GALAXY'
+     AND s.z BETWEEN 0.02 AND 0.2
+
+   -- Photometric redshift cross-match in a cluster cone (replace RA/Dec/radius):
+   SELECT TOP 1000 p.objID, p.ra, p.dec, p.petroMag_r, pz.z, pz.zErr
+   FROM PhotoObjAll p
+   JOIN Photoz pz ON pz.objID = p.objID
+   JOIN dbo.fGetNearbyObjEq(194.95, 27.98, 60) AS n ON n.objID = p.objID
+   WHERE p.mode=1 AND p.clean=1 AND p.type=3
+
+   -- MPA-JHU stellar masses + SFRs:
+   SELECT TOP 500 s.ra, s.dec, s.z, g.lgm_tot_p50, g.sfr_tot_p50, g.oh_p50
+   FROM SpecObjAll s
+   JOIN GalSpecExtra g ON g.specObjID = s.specObjID
+   WHERE s.class='GALAXY' AND s.zWarning=0
+   ```
+   Key tables + columns: PhotoObjAll(ra, dec, u,g,r,i,z, petroMag_r, type, mode, clean),
+   SpecObjAll(specObjID, bestObjID, z, zErr, zWarning, class), Photoz(objID, z, zErr),
+   GalSpecInfo / GalSpecExtra(specObjID, lgm_tot_p50, sfr_tot_p50, oh_p50, bptclass).
 2. Before writing any ADQL query, use describe_tap_table to confirm column names exist.
 3. Common table name mappings:
    - Gaia DR3 main table: gaiadr3.gaia_source (service="gaia")
@@ -1886,6 +1918,9 @@ async def _execute_tool_calls(
         # integration 对齐. agent loop 外层 total 360 s, 一次 run_adql 占
         # 300 s 剩 60 s 留给后续 LLM 总结, 够用.
         "run_adql": 300.0,
+        # J3: run_sdss_sql 打 SDSS SkyServer, 内部 httpx timeout 120 s.
+        # 给一点 slack 应付大 JOIN + 解析 JSON, 跟 crossmatch_catalogs 同级.
+        "run_sdss_sql": 180.0,
     }
     _TOOL_DEADLINE_DEFAULT = 45.0
 
