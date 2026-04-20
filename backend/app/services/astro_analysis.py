@@ -1128,9 +1128,26 @@ def compute_absolute_magnitude(
 def k_correction(z, band="r", galaxy_type="elliptical"):
     """Approximate K-correction for common bands.
 
-    Simple polynomial approximation — for precise work use kcorrect package.
+    Simple polynomial approximation calibrated on Chilingarian+10 templates.
+    **VALIDITY RANGE: z < 0.5**. For z > 0.5 the polynomial form extrapolates
+    beyond its calibration and systematic bias exceeds 0.2 mag (audit L3,
+    2026-04-20).
+
+    For precise high-z work (DESI / LSST / Euclid / Roman) use the kcorrect
+    package or full SED template library; this function is a fast convenience
+    for intermediate-z galaxy samples only.
+
+    Returns:
+        K-correction in magnitudes (scalar or array, matching z).  When any
+        element of z exceeds 0.5, emits an AstropyDeprecationWarning-compatible
+        runtime warning so the caller (and the AI's run_python stderr) can
+        surface the extrapolation risk.  Also stashes a module-level
+        `LAST_KCORR_STATUS` dict with {warning, max_z, valid_range,
+        estimated_extra_uncertainty_mag} for tools that want structured
+        metadata.
     """
-    z = np.asarray(z, dtype=float)
+    import warnings as _warnings
+    z_arr = np.asarray(z, dtype=float)
     # Approximate K-corrections from Chilingarian+10
     coeffs = {
         ("r", "elliptical"): [0.0, 1.0, 0.5],
@@ -1141,7 +1158,39 @@ def k_correction(z, band="r", galaxy_type="elliptical"):
         ("i", "spiral"): [0.0, 0.3, 0.2],
     }
     c = coeffs.get((band, galaxy_type), [0.0, 1.0, 0.5])
-    return c[0] + c[1] * z + c[2] * z**2
+
+    # L3 (audit 2026-04-20): z > 0.5 警告 + 结构化 metadata.
+    max_z = float(z_arr.max()) if z_arr.size > 0 else 0.0
+    if max_z > 0.5:
+        msg = (
+            f"K-correction polynomial (Chilingarian+10) called with z_max={max_z:.3f}, "
+            f"which is beyond its calibration range (z < 0.5).  The returned "
+            f"value is an extrapolation with systematic bias of order "
+            f"≥0.2 mag; do not use for publication-grade high-z photometry.  "
+            f"For z > 0.5 switch to full SED template fitting (kcorrect / EAZY / "
+            f"LePhare)."
+        )
+        _warnings.warn(msg, RuntimeWarning, stacklevel=2)
+        globals()["LAST_KCORR_STATUS"] = {
+            "analysis_status": "partial",
+            "warning": msg,
+            "max_z": max_z,
+            "valid_range_z_max": 0.5,
+            "estimated_extra_uncertainty_mag": 0.5,
+            "recommended_tool": "kcorrect or EAZY template fitting",
+        }
+    else:
+        globals()["LAST_KCORR_STATUS"] = {
+            "analysis_status": "ok",
+            "max_z": max_z,
+            "valid_range_z_max": 0.5,
+        }
+
+    return c[0] + c[1] * z_arr + c[2] * z_arr**2
+
+
+# L3: 模块级 status dict,最后一次 k_correction 调用后可查.
+LAST_KCORR_STATUS: dict = {}
 
 
 def spectral_stacking(wavelengths_list, fluxes_list, method="median"):

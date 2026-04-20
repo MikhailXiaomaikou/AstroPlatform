@@ -696,3 +696,66 @@ def test_run_sdss_sql_dispatches_to_connector():
     assert res.get("row_count") == 1
     assert "objid" in res.get("columns", [])
     assert res.get("service") == "sdss"
+
+
+# ---------- L3: K-correction z>0.5 降级 warning ----------
+
+def test_k_correction_z_low_no_warning():
+    """L3: z < 0.5 时函数正常返回, 不触发 warning, 状态标 ok."""
+    import warnings
+    from app.services import astro_analysis
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        kc = astro_analysis.k_correction(0.3, band="r", galaxy_type="elliptical")
+
+    # 不应触发任何 RuntimeWarning (可能有其他 astropy 警告, 过滤)
+    kcorr_warnings = [x for x in w if "K-correction" in str(x.message)]
+    assert len(kcorr_warnings) == 0, f"z=0.3 不该触发 K-corr warning: {kcorr_warnings}"
+    assert astro_analysis.LAST_KCORR_STATUS.get("analysis_status") == "ok"
+    # 数学值仍正常
+    assert abs(kc - (0.0 + 1.0 * 0.3 + 0.5 * 0.09)) < 1e-9
+
+
+def test_k_correction_z_high_emits_warning():
+    """L3: z > 0.5 时必须 emit RuntimeWarning + 把 LAST_KCORR_STATUS 标
+    成 partial 含 uncertainty 信息, 这样 run_python 里 AI 能从 stderr
+    看到并 propagate 到最终回复."""
+    import warnings
+    from app.services import astro_analysis
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        kc = astro_analysis.k_correction(1.2, band="r", galaxy_type="elliptical")
+
+    # 数值本身仍计算 (不拒跑, 只警告)
+    assert kc is not None
+
+    # 必须有 K-correction 相关的 RuntimeWarning
+    kcorr_warnings = [x for x in w if "K-correction" in str(x.message)]
+    assert len(kcorr_warnings) >= 1, "z=1.2 必须触发 K-corr 外推警告"
+    msg = str(kcorr_warnings[0].message)
+    assert "z_max=1.200" in msg or "z_max=1.2" in msg
+    assert "extrapolation" in msg.lower() or "calibration" in msg.lower()
+
+    # LAST_KCORR_STATUS 必须带结构化信息
+    status = astro_analysis.LAST_KCORR_STATUS
+    assert status.get("analysis_status") == "partial"
+    assert status.get("estimated_extra_uncertainty_mag") == 0.5
+    assert status.get("max_z") == 1.2
+    assert "kcorrect" in status.get("recommended_tool", "").lower() or "template" in status.get("recommended_tool", "").lower()
+
+
+def test_k_correction_array_input_picks_max_z():
+    """L3: 输入是数组 [0.1, 0.3, 0.8] 时, warning 应基于 max(z) 触发."""
+    import numpy as np
+    import warnings
+    from app.services import astro_analysis
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        _ = astro_analysis.k_correction(np.array([0.1, 0.3, 0.8]), band="g")
+
+    kcorr_warnings = [x for x in w if "K-correction" in str(x.message)]
+    assert len(kcorr_warnings) == 1, "数组含 z=0.8 > 0.5 必须触发一次警告"
+    assert astro_analysis.LAST_KCORR_STATUS["max_z"] == 0.8
