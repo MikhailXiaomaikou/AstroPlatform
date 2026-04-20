@@ -2780,15 +2780,60 @@ def exposure_time_estimate(target_mag, snr_target=10, telescope="vlt",
 # ── Light Curve Analysis (lightkurve) ──
 
 def search_lightcurve(target, mission='kepler'):
-    """Search for Kepler/TESS/K2 light curves via lightkurve."""
+    """Search for Kepler/TESS/K2 light curves via lightkurve.
+
+    H0.3: `r.exptime` is an astropy Quantity; using `if r.exptime` triggers
+    "Quantity truthiness is ambiguous, especially for logarithmic units and
+    temperatures." — the bug the Paper 2 reviewer hit.  Use explicit
+    `is not None` check instead.  Also try Simbad name resolution as a
+    fallback when direct search returns empty for well-known aliases.
+    """
     import lightkurve as lk
-    result = lk.search_lightcurve(target, mission=mission)
+
+    def _exptime(r):
+        try:
+            et = getattr(r, "exptime", None)
+            if et is None:
+                return None
+            val = getattr(et, "value", et)
+            return float(val)
+        except Exception:
+            return None
+
+    def _do_search(q):
+        try:
+            return lk.search_lightcurve(q, mission=mission)
+        except Exception as e:
+            return e
+
+    # H0.3 target resolution fallback: well-known exoplanet host aliases
+    # like HD 189733, HD 209458 sometimes don't hit MAST directly.  Try
+    # the original target, then Simbad-resolved coordinates.
+    result = _do_search(target)
+    if isinstance(result, Exception) or (hasattr(result, "__len__") and len(result) == 0):
+        try:
+            from astropy.coordinates import SkyCoord
+            coord = SkyCoord.from_name(target)
+            result2 = _do_search(coord)
+            if not isinstance(result2, Exception) and hasattr(result2, "__len__") and len(result2) > 0:
+                result = result2
+        except Exception:
+            pass  # fall through with the original result
+
+    if isinstance(result, Exception):
+        return {
+            "found": 0,
+            "error": f"lightkurve search_lightcurve failed: {type(result).__name__}: {result}",
+            "mission": mission,
+            "target": target,
+        }
+
     if len(result) == 0:
         return {"found": 0, "message": f"No {mission} light curves found for {target}"}
     return {
         "found": len(result),
         "results": [{"mission": str(r.mission), "target": str(r.target_name),
-                      "exptime": float(r.exptime.value) if r.exptime else None}
+                      "exptime": _exptime(r)}
                      for r in result[:20]]
     }
 

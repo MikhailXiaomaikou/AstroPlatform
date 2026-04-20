@@ -1106,6 +1106,10 @@ table.keys td a { color: var(--accent-2); font-style: italic; cursor: pointer; }
   padding: 12px 20px;
   font-size: 16.5px;
   display: inline-block;
+  /* 覆盖 App.css 的 color: #fff (那是非 Journal 主题下的 burgundy
+     背景用的).  Journal 主题把背景改成 --paper-2 (米色), 白字
+     不可读, 强制回到 --ink (近黑色). */
+  color: var(--ink);
 }
 .chat-message.assistant .chat-message-content { padding: 2px 2px 0 2px; }
 .chat-message-content p { margin: 10px 0; }

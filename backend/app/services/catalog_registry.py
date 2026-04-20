@@ -299,6 +299,53 @@ CATALOG_REGISTRY: dict[str, CatalogEntry] = {
             "Photometric redshift selection",
         ),
     ),
+    # H1.1: SDSS DR17 spectroscopic + photometric (VizieR mirror).
+    # Paper 3 reviewer hit this — AI generated RAJ2000 / DEJ2000 / petroMag_r
+    # (VizieR convention from old catalogs), but V/154 uses lowercase
+    # ra / dec plus the VizieR-computed _RAJ2000 / _DEJ2000.  Real schema
+    # from CDS metadata.
+    '"V/154/sdss17"': CatalogEntry(
+        table_name='"V/154/sdss17"',
+        service="vizier",
+        description="SDSS DR17 sources (photometric primary, ~4.4B rows)",
+        columns=_cols(
+            ("_RAJ2000", "DOUBLE", "VizieR-computed RA at J2000 [deg] — always available"),
+            ("_DEJ2000", "DOUBLE", "VizieR-computed Dec at J2000 [deg] — always available"),
+            ("ra", "DOUBLE", "Right ascension (ICRS, epoch 2000) [deg] — lowercase"),
+            ("dec", "DOUBLE", "Declination (ICRS, epoch 2000) [deg] — lowercase"),
+            ("objID", "BIGINT", "SDSS object identifier (primary key)"),
+            ("mode", "INTEGER", "1=primary, 2=secondary"),
+            ("class", "INTEGER", "Object class (3=galaxy, 6=star)"),
+            ("subClass", "VARCHAR", "Sub-classification (spectroscopic)"),
+            # Photometry (u/g/r/i/z, lowercase — NOT petroMag_r or psfMag_r)
+            ("u", "FLOAT", "Model u-band AB magnitude [mag]"),
+            ("err_u", "FLOAT", "u magnitude error [mag]"),
+            ("g", "FLOAT", "Model g-band AB magnitude [mag]"),
+            ("err_g", "FLOAT", "g magnitude error [mag]"),
+            ("r", "FLOAT", "Model r-band AB magnitude [mag]"),
+            ("err_r", "FLOAT", "r magnitude error [mag]"),
+            ("i", "FLOAT", "Model i-band AB magnitude [mag]"),
+            ("err_i", "FLOAT", "i magnitude error [mag]"),
+            ("z", "FLOAT", "Model z-band AB magnitude [mag] (photometry, NOT redshift)"),
+            ("err_z", "FLOAT", "z magnitude error [mag]"),
+            # Spectroscopic redshift (for the subset that has SpecObj)
+            ("spCl", "VARCHAR", "Spectroscopic class (GALAXY / QSO / STAR)"),
+            ("spType", "VARCHAR", "Spectroscopic sub-type"),
+            ("zsp", "FLOAT", "Spectroscopic redshift (if observed)"),
+            ("e_zsp", "FLOAT", "Spectroscopic redshift error"),
+            ("f_zsp", "VARCHAR", "zsp quality flag"),
+            ("zph", "FLOAT", "Photometric redshift (KD-tree)"),
+            ("e_zph", "FLOAT", "Photometric redshift error"),
+            ("plate", "INTEGER", "SDSS plate (spectroscopy)"),
+            ("MJD", "INTEGER", "Observation MJD"),
+            ("fiberID", "INTEGER", "Spectroscopic fiber ID"),
+        ),
+        common_queries=(
+            "Galaxy luminosity function (class=3, zsp available)",
+            "Photometric CMD (u-g vs g-r)",
+            "QSO selection (class=3 spCl='QSO' or class=6 + colors)",
+        ),
+    ),
     # V/139/sdss9 — still widely referenced in legacy papers (earlier DR).
     '"V/139/sdss9"': CatalogEntry(
         table_name='"V/139/sdss9"',
@@ -379,8 +426,15 @@ VIZIER_COMMON_MISTAKES: dict[str, dict[str, str]] = {
         "is `DE_ICRS`, not `DEJ2000`.  You can always use the VizieR-"
         "computed `_DEJ2000` (with leading underscore) for any table."
     ),
-    "ra": "VizieR tables almost always use `RAJ2000` or `RA_ICRS` rather than lowercase `ra`.",
-    "dec": "VizieR tables almost always use `DEJ2000` or `DE_ICRS` rather than lowercase `dec`.",
+    "ra": "VizieR tables almost always use `RAJ2000` or `RA_ICRS` rather than lowercase `ra`. (Exception: V/154/sdss17 DOES use lowercase `ra`/`dec`.)",
+    "dec": "VizieR tables almost always use `DEJ2000` or `DE_ICRS` rather than lowercase `dec`. (Exception: V/154/sdss17 DOES use lowercase `ra`/`dec`.)",
+    # H1.1: SDSS-specific mistakes the AI keeps making.
+    "petroMag_r": "V/154/sdss17 uses simply `r` for the model r-band magnitude. `petroMag_*` is the SDSS native column name but VizieR exposes only `u`/`g`/`r`/`i`/`z`.",
+    "petroMag_g": "V/154/sdss17 uses simply `g` for the model g-band magnitude. (Same for u, r, i, z.)",
+    "psfMag_r": "V/154/sdss17 uses simply `r` (no `psfMag_` prefix in the VizieR mirror).",
+    "psfMag_g": "V/154/sdss17 uses simply `g` (no `psfMag_` prefix in the VizieR mirror).",
+    "redshift": "V/154/sdss17 uses `zsp` for spectroscopic redshift and `zph` for photometric. Generic `redshift` is NOT a column.",
+    "objid": "V/154/sdss17 uses `objID` (capital ID). Case matters in TAP.",
 }
 
 

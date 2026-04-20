@@ -2971,7 +2971,11 @@ export default function ChatPage() {
 
     const updatedMessages = [...messages, userMsg, pendingMarker];
     setMessages(updatedMessages);
-    if (!overrideText) setInput("");
+    // H0.5: clear input whenever the text we're sending matches the
+    // current input state (i.e. came from the user, not an external
+    // inject).  The old `!overrideText` check broke when the Send
+    // button started passing overrideText=input explicitly.
+    if (!overrideText || overrideText === input) setInput("");
     setLoading(true);
 
     try {
@@ -3798,12 +3802,31 @@ export default function ChatPage() {
                     className="btn-secondary btn-small"
                     style={{ marginTop: 8 }}
                     onClick={() => {
+                      // H0.4: the old onClick did
+                      //   setMessages(prev.filter((m) => m.id !== msg.id))
+                      // BEFORE handleSend, which removed the pending
+                      // message from the list — and with it all the
+                      // prior successful tool_results / figures via the
+                      // localStorage flush.  Paper 1 reviewer lost an
+                      // entire Pleiades analysis to this.
+                      // Fix: DON'T remove the pending message.  Let
+                      // handleSend append a NEW pending marker + new
+                      // reply; the old stuck pending bubble stays as
+                      // context ("previous attempt got stuck") and the
+                      // figures above it are untouched.
                       const priorUser = messages
                         .slice(0, messages.indexOf(msg))
                         .reverse()
                         .find((m) => m.role === "user");
                       if (!priorUser) return;
-                      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                      // Clear _pending on the stuck message so it stops
+                      // showing the spinner and the Retry button — but
+                      // keep the bubble in the list.
+                      setMessages((prev) => prev.map((m) =>
+                        m.id === msg.id
+                          ? { ...m, _pending: undefined, content: m.content || "⚠ Previous attempt timed out; retrying below." }
+                          : m,
+                      ));
                       void handleSend(priorUser.content);
                     }}
                   >
@@ -4085,7 +4108,15 @@ export default function ChatPage() {
           ) : null}
           <button
             className="btn-chat-send"
-            onClick={() => handleSend()}
+            onClick={() => {
+              // H0.5: pass the current input value explicitly instead of
+              // relying on handleSend's closure over `input`.  Reviewer
+              // reported the first-click failing (input cleared but no
+              // request sent) — suspected cause is a rapid re-render
+              // race where the handleSend closure captured an empty
+              // string.  Passing via `overrideText` sidesteps the closure.
+              void handleSend(input);
+            }}
             disabled={!input.trim() || loading || !aiBackendReady}
             title={
               !aiBackendReady

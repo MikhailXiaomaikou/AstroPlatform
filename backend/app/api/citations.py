@@ -14,38 +14,108 @@ logger = logging.getLogger(__name__)
 ADS_API_KEY = os.getenv("ADS_API_KEY", "")
 
 
-def _search_ads_sync(object_name: str) -> list[dict]:
-    """Query NASA ADS. Requires ADS_API_KEY."""
-    if not ADS_API_KEY:
+def _search_arxiv_sync(query: str) -> list[dict]:
+    """H2.1: arXiv API fallback when ADS is unavailable.
+
+    arXiv is open (no key), slower, no abstracts in a structured form but
+    parses out title/authors/year.  Returns same shape as ADS for
+    downstream consumers.
+    """
+    try:
+        import urllib.parse
+        import xml.etree.ElementTree as ET
+
+        url = (
+            "http://export.arxiv.org/api/query?"
+            f"search_query=all:{urllib.parse.quote(query)}&max_results=8"
+        )
+        resp = httpx.get(url, timeout=15)
+        resp.raise_for_status()
+        # arXiv returns Atom XML
+        root = ET.fromstring(resp.text)
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        results = []
+        for entry in root.findall("atom:entry", ns):
+            title_el = entry.find("atom:title", ns)
+            title = (title_el.text or "").strip() if title_el is not None else ""
+            id_el = entry.find("atom:id", ns)
+            arxiv_id = (id_el.text or "").rsplit("/", 1)[-1] if id_el is not None else ""
+            published_el = entry.find("atom:published", ns)
+            year = (published_el.text or "")[:4] if published_el is not None else ""
+            authors = []
+            for author_el in entry.findall("atom:author/atom:name", ns):
+                if author_el.text:
+                    authors.append(author_el.text.strip())
+            summary_el = entry.find("atom:summary", ns)
+            summary = (summary_el.text or "").strip() if summary_el is not None else ""
+            results.append({
+                "bibcode": f"arXiv:{arxiv_id}",
+                "title": title,
+                "authors": authors[:5],
+                "year": year,
+                "doi": None,
+                "abstract": summary,
+                "source": "arxiv",
+            })
+        return results
+    except Exception as e:
+        logger.warning("arXiv fallback failed: %s", e)
         return []
 
-    headers = {"Authorization": f"Bearer {ADS_API_KEY}"}
-    params = {
-        "q": f"object:{object_name}",
-        "fl": "bibcode,title,author,year,doi,pub,abstract",
-        "rows": 5,
-    }
-    try:
-        resp = httpx.get(
-            "https://api.adsabs.harvard.edu/v1/search/query",
-            params=params, headers=headers, timeout=15,
-        )
-        resp.raise_for_status()
-        docs = resp.json().get("response", {}).get("docs", [])
-        return [
-            {
-                "bibcode": doc.get("bibcode", ""),
-                "title": (doc.get("title") or [""])[0],
-                "authors": doc.get("author", [])[:5],
-                "year": doc.get("year", ""),
-                "doi": (doc.get("doi") or [None])[0],
-                "abstract": doc.get("abstract", ""),
-            }
-            for doc in docs
-        ]
-    except Exception as e:
-        logger.warning("ADS search failed: %s", e)
-        return []
+
+def _search_ads_sync(object_name: str) -> list[dict]:
+    """Query NASA ADS, fall back to arXiv API if ADS unavailable.
+
+    H2.1: the Paper 4 reviewer hit "Literature Search EMPTY" even on
+    common topics.  Possible causes: missing/exhausted ADS_API_KEY,
+    401/429 from ADS.  We now:
+    1. Try ADS if key present
+    2. If ADS returns 401/429 or no results, fall back to arXiv
+    3. If both fail, surface an explicit error_class so the UI can say
+       "literature service unavailable" instead of silently returning []
+    """
+    # Path 1: ADS (if key present)
+    if ADS_API_KEY:
+        headers = {"Authorization": f"Bearer {ADS_API_KEY}"}
+        params = {
+            "q": f"object:{object_name}",
+            "fl": "bibcode,title,author,year,doi,pub,abstract",
+            "rows": 5,
+        }
+        try:
+            resp = httpx.get(
+                "https://api.adsabs.harvard.edu/v1/search/query",
+                params=params, headers=headers, timeout=15,
+            )
+            if resp.status_code in (401, 429):
+                # Key invalid / exhausted — log and fall through to arXiv
+                logger.warning(
+                    "ADS returned %d — key may be invalid/exhausted; using arXiv fallback",
+                    resp.status_code,
+                )
+            else:
+                resp.raise_for_status()
+                docs = resp.json().get("response", {}).get("docs", [])
+                if docs:
+                    return [
+                        {
+                            "bibcode": doc.get("bibcode", ""),
+                            "title": (doc.get("title") or [""])[0],
+                            "authors": doc.get("author", [])[:5],
+                            "year": doc.get("year", ""),
+                            "doi": (doc.get("doi") or [None])[0],
+                            "abstract": doc.get("abstract", ""),
+                            "source": "ads",
+                        }
+                        for doc in docs
+                    ]
+                # ADS returned empty — fall through to arXiv
+        except Exception as e:
+            logger.warning("ADS search failed (%s); falling back to arXiv", e)
+
+    # Path 2: arXiv fallback
+    arxiv_results = _search_arxiv_sync(object_name)
+    return arxiv_results
 
 
 def _search_simbad_refs(object_name: str) -> list[dict]:

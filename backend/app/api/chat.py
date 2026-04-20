@@ -623,7 +623,11 @@ with the listed packages + references as starting points for user-specific analy
   requires external install. Reference only.
 
 ## ADQL Usage Rules (CRITICAL)
-1. SDSS does NOT support ADQL. To query SDSS data, use search_objects(sources=["sdss"]).
+1. SDSS does NOT expose its own ADQL service.  You have THREE paths for SDSS data, pick based on the query:
+   - **search_objects(sources=["sdss"])** — direct SkyServer SQL, best for cone searches, returns photometry + spec_z + photo_z with galaxy/star class.
+   - **search_objects(sources=["sdss_spec"])** — spec-only variant, 100% redshift coverage, smaller sample.
+   - **run_adql(service="vizier", query="SELECT ... FROM \"V/154/sdss17\" ...")** — VizieR mirror, supports arbitrary ADQL.  Column names in `V/154/sdss17` are lowercase `ra`, `dec`, `u`, `g`, `r`, `i`, `z`, `class` (3=galaxy, 6=star), `zsp` (spec redshift), `zph` (photo-z), `objID`.  NOT `RAJ2000`/`DEJ2000`/`petroMag_r`/`psfMag_r`/`redshift` — those are common mistakes.  `V/154/sdss16` / `V/147/sdss12` are older DRs; prefer DR17 unless the paper specifically used an earlier release.
+   If VizieR returns 503 (unstable mirror), fall back to `search_objects(sources=["sdss"])` which goes direct to SkyServer.
 2. Before writing any ADQL query, use describe_tap_table to confirm column names exist.
 3. Common table name mappings:
    - Gaia DR3 main table: gaiadr3.gaia_source (service="gaia")
@@ -1867,11 +1871,15 @@ async def _run_agent_loop(
         "crossmatch_catalogs", "query_gaia_cluster", "get_object_info",
         "get_object_dossier", "get_extinction", "search_literature",
     }
-    # G3.4: tool → failure count this turn.  When ≥ DISABLE_AFTER_FAILURES,
-    # the tool is removed from the `tools` parameter sent to the LLM on the
-    # next iteration — the model literally cannot call it any more.
+    # G3.4 + H0.7: tool → failure count this turn.  When ≥
+    # DISABLE_AFTER_FAILURES, the tool is removed from the `tools`
+    # parameter sent to the LLM on the next iteration — the model
+    # literally cannot call it any more.
+    # H0.7: raised threshold from 2 to 3, and only count RETRYABLE
+    # failures (connector errors, not timeouts/payload_too_large which
+    # the AI might legitimately retry with smaller scope).
     tool_failure_counts: dict[str, int] = {}
-    DISABLE_AFTER_FAILURES = 2
+    DISABLE_AFTER_FAILURES = 3
     synthetic_run_python_count = 0  # G3.3 counter
 
     hit_iteration_cap = False
@@ -1975,20 +1983,34 @@ async def _run_agent_loop(
             result = tc["result"]
             tool_name = tc.get("name", "")
 
-            # G3.1: mark data-fetch failures for the G3.4 disable gate.
+            # G3.1 + H0.7: mark data-fetch failures for the G3.4 disable gate.
+            # H0.7: timeouts / payload_too_large / row_count=0 are "soft"
+            # failures — the AI can legitimately retry with smaller TOP or
+            # narrower cone.  Only count connector errors (real upstream
+            # failure that's not the AI's fault) toward the disable counter.
             if tool_name in _DATA_FETCH_TOOLS and isinstance(result, dict):
                 status_tokens: list[str] = []
                 for key in ("analysis_status", "__tool_status__", "status"):
                     v = result.get(key)
                     if isinstance(v, str):
                         status_tokens.append(v.upper())
-                is_failure = (
+                err_str = str(result.get("error") or "").lower()
+                err_class = str(result.get("error_class") or "").lower()
+                # "Retryable" / soft failures — user/AI can adjust parameters.
+                soft_failure = (
+                    "timeout" in err_str or "timed out" in err_str
+                    or "payload_too_large" in err_class
+                    or "too large" in err_str
+                    or result.get("row_count") == 0  # empty result is not a connector failure
+                    or any(s == "EMPTY" for s in status_tokens)
+                )
+                hard_failure = (
                     result.get("success") is False
                     or bool(result.get("error"))
-                    or any(s in {"EMPTY", "FAILED", "UNAVAILABLE"} for s in status_tokens)
-                    or result.get("row_count") == 0
-                )
-                if is_failure:
+                    or any(s in {"FAILED", "UNAVAILABLE"} for s in status_tokens)
+                ) and not soft_failure
+
+                if hard_failure:
                     tool_failure_counts[tool_name] = tool_failure_counts.get(tool_name, 0) + 1
 
             # G3.2: if any data-fetch failed this turn and the AI now runs

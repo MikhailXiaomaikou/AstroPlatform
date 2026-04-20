@@ -32,8 +32,10 @@ const TEMPLATES: Record<string, Array<{ label: string; tip: string; q: string }>
   vizier: [
     { label: "2MASS catalog", tip: "J/H/K photometry near Orion.",
       q: "SELECT TOP 50 RAJ2000, DEJ2000, Jmag, Hmag, Kmag\nFROM \"II/246/out\"\nWHERE 1=CONTAINS(POINT('ICRS', RAJ2000, DEJ2000), CIRCLE('ICRS', 83.633, -5.375, 0.1))" },
-    { label: "SDSS DR16 photo", tip: "Optical photometry.",
-      q: "SELECT TOP 50 ra, dec, psfMag_u, psfMag_g, psfMag_r, psfMag_i, psfMag_z\nFROM \"V/154/sdss16\"\nWHERE 1=CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', 180.0, 0.0, 0.1))" },
+    { label: "SDSS DR17 photo", tip: "Optical photometry (galaxies).",
+      // H1.1: V/154/sdss17 real columns are lowercase `u`/`g`/`r`/`i`/`z`
+      // (not psfMag_r).  Also the VizieR mirror name is sdss17 not sdss16.
+      q: "SELECT TOP 50 ra, dec, u, g, r, i, z, class, zsp FROM \"V/154/sdss17\" WHERE 1=CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', 180.0, 0.0, 0.1)) AND class = 3" },
   ],
   cadc: [
     { label: "JWST observations", tip: "James Webb archival data.",

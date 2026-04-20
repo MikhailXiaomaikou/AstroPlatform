@@ -1892,6 +1892,33 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
                 query = reduced  # remember the successful query
                 break
 
+        # H0.8: TOP N auto-degradation.  If the query has a TOP clause
+        # >= 10000 and the cone-radius retry ran out, try the query one
+        # more time with TOP reduced to min(1000, N/10).  Reviewer hit
+        # this on Paper 5: TOP 50000 Gaia query timed out, AI tried
+        # TOP 20000 which also timed out, circuit opened.  A smaller
+        # sample still gives the AI enough rows for tail statistics.
+        if result is None:
+            _top_match = _re.search(r"\bTOP\s+(\d+)\b", query, _re.IGNORECASE)
+            if _top_match:
+                old_top = int(_top_match.group(1))
+                if old_top >= 10000:
+                    new_top = max(1000, old_top // 10)
+                    degraded = _re.sub(
+                        r"\bTOP\s+\d+\b", f"TOP {new_top}", query, count=1,
+                        flags=_re.IGNORECASE,
+                    )
+                    retry_log.append(f"auto-degraded TOP {old_top} → {new_top}")
+                    await _aio.sleep(1.0)
+                    result = await _try_query(degraded)
+                    if result is not None:
+                        query = degraded
+                        # Flag in the output so AI knows it got fewer rows
+                        # than requested and can warn user about sample size.
+                        if isinstance(result, dict):
+                            result["top_auto_reduced_from"] = old_top
+                            result["top_used"] = new_top
+
     if result is None:
         return {
             "error": (

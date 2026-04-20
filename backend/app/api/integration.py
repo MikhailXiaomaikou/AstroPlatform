@@ -471,32 +471,121 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
     if req.service not in ADQL_SERVICES:
         raise HTTPException(status_code=400, detail=f"Unknown service: {req.service}. Available: {list(ADQL_SERVICES.keys())}")
 
+    # H0.2: normalize whitespace.  The Paper 4 reviewer hit
+    # "Cannot parse query SELECT TOP 5 ... FROM g" where TAP truncated
+    # at a newline mid-identifier.  Pydantic JSON decoding correctly
+    # converts \n escape sequences to real newlines, but some TAP
+    # servers tokenise on newlines as terminators (or AI-generated
+    # queries paste a stray "\n" as literal).  Collapse all whitespace
+    # to single spaces before dispatch — ADQL is whitespace-agnostic
+    # so this is always safe for legitimate queries.
+    req.query = " ".join(req.query.replace("\n", " ").replace("\r", " ").replace("\t", " ").split())
+
     # Sanitize: block dangerous operations
     query_upper = req.query.upper().strip()
     for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "CREATE", "ALTER"):
         if forbidden in query_upper.split():
             raise HTTPException(status_code=400, detail=f"Forbidden keyword: {forbidden}")
 
+    # H0.1: estimate whether the query is "big" (expected to exceed the
+    # sync 60 s TAP cutoff).  Gaia / VizieR / CADC all support async TAP
+    # (PHASE=RUN polling); we use launch_job_async for big ones and keep
+    # the fast sync path for small queries.
+    import re as _adql_re
+    query_lower = req.query.lower()
+    _top_match = _adql_re.search(r"\btop\s+(\d+)\b", query_lower)
+    _top_n = int(_top_match.group(1)) if _top_match else None
+    _circle_match = _adql_re.search(r"circle\s*\(\s*'icrs'\s*,\s*[\d.+-]+\s*,\s*[\d.+-]+\s*,\s*([\d.]+)\s*\)", query_lower)
+    _cone_radius = float(_circle_match.group(1)) if _circle_match else None
+    # Heuristics for "probably big":
+    #   - No TOP or TOP > 5000
+    #   - Cone radius > 1°
+    #   - Explicit JOIN (multi-table can be slow)
+    _looks_big = (
+        (_top_n is None or _top_n > 5000)
+        or (_cone_radius is not None and _cone_radius > 1.0)
+        or (" join " in query_lower)
+    )
+
     try:
         from astroquery.utils.tap.core import TapPlus
 
         loop = asyncio.get_running_loop()
 
-        def _run_query():
+        def _run_query_sync():
             tap = TapPlus(url=ADQL_SERVICES[req.service])
             job = tap.launch_job(req.query)
             return job.get_results()
 
-        # Retry once on transient TAP failures (connection resets, 503s)
+        def _run_query_async():
+            # H0.1: TAP async mode — submits PHASE=RUN + polls.
+            # astroquery's launch_job_async blocks the thread until the
+            # remote job finishes, so we still put it in the executor,
+            # but the WAIT time now has a 5-min budget instead of 60 s.
+            tap = TapPlus(url=ADQL_SERVICES[req.service])
+            job = tap.launch_job_async(req.query)
+            return job.get_results()
+
+        # Sync first unless we think it'll be big.
         try:
-            table = await loop.run_in_executor(None, _run_query)
+            if _looks_big:
+                logger.info(
+                    "ADQL: query flagged big (top=%s, radius=%s, join=%s); using async TAP",
+                    _top_n, _cone_radius, " join " in query_lower,
+                )
+                table = await asyncio.wait_for(
+                    loop.run_in_executor(None, _run_query_async),
+                    timeout=300.0,  # 5 min async budget
+                )
+            else:
+                table = await asyncio.wait_for(
+                    loop.run_in_executor(None, _run_query_sync),
+                    timeout=60.0,
+                )
+        except asyncio.TimeoutError as timeout_err:
+            # Sync timed out on a query we thought was small.  Fall back
+            # to async and give it the full 5-min budget.
+            if not _looks_big:
+                logger.info("ADQL sync timed out, retrying with async TAP (PHASE=RUN)...")
+                try:
+                    table = await asyncio.wait_for(
+                        loop.run_in_executor(None, _run_query_async),
+                        timeout=300.0,
+                    )
+                except Exception as async_err:
+                    raise HTTPException(
+                        status_code=408,
+                        detail=(
+                            f"ADQL query timed out even after async TAP fallback "
+                            f"(5 min). Reduce TOP, shrink cone radius, or use "
+                            f"run_adql with explicit smaller scope. Inner error: {async_err}"
+                        ),
+                    ) from async_err
+            else:
+                raise HTTPException(
+                    status_code=408,
+                    detail=(
+                        f"ADQL async TAP timed out after 5 min. Query is too "
+                        f"large — reduce TOP to <5000 or shrink cone radius "
+                        f"to <0.5 deg. Original error: {timeout_err}"
+                    ),
+                ) from timeout_err
         except Exception as first_err:
             err_str = str(first_err).lower()
             if any(hint in err_str for hint in ("timeout", "connection", "503", "502", "reset")):
-                logger.warning("ADQL first attempt failed (%s), retrying...", first_err)
+                logger.warning("ADQL first attempt failed (%s), retrying with async...", first_err)
                 import asyncio as _aio
                 await _aio.sleep(1.0)
-                table = await loop.run_in_executor(None, _run_query)
+                try:
+                    table = await asyncio.wait_for(
+                        loop.run_in_executor(None, _run_query_async),
+                        timeout=300.0,
+                    )
+                except Exception as retry_err:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"ADQL service unavailable after retry: {retry_err}",
+                    ) from retry_err
             else:
                 raise
 
