@@ -1196,6 +1196,271 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     );
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Dedicated renderers for high-frequency tools. Each replaces the
+  // default JSON-truncate fallback with a formatted data card that the
+  // user can actually read at a glance.
+  // ──────────────────────────────────────────────────────────────────
+
+  // fit_isochrone: best_fit {log_age, age_myr, distance_pc, A_V}, turnoff,
+  // method, n_data, note, warnings[]
+  if (toolName === "fit_isochrone") {
+    const bf = result.best_fit as Record<string, unknown> | undefined;
+    const to = result.turnoff as Record<string, unknown> | undefined;
+    const err = result.error as string | undefined;
+    const warnings = Array.isArray(result.warnings) ? (result.warnings as string[]) : [];
+    const method = String(result.method || "");
+    if (err) {
+      return (
+        <div style={{ fontSize: "0.82rem" }}>
+          <div style={{ color: "var(--color-red)" }}>Isochrone fit failed: {err}</div>
+          {result.message ? <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.75rem", marginTop: 3 }}>{String(result.message)}</div> : null}
+        </div>
+      );
+    }
+    return (
+      <div style={{ fontSize: "0.82rem" }}>
+        {bf && (
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 10px", marginBottom: 6 }}>
+            <strong>Age:</strong>
+            <span>{bf.age_myr != null ? `${bf.age_myr} Myr` : "—"} {bf.log_age != null ? <span style={{ color: "var(--color-text-tertiary)" }}>(log₁₀ = {String(bf.log_age)})</span> : null}</span>
+            <strong>Distance:</strong>
+            <span>{bf.distance_pc != null ? `${bf.distance_pc} pc` : "—"}</span>
+            <strong>A_V:</strong>
+            <span>{bf.A_V != null ? `${bf.A_V} mag` : "—"}</span>
+          </div>
+        )}
+        {to && (
+          <div style={{ fontSize: "0.75rem", color: "var(--color-text-tertiary)", marginBottom: 4 }}>
+            Turnoff: BP-RP={String(to.bp_rp ?? "—")}, M_G={String(to.abs_mag_G ?? "—")}, mass≈{String(to.approx_mass_msun ?? "—")} M☉
+          </div>
+        )}
+        <div style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)" }}>
+          {method} · N_data = {String(result.n_data ?? "?")}
+        </div>
+        {warnings.length > 0 && (
+          <details style={{ marginTop: 4, fontSize: "0.75rem" }}>
+            <summary style={{ color: "#a06500", cursor: "pointer" }}>⚠ {warnings.length} warning{warnings.length === 1 ? "" : "s"}</summary>
+            <ul style={{ margin: "4px 0 0 0", paddingLeft: 18 }}>
+              {warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </details>
+        )}
+      </div>
+    );
+  }
+
+  // query_gaia_cluster: row_count, columns, median_parallax_mas,
+  // stdev_parallax_mas, mean_pmra, mean_pmdec, center_ra, center_dec, radius_deg
+  if (toolName === "query_gaia_cluster") {
+    const err = result.error as string | undefined;
+    if (err) {
+      return <div style={{ color: "var(--color-red)", fontSize: "0.82rem" }}>Cluster query failed: {err}</div>;
+    }
+    const rowCount = (result.row_count as number) || 0;
+    const medPlx = result.median_parallax_mas as number | undefined;
+    const stdPlx = result.stdev_parallax_mas as number | undefined;
+    const meanPmra = result.mean_pmra as number | undefined;
+    const meanPmdec = result.mean_pmdec as number | undefined;
+    const cRa = result.center_ra as number | undefined;
+    const cDec = result.center_dec as number | undefined;
+    const radius = result.radius_deg as number | undefined;
+    return (
+      <div style={{ fontSize: "0.82rem" }}>
+        <div style={{ marginBottom: 4 }}>
+          <strong>{rowCount}</strong> member{rowCount === 1 ? "" : "s"} returned
+          {radius != null && (
+            <span style={{ color: "var(--color-text-tertiary)", marginLeft: 6 }}>
+              within {radius}° of ({cRa?.toFixed(3)}, {cDec?.toFixed(3)})
+            </span>
+          )}
+        </div>
+        {rowCount > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 10px", fontSize: "0.77rem" }}>
+            {medPlx != null && (<>
+              <span style={{ color: "var(--color-text-tertiary)" }}>Median parallax:</span>
+              <span>{medPlx.toFixed(3)} mas {stdPlx != null && <span style={{ color: "var(--color-text-tertiary)" }}>(σ = {stdPlx.toFixed(3)})</span>}</span>
+            </>)}
+            {meanPmra != null && (<>
+              <span style={{ color: "var(--color-text-tertiary)" }}>Mean μ_α:</span>
+              <span>{meanPmra.toFixed(2)} mas/yr</span>
+            </>)}
+            {meanPmdec != null && (<>
+              <span style={{ color: "var(--color-text-tertiary)" }}>Mean μ_δ:</span>
+              <span>{meanPmdec.toFixed(2)} mas/yr</span>
+            </>)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // get_extinction: e_b_v, a_v, r_v, method, galactic_l/b, a_g/a_v/...
+  if (toolName === "get_extinction") {
+    const err = result.error as string | undefined;
+    if (err) {
+      return <div style={{ color: "var(--color-red)", fontSize: "0.82rem" }}>Extinction lookup failed: {err}</div>;
+    }
+    const ebv = result.e_b_v as number | undefined;
+    const av = result.a_v as number | undefined;
+    const rv = result.r_v as number | undefined;
+    const method = String(result.method || "");
+    const l = result.galactic_l_deg as number | undefined;
+    const b = result.galactic_b_deg as number | undefined;
+    const note = result.note as string | undefined;
+    // Pick out band-specific a_x entries (a_g, a_b, a_r, a_j, etc.)
+    const bandEntries = Object.entries(result)
+      .filter(([k, v]) => /^a_[a-z]$/i.test(k) && typeof v === "number")
+      .map(([k, v]) => [k.slice(2).toUpperCase(), v as number] as const);
+    return (
+      <div style={{ fontSize: "0.82rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 10px", marginBottom: 4 }}>
+          {ebv != null && (<>
+            <strong>E(B−V):</strong>
+            <span>{ebv.toFixed(4)} mag</span>
+          </>)}
+          {av != null && (<>
+            <strong>A_V:</strong>
+            <span>{av.toFixed(3)} mag {rv != null && <span style={{ color: "var(--color-text-tertiary)" }}>(R_V = {rv})</span>}</span>
+          </>)}
+          {bandEntries.length > 0 && (<>
+            <strong>Bands:</strong>
+            <span>{bandEntries.map(([k, v]) => `A_${k}=${v.toFixed(3)}`).join(", ")}</span>
+          </>)}
+          {(l != null || b != null) && (<>
+            <span style={{ color: "var(--color-text-tertiary)" }}>Galactic (ℓ, b):</span>
+            <span>({l?.toFixed(2)}°, {b?.toFixed(2)}°)</span>
+          </>)}
+        </div>
+        <div style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)" }}>method: {method}</div>
+        {note && <div style={{ fontSize: "0.7rem", color: "#a06500", marginTop: 3 }}>⚠ {note}</div>}
+      </div>
+    );
+  }
+
+  // crossmatch_catalogs: match_count, showing, columns, rows, join_type, radius_arcsec
+  if (toolName === "crossmatch_catalogs") {
+    const err = result.error as string | undefined;
+    if (err) {
+      return <div style={{ color: "var(--color-red)", fontSize: "0.82rem" }}>Cross-match failed: {err}</div>;
+    }
+    const matchCount = (result.match_count as number) || 0;
+    const showing = (result.showing as number) || 0;
+    const radius = result.radius_arcsec as number | undefined;
+    const joinType = String(result.join_type || "");
+    const columns = (result.columns as string[]) || [];
+    const rows = (result.rows as Array<Record<string, unknown>>) || [];
+    return (
+      <div style={{ fontSize: "0.82rem" }}>
+        <div style={{ marginBottom: 4 }}>
+          <strong>{matchCount}</strong> match{matchCount === 1 ? "" : "es"}
+          {radius != null && <span style={{ color: "var(--color-text-tertiary)", marginLeft: 6 }}>within {radius}″ ({joinType})</span>}
+          {showing < matchCount && <span style={{ color: "var(--color-text-tertiary)", marginLeft: 6 }}>(showing first {showing})</span>}
+        </div>
+        {rows.length > 0 && columns.length > 0 && (
+          <div style={{ overflowX: "auto", maxHeight: 200, border: "1px solid var(--color-separator)", borderRadius: 4 }}>
+            <table style={{ fontSize: "0.72rem", borderCollapse: "collapse", width: "100%" }}>
+              <thead>
+                <tr>
+                  {columns.slice(0, 8).map((c) => (
+                    <th key={c} style={{ position: "sticky", top: 0, background: "var(--color-muted)", padding: "3px 6px", textAlign: "left", fontWeight: 600 }}>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.slice(0, 20).map((row, i) => (
+                  <tr key={i}>
+                    {columns.slice(0, 8).map((c) => {
+                      const v = row[c];
+                      const display = v == null ? "—" : (typeof v === "number" ? Number(v).toPrecision(6) : String(v).slice(0, 32));
+                      return <td key={c} style={{ padding: "2px 6px", borderTop: "1px solid var(--color-separator)" }}>{display}</td>;
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // get_object_dossier: object {name, ra, dec}, photometry, astrometry, redshift,
+  // object_type, spectral_type, cross_ids, sources_queried, sources_responded
+  if (toolName === "get_object_dossier") {
+    const err = result.error as string | undefined;
+    if (err) {
+      return <div style={{ color: "var(--color-red)", fontSize: "0.82rem" }}>Dossier lookup failed: {err}</div>;
+    }
+    const obj = result.object as Record<string, unknown> | undefined;
+    const photometry = result.photometry as Record<string, unknown> | undefined;
+    const astrometry = result.astrometry as Record<string, unknown> | undefined;
+    const redshift = result.redshift as Record<string, unknown> | undefined;
+    const objType = String(result.object_type || "");
+    const specType = String(result.spectral_type || "");
+    const crossIds = Array.isArray(result.cross_ids) ? (result.cross_ids as string[]) : [];
+    const sourcesResponded = (result.sources_responded as string[] | number | undefined);
+    const name = String(obj?.name || "Unknown");
+    const ra = obj?.ra as number | undefined;
+    const dec = obj?.dec as number | undefined;
+    return (
+      <div style={{ fontSize: "0.82rem" }}>
+        <div style={{ marginBottom: 6 }}>
+          <strong>{name}</strong>
+          {objType && <span style={{ color: "var(--color-text-tertiary)", marginLeft: 6 }}>({objType}{specType ? ` · ${specType}` : ""})</span>}
+          {ra != null && dec != null && (
+            <div style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)" }}>RA {ra.toFixed(5)}°, Dec {dec.toFixed(5)}°</div>
+          )}
+        </div>
+        {redshift && Object.keys(redshift).length > 0 && (
+          <div style={{ fontSize: "0.76rem", marginBottom: 3 }}>
+            <strong>z:</strong> {(redshift.value as number | null) != null ? (redshift.value as number).toPrecision(5) : "—"}
+            {redshift.source != null && <span style={{ color: "var(--color-text-tertiary)", marginLeft: 6 }}>({String(redshift.source)})</span>}
+          </div>
+        )}
+        {photometry && Object.keys(photometry).length > 0 && (
+          <details style={{ fontSize: "0.76rem", marginTop: 3 }}>
+            <summary style={{ cursor: "pointer" }}>Photometry ({Object.keys(photometry).length} bands)</summary>
+            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 8px", marginTop: 4, paddingLeft: 10, fontSize: "0.73rem" }}>
+              {Object.entries(photometry).slice(0, 12).map(([k, v]) => (
+                <div key={k} style={{ display: "contents" }}>
+                  <span style={{ color: "var(--color-text-tertiary)" }}>{k}:</span>
+                  <span>{typeof v === "number" ? v.toFixed(3) : String(v).slice(0, 40)}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+        {astrometry && Object.keys(astrometry).length > 0 && (
+          <details style={{ fontSize: "0.76rem", marginTop: 3 }}>
+            <summary style={{ cursor: "pointer" }}>Astrometry</summary>
+            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 8px", marginTop: 4, paddingLeft: 10, fontSize: "0.73rem" }}>
+              {Object.entries(astrometry).slice(0, 10).map(([k, v]) => (
+                <div key={k} style={{ display: "contents" }}>
+                  <span style={{ color: "var(--color-text-tertiary)" }}>{k}:</span>
+                  <span>{typeof v === "number" ? v.toFixed(4) : String(v).slice(0, 40)}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+        {crossIds.length > 0 && (
+          <details style={{ fontSize: "0.76rem", marginTop: 3 }}>
+            <summary style={{ cursor: "pointer" }}>Cross-IDs ({crossIds.length})</summary>
+            <div style={{ fontSize: "0.72rem", paddingLeft: 10, marginTop: 4, color: "var(--color-text-tertiary)" }}>
+              {crossIds.slice(0, 20).join(" · ")}
+            </div>
+          </details>
+        )}
+        {sourcesResponded != null && (
+          <div style={{ fontSize: "0.68rem", color: "var(--color-text-tertiary)", marginTop: 4 }}>
+            Sources: {Array.isArray(sourcesResponded) ? sourcesResponded.join(", ") : String(sourcesResponded)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // Default: compact JSON
   return (
     <pre style={{ fontSize: "0.7rem", maxHeight: 100, overflow: "auto", color: "var(--color-text-tertiary)" }}>

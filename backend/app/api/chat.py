@@ -1262,19 +1262,55 @@ async def chat_message_stream(
         # so the LLM's context stays under Anthropic's 200 KB cap.
         claude_messages = _trim_large_tool_results(claude_messages)
 
-        # If after trimming we're still > 180 KB, reject with a clear
-        # structured error instead of letting the upstream LLM API 413.
+        # G6.3 v2 (post-audit): earlier version hard-rejected the request at
+        # 180 KB, which blocked legitimate long chats entirely.  New posture:
+        # drop oldest message pairs until under cap, keeping at least the
+        # last 4 turns (8 messages) + the current user query.  Only bail if
+        # EVEN after aggressive trimming a single message is still > 180 KB
+        # (essentially impossible after _trim_large_tool_results ran).
         import json as _json
-        total_bytes = sum(len(_json.dumps(m, default=str)) for m in claude_messages)
-        if total_bytes > 180_000:
+        CAP_BYTES = 180_000
+        KEEP_TAIL_MIN = 9  # current user + up to 4 prior turns (4 × 2)
+
+        def _payload_size(msgs: list[dict]) -> int:
+            return sum(len(_json.dumps(m, default=str)) for m in msgs)
+
+        trimmed_rounds = 0
+        while _payload_size(claude_messages) > CAP_BYTES and len(claude_messages) > KEEP_TAIL_MIN:
+            # Drop the oldest two messages (one turn: user + assistant)
+            claude_messages = claude_messages[2:]
+            trimmed_rounds += 1
+
+        if trimmed_rounds > 0:
+            # Prepend a synthetic system-style note so the model knows it
+            # lost context rather than pretending the conversation started
+            # fresh.  Role 'user' with a brief framing is accepted by both
+            # Anthropic and OpenAI schemas.
+            claude_messages.insert(0, {
+                "role": "user",
+                "content": (
+                    f"[SYSTEM NOTE — context pre-flight dropped {trimmed_rounds} "
+                    f"older turn(s) to stay under the prompt size cap. The earlier "
+                    f"conversation covered topics leading up to this point. If you "
+                    f"need detail from a dropped turn, ask the user to restate it "
+                    f"or call a tool to re-fetch.]"
+                ),
+            })
+
+        # Final guard: if a SINGLE message is still over the cap (e.g.
+        # user pasted a huge blob), there's nothing more we can safely
+        # do — return the structured error only in this edge case.
+        total_bytes = _payload_size(claude_messages)
+        if total_bytes > CAP_BYTES:
             yield (
                 "data: "
                 + _json.dumps({
                     "type": "error",
                     "message": (
-                        f"Previous tool results are too large ({total_bytes} bytes). "
-                        "Start a new chat with '+ New chat' or ask a shorter question. "
-                        "(Server-side payload pre-flight / G6.3)"
+                        f"Your current message is too large even after trimming "
+                        f"older context ({total_bytes} bytes, cap {CAP_BYTES}). "
+                        "Shorten the message you just typed, or paste big data "
+                        "into a file and use load_fits/load_csv instead."
                     ),
                     "error_class": "payload_too_large",
                 })
