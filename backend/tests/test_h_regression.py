@@ -577,3 +577,28 @@ def test_launch_on_mirrors_error_message_comma_separated():
     assert primary in err_str and fallback in err_str
     # 逗号分隔
     assert f"{primary}, {fallback}" in err_str or f"{primary},{fallback}" in err_str
+
+
+# ---------- J2: run_adql per-tool deadline = 300 s ----------
+
+def test_run_adql_deadline_is_300s():
+    """J2: integration.py 的 async TAP 有 300 s budget, 但 chat.py 的
+    _TOOL_DEADLINE_TABLE 之前没给 run_adql 单独列 → 默认 45 s 先砍掉.
+    必须把 run_adql 加到表里且值 ≥ 300, 否则 async 路径没机会跑完.
+
+    用 inspect.getsource 直接看表的字面, 不跑 agent loop 避开副作用."""
+    import inspect
+    from app.api import chat as chat_module
+
+    src = inspect.getsource(chat_module._execute_tool_calls)
+    # 表字面必须带 "run_adql" 且值 >= 300
+    assert '"run_adql":' in src, "run_adql 未在 _TOOL_DEADLINE_TABLE 里"
+    # 提取 run_adql 对应的值 (简单正则, 足够)
+    import re
+    m = re.search(r'"run_adql":\s*([\d.]+)', src)
+    assert m, "run_adql 的 deadline 值无法 parse"
+    deadline = float(m.group(1))
+    assert deadline >= 300.0, (
+        f"run_adql deadline={deadline}s < 300s, "
+        f"integration.py 的 async TAP 跑不满, Paper 5 级大查询会被砍"
+    )

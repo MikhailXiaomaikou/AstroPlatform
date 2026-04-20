@@ -1879,6 +1879,13 @@ async def _execute_tool_calls(
         "solve_astrometry": 90.0,     # astrometry.net can be slow
         # Note: get_extinction stays at the 45 s default — SFD lookup is
         # <1 s typical, the 3-D fallback is local analytic.
+        # J2 (2026-04-20 3rd regression): run_adql 之前靠 45 s 默认, 但
+        # integration.py 的 execute_adql_query 对大查询 (TOP>5000 / cone>1° /
+        # JOIN) 会切到 launch_job_async, async budget 300 s. 45 s 工具层
+        # deadline 先砍, async 路径根本跑不满. 给 run_adql 300 s, 跟
+        # integration 对齐. agent loop 外层 total 360 s, 一次 run_adql 占
+        # 300 s 剩 60 s 留给后续 LLM 总结, 够用.
+        "run_adql": 300.0,
     }
     _TOOL_DEADLINE_DEFAULT = 45.0
 
