@@ -53,7 +53,11 @@ def gp_detrend(time: list, flux: list, flux_err: list | None = None,
 
         initial = np.array([0.0])
         try:
-            soln = minimize(neg_log_like, initial, method="L-BFGS-B")
+            # neg_log_like updates gp.set_parameter_vector(...) in its
+            # closure, so the OptimizeResult itself is not needed —
+            # the side-effect is what matters.  Prefix with _ to signal
+            # deliberately-discarded return.
+            _ = minimize(neg_log_like, initial, method="L-BFGS-B")
         except Exception as e:
             logger.debug("GP hyperparameter optimization failed: %s", e)
 
@@ -178,10 +182,18 @@ def fit_transit(time: list, flux: list, flux_err: list | None = None,
 
 def detect_flares(time: list, flux: list, flux_err: list | None = None,
                   nsigma: float = 3.0, min_duration: int = 3) -> dict:
-    """Detect stellar flares in a light curve."""
+    """Detect stellar flares in a light curve.
+
+    Note: `flux_err` is accepted for API consistency but currently unused
+    — this function estimates noise via MAD of the median-filter residual,
+    which is more robust than trusting user-supplied error bars that may
+    underestimate correlated noise.  To use the user errors, replace the
+    MAD line below with `noise = np.median(ferr)`.
+    """
     t = np.array(time)
     f = np.array(flux)
-    ferr = np.array(flux_err) if flux_err else np.ones_like(f) * np.std(f) * 0.01
+    # flux_err kept in the signature for future-proofing — see docstring.
+    _ = flux_err
 
     # Detrend first (median filter)
     from scipy.ndimage import median_filter

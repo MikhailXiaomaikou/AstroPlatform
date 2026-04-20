@@ -4,7 +4,7 @@ import logging
 import os
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
 from app.auth import get_current_user

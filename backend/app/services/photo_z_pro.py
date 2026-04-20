@@ -374,6 +374,11 @@ def fit_template_enhanced(
         "z_err": float(z_err),
         "z_68_lo": float(z_lo),
         "z_68_hi": float(z_hi),
+        # best_z_ml is the maximum-likelihood redshift (minimum chi² across
+        # the template/ebv/z grid).  This differs from z_phot, which is the
+        # P(z) peak (maximum-a-posteriori, includes the prior).  Returning
+        # both lets callers diagnose non-Gaussian P(z) by their disagreement.
+        "best_z_ml": float(best_z),
         "best_template": best_template_name,
         "best_ebv": float(best_ebv),
         "chi2_reduced": float(best_chi2 / ndof),

@@ -1123,8 +1123,8 @@ def _trim_large_tool_results(messages: list[dict]) -> list[dict]:
             s[:8000]
             + f"\n...[TRIMMED by pre-flight: {len(s) - 8000} chars dropped; "
             + f"original was {len(s)} chars. This tool_result was from a "
-            + f"previous turn. If you need to re-read it, ask the user to "
-            + f"re-run the tool or start a new chat.]"
+            + "previous turn. If you need to re-read it, ask the user to "
+            + "re-run the tool or start a new chat.]"
         )
 
     out: list[dict] = []
@@ -1268,13 +1268,13 @@ async def chat_message_stream(
         total_bytes = sum(len(_json.dumps(m, default=str)) for m in claude_messages)
         if total_bytes > 180_000:
             yield (
-                f"data: "
+                "data: "
                 + _json.dumps({
                     "type": "error",
                     "message": (
                         f"Previous tool results are too large ({total_bytes} bytes). "
-                        f"Start a new chat with '+ New chat' or ask a shorter question. "
-                        f"(Server-side payload pre-flight / G6.3)"
+                        "Start a new chat with '+ New chat' or ask a shorter question. "
+                        "(Server-side payload pre-flight / G6.3)"
                     ),
                     "error_class": "payload_too_large",
                 })

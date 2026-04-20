@@ -768,6 +768,11 @@ def voronoi_bin_cube(fits_path: str, target_snr: float = 10.0) -> dict:
         "bin_map_shape": [ny, nx],
         "bin_summary": binned_spectra,
         "wavelength_range": [float(crval3), float(crval3 + (nwave - 1) * cdelt3)],
+        # FITS WCS reference pixel — exposed so downstream code can
+        # reconstruct the exact wavelength axis: lambda = CRVAL3 +
+        # (pixel - CRPIX3) * CDELT3.  Previously dropped on the floor.
+        "wcs_crpix3": float(crpix3),
+        "wcs_cdelt3": float(cdelt3),
     }
 
 

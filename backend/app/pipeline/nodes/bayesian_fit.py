@@ -19,7 +19,8 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
     # the same data+params replay bit-exact.
     user_seed = params.get("random_seed")
     if user_seed is None:
-        import hashlib, json as _json
+        import hashlib
+        import json as _json
         sig_bytes = _json.dumps(
             {"method": method, "params": params, "x_len": len(input_data.get("x", []))},
             sort_keys=True, default=str,

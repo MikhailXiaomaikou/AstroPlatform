@@ -413,7 +413,6 @@ async def search_data(
     tasks = [_search_with_timeout(s) for s in source_list]
     results_per_source = await asyncio.gather(*tasks, return_exceptions=True)
 
-    any_cached = False
     all_results: list[SearchResult] = []
     for source_name, result in zip(source_list, results_per_source):
         if isinstance(result, Exception):
@@ -436,7 +435,6 @@ async def search_data(
             continue
         objects, from_cache = result
         if from_cache:
-            any_cached = True
             objects = _rebuild_astro_objects(objects)
         all_results.extend(_astro_to_result(obj) for obj in objects)
 

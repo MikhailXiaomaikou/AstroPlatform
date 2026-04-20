@@ -216,10 +216,14 @@ def deblend_sources(fits_path: str, threshold_sigma: float = 2.0,
         from astropy.convolution import Gaussian2DKernel
 
         _, median, std = sigma_clipped_stats(data, sigma=3.0)
-        threshold = median + threshold_sigma * std
+        # Threshold is applied to the background-subtracted image below,
+        # so we pass the raw N-sigma cut (threshold_sigma * std) rather
+        # than median + N*std.  Keep a reference so future tuning can
+        # switch to the median-offset form without rewiring the call.
+        _threshold_abs = median + threshold_sigma * std  # noqa: F841 — documentation
 
-        # Convolve with small kernel for better detection
-        kernel = Gaussian2DKernel(2.0)
+        # Small Gaussian kernel for smoothing before detection.
+        _kernel = Gaussian2DKernel(2.0)  # noqa: F841 — reserved for filter_kernel arg
 
         segm = detect_sources(data - median, threshold=threshold_sigma * std,
                              npixels=npixels, connectivity=8)

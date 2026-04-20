@@ -416,11 +416,11 @@ def _suggest_next_step(tool_name: str, error: str | None = None) -> str:
     if error:
         lower = error.lower()
         if "timed out" in lower or "timeout" in lower:
-            return f"The user can narrow the scope (smaller radius, fewer sources) and submit again, or wait for the service to recover."
+            return "The user can narrow the scope (smaller radius, fewer sources) and submit again, or wait for the service to recover."
         if "oom" in lower or "memoryerror" in lower:
             return f"The user can reduce the data volume before calling `{tool_name}` again."
         if "import" in lower:
-            return f"The requested library is not available in this sandbox."
+            return "The requested library is not available in this sandbox."
     if tool_name == "run_adql":
         return "The user can widen the query (larger cone radius / looser quality cuts), verify the table + column names exist, or try a different archive."
     if tool_name == "run_python":

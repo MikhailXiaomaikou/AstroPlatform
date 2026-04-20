@@ -300,7 +300,7 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int) -> None:
                     "variables": {},
                     "variable_types": {},
                 }
-                _child_breadcrumb(f"payload too large, replaced with error")
+                _child_breadcrumb("payload too large, replaced with error")
         except Exception as size_err:
             _child_breadcrumb(f"pickle size check failed: {size_err}")
             # proceed to send anyway — if it fails conn.send will catch it

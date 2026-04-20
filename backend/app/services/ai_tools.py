@@ -2144,7 +2144,6 @@ async def _exec_get_extinction(inp: dict) -> dict:
     # lightweight analytic approximation from galactic coordinates + a
     # bounded-uncertainty message so callers know the number is rough.
     try:
-        import numpy as np
         from astropy.coordinates import SkyCoord
         import astropy.units as u
         coord = SkyCoord(ra=float(ra) * u.deg, dec=float(dec) * u.deg, frame="icrs")
@@ -2387,11 +2386,9 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     # declares `latest_adql` but the code actually does np.random.normal().
     # Run detector early; if verdict=synthetic AND declared a real source,
     # reject; if verdict=suspicious, downgrade output to SYNTHETIC.
-    detector_verdict: str | None = None
     try:
         from app.services.synthetic_code_detector import analyze as _analyze
         detection = _analyze(code)
-        detector_verdict = detection.verdict
         if detection.verdict == "synthetic" and not is_synthetic_declared:
             try:
                 from app.observability.metrics import record_counter

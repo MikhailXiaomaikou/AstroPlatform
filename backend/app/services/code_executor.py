@@ -13,6 +13,7 @@ import logging
 import re
 import signal
 import sys
+import time as _session_time
 import traceback
 from contextlib import contextmanager
 from types import ModuleType
@@ -38,7 +39,6 @@ MAX_REPR_ROWS = 2000
 # _session_last_access tracks monotonic-clock last touch; _sweep_idle_sessions
 # evicts entries older than MAX_SESSION_IDLE_SECONDS when the registry grows
 # past MAX_TRACKED_SESSIONS.
-import time as _session_time
 
 _session_vars: dict[str, dict] = {}
 _session_replay_signatures: dict[str, str] = {}

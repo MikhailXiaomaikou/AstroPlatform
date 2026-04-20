@@ -1,7 +1,11 @@
+import logging
 import os
+import time as _time
 
 from slowapi import Limiter
 from starlette.requests import Request
+
+_quota_logger = logging.getLogger(__name__)
 
 # Disable rate limiting in test/dev environments
 _enabled = os.getenv("RATE_LIMIT_ENABLED", "true").lower() != "false"
@@ -34,12 +38,6 @@ limiter = Limiter(
     default_limits=["100/minute"],
     enabled=_enabled,
 )
-
-
-import logging
-import time as _time
-
-_quota_logger = logging.getLogger(__name__)
 
 
 def _get_quota_redis():
