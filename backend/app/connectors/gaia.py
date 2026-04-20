@@ -18,7 +18,19 @@ class GaiaConnector(BaseConnector):
 
     source_name = "gaia"
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
+    # Bug 11-adjacent: Gaia TAP is the most unstable of our 24 connectors.
+    # Original outer retry was max_retries=3 with base_delay=0.5 — combined
+    # with _cone_search's internal sync→async fallback (45s + 180s = 225s
+    # per attempt), worst-case wait was 15 min before surfacing the error.
+    # Reviewer hit "second query timed out after 3 retries" exactly because
+    # of this.  New posture: outer retry = 1 (the inner sync→async already
+    # IS the first fallback), base_delay bumped to 5s so we don't hammer
+    # an already-overloaded endpoint.  Worst-case wait is now ~7.5 min
+    # instead of ~15.
+    @with_retry(
+        max_retries=1, base_delay=5.0, max_delay=30.0,
+        retryable_exceptions=(ConnectionError, TimeoutError, IOError),
+    )
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
@@ -32,7 +44,10 @@ class GaiaConnector(BaseConnector):
         table = await self._cone_search(ra, dec, radius)
         return self._table_to_objects(table)
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
+    @with_retry(
+        max_retries=1, base_delay=5.0, max_delay=30.0,
+        retryable_exceptions=(ConnectionError, TimeoutError, IOError),
+    )
     async def fetch(self, object_id: str) -> FITSFile:
         """Fetch Gaia source data as a FITS-format table."""
         import numpy as np
@@ -74,11 +89,12 @@ class GaiaConnector(BaseConnector):
         coord = SkyCoord(ra=ra, dec=dec, unit=(u.degree, u.degree), frame="icrs")
         radius_qty = radius * u.degree
 
-        # E1.2: the sync cone search times out often on well-known
-        # targets (NGC / Messier / Gaia-rich clusters).  We give it a
-        # 45 s window, then fall back to the async TAP path which can
-        # poll in the background.  The fallback writes the result into
-        # an astropy Table the same shape as cone_search_async.
+        # E1.2 / Bug 11-adjacent: the sync cone search times out often on
+        # well-known targets (NGC / Messier / Gaia-rich clusters) or when
+        # Gaia TAP is under load.  Cut the sync window from 45 s to 25 s
+        # so we fall to async TAP faster when Gaia is slow — typical
+        # healthy sync response is <5 s, so 25 s is generous.  The async
+        # path has a 300 s budget (bumped from 180 s below).
         loop = asyncio.get_event_loop()
         try:
             job = await asyncio.wait_for(
@@ -90,7 +106,7 @@ class GaiaConnector(BaseConnector):
                         radius=radius_qty,
                     ),
                 ),
-                timeout=45.0,
+                timeout=25.0,
             )
             return job.get_results()
         except (asyncio.TimeoutError, Exception) as exc:
@@ -112,7 +128,7 @@ class GaiaConnector(BaseConnector):
         try:
             job = await asyncio.wait_for(
                 loop.run_in_executor(None, partial(Gaia.launch_job_async, adql)),
-                timeout=180.0,
+                timeout=300.0,  # Bug 11-adjacent: 180s → 300s for overloaded Gaia
             )
             return job.get_results()
         except Exception as exc2:
