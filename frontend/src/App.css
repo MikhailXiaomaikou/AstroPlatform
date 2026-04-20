@@ -6847,20 +6847,6 @@ body[data-lang="zh"] .lang-btn { font-size: 12px; font-variant: normal; letter-s
   font-family: var(--font-serif);
 }
 
-/* Mobile: reclaim horizontal space — the 2rem side padding wastes ~4rem
-   on a 375 px phone screen.  Also drop the bottom padding since footer
-   already has its own margin-top. */
-@media (max-width: 900px) {
-  .main-content {
-    padding: 1rem 1rem 1.5rem;
-  }
-}
-@media (max-width: 480px) {
-  .main-content {
-    padding: 0.75rem 0.6rem 1rem;
-  }
-}
-
 /* ── Journal footer ── */
 .journal-footer {
   margin-top: 3rem;
