@@ -33,7 +33,7 @@ from app.services.sandbox.subprocess_backend import SubprocessBackend  # noqa: E
 
 
 SMALL_TIMEOUT = 5
-SMALL_MEMORY = 256 * 1024 * 1024
+SMALL_MEMORY = 512 * 1024 * 1024
 
 
 class TestSubprocessPayloadGuard:

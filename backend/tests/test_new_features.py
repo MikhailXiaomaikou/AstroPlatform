@@ -233,6 +233,84 @@ print("ok")
         )
         assert r.success
 
+    def test_subprocess_cache_context_filters_and_aliases_session_keys(self, monkeypatch):
+        import time
+
+        from app.services import ai_tools
+        from app.services import code_executor
+
+        monkeypatch.setattr(ai_tools, "_search_result_cache", {}, raising=False)
+        ai_tools.store_search_results("latest", [{"name": "global"}])
+        ai_tools.store_search_results("latest_adql:dispatch-session", [{"value": "session"}])
+        ai_tools._search_result_cache["bad:dispatch-session"] = (lambda value: value, time.time())
+
+        context = code_executor._collect_subprocess_cache_context("dispatch-session")
+
+        assert context["latest"] == [{"name": "global"}]
+        assert context["latest_adql:dispatch-session"] == [{"value": "session"}]
+        assert context["latest_adql"] == [{"value": "session"}]
+        assert "bad:dispatch-session" not in context
+
+    def test_dispatch_subprocess_maps_raw_result(self, monkeypatch):
+        from app.services import code_executor
+        from app.services.sandbox import subprocess_backend
+        from app.services.sandbox.base import SandboxResult
+
+        captured = {}
+
+        class _FakeBackend:
+            def execute(self, code, *, timeout, memory_bytes, cache_context):
+                captured.update({
+                    "code": code,
+                    "timeout": timeout,
+                    "memory_bytes": memory_bytes,
+                    "cache_context": cache_context,
+                })
+                return SandboxResult(
+                    success=True,
+                    stdout="ok",
+                    stderr="warn",
+                    error=None,
+                    figures=["figure"],
+                    variables={"answer": "42"},
+                    variable_types={"answer": "int"},
+                    backend="subprocess",
+                    duration_ms=1,
+                    exit_code=0,
+                )
+
+        monkeypatch.setattr(subprocess_backend, "SubprocessBackend", _FakeBackend)
+        monkeypatch.setattr(
+            code_executor,
+            "_collect_subprocess_cache_context",
+            lambda session_id: {"session_id": session_id},
+        )
+
+        result = code_executor._dispatch_subprocess("print(42)", timeout_seconds=3, session_id="dispatch-session")
+
+        assert result is not None
+        assert result.success is True
+        assert result.stdout == "ok"
+        assert result.stderr == "warn"
+        assert result.figures == ["figure"]
+        assert result.variables == {"answer": "42"}
+        assert result.variable_types == {"answer": "int"}
+        assert captured["code"] == "print(42)"
+        assert captured["timeout"] == 3
+        assert captured["cache_context"] == {"session_id": "dispatch-session"}
+
+    def test_dispatch_subprocess_backend_exception_falls_back(self, monkeypatch):
+        from app.services import code_executor
+        from app.services.sandbox import subprocess_backend
+
+        class _FailingBackend:
+            def execute(self, *args, **kwargs):
+                raise RuntimeError("backend unavailable")
+
+        monkeypatch.setattr(subprocess_backend, "SubprocessBackend", _FailingBackend)
+
+        assert code_executor._dispatch_subprocess("print(1)", timeout_seconds=1) is None
+
 
 class TestInferenceRouting:
     def test_chat_provider_keys_accept_context_api_keys(self):
