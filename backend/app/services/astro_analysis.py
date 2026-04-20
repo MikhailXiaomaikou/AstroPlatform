@@ -2810,6 +2810,61 @@ def search_lightcurve(target, mission='kepler'):
     # like HD 189733, HD 209458 sometimes don't hit MAST directly.  Try
     # the original target, then Simbad-resolved coordinates.
     result = _do_search(target)
+    target_resolved_via: str | None = None
+
+    # I2/B-S3: Simbad cross-ID layer.  MAST indexes observations by
+    # TIC / KIC / EPIC not HD / HIP / common name.  Resolve the target's
+    # cross-IDs via Simbad and try the relevant catalog alias for the
+    # requested mission.  This unblocks queries like
+    # search_lightcurve("HD 189733", mission="tess") which previously
+    # returned 0 even after coordinate fallback.
+    if isinstance(result, Exception) or (hasattr(result, "__len__") and len(result) == 0):
+        try:
+            from astroquery.simbad import Simbad
+            ids_table = Simbad.query_objectids(target)
+            if ids_table is not None and len(ids_table) > 0:
+                prefix_priority = {
+                    "tess": ["TIC"],
+                    "kepler": ["KIC", "Kepler"],
+                    "k2": ["EPIC"],
+                }
+                wanted_prefixes = prefix_priority.get(
+                    mission.lower(), ["TIC", "KIC", "EPIC"]
+                )
+                # Find the column holding the ID string.  Astroquery has
+                # returned different column names over its history:
+                # "ID" (current), "id" (older), sometimes a single
+                # unnamed first column.  Try all plausible ones.
+                id_col = None
+                for cand in ("ID", "id", "MAIN_ID"):
+                    if cand in ids_table.colnames:
+                        id_col = cand
+                        break
+                if id_col is None and len(ids_table.colnames) > 0:
+                    id_col = ids_table.colnames[0]
+
+                if id_col is not None:
+                    # Scan rows for a TIC/KIC/EPIC alias in priority
+                    # order; break on first successful search.
+                    for prefix in wanted_prefixes:
+                        for row in ids_table:
+                            try:
+                                id_str = str(row[id_col]).strip()
+                            except Exception:
+                                continue
+                            if id_str.upper().startswith(prefix.upper() + " "):
+                                result3 = _do_search(id_str)
+                                if not isinstance(result3, Exception) and hasattr(result3, "__len__") and len(result3) > 0:
+                                    result = result3
+                                    target_resolved_via = id_str
+                                    break
+                        if not isinstance(result, Exception) and hasattr(result, "__len__") and len(result) > 0:
+                            break
+        except Exception as e:
+            logger.debug("Simbad cross-ID lookup for %s failed: %s", target, e)
+
+    # Layer 3 (coordinate fallback): if still nothing, resolve the
+    # target name to coordinates and query by position.
     if isinstance(result, Exception) or (hasattr(result, "__len__") and len(result) == 0):
         try:
             from astropy.coordinates import SkyCoord
@@ -2817,6 +2872,7 @@ def search_lightcurve(target, mission='kepler'):
             result2 = _do_search(coord)
             if not isinstance(result2, Exception) and hasattr(result2, "__len__") and len(result2) > 0:
                 result = result2
+                target_resolved_via = f"coords({coord.ra.deg:.4f}, {coord.dec.deg:.4f})"
         except Exception:
             pass  # fall through with the original result
 
@@ -2829,13 +2885,24 @@ def search_lightcurve(target, mission='kepler'):
         }
 
     if len(result) == 0:
-        return {"found": 0, "message": f"No {mission} light curves found for {target}"}
-    return {
+        return {
+            "found": 0,
+            "message": (
+                f"No {mission} light curves found for {target} "
+                f"(tried direct name, Simbad cross-IDs, and coordinate lookup). "
+                f"The target may not have been observed by {mission}, or the "
+                f"MAST archive does not yet have the observation indexed."
+            ),
+        }
+    out = {
         "found": len(result),
         "results": [{"mission": str(r.mission), "target": str(r.target_name),
                       "exptime": _exptime(r)}
                      for r in result[:20]]
     }
+    if target_resolved_via:
+        out["target_resolved_via"] = target_resolved_via
+    return out
 
 
 def download_and_clean_lightcurve(target, mission='kepler', flatten=True):

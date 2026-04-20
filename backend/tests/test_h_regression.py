@@ -279,3 +279,107 @@ def test_h07_soft_failure_classification_reference():
     assert 'soft_failure' in src
     assert 'payload_too_large' in src
     assert 'DISABLE_AFTER_FAILURES = 3' in src or '= 3' in src
+
+
+# ---------- I2 / B-S3: search_lightcurve Simbad cross-ID ----------
+
+def test_search_lightcurve_resolves_via_simbad_tic():
+    """I2 / B-S3: search_lightcurve("HD 189733", mission="tess") used to
+    return 0 because MAST indexes by TIC.  New flow uses
+    Simbad.query_objectids to resolve aliases, finds the TIC, retries."""
+    from app.services import astro_analysis
+
+    class FakeLKResult:
+        def __init__(self, results):
+            self._results = results
+        def __len__(self):
+            return len(self._results)
+        def __getitem__(self, key):
+            return FakeLKResult(self._results[key])
+        def __iter__(self):
+            return iter(self._results)
+
+    class FakeRow:
+        def __init__(self, mission, target_name):
+            self.mission = mission
+            self.target_name = target_name
+            self.exptime = None
+
+    # Mock Simbad table — a list-of-dicts-like with an "ID" column.
+    class FakeIDTable:
+        def __init__(self, ids):
+            self._ids = ids
+            self.colnames = ["ID"]
+        def __len__(self):
+            return len(self._ids)
+        def __iter__(self):
+            return iter([{"ID": i} for i in self._ids])
+
+    call_log: list = []
+
+    def fake_search_lightcurve(q, mission=None):
+        call_log.append(str(q))
+        # Only TIC 256364928 returns a hit; HD 189733 returns empty
+        if "TIC" in str(q).upper():
+            return FakeLKResult([FakeRow("TESS", "TIC 256364928")])
+        return FakeLKResult([])
+
+    with patch("lightkurve.search_lightcurve", side_effect=fake_search_lightcurve):
+        with patch("astroquery.simbad.Simbad.query_objectids") as simbad_mock:
+            simbad_mock.return_value = FakeIDTable([
+                "HD 189733", "HIP 98505", "2MASS J20004370+2242391",
+                "TIC 256364928", "Gaia DR3 1832671533156937856",
+            ])
+            result = astro_analysis.search_lightcurve("HD 189733", mission="tess")
+
+    assert result["found"] == 1
+    assert result.get("target_resolved_via", "").upper().startswith("TIC"), \
+        f"expected TIC resolution, got {result.get('target_resolved_via')!r}"
+    # Should have tried direct first, then TIC
+    assert any("HD 189733" in q for q in call_log)
+    assert any("TIC" in q.upper() for q in call_log)
+
+
+def test_search_lightcurve_picks_kic_for_kepler_mission():
+    """I2: prefix priority respects requested mission."""
+    from app.services import astro_analysis
+
+    class FakeLKResult:
+        def __init__(self, results):
+            self._results = results
+        def __len__(self):
+            return len(self._results)
+        def __getitem__(self, key):
+            return FakeLKResult(self._results[key])
+        def __iter__(self):
+            return iter(self._results)
+
+    class FakeRow:
+        mission = "Kepler"
+        target_name = "KIC 11446443"
+        exptime = None
+
+    class FakeIDTable:
+        colnames = ["ID"]
+        def __init__(self, ids):
+            self._ids = ids
+        def __len__(self):
+            return len(self._ids)
+        def __iter__(self):
+            return iter([{"ID": i} for i in self._ids])
+
+    def fake_lk(q, mission=None):
+        if "KIC" in str(q).upper():
+            return FakeLKResult([FakeRow()])
+        return FakeLKResult([])
+
+    with patch("lightkurve.search_lightcurve", side_effect=fake_lk):
+        with patch("astroquery.simbad.Simbad.query_objectids") as simbad_mock:
+            simbad_mock.return_value = FakeIDTable([
+                "Kepler-10", "TIC 377780790", "KIC 11904151",
+            ])
+            result = astro_analysis.search_lightcurve("Kepler-10", mission="kepler")
+
+    assert result["found"] == 1
+    # Must have picked KIC (mission=kepler), not TIC (higher priority only for tess)
+    assert "KIC" in (result.get("target_resolved_via") or "").upper()
