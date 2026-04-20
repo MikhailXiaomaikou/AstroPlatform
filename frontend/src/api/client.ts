@@ -30,6 +30,50 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Render free-tier sleep recovery.  After 15 min idle the backend dyno
+// sleeps and the first request wakes it — during that ~30-60s window
+// requests come back as 502 / 503 / 504.  We retry the request once
+// after a short wait, and expose a browser-level "waking up" signal
+// (CustomEvent) so any on-screen banner can re-appear.
+//
+// Matches the symptom Bug 12 reviewer hit: "backend returning 502 —
+// frontend otherwise correct".  This interceptor turns that into a
+// transparent retry + user-visible "waking up" notice.
+const COLD_START_STATUSES = new Set([502, 503, 504]);
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const config = error?.config;
+    const status = error?.response?.status;
+    if (!config || !COLD_START_STATUSES.has(status)) {
+      return Promise.reject(error);
+    }
+    // Avoid infinite loops — only retry once per original request.
+    const retryKey = "__cold_start_retried__";
+    if ((config as Record<string, unknown>)[retryKey]) {
+      return Promise.reject(error);
+    }
+    (config as Record<string, unknown>)[retryKey] = true;
+    // Clear the "backend_checked" flag so BackendBanner re-appears.
+    try {
+      sessionStorage.removeItem("astro_backend_checked");
+      // Signal banner to show immediately.
+      window.dispatchEvent(new CustomEvent("astro:backend-waking"));
+    } catch {
+      /* ignore */
+    }
+    // Wait 5s for the dyno to wake, then retry once.
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    try {
+      return await api.request(config);
+    } catch (retryErr) {
+      // If the retry also fails, surface the second error so the caller
+      // sees the real diagnostic.
+      return Promise.reject(retryErr);
+    }
+  },
+);
+
 // ── Auth API ──
 
 export interface TokenResponse {

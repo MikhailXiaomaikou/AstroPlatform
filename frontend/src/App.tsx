@@ -194,43 +194,75 @@ function NavBar() {
 
 function BackendBanner() {
   const [show, setShow] = useState(false);
+  const [message, setMessage] = useState("Connecting to backend server...");
 
   useEffect(() => {
-    if (sessionStorage.getItem("astro_backend_checked")) return;
     let cancelled = false;
 
-    // Show banner only if health check takes longer than 8 seconds
-    const showTimer = setTimeout(() => {
-      if (!cancelled) setShow(true);
-    }, 8000);
+    // Initial boot-time check (unchanged).
+    if (!sessionStorage.getItem("astro_backend_checked")) {
+      const showTimer = setTimeout(() => {
+        if (!cancelled) setShow(true);
+      }, 8000);
 
-    api.get("/health", { timeout: 30000 }).then(() => {
-      if (!cancelled) {
-        setShow(false);
-        clearTimeout(showTimer);
-        sessionStorage.setItem("astro_backend_checked", "1");
-      }
-    }).catch(() => {
-      // Backend unreachable — show banner briefly then dismiss
-      if (!cancelled) {
-        setShow(true);
-        setTimeout(() => {
+      api.get("/health", { timeout: 30000 }).then(() => {
+        if (!cancelled) {
           setShow(false);
+          clearTimeout(showTimer);
           sessionStorage.setItem("astro_backend_checked", "1");
-        }, 5000);
-      }
-    });
+        }
+      }).catch(() => {
+        if (!cancelled) {
+          setShow(true);
+          setTimeout(() => {
+            setShow(false);
+            sessionStorage.setItem("astro_backend_checked", "1");
+          }, 5000);
+        }
+      });
 
+      // Side effect: on unmount clear the boot timer.
+      // We register the listener below unconditionally.
+      return () => {
+        cancelled = true;
+        clearTimeout(showTimer);
+      };
+    }
+
+    // Mid-session wake-up detection: axios interceptor dispatches this
+    // event when a 502/503/504 is caught and a transparent retry is
+    // in-flight.  Show a "waking up" notice for ~10s.
+    const onWaking = () => {
+      setMessage("Waking up backend (Render free tier sleeps after 15 min idle)...");
+      setShow(true);
+      // Hide after 12s — covers the 5s interceptor wait + up to 7s
+      // cold-start response time.
+      setTimeout(() => setShow(false), 12000);
+    };
+    window.addEventListener("astro:backend-waking", onWaking);
     return () => {
       cancelled = true;
-      clearTimeout(showTimer);
+      window.removeEventListener("astro:backend-waking", onWaking);
     };
+  }, []);
+
+  // Also subscribe to the waking event even after the initial check
+  // succeeded (first useEffect returns early in that case so we add a
+  // second always-on listener here via a companion effect).
+  useEffect(() => {
+    const onWaking = () => {
+      setMessage("Waking up backend (Render free tier sleeps after 15 min idle)...");
+      setShow(true);
+      setTimeout(() => setShow(false), 12000);
+    };
+    window.addEventListener("astro:backend-waking", onWaking);
+    return () => window.removeEventListener("astro:backend-waking", onWaking);
   }, []);
 
   if (!show) return null;
   return (
     <div className="backend-banner">
-      Connecting to backend server...
+      {message}
     </div>
   );
 }

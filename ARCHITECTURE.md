@@ -139,6 +139,15 @@ layers:
 
 **Debug endpoint.** `/api/chat/_debug_last_prompt` (gated by env `DEBUG_LAST_PROMPT=1`) returns the last prompt `inference_router.route` received so reviewers can confirm in-browser that the zero-fabrication + anti-reflection rules are actually present in the LLM's context.
 
+### Render cold-start recovery (post-G fix)
+
+Render free-tier dynos sleep after 15 minutes idle. A user who idled and then fired a request (e.g. Advanced Search) would get a 502/503/504 back from the Render edge while the dyno woke, and the existing `BackendBanner` only checked backend health once at App mount — so mid-session sleeps went unflagged. Fixed:
+
+1. **Axios response interceptor** (`src/api/client.ts`). On any 502/503/504, clears the `astro_backend_checked` sessionStorage flag, dispatches a `window` `CustomEvent('astro:backend-waking')`, waits 5 s, and retries the original request exactly once. Retry loop is guarded by an `__cold_start_retried__` flag on the config so it can't spiral.
+2. **BackendBanner listens for the event** (`src/App.tsx`). A second `useEffect` subscribes to `astro:backend-waking` and shows "Waking up backend (Render free tier sleeps after 15 min idle)..." for 12 s regardless of whether the initial boot-time health check had already completed.
+
+This covers the Bug 12 reviewer scenario: Advanced Search returned a 502 after idle; now the request transparently retries and the banner explains the delay.
+
 ### Figure persistence (post-G fix)
 
 Reviewer flagged that `run_python`-generated matplotlib figures displayed correctly during a session but vanished on reload or tab switch — `<img>` / base64 / `Expand` / `Download` all gone, leaving only `print` text output. Root cause: `_pruneToolResults` in `ChatPage.tsx` replaced the entire `tool_result` with `{__offloaded__: true}` whenever the `astro_chat_history` localStorage blob exceeded its 4 MB soft cap. A single CMD four-panel figure (~400 KB base64) plus a few supporting plots easily crosses that cap, and figures were always the first victim.
