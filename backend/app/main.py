@@ -318,7 +318,12 @@ app.add_middleware(
     allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Page-Name", "X-Tracking-Session"],
+    allow_headers=[
+        "Authorization", "Content-Type", "X-Page-Name", "X-Tracking-Session",
+        # N'-1 hotfix: 桌面 admin HTML 发 X-Admin-Secret header, 必须在
+        # preflight 白名单里, 否则浏览器 CORS block ("Disallowed CORS headers" 400).
+        "X-Admin-Secret",
+    ],
 )
 app.add_middleware(EventTrackingMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
