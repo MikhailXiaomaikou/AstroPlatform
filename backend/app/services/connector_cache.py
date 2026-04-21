@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import pickle
@@ -31,6 +32,85 @@ from typing import Any
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# ── T1 (PART T): pickle RCE hardening ───────────────────────────────────
+# connector_cache 和 subprocess_backend 都 pickle.loads 外部来源数据
+# (Redis / SQLite / parent-process cache). 恶意 pickle 的 __reduce__ 能
+# RCE; 即使现在源头受信, 一次 Redis 凭据泄漏或 cache 文件写入就把整个
+# 服务转成 RCE 入口. RestrictedUnpickler 白名单只允许已知的 archive /
+# stdlib / 科学计算类型, 其他 raise UnpicklingError.
+
+_ALLOWED_PICKLE_CLASSES: set[tuple[str, str]] = {
+    # stdlib primitives + containers
+    ("builtins", "list"), ("builtins", "dict"), ("builtins", "set"),
+    ("builtins", "tuple"), ("builtins", "frozenset"),
+    ("builtins", "str"), ("builtins", "bytes"), ("builtins", "bytearray"),
+    ("builtins", "int"), ("builtins", "float"), ("builtins", "bool"),
+    ("builtins", "complex"), ("builtins", "NoneType"), ("builtins", "range"),
+    ("builtins", "slice"),
+    # datetime
+    ("datetime", "date"), ("datetime", "datetime"), ("datetime", "time"),
+    ("datetime", "timedelta"), ("datetime", "timezone"),
+    # collections
+    ("collections", "OrderedDict"), ("collections", "defaultdict"),
+    ("collections", "Counter"), ("collections", "deque"),
+    # uuid
+    ("uuid", "UUID"),
+    # project types
+    ("app.connectors.base", "AstroObject"),
+    ("app.api.data", "SearchResult"),
+    # numpy
+    ("numpy", "ndarray"), ("numpy", "dtype"),
+    ("numpy.core.multiarray", "_reconstruct"),
+    ("numpy.core.multiarray", "scalar"),
+    ("numpy._core.multiarray", "_reconstruct"),
+    ("numpy._core.multiarray", "scalar"),
+    ("numpy._core.numeric", "_frombuffer"),
+    ("numpy.core.numeric", "_frombuffer"),
+    ("numpy", "int8"), ("numpy", "int16"), ("numpy", "int32"), ("numpy", "int64"),
+    ("numpy", "uint8"), ("numpy", "uint16"), ("numpy", "uint32"), ("numpy", "uint64"),
+    ("numpy", "float16"), ("numpy", "float32"), ("numpy", "float64"),
+    ("numpy", "bool_"), ("numpy", "str_"), ("numpy", "bytes_"),
+    # pandas
+    ("pandas.core.frame", "DataFrame"),
+    ("pandas.core.series", "Series"),
+    ("pandas.core.indexes.base", "Index"),
+    ("pandas.core.indexes.base", "_new_Index"),
+    ("pandas.core.indexes.numeric", "Int64Index"),
+    ("pandas.core.indexes.range", "RangeIndex"),
+    ("pandas.core.internals.managers", "BlockManager"),
+    ("pandas.core.internals.managers", "_unpickle_block"),
+    ("pandas.core.internals.blocks", "new_block"),
+    ("pandas._libs.internals", "_unpickle_block"),
+    # astropy (connector 常返回的类型)
+    ("astropy.table.table", "Table"),
+    ("astropy.table.table", "QTable"),
+    ("astropy.table.column", "Column"),
+    ("astropy.table.column", "MaskedColumn"),
+    ("astropy.units.quantity", "Quantity"),
+}
+
+
+class RestrictedUnpickler(pickle.Unpickler):
+    """Only permit classes in the allowlist; everything else raises.
+
+    Blocks `__reduce__`-based RCE (os.system, subprocess.Popen, eval, etc.)
+    since those classes/functions are not in _ALLOWED_PICKLE_CLASSES.
+    """
+
+    def find_class(self, module: str, name: str):
+        if (module, name) in _ALLOWED_PICKLE_CLASSES:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(
+            f"disallowed pickle class: {module}.{name}. "
+            f"Add to _ALLOWED_PICKLE_CLASSES in connector_cache.py if safe."
+        )
+
+
+def loads_safe(data: bytes):
+    """pickle.loads equivalent with class allowlist (T1)."""
+    return RestrictedUnpickler(io.BytesIO(data)).load()
 
 # ---------------------------------------------------------------------------
 # TTL layer constants (seconds)
@@ -108,7 +188,7 @@ class SQLiteBackend:
             value, expires_at = row
             if expires_at < time.time():
                 return None
-            return pickle.loads(value)
+            return loads_safe(value)
         except (sqlite3.Error, pickle.UnpicklingError, EOFError) as e:
             logger.debug("sqlite cache get failed: %s", e)
             return None
@@ -151,7 +231,7 @@ class RedisBackend:
             raw = self._client.get(key)
             if raw is None:
                 return None
-            return pickle.loads(raw)
+            return loads_safe(raw)
         except Exception as e:
             logger.debug("redis cache get failed: %s", e)
             return None

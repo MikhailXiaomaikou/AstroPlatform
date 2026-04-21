@@ -683,9 +683,16 @@ def _should_persist_value(val) -> bool:
 
 
 def _collect_subprocess_cache_context(session_id: str) -> dict:
-    """Snapshot parent-process tool caches for the fresh subprocess."""
+    """Snapshot parent-process tool caches for the fresh subprocess.
+
+    T1 (PART T): multiprocessing 在 spawn 模式用 pickle 序列化 args 传给
+    child, child 收到时 multiprocessing 内部 pickle.loads. 我们无法拦截那
+    一 loads, 但可以在 parent 端只放入白名单类的 value — 恶意 __reduce__
+    构造无法通过 RestrictedUnpickler roundtrip.
+    """
     try:
         from app.services import ai_tools
+        from app.services.connector_cache import loads_safe
     except Exception:
         return {}
 
@@ -696,7 +703,9 @@ def _collect_subprocess_cache_context(session_id: str) -> dict:
         if value is None:
             continue
         try:
-            pickle.dumps(value)
+            pickled = pickle.dumps(value)
+            # T1: RestrictedUnpickler roundtrip — 非白名单类 raise 后跳过
+            loads_safe(pickled)
         except Exception:
             continue
         visible[key] = value
