@@ -4,37 +4,53 @@
  * 任何访客填昵称 + 内容即可提交, 无需登录.  管理员在 localStorage 设
  * 键 `astro_admin_secret` 后能看到每条评论右侧的"删除"按钮 (软删除,
  * 后端置 is_visible=False).
+ *
+ * i18n: 所有用户可见字符串走 t() 函数, 支持 en/zh/fr/es (key 前缀
+ * comments.*).
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CommentPublicView } from "../../api/client";
 import {
   fetchComments,
   postComment,
   deleteComment,
 } from "../../api/client";
+import { useI18n } from "../../i18n";
 
 // 跟后端 _NAME_MAX / _CONTENT_MAX 对齐
 const NAME_MAX = 40;
 const CONTENT_MAX = 500;
 const PAGE_SIZE = 20;
 
-function formatRelative(iso: string): string {
-  if (!iso) return "";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return iso;
-  const diffMs = Date.now() - then;
-  const diffSec = Math.max(0, Math.round(diffMs / 1000));
-  if (diffSec < 60) return "刚刚";
-  const diffMin = Math.round(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} 分钟前`;
-  const diffHour = Math.round(diffMin / 60);
-  if (diffHour < 24) return `${diffHour} 小时前`;
-  const diffDay = Math.round(diffHour / 24);
-  if (diffDay < 30) return `${diffDay} 天前`;
-  return new Date(iso).toLocaleDateString();
+function fill(template: string, values: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_, key) =>
+    key in values ? String(values[key]) : `{${key}}`,
+  );
 }
 
 export default function CommentSection() {
+  const { t, lang } = useI18n();  // lang 在 deps 里让切语言时触发重排 format
+
+  // 用 lang 作 useMemo dep: 切换语言时 formatRelative 输出跟着换.
+  const formatRelative = useMemo(
+    () => (iso: string): string => {
+      if (!iso) return "";
+      const then = new Date(iso).getTime();
+      if (Number.isNaN(then)) return iso;
+      const diffMs = Date.now() - then;
+      const diffSec = Math.max(0, Math.round(diffMs / 1000));
+      if (diffSec < 60) return t("comments.time.just_now");
+      const diffMin = Math.round(diffSec / 60);
+      if (diffMin < 60) return fill(t("comments.time.minutes_ago"), { n: diffMin });
+      const diffHour = Math.round(diffMin / 60);
+      if (diffHour < 24) return fill(t("comments.time.hours_ago"), { n: diffHour });
+      const diffDay = Math.round(diffHour / 24);
+      if (diffDay < 30) return fill(t("comments.time.days_ago"), { n: diffDay });
+      return new Date(iso).toLocaleDateString();
+    },
+    [t, lang],  // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const [comments, setComments] = useState<CommentPublicView[]>([]);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -56,7 +72,6 @@ export default function CommentSection() {
     return v && v.trim() ? v.trim() : null;
   });
 
-  // 监听同页其他组件修改 admin secret (虽然不常见,但低成本保险)
   useEffect(() => {
     if (typeof window === "undefined") return;
     const onStorage = () => {
@@ -107,44 +122,41 @@ export default function CommentSection() {
       const trimmedName = name.trim();
       const trimmedContent = content.trim();
       if (trimmedName.length < 1 || trimmedName.length > NAME_MAX) {
-        setSubmitError(`昵称长度需为 1 – ${NAME_MAX} 字`);
+        setSubmitError(t("comments.err.name_length"));
         return;
       }
       if (trimmedContent.length < 2 || trimmedContent.length > CONTENT_MAX) {
-        setSubmitError(`内容长度需为 2 – ${CONTENT_MAX} 字`);
+        setSubmitError(t("comments.err.content_length"));
         return;
       }
       setSubmitting(true);
       try {
         const created = await postComment(trimmedName, trimmedContent);
-        // 乐观插入顶部
         setComments((prev) => [created, ...prev]);
         setTotal((prev) => prev + 1);
         setContent("");
         setJustPostedId(created.id);
-        // 淡出提示
         setTimeout(() => setJustPostedId(null), 2500);
       } catch (err: unknown) {
-        // axios 错误: 读 response.data.detail / status
         const e = err as { response?: { status?: number; data?: { detail?: string } }; message?: string };
         if (e?.response?.status === 429) {
-          setSubmitError("发布太快啦,请稍等一会儿再试 (后端每 IP 每分钟最多 3 条).");
+          setSubmitError(t("comments.err.rate_limit"));
         } else if (e?.response?.data?.detail) {
           setSubmitError(String(e.response.data.detail));
         } else {
-          setSubmitError(e?.message || "提交失败");
+          setSubmitError(e?.message || t("comments.err.submit_failed"));
         }
       } finally {
         setSubmitting(false);
       }
     },
-    [name, content],
+    [name, content, t],
   );
 
   const handleDelete = useCallback(
     async (id: string) => {
       if (!adminSecret) return;
-      if (!window.confirm("删除这条评论? (软删除, 可在后台恢复)")) return;
+      if (!window.confirm(t("comments.delete_confirm"))) return;
       try {
         await deleteComment(id, adminSecret);
         setComments((prev) => prev.filter((c) => c.id !== id));
@@ -152,36 +164,34 @@ export default function CommentSection() {
       } catch (err: unknown) {
         const e = err as { response?: { status?: number; data?: { detail?: string } } };
         if (e?.response?.status === 403) {
-          window.alert("管理员密钥无效或已失效, 请检查 localStorage.astro_admin_secret");
+          window.alert(t("comments.admin_invalid"));
           setAdminSecret(null);
         } else {
-          window.alert("删除失败: " + (e?.response?.data?.detail || "unknown error"));
+          const msg = e?.response?.data?.detail || "unknown error";
+          window.alert(fill(t("comments.delete_failed"), { err: msg }));
         }
       }
     },
-    [adminSecret],
+    [adminSecret, t],
   );
 
   return (
     <section className="comment-section">
-      <h2 className="section-head alt">访客留言 · Guest Comments</h2>
-      <p className="comment-section-intro">
-        欢迎任何访客留下一句话 — 使用体验、建议、bug 反馈都行。
-        无需登录,填昵称即可。内容经管理员审核后可能被移除。
-      </p>
+      <h2 className="section-head alt">{t("comments.title")}</h2>
+      <p className="comment-section-intro">{t("comments.intro")}</p>
 
       {/* ── 提交表单 ── */}
       <form className="comment-form" onSubmit={handleSubmit}>
         <div className="comment-form-row">
           <label>
-            <span className="comment-form-label">昵称</span>
+            <span className="comment-form-label">{t("comments.form.name_label")}</span>
             <input
               type="text"
               className="comment-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={NAME_MAX}
-              placeholder="例如 Alice"
+              placeholder={t("comments.form.name_placeholder")}
               required
             />
           </label>
@@ -191,14 +201,14 @@ export default function CommentSection() {
         </div>
         <div className="comment-form-row">
           <label className="comment-form-row-content">
-            <span className="comment-form-label">内容</span>
+            <span className="comment-form-label">{t("comments.form.content_label")}</span>
             <textarea
               className="comment-textarea"
               value={content}
               onChange={(e) => setContent(e.target.value)}
               maxLength={CONTENT_MAX}
               rows={3}
-              placeholder="写点什么..."
+              placeholder={t("comments.form.content_placeholder")}
               required
             />
           </label>
@@ -215,7 +225,7 @@ export default function CommentSection() {
             className="comment-submit-btn"
             disabled={submitting}
           >
-            {submitting ? "提交中..." : "发布"}
+            {submitting ? t("comments.form.submitting") : t("comments.form.submit")}
           </button>
         </div>
       </form>
@@ -223,21 +233,26 @@ export default function CommentSection() {
       {/* ── 评论列表 ── */}
       <div className="comment-list-header">
         <span className="comment-list-count">
-          共 {total} 条
+          {fill(t("comments.count"), { n: total })}
         </span>
         {adminSecret && (
-          <span className="comment-admin-badge" title="检测到 localStorage 里有 astro_admin_secret, 列表可删除">
-            admin 模式
+          <span
+            className="comment-admin-badge"
+            title={t("comments.admin_badge_title")}
+          >
+            {t("comments.admin_badge")}
           </span>
         )}
       </div>
 
       {loading ? (
-        <div className="comment-loading">加载中...</div>
+        <div className="comment-loading">{t("comments.loading")}</div>
       ) : error ? (
-        <div className="comment-error">加载失败: {error}</div>
+        <div className="comment-error">
+          {fill(t("comments.load_failed"), { err: error })}
+        </div>
       ) : comments.length === 0 ? (
-        <div className="comment-empty">还没有人留言 — 做第一个吧。</div>
+        <div className="comment-empty">{t("comments.empty")}</div>
       ) : (
         <ul className="comment-list">
           {comments.map((c) => (
@@ -255,9 +270,9 @@ export default function CommentSection() {
                     type="button"
                     className="comment-delete-btn"
                     onClick={() => handleDelete(c.id)}
-                    title="管理员软删除"
+                    title={t("comments.delete_title")}
                   >
-                    删除
+                    {t("comments.delete")}
                   </button>
                 )}
               </div>
@@ -275,7 +290,7 @@ export default function CommentSection() {
             onClick={handleLoadMore}
             disabled={loadingMore}
           >
-            {loadingMore ? "加载中..." : "加载更多"}
+            {loadingMore ? t("comments.loading_more") : t("comments.load_more")}
           </button>
         </div>
       )}
