@@ -1185,38 +1185,33 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           <pre className="code-output code-error">{tb.slice(-500)}</pre>
         )}
 
-        {/* R3 (PART R): STDERR panel 只在失败路径下渲染. 成功 run 的
-            stderr (FutureWarning 等) 不再显示红色框. 原条件 `stderr !==
-            undefined` 对 stderr=null (axios 空字段转) 不守护, 导致 R8-OPEN-4
-            成功时误报 "subprocess crashed before Python stderr capture ran". */}
+        {/* S3 (PART S): 失败路径下 STDERR 总是用红底 <pre> monospace 样式,
+            内容切换 (traceback 文本 vs 占位字符串), 样式一致. R3 分支
+            成"<div> vs <pre>"了让样式断层, 这里恢复统一视觉. 成功路径下
+            整个 panel 不渲染 (继承 R3 修复). */}
         {!success && (
           <div style={{ marginTop: 6 }}>
             <div style={{ fontSize: "0.65rem", letterSpacing: "0.04em", color: "var(--color-red)", textTransform: "uppercase", marginBottom: 2 }}>
-              STDERR {!(stderr ?? "") ? "(empty, subprocess crashed early)" : ""}
+              STDERR {!(stderr ?? "") ? "(empty — subprocess crashed early)" : ""}
             </div>
-            {(stderr ?? "") !== "" && (
-              <pre
-                style={{
-                  background: "#2a1a1a",
-                  color: "#ff9c9c",
-                  fontFamily: "Menlo, Consolas, monospace",
-                  fontSize: "0.72rem",
-                  padding: "8px 10px",
-                  borderRadius: 3,
-                  whiteSpace: "pre-wrap",
-                  maxHeight: 260,
-                  overflow: "auto",
-                  margin: 0,
-                }}
-              >
-                {stderr}
-              </pre>
-            )}
-            {(stderr ?? "") === "" && (
-              <div style={{ fontSize: "0.72rem", color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
-                (empty — subprocess crashed before Python stderr capture ran)
-              </div>
-            )}
+            <pre
+              style={{
+                background: "#2a1a1a",
+                color: "#ff9c9c",
+                fontFamily: "Menlo, Consolas, monospace",
+                fontSize: "0.72rem",
+                padding: "8px 10px",
+                borderRadius: 3,
+                whiteSpace: "pre-wrap",
+                maxHeight: 260,
+                overflow: "auto",
+                margin: 0,
+              }}
+            >
+              {(stderr ?? "") !== ""
+                ? stderr
+                : "(empty — subprocess crashed before Python stderr capture ran; check error_class + traceback fields above, or the /api/admin/sandbox/health endpoint)"}
+            </pre>
             {stderrNote && (
               <div style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)", fontStyle: "italic", marginTop: 4, lineHeight: 1.45 }}>
                 {stderrNote}
