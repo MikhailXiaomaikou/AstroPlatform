@@ -532,12 +532,30 @@ def test_system_prompt_contains_data_source_hard_rule():
         "np.random",               # Rule 3 里的合法 synthetic 触发条件
         "np.linspace",             # Rule 3 的另一条
         "bootstrap",               # Rule 2 里明确不算 synthetic
+        "available_functions",     # 纯 helper introspection 不应伪装成 latest_lightcurve
+        "helper introspection",
         # 反例代码必须在 prompt 里作为 few-shot
         "WRONG",
         "CORRECT",
     ]
     missing = [kw for kw in required_keywords if kw not in SYSTEM_PROMPT]
     assert not missing, f"K1.A prompt 缺 keyword: {missing}"
+
+
+def test_run_python_tool_description_mentions_helper_introspection_data_source():
+    """R4 follow-up: available_functions() 只查 helper API, 不应声明 latest_lightcurve."""
+    from app.services.ai_tools import TOOLS
+
+    run_python = next(t for t in TOOLS if t.get("name") == "run_python")
+    text = (
+        str(run_python.get("description", ""))
+        + " "
+        + str(run_python.get("input_schema", {}).get("properties", {}).get("data_source", {}).get("description", ""))
+    )
+
+    assert "available_functions" in text
+    assert "helper introspection" in text
+    assert "none_not_analyzing_real_data" in text
 
 
 # ---------- K2: search_lightcurve missing target 错误消息 ----------

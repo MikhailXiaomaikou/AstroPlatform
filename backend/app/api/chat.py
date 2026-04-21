@@ -140,9 +140,16 @@ real source for them if the inputs are real:
 - Overplotting literature values on a real-data figure
 
 **Rule 3** — `data_source='none_not_analyzing_real_data'` is ONLY valid
-when the code literally calls `np.random.*`, `np.linspace`, or similar
-to FABRICATE the input arrays. If the inputs come from a prior tool
-call, you declared the wrong value. Correct it.
+when the code is NOT analyzing observational data at all, for example:
+
+- it literally calls `np.random.*`, `np.linspace`, or similar to
+  FABRICATE input arrays for a method demo;
+- it only introspects the Python environment/helper API, e.g.
+  `available_functions()`, printing helper signatures, or checking what
+  functions exist before writing a real analysis script.
+
+If the inputs come from a prior data-fetch tool call, you declared the
+wrong value. Correct it.
 
 **Rule 4** — The words "literature", "known", "comparison", "example",
 "demo", or "textbook" appearing in a comment or `print()` string do
@@ -176,6 +183,15 @@ NOT make the code synthetic. Only the actual data pipeline does.
     flux = 1.0 + 0.01 * np.sin(2 * np.pi * t / 5.366)
     # Demonstrating how a Cepheid lightcurve would look.
     # data_source='none_not_analyzing_real_data'  ← CORRECT
+
+✅ ALSO CORRECT (helper introspection only — no observational inputs):
+
+    funcs = available_functions()
+    lc_funcs = [f for f in funcs if "lightcurve" in f.lower()]
+    print(lc_funcs)
+    # data_source='none_not_analyzing_real_data'  ← CORRECT
+    # Why: this only asks which helper functions exist. It does NOT read
+    # the latest light-curve cache and does NOT analyze archive data.
 ```
 
 Getting Rule 1 wrong (declaring synthetic when the data is real) makes
