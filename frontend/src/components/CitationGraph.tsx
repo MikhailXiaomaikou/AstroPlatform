@@ -145,8 +145,10 @@ export default function CitationGraph({ bibcodes, depth = 1, height = 500 }: Pro
     };
   }, [bibcodes, depth, height]);
 
-  /* ---- Force simulation via rAF ---- */
-  const tick = useCallback(() => {
+  /* ---- Force simulation via rAF (Q2: ref-trampoline 避免 stale closure
+       + 静态 physics mutation 用 eslint-disable 标注设计意图) ---- */
+  const tickRef = useRef<() => void>(() => {});
+  tickRef.current = () => {
     const ns = nodesRef.current;
     if (ns.length === 0 || iterRef.current > 300) return;
     iterRef.current++;
@@ -161,6 +163,12 @@ export default function CitationGraph({ bibcodes, depth = 1, height = 500 }: Pro
     const idx = new Map<string, number>();
     ns.forEach((n, i) => idx.set(n.id, i));
 
+    // Force-directed physics simulation — nodes are mutated in place by
+    // design (vx/vy/x/y 是仿真状态, 下一帧要读最新值).  这是 physics
+    // sim 设计模式, 不是 React immutability 违反.  ESLint 的
+    // react-hooks/immutability 规则对 ref.current 里子对象的 mutation
+    // 一律 flag, 这里整块物理计算 disable.
+    /* eslint-disable react-hooks/immutability */
     // Center gravity
     for (const n of ns) {
       n.vx += (cx - n.x) * 0.005 * alpha;
@@ -214,17 +222,23 @@ export default function CitationGraph({ bibcodes, depth = 1, height = 500 }: Pro
       n.y = Math.max(n.radius, Math.min(h - n.radius, n.y));
     }
 
+    /* eslint-enable react-hooks/immutability */
+
     setNodes([...ns]);
-    frameRef.current = requestAnimationFrame(tick);
-  }, [edges, height]);
+    // Ref-trampoline: 通过 tickRef.current 自引用, 避免 useCallback 的
+    // stale closure 问题 (ESLint 报 "tick accessed before declared").
+    // tickRef 每次 render 都被重新赋最新闭包, RAF 回调访问
+    // tickRef.current 总是最新版.
+    frameRef.current = requestAnimationFrame(() => tickRef.current());
+  };
 
   useEffect(() => {
     if (nodesRef.current.length > 0) {
       iterRef.current = 0;
-      frameRef.current = requestAnimationFrame(tick);
+      frameRef.current = requestAnimationFrame(() => tickRef.current());
     }
     return () => cancelAnimationFrame(frameRef.current);
-  }, [tick]);
+  }, [edges, height]);
 
   /* ---- Zoom handler ---- */
   const handleWheel = useCallback(
