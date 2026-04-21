@@ -154,6 +154,27 @@
     .c-del:hover { border-color: var(--accent); color: var(--accent); }
     /* Plot 容器 */
     .plot { width: 100%; min-height: 320px; margin-bottom: 8px; }
+    /* Trending toggle 开关 */
+    .trend-toggle {
+      position: absolute;
+      top: 4px;
+      right: 8px;
+      z-index: 10;
+      font-size: 11px;
+      padding: 4px 10px;
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 12px;
+      cursor: pointer;
+      user-select: none;
+      color: var(--ink-2);
+    }
+    .trend-toggle:hover { border-color: var(--accent); }
+    .trend-toggle.public {
+      background: var(--green);
+      color: var(--paper);
+      border-color: var(--green);
+    }
     .plot-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     @media (max-width: 900px) { .plot-row { grid-template-columns: 1fr; } }
     /* 关于 */
@@ -206,6 +227,26 @@
 <h2>④ 评论管理</h2>
 <div id="comments-area">
   <div class="loading">等待加载...</div>
+</div>
+
+<!-- 科研趋势 (内部 + 可手动公开) -->
+<h2>⑤ 科研趋势</h2>
+<div class="sub" style="margin-bottom:8px;">
+  热门对象 / 数据源 / 周增长.  每块右侧 🔒/🌐 开关决定是否在首页 Landing 公开.
+</div>
+<div class="plot-row">
+  <div style="position:relative;">
+    <div id="trend-vis-objects" class="trend-toggle"></div>
+    <div id="plot-trend-objects" class="plot"></div>
+  </div>
+  <div style="position:relative;">
+    <div id="trend-vis-sources" class="trend-toggle"></div>
+    <div id="plot-trend-sources" class="plot"></div>
+  </div>
+</div>
+<div style="position:relative;">
+  <div id="trend-vis-delta" class="trend-toggle"></div>
+  <div id="plot-trend-delta" class="plot" style="min-height:340px;"></div>
 </div>
 
 <footer>
@@ -305,6 +346,7 @@ async function loadAll() {
     loadInferenceTrends(),
     loadCommentsStats(),
     loadCommentsList(),
+    loadTrending(),
   ]);
 }
 
@@ -530,6 +572,139 @@ async function deleteComment(id, btn) {
     alert('删除失败: ' + e.message);
     btn.disabled = false;
     btn.textContent = '删除';
+  }
+}
+
+// ───────────────────────────── 科研趋势 ─────────────────────────────
+
+async function loadTrending() {
+  // visibility 开关一次性拉
+  let vis = { objects: false, sources: false, delta: false };
+  try {
+    const r = await api('/api/admin/trending/visibility');
+    vis = r.visibility || vis;
+  } catch (e) {
+    console.warn('trending visibility fetch failed', e.message);
+  }
+  // 渲染三个 toggle
+  renderToggle('trend-vis-objects', 'objects', vis.objects);
+  renderToggle('trend-vis-sources', 'sources', vis.sources);
+  renderToggle('trend-vis-delta', 'delta', vis.delta);
+
+  await Promise.all([
+    loadTrendingObjects(),
+    loadTrendingSources(),
+    loadTrendingDelta(),
+  ]);
+}
+
+function renderToggle(divId, key, isPublic) {
+  const el = $(divId);
+  el.innerHTML = isPublic ? '🌐 已公开' : '🔒 仅内部';
+  el.className = 'trend-toggle' + (isPublic ? ' public' : '');
+  el.title = isPublic
+    ? '此数据已在 /api/trending/public 公开. 点击切为内部.'
+    : '此数据仅在 admin 页面可见. 点击切为公开.';
+  el.onclick = () => toggleTrendingVisibility(key, !isPublic);
+}
+
+async function toggleTrendingVisibility(key, newPublic) {
+  try {
+    await api('/api/admin/trending/visibility', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, is_public: newPublic }),
+    });
+    renderToggle(`trend-vis-${key}`, key, newPublic);
+  } catch (e) {
+    alert(`切换失败: ${e.message}`);
+  }
+}
+
+async function loadTrendingObjects() {
+  try {
+    const r = await api(`/api/admin/trending/objects?period=${PERIOD}&limit=20`);
+    const items = r.items || [];
+    if (items.length === 0) {
+      Plotly.purge('plot-trend-objects');
+      $('plot-trend-objects').innerHTML = '<div class="loading">无 result_click / object.viewed 事件</div>';
+      return;
+    }
+    Plotly.newPlot('plot-trend-objects', [{
+      type: 'bar',
+      orientation: 'h',
+      x: items.map(i => i.count).reverse(),
+      y: items.map(i => i.object_name).reverse(),
+      marker: { color: COLOR_BURGUNDY },
+      text: items.map(i => i.count).reverse().map(String),
+      textposition: 'outside',
+    }], {
+      ...basePlotLayout('热门天体 Top 20 (点击 + 查看)'),
+      margin: { t: 40, b: 40, l: 180, r: 60 },
+      xaxis: { title: '次数' },
+    }, { responsive: true, displayModeBar: false });
+  } catch (e) {
+    $('plot-trend-objects').innerHTML = `<div class="err">${e.message}</div>`;
+  }
+}
+
+async function loadTrendingSources() {
+  try {
+    const r = await api(`/api/admin/trending/sources?period=${PERIOD}&limit=20`);
+    const items = r.items || [];
+    if (items.length === 0) {
+      Plotly.purge('plot-trend-sources');
+      $('plot-trend-sources').innerHTML = '<div class="loading">无 search.query 事件</div>';
+      return;
+    }
+    Plotly.newPlot('plot-trend-sources', [{
+      type: 'pie',
+      labels: items.map(i => i.source),
+      values: items.map(i => i.count),
+      marker: { colors: PALETTE },
+      textinfo: 'label+percent',
+      textposition: 'outside',
+    }], {
+      ...basePlotLayout('热门数据源'),
+      margin: { t: 40, b: 20, l: 40, r: 40 },
+      showlegend: false,
+    }, { responsive: true, displayModeBar: false });
+  } catch (e) {
+    $('plot-trend-sources').innerHTML = `<div class="err">${e.message}</div>`;
+  }
+}
+
+async function loadTrendingDelta() {
+  try {
+    const r = await api(`/api/admin/trending/delta?period=${PERIOD}&limit=8&min_count=10&dimension=objects`);
+    const items = r.items || [];
+    if (items.length === 0) {
+      Plotly.purge('plot-trend-delta');
+      $('plot-trend-delta').innerHTML = '<div class="loading">无上升对象 (本期 < 10 次或无数据)</div>';
+      return;
+    }
+    const x = items.map(it => it.key).reverse();
+    const thisN = items.map(it => it.this_period).reverse();
+    const prevN = items.map(it => it.prev_period).reverse();
+    const labels = items.map(it => {
+      if (it.is_new) return 'NEW';
+      if (it.pct_change == null) return '';
+      const sign = it.pct_change > 0 ? '+' : '';
+      return `${sign}${it.pct_change.toFixed(0)}%`;
+    }).reverse();
+    Plotly.newPlot('plot-trend-delta', [
+      { type: 'bar', name: '本期', x: x, y: thisN, marker: { color: COLOR_BURGUNDY },
+        text: labels, textposition: 'outside', textfont: { size: 11 } },
+      { type: 'bar', name: '上期', x: x, y: prevN, marker: { color: COLOR_BLUE } },
+    ], {
+      ...basePlotLayout(`上升趋势 Top ${items.length} (本期 ≥ 10 次, period=${PERIOD}, NEW = 上期 0 次)`),
+      barmode: 'group',
+      xaxis: { title: '' },
+      yaxis: { title: '次数' },
+      margin: { t: 50, b: 100, l: 60, r: 20 },
+    }, { responsive: true, displayModeBar: false });
+  } catch (e) {
+    $('plot-trend-delta').innerHTML = `<div class="err">${e.message}</div>`;
   }
 }
 
