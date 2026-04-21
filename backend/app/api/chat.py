@@ -1061,6 +1061,12 @@ LIGHTCURVE / TIME-DOMAIN:
     defaults to the 3 most-recent to avoid OOM (Render workers have ~2GB).
     If you need a specific sector, pass sector=41 or sector=[41, 54, 81]
     explicitly. Downloading 14 sectors at once will be SIGKILLed.
+    TIMING: lightcurve downloads commonly exceed 75s (MAST latency +
+    stitching). When calling download_and_clean_lightcurve / transit_search
+    / search_lightcurve from run_python, set the run_python `mode` field to
+    'slow' up front (300s budget) instead of waiting for the default 75s
+    timeout and auto-escalating. Setting mode='slow' at the start is cheaper
+    than a failed first attempt.
   astro.transit_search(target, mission='kepler')
     -> {period_days, transit_time, depth, max_power}
   astro.lomb_scargle_period(time, flux, min_period=None, max_period=None)
@@ -1596,7 +1602,31 @@ async def chat_message_stream(
         python_session_id = (req.context or {}).get("python_session_id", "default")
         chat_session_id = (req.context or {}).get("current_session_id")
         _prime_adql_context_cache(req.context, python_session_id)
-        await _prime_python_session_from_history(req.messages, python_session_id)
+
+        # U1 (PART U): session-history replay 在长会话 + 历史 code 含网络/import
+        # 的场景 (如 lightkurve 预热) 可能花 30-60s. 这段没 heartbeat 的话
+        # Cloudflare / Render 会把 SSE 流以 idle timeout 切掉, 表现为
+        # "响应流在收到任何内容前被关闭". 用 8s 轮询 + status 事件守护.
+        _prime_task = _aio.create_task(
+            _prime_python_session_from_history(req.messages, python_session_id)
+        )
+        _prime_start = _time_mod.monotonic()
+        while not _prime_task.done():
+            try:
+                await _aio.wait_for(_aio.shield(_prime_task), timeout=8.0)
+            except _aio.TimeoutError:
+                elapsed = int(_time_mod.monotonic() - _prime_start)
+                yield ": heartbeat prime " + str(elapsed) + "s\n\n"
+                yield (
+                    f"data: {_json.dumps({'type': 'status', 'message': f'Replaying session history ({elapsed}s)...'})}"
+                    "\n\n"
+                )
+        # Surface any exception from the prime task (rare but possible —
+        # a bad history cell should not silently mask the real root cause).
+        try:
+            _prime_task.result()
+        except Exception as _prime_err:
+            logger.warning("session-history prime raised: %s", _prime_err)
 
         try:
             if len(agent_names) > 1:

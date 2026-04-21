@@ -2889,22 +2889,52 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
 
     # Run in executor with timeout to not block the event loop
     loop = asyncio.get_running_loop()
+    auto_escalated = False
     try:
         result = await asyncio.wait_for(
             loop.run_in_executor(None, execute_python, code, None, python_session_id, mode_timeout),
             timeout=mode_timeout,
         )
     except asyncio.TimeoutError:
-        return {
-            "success": False,
-            "error": (
-                f"Code execution timed out after {int(mode_timeout)}s (mode={mode}). "
-                f"For long computations (BLS / MCMC / bootstrap / PARSEC grid), "
-                f"declare mode='slow' to get a 300s budget."
-            ),
-            "error_class": "timeout",
-            "stdout": "",
-        }
+        # U2b (PART U): Round 10 观察 AI 常常首次用 mode='normal' 跑
+        # lightkurve 下载就超 75s, 必须在后续轮次里手动改 mode='slow'
+        # 绕过. 省掉 model round-trip: 如果 mode 不是 slow, 自动 retry
+        # 一次 mode='slow' (300s). 只允许一次升级避免死循环.
+        if mode != "slow":
+            try:
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None, execute_python, code, None, python_session_id, 300.0
+                    ),
+                    timeout=300.0,
+                )
+                auto_escalated = True
+                mode = "slow"
+                mode_timeout = 300.0
+            except asyncio.TimeoutError:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Code execution timed out after 300s even after auto-"
+                        f"escalating to mode='slow' (initial mode={inp.get('mode') or 'normal'}). "
+                        f"The task likely needs to be split into smaller chunks, "
+                        f"or run as a background pipeline job."
+                    ),
+                    "error_class": "timeout",
+                    "stdout": "",
+                    "auto_escalated_mode": True,
+                }
+        else:
+            return {
+                "success": False,
+                "error": (
+                    f"Code execution timed out after {int(mode_timeout)}s (mode={mode}). "
+                    f"For long computations (BLS / MCMC / bootstrap / PARSEC grid), "
+                    f"split into smaller chunks or use a background pipeline job."
+                ),
+                "error_class": "timeout",
+                "stdout": "",
+            }
 
     auto_fix_note = None
     if not result.success and result.error:
@@ -2929,7 +2959,15 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         "backend": getattr(result, "backend", "unknown"),
         "duration_ms": getattr(result, "duration_ms", 0),
         "exit_code": getattr(result, "exit_code", None),
+        "mode": mode,  # 反映最终生效的 mode (可能被 U2b auto-escalate 成 slow)
     }
+    if auto_escalated:
+        response["auto_escalated_mode"] = True
+        response["note"] = (
+            "run_python auto-escalated from mode='{}' to mode='slow' because "
+            "initial run exceeded its timeout budget. Future similar calls "
+            "should declare mode='slow' up front.".format(inp.get("mode") or "normal")
+        )
 
     # R5 O2: 非零 exit_code 降级 success. subprocess crash 时 child 一启
     # 动就 payload['success']=True, 代码还没跑到 except 就崩, 父进程拿到
