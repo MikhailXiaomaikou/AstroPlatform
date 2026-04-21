@@ -150,7 +150,9 @@ class TestTimeDomainPro:
         result = detect_flares(t.tolist(), flux.tolist(), nsigma=3.0)
         assert result["n_flares"] >= 1
 
+    @pytest.mark.slow
     def test_bls_recovers_period(self):
+        # Q4: ~148 s on typical hardware — excluded from default test run.
         from app.services.time_domain_pro import transit_search_bls
         t = np.linspace(0, 30, 3000)
         flux = np.ones_like(t)
