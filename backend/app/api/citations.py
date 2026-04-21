@@ -25,11 +25,13 @@ def _search_arxiv_sync(query: str) -> list[dict]:
         import urllib.parse
         import xml.etree.ElementTree as ET
 
+        # R6-NEW-1: arXiv 把 http 301 跳 https; httpx.get 默认不 follow.
+        # URL 直接 https + follow_redirects=True 双保险.
         url = (
-            "http://export.arxiv.org/api/query?"
+            "https://export.arxiv.org/api/query?"
             f"search_query=all:{urllib.parse.quote(query)}&max_results=8"
         )
-        resp = httpx.get(url, timeout=15)
+        resp = httpx.get(url, timeout=15, follow_redirects=True)
         resp.raise_for_status()
         # arXiv returns Atom XML
         root = ET.fromstring(resp.text)

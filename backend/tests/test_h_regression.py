@@ -1332,3 +1332,50 @@ def test_inert_code_exempted_from_synthetic_banner():
     assert 'is_synthetic_declared = False' in src, (
         "R5 O3: inert 分支必须把 is_synthetic_declared 设回 False"
     )
+
+
+# ── Phase P: arXiv 301 redirect + Unknown tool polish ────────────────
+
+async def test_unknown_tool_returns_available_list():
+    """R6-NEW-2: 调不存在工具应返 error_class + available_tools list,
+    不能留空 error_class 或只给 'Unknown tool: X' 一行."""
+    from app.services.ai_tools import execute_tool
+
+    result = await execute_tool("fit_transit_that_does_not_exist", {})
+    assert result.get("error_class") == "unknown_tool"
+    assert "available_tools" in result
+    assert isinstance(result["available_tools"], list)
+    assert len(result["available_tools"]) > 0
+    # 错误消息里带 "Available" 和工具列表
+    err = str(result.get("error", ""))
+    assert "Available" in err or "available" in err
+    # 至少真的列了几个已知工具
+    known = set(result["available_tools"])
+    assert "run_adql" in known or "search_objects" in known
+
+
+def test_arxiv_read_paper_uses_https_and_follow_redirects():
+    """R6-NEW-1: _exec_read_paper 必须用 https + follow_redirects 避免
+    arXiv 301 fail."""
+    import inspect
+    from app.services import ai_tools
+
+    src = inspect.getsource(ai_tools._exec_read_paper)
+    assert "https://export.arxiv.org" in src, (
+        "arXiv URL 必须 https (301 from http)"
+    )
+    assert "follow_redirects=True" in src, (
+        "httpx.AsyncClient 必须 follow_redirects 以防未来又有重定向"
+    )
+
+
+def test_arxiv_search_uses_https_and_follow_redirects():
+    """R6-NEW-1: citations._search_arxiv_sync 同样要处理 301."""
+    import inspect
+    from app.api import citations
+
+    src = inspect.getsource(citations)
+    # https URL 必须在
+    assert "https://export.arxiv.org/api/query" in src
+    # follow_redirects 必须在 httpx.get 调用里
+    assert "follow_redirects=True" in src

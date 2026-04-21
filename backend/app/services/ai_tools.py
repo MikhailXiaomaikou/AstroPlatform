@@ -1689,7 +1689,22 @@ async def _execute_tool_inner(
         elif tool_name == "get_extinction":
             return await _exec_get_extinction(tool_input)
         else:
-            return {"error": f"Unknown tool: {tool_name}"}
+            # R6-NEW-2: 给 Unknown tool 返具体 error_class + 可用工具清单,
+            # 让 AI 下一轮能自纠 (不再 hallucinate 工具名).  TOOLS 是模块
+            # 顶层 list, 每项 {"name": ..., "description": ...}.
+            try:
+                available = sorted(t.get("name", "") for t in TOOLS if t.get("name"))
+            except Exception:
+                available = []
+            return {
+                "error": (
+                    f"Unknown tool: {tool_name!r}. "
+                    f"Available tools: {', '.join(available) if available else 'n/a'}"
+                ),
+                "error_class": "unknown_tool",
+                "attempted_tool": tool_name,
+                "available_tools": available,
+            }
     except Exception as e:
         logger.warning("Tool %s failed: %s", tool_name, e)
         return {"error": str(e)}
@@ -3476,10 +3491,13 @@ async def _exec_read_paper(inp: dict) -> dict:
     # Clean the ID (remove 'arXiv:' prefix if present)
     arxiv_id = re.sub(r'^arXiv:', '', arxiv_id, flags=re.IGNORECASE)
 
-    # Fetch paper metadata from arXiv API
+    # Fetch paper metadata from arXiv API.
+    # R6-NEW-1: arXiv 把 http → https 301 跳了, httpx 默认不 follow.
+    # 两招叠加: URL 直接写 https + 也打开 follow_redirects (有些镜像还会
+    # 再跳一次).
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"http://export.arxiv.org/api/query?id_list={arxiv_id}")
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(f"https://export.arxiv.org/api/query?id_list={arxiv_id}")
             resp.raise_for_status()
     except Exception as e:
         return {"error": f"Failed to fetch arXiv metadata: {e}"}
