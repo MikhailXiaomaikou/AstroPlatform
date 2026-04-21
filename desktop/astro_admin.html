@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Astro Platform · Admin Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+  <style>
+    /* Journal palette — paper / ink / burgundy / 墨黑 */
+    :root {
+      --paper: #fbfaf5;
+      --paper-2: #f4f0e6;
+      --ink: #1a1a1a;
+      --ink-2: #555;
+      --ink-3: #888;
+      --rule: #d8d3c4;
+      --accent: #7b2d26;       /* burgundy */
+      --accent-2: #2a5d7b;     /* deep blue */
+      --green: #2e6a4e;        /* forest */
+      --warn: #b8860b;
+      --font-serif: Georgia, "Times New Roman", "Noto Serif CJK SC", serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px 32px;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font-serif);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    h1 {
+      margin: 0 0 4px 0;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    h2 {
+      margin: 32px 0 12px 0;
+      font-size: 18px;
+      letter-spacing: 0.02em;
+      border-bottom: 1px solid var(--rule);
+      padding-bottom: 6px;
+      color: var(--accent);
+    }
+    .sub { color: var(--ink-2); font-size: 13px; }
+    header {
+      border-bottom: 2px solid var(--ink);
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }
+    .config-bar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 12px;
+      padding: 12px;
+      background: var(--paper-2);
+      border-radius: 4px;
+    }
+    .config-bar label { font-size: 12px; color: var(--ink-2); }
+    .config-bar input {
+      font-family: var(--font-serif);
+      font-size: 13px;
+      padding: 4px 8px;
+      border: 1px solid var(--rule);
+      background: white;
+      border-radius: 2px;
+      width: 220px;
+    }
+    .config-bar input.secret { width: 280px; font-family: monospace; }
+    .config-bar button, .period-btn {
+      font-family: var(--font-serif);
+      font-size: 13px;
+      padding: 5px 14px;
+      background: var(--accent);
+      color: var(--paper);
+      border: none;
+      border-radius: 2px;
+      cursor: pointer;
+    }
+    .config-bar button:hover { filter: brightness(1.08); }
+    .period-bar {
+      display: flex;
+      gap: 6px;
+      margin: 12px 0 20px 0;
+    }
+    .period-btn {
+      background: var(--paper);
+      color: var(--ink-2);
+      border: 1px solid var(--rule);
+    }
+    .period-btn.active {
+      background: var(--ink);
+      color: var(--paper);
+      border-color: var(--ink);
+    }
+    /* KPI 卡片 */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .kpi {
+      background: var(--paper-2);
+      border-left: 3px solid var(--accent);
+      padding: 14px 16px;
+      border-radius: 2px;
+    }
+    .kpi-label { font-size: 11px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.06em; }
+    .kpi-value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+    .kpi-sub { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+    /* 加载/错误 */
+    .loading, .err {
+      padding: 16px;
+      text-align: center;
+      color: var(--ink-3);
+      font-style: italic;
+    }
+    .err { color: var(--accent); background: rgba(123,45,38,0.06); border: 1px solid var(--accent); border-radius: 2px; }
+    /* 评论列表 */
+    .comments {
+      list-style: none;
+      padding: 0;
+      max-height: 600px;
+      overflow-y: auto;
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      background: var(--paper-2);
+    }
+    .comments li {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--rule);
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .comments li:last-child { border-bottom: none; }
+    .c-meta { flex: 0 0 180px; font-size: 11px; color: var(--ink-3); }
+    .c-meta .c-author { color: var(--ink); font-weight: 600; font-size: 13px; display: block; }
+    .c-content { flex: 1; font-size: 13px; white-space: pre-wrap; }
+    .c-actions { flex: 0 0 auto; }
+    .c-del {
+      font-size: 11px;
+      padding: 3px 10px;
+      background: transparent;
+      border: 1px solid var(--ink-3);
+      color: var(--ink-3);
+      border-radius: 2px;
+      cursor: pointer;
+    }
+    .c-del:hover { border-color: var(--accent); color: var(--accent); }
+    /* Plot 容器 */
+    .plot { width: 100%; min-height: 320px; margin-bottom: 8px; }
+    .plot-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 900px) { .plot-row { grid-template-columns: 1fr; } }
+    /* 关于 */
+    footer { margin-top: 48px; color: var(--ink-3); font-size: 12px; text-align: center; padding: 16px; border-top: 1px solid var(--rule); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Astro Platform · Admin</h1>
+  <div class="sub">桌面管理面板 — 双击此 HTML 文件即可使用 · 数据连 Render production</div>
+  <div class="config-bar">
+    <label>Backend URL <input id="cfg-url" value="https://astro-backend-h4x1.onrender.com"></label>
+    <label>Admin Secret <input id="cfg-secret" class="secret" type="password" placeholder="X-Admin-Secret"></label>
+    <button onclick="saveConfigAndLoad()">保存并加载</button>
+    <button onclick="clearConfig()" style="background:transparent;color:var(--ink-2);border:1px solid var(--rule);">清除</button>
+  </div>
+</header>
+
+<div class="period-bar">
+  <span style="color:var(--ink-2);font-size:13px;align-self:center;">时间范围:</span>
+  <button class="period-btn" data-period="24h">24 小时</button>
+  <button class="period-btn active" data-period="7d">7 天</button>
+  <button class="period-btn" data-period="30d">30 天</button>
+  <button class="period-btn" data-period="90d">90 天</button>
+</div>
+
+<!-- KPI -->
+<h2>① 概览</h2>
+<div id="kpi-area">
+  <div class="loading">填入 admin secret 后点保存</div>
+</div>
+
+<!-- 使用方向: tool / page / agent -->
+<h2>② 使用次数 / 方向</h2>
+<div class="plot-row">
+  <div id="plot-by-tool" class="plot"></div>
+  <div id="plot-by-page" class="plot"></div>
+</div>
+
+<!-- 趋势 -->
+<h2>③ 趋势</h2>
+<div id="plot-timeline" class="plot" style="min-height:380px;"></div>
+<div class="plot-row">
+  <div id="plot-tokens" class="plot"></div>
+  <div id="plot-comments-trend" class="plot"></div>
+</div>
+
+<!-- 评论管理 -->
+<h2>④ 评论管理</h2>
+<div id="comments-area">
+  <div class="loading">等待加载...</div>
+</div>
+
+<footer>
+  Astro Platform Admin · 单 HTML 工具 · localStorage 仅保存在你这台设备
+</footer>
+
+<script>
+// ───────────────────────────── 配置 + localStorage ─────────────────────────────
+const LS_URL = 'astro_admin_url';
+const LS_SECRET = 'astro_admin_secret';
+let CONFIG = {
+  url: localStorage.getItem(LS_URL) || 'https://astro-backend-h4x1.onrender.com',
+  secret: localStorage.getItem(LS_SECRET) || '',
+};
+let PERIOD = '7d';
+
+function $(id) { return document.getElementById(id); }
+
+function saveConfigAndLoad() {
+  CONFIG.url = $('cfg-url').value.trim().replace(/\/$/, '');
+  CONFIG.secret = $('cfg-secret').value.trim();
+  if (!CONFIG.secret) { alert('请填 admin secret'); return; }
+  localStorage.setItem(LS_URL, CONFIG.url);
+  localStorage.setItem(LS_SECRET, CONFIG.secret);
+  loadAll();
+}
+
+function clearConfig() {
+  if (!confirm('清除本地存的 backend URL + admin secret?')) return;
+  localStorage.removeItem(LS_URL);
+  localStorage.removeItem(LS_SECRET);
+  CONFIG = { url: 'https://astro-backend-h4x1.onrender.com', secret: '' };
+  $('cfg-url').value = CONFIG.url;
+  $('cfg-secret').value = '';
+}
+
+// 启动时填回 input
+$('cfg-url').value = CONFIG.url;
+$('cfg-secret').value = CONFIG.secret;
+
+// ───────────────────────────── period 切换 ─────────────────────────────
+document.querySelectorAll('.period-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    PERIOD = btn.dataset.period;
+    if (CONFIG.secret) loadAll();
+  });
+});
+
+// ───────────────────────────── HTTP fetch wrapper ─────────────────────────────
+async function api(path, opts = {}) {
+  const headers = Object.assign(
+    { 'X-Admin-Secret': CONFIG.secret },
+    opts.headers || {},
+  );
+  const r = await fetch(CONFIG.url + path, { ...opts, headers });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`HTTP ${r.status} ${path}: ${text.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+// ───────────────────────────── Plotly 通用配色 ─────────────────────────────
+const PLOT_FONT = { family: 'Georgia, serif', size: 12, color: '#1a1a1a' };
+const PLOT_BG = { paper_bgcolor: '#fbfaf5', plot_bgcolor: '#fbfaf5' };
+const COLOR_BURGUNDY = '#7b2d26';
+const COLOR_BLUE = '#2a5d7b';
+const COLOR_GREEN = '#2e6a4e';
+const COLOR_WARN = '#b8860b';
+const PALETTE = [COLOR_BURGUNDY, COLOR_BLUE, COLOR_GREEN, COLOR_WARN, '#6b4a7e', '#aa6c39', '#3c6e71', '#9b3d3d', '#5c7a29', '#c84e44'];
+
+function basePlotLayout(title) {
+  return {
+    title: { text: title, font: { family: 'Georgia, serif', size: 14 } },
+    font: PLOT_FONT,
+    ...PLOT_BG,
+    margin: { t: 40, b: 50, l: 60, r: 20 },
+    showlegend: true,
+  };
+}
+
+// ───────────────────────────── 主加载 ─────────────────────────────
+async function loadAll() {
+  await Promise.all([
+    loadKpi(),
+    loadByTool(),
+    loadByPage(),
+    loadTimeline(),
+    loadInferenceTrends(),
+    loadCommentsStats(),
+    loadCommentsList(),
+  ]);
+}
+
+async function loadKpi() {
+  const area = $('kpi-area');
+  area.innerHTML = '<div class="loading">加载 KPI...</div>';
+  try {
+    const k = await api(`/api/admin/stats/kpi?period=${PERIOD}`);
+    area.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="kpi-label">事件总数</div>
+          <div class="kpi-value">${fmt(k.event_total)}</div>
+          <div class="kpi-sub">${PERIOD} 内</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">活跃用户</div>
+          <div class="kpi-value">${fmt(k.unique_users)}</div>
+          <div class="kpi-sub">${PERIOD} 内不同 user</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">AI 调用</div>
+          <div class="kpi-value">${fmt(k.inference_calls)}</div>
+          <div class="kpi-sub">$${k.inference_cost_usd.toFixed(2)} 成本</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">评论</div>
+          <div class="kpi-value">${k.comments_visible}</div>
+          <div class="kpi-sub">可见 / 共 ${k.comments_total} (隐藏 ${k.comments_total - k.comments_visible})</div>
+        </div>
+      </div>`;
+  } catch (e) {
+    area.innerHTML = `<div class="err">KPI 加载失败: ${e.message}</div>`;
+  }
+}
+
+async function loadByTool() {
+  try {
+    const r = await api(`/api/admin/stats/by-tool?period=${PERIOD}&limit=20`);
+    const items = r.items || [];
+    if (items.length === 0) {
+      Plotly.purge('plot-by-tool');
+      $('plot-by-tool').innerHTML = '<div class="loading">本时段无 ai.tool_called 事件</div>';
+      return;
+    }
+    Plotly.newPlot('plot-by-tool', [{
+      type: 'bar',
+      orientation: 'h',
+      x: items.map(i => i.count).reverse(),
+      y: items.map(i => i.tool_name).reverse(),
+      marker: { color: COLOR_BURGUNDY },
+      text: items.map(i => i.count).reverse().map(String),
+      textposition: 'outside',
+    }], {
+      ...basePlotLayout('AI 工具调用排行 Top 20 (方向)'),
+      margin: { t: 40, b: 40, l: 180, r: 60 },
+      xaxis: { title: '调用次数' },
+    }, { responsive: true, displayModeBar: false });
+  } catch (e) {
+    $('plot-by-tool').innerHTML = `<div class="err">${e.message}</div>`;
+  }
+}
+
+async function loadByPage() {
+  try {
+    const r = await api(`/api/admin/stats/by-page?period=${PERIOD}&limit=20`);
+    const items = r.items || [];
+    if (items.length === 0) {
+      Plotly.purge('plot-by-page');
+      $('plot-by-page').innerHTML = '<div class="loading">本时段无 page 事件</div>';
+      return;
+    }
+    Plotly.newPlot('plot-by-page', [{
+      type: 'bar',
+      orientation: 'h',
+      x: items.map(i => i.count).reverse(),
+      y: items.map(i => i.page).reverse(),
+      marker: { color: COLOR_BLUE },
+      text: items.map(i => i.count).reverse().map(String),
+      textposition: 'outside',
+    }], {
+      ...basePlotLayout('页面访问排行'),
+      margin: { t: 40, b: 40, l: 180, r: 60 },
+      xaxis: { title: '事件次数' },
+    }, { responsive: true, displayModeBar: false });
+  } catch (e) {
+    $('plot-by-page').innerHTML = `<div class="err">${e.message}</div>`;
+  }
+}
+
+async function loadTimeline() {
+  try {
+    const r = await api(`/api/admin/stats/timeline?period=${PERIOD}&bucket=auto`);
+    const series = r.series || [];
+    const topTypes = r.top_event_types || [];
+    if (series.length === 0) {
+      Plotly.purge('plot-timeline');
+      $('plot-timeline').innerHTML = '<div class="loading">本时段无事件</div>';
+      return;
+    }
+    const xs = series.map(s => s.ts);
+    const traces = topTypes.map((etype, i) => ({
+      type: 'bar',
+      name: etype,
+      x: xs,
+      y: series.map(s => (s.counts || {})[etype] || 0),
+      marker: { color: PALETTE[i % PALETTE.length] },
+    }));
+    Plotly.newPlot('plot-timeline', traces, {
+      ...basePlotLayout(`时间趋势 (按 ${r.bucket}, top-${topTypes.length} event_type 堆叠)`),
+      barmode: 'stack',
+      xaxis: { title: r.bucket === 'hour' ? '时间' : '日期' },
+      yaxis: { title: '事件数' },
+      margin: { t: 40, b: 60, l: 60, r: 20 },
+    }, { responsive: true, displayModeBar: false });
+  } catch (e) {
+    $('plot-timeline').innerHTML = `<div class="err">${e.message}</div>`;
+  }
+}
+
+async function loadInferenceTrends() {
+  try {
+    const r = await api(`/api/admin/inference/stats`);
+    const trends = r.token_usage_trends || [];
+    if (trends.length === 0) {
+      Plotly.purge('plot-tokens');
+      $('plot-tokens').innerHTML = '<div class="loading">无推理日志</div>';
+      return;
+    }
+    Plotly.newPlot('plot-tokens', [
+      { type: 'scatter', mode: 'lines+markers', name: 'input tokens',
+        x: trends.map(t => t.date), y: trends.map(t => t.input_tokens),
+        line: { color: COLOR_BLUE } },
+      { type: 'scatter', mode: 'lines+markers', name: 'output tokens',
+        x: trends.map(t => t.date), y: trends.map(t => t.output_tokens),
+        line: { color: COLOR_BURGUNDY } },
+      { type: 'scatter', mode: 'lines+markers', name: 'cost USD',
+        x: trends.map(t => t.date), y: trends.map(t => t.cost_usd),
+        line: { color: COLOR_GREEN }, yaxis: 'y2' },
+    ], {
+      ...basePlotLayout('AI Token / 成本趋势 (按日)'),
+      yaxis: { title: 'Token' },
+      yaxis2: { title: 'USD', overlaying: 'y', side: 'right' },
+      margin: { t: 40, b: 50, l: 60, r: 60 },
+    }, { responsive: true, displayModeBar: false });
+  } catch (e) {
+    $('plot-tokens').innerHTML = `<div class="err">${e.message}</div>`;
+  }
+}
+
+async function loadCommentsStats() {
+  try {
+    const r = await api(`/api/admin/stats/comments?period=30d`);
+    const series = r.per_day || [];
+    if (series.length === 0) {
+      Plotly.purge('plot-comments-trend');
+      $('plot-comments-trend').innerHTML = '<div class="loading">30 天内无评论</div>';
+      return;
+    }
+    Plotly.newPlot('plot-comments-trend', [
+      { type: 'bar', name: 'visible',
+        x: series.map(s => s.date), y: series.map(s => s.visible),
+        marker: { color: COLOR_GREEN } },
+      { type: 'bar', name: 'hidden (deleted)',
+        x: series.map(s => s.date), y: series.map(s => s.total - s.visible),
+        marker: { color: COLOR_WARN } },
+    ], {
+      ...basePlotLayout(`评论 30 天趋势 (可见 ${r.total_visible} / 隐藏 ${r.total_hidden})`),
+      barmode: 'stack',
+      xaxis: { title: '日期' },
+      yaxis: { title: '评论数' },
+    }, { responsive: true, displayModeBar: false });
+  } catch (e) {
+    $('plot-comments-trend').innerHTML = `<div class="err">${e.message}</div>`;
+  }
+}
+
+async function loadCommentsList() {
+  const area = $('comments-area');
+  area.innerHTML = '<div class="loading">加载评论...</div>';
+  try {
+    // 评论的 GET 是公开的 (不需 secret), 但用 secret 也无妨
+    const r = await api(`/api/comments?limit=100`);
+    const cs = r.comments || [];
+    if (cs.length === 0) {
+      area.innerHTML = '<div class="loading">无评论</div>';
+      return;
+    }
+    let html = `<div class="sub" style="margin-bottom:8px;">共 ${r.total} 条 (此处展示最新 ${cs.length})</div>`;
+    html += '<ul class="comments">';
+    for (const c of cs) {
+      const t = new Date(c.created_at).toLocaleString();
+      html += `
+        <li>
+          <div class="c-meta">
+            <span class="c-author">${escapeHtml(c.author_name)}</span>
+            ${t}<br>
+            <span style="opacity:0.5;font-family:monospace;font-size:10px;">${c.id}</span>
+          </div>
+          <div class="c-content">${escapeHtml(c.content)}</div>
+          <div class="c-actions">
+            <button class="c-del" onclick="deleteComment('${c.id}', this)">删除</button>
+          </div>
+        </li>`;
+    }
+    html += '</ul>';
+    area.innerHTML = html;
+  } catch (e) {
+    area.innerHTML = `<div class="err">${e.message}</div>`;
+  }
+}
+
+async function deleteComment(id, btn) {
+  if (!confirm('删除这条评论? (软删除, 后端 is_visible=false 仍在数据库)')) return;
+  btn.disabled = true;
+  btn.textContent = '删除中...';
+  try {
+    await api(`/api/comments/${id}`, { method: 'DELETE' });
+    btn.closest('li').remove();
+    loadKpi();             // 顺手刷新 kpi 计数
+    loadCommentsStats();   // 顺手刷新趋势
+  } catch (e) {
+    alert('删除失败: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = '删除';
+  }
+}
+
+// ───────────────────────────── helpers ─────────────────────────────
+function fmt(n) {
+  if (n == null) return '—';
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return String(n);
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+}
+
+// 自动加载: 启动时若 secret 已存就直接 load
+if (CONFIG.secret) {
+  loadAll();
+}
+
+</script>
+</body>
+</html>
