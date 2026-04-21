@@ -270,8 +270,16 @@
 // ───────────────────────────── 配置 + localStorage ─────────────────────────────
 const LS_URL = 'astro_admin_url';
 const LS_SECRET = 'astro_admin_secret';
+// 默认 URL: HTML 从 http(s) 后端托管时直接用 window.location.origin,
+// bookmark 此 URL 就永远是最新 HTML + 正确 backend. file:// 双击打开
+// 时 fallback 到 Render production.
+const _DEFAULT_URL = (
+  typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')
+    ? window.location.origin
+    : 'https://astro-backend-h4x1.onrender.com'
+);
 let CONFIG = {
-  url: localStorage.getItem(LS_URL) || 'https://astro-backend-h4x1.onrender.com',
+  url: localStorage.getItem(LS_URL) || _DEFAULT_URL,
   secret: localStorage.getItem(LS_SECRET) || '',
 };
 let PERIOD = '7d';
@@ -291,7 +299,7 @@ function clearConfig() {
   if (!confirm('清除本地存的 backend URL + admin secret?')) return;
   localStorage.removeItem(LS_URL);
   localStorage.removeItem(LS_SECRET);
-  CONFIG = { url: 'https://astro-backend-h4x1.onrender.com', secret: '' };
+  CONFIG = { url: _DEFAULT_URL, secret: '' };
   $('cfg-url').value = CONFIG.url;
   $('cfg-secret').value = '';
 }

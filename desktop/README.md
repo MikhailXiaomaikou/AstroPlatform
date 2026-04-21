@@ -1,30 +1,38 @@
-# Astro Platform — Desktop Admin
+# Astro Platform — Admin Dashboard
 
-## astro_admin.html
+## 推荐用法 (自动更新版)
 
-桌面 admin 面板单文件. 把它拖到桌面或任何位置, **双击**用浏览器打开就能用.
+**浏览器打开 → bookmark → 以后永远是最新:**
 
-### 用法
+```
+https://astro-backend-h4x1.onrender.com/admin
+```
 
-1. 在 Render dashboard 给 backend 设环境变量 `ADMIN_SECRET=<任意强随机字符串>`
-   (例如 `openssl rand -hex 32`)
-2. 双击 `astro_admin.html`
-3. 顶部填:
-   - Backend URL: 默认 `https://astro-backend-h4x1.onrender.com`, 一般不改
-   - Admin Secret: 第 1 步设的那个
-4. 点"保存并加载" — 配置存浏览器 localStorage, 下次打开自动 load
+第一次用: Render 后台 env var 加 `ADMIN_SECRET=<rand-hex-32>`, 页面顶部输入同样的值 → "保存并加载" → 数据自动加载.  以后每次打开页面 backend 会返回最新 HTML (Cache-Control: no-store), 不用 cp 文件不用重新下载.
 
-### 看到什么
+原 HTML 源在 `backend/app/static/astro_admin.html`, 每次 push 到 main + Render 部署完成就自动同步到这个 URL.
 
-- ① 概览: 4 张 KPI 卡 (事件总数 / 活跃用户 / AI 调用+成本 / 评论总览)
-- ② 使用次数 / 方向: 工具调用排行 + 页面访问排行 (横向柱状)
+## 离线 fallback (旧的 file:// 双击用法)
+
+若你不想每次联网 (或 backend 挂了想看 cache), 仍可:
+
+```bash
+curl -o ~/Desktop/astro_admin.html https://astro-backend-h4x1.onrender.com/admin
+open ~/Desktop/astro_admin.html
+```
+
+双击打开时浏览器 origin 是 `null`, backend CORS 已经允许 (一切仍可工作).
+
+## 看到什么
+
+- ① 概览: 4 张 KPI 卡
+- ② 使用次数 / 方向: 工具调用排行 + 页面访问排行
 - ③ 趋势: 时间桶事件量堆叠 + Token/成本趋势 + 评论趋势
-- ④ 评论管理: 列表 + 删除按钮 (软删, is_visible=False)
+- ④ 评论管理: 列表 + 软删除
+- ⑤ 科研趋势: 热门对象 / 数据源 / 上升趋势 + 公开开关
+- ⑥ Sandbox 诊断: Popen health / 生产链路 / repro-imports (定位 child crash)
 
-切顶部 "时间范围" 按钮 (24h / 7d / 30d / 90d) 全部图重算.
-
-### 隐私
+## 隐私
 
 - Admin secret 只存浏览器 localStorage, 不上传
-- 双击打开时浏览器 origin 是 `null`, backend CORS 已经允许
-- 数据全部从 Render production API 拉, 你能看到的都是真用户数据
+- 数据从 production API 拉, 是真用户行为

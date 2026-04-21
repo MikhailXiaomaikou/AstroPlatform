@@ -377,6 +377,28 @@ app.include_router(admin_stats_router)
 app.include_router(admin_trending_router)
 app.include_router(trending_public_router)
 app.include_router(admin_sandbox_router)
+
+
+# ── 桌面 admin HTML 托管 ─────────────────────────────────────────────
+# 把原本用户 "cp 到桌面双击" 的 astro_admin.html 搬到 backend 下,
+# 用户现在 bookmark `{BACKEND}/admin` 一次, 每次打开就是最新.
+# HTML 里默认 backend URL 用 window.location.origin 自动匹配.
+@app.get("/admin", include_in_schema=False)
+@app.get("/admin.html", include_in_schema=False)
+async def admin_dashboard_html():
+    """Serve the desktop admin dashboard HTML from backend/app/static/.
+
+    Cache-Control: no-store — admin 页不能被浏览器缓存, 否则 push 新版
+    用户硬刷新也看不到.
+    """
+    from fastapi.responses import FileResponse
+    import pathlib as _pl
+    path = _pl.Path(__file__).parent / "static" / "astro_admin.html"
+    return FileResponse(
+        path,
+        media_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 app.include_router(crossmatch_router)
 app.include_router(chat_router)
 app.include_router(data_router)
