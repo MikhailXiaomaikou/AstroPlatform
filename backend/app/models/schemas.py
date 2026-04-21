@@ -522,6 +522,16 @@ class TransientAlert(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+# ── Trending 可见性开关 (admin 控制哪些 trending 数据对外公开) ──
+# 3 行, key in {'objects', 'sources', 'delta'}, value = is_public bool
+class TrendingVisibility(Base):
+    __tablename__ = "trending_visibility"
+
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa_text("false"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 # ── 公开评论区 (Landing 页) ──
 # 无需登录,访客填昵称+内容即可提交;管理员用 X-Admin-Secret 删除.
 class Comment(Base):

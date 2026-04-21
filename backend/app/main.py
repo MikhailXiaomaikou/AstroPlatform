@@ -39,6 +39,7 @@ from app.api.citation_graph import router as citation_graph_router
 from app.api.citations import router as citations_router
 from app.api.comments import router as comments_router
 from app.api.admin_stats import router as admin_stats_router
+from app.api.admin_trending import admin_router as admin_trending_router, public_router as trending_public_router
 from app.api.crossmatch import router as crossmatch_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router, redis_subscriber
@@ -234,12 +235,13 @@ async def lifespan(app: FastAPI):
     # 避免每次发布都先写 Alembic).  只对 Comment.__table__ 一张表做
     # CREATE TABLE IF NOT EXISTS, 不碰其他表.
     try:
-        from app.models.schemas import Comment
+        from app.models.schemas import Comment, TrendingVisibility
         async with engine.begin() as conn:
             await conn.run_sync(lambda sync_conn: Comment.__table__.create(sync_conn, checkfirst=True))
-        logger.info("Ensured `comments` table exists")
+            await conn.run_sync(lambda sync_conn: TrendingVisibility.__table__.create(sync_conn, checkfirst=True))
+        logger.info("Ensured `comments` + `trending_visibility` tables exist")
     except Exception as e:
-        logger.warning("Failed to ensure `comments` table (%s); evaluate Alembic migration", e)
+        logger.warning("Failed to ensure new tables (%s); evaluate Alembic migration", e)
 
     # Start Redis subscriber for WebSocket relay (best-effort)
     subscriber_task = asyncio.create_task(redis_subscriber())
@@ -371,6 +373,8 @@ app.include_router(citation_graph_router)
 app.include_router(citations_router)
 app.include_router(comments_router)
 app.include_router(admin_stats_router)
+app.include_router(admin_trending_router)
+app.include_router(trending_public_router)
 app.include_router(crossmatch_router)
 app.include_router(chat_router)
 app.include_router(data_router)
