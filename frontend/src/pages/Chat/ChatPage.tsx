@@ -1182,12 +1182,14 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           <pre className="code-output code-error">{tb.slice(-500)}</pre>
         )}
 
-        {/* R6: stderr 独立面板 — subprocess 的 Python-level stderr.
-            总是展示(即便空)以区分 "真的没 stderr" vs "压根没捕获到". */}
-        {(stderr !== undefined) && (
+        {/* R7 fix: stderr 面板条件渲染.
+            - 成功 + 空 → 不渲染 (用户不需要看空框)
+            - 失败 + 空 → 渲染"crashed before capture"崩溃提示 (诊断信号)
+            - 有内容 → 直接显示 (不管成功失败, 可能是 warning) */}
+        {stderr !== undefined && (!success || stderr !== "") && (
           <div style={{ marginTop: 6 }}>
             <div style={{ fontSize: "0.65rem", letterSpacing: "0.04em", color: "var(--color-red)", textTransform: "uppercase", marginBottom: 2 }}>
-              STDERR {stderr === "" ? "(empty)" : ""}
+              STDERR {stderr === "" ? "(empty, subprocess crashed early)" : ""}
             </div>
             <pre
               style={{
