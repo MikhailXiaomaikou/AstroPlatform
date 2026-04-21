@@ -2954,11 +2954,25 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             record_counter("sandbox_silent_failure_total", 1.0, tool="run_python")
         except Exception:
             pass
-    # R5 O1: stderr 总是传 — 原来 `and not result.success` 过滤让 crash
-    # 时 payload.success 还是 True 的情况下 stderr 被吞, AI 看不到
-    # Python traceback 没法诊断 subprocess 挂的具体原因 (R5-OPEN-A).
-    # 即便 success=True 的正常运行, 如果有 stderr 也多半是 warning /
-    # deprecation 值得 AI 看到.
+    # R5 O1 + R6 post: stderr 作为一级字段**总是**写进 response, 即便空串.
+    # 诊断角度看, "stderr=''" 跟 "stderr not set" 是完全不同的信号:
+    #   前者 = 子进程 child main 跑过且写了 stderr 捕获, 真的没东西输出
+    #   后者 = 子进程崩在 Python 解释器启动 / import, child main 没跑到,
+    #          stderr 去了 uvicorn 的 fd=2 (Render 容器日志), 客户端拿不到
+    # 用户 (和 AI) 能凭空字符串本身推断出后一种情况, 去看
+    # /api/admin/sandbox/health 拿 Python-level stderr.
+    # 原来的 `traceback` 字段保留给已失败的场景当 backwards-compat.
+    response["stderr"] = (result.stderr or "")[:10_000]
+    if not result.stderr and _exit not in (None, 0):
+        response["stderr_note"] = (
+            "stderr field is empty DESPITE non-zero exit code. This means "
+            "the subprocess crashed during Python interpreter startup / "
+            "module import, before the child process could set up stderr "
+            "capture. The real Python error went to the container's fd=2 "
+            "(uvicorn stderr / Render log). Call GET /api/admin/sandbox/"
+            "health from an admin client to reproduce with subprocess.Popen "
+            "and see the actual Python traceback."
+        )
     if result.stderr:
         response["traceback"] = result.stderr[:10_000]
     if result.figures:

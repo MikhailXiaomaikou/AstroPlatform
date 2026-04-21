@@ -1108,6 +1108,11 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const variables = result.variables as Record<string, string> | undefined;
     const variableTypes = result.variable_types as Record<string, string> | undefined;
     const tb = result.traceback as string | undefined;
+    // R6 post: stderr 作为一级字段 (即便空串也存在); stderr_note 在
+    // "stderr 为空但非零退出" 时提示用户 subprocess 崩在 Python 启动
+    // 阶段, 去 /api/admin/sandbox/health 看真实 Python error.
+    const stderr = result.stderr as string | undefined;
+    const stderrNote = result.stderr_note as string | undefined;
     // When localStorage was over its soft cap, figures may have been
     // replaced with {__figures_offloaded__: N}.  Show a placeholder so the
     // user knows the figures existed + why they're gone right now.  The
@@ -1175,6 +1180,37 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
         {/* Traceback */}
         {tb && !success && (
           <pre className="code-output code-error">{tb.slice(-500)}</pre>
+        )}
+
+        {/* R6: stderr 独立面板 — subprocess 的 Python-level stderr.
+            总是展示(即便空)以区分 "真的没 stderr" vs "压根没捕获到". */}
+        {(stderr !== undefined) && (
+          <div style={{ marginTop: 6 }}>
+            <div style={{ fontSize: "0.65rem", letterSpacing: "0.04em", color: "var(--color-red)", textTransform: "uppercase", marginBottom: 2 }}>
+              STDERR {stderr === "" ? "(empty)" : ""}
+            </div>
+            <pre
+              style={{
+                background: "#2a1a1a",
+                color: "#ff9c9c",
+                fontFamily: "Menlo, Consolas, monospace",
+                fontSize: "0.72rem",
+                padding: "8px 10px",
+                borderRadius: 3,
+                whiteSpace: "pre-wrap",
+                maxHeight: 260,
+                overflow: "auto",
+                margin: 0,
+              }}
+            >
+              {stderr || "(empty — subprocess crashed before Python stderr capture ran)"}
+            </pre>
+            {stderrNote && (
+              <div style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)", fontStyle: "italic", marginTop: 4, lineHeight: 1.45 }}>
+                {stderrNote}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Figures */}
