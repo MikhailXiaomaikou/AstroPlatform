@@ -172,6 +172,98 @@ async def sandbox_repro_imports(
         }
 
 
+def _mp_simple_probe(conn, probe_id: str) -> None:
+    """Target for /repro-multiprocessing. Module-level to be picklable by
+    spawn mode.  No rlimit, no setsid, no heavy imports — just send a
+    dict back.  If this still fails, the issue is multiprocessing itself,
+    not _child_main content."""
+    import os as _os
+    conn.send({
+        "probe_id": probe_id,
+        "ok": True,
+        "child_pid": _os.getpid(),
+    })
+    conn.close()
+
+
+@router.get("/repro-multiprocessing")
+async def sandbox_repro_multiprocessing(
+    _admin: None = Depends(require_admin_any),
+) -> dict[str, Any]:
+    """启动一个**最简** multiprocessing spawn child, 不 rlimit / 不
+    setsid / 不 heavy import, 只是 conn.send({'ok': True}).
+
+    对比 /exec-test (走生产 SubprocessBackend, 含 rlimit + setsid +
+    import matplotlib + numpy + signals):
+    - 本端点成 + /exec-test 挂 → 问题在 _child_main 内部一步
+      (RLIMIT_AS / setsid / matplotlib.use("Agg") / numpy init / ...)
+    - 本端点也挂 → multiprocessing spawn 机制本身在 Render 容器上不能
+      用 (pipe fd 不足 / clone() syscall block / unpickle bootstrap
+      fail), 必须 refactor 成 subprocess.Popen
+    """
+    import multiprocessing as mp
+    ctx = mp.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    proc = ctx.Process(
+        target=_mp_simple_probe,
+        args=(child_conn, "admin-probe"),
+    )
+    t0 = time.time()
+    try:
+        proc.start()
+    except Exception as e:
+        return {
+            "ok": False,
+            "stage": "proc.start",
+            "error": f"{type(e).__name__}: {e}",
+            "duration_ms": int((time.time() - t0) * 1000),
+        }
+    child_conn.close()  # parent holds read end
+
+    payload: Any = None
+    poll_ok = False
+    recv_err: str | None = None
+    try:
+        if parent_conn.poll(timeout=15):
+            poll_ok = True
+            try:
+                payload = parent_conn.recv()
+            except (EOFError, ConnectionResetError) as e:
+                recv_err = f"{type(e).__name__}: {e}"
+    finally:
+        try:
+            proc.join(timeout=3)
+        except Exception:
+            pass
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=2)
+        try:
+            parent_conn.close()
+        except Exception:
+            pass
+
+    exit_code = proc.exitcode if hasattr(proc, "exitcode") else None
+    duration_ms = int((time.time() - t0) * 1000)
+
+    return {
+        "ok": bool(payload) and isinstance(payload, dict) and payload.get("ok") is True,
+        "exit_code": exit_code,
+        "poll_ok": poll_ok,
+        "recv_err": recv_err,
+        "payload_received": payload if isinstance(payload, (dict, str, type(None))) else str(payload),
+        "duration_ms": duration_ms,
+        "note": (
+            "最简 multiprocessing spawn probe.  无 rlimit / setsid / "
+            "heavy import.  本端点返 ok=true → spawn 本身可用, 问题在 "
+            "SubprocessBackend._child_main 的某一步 (多半是 "
+            "_child_set_limits 的 RLIMIT_AS / os.setsid, 或 matplotlib "
+            "import).  返 ok=false + exit 非零 / poll_ok=false → spawn "
+            "本身在 Render 容器上不通, 要换 subprocess.Popen 架构."
+        ),
+    }
+
+
 @router.get("/exec-test")
 async def sandbox_exec_test(
     _admin: None = Depends(require_admin_any),
