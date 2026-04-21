@@ -46,7 +46,10 @@ def _child_set_limits(memory_bytes: int, cpu_seconds: int) -> None:
     except (ValueError, OSError):
         pass
     try:
-        resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+        # R7 SIGSEGV fix: 64 太严, numpy/OpenBLAS import 时 pthread_create
+        # 失败 → segfault. 256 给 BLAS worker threads + uvicorn 基础进程数
+        # 留出 headroom.
+        resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
     except (ValueError, OSError, AttributeError):
         pass
     # Isolate the process group so the parent can signal the whole tree
@@ -218,6 +221,16 @@ def _make_astro_module(accessors: dict) -> ModuleType | None:
 
 def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_context: dict | None = None) -> None:
     """Entry point for the sandbox subprocess."""
+    # R7 SIGSEGV fix: 必须在 import numpy 之前设, 让 OpenBLAS / MKL / OMP
+    # 只起 1 thread. 原因: RLIMIT_NPROC 加上默认 BLAS 起 N=cpu_count 个
+    # worker thread, pthread_create 在受限容器里失败 → numpy C 初始化
+    # 段错误 → child SIGSEGV (-11) 没来得及 send payload, 从 admin 看
+    # exit_code=1 (multiprocessing 翻译过的).
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
     _child_set_limits(memory_bytes, cpu_seconds)
     _child_breadcrumb("start exec")
 

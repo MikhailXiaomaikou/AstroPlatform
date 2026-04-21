@@ -176,7 +176,15 @@ def _mp_staged_probe(conn, memory_bytes: int = 1024 * 1024 * 1024, cpu_seconds: 
     """按 _child_main 的实际顺序分步执行, 每步成功 send checkpoint.
     父进程循环 recv 拿到每步结果, 第一个 FAIL 就是 smoking gun.
     必须 module-level 才能被 spawn pickle.
+
+    R7 fix 已同步: 设 BLAS 单 threads + RLIMIT_NPROC 256, 让 probe
+    反映 production 修好后的行为.
     """
+    import os as _os0
+    _os0.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    _os0.environ.setdefault("OMP_NUM_THREADS", "1")
+    _os0.environ.setdefault("MKL_NUM_THREADS", "1")
+    _os0.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
     import sys
     import traceback as _tb
 
@@ -204,7 +212,7 @@ def _mp_staged_probe(conn, memory_bytes: int = 1024 * 1024 * 1024, cpu_seconds: 
             return
         if not _run(3, "setrlimit_RLIMIT_CPU", lambda: resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))):
             return
-        if not _run(4, "setrlimit_RLIMIT_NPROC", lambda: resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))):
+        if not _run(4, "setrlimit_RLIMIT_NPROC", lambda: resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))):
             return
         if not _run(5, "os.setsid", lambda: _os.setsid()):
             return
