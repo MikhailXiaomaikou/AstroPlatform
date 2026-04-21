@@ -172,6 +172,163 @@ async def sandbox_repro_imports(
         }
 
 
+def _mp_staged_probe(conn, memory_bytes: int = 1024 * 1024 * 1024, cpu_seconds: int = 15) -> None:
+    """按 _child_main 的实际顺序分步执行, 每步成功 send checkpoint.
+    父进程循环 recv 拿到每步结果, 第一个 FAIL 就是 smoking gun.
+    必须 module-level 才能被 spawn pickle.
+    """
+    import sys
+    import traceback as _tb
+
+    def _send(step: int, name: str, ok: bool, err: str = "", tb: str = ""):
+        try:
+            conn.send({"step": step, "name": name, "ok": ok, "err": err, "tb": tb[-2000:]})
+        except Exception:
+            pass
+
+    def _run(step: int, name: str, fn):
+        try:
+            fn()
+            _send(step, name, True)
+            return True
+        except BaseException as e:
+            _send(step, name, False, f"{type(e).__name__}: {e}", _tb.format_exc())
+            return False
+
+    try:
+        if not _run(1, "send-hello", lambda: None):
+            return
+
+        import resource, os as _os
+        if not _run(2, "setrlimit_RLIMIT_AS", lambda: resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))):
+            return
+        if not _run(3, "setrlimit_RLIMIT_CPU", lambda: resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))):
+            return
+        if not _run(4, "setrlimit_RLIMIT_NPROC", lambda: resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))):
+            return
+        if not _run(5, "os.setsid", lambda: _os.setsid()):
+            return
+
+        from io import StringIO
+        if not _run(6, "StringIO", lambda: StringIO()):
+            return
+
+        def _redir():
+            sys.stdout = StringIO()
+            sys.stderr = StringIO()
+        if not _run(7, "redirect-stdio", _redir):
+            return
+
+        def _mpl_use():
+            import matplotlib
+            matplotlib.use("Agg")
+        if not _run(8, "matplotlib.use(Agg)", _mpl_use):
+            return
+
+        def _mpl_fonts():
+            import matplotlib
+            matplotlib.rcParams["font.sans-serif"] = [
+                "Noto Sans CJK SC", "Noto Sans CJK", "WenQuanYi Micro Hei",
+                "PingFang SC", "Microsoft YaHei", "SimHei", "DejaVu Sans",
+            ]
+            matplotlib.rcParams["axes.unicode_minus"] = False
+        if not _run(9, "mpl-fonts", _mpl_fonts):
+            return
+
+        if not _run(10, "import-pyplot", lambda: __import__("matplotlib.pyplot")):
+            return
+        if not _run(11, "import-numpy", lambda: __import__("numpy")):
+            return
+
+        _send(99, "all-steps-done", True)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@router.get("/probe-steps")
+async def sandbox_probe_steps(
+    memory_mb: int = 1024,
+    _admin: None = Depends(require_admin_any),
+) -> dict[str, Any]:
+    """分步在 multiprocessing spawn child 里执行 _child_main 前 11 步.
+    第一个失败的 step 就是 smoking gun.
+
+    Query params:
+      memory_mb=1024 (默认 1GB, 可试更大比如 4096 看 RLIMIT_AS 是不是太小)
+    """
+    import multiprocessing as mp
+    ctx = mp.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    proc = ctx.Process(
+        target=_mp_staged_probe,
+        args=(child_conn,),
+        kwargs={"memory_bytes": memory_mb * 1024 * 1024, "cpu_seconds": 30},
+    )
+    t0 = time.time()
+    try:
+        proc.start()
+    except Exception as e:
+        return {"ok": False, "stage": "proc.start", "error": f"{type(e).__name__}: {e}"}
+    child_conn.close()
+
+    checkpoints: list[dict] = []
+    try:
+        # 循环 recv 直到 child 关闭 pipe 或超时
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if parent_conn.poll(timeout=2):
+                try:
+                    msg = parent_conn.recv()
+                    checkpoints.append(msg)
+                    if msg.get("step") == 99 or msg.get("ok") is False:
+                        break
+                except EOFError:
+                    break
+            else:
+                if not proc.is_alive():
+                    break
+    finally:
+        try:
+            proc.join(timeout=3)
+        except Exception:
+            pass
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=2)
+        try:
+            parent_conn.close()
+        except Exception:
+            pass
+
+    exit_code = proc.exitcode if hasattr(proc, "exitcode") else None
+    duration_ms = int((time.time() - t0) * 1000)
+
+    last_ok = next((c for c in reversed(checkpoints) if c.get("ok")), None)
+    first_fail = next((c for c in checkpoints if c.get("ok") is False), None)
+
+    return {
+        "ok": first_fail is None and any(c.get("step") == 99 for c in checkpoints),
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+        "memory_mb": memory_mb,
+        "checkpoints": checkpoints,
+        "last_ok_step": last_ok.get("step") if last_ok else None,
+        "first_fail_step": first_fail.get("step") if first_fail else None,
+        "first_fail_name": first_fail.get("name") if first_fail else None,
+        "first_fail_err": first_fail.get("err") if first_fail else None,
+        "first_fail_tb": first_fail.get("tb") if first_fail else None,
+        "note": (
+            "checkpoints 逐个看. 第一个 ok=false 的 step 就是问题所在. "
+            "如果没有 first_fail 但也没 step=99, 说明 child 崩在某个步骤"
+            "但没来得及 send err (SIGKILL / SIGSEGV). 尝试调整 memory_mb "
+            "query param 比如 ?memory_mb=4096 看 RLIMIT_AS 是否太小."
+        ),
+    }
+
+
 def _mp_simple_probe(conn, probe_id: str) -> None:
     """Target for /repro-multiprocessing. Module-level to be picklable by
     spawn mode.  No rlimit, no setsid, no heavy imports — just send a

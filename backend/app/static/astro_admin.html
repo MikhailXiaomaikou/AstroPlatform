@@ -260,6 +260,8 @@
   <button class="period-btn" onclick="runSandboxExecTest()">② 生产链路测试 (SubprocessBackend)</button>
   <button class="period-btn" onclick="runSandboxReproImports()">③ 复现 child 的 import (关键)</button>
   <button class="period-btn" onclick="runSandboxReproMP()">④ 最简 multiprocessing probe</button>
+  <button class="period-btn" onclick="runSandboxProbeSteps(1024)">⑤ 分步 probe (1GB)</button>
+  <button class="period-btn" onclick="runSandboxProbeSteps(4096)">⑤' 分步 probe (4GB)</button>
 </div>
 <div id="sandbox-result" class="sub" style="margin-top:4px;"></div>
 
@@ -771,6 +773,34 @@ async function runSandboxReproMP() {
   try {
     const r = await api('/api/admin/sandbox/repro-multiprocessing');
     renderSandboxResult(area, '④ /sandbox/repro-multiprocessing (最简 spawn probe)', r);
+  } catch (e) {
+    area.innerHTML = `<div class="err">请求失败: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function runSandboxProbeSteps(memoryMb) {
+  const area = $('sandbox-result');
+  area.innerHTML = `<div class="loading">分步 probe 运行中 (memory_mb=${memoryMb}, 最多 60s)...</div>`;
+  try {
+    const r = await api(`/api/admin/sandbox/probe-steps?memory_mb=${memoryMb}`);
+    // 自定义渲染含 checkpoints list
+    let extraHtml = '';
+    if (r.checkpoints && Array.isArray(r.checkpoints)) {
+      extraHtml += '<div style="margin-top:10px;"><strong style="font-size:11px;color:var(--ink-2);">CHECKPOINTS:</strong><pre style="background:#f0f0f0;color:#333;padding:8px;border-radius:2px;font-size:11px;max-height:260px;overflow:auto;">';
+      for (const cp of r.checkpoints) {
+        const ok = cp.ok ? '✓' : '✗';
+        const color = cp.ok ? '#2e6a4e' : '#7b2d26';
+        extraHtml += `<div style="color:${color}">${ok} step ${cp.step}: ${escapeHtml(cp.name || '')}${cp.err ? ' — ' + escapeHtml(cp.err) : ''}</div>`;
+        if (cp.tb) {
+          extraHtml += `<pre style="background:#2a1a1a;color:#ff9c9c;padding:6px;margin:4px 0;font-size:10px;white-space:pre-wrap;">${escapeHtml(cp.tb)}</pre>`;
+        }
+      }
+      extraHtml += '</pre></div>';
+    }
+    const area2 = $('sandbox-result');
+    // Render 基本信息 + checkpoints
+    renderSandboxResult(area2, `⑤ /sandbox/probe-steps memory_mb=${memoryMb}`, r);
+    area2.querySelector('div[style*="border"]').insertAdjacentHTML('beforeend', extraHtml);
   } catch (e) {
     area.innerHTML = `<div class="err">请求失败: ${escapeHtml(e.message)}</div>`;
   }
