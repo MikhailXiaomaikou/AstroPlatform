@@ -26,13 +26,17 @@ export default function OnboardingOverlay() {
     if (el) setTargetRect(el.getBoundingClientRect());
   }, [step]);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    // Q3: updateTargetRect reads DOM getBoundingClientRect and calls
+    // setTargetRect — must run after DOM commit, not during render.
     if (visible) {
       updateTargetRect();
       window.addEventListener("resize", updateTargetRect);
       return () => window.removeEventListener("resize", updateTargetRect);
     }
   }, [visible, step, updateTargetRect]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleComplete = () => {
     localStorage.setItem("astro_onboarded", "1");

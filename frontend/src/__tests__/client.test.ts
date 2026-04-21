@@ -49,7 +49,9 @@ describe("API client configuration", () => {
     store["astro_token"] = "test-jwt-token-123";
 
     // Simulate the interceptor by manually invoking it
-    const interceptors = (api.interceptors.request as any).handlers;
+    const interceptors = (api.interceptors.request as unknown as {
+      handlers: Array<{ fulfilled: (c: { headers: Record<string, string> }) => { headers: Record<string, string> } }>;
+    }).handlers;
     const interceptor = interceptors[interceptors.length - 1];
     const config = { headers: {} as Record<string, string> };
     const result = interceptor.fulfilled(config);
@@ -64,7 +66,9 @@ describe("API client configuration", () => {
     // Ensure no token
     delete store["astro_token"];
 
-    const interceptors = (api.interceptors.request as any).handlers;
+    const interceptors = (api.interceptors.request as unknown as {
+      handlers: Array<{ fulfilled: (c: { headers: Record<string, string> }) => { headers: Record<string, string> } }>;
+    }).handlers;
     const interceptor = interceptors[interceptors.length - 1];
     const config = { headers: {} as Record<string, string> };
     const result = interceptor.fulfilled(config);
@@ -409,7 +413,7 @@ describe("API function exports", () => {
     ] as const;
 
     for (const fnName of expectedFunctions) {
-      expect(typeof (client as any)[fnName]).toBe("function");
+      expect(typeof (client as unknown as Record<string, unknown>)[fnName]).toBe("function");
     }
   });
 });

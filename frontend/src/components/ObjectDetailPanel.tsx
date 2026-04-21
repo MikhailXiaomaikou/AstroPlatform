@@ -19,7 +19,10 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
   const [tab, setTab] = useState<"overview" | "surveys" | "refs" | "data">("overview");
   const [saved, setSaved] = useState(false);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    // Q3: panel 打开时重置 loading/error/data/tab 然后发 async fetch.
+    // 经典 "props change → reset state → kick off request" 场景.
     if (!isOpen || !objectName) return;
     setLoading(true);
     setError(null);
@@ -30,6 +33,7 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
       .catch((e) => setError(e instanceof Error ? e.message : t("odp.failed_to_load")))
       .finally(() => setLoading(false));
   }, [isOpen, objectName, ra, dec]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!isOpen) return null;
 

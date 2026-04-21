@@ -596,7 +596,9 @@ function CitationModal({ objectName, onClose }: { objectName: string; onClose: (
   const [error, setError] = useState<string | null>(null);
   const [copiedBib, setCopiedBib] = useState<string | null>(null);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    // Q3: async ADS fetch + reset loading/error on objectName change.
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -606,6 +608,7 @@ function CitationModal({ objectName, onClose }: { objectName: string; onClose: (
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [objectName]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   async function handleCopyBib(bibcode: string) {
     try {

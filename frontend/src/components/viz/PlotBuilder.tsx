@@ -754,6 +754,9 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
   useEffect(() => {
     if (numericColumns.length === 0) return;
 
+    // Q3: chart type 变化时自动挑 X/Y 列. 这是 "sync derived defaults
+    // from chartType + columns" 场景.
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (chartType === "hr_diagram") {
       const xCol = numericColumns.includes("bp_rp") ? "bp_rp" : numericColumns.includes("phot_bp_mean_mag") ? "phot_bp_mean_mag" : "";
       const yCol = numericColumns.includes("abs_g_mag") ? "abs_g_mag" : numericColumns.includes("phot_g_mean_mag") ? "phot_g_mean_mag" : "";
@@ -813,6 +816,7 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
       setFlipY(true);
     }
   }, [chartType, customColor, customX, customY, numericColumns]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const availableCharts = useMemo(() => {
     if (!initialData) return CHART_TYPES;
@@ -1025,7 +1029,13 @@ export default function PlotBuilder({ initialData, initialChartType, onClose }: 
 
       {plotResult && plotResult.data.length > 0 ? (
         <Plot
+          // Q3: plotResult.data / layout 是 Plotly 运行时 shape, 跟 d.ts
+          // 里 PlotParams.data: any[] / layout: Record<string,any> 完全
+          // 对齐的 cast 只能是 any.  d.ts 那边已 file-level disable, 这
+          // 里 inline disable.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           data={plotResult.data as any}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           layout={plotResult.layout as any}
           config={{
             displayModeBar: true,

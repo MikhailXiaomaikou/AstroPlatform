@@ -35,7 +35,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    // Q3: bootstrap user session from stored JWT on mount.  setState in
+    // effect is correct here — it's syncing React state with an async
+    // auth check, not a derived value.
     if (isAuthenticated()) {
       getProfile()
         .then(setUser)
@@ -57,6 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     }
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const login = async (username: string, password: string) => {
     await apiLogin(username, password);

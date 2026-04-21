@@ -203,8 +203,11 @@ export default function NodeParamsEditor({
         initial[def.key] = def.type === "number" ? "" as unknown as number : "";
       }
     }
+    // Q3: initialize form values when selected node changes — reset per
+    // node-type + saved params.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFormValues(initial);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [currentParams, nodeId, nodeType, paramDefs, workspacePaths]);
 
   const handleChange = (key: string, value: string, type: "text" | "number" | "select" | "checkboxes") => {

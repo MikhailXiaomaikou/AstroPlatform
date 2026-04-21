@@ -30,6 +30,9 @@ export default function GlossaryTerm({ term, children }: Props) {
   }, []);
 
   useEffect(() => {
+    // Q3: reposition() 读 DOM bounding box 后 setPos — 需要在 DOM 更新
+    // 后做, 不能在 render 里. 这是 "sync with external DOM state" 场景.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (visible) reposition();
   }, [visible, reposition]);
 

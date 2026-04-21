@@ -134,7 +134,7 @@ function readStoredAdqlResultSets(): StoredAdqlResultSet[] {
 const ADQL_STORAGE_SOFT_CAP_BYTES = 3 * 1024 * 1024;
 
 function _safeSetAdqlResultSets(sets: StoredAdqlResultSet[]): { written: boolean; dropped: number } {
-  let working = [...sets];
+  const working = [...sets];
   let dropped = 0;
   let payload = JSON.stringify(working);
   // Pass 1 — trim oldest entries until under cap.

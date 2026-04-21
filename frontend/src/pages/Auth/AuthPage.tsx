@@ -53,6 +53,8 @@ function GoogleSignInButton({ onSuccess, disabled }: { onSuccess: (credential: s
 
     const existingScript = document.getElementById("google-gsi-script");
     if (existingScript) {
+      // Q3: syncing React state with already-loaded external script.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setScriptLoaded(true);
       return;
     }

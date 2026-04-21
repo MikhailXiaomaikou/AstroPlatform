@@ -740,7 +740,9 @@ function ImageViewer({ spectrum, fitsPath }: { spectrum: FITSSpectrum; fitsPath?
   }, [renderImage]);
 
   // Load WCS grid when toggled on
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    // Q3: toggle-triggered async fetch with loading / data state sync.
     if (showWCS && !wcsData && !wcsLoading && fitsPath) {
       setWcsLoading(true);
       getFITSWCS(fitsPath)
@@ -749,6 +751,7 @@ function ImageViewer({ spectrum, fitsPath }: { spectrum: FITSSpectrum; fitsPath?
         .finally(() => setWcsLoading(false));
     }
   }, [showWCS, wcsData, wcsLoading, fitsPath]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Draw WCS grid overlay on canvas after image renders
   useEffect(() => {

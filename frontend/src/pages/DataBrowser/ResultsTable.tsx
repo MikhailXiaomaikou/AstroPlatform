@@ -155,6 +155,7 @@ export default function ResultsTable({
   // user on "page 2 of 3" looking at a freshly-sorted data set — a confusing
   // way to lose rows.  Must be useEffect — calling setState from useMemo is
   // illegal under React 18+ (triggers an infinite-render warning / loop).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setPage(0); }, [results, sortKey, sortAsc]);
 
   if (!loading && results.length === 0) {
