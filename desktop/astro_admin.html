@@ -267,7 +267,13 @@ async function api(path, opts = {}) {
     const text = await r.text().catch(() => '');
     throw new Error(`HTTP ${r.status} ${path}: ${text.slice(0, 200)}`);
   }
-  return r.json();
+  // HTTP 204 No Content (DELETE 成功) 没 body, 不要调 r.json() 否则
+  // SyntaxError: Unexpected end of JSON input.
+  if (r.status === 204) return null;
+  // 其他响应: 只有声明 JSON 的才 parse, 否则返 text.
+  const ct = r.headers.get('content-type') || '';
+  if (ct.includes('application/json')) return r.json();
+  return r.text();
 }
 
 // ───────────────────────────── Plotly 通用配色 ─────────────────────────────
