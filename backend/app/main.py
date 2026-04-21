@@ -335,11 +335,39 @@ app.add_middleware(CorrelationIdMiddleware)
 MAX_REQUEST_BODY = 1_048_576  # 1 MB for non-upload endpoints
 
 
+# T5 (PART T): `null` origin (file:// / data: URL) 只允许 admin 和公开
+# comments 两个前缀. 防止用户被诱导打开恶意 file:// HTML 后, 该 HTML
+# 跨源调其他敏感 API (/api/chat, /api/adql 等). 桌面 admin HTML 仍可用.
+_NULL_ORIGIN_ALLOWED_PREFIXES = (
+    "/api/admin/",
+    "/api/comments",
+    "/admin",          # static HTML route
+    "/metrics",        # prometheus scrape from anywhere OK
+    "/health",
+)
+
+
 @app.middleware("http")
 async def security_headers(request, call_next):
     """Set security headers on every response and enforce a 1 MB body-size
     limit for endpoints other than the FITS upload route (which uses its own
     ``MAX_UPLOAD_SIZE`` setting)."""
+    # --- T5: null-origin path restriction (before body-size check) ---
+    origin = request.headers.get("origin", "")
+    if origin == "null":
+        path = request.url.path
+        if not any(path.startswith(p) for p in _NULL_ORIGIN_ALLOWED_PREFIXES):
+            from starlette.responses import JSONResponse
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "null origin (file:// / data:) only permitted for admin "
+                        "/ comments / metrics / health endpoints"
+                    )
+                },
+            )
+
     # --- request body size gate (skip FITS upload) ---
     if request.url.path != "/api/data/fits/upload":
         content_length = request.headers.get("content-length")

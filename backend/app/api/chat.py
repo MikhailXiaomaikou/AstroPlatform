@@ -11,7 +11,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from starlette.requests import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1246,15 +1246,35 @@ def _generate_next_steps(tool_results: list[dict]) -> str:
     return "\n".join(f"- {s}" for s in unique[:6])
 
 
+# T6 (PART T): per-message + total payload size limits.  Without them a
+# malicious user can push 1 MB prompts through the chat endpoint and drive
+# LLM token spend + inference latency; rate limit alone (15/min) still
+# allows 15 MB/min of LLM input.
+_CHAT_MESSAGE_MAX_LEN = 50_000
+_CHAT_TOTAL_MAX_LEN = 200_000
+_CHAT_MAX_MESSAGES = 200
+
+
 class ChatMessage(BaseModel):
     role: str  # "user" or "assistant"
-    content: str
+    content: str = Field(..., max_length=_CHAT_MESSAGE_MAX_LEN)
     actions: list[dict] | None = None
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
+    messages: list[ChatMessage] = Field(..., max_length=_CHAT_MAX_MESSAGES)
     context: dict | None = None  # optional context like current workspace files
+
+    @field_validator("messages")
+    @classmethod
+    def _check_total_content_size(cls, v: list[ChatMessage]) -> list[ChatMessage]:
+        total = sum(len(m.content or "") for m in v)
+        if total > _CHAT_TOTAL_MAX_LEN:
+            raise ValueError(
+                f"total message content {total} bytes exceeds "
+                f"{_CHAT_TOTAL_MAX_LEN} byte limit"
+            )
+        return v
 
 
 class ChatAction(BaseModel):

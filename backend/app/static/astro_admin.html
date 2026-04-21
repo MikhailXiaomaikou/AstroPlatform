@@ -3,7 +3,14 @@
 <head>
   <meta charset="utf-8">
   <title>Astro Platform · Admin Dashboard</title>
-  <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+  <!-- T9 (PART T): CSP 限制 script/style/connect 来源. file:// 场景下
+       'self' 作用弱, 但仍是一层 defense-in-depth 防 XSS 后拉远程脚本. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plot.ly; style-src 'self' 'unsafe-inline'; connect-src 'self' https://astro-backend-h4x1.onrender.com http://localhost:8000 http://127.0.0.1:8000; img-src 'self' data: https:; font-src 'self' data:;">
+  <!-- T7 (PART T): Plotly CDN 加 SRI, 防 CDN 劫持后偷 admin secret.
+       固定 2.35.0 版本, 若升级版本需要同步更新 integrity. -->
+  <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"
+          integrity="sha384-TAqBiqItCr14J//ULLD26bSQ8Z6uPnlisSwkvWaqP8SCSiDkgR8jNknuAv8uxSOT"
+          crossorigin="anonymous"></script>
   <style>
     /* Journal palette — paper / ink / burgundy / 墨黑 */
     :root {
@@ -403,7 +410,7 @@ async function loadKpi() {
         </div>
       </div>`;
   } catch (e) {
-    area.innerHTML = `<div class="err">KPI 加载失败: ${e.message}</div>`;
+    area.innerHTML = `<div class="err">KPI 加载失败: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -430,7 +437,7 @@ async function loadByTool() {
       xaxis: { title: '调用次数' },
     }, { responsive: true, displayModeBar: false });
   } catch (e) {
-    $('plot-by-tool').innerHTML = `<div class="err">${e.message}</div>`;
+    $('plot-by-tool').innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -457,7 +464,7 @@ async function loadByPage() {
       xaxis: { title: '事件次数' },
     }, { responsive: true, displayModeBar: false });
   } catch (e) {
-    $('plot-by-page').innerHTML = `<div class="err">${e.message}</div>`;
+    $('plot-by-page').innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -487,7 +494,7 @@ async function loadTimeline() {
       margin: { t: 40, b: 60, l: 60, r: 20 },
     }, { responsive: true, displayModeBar: false });
   } catch (e) {
-    $('plot-timeline').innerHTML = `<div class="err">${e.message}</div>`;
+    $('plot-timeline').innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -517,7 +524,7 @@ async function loadInferenceTrends() {
       margin: { t: 40, b: 50, l: 60, r: 60 },
     }, { responsive: true, displayModeBar: false });
   } catch (e) {
-    $('plot-tokens').innerHTML = `<div class="err">${e.message}</div>`;
+    $('plot-tokens').innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -544,7 +551,7 @@ async function loadCommentsStats() {
       yaxis: { title: '评论数' },
     }, { responsive: true, displayModeBar: false });
   } catch (e) {
-    $('plot-comments-trend').innerHTML = `<div class="err">${e.message}</div>`;
+    $('plot-comments-trend').innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -563,25 +570,36 @@ async function loadCommentsList() {
     html += '<ul class="comments">';
     for (const c of cs) {
       const t = new Date(c.created_at).toLocaleString();
+      // T3/T8 (PART T): 所有来自后端的字段 (包含 id) 都 escapeHtml.
+      // 按钮用 data-comment-id + 事件委托, 避免 onclick 字符串里拼 id.
       html += `
         <li>
           <div class="c-meta">
             <span class="c-author">${escapeHtml(c.author_name)}</span>
-            ${t}<br>
-            <span style="opacity:0.5;font-family:monospace;font-size:10px;">${c.id}</span>
+            ${escapeHtml(t)}<br>
+            <span style="opacity:0.5;font-family:monospace;font-size:10px;">${escapeHtml(c.id)}</span>
           </div>
           <div class="c-content">${escapeHtml(c.content)}</div>
           <div class="c-actions">
-            <button class="c-del" onclick="deleteComment('${c.id}', this)">删除</button>
+            <button class="c-del" data-comment-id="${escapeHtml(c.id)}">删除</button>
           </div>
         </li>`;
     }
     html += '</ul>';
     area.innerHTML = html;
   } catch (e) {
-    area.innerHTML = `<div class="err">${e.message}</div>`;
+    area.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
+
+// T8 (PART T): 事件委托接管 .c-del 点击, 不再用内联 onclick="..."
+// (避免字段拼到 HTML 属性里的 XSS 风险).
+document.addEventListener('click', (ev) => {
+  const btn = ev.target.closest && ev.target.closest('.c-del');
+  if (!btn) return;
+  const id = btn.getAttribute('data-comment-id') || '';
+  if (id) deleteComment(id, btn);
+});
 
 async function deleteComment(id, btn) {
   if (!confirm('删除这条评论? (软删除, 后端 is_visible=false 仍在数据库)')) return;
@@ -668,7 +686,7 @@ async function loadTrendingObjects() {
       xaxis: { title: '次数' },
     }, { responsive: true, displayModeBar: false });
   } catch (e) {
-    $('plot-trend-objects').innerHTML = `<div class="err">${e.message}</div>`;
+    $('plot-trend-objects').innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -694,7 +712,7 @@ async function loadTrendingSources() {
       showlegend: false,
     }, { responsive: true, displayModeBar: false });
   } catch (e) {
-    $('plot-trend-sources').innerHTML = `<div class="err">${e.message}</div>`;
+    $('plot-trend-sources').innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -728,7 +746,7 @@ async function loadTrendingDelta() {
       margin: { t: 50, b: 100, l: 60, r: 20 },
     }, { responsive: true, displayModeBar: false });
   } catch (e) {
-    $('plot-trend-delta').innerHTML = `<div class="err">${e.message}</div>`;
+    $('plot-trend-delta').innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
 

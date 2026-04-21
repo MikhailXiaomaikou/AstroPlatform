@@ -224,6 +224,14 @@ export default function AladinViewer(props: AladinViewerProps) {
         script.async = true;
         script.charset = "utf-8";
         script.crossOrigin = "anonymous";
+        // T7 (PART T): SRI integrity for the Aladin CDN script.  The
+        // `latest` URL means this hash needs updating whenever CDS ships
+        // a new upstream version — on that day the script will fail to
+        // load and we'll notice in the AladinViewer error UI. Trade-off
+        // accepted: loud breakage on upstream change is safer than a
+        // silent CDN-injection compromise.
+        script.integrity = "sha384-z5VTZYsuT3SJA79XqRH6uvCKYmcEBee1vCGu9fle6dOUKcovX6SyeeSj5YsXYuyc";
+        script.referrerPolicy = "no-referrer";
         document.head.appendChild(script);
       }
 

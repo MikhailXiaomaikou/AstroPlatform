@@ -387,7 +387,14 @@ async def _require_admin(request: Request):
             detail="Admin endpoints disabled (ADMIN_SECRET not configured)",
         )
     provided = request.headers.get("X-Admin-Secret", "")
-    if not provided or provided != settings.admin_secret:
+    # T4 (PART T): timing-safe compare defeats byte-by-byte timing
+    # side-channel attacks that would otherwise let an attacker probe
+    # the secret one character at a time.
+    import hmac as _hmac
+    if not provided or not _hmac.compare_digest(
+        provided.encode("utf-8"),
+        settings.admin_secret.encode("utf-8"),
+    ):
         raise HTTPException(status_code=403, detail="Invalid admin secret")
 
 
@@ -409,7 +416,12 @@ async def require_admin_any(
     # ── 路径 1: X-Admin-Secret
     if settings.admin_secret:
         provided = request.headers.get("X-Admin-Secret", "")
-        if provided and provided == settings.admin_secret:
+        # T4 (PART T): timing-safe compare (同 _require_admin)
+        import hmac as _hmac
+        if provided and _hmac.compare_digest(
+            provided.encode("utf-8"),
+            settings.admin_secret.encode("utf-8"),
+        ):
             return None
     # dev bypass: ENV=dev 且 admin_secret 空, 允许通过
     import os as _os_local
