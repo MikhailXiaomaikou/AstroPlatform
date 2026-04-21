@@ -265,6 +265,34 @@ def test_ast_linter_rejects_random_numpy_without_reader():
     }
 
 
+def test_ast_linter_mismatch_echoes_observed_identifiers():
+    """R4-NEW-1: mismatch errors tell the model which names AST actually saw."""
+    from app.services.ai_tools import _exec_run_python
+
+    code = "results = [{'target': 'HD 189733'}]\nfirst = results[0]\nprint(first)"
+    resp = asyncio.run(_exec_run_python({"code": code, "data_source": "latest_search"}))
+
+    assert resp.get("success") is False
+    assert resp.get("error_class") == "data_source_mismatch"
+    err = str(resp.get("error") or "")
+    assert "get_search_results" in err
+    assert "get_cached_results" in err
+    assert "AST observed" in err
+    assert "results" in err
+
+
+def test_system_prompt_routes_transit_queries_to_search_lightcurve():
+    """R4-NEW-2: TESS/transit prompts should make search_lightcurve obvious."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    prompt = SYSTEM_PROMPT.lower()
+    assert "search_lightcurve" in prompt
+    assert "tess" in prompt
+    assert "transit" in prompt
+    assert "before `search_objects`" in SYSTEM_PROMPT
+    assert "hd 189733" in prompt
+
+
 # ---------- H0.7 tool_failure_counts ignores soft failures ----------
 
 def test_h07_soft_failure_classification_reference():

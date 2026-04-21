@@ -2520,6 +2520,57 @@ _REAL_DATA_SOURCE_PATTERNS = {
 }
 
 
+def _summarize_ast_observations(code: str, limit: int = 24) -> str:
+    """返回 AST 校验实际看见的标识符, 方便模型按错误提示自修复。"""
+    import ast as _ast
+
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return "AST observations unavailable because the code has a SyntaxError."
+
+    calls: set[str] = set()
+    names: set[str] = set()
+    imports: set[str] = set()
+
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Name):
+            names.add(node.id)
+        elif isinstance(node, _ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, _ast.Call):
+            func = node.func
+            if isinstance(func, _ast.Name):
+                calls.add(func.id)
+            elif isinstance(func, _ast.Attribute):
+                calls.add(func.attr)
+        elif isinstance(node, _ast.ImportFrom):
+            for alias in node.names:
+                imports.add(alias.asname or alias.name)
+        elif isinstance(node, _ast.Import):
+            for alias in node.names:
+                imports.add(alias.asname or alias.name.split(".")[0])
+
+    def _fmt(label: str, values: set[str]) -> str | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        suffix = "" if len(ordered) <= limit else f", +{len(ordered) - limit} more"
+        return f"{label}={ordered[:limit]}{suffix}"
+
+    parts = [
+        part for part in (
+            _fmt("calls", calls),
+            _fmt("names", names),
+            _fmt("imports", imports),
+        )
+        if part
+    ]
+    if not parts:
+        return "AST observed no function calls, variable names, or imports."
+    return "AST observed " + "; ".join(parts) + "."
+
+
 async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dict:
     """Execute Python code in sandboxed environment."""
     from app.services.code_executor import execute_python
@@ -2641,13 +2692,14 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             found_in_ast = any(tok in code for tok in tokens_to_match)
 
         if not found_in_ast:
+            observed_ast = _summarize_ast_observations(code)
             return {
                 "success": False,
                 "error": (
                     f"data_source='{data_source}' declared but the code does not "
                     f"call any of {sorted(tokens_to_match)} (checked via AST walk "
-                    f"including aliases + imports). Either (a) update your code to "
-                    f"actually read that cache, or (b) declare "
+                    f"including aliases + imports). {observed_ast} Either (a) update "
+                    f"your code to actually read that cache, or (b) declare "
                     f"data_source='none_not_analyzing_real_data' if you are "
                     f"intentionally generating synthetic data (which will be "
                     f"marked SYNTHETIC and forbidden from citation)."

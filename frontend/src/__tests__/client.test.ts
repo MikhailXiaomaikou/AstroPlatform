@@ -251,6 +251,58 @@ describe("Auth helper functions", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sendChatMessage streams live tool_result actions before final response", async () => {
+    const { sendChatMessage } = await import("../api/client");
+
+    const sseBody = [
+      'data: {"type":"tool_result","live":true,"tool":"run_adql","result":{"row_count":3}}\n\n',
+      'data: {"type":"text","content":"Done"}\n\n',
+      'data: {"type":"tool_result","tool":"run_adql","result":{"row_count":3,"rows":[{"id":1}]}}\n\n',
+      'data: {"type":"done"}\n\n',
+    ].join("");
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      body: stream,
+    }));
+
+    const onActions = vi.fn();
+    const result = await sendChatMessage(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      undefined,
+      undefined,
+      onActions,
+    );
+
+    expect(onActions).toHaveBeenCalledTimes(2);
+    expect(onActions.mock.calls[0][0]).toEqual([
+      expect.objectContaining({
+        action: "run_adql",
+        _stream_preview: true,
+        tool_result: { row_count: 3 },
+      }),
+    ]);
+    expect(onActions.mock.calls[1][0]).toEqual([
+      expect.objectContaining({
+        action: "run_adql",
+        tool_result: { row_count: 3, rows: [{ id: 1 }] },
+      }),
+    ]);
+    expect(result.reply).toBe("Done");
+    expect(result.actions).toHaveLength(1);
+
+    vi.unstubAllGlobals();
+  });
+
   it("getAlerts uses the canonical trailing-slash endpoint", async () => {
     const { default: api, getAlerts } = await import("../api/client");
 

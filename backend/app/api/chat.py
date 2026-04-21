@@ -1013,6 +1013,11 @@ using plot_hr_diagram(bp_rp, gmag, isochrone_ages=[best_log_age]).
 You have a `search_lightcurve` tool that searches for Kepler/TESS/K2 light curves for a target star.
 Use it when users ask about exoplanet transits, stellar variability, or light curves. The toolkit also
 includes download_and_clean_lightcurve() and transit_search() available via run_python.
+If the user explicitly names `search_lightcurve`, or mentions TESS/Kepler/K2, transit, phase-folding,
+period search, variability, or time-series photometry for a named star, call `search_lightcurve`
+before `search_objects` or `get_object_dossier`. For exoplanet hosts such as HD 189733, HD 209458,
+WASP-12, or similar systems, prefer `search_lightcurve(target="<star>", mission="tess")` before
+generic object search.
 
 You have an `extract_sources` tool that detects and measures sources in a FITS image using SEP
 (SExtractor as a Python library). It performs background subtraction, source detection, and Kron
@@ -2052,6 +2057,7 @@ async def _run_agent_loop(
 
     hit_iteration_cap = False
     hit_deadline = False
+    soft_deadline_reminded = False
     for _iteration in range(max_iterations):
         if _time.monotonic() > _loop_deadline:
             hit_deadline = True
@@ -2097,6 +2103,27 @@ async def _run_agent_loop(
             })
         else:
             system_this_call = system
+
+        seconds_left = _loop_deadline - _time.monotonic()
+        if seconds_left <= 75.0:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: you are close to the agent-loop deadline "
+                + f"({max(0, int(seconds_left))}s left). Stop broad retries now. "
+                + "Summarize the successful tool results already gathered, or emit "
+                + "<tools_returned_nothing/> if the required data is still missing. "
+                + "Do not start another broad archive query unless it is essential "
+                + "and narrowly scoped.]"
+            )
+            if not soft_deadline_reminded:
+                await _emit({
+                    "type": "status",
+                    "message": (
+                        "Agent is near the workflow deadline; asking it to summarize "
+                        "partial results instead of starting broad retries."
+                    ),
+                })
+                soft_deadline_reminded = True
 
         response = await _llm_messages_create(
             system=system_this_call,

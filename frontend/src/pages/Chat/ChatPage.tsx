@@ -1781,6 +1781,7 @@ function serializeStored(messages: DisplayMessage[]): StoredMessage[] {
     content: m.content,
     actions: m.actions,
     actionResults: m.actionResults ? Array.from(m.actionResults.entries()) : undefined,
+    _pending: m._pending,
   }));
 }
 
@@ -2997,6 +2998,20 @@ export default function ChatPage() {
       );
     };
 
+    let streamedActions: ChatAction[] = [];
+    const onActions = (actions: ChatAction[]) => {
+      streamedActions = actions;
+      setMessages((prev) => {
+        const next = prev.map((m) =>
+          m.id === pendingId
+            ? { ...m, actions: actions.length > 0 ? actions : undefined }
+            : m,
+        );
+        saveChatHistory(next);
+        return next;
+      });
+    };
+
     const updatedMessages = [...messages, userMsg, pendingMarker];
     setMessages(updatedMessages);
     // H0.5: clear input whenever the text we're sending matches the
@@ -3056,7 +3071,7 @@ export default function ChatPage() {
       // can cancel this stream specifically.
       const abort = new AbortController();
       chatAbortRef.current = abort;
-      const response = await sendChatMessage(chatHistory, wsContext, onThinking, abort.signal);
+      const response = await sendChatMessage(chatHistory, wsContext, onThinking, abort.signal, onActions);
 
       // F3.2: carry forward any _abstention that arrived on a thinking event
       // before the final reply.  Without this the card would flash and
@@ -3102,6 +3117,7 @@ export default function ChatPage() {
         id: pendingId,
         role: "assistant",
         content: `Sorry, I encountered an error: ${errorDetail}`,
+        actions: streamedActions.length > 0 ? streamedActions : undefined,
       };
       setMessages((prev) => prev.map((m) => (m.id === pendingId ? errorMsg : m)));
       track("error.ai_failed", {

@@ -1749,6 +1749,7 @@ export async function sendChatMessage(
   context?: Record<string, unknown>,
   onThinking?: (evt: ThinkingEvent) => void,
   signal?: AbortSignal,
+  onActions?: (actions: ChatAction[]) => void,
 ): Promise<ChatResponse> {
   const apiKeys = getStoredApiKeys();
   const apiProvider = getPreferredAiProvider();
@@ -1804,6 +1805,7 @@ export async function sendChatMessage(
     const decoder = new TextDecoder();
     const replyParts: string[] = [];
     const actions: ChatAction[] = [];
+    const streamedActions: ChatAction[] = [];
     let buffer = "";
 
     // H7: cancel the reader on any exit path so the browser can release the
@@ -1833,11 +1835,19 @@ export async function sendChatMessage(
           if (evt.type === "text" && typeof evt.content === "string") {
             replyParts.push(evt.content);
           } else if (evt.type === "tool_result") {
+            const action = {
+              action: String(evt.tool || ""),
+              tool_result: evt.result,
+              _auto_executed: true,
+              ...(evt.live === true ? { _stream_preview: true } : {}),
+            } as ChatAction;
             // Backend emits tool_result twice: once inline (live:true) during
             // the agent loop for thinking-timeline updates, once at the end
             // with the full consolidated actions list.  Route each to the
             // right sink so the actions array stays deduplicated.
             if (evt.live === true) {
+              streamedActions.push(action);
+              if (onActions) onActions([...streamedActions]);
               if (onThinking) {
                 onThinking({
                   type: "tool_result",
@@ -1847,11 +1857,8 @@ export async function sendChatMessage(
                 });
               }
             } else {
-              actions.push({
-                action: String(evt.tool || ""),
-                tool_result: evt.result,
-                _auto_executed: true,
-              } as ChatAction);
+              actions.push(action);
+              if (onActions) onActions([...actions]);
             }
           } else if (evt.type === "agent_text" && typeof evt.content === "string") {
             // Intermediate prose the LLM produced between tool calls —
