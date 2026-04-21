@@ -38,6 +38,7 @@ from app.api.visualization import router as viz_router
 from app.api.citation_graph import router as citation_graph_router
 from app.api.citations import router as citations_router
 from app.api.comments import router as comments_router
+from app.api.admin_stats import router as admin_stats_router
 from app.api.crossmatch import router as crossmatch_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router, redis_subscriber
@@ -364,6 +365,7 @@ app.include_router(auth_router)
 app.include_router(citation_graph_router)
 app.include_router(citations_router)
 app.include_router(comments_router)
+app.include_router(admin_stats_router)
 app.include_router(crossmatch_router)
 app.include_router(chat_router)
 app.include_router(data_router)

@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.inference_router import inference_router
+from app.api.auth import require_admin_any
 from app.auth import get_current_user
 from app.models.database import get_db
 from app.models.schemas import InferenceLog, User
@@ -32,9 +33,8 @@ def _require_admin(user: User) -> None:
 @router.get("/stats")
 async def get_inference_stats(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    _: None = Depends(require_admin_any),
 ):
-    _require_admin(user)
     now = datetime.now(timezone.utc)
     windows = {
         "today": now - timedelta(days=1),
@@ -118,8 +118,7 @@ async def get_inference_stats(
 
 
 @router.get("/config")
-async def get_inference_config(user: User = Depends(get_current_user)):
-    _require_admin(user)
+async def get_inference_config(_: None = Depends(require_admin_any)):
     return {
         "routing": inference_router.agent_routing,
         "fallback_chain": inference_router.fallback_chain,
@@ -129,9 +128,8 @@ async def get_inference_config(user: User = Depends(get_current_user)):
 @router.put("/config")
 async def update_inference_config(
     req: InferenceConfigUpdate,
-    user: User = Depends(get_current_user),
+    _: None = Depends(require_admin_any),
 ):
-    _require_admin(user)
     for agent_name, backend_name in req.routing.items():
         if backend_name not in inference_router.backends:
             raise HTTPException(status_code=400, detail=f"Unknown backend: {backend_name}")
@@ -140,8 +138,7 @@ async def update_inference_config(
 
 
 @router.get("/health")
-async def inference_health(user: User = Depends(get_current_user)):
-    _require_admin(user)
+async def inference_health(_: None = Depends(require_admin_any)):
     health = []
     for name, backend in inference_router.backends.items():
         configured = True

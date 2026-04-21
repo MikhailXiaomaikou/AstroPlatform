@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_admin_any
 from app.auth import get_current_user, get_optional_user
 from app.models.database import get_db
 from app.models.schemas import User, UserEvent
@@ -76,9 +77,8 @@ async def track_event_endpoint(
 async def recent_events(
     hours: int = Query(24, ge=1, le=168),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    _: None = Depends(require_admin_any),
 ):
-    _require_admin(user)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     rows = (
         await db.execute(
@@ -106,9 +106,8 @@ async def recent_events(
 @admin_router.get("/stats")
 async def event_stats(
     period: str = Query("7d"),
-    user: User = Depends(get_current_user),
+    _: None = Depends(require_admin_any),
 ):
-    _require_admin(user)
     delta = _parse_period(period)
     cutoff = datetime.now(timezone.utc) - delta
     stats = await get_event_stats(start_time=cutoff)
@@ -125,9 +124,8 @@ async def export_events(
     end: datetime = Query(...),
     format: str = Query("csv"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    _: None = Depends(require_admin_any),
 ):
-    _require_admin(user)
     if format != "csv":
         raise HTTPException(status_code=400, detail="Only csv export is supported")
 

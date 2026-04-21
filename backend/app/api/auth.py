@@ -391,6 +391,63 @@ async def _require_admin(request: Request):
         raise HTTPException(status_code=403, detail="Invalid admin secret")
 
 
+async def require_admin_any(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """N'-1: 双 auth 的 admin 检查 (FastAPI dependency 形式).
+
+    - 优先看 X-Admin-Secret header (桌面工具场景), 匹配 settings.admin_secret 则放行
+    - 否则看 JWT + 用户 username 是否在 ADMIN_USERNAMES env var 里, 或
+      subscription_tier in {admin, institution}
+    - 都不行 → 403
+
+    用 FastAPI Depends(get_db) 拿 session, conftest 测试时的 dep override
+    才能生效.  events.py / inference.py / admin_stats.py 都用
+    `Depends(require_admin_any)` 调.
+    """
+    # ── 路径 1: X-Admin-Secret
+    if settings.admin_secret:
+        provided = request.headers.get("X-Admin-Secret", "")
+        if provided and provided == settings.admin_secret:
+            return None
+    # dev bypass: ENV=dev 且 admin_secret 空, 允许通过
+    import os as _os_local
+    _env = _os_local.getenv("ENV", "").strip().lower()
+    if not settings.admin_secret and _env == "dev":
+        return None
+
+    # ── 路径 2: JWT + ADMIN_USERNAMES 或 subscription_tier
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        try:
+            from app.auth import decode_token
+            from app.models.schemas import User
+            from sqlalchemy import select
+
+            user_id = decode_token(token)  # 返回 uuid.UUID 或 raise
+            user = (
+                await db.execute(select(User).where(User.id == user_id))
+            ).scalar_one_or_none()
+            if user is not None:
+                import os
+                admin_usernames = {
+                    u.strip()
+                    for u in os.getenv("ADMIN_USERNAMES", "").split(",")
+                    if u.strip()
+                }
+                if user.username in admin_usernames or user.subscription_tier in {"admin", "institution"}:
+                    return None
+        except Exception:
+            pass
+
+    raise HTTPException(
+        status_code=403,
+        detail="Admin access required (set X-Admin-Secret header or login as admin user)",
+    )
+
+
 @router.post("/generate-setup-keys", response_model=list[str])
 async def generate_setup_keys(
     request: Request,
