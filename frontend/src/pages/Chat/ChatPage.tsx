@@ -1185,31 +1185,38 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           <pre className="code-output code-error">{tb.slice(-500)}</pre>
         )}
 
-        {/* R7 fix: stderr 面板条件渲染.
-            - 成功 + 空 → 不渲染 (用户不需要看空框)
-            - 失败 + 空 → 渲染"crashed before capture"崩溃提示 (诊断信号)
-            - 有内容 → 直接显示 (不管成功失败, 可能是 warning) */}
-        {stderr !== undefined && (!success || stderr !== "") && (
+        {/* R3 (PART R): STDERR panel 只在失败路径下渲染. 成功 run 的
+            stderr (FutureWarning 等) 不再显示红色框. 原条件 `stderr !==
+            undefined` 对 stderr=null (axios 空字段转) 不守护, 导致 R8-OPEN-4
+            成功时误报 "subprocess crashed before Python stderr capture ran". */}
+        {!success && (
           <div style={{ marginTop: 6 }}>
             <div style={{ fontSize: "0.65rem", letterSpacing: "0.04em", color: "var(--color-red)", textTransform: "uppercase", marginBottom: 2 }}>
-              STDERR {stderr === "" ? "(empty, subprocess crashed early)" : ""}
+              STDERR {!(stderr ?? "") ? "(empty, subprocess crashed early)" : ""}
             </div>
-            <pre
-              style={{
-                background: "#2a1a1a",
-                color: "#ff9c9c",
-                fontFamily: "Menlo, Consolas, monospace",
-                fontSize: "0.72rem",
-                padding: "8px 10px",
-                borderRadius: 3,
-                whiteSpace: "pre-wrap",
-                maxHeight: 260,
-                overflow: "auto",
-                margin: 0,
-              }}
-            >
-              {stderr || "(empty — subprocess crashed before Python stderr capture ran)"}
-            </pre>
+            {(stderr ?? "") !== "" && (
+              <pre
+                style={{
+                  background: "#2a1a1a",
+                  color: "#ff9c9c",
+                  fontFamily: "Menlo, Consolas, monospace",
+                  fontSize: "0.72rem",
+                  padding: "8px 10px",
+                  borderRadius: 3,
+                  whiteSpace: "pre-wrap",
+                  maxHeight: 260,
+                  overflow: "auto",
+                  margin: 0,
+                }}
+              >
+                {stderr}
+              </pre>
+            )}
+            {(stderr ?? "") === "" && (
+              <div style={{ fontSize: "0.72rem", color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
+                (empty — subprocess crashed before Python stderr capture ran)
+              </div>
+            )}
             {stderrNote && (
               <div style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)", fontStyle: "italic", marginTop: 4, lineHeight: 1.45 }}>
                 {stderrNote}
