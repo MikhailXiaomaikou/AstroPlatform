@@ -1348,7 +1348,9 @@ class FITSFileInfo(BaseModel):
 
 
 @router.post("/fits/upload", response_model=FITSFileInfo)
+@limiter.limit("10/minute")
 async def upload_fits_file(
+    request: Request,
     file: UploadFile = FastAPIFile(..., description="FITS file to upload"),
     object_id: str = Query("", description="Optional object identifier"),
     db: AsyncSession = Depends(get_db),
@@ -1593,7 +1595,9 @@ async def download_fits_file(
 
 
 @router.post("/files/upload")
+@limiter.limit("10/minute")
 async def upload_general_file(
+    request: Request,
     file: UploadFile = FastAPIFile(...),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
