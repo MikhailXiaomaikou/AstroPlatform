@@ -333,7 +333,7 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict, z_max: float =
         "note": (
             f"Simplified template fitting with 7 SEDs (z_max={z_max}). "
             f"Use EAZY or Le Phare for publication-quality photo-z."
-            + (f"  WARNING: best z_phot is at the boundary of the grid; re-run with larger z_max to confirm." if at_boundary else "")
+            + ("  WARNING: best z_phot is at the boundary of the grid; re-run with larger z_max to confirm." if at_boundary else "")
         ),
     }
 
