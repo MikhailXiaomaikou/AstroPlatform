@@ -1054,9 +1054,13 @@ LIGHTCURVE / TIME-DOMAIN:
   astro.search_lightcurve(target, mission='tess')
     -> list of {mission, sector/quarter, exptime, author, target_id}
   astro.download_and_clean_lightcurve(target, mission='kepler'|'tess'|'k2',
-      flatten=True, sector=None, author=None)
+      flatten=True, sector=None, author=None, max_segments=3)
     -> {time, flux, flux_err, meta}
     sector is TESS sector int/list; author is 'SPOC' | 'TESS-SPOC' | 'QLP' | 'Kepler'.
+    IMPORTANT: when sector=None and the target has many TESS sectors, the helper
+    defaults to the 3 most-recent to avoid OOM (Render workers have ~2GB).
+    If you need a specific sector, pass sector=41 or sector=[41, 54, 81]
+    explicitly. Downloading 14 sectors at once will be SIGKILLed.
   astro.transit_search(target, mission='kepler')
     -> {period_days, transit_time, depth, max_power}
   astro.lomb_scargle_period(time, flux, min_period=None, max_period=None)

@@ -2972,16 +2972,26 @@ def search_lightcurve(target, mission='kepler'):
     return out
 
 
+# S2 (PART S): 若 sector=None 且 search 返回 > 此阈值, 默认只下最近 3 个,
+# 防止 lightkurve 下 14+ 个 TESS sector 一次爆 2-3 GB 内存被 SIGKILL
+# (Round 9 HD 189733b exit_code=-9 就是这个).
+DEFAULT_LIGHTCURVE_MAX_SEGMENTS = 3
+
+
 def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
-                                  sector=None, author=None):
+                                  sector=None, author=None,
+                                  max_segments=DEFAULT_LIGHTCURVE_MAX_SEGMENTS):
     """Download, stitch, and clean a light curve.
 
     target: 名称 (HD / HIP / TIC / KIC / EPIC / 坐标字符串).
     mission: 'kepler' | 'tess' | 'k2'.
-    sector: TESS sector 编号 (int 或 list[int]). None 表示全部.
+    sector: TESS sector 编号 (int 或 list[int]). None 表示全部, 但默认会被
+            截到最近的 max_segments 个防 OOM. 显式传 sector=[41,42,43] 精确指定.
     author: 'SPOC' | 'TESS-SPOC' | 'QLP' | 'Kepler' 等, 用来区分不同 pipeline
             出的同一目标产品. None 取第一个可用的.
     flatten: 做 outlier 剔除 + 去除长周期趋势. False 保留原始曲线.
+    max_segments: 默认 3 个 segment 上限, 防止 lightkurve 下所有 TESS sector
+                  爆内存被 SIGKILL.  显式传 None 关闭截断.
     """
     import lightkurve as lk
     # R1.1: 只在非 None 时传参, 保持 lightkurve 默认行为
@@ -2993,21 +3003,38 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
     search = lk.search_lightcurve(target, **kwargs)
     if len(search) == 0:
         raise ValueError(f"No {mission} light curves found for {target}")
+
+    # S2: 只在用户没显式指定 sector 时触发 max_segments 截断.
+    segments_warning = None
+    original_n = len(search)
+    if sector is None and max_segments is not None and original_n > max_segments:
+        # 保留最近的 max_segments 个 — lightkurve SearchResult 支持 slicing
+        search = search[-max_segments:]
+        segments_warning = (
+            f"Found {original_n} matching {mission} light curves; "
+            f"downloading only the most recent {max_segments} to avoid OOM. "
+            f"Pass sector=[...] or max_segments=None to override."
+        )
+
     lc_collection = search.download_all()
     lc = lc_collection.stitch()
     if flatten:
         lc = lc.remove_outliers().flatten()
+    meta = {
+        'target': target,
+        'mission': mission,
+        'sector': sector,
+        'author': author,
+        'segments': len(lc_collection),
+        'segments_requested': original_n,
+    }
+    if segments_warning is not None:
+        meta['warning'] = segments_warning
     return {
         'time': lc.time.value.tolist(),
         'flux': lc.flux.value.tolist(),
         'flux_err': lc.flux_err.value.tolist() if lc.flux_err is not None else None,
-        'meta': {
-            'target': target,
-            'mission': mission,
-            'sector': sector,
-            'author': author,
-            'segments': len(lc_collection),
-        }
+        'meta': meta,
     }
 
 

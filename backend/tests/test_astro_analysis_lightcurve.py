@@ -131,3 +131,99 @@ def test_empty_search_raises_informative_error():
             astro_analysis.download_and_clean_lightcurve(
                 "NonExistent", mission="tess"
             )
+
+
+# ── S2 (PART S): OOM guard ──────────────────────────────────────────────
+
+
+class _SearchSlice:
+    """SearchResult slicing 的 fake 实现, 支持 search[-3:]."""
+
+    def __init__(self, n):
+        self._n = n
+
+    def __len__(self):
+        return self._n
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            # slice 后返回一个新的, 长度为 stop-start 的 SearchSlice
+            start = key.start if key.start is not None else 0
+            stop = key.stop if key.stop is not None else self._n
+            if start < 0:
+                start = max(0, self._n + start)
+            if stop < 0:
+                stop = max(0, self._n + stop)
+            return _SearchSlice(max(0, stop - start))
+        raise TypeError(f"Unsupported index: {key!r}")
+
+    def download_all(self):
+        return _FakeCollection(n_segments=self._n)
+
+
+def test_sector_none_caps_at_default_max_segments():
+    """sector=None + 14 个 TESS sector → 默认只下最近 3 个, meta 有 warning."""
+    from app.services import astro_analysis
+
+    fake_lk = MagicMock()
+    fake_lk.search_lightcurve.return_value = _SearchSlice(14)
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.download_and_clean_lightcurve(
+            "HD 189733", mission="tess"
+        )
+
+    # 应当截到默认 3 个
+    assert result["meta"]["segments"] == 3
+    assert result["meta"]["segments_requested"] == 14
+    assert "warning" in result["meta"]
+    assert "14" in result["meta"]["warning"]
+
+
+def test_explicit_sector_skips_cap():
+    """sector=[41, 54, 81] 显式传时不触发截断."""
+    from app.services import astro_analysis
+
+    fake_lk = MagicMock()
+    fake_lk.search_lightcurve.return_value = _SearchSlice(3)
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.download_and_clean_lightcurve(
+            "HD 189733", mission="tess", sector=[41, 54, 81]
+        )
+
+    # 没 warning 因为用户显式传了 sector
+    assert "warning" not in result["meta"]
+    assert result["meta"]["sector"] == [41, 54, 81]
+
+
+def test_max_segments_none_disables_cap():
+    """max_segments=None 显式关闭截断."""
+    from app.services import astro_analysis
+
+    fake_lk = MagicMock()
+    fake_lk.search_lightcurve.return_value = _SearchSlice(10)
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.download_and_clean_lightcurve(
+            "Kepler-10", mission="kepler", max_segments=None
+        )
+
+    assert result["meta"]["segments"] == 10
+    assert "warning" not in result["meta"]
+
+
+def test_segments_below_cap_no_warning():
+    """只有 2 个 segment 时不该触发截断提示."""
+    from app.services import astro_analysis
+
+    fake_lk = MagicMock()
+    fake_lk.search_lightcurve.return_value = _SearchSlice(2)
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.download_and_clean_lightcurve(
+            "HD 189733", mission="tess"
+        )
+
+    assert result["meta"]["segments"] == 2
+    assert "warning" not in result["meta"]
