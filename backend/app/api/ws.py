@@ -7,8 +7,11 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from sqlalchemy import or_, select
 
 from app.auth import decode_token
+from app.models.database import async_session
+from app.models.schemas import PipelineRun, TeamMember
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -16,6 +19,56 @@ router = APIRouter()
 
 # WebSocket close codes: 4401 = unauthorized (RFC 6455 private range).
 _WS_CLOSE_UNAUTHORIZED = 4401
+# T2 (PART T): 4403 = authorized but not a member / owner.
+_WS_CLOSE_FORBIDDEN = 4403
+
+
+async def _authorize_pipeline_run(user_id: str, run_id: str) -> bool:
+    """T2 (PART T): verify JWT user owns the pipeline run.
+
+    Without this any authenticated user could tail arbitrary run_ids by
+    guessing / knowing UUIDs.
+    """
+    import uuid
+    try:
+        run_uuid = uuid.UUID(str(run_id))
+        user_uuid = uuid.UUID(str(user_id))
+    except (ValueError, TypeError):
+        return False
+    async with async_session() as db:
+        result = await db.execute(
+            select(PipelineRun.id).where(
+                PipelineRun.id == run_uuid,
+                PipelineRun.user_id == user_uuid,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+
+async def _authorize_team_member(user_id: str, team_id: str) -> bool:
+    """T2 (PART T): verify JWT user is owner or member of the team.
+
+    Team is identified by its owner's user_id (team_id == owner user_id).
+    Accept if auth_user_id == team_id (owner) or a TeamMember row exists
+    with (owner_id=team_id, member_id=auth_user_id).
+    """
+    import uuid
+    try:
+        team_uuid = uuid.UUID(str(team_id))
+        user_uuid = uuid.UUID(str(user_id))
+    except (ValueError, TypeError):
+        return False
+    # Owner fast-path
+    if team_uuid == user_uuid:
+        return True
+    async with async_session() as db:
+        result = await db.execute(
+            select(TeamMember.id).where(
+                TeamMember.owner_id == team_uuid,
+                TeamMember.member_id == user_uuid,
+            )
+        )
+        return result.scalar_one_or_none() is not None
 
 
 async def _authenticate_ws(websocket: WebSocket):
@@ -104,6 +157,11 @@ async def pipeline_ws(websocket: WebSocket, run_id: str):
     user_id = await _authenticate_ws(websocket)
     if user_id is None:
         return
+    # T2 (PART T): verify the JWT user owns this run_id before accepting.
+    if not await _authorize_pipeline_run(user_id, run_id):
+        await websocket.close(code=_WS_CLOSE_FORBIDDEN, reason="run not found or not yours")
+        logger.info("WS pipeline_ws rejected: user %s → run %s (not owner)", user_id, run_id)
+        return
     await websocket.accept()
     _connections[run_id].append(websocket)
     logger.info("WebSocket connected for run %s (user %s)", run_id, user_id)
@@ -186,6 +244,16 @@ async def collab_websocket(websocket: WebSocket, team_id: str):
     """Real-time collaboration channel for team pipeline editing."""
     auth_user_id = await _authenticate_ws(websocket)
     if auth_user_id is None:
+        return
+    # T2 (PART T): verify auth_user is a member / owner of this team before
+    # accepting. Otherwise any logged-in user could tail arbitrary teams'
+    # cursor / comment / edit broadcasts.
+    if not await _authorize_team_member(auth_user_id, team_id):
+        await websocket.close(code=_WS_CLOSE_FORBIDDEN, reason="not a team member")
+        logger.info(
+            "WS collab_websocket rejected: user %s → team %s (not a member)",
+            auth_user_id, team_id,
+        )
         return
     await websocket.accept()
 
