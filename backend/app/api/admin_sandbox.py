@@ -88,6 +88,90 @@ async def sandbox_health(
         }
 
 
+@router.get("/repro-imports")
+async def sandbox_repro_imports(
+    _admin: None = Depends(require_admin_any),
+) -> dict[str, Any]:
+    """Popen 跑一个 child-equivalent Python: 尝试 import
+    app.services.sandbox.subprocess_backend + app.main.
+
+    multiprocessing spawn 的 child 启动时会 re-import 主 program + target
+    module.  如果哪个 module 的 top-level code 崩 (environment variable
+    缺失 / DB 连接初始化 / import cycle), child 在 `_child_main` 执行
+    **之前** 就 Python-exit(1), 它的 stderr 去 parent 的 fd=2.  这个
+    endpoint 用 Popen 复现同样的 import 链路 + stderr=PIPE 捕获, 能定
+    位 R5-OPEN-A 的具体 crash 位置.
+    """
+    probe = (
+        "import sys\n"
+        "import traceback\n"
+        "try:\n"
+        "    import app.services.sandbox.subprocess_backend  # noqa\n"
+        '    print("sandbox_backend_import_ok")\n'
+        "except Exception:\n"
+        '    sys.stderr.write("=== FAILED importing app.services.sandbox.subprocess_backend ===\\n")\n'
+        "    traceback.print_exc(file=sys.stderr)\n"
+        "    sys.exit(10)\n"
+        "try:\n"
+        "    from app.main import app  # noqa\n"
+        '    print("app_main_import_ok")\n'
+        "except Exception:\n"
+        '    sys.stderr.write("=== FAILED importing app.main ===\\n")\n'
+        "    traceback.print_exc(file=sys.stderr)\n"
+        "    sys.exit(11)\n"
+        "try:\n"
+        "    import pickle, multiprocessing as mp\n"
+        "    ctx = mp.get_context('spawn')\n"
+        "    # 试 pickle _child_main (spawn 必须能 pickle 它)\n"
+        "    from app.services.sandbox.subprocess_backend import _child_main\n"
+        "    pickle.dumps(_child_main)\n"
+        '    print("pickle_child_main_ok")\n'
+        "except Exception:\n"
+        '    sys.stderr.write("=== FAILED picklability check ===\\n")\n'
+        "    traceback.print_exc(file=sys.stderr)\n"
+        "    sys.exit(12)\n"
+    )
+    t0 = time.time()
+    # 重要: cwd 必须是 backend/ 以便 import app.*
+    import pathlib as _pl
+    backend_dir = _pl.Path(__file__).resolve().parent.parent.parent
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(backend_dir),
+            env={**os.environ},  # 继承当前环境
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "duration_ms": int((time.time() - t0) * 1000),
+            "cwd": str(backend_dir),
+            "note": (
+                "exit_code 10 = app.services.sandbox.subprocess_backend "
+                "import 挂. exit 11 = app.main import 挂. exit 12 = "
+                "spawn picklability 挂. 0 = 三步都 OK, 问题在 multiprocessing "
+                "本身 (pipe / fd 继承 / signal handling)."
+            ),
+        }
+    except subprocess.TimeoutExpired as e:
+        return {
+            "ok": False,
+            "exit_code": None,
+            "stdout": e.stdout or "",
+            "stderr": (e.stderr or "") + "\n\n[TimeoutExpired after 30s — import hung]",
+            "duration_ms": int((time.time() - t0) * 1000),
+            "error": "import timeout",
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"failed to spawn probe: {type(e).__name__}: {e}",
+        }
+
+
 @router.get("/exec-test")
 async def sandbox_exec_test(
     _admin: None = Depends(require_admin_any),

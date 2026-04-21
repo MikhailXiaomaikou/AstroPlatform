@@ -255,9 +255,10 @@
   run_python 挂时用这两个按钮看真实 Python stderr.  /health 绕开
   multiprocessing, 直接 Popen 跑最简 print. /exec-test 走生产链路对比.
 </div>
-<div style="display:flex;gap:8px;margin-bottom:12px;">
+<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
   <button class="period-btn" onclick="runSandboxHealth()">① 诊断子进程 (直接 Popen)</button>
   <button class="period-btn" onclick="runSandboxExecTest()">② 生产链路测试 (SubprocessBackend)</button>
+  <button class="period-btn" onclick="runSandboxReproImports()">③ 复现 child 的 import (关键)</button>
 </div>
 <div id="sandbox-result" class="sub" style="margin-top:4px;"></div>
 
@@ -739,6 +740,17 @@ async function runSandboxExecTest() {
   try {
     const r = await api('/api/admin/sandbox/exec-test');
     renderSandboxResult(area, '② /sandbox/exec-test (生产链路)', r);
+  } catch (e) {
+    area.innerHTML = `<div class="err">请求失败: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function runSandboxReproImports() {
+  const area = $('sandbox-result');
+  area.innerHTML = '<div class="loading">Popen 跑 child 等价的 import 测试 (最多 30s)...</div>';
+  try {
+    const r = await api('/api/admin/sandbox/repro-imports');
+    renderSandboxResult(area, '③ /sandbox/repro-imports (复现 child 的 import)', r);
   } catch (e) {
     area.innerHTML = `<div class="err">请求失败: ${escapeHtml(e.message)}</div>`;
   }
