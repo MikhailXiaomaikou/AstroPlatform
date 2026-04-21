@@ -2972,10 +2972,25 @@ def search_lightcurve(target, mission='kepler'):
     return out
 
 
-def download_and_clean_lightcurve(target, mission='kepler', flatten=True):
-    """Download, stitch, and clean a light curve."""
+def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
+                                  sector=None, author=None):
+    """Download, stitch, and clean a light curve.
+
+    target: 名称 (HD / HIP / TIC / KIC / EPIC / 坐标字符串).
+    mission: 'kepler' | 'tess' | 'k2'.
+    sector: TESS sector 编号 (int 或 list[int]). None 表示全部.
+    author: 'SPOC' | 'TESS-SPOC' | 'QLP' | 'Kepler' 等, 用来区分不同 pipeline
+            出的同一目标产品. None 取第一个可用的.
+    flatten: 做 outlier 剔除 + 去除长周期趋势. False 保留原始曲线.
+    """
     import lightkurve as lk
-    search = lk.search_lightcurve(target, mission=mission)
+    # R1.1: 只在非 None 时传参, 保持 lightkurve 默认行为
+    kwargs = {"mission": mission}
+    if sector is not None:
+        kwargs["sector"] = sector
+    if author is not None:
+        kwargs["author"] = author
+    search = lk.search_lightcurve(target, **kwargs)
     if len(search) == 0:
         raise ValueError(f"No {mission} light curves found for {target}")
     lc_collection = search.download_all()
@@ -2986,7 +3001,13 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True):
         'time': lc.time.value.tolist(),
         'flux': lc.flux.value.tolist(),
         'flux_err': lc.flux_err.value.tolist() if lc.flux_err is not None else None,
-        'meta': {'target': target, 'mission': mission, 'segments': len(lc_collection)}
+        'meta': {
+            'target': target,
+            'mission': mission,
+            'sector': sector,
+            'author': author,
+            'segments': len(lc_collection),
+        }
     }
 
 

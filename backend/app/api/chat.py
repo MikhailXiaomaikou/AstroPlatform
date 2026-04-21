@@ -1044,6 +1044,52 @@ before `search_objects` or `get_object_dossier`. For exoplanet hosts such as HD 
 WASP-12, or similar systems, prefer `search_lightcurve(target="<star>", mission="tess")` before
 generic object search.
 
+## Common astro.* helpers in run_python (EXACT signatures — do not guess)
+
+These are the ~12 high-frequency helpers exposed inside run_python as `astro.<name>(...)`.
+Call `astro.available_functions()` inside run_python to list all ~50 helpers; use this short
+list when you know the scenario.
+
+LIGHTCURVE / TIME-DOMAIN:
+  astro.search_lightcurve(target, mission='tess')
+    -> list of {mission, sector/quarter, exptime, author, target_id}
+  astro.download_and_clean_lightcurve(target, mission='kepler'|'tess'|'k2',
+      flatten=True, sector=None, author=None)
+    -> {time, flux, flux_err, meta}
+    sector is TESS sector int/list; author is 'SPOC' | 'TESS-SPOC' | 'QLP' | 'Kepler'.
+  astro.transit_search(target, mission='kepler')
+    -> {period_days, transit_time, depth, max_power}
+  astro.lomb_scargle_period(time, flux, min_period=None, max_period=None)
+    -> {best_period, power, false_alarm_prob}
+  astro.phase_fold(time, flux, period, t0=None)
+    -> {phase, flux_folded}
+
+EXTINCTION / REDDENING:
+  astro.extinction_curve(wavelengths_aa, av, rv=3.1) -> a_lambda array
+  astro.deredden(wave, flux, av, rv=3.1)             -> flux_dereddened
+  astro.estimate_ebv(ra, dec)                        -> e_bv (SFD fallback)
+
+ISOCHRONES / HR DIAGRAM:
+  astro.get_isochrone(age_gyr, metallicity=0.0, filter_set='gaia')
+    -> {bp_rp, abs_g, mass, ...}
+  astro.fit_isochrone(bp_rp, abs_g, age_range_gyr=(0.01, 13))
+    -> {best_age_gyr, distance_modulus, ...}
+  astro.plot_hr_diagram(bp_rp, gmag, isochrone_ages=None, title=None)
+    -> matplotlib Figure
+
+CLASSIFICATION / SPECTRA:
+  astro.bpt_classify(log_nii_ha, log_oiii_hb) -> 'sf' | 'agn' | 'composite'
+  astro.classify_variable(time, flux)         -> {class, confidence}
+
+PHOTOMETRY / DISTANCES:
+  astro.compute_absolute_magnitude(apparent_mag, distance_pc)
+  astro.compute_luminosity_distance(z, cosmology='planck18')
+  astro.k_correction(z, filter_name)
+
+If you need a helper not on this list, call `astro.available_functions()` first instead of
+guessing the signature. Never invent kwargs (sector=, quarter=, campaign=) unless you verified
+the helper accepts them.
+
 You have an `extract_sources` tool that detects and measures sources in a FITS image using SEP
 (SExtractor as a Python library). It performs background subtraction, source detection, and Kron
 aperture photometry. Use it when users upload a FITS image and want to find objects in it.
