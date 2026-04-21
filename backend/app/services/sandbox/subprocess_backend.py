@@ -486,6 +486,12 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
                 conn.close()
             except Exception:
                 pass
+            # R2: 如果 payload 记载失败 (exec 抛异常被 try/except 捕获), 主动
+            # 非零 exit 让父进程 proc.exitcode 真实反映失败. 否则 implicit
+            # return 会让 Unix exit_code=0 与 success=False 语义矛盾, 监控
+            # 无法按 exit_code 聚合.
+            if not result.get("success", True):
+                sys.exit(1)
 
 
 class SubprocessBackend:
