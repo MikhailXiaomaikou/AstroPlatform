@@ -2304,4 +2304,51 @@ export async function dismissAnomaly(id: string): Promise<{ id: string; dismisse
   return data;
 }
 
+
+// ── 公开评论区 (Landing 页下方) ──
+
+export interface CommentPublicView {
+  id: string;
+  author_name: string;
+  content: string;
+  created_at: string;  // ISO 8601
+}
+
+export interface CommentListResponse {
+  comments: CommentPublicView[];
+  total: number;
+  has_more: boolean;
+}
+
+export async function fetchComments(
+  limit: number = 20,
+  offset: number = 0,
+): Promise<CommentListResponse> {
+  const { data } = await api.get<CommentListResponse>(
+    "/api/comments",
+    { params: { limit, offset } },
+  );
+  return data;
+}
+
+export async function postComment(
+  author_name: string,
+  content: string,
+): Promise<CommentPublicView> {
+  const { data } = await api.post<CommentPublicView>(
+    "/api/comments",
+    { author_name, content },
+  );
+  return data;
+}
+
+export async function deleteComment(
+  id: string,
+  adminSecret: string,
+): Promise<void> {
+  await api.delete(`/api/comments/${id}`, {
+    headers: { "X-Admin-Secret": adminSecret },
+  });
+}
+
 export default api;

@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useI18n } from "../../i18n";
+import CommentSection from "./CommentSection";
 
 /**
  * Home page — Journal Edition.
@@ -139,6 +140,9 @@ export default function LandingPage() {
           </li>
         </ol>
       </div>
+
+      {/* 公开评论区 — 向全网开放, 无需登录 */}
+      <CommentSection />
     </div>
   );
 }

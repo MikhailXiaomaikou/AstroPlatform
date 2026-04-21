@@ -2198,3 +2198,242 @@ textarea.adql-editor-textarea {
 .account-page input:focus,
 .account-page textarea:focus,
 .account-page select:focus { border-bottom-color: var(--accent); }
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   公开评论区 (Landing 页下方).  Journal 配色 — paper 米白背景, ink
+   黑字, burgundy 强调色. 不登录即可发.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.comment-section {
+  margin: 48px 0 32px 0;
+  padding-top: 24px;
+  border-top: 1px solid var(--rule);
+}
+
+.comment-section-intro {
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 4px 0 20px 0;
+  max-width: 720px;
+}
+
+.comment-form {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  padding: 16px 18px 14px 18px;
+  margin-bottom: 28px;
+  border-radius: 2px;
+}
+
+.comment-form-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  position: relative;
+}
+.comment-form-row label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.comment-form-row-content {
+  flex: 1;
+}
+.comment-form-label {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  text-transform: uppercase;
+}
+
+.comment-input,
+.comment-textarea {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 2px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.comment-textarea {
+  resize: vertical;
+  min-height: 72px;
+}
+.comment-input:focus,
+.comment-textarea:focus {
+  border-color: var(--accent);
+}
+
+.comment-char-count {
+  font-size: 11px;
+  color: var(--ink-3);
+  align-self: flex-end;
+  padding-bottom: 6px;
+  white-space: nowrap;
+  min-width: 52px;
+  text-align: right;
+}
+
+.comment-form-error {
+  color: var(--accent);
+  font-size: 13px;
+  margin: 6px 0 4px 0;
+}
+
+.comment-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.comment-submit-btn {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  padding: 6px 18px;
+  background: var(--accent);
+  color: var(--paper);
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.comment-submit-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.comment-submit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.comment-list-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 12px 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.comment-list-count {
+  font-style: italic;
+}
+.comment-admin-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 2px;
+  letter-spacing: 0.04em;
+}
+
+.comment-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.comment-item {
+  padding: 14px 4px 14px 4px;
+  border-top: 1px solid var(--rule);
+  transition: background-color 800ms ease-out;
+}
+.comment-item:last-child {
+  border-bottom: 1px solid var(--rule);
+}
+.comment-item-fresh {
+  background: rgba(123, 45, 38, 0.06);  /* 淡 burgundy 高亮 */
+}
+
+.comment-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.comment-author {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 14px;
+}
+.comment-time {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.comment-delete-btn {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--ink-3);
+  color: var(--ink-3);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.comment-delete-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.comment-content {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.comment-loading,
+.comment-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--ink-3);
+  font-style: italic;
+}
+.comment-error {
+  padding: 14px;
+  text-align: center;
+  color: var(--accent);
+  background: rgba(123, 45, 38, 0.06);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+}
+
+.comment-load-more-wrap {
+  text-align: center;
+  margin: 20px 0 0 0;
+}
+.comment-load-more-btn {
+  font-family: var(--font-serif);
+  font-size: 13px;
+  padding: 6px 18px;
+  background: var(--paper);
+  color: var(--ink-2);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.comment-load-more-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.comment-load-more-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+  .comment-form-row {
+    flex-direction: column;
+  }
+  .comment-char-count {
+    align-self: flex-end;
+  }
+}
