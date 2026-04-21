@@ -264,6 +264,9 @@ class CodeExecutionResult:
         self.variables: dict[str, str] = {}  # name -> repr (for key results)
         self.variable_types: dict[str, str] = {}  # name -> type name
         self.success: bool = True
+        self.backend: str = "unknown"
+        self.duration_ms: int = 0
+        self.exit_code: int | None = None
 
 
 @contextmanager
@@ -543,6 +546,48 @@ def _normalize_code(code: str) -> str:
     return "\n".join(normalized)
 
 
+def _install_savefig_capture(plt):
+    """捕获用户显式 savefig 后又 close 的图。"""
+    try:
+        from matplotlib.figure import Figure
+    except Exception:
+        return {}, None, lambda: None
+
+    original_savefig = Figure.savefig
+    saved_figures: dict[int, str] = {}
+    in_capture = False
+
+    def _capture(fig) -> None:
+        nonlocal in_capture
+        if in_capture:
+            return
+        try:
+            in_capture = True
+            buf = io.BytesIO()
+            original_savefig(fig, buf, format="png", dpi=150, bbox_inches="tight")
+            b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            if len(b64) <= 8 * 1024 * 1024:
+                saved_figures[id(fig)] = b64
+        except Exception:
+            pass
+        finally:
+            in_capture = False
+
+    def _wrapped_savefig(self, *args, **kwargs):
+        _capture(self)
+        return original_savefig(self, *args, **kwargs)
+
+    Figure.savefig = _wrapped_savefig
+
+    def _restore() -> None:
+        try:
+            Figure.savefig = original_savefig
+        except Exception:
+            pass
+
+    return saved_figures, original_savefig, _restore
+
+
 def _should_persist_value(val) -> bool:
     """Keep most Python objects alive across cells, but skip modules and figures."""
     if isinstance(val, ModuleType):
@@ -619,6 +664,9 @@ def _dispatch_subprocess(
     result.variables = dict(raw.variables)
     result.variable_types = dict(raw.variable_types)
     result.success = raw.success
+    result.backend = raw.backend
+    result.duration_ms = raw.duration_ms
+    result.exit_code = raw.exit_code
     return result
 
 
@@ -654,7 +702,9 @@ def execute_python(
     except Exception as e:
         logger.warning("sandbox: subprocess dispatch raised %s, using in-process", e)
 
+    t0 = _session_time.monotonic()
     result = CodeExecutionResult()
+    result.backend = "inprocess"
     code = _normalize_code(code)
 
     # Capture stdout/stderr
@@ -682,6 +732,7 @@ def execute_python(
     ]
     matplotlib.rcParams["axes.unicode_minus"] = False  # Fix minus sign rendering
     import matplotlib.pyplot as plt
+    saved_figures, original_savefig, restore_savefig = _install_savefig_capture(plt)
 
     data_accessors = _make_data_accessor(session_id)
     exec_globals = {
@@ -878,8 +929,10 @@ def execute_python(
     # Capture matplotlib figures as base64 PNG
     try:
         fig_nums = plt.get_fignums()
+        open_figure_ids: set[int] = set()
         for fig_num in fig_nums:
             fig = plt.figure(fig_num)
+            open_figure_ids.add(id(fig))
             buf = io.BytesIO()
             # Use dark theme for figures (matches default dark UI)
             fig.patch.set_facecolor("#1c1c1e")
@@ -891,14 +944,27 @@ def execute_python(
                 ax.title.set_color("#eee")
                 for spine in ax.spines.values():
                     spine.set_edgecolor("#555")
-            fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
-                       facecolor="#1c1c1e", edgecolor="none")
+            if original_savefig is not None:
+                original_savefig(
+                    fig, buf, format="png", dpi=150, bbox_inches="tight",
+                    facecolor="#1c1c1e", edgecolor="none",
+                )
+            else:
+                fig.savefig(
+                    buf, format="png", dpi=150, bbox_inches="tight",
+                    facecolor="#1c1c1e", edgecolor="none",
+                )
             buf.seek(0)
             b64 = base64.b64encode(buf.read()).decode("utf-8")
             result.figures.append(b64)
+        for fig_id, b64 in saved_figures.items():
+            if fig_id not in open_figure_ids and b64 not in result.figures:
+                result.figures.append(b64)
         plt.close("all")
     except Exception as e:
         logger.warning("Failed to capture matplotlib figures: %s", e)
+    finally:
+        restore_savefig()
 
     # Save user-defined variables back to session for persistence
     for name, val in exec_globals.items():
@@ -922,4 +988,6 @@ def execute_python(
         except Exception:
             pass
 
+    result.duration_ms = int((_session_time.monotonic() - t0) * 1000)
+    result.exit_code = 0 if result.success else None
     return result

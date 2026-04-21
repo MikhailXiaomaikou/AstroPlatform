@@ -217,6 +217,16 @@ def test_run_python_no_output_stamped_as_empty():
     assert r["__tool_status__"] == "EMPTY"
 
 
+def test_run_python_figure_output_not_stamped_empty():
+    r = normalize_tool_result(
+        "run_python",
+        {"success": True, "stdout": "", "figures": ["iVBORw0"], "variables": {}},
+        tool_input={"code": "plt.savefig(buf); plt.close('all')"},
+    )
+    assert r["analysis_status"] == "completed"
+    assert r.get("__tool_status__") != "EMPTY"
+
+
 def test_tool_failure_stamped_as_failed_with_banner():
     r = normalize_tool_result(
         "run_python",

@@ -2828,6 +2828,9 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     response: dict = {
         "success": result.success,
         "stdout": result.stdout[:50_000] if result.stdout else "",
+        "backend": getattr(result, "backend", "unknown"),
+        "duration_ms": getattr(result, "duration_ms", 0),
+        "exit_code": getattr(result, "exit_code", None),
     }
 
     # F0.2: error-field tripwire.  Previously we only populated `error` when

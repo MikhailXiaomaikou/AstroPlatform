@@ -111,6 +111,19 @@ class TestSubprocessSandboxIsolation:
         # PNG base64 starts with iVBOR
         assert r.figures[0].startswith("iVBOR")
 
+    def test_savefig_then_close_still_captures_figure(self):
+        r = _run(
+            "import io\n"
+            "import matplotlib.pyplot as plt\n"
+            "plt.figure(); plt.plot([1,2,3],[1,4,9]); plt.title('closed')\n"
+            "buf = io.BytesIO()\n"
+            "plt.savefig(buf, format='png')\n"
+            "plt.close('all')"
+        )
+        assert r.success is True, r.error
+        assert len(r.figures) == 1
+        assert r.figures[0].startswith("iVBOR")
+
     def test_parent_survives_repeated_crashes(self):
         for _ in range(3):
             _run("raise SystemError('bang')")

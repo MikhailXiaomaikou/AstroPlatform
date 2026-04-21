@@ -115,6 +115,52 @@ def _safe_var_repr(val) -> str | None:
     return r
 
 
+def _install_savefig_capture(plt, stderr_buf: StringIO):
+    """捕获用户显式 savefig 后又 close 的图。"""
+    try:
+        from matplotlib.figure import Figure
+    except Exception:
+        return {}, None, lambda: None
+
+    original_savefig = Figure.savefig
+    saved_figures: dict[int, str] = {}
+    in_capture = False
+
+    def _capture(fig) -> None:
+        nonlocal in_capture
+        if in_capture:
+            return
+        try:
+            in_capture = True
+            buf = BytesIO()
+            original_savefig(fig, buf, format="png", dpi=150, bbox_inches="tight")
+            png_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            if len(png_b64) > 8 * 1024 * 1024:
+                stderr_buf.write(
+                    f"[savefig capture: {len(png_b64)} b64 chars, dropping — too large for pipe]\n"
+                )
+                return
+            saved_figures[id(fig)] = png_b64
+        except Exception as err:  # pragma: no cover - diagnostic only
+            stderr_buf.write(f"[savefig capture failed: {type(err).__name__}: {err}]\n")
+        finally:
+            in_capture = False
+
+    def _wrapped_savefig(self, *args, **kwargs):
+        _capture(self)
+        return original_savefig(self, *args, **kwargs)
+
+    Figure.savefig = _wrapped_savefig
+
+    def _restore() -> None:
+        try:
+            Figure.savefig = original_savefig
+        except Exception:
+            pass
+
+    return saved_figures, original_savefig, _restore
+
+
 def _normalize_adql_rows(payload):
     if isinstance(payload, dict):
         rows = payload.get("rows")
@@ -202,6 +248,7 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
         matplotlib.rcParams["axes.unicode_minus"] = False
         import matplotlib.pyplot as plt
         import numpy as np
+        saved_figures, original_savefig, restore_savefig = _install_savefig_capture(plt, stderr_buf)
 
         # H4: Filter the truly dangerous builtins (open/exec/eval/compile) from
         # user code.  Previously the subprocess backend exposed the full
@@ -254,13 +301,18 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
         exec(code, exec_globals)  # noqa: S102
         _child_breadcrumb(f"exec done; fignums={plt.get_fignums()}")
 
-        # Capture figures — G0.3: each figure guarded independently so one
-        # OOM/corrupt figure doesn't wipe the whole result.
+        # 捕获仍然打开的 figure；用户若 savefig 后 close，下面会从
+        # saved_figures 兜底补回。
+        open_figure_ids: set[int] = set()
         for fig_num in plt.get_fignums():
             try:
                 fig = plt.figure(fig_num)
+                open_figure_ids.add(id(fig))
                 buf = BytesIO()
-                fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+                if original_savefig is not None:
+                    original_savefig(fig, buf, format="png", dpi=150, bbox_inches="tight")
+                else:
+                    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
                 png_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
                 # G0.3: per-figure size cap (8 MB raw PNG is absurd).
                 if len(png_b64) > 8 * 1024 * 1024:
@@ -274,10 +326,16 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
             except Exception as fig_err:  # pragma: no cover
                 stderr_buf.write(f"[figure {fig_num} capture failed: {type(fig_err).__name__}: {fig_err}]\n")
                 _child_breadcrumb(f"figure {fig_num} failed: {type(fig_err).__name__}")
+        for fig_id, png_b64 in saved_figures.items():
+            if fig_id in open_figure_ids or png_b64 in result["figures"]:
+                continue
+            result["figures"].append(png_b64)
+            _child_breadcrumb(f"closed savefig figure serialized OK ({len(png_b64)} b64 chars)")
         try:
             plt.close("all")
         except Exception:
             pass
+        restore_savefig()
 
         # Stringify new user variables (skip privates, modules, pre-existing)
         import inspect as _inspect

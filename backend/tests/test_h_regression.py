@@ -281,6 +281,28 @@ def test_ast_linter_mismatch_echoes_observed_identifiers():
     assert "results" in err
 
 
+def test_run_python_savefig_then_close_is_not_empty():
+    """R5-OPEN-1: AI often saves a plot then closes it; keep that figure."""
+    from app.services.ai_tools import _exec_run_python
+
+    code = (
+        "import io\n"
+        "rows = get_adql_results()\n"
+        "plt.figure()\n"
+        "plt.plot([1, 2, 3], [1, 4, 9])\n"
+        "buf = io.BytesIO()\n"
+        "plt.savefig(buf, format='png')\n"
+        "plt.close('all')\n"
+    )
+    resp = asyncio.run(_exec_run_python({"code": code, "data_source": "latest_adql"}))
+
+    assert resp.get("success") is True, resp
+    assert resp.get("figures"), resp
+    assert resp["figures"][0].startswith("iVBOR")
+    assert resp.get("backend") in {"inprocess", "subprocess", "unknown"}
+    assert "exit_code" in resp
+
+
 def test_system_prompt_routes_transit_queries_to_search_lightcurve():
     """R4-NEW-2: TESS/transit prompts should make search_lightcurve obvious."""
     from app.api.chat import SYSTEM_PROMPT
