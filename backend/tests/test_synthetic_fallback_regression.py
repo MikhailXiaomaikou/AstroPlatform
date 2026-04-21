@@ -114,8 +114,14 @@ print(x.mean())
 
 def test_missing_data_source_defaults_to_synthetic():
     """Legacy callers without data_source must still work, but get
-    marked SYNTHETIC (backwards-compat default, G1.1)."""
-    code = "print('hello')"
+    marked SYNTHETIC (backwards-compat default, G1.1).
+
+    R5 O3 note: 纯 literal print 是 'inert' verdict 被豁免 SYNTHETIC,
+    所以这里测试用**有 numpy 计算**的代码 (不是 inert, 没 real source
+    也没 legit random context → verdict=suspicious → 按 G1.1 默认成
+    SYNTHETIC).
+    """
+    code = "import numpy as np\nprint(np.arange(5).sum())"
     resp = asyncio.run(_exec_run_python({"code": code}))
     # Missing declaration → default to synthetic treatment
     assert resp.get("data_origin") == "synthetic"

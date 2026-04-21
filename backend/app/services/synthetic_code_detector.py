@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
-Verdict = Literal["clean", "suspicious", "synthetic"]
+Verdict = Literal["clean", "suspicious", "synthetic", "inert"]
 
 
 @dataclass
@@ -136,6 +136,51 @@ class _CodeVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _is_inert_expr(node: ast.expr) -> bool:
+    """True iff an expression is a pure literal computation — no name
+    reads, no function calls.  Covers: Constant, BinOp over constants,
+    UnaryOp over constants, nested tuples/lists of constants.
+    """
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.BinOp):
+        return _is_inert_expr(node.left) and _is_inert_expr(node.right)
+    if isinstance(node, ast.UnaryOp):
+        return _is_inert_expr(node.operand)
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return all(_is_inert_expr(el) for el in node.elts)
+    return False
+
+
+def _is_inert_stmt(node: ast.stmt) -> bool:
+    """True iff a top-level statement is `print(<literal>...)` or a
+    standalone literal expression.  Nothing else qualifies — no imports,
+    assignments, loops, conditions, defs, or variable reads."""
+    if not isinstance(node, ast.Expr):
+        return False
+    value = node.value
+    if _is_inert_expr(value):
+        return True
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "print"
+        and all(_is_inert_expr(arg) for arg in value.args)
+        and not value.keywords  # 拒绝 print(..., file=sys.stderr) 这种
+    ):
+        return True
+    return False
+
+
+def _is_inert_code(tree: ast.Module) -> bool:
+    """True iff EVERY top-level statement is inert (see above).  Empty
+    code doesn't count — has nothing to diagnose.
+    """
+    if not tree.body:
+        return False
+    return all(_is_inert_stmt(stmt) for stmt in tree.body)
+
+
 def analyze(code: str) -> DetectionResult:
     """Classify a run_python code string.  Never raises — returns
     verdict='clean' if the code can't be parsed (the sandbox will give
@@ -148,6 +193,14 @@ def analyze(code: str) -> DetectionResult:
         tree = ast.parse(code)
     except SyntaxError:
         result.notes.append("code has SyntaxError; detector skipped")
+        return result
+
+    # R5 O3: 纯 literal print / 字面量算术代码(diagnostic / smoke test)
+    # 早返 verdict='inert'.  即便 AI 声明 data_source='none...', 这种代
+    # 码也不算数据合成 — 让子进程环境自检不被 SYNTHETIC banner 刷红.
+    if _is_inert_code(tree):
+        result.verdict = "inert"
+        result.notes.append("code contains only literal output (inert/diagnostic)")
         return result
 
     visitor = _CodeVisitor()

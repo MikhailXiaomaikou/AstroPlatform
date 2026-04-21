@@ -1277,3 +1277,58 @@ def test_honest_abstention_counter_label_schema():
     assert len(counters_by_label) == 3
     # 每个组合至少 1 次
     assert all(v >= 1.0 for v in counters_by_label.values())
+
+
+# ── R5 PART O: subprocess 诊断暴露 ────────────────────────────────────
+
+def test_run_python_exposes_stderr_even_when_success_true():
+    """R5 O1: stderr 即便 success=True 也要传给 AI / 前端.
+    原来 `if result.stderr and not result.success` 让 subprocess crash
+    时 payload.success=True (child init 默认值) 的情况下 stderr 被吞,
+    诊断信息丢失.  现在条件改成 `if result.stderr:` 总传."""
+    import inspect
+    from app.services import ai_tools
+
+    src = inspect.getsource(ai_tools._exec_run_python)
+    # 原 buggy 形式必须消失
+    assert "result.stderr and not result.success" not in src, (
+        "R5 O1: stderr 过滤条件还在, success=True 时 stderr 仍会被丢"
+    )
+    # 新形式必须存在 (if result.stderr: 或类似无条件传)
+    assert 'if result.stderr:' in src, (
+        "R5 O1: stderr 必须无条件传 response['traceback']"
+    )
+
+
+def test_run_python_exit_code_nonzero_degrades_success():
+    """R5 O2: response 构造后, 若 exit_code != 0 则 success 降级 False.
+    原来 success 只来自 payload, exit_code 来自 proc.exitcode, 可以
+    矛盾 (success=True + exit_code=1)."""
+    import inspect
+    from app.services import ai_tools
+
+    src = inspect.getsource(ai_tools._exec_run_python)
+    # 检查关键行:
+    assert "sandbox_nonzero_exit" in src, (
+        "R5 O2: exit_code 降级逻辑 (error_class='sandbox_nonzero_exit') 丢失"
+    )
+    # 降级逻辑必须基于 exit_code 检查
+    assert 'response["exit_code"]' in src or 'response.get("exit_code")' in src
+
+
+def test_inert_code_exempted_from_synthetic_banner():
+    """R5 O3: 当 AI 声明 data_source='none...', 但 detector 判 inert
+    (纯 literal print), ai_tools 层应把 is_synthetic_declared 翻回 False,
+    避免 smoke test 被打 SYNTHETIC."""
+    import inspect
+    from app.services import ai_tools
+
+    src = inspect.getsource(ai_tools._exec_run_python)
+    # 必须有 inert verdict 的 elif 分支
+    assert 'detection.verdict == "inert"' in src, (
+        "R5 O3: inert verdict 分支丢失, smoke test 仍会被标 SYNTHETIC"
+    )
+    # 必须翻转 is_synthetic_declared
+    assert 'is_synthetic_declared = False' in src, (
+        "R5 O3: inert 分支必须把 is_synthetic_declared 设回 False"
+    )

@@ -171,3 +171,58 @@ def test_syntax_error_returns_clean():
     code = "print(\"hello\"\n x = "
     r = analyze(code)
     assert r.verdict == "clean"  # can't parse; defer to sandbox SyntaxError
+
+
+# ── R5 O3: inert verdict ─────────────────────────────────────────────
+
+def test_inert_simple_print_literal():
+    """R5 O3: `print("hello world")` 纯 literal, 不是合成数据"""
+    r = analyze('print("hello world")')
+    assert r.verdict == "inert"
+
+
+def test_inert_print_arithmetic_literal():
+    """R5 O3: `print(2+2)` 字面量算术 BinOp 也算 inert"""
+    r = analyze('print(2+2)')
+    assert r.verdict == "inert"
+
+
+def test_inert_multiple_literal_prints():
+    """R5 O3: smoke test 典型形式 — 两行 literal print"""
+    code = 'print("hello world")\nprint(2+2)'
+    r = analyze(code)
+    assert r.verdict == "inert"
+
+
+def test_not_inert_with_variable_read():
+    """R5 O3: 读变量 (Name) 不算 inert — 已经有 side effect"""
+    code = 'x = 5\nprint(x)'
+    r = analyze(code)
+    assert r.verdict != "inert"
+
+
+def test_not_inert_with_import():
+    """R5 O3: 有 import 不算 inert (未来可能干坏事)"""
+    code = 'import astropy\nprint("hi")'
+    r = analyze(code)
+    assert r.verdict != "inert"
+
+
+def test_not_inert_with_function_call_other_than_print():
+    """R5 O3: 除 print 外调用函数不算 inert"""
+    code = 'len("hi")\nprint("done")'
+    r = analyze(code)
+    assert r.verdict != "inert"
+
+
+def test_inert_empty_code_not_classified_as_inert():
+    """R5 O3: 空代码不是 inert (无诊断价值), 保持原 clean 行为"""
+    r = analyze('')
+    assert r.verdict != "inert"
+
+
+def test_still_catches_np_random_after_inert_check():
+    """R5 O3 回归: inert 早返不影响对 np.random 的合成检测"""
+    code = 'import numpy as np\nx = np.random.normal(0, 1, 100)'
+    r = analyze(code)
+    assert r.verdict in ("synthetic", "suspicious")

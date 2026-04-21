@@ -2820,6 +2820,16 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                 )
             except Exception:
                 pass
+        elif detection.verdict == "inert":
+            # R5 O3: 纯 literal print / 字面量算术代码 (smoke test /
+            # 环境自检). 即使 AI 声明了 data_source='none...', 也不打
+            # SYNTHETIC — 没有合成数据产生, 没有数字进入分析链.
+            is_synthetic_declared = False
+            try:
+                from app.observability.metrics import record_counter
+                record_counter("inert_code_exempted_from_synthetic_total", 1.0)
+            except Exception:
+                pass
     except Exception as det_exc:
         logger.debug("synthetic_code_detector failed: %s", det_exc)
 
@@ -2892,6 +2902,17 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         "exit_code": getattr(result, "exit_code", None),
     }
 
+    # R5 O2: 非零 exit_code 降级 success. subprocess crash 时 child 一启
+    # 动就 payload['success']=True, 代码还没跑到 except 就崩, 父进程拿到
+    # 的 SandboxResult.success 还是 True 但 proc.exitcode=1. 让两者对齐
+    # 是 success 真实语义的基础 — 否则 UI / AI 看到 "success=true +
+    # exit_code=1" 矛盾, 不知道到底成了没.
+    _exit = response.get("exit_code")
+    if _exit not in (None, 0) and response.get("success"):
+        response["success"] = False
+        response.setdefault("error", f"Subprocess exited with non-zero code {_exit}")
+        response.setdefault("error_class", "sandbox_nonzero_exit")
+
     # F0.2: error-field tripwire.  Previously we only populated `error` when
     # `result.error` was truthy — so a sandbox that returned success=False
     # with an empty/None error (e.g. subprocess was SIGKILLed before it
@@ -2918,7 +2939,12 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             record_counter("sandbox_silent_failure_total", 1.0, tool="run_python")
         except Exception:
             pass
-    if result.stderr and not result.success:
+    # R5 O1: stderr 总是传 — 原来 `and not result.success` 过滤让 crash
+    # 时 payload.success 还是 True 的情况下 stderr 被吞, AI 看不到
+    # Python traceback 没法诊断 subprocess 挂的具体原因 (R5-OPEN-A).
+    # 即便 success=True 的正常运行, 如果有 stderr 也多半是 warning /
+    # deprecation 值得 AI 看到.
+    if result.stderr:
         response["traceback"] = result.stderr[:10_000]
     if result.figures:
         response["figures"] = result.figures[:10]  # max 10 figures
