@@ -249,6 +249,18 @@
   <div id="plot-trend-delta" class="plot" style="min-height:340px;"></div>
 </div>
 
+<!-- Sandbox 诊断 -->
+<h2>⑥ Sandbox 诊断</h2>
+<div class="sub" style="margin-bottom:8px;">
+  run_python 挂时用这两个按钮看真实 Python stderr.  /health 绕开
+  multiprocessing, 直接 Popen 跑最简 print. /exec-test 走生产链路对比.
+</div>
+<div style="display:flex;gap:8px;margin-bottom:12px;">
+  <button class="period-btn" onclick="runSandboxHealth()">① 诊断子进程 (直接 Popen)</button>
+  <button class="period-btn" onclick="runSandboxExecTest()">② 生产链路测试 (SubprocessBackend)</button>
+</div>
+<div id="sandbox-result" class="sub" style="margin-top:4px;"></div>
+
 <footer>
   Astro Platform Admin · 单 HTML 工具 · localStorage 仅保存在你这台设备
 </footer>
@@ -706,6 +718,76 @@ async function loadTrendingDelta() {
   } catch (e) {
     $('plot-trend-delta').innerHTML = `<div class="err">${e.message}</div>`;
   }
+}
+
+// ───────────────────────────── Sandbox 诊断 ─────────────────────────────
+
+async function runSandboxHealth() {
+  const area = $('sandbox-result');
+  area.innerHTML = '<div class="loading">调子进程 Popen 中...</div>';
+  try {
+    const r = await api('/api/admin/sandbox/health');
+    renderSandboxResult(area, '① /sandbox/health (Popen 直接)', r);
+  } catch (e) {
+    area.innerHTML = `<div class="err">请求失败: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function runSandboxExecTest() {
+  const area = $('sandbox-result');
+  area.innerHTML = '<div class="loading">调生产链路 SubprocessBackend...</div>';
+  try {
+    const r = await api('/api/admin/sandbox/exec-test');
+    renderSandboxResult(area, '② /sandbox/exec-test (生产链路)', r);
+  } catch (e) {
+    area.innerHTML = `<div class="err">请求失败: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderSandboxResult(area, title, r) {
+  const ok = r.ok === true;
+  const color = ok ? 'var(--green)' : 'var(--accent)';
+  const status = ok ? '✓ 成功' : '✗ 失败';
+
+  const fields = [
+    ['ok', r.ok],
+    ['exit_code', r.exit_code],
+    ['duration_ms', r.duration_ms],
+    ['python_executable', r.python_executable],
+    ['python_version', r.python_version],
+    ['error', r.error],
+    ['backend', r.backend],
+  ].filter(([, v]) => v !== undefined && v !== null && v !== '');
+
+  let html = `
+    <div style="border:2px solid ${color};padding:12px 14px;border-radius:3px;background:var(--paper-2);">
+      <h3 style="margin:0 0 8px 0;color:${color};">${escapeHtml(title)} — ${status}</h3>
+      <table style="border-collapse:collapse;font-family:monospace;font-size:12px;">
+  `;
+  for (const [k, v] of fields) {
+    html += `<tr><td style="padding:2px 10px 2px 0;color:var(--ink-2);">${escapeHtml(k)}</td><td>${escapeHtml(String(v)).slice(0, 300)}</td></tr>`;
+  }
+  html += '</table>';
+
+  if (r.stdout) {
+    html += `
+      <div style="margin-top:10px;">
+        <strong style="font-size:11px;color:var(--ink-2);">STDOUT:</strong>
+        <pre style="background:#1a1a1a;color:#a5d6a7;padding:10px;border-radius:2px;font-size:12px;max-height:220px;overflow:auto;margin-top:4px;">${escapeHtml(r.stdout)}</pre>
+      </div>`;
+  }
+  if (r.stderr) {
+    html += `
+      <div style="margin-top:10px;">
+        <strong style="font-size:11px;color:var(--accent);">STDERR (Python 真实错误在这):</strong>
+        <pre style="background:#2a1a1a;color:#ff9090;padding:10px;border-radius:2px;font-size:12px;max-height:320px;overflow:auto;margin-top:4px;">${escapeHtml(r.stderr)}</pre>
+      </div>`;
+  }
+  if (r.note) {
+    html += `<div style="margin-top:10px;font-style:italic;color:var(--ink-3);font-size:12px;">${escapeHtml(r.note)}</div>`;
+  }
+  html += '</div>';
+  area.innerHTML = html;
 }
 
 // ───────────────────────────── helpers ─────────────────────────────
