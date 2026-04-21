@@ -46,6 +46,13 @@ _session_replay_signatures: dict[str, str] = {}
 _session_last_access: dict[str, float] = {}
 _astro_module: ModuleType | None = None
 
+# S1 (PART S): subprocess sandbox 每次 fresh fork, 没有 _session_vars 之类
+# in-process 持久化.  记录成功跑过的 code blocks, 下次新 subprocess fork 前
+# 把历史代码作为 prefix 拼在当前 code 前, 一次 exec 里重建前序变量.
+# (Jupyter-like 状态模拟).  对 in-process 路径无影响 — _session_vars 仍然
+# 直接走更快的 globals 注入.
+_session_code_history: dict[str, list[str]] = {}
+
 # E0.2: a NGC 752 reviewer saw 7/8 run_python calls fail partly because
 # intermediate DataFrames evicted mid-chat.  Raise the cap so a long
 # research session (multiple chat turns × concurrent tool runs) can keep
@@ -77,6 +84,7 @@ def _sweep_idle_sessions() -> int:
         _session_vars.pop(sid, None)
         _session_replay_signatures.pop(sid, None)
         _session_last_access.pop(sid, None)
+        _session_code_history.pop(sid, None)
         evicted += 1
 
     # Pass 2: if we're still over the cap, evict oldest-first until we're under.
@@ -87,6 +95,7 @@ def _sweep_idle_sessions() -> int:
             _session_vars.pop(sid, None)
             _session_replay_signatures.pop(sid, None)
             _session_last_access.pop(sid, None)
+            _session_code_history.pop(sid, None)
             evicted += 1
 
     if evicted:
@@ -113,10 +122,80 @@ def clear_session_vars(session_id: str = "default") -> None:
     _session_vars.pop(session_id, None)
     _session_replay_signatures.pop(session_id, None)
     _session_last_access.pop(session_id, None)
+    _session_code_history.pop(session_id, None)
 
 
 def has_session_state(session_id: str = "default") -> bool:
     return bool(_session_vars.get(session_id))
+
+
+# ── S1 (PART S): session code history for subprocess replay ─────────────
+MAX_SESSION_CODE_BLOCKS: int = 40  # 防止极长会话无限膨胀
+MAX_SESSION_CODE_PREFIX_BYTES: int = 200_000  # 200 KB 上限 — subprocess pipe 也有自己的限
+
+
+def append_session_code_block(session_id: str, code: str) -> None:
+    """在成功执行后记录一个 code block.  Subprocess 下次 fork 会 replay."""
+    if not session_id or session_id == "default":
+        return
+    if not isinstance(code, str) or not code.strip():
+        return
+    history = _session_code_history.setdefault(session_id, [])
+    history.append(code)
+    # 溢出时丢掉最老的, 保证最近 N 个仍可 replay
+    if len(history) > MAX_SESSION_CODE_BLOCKS:
+        del history[: len(history) - MAX_SESSION_CODE_BLOCKS]
+    _touch_session(session_id)
+
+
+def get_session_code_history(session_id: str) -> list[str]:
+    return list(_session_code_history.get(session_id, []))
+
+
+def get_session_code_prefix(session_id: str) -> str:
+    """拼接历史 code blocks 作为 subprocess 预 exec 的前缀.
+
+    返回空字符串表示没有历史可 replay, 调用方直接 exec 当前 code.
+    """
+    blocks = _session_code_history.get(session_id, [])
+    if not blocks:
+        return ""
+    joined = "\n\n# === prior cell ===\n\n".join(blocks)
+    # 再加一个 separator 和当前 cell 分开
+    prefix = joined + "\n\n# === current cell ===\n\n"
+    # 若前缀过长 (session 代码累积太多), 从老到新丢弃直到合规
+    while len(prefix.encode("utf-8")) > MAX_SESSION_CODE_PREFIX_BYTES and len(blocks) > 1:
+        blocks = blocks[1:]
+        joined = "\n\n# === prior cell ===\n\n".join(blocks)
+        prefix = joined + "\n\n# === current cell ===\n\n"
+    return prefix
+
+
+def get_session_helper_calls(session_id: str) -> set[str]:
+    """返回 session 历史 code 里调过的所有 Name/Attribute 标识符.
+
+    G1 contract validator 用它来允许 "前 cell 已经 call 过 get_adql_results,
+    本 cell 直接用变量" 这种合法模式, 解决 R9-NEW-1 detector 过严.
+    """
+    import ast as _ast
+    called: set[str] = set()
+    for block in _session_code_history.get(session_id, []):
+        try:
+            tree = _ast.parse(block)
+        except SyntaxError:
+            continue
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Name):
+                called.add(node.id)
+            elif isinstance(node, _ast.Attribute):
+                called.add(node.attr)
+            elif isinstance(node, _ast.ImportFrom):
+                for alias in node.names:
+                    called.add(alias.asname or alias.name)
+            elif isinstance(node, _ast.Import):
+                for alias in node.names:
+                    called.add(alias.asname or alias.name)
+    return called
 
 
 def replay_session_history(session_id: str, code_blocks: list[str]) -> None:
@@ -644,10 +723,16 @@ def _dispatch_subprocess(
         logger.warning("subprocess sandbox backend unavailable: %s", e)
         return None
 
+    # S1 (PART S): subprocess fresh fork 没有持久化 state.  把 session
+    # 历史所有成功 code blocks 作为 prefix 拼在当前 code 前, 一次 exec 里
+    # 重建前序变量.  前缀为空时 (首次 run_python / 新 session) 直接跑 code.
+    replay_prefix = get_session_code_prefix(session_id)
+    effective_code = replay_prefix + code if replay_prefix else code
+
     backend = SubprocessBackend()
     try:
         raw = backend.execute(
-            code,
+            effective_code,
             timeout=int(timeout_seconds or _settings.sandbox_timeout_seconds),
             memory_bytes=_settings.sandbox_memory_bytes,
             cache_context=_collect_subprocess_cache_context(session_id),
@@ -668,6 +753,24 @@ def _dispatch_subprocess(
     result.duration_ms = raw.duration_ms
     result.exit_code = raw.exit_code
     return result
+
+
+def _maybe_record_session_history(
+    session_id: str, code: str, result: "CodeExecutionResult"
+) -> None:
+    """成功 run 后把原始 (未拼前缀) 代码 append 到 session history.
+
+    只有 session_id 非 default, 且执行成功, 才记录. 失败的 cell 不入 replay
+    (否则后续 subprocess fork 会重复 crash).
+    """
+    if not session_id or session_id == "default":
+        return
+    if not result.success:
+        return
+    try:
+        append_session_code_block(session_id, code)
+    except Exception as e:  # 记录失败不该阻断成功路径
+        logger.debug("append_session_code_block failed: %s", e)
 
 
 def execute_python(
@@ -693,8 +796,17 @@ def execute_python(
         from app.config import settings as _settings
         if _settings.sandbox_backend == "subprocess" and not context:
             logger.info("sandbox: using backend=subprocess (no context)")
-            sub_result = _dispatch_subprocess(_normalize_code(code), timeout_seconds, session_id)
+            _normalized_for_subprocess = _normalize_code(code)
+            sub_result = _dispatch_subprocess(
+                _normalized_for_subprocess, timeout_seconds, session_id
+            )
             if sub_result is not None:
+                # S1: 只记录 "当前 cell" 原始代码到 session history, 供下次
+                # subprocess fork 时 replay.  拼进去的 replay_prefix 已经
+                # 是前序 history 再次展开, 这里不要二次 append 否则历史膨胀.
+                _maybe_record_session_history(
+                    session_id, _normalized_for_subprocess, sub_result
+                )
                 return sub_result
             logger.warning(
                 "sandbox: subprocess dispatch returned None; falling back to in-process"
@@ -990,4 +1102,7 @@ def execute_python(
 
     result.duration_ms = int((_session_time.monotonic() - t0) * 1000)
     result.exit_code = 0 if result.success else None
+    # S1: in-process 也 append history, 这样即使中途 backend 从 inproc 切
+    # subprocess (例如 cache_context 变化) 历史仍然一致.
+    _maybe_record_session_history(session_id, code, result)
     return result

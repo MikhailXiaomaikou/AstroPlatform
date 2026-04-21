@@ -2767,6 +2767,20 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             # don't reject on syntax issues alone.
             found_in_ast = any(tok in code for tok in tokens_to_match)
 
+        # S1 (PART S): session-scoped history check.  R9-NEW-1 regression:
+        # AI 前一个 cell 已经 `rows = get_adql_results()`, 当前 cell 直接
+        # `df.groupby(...)` 被拒.  若 session 历史里调过 expected token,
+        # 也算过关 — 因为 subprocess replay prefix 会把那一 cell 重跑,
+        # 本 cell 里真的拿得到 real-archive 数据.
+        if not found_in_ast and python_session_id and python_session_id != "default":
+            try:
+                from app.services.code_executor import get_session_helper_calls
+                history_tokens = get_session_helper_calls(python_session_id)
+                if tokens_to_match & history_tokens:
+                    found_in_ast = True
+            except Exception:
+                pass
+
         if not found_in_ast:
             observed_ast = _summarize_ast_observations(code)
             return {
