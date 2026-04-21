@@ -228,6 +228,18 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Skipping create_all in production; use `alembic upgrade head`")
 
+    # 专项小 migration: 新 `comments` 表.  Production 走 Alembic 的规矩
+    # 下我们仍需要在表不存在时 create 一次(未来追加新表都走这个路径,
+    # 避免每次发布都先写 Alembic).  只对 Comment.__table__ 一张表做
+    # CREATE TABLE IF NOT EXISTS, 不碰其他表.
+    try:
+        from app.models.schemas import Comment
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda sync_conn: Comment.__table__.create(sync_conn, checkfirst=True))
+        logger.info("Ensured `comments` table exists")
+    except Exception as e:
+        logger.warning("Failed to ensure `comments` table (%s); evaluate Alembic migration", e)
+
     # Start Redis subscriber for WebSocket relay (best-effort)
     subscriber_task = asyncio.create_task(redis_subscriber())
     event_flush_task = asyncio.create_task(periodic_flush(event_collector, interval=event_collector.FLUSH_INTERVAL))

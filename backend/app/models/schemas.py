@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, TypeDecorator, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, TypeDecorator, UniqueConstraint, func, text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -530,8 +530,11 @@ class Comment(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
     author_name: Mapped[str] = mapped_column(String(40), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    # is_visible 默认 True,即发即显;管理员软删时置 False,列表接口过滤掉
-    is_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    # is_visible 默认 True,即发即显;管理员软删时置 False,列表接口过滤掉.
+    # server_default 用 sa_text("true") 同时兼容 PostgreSQL (TRUE/FALSE)
+    # 和 SQLite (接受 "true" 作 1).  先前用 "1" 在 PG 上会被解成字符串
+    # → 非法 boolean, 表都建不起来.
+    is_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sa_text("true"))
     # 记录 IP 便于反垃圾 / rate limit 调查,不公开返回给前端
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
