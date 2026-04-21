@@ -303,6 +303,47 @@ describe("Auth helper functions", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sendChatMessage emits live tool_result actions before an SSE error", async () => {
+    const { sendChatMessage } = await import("../api/client");
+
+    const sseBody = [
+      'data: {"type":"tool_result","live":true,"tool":"run_adql","result":{"row_count":3}}\n\n',
+      'data: {"type":"error","message":"AI workflow timed out after 420s"}\n\n',
+    ].join("");
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      body: stream,
+    }));
+
+    const onActions = vi.fn();
+    await expect(sendChatMessage(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      undefined,
+      undefined,
+      onActions,
+    )).rejects.toThrow("AI workflow timed out after 420s");
+
+    expect(onActions).toHaveBeenCalledWith([
+      expect.objectContaining({
+        action: "run_adql",
+        _stream_preview: true,
+        tool_result: { row_count: 3 },
+      }),
+    ]);
+
+    vi.unstubAllGlobals();
+  });
+
   it("getAlerts uses the canonical trailing-slash endpoint", async () => {
     const { default: api, getAlerts } = await import("../api/client");
 

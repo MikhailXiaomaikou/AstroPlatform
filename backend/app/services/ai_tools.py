@@ -313,7 +313,11 @@ TOOLS = [
     },
     {
         "name": "search_literature",
-        "description": "Search NASA ADS for academic papers about an astronomical object or topic. Returns titles, authors, years, and paper abstracts that you can cite in your response.",
+        "description": (
+            "Search NASA ADS for academic papers about an astronomical object or topic, "
+            "with arXiv fallback when ADS has no key/results. Returns titles, authors, "
+            "years, abstracts, and source metadata that you can cite in your response."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1876,6 +1880,14 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
             if any(h in msg for h in ("unresolved identifier", "unknown column", "invalid identifier")):
                 from app.services.catalog_registry import suggest_for_missing_column
                 suggestions: list[str] = []
+                if "gaiadr3.epoch_photometry" in q.lower():
+                    suggestions.append(
+                        "`gaiadr3.epoch_photometry` is not a generic TAP light-curve "
+                        "table with `time`/`mag`/`band`/`flux` columns. Call "
+                        "`describe_tap_table` first, use Gaia `vari_*` tables for "
+                        "published variable-star periods, or use `search_lightcurve` "
+                        "for TESS/MAST light curves."
+                    )
                 try:
                     tokens = _re.findall(r"[A-Za-z][A-Za-z0-9_]{2,32}", str(exc))
                 except Exception:
@@ -1903,7 +1915,13 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     # day on Gaia TAP could chain 3 × 6 min = 18 minutes of silence.
     import time as _time_mod
     _start_ts = _time_mod.monotonic()
-    _total_budget_s = 360.0  # 6 min hard cap for the whole retry chain
+    _timeout_policy = {
+        "tool_deadline_seconds": 300,
+        "sync_probe_seconds": 30,
+        "async_fallback_budget_seconds": 300,
+        "retry_chain_budget_seconds": 360,
+    }
+    _total_budget_s = float(_timeout_policy["retry_chain_budget_seconds"])
 
     def _time_left() -> float:
         return _total_budget_s - (_time_mod.monotonic() - _start_ts)
@@ -1973,8 +1991,14 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
             "error": (
                 f"ADQL query failed after {_elapsed}s of retries "
                 f"({len(retry_log)} attempt{'s' if len(retry_log) != 1 else ''}).  "
-                "The TAP service is either overloaded or the query is fundamentally "
-                "too large.  Try one of: "
+                "This particular ADQL query pattern exceeded the retry budget; "
+                "the TAP service may still be responsive for smaller queries.  "
+                "This usually means the requested query is too broad/heavy "
+                "(large TOP, wide cone, JOIN, or weak cuts) or transiently slow.  "
+                "Timeout policy: run_adql has a 300s tool deadline; each TAP call "
+                "uses a 30s sync probe before the 300s async fallback; the retry "
+                "chain has a 360s internal budget but may be capped by the outer "
+                "workflow budget.  Try one of: "
                 "(a) add/tighten TOP (e.g. TOP 500 instead of TOP 50000 — you can "
                 "still get statistics from smaller samples); "
                 "(b) shrink the cone radius to <0.3°; "
@@ -1988,6 +2012,8 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
             "retries": retry_log,
             "elapsed_seconds": _elapsed,
             "service": service,
+            "diagnosis": "query_pattern_exceeded_budget",
+            "timeout_policy": _timeout_policy,
         }
 
     # Normalize column names to lowercase for consistent AI code
@@ -2482,12 +2508,44 @@ def _exec_pipeline(inp: dict) -> dict:
 
 async def _exec_literature(inp: dict) -> dict:
     try:
-        from app.api.citations import _search_ads_sync
+        from functools import partial
+        from app.api.citations import (
+            _search_ads_sync,
+            _search_literature_ads,
+            _search_literature_arxiv,
+        )
+
+        query = str(inp.get("query") or "").strip()
+        if not query:
+            return {
+                "results": [],
+                "error": "search_literature requires query",
+                "error_class": "missing_argument",
+                "argument": "query",
+            }
         loop = asyncio.get_running_loop()
-        raw = await loop.run_in_executor(None, _search_ads_sync, inp["query"])
+        raw = await loop.run_in_executor(None, _search_ads_sync, query)
+        source = "ads_or_arxiv_object"
+        # `_search_ads_sync` 偏 object:<name> 检索。审稿场景里经常问的是
+        # topic / method / catalog name, 所以 object 检索为空时再走
+        # free-text ADS 和 arXiv, 避免直接 EMPTY。
         if not raw:
-            return {"results": [], "message": "No papers found. ADS API key may not be configured."}
+            raw = await loop.run_in_executor(None, partial(_search_literature_ads, query, 8))
+            source = "ads_free_text"
+        if not raw:
+            raw = await loop.run_in_executor(None, partial(_search_literature_arxiv, query, 8))
+            source = "arxiv_free_text"
+        if not raw:
+            return {
+                "results": [],
+                "source": source,
+                "message": (
+                    "No papers found via ADS object search, ADS free-text search, "
+                    "or arXiv fallback."
+                ),
+            }
         return {
+            "source": source,
             "results": [
                 {
                     "title": r["title"],
@@ -2495,6 +2553,7 @@ async def _exec_literature(inp: dict) -> dict:
                     "year": r["year"],
                     "bibcode": r["bibcode"],
                     "abstract": (r.get("abstract") or "")[:500],
+                    "source": r.get("source") or r.get("pub") or source,
                 }
                 for r in raw[:8]
             ]

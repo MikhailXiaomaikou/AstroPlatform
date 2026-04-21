@@ -295,6 +295,15 @@ Use describe_tap_table for full column details of any Gaia or VizieR table.
 Use describe_tap_table to get exact column names before writing ADQL.
 ALWAYS join to gaia_source for sky position: `FROM gaiadr3.vari_rrlyrae rr JOIN gaiadr3.gaia_source gs ON rr.source_id = gs.source_id`
 
+### Gaia DR3 epoch photometry is NOT a generic light-curve table
+Do NOT write ADQL against `gaiadr3.epoch_photometry` with invented columns
+like `transit_id`, `band`, `time`, `mag`, or `flux`.  Gaia epoch data is a
+specialized product; schema varies by release/access path and must be checked
+with `describe_tap_table` before SELECTing columns.  For variable-star periods
+prefer the Gaia `vari_*` tables above; for TESS/MAST-style light curves use
+`search_lightcurve`.  If `describe_tap_table` cannot confirm the exact epoch
+columns, abstain instead of guessing.
+
 ## CRITICAL: Extinction for low-E(B-V) targets (ROUTE TO SFD, NOT fit_isochrone)
 For ANY of these cases, do NOT use Gaia ag_gspphot or fit_isochrone's av_range
 to estimate extinction — they systematically OVER-estimate A_V by factors of 5-6
@@ -1888,6 +1897,8 @@ async def _execute_tool_calls(
     tool_calls: list[dict], api_key: str, provider_api_keys: dict[str, str], python_session_id: str,
     user_id: str | None = None, chat_session_id: str | None = None,
     on_event: Callable[[dict], Awaitable[None]] | None = None,
+    loop_deadline: float | None = None,
+    summary_reserve_s: float = 60.0,
 ) -> list[dict]:
     """Execute one model turn's tool calls concurrently while preserving order.
 
@@ -1954,7 +1965,34 @@ async def _execute_tool_calls(
 
     async def _run_one(tc: dict) -> dict:
         tool_name = tc.get("name") or ""
-        deadline_s = _TOOL_DEADLINE_TABLE.get(tool_name, _TOOL_DEADLINE_DEFAULT)
+        base_deadline_s = _TOOL_DEADLINE_TABLE.get(tool_name, _TOOL_DEADLINE_DEFAULT)
+        deadline_s = base_deadline_s
+        deadline_adjusted = False
+        workflow_seconds_remaining: int | None = None
+        if loop_deadline is not None:
+            now = _time.monotonic()
+            workflow_seconds_remaining = max(0, int(loop_deadline - now))
+            tool_window_s = loop_deadline - now - summary_reserve_s
+            # R5: 临近 agent-loop 截止时间时不要再启动长工具调用。否则最后
+            # 60s 总结预算会被吃掉, 外层 420s 硬墙直接杀掉整轮。这里返回
+            # 普通 tool-shaped failure, 让下一轮 LLM 总结已有结果。
+            if tool_window_s < 8.0:
+                return {
+                    "error": (
+                        f"Tool {tool_name} was not started because the workflow "
+                        f"has only {workflow_seconds_remaining}s left; summarize "
+                        "the successful tool results already gathered or ask the "
+                        "user to split query + analysis steps."
+                    ),
+                    "success": False,
+                    "error_class": "workflow_deadline_near",
+                    "deadline_seconds": 0,
+                    "base_deadline_seconds": int(base_deadline_s),
+                    "workflow_seconds_remaining": workflow_seconds_remaining,
+                    "summary_reserve_seconds": int(summary_reserve_s),
+                }
+            deadline_s = min(base_deadline_s, tool_window_s)
+            deadline_adjusted = deadline_s < base_deadline_s
         task = asyncio.create_task(execute_tool(
             tool_name, tc["input"], api_key, provider_api_keys, python_session_id,
             user_id=user_id, chat_session_id=chat_session_id,
@@ -1974,6 +2012,11 @@ async def _execute_tool_calls(
                         f"deadline and was cancelled. Retry with narrower parameters."
                     ),
                     "success": False,
+                    "error_class": "tool_timeout",
+                    "deadline_seconds": int(deadline_s),
+                    "base_deadline_seconds": int(base_deadline_s),
+                    "workflow_seconds_remaining": workflow_seconds_remaining,
+                    "deadline_adjusted_for_workflow": deadline_adjusted,
                 }
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=6.0)
@@ -2008,6 +2051,19 @@ async def _execute_tool_calls(
             "result": result,
         })
     return executed
+
+
+def _tool_results_to_actions(all_tool_results: list[dict]) -> list[dict]:
+    """把内部 tool-result 记录转成前端 action card 结构。"""
+    return [
+        {
+            "action": tr.get("tool"),
+            "tool_input": tr.get("input"),
+            "tool_result": tr.get("result"),
+            "_auto_executed": True,
+        }
+        for tr in all_tool_results
+    ]
 
 
 async def _run_agent_loop(
@@ -2080,7 +2136,7 @@ async def _run_agent_loop(
             summary = " ".join(text_parts) if text_parts else "AI workflow timed out."
             return {
                 "reply": summary + "\n\n(Agent loop timed out after 6 minutes. Results above are partial.)",
-                "actions": all_tool_results,
+                "actions": _tool_results_to_actions(all_tool_results),
                 "hit_deadline": True,
                 "hit_iteration_cap": False,
             }
@@ -2189,6 +2245,8 @@ async def _run_agent_loop(
             user_id=user_id,
             chat_session_id=chat_session_id,
             on_event=on_event,
+            loop_deadline=_loop_deadline,
+            summary_reserve_s=60.0,
         )
         for tc in executed_tools:
             result = tc["result"]
@@ -2370,13 +2428,7 @@ async def _run_agent_loop(
             except Exception:
                 pass
         # Attach tool-result action cards as usual, then short-circuit out.
-        for tr in all_tool_results:
-            actions.append({
-                "action": tr["tool"],
-                "tool_input": tr["input"],
-                "tool_result": tr["result"],
-                "_auto_executed": True,
-            })
+        actions.extend(_tool_results_to_actions(all_tool_results))
         return {
             "reply": clean_reply,
             "actions": actions,
@@ -2515,15 +2567,7 @@ async def _run_agent_loop(
         # Still need is_empty_turn for the fallback branch below.
         from app.services.claim_validator import is_empty_turn  # noqa: F401
 
-    for tr in all_tool_results:
-        actions.append(
-            {
-                "action": tr["tool"],
-                "tool_input": tr["input"],
-                "tool_result": tr["result"],
-                "_auto_executed": True,
-            }
-        )
+    actions.extend(_tool_results_to_actions(all_tool_results))
 
     # Fallback: if the LLM returned zero text (empty text_parts) but did
     # execute tools, synthesise a minimal human-readable summary so the user

@@ -672,6 +672,104 @@ def test_run_adql_deadline_is_300s():
     )
 
 
+def test_execute_tool_calls_preserves_summary_budget_near_deadline():
+    """R5: 接近 360s agent-loop deadline 时, 不应再启动长工具调用.
+
+    否则一个新的 run_adql / run_python 会吃掉最后 60s, 外层 420s 墙
+    直接杀掉整轮, 用户只看到 workflow timeout 而不是已有结果总结.
+    """
+    import time
+    from app.api.chat import _execute_tool_calls
+
+    result = asyncio.run(_execute_tool_calls(
+        [{"id": "toolu_1", "name": "run_adql", "input": {"query": "SELECT 1", "service": "gaia"}}],
+        api_key="",
+        provider_api_keys={},
+        python_session_id="pytest",
+        loop_deadline=time.monotonic() + 5.0,
+        summary_reserve_s=10.0,
+    ))
+
+    assert result[0]["result"]["error_class"] == "workflow_deadline_near"
+    assert "summarize" in result[0]["result"]["error"]
+    assert result[0]["result"]["workflow_seconds_remaining"] <= 5
+
+
+def test_agent_deadline_returns_frontend_action_shape():
+    """R5: deadline 早退时也必须返回前端 action shape.
+
+    旧代码把内部 all_tool_results 原样塞进 actions, 字段是
+    tool/input/result, SSE final 阶段再读 action/tool_result 会全是 None.
+    """
+    from app.api.chat import _tool_results_to_actions
+
+    actions = _tool_results_to_actions([{
+        "tool": "run_adql",
+        "input": {"query": "SELECT 1"},
+        "result": {"row_count": 1},
+    }])
+
+    assert actions == [{
+        "action": "run_adql",
+        "tool_input": {"query": "SELECT 1"},
+        "tool_result": {"row_count": 1},
+        "_auto_executed": True,
+    }]
+
+
+def test_adql_timeout_message_blames_query_pattern_not_global_overload():
+    """R5: Gaia 大查询超预算时不要误导用户以为整个 TAP 服务挂了."""
+    import inspect
+    from app.services.ai_tools import _exec_adql
+
+    src = inspect.getsource(_exec_adql)
+    assert "either overloaded or the query is fundamentally" not in src
+    assert "query pattern exceeded the retry budget" in src
+    assert "timeout_policy" in src
+
+
+def test_system_prompt_warns_against_invented_gaia_epoch_photometry_schema():
+    """R5: 防止 AI 继续写 transit_id/band/time/mag/flux 这种伪 schema."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    required = [
+        "gaiadr3.epoch_photometry",
+        "transit_id",
+        "band",
+        "time",
+        "mag",
+        "flux",
+        "describe_tap_table",
+        "search_lightcurve",
+    ]
+    missing = [kw for kw in required if kw not in SYSTEM_PROMPT]
+    assert not missing, f"SYSTEM_PROMPT 缺 Gaia epoch photometry 护栏: {missing}"
+
+
+def test_literature_tool_falls_back_to_free_text_arxiv():
+    """R5: search_literature 不应只靠 ADS object:<name> 后直接 EMPTY."""
+    from app.services.ai_tools import _exec_literature
+
+    fake_paper = {
+        "title": "Gaia studies of the Pleiades",
+        "authors": ["A. Author", "B. Author"],
+        "year": "2024",
+        "bibcode": "arXiv:2401.00001",
+        "abstract": "A Pleiades paper.",
+        "source": "arxiv",
+    }
+
+    with (
+        patch("app.api.citations._search_ads_sync", return_value=[]),
+        patch("app.api.citations._search_literature_ads", return_value=[]),
+        patch("app.api.citations._search_literature_arxiv", return_value=[fake_paper]),
+    ):
+        result = asyncio.run(_exec_literature({"query": "Pleiades Gaia CMD"}))
+
+    assert result["source"] == "arxiv_free_text"
+    assert result["results"][0]["bibcode"] == "arXiv:2401.00001"
+
+
 # ---------- J3: SDSS SkyServer 直连工具 run_sdss_sql ----------
 
 def test_run_sdss_sql_tool_registered():

@@ -5,7 +5,7 @@
  * and basic UI elements. All API calls and context providers are mocked.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
 
 // ── Mock scrollIntoView (not available in jsdom) ──
@@ -96,7 +96,7 @@ vi.mock("../api/client", () => ({
 
 // ── Import component under test (after mocks) ──
 import ChatPage from "../pages/Chat/ChatPage";
-import { getStoredApiKeys } from "../api/client";
+import { getStoredApiKeys, sendChatMessage } from "../api/client";
 
 /* ── Helper to render with providers ── */
 
@@ -230,5 +230,53 @@ describe("ChatPage", () => {
 
     // The hint is rendered with the i18n key
     expect(screen.getByText("chat.hint")).toBeInTheDocument();
+  });
+
+  it("persists streamed tool actions to localStorage before the turn finishes", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockImplementation(async (
+      _messages,
+      _context,
+      _onThinking,
+      _signal,
+      onActions,
+    ) => {
+      onActions?.([{
+        action: "run_adql",
+        tool_result: { row_count: 3 },
+        _auto_executed: true,
+        _stream_preview: true,
+      }]);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return {
+        reply: "Done",
+        actions: [{
+          action: "run_adql",
+          tool_result: { row_count: 3, rows: [{ id: 1 }] },
+          _auto_executed: true,
+        }],
+      };
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "query Gaia" } });
+    fireEvent.click(sendBtn);
+
+    await waitFor(() => {
+      const raw = localStorage.getItem("astro_chat_history");
+      expect(raw).toBeTruthy();
+      const stored = JSON.parse(raw || "[]") as Array<{
+        role?: string;
+        actions?: Array<{ action?: string; _stream_preview?: boolean }>;
+      }>;
+      const assistant = stored.find((m) => m.role === "assistant" && m.actions?.length);
+      expect(assistant?.actions?.[0]).toEqual(expect.objectContaining({
+        action: "run_adql",
+        _stream_preview: true,
+      }));
+    });
   });
 });
