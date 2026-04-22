@@ -1810,6 +1810,17 @@ def test_run_python_after_failed_fetch_is_empty_not_synthetic():
     assert "synthetic_after_failure_total" not in src
 
 
+def test_orchestrator_validates_merged_reply_claims():
+    """R21: 多 agent 合并后的最终回复也要过同一 turn 的 claim gate。"""
+    import inspect
+    from app.api import chat
+
+    src = inspect.getsource(chat._run_orchestrated_chat)
+    assert "validate_claims(merged_reply, merged_tool_results)" in src
+    assert "zero_data_but_quantitative(merged_reply, merged_tool_results)" in src
+    assert "merged_orchestrator" in src
+
+
 # ── Phase P: arXiv 301 redirect + Unknown tool polish ────────────────
 
 async def test_unknown_tool_returns_available_list():

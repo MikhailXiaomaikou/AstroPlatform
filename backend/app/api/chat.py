@@ -3383,12 +3383,46 @@ async def _run_orchestrated_chat(
                 result["reply"],
             )
 
-    merged_reply = await orchestrator.merge_responses(agent_results)
     merged_actions: list[dict] = []
     merged_tool_results: list[dict] = []
     for result in agent_results:
         merged_actions.extend(result["actions"])
         merged_tool_results.extend(result.get("tool_results", []))
+    merged_reply = await orchestrator.merge_responses(agent_results)
+    if merged_reply.strip():
+        try:
+            from app.services.claim_validator import (
+                blocked_reply_text,
+                validate_claims,
+                zero_data_but_quantitative,
+            )
+
+            # R21: specialist replies are individually checked inside each
+            # agent loop, but the final merged prose is a new assistant reply.
+            # Validate it against the union of tool results from the same user
+            # turn so a later agent cannot accidentally launder unsupported
+            # numbers from an earlier rewrite/handoff.
+            zero_data_claims = zero_data_but_quantitative(merged_reply, merged_tool_results)
+            validation = validate_claims(merged_reply, merged_tool_results)
+            if zero_data_claims or not validation.ok:
+                try:
+                    from app.observability.metrics import record_counter
+                    record_counter(
+                        "fabrication_blocked_total",
+                        1.0,
+                        agent="merged_orchestrator",
+                        reason="merged_reply",
+                    )
+                except Exception:
+                    pass
+                logger.error(
+                    "Fabrication gate BLOCKED merged reply (%d uncited, zero_data=%s)",
+                    len(validation.uncited),
+                    bool(zero_data_claims),
+                )
+                merged_reply = blocked_reply_text(validation)
+        except Exception as exc:
+            logger.warning("Merged-reply claim validation failed open: %s", exc)
     return {
         "reply": merged_reply,
         "actions": merged_actions,
