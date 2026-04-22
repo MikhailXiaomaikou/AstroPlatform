@@ -37,12 +37,17 @@ class TestCheckpoint:
         assert last.step_idx == 1
 
     def test_summary_shape(self):
-        wc.record_step("s4", "x", "h", "completed", ["latest"])
+        wc.record_step(
+            "s4", "x", "h", "completed", ["latest"],
+            tool_call_id="toolu_1", summary="1 row cached",
+        )
         wc.record_step("s4", "y", "h", "failed", error="oops")
         summary = wc.summarize("s4")
         assert summary["has_checkpoint"] is True
         assert summary["n_steps"] == 2
         assert summary["last_successful_step_idx"] == 0
+        assert summary["steps"][0]["tool_call_id"] == "toolu_1"
+        assert summary["steps"][0]["summary"] == "1 row cached"
         assert summary["steps"][1]["error"] == "oops"
 
     def test_missing_session_returns_empty_summary(self):

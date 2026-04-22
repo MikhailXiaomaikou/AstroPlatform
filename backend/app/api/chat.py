@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -800,6 +801,13 @@ with the listed packages + references as starting points for user-specific analy
    - SDSS DR18: does NOT support ADQL — use search_objects(sources=["sdss"])
 4. NEVER guess column names. If unsure, call describe_tap_table first.
 
+## Milky Way escape velocity / high-velocity stars
+For Milky Way escape velocity, halo-star kinematics, or "v_esc" reproduction tasks, do NOT start with a broad
+`SELECT TOP 50000 * FROM gaiadr3.gaia_source` scan. First call `query_high_velocity_stars`, which queries a
+focused Gaia DR3 high-tangential-velocity candidate sample and caches it under `latest_adql`. Then use
+`run_python(data_source="latest_adql")` to compute velocities and explicitly state the sample caveat:
+this is an accessible Gaia candidate sample, not the full Piffl+2014 halo-star selection.
+
 ## CRITICAL: Data integrity rules
 - NEVER generate simulated, random, or synthetic data to replace real observations. If a query fails, tell the user explicitly and emit `<tools_returned_nothing/>`. Do NOT fall back to "example data", "realistic values based on known parameters", "for methodology demonstration", or any variant.
 - NEVER silently fall back to mock data. Every data point shown to the user MUST come from a real astronomical database or the user's own uploaded files.
@@ -1344,6 +1352,210 @@ def _preferred_backend(context: dict | None) -> str | None:
     return provider_to_backend.get(provider)
 
 
+_DEFAULT_WORKFLOW_BUDGET = {
+    "mode": "default",
+    "agent_loop_seconds": 360.0,
+    "endpoint_timeout_seconds": 420.0,
+    "summary_reserve_seconds": 60.0,
+    "soft_reminder_seconds": 75.0,
+    "max_iterations": 12,
+    "tool_deadline_scale": 1.0,
+}
+_LONG_WORKFLOW_BUDGET = {
+    "mode": "long",
+    "agent_loop_seconds": 900.0,
+    "endpoint_timeout_seconds": 1020.0,
+    "summary_reserve_seconds": 90.0,
+    "soft_reminder_seconds": 180.0,
+    "max_iterations": 18,
+    "tool_deadline_scale": 2.0,
+}
+
+
+def _context_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value > 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on", "long", "extended"}
+    return False
+
+
+def _latest_user_text(messages: list[ChatMessage]) -> str:
+    for message in reversed(messages):
+        if message.role == "user":
+            return message.content or ""
+    return ""
+
+
+def _infer_workflow_budget_mode(req: ChatRequest) -> str:
+    """Keep ordinary chats cheap; opt into long budget for paper-scale work."""
+    context = req.context or {}
+    explicit = (
+        context.get("workflow_budget_mode")
+        or context.get("budget_mode")
+        or context.get("workflow_budget")
+    )
+    if isinstance(explicit, str) and explicit.strip().lower() in {"long", "extended", "elastic"}:
+        return "long"
+    if any(_context_truthy(context.get(key)) for key in ("long_task", "extended_budget", "elastic_budget")):
+        return "long"
+
+    latest = _latest_user_text(req.messages).lower()
+    long_task_keywords = (
+        "复现", "论文", "长任务", "完整跑", "逃逸速度", "光度函数",
+        "reproduce", "replication", "paper", "end-to-end", "long analysis",
+        "luminosity function", "escape velocity", "hd 189733", "pleiades cmd",
+        "milky way v_esc", "sdss lf",
+    )
+    return "long" if any(keyword in latest for keyword in long_task_keywords) else "default"
+
+
+def _workflow_budget_config(mode: str | None) -> dict[str, Any]:
+    if str(mode or "").strip().lower() in {"long", "extended", "elastic"}:
+        return dict(_LONG_WORKFLOW_BUDGET)
+    return dict(_DEFAULT_WORKFLOW_BUDGET)
+
+
+def _debug_stream_enabled(request: Request | None, context: dict | None) -> bool:
+    if request is not None and request.query_params.get("debug_stream") == "1":
+        return True
+    return _context_truthy((context or {}).get("debug_stream"))
+
+
+def _checkpoint_session_id(chat_session_id: str | None, python_session_id: str | None) -> str | None:
+    chat_id = str(chat_session_id or "").strip()
+    if chat_id:
+        return chat_id
+    py_id = str(python_session_id or "").strip()
+    if py_id and py_id != "default":
+        return py_id
+    return None
+
+
+def _hash_tool_input(tool_input: Any) -> str:
+    import hashlib
+
+    try:
+        raw = json.dumps(tool_input, sort_keys=True, default=str)
+    except Exception:
+        raw = str(tool_input)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _checkpoint_cache_refs(tool_name: str, result: Any, python_session_id: str) -> list[str]:
+    refs: list[str] = []
+    if tool_name in {"run_adql", "query_high_velocity_stars"}:
+        refs.extend(["latest_adql", "latest_adql_set", "latest_adql_sets"])
+    elif tool_name == "run_sdss_sql":
+        refs.extend(["latest_sdss_sql", "latest_adql", "latest_adql_set"])
+    elif tool_name in {"search_objects", "get_object_info", "get_object_dossier"}:
+        refs.append("latest")
+    elif tool_name == "search_lightcurve":
+        refs.append("latest_lightcurve")
+    elif tool_name == "run_python":
+        refs.append(f"python_session:{python_session_id}")
+    if isinstance(result, dict) and result.get("figures"):
+        refs.append("figures")
+    return refs
+
+
+def _checkpoint_status(result: Any) -> str:
+    if not isinstance(result, dict):
+        return "completed"
+    status = str(result.get("__tool_status__") or result.get("analysis_status") or "").upper()
+    if result.get("success") is False or result.get("error") or status in {"FAILED", "UNAVAILABLE"}:
+        return "failed"
+    return "completed"
+
+
+def _checkpoint_result_summary(tool_name: str, result: Any) -> str:
+    if not isinstance(result, dict):
+        return f"{tool_name} returned {type(result).__name__}"
+    bits: list[str] = []
+    row_count = result.get("row_count")
+    if isinstance(row_count, int):
+        bits.append(f"{row_count} rows")
+    columns = result.get("columns")
+    if isinstance(columns, list) and columns:
+        bits.append("columns=" + ",".join(str(c) for c in columns[:8]))
+    if result.get("figures"):
+        try:
+            bits.append(f"{len(result['figures'])} figures")
+        except Exception:
+            bits.append("figures")
+    error = result.get("error")
+    if error:
+        bits.append("error=" + str(error)[:160])
+    return "; ".join(bits)[:360] if bits else f"{tool_name} completed"
+
+
+def _record_tool_checkpoint(
+    *,
+    chat_session_id: str | None,
+    python_session_id: str,
+    tool_call: dict,
+    result: Any,
+) -> dict[str, Any] | None:
+    session_id = _checkpoint_session_id(chat_session_id, python_session_id)
+    if not session_id:
+        return None
+    try:
+        from app.services import workflow_checkpoint
+
+        tool_name = str(tool_call.get("name") or "")
+        step = workflow_checkpoint.record_step(
+            session_id,
+            tool_name,
+            _hash_tool_input(tool_call.get("input")),
+            _checkpoint_status(result),
+            _checkpoint_cache_refs(tool_name, result, python_session_id),
+            error=(str(result.get("error"))[:500] if isinstance(result, dict) and result.get("error") else None),
+            tool_call_id=str(tool_call.get("id") or "") or None,
+            summary=_checkpoint_result_summary(tool_name, result),
+        )
+        return {
+            "session_id": session_id,
+            "step_idx": step.step_idx,
+            "tool_name": step.tool_name,
+            "status": step.status,
+            "cache_refs": step.cache_refs,
+            "summary": step.summary,
+        }
+    except Exception:
+        logger.debug("workflow checkpoint write failed", exc_info=True)
+        return None
+
+
+def _format_checkpoint_resume_note(session_id: str | None) -> str:
+    if not session_id:
+        return ""
+    try:
+        from app.services import workflow_checkpoint
+
+        summary = workflow_checkpoint.summarize(session_id)
+    except Exception:
+        return ""
+    if not summary.get("has_checkpoint"):
+        return ""
+    steps = summary.get("steps", [])[-8:]
+    lines = [
+        "[RUNTIME CHECKPOINT: previous tool steps exist for this chat/session.",
+        "Use cached results before rerunning expensive archive queries. Relevant cache refs include latest_adql, latest_adql_set, latest_sdss_sql, latest_lightcurve, and python_session state.",
+    ]
+    for step in steps:
+        bits = [
+            f"#{step.get('step_idx')} {step.get('tool_name')} {step.get('status')}",
+            f"refs={step.get('cache_refs') or []}",
+        ]
+        if step.get("summary"):
+            bits.append(str(step.get("summary")))
+        lines.append("- " + "; ".join(bits))
+    lines.append("If the workflow budget is nearly exhausted, summarize these checkpoints and ask the user to continue from them.]")
+    return "\n".join(lines)
+
+
 def _filter_tools(tool_names: list[str] | None, tools: list[dict]) -> list[dict]:
     if not tool_names:
         return tools
@@ -1510,11 +1722,44 @@ async def chat_message_stream(
         import asyncio as _aio
         import time as _time_mod
 
+        _stream_t0 = _time_mod.monotonic()
+        debug_stream = _debug_stream_enabled(request, req.context)
+        workflow_budget = _workflow_budget_config(_infer_workflow_budget_mode(req))
+
+        def _debug_frame(stage: str, **extra: Any) -> str:
+            if not debug_stream:
+                return ""
+            payload = {
+                "type": "stream_debug",
+                "stage": stage,
+                "elapsed_ms": int((_time_mod.monotonic() - _stream_t0) * 1000),
+                **extra,
+            }
+            return f"data: {_json.dumps(payload, default=str)}\n\n"
+
         # Frame 1: 8 KB padding SSE comment — forces edge proxies to
         # flush immediately, before any slow backend work.
         yield ": " + (" " * SSE_PREAMBLE_PADDING_BYTES) + "\n\n"
         # Frame 2: status so the UI shows "Thinking..." right away.
         yield f"data: {_json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
+        if debug_stream:
+            yield _debug_frame(
+                "stream_open",
+                workflow_budget_mode=workflow_budget["mode"],
+                endpoint_timeout_seconds=int(workflow_budget["endpoint_timeout_seconds"]),
+            )
+        if workflow_budget["mode"] == "long":
+            yield (
+                "data: "
+                + _json.dumps({
+                    "type": "status",
+                    "message": (
+                        f"Long workflow budget enabled ({int(workflow_budget['agent_loop_seconds'])}s). "
+                        "Intermediate results will be checkpointed."
+                    ),
+                })
+                + "\n\n"
+            )
 
         # Reuse the same logic but yield intermediate results
         provider_api_keys = _provider_api_keys(req.context, user)
@@ -1602,6 +1847,12 @@ async def chat_message_stream(
                 yield f"data: {_json.dumps({'type': 'status', 'message': f'Setting up (elapsed {elapsed}s)...'})}\n\n"
         try:
             runtime = _build_task.result()
+            if debug_stream:
+                yield _debug_frame(
+                    "runtime_ready",
+                    agent_names=runtime.get("agent_names"),
+                    tool_count=len(runtime.get("toolset") or []),
+                )
         except Exception as setup_exc:
             logger.exception("Early chat stream setup failed before agent loop")
             msg = str(setup_exc) or setup_exc.__class__.__name__
@@ -1644,8 +1895,12 @@ async def chat_message_stream(
         # a bad history cell should not silently mask the real root cause).
         try:
             _prime_task.result()
+            if debug_stream:
+                yield _debug_frame("python_history_replayed")
         except Exception as _prime_err:
             logger.warning("session-history prime raised: %s", _prime_err)
+            if debug_stream:
+                yield _debug_frame("python_history_replay_failed", error=str(_prime_err)[:300])
 
         try:
             if len(agent_names) > 1:
@@ -1758,8 +2013,9 @@ async def chat_message_stream(
                         preferred_backend=preferred_backend,
                         chat_session_id=chat_session_id,
                         on_event=_emit,
+                        workflow_budget=workflow_budget,
                     ),
-                    timeout=420.0,  # 7-min hard ceiling — heartbeat keeps SSE alive
+                    timeout=float(workflow_budget["endpoint_timeout_seconds"]),
                 )
             )
             _hb_count = 0
@@ -1770,6 +2026,13 @@ async def chat_message_stream(
                     # means the user sees motion within seconds even when
                     # the agent is making a long LLM call.
                     evt = await asyncio.wait_for(event_queue.get(), timeout=6.0)
+                    if debug_stream:
+                        yield _debug_frame(
+                            "sse_event",
+                            event_type=evt.get("type"),
+                            tool=evt.get("tool"),
+                            live=evt.get("live"),
+                        )
                     yield f"data: {json.dumps(evt, default=str)}\n\n"
                     _hb_count = 0
                 except asyncio.TimeoutError:
@@ -1780,6 +2043,13 @@ async def chat_message_stream(
             while not event_queue.empty():
                 try:
                     evt = event_queue.get_nowait()
+                    if debug_stream:
+                        yield _debug_frame(
+                            "sse_event",
+                            event_type=evt.get("type"),
+                            tool=evt.get("tool"),
+                            live=evt.get("live"),
+                        )
                     yield f"data: {json.dumps(evt, default=str)}\n\n"
                 except asyncio.QueueEmpty:
                     break
@@ -1795,7 +2065,8 @@ async def chat_message_stream(
             for action in response["actions"]:
                 yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result'), 'tool_call_id': action.get('_tool_call_id')}, default=str)}\n\n"
         except (TimeoutError, asyncio.TimeoutError):
-            yield f"data: {json.dumps({'type': 'error', 'message': 'AI workflow timed out after 420s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
+            timeout_s = int(workflow_budget["endpoint_timeout_seconds"])
+            yield f"data: {json.dumps({'type': 'error', 'message': f'AI workflow timed out after {timeout_s}s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
         except InferenceError as e:
             msg = str(e) or e.__class__.__name__
             yield f"data: {json.dumps({'type': 'error', 'message': msg})}\n\n"
@@ -1813,6 +2084,43 @@ async def chat_message_stream(
             # these headers Cloudflare + Render's edge hold small SSE frames
             # until their write buffers fill, which on a quiet agent loop
             # can be minutes — looking identical to "the AI is stuck".
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.get("/_debug/simulate_stream_failure")
+async def simulate_stream_failure(request: Request):
+    """Dev-only SSE failure fixture for frontend regression tests."""
+    from starlette.responses import StreamingResponse
+
+    if os.getenv("ENV") == "production" and not os.getenv("ALLOW_STREAM_DEBUG_ENDPOINT"):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    async def generate():
+        import json as _json
+
+        yield ": " + (" " * SSE_PREAMBLE_PADDING_BYTES) + "\n\n"
+        yield f"data: {_json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
+        if request.query_params.get("debug_stream") == "1":
+            yield f"data: {_json.dumps({'type': 'stream_debug', 'stage': 'simulated_setup_failure', 'elapsed_ms': 0})}\n\n"
+        yield (
+            "data: "
+            + _json.dumps({
+                "type": "error",
+                "message": "Simulated stream setup failure",
+                "error_class": "stream_setup_failed",
+            })
+            + "\n\n"
+        )
+        yield f"data: {_json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
             "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
@@ -2064,6 +2372,8 @@ async def _execute_tool_calls(
     on_event: Callable[[dict], Awaitable[None]] | None = None,
     loop_deadline: float | None = None,
     summary_reserve_s: float = 60.0,
+    workflow_budget_mode: str = "default",
+    tool_deadline_scale: float = 1.0,
 ) -> list[dict]:
     """Execute one model turn's tool calls concurrently while preserving order.
 
@@ -2125,12 +2435,24 @@ async def _execute_tool_calls(
         # J3: run_sdss_sql 打 SDSS SkyServer, 内部 httpx timeout 120 s.
         # 给一点 slack 应付大 JOIN + 解析 JSON, 跟 crossmatch_catalogs 同级.
         "run_sdss_sql": 180.0,
+        # MW v_esc / halo-star workflows need a focused Gaia DR3 helper
+        # rather than repeated broad source-table scans.
+        "query_high_velocity_stars": 240.0,
     }
     _TOOL_DEADLINE_DEFAULT = 45.0
 
     async def _run_one(tc: dict) -> dict:
         tool_name = tc.get("name") or ""
         base_deadline_s = _TOOL_DEADLINE_TABLE.get(tool_name, _TOOL_DEADLINE_DEFAULT)
+        if workflow_budget_mode == "long":
+            if tool_name == "run_adql":
+                base_deadline_s = max(base_deadline_s, 780.0)
+            elif tool_name == "run_sdss_sql":
+                base_deadline_s = max(base_deadline_s, 300.0)
+            elif tool_name == "query_high_velocity_stars":
+                base_deadline_s = max(base_deadline_s, 420.0)
+            else:
+                base_deadline_s = min(base_deadline_s * max(1.0, tool_deadline_scale), 360.0)
         deadline_s = base_deadline_s
         deadline_adjusted = False
         workflow_seconds_remaining: int | None = None
@@ -2171,8 +2493,14 @@ async def _execute_tool_calls(
             except Exception:
                 logger.debug("tool_progress event failed", exc_info=True)
 
+        tool_input = dict(tc.get("input") or {})
+        if workflow_budget_mode == "long":
+            tool_input.setdefault("_workflow_budget_mode", "long")
+            if tool_name in {"run_adql", "run_sdss_sql", "query_high_velocity_stars"}:
+                tool_input.setdefault("extended_timeout", True)
+
         task = asyncio.create_task(execute_tool(
-            tool_name, tc["input"], api_key, provider_api_keys, python_session_id,
+            tool_name, tool_input, api_key, provider_api_keys, python_session_id,
             user_id=user_id, chat_session_id=chat_session_id,
             progress_callback=_emit_tool_progress,
         ))
@@ -2260,6 +2588,7 @@ async def _run_agent_loop(
     user_id: str | None = None,
     chat_session_id: str | None = None,
     on_event: Callable[[dict], Awaitable[None]] | None = None,
+    workflow_budget: dict[str, Any] | None = None,
 ) -> dict:
     """Run the agent's multi-turn loop.
 
@@ -2284,11 +2613,37 @@ async def _run_agent_loop(
     working_messages = deepcopy(messages)
     all_tool_results: list[dict] = []
     text_parts: list[str] = []
-    max_iterations = 12
-    # H1 / step 0 bump: agent-loop deadline sits between the outer endpoint
-    # (420s) and the per-LLM-call timeout (150s).  360s leaves ~60s of
-    # buffer on each side for tool execution + response assembly.
-    _loop_deadline = _time.monotonic() + 360.0
+    budget = _workflow_budget_config((workflow_budget or {}).get("mode"))
+    budget.update(workflow_budget or {})
+    max_iterations = int(budget.get("max_iterations", 12))
+    summary_reserve_s = float(budget.get("summary_reserve_seconds", 60.0))
+    soft_reminder_s = float(budget.get("soft_reminder_seconds", 75.0))
+    budget_mode = str(budget.get("mode") or "default")
+    _loop_seconds = float(budget.get("agent_loop_seconds", 360.0))
+    # H1 / long-task bump: default remains 360s; paper-scale workflows can
+    # explicitly opt into a 900s loop with larger summary reserve.
+    _loop_deadline = _time.monotonic() + _loop_seconds
+    checkpoint_id = _checkpoint_session_id(chat_session_id, python_session_id)
+    checkpoint_note = _format_checkpoint_resume_note(checkpoint_id)
+
+    await _emit({
+        "type": "workflow_budget",
+        "agent": agent_name,
+        "mode": budget_mode,
+        "agent_loop_seconds": int(_loop_seconds),
+        "summary_reserve_seconds": int(summary_reserve_s),
+        "max_iterations": max_iterations,
+    })
+    if checkpoint_note:
+        try:
+            from app.services import workflow_checkpoint
+            await _emit({
+                "type": "workflow_checkpoint",
+                "agent": agent_name,
+                "summary": workflow_checkpoint.summarize(checkpoint_id or ""),
+            })
+        except Exception:
+            pass
 
     # G3.1: track which data-fetch tools have failed this turn so we can
     # taint subsequent run_python outputs + physically remove the failed
@@ -2297,6 +2652,7 @@ async def _run_agent_loop(
         "search_objects", "run_adql", "search_lightcurve", "query_transients",
         "crossmatch_catalogs", "query_gaia_cluster", "get_object_info",
         "get_object_dossier", "get_extinction", "search_literature",
+        "query_high_velocity_stars",
     }
     # G3.4 + H0.7: tool → failure count this turn.  When ≥
     # DISABLE_AFTER_FAILURES, the tool is removed from the `tools`
@@ -2317,7 +2673,11 @@ async def _run_agent_loop(
             hit_deadline = True
             summary = " ".join(text_parts) if text_parts else "AI workflow timed out."
             return {
-                "reply": summary + "\n\n(Agent loop timed out after 6 minutes. Results above are partial.)",
+                "reply": (
+                    summary
+                    + f"\n\n(Agent loop timed out after {int(_loop_seconds)} seconds. "
+                    "Results above are partial and checkpointed for continuation.)"
+                ),
                 "actions": _tool_results_to_actions(all_tool_results),
                 "hit_deadline": True,
                 "hit_iteration_cap": False,
@@ -2358,8 +2718,11 @@ async def _run_agent_loop(
         else:
             system_this_call = system
 
+        if checkpoint_note:
+            system_this_call = system_this_call + "\n\n" + checkpoint_note
+
         seconds_left = _loop_deadline - _time.monotonic()
-        if seconds_left <= 75.0:
+        if seconds_left <= soft_reminder_s:
             system_this_call = (
                 system_this_call
                 + "\n\n[RUNTIME: you are close to the agent-loop deadline "
@@ -2428,7 +2791,9 @@ async def _run_agent_loop(
             chat_session_id=chat_session_id,
             on_event=on_event,
             loop_deadline=_loop_deadline,
-            summary_reserve_s=60.0,
+            summary_reserve_s=summary_reserve_s,
+            workflow_budget_mode=budget_mode,
+            tool_deadline_scale=float(budget.get("tool_deadline_scale", 1.0)),
         )
         for tc in executed_tools:
             result = tc["result"]
@@ -2554,6 +2919,18 @@ async def _run_agent_loop(
                     "result": result,
                 }
             )
+            checkpoint_event = _record_tool_checkpoint(
+                chat_session_id=chat_session_id,
+                python_session_id=python_session_id,
+                tool_call=tc,
+                result=result,
+            )
+            if checkpoint_event is not None:
+                await _emit({
+                    "type": "workflow_checkpoint",
+                    "agent": agent_name,
+                    **checkpoint_event,
+                })
             # Stream the result immediately so the UI can update inline.
             # `live: true` distinguishes this from the final consolidated
             # tool_result events the SSE generator emits at the end — the
@@ -2842,25 +3219,44 @@ async def _run_orchestrated_chat(
     user_id: str | None = None,
     chat_session_id: str | None = None,
     on_event: Callable[[dict], Awaitable[None]] | None = None,
+    workflow_budget: dict[str, Any] | None = None,
 ) -> dict:
     agent_names = list(runtime.get("agent_names") or [])
     if not agent_names:
         agent_names = ["orchestrator"]
 
-    if len(agent_names) == 1:
-        single = await _run_agent_loop(
-            system=str(runtime.get("system", "") or ""),
-            messages=messages,
-            tools=list(runtime.get("toolset") or []),
-            provider_api_keys=provider_api_keys,
-            agent_name=agent_names[0],
-            python_session_id=python_session_id,
-            preferred_backend=preferred_backend,
-            user_id=user_id,
-            chat_session_id=chat_session_id,
-            on_event=on_event,
+    try:
+        _loop_sig = inspect.signature(_run_agent_loop)
+        _loop_accepts_workflow_budget = (
+            "workflow_budget" in _loop_sig.parameters
+            or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in _loop_sig.parameters.values())
         )
-        return {"reply": single["reply"], "actions": single["actions"]}
+    except Exception:
+        _loop_accepts_workflow_budget = True
+
+    if len(agent_names) == 1:
+        loop_kwargs = {
+            "system": str(runtime.get("system", "") or ""),
+            "messages": messages,
+            "tools": list(runtime.get("toolset") or []),
+            "provider_api_keys": provider_api_keys,
+            "agent_name": agent_names[0],
+            "python_session_id": python_session_id,
+            "preferred_backend": preferred_backend,
+            "user_id": user_id,
+            "chat_session_id": chat_session_id,
+            "on_event": on_event,
+        }
+        if _loop_accepts_workflow_budget:
+            loop_kwargs["workflow_budget"] = workflow_budget
+        single = await _run_agent_loop(**loop_kwargs)
+        return {
+            "reply": single["reply"],
+            "actions": single["actions"],
+            "tool_results": single.get("tool_results", []),
+            "hit_deadline": single.get("hit_deadline", False),
+            "hit_iteration_cap": single.get("hit_iteration_cap", False),
+        }
 
     agent_results: list[dict] = []
     handoff = None
@@ -2872,23 +3268,29 @@ async def _run_orchestrated_chat(
         agent_messages = deepcopy(messages)
         if handoff is not None:
             agent_messages.append({"role": "user", "content": _build_agent_handoff_message(handoff)})
-        result = await _run_agent_loop(
-            system=str(runtime.get("base_system", "") or "") + "\n\n" + agent_runtime["system_prompt"],
-            messages=agent_messages,
-            tools=_filter_tools(agent_runtime.get("tool_names"), list(runtime.get("toolset") or [])),
-            provider_api_keys=provider_api_keys,
-            agent_name=agent_name,
-            python_session_id=python_session_id,
-            preferred_backend=preferred_backend,
-            user_id=user_id,
-            chat_session_id=chat_session_id,
-            on_event=on_event,
-        )
+        loop_kwargs = {
+            "system": str(runtime.get("base_system", "") or "") + "\n\n" + agent_runtime["system_prompt"],
+            "messages": agent_messages,
+            "tools": _filter_tools(agent_runtime.get("tool_names"), list(runtime.get("toolset") or [])),
+            "provider_api_keys": provider_api_keys,
+            "agent_name": agent_name,
+            "python_session_id": python_session_id,
+            "preferred_backend": preferred_backend,
+            "user_id": user_id,
+            "chat_session_id": chat_session_id,
+            "on_event": on_event,
+        }
+        if _loop_accepts_workflow_budget:
+            loop_kwargs["workflow_budget"] = workflow_budget
+        result = await _run_agent_loop(**loop_kwargs)
         agent_results.append(
             {
                 "agent_name": agent_name,
                 "reply": result["reply"],
                 "actions": result["actions"],
+                "tool_results": result.get("tool_results", []),
+                "hit_deadline": result.get("hit_deadline", False),
+                "hit_iteration_cap": result.get("hit_iteration_cap", False),
             }
         )
         if index < len(agent_names) - 1:
@@ -2900,9 +3302,17 @@ async def _run_orchestrated_chat(
 
     merged_reply = await orchestrator.merge_responses(agent_results)
     merged_actions: list[dict] = []
+    merged_tool_results: list[dict] = []
     for result in agent_results:
         merged_actions.extend(result["actions"])
-    return {"reply": merged_reply, "actions": merged_actions}
+        merged_tool_results.extend(result.get("tool_results", []))
+    return {
+        "reply": merged_reply,
+        "actions": merged_actions,
+        "tool_results": merged_tool_results,
+        "hit_deadline": any(bool(r.get("hit_deadline")) for r in agent_results),
+        "hit_iteration_cap": any(bool(r.get("hit_iteration_cap")) for r in agent_results),
+    }
 
 
 # G7.3: debug store for the last LLM prompt.  Populated by the agent-loop
@@ -3004,6 +3414,7 @@ async def chat_message(
     """
     provider_api_keys = _provider_api_keys(req.context, user)
     preferred_backend = _preferred_backend(req.context)
+    workflow_budget = _workflow_budget_config(_infer_workflow_budget_mode(req))
 
     claude_messages: list[dict] = _normalize_messages(req.messages)
     runtime = await _build_runtime(req, user, db)
@@ -3021,6 +3432,7 @@ async def chat_message(
             preferred_backend=preferred_backend,
             user_id=str(user.id) if user else None,
             chat_session_id=chat_session_id,
+            workflow_budget=workflow_budget,
         )
         return ChatResponse(reply=response["reply"], actions=response["actions"])
 

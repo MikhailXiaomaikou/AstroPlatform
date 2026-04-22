@@ -180,6 +180,8 @@ _DATA_TOOLS = {
     "query_gaia_cluster", "get_extinction",
     # J3: SDSS SkyServer 直连 — 和 run_adql 同类, 都是 data fetch
     "run_sdss_sql",
+    # MW v_esc helper — focused Gaia DR3 high-velocity candidate fetch
+    "query_high_velocity_stars",
 }
 _COMPUTE_TOOLS = {
     "run_python", "generate_pipeline", "run_pipeline", "validate_analysis",

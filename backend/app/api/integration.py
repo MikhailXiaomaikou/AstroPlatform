@@ -608,7 +608,13 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool, progress_call
         raise type(last_err)(msg) from last_err
     raise ConnectionError(msg)
 
-async def execute_adql_query(req: ADQLRequest, progress_callback=None) -> dict:
+async def execute_adql_query(
+    req: ADQLRequest,
+    progress_callback=None,
+    *,
+    sync_timeout_s: float = 30.0,
+    async_timeout_s: float = 300.0,
+) -> dict:
     """Core ADQL query execution (callable from AI tools without Request)."""
     import asyncio
 
@@ -707,15 +713,16 @@ async def execute_adql_query(req: ADQLRequest, progress_callback=None) -> dict:
 
         # Sync first unless we think it'll be big.  H0.1 (post-review):
         # tightened sync to 30s — healthy Gaia/VizieR responds in <5s, and
-        # a slow sync is usually a sign async will do better.  Async
-        # budget stays at 300s.
+        # a slow sync is usually a sign async will do better.  Long-task
+        # callers can explicitly raise async_timeout_s.
         try:
             if _looks_big:
                 await _emit_progress({
                     "stage": "async_start",
                     "service": req.service,
                     "mode": "async",
-                    "message": "ADQL query looks broad; using async TAP directly",
+                    "message": f"ADQL query looks broad; using async TAP directly ({int(async_timeout_s)}s budget)",
+                    "async_timeout_seconds": int(async_timeout_s),
                 })
                 logger.info(
                     "ADQL: query flagged big (top=%s, radius=%s, join=%s); using async TAP",
@@ -723,22 +730,23 @@ async def execute_adql_query(req: ADQLRequest, progress_callback=None) -> dict:
                 )
                 table = await asyncio.wait_for(
                     loop.run_in_executor(None, _run_query_async),
-                    timeout=300.0,  # 5 min async budget
+                    timeout=async_timeout_s,
                 )
             else:
                 await _emit_progress({
                     "stage": "sync_start",
                     "service": req.service,
                     "mode": "sync",
-                    "message": "Starting ADQL sync TAP probe",
+                    "message": f"Starting ADQL sync TAP probe ({int(sync_timeout_s)}s budget)",
+                    "sync_timeout_seconds": int(sync_timeout_s),
                 })
                 table = await asyncio.wait_for(
                     loop.run_in_executor(None, _run_query_sync),
-                    timeout=30.0,
+                    timeout=sync_timeout_s,
                 )
         except asyncio.TimeoutError as timeout_err:
             # Sync timed out on a query we thought was small.  Fall back
-            # to async and give it the full 5-min budget.
+            # to async and give it the configured async budget.
             if not _looks_big:
                 await _emit_progress({
                     "stage": "sync_timeout_async_fallback",
@@ -751,22 +759,22 @@ async def execute_adql_query(req: ADQLRequest, progress_callback=None) -> dict:
                 try:
                     table = await asyncio.wait_for(
                         loop.run_in_executor(None, _run_query_async),
-                        timeout=300.0,
+                        timeout=async_timeout_s,
                     )
                 except Exception as async_err:
                     raise HTTPException(
                         status_code=408,
                         detail=(
                             f"ADQL query timed out even after async TAP fallback "
-                            f"(5 min). Reduce TOP, shrink cone radius, or use "
+                            f"({int(async_timeout_s)}s). Reduce TOP, shrink cone radius, or use "
                             f"run_adql with explicit smaller scope. Inner error: {async_err}"
                         ),
                     ) from async_err
             else:
                 raise HTTPException(
-                    status_code=408,
-                    detail=(
-                        f"ADQL async TAP timed out after 5 min. Query is too "
+                        status_code=408,
+                        detail=(
+                        f"ADQL async TAP timed out after {int(async_timeout_s)}s. Query is too "
                         f"large — reduce TOP to <5000 or shrink cone radius "
                         f"to <0.5 deg. Original error: {timeout_err}"
                     ),
@@ -787,7 +795,7 @@ async def execute_adql_query(req: ADQLRequest, progress_callback=None) -> dict:
                 try:
                     table = await asyncio.wait_for(
                         loop.run_in_executor(None, _run_query_async),
-                        timeout=300.0,
+                        timeout=async_timeout_s,
                     )
                 except Exception as retry_err:
                     raise HTTPException(

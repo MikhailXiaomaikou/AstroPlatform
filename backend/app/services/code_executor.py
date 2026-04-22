@@ -631,7 +631,10 @@ def _make_data_accessor(session_id: str):
         """Get cached platform data, preferring this chat/session scope."""
         from app.services.ai_tools import get_cached_results
         scoped_key = f"{key}:{session_id}" if session_id and session_id != "default" else None
-        adql_keys = {"latest_adql", "latest_adql_set", "latest_adql_sets", "latest_sdss_sql"}
+        adql_keys = {
+            "latest_adql", "latest_adql_set", "latest_adql_sets",
+            "latest_sdss_sql", "latest_high_velocity_stars",
+        }
         if scoped_key and key in adql_keys:
             payload = get_cached_results(scoped_key)
         else:

@@ -13,7 +13,7 @@ Covers the key fixes from the 5-paper reviewer cycle:
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -231,7 +231,6 @@ def test_ast_linter_accepts_import_alias():
     broke the naive string check before AST."""
     from app.services.ai_tools import _exec_run_python
 
-    code = "from builtins import print\nimport builtins\nprint(1)\n# reads via get_adql_results"
     # Using a comment to mention the token — old code would accept this.
     # The NEW AST check also accepts because the name appears in a Name node
     # somewhere (actually no — in a comment it's not in AST).  Let's test
@@ -1000,6 +999,110 @@ def test_run_sdss_sql_dispatches_to_connector():
     assert res.get("service") == "sdss"
 
 
+# ---------- M1: long workflow budget + checkpoint + MW high-velocity helper ----------
+
+def test_long_workflow_budget_inferred_for_paper_scale_prompt():
+    from app.api.chat import ChatMessage, ChatRequest, _infer_workflow_budget_mode, _workflow_budget_config
+
+    req = ChatRequest(messages=[
+        ChatMessage(role="user", content="请完整复现 SDSS luminosity function 论文场景")
+    ])
+    assert _infer_workflow_budget_mode(req) == "long"
+    budget = _workflow_budget_config("long")
+    assert budget["agent_loop_seconds"] >= 900
+    assert budget["endpoint_timeout_seconds"] > budget["agent_loop_seconds"]
+
+
+def test_execute_tool_calls_marks_adql_extended_in_long_mode():
+    from app.api.chat import _execute_tool_calls
+
+    captured: dict = {}
+
+    async def fake_execute_tool(tool_name, tool_input, *args, **kwargs):
+        captured["tool_name"] = tool_name
+        captured["tool_input"] = tool_input
+        return {"success": True, "row_count": 1}
+
+    with patch("app.services.ai_tools.execute_tool", side_effect=fake_execute_tool):
+        result = asyncio.run(_execute_tool_calls(
+            [{"id": "toolu_adql", "name": "run_adql", "input": {"query": "SELECT TOP 1 *", "service": "gaia"}}],
+            api_key="",
+            provider_api_keys={},
+            python_session_id="pytest",
+            workflow_budget_mode="long",
+        ))
+
+    assert result[0]["result"]["success"] is True
+    assert captured["tool_name"] == "run_adql"
+    assert captured["tool_input"]["extended_timeout"] is True
+    assert captured["tool_input"]["_workflow_budget_mode"] == "long"
+
+
+def test_workflow_checkpoint_helpers_record_cache_refs():
+    from app.api.chat import _record_tool_checkpoint
+    from app.services import workflow_checkpoint as wc
+
+    wc.reset()
+    event = _record_tool_checkpoint(
+        chat_session_id="chat-1",
+        python_session_id="py-1",
+        tool_call={"id": "toolu_1", "name": "run_adql", "input": {"query": "SELECT 1"}},
+        result={"success": True, "row_count": 3, "columns": ["ra", "dec"]},
+    )
+    assert event is not None
+    assert event["status"] == "completed"
+    assert "latest_adql" in event["cache_refs"]
+    summary = wc.summarize("chat-1")
+    assert summary["has_checkpoint"] is True
+    assert summary["steps"][0]["tool_call_id"] == "toolu_1"
+    wc.reset()
+
+
+def test_high_velocity_star_tool_registered_and_classified():
+    from app.services.ai_tools import TOOLS
+    from app.services.result_provenance import _DATA_TOOLS
+
+    names = [t.get("name") for t in TOOLS]
+    assert "query_high_velocity_stars" in names
+    assert "query_high_velocity_stars" in _DATA_TOOLS
+    entry = next(t for t in TOOLS if t.get("name") == "query_high_velocity_stars")
+    assert "escape-velocity" in entry["description"] or "escape" in entry["description"].lower()
+    assert "min_vtan_kms" in entry["input_schema"]["properties"]
+
+
+def test_high_velocity_star_query_is_focused_gaia_vizier_query():
+    from app.services.ai_tools import _build_high_velocity_stars_query
+
+    query = _build_high_velocity_stars_query(
+        limit=500,
+        min_parallax_mas=0.2,
+        min_vtan_kms=250,
+        require_radial_velocity=True,
+    )
+    assert 'FROM "I/355/gaiadr3"' in query
+    assert "vtan_kms" in query
+    assert "RV IS NOT NULL" in query
+    assert "TOP 500" in query
+
+
+def test_system_prompt_routes_escape_velocity_to_high_velocity_tool():
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "query_high_velocity_stars" in SYSTEM_PROMPT
+    assert "escape velocity" in SYSTEM_PROMPT.lower()
+    assert "latest_adql" in SYSTEM_PROMPT
+
+
+def test_stream_debug_endpoint_is_dev_fixture():
+    import inspect
+    from app.api import chat
+
+    src = inspect.getsource(chat.simulate_stream_failure)
+    assert "stream_setup_failed" in src
+    assert "stream_debug" in src
+    assert "ALLOW_STREAM_DEBUG_ENDPOINT" in src
+
+
 # ---------- L3: K-correction z>0.5 降级 warning ----------
 
 def test_k_correction_z_low_no_warning():
@@ -1342,7 +1445,7 @@ def test_fabrication_blocked_counter_increments_on_uncited_claim():
     是否发火, 万一静默回退无人知.
     """
     from app.observability.metrics import get_registry
-    from app.services.claim_validator import zero_data_but_quantitative, validate_claims
+    from app.services.claim_validator import zero_data_but_quantitative
 
     registry = get_registry()
     # 清零 counter 命名空间

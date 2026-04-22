@@ -204,8 +204,30 @@ TOOLS = [
             "properties": {
                 "query": {"type": "string", "description": "ADQL query string"},
                 "service": {"type": "string", "enum": ["gaia", "simbad", "vizier", "cadc"], "description": "TAP service to query"},
+                "extended_timeout": {"type": "boolean", "description": "Optional: true for paper-scale queries that need the long workflow ADQL budget."},
             },
             "required": ["query", "service"],
+        },
+    },
+    {
+        "name": "query_high_velocity_stars",
+        "description": (
+            "Fetch a focused Gaia DR3 high-tangential-velocity candidate sample for "
+            "Milky Way escape-velocity / halo-star workflows. Use this BEFORE broad "
+            "Gaia source-table scans. It queries VizieR Gaia DR3 with parallax and "
+            "proper-motion cuts, computes vtan_kms, caches rows under latest_adql, "
+            "and returns a clear caveat that this is an accessible candidate sample, "
+            "not the full literature halo-star selection."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Maximum rows to return/cache (default 500, max 2000)."},
+                "min_parallax_mas": {"type": "number", "description": "Minimum positive parallax in mas (default 0.2)."},
+                "min_vtan_kms": {"type": "number", "description": "Minimum tangential velocity in km/s (default 250)."},
+                "require_radial_velocity": {"type": "boolean", "description": "Require Gaia radial velocity RV to be present (default false; true is cleaner but much smaller)."},
+                "extended_timeout": {"type": "boolean", "description": "Optional: use the long workflow ADQL budget."},
+            },
         },
     },
     {
@@ -232,6 +254,7 @@ TOOLS = [
             "properties": {
                 "query": {"type": "string", "description": "T-SQL query string"},
                 "dr": {"type": "string", "enum": ["18", "17", "16"], "description": "SDSS Data Release (default '18')"},
+                "extended_timeout": {"type": "boolean", "description": "Optional: true for paper-scale SDSS queries in long workflow mode."},
             },
             "required": ["query"],
         },
@@ -444,6 +467,7 @@ TOOLS = [
                         "'latest_adql' (uses get_adql_results / get_adql_result_sets), "
                         "'latest_search' (uses get_search_results), "
                         "'latest_lightcurve' / 'cached:<key>' (other cached real data), "
+                        "'latest_high_velocity_stars' (uses the focused Gaia high-velocity cache), "
                         "'fits:<path>' (loads a specific FITS file via load_fits), "
                         "'none_not_analyzing_real_data' (not analyzing observational data: "
                         "synthetic/pedagogical/Monte-Carlo data, or helper introspection such as "
@@ -1423,6 +1447,8 @@ async def _execute_tool_inner(
             return await _exec_search(tool_input, python_session_id)
         elif tool_name == "run_adql":
             return await _exec_adql(tool_input, python_session_id, progress_callback)
+        elif tool_name == "query_high_velocity_stars":
+            return await _exec_query_high_velocity_stars(tool_input, python_session_id, progress_callback)
         elif tool_name == "run_sdss_sql":
             return await _exec_run_sdss_sql(tool_input, python_session_id)
         elif tool_name == "get_object_info":
@@ -1878,6 +1904,12 @@ async def _exec_adql(
 
     query = inp.get("query", "")
     service = inp.get("service", "gaia")
+    extended_timeout = bool(
+        inp.get("extended_timeout")
+        or str(inp.get("_workflow_budget_mode") or "").lower() == "long"
+    )
+    async_timeout_s = 780.0 if extended_timeout else 300.0
+    retry_chain_budget_s = 840.0 if extended_timeout else 360.0
 
     async def _emit_progress(stage: str, message: str, **extra: Any) -> None:
         if progress_callback is None:
@@ -1912,6 +1944,7 @@ async def _exec_adql(
             return await execute_adql_query(
                 ADQLRequest(query=q, service=service),
                 progress_callback=progress_callback,
+                async_timeout_s=async_timeout_s,
             )
         except Exception as exc:
             msg = str(exc).lower()
@@ -1960,12 +1993,13 @@ async def _exec_adql(
     import time as _time_mod
     _start_ts = _time_mod.monotonic()
     _timeout_policy = {
-        "tool_deadline_seconds": 300,
+        "tool_deadline_seconds": 780 if extended_timeout else 300,
         "sync_probe_seconds": 30,
-        "async_fallback_budget_seconds": 300,
-        "retry_chain_budget_seconds": 360,
+        "async_fallback_budget_seconds": int(async_timeout_s),
+        "retry_chain_budget_seconds": int(retry_chain_budget_s),
+        "extended_timeout": extended_timeout,
     }
-    _total_budget_s = float(_timeout_policy["retry_chain_budget_seconds"])
+    _total_budget_s = retry_chain_budget_s
 
     def _time_left() -> float:
         return _total_budget_s - (_time_mod.monotonic() - _start_ts)
@@ -2086,9 +2120,11 @@ async def _exec_adql(
                 "the TAP service may still be responsive for smaller queries.  "
                 "This usually means the requested query is too broad/heavy "
                 "(large TOP, wide cone, JOIN, or weak cuts) or transiently slow.  "
-                "Timeout policy: run_adql has a 300s tool deadline; each TAP call "
-                "uses a 30s sync probe before the 300s async fallback; the retry "
-                "chain has a 360s internal budget but may be capped by the outer "
+                f"Timeout policy: run_adql has a {int(_timeout_policy['tool_deadline_seconds'])}s base "
+                f"tool deadline ({'extended by long workflow mode' if extended_timeout else 'default mode'}); "
+                "each TAP call uses a 30s sync probe before the "
+                f"{int(async_timeout_s)}s async fallback; the retry "
+                f"chain has a {int(retry_chain_budget_s)}s internal budget but may be capped by the outer "
                 "workflow budget.  Try one of: "
                 "(a) add/tighten TOP (e.g. TOP 500 instead of TOP 50000 — you can "
                 "still get statistics from smaller samples); "
@@ -2158,6 +2194,147 @@ async def _exec_adql(
     return adql_result
 
 
+def _bounded_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(min_value, min(max_value, parsed))
+
+
+def _bounded_float(value: Any, *, default: float, min_value: float, max_value: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if parsed != parsed:
+        parsed = default
+    return max(min_value, min(max_value, parsed))
+
+
+def _build_high_velocity_stars_query(
+    *,
+    limit: int = 500,
+    min_parallax_mas: float = 0.2,
+    min_vtan_kms: float = 250.0,
+    require_radial_velocity: bool = False,
+) -> str:
+    vtan_expr = "(4.74047 * SQRT(pmRA*pmRA + pmDE*pmDE) / Plx)"
+    rv_clause = "AND RV IS NOT NULL" if require_radial_velocity else ""
+    return f"""
+SELECT TOP {limit}
+  Source, RA_ICRS, DE_ICRS, Plx, pmRA, pmDE, RV, Gmag, RUWE,
+  {vtan_expr} AS vtan_kms
+FROM "I/355/gaiadr3"
+WHERE Plx >= {min_parallax_mas:.6g}
+  AND pmRA IS NOT NULL
+  AND pmDE IS NOT NULL
+  AND {vtan_expr} >= {min_vtan_kms:.6g}
+  AND (RUWE IS NULL OR RUWE < 1.4)
+  {rv_clause}
+ORDER BY {vtan_expr} DESC
+""".strip()
+
+
+async def _exec_query_high_velocity_stars(
+    inp: dict,
+    python_session_id: str = "default",
+    progress_callback: Callable[[dict], Awaitable[None]] | None = None,
+) -> dict:
+    """Focused Gaia DR3 high-velocity candidate query for v_esc workflows."""
+    from app.api.integration import ADQLRequest, execute_adql_query
+
+    limit = _bounded_int(inp.get("limit"), default=500, min_value=50, max_value=2000)
+    min_parallax = _bounded_float(inp.get("min_parallax_mas"), default=0.2, min_value=0.05, max_value=20.0)
+    min_vtan = _bounded_float(inp.get("min_vtan_kms"), default=250.0, min_value=50.0, max_value=1000.0)
+    require_rv = bool(inp.get("require_radial_velocity") is True)
+    extended_timeout = bool(
+        inp.get("extended_timeout")
+        or str(inp.get("_workflow_budget_mode") or "").lower() == "long"
+    )
+    query = _build_high_velocity_stars_query(
+        limit=limit,
+        min_parallax_mas=min_parallax,
+        min_vtan_kms=min_vtan,
+        require_radial_velocity=require_rv,
+    )
+    async_timeout_s = 780.0 if extended_timeout else 300.0
+    try:
+        result = await execute_adql_query(
+            ADQLRequest(query=query, service="vizier"),
+            progress_callback=progress_callback,
+            async_timeout_s=async_timeout_s,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": (
+                f"High-velocity Gaia DR3 candidate query failed: {exc}. "
+                "Retry with a higher min_vtan_kms, lower limit, or require_radial_velocity=false."
+            ),
+            "error_class": "high_velocity_query_failed",
+            "service": "vizier",
+            "table": "I/355/gaiadr3",
+            "query": query,
+            "params": {
+                "limit": limit,
+                "min_parallax_mas": min_parallax,
+                "min_vtan_kms": min_vtan,
+                "require_radial_velocity": require_rv,
+                "extended_timeout": extended_timeout,
+            },
+        }
+
+    raw_data = result.get("data", {}) if isinstance(result, dict) else {}
+    data = {str(col).lower(): vals for col, vals in raw_data.items()}
+    columns = [str(c).lower() for c in (result.get("columns", []) if isinstance(result, dict) else [])]
+    row_count = int(result.get("row_count", 0) or 0) if isinstance(result, dict) else 0
+    attempt_log = result.get("attempt_log", []) if isinstance(result, dict) else []
+
+    result_set = build_adql_result_set(
+        service="vizier",
+        query=query,
+        columns=columns,
+        data=data,
+        row_count=row_count,
+    )
+    store_adql_result_set(python_session_id, result_set)
+    hv_key = _session_cache_key("latest_high_velocity_stars", python_session_id) or "latest_high_velocity_stars"
+    store_search_results(hv_key, result_set)
+
+    view_rows = min(100, row_count)
+    truncated = {col: (vals[:view_rows] if isinstance(vals, list) else vals) for col, vals in data.items()}
+    return {
+        "service": "vizier",
+        "table": "I/355/gaiadr3",
+        "query": query,
+        "columns": columns,
+        "data": truncated,
+        "row_count": row_count,
+        "showing": view_rows,
+        "has_data": row_count > 0,
+        "cache_keys": ["latest_adql", "latest_adql_set", hv_key],
+        "params": {
+            "limit": limit,
+            "min_parallax_mas": min_parallax,
+            "min_vtan_kms": min_vtan,
+            "require_radial_velocity": require_rv,
+            "extended_timeout": extended_timeout,
+        },
+        "science_caveat": (
+            "This is a Gaia DR3 high-tangential-velocity candidate sample reachable "
+            "through public TAP. It is useful for platform reproduction and sanity "
+            "checks, but it is not the full Piffl+2014 / Monari+2018 halo-star "
+            "selection function."
+        ),
+        "note": (
+            f"Showing first {view_rows} of {row_count} rows. Full rows are cached under latest_adql "
+            f"and {hv_key}; compute 3D velocities in run_python(data_source='latest_adql')."
+        ) if row_count > view_rows else None,
+        "attempt_log": attempt_log[-20:] if isinstance(attempt_log, list) else [],
+    }
+
+
 async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> dict:
     """J3: 直接打 SDSS SkyServer SQL API, 不经 VizieR.
 
@@ -2175,6 +2352,10 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
 
     query = str(inp.get("query") or "").strip()
     dr = str(inp.get("dr") or "18").strip()
+    timeout_s = 240.0 if (
+        inp.get("extended_timeout")
+        or str(inp.get("_workflow_budget_mode") or "").lower() == "long"
+    ) else 120.0
 
     if not query:
         return {
@@ -2194,7 +2375,7 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
         }
 
     try:
-        raw = await execute_sdss_sql(query, dr=dr, timeout_s=120.0)
+        raw = await execute_sdss_sql(query, dr=dr, timeout_s=timeout_s)
     except ValueError as e:
         # SQL 语法错误 / 危险关键词: 用户可见的 4xx 语义
         return {
@@ -2667,6 +2848,7 @@ async def _exec_literature(inp: dict) -> dict:
 _VALID_DATA_SOURCES = {
     "latest_adql", "latest_search", "latest_lightcurve",
     "latest_sdss_sql",  # J3: SDSS SkyServer 直连结果
+    "latest_high_velocity_stars",
     "none_not_analyzing_real_data",
 }
 _REAL_DATA_SOURCE_PATTERNS = {
@@ -2680,6 +2862,7 @@ _REAL_DATA_SOURCE_PATTERNS = {
     # (run_sdss_sql 把结果存进 adql_result_sets 池, 复用 getter), 加上显式的
     # latest_sdss_sql 变量名就能匹配.
     "latest_sdss_sql": ("get_cached_results", "get_adql_results", "latest_sdss_sql"),
+    "latest_high_velocity_stars": ("get_cached_results", "get_adql_results", "latest_high_velocity_stars"),
 }
 _PLATFORM_REAL_DATA_READER_TOKENS = {
     # 这些 helper 本身会触发真实 archive / MAST / platform cache 读取。

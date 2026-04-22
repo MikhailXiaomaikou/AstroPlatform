@@ -1319,6 +1319,8 @@ export type ThinkingEvent =
   | { type: "tool_progress"; agent?: string; tool: string; message: string; stage?: string; detail?: Record<string, unknown> }
   | { type: "tool_result"; agent?: string; tool: string; result: unknown }
   | { type: "status"; message: string }
+  | { type: "workflow_budget"; agent?: string; mode: string; agent_loop_seconds: number; summary_reserve_seconds: number; max_iterations: number }
+  | { type: "workflow_checkpoint"; agent?: string; summary?: unknown; step_idx?: number; tool_name?: string; status?: string; cache_refs?: string[]; checkpoint_summary?: string }
   // F3.2: emitted by chat.py when the model responds with a structured
   // abstention tag.  Frontend renders as HonestAbstentionCard.
   | { type: "honest_abstention"; payload: {
@@ -1766,7 +1768,11 @@ export async function sendChatMessage(
   // Use SSE streaming endpoint to avoid proxy timeouts (Render kills idle
   // connections after ~30s; streaming keeps the connection alive).
   try {
-    const streamUrl = `${API_BASE_URL}/api/chat/message/stream`;
+    const streamDebug =
+      context?.debug_stream === true
+      || context?.debug_stream === "1"
+      || (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug_stream") === "1");
+    const streamUrl = `${API_BASE_URL}/api/chat/message/stream${streamDebug ? "?debug_stream=1" : ""}`;
     const fetchStream = () => fetch(streamUrl, {
       method: "POST",
       headers: {
@@ -1862,6 +1868,9 @@ export async function sendChatMessage(
             continue;
           }
           sawAnySseEvent = true;
+          if (streamDebug) {
+            console.debug("[astro:sse]", evt.type, evt);
+          }
 
           if (evt.type === "text" && typeof evt.content === "string") {
             replyParts.push(evt.content);
@@ -1936,6 +1945,35 @@ export async function sendChatMessage(
             if (onThinking) {
               onThinking({ type: "status", message: evt.message });
             }
+          } else if (evt.type === "workflow_budget" && typeof evt.mode === "string") {
+            if (onThinking) {
+              onThinking({
+                type: "workflow_budget",
+                agent: typeof evt.agent === "string" ? evt.agent : undefined,
+                mode: evt.mode,
+                agent_loop_seconds: typeof evt.agent_loop_seconds === "number" ? evt.agent_loop_seconds : 0,
+                summary_reserve_seconds: typeof evt.summary_reserve_seconds === "number" ? evt.summary_reserve_seconds : 0,
+                max_iterations: typeof evt.max_iterations === "number" ? evt.max_iterations : 0,
+              });
+            }
+          } else if (evt.type === "workflow_checkpoint") {
+            if (onThinking) {
+              const cacheRefs = Array.isArray(evt.cache_refs)
+                ? evt.cache_refs.filter((x): x is string => typeof x === "string")
+                : undefined;
+              onThinking({
+                type: "workflow_checkpoint",
+                agent: typeof evt.agent === "string" ? evt.agent : undefined,
+                summary: evt.summary,
+                step_idx: typeof evt.step_idx === "number" ? evt.step_idx : undefined,
+                tool_name: typeof evt.tool_name === "string" ? evt.tool_name : undefined,
+                status: typeof evt.status === "string" ? evt.status : undefined,
+                cache_refs: cacheRefs,
+                checkpoint_summary: typeof evt.summary === "string" ? evt.summary : undefined,
+              });
+            }
+          } else if (evt.type === "stream_debug") {
+            // Debug-only event; console logging above is the intended UI.
           } else if (evt.type === "honest_abstention" && evt.payload && typeof evt.payload === "object") {
             // F3.2: structured abstention card.  Payload keys match the
             // attributes of <tools_returned_nothing/> as parsed by the backend.

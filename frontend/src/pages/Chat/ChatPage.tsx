@@ -92,13 +92,15 @@ function ClickableFigure({ src, alt }: { src: string; alt: string }) {
 }
 
 interface ThinkingStep {
-  kind: "agent_text" | "tool_call" | "tool_progress" | "tool_result" | "status" | "tools_disabled";
+  kind: "agent_text" | "tool_call" | "tool_progress" | "tool_result" | "status" | "tools_disabled" | "workflow_budget" | "workflow_checkpoint";
   agent?: string;
   tool?: string;
   text?: string;
   input?: unknown;
   stage?: string;
   result?: unknown;
+  mode?: string;
+  cacheRefs?: string[];
   // G3.5 — backend stripped these tools from the toolkit this iteration.
   disabled?: string[];
   iteration?: number;
@@ -3069,10 +3071,19 @@ export default function ChatPage() {
         kind: evt.type,
         agent: "agent" in evt ? evt.agent : undefined,
         tool: evt.type === "tool_call" || evt.type === "tool_progress" || evt.type === "tool_result" ? evt.tool : undefined,
-        text: evt.type === "agent_text" || evt.type === "tool_progress" ? (evt.type === "agent_text" ? evt.content : evt.message) : undefined,
+        text:
+          evt.type === "agent_text" || evt.type === "tool_progress"
+            ? (evt.type === "agent_text" ? evt.content : evt.message)
+            : evt.type === "workflow_budget"
+              ? `${evt.mode} budget: ${evt.agent_loop_seconds}s loop, ${evt.max_iterations} iterations`
+              : evt.type === "workflow_checkpoint"
+                ? (evt.checkpoint_summary || (evt.tool_name ? `${evt.tool_name} ${evt.status || ""}` : "checkpoint available"))
+                : undefined,
         input: evt.type === "tool_call" ? evt.input : undefined,
         stage: evt.type === "tool_progress" ? evt.stage : undefined,
         result: evt.type === "tool_result" ? evt.result : undefined,
+        mode: evt.type === "workflow_budget" ? evt.mode : undefined,
+        cacheRefs: evt.type === "workflow_checkpoint" ? evt.cache_refs : undefined,
         disabled: evt.type === "tools_disabled" ? evt.disabled : undefined,
         iteration: evt.type === "tools_disabled" ? evt.iteration : undefined,
       };
@@ -3855,6 +3866,23 @@ export default function ChatPage() {
                                     ? <em style={{ color: "#b00020", marginLeft: 6 }}>{String(r.error).slice(0, 120)}</em>
                                     : <span style={{ marginLeft: 6, color: "#2e7d32" }}>done</span>;
                                 })()}
+                              </span>
+                            )}
+                            {step.kind === "workflow_budget" && (
+                              <span>
+                                <strong>Workflow budget</strong>
+                                <span style={{ marginLeft: 6, color: "#4b5563" }}>{step.text}</span>
+                              </span>
+                            )}
+                            {step.kind === "workflow_checkpoint" && (
+                              <span>
+                                <strong>Checkpoint</strong>
+                                <span style={{ marginLeft: 6, color: "#4b5563" }}>{step.text}</span>
+                                {step.cacheRefs && step.cacheRefs.length > 0 ? (
+                                  <code style={{ marginLeft: 6, fontSize: "0.85em", color: "#666" }}>
+                                    {step.cacheRefs.join(", ")}
+                                  </code>
+                                ) : null}
                               </span>
                             )}
                             {step.kind === "tools_disabled" && step.disabled && step.disabled.length > 0 && (

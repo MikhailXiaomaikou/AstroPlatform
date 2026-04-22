@@ -422,6 +422,58 @@ describe("Auth helper functions", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sendChatMessage enables debug_stream and forwards workflow events", async () => {
+    const { sendChatMessage } = await import("../api/client");
+
+    const sseBody = [
+      'data: {"type":"stream_debug","stage":"stream_open","elapsed_ms":0}\n\n',
+      'data: {"type":"workflow_budget","mode":"long","agent_loop_seconds":900,"summary_reserve_seconds":90,"max_iterations":18}\n\n',
+      'data: {"type":"workflow_checkpoint","tool_name":"run_adql","status":"completed","cache_refs":["latest_adql"],"summary":"3 rows"}\n\n',
+      'data: {"type":"text","content":"Done"}\n\n',
+      'data: {"type":"done"}\n\n',
+    ].join("");
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
+    });
+
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      body: stream,
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const consoleSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+
+    const onThinking = vi.fn();
+    const result = await sendChatMessage(
+      [{ role: "user", content: "debug" }],
+      { debug_stream: true },
+      onThinking,
+    );
+
+    expect(String(mockFetch.mock.calls[0][0])).toContain("debug_stream=1");
+    expect(consoleSpy).toHaveBeenCalledWith("[astro:sse]", "stream_debug", expect.any(Object));
+    expect(onThinking).toHaveBeenCalledWith(expect.objectContaining({
+      type: "workflow_budget",
+      mode: "long",
+      agent_loop_seconds: 900,
+    }));
+    expect(onThinking).toHaveBeenCalledWith(expect.objectContaining({
+      type: "workflow_checkpoint",
+      tool_name: "run_adql",
+      status: "completed",
+      cache_refs: ["latest_adql"],
+    }));
+    expect(result.reply).toBe("Done");
+
+    consoleSpy.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
   it("sendChatMessage emits live tool_result actions before an SSE error", async () => {
     const { sendChatMessage } = await import("../api/client");
 

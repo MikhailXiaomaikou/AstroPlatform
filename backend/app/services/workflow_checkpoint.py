@@ -32,6 +32,8 @@ class CheckpointStep:
     status: str  # "completed" | "failed" | "in_progress"
     cache_refs: list[str] = field(default_factory=list)
     error: str | None = None
+    tool_call_id: str | None = None
+    summary: str | None = None
     created_at: float = field(default_factory=time.time)
 
 
@@ -60,6 +62,8 @@ def record_step(
     status: str,
     cache_refs: list[str] | None = None,
     error: str | None = None,
+    tool_call_id: str | None = None,
+    summary: str | None = None,
 ) -> CheckpointStep:
     """Append a step to the session's checkpoint chain."""
     with _lock:
@@ -75,6 +79,8 @@ def record_step(
             status=status,
             cache_refs=list(cache_refs or []),
             error=error,
+            tool_call_id=tool_call_id,
+            summary=summary,
         )
         cp.steps.append(step)
         # Bound memory per session
@@ -118,6 +124,8 @@ def summarize(session_id: str) -> dict[str, Any]:
                 "status": s.status,
                 "cache_refs": s.cache_refs,
                 "error": s.error,
+                "tool_call_id": s.tool_call_id,
+                "summary": s.summary,
                 "age_seconds": round(time.time() - s.created_at, 1),
             }
             for s in cp.steps
