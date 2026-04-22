@@ -307,6 +307,94 @@ describe("Auth helper functions", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sendChatMessage keeps later live ADQL success visible while final events replay", async () => {
+    const { sendChatMessage } = await import("../api/client");
+
+    const sseBody = [
+      'data: {"type":"tool_result","live":true,"tool":"run_adql","tool_call_id":"adql-1","result":{"success":false,"error":"timeout"}}\n\n',
+      'data: {"type":"tool_result","live":true,"tool":"run_adql","tool_call_id":"adql-2","result":{"row_count":1000,"columns":["ra"]}}\n\n',
+      'data: {"type":"text","content":"Done"}\n\n',
+      'data: {"type":"tool_result","tool":"run_adql","tool_call_id":"adql-1","result":{"success":false,"error":"timeout","__tool_status__":"FAILED"}}\n\n',
+      'data: {"type":"tool_result","tool":"run_adql","tool_call_id":"adql-2","result":{"row_count":1000,"columns":["ra"],"attempt_log":[{"stage":"mirror_success","message":"fallback succeeded"}]}}\n\n',
+      'data: {"type":"done"}\n\n',
+    ].join("");
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      body: stream,
+    }));
+
+    const onActions = vi.fn();
+    const result = await sendChatMessage(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      undefined,
+      undefined,
+      onActions,
+    );
+
+    const afterFirstFinal = onActions.mock.calls[2][0];
+    expect(afterFirstFinal).toHaveLength(2);
+    expect(afterFirstFinal[1]).toEqual(expect.objectContaining({
+      action: "run_adql",
+      _tool_call_id: "adql-2",
+      tool_result: expect.objectContaining({ row_count: 1000 }),
+    }));
+    expect(result.actions).toHaveLength(2);
+    expect(result.actions[1].tool_result).toEqual(expect.objectContaining({
+      attempt_log: [expect.objectContaining({ stage: "mirror_success" })],
+    }));
+
+    vi.unstubAllGlobals();
+  });
+
+  it("sendChatMessage forwards ADQL tool_progress events to thinking subscribers", async () => {
+    const { sendChatMessage } = await import("../api/client");
+
+    const sseBody = [
+      'data: {"type":"tool_progress","tool":"run_adql","stage":"mirror_attempt","message":"Trying VizieR mirror 1/4","mirror_index":1}\n\n',
+      'data: {"type":"text","content":"Done"}\n\n',
+      'data: {"type":"done"}\n\n',
+    ].join("");
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      body: stream,
+    }));
+
+    const onThinking = vi.fn();
+    await sendChatMessage(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      onThinking,
+    );
+
+    expect(onThinking).toHaveBeenCalledWith(expect.objectContaining({
+      type: "tool_progress",
+      tool: "run_adql",
+      stage: "mirror_attempt",
+      message: "Trying VizieR mirror 1/4",
+    }));
+
+    vi.unstubAllGlobals();
+  });
+
   it("sendChatMessage emits live tool_result actions before an SSE error", async () => {
     const { sendChatMessage } = await import("../api/client");
 

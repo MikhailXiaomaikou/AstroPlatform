@@ -92,11 +92,12 @@ function ClickableFigure({ src, alt }: { src: string; alt: string }) {
 }
 
 interface ThinkingStep {
-  kind: "agent_text" | "tool_call" | "tool_result" | "status" | "tools_disabled";
+  kind: "agent_text" | "tool_call" | "tool_progress" | "tool_result" | "status" | "tools_disabled";
   agent?: string;
   tool?: string;
   text?: string;
   input?: unknown;
+  stage?: string;
   result?: unknown;
   // G3.5 — backend stripped these tools from the toolkit this iteration.
   disabled?: string[];
@@ -1018,9 +1019,49 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
   if (toolName === "run_adql") {
     const cols = (result.columns as string[]) || [];
     const rowCount = (result.row_count as number) || 0;
+    const attemptLog = Array.isArray(result.attempt_log)
+      ? (result.attempt_log as Array<Record<string, unknown>>)
+      : [];
+    const retryLog = Array.isArray(result.retry_log)
+      ? (result.retry_log as string[])
+      : [];
+    const successStages = attemptLog.filter((entry) =>
+      String(entry.stage || "").includes("success")
+    );
+    const failureStages = attemptLog.filter((entry) =>
+      String(entry.stage || "").includes("error") || String(entry.stage || "").includes("timeout")
+    );
+    const finalSuccess = successStages[successStages.length - 1];
+    const successMessage = finalSuccess && typeof finalSuccess.message === "string"
+      ? finalSuccess.message
+      : "ADQL query succeeded";
     return (
-      <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)" }}>
-        Query returned {rowCount} rows, {cols.length} columns ({cols.slice(0, 5).join(", ")}{cols.length > 5 ? "..." : ""})
+      <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
+        <div style={{ color: "#2e7d32", fontWeight: 600 }}>
+          ✓ {successMessage}: {rowCount} rows, {cols.length} columns
+        </div>
+        <div>
+          Columns: {cols.slice(0, 5).join(", ")}{cols.length > 5 ? "..." : ""}
+        </div>
+        {(attemptLog.length > 0 || retryLog.length > 0) && (
+          <details style={{ marginTop: 4 }}>
+            <summary>
+              {failureStages.length + retryLog.length > 0
+                ? `Recovered after ${failureStages.length + retryLog.length} retry/fallback step${failureStages.length + retryLog.length === 1 ? "" : "s"}`
+                : "Execution details"}
+            </summary>
+            <ul style={{ margin: "4px 0 0 1rem", padding: 0 }}>
+              {attemptLog.slice(-8).map((entry, i) => (
+                <li key={`attempt-${i}`}>
+                  {String(entry.message || entry.stage || "ADQL progress")}
+                </li>
+              ))}
+              {retryLog.map((entry, i) => (
+                <li key={`retry-${i}`}>{entry}</li>
+              ))}
+            </ul>
+          </details>
+        )}
       </div>
     );
   }
@@ -3028,9 +3069,10 @@ export default function ChatPage() {
       const step: ThinkingStep = {
         kind: evt.type,
         agent: "agent" in evt ? evt.agent : undefined,
-        tool: evt.type === "tool_call" || evt.type === "tool_result" ? evt.tool : undefined,
-        text: evt.type === "agent_text" ? evt.content : undefined,
+        tool: evt.type === "tool_call" || evt.type === "tool_progress" || evt.type === "tool_result" ? evt.tool : undefined,
+        text: evt.type === "agent_text" || evt.type === "tool_progress" ? (evt.type === "agent_text" ? evt.content : evt.message) : undefined,
         input: evt.type === "tool_call" ? evt.input : undefined,
+        stage: evt.type === "tool_progress" ? evt.stage : undefined,
         result: evt.type === "tool_result" ? evt.result : undefined,
         disabled: evt.type === "tools_disabled" ? evt.disabled : undefined,
         iteration: evt.type === "tools_disabled" ? evt.iteration : undefined,
@@ -3788,6 +3830,19 @@ export default function ChatPage() {
                                 {step.input && typeof step.input === "object" ? (
                                   <code style={{ marginLeft: 6, fontSize: "0.9em", color: "#666" }}>
                                     {JSON.stringify(step.input).slice(0, 140)}
+                                  </code>
+                                ) : null}
+                              </span>
+                            )}
+                            {step.kind === "tool_progress" && (
+                              <span>
+                                ↻ <strong>{step.tool}</strong>
+                                <span style={{ marginLeft: 6, color: "#4b5563" }}>
+                                  {step.text}
+                                </span>
+                                {step.stage ? (
+                                  <code style={{ marginLeft: 6, fontSize: "0.85em", color: "#666" }}>
+                                    {step.stage}
                                   </code>
                                 ) : null}
                               </span>

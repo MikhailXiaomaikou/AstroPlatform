@@ -9,6 +9,7 @@ import logging
 import math
 import re
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -148,14 +149,15 @@ def replace_adql_result_sets(session_id: str | None, result_sets: list[dict[str,
     latest = normalized[-1] if normalized else None
     latest_rows = list(latest.get("rows", [])) if latest else []
 
-    store_search_results("latest_adql_sets", normalized)
-    if latest is not None:
-        store_search_results("latest_adql_set", latest)
-        store_search_results("latest_adql", latest_rows)
-
     session_sets_key = _session_cache_key("latest_adql_sets", session_id)
     session_set_key = _session_cache_key("latest_adql_set", session_id)
     session_rows_key = _session_cache_key("latest_adql", session_id)
+    if not session_sets_key:
+        store_search_results("latest_adql_sets", normalized)
+        if latest is not None:
+            store_search_results("latest_adql_set", latest)
+            store_search_results("latest_adql", latest_rows)
+
     if session_sets_key:
         store_search_results(session_sets_key, normalized)
     if latest is not None and session_set_key and session_rows_key:
@@ -1388,12 +1390,13 @@ async def execute_tool(
     python_session_id: str = "default",
     user_id: str | None = None,
     chat_session_id: str | None = None,
+    progress_callback: Callable[[dict], Awaitable[None]] | None = None,
 ) -> dict:
     """Execute a tool call and return the result as a dict."""
     from app.services.result_provenance import normalize_tool_result
     result = await _execute_tool_inner(
         tool_name, tool_input, api_key, provider_api_keys,
-        python_session_id, user_id, chat_session_id,
+        python_session_id, user_id, chat_session_id, progress_callback,
     )
     # R1: pass the caller's tool_input so the reproducibility envelope can
     # hash the exact invocation parameters.
@@ -1408,13 +1411,14 @@ async def _execute_tool_inner(
     python_session_id: str = "default",
     user_id: str | None = None,
     chat_session_id: str | None = None,
+    progress_callback: Callable[[dict], Awaitable[None]] | None = None,
 ) -> dict:
     """Inner dispatch — called by execute_tool, result wrapped with provenance."""
     try:
         if tool_name == "search_objects":
             return await _exec_search(tool_input, python_session_id)
         elif tool_name == "run_adql":
-            return await _exec_adql(tool_input, python_session_id)
+            return await _exec_adql(tool_input, python_session_id, progress_callback)
         elif tool_name == "run_sdss_sql":
             return await _exec_run_sdss_sql(tool_input, python_session_id)
         elif tool_name == "get_object_info":
@@ -1853,7 +1857,11 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     return result
 
 
-async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
+async def _exec_adql(
+    inp: dict,
+    python_session_id: str = "default",
+    progress_callback: Callable[[dict], Awaitable[None]] | None = None,
+) -> dict:
     """Execute ADQL query with automatic retry on timeout.
 
     On timeout (408/502/503), automatically retries with progressively
@@ -1866,6 +1874,20 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
 
     query = inp.get("query", "")
     service = inp.get("service", "gaia")
+
+    async def _emit_progress(stage: str, message: str, **extra: Any) -> None:
+        if progress_callback is None:
+            return
+        event = {
+            "stage": stage,
+            "message": message,
+            "service": service,
+            **extra,
+        }
+        try:
+            await progress_callback(event)
+        except Exception:
+            logger.debug("ADQL tool progress callback failed", exc_info=True)
 
     # Validate and rewrite ADQL before sending to TAP service
     from app.services.adql_dialect import normalize_adql
@@ -1883,7 +1905,10 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
         a concrete correction instead of bouncing off the error again.
         """
         try:
-            return await execute_adql_query(ADQLRequest(query=q, service=service))
+            return await execute_adql_query(
+                ADQLRequest(query=q, service=service),
+                progress_callback=progress_callback,
+            )
         except Exception as exc:
             msg = str(exc).lower()
             if any(h in msg for h in ("timeout", "408", "502", "503", "aborted", "deadline")):
@@ -1941,6 +1966,11 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     def _time_left() -> float:
         return _total_budget_s - (_time_mod.monotonic() - _start_ts)
 
+    await _emit_progress(
+        "query_attempt",
+        f"Running ADQL on {service}",
+        query_preview=str(query)[:300],
+    )
     result = await _try_query(query)
 
     # On timeout, retry with reduced cone radius (halve, then quarter)
@@ -1962,15 +1992,33 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
         for attempt, factor in enumerate([0.5, 0.25], start=1):
             if _time_left() < 30:
                 retry_log.append(f"skipped radius×{factor} — budget exhausted")
+                await _emit_progress(
+                    "retry_skipped_budget",
+                    f"Skipped radius × {factor} retry because the ADQL retry budget is nearly exhausted",
+                    factor=factor,
+                )
                 break
             reduced = _halve_radius(query, factor)
             if reduced is None:
                 break
             retry_log.append(f"attempt {attempt}: radius × {factor}")
+            await _emit_progress(
+                "radius_retry",
+                f"ADQL timed out; retrying with cone radius × {factor}",
+                attempt=attempt,
+                factor=factor,
+                query_preview=reduced[:300],
+            )
             await _aio.sleep(1.0)
             result = await _try_query(reduced)
             if result is not None:
                 query = reduced  # remember the successful query
+                await _emit_progress(
+                    "radius_retry_success",
+                    f"ADQL succeeded after cone radius × {factor}",
+                    attempt=attempt,
+                    factor=factor,
+                )
                 break
 
         # H0.8: TOP N auto-degradation.  If the query has a TOP clause
@@ -1990,10 +2038,23 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
                         flags=_re.IGNORECASE,
                     )
                     retry_log.append(f"auto-degraded TOP {old_top} → {new_top}")
+                    await _emit_progress(
+                        "top_auto_reduced",
+                        f"ADQL timed out; retrying with TOP {new_top} instead of TOP {old_top}",
+                        old_top=old_top,
+                        new_top=new_top,
+                        query_preview=degraded[:300],
+                    )
                     await _aio.sleep(1.0)
                     result = await _try_query(degraded)
                     if result is not None:
                         query = degraded
+                        await _emit_progress(
+                            "top_auto_reduce_success",
+                            f"ADQL succeeded after reducing TOP {old_top} to {new_top}",
+                            old_top=old_top,
+                            new_top=new_top,
+                        )
                         # Flag in the output so AI knows it got fewer rows
                         # than requested and can warn user about sample size.
                         if isinstance(result, dict):
@@ -2037,6 +2098,7 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     raw_columns = result.get("columns", []) if isinstance(result, dict) else []
     columns = [c.lower() for c in raw_columns]
     row_count = result.get("row_count", 0) if isinstance(result, dict) else 0
+    attempt_log = result.get("attempt_log", []) if isinstance(result, dict) else []
 
     # AI view: first 100 rows to fit in context. Full data goes to cache.
     VIEW_ROWS = 100
@@ -2055,8 +2117,17 @@ async def _exec_adql(inp: dict, python_session_id: str = "default") -> dict:
     }
     if retry_log:
         adql_result["retry_log"] = retry_log
+    if isinstance(attempt_log, list) and attempt_log:
+        adql_result["attempt_log"] = attempt_log[-20:]
     if _dialect_warnings:
         adql_result["dialect_warnings"] = _dialect_warnings
+
+    await _emit_progress(
+        "query_success",
+        f"ADQL query succeeded with {row_count} rows",
+        row_count=row_count,
+        showing=min(VIEW_ROWS, row_count),
+    )
 
     # Store full result set in cache (indexed for get_cached_results)
     result_set = build_adql_result_set(

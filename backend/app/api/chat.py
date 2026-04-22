@@ -1774,7 +1774,7 @@ async def chat_message_stream(
             # and the live-stream tool_result events above carry a __preview__
             # only, so the final ones deliver the full actions list.
             for action in response["actions"]:
-                yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result')}, default=str)}\n\n"
+                yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result'), 'tool_call_id': action.get('_tool_call_id')}, default=str)}\n\n"
         except (TimeoutError, asyncio.TimeoutError):
             yield f"data: {json.dumps({'type': 'error', 'message': 'AI workflow timed out after 420s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
         except InferenceError as e:
@@ -2139,9 +2139,23 @@ async def _execute_tool_calls(
                 }
             deadline_s = min(base_deadline_s, tool_window_s)
             deadline_adjusted = deadline_s < base_deadline_s
+
+        async def _emit_tool_progress(progress: dict) -> None:
+            if on_event is None:
+                return
+            try:
+                await on_event({
+                    "type": "tool_progress",
+                    "tool": tool_name,
+                    **progress,
+                })
+            except Exception:
+                logger.debug("tool_progress event failed", exc_info=True)
+
         task = asyncio.create_task(execute_tool(
             tool_name, tc["input"], api_key, provider_api_keys, python_session_id,
             user_id=user_id, chat_session_id=chat_session_id,
+            progress_callback=_emit_tool_progress,
         ))
         start = _time.monotonic()
         while not task.done():
@@ -2201,15 +2215,18 @@ async def _execute_tool_calls(
 
 def _tool_results_to_actions(all_tool_results: list[dict]) -> list[dict]:
     """把内部 tool-result 记录转成前端 action card 结构。"""
-    return [
-        {
+    actions: list[dict] = []
+    for tr in all_tool_results:
+        action = {
             "action": tr.get("tool"),
             "tool_input": tr.get("input"),
             "tool_result": tr.get("result"),
             "_auto_executed": True,
         }
-        for tr in all_tool_results
-    ]
+        if tr.get("id"):
+            action["_tool_call_id"] = tr.get("id")
+        actions.append(action)
+    return actions
 
 
 async def _run_agent_loop(
@@ -2512,6 +2529,7 @@ async def _run_agent_loop(
             )
             all_tool_results.append(
                 {
+                    "id": tc["id"],
                     "tool": tc["name"],
                     "input": tc["input"],
                     "result": result,
@@ -2528,6 +2546,7 @@ async def _run_agent_loop(
                 "tool": tc["name"],
                 "result": result,
                 "live": True,
+                "tool_call_id": tc["id"],
             })
         working_messages.append({"role": "user", "content": tool_result_blocks})
         # Claude uses "tool_use", OpenAI uses "tool_calls" as stop reason

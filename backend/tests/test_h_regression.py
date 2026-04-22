@@ -442,6 +442,46 @@ def test_vizier_multi_mirror_falls_through_on_first_failure():
     assert str(result["from_url"][0]) == fallback_url
 
 
+def test_vizier_mirror_fallback_reports_progress_events():
+    """ADQL mirror fallback must be visible to the chat stream, not only logs."""
+    from app.api import integration as integ
+    from astropy.table import Table
+
+    primary_url = integ.ADQL_SERVICE_MIRRORS["vizier"][0]
+    fallback_url = integ.ADQL_SERVICE_MIRRORS["vizier"][1]
+    progress: list[dict] = []
+
+    class _FakeJob:
+        def get_results(self):
+            t = Table()
+            t["ok"] = [1]
+            return t
+
+    class FakeTapPlus:
+        def __init__(self, url):
+            self.url = url
+        def launch_job(self, query):
+            if self.url == primary_url:
+                raise ConnectionError("503 Service Unavailable (simulated)")
+            return _FakeJob()
+        def launch_job_async(self, query):
+            return self.launch_job(query)
+
+    with patch("astroquery.utils.tap.core.TapPlus", FakeTapPlus):
+        result = integ._launch_on_mirrors(
+            "SELECT TOP 1 * FROM \"V/154/sdss17\"",
+            service="vizier",
+            async_mode=False,
+            progress_callback=progress.append,
+        )
+
+    assert len(result) == 1
+    stages = [event.get("stage") for event in progress]
+    assert stages[:3] == ["mirror_attempt", "mirror_transient_error", "mirror_attempt"]
+    assert progress[-1]["stage"] == "mirror_success"
+    assert progress[-1]["mirror_url"] == fallback_url
+
+
 def test_vizier_all_mirrors_fail_raises_with_url_list():
     """I3/B-S1: when EVERY VizieR mirror fails, the caller must see an
     error that names which URLs were tried — so support / users can
@@ -715,6 +755,61 @@ def test_agent_deadline_returns_frontend_action_shape():
         "tool_result": {"row_count": 1},
         "_auto_executed": True,
     }]
+
+
+def test_tool_results_to_actions_preserves_tool_call_id_for_stream_merge():
+    """Final SSE actions need the tool-call id so the frontend can upgrade
+    live cards without temporarily hiding later successful tool results."""
+    from app.api.chat import _tool_results_to_actions
+
+    actions = _tool_results_to_actions([{
+        "id": "toolu_adql_1",
+        "tool": "run_adql",
+        "input": {"query": "SELECT 1"},
+        "result": {"row_count": 1},
+    }])
+
+    assert actions[0]["_tool_call_id"] == "toolu_adql_1"
+
+
+def test_adql_helpers_do_not_fall_back_to_other_chat_cache():
+    """R12-NEW-1: a fresh chat must not silently read another chat's ADQL rows."""
+    from app.services import ai_tools
+    from app.services.code_executor import _make_data_accessor
+
+    ai_tools._search_result_cache.clear()
+    ai_tools.store_search_results("latest_adql", [{"z": 0.12, "kind": "global_sdss"}])
+    ai_tools.store_adql_result_set(
+        "chat-mw",
+        {
+            "service": "vizier",
+            "query": "SELECT TOP 1 source FROM I/355/gaiadr3",
+            "row_count": 1,
+            "columns": ["source"],
+            "rows": [{"source": 123}],
+            "data": {"source": [123]},
+        },
+    )
+
+    assert _make_data_accessor("chat-mw")["get_adql_results"]() == [{"source": 123}]
+    assert _make_data_accessor("chat-sdss")["get_adql_results"]() == []
+    assert _make_data_accessor("chat-sdss")["get_latest_adql_result"]() == {}
+
+
+def test_subprocess_cache_context_filters_foreign_adql_cache():
+    """The sandbox subprocess receives only this chat's ADQL aliases."""
+    from app.services import ai_tools
+    from app.services.code_executor import _collect_subprocess_cache_context
+
+    ai_tools._search_result_cache.clear()
+    ai_tools.store_search_results("latest_adql", [{"z": 0.12, "kind": "global_sdss"}])
+    ai_tools.store_search_results("latest_adql:chat-mw", [{"source": 123}])
+
+    foreign = _collect_subprocess_cache_context("chat-sdss")
+    assert "latest_adql" not in foreign
+
+    current = _collect_subprocess_cache_context("chat-mw")
+    assert current["latest_adql"] == [{"source": 123}]
 
 
 def test_adql_timeout_message_blames_query_pattern_not_global_overload():

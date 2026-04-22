@@ -552,32 +552,31 @@ def _make_data_accessor(session_id: str):
     def get_adql_results():
         """Get the latest ADQL query results as a row-wise list of dicts."""
         from app.services.ai_tools import get_cached_results
-        payload = get_cached_results(f"latest_adql:{session_id}") or get_cached_results("latest_adql") or []
+        scoped_key = f"latest_adql:{session_id}" if session_id and session_id != "default" else None
+        payload = (get_cached_results(scoped_key) if scoped_key else get_cached_results("latest_adql")) or []
         return _normalize_adql_rows(payload)
 
     def get_latest_adql_result():
         """Get the latest ADQL result set with service/query metadata and rows."""
         from app.services.ai_tools import get_cached_results
-        return (
-            get_cached_results(f"latest_adql_set:{session_id}")
-            or get_cached_results("latest_adql_set")
-            or {}
-        )
+        scoped_key = f"latest_adql_set:{session_id}" if session_id and session_id != "default" else None
+        return (get_cached_results(scoped_key) if scoped_key else get_cached_results("latest_adql_set")) or {}
 
     def get_adql_result_sets():
         """Get recent ADQL result sets for multi-query workflows."""
         from app.services.ai_tools import get_cached_results
-        return (
-            get_cached_results(f"latest_adql_sets:{session_id}")
-            or get_cached_results("latest_adql_sets")
-            or []
-        )
+        scoped_key = f"latest_adql_sets:{session_id}" if session_id and session_id != "default" else None
+        return (get_cached_results(scoped_key) if scoped_key else get_cached_results("latest_adql_sets")) or []
 
     def get_cached_results_for_session(key: str):
         """Get cached platform data, preferring this chat/session scope."""
         from app.services.ai_tools import get_cached_results
         scoped_key = f"{key}:{session_id}" if session_id and session_id != "default" else None
-        payload = (get_cached_results(scoped_key) if scoped_key else None) or get_cached_results(key)
+        adql_keys = {"latest_adql", "latest_adql_set", "latest_adql_sets", "latest_sdss_sql"}
+        if scoped_key and key in adql_keys:
+            payload = get_cached_results(scoped_key)
+        else:
+            payload = (get_cached_results(scoped_key) if scoped_key else None) or get_cached_results(key)
         if key == "latest_adql":
             return _normalize_adql_rows(payload)
         return payload
@@ -698,7 +697,14 @@ def _collect_subprocess_cache_context(session_id: str) -> dict:
 
     visible: dict = {}
     session_suffix = f":{session_id}" if session_id and session_id != "default" else ""
+    adql_prefixes = ("latest_adql", "latest_adql_set", "latest_adql_sets", "latest_sdss_sql")
+
+    def _is_adql_cache_key(key: str) -> bool:
+        return any(key == prefix or key.startswith(prefix + ":") for prefix in adql_prefixes)
+
     for key in list(getattr(ai_tools, "_search_result_cache", {}).keys()):
+        if session_suffix and _is_adql_cache_key(key) and not key.endswith(session_suffix):
+            continue
         value = ai_tools.get_cached_results(key)
         if value is None:
             continue

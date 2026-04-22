@@ -486,7 +486,7 @@ ADQL_SERVICE_MIRRORS: dict[str, list[str]] = {
 ADQL_SERVICES = {k: v[0] for k, v in ADQL_SERVICE_MIRRORS.items()}
 
 
-def _launch_on_mirrors(query: str, service: str, async_mode: bool):
+def _launch_on_mirrors(query: str, service: str, async_mode: bool, progress_callback=None):
     """I3/B-S1: try each mirror for the service in order.  First success
     wins; on any failure (timeout / 5xx / connection error) skip to the
     next mirror.  The error from the LAST attempted mirror is re-raised
@@ -508,15 +508,37 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool):
 
     last_err: Exception | None = None
     tried: list[str] = []
-    for url in mirrors:
+    mode = "async" if async_mode else "sync"
+    for index, url in enumerate(mirrors, start=1):
         tried.append(url)
         try:
+            if progress_callback:
+                progress_callback({
+                    "stage": "mirror_attempt",
+                    "service": service,
+                    "mode": mode,
+                    "mirror_index": index,
+                    "mirror_count": len(mirrors),
+                    "mirror_url": url,
+                    "message": f"Trying {service} TAP mirror {index}/{len(mirrors)} ({mode})",
+                })
             tap = TapPlus(url=url)
             if async_mode:
                 job = tap.launch_job_async(query)
             else:
                 job = tap.launch_job(query)
-            return job.get_results()
+            table = job.get_results()
+            if progress_callback:
+                progress_callback({
+                    "stage": "mirror_success",
+                    "service": service,
+                    "mode": mode,
+                    "mirror_index": index,
+                    "mirror_count": len(mirrors),
+                    "mirror_url": url,
+                    "message": f"{service} TAP mirror {index}/{len(mirrors)} succeeded",
+                })
+            return table
         except Exception as e:
             # L17 (audit 2026-04-20): 区分 4xx (permanent, 不换 mirror) vs
             # 5xx / 网络错 (transient, 换 mirror).  404 = 表不存在 /
@@ -536,6 +558,17 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool):
             if "408" in err_str or "429" in err_str:
                 is_permanent = False
             if is_permanent:
+                if progress_callback:
+                    progress_callback({
+                        "stage": "mirror_permanent_error",
+                        "service": service,
+                        "mode": mode,
+                        "mirror_index": index,
+                        "mirror_count": len(mirrors),
+                        "mirror_url": url,
+                        "error": str(e)[:500],
+                        "message": f"{service} TAP mirror {index}/{len(mirrors)} returned a permanent query error",
+                    })
                 logger.info(
                     "TAP mirror %s returned permanent error (%s: %s); NOT "
                     "trying other mirrors — raising immediately",
@@ -543,6 +576,17 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool):
                 )
                 raise
             last_err = e
+            if progress_callback:
+                progress_callback({
+                    "stage": "mirror_transient_error",
+                    "service": service,
+                    "mode": mode,
+                    "mirror_index": index,
+                    "mirror_count": len(mirrors),
+                    "mirror_url": url,
+                    "error": str(e)[:500],
+                    "message": f"{service} TAP mirror {index}/{len(mirrors)} failed; trying next mirror",
+                })
             logger.info(
                 "TAP mirror %s failed with transient error (%s: %s); "
                 "trying next mirror",
@@ -564,7 +608,7 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool):
         raise type(last_err)(msg) from last_err
     raise ConnectionError(msg)
 
-async def execute_adql_query(req: ADQLRequest) -> dict:
+async def execute_adql_query(req: ADQLRequest, progress_callback=None) -> dict:
     """Core ADQL query execution (callable from AI tools without Request)."""
     import asyncio
 
@@ -607,14 +651,46 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
         or (" join " in query_lower)
     )
 
+    attempt_log: list[dict] = []
+
+    async def _emit_progress(event: dict) -> None:
+        entry = {k: v for k, v in event.items() if v is not None}
+        attempt_log.append(entry)
+        if progress_callback:
+            try:
+                await progress_callback(entry)
+            except Exception:
+                logger.debug("ADQL progress callback failed", exc_info=True)
+
+    async def _call_progress_callback(entry: dict) -> None:
+        if not progress_callback:
+            return
+        try:
+            await progress_callback(entry)
+        except Exception:
+            logger.debug("ADQL progress callback failed", exc_info=True)
+
     try:
         loop = asyncio.get_running_loop()
+
+        def _record_progress_from_thread(event: dict) -> None:
+            entry = {k: v for k, v in event.items() if v is not None}
+            attempt_log.append(entry)
+            if progress_callback:
+                loop.call_soon_threadsafe(
+                    lambda e=entry: asyncio.create_task(_call_progress_callback(e))
+                )
 
         def _run_query_sync():
             # I3/B-S1: iterate through mirrors instead of hitting only
             # the primary URL.  When CDS France 503s the international
             # VizieR mirrors usually still answer.
-            return _launch_on_mirrors(req.query, req.service, async_mode=False)
+            return _launch_on_mirrors(
+                req.query,
+                req.service,
+                async_mode=False,
+                progress_callback=_record_progress_from_thread,
+            )
 
         def _run_query_async():
             # H0.1: TAP async mode — submits PHASE=RUN + polls.
@@ -622,7 +698,12 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
             # blocks the thread until the remote job finishes, so we
             # still put it in the executor; the outer 5-min budget in
             # asyncio.wait_for covers all mirrors collectively.
-            return _launch_on_mirrors(req.query, req.service, async_mode=True)
+            return _launch_on_mirrors(
+                req.query,
+                req.service,
+                async_mode=True,
+                progress_callback=_record_progress_from_thread,
+            )
 
         # Sync first unless we think it'll be big.  H0.1 (post-review):
         # tightened sync to 30s — healthy Gaia/VizieR responds in <5s, and
@@ -630,6 +711,12 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
         # budget stays at 300s.
         try:
             if _looks_big:
+                await _emit_progress({
+                    "stage": "async_start",
+                    "service": req.service,
+                    "mode": "async",
+                    "message": "ADQL query looks broad; using async TAP directly",
+                })
                 logger.info(
                     "ADQL: query flagged big (top=%s, radius=%s, join=%s); using async TAP",
                     _top_n, _cone_radius, " join " in query_lower,
@@ -639,6 +726,12 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
                     timeout=300.0,  # 5 min async budget
                 )
             else:
+                await _emit_progress({
+                    "stage": "sync_start",
+                    "service": req.service,
+                    "mode": "sync",
+                    "message": "Starting ADQL sync TAP probe",
+                })
                 table = await asyncio.wait_for(
                     loop.run_in_executor(None, _run_query_sync),
                     timeout=30.0,
@@ -647,6 +740,13 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
             # Sync timed out on a query we thought was small.  Fall back
             # to async and give it the full 5-min budget.
             if not _looks_big:
+                await _emit_progress({
+                    "stage": "sync_timeout_async_fallback",
+                    "service": req.service,
+                    "mode": "async",
+                    "error": str(timeout_err)[:500],
+                    "message": "Sync TAP probe timed out; switching to async TAP",
+                })
                 logger.info("ADQL sync timed out, retrying with async TAP (PHASE=RUN)...")
                 try:
                     table = await asyncio.wait_for(
@@ -674,6 +774,13 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
         except Exception as first_err:
             err_str = str(first_err).lower()
             if any(hint in err_str for hint in ("timeout", "connection", "503", "502", "reset")):
+                await _emit_progress({
+                    "stage": "transient_error_async_retry",
+                    "service": req.service,
+                    "mode": "async",
+                    "error": str(first_err)[:500],
+                    "message": "ADQL attempt hit a transient service error; retrying with async TAP",
+                })
                 logger.warning("ADQL first attempt failed (%s), retrying with async...", first_err)
                 import asyncio as _aio
                 await _aio.sleep(1.0)
@@ -753,6 +860,7 @@ async def execute_adql_query(req: ADQLRequest) -> dict:
             "data": augmented_data,
             "row_count": len(table),
             "service": req.service,
+            "attempt_log": attempt_log,
         }
     except HTTPException:
         raise

@@ -1316,6 +1316,7 @@ export interface ChatResponse {
 export type ThinkingEvent =
   | { type: "agent_text"; agent?: string; content: string }
   | { type: "tool_call"; agent?: string; tool: string; input: unknown }
+  | { type: "tool_progress"; agent?: string; tool: string; message: string; stage?: string; detail?: Record<string, unknown> }
   | { type: "tool_result"; agent?: string; tool: string; result: unknown }
   | { type: "status"; message: string }
   // F3.2: emitted by chat.py when the model responds with a structured
@@ -1806,6 +1807,32 @@ export async function sendChatMessage(
     const replyParts: string[] = [];
     const actions: ChatAction[] = [];
     const streamedActions: ChatAction[] = [];
+
+    const actionKey = (action: ChatAction, fallbackIndex: number) => {
+      const toolCallId = action._tool_call_id;
+      return typeof toolCallId === "string" && toolCallId
+        ? `id:${toolCallId}`
+        : `idx:${fallbackIndex}:${action.action}`;
+    };
+
+    const mergedVisibleActions = () => {
+      const merged = [...streamedActions];
+      const indexByKey = new Map<string, number>();
+      merged.forEach((action, index) => {
+        indexByKey.set(actionKey(action, index), index);
+      });
+      actions.forEach((action, index) => {
+        const key = actionKey(action, index);
+        const existingIndex = indexByKey.get(key);
+        if (existingIndex == null) {
+          indexByKey.set(key, merged.length);
+          merged.push(action);
+        } else {
+          merged[existingIndex] = action;
+        }
+      });
+      return merged;
+    };
     let buffer = "";
 
     // H7: cancel the reader on any exit path so the browser can release the
@@ -1839,6 +1866,7 @@ export async function sendChatMessage(
               action: String(evt.tool || ""),
               tool_result: evt.result,
               _auto_executed: true,
+              ...(typeof evt.tool_call_id === "string" && evt.tool_call_id ? { _tool_call_id: evt.tool_call_id } : {}),
               ...(evt.live === true ? { _stream_preview: true } : {}),
             } as ChatAction;
             // Backend emits tool_result twice: once inline (live:true) during
@@ -1847,7 +1875,7 @@ export async function sendChatMessage(
             // right sink so the actions array stays deduplicated.
             if (evt.live === true) {
               streamedActions.push(action);
-              if (onActions) onActions([...streamedActions]);
+              if (onActions) onActions(mergedVisibleActions());
               if (onThinking) {
                 onThinking({
                   type: "tool_result",
@@ -1858,7 +1886,24 @@ export async function sendChatMessage(
               }
             } else {
               actions.push(action);
-              if (onActions) onActions([...actions]);
+              if (onActions) onActions(mergedVisibleActions());
+            }
+          } else if (evt.type === "tool_progress" && typeof evt.tool === "string") {
+            if (onThinking) {
+              const detail = { ...evt };
+              delete detail.type;
+              delete detail.tool;
+              delete detail.agent;
+              delete detail.message;
+              delete detail.stage;
+              onThinking({
+                type: "tool_progress",
+                agent: typeof evt.agent === "string" ? evt.agent : undefined,
+                tool: evt.tool,
+                message: typeof evt.message === "string" ? evt.message : "Tool progress update",
+                stage: typeof evt.stage === "string" ? evt.stage : undefined,
+                detail,
+              });
             }
           } else if (evt.type === "agent_text" && typeof evt.content === "string") {
             // Intermediate prose the LLM produced between tool calls —
@@ -1940,7 +1985,7 @@ export async function sendChatMessage(
     // Cloudflare) drops the SSE connection before the backend finishes,
     // so the browser sees `done` without any payload.  Without this guard
     // the caller would render a blank assistant bubble with no explanation.
-    if (replyParts.length === 0 && actions.length === 0) {
+    if (replyParts.length === 0 && actions.length === 0 && streamedActions.length === 0) {
       throw new Error(
         "AI 回复中断 — 响应流在收到任何内容前被关闭（可能是上游代理超时或网络问题）。请重试；若反复出现，改用更简短的问题或稍后再试。"
       );
@@ -1948,7 +1993,7 @@ export async function sendChatMessage(
 
     return {
       reply: replyParts.join("\n\n"),
-      actions,
+      actions: actions.length > 0 ? actions : streamedActions,
     };
   } catch (err: unknown) {
     if (err instanceof TypeError && (err.message === "Failed to fetch" || err.message === "NetworkError when attempting to fetch resource.")) {

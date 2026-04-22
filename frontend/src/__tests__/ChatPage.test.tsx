@@ -278,5 +278,87 @@ describe("ChatPage", () => {
         _stream_preview: true,
       }));
     });
+    await screen.findByText("Done");
+  });
+
+  it("does not drop a later streamed ADQL success when earlier final actions replay", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockImplementation(async (
+      _messages,
+      _context,
+      _onThinking,
+      _signal,
+      onActions,
+    ) => {
+      onActions?.([
+        {
+          action: "run_adql",
+          tool_result: { success: false, error: "timeout" },
+          _auto_executed: true,
+          _stream_preview: true,
+          _tool_call_id: "adql-1",
+        },
+        {
+          action: "run_adql",
+          tool_result: { row_count: 1000, columns: ["ra"] },
+          _auto_executed: true,
+          _stream_preview: true,
+          _tool_call_id: "adql-2",
+        },
+      ]);
+      onActions?.([
+        {
+          action: "run_adql",
+          tool_result: { success: false, error: "timeout", __tool_status__: "FAILED" },
+          _auto_executed: true,
+          _tool_call_id: "adql-1",
+        },
+        {
+          action: "run_adql",
+          tool_result: { row_count: 1000, columns: ["ra"], attempt_log: [{ stage: "mirror_success", message: "fallback succeeded" }] },
+          _auto_executed: true,
+          _tool_call_id: "adql-2",
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return {
+        reply: "Done",
+        actions: [
+          {
+            action: "run_adql",
+            tool_result: { success: false, error: "timeout", __tool_status__: "FAILED" },
+            _auto_executed: true,
+            _tool_call_id: "adql-1",
+          },
+          {
+            action: "run_adql",
+            tool_result: { row_count: 1000, columns: ["ra"], attempt_log: [{ stage: "mirror_success", message: "fallback succeeded" }] },
+            _auto_executed: true,
+            _tool_call_id: "adql-2",
+          },
+        ],
+      };
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "query Gaia" } });
+    fireEvent.click(sendBtn);
+
+    await waitFor(() => {
+      const raw = localStorage.getItem("astro_chat_history");
+      const stored = JSON.parse(raw || "[]") as Array<{
+        role?: string;
+        actions?: Array<{ _tool_call_id?: string; tool_result?: { row_count?: number } }>;
+      }>;
+      const assistant = stored.find((m) => m.role === "assistant" && m.actions?.length === 2);
+      expect(assistant?.actions?.[1]).toEqual(expect.objectContaining({
+        _tool_call_id: "adql-2",
+        tool_result: expect.objectContaining({ row_count: 1000 }),
+      }));
+    });
+    await screen.findByText("Done");
   });
 });
