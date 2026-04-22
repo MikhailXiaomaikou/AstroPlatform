@@ -34,6 +34,7 @@ class DetectionResult:
     verdict: Verdict
     has_np_random: bool = False
     has_time_linspace: bool = False
+    has_constant_redshift_sequence: bool = False
     suspicious_keywords: list[str] = field(default_factory=list)
     reads_real_data: bool = False
     legitimate_random_context: bool = False
@@ -84,6 +85,7 @@ class _CodeVisitor(ast.NodeVisitor):
         self.real_data_reader_calls: list[str] = []
         self.legit_random_refs: list[str] = []
         self.suspicious_var_names: list[str] = []
+        self.constant_redshift_sequences: list[str] = []
 
     def _attribute_chain(self, node: ast.AST) -> str:
         """Return a dotted chain like 'np.random.normal' if possible."""
@@ -112,6 +114,62 @@ class _CodeVisitor(ast.NodeVisitor):
             if reader in chain:
                 self.real_data_reader_calls.append(chain)
                 break
+        self.generic_visit(node)
+
+    def _target_names(self, target: ast.AST) -> list[str]:
+        if isinstance(target, ast.Name):
+            return [target.id]
+        if isinstance(target, ast.Tuple):
+            out: list[str] = []
+            for elt in target.elts:
+                out.extend(self._target_names(elt))
+            return out
+        if isinstance(target, ast.Subscript):
+            # df["z"] = ...
+            sl = target.slice
+            if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+                return [sl.value]
+        return []
+
+    def _is_redshift_name(self, name: str) -> bool:
+        lowered = name.lower()
+        return lowered in {"z", "redshift", "zsp", "z_spec", "specz"} or "redshift" in lowered
+
+    def _is_constant_numeric_sequence(self, node: ast.AST) -> bool:
+        # [0.05] * n 或 np.full(n, 0.05) 这类“整列单值”的假样本。
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            left = node.left
+            if (
+                isinstance(left, ast.List)
+                and len(left.elts) == 1
+                and isinstance(left.elts[0], ast.Constant)
+                and isinstance(left.elts[0].value, (int, float))
+            ):
+                return True
+        if isinstance(node, ast.Call):
+            chain = self._attribute_chain(node.func)
+            if chain in {"np.full", "numpy.full"} and len(node.args) >= 2:
+                fill = node.args[1]
+                return isinstance(fill, ast.Constant) and isinstance(fill.value, (int, float))
+        return False
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if self._is_constant_numeric_sequence(node.value):
+            for target in node.targets:
+                for name in self._target_names(target):
+                    if self._is_redshift_name(name):
+                        self.constant_redshift_sequences.append(name)
+        self.generic_visit(node)
+
+    def visit_Dict(self, node: ast.Dict) -> None:
+        for key, val in zip(node.keys, node.values, strict=False):
+            if (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and self._is_redshift_name(key.value)
+                and self._is_constant_numeric_sequence(val)
+            ):
+                self.constant_redshift_sequences.append(key.value)
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
@@ -212,6 +270,7 @@ def analyze(code: str) -> DetectionResult:
     result.has_np_random = bool(visitor.np_random_calls)
     result.reads_real_data = bool(visitor.real_data_reader_calls)
     result.legitimate_random_context = bool(visitor.legit_random_refs)
+    result.has_constant_redshift_sequence = bool(visitor.constant_redshift_sequences)
 
     # np.linspace / np.arange are only suspicious when the variable
     # assigned holds the word "time" / "t" / "bjd" / "mjd" — cheap lexical
@@ -236,6 +295,8 @@ def analyze(code: str) -> DetectionResult:
     # Suspicious variable names
     if visitor.suspicious_var_names:
         result.notes.append(f"variables: {visitor.suspicious_var_names}")
+    if visitor.constant_redshift_sequences:
+        result.notes.append(f"constant_redshift_sequences: {visitor.constant_redshift_sequences}")
 
     # Classification
     hard_signals = 0
@@ -246,6 +307,8 @@ def analyze(code: str) -> DetectionResult:
     if result.suspicious_keywords:
         hard_signals += 1
     if visitor.suspicious_var_names:
+        hard_signals += 1
+    if result.has_constant_redshift_sequence:
         hard_signals += 1
 
     if hard_signals == 0:
@@ -263,6 +326,9 @@ def analyze(code: str) -> DetectionResult:
         # 仍可能只是方法演示；保守降级, 不硬判 synthetic。
         result.verdict = "clean" if hard_signals == 1 else "suspicious"
     else:
+        if result.has_constant_redshift_sequence:
+            result.verdict = "synthetic"
+            return result
         # Random without any real-data anchor ⇒ synthetic
         # ≥2 hard signals → synthetic
         # 1 hard signal (just np.random, no keywords, no time axis) →

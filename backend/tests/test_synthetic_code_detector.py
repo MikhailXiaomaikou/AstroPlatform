@@ -56,6 +56,22 @@ print(len(synthetic_gmag))
     assert any("synthetic_" in n for n in r.notes[:1] + [" ".join(r.notes)])
 
 
+def test_constant_redshift_sequence_without_real_reader_is_synthetic():
+    code = """
+import pandas as pd
+n = 100
+df = pd.DataFrame({
+    "z": [0.05] * n,
+    "petroMag_r": [17.2] * n,
+})
+print(df["z"].mean())
+"""
+    r = analyze(code)
+    assert r.verdict == "synthetic"
+    assert r.has_constant_redshift_sequence is True
+    assert r.reads_real_data is False
+
+
 def test_bare_np_random_without_real_data_is_synthetic():
     code = """
 import numpy as np

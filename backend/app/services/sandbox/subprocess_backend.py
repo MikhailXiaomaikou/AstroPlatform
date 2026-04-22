@@ -203,6 +203,29 @@ def _make_cache_accessors(cache_context: dict | None) -> dict:
     }
 
 
+def _make_sandbox_helpers() -> dict:
+    def sandbox_limits() -> dict:
+        limits: dict[str, object] = {}
+        try:
+            soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+            limits["rlimit_as_bytes"] = soft
+            limits["rlimit_as_hard_bytes"] = hard
+            limits["rlimit_as_mb"] = None if soft < 0 else soft // (1024 * 1024)
+        except Exception as exc:
+            limits["rlimit_as_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            if sys.platform == "darwin":
+                limits["memory_usage_mb"] = usage / (1024 * 1024)
+            else:
+                limits["memory_usage_mb"] = usage / 1024
+        except Exception:
+            pass
+        return limits
+
+    return {"sandbox_limits": sandbox_limits}
+
+
 def _make_astro_module(accessors: dict) -> ModuleType | None:
     try:
         from app.services import astro_analysis
@@ -285,6 +308,7 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
             "plt": plt,
             "matplotlib": matplotlib,
             **cache_accessors,
+            **_make_sandbox_helpers(),
         }
         if astro_module is not None:
             exec_globals["astro"] = astro_module
@@ -292,6 +316,8 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
             for name in (
                 "pub_figure", "pub_style", "get_isochrone", "fit_isochrone",
                 "compare_models", "analyze_residuals", "plot_hr_diagram",
+                "available_functions", "download_and_clean_lightcurve",
+                "phase_fold", "plot_lightcurve", "plot_phase_folded",
             ):
                 if hasattr(astro_module, name):
                     exec_globals[name] = getattr(astro_module, name)

@@ -558,6 +558,20 @@ def _make_sandbox_helpers():
         """Return approximate process memory usage in megabytes."""
         return _get_memory_usage_bytes() / (1024 * 1024)
 
+    def sandbox_limits() -> dict:
+        """返回当前 Python kernel 能看到的资源限制。"""
+        limits: dict[str, object] = {}
+        try:
+            import resource
+            soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+            limits["rlimit_as_bytes"] = soft
+            limits["rlimit_as_hard_bytes"] = hard
+            limits["rlimit_as_mb"] = None if soft < 0 else soft // (1024 * 1024)
+        except Exception as exc:
+            limits["rlimit_as_error"] = f"{type(exc).__name__}: {exc}"
+        limits["memory_usage_mb"] = memory_usage_mb()
+        return limits
+
     def lazy_load_table(path: str, format: str = "auto"):
         """Load a large table lazily with Dask for out-of-core processing."""
         try:
@@ -579,6 +593,7 @@ def _make_sandbox_helpers():
         "load_votable": load_votable,
         "load_csv": load_csv,
         "memory_usage_mb": memory_usage_mb,
+        "sandbox_limits": sandbox_limits,
         "lazy_load_table": lazy_load_table,
     }
 
@@ -759,7 +774,10 @@ def _collect_subprocess_cache_context(session_id: str) -> dict:
 
     visible: dict = {}
     session_suffix = f":{session_id}" if session_id and session_id != "default" else ""
-    adql_prefixes = ("latest_adql", "latest_adql_set", "latest_adql_sets", "latest_sdss_sql")
+    adql_prefixes = (
+        "latest_adql", "latest_adql_set", "latest_adql_sets",
+        "latest_sdss_sql", "latest_high_velocity_stars",
+    )
 
     def _is_adql_cache_key(key: str) -> bool:
         return any(key == prefix or key.startswith(prefix + ":") for prefix in adql_prefixes)

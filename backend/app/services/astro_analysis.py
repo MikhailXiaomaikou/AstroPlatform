@@ -3135,11 +3135,53 @@ def search_lightcurve(target, mission='kepler'):
 # 防止 lightkurve 下 14+ 个 TESS sector 一次爆 2-3 GB 内存被 SIGKILL
 # (Round 9 HD 189733b exit_code=-9 就是这个).
 DEFAULT_LIGHTCURVE_MAX_SEGMENTS = 3
+DEFAULT_LIGHTCURVE_MAX_POINTS = 30_000
+
+
+def _lightcurve_value_array(value):
+    """把 lightkurve / astropy quantity-like 对象转成 float ndarray。"""
+    raw = getattr(value, "value", value)
+    try:
+        return np.asarray(raw, dtype=float)
+    except (TypeError, ValueError):
+        if hasattr(raw, "tolist"):
+            return np.asarray(raw.tolist(), dtype=float)
+        raise
+
+
+def _downsample_lightcurve_arrays(time, flux, flux_err, max_points):
+    """返回给 run_python 前, 对超大光变曲线做 median binning。"""
+    if max_points is None or max_points <= 0 or len(time) <= max_points:
+        return time, flux, flux_err, None
+
+    factor = int(np.ceil(len(time) / max_points))
+    usable = (len(time) // factor) * factor
+    if usable <= 0:
+        return time, flux, flux_err, None
+
+    def _bin(arr, reducer=np.nanmedian):
+        shaped = np.asarray(arr[:usable], dtype=float).reshape(-1, factor)
+        return reducer(shaped, axis=1)
+
+    binned_time = _bin(time)
+    binned_flux = _bin(flux)
+    binned_err = None
+    if flux_err is not None:
+        # Independent-error approximation for grouped cadences.
+        err = np.asarray(flux_err[:usable], dtype=float).reshape(-1, factor)
+        binned_err = np.sqrt(np.nanmean(err * err, axis=1)) / np.sqrt(factor)
+
+    warning = (
+        f"Downsampled light curve from {len(time)} to {len(binned_time)} points "
+        f"with median bins of {factor} cadences to stay within sandbox memory."
+    )
+    return binned_time, binned_flux, binned_err, warning
 
 
 def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
                                   sector=None, author=None,
-                                  max_segments=DEFAULT_LIGHTCURVE_MAX_SEGMENTS):
+                                  max_segments=DEFAULT_LIGHTCURVE_MAX_SEGMENTS,
+                                  max_points=DEFAULT_LIGHTCURVE_MAX_POINTS):
     """Download, stitch, and clean a light curve.
 
     target: 名称 (HD / HIP / TIC / KIC / EPIC / 坐标字符串).
@@ -3151,6 +3193,8 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
     flatten: 做 outlier 剔除 + 去除长周期趋势. False 保留原始曲线.
     max_segments: 默认 3 个 segment 上限, 防止 lightkurve 下所有 TESS sector
                   爆内存被 SIGKILL.  显式传 None 关闭截断.
+    max_points: 返回给 run_python 的最大点数. 超过后按时间顺序做确定性
+                median binning, 防止 phase-fold / plot 阶段 OOM.
     """
     import lightkurve as lk
     # R1.1: 只在非 None 时传参, 保持 lightkurve 默认行为
@@ -3238,14 +3282,26 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
         'segments': len(lc_collection),
         'segments_requested': original_n,
     }
+    time_arr = _lightcurve_value_array(lc.time)
+    flux_arr = _lightcurve_value_array(lc.flux)
+    flux_err_arr = _lightcurve_value_array(lc.flux_err) if lc.flux_err is not None else None
+
+    original_points = len(time_arr)
+    time_arr, flux_arr, flux_err_arr, downsample_warning = _downsample_lightcurve_arrays(
+        time_arr, flux_arr, flux_err_arr, max_points
+    )
+    meta['points_original'] = int(original_points)
+    meta['points_returned'] = int(len(time_arr))
+    meta['max_points'] = max_points
+
     # R11-NEW-2: 合并 segment-cap 警告 + homogenize 警告
-    warnings = [w for w in (segments_warning, homogenize_warning) if w]
+    warnings = [w for w in (segments_warning, homogenize_warning, downsample_warning) if w]
     if warnings:
         meta['warning'] = " | ".join(warnings)
     return {
-        'time': np.asarray(lc.time.value, dtype=float),
-        'flux': np.asarray(lc.flux.value, dtype=float),
-        'flux_err': np.asarray(lc.flux_err.value, dtype=float) if lc.flux_err is not None else None,
+        'time': time_arr,
+        'flux': flux_arr,
+        'flux_err': flux_err_arr,
         'meta': meta,
     }
 

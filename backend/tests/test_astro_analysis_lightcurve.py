@@ -140,6 +140,65 @@ def test_download_and_clean_lightcurve_returns_numeric_arrays():
     assert result["flux_err"].dtype.kind == "f"
 
 
+def test_download_and_clean_lightcurve_downsamples_large_arrays():
+    """R18-NEW-4: 大 TESS 曲线返回前要降采样，避免后续绘图 OOM。"""
+    from app.services import astro_analysis
+
+    class _Quantity:
+        def __init__(self, value):
+            self.value = value
+
+    class _LargeLC:
+        def __init__(self):
+            self._time = np.arange(1000, dtype=float)
+            self._flux = np.ones(1000, dtype=float)
+            self._flux_err = np.full(1000, 0.01, dtype=float)
+
+        @property
+        def time(self):
+            return _Quantity(self._time)
+
+        @property
+        def flux(self):
+            return _Quantity(self._flux)
+
+        @property
+        def flux_err(self):
+            return _Quantity(self._flux_err)
+
+        def remove_outliers(self):
+            return self
+
+        def flatten(self):
+            return self
+
+    class _LargeCollection(_FakeCollection):
+        def stitch(self):
+            return _LargeLC()
+
+    class _LargeSearch:
+        def __len__(self):
+            return 1
+
+        def download_all(self):
+            return _LargeCollection(n_segments=1)
+
+    fake_lk = MagicMock()
+    fake_lk.search_lightcurve.return_value = _LargeSearch()
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.download_and_clean_lightcurve(
+            "HD 189733", mission="tess", max_points=100
+        )
+
+    assert len(result["time"]) <= 100
+    assert len(result["flux"]) == len(result["time"])
+    assert len(result["flux_err"]) == len(result["time"])
+    assert result["meta"]["points_original"] == 1000
+    assert result["meta"]["points_returned"] <= 100
+    assert "Downsampled light curve" in result["meta"]["warning"]
+
+
 def test_cleanup_lightkurve_cache_removes_only_corrupted_fits(tmp_path):
     """R18: 坏 FITS 缓存会污染后续 lightkurve 下载；只删打不开的文件。"""
     from astropy.io import fits

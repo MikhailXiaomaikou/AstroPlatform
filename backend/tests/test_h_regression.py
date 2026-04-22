@@ -839,6 +839,45 @@ def test_subprocess_cache_context_filters_foreign_adql_cache():
     assert current["latest_adql"] == [{"source": 123}]
 
 
+def test_latest_sdss_sql_cache_is_session_scoped_and_aliased():
+    """R18-NEW-3: run_python helper 只能看到同 chat 的 SDSS cache。"""
+    from app.services import ai_tools
+    from app.services.code_executor import _collect_subprocess_cache_context, _make_data_accessor
+
+    ai_tools._search_result_cache.clear()
+    ai_tools.store_search_results("latest_sdss_sql:chat-sdss", {
+        "petroMag_r": [17.2],
+        "petromag_r": [17.2],
+        "zErr": [0.001],
+        "zerr": [0.001],
+    })
+
+    current = _make_data_accessor("chat-sdss")["get_cached_results"]("latest_sdss_sql")
+    assert current["petroMag_r"] == [17.2]
+    assert current["petromag_r"] == [17.2]
+    assert _make_data_accessor("chat-other")["get_cached_results"]("latest_sdss_sql") is None
+
+    ctx = _collect_subprocess_cache_context("chat-sdss")
+    assert ctx["latest_sdss_sql"]["zErr"] == [0.001]
+    assert ctx["latest_sdss_sql:chat-sdss"]["zerr"] == [0.001]
+
+
+def test_run_python_exposes_cache_and_introspection_helpers():
+    """R18-NEW-5: 常见发现式 helper 不应 NameError。"""
+    from app.services.code_executor import execute_python
+
+    result = execute_python(
+        "print(callable(get_cached_results))\n"
+        "print(callable(get_search_results))\n"
+        "print(callable(available_functions))\n"
+        "print('rlimit_as_mb' in sandbox_limits())",
+        session_id="helper-smoke",
+    )
+
+    assert result.success, result.error
+    assert result.stdout.strip().splitlines() == ["True", "True", "True", "True"]
+
+
 def test_adql_timeout_message_blames_query_pattern_not_global_overload():
     """R5: Gaia 大查询超预算时不要误导用户以为整个 TAP 服务挂了."""
     import inspect
@@ -1001,8 +1040,9 @@ def test_run_sdss_sql_dispatches_to_connector():
     from app.services.ai_tools import execute_tool
 
     fake_conn_result = {
-        "columns": ["objid", "ra", "dec"],
-        "data": {"objid": [111], "ra": [180.0], "dec": [0.0]},
+        "columns": ["objID", "ra", "dec"],
+        "data": {"objID": [111], "ra": [180.0], "dec": [0.0]},
+        "column_aliases": {"objid": "objID", "ra": "ra", "dec": "dec"},
         "row_count": 1,
         "service": "sdss",
         "dr": "18",
@@ -1021,8 +1061,45 @@ def test_run_sdss_sql_dispatches_to_connector():
 
     # execute_tool 会走 result_provenance 包一层, 原字段应该仍在
     assert res.get("row_count") == 1
-    assert "objid" in res.get("columns", [])
+    assert "objID" in res.get("columns", [])
+    assert res.get("column_aliases", {}).get("objid") == "objID"
     assert res.get("service") == "sdss"
+
+
+def test_run_sdss_sql_writes_session_scoped_cache_with_case_aliases():
+    from app.services import ai_tools
+    from app.services.ai_tools import _exec_run_sdss_sql
+
+    ai_tools._search_result_cache.clear()
+    fake_conn_result = {
+        "columns": ["objID", "petroMag_r", "zErr"],
+        "data": {
+            "objID": [111],
+            "petroMag_r": [17.2],
+            "zErr": [0.001],
+        },
+        "column_aliases": {"objid": "objID", "petromag_r": "petroMag_r", "zerr": "zErr"},
+        "row_count": 1,
+        "service": "sdss",
+        "dr": "18",
+        "query": "SELECT TOP 1 objID, petroMag_r, zErr FROM PhotoObjAll",
+    }
+
+    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0):
+        return fake_conn_result
+
+    with patch("app.connectors.sdss_sql.execute_sdss_sql", side_effect=fake_execute_sdss_sql):
+        res = asyncio.run(_exec_run_sdss_sql(
+            {"query": "SELECT TOP 1 objID, petroMag_r, zErr FROM PhotoObjAll"},
+            python_session_id="chat-sdss",
+        ))
+
+    assert res["columns"] == ["objID", "petroMag_r", "zErr"]
+    cache = ai_tools.get_cached_results("latest_sdss_sql:chat-sdss")
+    assert cache["petroMag_r"] == [17.2]
+    assert cache["petromag_r"] == [17.2]
+    assert cache["zErr"] == [0.001]
+    assert cache["zerr"] == [0.001]
 
 
 # ---------- M1: long workflow budget + checkpoint + MW high-velocity helper ----------

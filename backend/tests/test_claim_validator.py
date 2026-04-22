@@ -99,6 +99,22 @@ def test_validate_returns_multiple_uncited():
     assert len(r.uncited) >= 2
 
 
+def test_schema_numbers_inside_markdown_code_are_not_claims():
+    text = (
+        "Available tool schema:\n"
+        "```json\n"
+        '{"limit": 24.0, "radius": 4.0, "max_rows": 70.0}\n'
+        "```\n"
+        "Use `SELECT TOP 1000 objID FROM PhotoObjAll` for examples."
+    )
+    claims = extract_claims(text)
+    values = {c.value for c in claims}
+    assert 24.0 not in values
+    assert 4.0 not in values
+    assert 70.0 not in values
+    assert 1000.0 not in values
+
+
 # -------------------- Prompts & blocked text --------------------
 
 

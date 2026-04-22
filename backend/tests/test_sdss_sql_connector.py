@@ -30,9 +30,10 @@ def test_parse_skyserver_list_wrapper():
     result = _parse_skyserver_json(payload, query="SELECT TOP 2 ...", dr="18")
 
     assert result["row_count"] == 2
-    assert "objid" in result["columns"]  # 列名被小写
+    assert "objID" in result["columns"]  # 保留 SkyServer 原始大小写
     assert "ra" in result["columns"]
-    assert result["data"]["objid"] == [1237645877629878395, 1237645877629878396]
+    assert result["column_aliases"]["objid"] == "objID"
+    assert result["data"]["objID"] == [1237645877629878395, 1237645877629878396]
     assert result["data"]["ra"] == [180.0, 180.1]
     assert result["service"] == "sdss"
     assert result["dr"] == "18"
@@ -121,7 +122,8 @@ def test_execute_success_returns_parsed_rows():
         result = asyncio.run(execute_sdss_sql("SELECT TOP 1 objID, ra, r FROM PhotoObjAll WHERE mode=1", dr="18"))
 
     assert result["row_count"] == 1
-    assert result["data"]["objid"] == [123]
+    assert result["data"]["objID"] == [123]
+    assert result["column_aliases"]["objid"] == "objID"
     # 确认是 GET + format=json + cmd=<query>
     call_kwargs = fake_client.get.call_args
     assert call_kwargs.kwargs["params"]["format"] == "json"

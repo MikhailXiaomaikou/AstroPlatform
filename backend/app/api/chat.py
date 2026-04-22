@@ -2634,6 +2634,12 @@ async def _run_agent_loop(
     working_messages = deepcopy(messages)
     all_tool_results: list[dict] = []
     text_parts: list[str] = []
+    latest_user_text = ""
+    for _msg in reversed(messages):
+        if _msg.get("role") == "user":
+            latest_user_text = str(_msg.get("content") or "")
+            break
+    skip_claim_gate_for_meta = _is_tool_inventory_request(latest_user_text)
     budget = _workflow_budget_config((workflow_budget or {}).get("mode"))
     budget.update(workflow_budget or {})
     max_iterations = int(budget.get("max_iterations", 12))
@@ -3025,7 +3031,7 @@ async def _run_agent_loop(
     # against the tool_results collected this turn; if any claim can't be
     # cited, push the LLM to regenerate.  After two failures, block.
     fabrication_stats = {"pass": 0, "blocked": False, "regenerations": 0}
-    if clean_reply.strip():
+    if clean_reply.strip() and not skip_claim_gate_for_meta:
         from app.services.claim_validator import (
             validate_claims,
             build_regeneration_prompt,

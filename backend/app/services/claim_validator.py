@@ -207,6 +207,17 @@ class ValidationResult:
         )
 
 
+def _strip_markdown_code(text: str) -> str:
+    """在抽取 prose 数值 claim 前移除 markdown 代码区。
+
+    工具 schema / help 回复里常有 ``limit: 24`` 这种参数默认值, 或 SQL
+    示例。它们是接口元数据, 不是天文结论, 不应进入 zero-fabrication gate。
+    """
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    text = re.sub(r"`[^`\n]*`", " ", text)
+    return text
+
+
 def extract_claims(text: str) -> list[Claim]:
     """Scan a reply for astronomical numeric claims.
 
@@ -220,6 +231,7 @@ def extract_claims(text: str) -> list[Claim]:
     (span 4-24) 和 value_bare_unit (span 16-24) 匹到, 只保留前者.
     避免漏检光谱单位的同时不重复计数.
     """
+    text = _strip_markdown_code(text)
     claims: list[Claim] = []
     seen: set[tuple[int, int, float]] = set()
     for label, pattern in _PATTERNS:

@@ -46,8 +46,9 @@ async def execute_sdss_sql(query: str, dr: str = "18", timeout_s: float = 120.0)
 
     返回结构跟 ADQL 路径一致:
         {
-          "columns": ["col1", "col2", ...],  # 小写
+          "columns": ["col1", "col2", ...],  # 保留 SkyServer 原始大小写
           "data": {"col1": [v1, v2, ...], ...},
+          "column_aliases": {"col1_lower": "col1", ...},
           "row_count": int,
           "service": "sdss",
           "dr": "18",
@@ -128,21 +129,25 @@ def _parse_skyserver_json(payload, query: str, dr: str) -> dict:
 
     # 列名从第一行的 keys 取, 保持原始顺序.
     columns_original = list(rows[0].keys())
-    columns_lower = [c.lower() for c in columns_original]
-
     # 转置: rows of dicts → dict of lists.
-    data: dict[str, list] = {col.lower(): [] for col in columns_original}
+    data: dict[str, list] = {col: [] for col in columns_original}
     for row in rows:
         for col in columns_original:
             val = row.get(col)
             # SkyServer 返回值: numbers 是 int/float, "NULL" 字符串表示 null.
             if val == "" or (isinstance(val, str) and val.strip().upper() == "NULL"):
                 val = None
-            data[col.lower()].append(val)
+            data[col].append(val)
+
+    # 给 run_python 的兼容层使用: AI 以前已经学会写 df['petromag_r']，
+    # 但 SkyServer 官方列名是 petroMag_r / objID / zErr。工具结果展示
+    # 保持原始列名，cache 侧再按这个 map 补小写别名。
+    column_aliases = {col.lower(): col for col in columns_original}
 
     return {
-        "columns": columns_lower,
+        "columns": columns_original,
         "data": data,
+        "column_aliases": column_aliases,
         "row_count": len(rows),
         "service": "sdss",
         "dr": dr,

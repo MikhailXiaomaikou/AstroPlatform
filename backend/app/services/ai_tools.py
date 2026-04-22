@@ -63,8 +63,12 @@ def _coerce_float(value: Any) -> float | None:
 
 
 def _augment_adql_row(row: dict[str, Any]) -> dict[str, Any]:
-    # Normalize keys to lowercase (TAP services may return UPPERCASE)
-    enriched = {k.lower(): v for k, v in row.items()}
+    # 保留 archive 原始列名, 同时补小写别名。SDSS SkyServer 使用 objID /
+    # petroMag_r / zErr 这种混合大小写, 但旧分析代码常写小写列名。两者都
+    # 保留可避免 KeyError, 又不隐藏真实 schema。
+    enriched = dict(row)
+    for k, v in row.items():
+        enriched.setdefault(str(k).lower(), v)
     if "bp_rp" not in enriched or enriched.get("bp_rp") is None:
         bp = _coerce_float(enriched.get("phot_bp_mean_mag"))
         rp = _coerce_float(enriched.get("phot_rp_mean_mag"))
@@ -2532,7 +2536,14 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
 
     columns = raw.get("columns", [])
     data = raw.get("data", {})
+    column_aliases = raw.get("column_aliases", {}) if isinstance(raw, dict) else {}
     row_count = raw.get("row_count", 0)
+
+    cache_data = dict(data)
+    if isinstance(column_aliases, dict):
+        for alias, original in column_aliases.items():
+            if alias not in cache_data and original in data:
+                cache_data[alias] = data[original]
 
     # AI 视图: 截取前 100 行, 完整数据走 cache.
     VIEW_ROWS = 100
@@ -2552,7 +2563,10 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
         )
         store_adql_result_set(python_session_id, result_set)
         # 显式的 sdss 别名, 让 AI 能 import 时用 `latest_sdss_sql` 标识.
-        store_search_results("latest_sdss_sql", data)
+        sdss_key = _session_cache_key("latest_sdss_sql", python_session_id) or "latest_sdss_sql"
+        store_search_results(sdss_key, cache_data)
+        if python_session_id in (None, "", "default"):
+            store_search_results("latest_sdss_sql", cache_data)
     except Exception as e:
         logger.debug("SDSS SQL cache write failed: %s", e)
 
@@ -2561,6 +2575,7 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
         "dr": dr,
         "columns": columns,
         "data": truncated,
+        "column_aliases": column_aliases,
         "row_count": row_count,
         "showing": min(VIEW_ROWS, row_count),
         "has_data": row_count > 0,
@@ -3242,6 +3257,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                     f"but data_source='{data_source}' was declared. "
                     f"Signals: has_np_random={detection.has_np_random}, "
                     f"has_time_linspace={detection.has_time_linspace}, "
+                    f"has_constant_redshift_sequence={detection.has_constant_redshift_sequence}, "
                     f"suspicious_keywords={detection.suspicious_keywords}, "
                     f"reads_real_data={detection.reads_real_data}. "
                     f"Either fix the code to read real data, declare "
@@ -3254,6 +3270,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                     "suspicious_keywords": detection.suspicious_keywords,
                     "has_np_random": detection.has_np_random,
                     "has_time_linspace": detection.has_time_linspace,
+                    "has_constant_redshift_sequence": detection.has_constant_redshift_sequence,
                     "reads_real_data": detection.reads_real_data,
                 },
             }
