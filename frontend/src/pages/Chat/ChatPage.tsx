@@ -136,6 +136,99 @@ interface DisplayMessage {
   _action_hint?: "new_chat";
 }
 
+function getActionToolResult(action: ChatAction): Record<string, unknown> | undefined {
+  const result = (action as Record<string, unknown>).tool_result;
+  return result && typeof result === "object" ? result as Record<string, unknown> : undefined;
+}
+
+function isSyntheticToolAction(action: ChatAction): boolean {
+  const result = getActionToolResult(action);
+  if (!result) return false;
+  const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
+  const origin = String(result.data_origin || "").toLowerCase();
+  if (
+    status === "FAILED"
+    || status === "UNAVAILABLE"
+    || result.success === false
+    || (typeof result.error === "string" && result.error.trim() !== "")
+  ) {
+    return false;
+  }
+  return status === "SYNTHETIC" || origin === "synthetic";
+}
+
+function summarizeTurnActions(actions: ChatAction[] | undefined) {
+  const acts = actions || [];
+  const synthetic = acts.filter(isSyntheticToolAction);
+  const failed = acts.filter((action) => {
+    if (isSyntheticToolAction(action)) return false;
+    const result = getActionToolResult(action);
+    if (!result) return false;
+    const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
+    return status !== "PARTIAL" && (
+      status === "FAILED"
+      || status === "UNAVAILABLE"
+      || result.success === false
+      || (typeof result.error === "string" && result.error.trim() !== "")
+    );
+  });
+  const empty = acts.filter((action) => {
+    if (isSyntheticToolAction(action)) return false;
+    const result = getActionToolResult(action);
+    if (!result) return false;
+    const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
+    return status === "EMPTY";
+  });
+  const total = acts.filter((action) => !!(action as Record<string, unknown>)._auto_executed).length;
+  return { synthetic, failed, empty, total };
+}
+
+function ToolTurnSummary({
+  actions,
+  live = false,
+}: {
+  actions?: ChatAction[];
+  live?: boolean;
+}) {
+  const { synthetic, failed, empty, total } = summarizeTurnActions(actions);
+  if ((failed.length + empty.length + synthetic.length) === 0 || total === 0) return null;
+
+  const hasSynthetic = synthetic.length > 0;
+  return (
+    <details
+      className="chat-reply-failure-preamble"
+      style={hasSynthetic ? {
+        borderLeftColor: "var(--color-red)",
+        background: "rgba(255, 69, 58, 0.1)",
+      } : undefined}
+      open={live || hasSynthetic}
+    >
+      <summary>
+        {hasSynthetic ? "⚠⚠ " : "⚠ "}
+        {live && <strong>Live tool summary: </strong>}
+        {synthetic.length > 0 && (
+          <strong>{synthetic.length} SYNTHETIC{synthetic.length === 1 ? "" : ""}</strong>
+        )}
+        {synthetic.length > 0 && (failed.length + empty.length > 0) ? " + " : ""}
+        {(failed.length + empty.length) > 0 && (
+          <span>{failed.length + empty.length} no-data</span>
+        )}
+        {` of ${total} tool${total === 1 ? "" : "s"} this turn. `}
+        {hasSynthetic && <strong>Numbers from synthetic tools are NOT from observations — do NOT cite them.</strong>}
+      </summary>
+      <div style={{ marginTop: 6, fontSize: "0.78rem" }}>
+        {synthetic.length > 0 && (
+          <div style={{ color: "var(--color-red)" }}>
+            <strong>Synthetic:</strong> {synthetic.map((action) => action.action).join(", ")}
+          </div>
+        )}
+        {failed.length > 0 && <div>Failed: {failed.map((action) => action.action).join(", ")}</div>}
+        {empty.length > 0 && <div>Empty: {empty.map((action) => action.action).join(", ")}</div>}
+      </div>
+    </details>
+  );
+}
+
 function hasStoredAiKey(): boolean {
   const keys = getStoredApiKeys();
   return Object.values(keys).some((v) => typeof v === "string" && v.trim().length > 0);
@@ -3909,6 +4002,7 @@ export default function ChatPage() {
                           ? "The previous reply was interrupted before the backend responded."
                           : "Reconnecting to your in-flight reply…"}
                     </em>
+                    <ToolTurnSummary actions={msg.actions} live />
                     {msg._thinking && msg._thinking.length > 0 && (
                       <ul className="chat-thinking-timeline" style={{
                         listStyle: "none",
@@ -3998,79 +4092,7 @@ export default function ChatPage() {
                       {/* F3.3: ⚠ preamble when any auto-executed tool failed
                           or returned empty, even if the prose passed the
                           claim gate.  Keeps the validation signal visible. */}
-                      {(() => {
-                        const acts = msg.actions || [];
-                        const isSynthetic = (a: typeof acts[number]) => {
-                          const r = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
-                          if (!r || typeof r !== "object") return false;
-                          const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
-                          const origin = String(r.data_origin || "").toLowerCase();
-                          if (
-                            st === "FAILED"
-                            || st === "UNAVAILABLE"
-                            || r.success === false
-                            || (typeof r.error === "string" && r.error.trim() !== "")
-                          ) return false;
-                          return st === "SYNTHETIC" || origin === "synthetic";
-                        };
-                        const synthetic = acts.filter(isSynthetic);
-                        const failed = acts.filter((a) => {
-                          if (isSynthetic(a)) return false;
-                          const r = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
-                          if (!r || typeof r !== "object") return false;
-                          const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
-                          return st !== "PARTIAL" && (
-                            st === "FAILED"
-                            || st === "UNAVAILABLE"
-                            || r.success === false
-                            || (typeof r.error === "string" && r.error.trim() !== "")
-                          );
-                        });
-                        const empty = acts.filter((a) => {
-                          if (isSynthetic(a)) return false;
-                          const r = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
-                          if (!r || typeof r !== "object") return false;
-                          const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
-                          return st === "EMPTY";
-                        });
-                        const total = acts.filter((a) => !!(a as Record<string, unknown>)._auto_executed).length;
-                        if ((failed.length + empty.length + synthetic.length) > 0 && total > 0) {
-                          const extreme = synthetic.length > 0;
-                          return (
-                            <details
-                              className="chat-reply-failure-preamble"
-                              style={extreme ? {
-                                borderLeftColor: "var(--color-red)",
-                                background: "rgba(255, 69, 58, 0.1)",
-                              } : undefined}
-                              open={extreme}
-                            >
-                              <summary>
-                                {extreme ? "⚠⚠ " : "⚠ "}
-                                {synthetic.length > 0 && (
-                                  <strong>{synthetic.length} SYNTHETIC{synthetic.length === 1 ? "" : ""}</strong>
-                                )}
-                                {synthetic.length > 0 && (failed.length + empty.length > 0) ? " + " : ""}
-                                {(failed.length + empty.length) > 0 && (
-                                  <span>{failed.length + empty.length} no-data</span>
-                                )}
-                                {` of ${total} tool${total === 1 ? "" : "s"} this turn. `}
-                                {extreme && <strong>Numbers from synthetic tools are NOT from observations — do NOT cite them.</strong>}
-                              </summary>
-                              <div style={{ marginTop: 6, fontSize: "0.78rem" }}>
-                                {synthetic.length > 0 && (
-                                  <div style={{ color: "var(--color-red)" }}>
-                                    <strong>Synthetic:</strong> {synthetic.map((a) => a.action).join(", ")}
-                                  </div>
-                                )}
-                                {failed.length > 0 && <div>Failed: {failed.map((a) => a.action).join(", ")}</div>}
-                                {empty.length > 0 && <div>Empty: {empty.map((a) => a.action).join(", ")}</div>}
-                              </div>
-                            </details>
-                          );
-                        }
-                        return null;
-                      })()}
+                      <ToolTurnSummary actions={msg.actions} />
                       <MarkdownText content={msg.content} />
                       {/* R11-NEW-1: payload_too_large 错误专属 CTA —
                           一键新开聊天清空当前会话历史. */}
