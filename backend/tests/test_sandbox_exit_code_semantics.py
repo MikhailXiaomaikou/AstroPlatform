@@ -5,13 +5,17 @@ Round 8 观察到 NameError → subprocess 正常 return → exit_code=0 + succe
 """
 
 import os
-import sys
 import pytest
 
 # 这些测试依赖真实 subprocess, CI 里如果没装子进程 sandbox 依赖就跳过
 pytestmark = pytest.mark.skipif(
     os.name != "posix", reason="subprocess sandbox 仅在 POSIX 系统测试"
 )
+
+# 覆盖率注入 + 科学计算默认 imports 在 GitHub Ubuntu/Python 3.11 下
+# 256 MB 会偶发触发 numpy/matplotlib C 初始化 SIGSEGV。生产配置是 1 GB；
+# 这里用和 sandbox_isolation 一致的 512 MB，测试 exit_code 语义本身。
+SANDBOX_TEST_MEMORY = 512 * 1024 * 1024
 
 
 @pytest.fixture
@@ -25,7 +29,7 @@ def test_name_error_produces_nonzero_exit_code(backend):
     result = backend.execute(
         "print(undefined_variable)",
         timeout=10,
-        memory_bytes=256 * 1024 * 1024,
+        memory_bytes=SANDBOX_TEST_MEMORY,
     )
     assert result.success is False
     assert result.exit_code not in (None, 0), (
@@ -41,7 +45,7 @@ def test_successful_run_still_exits_zero(backend):
     result = backend.execute(
         "print('hello world')",
         timeout=10,
-        memory_bytes=256 * 1024 * 1024,
+        memory_bytes=SANDBOX_TEST_MEMORY,
     )
     assert result.success is True
     assert result.exit_code == 0, (
@@ -60,7 +64,7 @@ def test_explicit_sys_exit_triggers_nonzero(backend):
     result = backend.execute(
         "import sys; sys.exit(7)",
         timeout=10,
-        memory_bytes=256 * 1024 * 1024,
+        memory_bytes=SANDBOX_TEST_MEMORY,
     )
     assert result.success is False
     assert result.exit_code not in (None, 0)
@@ -71,7 +75,7 @@ def test_zero_division_also_triggers_nonzero_exit(backend):
     result = backend.execute(
         "x = 1 / 0",
         timeout=10,
-        memory_bytes=256 * 1024 * 1024,
+        memory_bytes=SANDBOX_TEST_MEMORY,
     )
     assert result.success is False
     assert result.exit_code not in (None, 0)

@@ -443,13 +443,17 @@ async def sandbox_exec_test(
     依赖 / 权限问题, 按 stderr 指示修.
     """
     from app.services.sandbox.subprocess_backend import SubprocessBackend
+    from app.config import settings
     try:
         backend = SubprocessBackend()
         t0 = time.time()
+        # 真实生产 run_python 默认 1 GB。这里至少给 512 MB，避免诊断端点
+        # 因 256 MB 硬编码误报 numpy/matplotlib 初始化崩溃。
+        memory_bytes = max(settings.sandbox_memory_bytes, 512 * 1024 * 1024)
         result = backend.execute(
             'print("hello from sandbox exec-test")',
             timeout=10,
-            memory_bytes=256 * 1024 * 1024,  # 256 MB
+            memory_bytes=memory_bytes,
         )
         return {
             "ok": result.success,
@@ -460,6 +464,7 @@ async def sandbox_exec_test(
             "error": getattr(result, "error", None),
             "duration_ms": int((time.time() - t0) * 1000),
             "backend": getattr(result, "backend", "unknown"),
+            "memory_mb": memory_bytes // (1024 * 1024),
             "note": (
                 "This uses the production multiprocessing-based "
                 "SubprocessBackend. Compare against /sandbox/health "
