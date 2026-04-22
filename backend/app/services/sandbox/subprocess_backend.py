@@ -20,6 +20,7 @@ import base64
 import logging
 import multiprocessing as mp
 import os
+import re
 import resource
 import signal
 import sys
@@ -116,6 +117,70 @@ def _safe_var_repr(val) -> str | None:
     if len(r) > _VAR_REPR_MAX:
         return r[:_VAR_REPR_MAX] + f"...[TRUNCATED: {len(r) - _VAR_REPR_MAX} chars dropped]"
     return r
+
+
+# Language guard: detect characters that render as □ tofu squares in the
+# sandbox's default font (DejaVu Sans).  The system prompt already tells
+# the AI all run_python output must be standard English; this runtime
+# scan is the fail-loud safety net.  Hit ranges = CJK Unified, CJK Ext A,
+# CJK punctuation, Hiragana, Katakana, Hangul, full-width ASCII.  Greek
+# letters (U+0370-U+03FF), Latin-1 supplement (Å, °, ±), and math
+# operators (≤, ≥, ≈, ×, ÷) are intentionally NOT matched — DejaVu Sans
+# renders them correctly.
+_NON_ENGLISH_PATTERN = re.compile(
+    "["
+    "　-〿"  # CJK punctuation
+    "぀-ゟ"  # Hiragana
+    "゠-ヿ"  # Katakana
+    "㐀-䶿"  # CJK Extension A
+    "一-鿿"  # CJK Unified Ideographs
+    "가-힯"  # Hangul Syllables
+    "＀-￯"  # Full-width ASCII
+    "]+"
+)
+
+
+def _detect_non_english(text: str, max_samples: int = 5) -> list[str]:
+    """Return up to ``max_samples`` unique non-English substrings found in ``text``.
+
+    Returns [] when ``text`` is entirely English + scientific Unicode +
+    Greek-via-LaTeX.
+    """
+    if not text:
+        return []
+    seen: list[str] = []
+    for match in _NON_ENGLISH_PATTERN.findall(text):
+        if match not in seen:
+            seen.append(match)
+            if len(seen) >= max_samples:
+                break
+    return seen
+
+
+def _scan_figure_non_english(fig) -> list[str]:
+    """Walk every Text child on a Matplotlib Figure (title, labels, legend,
+    ticklabels, annotations, ax.text) and collect non-English substrings."""
+    try:
+        from matplotlib.text import Text
+    except Exception:
+        return []
+    samples: list[str] = []
+    try:
+        for obj in fig.findobj(match=Text):
+            try:
+                s = obj.get_text()
+            except Exception:
+                continue
+            if not s:
+                continue
+            for hit in _detect_non_english(s, max_samples=3):
+                if hit not in samples:
+                    samples.append(hit)
+                    if len(samples) >= 10:
+                        return samples
+    except Exception:
+        pass
+    return samples
 
 
 def _install_savefig_capture(plt, stderr_buf: StringIO):
@@ -386,6 +451,43 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
                 continue
             result["figures"].append(png_b64)
             _child_breadcrumb(f"closed savefig figure serialized OK ({len(png_b64)} b64 chars)")
+
+        # Language guard: scan every Text child on still-open figures + the
+        # stdout buffer for CJK / full-width / Hangul characters — all of
+        # which render as □ tofu squares in the sandbox font (DejaVu Sans).
+        # Must run BEFORE plt.close() clears the Text objects.
+        language_violations: list[str] = []
+        try:
+            for fig_num in plt.get_fignums():
+                try:
+                    fig = plt.figure(fig_num)
+                    hits = _scan_figure_non_english(fig)
+                    if hits:
+                        language_violations.append(
+                            f"figure #{fig_num} text: {hits[:3]}"
+                        )
+                except Exception:
+                    continue
+        except Exception as scan_err:
+            _child_breadcrumb(f"figure language scan failed: {scan_err}")
+        stdout_hits = _detect_non_english(stdout_buf.getvalue(), max_samples=5)
+        if stdout_hits:
+            language_violations.append(f"print() output: {stdout_hits[:3]}")
+        if language_violations and result.get("success"):
+            result["success"] = False
+            result["error"] = (
+                "TextLanguageError: run_python produced non-English text in "
+                "stdout or figure text (renders as tofu squares in the "
+                "sandbox font). All print() output and matplotlib title / "
+                "xlabel / ylabel / legend / annotate / ticklabels must be "
+                "standard English. Greek letters via LaTeX (r'$\\alpha$'), "
+                "Å, °, ±, ×, ÷, ≤, ≥, ≈ are allowed. "
+                "Violations: " + " | ".join(language_violations)
+            )
+            _child_breadcrumb(
+                "TextLanguageError: " + " | ".join(language_violations)
+            )
+
         try:
             plt.close("all")
         except Exception:

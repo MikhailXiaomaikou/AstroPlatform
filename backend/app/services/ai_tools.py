@@ -3524,6 +3524,8 @@ def _classify_sandbox_error(err: str) -> str:
     if not err:
         return "unknown"
     low = err.lower()
+    if "textlanguageerror" in low or "non-english" in low:
+        return "non_english_output"
     if "timed out" in low or "timeout" in low:
         return "timeout"
     if "memoryerror" in low or "address-space" in low or "oom" in low:

@@ -986,6 +986,42 @@ Key patterns:
 - Print results with `print()` — output shown to user
 - Matplotlib figures auto-captured and displayed in chat
 
+**MANDATORY — run_python output language rule (zero tolerance)**
+
+All text that `run_python` produces for the user — `print()` output (stdout) AND
+figure text (title / xlabel / ylabel / legend / ticklabels / annotate / `ax.text`) —
+MUST be standard English. The sandbox enforces this at runtime: non-English
+output causes `TextLanguageError` with `error_class="non_english_output"`, the
+call fails, you get an error back, and you must retry in English.
+
+Allowed beyond ASCII (sandbox font supports these):
+- Greek letters via LaTeX: `r"$\\alpha$"`, `r"$\\mu$"`, `r"$\\sigma$"`, `r"$\\chi^2$"`
+- Math mode: `r"$T_{\\rm eff}$"`, `r"$M_\\odot$"`, `r"$\\log g$"`, `r"$M_G$"`
+- Scientific Unicode: `Å`, `°`, `±`, `×`, `÷`, `≤`, `≥`, `≈`, `∞`, `½`, `²`, `³`
+
+Forbidden (renders as □ tofu squares in the platform font):
+- Chinese / Japanese / Korean characters (any CJK)
+- Pinyin with tone marks (`jiāngxīng` → just "star")
+- Emoji in print or figure text
+
+English must be standard — no typos. Use canonical astronomy terms.
+
+✅ `print(f"Pleiades CMD: N = {len(stars)}, median parallax = {p:.3f} mas")`
+✅ `plt.xlabel("BP − RP (mag)")`
+✅ `plt.ylabel(r"Absolute $M_G$ (mag)")`
+✅ `plt.title(r"Pleiades CMD · Gaia DR3 ($N = {0}$)".format(len(stars)))`
+✅ `ax.annotate(r"$\\alpha$ Cen A", xy=(ra, dec))`
+
+❌ `print(f"成员星数量: {len(stars)}")`          # Chinese in stdout
+❌ `plt.title("昴星团 HR 图")`                   # Chinese in figure → tofu
+❌ `plt.xlabel("BP - RP yanse")`                 # pinyin is not English
+❌ `plt.ylabel("Magintude")`                     # typo (should be "Magnitude")
+❌ `print("计算完毕 ✓")`                         # Chinese + emoji
+
+This rule applies ONLY to `run_python` output. Your natural-language reply
+to the user stays in the user's chosen language (Chinese if they chat in
+Chinese) — only the code-execution tool payload must be English.
+
 Pre-imported (available without import):
 - `np` (numpy), `plt` (matplotlib.pyplot), `pd` (pandas), `scipy`
 - `u` (astropy.units), `Table`, `SkyCoord` (astropy)
