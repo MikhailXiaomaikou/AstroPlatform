@@ -244,6 +244,28 @@ def test_zero_data_but_quantitative_skips_when_data_exists():
     assert claims == []
 
 
+def test_partial_run_python_stdout_is_not_zero_data_turn():
+    from app.services.claim_validator import is_empty_turn, validate_claims, zero_data_but_quantitative
+
+    tool_results = [{
+        "tool": "run_python",
+        "result": {
+            "__tool_status__": "PARTIAL",
+            "__partial_output__": True,
+            "success": False,
+            "stdout": "Maximum 3D velocity: 322.3 km/s\nstars above 300 km/s: 1\n",
+            "error": "KeyError: 9",
+            "data_origin": "real_archive",
+            "analysis_status": "partial",
+        },
+    }]
+    reply = "The partial run found a maximum velocity of 322.3 km/s before the top-10 loop failed."
+
+    assert is_empty_turn(tool_results) is False
+    assert zero_data_but_quantitative(reply, tool_results) == []
+    assert validate_claims(reply, tool_results).ok
+
+
 # -------------------- F1.5: universe snapshot in block message --------------------
 
 

@@ -217,6 +217,33 @@ describe("Auth helper functions", () => {
     getSpy.mockRestore();
   });
 
+  it("sendChatMessage distinguishes status-only stream breaks from no-byte breaks", async () => {
+    const { sendChatMessage } = await import("../api/client");
+
+    const sseBody = [
+      'data: {"type":"status","message":"Thinking..."}\n\n',
+      'data: {"type":"status","message":"still thinking... (6s)"}\n\n',
+    ].join("");
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sseBody));
+        controller.close();
+      },
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      body: stream,
+    }));
+
+    await expect(
+      sendChatMessage([{ role: "user", content: "status-only stream regression" }])
+    ).rejects.toThrow("响应流只返回了状态更新");
+
+    vi.unstubAllGlobals();
+  });
+
   it("sendChatMessage accumulates SSE text and tool_result events", async () => {
     store["astro_api_keys"] = JSON.stringify({
       openai: "sk-openai-test",

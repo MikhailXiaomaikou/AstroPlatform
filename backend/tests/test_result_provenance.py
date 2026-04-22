@@ -239,6 +239,24 @@ def test_tool_failure_stamped_as_failed_with_banner():
     assert r["__do_not_claim__"] is True
 
 
+def test_run_python_failure_with_stdout_stamped_partial_not_failed():
+    r = normalize_tool_result(
+        "run_python",
+        {
+            "success": False,
+            "stdout": "Maximum 3D velocity: 322.3 km/s\nstars above 300 km/s: 1\n",
+            "error": "KeyError: 9",
+            "stderr": "KeyError: 9",
+        },
+        tool_input={"code": "print('Maximum 3D velocity: 322.3 km/s'); raise KeyError(9)"},
+    )
+    assert r["analysis_status"] == "partial"
+    assert r["__tool_status__"] == "PARTIAL"
+    assert r["__partial_output__"] is True
+    assert "__do_not_claim__" not in r
+    assert "MAY cite only values" in r["__message_to_model__"]
+
+
 def test_successful_adql_not_stamped_empty():
     r = normalize_tool_result(
         "run_adql",

@@ -340,7 +340,8 @@ function ActionCardInner({
   const explicitFail = autoResult && typeof autoResult === "object"
     && (autoResult as Record<string, unknown>).success === false;
   const isToolSynthetic = toolStatus === "SYNTHETIC" || dataOrigin === "synthetic";
-  const isToolFailed = !isToolSynthetic && (toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField);
+  const isToolPartial = !isToolSynthetic && toolStatus === "PARTIAL";
+  const isToolFailed = !isToolSynthetic && !isToolPartial && (toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField);
   const isToolEmpty = !isToolSynthetic && !isToolFailed && toolStatus === "EMPTY";
 
   return (
@@ -356,9 +357,9 @@ function ActionCardInner({
           {isAutoExecuted && (
             <span
               className={`auto-badge${isToolFailed ? " failed" : ""}${isToolEmpty ? " empty" : ""}${isToolSynthetic ? " failed" : ""}`}
-              title={isToolSynthetic ? "Synthetic data — not from real observations" : isToolFailed ? "Tool failed" : isToolEmpty ? "Tool returned no data" : "Auto-executed"}
+              title={isToolSynthetic ? "Synthetic data — not from real observations" : isToolPartial ? "Tool produced partial output before failing" : isToolFailed ? "Tool failed" : isToolEmpty ? "Tool returned no data" : "Auto-executed"}
             >
-              {isToolSynthetic ? "⚠ SYNTHETIC" : isToolFailed ? "❌ Failed" : isToolEmpty ? "∅ Empty" : "auto"}
+              {isToolSynthetic ? "⚠ SYNTHETIC" : isToolPartial ? "⚠ Partial" : isToolFailed ? "❌ Failed" : isToolEmpty ? "∅ Empty" : "auto"}
             </span>
           )}
           {sanityWarnings.length > 0 && (
@@ -1148,6 +1149,8 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
   // Python code execution
   if (toolName === "run_python") {
     const success = result.success as boolean;
+    const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
+    const isPartial = status === "PARTIAL";
     const stdout = result.stdout as string || "";
     const error = result.error as string | undefined;
     const errorClass = result.error_class as string | undefined;
@@ -1177,6 +1180,8 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     // response itself is malformed.
     const errorDisplay = success
       ? "Executed successfully"
+      : isPartial && error && error.trim()
+        ? `Partial output before error: ${error}`
       : error && error.trim()
         ? `Error: ${error}`
         : "Error: run_python returned an empty response (tool response malformed; check backend logs)";
@@ -1198,7 +1203,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     return (
       <div className="code-result">
         {/* Status */}
-        <div style={{ fontSize: "0.72rem", color: success ? "var(--color-green)" : "var(--color-red)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <div style={{ fontSize: "0.72rem", color: success ? "var(--color-green)" : isPartial ? "var(--color-yellow, #ffd60a)" : "var(--color-red)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <span>{errorDisplay}</span>
           {!success && errorClass && errorClassLabel[errorClass] && (
             <span
@@ -3898,8 +3903,12 @@ export default function ChatPage() {
                           const r = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
                           if (!r || typeof r !== "object") return false;
                           const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
-                          return st === "FAILED" || st === "UNAVAILABLE" || r.success === false
-                            || (typeof r.error === "string" && r.error.trim() !== "");
+                          return st !== "PARTIAL" && (
+                            st === "FAILED"
+                            || st === "UNAVAILABLE"
+                            || r.success === false
+                            || (typeof r.error === "string" && r.error.trim() !== "")
+                          );
                         });
                         const empty = acts.filter((a) => {
                           if (isSynthetic(a)) return false;

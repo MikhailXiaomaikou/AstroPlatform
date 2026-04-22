@@ -284,6 +284,9 @@ def normalize_tool_result(
         return result
 
     if result.get("error"):
+        if _has_partial_payload(tool_name, result) and result.get("__do_not_claim__") is not True:
+            result = _inject_partial_banner(result, tool_name)
+            return attach_provenance(result, data_origin=REAL_ARCHIVE, analysis_status=PARTIAL)
         result = _inject_failed_banner(result, tool_name)
         return attach_provenance(result, data_origin=UNAVAILABLE, analysis_status=FAILED)
 
@@ -310,6 +313,9 @@ def normalize_tool_result(
         origin = REAL_ARCHIVE if success else UNAVAILABLE
         status = COMPLETED if success else FAILED
         if not success:
+            if _has_partial_payload(tool_name, result) and result.get("__do_not_claim__") is not True:
+                result = _inject_partial_banner(result, tool_name)
+                return attach_provenance(result, data_origin=REAL_ARCHIVE, analysis_status=PARTIAL)
             result = _inject_failed_banner(result, tool_name)
         return attach_provenance(result, data_origin=origin, analysis_status=status)
 
@@ -349,6 +355,22 @@ def _is_empty_payload(tool_name: str, result: dict[str, Any]) -> bool:
         if result.get("success") is True and not stdout.strip() and not figures and not variables:
             return True
     return False
+
+
+def _has_partial_payload(tool_name: str, result: dict[str, Any]) -> bool:
+    """Return True when a failed tool still produced citeable partial output.
+
+    This is intentionally narrow for now.  A failed `run_python` cell can still
+    print useful statistics or create figures before a later statement raises;
+    treating that as a total failure hides the useful output from the model and
+    the user.
+    """
+    if tool_name != "run_python":
+        return False
+    stdout = str(result.get("stdout") or "").strip()
+    figures = result.get("figures") or []
+    variables = result.get("variables") or {}
+    return bool(stdout or figures or variables)
 
 
 # G1.5c: "retry"/"fallback"/"simulate" etc. appearing in a tool error string
@@ -419,6 +441,27 @@ def _inject_failed_banner(result: dict[str, Any], tool_name: str) -> dict[str, A
             f"any numerical result derived from this call, and you MUST "
             f"NOT substitute synthetic data to 'complete' the analysis. "
             f"Emit a <tools_returned_nothing/> structured abstention instead."
+        ),
+        "__suggested_next_step__": _suggest_next_step(tool_name, error=err),
+    }
+    new_result = dict(banner)
+    new_result.update(result)
+    return new_result
+
+
+def _inject_partial_banner(result: dict[str, Any], tool_name: str) -> dict[str, Any]:
+    """Prepend a banner for failed tools that produced usable partial output."""
+    raw_err = str(result.get("error") or "unknown").strip()
+    err = _sanitize_error_message(raw_err)
+    banner = {
+        "__tool_status__": "PARTIAL",
+        "__partial_output__": True,
+        "__message_to_model__": (
+            f"Tool `{tool_name}` produced partial output before failing with: {err!r}. "
+            "You MAY cite only values that appear directly in stdout, figures, or "
+            "variables from this tool result, and you MUST state that a later "
+            "step in the same Python cell failed. Do NOT infer any missing rows, "
+            "plots, or follow-up values from the failed part."
         ),
         "__suggested_next_step__": _suggest_next_step(tool_name, error=err),
     }

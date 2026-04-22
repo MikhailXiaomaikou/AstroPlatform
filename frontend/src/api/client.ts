@@ -1807,6 +1807,9 @@ export async function sendChatMessage(
     const replyParts: string[] = [];
     const actions: ChatAction[] = [];
     const streamedActions: ChatAction[] = [];
+    let sawAnySseEvent = false;
+    let sawDoneEvent = false;
+    let sawToolActivity = false;
 
     const actionKey = (action: ChatAction, fallbackIndex: number) => {
       const toolCallId = action._tool_call_id;
@@ -1858,10 +1861,12 @@ export async function sendChatMessage(
           } catch {
             continue;
           }
+          sawAnySseEvent = true;
 
           if (evt.type === "text" && typeof evt.content === "string") {
             replyParts.push(evt.content);
           } else if (evt.type === "tool_result") {
+            sawToolActivity = true;
             const action = {
               action: String(evt.tool || ""),
               tool_result: evt.result,
@@ -1889,6 +1894,7 @@ export async function sendChatMessage(
               if (onActions) onActions(mergedVisibleActions());
             }
           } else if (evt.type === "tool_progress" && typeof evt.tool === "string") {
+            sawToolActivity = true;
             if (onThinking) {
               const detail = { ...evt };
               delete detail.type;
@@ -1917,6 +1923,7 @@ export async function sendChatMessage(
               });
             }
           } else if (evt.type === "tool_call" && typeof evt.tool === "string") {
+            sawToolActivity = true;
             if (onThinking) {
               onThinking({
                 type: "tool_call",
@@ -1968,8 +1975,9 @@ export async function sendChatMessage(
               err.error_class = evt.error_class;
             }
             throw err;
+          } else if (evt.type === "done") {
+            sawDoneEvent = true;
           }
-          // "done" event is ignored (stream terminator).
         }
       }
     } finally {
@@ -1986,6 +1994,15 @@ export async function sendChatMessage(
     // so the browser sees `done` without any payload.  Without this guard
     // the caller would render a blank assistant bubble with no explanation.
     if (replyParts.length === 0 && actions.length === 0 && streamedActions.length === 0) {
+      if (sawAnySseEvent) {
+        throw new Error(
+          sawDoneEvent
+            ? "AI 回复中断 — 后端流已结束，但没有返回最终回答或工具结果。请重试；如果反复出现，请开始一个新聊天或缩短问题。"
+            : sawToolActivity
+              ? "AI 回复中断 — 响应流在工具执行过程中被关闭，尚未收到最终回答。请重试；如果工具已经很慢，请缩小查询范围。"
+              : "AI 回复中断 — 响应流只返回了状态更新，尚未进入工具调用或最终回答就被关闭。请重试；如果反复出现，请开始一个新聊天或稍后再试。"
+        );
+      }
       throw new Error(
         "AI 回复中断 — 响应流在收到任何内容前被关闭（可能是上游代理超时或网络问题）。请重试；若反复出现，改用更简短的问题或稍后再试。"
       );

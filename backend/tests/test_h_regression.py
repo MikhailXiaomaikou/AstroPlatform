@@ -772,6 +772,22 @@ def test_tool_results_to_actions_preserves_tool_call_id_for_stream_merge():
     assert actions[0]["_tool_call_id"] == "toolu_adql_1"
 
 
+def test_stream_endpoint_wraps_early_setup_failures_as_sse_errors():
+    """R12-NEW-1 sibling: stream setup failures must not close SSE silently.
+
+    If runtime construction fails before the agent loop starts, the browser
+    otherwise sees a closed stream with only status updates and reports a
+    misleading "received no content" error.
+    """
+    import inspect
+    from app.api import chat
+
+    src = inspect.getsource(chat.chat_message_stream)
+    assert "stream_setup_failed" in src
+    assert "_build_task.result()" in src
+    assert "SSE_PREAMBLE_PADDING_BYTES" in src
+
+
 def test_adql_helpers_do_not_fall_back_to_other_chat_cache():
     """R12-NEW-1: a fresh chat must not silently read another chat's ADQL rows."""
     from app.services import ai_tools

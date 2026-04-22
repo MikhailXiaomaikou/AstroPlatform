@@ -501,6 +501,19 @@ def is_empty_turn(tool_results: Any) -> bool:
         if row_count is None:
             row_count = outer.get("row_count")
 
+        has_payload = bool(inner.get("rows") or inner.get("data")
+                           or inner.get("stdout") or inner.get("results")
+                           or inner.get("figures") or inner.get("variables"))
+
+        partial_with_payload = (
+            any(tok == "PARTIAL" for tok in status_tokens)
+            and has_payload
+            and inner.get("__do_not_claim__") is not True
+            and outer.get("__do_not_claim__") is not True
+            and str(inner.get("data_origin") or "").lower() != "synthetic"
+            and str(outer.get("data_origin") or "").lower() != "synthetic"
+        )
+
         synthetic_or_unciteable = (
             inner.get("__do_not_claim__") is True
             or outer.get("__do_not_claim__") is True
@@ -510,19 +523,17 @@ def is_empty_turn(tool_results: Any) -> bool:
         )
 
         explicit_fail = (
-            inner.get("success") is False
-            or outer.get("success") is False
-            or bool(inner.get("error"))
-            or bool(outer.get("error"))
-            or any(tok in {"EMPTY", "FAILED", "UNAVAILABLE"} for tok in status_tokens)
-            or row_count == 0
-            or synthetic_or_unciteable
+            not partial_with_payload
+            and (
+                inner.get("success") is False
+                or outer.get("success") is False
+                or bool(inner.get("error"))
+                or bool(outer.get("error"))
+                or any(tok in {"EMPTY", "FAILED", "UNAVAILABLE"} for tok in status_tokens)
+                or row_count == 0
+                or synthetic_or_unciteable
+            )
         )
-        # Also empty: a dict with only the tool/input keys and no meaningful
-        # result payload at all.
-        has_payload = bool(inner.get("rows") or inner.get("data")
-                           or inner.get("stdout") or inner.get("results")
-                           or inner.get("figures"))
         if explicit_fail:
             continue
         if inner is entry and not has_payload and not outer.get("result"):

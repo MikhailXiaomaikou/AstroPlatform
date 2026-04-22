@@ -26,6 +26,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+SSE_PREAMBLE_PADDING_BYTES = 8192
 
 SYSTEM_PROMPT = """You are an AI research assistant for Standard Astro. Users ask you questions in natural language and you translate them into database queries automatically. Users should NEVER need to write ADQL/SQL themselves — that's YOUR job.
 
@@ -1506,9 +1507,9 @@ async def chat_message_stream(
         import asyncio as _aio
         import time as _time_mod
 
-        # Frame 1: 2 KB padding SSE comment — forces edge proxies to
+        # Frame 1: 8 KB padding SSE comment — forces edge proxies to
         # flush immediately, before any slow backend work.
-        yield ": " + (" " * 2048) + "\n\n"
+        yield ": " + (" " * SSE_PREAMBLE_PADDING_BYTES) + "\n\n"
         # Frame 2: status so the UI shows "Thinking..." right away.
         yield f"data: {_json.dumps({'type': 'status', 'message': 'Thinking...'})}\n\n"
 
@@ -1596,7 +1597,22 @@ async def chat_message_stream(
                 elapsed = int(_time_mod.monotonic() - _heartbeat_start)
                 yield ": heartbeat " + str(elapsed) + "s\n\n"
                 yield f"data: {_json.dumps({'type': 'status', 'message': f'Setting up (elapsed {elapsed}s)...'})}\n\n"
-        runtime = _build_task.result()
+        try:
+            runtime = _build_task.result()
+        except Exception as setup_exc:
+            logger.exception("Early chat stream setup failed before agent loop")
+            msg = str(setup_exc) or setup_exc.__class__.__name__
+            yield (
+                "data: "
+                + _json.dumps({
+                    "type": "error",
+                    "message": msg,
+                    "error_class": "stream_setup_failed",
+                })
+                + "\n\n"
+            )
+            yield f"data: {_json.dumps({'type': 'done'})}\n\n"
+            return
         agent_names = list(runtime.get("agent_names") or ["orchestrator"])
 
         python_session_id = (req.context or {}).get("python_session_id", "default")
