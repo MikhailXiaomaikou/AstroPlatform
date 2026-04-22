@@ -3017,7 +3017,58 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
         )
 
     lc_collection = search.download_all()
-    lc = lc_collection.stitch()
+
+    # R11-NEW-2 (PART V): TESS / Kepler 个别 segment 会把 quality 列存成
+    # str32 (e.g. HD 189733 sector 41, SPOC 不同 release 的混合), astropy
+    # vstack 默认严格 dtype 匹配, `lc_collection.stitch()` 直接抛
+    # TableMergeError: 'quality' columns have incompatible types
+    # [int32, int32, int32, int32, str32]. 统一把 quality 列 cast 到 int32;
+    # 无法转的 segment 直接丢这列 (下游 flatten / remove_outliers 不依赖 quality).
+    import numpy as _np_lc
+    homogenize_warning = None
+    _cast_count = 0
+    _dropped_count = 0
+    for _lc_single in lc_collection:
+        try:
+            cols = getattr(_lc_single, "columns", None)
+            if cols is None or "quality" not in cols:
+                continue
+            col = _lc_single["quality"]
+            kind = getattr(getattr(col, "dtype", None), "kind", None)
+            if kind in ("i", "u", "b"):
+                continue  # 已经是整数 dtype
+            try:
+                arr = _np_lc.asarray(col).astype("int32", casting="unsafe")
+                _lc_single["quality"] = arr
+                _cast_count += 1
+            except (ValueError, TypeError):
+                try:
+                    _lc_single.remove_column("quality")
+                    _dropped_count += 1
+                except Exception:
+                    pass
+        except Exception:
+            continue
+    if _cast_count or _dropped_count:
+        homogenize_warning = (
+            f"Homogenized quality-column dtype across {len(lc_collection)} "
+            f"segments before stitch: cast {_cast_count}, dropped {_dropped_count}."
+        )
+
+    try:
+        lc = lc_collection.stitch()
+    except Exception as stitch_err:
+        # 兜底: 少数情况 stitch 仍失败 (e.g. time 列 dtype 不同).
+        # 退而求其次用第一个 segment, 不整体失败.
+        stitch_msg = f"{type(stitch_err).__name__}: {stitch_err}"
+        lc = lc_collection[0]
+        if homogenize_warning:
+            homogenize_warning += f"; stitch fallback to segment[0] ({stitch_msg})"
+        else:
+            homogenize_warning = (
+                f"stitch() failed ({stitch_msg}); returning first segment only."
+            )
+
     if flatten:
         lc = lc.remove_outliers().flatten()
     meta = {
@@ -3028,8 +3079,10 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
         'segments': len(lc_collection),
         'segments_requested': original_n,
     }
-    if segments_warning is not None:
-        meta['warning'] = segments_warning
+    # R11-NEW-2: 合并 segment-cap 警告 + homogenize 警告
+    warnings = [w for w in (segments_warning, homogenize_warning) if w]
+    if warnings:
+        meta['warning'] = " | ".join(warnings)
     return {
         'time': lc.time.value.tolist(),
         'flux': lc.flux.value.tolist(),

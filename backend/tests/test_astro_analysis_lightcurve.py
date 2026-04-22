@@ -16,6 +16,41 @@ class _FakeCollection:
     def __len__(self):
         return self._n
 
+    def __iter__(self):
+        # R11-NEW-2: 新的 homogenize 循环要 iterate collection. 返回 stub
+        # segment 对象 (无 quality 列, 跳过 cast).
+        class _Stub:
+            columns = {"time": True}
+            def __contains__(_self, key):
+                return False
+            def __getitem__(_self, key):
+                raise KeyError(key)
+            def __setitem__(_self, key, value):
+                pass
+            def remove_column(_self, name):
+                pass
+        return iter([_Stub() for _ in range(self._n)])
+
+    def __getitem__(self, i):
+        class _SingleSegLC:
+            """Fake single-segment lightcurve for stitch-fallback path."""
+            @property
+            def time(_self):
+                m = MagicMock()
+                m.value.tolist.return_value = [0.0, 0.1]
+                return m
+            @property
+            def flux(_self):
+                m = MagicMock()
+                m.value.tolist.return_value = [1.0, 1.0]
+                return m
+            @property
+            def flux_err(_self):
+                return None
+            def remove_outliers(_self): return _self
+            def flatten(_self): return _self
+        return _SingleSegLC()
+
     def stitch(self):
         return _FakeLC()
 
@@ -227,3 +262,174 @@ def test_segments_below_cap_no_warning():
 
     assert result["meta"]["segments"] == 2
     assert "warning" not in result["meta"]
+
+
+# ── R11-NEW-2 (PART V): TableMergeError vstack dtype homogenize ──
+
+
+class _SegmentWithQuality:
+    """Fake TESS segment exposing a quality column with configurable dtype."""
+
+    def __init__(self, quality_dtype="int32", has_quality=True):
+        import numpy as np
+        self._quality = np.array(
+            ["0", "0", "1"] if quality_dtype.startswith("str") else [0, 0, 1],
+            dtype=quality_dtype,
+        ) if has_quality else None
+        self.columns = {"quality": True, "time": True} if has_quality else {"time": True}
+        self.removed = False
+
+    def __contains__(self, key):
+        return key in self.columns
+
+    def __getitem__(self, key):
+        if key == "quality":
+            class _Col:
+                dtype = self._quality.dtype
+                def __array__(_self, dtype=None):
+                    return self._quality
+            return _Col()
+        raise KeyError(key)
+
+    def __setitem__(self, key, value):
+        if key == "quality":
+            import numpy as np
+            self._quality = np.asarray(value)
+            self.columns[key] = True
+
+    def remove_column(self, name):
+        if name in self.columns:
+            del self.columns[name]
+            self.removed = True
+
+
+class _CollectionWithMixedQuality:
+    """download_all() 的返回值, 支持 iteration + stitch."""
+
+    def __init__(self, segments):
+        self._segs = segments
+        self.stitch_was_called = False
+
+    def __iter__(self):
+        return iter(self._segs)
+
+    def __len__(self):
+        return len(self._segs)
+
+    def __getitem__(self, i):
+        return self._segs[i]
+
+    def stitch(self):
+        # 检查所有 segment 的 quality dtype 是否一致
+        import numpy as np
+        dtypes = set()
+        for s in self._segs:
+            if "quality" in s:
+                dtypes.add(s["quality"].dtype.kind)
+        if len(dtypes) > 1:
+            from astropy.utils.exceptions import AstropyUserWarning  # noqa
+            class _TableMergeError(Exception):
+                pass
+            raise _TableMergeError(
+                "The 'quality' columns have incompatible types: "
+                f"{sorted(dtypes)}"
+            )
+        self.stitch_was_called = True
+        return _FakeLC()
+
+
+class _SearchReturningMixed:
+    def __init__(self, mixed_collection):
+        self._mc = mixed_collection
+
+    def __len__(self):
+        return len(self._mc)
+
+    def __getitem__(self, key):
+        return _SearchReturningMixed(self._mc)  # slicing keeps everything
+
+    def download_all(self):
+        return self._mc
+
+
+def test_mixed_quality_dtype_homogenized_before_stitch():
+    """Round 11 真 bug: 混合 int32 + str32 quality 列应被强制统一成 int32."""
+    from app.services import astro_analysis
+
+    segments = [
+        _SegmentWithQuality("int32"),
+        _SegmentWithQuality("int32"),
+        _SegmentWithQuality("<U32"),  # str32 equivalent
+    ]
+    mixed = _CollectionWithMixedQuality(segments)
+
+    fake_lk = MagicMock()
+    fake_lk.search_lightcurve.return_value = _SearchReturningMixed(mixed)
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.download_and_clean_lightcurve(
+            "HD 189733", mission="tess", sector=41
+        )
+
+    # stitch() 应当被调, 且成功 (因为 homogenize 把 str32 cast 成 int32)
+    assert mixed.stitch_was_called, "stitch() should succeed after homogenization"
+    # meta 里应记录 cast 动作
+    assert "warning" in result["meta"]
+    warn = result["meta"]["warning"]
+    assert "Homogenized quality" in warn or "cast" in warn.lower()
+
+
+def test_quality_column_already_int_skipped():
+    """quality 列全是 int 时不该有 homogenize warning."""
+    from app.services import astro_analysis
+
+    segments = [_SegmentWithQuality("int32") for _ in range(3)]
+    mixed = _CollectionWithMixedQuality(segments)
+
+    fake_lk = MagicMock()
+    fake_lk.search_lightcurve.return_value = _SearchReturningMixed(mixed)
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.download_and_clean_lightcurve(
+            "HD 189733", mission="tess", sector=41
+        )
+
+    assert "warning" not in result["meta"] or "Homogenized" not in result["meta"].get("warning", "")
+    assert mixed.stitch_was_called
+
+
+def test_stitch_fallback_to_first_segment():
+    """stitch() 在 homogenize 后仍然抛错 → 退到第一个 segment, 不整体失败."""
+    from app.services import astro_analysis
+
+    class _AlwaysFailColl:
+        def __init__(self):
+            self._segs = [_SegmentWithQuality("int32")]
+        def __iter__(self): return iter(self._segs)
+        def __len__(self): return len(self._segs)
+        def __getitem__(self, i): return self._segs[i] if isinstance(i, int) else _FakeCollection(1)
+        def stitch(self):
+            raise ValueError("time column dtype mismatch")
+
+    class _SearchFail:
+        def __init__(self, mc): self._mc = mc
+        def __len__(self): return 1
+        def __getitem__(self, key): return self
+        def download_all(self): return self._mc
+
+    coll = _AlwaysFailColl()
+    coll._segs = [_FakeLC()]  # 替换成可当 single-segment lc 的对象
+
+    fake_lk = MagicMock()
+    fake_lk.search_lightcurve.return_value = _SearchFail(coll)
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.download_and_clean_lightcurve(
+            "HD 189733", mission="tess", sector=41
+        )
+
+    # 应得到 time/flux (来自 segment[0]), 且 meta 里说明 stitch 失败
+    assert "time" in result
+    assert "flux" in result
+    assert "warning" in result["meta"]
+    assert "stitch" in result["meta"]["warning"].lower()

@@ -1916,7 +1916,13 @@ export async function sendChatMessage(
               });
             }
           } else if (evt.type === "error" && typeof evt.message === "string") {
-            throw new Error(evt.message);
+            // R11-NEW-1: 把 error_class 带出去, 让 UI 能对 payload_too_large
+            // 等特定类型显示专属引导 (如 "开始新聊天" 按钮).
+            const err = new Error(evt.message) as Error & { error_class?: string };
+            if (typeof evt.error_class === "string") {
+              err.error_class = evt.error_class;
+            }
+            throw err;
           }
           // "done" event is ignored (stream terminator).
         }

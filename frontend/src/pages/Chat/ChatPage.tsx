@@ -128,6 +128,9 @@ interface DisplayMessage {
     suggested_next_step?: string;
     reason?: string;
   };
+  // R11-NEW-1: 当错误气泡需要操作按钮 (如 payload_too_large 引导"开始新聊天")
+  // 时填此字段. UI 根据值 render 对应 CTA. 保持 undefined 不影响普通气泡.
+  _action_hint?: "new_chat";
 }
 
 function hasStoredAiKey(): boolean {
@@ -3143,6 +3146,7 @@ export default function ChatPage() {
         return;
       }
       let errorDetail = "Unknown error";
+      let errorClass: string | undefined;
       if (err && typeof err === "object" && "response" in err) {
         const resp = (err as { response?: { data?: { detail?: string }; status?: number } }).response;
         errorDetail = resp?.data?.detail || `Request failed (${resp?.status})`;
@@ -3152,15 +3156,26 @@ export default function ChatPage() {
         }
       } else if (err instanceof Error) {
         errorDetail = err.message;
+        // R11-NEW-1: error_class 从 stream 里的 'error' 事件传上来 (client.ts 挂到 Error instance).
+        errorClass = (err as Error & { error_class?: string }).error_class;
       }
       if (errorDetail.includes("Could not reach the backend server")) {
         errorDetail = "The request payload was likely rejected before the app server handled it. This usually happens when the previous tool results made the second-round chat request too large.";
+        errorClass = errorClass || "payload_too_large";
       }
+      // R11-NEW-1: payload 太大时, 在错误气泡里加一条"开始新聊天"按钮
+      // (通过 markdown link 用一个保留的 sentinel, 再在 MarkdownText 里识别
+      // 或在 content 里直接写提示文字).  轻量做法: 错误消息尾部带一段
+      // 引导 + 按钮通过 DisplayMessage._action_hint 实现, 让 UI 渲染按钮.
+      const hint = errorClass === "payload_too_large"
+        ? "\n\n👉 点下方按钮开始新聊天 (会清空当前会话的历史):"
+        : "";
       const errorMsg: DisplayMessage = {
         id: pendingId,
         role: "assistant",
-        content: `Sorry, I encountered an error: ${errorDetail}`,
+        content: `Sorry, I encountered an error: ${errorDetail}${hint}`,
         actions: streamedActions.length > 0 ? streamedActions : undefined,
+        _action_hint: errorClass === "payload_too_large" ? "new_chat" : undefined,
       };
       setMessages((prev) => prev.map((m) => (m.id === pendingId ? errorMsg : m)));
       track("error.ai_failed", {
@@ -3877,6 +3892,17 @@ export default function ChatPage() {
                         return null;
                       })()}
                       <MarkdownText content={msg.content} />
+                      {/* R11-NEW-1: payload_too_large 错误专属 CTA —
+                          一键新开聊天清空当前会话历史. */}
+                      {msg._action_hint === "new_chat" && (
+                        <button
+                          className="btn-primary btn-small"
+                          style={{ marginTop: 10 }}
+                          onClick={handleNewChat}
+                        >
+                          🔄 开始新聊天 (Start fresh chat)
+                        </button>
+                      )}
                     </>
                   )
                 ) : (

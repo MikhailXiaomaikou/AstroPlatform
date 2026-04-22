@@ -1669,16 +1669,62 @@ async def chat_message_stream(
                 # Truncate tool_result payloads that could bloat the SSE
                 # frame — the full (truncated) JSON is already delivered
                 # to the model through the normal tool_result_blocks path.
+                #
+                # R8-OPEN-4 / Round 11 root cause: 8 KB 截断以前把**整个**
+                # tool_result 替换成 {__preview__, preview, size}, 导致前端
+                # 只拿到一个字符串 preview, 关键诊断字段 (error / error_class
+                # / stderr / traceback / success / exit_code / backend /
+                # duration_ms) 全丢. UI 只好显示 "subprocess crashed"
+                # 占位符. 当 final tool_result 因 payload-too-large 被上游
+                # 拒时更是完全没诊断信息可看. 现在保留诊断字段原样, 只把大
+                # 体积字段 (rows / data / figures / variables / stdout) 替
+                # 换成 preview/offloaded marker.
                 if evt.get("type") == "tool_result":
                     try:
                         raw = json.dumps(evt.get("result"), default=str)
-                        if len(raw) > 8000:
-                            evt = dict(evt)
-                            evt["result"] = {
-                                "__preview__": True,
-                                "preview": raw[:6000],
-                                "size": len(raw),
+                        if len(raw) > 8000 and isinstance(evt.get("result"), dict):
+                            src = dict(evt["result"])
+                            # 必保留的诊断键 (即使总体积超 8KB)
+                            _KEEP = {
+                                "success", "error", "error_class",
+                                "stderr", "stderr_note", "traceback",
+                                "exit_code", "backend", "duration_ms",
+                                "mode", "auto_escalated_mode", "note",
+                                "analysis_status", "data_origin",
+                                "__tool_status__", "__do_not_claim__",
+                                "__message_to_model__",
+                                "row_count", "columns", "meta",
                             }
+                            slim = {k: src[k] for k in _KEEP if k in src}
+                            # 大字段: rows / data / figures / variables /
+                            # stdout 替换成 marker + 前 2000 字预览
+                            for big_key in (
+                                "rows", "data", "figures",
+                                "variables", "variable_types", "stdout",
+                            ):
+                                if big_key in src:
+                                    try:
+                                        v = src[big_key]
+                                        if isinstance(v, (list, tuple)):
+                                            slim[big_key + "__preview__"] = {
+                                                "n_items": len(v),
+                                                "truncated": True,
+                                            }
+                                        elif isinstance(v, dict):
+                                            slim[big_key + "__preview__"] = {
+                                                "n_keys": len(v),
+                                                "truncated": True,
+                                            }
+                                        elif isinstance(v, str) and len(v) > 2000:
+                                            slim[big_key] = v[:2000] + "…[truncated]"
+                                        else:
+                                            slim[big_key] = v
+                                    except Exception:
+                                        pass
+                            slim["__preview__"] = True
+                            slim["__original_size__"] = len(raw)
+                            evt = dict(evt)
+                            evt["result"] = slim
                     except (TypeError, ValueError):
                         pass
                 await event_queue.put(evt)
