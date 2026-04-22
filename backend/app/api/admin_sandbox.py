@@ -207,7 +207,8 @@ def _mp_staged_probe(conn, memory_bytes: int = 1024 * 1024 * 1024, cpu_seconds: 
         if not _run(1, "send-hello", lambda: None):
             return
 
-        import resource, os as _os
+        import os as _os
+        import resource
         if not _run(2, "setrlimit_RLIMIT_AS", lambda: resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))):
             return
         if not _run(3, "setrlimit_RLIMIT_CPU", lambda: resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))):

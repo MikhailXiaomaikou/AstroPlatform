@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
 from app.auth import decode_token
 from app.models.database import async_session

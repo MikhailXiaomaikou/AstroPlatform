@@ -14,7 +14,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import require_admin_any
-from app.auth import get_current_user, get_optional_user
+from app.auth import get_optional_user
 from app.models.database import get_db
 from app.models.schemas import User, UserEvent
 from app.rate_limit import limiter
