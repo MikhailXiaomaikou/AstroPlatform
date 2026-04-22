@@ -11,6 +11,7 @@ from collections.abc import Callable
 from functools import wraps
 
 from sqlalchemy import func, insert, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import async_session
 from app.models.schemas import UserEvent
@@ -194,8 +195,8 @@ def track_event(event_type: str) -> Callable:
     return decorator
 
 
-async def get_event_stats(start_time=None, end_time=None) -> dict:
-    async with async_session() as db:
+async def get_event_stats(start_time=None, end_time=None, db: AsyncSession | None = None) -> dict:
+    async def _query(session: AsyncSession) -> dict:
         query = select(
             UserEvent.event_type,
             func.count(UserEvent.id).label("count"),
@@ -217,6 +218,12 @@ async def get_event_stats(start_time=None, end_time=None) -> dict:
                 for row in rows
             ]
         }
+
+    if db is not None:
+        return await _query(db)
+
+    async with async_session() as session:
+        return await _query(session)
 
 
 event_collector = EventCollector()

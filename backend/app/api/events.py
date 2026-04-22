@@ -106,11 +106,12 @@ async def recent_events(
 @admin_router.get("/stats")
 async def event_stats(
     period: str = Query("7d"),
+    db: AsyncSession = Depends(get_db),
     _: None = Depends(require_admin_any),
 ):
     delta = _parse_period(period)
     cutoff = datetime.now(timezone.utc) - delta
-    stats = await get_event_stats(start_time=cutoff)
+    stats = await get_event_stats(start_time=cutoff, db=db)
     return {
         "period": period,
         "start_time": cutoff.isoformat(),
