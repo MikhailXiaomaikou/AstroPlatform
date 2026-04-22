@@ -391,6 +391,27 @@ CATALOG_REGISTRY: dict[str, CatalogEntry] = {
         ),
         common_queries=("Gaia fallback when TAP is overloaded",),
     ),
+    # B/gcvs/gcvs_cat — General Catalogue of Variable Stars (real VizieR
+    # fallback for named bright variables when mission light curves / Gaia TAP
+    # are unavailable).  Always confirm with describe_tap_table before a
+    # production query because VizieR column availability can differ by mirror.
+    '"B/gcvs/gcvs_cat"': CatalogEntry(
+        table_name='"B/gcvs/gcvs_cat"',
+        service="vizier",
+        description="General Catalogue of Variable Stars (GCVS)",
+        columns=_cols(
+            ("GCVS", "VARCHAR", "GCVS variable-star designation"),
+            ("RAJ2000", "DOUBLE", "Right ascension J2000 [deg]"),
+            ("DEJ2000", "DOUBLE", "Declination J2000 [deg]"),
+            ("VarType", "VARCHAR", "Variable-star type"),
+            ("Vmax", "FLOAT", "Maximum visual magnitude"),
+            ("Vmin", "FLOAT", "Minimum visual magnitude"),
+            ("Period", "DOUBLE", "Variability period [day]"),
+            ("Epoch", "DOUBLE", "Epoch of maximum/minimum light"),
+            ("SpType", "VARCHAR", "Spectral type"),
+        ),
+        common_queries=("Bright variable-star catalog fallback", "Cepheid period sanity check"),
+    ),
     # II/335/galex_ais — UV photometry, commonly used for SED + YSO work
     '"II/335/galex_ais"': CatalogEntry(
         table_name='"II/335/galex_ais"',

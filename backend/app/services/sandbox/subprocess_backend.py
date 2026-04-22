@@ -510,6 +510,11 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
             plt.close("all")
         except Exception:
             pass
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
         restore_savefig()
 
         # Stringify new user variables (skip privates, modules, pre-existing)

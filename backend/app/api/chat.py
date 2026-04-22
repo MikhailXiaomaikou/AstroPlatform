@@ -76,6 +76,9 @@ XML tag as your entire reply and nothing else:
 
 Rules:
 - No prose before or after the tag.  The entire reply IS the tag.
+- Use this exact tag and exact snake_case attribute names.  Do not emit
+  variants like `toolsreturnednothing`, `failedtools`, `emptytools`, or
+  `suggestednext_step`.
 - `failed_tools` = comma-separated list of tools whose `__tool_status__`
   was FAILED this turn.  Empty string if none.
 - `empty_tools` = same idea for EMPTY.  Empty string if none.
@@ -357,7 +360,7 @@ NEVER report ag_gspphot or mh_gspphot as the final answer for distant or low-met
 
 ## Open cluster workflow (young/intermediate, < 2 Gyr, < 2 kpc)
 For Hyades, Pleiades, NGC 1647, NGC 752 etc:
-1. SIMBAD search for center coordinates + literature distance. Compute expected parallax = 1000/distance_pc.
+1. SIMBAD/object dossier search for center coordinates + catalog/dossier distance. Compute expected parallax = 1000/distance_pc.
 2. Tight ADQL query with parallax + proper motion constraints:
    SELECT source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, bp_rp, parallax, parallax_error, pmra, pmdec, ruwe, teff_gspphot, logg_gspphot, mh_gspphot, ag_gspphot, ebpminrp_gspphot
    FROM gaiadr3.gaia_source
@@ -368,7 +371,7 @@ For Hyades, Pleiades, NGC 1647, NGC 752 etc:
    Example: NGC 1647 (~450 pc) → parallax ~2.2 mas → "parallax BETWEEN 1.2 AND 3.2"
    Example: Pleiades (~136 pc) → parallax ~7.4 mas → "parallax BETWEEN 5.5 AND 9.5"
 3. DBSCAN/GMM membership selection on (pmra, pmdec, parallax). StandardScaler first; eps=0.3-0.5; min_samples=5-10.
-   VERIFY median parallax of members matches literature within ~20%.
+   Verify median parallax of members is self-consistent with the dossier/catalog expected parallax. Do not write "matches literature" unless search_literature was used in this turn.
 4. fit_isochrone with use_cached_results=true (auto-extracts data, fits PARSEC CMD 3.9 isochrones, fits A_V).
 5. For spectroscopy (Teff/logg/[Fe/H]/RV/v sin i): cross-match with LAMOST via search_objects sources=["lamost"].
 
@@ -833,6 +836,14 @@ this is an accessible Gaia candidate sample, not the full Piffl+2014 halo-star s
   Do NOT claim agreement with literature unless this turn explicitly queried
   the literature value or independently estimated the period from real
   epoch/time-series photometry.
+- This "no self-confirmation" rule applies to ALL catalog/dossier values,
+  not only periods: distance, parallax, age, metallicity, radius, mass,
+  transit depth, and every other numeric value must not be described as
+  "matches literature", "consistent with literature", or "与文献一致"
+  unless a literature-search tool or an explicit independent calculation in
+  this turn produced the comparison value. If the number came from Gaia,
+  SIMBAD, SDSS, a dossier, or a catalog query, say "catalog/dossier value"
+  or name the archive, not "literature agreement".
 - If the user asks for a phase plot but no epoch/time-series photometry is
   available, do NOT draw an analytic/schematic light curve from only
   period/amplitude/catalog summary fields.  Either retrieve real epoch
@@ -847,6 +858,15 @@ this is an accessible Gaia candidate sample, not the full Piffl+2014 halo-star s
 - Keep final answers constrained to tool-supported analysis.  Do not add
   historical background, textbook context, or paper-like narrative unless
   the user asks for it or you have searched literature in this turn.
+- For Galactic stars, Cepheids, open clusters, and other local Milky Way
+  objects, do not report small SIMBAD/SDSS `z` values as cosmological
+  redshift. Prefer radial velocity in km/s when available, and mention Gaia
+  RUWE > 1.4 as a possible astrometric-quality / binary / crowding warning.
+- If Gaia TAP fails while querying variable-star tables, do not guess
+  nonexistent VizieR tables such as `"I/355/varisum"`. Either call
+  `describe_tap_table` before any VizieR fallback (for example GCVS
+  `"B/gcvs/gcvs_cat"`), use a real literature/search tool, or emit
+  `<tools_returned_nothing/>`.
 
 ## SIMBAD basic table columns
 main_id, ra, dec, otype, otype_txt, rvz_redshift, rvz_radvel, rvz_type, sp_type, morph_type, plx_value, pmra, pmdec, nbref
@@ -1297,7 +1317,7 @@ def _generate_next_steps(tool_results: list[dict]) -> str:
 
         # Fitted parameters
         if "fitted_params" in result or "parameter_summary" in result:
-            suggestions.append("Generate a paper draft from this analysis")
+            suggestions.append("Validate assumptions before drafting a report")
             suggestions.append("Run a sensitivity analysis on the fitted parameters")
             suggestions.append("Export results as a Jupyter notebook")
 
@@ -2226,9 +2246,9 @@ def _strip_actions_from_reply(text: str) -> str:
 # when tools had no data.  We parse permissively: attribute order doesn't
 # matter, quotes can be " or ', and whitespace may surround the tag.
 _ABSTENTION_RE = __import__("re").compile(
-    r"""^\s*<tools_returned_nothing
+    r"""^\s*<(?P<tag>tools_returned_nothing|toolsreturnednothing)
         (?P<attrs>[^>]*)
-        /?\s*>\s*(?:</tools_returned_nothing>\s*)?$""",
+        /?\s*>\s*(?:</(?P=tag)>\s*)?$""",
     __import__("re").VERBOSE | __import__("re").DOTALL,
 )
 _ATTR_RE = __import__("re").compile(
@@ -2239,7 +2259,10 @@ _ATTR_RE = __import__("re").compile(
 def _parse_abstention_tag(reply: str) -> dict | None:
     """Return attrs dict if reply is a single <tools_returned_nothing/> tag,
     else None.  Tolerates a trailing newline or surrounding whitespace."""
-    if not reply or "tools_returned_nothing" not in reply:
+    if not reply:
+        return None
+    reply_l = reply.lower()
+    if "tools_returned_nothing" not in reply_l and "toolsreturnednothing" not in reply_l:
         return None
     m = _ABSTENTION_RE.match(reply.strip())
     if not m:
@@ -2247,10 +2270,33 @@ def _parse_abstention_tag(reply: str) -> dict | None:
     attrs_raw = m.group("attrs") or ""
     attrs: dict = {}
     for match in _ATTR_RE.finditer(attrs_raw):
-        key = match.group(1).lower()
+        key = _normalize_abstention_attr_key(match.group(1))
         val = match.group(2) if match.group(2) is not None else match.group(3) or ""
         attrs[key] = val.strip()
     return attrs
+
+
+def _normalize_abstention_attr_key(key: str) -> str:
+    """Normalize known malformed abstention attribute spellings.
+
+    The prompt requires snake_case, but production traces occasionally
+    contain variants such as `failedtools` or `suggestednext_step`.  Keep
+    this recovery narrow so the UI can render a friendly card without
+    treating arbitrary XML as valid.
+    """
+    compact = key.replace("-", "_").replace(" ", "_").lower()
+    no_underscore = compact.replace("_", "")
+    aliases = {
+        "failedtools": "failed_tools",
+        "failedtool": "failed_tools",
+        "emptytools": "empty_tools",
+        "emptytool": "empty_tools",
+        "suggestednextstep": "suggested_next_step",
+        "nextstep": "suggested_next_step",
+        "reason": "rationale",
+        "rationale": "rationale",
+    }
+    return aliases.get(no_underscore, compact)
 
 
 def _classify_abstention_reason(all_tool_results: list[dict]) -> str:

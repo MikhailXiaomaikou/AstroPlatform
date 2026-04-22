@@ -12,6 +12,7 @@ from collections import OrderedDict
 
 import httpx
 
+from app.connectors.simbad import _is_galactic_stellar_type
 from app.services.transient_service import search_tns
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ async def _query_simbad(ra: float, dec: float) -> dict:
     try:
         adql = (
             f"SELECT TOP 1 main_id, otype, otype_txt, sp_type, "
-            f"rvz_redshift, plx_value, pmra, pmdec "
+            f"rvz_redshift, rvz_radvel, plx_value, pmra, pmdec "
             f"FROM basic "
             f"WHERE CONTAINS(POINT('ICRS', ra, dec), "
             f"CIRCLE('ICRS', {ra}, {dec}, {10.0 / 3600.0})) = 1"
@@ -149,7 +150,24 @@ async def _query_simbad(ra: float, dec: float) -> dict:
                     result["spectral_type"] = rec.get("sp_type") or result.get(
                         "spectral_type"
                     )
-                    result["redshift"] = _safe_float(rec.get("rvz_redshift"))
+                    rvz_redshift = _safe_float(rec.get("rvz_redshift"))
+                    radial_velocity = _safe_float(rec.get("rvz_radvel"))
+                    if _is_galactic_stellar_type(
+                        result.get("object_type"),
+                        rec.get("otype_txt"),
+                        result.get("spectral_type"),
+                    ):
+                        result["redshift"] = None
+                        result["radial_velocity_km_s"] = radial_velocity
+                        if rvz_redshift is not None:
+                            result["redshift_note"] = (
+                                "SIMBAD rvz_redshift is a velocity-derived "
+                                "quantity for Galactic stellar objects; use "
+                                "radial_velocity_km_s instead."
+                            )
+                    else:
+                        result["redshift"] = rvz_redshift
+                        result["radial_velocity_km_s"] = radial_velocity
     except Exception:
         pass  # Fall back to text-parsed data
 
@@ -190,6 +208,7 @@ async def _query_gaia(ra: float, dec: float) -> dict:
     adql = (
         f"SELECT TOP 1 source_id, parallax, parallax_error, "
         f"pmra, pmdec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, "
+        f"ruwe, "
         f"DISTANCE(POINT('ICRS', ra, dec), POINT('ICRS', {ra}, {dec})) AS dist "
         f"FROM gaiadr3.gaia_source "
         f"WHERE CONTAINS(POINT('ICRS', ra, dec), "
@@ -234,6 +253,7 @@ async def _query_gaia(ra: float, dec: float) -> dict:
         "g_mag": _safe_float(rec.get("phot_g_mean_mag")),
         "bp_mag": _safe_float(rec.get("phot_bp_mean_mag")),
         "rp_mag": _safe_float(rec.get("phot_rp_mean_mag")),
+        "ruwe": _safe_float(rec.get("ruwe")),
         "distance_pc": distance_pc,
     }
 
@@ -512,19 +532,37 @@ async def generate_dossier(
     }
 
     # Astrometry
+    astrometry_warnings: list[str] = []
+    ruwe = gaia.get("ruwe")
+    if isinstance(ruwe, (int, float)) and ruwe > 1.4:
+        astrometry_warnings.append(
+            "Gaia RUWE > 1.4; astrometric solution may be affected by binarity, crowding, or variability."
+        )
     astrometry = {
         "parallax_mas": gaia.get("parallax_mas"),
         "pm_ra": gaia.get("pm_ra"),
         "pm_dec": gaia.get("pm_dec"),
         "distance_pc": gaia.get("distance_pc"),
+        "ruwe": ruwe,
+        "warnings": astrometry_warnings,
     }
 
     # Redshift — prefer spectroscopic
     redshift_val = None
     redshift_source = None
     redshift_origin = None
+    object_type = simbad.get("object_type") or ned.get("type") or "Unknown"
+    spectral_type = simbad.get("spectral_type")
+    is_galactic_stellar = _is_galactic_stellar_type(
+        object_type,
+        simbad.get("object_type_long"),
+        spectral_type,
+    )
 
-    if sdss.get("redshift") is not None:
+    if is_galactic_stellar:
+        redshift_source = "not_applicable_galactic_stellar"
+        redshift_origin = None
+    elif sdss.get("redshift") is not None:
         redshift_val = sdss["redshift"]
         redshift_source = sdss.get("redshift_source", "spectroscopic")
         redshift_origin = "SDSS"
@@ -542,6 +580,16 @@ async def generate_dossier(
         "source": redshift_source,
         "origin": redshift_origin,
     }
+    redshift_note = simbad.get("redshift_note")
+    if is_galactic_stellar and not redshift_note:
+        redshift_note = (
+            "Object is Galactic/stellar; small z-like values are not cosmological redshifts. "
+            "Use radial_velocity_km_s when available."
+        )
+    if redshift_note:
+        redshift["note"] = redshift_note
+    if simbad.get("radial_velocity_km_s") is not None:
+        redshift["radial_velocity_km_s"] = simbad.get("radial_velocity_km_s")
 
     # Host galaxy
     host_galaxy = {
@@ -556,9 +604,10 @@ async def generate_dossier(
     # Cross-IDs
     cross_ids = simbad.get("cross_ids", [])
 
-    # Object type and spectral type
-    object_type = simbad.get("object_type") or ned.get("type") or "Unknown"
-    spectral_type = simbad.get("spectral_type")
+    warnings = []
+    warnings.extend(astrometry_warnings)
+    if redshift_note:
+        warnings.append(redshift_note)
 
     # Prior classifications from TNS
     prior_classifications = []
@@ -590,6 +639,7 @@ async def generate_dossier(
         "sources_queried": 7,
         "sources_responded": sources_responded,
         "query_time_seconds": query_time,
+        "warnings": warnings,
         "_raw": results,
     }
 

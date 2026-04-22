@@ -81,6 +81,79 @@ def test_gaia_table_to_objects_does_not_fill_redshift_from_rv():
            "not" in obj.extra.get("radial_velocity_note", "").lower()
 
 
+def test_simbad_stellar_rvz_redshift_is_not_cosmological_redshift():
+    """B1: SIMBAD stellar rvz_redshift should surface as RV context, not z."""
+    from astropy.table import Table
+
+    from app.connectors.simbad import SIMBADConnector
+
+    tbl = Table({
+        "main_id": ["* del Cep"],
+        "ra": [337.2929],
+        "dec": [58.4152],
+        "otype": ["cC*"],
+        "otype_txt": ["Classical Cepheid"],
+        "rvz_redshift": [-0.000070562],
+        "rvz_radvel": [-21.15],
+        "sp_type": ["F5Iab:"],
+    })
+
+    obj = SIMBADConnector()._table_to_objects(tbl)[0]
+    assert obj.redshift is None
+    assert obj.extra["radial_velocity_km_s"] == pytest.approx(-21.15)
+    assert "velocity-derived" in obj.extra["redshift_note"]
+
+
+def test_dossier_suppresses_redshift_for_galactic_stellar_object(monkeypatch):
+    """B1/B2: dossier should not expose z for Cepheids/open-cluster stars."""
+    import asyncio
+
+    from app.services import dossier_generator as dg
+
+    async def fake_simbad(ra, dec):
+        return {
+            "status": "ok",
+            "main_id": "* del Cep",
+            "object_type": "Classical Cepheid",
+            "spectral_type": "F5Iab:",
+            "redshift": None,
+            "radial_velocity_km_s": -21.15,
+            "redshift_note": "SIMBAD rvz_redshift is a velocity-derived quantity.",
+        }
+
+    async def fake_gaia(ra, dec):
+        return {
+            "status": "ok",
+            "parallax_mas": 3.55,
+            "pm_ra": 14.5,
+            "pm_dec": 3.2,
+            "distance_pc": 281.7,
+            "ruwe": 2.71,
+        }
+
+    async def fake_sdss(ra, dec):
+        return {"status": "ok", "redshift": -0.00007, "redshift_source": "spectroscopic"}
+
+    async def fake_empty(*args, **kwargs):
+        return {"status": "no_match"}
+
+    dg._dossier_cache.clear()
+    monkeypatch.setattr(dg, "_query_simbad", fake_simbad)
+    monkeypatch.setattr(dg, "_query_gaia", fake_gaia)
+    monkeypatch.setattr(dg, "_query_sdss", fake_sdss)
+    monkeypatch.setattr(dg, "_query_2mass", fake_empty)
+    monkeypatch.setattr(dg, "_query_allwise", fake_empty)
+    monkeypatch.setattr(dg, "_query_ned", fake_empty)
+    monkeypatch.setattr(dg, "_query_tns", fake_empty)
+
+    dossier = asyncio.run(dg.generate_dossier(337.2929, 58.4152, name="delta Cep"))
+    assert dossier["redshift"]["value"] is None
+    assert dossier["redshift"]["source"] == "not_applicable_galactic_stellar"
+    assert dossier["redshift"]["radial_velocity_km_s"] == pytest.approx(-21.15)
+    assert dossier["astrometry"]["ruwe"] == pytest.approx(2.71)
+    assert any("RUWE > 1.4" in warning for warning in dossier["warnings"])
+
+
 # --------------------------------------------------------------------
 # D2.1 — crossmatch PM epoch propagation
 # --------------------------------------------------------------------

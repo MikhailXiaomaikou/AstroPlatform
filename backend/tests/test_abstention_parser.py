@@ -71,6 +71,21 @@ def test_parse_accepts_open_close_form():
     assert attrs["failed_tools"] == "t"
 
 
+def test_parse_recovers_no_underscore_tag_and_attr_aliases():
+    """B1: model emitted malformed abstention XML; UI should still render a card."""
+    reply = (
+        '<toolsreturnednothing failedtools="run_adql,run_python" '
+        'emptytools="search_lightcurve" '
+        'rationale="Archives returned no usable data" '
+        'suggestednext_step="Try AAVSO photometry"/>'
+    )
+    attrs = _parse_abstention_tag(reply)
+    assert attrs is not None
+    assert attrs["failed_tools"] == "run_adql,run_python"
+    assert attrs["empty_tools"] == "search_lightcurve"
+    assert attrs["suggested_next_step"] == "Try AAVSO photometry"
+
+
 # ---------- Parser negatives ----------
 
 

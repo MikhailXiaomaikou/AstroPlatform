@@ -1984,6 +1984,15 @@ async def _exec_adql(
             msg = str(exc).lower()
             if any(h in msg for h in ("timeout", "408", "502", "503", "aborted", "deadline")):
                 return None
+            if "i/355/varisum" in q.lower() or "varisum" in msg:
+                raise type(exc)(
+                    f"{exc}\n\n[auto-suggestion] `I/355/varisum` is not a "
+                    "valid Gaia variable-summary table in VizieR. Do not guess "
+                    "Gaia variable table names. For bright named variables, call "
+                    "describe_tap_table on `\"B/gcvs/gcvs_cat\"` (GCVS) before "
+                    "querying it, or emit <tools_returned_nothing/> if no real "
+                    "epoch/time-series data is available."
+                ) from exc
             # G0.1: column-name rescue.  The Pleiades/Coma reviewer hit
             # "unresolved identifier: RAJ2000" in SDSS V/147 because the
             # real name is RA_ICRS.  Grep the raw error for quoted /
@@ -2140,6 +2149,7 @@ async def _exec_adql(
         _elapsed = int(_time_mod.monotonic() - _start_ts)
         _query_l = str(query).lower()
         _sdss_vizier_hint = ""
+        _gaia_variable_hint = ""
         if service.lower() == "vizier" and any(
             token in _query_l for token in ("v/154/sdss", "v/147/sdss", "v/139/sdss")
         ):
@@ -2148,6 +2158,13 @@ async def _exec_adql(
                 "stop retrying broad VizieR ADQL: call run_sdss_sql instead "
                 "with a T-SQL query against PhotoObjAll JOIN SpecObjAll "
                 "(start with TOP 500-1000)."
+            )
+        if service.lower() == "gaia" and "vari_" in _query_l:
+            _gaia_variable_hint = (
+                " For Gaia variable-star table outages, do not invent a VizieR "
+                "Gaia variable-summary table. Try describe_tap_table on "
+                "`\"B/gcvs/gcvs_cat\"` (GCVS) for named bright variables, or "
+                "abstain if no real epoch/time-series data is available."
             )
         return {
             "error": (
@@ -2172,6 +2189,7 @@ async def _exec_adql(
                 "(e) for Gaia DR3 mirrors: try VizieR 'I/355/gaiadr3' instead of "
                 "the primary Gaia TAP."
                 f"{_sdss_vizier_hint}"
+                f"{_gaia_variable_hint}"
             ),
             "error_class": "adql_timeout",
             "retries": retry_log,

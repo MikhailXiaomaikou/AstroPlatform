@@ -16,6 +16,36 @@ from app.connectors.retry import with_retry
 logger = logging.getLogger(__name__)
 
 
+def _is_galactic_stellar_type(
+    object_type: object | None,
+    object_type_long: object | None = None,
+    spectral_type: object | None = None,
+) -> bool:
+    """Return True for Milky Way stellar objects where z is not cosmological."""
+    text = " ".join(
+        str(v or "").lower()
+        for v in (object_type, object_type_long, spectral_type)
+    )
+    if any(token in text for token in ("galaxy", "qso", "quasar", "agn", "seyfert")):
+        return False
+    stellar_markers = (
+        "*",
+        "star",
+        "cepheid",
+        "variable",
+        "open cluster",
+        "cluster of stars",
+        "pulsating variable",
+        "binary",
+        "supergiant",
+    )
+    spectral_markers = ("o", "b", "a", "f", "g", "k", "m", "wr", "wd")
+    if any(token in text for token in stellar_markers):
+        return True
+    spectral = str(spectral_type or "").strip().lower()
+    return bool(spectral) and spectral[:2] in spectral_markers or spectral[:1] in spectral_markers
+
+
 class SIMBADConnector(BaseConnector):
     """Connector for SIMBAD astronomical database via astroquery."""
 
@@ -304,21 +334,39 @@ class SIMBADConnector(BaseConnector):
                 s = str(v).strip()
                 return s if s else None
 
-        return {
+        object_type = safe("otype") or ""
+        object_type_long = safe("otype_txt") or ""
+        spectral_type = safe("sp_type")
+        redshift = safe("rvz_redshift")
+        radial_velocity = safe("rvz_radvel")
+        redshift_note = None
+        if _is_galactic_stellar_type(object_type, object_type_long, spectral_type):
+            if redshift is not None:
+                redshift_note = (
+                    "SIMBAD rvz_redshift is a velocity-derived quantity for "
+                    "Galactic stellar objects; use radial_velocity km/s instead."
+                )
+            redshift = None
+
+        detail = {
             "name": str(row["main_id"]).strip() if "main_id" in table.colnames else object_name,
             "ra": safe("ra") or 0.0,
             "dec": safe("dec") or 0.0,
-            "object_type": safe("otype") or "",
-            "object_type_long": safe("otype_txt") or "",
-            "redshift": safe("rvz_redshift"),
-            "radial_velocity": safe("rvz_radvel"),
-            "spectral_type": safe("sp_type"),
+            "object_type": object_type,
+            "object_type_long": object_type_long,
+            "redshift": redshift,
+            "radial_velocity": radial_velocity,
+            "spectral_type": spectral_type,
             "morphology": safe("morph_type"),
             "parallax": safe("plx_value"),
             "proper_motion_ra": safe("pmra"),
             "proper_motion_dec": safe("pmdec"),
             "n_references": safe("nbref"),
         }
+        if redshift_note:
+            detail["redshift_note"] = redshift_note
+            detail["redshift_source"] = "not_applicable_galactic_stellar"
+        return detail
 
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
@@ -436,6 +484,17 @@ class SIMBADConnector(BaseConnector):
                     except (ValueError, TypeError):
                         pass
 
+            radial_velocity = None
+            for rv_col in ("rvz_radvel", "RVZ_RADVEL"):
+                if rv_col in row.colnames:
+                    try:
+                        val = float(row[rv_col])
+                        if not (val != val):
+                            radial_velocity = val
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
             # Collect all extra columns into extra dict
             extra: dict = {}
             skip = {"main_id", "MAIN_ID", "ra", "RA", "dec", "DEC", "otype", "OTYPE",
@@ -465,6 +524,19 @@ class SIMBADConnector(BaseConnector):
                     extra[col] = val
                 except (ValueError, TypeError, KeyError) as e:
                     logger.debug("Skipping extra column %r: %s", col, e)
+
+            spectral_type = extra.get("sp_type") or extra.get("SP_TYPE")
+            object_type_long = extra.get("otype_txt") or extra.get("OTYPE_TXT")
+            if _is_galactic_stellar_type(obj_type, object_type_long, spectral_type):
+                if redshift is not None:
+                    extra["redshift_note"] = (
+                        "SIMBAD rvz_redshift is a velocity-derived quantity for "
+                        "Galactic stellar objects; use radial_velocity km/s instead."
+                    )
+                    extra["redshift_source"] = "not_applicable_galactic_stellar"
+                redshift = None
+            if radial_velocity is not None:
+                extra["radial_velocity_km_s"] = radial_velocity
 
             objects.append(
                 AstroObject(

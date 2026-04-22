@@ -337,6 +337,29 @@ def test_system_prompt_distinguishes_catalog_period_from_measured_phase_curve():
     assert "phase plot" in prompt
     assert "schematic" in prompt
     assert "epoch/time-series photometry" in prompt
+    assert "distance, parallax, age" in prompt
+    assert "与文献一致" in SYSTEM_PROMPT
+    assert '"i/355/varisum"' in prompt
+    assert '"b/gcvs/gcvs_cat"' in prompt
+
+
+def test_generated_next_steps_do_not_offer_paper_draft_by_default():
+    """B1/B2: suggested actions should not push paper-draft generation."""
+    from app.api.chat import _generate_next_steps
+
+    suggestions = _generate_next_steps([{"fitted_params": {"period": 5.0}}])
+    assert "paper draft" not in suggestions.lower()
+    assert "sensitivity" in suggestions.lower()
+
+
+def test_gcvs_catalog_registered_for_variable_star_fallback():
+    """B1: VizieR variable-star fallback should point at a real catalog entry."""
+    from app.services.catalog_registry import CATALOG_REGISTRY
+
+    entry = CATALOG_REGISTRY['"B/gcvs/gcvs_cat"']
+    col_names = {col.name for col in entry.columns}
+    assert entry.service == "vizier"
+    assert {"GCVS", "RAJ2000", "DEJ2000", "Period", "VarType"} <= col_names
 
 
 # ---------- H0.7 tool_failure_counts ignores soft failures ----------
