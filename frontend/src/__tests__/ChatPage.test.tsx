@@ -499,6 +499,38 @@ describe("ChatPage", () => {
     expect(screen.queryByText("auto")).not.toBeInTheDocument();
   });
 
+  it("marks synthetic-declared sandbox crashes as failed", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "The sandbox failed.",
+      actions: [{
+        action: "run_python",
+        tool_result: {
+          success: false,
+          error: "MemoryError: process hit its address-space limit",
+          error_class: "oom",
+          __tool_status__: "FAILED",
+          data_origin: "synthetic",
+          __do_not_claim__: true,
+          stdout: "",
+          stderr: "",
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "synthetic crash" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText("❌ Failed");
+    expect(screen.queryByText("⚠ SYNTHETIC")).not.toBeInTheDocument();
+    expect(screen.getByText(/MemoryError/)).toBeInTheDocument();
+  });
+
   it("marks suppressed run_python fallback as empty", async () => {
     vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
     vi.mocked(sendChatMessage).mockResolvedValueOnce({

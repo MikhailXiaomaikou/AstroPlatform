@@ -256,6 +256,42 @@ def get_session_helper_calls(session_id: str) -> set[str]:
     return called
 
 
+def get_session_defined_names(session_id: str) -> list[str]:
+    """返回该 Python session 已知定义名, 用于 NameError 自愈提示。
+
+    subprocess backend 不保留父进程 locals, 但会保存成功 cell 的代码历史。
+    因此这里同时看 in-process session_vars 和历史代码里的赋值目标/import。
+    """
+    import ast as _ast
+
+    names: set[str] = set()
+    names.update(str(k) for k in _session_vars.get(session_id, {}).keys())
+    for block in _session_code_history.get(session_id, []):
+        try:
+            tree = _ast.parse(block)
+        except SyntaxError:
+            continue
+        for node in _ast.walk(tree):
+            targets = []
+            if isinstance(node, (_ast.Assign, _ast.AnnAssign, _ast.AugAssign)):
+                target = getattr(node, "target", None)
+                targets = list(getattr(node, "targets", []) or ([target] if target is not None else []))
+            elif isinstance(node, (_ast.For, _ast.AsyncFor, _ast.With, _ast.AsyncWith)):
+                target = getattr(node, "target", None)
+                targets = [target] if target is not None else []
+            for target in targets:
+                for sub in _ast.walk(target):
+                    if isinstance(sub, _ast.Name):
+                        names.add(sub.id)
+            if isinstance(node, _ast.ImportFrom):
+                for alias in node.names:
+                    names.add(alias.asname or alias.name.split(".")[0])
+            elif isinstance(node, _ast.Import):
+                for alias in node.names:
+                    names.add(alias.asname or alias.name.split(".")[0])
+    return sorted(n for n in names if n and not n.startswith("_"))
+
+
 def replay_session_history(session_id: str, code_blocks: list[str]) -> None:
     """Rebuild a Python session by replaying prior successful code blocks."""
     normalized_blocks = [block for block in code_blocks if isinstance(block, str) and block.strip()]

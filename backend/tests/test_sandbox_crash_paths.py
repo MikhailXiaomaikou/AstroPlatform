@@ -305,12 +305,27 @@ class TestExecRunPythonErrorFloor:
         assert response.get("error_class") == "empty_input"
         assert "empty" in response["error"].lower()
 
+    def test_synthetic_declared_crash_keeps_failed_status(self):
+        """R22: data_source=none 不应把 sandbox failure 覆盖成 SYNTHETIC。"""
+        from app.services.ai_tools import _exec_run_python
+
+        response = asyncio.run(_exec_run_python({
+            "code": "import numpy as np\nx = np.random.normal(size=2)\nraise MemoryError('forced test failure')",
+            "data_source": "none_not_analyzing_real_data",
+        }))
+        assert response["success"] is False
+        assert response.get("data_origin") == "synthetic"
+        assert response.get("__tool_status__") == "FAILED"
+        assert response.get("analysis_status") == "failed"
+
     def test_timeout_reaches_timeout_error_class(self):
         """F0.2 classifier — "timed out" message surfaces as error_class=timeout."""
         from app.services.ai_tools import _classify_sandbox_error
 
         assert _classify_sandbox_error("Code execution timed out after 90 seconds") == "timeout"
         assert _classify_sandbox_error("MemoryError: process hit limit") == "oom"
+        assert _classify_sandbox_error("SIGSEGV signal 11") == "sandbox_crash"
+        assert _classify_sandbox_error("process killed by SIGKILL signal 9") == "oom"
         assert _classify_sandbox_error("sandbox subprocess terminated without result") == "sandbox_crash"
         assert _classify_sandbox_error("NameError: name 'x' is not defined") == "name_error"
         assert _classify_sandbox_error("ImportError: no module named astropy") == "import_error"

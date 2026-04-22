@@ -141,6 +141,22 @@ def test_get_session_helper_calls_picks_up_function_names():
     assert "rows" in called
 
 
+def test_get_session_defined_names_reports_history_assignments():
+    """R22: NameError 提示应能告诉 AI 这个 session 已有哪些变量。"""
+    from app.services.code_executor import (
+        append_session_code_block,
+        clear_session_vars,
+        get_session_defined_names,
+    )
+
+    sid = "test_r22_defined_names"
+    clear_session_vars(sid)
+    append_session_code_block(sid, "time_clean = [1, 2]\nflux_clean = [0.9, 1.0]")
+    names = get_session_defined_names(sid)
+    assert "time_clean" in names
+    assert "flux_clean" in names
+
+
 def test_clear_session_also_clears_code_history():
     """clear_session_vars 要连带清 _session_code_history."""
     from app.services.code_executor import (

@@ -329,8 +329,8 @@ function ActionCardInner({
   // __tool_status__ = FAILED or EMPTY (F2.1), and analysis_status =
   // failed / empty on dead/no-data tool returns.  Turn the whole card
   // red / amber so the user sees it alongside the model's prose.
-  // G4: __tool_status__ = "SYNTHETIC" / data_origin = "synthetic" gets
-  // the loudest treatment — synthetic data is the most dangerous case.
+  // G4/R22: completed synthetic output is loud, but sandbox crash/OOM must
+  // still render as Failed so the user sees the execution problem first.
   const toolStatus = cardResult && typeof cardResult === "object"
     ? String((cardResult as Record<string, unknown>).__tool_status__ || (cardResult as Record<string, unknown>).analysis_status || "").toUpperCase()
     : "";
@@ -354,9 +354,19 @@ function ActionCardInner({
       || errorClass === "subprocesscrash"
       || errorClass === "sandbox_crash"
     );
-  const isToolSynthetic = toolStatus === "SYNTHETIC" || dataOrigin === "synthetic";
+  const fatalRunPythonFailure = action.action === "run_python"
+    && (
+      malformedRunPython
+      || errorClass === "oom"
+      || errorClass === "sigsegv"
+      || errorClass === "sandbox_crash"
+      || errorClass === "subprocesscrash"
+      || errorClass === "timeout"
+    )
+    && (explicitFail || hasErrorField || toolStatus === "FAILED" || malformedRunPython);
+  const isToolSynthetic = !fatalRunPythonFailure && (toolStatus === "SYNTHETIC" || dataOrigin === "synthetic");
   const isToolPartial = !isToolSynthetic && toolStatus === "PARTIAL";
-  const isToolFailed = !isToolSynthetic && !isToolPartial && (toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField || malformedRunPython);
+  const isToolFailed = !isToolSynthetic && !isToolPartial && (toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField || malformedRunPython || fatalRunPythonFailure);
   const isToolEmpty = !isToolSynthetic && !isToolFailed && toolStatus === "EMPTY";
 
   return (
@@ -1213,10 +1223,18 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
     const isPartial = status === "PARTIAL";
     const isEmpty = status === "EMPTY";
-    const isSynthetic = status === "SYNTHETIC" || String(result.data_origin || "").toLowerCase() === "synthetic";
+    const errorClass = result.error_class as string | undefined;
+    const fatalFailure = !success && (
+      status === "FAILED"
+      || String(errorClass || "").toLowerCase() === "oom"
+      || String(errorClass || "").toLowerCase() === "sigsegv"
+      || String(errorClass || "").toLowerCase() === "sandbox_crash"
+      || String(errorClass || "").toLowerCase() === "subprocesscrash"
+      || String(errorClass || "").toLowerCase() === "timeout"
+    );
+    const isSynthetic = !fatalFailure && (status === "SYNTHETIC" || String(result.data_origin || "").toLowerCase() === "synthetic");
     const stdout = result.stdout as string || "";
     const error = result.error as string | undefined;
-    const errorClass = result.error_class as string | undefined;
     const figures = (result.figures as string[]) || [];
     const variables = result.variables as Record<string, string> | undefined;
     const variableTypes = result.variable_types as Record<string, string> | undefined;
@@ -3987,6 +4005,12 @@ export default function ChatPage() {
                           if (!r || typeof r !== "object") return false;
                           const st = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
                           const origin = String(r.data_origin || "").toLowerCase();
+                          if (
+                            st === "FAILED"
+                            || st === "UNAVAILABLE"
+                            || r.success === false
+                            || (typeof r.error === "string" && r.error.trim() !== "")
+                          ) return false;
                           return st === "SYNTHETIC" || origin === "synthetic";
                         };
                         const synthetic = acts.filter(isSynthetic);

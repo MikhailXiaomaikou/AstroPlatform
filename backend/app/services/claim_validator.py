@@ -51,6 +51,19 @@ _NUM = r"([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)"
 _UNIT = r"(?:\s*(?:±|\+/-)\s*[-+]?(?:\d+(?:\.\d+)?|\.\d+))?"  # optional ± err
 
 _PATTERNS: list[tuple[str, re.Pattern]] = [
+    # R22: exoplanet transit fits often report dimensionless ratios without
+    # units ("Rp/Rs ≈ 0.157").  The older unit-based catalogue missed these,
+    # so multi-agent merged replies could launder an unsupported radius ratio.
+    ("radius_ratio", re.compile(
+        rf"\b(?:R_?p\s*/\s*R_?s|Rp\s*/\s*Rs|R_p\s*/\s*R_s|"
+        rf"planet[-\s]*to[-\s]*star\s+radius\s+ratio|radius\s+ratio)"
+        rf"\s*(?:is|was|=|≈|~|about|around|approximately|approx\.?|约为)?\s*{_NUM}\b",
+        re.I,
+    )),
+    ("transit_depth", re.compile(
+        rf"\b(?:transit\s+depth|depth)\s*(?:is|was|=|≈|~|about|around|approximately|approx\.?)?\s*{_NUM}\b",
+        re.I,
+    )),
     ("redshift_z", re.compile(rf"\bz\s*[=≈~]\s*{_NUM}\b", re.I)),
     ("redshift_word", re.compile(rf"\bredshift\s*(?:of|=|≈|~|is)?\s*{_NUM}\b", re.I)),
     ("log_g", re.compile(rf"\blog\s*g\s*[=≈~]\s*{_NUM}\b", re.I)),

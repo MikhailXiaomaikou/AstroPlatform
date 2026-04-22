@@ -1107,13 +1107,15 @@ LIGHTCURVE / TIME-DOMAIN:
   astro.search_lightcurve(target, mission='tess')
     -> list of {mission, sector/quarter, exptime, author, target_id}
   astro.download_and_clean_lightcurve(target, mission='kepler'|'tess'|'k2',
-      flatten=True, sector=None, author=None, max_segments=3)
+      flatten=True, sector=None, author=None, max_segments=1)
     -> {time, flux, flux_err, meta}
     sector is TESS sector int/list; author is 'SPOC' | 'TESS-SPOC' | 'QLP' | 'Kepler'.
     IMPORTANT: when sector=None and the target has many TESS sectors, the helper
-    defaults to the 3 most-recent to avoid OOM (Render workers have ~2GB).
+    defaults to the single most-recent sector to avoid multi-sector MAST
+    stitching timeouts/OOM. Set max_segments=3 or pass sector=[...] only when
+    the user explicitly asks for a multi-sector baseline.
     If you need a specific sector, pass sector=41 or sector=[41, 54, 81]
-    explicitly. Downloading 14 sectors at once will be SIGKILLed.
+    explicitly. Downloading 14 sectors at once will be SIGKILLed or time out.
     TIMING: lightcurve downloads commonly exceed 75s (MAST latency +
     stitching). When calling download_and_clean_lightcurve / transit_search
     / search_lightcurve from run_python, set the run_python `mode` field to
@@ -1127,7 +1129,9 @@ LIGHTCURVE / TIME-DOMAIN:
     -> {rp_rs, a_rs, inc, t0, period, chi2, chi2_reduced, model_flux, residuals}
     Use this for Mandel-Agol / planet radius-ratio fits before writing custom batman/scipy code.
   astro.lomb_scargle_period(time, flux, min_period=None, max_period=None)
-    -> {best_period, power, false_alarm_prob}
+    -> {best_period, best_power, power, powers, fap, fap_level}
+    `power` is a scalar alias for `best_power`; use `powers` for the full
+    periodogram array. Do not assume a separate `false_alarm_prob` key; use `fap`.
   astro.phase_fold(time, flux, period, t0=None)
     -> PhaseFoldResult supporting `phase, flux_folded = result`,
        `result.phase`, and `result["phase"]`.
@@ -2735,6 +2739,10 @@ async def _run_agent_loop(
     # failures (connector errors, not timeouts/payload_too_large which
     # the AI might legitimately retry with smaller scope).
     tool_failure_counts: dict[str, int] = {}
+    # R22: row_count=0 / EMPTY are soft for retry disabling, but still mean
+    # later Python cells have no real cache to analyze.  Track them separately
+    # so fallback/demo code is suppressed as ∅ Empty instead of AUTO/SYNTHETIC.
+    empty_data_fetches: set[str] = set()
     DISABLE_AFTER_FAILURES = 3
     synthetic_run_python_count = 0  # G3.3 counter
 
@@ -2893,12 +2901,18 @@ async def _run_agent_loop(
                     or result.get("row_count") == 0  # empty result is not a connector failure
                     or any(s == "EMPTY" for s in status_tokens)
                 )
+                empty_failure = (
+                    result.get("row_count") == 0
+                    or any(s == "EMPTY" for s in status_tokens)
+                )
                 hard_failure = (
                     result.get("success") is False
                     or bool(result.get("error"))
                     or any(s in {"FAILED", "UNAVAILABLE"} for s in status_tokens)
                 ) and not soft_failure
 
+                if empty_failure:
+                    empty_data_fetches.add(tool_name)
                 if hard_failure:
                     tool_failure_counts[tool_name] = tool_failure_counts.get(tool_name, 0) + 1
 
@@ -2909,15 +2923,26 @@ async def _run_agent_loop(
             if tool_name == "run_python" and isinstance(result, dict):
                 failed_data_fetches = {
                     n for n, c in tool_failure_counts.items() if c > 0
-                }
+                } | set(empty_data_fetches)
                 declared = str(tc.get("input", {}).get("data_source", "")).strip()
                 is_real_source_declared = declared in {
                     "latest_adql", "latest_search", "latest_lightcurve",
                     "latest_sdss_sql", "latest_high_velocity_stars",
                 } or declared.startswith(("cached:", "fits:"))
+                declared_empty_dependency = bool(empty_data_fetches & {
+                    "latest_adql": {"run_adql"},
+                    "latest_search": {"search_objects", "get_object_info", "get_object_dossier"},
+                    "latest_lightcurve": {"search_lightcurve"},
+                    "latest_sdss_sql": {"run_sdss_sql"},
+                    "latest_high_velocity_stars": {"query_high_velocity_stars"},
+                }.get(declared, set()))
                 origin = str(result.get("data_origin") or "").lower()
                 has_real_origin = origin in {"real_archive", "cached_real", "user_uploaded"}
-                if failed_data_fetches and not is_real_source_declared and not has_real_origin:
+                if (
+                    failed_data_fetches
+                    and not has_real_origin
+                    and (not is_real_source_declared or declared_empty_dependency)
+                ):
                     # Replace the payload so stdout from fallback/demo code
                     # cannot be displayed as if it were a successful analysis.
                     empty_banner = {

@@ -41,6 +41,11 @@ def test_extract_skips_text_without_numbers():
     assert extract_claims("This galaxy is beautiful.") == []
 
 
+def test_extract_exoplanet_radius_ratio_claims():
+    claims = extract_claims("综合估计 Rp/Rs 约为 0.157。")
+    assert any(c.label == "radius_ratio" and c.value == pytest.approx(0.157) for c in claims)
+
+
 # -------------------- validate_claims --------------------
 
 
@@ -61,6 +66,12 @@ def test_validate_flags_fabricated_number():
     assert not r.ok
     assert len(r.uncited) == 1
     assert r.uncited[0].label == "parallax_mas"
+
+
+def test_validate_flags_uncited_radius_ratio():
+    r = validate_claims("The planet-to-star radius ratio is 0.157.", [])
+    assert not r.ok
+    assert any(c.label == "radius_ratio" and c.value == pytest.approx(0.157) for c in r.uncited)
 
 
 def test_validate_tolerance_accepts_rounded_value():

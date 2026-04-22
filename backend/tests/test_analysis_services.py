@@ -245,6 +245,8 @@ class TestLombScargle:
         result = lomb_scargle_period(t.tolist(), mag.tolist())
         assert "best_period" in result
         assert "best_power" in result
+        assert "power" in result
+        assert result["power"] == result["best_power"]
         assert "fap" in result
         assert "fap_level" in result
         assert "reliable" in result

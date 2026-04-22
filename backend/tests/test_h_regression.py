@@ -1806,6 +1806,8 @@ def test_run_python_after_failed_fetch_is_empty_not_synthetic():
     src = inspect.getsource(chat._run_agent_loop)
     assert '"__tool_status__": "EMPTY"' in src
     assert '"data_origin": "unavailable"' in src
+    assert "empty_data_fetches" in src
+    assert "declared_empty_dependency" in src
     assert "empty_after_failed_fetch_total" in src
     assert "synthetic_after_failure_total" not in src
 

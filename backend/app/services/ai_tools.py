@@ -3454,6 +3454,18 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             record_counter("sandbox_silent_failure_total", 1.0, tool="run_python")
         except Exception:
             pass
+    if response.get("error_class") == "name_error":
+        try:
+            from app.services.code_executor import get_session_defined_names
+            defined_names = get_session_defined_names(python_session_id)[:80]
+            if defined_names:
+                response["defined_names"] = defined_names
+                response["hint"] = (
+                    "NameError occurred. Reuse one of the defined session "
+                    f"names instead of guessing: {', '.join(defined_names[:30])}"
+                )
+        except Exception:
+            pass
     # R5 O1 + R6 post: stderr 作为一级字段**总是**写进 response, 即便空串.
     # 诊断角度看, "stderr=''" 跟 "stderr not set" 是完全不同的信号:
     #   前者 = 子进程 child main 跑过且写了 stderr 捕获, 真的没东西输出
@@ -3522,9 +3534,30 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         combined = dict(banner)
         combined.update(response)
         # But preserve the banner-level data_origin override (response may
-        # have its own; we want the SYNTHETIC tag to win)
+        # have its own; this output remains non-citeable synthetic even when
+        # the sandbox itself failed).
         combined["data_origin"] = "synthetic"
-        combined["analysis_status"] = "simulated_demo"
+        combined["__synthetic_declared__"] = True
+        error_class = str(combined.get("error_class") or "").lower()
+        fatal_failure = (
+            combined.get("success") is False
+            or combined.get("__tool_status__") == "FAILED"
+            or error_class in {"oom", "sandbox_crash", "subprocesscrash", "timeout"}
+        )
+        if fatal_failure:
+            # R22: execution failure must win over the SYNTHETIC badge.  The
+            # payload is still non-citeable, but the UI/model must see that
+            # the sandbox crashed/timed out instead of treating it as a
+            # completed synthetic demo.
+            combined["__tool_status__"] = "FAILED"
+            combined["analysis_status"] = "failed"
+            combined["__message_to_model__"] = (
+                banner["__message_to_model__"]
+                + " The Python execution also failed; do not treat stdout as "
+                "a completed synthetic result."
+            )
+        else:
+            combined["analysis_status"] = "simulated_demo"
         try:
             from app.observability.metrics import record_counter
             record_counter(
@@ -3550,6 +3583,13 @@ def _classify_sandbox_error(err: str) -> str:
     if "timed out" in low or "timeout" in low:
         return "timeout"
     if "memoryerror" in low or "address-space" in low or "oom" in low:
+        return "oom"
+    if (
+        "sigsegv" in low or "segmentation fault" in low or "signal 11" in low
+        or "subprocesscrash" in low
+    ):
+        return "sandbox_crash"
+    if "sigkill" in low or "signal 9" in low or "killed" in low:
         return "oom"
     if "incomplete payload" in low or "terminated without result" in low \
             or "without an error message" in low:

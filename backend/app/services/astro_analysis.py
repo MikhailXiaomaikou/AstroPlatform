@@ -1984,6 +1984,9 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
         "best_period": best_period,
         "best_period_err": best_period_err,
         "best_power": best_power,
+        # R22: compatibility alias for older prompts/AI snippets that read
+        # result["power"].  The full periodogram remains in "powers".
+        "power": best_power,
         "fap": fap_at_best,
         "fap_level": fap_label,
         "fap_method": method,
@@ -3161,10 +3164,11 @@ def search_lightcurve(target, mission='kepler'):
     return out
 
 
-# S2 (PART S): 若 sector=None 且 search 返回 > 此阈值, 默认只下最近 3 个,
-# 防止 lightkurve 下 14+ 个 TESS sector 一次爆 2-3 GB 内存被 SIGKILL
-# (Round 9 HD 189733b exit_code=-9 就是这个).
-DEFAULT_LIGHTCURVE_MAX_SEGMENTS = 3
+# S2/R22: 若 sector=None 且 search 返回多个 segment, 默认只下最近 1 个。
+# 多 sector stitching 在 MAST 冷启动时常超过 300s, 而且 14+ 个 TESS
+# sector 会爆 2-3 GB 内存。需要长 baseline 时让调用方显式传
+# max_segments=3 或 sector=[...]。
+DEFAULT_LIGHTCURVE_MAX_SEGMENTS = 1
 DEFAULT_LIGHTCURVE_MAX_POINTS = 30_000
 
 
@@ -3221,8 +3225,8 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
     author: 'SPOC' | 'TESS-SPOC' | 'QLP' | 'Kepler' 等, 用来区分不同 pipeline
             出的同一目标产品. None 取第一个可用的.
     flatten: 做 outlier 剔除 + 去除长周期趋势. False 保留原始曲线.
-    max_segments: 默认 3 个 segment 上限, 防止 lightkurve 下所有 TESS sector
-                  爆内存被 SIGKILL.  显式传 None 关闭截断.
+    max_segments: 默认 1 个 segment 上限, 防止 lightkurve 下所有 TESS sector
+                  超时或爆内存. 显式传 None 关闭截断.
     max_points: 返回给 run_python 的最大点数. 超过后按时间顺序做确定性
                 median binning, 防止 phase-fold / plot 阶段 OOM.
     """

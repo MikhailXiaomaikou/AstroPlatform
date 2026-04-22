@@ -369,7 +369,7 @@ class _SearchSlice:
 
 
 def test_sector_none_caps_at_default_max_segments():
-    """sector=None + 14 个 TESS sector → 默认只下最近 3 个, meta 有 warning."""
+    """sector=None + 14 个 TESS sector → 默认只下最近 1 个, meta 有 warning."""
     from app.services import astro_analysis
 
     fake_lk = MagicMock()
@@ -380,8 +380,8 @@ def test_sector_none_caps_at_default_max_segments():
             "HD 189733", mission="tess"
         )
 
-    # 应当截到默认 3 个
-    assert result["meta"]["segments"] == 3
+    # 应当截到默认 1 个
+    assert result["meta"]["segments"] == 1
     assert result["meta"]["segments_requested"] == 14
     assert "warning" in result["meta"]
     assert "14" in result["meta"]["warning"]
@@ -420,8 +420,8 @@ def test_max_segments_none_disables_cap():
     assert "warning" not in result["meta"]
 
 
-def test_segments_below_cap_no_warning():
-    """只有 2 个 segment 时不该触发截断提示."""
+def test_segments_below_explicit_cap_no_warning():
+    """显式 max_segments=3 时, 只有 2 个 segment 不该触发截断提示."""
     from app.services import astro_analysis
 
     fake_lk = MagicMock()
@@ -429,7 +429,7 @@ def test_segments_below_cap_no_warning():
 
     with patch.dict("sys.modules", {"lightkurve": fake_lk}):
         result = astro_analysis.download_and_clean_lightcurve(
-            "HD 189733", mission="tess"
+            "HD 189733", mission="tess", max_segments=3
         )
 
     assert result["meta"]["segments"] == 2
