@@ -909,6 +909,32 @@ def test_run_sdss_sql_tool_registered():
     assert entry["input_schema"]["required"] == ["query"]
 
 
+def test_r17_critical_data_tools_visible_to_data_agent():
+    """R17: TOOLS 里有工具还不够, runtime schema 会被 agent.tool_names 裁剪。
+
+    SDSS LF 和 MW v_esc 两条线都默认走 data_agent；这些工具必须在
+    data_agent 的 tool_names 里, 否则 LLM 实际 function schema 看不到。
+    """
+    from app.ai.agents.data_agent import DATA_AGENT
+
+    exposed = set(DATA_AGENT.tool_names)
+    required = {"run_sdss_sql", "query_high_velocity_stars", "search_lightcurve"}
+    missing = required - exposed
+    assert not missing, f"data_agent 未暴露 R17 关键工具: {missing}"
+
+
+def test_tool_inventory_prompt_gets_full_tool_schema():
+    """R17: 用户直接问工具清单时, 不应被 data_agent 的子集误导。"""
+    from app.api.chat import _filter_tools, _is_tool_inventory_request
+    from app.services.ai_tools import TOOLS
+
+    assert _is_tool_inventory_request("列出你现在可用的工具清单")
+    full_names = {tool["name"] for tool in TOOLS}
+    filtered_names = {tool["name"] for tool in _filter_tools(["search_objects"], TOOLS)}
+    assert "run_sdss_sql" in full_names and "query_high_velocity_stars" in full_names
+    assert "run_sdss_sql" not in filtered_names
+
+
 def test_latest_sdss_sql_is_valid_data_source():
     """J3: run_python 调用要能声明 data_source='latest_sdss_sql'
     (SDSS cache 的新 source), 否则 Phase G 会拒绝合法 SDSS 分析代码."""
@@ -1038,6 +1064,17 @@ def test_execute_tool_calls_marks_adql_extended_in_long_mode():
     assert captured["tool_input"]["_workflow_budget_mode"] == "long"
 
 
+def test_search_lightcurve_long_mode_deadline_is_240s():
+    """R17-NEW-3: MAST cold starts regularly exceed 90s in long workflows."""
+    import inspect
+    from app.api.chat import _execute_tool_calls
+
+    src = inspect.getsource(_execute_tool_calls)
+    assert '"search_lightcurve": 90.0' in src
+    assert 'tool_name == "search_lightcurve"' in src
+    assert "max(base_deadline_s, 240.0)" in src
+
+
 def test_workflow_checkpoint_helpers_record_cache_refs():
     from app.api.chat import _record_tool_checkpoint
     from app.services import workflow_checkpoint as wc
@@ -1080,9 +1117,70 @@ def test_high_velocity_star_query_is_focused_gaia_vizier_query():
         require_radial_velocity=True,
     )
     assert 'FROM "I/355/gaiadr3"' in query
-    assert "vtan_kms" in query
+    assert "SQRT" not in query
+    assert "ORDER BY (" not in query
+    assert "pmRA >=" in query
     assert "RV IS NOT NULL" in query
     assert "TOP 500" in query
+
+
+def test_high_velocity_star_tool_computes_vtan_in_python():
+    from app.services.ai_tools import _exec_query_high_velocity_stars
+
+    fake_result = {
+        "columns": ["Source", "RA_ICRS", "DE_ICRS", "Plx", "pmRA", "pmDE", "RV", "Gmag", "RUWE"],
+        "data": {
+            "Source": [1, 2],
+            "RA_ICRS": [10.0, 20.0],
+            "DE_ICRS": [1.0, 2.0],
+            "Plx": [0.2, 10.0],
+            "pmRA": [20.0, 1.0],
+            "pmDE": [20.0, 1.0],
+            "RV": [None, 30.0],
+            "Gmag": [14.0, 9.0],
+            "RUWE": [1.1, 1.0],
+        },
+        "row_count": 2,
+        "attempt_log": [{"stage": "mock_success"}],
+    }
+
+    async def fake_execute_adql_query(*args, **kwargs):
+        return fake_result
+
+    with patch("app.api.integration.execute_adql_query", side_effect=fake_execute_adql_query):
+        result = asyncio.run(_exec_query_high_velocity_stars(
+            {"limit": 50, "min_parallax_mas": 0.2, "min_vtan_kms": 250},
+            python_session_id="pytest-hv",
+        ))
+
+    assert result["row_count"] == 1
+    assert "vtan_kms" in result["columns"]
+    assert result["data"]["source"] == [1]
+    assert result["data"]["vtan_kms"][0] > 600
+    assert "SQRT" not in result["query"]
+
+
+def test_gaia_adql_sqrt_error_gets_actionable_hint():
+    from app.services.ai_tools import _exec_adql
+
+    async def fake_execute_adql_query(*args, **kwargs):
+        raise RuntimeError('Encountered " "SQRT" "SQRT " at line 1')
+
+    with patch("app.api.integration.execute_adql_query", side_effect=fake_execute_adql_query):
+        with pytest.raises(RuntimeError) as exc:
+            asyncio.run(_exec_adql({
+                "service": "gaia",
+                "query": (
+                    "SELECT TOP 10 source_id FROM gaiadr3.gaia_source "
+                    "WHERE SQRT(pmra*pmra+pmdec*pmdec) > 10 "
+                    "ORDER BY (pmra*pmra+pmdec*pmdec) DESC"
+                ),
+            }))
+
+    msg = str(exc.value)
+    assert "[auto-suggestion]" in msg
+    assert "query_high_velocity_stars" in msg
+    assert "compute SQRT / velocities in run_python" in msg
 
 
 def test_system_prompt_routes_escape_velocity_to_high_velocity_tool():

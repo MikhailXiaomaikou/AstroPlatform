@@ -4983,6 +4983,12 @@
   margin: 0;
 }
 
+.code-stderr-fold-note {
+  font-size: 0.68rem;
+  color: var(--color-text-tertiary);
+  margin-top: 4px;
+}
+
 .code-stderr-panel.failed .code-stderr-label {
   color: var(--color-red);
 }

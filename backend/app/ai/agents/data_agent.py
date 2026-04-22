@@ -11,10 +11,12 @@ DATA_AGENT = SpecialistAgent(
     tool_names=[
         "search_objects",
         "run_adql",
+        "run_sdss_sql",
+        "query_high_velocity_stars",
+        "search_lightcurve",
         "get_object_info",
         "get_last_search_results",
         "query_transients",
         "get_object_dossier",
     ],
 )
-

@@ -991,6 +991,46 @@ ${trs}
   );
 }
 
+function displayValue(value: unknown, fallback = "—"): string {
+  if (value == null) return fallback;
+  const text = String(value).trim();
+  if (!text || text.toLowerCase() === "undefined" || text.toLowerCase() === "null") return fallback;
+  return text;
+}
+
+function compactStderrWarnings(text: string): { text: string; folded: boolean; originalLines: number; displayedLines: number } {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "");
+  if (lines.length === 0) {
+    return { text, folded: false, originalLines: 0, displayedLines: 0 };
+  }
+  const groups = new Map<string, { first: string; count: number }>();
+  for (const line of lines) {
+    const trimmed = line.trimEnd();
+    const key = /Glyph\s+\d+.*missing from font/i.test(trimmed)
+      ? "matplotlib:glyph-missing"
+      : trimmed;
+    const current = groups.get(key);
+    if (current) {
+      current.count += 1;
+    } else {
+      groups.set(key, { first: trimmed, count: 1 });
+    }
+  }
+  const folded = groups.size < lines.length;
+  if (!folded) {
+    return { text, folded: false, originalLines: lines.length, displayedLines: lines.length };
+  }
+  const compacted = Array.from(groups.values()).map((entry) =>
+    entry.count > 1 ? `${entry.first}\n  [repeated ${entry.count} times]` : entry.first
+  );
+  return {
+    text: compacted.join("\n"),
+    folded: true,
+    originalLines: lines.length,
+    displayedLines: compacted.length,
+  };
+}
+
 function AutoToolResult({ toolName, result }: { toolName: string; result: Record<string, unknown> }) {
   if (result.error) {
     return <div style={{ color: "var(--color-red)", fontSize: "0.8rem" }}>Error: {String(result.error)}</div>;
@@ -1006,11 +1046,18 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           Found {total} objects
         </div>
         {items.slice(0, 8).map((r, i) => (
-          <div key={i} style={{ fontSize: "0.75rem", padding: "2px 0", display: "flex", gap: 8 }}>
-            <span className={`badge badge-${r.source}`} style={{ fontSize: "0.6rem" }}>{String(r.source).toUpperCase()}</span>
-            <span>{String(r.name)}</span>
-            {r.redshift != null && <span style={{ color: "var(--color-text-tertiary)" }}>z={Number(r.redshift).toFixed(4)}</span>}
-          </div>
+          (() => {
+            const source = displayValue(r.source, "unknown");
+            const sourceClass = source.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+            const name = displayValue(r.name ?? r.object_id ?? r.main_id ?? r.id, "Unnamed object");
+            return (
+              <div key={i} style={{ fontSize: "0.75rem", padding: "2px 0", display: "flex", gap: 8 }}>
+                <span className={`badge badge-${sourceClass}`} style={{ fontSize: "0.6rem" }}>{source.toUpperCase()}</span>
+                <span>{name}</span>
+                {r.redshift != null && <span style={{ color: "var(--color-text-tertiary)" }}>z={Number(r.redshift).toFixed(4)}</span>}
+              </div>
+            );
+          })()
         ))}
         {total > 8 && <div style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)" }}>...and {total - 8} more</div>}
       </div>
@@ -1165,6 +1212,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     // 阶段, 去 /api/admin/sandbox/health 看真实 Python error.
     const stderr = result.stderr as string | undefined;
     const stderrText = stderr ?? "";
+    const stderrDisplay = compactStderrWarnings(stderrText);
     const stderrNote = result.stderr_note as string | undefined;
     const showStderrPanel = stderrText.trim() !== "" || !success;
     // When localStorage was over its soft cap, figures may have been
@@ -1254,9 +1302,14 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
             </div>
             <pre className="code-output code-stderr-output">
               {stderrText !== ""
-                ? stderrText
+                ? stderrDisplay.text
                 : "(empty — subprocess crashed before Python stderr capture ran; check error_class + traceback fields above, or the /api/admin/sandbox/health endpoint)"}
             </pre>
+            {stderrDisplay.folded && (
+              <div className="code-stderr-fold-note">
+                Folded repeated warnings: {stderrDisplay.originalLines} lines → {stderrDisplay.displayedLines}.
+              </div>
+            )}
             {stderrNote && (
               <div style={{ fontSize: "0.7rem", color: "var(--color-text-tertiary)", fontStyle: "italic", marginTop: 4, lineHeight: 1.45 }}>
                 {stderrNote}

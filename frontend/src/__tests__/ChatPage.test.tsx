@@ -389,6 +389,61 @@ describe("ChatPage", () => {
     expect(document.querySelectorAll("[class*='stderr']").length).toBeGreaterThan(0);
   });
 
+  it("folds repeated run_python stderr warnings", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "Done",
+      actions: [{
+        action: "run_python",
+        tool_result: {
+          success: true,
+          stdout: "ok\n",
+          stderr: [
+            "UserWarning: duplicate warning",
+            "UserWarning: duplicate warning",
+            "UserWarning: duplicate warning",
+          ].join("\n"),
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "show repeated stderr" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText(/Folded repeated warnings/);
+    expect(screen.getByText(/repeated 3 times/)).toBeInTheDocument();
+  });
+
+  it("does not render literal undefined in search_objects cards", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "Done",
+      actions: [{
+        action: "search_objects",
+        tool_result: {
+          total: 1,
+          results: [{ source: "sdss", object_id: "SDSS-J001" }],
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "search sdss" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText("SDSS-J001");
+    expect(screen.queryByText("undefined")).not.toBeInTheDocument();
+  });
+
   it("labels synthetic run_python stdout as audit-only", async () => {
     vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
     vi.mocked(sendChatMessage).mockResolvedValueOnce({

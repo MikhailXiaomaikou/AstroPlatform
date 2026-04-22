@@ -244,6 +244,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Failed to ensure new tables (%s); evaluate Alembic migration", e)
 
+    # R18: lightkurve/MAST 偶尔会留下半截 FITS 缓存，后续下载同一目标
+    # 时会被坏文件反复污染。启动时做一次有限扫描，只删除 astropy 无法
+    # 打开的缓存 FITS，正常缓存保留。
+    try:
+        from app.services.astro_analysis import cleanup_lightkurve_cache
+        cache_cleanup = cleanup_lightkurve_cache(max_files=500)
+        removed = cache_cleanup.get("removed") or []
+        if removed:
+            logger.warning("Removed %d corrupted lightkurve cache file(s)", len(removed))
+        else:
+            logger.info("Lightkurve cache check complete (%s file(s) checked)", cache_cleanup.get("checked", 0))
+    except Exception as e:
+        logger.debug("Lightkurve cache check skipped: %s", e)
+
     # Start Redis subscriber for WebSocket relay (best-effort)
     subscriber_task = asyncio.create_task(redis_subscriber())
     event_flush_task = asyncio.create_task(periodic_flush(event_collector, interval=event_collector.FLUSH_INTERVAL))

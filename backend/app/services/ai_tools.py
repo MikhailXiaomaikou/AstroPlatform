@@ -1933,6 +1933,36 @@ async def _exec_adql(
     query = dialect.rewritten_query
     _dialect_warnings = dialect.warnings
 
+    def _gaia_expression_syntax_hint(q: str, error_msg: str) -> str | None:
+        q_l = str(q or "").lower()
+        if service.lower() != "gaia" and "gaiadr3.gaia_source" not in q_l:
+            return None
+        expression_tokens = (
+            'encountered " "sqrt',
+            'encountered "sqrt"',
+            'encountered " "("',
+            "unexpected token: sqrt",
+            "parse error",
+        )
+        has_expression_error = any(token in error_msg for token in expression_tokens)
+        has_query_pattern = (
+            "sqrt(" in q_l
+            or re.search(r"\border\s+by\s*\(", q_l) is not None
+            or re.search(r"\border\s+by\s+[^,\n]+[+\-*/][^,\n]+", q_l) is not None
+            or re.search(r"\bwhere\b[\s\S]*sqrt\s*\(", q_l) is not None
+        )
+        if not (has_expression_error or has_query_pattern):
+            return None
+        return (
+            "Gaia TAP commonly rejects function calls or arithmetic expressions "
+            "inside WHERE/ORDER BY. For high-velocity stars, prefer the dedicated "
+            "`query_high_velocity_stars` tool. Otherwise select raw columns "
+            "(pmra, pmdec, parallax, radial_velocity) with simple cuts, then "
+            "compute SQRT / velocities in run_python; if your TAP mirror accepts "
+            "aliases, put the expression in SELECT as `... AS pm_tot` and ORDER "
+            "BY that alias, not by `SQRT(...)` or `(pmra*pmra+...)` directly."
+        )
+
     async def _try_query(q: str) -> dict | None:
         """Attempt one ADQL query. Return result dict or None on timeout.
 
@@ -1982,6 +2012,9 @@ async def _exec_adql(
                         f"{exc}\n\n[auto-suggestion] "
                         + " ".join(suggestions)
                     ) from exc
+            syntax_hint = _gaia_expression_syntax_hint(q, msg)
+            if syntax_hint:
+                raise type(exc)(f"{exc}\n\n[auto-suggestion] {syntax_hint}") from exc
             raise
 
     # Post-H0.1 hardening: track wall-clock budget.  execute_adql_query
@@ -2212,6 +2245,46 @@ def _bounded_float(value: Any, *, default: float, min_value: float, max_value: f
     return max(min_value, min(max_value, parsed))
 
 
+def _high_velocity_component_threshold_masyr(
+    min_parallax_mas: float,
+    min_vtan_kms: float,
+) -> float:
+    # 如果总切向速度超过阈值, 至少一个 PM 分量会超过总阈值 / sqrt(2)。
+    # 用最小视差换算成 mas/yr 后在 TAP 侧做粗筛, 精确 vtan 留给 Python。
+    return max(1.0, min_vtan_kms * min_parallax_mas / 4.74047 / math.sqrt(2.0))
+
+
+def _build_high_velocity_component_query(
+    *,
+    limit: int = 500,
+    min_parallax_mas: float = 0.2,
+    min_vtan_kms: float = 250.0,
+    require_radial_velocity: bool = False,
+    component: str = "pmRA",
+    direction: str = "DESC",
+) -> str:
+    component = "pmRA" if component not in {"pmRA", "pmDE"} else component
+    direction = "ASC" if str(direction).upper() == "ASC" else "DESC"
+    threshold = _high_velocity_component_threshold_masyr(min_parallax_mas, min_vtan_kms)
+    if direction == "ASC":
+        pm_cut = f"{component} <= {-threshold:.6g}"
+    else:
+        pm_cut = f"{component} >= {threshold:.6g}"
+    rv_clause = "AND RV IS NOT NULL" if require_radial_velocity else ""
+    return f"""
+SELECT TOP {limit}
+  Source, RA_ICRS, DE_ICRS, Plx, pmRA, pmDE, RV, Gmag, RUWE
+FROM "I/355/gaiadr3"
+WHERE Plx >= {min_parallax_mas:.6g}
+  AND pmRA IS NOT NULL
+  AND pmDE IS NOT NULL
+  AND {pm_cut}
+  AND (RUWE IS NULL OR RUWE < 1.4)
+  {rv_clause}
+ORDER BY {component} {direction}
+""".strip()
+
+
 def _build_high_velocity_stars_query(
     *,
     limit: int = 500,
@@ -2219,21 +2292,14 @@ def _build_high_velocity_stars_query(
     min_vtan_kms: float = 250.0,
     require_radial_velocity: bool = False,
 ) -> str:
-    vtan_expr = "(4.74047 * SQRT(pmRA*pmRA + pmDE*pmDE) / Plx)"
-    rv_clause = "AND RV IS NOT NULL" if require_radial_velocity else ""
-    return f"""
-SELECT TOP {limit}
-  Source, RA_ICRS, DE_ICRS, Plx, pmRA, pmDE, RV, Gmag, RUWE,
-  {vtan_expr} AS vtan_kms
-FROM "I/355/gaiadr3"
-WHERE Plx >= {min_parallax_mas:.6g}
-  AND pmRA IS NOT NULL
-  AND pmDE IS NOT NULL
-  AND {vtan_expr} >= {min_vtan_kms:.6g}
-  AND (RUWE IS NULL OR RUWE < 1.4)
-  {rv_clause}
-ORDER BY {vtan_expr} DESC
-""".strip()
+    return _build_high_velocity_component_query(
+        limit=limit,
+        min_parallax_mas=min_parallax_mas,
+        min_vtan_kms=min_vtan_kms,
+        require_radial_velocity=require_radial_velocity,
+        component="pmRA",
+        direction="DESC",
+    )
 
 
 async def _exec_query_high_velocity_stars(
@@ -2252,30 +2318,64 @@ async def _exec_query_high_velocity_stars(
         inp.get("extended_timeout")
         or str(inp.get("_workflow_budget_mode") or "").lower() == "long"
     )
-    query = _build_high_velocity_stars_query(
-        limit=limit,
-        min_parallax_mas=min_parallax,
-        min_vtan_kms=min_vtan,
-        require_radial_velocity=require_rv,
-    )
-    async_timeout_s = 780.0 if extended_timeout else 300.0
-    try:
-        result = await execute_adql_query(
-            ADQLRequest(query=query, service="vizier"),
-            progress_callback=progress_callback,
-            async_timeout_s=async_timeout_s,
+    per_query_limit = max(50, min(2000, limit))
+    scans = [
+        ("pmRA_desc", "pmRA", "DESC"),
+        ("pmRA_asc", "pmRA", "ASC"),
+        ("pmDE_desc", "pmDE", "DESC"),
+        ("pmDE_asc", "pmDE", "ASC"),
+    ]
+    queries = {
+        label: _build_high_velocity_component_query(
+            limit=per_query_limit,
+            min_parallax_mas=min_parallax,
+            min_vtan_kms=min_vtan,
+            require_radial_velocity=require_rv,
+            component=component,
+            direction=direction,
         )
-    except Exception as exc:
+        for label, component, direction in scans
+    }
+    async_timeout_s = 780.0 if extended_timeout else 300.0
+
+    async def _run_component(label: str, q: str) -> tuple[str, dict | None, str | None]:
+        if progress_callback:
+            try:
+                await progress_callback({
+                    "stage": "component_scan",
+                    "message": f"Scanning Gaia DR3 high-PM candidates by {label}",
+                    "service": "vizier",
+                    "query_preview": q[:300],
+                })
+            except Exception:
+                logger.debug("High-velocity progress callback failed", exc_info=True)
+        try:
+            result = await execute_adql_query(
+                ADQLRequest(query=q, service="vizier"),
+                progress_callback=progress_callback,
+                async_timeout_s=async_timeout_s,
+            )
+            return label, result, None
+        except Exception as exc:
+            return label, None, str(exc)
+
+    component_results = await asyncio.gather(*[
+        _run_component(label, query) for label, query in queries.items()
+    ])
+    failures = [f"{label}: {err}" for label, result, err in component_results if result is None and err]
+    successful = [(label, result) for label, result, err in component_results if isinstance(result, dict)]
+    if not successful:
         return {
             "success": False,
             "error": (
-                f"High-velocity Gaia DR3 candidate query failed: {exc}. "
+                "High-velocity Gaia DR3 candidate query failed on all component scans: "
+                f"{'; '.join(failures[:4])}. "
                 "Retry with a higher min_vtan_kms, lower limit, or require_radial_velocity=false."
             ),
             "error_class": "high_velocity_query_failed",
             "service": "vizier",
             "table": "I/355/gaiadr3",
-            "query": query,
+            "query": "\n\n-- component scan --\n\n".join(queries.values()),
             "params": {
                 "limit": limit,
                 "min_parallax_mas": min_parallax,
@@ -2285,11 +2385,44 @@ async def _exec_query_high_velocity_stars(
             },
         }
 
-    raw_data = result.get("data", {}) if isinstance(result, dict) else {}
-    data = {str(col).lower(): vals for col, vals in raw_data.items()}
-    columns = [str(c).lower() for c in (result.get("columns", []) if isinstance(result, dict) else [])]
-    row_count = int(result.get("row_count", 0) or 0) if isinstance(result, dict) else 0
-    attempt_log = result.get("attempt_log", []) if isinstance(result, dict) else []
+    candidates: dict[str, dict[str, Any]] = {}
+    attempt_log: list[Any] = []
+    for label, result in successful:
+        raw_data = result.get("data", {}) if isinstance(result, dict) else {}
+        data_in = {str(col).lower(): vals for col, vals in raw_data.items()}
+        columns_in = [str(c).lower() for c in (result.get("columns", []) if isinstance(result, dict) else [])]
+        row_count_in = int(result.get("row_count", 0) or 0) if isinstance(result, dict) else 0
+        if isinstance(result.get("attempt_log"), list):
+            attempt_log.extend(result.get("attempt_log", []))
+        rows = build_adql_rows(columns_in, data_in, row_count_in, limit=per_query_limit)
+        for idx, row in enumerate(rows):
+            plx = _coerce_float(row.get("plx"))
+            pmra = _coerce_float(row.get("pmra"))
+            pmde = _coerce_float(row.get("pmde"))
+            if plx is None or plx <= 0 or pmra is None or pmde is None:
+                continue
+            rv = _coerce_float(row.get("rv"))
+            if require_rv and rv is None:
+                continue
+            vtan = 4.74047 * math.sqrt(pmra * pmra + pmde * pmde) / plx
+            if vtan < min_vtan:
+                continue
+            normalized = dict(row)
+            normalized["vtan_kms"] = round(vtan, 6)
+            source = normalized.get("source")
+            key = str(source) if source not in (None, "") else f"{label}:{idx}"
+            current = candidates.get(key)
+            if current is None or float(normalized["vtan_kms"]) > float(current.get("vtan_kms", -1.0)):
+                candidates[key] = normalized
+
+    rows_out = sorted(candidates.values(), key=lambda row: float(row.get("vtan_kms") or 0.0), reverse=True)[:limit]
+    columns = [
+        col for col in ("source", "ra_icrs", "de_icrs", "plx", "pmra", "pmde", "rv", "gmag", "ruwe", "vtan_kms")
+        if any(row.get(col) is not None for row in rows_out)
+    ]
+    row_count = len(rows_out)
+    data = {col: [row.get(col) for row in rows_out] for col in columns}
+    query = "\n\n-- component scan --\n\n".join(queries.values())
 
     result_set = build_adql_result_set(
         service="vizier",
@@ -2327,6 +2460,11 @@ async def _exec_query_high_velocity_stars(
             "checks, but it is not the full Piffl+2014 / Monari+2018 halo-star "
             "selection function."
         ),
+        "component_scan": {
+            "threshold_masyr": round(_high_velocity_component_threshold_masyr(min_parallax, min_vtan), 6),
+            "queries": list(queries.values()),
+            "failures": failures,
+        },
         "note": (
             f"Showing first {view_rows} of {row_count} rows. Full rows are cached under latest_adql "
             f"and {hv_key}; compute 3D velocities in run_python(data_source='latest_adql')."

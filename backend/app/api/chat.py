@@ -1564,6 +1564,22 @@ def _filter_tools(tool_names: list[str] | None, tools: list[dict]) -> list[dict]
     return selected or tools
 
 
+def _is_tool_inventory_request(message: str) -> bool:
+    """Detect prompts whose goal is to inspect the actual callable tool schema."""
+    msg = (message or "").lower()
+    zh_markers = ("工具清单", "工具列表", "有哪些工具", "可用工具", "工具 schema", "工具名")
+    en_markers = (
+        "tool list",
+        "available tools",
+        "which tools",
+        "what tools",
+        "tool schema",
+        "function schema",
+        "registered tools",
+    )
+    return any(marker in msg for marker in zh_markers + en_markers)
+
+
 def _trim_large_tool_results(messages: list[dict]) -> list[dict]:
     """G6.2: shrink oversized tool_result / assistant content so the full
     message array stays under Anthropic's ~200 KB prompt cap.
@@ -1656,7 +1672,7 @@ async def _build_runtime(
         runtime_prompt = str(runtime.get("system_prompt", "") or "").strip()
         if runtime_prompt:
             merged_system += "\n\n" + runtime_prompt
-        toolset = _filter_tools(runtime.get("tool_names"), TOOLS)
+        toolset = TOOLS if _is_tool_inventory_request(latest_user_message) else _filter_tools(runtime.get("tool_names"), TOOLS)
         if runtime.get("agent_names"):
             agent_names = list(runtime["agent_names"])
         user_context = str(runtime.get("user_context", "") or "")
@@ -2438,6 +2454,9 @@ async def _execute_tool_calls(
         # MW v_esc / halo-star workflows need a focused Gaia DR3 helper
         # rather than repeated broad source-table scans.
         "query_high_velocity_stars": 240.0,
+        # MAST / lightkurve cold starts are often >45s on Render.  Keep the
+        # default mode bounded, then stretch it explicitly in long mode below.
+        "search_lightcurve": 90.0,
     }
     _TOOL_DEADLINE_DEFAULT = 45.0
 
@@ -2451,6 +2470,8 @@ async def _execute_tool_calls(
                 base_deadline_s = max(base_deadline_s, 300.0)
             elif tool_name == "query_high_velocity_stars":
                 base_deadline_s = max(base_deadline_s, 420.0)
+            elif tool_name == "search_lightcurve":
+                base_deadline_s = max(base_deadline_s, 240.0)
             else:
                 base_deadline_s = min(base_deadline_s * max(1.0, tool_deadline_scale), 360.0)
         deadline_s = base_deadline_s

@@ -6,6 +6,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 
@@ -121,6 +122,40 @@ def test_sector_kwarg_forwarded_to_lightkurve():
     assert captured["sector"] == 41
     assert "author" not in captured  # 不传 author 时不应出现在 kwargs
     assert result["meta"]["sector"] == 41
+
+
+def test_download_and_clean_lightcurve_returns_numeric_arrays():
+    """R18: run_python 里下游拟合通常期望 ndarray, 尤其 flux_err。"""
+    from app.services import astro_analysis
+
+    captured: dict = {}
+    fake_lk = _patch_lightkurve(captured)
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.download_and_clean_lightcurve("HD 189733", mission="tess")
+
+    assert isinstance(result["time"], np.ndarray)
+    assert isinstance(result["flux"], np.ndarray)
+    assert isinstance(result["flux_err"], np.ndarray)
+    assert result["flux_err"].dtype.kind == "f"
+
+
+def test_cleanup_lightkurve_cache_removes_only_corrupted_fits(tmp_path):
+    """R18: 坏 FITS 缓存会污染后续 lightkurve 下载；只删打不开的文件。"""
+    from astropy.io import fits
+    from app.services import astro_analysis
+
+    good = tmp_path / "good.fits"
+    bad = tmp_path / "bad.fits"
+    fits.PrimaryHDU().writeto(good)
+    bad.write_text("not a fits file", encoding="utf-8")
+
+    result = astro_analysis.cleanup_lightkurve_cache(tmp_path)
+
+    assert result["checked"] == 2
+    assert good.exists()
+    assert not bad.exists()
+    assert str(bad) in result["removed"]
 
 
 def test_author_kwarg_forwarded_to_lightkurve():

@@ -7,10 +7,92 @@ astronomical diagnostics without requiring the user to write boilerplate.
 
 import inspect
 import logging
+import os
+from pathlib import Path
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def cleanup_lightkurve_cache(
+    cache_root: str | Path | None = None,
+    *,
+    max_files: int = 500,
+) -> dict:
+    """Remove corrupted lightkurve FITS cache files.
+
+    只删除 astropy.io.fits 无法打开的 FITS / FITS.GZ 文件；正常缓存保留。
+    启动时限制扫描数量，避免 Render 冷启动被大缓存拖慢。
+    """
+    roots: list[Path] = []
+    if cache_root is not None:
+        roots.append(Path(cache_root))
+    else:
+        xdg = os.environ.get("XDG_CACHE_HOME")
+        home = os.environ.get("HOME")
+        if xdg:
+            roots.append(Path(xdg) / "lightkurve")
+        if home:
+            roots.append(Path(home) / ".lightkurve" / "cache")
+            roots.append(Path(home) / ".cache" / "lightkurve")
+
+    seen: set[Path] = set()
+    existing_roots: list[Path] = []
+    for root in roots:
+        try:
+            resolved = root.expanduser().resolve()
+        except Exception:
+            continue
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        existing_roots.append(resolved)
+
+    checked = 0
+    removed: list[str] = []
+    errors: list[str] = []
+    try:
+        from astropy.io import fits
+    except Exception as exc:
+        return {
+            "checked": 0,
+            "removed": [],
+            "roots": [str(root) for root in existing_roots],
+            "error": f"astropy.io.fits unavailable: {type(exc).__name__}: {exc}",
+        }
+
+    for root in existing_roots:
+        for pattern in ("*.fits", "*.fits.gz"):
+            for path in root.rglob(pattern):
+                if checked >= max_files:
+                    return {
+                        "checked": checked,
+                        "removed": removed,
+                        "roots": [str(r) for r in existing_roots],
+                        "errors": errors,
+                        "truncated": True,
+                    }
+                checked += 1
+                try:
+                    with fits.open(path, memmap=False):
+                        pass
+                except Exception as exc:
+                    try:
+                        path.unlink()
+                        removed.append(str(path))
+                    except Exception as unlink_exc:
+                        errors.append(
+                            f"{path}: {type(exc).__name__}: {exc}; unlink failed: "
+                            f"{type(unlink_exc).__name__}: {unlink_exc}"
+                        )
+    return {
+        "checked": checked,
+        "removed": removed,
+        "roots": [str(root) for root in existing_roots],
+        "errors": errors,
+        "truncated": False,
+    }
 
 # ── Publication Figure Defaults ──
 
@@ -3161,9 +3243,9 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
     if warnings:
         meta['warning'] = " | ".join(warnings)
     return {
-        'time': lc.time.value.tolist(),
-        'flux': lc.flux.value.tolist(),
-        'flux_err': lc.flux_err.value.tolist() if lc.flux_err is not None else None,
+        'time': np.asarray(lc.time.value, dtype=float),
+        'flux': np.asarray(lc.flux.value, dtype=float),
+        'flux_err': np.asarray(lc.flux_err.value, dtype=float) if lc.flux_err is not None else None,
         'meta': meta,
     }
 
