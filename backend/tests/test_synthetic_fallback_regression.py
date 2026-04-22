@@ -186,6 +186,26 @@ def test_empty_turn_with_synthetic_bait_blocks_claim():
     assert tool_results[1]["result"]["__tool_status__"] == "SYNTHETIC"
 
 
+def test_synthetic_summary_stats_do_not_support_claims():
+    """R14: mean/std 这种裸摘要统计也不能从 SYNTHETIC stdout 洗白。"""
+    tool_results = [{
+        "tool": "run_python",
+        "result": {
+            "__tool_status__": "SYNTHETIC",
+            "__do_not_claim__": True,
+            "data_origin": "synthetic",
+            "success": False,
+            "stdout": "mean=3.0\nstd=1.414\n",
+            "error": "KeyError: 'missing_key'",
+        },
+    }]
+    reply = "The diagnostic calculation found mean=3.0 and std=1.414 before failing."
+
+    result = validate_claims(reply, tool_results)
+    assert result.ok is False
+    assert {round(c.value, 3) for c in result.uncited} >= {3.0, 1.414}
+
+
 # -------------------------------------------------- anti-instruction reflex
 
 

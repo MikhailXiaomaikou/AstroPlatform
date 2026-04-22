@@ -361,4 +361,59 @@ describe("ChatPage", () => {
     });
     await screen.findByText("Done");
   });
+
+  it("renders run_python stderr even when the tool succeeds", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "Done",
+      actions: [{
+        action: "run_python",
+        tool_result: {
+          success: true,
+          stdout: "stdout value=42\n",
+          stderr: "UserWarning: check this warning\n",
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "show stderr" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText("STDERR / WARNINGS");
+    expect(screen.getByText(/UserWarning: check this warning/)).toBeInTheDocument();
+    expect(document.querySelectorAll("[class*='stderr']").length).toBeGreaterThan(0);
+  });
+
+  it("labels synthetic run_python stdout as audit-only", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "I cannot cite that output.",
+      actions: [{
+        action: "run_python",
+        tool_result: {
+          success: false,
+          stdout: "mean=3.0\n",
+          __tool_status__: "SYNTHETIC",
+          __do_not_claim__: true,
+          data_origin: "synthetic",
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "synthetic diagnostic" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText(/Synthetic stdout is shown for audit only/);
+    expect(screen.getByText(/mean=3.0/)).toBeInTheDocument();
+  });
 });

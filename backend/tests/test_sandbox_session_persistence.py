@@ -67,6 +67,34 @@ def test_failed_cell_not_added_to_history():
     assert not any("undefined_var" in block for block in history_after_fail)
 
 
+def test_failed_cell_records_completed_prefix_for_replay(monkeypatch):
+    """R14-NEW-2: 失败 cell 前半段已定义的变量要能被下一 cell 看到。"""
+    from app.config import settings
+    from app.services.code_executor import execute_python, get_session_code_history
+
+    monkeypatch.setattr(settings, "sandbox_backend", "subprocess")
+    session_id = "test_r14_partial_prefix"
+
+    r1 = execute_python(
+        "time_clean = [1, 2, 3]\n"
+        "print('prepared partial state')\n"
+        "missing_name + 1",
+        session_id=session_id,
+    )
+    assert not r1.success
+    assert "prepared partial state" in r1.stdout
+    assert "time_clean" in r1.variables
+
+    history = get_session_code_history(session_id)
+    assert history, "失败前已完成的前缀应进入 replay history"
+    assert "time_clean = [1, 2, 3]" in history[-1]
+    assert "missing_name" not in history[-1]
+
+    r2 = execute_python("print(sum(time_clean))", session_id=session_id)
+    assert r2.success, f"next cell should see partial prefix vars: {r2.error} / {r2.stderr}"
+    assert "6" in r2.stdout
+
+
 def test_default_session_does_not_accumulate_history():
     """session_id='default' 不启用持久化, 避免测试 / 匿名用户互相干扰."""
     from app.services.code_executor import execute_python, get_session_code_history

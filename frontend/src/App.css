@@ -4965,6 +4965,43 @@
   color: var(--color-red);
 }
 
+.code-stderr-panel {
+  margin-top: 0.4rem;
+}
+
+.code-stderr-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.code-stderr-output {
+  background: rgba(142, 142, 147, 0.12);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.code-stderr-panel.failed .code-stderr-label {
+  color: var(--color-red);
+}
+
+.code-stderr-panel.failed .code-stderr-output {
+  background: #2a1a1a;
+  color: #ff9c9c;
+}
+
+.code-synthetic-output-note {
+  font-size: 0.72rem;
+  color: var(--color-red);
+  background: rgba(255, 69, 58, 0.08);
+  border-left: 2px solid rgba(255, 69, 58, 0.5);
+  border-radius: 2px;
+  padding: 5px 8px;
+  margin: 0.35rem 0 0.25rem;
+}
+
 .code-figure-wrapper {
   position: relative;
   margin: 0.5rem 0;

@@ -171,6 +171,64 @@ def get_session_code_prefix(session_id: str) -> str:
     return prefix
 
 
+def _last_string_traceback_line(stderr: str | None) -> int | None:
+    """从 traceback 中取最后一个 <string> 行号。"""
+    if not stderr:
+        return None
+    matches = re.findall(r'File "<string>", line (\d+)', stderr)
+    if not matches:
+        return None
+    try:
+        return int(matches[-1])
+    except ValueError:
+        return None
+
+
+def _completed_top_level_prefix(code: str, failing_line: int | None) -> str:
+    """返回失败行之前已完成的顶层语句源码。
+
+    失败 cell 不能整段进 subprocess replay history, 否则后续每次都会
+    重放同一个异常。只记录失败行之前已经完成的顶层语句, 能恢复
+    `time_clean = ...` 这类前置变量, 同时避开抛错语句本身。
+    """
+    if not failing_line or failing_line <= 1:
+        return ""
+    try:
+        import ast as _ast
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return ""
+    completed: list[str] = []
+    for node in tree.body:
+        end_lineno = getattr(node, "end_lineno", getattr(node, "lineno", None))
+        if end_lineno is None or end_lineno >= failing_line:
+            continue
+        segment = _ast.get_source_segment(code, node)
+        if segment and segment.strip():
+            completed.append(segment.strip())
+    return "\n\n".join(completed)
+
+
+def _maybe_record_partial_session_history(
+    session_id: str,
+    completed_prefix: str,
+    result: "CodeExecutionResult",
+) -> None:
+    """失败但有部分输出时, 记录失败前已完成的安全前缀。"""
+    if not session_id or session_id == "default":
+        return
+    if result.success or not completed_prefix.strip():
+        return
+    has_partial_payload = bool(
+        (result.stdout or "").strip()
+        or result.figures
+        or result.variables
+    )
+    if not has_partial_payload:
+        return
+    append_session_code_block(session_id, completed_prefix)
+
+
 def get_session_helper_calls(session_id: str) -> set[str]:
     """返回 session 历史 code 里调过的所有 Name/Attribute 标识符.
 
@@ -346,6 +404,7 @@ class CodeExecutionResult:
         self.backend: str = "unknown"
         self.duration_ms: int = 0
         self.exit_code: int | None = None
+        self.completed_code_prefix: str = ""
 
 
 @contextmanager
@@ -767,6 +826,14 @@ def _dispatch_subprocess(
     result.backend = raw.backend
     result.duration_ms = raw.duration_ms
     result.exit_code = raw.exit_code
+    if not raw.success:
+        failing_line = _last_string_traceback_line(raw.stderr)
+        if failing_line is not None:
+            prefix_line_count = replay_prefix.count("\n")
+            current_cell_line = failing_line - prefix_line_count
+            result.completed_code_prefix = _completed_top_level_prefix(
+                code, current_cell_line
+            )
     return result
 
 
@@ -821,6 +888,11 @@ def execute_python(
                 # 是前序 history 再次展开, 这里不要二次 append 否则历史膨胀.
                 _maybe_record_session_history(
                     session_id, _normalized_for_subprocess, sub_result
+                )
+                _maybe_record_partial_session_history(
+                    session_id,
+                    getattr(sub_result, "completed_code_prefix", ""),
+                    sub_result,
                 )
                 return sub_result
             logger.warning(
@@ -1050,8 +1122,13 @@ def execute_python(
     # Capture output
     result.stdout = stdout_capture.getvalue()[:MAX_OUTPUT_SIZE]
     stderr_text = stderr_capture.getvalue()
-    if stderr_text and not result.stderr:
-        result.stderr = stderr_text[:MAX_OUTPUT_SIZE]
+    if stderr_text:
+        clipped_stderr = stderr_text[:MAX_OUTPUT_SIZE]
+        result.stderr = (
+            clipped_stderr
+            if not result.stderr
+            else clipped_stderr + "\n" + result.stderr
+        )
 
     # Capture matplotlib figures as base64 PNG
     try:
@@ -1120,4 +1197,11 @@ def execute_python(
     # S1: in-process 也 append history, 这样即使中途 backend 从 inproc 切
     # subprocess (例如 cache_context 变化) 历史仍然一致.
     _maybe_record_session_history(session_id, code, result)
+    if not result.success:
+        failing_line = _last_string_traceback_line(result.stderr)
+        _maybe_record_partial_session_history(
+            session_id,
+            _completed_top_level_prefix(code, failing_line),
+            result,
+        )
     return result

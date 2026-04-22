@@ -1919,22 +1919,42 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
     }
 
 
-def phase_fold(time, period, epoch=None):
-    """Phase-fold time array.
+def phase_fold(time, flux=None, period=None, t0=None, epoch=None):
+    """相位折叠时间序列。
 
     Args:
-        time: observation times array
-        period: folding period
-        epoch: reference epoch (defaults to min(time))
+        time: 观测时间数组。
+        flux: 可选的 flux / magnitude 数组。省略时保留旧接口
+            ``phase_fold(time, period, epoch=...)``, 只返回 phase 数组。
+        period: 折叠周期。旧调用可把它作为第二个位置参数传入。
+        t0: 新 light-curve helper API 使用的 transit/reference epoch。
+        epoch: 旧接口里的 reference epoch 别名。
 
     Returns:
-        phases array in [0, 1)
+        旧调用: [0, 1) 范围内的 phase 数组。
+        带 flux 的新调用: {"phase": 排序后的 phase, "flux_folded": 同序 flux}。
     """
     t = np.asarray(time, dtype=float)
-    if epoch is None:
-        epoch = float(np.min(t))
-    phases = ((t - epoch) / period) % 1.0
-    return phases
+    legacy_array_only = period is None
+    if legacy_array_only:
+        period = flux
+        flux = None
+    if period is None:
+        raise TypeError("phase_fold() missing required period")
+    ref_epoch = epoch if epoch is not None else t0
+    if ref_epoch is None:
+        ref_epoch = float(np.min(t))
+    phases = ((t - float(ref_epoch)) / float(period)) % 1.0
+    if legacy_array_only or flux is None:
+        return phases
+    f = np.asarray(flux, dtype=float)
+    if len(f) != len(t):
+        raise ValueError("time and flux must have the same length")
+    order = np.argsort(phases)
+    return {
+        "phase": phases[order],
+        "flux_folded": f[order],
+    }
 
 
 def plot_periodogram(time, mag, mag_err=None, min_period=0.1, max_period=100,

@@ -1150,6 +1150,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const success = result.success as boolean;
     const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
     const isPartial = status === "PARTIAL";
+    const isSynthetic = status === "SYNTHETIC" || String(result.data_origin || "").toLowerCase() === "synthetic";
     const stdout = result.stdout as string || "";
     const error = result.error as string | undefined;
     const errorClass = result.error_class as string | undefined;
@@ -1161,7 +1162,9 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     // "stderr 为空但非零退出" 时提示用户 subprocess 崩在 Python 启动
     // 阶段, 去 /api/admin/sandbox/health 看真实 Python error.
     const stderr = result.stderr as string | undefined;
+    const stderrText = stderr ?? "";
     const stderrNote = result.stderr_note as string | undefined;
+    const showStderrPanel = stderrText.trim() !== "" || !success;
     // When localStorage was over its soft cap, figures may have been
     // replaced with {__figures_offloaded__: N}.  Show a placeholder so the
     // user knows the figures existed + why they're gone right now.  The
@@ -1177,7 +1180,9 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     // on the backend guarantees every failure carries a concrete error
     // message.  If we still see no error for a failed call, the tool
     // response itself is malformed.
-    const errorDisplay = success
+    const errorDisplay = isSynthetic
+      ? "Synthetic output (not citeable)"
+      : success
       ? "Executed successfully"
       : isPartial && error && error.trim()
         ? `Partial output before error: ${error}`
@@ -1224,6 +1229,11 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
         </div>
 
         {/* Stdout */}
+        {isSynthetic && stdout && (
+          <div className="code-synthetic-output-note">
+            Synthetic stdout is shown for audit only. Do not cite these numbers as observational results.
+          </div>
+        )}
         {stdout && (
           <pre className="code-output">{stdout}</pre>
         )}
@@ -1233,31 +1243,16 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           <pre className="code-output code-error">{tb.slice(-500)}</pre>
         )}
 
-        {/* S3 (PART S): 失败路径下 STDERR 总是用红底 <pre> monospace 样式,
-            内容切换 (traceback 文本 vs 占位字符串), 样式一致. R3 分支
-            成"<div> vs <pre>"了让样式断层, 这里恢复统一视觉. 成功路径下
-            整个 panel 不渲染 (继承 R3 修复). */}
-        {!success && (
-          <div style={{ marginTop: 6 }}>
-            <div style={{ fontSize: "0.65rem", letterSpacing: "0.04em", color: "var(--color-red)", textTransform: "uppercase", marginBottom: 2 }}>
-              STDERR {!(stderr ?? "") ? "(empty — subprocess crashed early)" : ""}
+        {/* stderr / warnings 成功时也要显示；warnings.warn 和 print(..., file=sys.stderr)
+            不代表工具失败, 但对用户调试很关键。 */}
+        {showStderrPanel && (
+          <div className={`code-stderr-panel${!success ? " failed" : ""}`}>
+            <div className="code-stderr-label">
+              {success ? "STDERR / WARNINGS" : "STDERR"} {!stderrText ? "(empty — subprocess crashed early)" : ""}
             </div>
-            <pre
-              style={{
-                background: "#2a1a1a",
-                color: "#ff9c9c",
-                fontFamily: "Menlo, Consolas, monospace",
-                fontSize: "0.72rem",
-                padding: "8px 10px",
-                borderRadius: 3,
-                whiteSpace: "pre-wrap",
-                maxHeight: 260,
-                overflow: "auto",
-                margin: 0,
-              }}
-            >
-              {(stderr ?? "") !== ""
-                ? stderr
+            <pre className="code-output code-stderr-output">
+              {stderrText !== ""
+                ? stderrText
                 : "(empty — subprocess crashed before Python stderr capture ran; check error_class + traceback fields above, or the /api/admin/sandbox/health endpoint)"}
             </pre>
             {stderrNote && (

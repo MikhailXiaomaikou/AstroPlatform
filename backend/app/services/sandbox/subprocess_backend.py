@@ -311,8 +311,24 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
 
         pre_keys = set(exec_globals.keys())
 
-        exec(code, exec_globals)  # noqa: S102
-        _child_breadcrumb(f"exec done; fignums={plt.get_fignums()}")
+        try:
+            exec(code, exec_globals)  # noqa: S102
+            _child_breadcrumb(f"exec done; fignums={plt.get_fignums()}")
+        except SystemExit as e:
+            result["success"] = False
+            result["error"] = f"SystemExit: {e.code}"
+            result["stderr"] = traceback.format_exc()
+            _child_breadcrumb(f"SystemExit: {e.code}")
+        except MemoryError:
+            result["success"] = False
+            result["error"] = "MemoryError: process hit its address-space limit"
+            result["stderr"] = traceback.format_exc()
+            _child_breadcrumb("MemoryError hit")
+        except Exception as e:
+            result["success"] = False
+            result["error"] = f"{type(e).__name__}: {e}"
+            result["stderr"] = traceback.format_exc()
+            _child_breadcrumb(f"unhandled: {type(e).__name__}: {str(e)[:200]}")
 
         # 捕获仍然打开的 figure；用户若 savefig 后 close，下面会从
         # saved_figures 兜底补回。
@@ -377,19 +393,11 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
                 stderr_buf.write(f"[variable '{name}' capture failed: {type(e).__name__}: {e}]\n")
                 continue
 
-    except SystemExit as e:
-        result["success"] = False
-        result["error"] = f"SystemExit: {e.code}"
-        _child_breadcrumb(f"SystemExit: {e.code}")
-    except MemoryError:
-        result["success"] = False
-        result["error"] = "MemoryError: process hit its address-space limit"
-        _child_breadcrumb("MemoryError hit")
     except Exception as e:
         result["success"] = False
         result["error"] = f"{type(e).__name__}: {e}"
         result["stderr"] = traceback.format_exc()
-        _child_breadcrumb(f"unhandled: {type(e).__name__}: {str(e)[:200]}")
+        _child_breadcrumb(f"setup/capture failed: {type(e).__name__}: {str(e)[:200]}")
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
@@ -405,11 +413,14 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
             result["stdout"] = raw_stdout
 
         extra_stderr = stderr_buf.getvalue()
-        if extra_stderr and not result["stderr"]:
+        if extra_stderr:
             if len(extra_stderr) > 500_000:
-                result["stderr"] = extra_stderr[:500_000] + "\n[TRUNCATED]"
-            else:
-                result["stderr"] = extra_stderr
+                extra_stderr = extra_stderr[:500_000] + "\n[TRUNCATED]"
+            result["stderr"] = (
+                extra_stderr
+                if not result["stderr"]
+                else extra_stderr + "\n" + result["stderr"]
+            )
 
         # G0.3: pre-send size check.  If the pickled payload would exceed
         # _SANDBOX_MAX_PAYLOAD_BYTES, replace it with a concrete error

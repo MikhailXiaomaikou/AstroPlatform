@@ -1395,6 +1395,22 @@ class TestAstroAnalysisTimeSeries:
         phases = phase_fold(time, period=1.0, epoch=0.5)
         assert phases[0] == pytest.approx(0.5)
 
+    def test_phase_fold_with_flux_signature(self):
+        from app.services.astro_analysis import phase_fold
+
+        time = np.array([2.0, 1.0, 1.5])
+        flux = np.array([0.99, 1.0, 0.98])
+        folded = phase_fold(time, flux, 1.0, 1.0)
+        assert list(folded) == ["phase", "flux_folded"]
+        assert np.all(np.diff(folded["phase"]) >= 0)
+        assert len(folded["flux_folded"]) == len(flux)
+
+    def test_phase_fold_rejects_mismatched_flux_length(self):
+        from app.services.astro_analysis import phase_fold
+
+        with pytest.raises(ValueError, match="same length"):
+            phase_fold([1.0, 2.0], [1.0], 1.0)
+
     def test_variability_indices(self):
         from app.services.astro_analysis import variability_indices
 
@@ -3171,5 +3187,4 @@ class TestAPIEndpointsData:
         if resp.status_code == 200:
             data = resp.json()
             assert isinstance(data, list)
-
 

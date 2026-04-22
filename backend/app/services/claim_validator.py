@@ -86,6 +86,14 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         re.I,
     )),
 
+    # R14: synthetic 诊断代码常输出无天文单位的摘要统计
+    # ("mean=3.0", "std≈1.414")。这些仍然是数值 claim, 不能从
+    # SYNTHETIC stdout 里被洗白引用。
+    ("summary_stat", re.compile(
+        rf"\b(?:mean|average|avg|std|standard\s+deviation|sigma)\s*[:=≈~]\s*{_NUM}\b",
+        re.I,
+    )),
+
     # F1.1: integer cardinal counts with a noun.  Captures "776 stars",
     # "1000 members", "250 sources" — the Pleiades fabrication included
     # "Member Star Count: 776 stars" which the old patterns missed
