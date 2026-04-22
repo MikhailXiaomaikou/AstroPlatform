@@ -409,7 +409,6 @@ function ActionCardInner({
             borderRadius: "2px",
           }}
         >
-          <strong style={{ opacity: 0.85 }}>系统说明(给 AI 看的):</strong>{" "}
           {String((autoResult as Record<string, unknown>).__message_to_model__).slice(0, 400)}
           {String((autoResult as Record<string, unknown>).__message_to_model__).length > 400 ? "…" : ""}
         </div>
