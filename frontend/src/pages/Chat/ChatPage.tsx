@@ -104,6 +104,7 @@ interface ThinkingStep {
   // G3.5 — backend stripped these tools from the toolkit this iteration.
   disabled?: string[];
   iteration?: number;
+  maxIterations?: number;
 }
 
 interface DisplayMessage {
@@ -2366,7 +2367,6 @@ function deleteLocalChatSession(id: string): void {
 
 function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
   const steps = [
-    { label: "Generate paper draft", prompt: "Generate a paper draft from this analysis" },
     { label: "Export as notebook", prompt: "Export this session as a Jupyter notebook" },
     { label: "Run sensitivity analysis", prompt: "Run a sensitivity analysis on these results" },
     { label: "Search related literature", prompt: "Search for related papers on ADS" },
@@ -3266,7 +3266,8 @@ export default function ChatPage() {
         mode: evt.type === "workflow_budget" ? evt.mode : undefined,
         cacheRefs: evt.type === "workflow_checkpoint" ? evt.cache_refs : undefined,
         disabled: evt.type === "tools_disabled" ? evt.disabled : undefined,
-        iteration: evt.type === "tools_disabled" ? evt.iteration : undefined,
+        iteration: evt.type === "tools_disabled" || evt.type === "tool_call" ? evt.iteration : undefined,
+        maxIterations: evt.type === "tool_call" ? evt.max_iterations : undefined,
       };
       setMessages((prev) =>
         prev.map((m) =>
@@ -4019,6 +4020,11 @@ export default function ChatPage() {
                             {step.kind === "tool_call" && (
                               <span>
                                 🔧 <strong>{step.tool}</strong>
+                                {step.iteration && step.maxIterations ? (
+                                  <code style={{ marginLeft: 6, fontSize: "0.85em", color: "#666" }}>
+                                    {step.iteration}/{step.maxIterations}
+                                  </code>
+                                ) : null}
                                 {step.input && typeof step.input === "object" ? (
                                   <code style={{ marginLeft: 6, fontSize: "0.9em", color: "#666" }}>
                                     {JSON.stringify(step.input).slice(0, 140)}

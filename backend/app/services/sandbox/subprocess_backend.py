@@ -456,14 +456,14 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
         # stdout buffer for CJK / full-width / Hangul characters — all of
         # which render as □ tofu squares in the sandbox font (DejaVu Sans).
         # Must run BEFORE plt.close() clears the Text objects.
-        language_violations: list[str] = []
+        figure_language_violations: list[str] = []
         try:
             for fig_num in plt.get_fignums():
                 try:
                     fig = plt.figure(fig_num)
                     hits = _scan_figure_non_english(fig)
                     if hits:
-                        language_violations.append(
+                        figure_language_violations.append(
                             f"figure #{fig_num} text: {hits[:3]}"
                         )
                 except Exception:
@@ -471,9 +471,10 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
         except Exception as scan_err:
             _child_breadcrumb(f"figure language scan failed: {scan_err}")
         stdout_hits = _detect_non_english(stdout_buf.getvalue(), max_samples=5)
+        stdout_language_violations: list[str] = []
         if stdout_hits:
-            language_violations.append(f"print() output: {stdout_hits[:3]}")
-        if language_violations and result.get("success"):
+            stdout_language_violations.append(f"print() output: {stdout_hits[:3]}")
+        if figure_language_violations and result.get("success"):
             result["success"] = False
             result["error"] = (
                 "TextLanguageError: run_python produced non-English text in "
@@ -482,10 +483,27 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
                 "xlabel / ylabel / legend / annotate / ticklabels must be "
                 "standard English. Greek letters via LaTeX (r'$\\alpha$'), "
                 "Å, °, ±, ×, ÷, ≤, ≥, ≈ are allowed. "
-                "Violations: " + " | ".join(language_violations)
+                "Violations: " + " | ".join(figure_language_violations + stdout_language_violations)
             )
             _child_breadcrumb(
-                "TextLanguageError: " + " | ".join(language_violations)
+                "TextLanguageError: " + " | ".join(figure_language_violations + stdout_language_violations)
+            )
+        elif stdout_language_violations and result.get("success"):
+            # R0: non-English print() output is an implementation/UI issue,
+            # not a scientific failure.  Keep the run successful so the user
+            # does not see a spurious Partial card, but surface a concise
+            # warning so the model can use English stdout next time.  Figure
+            # text still fails above because the rendered PNG would contain
+            # tofu squares and cannot be repaired after capture.
+            stderr_buf.write(
+                "[language warning: non-English print() output was preserved "
+                "but may render poorly in logs; use English stdout in future "
+                "run_python calls. Violations: "
+                + " | ".join(stdout_language_violations)
+                + "]\n"
+            )
+            _child_breadcrumb(
+                "TextLanguageWarning: " + " | ".join(stdout_language_violations)
             )
 
         try:

@@ -326,6 +326,19 @@ def test_system_prompt_routes_transit_queries_to_search_lightcurve():
     assert "hd 189733" in prompt
 
 
+def test_system_prompt_distinguishes_catalog_period_from_measured_phase_curve():
+    """R0: variable-star catalog period is not an independent measurement,
+    and schematic phase curves must not be presented as folded observations.
+    """
+    from app.api.chat import SYSTEM_PROMPT
+
+    prompt = SYSTEM_PROMPT.lower()
+    assert "catalog-reported" in prompt
+    assert "phase plot" in prompt
+    assert "schematic" in prompt
+    assert "epoch/time-series photometry" in prompt
+
+
 # ---------- H0.7 tool_failure_counts ignores soft failures ----------
 
 def test_h07_soft_failure_classification_reference():
@@ -399,6 +412,39 @@ def test_search_lightcurve_resolves_via_simbad_tic():
     # Should have tried direct first, then TIC
     assert any("HD 189733" in q for q in call_log)
     assert any("TIC" in q.upper() for q in call_log)
+
+
+def test_search_lightcurve_empty_bright_tess_target_mentions_saturation():
+    """R0: empty TESS result for a very bright target should not only say
+    "maybe not indexed"; it should surface the likely saturation/product
+    limitation when SIMBAD has a bright V magnitude.
+    """
+    from app.services import astro_analysis
+
+    class FakeLKResult:
+        def __len__(self):
+            return 0
+
+    class FakeMagTable:
+        colnames = ["V"]
+        def __len__(self):
+            return 1
+        def __getitem__(self, key):
+            if key == "V":
+                return [3.8]
+            raise KeyError(key)
+
+    with patch("lightkurve.search_lightcurve", return_value=FakeLKResult()):
+        with patch("astroquery.simbad.Simbad") as simbad_cls:
+            simbad_cls.query_objectids.return_value = None
+            simbad_cls.return_value.query_object.return_value = FakeMagTable()
+            with patch("astropy.coordinates.SkyCoord.from_name", side_effect=ValueError("offline")):
+                result = astro_analysis.search_lightcurve("delta Cephei", mission="tess")
+
+    assert result["found"] == 0
+    msg = result["message"].lower()
+    assert "very bright" in msg
+    assert "saturated" in msg
 
 
 # ---------- I3 / B-S1: VizieR multi-mirror fallback ----------

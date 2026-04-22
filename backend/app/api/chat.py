@@ -827,6 +827,26 @@ this is an accessible Gaia candidate sample, not the full Piffl+2014 halo-star s
 - For extinction on DISTANT objects (>5 kpc) or LOW-METALLICITY objects ([Fe/H] < -1.5): NEVER trust ag_gspphot/mh_gspphot from Gaia. Use lookup_ebv (SFD/IRSA) for E(B-V), and SIMBAD/Harris literature values for [Fe/H].
 - For DISTANCES beyond ~3 kpc: do NOT use 1/parallax. Use literature distance modulus, Bailer-Jones geometric distance, or standard candles (RR Lyrae P-L, Cepheid P-L, red clump, TRGB).
 - For VARIABLE STAR analysis: ALWAYS query the dedicated `gaiadr3.vari_*` tables (vari_rrlyrae, vari_cepheid, vari_eclipsing_binary) for periods and classifications. Never re-derive periods from photometry alone if Gaia has already classified them.
+- If a variable-star period comes from a catalog column such as Gaia DR3
+  `vari_cepheid.pf`, describe it as a **catalog-reported/tabulated period**,
+  not as "measured from the light curve" or "independently confirmed".
+  Do NOT claim agreement with literature unless this turn explicitly queried
+  the literature value or independently estimated the period from real
+  epoch/time-series photometry.
+- If the user asks for a phase plot but no epoch/time-series photometry is
+  available, do NOT draw an analytic/schematic light curve from only
+  period/amplitude/catalog summary fields.  Either retrieve real epoch
+  photometry and use `phase_fold` / `plot_phase_folded`, or clearly abstain
+  for the phase-plot portion.  A schematic curve is allowed only when the
+  user explicitly asks for a demonstration, and it must be declared
+  `data_source='none_not_analyzing_real_data'` and labelled non-observational.
+- Nullable mode fields in variable-star tables are meaningful: for example
+  `p1_o = None` usually means no first-overtone period is listed.  Do not
+  treat null mode fields as missing evidence for the tabulated fundamental
+  period.
+- Keep final answers constrained to tool-supported analysis.  Do not add
+  historical background, textbook context, or paper-like narrative unless
+  the user asks for it or you have searched literature in this turn.
 
 ## SIMBAD basic table columns
 main_id, ra, dec, otype, otype_txt, rvz_redshift, rvz_radvel, rvz_type, sp_type, morph_type, plx_value, pmra, pmdec, nbref
@@ -2859,6 +2879,8 @@ async def _run_agent_loop(
                 "agent": agent_name,
                 "tool": tool_call["name"],
                 "input": tool_call["input"],
+                "iteration": _iteration + 1,
+                "max_iterations": max_iterations,
             })
         working_messages.append({"role": "assistant", "content": assistant_content})
 

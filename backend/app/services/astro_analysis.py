@@ -3064,6 +3064,59 @@ def search_lightcurve(target, mission='kepler'):
         except Exception as e:
             return e
 
+    def _safe_float_cell(value):
+        try:
+            raw = _jsonish_cell(value)
+            if isinstance(raw, list):
+                raw = raw[0] if raw else None
+            return None if raw is None else float(raw)
+        except Exception:
+            return None
+
+    def _brightness_empty_note() -> str | None:
+        """Best-effort mission-specific explanation for empty light-curve searches.
+
+        The generic "may not have been observed" message was misleading for
+        very bright classical variables such as δ Cep: TESS can be saturated,
+        while Kepler had a fixed field.  This helper only annotates EMPTY
+        results; it never changes successful archive results.
+        """
+        mission_l = str(mission or "").lower()
+        try:
+            from astroquery.simbad import Simbad
+            simbad = Simbad()
+            try:
+                simbad.add_votable_fields("V")
+            except Exception:
+                pass
+            table = simbad.query_object(target)
+            if table is None or len(table) == 0:
+                return None
+            vmag = None
+            for col in getattr(table, "colnames", []):
+                if str(col).lower() in {"v", "flux_v", "flux v", "mag_v", "mag v"}:
+                    vmag = _safe_float_cell(table[col][0])
+                    if vmag is not None:
+                        break
+            if vmag is None:
+                return None
+            if mission_l == "tess" and vmag < 5.0:
+                return (
+                    f"SIMBAD V≈{vmag:.2f}; this target is very bright and may "
+                    "be saturated or omitted from standard TESS light-curve "
+                    "products even if pixel data exist."
+                )
+            if mission_l in {"kepler", "k2"}:
+                return (
+                    f"SIMBAD V≈{vmag:.2f}; Kepler/K2 light curves require the "
+                    "target to be in the fixed mission field/campaign, so an "
+                    "empty result usually means field coverage is unavailable "
+                    "rather than an indexing delay."
+                )
+        except Exception:
+            return None
+        return None
+
     # H0.3 target resolution fallback: well-known exoplanet host aliases
     # like HD 189733, HD 209458 sometimes don't hit MAST directly.  Try
     # the original target, then Simbad-resolved coordinates.
@@ -3143,6 +3196,16 @@ def search_lightcurve(target, mission='kepler'):
         }
 
     if len(result) == 0:
+        brightness_note = _brightness_empty_note()
+        mission_note = (
+            f" {brightness_note}"
+            if brightness_note
+            else (
+                " For Kepler/K2, the target may simply be outside the fixed "
+                "field/campaign. For very bright TESS targets, saturation can "
+                "prevent standard light-curve products from appearing."
+            )
+        )
         return {
             "found": 0,
             "message": (
@@ -3150,7 +3213,9 @@ def search_lightcurve(target, mission='kepler'):
                 f"(tried direct name, Simbad cross-IDs, and coordinate lookup). "
                 f"The target may not have been observed by {mission}, or the "
                 f"MAST archive does not yet have the observation indexed."
+                f"{mission_note}"
             ),
+            "diagnostic_note": brightness_note,
         }
     out = {
         "found": len(result),

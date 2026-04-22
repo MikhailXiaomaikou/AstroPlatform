@@ -74,6 +74,13 @@ def test_validate_flags_uncited_radius_ratio():
     assert any(c.label == "radius_ratio" and c.value == pytest.approx(0.157) for c in r.uncited)
 
 
+def test_extract_chinese_period_and_percent_claims():
+    claims = extract_claims("周期值为 5.366154 天，距离估算约260 pc，误差 5.2%。")
+    assert any(c.label == "period_days_zh" and c.value == pytest.approx(5.366154) for c in claims)
+    assert any(c.value == pytest.approx(260.0) for c in claims)
+    assert any(c.label == "percent_claim" and c.value == pytest.approx(5.2) for c in claims)
+
+
 def test_validate_tolerance_accepts_rounded_value():
     """7.504 formatted as 7.50 must count as a match under the 1 % tolerance."""
     tool_results = [{"result": {"parallax": 7.504}}]

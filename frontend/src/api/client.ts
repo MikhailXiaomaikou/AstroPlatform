@@ -1315,7 +1315,7 @@ export interface ChatResponse {
 // callback to render a live timeline of what the model is doing.
 export type ThinkingEvent =
   | { type: "agent_text"; agent?: string; content: string }
-  | { type: "tool_call"; agent?: string; tool: string; input: unknown }
+  | { type: "tool_call"; agent?: string; tool: string; input: unknown; iteration?: number; max_iterations?: number }
   | { type: "tool_progress"; agent?: string; tool: string; message: string; stage?: string; detail?: Record<string, unknown> }
   | { type: "tool_result"; agent?: string; tool: string; result: unknown }
   | { type: "status"; message: string }
@@ -1939,6 +1939,8 @@ export async function sendChatMessage(
                 agent: typeof evt.agent === "string" ? evt.agent : undefined,
                 tool: evt.tool,
                 input: evt.input,
+                iteration: typeof evt.iteration === "number" ? evt.iteration : undefined,
+                max_iterations: typeof evt.max_iterations === "number" ? evt.max_iterations : undefined,
               });
             }
           } else if (evt.type === "status" && typeof evt.message === "string") {

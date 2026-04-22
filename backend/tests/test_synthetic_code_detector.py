@@ -165,6 +165,29 @@ print(len(rows), y_model.min())
     assert r.reads_real_data is True
 
 
+def test_catalog_summary_schematic_phase_curve_is_suspicious():
+    """R0: Gaia vari_cepheid.pf + amplitude can support a catalog summary,
+    but not a real phase-folded light curve.  A linspace phase axis plus an
+    analytic magnitude curve without a time-series reader must be downgraded.
+    """
+    code = """
+import numpy as np
+import matplotlib.pyplot as plt
+rows = get_adql_results()
+period = rows[0]["pf"]
+amp = rows[0]["peak_to_peak_g"]
+mean_mag = rows[0]["int_average_g"]
+phase = np.linspace(0, 2, 400)
+mag = np.interp(phase % 1, [0.0, 0.5, 1.0], [mean_mag - amp/2, mean_mag + amp/2, mean_mag - amp/2])
+plt.plot(phase, mag)
+print(period)
+"""
+    r = analyze(code)
+    assert r.reads_real_data is True
+    assert r.has_schematic_phase_curve is True
+    assert r.verdict == "suspicious"
+
+
 def test_arithmetic_no_random_is_clean():
     code = """
 import numpy as np

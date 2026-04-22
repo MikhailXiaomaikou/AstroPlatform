@@ -3268,6 +3268,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                     f"but data_source='{data_source}' was declared. "
                     f"Signals: has_np_random={detection.has_np_random}, "
                     f"has_time_linspace={detection.has_time_linspace}, "
+                    f"has_schematic_phase_curve={getattr(detection, 'has_schematic_phase_curve', False)}, "
                     f"has_constant_redshift_sequence={detection.has_constant_redshift_sequence}, "
                     f"suspicious_keywords={detection.suspicious_keywords}, "
                     f"reads_real_data={detection.reads_real_data}. "
@@ -3281,6 +3282,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                     "suspicious_keywords": detection.suspicious_keywords,
                     "has_np_random": detection.has_np_random,
                     "has_time_linspace": detection.has_time_linspace,
+                    "has_schematic_phase_curve": getattr(detection, "has_schematic_phase_curve", False),
                     "has_constant_redshift_sequence": detection.has_constant_redshift_sequence,
                     "reads_real_data": detection.reads_real_data,
                 },

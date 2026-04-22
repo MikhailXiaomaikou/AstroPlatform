@@ -2,7 +2,7 @@
 
 覆盖:
 - 英语 stdout + 英语 figure → 通过
-- 中文 print 输出 → 触发 TextLanguageError
+- 中文 print 输出 → warning, 不让成功计算变 Partial
 - 中文 figure title → 触发 TextLanguageError
 - 希腊字母 (LaTeX) / Å / ° / ± / ≥ 不误判
 - 日语 / 韩语 / 全角标点也被拦
@@ -113,19 +113,18 @@ def test_subprocess_english_print_passes():
 
 
 @pytest.mark.slow
-def test_subprocess_chinese_print_raises_textlanguage_error():
-    """中文 print 被子进程硬拦。"""
+def test_subprocess_chinese_print_warns_without_failing():
+    """R0: 中文 print 是日志/UI问题, 不应把科学计算降成 Partial。"""
     backend = SubprocessBackend()
     result = backend.execute(
         'print("成员星数量: 776")',
         timeout=30,
         memory_bytes=512 * 1024 * 1024,
     )
-    assert result.success is False
-    assert result.error is not None
-    assert "TextLanguageError" in result.error
-    assert "print()" in result.error
-    # stdout 保留让 AI 能看到自己写了啥
+    assert result.success is True
+    assert result.error is None
+    assert "language warning" in result.stderr
+    assert "print()" in result.stderr
     assert "成员星数量" in result.stdout
 
 

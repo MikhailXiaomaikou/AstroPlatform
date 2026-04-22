@@ -34,9 +34,11 @@ class DetectionResult:
     verdict: Verdict
     has_np_random: bool = False
     has_time_linspace: bool = False
+    has_schematic_phase_curve: bool = False
     has_constant_redshift_sequence: bool = False
     suspicious_keywords: list[str] = field(default_factory=list)
     reads_real_data: bool = False
+    reads_time_series_data: bool = False
     legitimate_random_context: bool = False
     notes: list[str] = field(default_factory=list)
 
@@ -83,9 +85,12 @@ class _CodeVisitor(ast.NodeVisitor):
         self.np_random_calls: list[str] = []  # np.random.normal etc.
         self.linspace_calls: list[str] = []   # np.linspace / np.arange
         self.real_data_reader_calls: list[str] = []
+        self.time_series_reader_calls: list[str] = []
         self.legit_random_refs: list[str] = []
         self.suspicious_var_names: list[str] = []
         self.constant_redshift_sequences: list[str] = []
+        self.phase_axis_generators: list[str] = []
+        self.schematic_curve_assignments: list[str] = []
 
     def _attribute_chain(self, node: ast.AST) -> str:
         """Return a dotted chain like 'np.random.normal' if possible."""
@@ -114,6 +119,19 @@ class _CodeVisitor(ast.NodeVisitor):
             if reader in chain:
                 self.real_data_reader_calls.append(chain)
                 break
+        if any(
+            token in chain
+            for token in (
+                "search_lightcurve", "download_and_clean_lightcurve",
+                "transit_search", "phase_fold", "plot_phase_folded",
+                "lomb_scargle_period",
+            )
+        ):
+            self.time_series_reader_calls.append(chain)
+        if chain in {"get_cached_results", "astro.get_cached_results"} and node.args:
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and str(first.value) == "latest_lightcurve":
+                self.time_series_reader_calls.append("get_cached_results(latest_lightcurve)")
         self.generic_visit(node)
 
     def _target_names(self, target: ast.AST) -> list[str]:
@@ -154,12 +172,56 @@ class _CodeVisitor(ast.NodeVisitor):
         return False
 
     def visit_Assign(self, node: ast.Assign) -> None:
+        target_names: list[str] = []
+        for target in node.targets:
+            target_names.extend(self._target_names(target))
+
+        value_chain = self._call_chain_in_expr(node.value)
+        for name in target_names:
+            lowered = name.lower()
+            if (
+                ("phase" in lowered)
+                and value_chain in {"np.linspace", "numpy.linspace", "np.arange", "numpy.arange"}
+            ):
+                self.phase_axis_generators.append(name)
+            if (
+                any(tok in lowered for tok in ("mag", "flux", "lightcurve", "curve"))
+                and self._looks_like_analytic_curve(node.value)
+            ):
+                self.schematic_curve_assignments.append(name)
+
         if self._is_constant_numeric_sequence(node.value):
-            for target in node.targets:
-                for name in self._target_names(target):
-                    if self._is_redshift_name(name):
-                        self.constant_redshift_sequences.append(name)
+            for name in target_names:
+                if self._is_redshift_name(name):
+                    self.constant_redshift_sequences.append(name)
         self.generic_visit(node)
+
+    def _call_chain_in_expr(self, node: ast.AST) -> str:
+        if isinstance(node, ast.Call):
+            return self._attribute_chain(node.func)
+        return ""
+
+    def _looks_like_analytic_curve(self, node: ast.AST) -> bool:
+        """Heuristic for a plotted light/phase curve generated from formulas.
+
+        This catches the R0 failure mode: code reads a real catalog row
+        (period/amplitude) but then fabricates phase/magnitude arrays with
+        np.linspace + np.interp/piecewise/where/sin/cos and presents that
+        as a phase-folded observation.  Real time-series analysis normally
+        calls phase_fold / lomb_scargle / download helpers and is exempt.
+        """
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                chain = self._attribute_chain(child.func)
+                if chain in {
+                    "np.interp", "numpy.interp", "np.piecewise", "numpy.piecewise",
+                    "np.where", "numpy.where", "np.sin", "numpy.sin",
+                    "np.cos", "numpy.cos",
+                }:
+                    return True
+            if isinstance(child, ast.Name) and child.id.lower() in {"phase", "phases", "phase_grid"}:
+                return True
+        return False
 
     def visit_Dict(self, node: ast.Dict) -> None:
         for key, val in zip(node.keys, node.values, strict=False):
@@ -269,6 +331,7 @@ def analyze(code: str) -> DetectionResult:
 
     result.has_np_random = bool(visitor.np_random_calls)
     result.reads_real_data = bool(visitor.real_data_reader_calls)
+    result.reads_time_series_data = bool(visitor.time_series_reader_calls)
     result.legitimate_random_context = bool(visitor.legit_random_refs)
     result.has_constant_redshift_sequence = bool(visitor.constant_redshift_sequences)
 
@@ -297,6 +360,11 @@ def analyze(code: str) -> DetectionResult:
         result.notes.append(f"variables: {visitor.suspicious_var_names}")
     if visitor.constant_redshift_sequences:
         result.notes.append(f"constant_redshift_sequences: {visitor.constant_redshift_sequences}")
+    if visitor.phase_axis_generators and visitor.schematic_curve_assignments and not result.reads_time_series_data:
+        result.has_schematic_phase_curve = True
+        result.notes.append(
+            "schematic_phase_curve: phase axis plus analytic mag/flux curve without time-series reader"
+        )
 
     # Classification
     hard_signals = 0
@@ -310,14 +378,19 @@ def analyze(code: str) -> DetectionResult:
         hard_signals += 1
     if result.has_constant_redshift_sequence:
         hard_signals += 1
+    if result.has_schematic_phase_curve:
+        hard_signals += 1
 
     if hard_signals == 0:
         result.verdict = "clean"
     elif result.reads_real_data:
         # 读了真实数据时, np.linspace + "synthetic/model" 注释常用于画
         # 对照模型曲线, 不应仅凭关键词把真实分析降级。真正危险的是
-        # random/fake 生成混入真实声明。
-        if result.has_np_random and not result.legitimate_random_context:
+        # random/fake 生成混入真实声明, 或把 catalog summary 拼成
+        # schematic phase curve 后冒充真实折叠光变。
+        if result.has_schematic_phase_curve:
+            result.verdict = "suspicious"
+        elif result.has_np_random and not result.legitimate_random_context:
             result.verdict = "suspicious" if hard_signals >= 2 else "clean"
         else:
             result.verdict = "clean"
