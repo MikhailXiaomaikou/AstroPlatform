@@ -41,7 +41,13 @@ SDSS_SQL_URLS: dict[str, list[str]] = {
 }
 
 
-async def execute_sdss_sql(query: str, dr: str = "18", timeout_s: float = 120.0) -> dict:
+async def execute_sdss_sql(
+    query: str,
+    dr: str = "18",
+    timeout_s: float = 120.0,
+    max_attempts: int = 1,
+    backoff_s: float = 0.75,
+) -> dict:
     """直接打 SkyServer SQL API 跑一条 T-SQL 查询.
 
     返回结构跟 ADQL 路径一致:
@@ -72,34 +78,44 @@ async def execute_sdss_sql(query: str, dr: str = "18", timeout_s: float = 120.0)
 
     mirrors = SDSS_SQL_URLS[dr_key]
     last_err: Exception | None = None
+    attempts = 0
+    max_attempts = max(1, int(max_attempts or 1))
 
-    for url in mirrors:
-        try:
-            async with httpx.AsyncClient(timeout=timeout_s) as client:
-                # SkyServer GET 接口: ?cmd=<sql>&format=json
-                # 不走 POST 是因为 SkyServer 多数历史文档用 GET, GET 对
-                # 调试/日志友好 (URL 可复现), 查询长度没超过 URL 上限.
-                resp = await client.get(url, params={"cmd": query, "format": "json"})
-                resp.raise_for_status()
-                # 成功 → parse json
-                try:
-                    payload = resp.json()
-                except Exception as je:
-                    raise ValueError(f"SDSS SkyServer did not return JSON (likely SQL syntax error). "
-                                     f"Response head: {resp.text[:300]!r}") from je
-                return _parse_skyserver_json(payload, query=query, dr=dr_key)
-        except (httpx.HTTPError, ConnectionError, TimeoutError, asyncio.TimeoutError) as e:
-            logger.info("SDSS SkyServer mirror %s failed (%s: %s); trying next",
-                        url, type(e).__name__, str(e)[:200])
-            last_err = e
-            continue
-        except ValueError:
-            # SQL 错误 — 不换 mirror, 直接往上抛.
-            raise
+    for attempt in range(1, max_attempts + 1):
+        for url in mirrors:
+            attempts += 1
+            try:
+                async with httpx.AsyncClient(timeout=timeout_s) as client:
+                    # SkyServer GET 接口: ?cmd=<sql>&format=json
+                    # 不走 POST 是因为 SkyServer 多数历史文档用 GET, GET 对
+                    # 调试/日志友好 (URL 可复现), 查询长度没超过 URL 上限.
+                    resp = await client.get(url, params={"cmd": query, "format": "json"})
+                    resp.raise_for_status()
+                    # 成功 → parse json
+                    try:
+                        payload = resp.json()
+                    except Exception as je:
+                        raise ValueError(f"SDSS SkyServer did not return JSON (likely SQL syntax error). "
+                                         f"Response head: {resp.text[:300]!r}") from je
+                    return _parse_skyserver_json(payload, query=query, dr=dr_key)
+            except (httpx.HTTPError, ConnectionError, TimeoutError, asyncio.TimeoutError) as e:
+                logger.info(
+                    "SDSS SkyServer mirror %s failed on attempt %s/%s (%s: %s)",
+                    url, attempt, max_attempts, type(e).__name__, str(e)[:200],
+                )
+                last_err = e
+                continue
+            except ValueError:
+                # SQL 错误 — 重试不会改变语法, 直接往上抛.
+                raise
+        if attempt < max_attempts and backoff_s > 0:
+            await asyncio.sleep(backoff_s * (2 ** (attempt - 1)))
 
     msg = (
-        f"All SDSS DR{dr_key} SkyServer mirrors unavailable after {len(mirrors)} attempts. "
-        f"Tried: {', '.join(mirrors)}. Last error: {last_err}"
+        f"All SDSS DR{dr_key} SkyServer mirrors unavailable after {attempts} attempts. "
+        f"Tried: {', '.join(mirrors)}. Last error: {last_err}. "
+        f"SkyServer sometimes has transient outages; retry the same query, "
+        f"or fall back to VizieR for small sanity checks."
     )
     raise ConnectionError(msg)
 

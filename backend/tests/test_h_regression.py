@@ -878,6 +878,19 @@ def test_run_python_exposes_cache_and_introspection_helpers():
     assert result.stdout.strip().splitlines() == ["True", "True", "True", "True"]
 
 
+def test_available_functions_lists_cache_helpers_and_supports_limit():
+    from app.services.astro_analysis import available_functions
+
+    funcs = available_functions()
+    assert "get_search_results" in funcs
+    assert "get_cached_results" in funcs
+    assert "sandbox_limits" in funcs
+    first_five = funcs[:5]
+    assert isinstance(first_five, dict)
+    assert len(first_five) == 5
+    assert len(available_functions(limit=3)) == 3
+
+
 def test_adql_timeout_message_blames_query_pattern_not_global_overload():
     """R5: Gaia 大查询超预算时不要误导用户以为整个 TAP 服务挂了."""
     import inspect
@@ -1049,7 +1062,7 @@ def test_run_sdss_sql_dispatches_to_connector():
         "query": "SELECT TOP 1 objID, ra, dec FROM PhotoObjAll WHERE mode=1",
     }
 
-    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0):
+    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0, max_attempts=1):
         return fake_conn_result
 
     with patch("app.connectors.sdss_sql.execute_sdss_sql", side_effect=fake_execute_sdss_sql):
@@ -1085,7 +1098,7 @@ def test_run_sdss_sql_writes_session_scoped_cache_with_case_aliases():
         "query": "SELECT TOP 1 objID, petroMag_r, zErr FROM PhotoObjAll",
     }
 
-    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0):
+    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0, max_attempts=1):
         return fake_conn_result
 
     with patch("app.connectors.sdss_sql.execute_sdss_sql", side_effect=fake_execute_sdss_sql):
@@ -1100,6 +1113,35 @@ def test_run_sdss_sql_writes_session_scoped_cache_with_case_aliases():
     assert cache["petromag_r"] == [17.2]
     assert cache["zErr"] == [0.001]
     assert cache["zerr"] == [0.001]
+
+
+def test_run_sdss_sql_long_mode_uses_three_attempts():
+    from app.services.ai_tools import _exec_run_sdss_sql
+
+    seen: dict[str, object] = {}
+
+    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0, max_attempts=1):
+        seen["timeout_s"] = timeout_s
+        seen["max_attempts"] = max_attempts
+        return {
+            "columns": ["objID"],
+            "data": {"objID": [111]},
+            "column_aliases": {"objid": "objID"},
+            "row_count": 1,
+            "service": "sdss",
+            "dr": "18",
+            "query": query,
+        }
+
+    with patch("app.connectors.sdss_sql.execute_sdss_sql", side_effect=fake_execute_sdss_sql):
+        res = asyncio.run(_exec_run_sdss_sql({
+            "query": "SELECT TOP 1 objID FROM PhotoObjAll",
+            "_workflow_budget_mode": "long",
+        }))
+
+    assert res["row_count"] == 1
+    assert seen["timeout_s"] == 240.0
+    assert seen["max_attempts"] == 3
 
 
 # ---------- M1: long workflow budget + checkpoint + MW high-velocity helper ----------

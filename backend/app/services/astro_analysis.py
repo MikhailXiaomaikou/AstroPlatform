@@ -3583,8 +3583,23 @@ def bss_select(bp_rp, abs_mag, turnoff_bp_rp, turnoff_M_G,
     return mask
 
 
-def available_functions():
-    """Return signatures and one-line docs for sandbox preloaded helpers."""
+class _FunctionRegistry(dict):
+    """让 helper 清单既像 dict, 又能容错 `funcs[:10]` 这种 LLM 写法."""
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            keys = list(self.keys())[key]
+            return _FunctionRegistry({name: dict.__getitem__(self, name) for name in keys})
+        return dict.__getitem__(self, key)
+
+
+def available_functions(limit: int | None = None):
+    """Return signatures and one-line docs for sandbox preloaded helpers.
+
+    `limit` is optional.  The returned object is a dict subclass, so legacy
+    code can use `.keys()` / `.items()`, while accidental slices such as
+    `available_functions()[:10]` return a smaller dict instead of raising.
+    """
     exported = [
         pub_figure,
         pub_style,
@@ -3677,11 +3692,43 @@ def available_functions():
         extract_and_photometer,
     ])
 
-    info = {}
+    info = _FunctionRegistry()
     for func in exported:
         doc = inspect.getdoc(func) or ""
         info[func.__name__] = {
             "signature": f"{func.__name__}{inspect.signature(func)}",
             "summary": doc.splitlines()[0] if doc else "",
         }
+    info.update({
+        "get_search_results": {
+            "signature": "get_search_results() -> list[dict]",
+            "summary": "Return same-chat latest search/lightcurve results as row dictionaries.",
+        },
+        "get_cached_results": {
+            "signature": "get_cached_results(key: str = 'latest_search') -> Any",
+            "summary": "Return same-chat cached tool payloads such as latest_sdss_sql or latest_adql.",
+        },
+        "get_adql_results": {
+            "signature": "get_adql_results() -> list[dict]",
+            "summary": "Return the latest same-chat ADQL/SQL result as row dictionaries.",
+        },
+        "get_latest_adql_result": {
+            "signature": "get_latest_adql_result() -> dict | None",
+            "summary": "Return the latest same-chat ADQL/SQL result set with metadata.",
+        },
+        "get_adql_result_sets": {
+            "signature": "get_adql_result_sets() -> list[dict]",
+            "summary": "Return recent same-chat ADQL/SQL result sets for multi-query workflows.",
+        },
+        "sandbox_limits": {
+            "signature": "sandbox_limits() -> dict",
+            "summary": "Return sandbox resource limits and current memory usage.",
+        },
+    })
+    if limit is not None:
+        try:
+            n = max(0, int(limit))
+        except (TypeError, ValueError):
+            n = 0
+        return info[:n]
     return info

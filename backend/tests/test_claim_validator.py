@@ -115,6 +115,21 @@ def test_schema_numbers_inside_markdown_code_are_not_claims():
     assert 1000.0 not in values
 
 
+def test_spelled_out_summary_numbers_are_claims():
+    """R20: 'three point zero' 这种英文拼写数字不能绕过 gate."""
+    claims = extract_claims("The synthetic run said the mean was three point zero.")
+    assert any(c.label == "spelled_number" and c.value == pytest.approx(3.0) for c in claims)
+
+
+def test_spelled_out_uncited_number_is_blocked():
+    r = validate_claims(
+        "The mean was three point zero.",
+        [{"result": {"__tool_status__": "SYNTHETIC", "__do_not_claim__": True, "stdout": "mean=3.0"}}],
+    )
+    assert not r.ok
+    assert any(c.value == pytest.approx(3.0) for c in r.uncited)
+
+
 # -------------------- Prompts & blocked text --------------------
 
 

@@ -341,9 +341,14 @@ function ActionCardInner({
     && ((autoResult as Record<string, unknown>).error as string).trim() !== "";
   const explicitFail = autoResult && typeof autoResult === "object"
     && (autoResult as Record<string, unknown>).success === false;
+  const malformedRunPython = action.action === "run_python"
+    && isAutoExecuted
+    && autoResult
+    && typeof autoResult === "object"
+    && Object.keys(autoResult).length === 0;
   const isToolSynthetic = toolStatus === "SYNTHETIC" || dataOrigin === "synthetic";
   const isToolPartial = !isToolSynthetic && toolStatus === "PARTIAL";
-  const isToolFailed = !isToolSynthetic && !isToolPartial && (toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField);
+  const isToolFailed = !isToolSynthetic && !isToolPartial && (toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField || malformedRunPython);
   const isToolEmpty = !isToolSynthetic && !isToolFailed && toolStatus === "EMPTY";
 
   return (

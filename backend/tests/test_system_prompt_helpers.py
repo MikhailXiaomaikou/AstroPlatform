@@ -52,3 +52,20 @@ def test_system_prompt_warns_against_guessing_kwargs():
     from app.api.chat import SYSTEM_PROMPT
 
     assert "Never invent kwargs" in SYSTEM_PROMPT or "do not guess" in SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_routes_transit_fits_to_pro_helper():
+    """R20: HD 189733b / Mandel-Agol 场景优先走平台 transit fit helper."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "astro.pro_fit_transit" in SYSTEM_PROMPT
+    assert "Mandel-Agol" in SYSTEM_PROMPT
+    assert "hand-roll" in SYSTEM_PROMPT
+
+
+def test_system_prompt_preserves_requested_separate_cells():
+    """R20: 用户明确要求 separate cells 时不能合并成一个 run_python."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "separate cells" in SYSTEM_PROMPT
+    assert "Do not concatenate" in SYSTEM_PROMPT

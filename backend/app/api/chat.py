@@ -960,6 +960,8 @@ You can define variables in one run_python call and use them in the next. No nee
 in one giant code block, but do not assume variables survive after opening a brand-new chat or page refresh.
 Complex objects such as astropy cosmology instances, scipy functions, and custom classes also persist.
 Do not probe for availability with `eval`, `sys`, or fragile introspection hacks. These helpers are guaranteed.
+If the user asks for "separate cells", "independent cells", or "each in a separate cell", issue separate
+run_python tool calls. Do not concatenate those requested cells into one script.
 
 **Variable-name consistency rule (IMPORTANT):** When a later script references
 a variable defined in an earlier script, you MUST verify the variable was
@@ -1084,12 +1086,16 @@ using plot_hr_diagram(bp_rp, gmag, isochrone_ages=[best_log_age]).
 
 You have a `search_lightcurve` tool that searches for Kepler/TESS/K2 light curves for a target star.
 Use it when users ask about exoplanet transits, stellar variability, or light curves. The toolkit also
-includes download_and_clean_lightcurve() and transit_search() available via run_python.
+includes download_and_clean_lightcurve(), transit_search(), and pro_fit_transit() available via run_python.
 If the user explicitly names `search_lightcurve`, or mentions TESS/Kepler/K2, transit, phase-folding,
 period search, variability, or time-series photometry for a named star, call `search_lightcurve`
 before `search_objects` or `get_object_dossier`. For exoplanet hosts such as HD 189733, HD 209458,
 WASP-12, or similar systems, prefer `search_lightcurve(target="<star>", mission="tess")` before
 generic object search.
+For transit fitting, Mandel-Agol modeling, or HD 189733b-style radius-ratio estimates, prefer
+`astro.pro_fit_transit(...)` after downloading/cleaning and phase-folding the light curve. Do not
+hand-roll `batman` + scipy/L-BFGS-B fits unless `pro_fit_transit` is unavailable or the user explicitly
+asks for a from-scratch implementation.
 
 ## Common astro.* helpers in run_python (EXACT signatures — do not guess)
 
@@ -1116,6 +1122,9 @@ LIGHTCURVE / TIME-DOMAIN:
     than a failed first attempt.
   astro.transit_search(target, mission='kepler')
     -> {period_days, transit_time, depth, max_power}
+  astro.pro_fit_transit(time, flux, flux_err=None, period=1.0, t0=0.0, rp_rs=0.1)
+    -> robust transit model fit with fitted parameters and diagnostics.
+    Use this for Mandel-Agol / planet radius-ratio fits before writing custom batman/scipy code.
   astro.lomb_scargle_period(time, flux, min_period=None, max_period=None)
     -> {best_period, power, false_alarm_prob}
   astro.phase_fold(time, flux, period, t0=None)

@@ -2494,10 +2494,12 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
 
     query = str(inp.get("query") or "").strip()
     dr = str(inp.get("dr") or "18").strip()
-    timeout_s = 240.0 if (
+    is_long_mode = (
         inp.get("extended_timeout")
         or str(inp.get("_workflow_budget_mode") or "").lower() == "long"
-    ) else 120.0
+    )
+    timeout_s = 240.0 if is_long_mode else 120.0
+    max_attempts = 3 if is_long_mode else 1
 
     if not query:
         return {
@@ -2517,7 +2519,12 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
         }
 
     try:
-        raw = await execute_sdss_sql(query, dr=dr, timeout_s=timeout_s)
+        raw = await execute_sdss_sql(
+            query,
+            dr=dr,
+            timeout_s=timeout_s,
+            max_attempts=max_attempts,
+        )
     except ValueError as e:
         # SQL 语法错误 / 危险关键词: 用户可见的 4xx 语义
         return {
@@ -2532,6 +2539,10 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
             "error_class": "sdss_unavailable",
             "service": "sdss",
             "dr": dr,
+            "hint": (
+                "SkyServer outages are often transient. Retry the same SQL "
+                "query, or use VizieR for a small sanity query while waiting."
+            ),
         }
 
     columns = raw.get("columns", [])
@@ -3473,6 +3484,16 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         response["variable_types"] = dict(list(result.variable_types.items())[:50])
     if auto_fix_note:
         response["auto_fix_note"] = auto_fix_note
+
+    if response.get("success") is False and not (
+        response.get("stdout")
+        or response.get("figures")
+        or response.get("variables")
+    ):
+        # 没有任何可用输出的失败必须直接标 FAILED，避免前端只能显示 auto。
+        # 有 stdout/figures/variables 的失败交给 result_provenance 降级为 PARTIAL。
+        response.setdefault("__tool_status__", "FAILED")
+        response.setdefault("analysis_status", "failed")
 
     # G1.3: SYNTHETIC banner.  If the AI declared that this run_python call
     # is NOT analyzing real data, prepend a banner and mark data_origin so

@@ -292,6 +292,8 @@ class TestExecRunPythonErrorFloor:
         msg = response["error"].lower()
         assert "sandbox reported failure" in msg or "without a specific error" in msg
         assert response.get("error_class") == "sandbox_crash"
+        assert response.get("__tool_status__") == "FAILED"
+        assert response.get("analysis_status") == "failed"
 
     def test_empty_code_early_return(self):
         """Empty code should still hit the pre-existing empty_input path,

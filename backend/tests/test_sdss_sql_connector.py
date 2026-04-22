@@ -130,6 +130,31 @@ def test_execute_success_returns_parsed_rows():
     assert "SELECT" in call_kwargs.kwargs["params"]["cmd"]
 
 
+def test_execute_retries_transient_skyserver_failure():
+    """SkyServer 偶发连接/超时错误时, long-mode 调用方会给 3 次机会。"""
+    fake_payload = [{"Rows": [{"objID": 123, "ra": 100.0}]}]
+    fake_resp = _make_fake_httpx_response(200, json_data=fake_payload)
+
+    fake_client = MagicMock()
+    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+    fake_client.__aexit__ = AsyncMock(return_value=None)
+    fake_client.get = AsyncMock(side_effect=[
+        httpx.ConnectTimeout("temporary SkyServer outage"),
+        fake_resp,
+    ])
+
+    with patch("app.connectors.sdss_sql.httpx.AsyncClient", return_value=fake_client):
+        result = asyncio.run(execute_sdss_sql(
+            "SELECT TOP 1 objID, ra FROM PhotoObjAll WHERE mode=1",
+            dr="18",
+            max_attempts=2,
+            backoff_s=0,
+        ))
+
+    assert result["row_count"] == 1
+    assert fake_client.get.await_count == 2
+
+
 def test_execute_sql_syntax_error_surfaces_as_valueerror():
     """SkyServer 对 SQL 错误返回 HTML/text 不是 JSON — 我们转成清晰的
     ValueError 让调用方捕获后告诉 AI 改 query."""

@@ -161,6 +161,65 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     )),
 ]
 
+_NUMBER_WORD_DIGITS: dict[str, str] = {
+    "zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3",
+    "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8",
+    "nine": "9",
+}
+_NUMBER_WORD_INTS: dict[str, int] = {
+    "zero": 0, "oh": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+    "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+    "eighty": 80, "ninety": 90,
+}
+_NUMBER_WORD_TOKEN = (
+    r"(?:zero|oh|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|"
+    r"eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|"
+    r"eighty|ninety)"
+)
+_SPELLED_NUMBER_PATTERN = re.compile(
+    rf"\b(?:mean|average|avg|std|standard\s+deviation|sigma|period|"
+    rf"distance|redshift|age|mass|radius|ratio|depth|rms|chi[-\s]?squared?)"
+    rf"\s*(?:is|was|of|at|=|≈|~|:)?\s+"
+    rf"({_NUMBER_WORD_TOKEN}(?:[-\s]{_NUMBER_WORD_TOKEN})?"
+    rf"(?:\s+point\s+{_NUMBER_WORD_TOKEN}(?:\s+{_NUMBER_WORD_TOKEN})*)?)\b",
+    re.I,
+)
+
+
+def _spelled_number_to_float(raw: str) -> float | None:
+    """把简单英文数字短语转成 float, 仅用于 claim 抽取兜底。"""
+    tokens = re.sub(r"[-_]", " ", raw.lower()).split()
+    if not tokens:
+        return None
+    if "point" in tokens:
+        idx = tokens.index("point")
+        left_tokens = tokens[:idx]
+        right_tokens = tokens[idx + 1:]
+        if not right_tokens or any(tok not in _NUMBER_WORD_DIGITS for tok in right_tokens):
+            return None
+        left = _spelled_integer_to_int(left_tokens) if left_tokens else 0
+        if left is None:
+            return None
+        return float(f"{left}.{''.join(_NUMBER_WORD_DIGITS[tok] for tok in right_tokens)}")
+    integer = _spelled_integer_to_int(tokens)
+    return float(integer) if integer is not None else None
+
+
+def _spelled_integer_to_int(tokens: list[str]) -> int | None:
+    if not tokens:
+        return 0
+    if any(tok not in _NUMBER_WORD_INTS for tok in tokens):
+        return None
+    total = 0
+    for tok in tokens:
+        total += _NUMBER_WORD_INTS[tok]
+    return total
+
 
 @dataclass
 class Claim:
@@ -267,6 +326,17 @@ def extract_claims(text: str) -> list[Claim]:
                     start=span[0],
                     end=span[1],
                 ))
+    for match in _SPELLED_NUMBER_PATTERN.finditer(text):
+        value = _spelled_number_to_float(match.group(1))
+        if value is None or not math.isfinite(value):
+            continue
+        claims.append(Claim(
+            label="spelled_number",
+            raw=match.group(0).strip(),
+            value=value,
+            start=match.start(),
+            end=match.end(),
+        ))
 
     # L1: span-overlap dedup.  Two patterns may both match the same numeric
     # value at overlapping character ranges ("parallax is 9.00 mas" + "9.00
