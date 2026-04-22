@@ -140,6 +140,84 @@ def test_download_and_clean_lightcurve_returns_numeric_arrays():
     assert result["flux_err"].dtype.kind == "f"
 
 
+def test_phase_fold_result_exposes_flux_alias():
+    """R21: AI 常写 folded.flux；它应等价于 folded.flux_folded。"""
+    from app.services import astro_analysis
+
+    folded = astro_analysis.phase_fold([0.2, 0.1], [1.2, 1.1], period=1.0, t0=0.0)
+
+    assert np.allclose(folded.flux, folded.flux_folded)
+    assert np.allclose(folded["flux"], folded["flux_folded"])
+    assert "flux" in folded
+
+
+def test_search_lightcurve_serializes_list_cells_as_lists():
+    """R21: lightkurve/astropy list cells 不能被 str() 成 \"['...']\"。"""
+    from app.services import astro_analysis
+
+    class _Cell:
+        def __init__(self, value):
+            self._value = value
+
+        def tolist(self):
+            return self._value
+
+    class _Row:
+        mission = _Cell(["TESS Sector 41"])
+        target_name = _Cell(["HD 189733"])
+        exptime = _Cell([120.0])
+
+    class _Search:
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                return [_Row()]
+            raise TypeError(key)
+
+    fake_lk = MagicMock()
+    fake_lk.search_lightcurve.return_value = _Search()
+
+    with patch.dict("sys.modules", {"lightkurve": fake_lk}):
+        result = astro_analysis.search_lightcurve("HD 189733", mission="tess")
+
+    row = result["results"][0]
+    assert row["mission"] == ["TESS Sector 41"]
+    assert row["target"] == ["HD 189733"]
+    assert row["exptime"] == [120.0]
+
+
+def test_pro_fit_transit_returns_stable_schema_and_radius_ratio():
+    """R21: pro_fit_transit 要给 AI 稳定 schema, 并从 box depth 给出合理 Rp/Rs。"""
+    from app.services import astro_analysis
+
+    t = np.linspace(0, 10, 600)
+    period = 2.0
+    t0 = 1.0
+    rp_true = 0.15
+    phase = ((t - t0) / period) % 1.0
+    in_transit = (phase < 0.03) | (phase > 0.97)
+    flux = np.ones_like(t)
+    flux[in_transit] -= rp_true ** 2
+
+    result = astro_analysis.pro_fit_transit(
+        t.tolist(),
+        flux.tolist(),
+        period=period,
+        t0=t0,
+        rp_rs=0.1,
+        a_rs=10.0,
+        inc=89.0,
+    )
+
+    for key in ("rp_rs", "a_rs", "inc", "t0", "period", "chi2", "chi2_reduced", "residuals"):
+        assert key in result
+    assert isinstance(result["residuals"], dict)
+    assert "values" in result["residuals"]
+    assert 0.10 < result["rp_rs"] < 0.20
+
+
 def test_download_and_clean_lightcurve_downsamples_large_arrays():
     """R18-NEW-4: 大 TESS 曲线返回前要降采样，避免后续绘图 OOM。"""
     from app.services import astro_analysis

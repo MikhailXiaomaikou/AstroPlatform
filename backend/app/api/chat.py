@@ -1122,8 +1122,9 @@ LIGHTCURVE / TIME-DOMAIN:
     than a failed first attempt.
   astro.transit_search(target, mission='kepler')
     -> {period_days, transit_time, depth, max_power}
-  astro.pro_fit_transit(time, flux, flux_err=None, period=1.0, t0=0.0, rp_rs=0.1)
-    -> robust transit model fit with fitted parameters and diagnostics.
+  astro.pro_fit_transit(time, flux, flux_err=None, period=1.0, t0=0.0,
+      rp_rs=0.1, a_rs=10.0, inc=90.0, limb_darkening="quadratic", ld_coeffs=None)
+    -> {rp_rs, a_rs, inc, t0, period, chi2, chi2_reduced, model_flux, residuals}
     Use this for Mandel-Agol / planet radius-ratio fits before writing custom batman/scipy code.
   astro.lomb_scargle_period(time, flux, min_period=None, max_period=None)
     -> {best_period, power, false_alarm_prob}
@@ -2718,8 +2719,8 @@ async def _run_agent_loop(
             pass
 
     # G3.1: track which data-fetch tools have failed this turn so we can
-    # taint subsequent run_python outputs + physically remove the failed
-    # tools from future LLM turns (G3.4).
+    # suppress subsequent synthetic run_python fallbacks + physically remove
+    # the failed tools from future LLM turns (G3.4).
     _DATA_FETCH_TOOLS = {
         "search_objects", "run_adql", "search_lightcurve", "query_transients",
         "crossmatch_catalogs", "query_gaia_cluster", "get_object_info",
@@ -2902,7 +2903,9 @@ async def _run_agent_loop(
                     tool_failure_counts[tool_name] = tool_failure_counts.get(tool_name, 0) + 1
 
             # G3.2: if any data-fetch failed this turn and the AI now runs
-            # run_python without declaring a real source, taint its output.
+            # run_python without declaring a real source, treat that call as
+            # EMPTY instead of showing a synthetic/demo replacement.  The
+            # intended next step is an honest <tools_returned_nothing/>.
             if tool_name == "run_python" and isinstance(result, dict):
                 failed_data_fetches = {
                     n for n, c in tool_failure_counts.items() if c > 0
@@ -2910,35 +2913,43 @@ async def _run_agent_loop(
                 declared = str(tc.get("input", {}).get("data_source", "")).strip()
                 is_real_source_declared = declared in {
                     "latest_adql", "latest_search", "latest_lightcurve",
+                    "latest_sdss_sql", "latest_high_velocity_stars",
                 } or declared.startswith(("cached:", "fits:"))
-                if failed_data_fetches and not is_real_source_declared:
-                    # Override result to add SYNTHETIC taint + banner.
-                    taint_banner = {
-                        "__tool_status__": "SYNTHETIC",
+                origin = str(result.get("data_origin") or "").lower()
+                has_real_origin = origin in {"real_archive", "cached_real", "user_uploaded"}
+                if failed_data_fetches and not is_real_source_declared and not has_real_origin:
+                    # Replace the payload so stdout from fallback/demo code
+                    # cannot be displayed as if it were a successful analysis.
+                    empty_banner = {
+                        "__tool_status__": "EMPTY",
                         "__do_not_claim__": True,
                         "__message_to_model__": (
-                            f"This run_python output has been marked SYNTHETIC "
-                            f"because data-fetch tools {sorted(failed_data_fetches)} "
-                            f"failed earlier this turn and this call did NOT declare "
-                            f"a real data source.  You MUST NOT cite any number from "
-                            f"it.  If you were trying to complete the user's analysis "
-                            f"after a data-fetch failed, emit <tools_returned_nothing/> "
-                            f"instead."
+                            f"Tool `run_python` produced no citeable data because "
+                            f"data-fetch tools {sorted(failed_data_fetches)} failed "
+                            f"earlier this turn and this call did not read a real "
+                            f"data source. You MUST NOT cite any number from this "
+                            f"call. Emit <tools_returned_nothing/> with the failed "
+                            f"tool names instead of substituting synthetic data."
                         ),
-                        "data_origin": "synthetic",
-                        "analysis_status": "simulated_demo",
+                        "__suggested_next_step__": (
+                            "Report that the requested real data could not be retrieved "
+                            "and ask the user to narrow the query or try again later."
+                        ),
+                        "data_origin": "unavailable",
+                        "analysis_status": "empty",
+                        "row_count": 0,
+                        "success": True,
                     }
-                    new_result = dict(taint_banner)
-                    new_result.update(result if isinstance(result, dict) else {})
-                    new_result["data_origin"] = "synthetic"
-                    new_result["analysis_status"] = "simulated_demo"
-                    result = new_result
+                    suppressed_stdout = str(result.get("stdout") or "")
+                    result = dict(empty_banner)
+                    if suppressed_stdout.strip():
+                        result["suppressed_stdout_preview"] = suppressed_stdout[:500]
                     tc = {**tc, "result": result}
                     synthetic_run_python_count += 1
                     try:
                         from app.observability.metrics import record_counter
                         record_counter(
-                            "synthetic_after_failure_total", 1.0,
+                            "empty_after_failed_fetch_total", 1.0,
                             failed_tool=",".join(sorted(failed_data_fetches))[:80],
                             agent=agent_name,
                         )

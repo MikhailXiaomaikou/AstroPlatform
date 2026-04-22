@@ -314,11 +314,12 @@ function ActionCardInner({
 
   const isAutoExecuted = !!(action as Record<string, unknown>)._auto_executed;
   const autoResult = (action as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
+  const cardResult = autoResult && typeof autoResult === "object" ? autoResult : result;
 
   // R3: surface numeric_sanity_warnings on the card as a ⚠ chip.  The
   // warnings list is attached by normalize_tool_result in the backend.
-  const rawWarnings = autoResult && typeof autoResult === "object" && "warnings" in autoResult
-    ? (autoResult as { warnings?: unknown }).warnings
+  const rawWarnings = cardResult && typeof cardResult === "object" && "warnings" in cardResult
+    ? (cardResult as { warnings?: unknown }).warnings
     : null;
   const sanityWarnings: string[] = Array.isArray(rawWarnings)
     ? rawWarnings.filter((w): w is string => typeof w === "string")
@@ -330,22 +331,29 @@ function ActionCardInner({
   // red / amber so the user sees it alongside the model's prose.
   // G4: __tool_status__ = "SYNTHETIC" / data_origin = "synthetic" gets
   // the loudest treatment — synthetic data is the most dangerous case.
-  const toolStatus = autoResult && typeof autoResult === "object"
-    ? String((autoResult as Record<string, unknown>).__tool_status__ || (autoResult as Record<string, unknown>).analysis_status || "").toUpperCase()
+  const toolStatus = cardResult && typeof cardResult === "object"
+    ? String((cardResult as Record<string, unknown>).__tool_status__ || (cardResult as Record<string, unknown>).analysis_status || "").toUpperCase()
     : "";
-  const dataOrigin = autoResult && typeof autoResult === "object"
-    ? String((autoResult as Record<string, unknown>).data_origin || "").toLowerCase()
+  const dataOrigin = cardResult && typeof cardResult === "object"
+    ? String((cardResult as Record<string, unknown>).data_origin || "").toLowerCase()
     : "";
-  const hasErrorField = autoResult && typeof autoResult === "object"
-    && typeof (autoResult as Record<string, unknown>).error === "string"
-    && ((autoResult as Record<string, unknown>).error as string).trim() !== "";
-  const explicitFail = autoResult && typeof autoResult === "object"
-    && (autoResult as Record<string, unknown>).success === false;
+  const hasErrorField = cardResult && typeof cardResult === "object"
+    && typeof (cardResult as Record<string, unknown>).error === "string"
+    && ((cardResult as Record<string, unknown>).error as string).trim() !== "";
+  const explicitFail = cardResult && typeof cardResult === "object"
+    && (cardResult as Record<string, unknown>).success === false;
+  const errorClass = cardResult && typeof cardResult === "object"
+    ? String((cardResult as Record<string, unknown>).error_class || "").toLowerCase()
+    : "";
   const malformedRunPython = action.action === "run_python"
     && isAutoExecuted
-    && autoResult
-    && typeof autoResult === "object"
-    && Object.keys(autoResult).length === 0;
+    && cardResult
+    && typeof cardResult === "object"
+    && (
+      Object.keys(cardResult).length === 0
+      || errorClass === "subprocesscrash"
+      || errorClass === "sandbox_crash"
+    );
   const isToolSynthetic = toolStatus === "SYNTHETIC" || dataOrigin === "synthetic";
   const isToolPartial = !isToolSynthetic && toolStatus === "PARTIAL";
   const isToolFailed = !isToolSynthetic && !isToolPartial && (toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField || malformedRunPython);
@@ -1204,6 +1212,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const success = result.success as boolean;
     const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
     const isPartial = status === "PARTIAL";
+    const isEmpty = status === "EMPTY";
     const isSynthetic = status === "SYNTHETIC" || String(result.data_origin || "").toLowerCase() === "synthetic";
     const stdout = result.stdout as string || "";
     const error = result.error as string | undefined;
@@ -1237,6 +1246,8 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     // response itself is malformed.
     const errorDisplay = isSynthetic
       ? "Synthetic output (not citeable)"
+      : isEmpty
+      ? "Tool returned no data"
       : success
       ? "Executed successfully"
       : isPartial && error && error.trim()
@@ -1248,6 +1259,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     // Map F0.2 error_class to a short chip label.
     const errorClassLabel: Record<string, string> = {
       sandbox_crash: "Sandbox crash",
+      SubprocessCrash: "Sandbox crash",
       oom: "Out of memory",
       timeout: "Timed out",
       name_error: "NameError",
@@ -1262,7 +1274,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     return (
       <div className="code-result">
         {/* Status */}
-        <div style={{ fontSize: "0.72rem", color: success ? "var(--color-green)" : isPartial ? "var(--color-yellow, #ffd60a)" : "var(--color-red)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <div style={{ fontSize: "0.72rem", color: isEmpty ? "var(--color-yellow, #ffd60a)" : success ? "var(--color-green)" : isPartial ? "var(--color-yellow, #ffd60a)" : "var(--color-red)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <span>{errorDisplay}</span>
           {!success && errorClass && errorClassLabel[errorClass] && (
             <span

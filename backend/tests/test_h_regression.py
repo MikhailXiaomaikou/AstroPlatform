@@ -888,6 +888,9 @@ def test_available_functions_lists_cache_helpers_and_supports_limit():
     first_five = funcs[:5]
     assert isinstance(first_five, dict)
     assert len(first_five) == 5
+    first = funcs[0]
+    assert isinstance(first, tuple)
+    assert len(first) == 2
     assert len(available_functions(limit=3)) == 3
 
 
@@ -1788,6 +1791,23 @@ def test_inert_code_exempted_from_synthetic_banner():
     assert 'is_synthetic_declared = False' in src, (
         "R5 O3: inert 分支必须把 is_synthetic_declared 设回 False"
     )
+
+
+def test_run_python_after_failed_fetch_is_empty_not_synthetic():
+    """R21: 真实数据抓取失败后的 Python fallback 不应展示为 SYNTHETIC。
+
+    这种路径本质是“没有可引用真实数据”，UI 应显示 ∅ Empty, 并让 AI
+    走 <tools_returned_nothing/>；不要把 fallback stdout 当成 synthetic
+    demo 暴露给用户。
+    """
+    import inspect
+    from app.api import chat
+
+    src = inspect.getsource(chat._run_agent_loop)
+    assert '"__tool_status__": "EMPTY"' in src
+    assert '"data_origin": "unavailable"' in src
+    assert "empty_after_failed_fetch_total" in src
+    assert "synthetic_after_failure_total" not in src
 
 
 # ── Phase P: arXiv 301 redirect + Unknown tool polish ────────────────

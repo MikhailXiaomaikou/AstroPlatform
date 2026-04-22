@@ -471,4 +471,60 @@ describe("ChatPage", () => {
     await screen.findByText(/Synthetic stdout is shown for audit only/);
     expect(screen.getByText(/mean=3.0/)).toBeInTheDocument();
   });
+
+  it("marks malformed run_python crash output as failed", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "The sandbox crashed.",
+      actions: [{
+        action: "run_python",
+        tool_result: {
+          error: "run_python returned an empty response (tool response malformed; check backend logs)",
+          error_class: "SubprocessCrash",
+          stdout: "",
+          stderr: "",
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "crash python" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText("❌ Failed");
+    expect(screen.queryByText("auto")).not.toBeInTheDocument();
+  });
+
+  it("marks suppressed run_python fallback as empty", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "No citeable data was returned.",
+      actions: [{
+        action: "run_python",
+        tool_result: {
+          __tool_status__: "EMPTY",
+          __do_not_claim__: true,
+          data_origin: "unavailable",
+          analysis_status: "empty",
+          success: true,
+          stdout: "",
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "fallback after failed data" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText("∅ Empty");
+    expect(screen.getByText("Tool returned no data")).toBeInTheDocument();
+  });
 });

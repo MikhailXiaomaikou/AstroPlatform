@@ -100,10 +100,129 @@ def fit_transit(time: list, flux: list, flux_err: list | None = None,
                 rp_rs: float = 0.1, a_rs: float = 10.0,
                 inc: float = 90.0, limb_darkening: str = "quadratic",
                 ld_coeffs: list[float] | None = None) -> dict:
-    """Fit a transit model using batman."""
-    t = np.array(time)
-    f = np.array(flux)
-    ferr = np.array(flux_err) if flux_err else np.ones_like(f) * np.std(f) * 0.01
+    """Fit a transit model using batman with a stable, documented schema."""
+    t = np.asarray(time, dtype=float)
+    f_raw = np.asarray(flux, dtype=float)
+    if t.size == 0 or f_raw.size == 0:
+        raise ValueError("fit_transit requires non-empty time and flux arrays")
+    if t.shape != f_raw.shape:
+        raise ValueError("time and flux must have the same length")
+
+    ferr_raw = np.asarray(flux_err, dtype=float) if flux_err is not None else None
+    if ferr_raw is not None and ferr_raw.shape != f_raw.shape:
+        ferr_raw = None
+
+    finite = np.isfinite(t) & np.isfinite(f_raw)
+    if ferr_raw is not None:
+        finite &= np.isfinite(ferr_raw) & (ferr_raw > 0)
+    if np.count_nonzero(finite) < 8:
+        raise ValueError("fit_transit needs at least 8 finite points")
+    t = t[finite]
+    f_raw = f_raw[finite]
+    ferr_raw = ferr_raw[finite] if ferr_raw is not None else None
+
+    continuum = float(np.nanmedian(f_raw))
+    if not np.isfinite(continuum) or continuum == 0:
+        continuum = 1.0
+    f = f_raw / continuum
+    if ferr_raw is not None:
+        ferr = ferr_raw / abs(continuum)
+    else:
+        scatter = float(1.4826 * np.nanmedian(np.abs(f - np.nanmedian(f))))
+        if not np.isfinite(scatter) or scatter <= 0:
+            scatter = float(np.nanstd(f))
+        if not np.isfinite(scatter) or scatter <= 0:
+            scatter = 0.001
+        ferr = np.ones_like(f) * scatter
+
+    def _finite_float(value, default):
+        try:
+            out = float(value)
+            return out if np.isfinite(out) else default
+        except Exception:
+            return default
+
+    period = _finite_float(period, 1.0)
+    if period <= 0:
+        period = 1.0
+
+    depth_guess = float(max(0.0, np.nanmedian(f) - np.nanpercentile(f, 1.0)))
+    if not np.isfinite(depth_guess) or depth_guess <= 0:
+        depth_guess = max(1e-4, float(np.nanvar(f)))
+    rp_guess = float(np.clip(np.sqrt(depth_guess), 0.01, 0.5))
+    rp_rs = _finite_float(rp_rs, rp_guess)
+    if rp_rs <= 0 or rp_rs >= 1:
+        rp_rs = rp_guess
+    a_rs = _finite_float(a_rs, 10.0)
+    if a_rs < 2.5:
+        a_rs = 10.0
+    inc = _finite_float(inc, 89.0)
+    if inc <= 0 or inc > 90:
+        inc = 89.0
+    t0 = _finite_float(t0, float(t[np.nanargmin(f)]))
+    # 绝对 BJD 时间配 t0=0 基本不可用；自动用最低 flux 附近做初值。
+    if abs(t0) < 1e-12 and float(np.nanmin(np.abs(t))) > period:
+        t0 = float(t[np.nanargmin(f)])
+
+    # 大曲线只抽样拟合参数，最后仍在全量点上生成 model/residual。
+    fit_idx = np.arange(len(t))
+    if len(fit_idx) > 8000:
+        fit_idx = np.linspace(0, len(t) - 1, 8000, dtype=int)
+    t_fit = t[fit_idx]
+    f_fit = f[fit_idx]
+    ferr_fit = ferr[fit_idx]
+
+    def _schema(*, model_flux, residuals, method, optimizer_success=False,
+                message="", fitted_rp=None, fitted_a=None, fitted_inc=None,
+                fitted_t0=None, chi2_val=None, extra=None):
+        fitted_rp = float(fitted_rp if fitted_rp is not None else rp_rs)
+        fitted_a = float(fitted_a if fitted_a is not None else a_rs)
+        fitted_inc = float(fitted_inc if fitted_inc is not None else inc)
+        fitted_t0 = float(fitted_t0 if fitted_t0 is not None else t0)
+        model_flux = np.asarray(model_flux, dtype=float)
+        residuals = np.asarray(residuals, dtype=float)
+        if chi2_val is None:
+            chi2_val = float(np.nansum((residuals / ferr) ** 2))
+        ndof = max(int(len(f) - 4), 1)
+        depth_ppm = float((1.0 - np.nanmin(model_flux)) * 1e6)
+        out = {
+            "time": t.tolist(),
+            "model_flux": model_flux.tolist(),
+            "residual_values": residuals.tolist(),
+            "residuals": {
+                "values": residuals.tolist(),
+                "rms": float(np.sqrt(np.nanmean(residuals ** 2))),
+                "median": float(np.nanmedian(residuals)),
+                "n": int(len(residuals)),
+            },
+            "rp_rs": fitted_rp,
+            "a_rs": fitted_a,
+            "inc": fitted_inc,
+            "inclination": fitted_inc,
+            "t0": fitted_t0,
+            "period": float(period),
+            "chi2": float(chi2_val),
+            "chi2_reduced": float(chi2_val / ndof),
+            "depth_ppm": depth_ppm,
+            "power": None,
+            "fitted_params": {
+                "rp_rs": fitted_rp,
+                "a_rs": fitted_a,
+                "inc": fitted_inc,
+                "inclination": fitted_inc,
+                "t0": fitted_t0,
+                "period": float(period),
+                "depth_ppm": depth_ppm,
+            },
+            "optimizer_success": bool(optimizer_success),
+            "optimizer_message": str(message),
+            "limb_darkening": limb_darkening,
+            "method": method,
+            "flux_normalization": continuum,
+        }
+        if extra:
+            out.update(extra)
+        return out
 
     try:
         import batman
@@ -112,92 +231,89 @@ def fit_transit(time: list, flux: list, flux_err: list | None = None,
         if ld_coeffs is None:
             ld_coeffs = [0.4, 0.3]
 
-        params = batman.TransitParams()
-        params.t0 = t0
-        params.per = period
-        params.rp = rp_rs
-        params.a = a_rs
-        params.inc = inc
-        params.ecc = 0.0
-        params.w = 90.0
-        params.u = ld_coeffs
-        params.limb_dark = limb_darkening
+        def _params(rp, t0_fit, a=a_rs, i=inc):
+            params = batman.TransitParams()
+            params.t0 = float(t0_fit)
+            params.per = float(period)
+            params.rp = float(rp)
+            params.a = float(a)
+            params.inc = float(i)
+            params.ecc = 0.0
+            params.w = 90.0
+            params.u = ld_coeffs
+            params.limb_dark = limb_darkening
+            return params
 
-        m = batman.TransitModel(params, t)
+        def _model(times, rp, t0_fit, baseline, a=a_rs, i=inc):
+            params = _params(rp, t0_fit, a=a, i=i)
+            m = batman.TransitModel(params, times)
+            return float(baseline) * m.light_curve(params)
 
-        # Optimize: fit rp, a, inc, t0
-        # L2-b (audit 2026-04-20): 物理边界软约束.  Nelder-Mead 不支持
-        # hard bounds, 所以把 chi2 wrap 一层: 违反 transit 物理 (rp 超
-        # [0,1] 是深度>100%; a/R* < 2.5 违反 Mandel & Agol 2002 的
-        # analytic limit; inc 超 [0°, 90°]) 时返回巨大 penalty 让
-        # minimizer 自然远离.  之前单 `abs()` 只是绝对值对称, 让
-        # minimizer 在 degenerate 空间漫游, 且不阻挡 rp 漂到 10 (物理
-        # 上等价于 transit depth = 10000%).
         def chi2(theta):
-            rp, a, i, t0_fit = theta
-            # 物理边界检查 — 违反任一 → 1e20 penalty (远大于任何合法 chi2)
-            if rp <= 0 or rp >= 1.0:
+            rp, t0_fit, baseline = theta
+            a = a_rs
+            if rp <= 0 or rp >= 1.0 or a < 2.5 or inc < 0 or inc > 90:
                 return 1e20
-            if a < 2.5:
-                return 1e20
-            if i < 0 or i > 90:
-                return 1e20
-            params.rp = rp
-            params.a = a
-            params.inc = i
-            params.t0 = t0_fit
             try:
-                model = m.light_curve(params)
+                model = _model(t_fit, rp, t0_fit, baseline)
             except Exception:
-                # batman 偶尔抛数值错 (eg inc 接近 0/90), 一视同仁给 penalty
                 return 1e20
-            return np.sum(((f - model) / ferr) ** 2)
+            return float(np.nansum(((f_fit - model) / ferr_fit) ** 2))
 
-        x0 = [rp_rs, a_rs, inc, t0]
-        result = minimize(chi2, x0, method="Nelder-Mead",
-                         options={"maxiter": 5000})
+        x0 = np.array([rp_rs, t0, 1.0], dtype=float)
+        t0_half_width = max(float(period) * 0.5, 0.05)
+        bounds = [(0.005, 0.5), (t0 - t0_half_width, t0 + t0_half_width), (0.8, 1.2)]
+        result = minimize(chi2, x0, method="L-BFGS-B", bounds=bounds, options={"maxiter": 300})
 
-        best_rp, best_a, best_inc, best_t0 = result.x
-        # L2-b: 最终结果仍 abs() 保兼容 (老 caller 可能依赖 rp >= 0),
-        # 但 chi2 guard 已确保 best_rp 在物理范围内的.
-        params.rp = abs(best_rp)
-        params.a = abs(best_a)
-        params.inc = best_inc
-        params.t0 = best_t0
-        model_flux = m.light_curve(params)
-
+        best_rp, best_t0, best_baseline = result.x
+        model_flux = _model(t, best_rp, best_t0, best_baseline)
         residuals = f - model_flux
-        chi2_val = np.sum((residuals / ferr) ** 2)
-        ndof = len(f) - 4
+        chi2_val = float(np.nansum((residuals / ferr) ** 2))
 
-        return {
-            "time": time,
-            "model_flux": model_flux.tolist(),
-            "residuals": residuals.tolist(),
-            "fitted_params": {
-                "rp_rs": float(abs(best_rp)),
-                "a_rs": float(abs(best_a)),
-                "inclination": float(best_inc),
-                "t0": float(best_t0),
-                "period": period,
-                "depth_ppm": float((1 - min(model_flux)) * 1e6),
-            },
-            "chi2_reduced": float(chi2_val / max(ndof, 1)),
-            "limb_darkening": limb_darkening,
-            "method": "batman",
-        }
+        return _schema(
+            model_flux=model_flux,
+            residuals=residuals,
+            method="batman_l_bfgs_b",
+            optimizer_success=bool(result.success),
+            message=getattr(result, "message", ""),
+            fitted_rp=best_rp,
+            fitted_a=a_rs,
+            fitted_inc=inc,
+            fitted_t0=best_t0,
+            chi2_val=chi2_val,
+        )
     except ImportError:
-        # Simple box model fallback
-        phase = ((t - t0) / period) % 1.0
-        in_transit = (phase < 0.05) | (phase > 0.95)
-        depth = 1.0 - np.median(f[in_transit]) / np.median(f[~in_transit]) if np.any(in_transit) else 0
+        pass
+    except Exception as exc:
+        logger.debug("batman transit fit failed, falling back to box model: %s", exc)
 
-        return {
-            "time": time,
-            "fitted_params": {"depth_ppm": float(depth * 1e6), "period": period, "t0": t0},
-            "method": "box_fallback",
-            "note": "batman not available, using simple box model",
-        }
+    # Simple box model fallback with the same schema.
+    try:
+        phase = ((t - t0) / period) % 1.0
+        width = min(0.08, max(0.015, 1.0 / max(a_rs, 2.5) / np.pi))
+        in_transit = (phase < width) | (phase > 1.0 - width)
+        if np.any(in_transit) and np.any(~in_transit):
+            depth = max(0.0, 1.0 - float(np.nanmedian(f[in_transit])) / float(np.nanmedian(f[~in_transit])))
+        else:
+            depth = depth_guess
+        rp_box = float(np.clip(np.sqrt(max(depth, 1e-6)), 0.001, 0.8))
+        model_flux = np.ones_like(f)
+        model_flux[in_transit] -= rp_box ** 2
+        residuals = f - model_flux
+        return _schema(
+            model_flux=model_flux,
+            residuals=residuals,
+            method="box_fallback",
+            optimizer_success=False,
+            message="batman unavailable or failed; used box model fallback",
+            fitted_rp=rp_box,
+            fitted_a=a_rs,
+            fitted_inc=inc,
+            fitted_t0=t0,
+            extra={"note": "batman not available or failed, using simple box model"},
+        )
+    except Exception as exc:
+        raise RuntimeError(f"fit_transit failed before producing a model: {exc}") from exc
 
 
 def detect_flares(time: list, flux: list, flux_err: list | None = None,

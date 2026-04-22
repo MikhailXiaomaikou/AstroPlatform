@@ -2006,15 +2006,16 @@ class PhaseFoldResult:
 
     同时支持三种常见访问方式:
     - phase, flux_folded = result
-    - result.phase / result.flux_folded
-    - result["phase"] / result["flux_folded"]
+    - result.phase / result.flux_folded / result.flux
+    - result["phase"] / result["flux_folded"] / result["flux"]
     """
 
-    __slots__ = ("phase", "flux_folded")
+    __slots__ = ("phase", "flux_folded", "flux")
 
     def __init__(self, phase, flux_folded):
         self.phase = phase
         self.flux_folded = flux_folded
+        self.flux = flux_folded
 
     def __iter__(self):
         return iter((self.phase, self.flux_folded))
@@ -2025,14 +2026,14 @@ class PhaseFoldResult:
     def __getitem__(self, key):
         if key == 0 or key == "phase":
             return self.phase
-        if key == 1 or key == "flux_folded":
+        if key == 1 or key in {"flux_folded", "flux"}:
             return self.flux_folded
         if isinstance(key, int):
             raise IndexError(key)
         raise KeyError(key)
 
     def __contains__(self, key):
-        return key in {"phase", "flux_folded", 0, 1}
+        return key in {"phase", "flux_folded", "flux", 0, 1}
 
     def keys(self):
         return ("phase", "flux_folded")
@@ -2041,7 +2042,10 @@ class PhaseFoldResult:
         return (self.phase, self.flux_folded)
 
     def items(self):
-        return (("phase", self.phase), ("flux_folded", self.flux_folded))
+        return (
+            ("phase", self.phase),
+            ("flux_folded", self.flux_folded),
+        )
 
     def get(self, key, default=None):
         try:
@@ -3016,12 +3020,37 @@ def search_lightcurve(target, mission='kepler'):
     """
     import lightkurve as lk
 
+    def _jsonish_cell(value):
+        """把 astropy / numpy / MaskedArray cell 转成真实 JSON 值, 不走 str(list)。"""
+        raw = getattr(value, "value", value)
+        if hasattr(raw, "filled"):
+            try:
+                raw = raw.filled(None)
+            except Exception:
+                pass
+        if hasattr(raw, "tolist"):
+            try:
+                raw = raw.tolist()
+            except Exception:
+                pass
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="replace")
+        if isinstance(raw, tuple):
+            raw = list(raw)
+        if isinstance(raw, list):
+            return [_jsonish_cell(item) for item in raw]
+        if isinstance(raw, np.generic):
+            return raw.item()
+        return raw
+
     def _exptime(r):
         try:
             et = getattr(r, "exptime", None)
             if et is None:
                 return None
-            val = getattr(et, "value", et)
+            val = _jsonish_cell(et)
+            if isinstance(val, list):
+                return [float(item) if item is not None else None for item in val]
             return float(val)
         except Exception:
             return None
@@ -3122,7 +3151,8 @@ def search_lightcurve(target, mission='kepler'):
         }
     out = {
         "found": len(result),
-        "results": [{"mission": str(r.mission), "target": str(r.target_name),
+        "results": [{"mission": _jsonish_cell(getattr(r, "mission", None)),
+                      "target": _jsonish_cell(getattr(r, "target_name", None)),
                       "exptime": _exptime(r)}
                      for r in result[:20]]
     }
@@ -3426,10 +3456,36 @@ def pro_gp_detrend(time, flux, flux_err=None, kernel="matern32"):
     return gp_detrend(time, flux, flux_err, kernel)
 
 
-def pro_fit_transit(time, flux, flux_err=None, period=1.0, t0=0.0, rp_rs=0.1):
-    """Fit a transit model via batman."""
+def pro_fit_transit(
+    time,
+    flux,
+    flux_err=None,
+    period=1.0,
+    t0=0.0,
+    rp_rs=0.1,
+    a_rs=10.0,
+    inc=90.0,
+    limb_darkening="quadratic",
+    ld_coeffs=None,
+):
+    """Fit a transit model via batman.
+
+    Returns a dict with top-level `rp_rs`, `a_rs`, `inc`, `t0`, `period`,
+    `chi2`, `chi2_reduced`, `model_flux`, and `residuals`.
+    """
     from app.services.time_domain_pro import fit_transit
-    return fit_transit(time, flux, flux_err, period, t0, rp_rs)
+    return fit_transit(
+        time,
+        flux,
+        flux_err,
+        period,
+        t0,
+        rp_rs,
+        a_rs=a_rs,
+        inc=inc,
+        limb_darkening=limb_darkening,
+        ld_coeffs=ld_coeffs,
+    )
 
 
 def pro_detect_flares(time, flux, flux_err=None, nsigma=3.0):
@@ -3590,6 +3646,10 @@ class _FunctionRegistry(dict):
         if isinstance(key, slice):
             keys = list(self.keys())[key]
             return _FunctionRegistry({name: dict.__getitem__(self, name) for name in keys})
+        if isinstance(key, int):
+            keys = list(self.keys())
+            name = keys[key]
+            return name, dict.__getitem__(self, name)
         return dict.__getitem__(self, key)
 
 
