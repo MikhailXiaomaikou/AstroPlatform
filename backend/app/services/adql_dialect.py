@@ -33,7 +33,12 @@ def normalize_adql(query: str, service: str) -> ADQLDialectResult:
     errors: list[str] = []
 
     if service_l == "sdss":
-        errors.append("SDSS SkyServer does not support ADQL TAP; use search_objects(sources=['sdss']).")
+        errors.append(
+            "SDSS SkyServer does not support ADQL TAP. For a single-object/tiny-cone "
+            "lookup use search_objects(sources=['sdss']); for SDSS luminosity-function "
+            "or photometry+spec-z samples use run_sdss_sql with T-SQL against "
+            "PhotoObjAll JOIN SpecObjAll."
+        )
         return ADQLDialectResult(service_l, query, rewritten, warnings, errors)
 
     if service_l == "simbad":

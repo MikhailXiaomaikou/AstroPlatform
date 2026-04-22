@@ -122,6 +122,33 @@ plt.savefig('/tmp/sky.png')
     assert r.reads_real_data is True
 
 
+def test_download_and_clean_lightcurve_counts_as_real_reader():
+    code = """
+import astro
+lc = astro.download_and_clean_lightcurve("HD 189733", mission="tess", sector=54)
+time = lc["time"]
+flux = lc["flux"]
+print(len(time), len(flux))
+"""
+    r = analyze(code)
+    assert r.verdict == "clean"
+    assert r.reads_real_data is True
+
+
+def test_real_data_with_model_grid_and_synthetic_comment_is_clean():
+    code = """
+import numpy as np
+rows = get_search_results()
+# Plot a synthetic/model comparison curve against the real observations.
+x_model = np.linspace(0, 1, 1000)
+y_model = 1 - 0.01 * np.exp(-((x_model - 0.5) ** 2) / 0.01)
+print(len(rows), y_model.min())
+"""
+    r = analyze(code)
+    assert r.verdict == "clean"
+    assert r.reads_real_data is True
+
+
 def test_arithmetic_no_random_is_clean():
     code = """
 import numpy as np

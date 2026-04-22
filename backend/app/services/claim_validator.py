@@ -90,7 +90,13 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     # ("mean=3.0", "std≈1.414")。这些仍然是数值 claim, 不能从
     # SYNTHETIC stdout 里被洗白引用。
     ("summary_stat", re.compile(
-        rf"\b(?:mean|average|avg|std|standard\s+deviation|sigma)\s*[:=≈~]\s*{_NUM}\b",
+        rf"\b(?:mean|average|avg|std|standard\s+deviation|sigma)\s*"
+        rf"(?:"
+        rf"[:=≈~]\s*"
+        rf"|(?:is|was|of|at)\s+(?:(?:about|around|approximately|approx\.?)\s+)?"
+        rf"|(?:about|around|approximately|approx\.?)\s+"
+        rf")"
+        rf"{_NUM}\b",
         re.I,
     )),
 

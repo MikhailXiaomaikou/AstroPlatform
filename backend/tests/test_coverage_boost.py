@@ -1401,9 +1401,13 @@ class TestAstroAnalysisTimeSeries:
         time = np.array([2.0, 1.0, 1.5])
         flux = np.array([0.99, 1.0, 0.98])
         folded = phase_fold(time, flux, 1.0, 1.0)
-        assert list(folded) == ["phase", "flux_folded"]
+        phase, flux_folded = folded
+        assert list(folded.keys()) == ["phase", "flux_folded"]
+        assert folded.phase is phase
+        assert folded.flux_folded is flux_folded
+        assert folded["phase"] is phase
         assert np.all(np.diff(folded["phase"]) >= 0)
-        assert len(folded["flux_folded"]) == len(flux)
+        assert len(flux_folded) == len(flux)
 
     def test_phase_fold_rejects_mismatched_flux_length(self):
         from app.services.astro_analysis import phase_fold
@@ -3187,4 +3191,3 @@ class TestAPIEndpointsData:
         if resp.status_code == 200:
             data = resp.json()
             assert isinstance(data, list)
-

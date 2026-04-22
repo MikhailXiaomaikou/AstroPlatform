@@ -251,6 +251,18 @@ def test_ast_linter_accepts_get_cached_results_any_source():
     assert resp.get("error_class") != "data_source_mismatch"
 
 
+def test_ast_linter_accepts_platform_real_data_reader_for_latest_search():
+    """R15: download_and_clean_lightcurve 本身是真实 MAST 读取器。
+
+    AI 有时把这种代码声明成 latest_search（因为上一 action 是
+    search_lightcurve），合同层不能因此误报为“没读真实数据”。
+    """
+    from app.services.ai_tools import _PLATFORM_REAL_DATA_READER_TOKENS
+
+    assert "download_and_clean_lightcurve" in _PLATFORM_REAL_DATA_READER_TOKENS
+    assert "transit_search" in _PLATFORM_REAL_DATA_READER_TOKENS
+
+
 def test_ast_linter_rejects_random_numpy_without_reader():
     """H3.1: np.random-only code with data_source='latest_adql' still rejected."""
     from app.services.ai_tools import _exec_run_python
@@ -930,6 +942,19 @@ def test_system_prompt_has_sdss_skyserver_fallback_rule():
     # 都接受, 只要两者都在 prompt 里.
     assert "mode=1" in SYSTEM_PROMPT.replace(" ", "") or "mode = 1" in SYSTEM_PROMPT
     assert "clean=1" in SYSTEM_PROMPT.replace(" ", "") or "clean = 1" in SYSTEM_PROMPT
+    assert "luminosity function" in SYSTEM_PROMPT.lower()
+    assert "PhotoObjAll JOIN SpecObjAll" in SYSTEM_PROMPT
+    assert "SELECT TOP 1000" in SYSTEM_PROMPT
+
+
+def test_sdss_adql_error_routes_bulk_samples_to_run_sdss_sql():
+    from app.services.adql_dialect import normalize_adql
+
+    result = normalize_adql("SELECT TOP 10 * FROM PhotoObjAll", "sdss")
+    assert result.ok is False
+    msg = " ".join(result.errors)
+    assert "run_sdss_sql" in msg
+    assert "PhotoObjAll JOIN SpecObjAll" in msg
 
 
 def test_run_sdss_sql_missing_query_returns_actionable_error():

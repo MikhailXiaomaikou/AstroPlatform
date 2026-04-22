@@ -56,6 +56,9 @@ _REAL_DATA_READERS = {
     "get_cached_results", "load_fits", "load_votable", "load_csv",
     "fits.open", "Table.read", "pd.read_csv", "pd.read_parquet",
     "lightkurve.search_lightcurve", "astroquery",
+    "search_lightcurve", "astro.search_lightcurve",
+    "download_and_clean_lightcurve", "astro.download_and_clean_lightcurve",
+    "transit_search", "astro.transit_search",
 }
 
 # Keyword / phrase blacklist.  Matched in comments, docstrings, and string
@@ -247,8 +250,17 @@ def analyze(code: str) -> DetectionResult:
 
     if hard_signals == 0:
         result.verdict = "clean"
-    elif result.reads_real_data or result.legitimate_random_context:
-        # Random + real data ⇒ probably bootstrap / MCMC over real data
+    elif result.reads_real_data:
+        # 读了真实数据时, np.linspace + "synthetic/model" 注释常用于画
+        # 对照模型曲线, 不应仅凭关键词把真实分析降级。真正危险的是
+        # random/fake 生成混入真实声明。
+        if result.has_np_random and not result.legitimate_random_context:
+            result.verdict = "suspicious" if hard_signals >= 2 else "clean"
+        else:
+            result.verdict = "clean"
+    elif result.legitimate_random_context:
+        # MCMC / bootstrap 等 legitimate random 语境, 没有真实 reader 时
+        # 仍可能只是方法演示；保守降级, 不硬判 synthetic。
         result.verdict = "clean" if hard_signals == 1 else "suspicious"
     else:
         # Random without any real-data anchor ⇒ synthetic

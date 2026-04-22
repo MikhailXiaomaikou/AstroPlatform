@@ -408,6 +408,10 @@ TOOLS = [
             "get_search_results() returns the latest search results as a list of dicts, "
             "get_adql_results() returns only the latest ADQL rows as list[dict], "
             "get_adql_result_sets() returns recent ADQL result sets with query/service metadata, "
+            "astro.search_lightcurve(...) returns list[dict]; access the first row as results[0]['mission'] "
+            "or results[0].get('sector'). astro.download_and_clean_lightcurve(...) returns a dict with "
+            "keys ['time', 'flux', 'flux_err', 'meta']. astro.phase_fold(time, flux, period, t0) returns "
+            "a PhaseFoldResult supporting `phase, flux_folded = result`, `result.phase`, and result['phase']. "
             "load_votable(path) loads a VOTable as an astropy Table, "
             "load_csv(path) loads a CSV as a pandas DataFrame, "
             "process_in_chunks(data, chunk_size, func) processes large data in memory-safe chunks, "
@@ -2063,6 +2067,17 @@ async def _exec_adql(
 
     if result is None:
         _elapsed = int(_time_mod.monotonic() - _start_ts)
+        _query_l = str(query).lower()
+        _sdss_vizier_hint = ""
+        if service.lower() == "vizier" and any(
+            token in _query_l for token in ("v/154/sdss", "v/147/sdss", "v/139/sdss")
+        ):
+            _sdss_vizier_hint = (
+                " For SDSS luminosity-function or photometry+spec-z samples, "
+                "stop retrying broad VizieR ADQL: call run_sdss_sql instead "
+                "with a T-SQL query against PhotoObjAll JOIN SpecObjAll "
+                "(start with TOP 500-1000)."
+            )
         return {
             "error": (
                 f"ADQL query failed after {_elapsed}s of retries "
@@ -2083,6 +2098,7 @@ async def _exec_adql(
                 "(d) query by source_id list if you know your targets; "
                 "(e) for Gaia DR3 mirrors: try VizieR 'I/355/gaiadr3' instead of "
                 "the primary Gaia TAP."
+                f"{_sdss_vizier_hint}"
             ),
             "error_class": "adql_timeout",
             "retries": retry_log,
@@ -2665,6 +2681,14 @@ _REAL_DATA_SOURCE_PATTERNS = {
     # latest_sdss_sql 变量名就能匹配.
     "latest_sdss_sql": ("get_cached_results", "get_adql_results", "latest_sdss_sql"),
 }
+_PLATFORM_REAL_DATA_READER_TOKENS = {
+    # 这些 helper 本身会触发真实 archive / MAST / platform cache 读取。
+    # 即使模型把 data_source 写成 latest_search 而不是 latest_lightcurve,
+    # 也不应被 G1.2 当成“没有读取真实数据”。
+    "search_lightcurve",
+    "download_and_clean_lightcurve",
+    "transit_search",
+}
 
 
 def _summarize_ast_observations(code: str, limit: int = 24) -> str:
@@ -2806,7 +2830,11 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         # signal for any real data_source (the generic cache reader
         # from G6.2 can fetch any handle).
         import ast as _ast
-        tokens_to_match = set(expected_tokens) | {"get_cached_results"}
+        tokens_to_match = (
+            set(expected_tokens)
+            | {"get_cached_results"}
+            | _PLATFORM_REAL_DATA_READER_TOKENS
+        )
         found_in_ast = False
         try:
             tree = _ast.parse(code)

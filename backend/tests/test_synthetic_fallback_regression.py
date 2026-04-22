@@ -206,6 +206,29 @@ def test_synthetic_summary_stats_do_not_support_claims():
     assert {round(c.value, 3) for c in result.uncited} >= {3.0, 1.414}
 
 
+def test_synthetic_summary_stats_natural_language_do_not_support_claims():
+    """R15: reply-withheld 也要覆盖短数字的自然语言写法。"""
+    tool_results = [{
+        "tool": "run_python",
+        "result": {
+            "__tool_status__": "SYNTHETIC",
+            "__do_not_claim__": True,
+            "data_origin": "synthetic",
+            "success": False,
+            "stdout": "mean=3.0\nstd=1.414\n",
+            "error": "KeyError: 'missing_key'",
+        },
+    }]
+    reply = (
+        "The diagnostic calculation found the mean was 3.0 and "
+        "the standard deviation was approximately 1.414 before failing."
+    )
+
+    result = validate_claims(reply, tool_results)
+    assert result.ok is False
+    assert {round(c.value, 3) for c in result.uncited} >= {3.0, 1.414}
+
+
 # -------------------------------------------------- anti-instruction reflex
 
 

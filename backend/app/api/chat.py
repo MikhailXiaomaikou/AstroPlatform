@@ -755,18 +755,18 @@ with the listed packages + references as starting points for user-specific analy
 1. SDSS does NOT expose its own ADQL service.  You have FOUR paths for SDSS data, pick based on the query:
    - **search_objects(sources=["sdss"])** — direct SkyServer SQL, best for cone searches, returns photometry + spec_z + photo_z with galaxy/star class.
    - **search_objects(sources=["sdss_spec"])** — spec-only variant, 100% redshift coverage, smaller sample.
-   - **run_adql(service="vizier", query="SELECT ... FROM \"V/154/sdss17\" ...")** — VizieR mirror, supports arbitrary ADQL.  Column names in `V/154/sdss17` are lowercase `ra`, `dec`, `u`, `g`, `r`, `i`, `z`, `class` (3=galaxy, 6=star), `zsp` (spec redshift), `zph` (photo-z), `objID`.  NOT `RAJ2000`/`DEJ2000`/`petroMag_r`/`psfMag_r`/`redshift` — those are common mistakes.  `V/154/sdss16` / `V/147/sdss12` are older DRs; prefer DR17 unless the paper specifically used an earlier release.
+   - **run_adql(service="vizier", query="SELECT ... FROM \"V/154/sdss17\" ...")** — VizieR mirror, supports arbitrary ADQL.  Column names in `V/154/sdss17` are lowercase `ra`, `dec`, `u`, `g`, `r`, `i`, `z`, `class` (3=galaxy, 6=star), `zsp` (spec redshift), `zph` (photo-z), `objID`.  NOT `RAJ2000`/`DEJ2000`/`petroMag_r`/`psfMag_r`/`redshift` — those are common mistakes.  `V/154/sdss16` / `V/147/sdss12` are older DRs; prefer DR17 unless the paper specifically used an earlier release.  Do NOT use this path for SDSS luminosity-function samples or broad photometry+spec-z queries; VizieR SDSS tables are too slow for 500-1000 row filtered sky-region pulls.
    - **run_sdss_sql(query="SELECT TOP N ... FROM PhotoObjAll ...")** — J3: direct SkyServer T-SQL, bypasses VizieR entirely.  USE THIS when `run_adql(service="vizier")` on a SDSS table returns "All mirrors unavailable" or any 4xx/5xx.  ALSO USE for SDSS-specific tables VizieR doesn't expose: Photoz, GalSpecInfo, GalSpecExtra, Field, emissionLinesPort, stellarMassPort.  SYNTAX IS T-SQL, NOT ADQL:
      * `TOP N` not `LIMIT N`
      * `dbo.fGetNearbyObjEq(ra_deg, dec_deg, radius_arcmin)` for cone search (radius is arcmin, not degrees)
      * ALWAYS add `WHERE p.mode = 1 AND p.clean = 1` on PhotoObjAll to drop secondary detections + artefacts
      * column names are CamelCase-ish: `objID` (capital ID), `ra`, `dec`, `u`/`g`/`r`/`i`/`z` (model mags), `petroMag_u..z`, `type` (3=galaxy, 6=star), `z` (spec redshift inside SpecObjAll), `zErr`, `zWarning`
-   Decision tree: "simple cone search" → search_objects(sources=sdss); "custom JOIN or aggregation, VizieR healthy" → run_adql(vizier, V/154/sdss17); "VizieR down OR need SDSS-only table" → run_sdss_sql.
+   Decision tree: "single object / tiny cone" → search_objects(sources=sdss); "SDSS luminosity function, photometry+spec-z sample, galaxy statistics, or any query needing PhotoObjAll JOIN SpecObjAll" → run_sdss_sql; "small custom VizieR-only SDSS sanity check" → run_adql(vizier, V/154/sdss17).
 
    **run_sdss_sql example queries** (copy-paste + modify; all produce real results):
    ```
    -- SDSS galaxy luminosity function sample (Paper 3 style):
-   SELECT TOP 10000 p.objID, p.ra, p.dec, p.petroMag_r, s.z
+   SELECT TOP 1000 p.objID, p.ra, p.dec, p.petroMag_r, s.z
    FROM PhotoObjAll p
    JOIN SpecObjAll s ON s.bestObjID = p.objID
    WHERE p.mode=1 AND p.clean=1 AND p.type=3
@@ -968,10 +968,12 @@ print("columns:", list(df.columns))  # sanity check before indexing
 ```
 
 Key patterns:
-- `results = get_search_results()` — access the user's latest search results
+- `results = get_search_results()` — list[dict]; use `results[0]["ra"]`, `results[0].get("dec")`, etc., not `results["ra"]`
 - `hdul = load_fits("path/to/file.fits")` — load a FITS file
 - `rows = get_adql_results()` — latest ADQL rows only
 - `result_sets = get_adql_result_sets()` — recent ADQL result-set history, each with `service`, `query`, `columns`, `row_count`, and `rows`
+- `lc = astro.download_and_clean_lightcurve(...)` — dict with `time`, `flux`, `flux_err`, `meta`
+- `folded = astro.phase_fold(time, flux, period, t0)` — supports `phase, flux_folded = folded`, `folded.phase`, and `folded["phase"]`
 - `available_functions()` — list the preloaded astronomy helpers with signatures/doc summaries
 - Print results with `print()` — output shown to user
 - Matplotlib figures auto-captured and displayed in chat
@@ -1073,7 +1075,8 @@ LIGHTCURVE / TIME-DOMAIN:
   astro.lomb_scargle_period(time, flux, min_period=None, max_period=None)
     -> {best_period, power, false_alarm_prob}
   astro.phase_fold(time, flux, period, t0=None)
-    -> {phase, flux_folded}
+    -> PhaseFoldResult supporting `phase, flux_folded = result`,
+       `result.phase`, and `result["phase"]`.
 
 EXTINCTION / REDDENING:
   astro.extinction_curve(wavelengths_aa, av, rv=3.1) -> a_lambda array

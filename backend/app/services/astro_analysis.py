@@ -1919,6 +1919,64 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
     }
 
 
+class PhaseFoldResult:
+    """phase_fold(time, flux, period, t0) 的结果容器。
+
+    同时支持三种常见访问方式:
+    - phase, flux_folded = result
+    - result.phase / result.flux_folded
+    - result["phase"] / result["flux_folded"]
+    """
+
+    __slots__ = ("phase", "flux_folded")
+
+    def __init__(self, phase, flux_folded):
+        self.phase = phase
+        self.flux_folded = flux_folded
+
+    def __iter__(self):
+        return iter((self.phase, self.flux_folded))
+
+    def __len__(self):
+        return 2
+
+    def __getitem__(self, key):
+        if key == 0 or key == "phase":
+            return self.phase
+        if key == 1 or key == "flux_folded":
+            return self.flux_folded
+        if isinstance(key, int):
+            raise IndexError(key)
+        raise KeyError(key)
+
+    def __contains__(self, key):
+        return key in {"phase", "flux_folded", 0, 1}
+
+    def keys(self):
+        return ("phase", "flux_folded")
+
+    def values(self):
+        return (self.phase, self.flux_folded)
+
+    def items(self):
+        return (("phase", self.phase), ("flux_folded", self.flux_folded))
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except (KeyError, IndexError):
+            return default
+
+    def as_dict(self):
+        return {"phase": self.phase, "flux_folded": self.flux_folded}
+
+    def __repr__(self):
+        return (
+            "PhaseFoldResult("
+            f"phase={self.phase!r}, flux_folded={self.flux_folded!r})"
+        )
+
+
 def phase_fold(time, flux=None, period=None, t0=None, epoch=None):
     """相位折叠时间序列。
 
@@ -1932,7 +1990,9 @@ def phase_fold(time, flux=None, period=None, t0=None, epoch=None):
 
     Returns:
         旧调用: [0, 1) 范围内的 phase 数组。
-        带 flux 的新调用: {"phase": 排序后的 phase, "flux_folded": 同序 flux}。
+        带 flux 的新调用: PhaseFoldResult。可写成
+        ``phase, flux_folded = phase_fold(...)``，也可用
+        ``result.phase`` 或 ``result["phase"]`` 访问。
     """
     t = np.asarray(time, dtype=float)
     legacy_array_only = period is None
@@ -1951,10 +2011,7 @@ def phase_fold(time, flux=None, period=None, t0=None, epoch=None):
     if len(f) != len(t):
         raise ValueError("time and flux must have the same length")
     order = np.argsort(phases)
-    return {
-        "phase": phases[order],
-        "flux_folded": f[order],
-    }
+    return PhaseFoldResult(phases[order], f[order])
 
 
 def plot_periodogram(time, mag, mag_err=None, min_period=0.1, max_period=100,
