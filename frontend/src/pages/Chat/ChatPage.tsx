@@ -3172,6 +3172,9 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
+    // 点击"新对话"会 setMessages([]), 空列表不滚动 — 避免新会话启动时
+    // 页面莫名跳到底部锚点.
+    if (messages.length === 0) return;
     scrollToBottom();
   }, [messages, loading, scrollToBottom]);
 
