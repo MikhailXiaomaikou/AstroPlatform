@@ -502,3 +502,67 @@ def test_scientific_notation_does_not_cross_orders_of_magnitude():
         "1.23e-23 跟 tool 的 1.23e-24 差 10 倍, 不该匹配 (相对容差"
         "的物理意义)"
     )
+
+
+# ---- W1 (PART W): 文献先验 age/mass/distance 硬拦 ----
+
+
+def test_literature_prior_age_without_fit_isochrone_is_violation():
+    """W1: run_adql 返回一堆 Gaia 行, reply 说 "age ~100 Myr" 但本轮没跑
+    fit_isochrone / search_literature / get_object_dossier, 视为文献先验."""
+    from app.services.claim_validator import literature_prior_violations
+    rows = [{"phot_g_mean_mag": 10.0 + i * 0.01} for i in range(100)]
+    tool_results = [
+        {"tool": "run_adql", "input": {}, "result": {"data": {"rows": rows}}},
+    ]
+    vios = literature_prior_violations(
+        "The cluster age is ~100 Myr (young open cluster).", tool_results
+    )
+    assert len(vios) >= 1
+    assert any(c.label == "age_myr" for c in vios)
+
+
+def test_literature_prior_age_passes_when_fit_isochrone_ran():
+    """W1: 跑了 fit_isochrone 后 AI 可以引用 age 值."""
+    from app.services.claim_validator import literature_prior_violations
+    tool_results = [
+        {"tool": "fit_isochrone", "input": {}, "result": {"best_log_age": 8.0}},
+    ]
+    assert literature_prior_violations("The best-fit age is 100 Myr.", tool_results) == []
+
+
+def test_literature_prior_age_chinese_caught_by_zh_pattern():
+    """W1: 中文 "年龄: ~100 Myr" 同样被 age_myr_zh pattern 捕获."""
+    from app.services.claim_validator import literature_prior_violations
+    tool_results = [
+        {"tool": "run_adql", "input": {}, "result": {"data": {"rows": [{"x": 1}]}}},
+    ]
+    vios = literature_prior_violations("年龄: ~100 Myr (年轻疏散星团)", tool_results)
+    assert len(vios) >= 1
+    assert any(c.label == "age_myr_zh" for c in vios)
+
+
+def test_literature_prior_distance_passes_with_run_adql():
+    """W1: distance 有 run_adql (Gaia parallax) 支撑即可通过."""
+    from app.services.claim_validator import literature_prior_violations
+    tool_results = [
+        {"tool": "run_adql", "input": {}, "result": {"data": {"parallax": [7.35]}}},
+    ]
+    assert literature_prior_violations("The distance is ~136 pc.", tool_results) == []
+
+
+def test_literature_prior_mass_with_only_search_objects_is_violation():
+    """W1: search_objects 不是 mass 的测量/引用工具, mass claim 违规."""
+    from app.services.claim_validator import literature_prior_violations
+    tool_results = [
+        {"tool": "search_objects", "input": {}, "result": {"results": []}},
+    ]
+    vios = literature_prior_violations("Typical mass is 2 M_sun.", tool_results)
+    assert len(vios) >= 1
+
+
+def test_literature_prior_no_claim_labels_no_violations():
+    """W1: reply 不含 age/mass/distance, 自然无 W1 违规 (只做 label 过滤)."""
+    from app.services.claim_validator import literature_prior_violations
+    tool_results = [{"tool": "run_adql", "input": {}, "result": {"data": {"x": [1]}}}]
+    assert literature_prior_violations("The period is 5.366 days.", tool_results) == []

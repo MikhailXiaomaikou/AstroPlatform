@@ -72,8 +72,11 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("a_v", re.compile(rf"\bA_?V\s*[=≈~]\s*{_NUM}\b", re.I)),
     ("mass_solar", re.compile(rf"{_NUM}\s*(?:M_sun|M☉|solar\s*mass(?:es)?)\b", re.I)),
     ("luminosity_solar", re.compile(rf"{_NUM}\s*(?:L_sun|L☉|solar\s*luminosit(?:y|ies))\b", re.I)),
-    ("age_gyr", re.compile(rf"\bage\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*Gyr\b", re.I)),
-    ("age_myr", re.compile(rf"\bage\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*Myr\b", re.I)),
+    # W1: allow stacking markers so `age: ~100 Myr` / `age = ~100 Myr` /
+    # `age is approximately 100 Myr` all match (previously only single-marker
+    # forms like `age ~100 Myr` were captured).
+    ("age_gyr", re.compile(rf"\bage(?:\s*(?:of|=|≈|~|is|:|：|about|approximately|roughly|around))*\s*{_NUM}\s*Gyr\b", re.I)),
+    ("age_myr", re.compile(rf"\bage(?:\s*(?:of|=|≈|~|is|:|：|about|approximately|roughly|around))*\s*{_NUM}\s*Myr\b", re.I)),
     ("teff_k", re.compile(rf"\bT(?:_?eff)?\s*[=≈~]\s*{_NUM}\s*K\b", re.I)),
     ("distance_pc", re.compile(rf"\bdistance\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*pc\b", re.I)),
     ("distance_kpc", re.compile(rf"\bdistance\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*kpc\b", re.I)),
@@ -81,6 +84,13 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("period_days", re.compile(rf"\bperiod\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*days?\b", re.I)),
     ("period_days_zh", re.compile(rf"(?:周期|脉动周期|轨道周期)\s*(?:值)?\s*(?:为|是|=|≈|~|约为)?\s*{_NUM}\s*(?:天|日)\b", re.I)),
     ("distance_pc_zh", re.compile(rf"(?:距离|距离估算|距离约为)\s*(?:值)?\s*(?:为|是|=|≈|~|约为)?\s*{_NUM}\s*pc\b", re.I)),
+    # W1 (PART W): 中文 label 的 age/mass claim. AI 在 Pleiades 用
+    # "年龄: ~100 Myr (年轻疏散星团)" / "年龄 ≈ 100 Myr" 绕过 age_myr
+    # 英文正则. 新 _zh 版抓所有带中文 label 的形式, 允许多个 marker 连缀
+    # (e.g. `: ~` 两个 punctuation 同时出现).
+    ("age_myr_zh", re.compile(rf"(?:年龄|年龄约|大致年龄|估计年龄)(?:\s*(?:值|为|是|≈|~|约|约为|:|：|=))*\s*{_NUM}\s*(?:Myr|百万年)", re.I)),
+    ("age_gyr_zh", re.compile(rf"(?:年龄|年龄约|大致年龄|估计年龄)(?:\s*(?:值|为|是|≈|~|约|约为|:|：|=))*\s*{_NUM}\s*(?:Gyr|亿年)", re.I)),
+    ("mass_solar_zh", re.compile(rf"(?:质量|恒星质量|星团质量)(?:\s*(?:值|为|是|≈|~|约|约为|:|：|=))*\s*{_NUM}\s*(?:M_sun|M☉|太阳质量)", re.I)),
     ("percent_claim", re.compile(
         rf"(?:误差|偏差|相对误差|差异|agreement|error|offset)\s*(?:为|是|=|≈|~|about|around|approximately|approx\.?)?\s*{_NUM}\s*%",
         re.I,
@@ -673,3 +683,72 @@ def dump_tool_universe(tool_results: Any, limit: int = 50) -> str:
     vals = list(_iter_numeric_values(tool_results))
     vals.sort()
     return json.dumps(vals[:limit])
+
+
+# W1 (PART W): 文献先验硬黑名单 — age/mass/distance 必须有对应测量/引用工具
+# 出现在 tool_results 才允许在 reply 里引用. 独立于 ±1% universe 匹配;
+# 即使 universe 偶然包含数字 100, "age ~100 Myr" 也会被硬拦除非本轮跑了
+# 对应工具. 防止 LLM 借 Gaia ADQL 返回表里某行的值洗白教科书先验.
+_LITERATURE_PRIOR_LABELS_REQUIRE_TOOL: dict[str, tuple[str, ...]] = {
+    # age: 要么测量 (fit_isochrone), 要么引用 (search_literature),
+    # 要么从 dossier 拿现成的 (get_object_dossier).
+    "age_myr": ("fit_isochrone", "search_literature", "get_object_dossier"),
+    "age_gyr": ("fit_isochrone", "search_literature", "get_object_dossier"),
+    "age_myr_zh": ("fit_isochrone", "search_literature", "get_object_dossier"),
+    "age_gyr_zh": ("fit_isochrone", "search_literature", "get_object_dossier"),
+    # mass: 除了拟合 / 文献 / dossier, 也可从 Gaia / SDSS 质量列拿 (run_adql).
+    "mass_solar": (
+        "fit_isochrone", "search_literature", "get_object_dossier", "run_adql",
+    ),
+    "mass_solar_zh": (
+        "fit_isochrone", "search_literature", "get_object_dossier", "run_adql",
+    ),
+    # distance: Gaia parallax (run_adql / get_object_info), extinction helper
+    # (get_extinction 返回含距离), dossier, 或文献引用.
+    "distance_pc": (
+        "run_adql", "search_literature", "get_object_dossier",
+        "get_object_info", "get_extinction",
+    ),
+    "distance_kpc": (
+        "search_literature", "get_object_dossier", "get_object_info",
+    ),
+    "distance_mpc": (
+        "search_literature", "get_object_dossier", "get_object_info",
+    ),
+    "distance_pc_zh": (
+        "run_adql", "search_literature", "get_object_dossier",
+        "get_object_info", "get_extinction",
+    ),
+}
+
+
+def literature_prior_violations(reply: str, tool_results: Any) -> list[Claim]:
+    """W1 (PART W): 检测 textbook-prior 式 age/mass/distance 引用.
+
+    当 reply 里出现这些 label 的数字 claim, 但本轮 tool_results 里没有任何
+    对应测量/引用工具的调用 (fit_isochrone / search_literature /
+    get_object_dossier / run_adql / get_object_info / get_extinction), 返回
+    违规 claim 列表. 比 validate_claims 的 ±1% universe 匹配更严: 独立于
+    universe 里是否偶然有相近数字, 直接按 "有没有跑该工具" 判断.
+
+    Args:
+        reply: assistant 回复原文
+        tool_results: 本轮工具调用结果列表 (每条 dict 含 "tool" key)
+
+    Returns:
+        违规 claim 列表. 空 list 表示所有相关 claim 都有对应工具支撑.
+    """
+    tools_run: set[str] = set()
+    if isinstance(tool_results, list):
+        for entry in tool_results:
+            if isinstance(entry, dict) and "tool" in entry:
+                tools_run.add(str(entry["tool"]))
+    claims = extract_claims(reply)
+    violations: list[Claim] = []
+    for c in claims:
+        allowed = _LITERATURE_PRIOR_LABELS_REQUIRE_TOOL.get(c.label)
+        if allowed is None:
+            continue
+        if not any(t in tools_run for t in allowed):
+            violations.append(c)
+    return violations

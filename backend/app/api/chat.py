@@ -65,6 +65,24 @@ violation; the system will detect it and reject your reply.  When in
 doubt, call a tool (search_literature for published values,
 get_object_info / run_adql for catalog values).
 
+### Literature-prior citation rule (hard-blocked, no regen opportunity)
+Age, mass, and distance are the three quantities the model most often
+leaks from training-data priors.  Even if a tool_result happens to
+contain a numerically close value, you MUST NOT state "age ~100 Myr" /
+"mass ~2 M_sun" / "distance ~136 pc" UNLESS this turn's tool_results
+contain the matching measurement:
+  - age      ← fit_isochrone (model fit) OR search_literature (citation)
+               OR get_object_dossier (dossier age field)
+  - mass     ← fit_isochrone OR search_literature OR get_object_dossier
+               OR run_adql (Gaia mass column)
+  - distance ← run_adql (Gaia parallax → distance) OR get_object_info
+               OR get_object_dossier OR get_extinction OR search_literature
+If you want to cite the textbook value, call `search_literature` first
+so the citation lands in tool_results and the zero-fabrication gate
+passes.  Writing age/mass/distance without the corresponding tool call
+is **hard-blocked** (no regen attempt, no laundering via ±1% match).
+Covers Chinese prose too ("年龄: ~100 Myr", "质量约 2 太阳质量", etc.).
+
 ## STRUCTURED ABSTENTION (preferred response when tools have no data)
 When tool_results for this turn are marked `__tool_status__` = EMPTY or
 FAILED, you MUST NOT attempt a prose answer.  Instead, output a SINGLE
@@ -3187,6 +3205,7 @@ async def _run_agent_loop(
             blocked_reply_text,
             zero_data_but_quantitative,
             is_empty_turn,
+            literature_prior_violations,
         )
 
         # F1.4: zero-data hard block.  If every tool call this turn was
@@ -3223,6 +3242,47 @@ async def _run_agent_loop(
                 record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="zero_data")
             except Exception:
                 pass
+
+        elif literature_prior_violations(clean_reply, all_tool_results):
+            # W1 (PART W): 文献先验硬 block. 比 zero_data_but_quantitative 松 —
+            # 这里 tool_results 有数据, 但 claim 是 age/mass/distance 这类必须
+            # 有对应测量工具支撑的量, 本轮没跑就 block, 不让 regen 循环借
+            # universe 里偶然的数字洗白 (Pleiades "~100 Myr" 场景).
+            lit_prior_claims = literature_prior_violations(
+                clean_reply, all_tool_results
+            )
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "fabrication_blocked_total",
+                    1.0,
+                    agent=agent_name,
+                    reason="literature_prior",
+                )
+            except Exception:
+                pass
+            logger.error(
+                "Literature-prior turn with %d claim(s) from %s — "
+                "hard-blocking (labels: %s, tools_run this turn: %s)",
+                len(lit_prior_claims), agent_name,
+                [c.label for c in lit_prior_claims],
+                sorted({
+                    r["tool"] for r in all_tool_results
+                    if isinstance(r, dict) and "tool" in r
+                }),
+            )
+            validation = validate_claims(clean_reply, all_tool_results)
+            clean_reply = blocked_reply_text(validation) + (
+                "\n\nAdditional note: your claims matched the pattern of "
+                "citing a textbook literature value (age / mass / distance) "
+                "without running a corresponding measurement tool this turn. "
+                "If you want to cite a literature value, call "
+                "`search_literature` first so the citation lands in "
+                "tool_results; if you want to measure it, call "
+                "`fit_isochrone` / `run_adql` (Gaia parallax → distance) "
+                "/ `get_object_dossier` explicitly."
+            )
+            fabrication_stats["blocked"] = True
 
         elif True:
             for attempt in range(2):
