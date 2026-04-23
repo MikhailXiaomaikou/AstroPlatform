@@ -38,6 +38,10 @@ class SessionArtifacts:
     pipeline_calls: list[dict]
     figure_refs: list[dict]
     bibcodes: list[str]
+    tool_results: list[dict]
+    provenance_datasets: list[dict]
+    provenance_runs: list[dict]
+    source_urls: list[str]
 
 
 def _escape_latex(text: str) -> str:
@@ -79,6 +83,10 @@ def _extract_actions(messages: list[dict]) -> SessionArtifacts:
     pipeline_calls: list[dict] = []
     figure_refs: list[dict] = []
     bibcodes: list[str] = []
+    tool_results: list[dict] = []
+    provenance_datasets: list[dict] = []
+    provenance_runs: list[dict] = []
+    source_urls: list[str] = []
 
     for message in messages:
         role = message.get("role", "")
@@ -109,6 +117,17 @@ def _extract_actions(messages: list[dict]) -> SessionArtifacts:
                 })
 
             tool_result = action.get("tool_result")
+            for result_dict in _iter_tool_result_dicts(tool_result):
+                tool_results.append(result_dict)
+                provenance_datasets.extend(_extract_provenance_datasets(result_dict))
+                run = _extract_reproducibility_run(result_dict)
+                if run:
+                    provenance_runs.append({
+                        "action": action_name,
+                        **run,
+                    })
+                source_urls.extend(_extract_source_urls(result_dict))
+                bibcodes.extend(_extract_bibcodes_from_provenance(result_dict))
             if isinstance(tool_result, dict) and tool_result.get("bibcode"):
                 bibcodes.append(str(tool_result["bibcode"]))
             elif isinstance(tool_result, list):
@@ -126,7 +145,109 @@ def _extract_actions(messages: list[dict]) -> SessionArtifacts:
         pipeline_calls=pipeline_calls,
         figure_refs=figure_refs,
         bibcodes=list(dict.fromkeys(bibcodes)),
+        tool_results=tool_results,
+        provenance_datasets=_dedupe_datasets(provenance_datasets),
+        provenance_runs=_dedupe_runs(provenance_runs),
+        source_urls=list(dict.fromkeys(source_urls)),
     )
+
+
+def _iter_tool_result_dicts(tool_result: object):
+    if isinstance(tool_result, dict):
+        yield tool_result
+    elif isinstance(tool_result, list):
+        for item in tool_result:
+            if isinstance(item, dict):
+                yield item
+
+
+def _extract_provenance_datasets(tool_result: dict) -> list[dict]:
+    datasets: list[dict] = []
+    provenance = tool_result.get("provenance")
+    if isinstance(provenance, dict):
+        raw = provenance.get("datasets")
+        if isinstance(raw, list):
+            datasets.extend(item for item in raw if isinstance(item, dict))
+    raw_top = tool_result.get("datasets")
+    if isinstance(raw_top, list):
+        datasets.extend(item for item in raw_top if isinstance(item, dict))
+    return datasets
+
+
+def _extract_reproducibility_run(tool_result: dict) -> dict | None:
+    provenance = tool_result.get("provenance")
+    repro = None
+    if isinstance(provenance, dict) and isinstance(provenance.get("reproducibility"), dict):
+        repro = provenance["reproducibility"]
+    elif isinstance(tool_result.get("reproducibility"), dict):
+        repro = tool_result["reproducibility"]
+    if not isinstance(repro, dict):
+        return None
+    keys = ("run_id", "query_hash", "archive_version", "tool_version")
+    run = {key: str(repro[key]) for key in keys if repro.get(key)}
+    return run or None
+
+
+def _extract_source_urls(tool_result: dict) -> list[str]:
+    urls: list[str] = []
+    for value in tool_result.get("source_urls") or []:
+        if value:
+            urls.append(str(value))
+    for dataset in _extract_provenance_datasets(tool_result):
+        for value in dataset.get("source_urls") or []:
+            if value:
+                urls.append(str(value))
+        for key in ("reference_url", "credits_page_url"):
+            if dataset.get(key):
+                urls.append(str(dataset[key]))
+    return list(dict.fromkeys(urls))
+
+
+def _extract_bibcodes_from_provenance(tool_result: dict) -> list[str]:
+    bibcodes: list[str] = []
+    for dataset in _extract_provenance_datasets(tool_result):
+        article = dataset.get("article")
+        if article:
+            bibcodes.extend(_BIBCODE_RE.findall(str(article)))
+    provenance = tool_result.get("provenance")
+    field_bibcodes = provenance.get("field_bibcodes") if isinstance(provenance, dict) else tool_result.get("field_bibcodes")
+    if isinstance(field_bibcodes, dict):
+        columns = field_bibcodes.get("columns") or {}
+        if isinstance(columns, dict):
+            for values in columns.values():
+                if isinstance(values, list):
+                    for value in values:
+                        bibcodes.extend(_BIBCODE_RE.findall(str(value)))
+    return bibcodes
+
+
+def _dedupe_datasets(datasets: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str, str, str]] = set()
+    deduped: list[dict] = []
+    for dataset in datasets:
+        key = (
+            str(dataset.get("ivoid") or "").lower(),
+            str(dataset.get("service_key") or dataset.get("service_name") or "").lower(),
+            str(dataset.get("archive_version") or "").lower(),
+            str(dataset.get("article") or "").lower(),
+        )
+        if not any(key) or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(dict(dataset))
+    return deduped
+
+
+def _dedupe_runs(runs: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict] = []
+    for run in runs:
+        key = (str(run.get("run_id") or ""), str(run.get("query_hash") or ""))
+        if not any(key) or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(dict(run))
+    return deduped
 
 
 def _summarize_data_sources(artifacts: SessionArtifacts) -> tuple[list[str], str]:
@@ -144,17 +265,54 @@ def _summarize_data_sources(artifacts: SessionArtifacts) -> tuple[list[str], str
         used_sources.append(service)
         query = str(action.get("query", "")).strip().replace("\n", " ")
         data_lines.append(f"ADQL query on {service}: {query[:180]}")
+    for dataset in artifacts.provenance_datasets:
+        service = str(dataset.get("service_key") or dataset.get("service_name") or "").lower()
+        if service:
+            used_sources.append(service)
+        archive_version = dataset.get("archive_version")
+        article = dataset.get("article")
+        parts = [
+            str(dataset.get("service_name") or dataset.get("service_key") or "dataset"),
+            f"archive_version={archive_version}" if archive_version else "",
+            f"article={article}" if article else "",
+        ]
+        data_lines.append("Dataset provenance: " + ", ".join(part for part in parts if part) + ".")
 
     deduped_sources = list(dict.fromkeys(source for source in used_sources if source))
     data_text = " ".join(data_lines) or "The session primarily consists of interactive analysis and interpretation."
     return deduped_sources, data_text
 
 
-def _build_acknowledgments(sources: list[str]) -> str:
-    lines = [_ACKNOWLEDGMENTS[source] for source in sources if source in _ACKNOWLEDGMENTS]
+def _build_acknowledgments(sources: list[str], datasets: list[dict] | None = None) -> str:
+    lines: list[str] = []
+    for dataset in datasets or []:
+        template = dataset.get("acknowledgement_template")
+        if template:
+            lines.append(str(template))
+            continue
+        service_key = str(dataset.get("service_key") or "").lower()
+        if service_key in _ACKNOWLEDGMENTS:
+            lines.append(_ACKNOWLEDGMENTS[service_key])
+    lines.extend(_ACKNOWLEDGMENTS[source] for source in sources if source in _ACKNOWLEDGMENTS)
     if not lines:
         lines.append("This work made use of the Standard Astro research platform for interactive data analysis.")
     return " ".join(dict.fromkeys(lines))
+
+
+def _build_data_provenance_text(artifacts: SessionArtifacts) -> str:
+    lines: list[str] = []
+    for run in artifacts.provenance_runs:
+        fields = [
+            f"tool={run.get('action')}" if run.get("action") else "",
+            f"run_id={run.get('run_id')}" if run.get("run_id") else "",
+            f"query_hash={run.get('query_hash')}" if run.get("query_hash") else "",
+            f"archive_version={run.get('archive_version')}" if run.get("archive_version") else "",
+            f"tool_version={run.get('tool_version')}" if run.get("tool_version") else "",
+        ]
+        lines.append("; ".join(field for field in fields if field))
+    if artifacts.source_urls:
+        lines.append("Source URLs: " + "; ".join(artifacts.source_urls))
+    return "\n".join(lines)
 
 
 def _build_results_tables(artifacts: SessionArtifacts) -> list[dict]:
@@ -178,6 +336,7 @@ def _build_results_tables(artifacts: SessionArtifacts) -> list[dict]:
 
 def _build_default_paper_json(artifacts: SessionArtifacts, journal_format: str) -> dict:
     sources, data_description = _summarize_data_sources(artifacts)
+    data_provenance = _build_data_provenance_text(artifacts)
     primary_question = artifacts.user_prompts[0] if artifacts.user_prompts else "Exploratory astronomical data analysis"
     discussion_citations = artifacts.bibcodes[:5]
     intro_citations = artifacts.bibcodes[:2]
@@ -210,6 +369,7 @@ def _build_default_paper_json(artifacts: SessionArtifacts, journal_format: str) 
             ),
             "citations": methods_citations,
         },
+        "data_provenance": data_provenance,
         "results": {
             "text": results_text,
             "figures": artifacts.figure_refs,
@@ -226,7 +386,7 @@ def _build_default_paper_json(artifacts: SessionArtifacts, journal_format: str) 
             "The session establishes a reproducible foundation for a paper draft, but the final manuscript should confirm all "
             "numerical claims, uncertainties, and literature context before submission."
         ),
-        "acknowledgments": _build_acknowledgments(sources),
+        "acknowledgments": _build_acknowledgments(sources, artifacts.provenance_datasets),
         "journal_format": journal_format,
     }
 
@@ -324,6 +484,10 @@ def render_latex(paper_json: dict, format: str = "aastex",
         r"\end{abstract}",
         r"\maketitle",
     ])
+    data_provenance = str(paper_json.get("data_provenance") or "").strip()
+    if data_provenance:
+        for line in data_provenance.splitlines():
+            lines.append("% Data provenance: " + line)
 
     def _section(title: str, body: str):
         lines.append(rf"\section{{{_escape_latex(title)}}}")
@@ -340,6 +504,8 @@ def render_latex(paper_json: dict, format: str = "aastex",
         "Data and Methods",
         f"{methods.get('data_sources', '')}\n\n{methods.get('analysis_methods', '')}",
     )
+    if data_provenance:
+        _section("Data provenance", data_provenance)
     _section("Results", str(results.get("text", "")))
 
     for figure in results.get("figures", [])[:5]:
