@@ -41,10 +41,13 @@ import {
   validatePaperSession,
 } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
+import AckButton from "../../components/chat/AckButton";
+import DataSourcesPanel from "../../components/chat/DataSourcesPanel";
 import ErrorBoundary from "../../components/ErrorBoundary";
 import { useI18n } from "../../i18n";
 import { useAuth } from "../../context/AuthContext";
 import { useTracking } from "../../hooks/useTracking";
+import { useConversationProvenance, type ConversationProvenance } from "../../hooks/useConversationProvenance";
 import { registerWorkspaceExport } from "../../utils/workspaceCache";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
@@ -359,12 +362,16 @@ function ActionCardInner({
   result,
   onExecute,
   executing,
+  conversationProvenance,
+  onCopyAcknowledgement,
 }: {
   action: ChatAction;
   index: number;
   result?: Record<string, unknown>;
   onExecute: (index: number, action: ChatAction) => void;
   executing: boolean;
+  conversationProvenance?: ConversationProvenance;
+  onCopyAcknowledgement?: () => void;
 }) {
   const labels: Record<string, string> = {
     search: "Search databases",
@@ -409,6 +416,7 @@ function ActionCardInner({
   const isAutoExecuted = !!(action as Record<string, unknown>)._auto_executed;
   const autoResult = (action as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
   const cardResult = autoResult && typeof autoResult === "object" ? autoResult : result;
+  const toolProvenance = useConversationProvenance(cardResult);
 
   // R3: surface numeric_sanity_warnings on the card as a ⚠ chip.  The
   // warnings list is attached by normalize_tool_result in the backend.
@@ -595,6 +603,11 @@ function ActionCardInner({
       {result && <ActionResult result={result} />}
       {isAutoExecuted && autoResult && !result && (
         <div className="chat-action-result auto-result">
+          <DataSourcesPanel summary={toolProvenance} />
+          <AckButton
+            summary={conversationProvenance || toolProvenance}
+            onCopied={onCopyAcknowledgement}
+          />
           <AutoToolResult toolName={action.action} result={autoResult} />
         </div>
       )}
@@ -612,6 +625,7 @@ const ActionCard = memo(ActionCardInner, (prev, next) => {
   if (prev.action !== next.action) return false;
   if (prev.index !== next.index) return false;
   if (prev.executing !== next.executing) return false;
+  if (prev.conversationProvenance !== next.conversationProvenance) return false;
   // Result may mutate in-place when a deferred tool finishes — compare by
   // reproducibility.run_id when present (stable for the lifetime of the
   // tool call), otherwise by identity.
@@ -2494,6 +2508,7 @@ export default function ChatPage() {
   }); // intentionally no deps — runs every render but only sets state once
 
   const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
+  const conversationProvenance = useConversationProvenance(messages);
   const [input, setInput] = useState("");
   const [pageError, _setPageError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -4248,6 +4263,8 @@ export default function ChatPage() {
                       executing={executingActions.has(
                         `${msg.id}-${idx}`
                       )}
+                      conversationProvenance={conversationProvenance}
+                      onCopyAcknowledgement={() => showToast("Copied", "success")}
                       onExecute={(i, a) =>
                         handleExecuteAction(msg.id, i, a)
                       }

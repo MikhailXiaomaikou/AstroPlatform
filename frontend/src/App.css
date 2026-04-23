@@ -4869,6 +4869,168 @@
   border-top-color: rgba(48, 209, 88, 0.2);
 }
 
+.data-sources-panel {
+  border: 1px solid var(--color-separator);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.45);
+  margin-bottom: 0.5rem;
+  overflow: hidden;
+}
+
+.data-sources-panel summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  list-style: none;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.data-sources-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.data-sources-panel summary::before {
+  content: ">";
+  color: var(--color-text-tertiary);
+  font-size: 0.72rem;
+}
+
+.data-sources-panel[open] summary::before {
+  content: "v";
+}
+
+.data-source-count,
+.field-bibcode-count {
+  border: 1px solid var(--color-separator);
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.16rem 0.4rem;
+}
+
+.field-bibcode-count {
+  border-color: rgba(42, 93, 123, 0.28);
+  color: var(--accent-2, #2a5d7b);
+}
+
+.data-sources-panel-body {
+  border-top: 1px solid var(--color-separator);
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.55rem;
+}
+
+.data-source-item {
+  min-width: 0;
+}
+
+.data-source-item-header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.3rem;
+  color: var(--color-text);
+  font-size: 0.78rem;
+}
+
+.data-source-authority {
+  align-items: center;
+  border: 1px solid var(--color-separator);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 0.25rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.16rem 0.38rem;
+  text-transform: uppercase;
+}
+
+.data-source-authority-dot {
+  border-radius: 999px;
+  display: inline-block;
+  height: 0.45rem;
+  width: 0.45rem;
+}
+
+.data-source-authority-good .data-source-authority-dot {
+  background: var(--color-green);
+}
+
+.data-source-authority-warn .data-source-authority-dot {
+  background: #c58b00;
+}
+
+.data-source-authority-registry .data-source-authority-dot {
+  background: #d46a1f;
+}
+
+.data-source-authority-neutral .data-source-authority-dot {
+  background: var(--color-text-tertiary);
+}
+
+.data-source-fields {
+  display: grid;
+  grid-template-columns: minmax(4.5rem, max-content) minmax(0, 1fr);
+  gap: 0.22rem 0.55rem;
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+.data-source-fields dt {
+  color: var(--color-text-tertiary);
+  font-weight: 600;
+}
+
+.data-source-fields dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.data-source-fields a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.data-source-fields a:hover {
+  text-decoration: underline;
+}
+
+.field-bibcode-detail {
+  border-top: 1px dashed var(--color-separator);
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  padding-top: 0.45rem;
+  overflow-wrap: anywhere;
+}
+
+.ack-button {
+  border: 1px solid var(--color-separator);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  padding: 0.32rem 0.55rem;
+}
+
+.ack-button:hover {
+  border-color: var(--color-scrollbar);
+  color: var(--color-text);
+}
+
 /* F3.2: Honest abstention bubble — pale blue, ✓ icon, welcoming tone.
    This is the UI celebration of the model's honesty. */
 .chat-abstention-card {

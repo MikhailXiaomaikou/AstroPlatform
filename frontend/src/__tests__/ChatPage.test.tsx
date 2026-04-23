@@ -559,6 +559,50 @@ describe("ChatPage", () => {
     await screen.findByText("∅ Empty");
     expect(screen.getByText("Tool returned no data")).toBeInTheDocument();
   });
+
+  it("surfaces provenance controls on auto-executed tool results", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "Gaia result ready.",
+      actions: [{
+        action: "run_adql",
+        tool_result: {
+          row_count: 1,
+          columns: ["source_id", "parallax"],
+          provenance: {
+            datasets: [{
+              service_key: "gaia",
+              service_name: "Gaia DR3",
+              archive_version: "Gaia DR3",
+              ivoid: "ivo://esavo/gaia/dr3",
+              article: "2023A&A...674A...1G",
+              publisher: "European Space Agency / Gaia Archive",
+              credits_page_url: "https://www.cosmos.esa.int/web/gaia-users/archive/credits",
+              source_authority: "datacenter_non_standard_tag",
+            }],
+            field_bibcodes: {
+              columns: {
+                plx_bibcode: ["2020yCat.1350....0G"],
+              },
+            },
+          },
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "query Gaia with provenance" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText("Data Sources");
+    expect(screen.getAllByText("Gaia DR3").length).toBeGreaterThan(0);
+    expect(screen.getByText("2023A&A...674A...1G")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy Acknowledgement" })).toBeInTheDocument();
+  });
 });
 
 
