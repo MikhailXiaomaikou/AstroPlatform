@@ -375,3 +375,21 @@ class TestEndToEndNoMessageBugIsGone:
         assert response["success"] is False
         assert response.get("error_class") == "import_error"
         assert "error" in response and response["error"].strip() != ""
+
+    def test_x5_session_counter_bumps_across_calls(self):
+        """X5 (PART X): _session_run_python_count 累积每次 run_python 调用
+        (成功+失败都计). B4/B5/B6 第 3+ 次 crash 数据收集的基础."""
+        from app.services.ai_tools import (
+            _bump_run_python_attempt_idx,
+            _session_run_python_count,
+        )
+        # 用隔离 session id 避免跟其他 test 串扰
+        sid = f"pytest-x5-counter-{id(self)}"
+        _session_run_python_count.pop(sid, None)
+
+        assert _bump_run_python_attempt_idx(sid) == 1
+        assert _bump_run_python_attempt_idx(sid) == 2
+        assert _bump_run_python_attempt_idx(sid) == 3
+        assert _session_run_python_count[sid] == 3
+
+        _session_run_python_count.pop(sid, None)

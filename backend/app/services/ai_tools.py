@@ -3141,6 +3141,21 @@ def _summarize_ast_observations(code: str, limit: int = 24) -> str:
     return "AST observed " + "; ".join(parts) + "."
 
 
+# X5 (PART X): 每 session 的 run_python 连续调用计数. 用来观察 "第 N 次
+# run_python 在 sandbox 崩溃" 这个 pattern — B4/B5/B6 都在第 3+ 次 crash,
+# 目前没数据定位根因. 本 counter 积累 1-2 轮 B 回归后再决定是否深度修 sandbox.
+_session_run_python_count: dict[str, int] = {}
+_MAX_TRACKED_ATTEMPT_IDX_FOR_METRIC = 10  # cap cardinality
+
+
+def _bump_run_python_attempt_idx(session_id: str) -> int:
+    """Return the 1-indexed call number of run_python in this session."""
+    _session_run_python_count[session_id] = (
+        _session_run_python_count.get(session_id, 0) + 1
+    )
+    return _session_run_python_count[session_id]
+
+
 async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dict:
     """Execute Python code in sandboxed environment."""
     from app.services.code_executor import execute_python
@@ -3665,6 +3680,31 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         except Exception:
             pass
         return combined
+
+    # X5 (PART X): 记录 sandbox 崩溃在本 session 第几次 run_python 发生.
+    # B4/B5/B6 都观察到第 3+ 次 crash 但没数据定位. 不修根因, 只埋监控.
+    # 捕获 error_class 维度也方便分类 (oom / sandbox_crash / timeout 等).
+    try:
+        if not response.get("success"):
+            from app.observability.metrics import record_counter
+            attempt_idx = _bump_run_python_attempt_idx(python_session_id)
+            # Cap attempt_idx label at 10 to bound Prometheus cardinality —
+            # beyond 10 all go into the "10+" bucket.
+            attempt_label = (
+                str(attempt_idx) if attempt_idx < _MAX_TRACKED_ATTEMPT_IDX_FOR_METRIC
+                else f"{_MAX_TRACKED_ATTEMPT_IDX_FOR_METRIC}+"
+            )
+            record_counter(
+                "sandbox_crash_by_attempt_idx_total",
+                1.0,
+                attempt_idx=attempt_label,
+                error_class=str(response.get("error_class", "unknown"))[:32],
+            )
+        else:
+            # 成功也 bump, 保持 attempt_idx 与真实调用次数同步
+            _bump_run_python_attempt_idx(python_session_id)
+    except Exception:
+        pass
 
     return response
 
