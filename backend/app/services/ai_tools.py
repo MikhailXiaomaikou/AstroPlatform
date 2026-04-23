@@ -1801,6 +1801,11 @@ def _suggest_actions_for_results(results: list) -> list[dict]:
 
 async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     from app.connectors.registry import CONNECTORS_KEYS, get_connector
+    from app.connectors.availability import (
+        build_unavailable_response,
+        is_available,
+        record_connector_gated,
+    )
     from app.api.data import _astro_to_result
     from app.api.data import _resolve_search_coordinates, _search_timeout_for_source
     from app.search.query_parser import parse_natural_query
@@ -1816,6 +1821,16 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     sources = [s for s in sources if s in CONNECTORS_KEYS]
     if not sources:
         sources = ["simbad"]
+
+    unavailable_sources = [s for s in sources if not is_available(s)]
+    for source in unavailable_sources:
+        record_connector_gated(source)
+
+    sources = [s for s in sources if is_available(s)]
+    if unavailable_sources and not sources:
+        store_search_results("latest", [])
+        store_search_results(f"latest:{python_session_id}", [])
+        return build_unavailable_response(unavailable_sources, tool_name="search_objects")
 
     parsed = parse_natural_query(query)
     object_type = parsed.get("object_type")
@@ -1855,6 +1870,10 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     # set is the complete archive response.
     per_source_counts: list[dict] = []
     total_truncated = False
+    for src in unavailable_sources:
+        unavailable = build_unavailable_response(src, tool_name="search_objects")
+        per_source_counts.extend(unavailable["per_source"])
+
     for src, res in zip(sources, results_per):
         if isinstance(res, Exception):
             all_results.append({"source": src, "error": str(res)})
@@ -1884,6 +1903,15 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
         "per_source": per_source_counts,
         "truncated": total_truncated,
     }
+    if unavailable_sources:
+        result["unavailable_sources"] = unavailable_sources
+        result["available_alternatives"] = ["vizier", "gaia", "simbad", "ned", "2mass"]
+        result["warnings"] = [
+            (
+                "Some requested sources are temporarily under maintenance during "
+                "the provenance v2 rollout: " + ", ".join(unavailable_sources)
+            )
+        ]
 
     # Phase 2B: Add suggested actions based on search results
     result["suggested_actions"] = _suggest_actions_for_results(result.get("results", []))
