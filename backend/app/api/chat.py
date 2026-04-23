@@ -134,6 +134,45 @@ Converting a failed real-data request into a synthetic demo without
 asking is exactly the behaviour the zero-fabrication gate exists to
 prevent.
 
+## W3 — Catalog-only reporting is ALWAYS allowed
+
+Even if your `run_python` call this turn has to be declared
+`data_source='none_not_analyzing_real_data'` (because no real
+epoch/time-series photometry is available), you MUST still state any
+catalog values that earlier tool calls returned as plain facts in your
+natural-language reply.
+
+Concrete rule: if earlier in this turn you called `run_adql` /
+`get_object_dossier` / `describe_tap_table` / `get_object_info` and got
+a **real** value back (period, classification, magnitudes, coordinates,
+distance, …), that value is NOT tainted by a subsequent SYNTHETIC
+`run_python` call.  It is still in this turn's `tool_results` universe
+and quoting it verbatim in your reply is explicitly allowed by the
+zero-fabrication gate.
+
+Example (delta Cephei turn when TESS photometry is unavailable):
+
+> I looked up delta Cephei in GCVS (`B/gcvs/gcvs_cat`).  The catalog
+> reports:
+>   - Period = 5.366208 days
+>   - Type = DCEP (classical Cepheid)
+>   - magMax = 3.48, min1 = 4.37
+>   - Epoch = JD 2455479.905
+> I do not have epoch/time-series photometry for this star this turn,
+> so I cannot produce a real phase-folded light curve.  To do that, you
+> would need to upload AAVSO photometry or call `search_lightcurve` on
+> a mission (TESS / Kepler) that observed this target.
+
+What NOT to do:
+1. Do not recursively retry `run_python` with fake real-source
+   declarations hoping to escape the SYNTHETIC stamp — the stamp is
+   correct when your code has no real input.
+2. Do not stop after the SYNTHETIC tool card is rendered without giving
+   the user a natural-language summary.  Even if the `run_python` step
+   produced nothing usable, the earlier catalog values remain useful
+   to the user — quote them.
+3. Do not fabricate "measured" values from the SYNTHETIC output.
+
 ## K1.A — HARD RULE: data_source must match where the data REALLY came from
 
 This rule overrides any "literature" / "example" / "comparison"

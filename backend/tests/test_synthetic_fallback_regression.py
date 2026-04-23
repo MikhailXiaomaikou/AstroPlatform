@@ -229,6 +229,69 @@ def test_synthetic_summary_stats_natural_language_do_not_support_claims():
     assert {round(c.value, 3) for c in result.uncited} >= {3.0, 1.414}
 
 
+# -------------------------------------------------- W3 catalog-only reporting
+
+
+def test_w3_catalog_value_survives_synthetic_run_python():
+    """W3 (PART W) — δ Cep regression:
+    Turn has run_adql(GCVS) succeeding with Period=5.366208 +
+    run_python (SYNTHETIC, no real time-series available).  AI reply
+    quotes "5.366208 days" as catalog fact — validator must pass
+    because Period is in this turn's tool_results universe (the GCVS
+    lookup returned it), even though the later run_python was SYNTHETIC.
+    """
+    tool_results = [
+        {
+            "tool": "run_adql",
+            "input": {
+                "service": "vizier",
+                "query": 'SELECT * FROM "B/gcvs/gcvs_cat" WHERE GCVS=\'delta Cep\'',
+            },
+            "result": {
+                "columns": ["GCVS", "Period", "VarType"],
+                "data": {
+                    "period": [5.366208],
+                    "vartype": ["DCEP"],
+                    "gcvs": ["delta Cep"],
+                },
+                "row_count": 1,
+                "has_data": True,
+            },
+        },
+        {
+            "tool": "run_python",
+            "input": {"data_source": "none_not_analyzing_real_data"},
+            "result": {
+                "__tool_status__": "SYNTHETIC",
+                "data_origin": "synthetic",
+                "success": True,
+                "stdout": "No real time-series data available",
+            },
+        },
+    ]
+    reply = (
+        "The GCVS catalog reports delta Cep with Period = 5.366208 days, "
+        "type DCEP (classical Cepheid). I cannot produce a real "
+        "phase-folded light curve because no epoch photometry is "
+        "available this turn."
+    )
+    result = validate_claims(reply, tool_results)
+    assert result.ok, f"Expected validator pass, got uncited={[(c.label, c.value) for c in result.uncited]}"
+
+
+def test_w3_system_prompt_mentions_catalog_only_reporting():
+    """W3 prompt regression: the Catalog-only reporting rule MUST be in
+    the SYSTEM_PROMPT so the model knows catalog facts are quotable
+    even when the final run_python was SYNTHETIC."""
+    from app.api.chat import SYSTEM_PROMPT
+    assert "Catalog-only reporting" in SYSTEM_PROMPT
+    # The rule names the concrete tools whose outputs survive
+    assert "run_adql" in SYSTEM_PROMPT
+    assert "describe_tap_table" in SYSTEM_PROMPT
+    # And gives a concrete δ Cep example
+    assert "5.366208" in SYSTEM_PROMPT
+
+
 # -------------------------------------------------- anti-instruction reflex
 
 
