@@ -279,6 +279,44 @@ def test_w3_catalog_value_survives_synthetic_run_python():
     assert result.ok, f"Expected validator pass, got uncited={[(c.label, c.value) for c in result.uncited]}"
 
 
+def test_x3_declared_synthetic_but_reads_adql_cache_is_caught():
+    """X3 (PART X): 代码含 get_adql_results() 但声明 data_source='none_not_
+    analyzing_real_data', 触发 incorrect_synthetic_declaration error.
+    修复 B6 P-3: AI 把 DBSCAN 真实数据 run_python 错标 SYNTHETIC."""
+    import asyncio
+    from app.services.ai_tools import _exec_run_python
+
+    code = (
+        "rows = get_adql_results()\n"
+        "import pandas as pd\n"
+        "df = pd.DataFrame(rows)\n"
+        "print(df.shape)\n"
+    )
+    result = asyncio.run(_exec_run_python({
+        "code": code,
+        "data_source": "none_not_analyzing_real_data",
+    }))
+    assert result["success"] is False
+    assert result.get("error_class") == "incorrect_synthetic_declaration"
+    assert "real cache" in result["error"].lower() or "get_adql_results" in result["error"]
+
+
+def test_x3_declared_synthetic_true_pure_demo_still_passes_validation():
+    """X3: 真的纯 demo 代码 (不读任何 real cache helper) + 声明 synthetic
+    → X3 检测不拦 (仍可能被 G2 / INERT 等其它分支处理, 但不是 X3 这条)."""
+    from app.services.ai_tools import _exec_run_python
+    import asyncio
+
+    code = 'print("hello world")\nx = 2 + 2\n'
+    result = asyncio.run(_exec_run_python({
+        "code": code,
+        "data_source": "none_not_analyzing_real_data",
+    }))
+    # 不应是 incorrect_synthetic_declaration — 即使是 SYNTHETIC 标, 至少
+    # error_class 不是 X3 的这个.
+    assert result.get("error_class") != "incorrect_synthetic_declaration"
+
+
 def test_w3_system_prompt_mentions_catalog_only_reporting():
     """W3 prompt regression: the Catalog-only reporting rule MUST be in
     the SYSTEM_PROMPT so the model knows catalog facts are quotable

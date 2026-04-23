@@ -3182,6 +3182,50 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
 
     is_synthetic_declared = data_source == "none_not_analyzing_real_data"
 
+    # X3 (PART X): reverse-direction data_source check.  If AI declared
+    # synthetic but the code actually reads real archive/cache helpers,
+    # the declaration is wrong — the output would be mis-labelled as
+    # SYNTHETIC even though it's analyzing real data, confusing the user
+    # and tainting the provenance trail.  Symmetric counterpart to G1.2
+    # ("declared real but code is synthetic").
+    #
+    # B6 P-3 regression: AI ran DBSCAN on 252 real Gaia rows (fetched
+    # via get_adql_results() earlier in the turn) but declared
+    # data_source='none_not_analyzing_real_data', so the real output
+    # got SYNTHETIC-stamped incorrectly.
+    if is_synthetic_declared:
+        _REAL_CACHE_READERS = (
+            "get_cached_results(", "get_search_results(",
+            "get_adql_results(", "get_adql_result_sets(",
+            "get_latest_adql_result(", "load_fits(",
+        )
+        reads_real_cache = any(p in code for p in _REAL_CACHE_READERS)
+        if reads_real_cache:
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "incorrect_synthetic_declaration_total",
+                    1.0,
+                )
+            except Exception:
+                pass
+            return {
+                "success": False,
+                "error": (
+                    "Incorrect synthetic declaration: code accesses real "
+                    "cache helpers (get_cached_results / get_search_results "
+                    "/ get_adql_results / get_adql_result_sets / "
+                    "get_latest_adql_result / load_fits) but data_source "
+                    "was declared 'none_not_analyzing_real_data'. Change "
+                    "data_source to 'latest_adql' / 'latest_search' / "
+                    "'latest_lightcurve' / 'cached:<key>' / 'fits:<path>' "
+                    "to match what the code actually reads. The SYNTHETIC "
+                    "tag is reserved for code that genuinely does NOT "
+                    "read any real data."
+                ),
+                "error_class": "incorrect_synthetic_declaration",
+            }
+
     # G1.2: if declared a real source, the code should reference the
     # matching helper.  Skip validation for cached:... and fits:... which
     # carry the target inline.
