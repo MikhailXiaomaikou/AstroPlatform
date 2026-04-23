@@ -391,26 +391,41 @@ CATALOG_REGISTRY: dict[str, CatalogEntry] = {
         ),
         common_queries=("Gaia fallback when TAP is overloaded",),
     ),
-    # B/gcvs/gcvs_cat — General Catalogue of Variable Stars (real VizieR
-    # fallback for named bright variables when mission light curves / Gaia TAP
-    # are unavailable).  Always confirm with describe_tap_table before a
-    # production query because VizieR column availability can differ by mirror.
+    # B/gcvs/gcvs_cat — General Catalogue of Variable Stars (Samus+ 2017
+    # ARep 61, 80).  Real VizieR fallback for named bright variables when
+    # mission light curves / Gaia TAP are unavailable.
+    # W4 (PART W): real CDS column names are GCVS / VarType / magMax / min1 /
+    # Epoch (NOT Vmax / Vmin / Name / Type — those are AI's common wrong
+    # guesses and return 400).  VIZIER_COMMON_MISTAKES has precise hints for
+    # each misguess.
     '"B/gcvs/gcvs_cat"': CatalogEntry(
         table_name='"B/gcvs/gcvs_cat"',
         service="vizier",
-        description="General Catalogue of Variable Stars (GCVS)",
+        description=(
+            "General Catalogue of Variable Stars (GCVS, Samus+ 2017 ARep 61, "
+            "80). Bright named variables; authoritative periods/types for "
+            "Cepheids, RR Lyrae, Miras, novae. Use as VizieR fallback when "
+            "Gaia vari_* tables are unavailable."
+        ),
         columns=_cols(
-            ("GCVS", "VARCHAR", "GCVS variable-star designation"),
+            ("GCVS", "VARCHAR", "GCVS identifier / primary designation"),
+            ("VarName", "VARCHAR", "Variable-star designation (alternate form)"),
             ("RAJ2000", "DOUBLE", "Right ascension J2000 [deg]"),
             ("DEJ2000", "DOUBLE", "Declination J2000 [deg]"),
-            ("VarType", "VARCHAR", "Variable-star type"),
-            ("Vmax", "FLOAT", "Maximum visual magnitude"),
-            ("Vmin", "FLOAT", "Minimum visual magnitude"),
+            ("VarType", "VARCHAR", "Variable-star type (DCEP, RRAB, M, EA, ...)"),
+            ("magMax", "FLOAT", "Magnitude at maximum brightness"),
+            ("min1", "FLOAT", "Primary minimum magnitude"),
+            ("min2", "FLOAT", "Secondary minimum (eclipsing binaries)"),
+            ("magMin", "FLOAT", "Legacy alias for min1 (prefer min1)"),
             ("Period", "DOUBLE", "Variability period [day]"),
-            ("Epoch", "DOUBLE", "Epoch of maximum/minimum light"),
+            ("Epoch", "DOUBLE", "Epoch of maximum/primary minimum [JD - 2400000]"),
             ("SpType", "VARCHAR", "Spectral type"),
         ),
-        common_queries=("Bright variable-star catalog fallback", "Cepheid period sanity check"),
+        common_queries=(
+            "Cepheid period lookup (WHERE VarType LIKE 'DCEP%')",
+            "Named variable by designation (WHERE GCVS = 'delta Cep')",
+            "RR Lyrae classification (WHERE VarType LIKE 'RR%')",
+        ),
     ),
     # II/335/galex_ais — UV photometry, commonly used for SED + YSO work
     '"II/335/galex_ais"': CatalogEntry(
@@ -456,6 +471,12 @@ VIZIER_COMMON_MISTAKES: dict[str, dict[str, str]] = {
     "psfMag_g": "V/154/sdss17 uses simply `g` (no `psfMag_` prefix in the VizieR mirror).",
     "redshift": "V/154/sdss17 uses `zsp` for spectroscopic redshift and `zph` for photometric. Generic `redshift` is NOT a column.",
     "objid": "V/154/sdss17 uses `objID` (capital ID). Case matters in TAP.",
+    # W4 (PART W): GCVS-specific mistakes.  δ Cep B3 review observed AI
+    # guessing Name / magMin / Vmax / Vmin — all return 400.
+    "Name": "B/gcvs/gcvs_cat uses `GCVS` (primary identifier) or `VarName` (alternate designation), not generic `Name`.",
+    "Vmax": "B/gcvs/gcvs_cat uses `magMax` for maximum brightness, not `Vmax`.",
+    "Vmin": "B/gcvs/gcvs_cat uses `min1` (primary minimum) or `min2` (secondary), not `Vmin`.",
+    "Type": "B/gcvs/gcvs_cat uses `VarType` (e.g. 'DCEP', 'RRAB'), not generic `Type`.",
 }
 
 

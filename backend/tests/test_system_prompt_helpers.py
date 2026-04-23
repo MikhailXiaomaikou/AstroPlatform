@@ -69,3 +69,57 @@ def test_system_prompt_preserves_requested_separate_cells():
 
     assert "separate cells" in SYSTEM_PROMPT
     assert "Do not concatenate" in SYSTEM_PROMPT
+
+
+def test_system_prompt_gcvs_fallback_has_correct_columns():
+    """W4 (PART W): GCVS 段必须给出真实 CDS 列名 (非 Vmax / Vmin / Name /
+    Type). B3 回归里 AI 猜这些列名导致 4 iterations 浪费."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "B/gcvs/gcvs_cat" in SYSTEM_PROMPT
+    # Correct column names must be present
+    assert "magMax" in SYSTEM_PROMPT
+    assert "min1" in SYSTEM_PROMPT
+    assert "VarType" in SYSTEM_PROMPT
+    # Wrong-name warnings also in prompt (tell AI not to guess)
+    assert "Vmax" in SYSTEM_PROMPT  # Now appears as a forbidden-guess warning
+    assert "describe_tap_table" in SYSTEM_PROMPT
+
+
+def test_gcvs_registry_has_real_column_names():
+    """W4: catalog_registry entry uses CDS-correct column names."""
+    from app.services.catalog_registry import get_catalog
+
+    entry = get_catalog('"B/gcvs/gcvs_cat"')
+    assert entry is not None
+    col_names = {c.name for c in entry.columns}
+    # Core columns required for a period lookup
+    for required in ("GCVS", "RAJ2000", "DEJ2000", "VarType", "Period",
+                     "magMax", "min1", "Epoch", "SpType"):
+        assert required in col_names, f"GCVS registry missing column: {required}"
+
+
+def test_vizier_common_mistakes_covers_gcvs_traps():
+    """W4: VIZIER_COMMON_MISTAKES suggests correct column when AI guesses
+    wrong GCVS column name."""
+    from app.services.catalog_registry import suggest_for_missing_column
+
+    # Name → GCVS / VarName
+    hint_name = suggest_for_missing_column("Name")
+    assert hint_name is not None
+    assert "GCVS" in hint_name
+
+    # Vmax → magMax
+    hint_vmax = suggest_for_missing_column("Vmax")
+    assert hint_vmax is not None
+    assert "magMax" in hint_vmax
+
+    # Vmin → min1 / min2
+    hint_vmin = suggest_for_missing_column("Vmin")
+    assert hint_vmin is not None
+    assert "min1" in hint_vmin
+
+    # Type → VarType
+    hint_type = suggest_for_missing_column("Type")
+    assert hint_type is not None
+    assert "VarType" in hint_type

@@ -472,6 +472,19 @@ ALWAYS query the dedicated Gaia variable tables for periods and classifications,
    M_G = -2.78 * log10(P/days) - 1.29   (Ripepi+ 2019, classical fundamental mode)
    For Type II Cepheids: M_G = -2.18 * log10(P/days) - 0.54
 
+**GCVS fallback** (when Gaia `vari_*` TAP is unavailable or the star is
+bright / named / in the Northern hemisphere):
+Use `run_adql(service="vizier", query="SELECT TOP 10 GCVS, VarName, RAJ2000, DEJ2000, VarType, Period, magMax, min1, Epoch, SpType FROM \"B/gcvs/gcvs_cat\" WHERE GCVS = 'delta Cep'")`.
+Column names (exact case, NO guessing):
+  - `GCVS` (identifier, primary) / `VarName` (alt designation)
+  - `VarType` (e.g. 'DCEP', 'RRAB') — **NOT** `Type`
+  - `magMax` (maximum brightness) — **NOT** `Vmax` / `Vmag`
+  - `min1` (primary minimum) / `min2` (secondary) — **NOT** `Vmin` / `magMin`
+  - `Period` in days, `Epoch` in JD - 2400000, `SpType` spectral type
+  - `RAJ2000`/`DEJ2000` in degrees
+Do NOT guess `Name` / `Type` / `Vmax` / `Vmin` / `magMin` — those return 400.
+When in doubt call `describe_tap_table` first.
+
 **Eclipsing binaries**:
 1. Query `gaiadr3.vari_eclipsing_binary` for periods and morphology.
 2. For mass determinations: cross-match with `gaiadr3.nss_two_body_orbit` (spectroscopic/astrometric binaries with orbital solutions).
