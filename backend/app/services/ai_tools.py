@@ -2217,6 +2217,11 @@ async def _exec_adql(
         "row_count": row_count,
         "showing": min(VIEW_ROWS, row_count),
         "has_data": row_count > 0,
+        # W5 (PART W): expose the actually-executed query + service so the
+        # AutoToolResult run_adql card can render it (not just the row count
+        # summary).  Users need to see the SQL for reproducibility.
+        "service": service,
+        "query": query,
         "note": (
             f"Showing first {VIEW_ROWS} of {row_count} rows. Full data is cached — "
             "in run_python you can access it via get_cached_results('latest_adql')."

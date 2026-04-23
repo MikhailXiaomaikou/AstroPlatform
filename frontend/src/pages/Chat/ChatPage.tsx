@@ -1201,14 +1201,42 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const successMessage = finalSuccess && typeof finalSuccess.message === "string"
       ? finalSuccess.message
       : "ADQL query succeeded";
+    // W5 (PART W): expose the actually-executed ADQL in a folded block so
+    // user can read / copy the SQL. Previously only row-count summary was
+    // shown on auto-executed cards; the manual-Execute ActionCard already
+    // showed the query, but run_adql auto-results did not.
+    const queryText = typeof result.query === "string" ? (result.query as string) : "";
+    const serviceName = typeof result.service === "string" ? (result.service as string) : "";
     return (
       <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
         <div style={{ color: "#2e7d32", fontWeight: 600 }}>
           ✓ {successMessage}: {rowCount} rows, {cols.length} columns
+          {serviceName ? ` · ${serviceName}` : ""}
         </div>
         <div>
           Columns: {cols.slice(0, 5).join(", ")}{cols.length > 5 ? "..." : ""}
         </div>
+        {queryText && (
+          <details style={{ marginTop: 4 }}>
+            <summary style={{ cursor: "pointer" }}>
+              Show ADQL query ({queryText.length} chars)
+            </summary>
+            <pre
+              style={{
+                margin: "4px 0 0 0",
+                padding: "6px 8px",
+                background: "var(--color-bg-code, rgba(0,0,0,0.04))",
+                fontSize: "0.72rem",
+                borderRadius: 3,
+                overflowX: "auto",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              <code>{queryText}</code>
+            </pre>
+          </details>
+        )}
         {(attemptLog.length > 0 || retryLog.length > 0) && (
           <details style={{ marginTop: 4 }}>
             <summary>

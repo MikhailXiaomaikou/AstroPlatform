@@ -1351,6 +1351,33 @@ def test_high_velocity_star_tool_computes_vtan_in_python():
     assert "SQRT" not in result["query"]
 
 
+def test_w5_exec_adql_result_carries_query_and_service():
+    """W5 (PART W): _exec_adql 返回值必须含 `query` 和 `service` 字段,
+    这样前端 AutoToolResult run_adql 分支可以渲染执行过的 SQL
+    (ChatPage.tsx "Show ADQL query" 折叠块).
+    修复 B4 Pleiades 回归: 598 行 Gaia ADQL auto-executed 后用户看不到 SQL.
+    """
+    from app.services.ai_tools import _exec_adql
+
+    async def fake_execute_adql_query(*args, **kwargs):
+        return {
+            "columns": ["source_id"],
+            "data": {"source_id": [1]},
+            "row_count": 1,
+        }
+
+    with patch("app.api.integration.execute_adql_query", side_effect=fake_execute_adql_query):
+        result = asyncio.run(_exec_adql({
+            "service": "gaia",
+            "query": "SELECT TOP 1 source_id FROM gaiadr3.gaia_source",
+        }))
+
+    # 两个新字段必须到位, 让前端能展示
+    assert "query" in result, "_exec_adql result missing 'query' field (W5)"
+    assert result["query"].strip().startswith("SELECT TOP 1 source_id")
+    assert result["service"] == "gaia"
+
+
 def test_gaia_adql_sqrt_error_gets_actionable_hint():
     from app.services.ai_tools import _exec_adql
 
