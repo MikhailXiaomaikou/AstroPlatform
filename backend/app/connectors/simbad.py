@@ -21,7 +21,13 @@ def _is_galactic_stellar_type(
     object_type_long: object | None = None,
     spectral_type: object | None = None,
 ) -> bool:
-    """Return True for Milky Way stellar objects where z is not cosmological."""
+    """Return True for Milky Way stellar objects where z is not cosmological.
+
+    Legacy substring-matching helper (kept for backwards compatibility).
+    New code paths should use :func:`_otype_is_extragalactic` instead —
+    the allow-list is more robust against otype_txt variants like
+    ``Open (galactic) Cluster`` that sneak past substring matches.
+    """
     text = " ".join(
         str(v or "").lower()
         for v in (object_type, object_type_long, spectral_type)
@@ -44,6 +50,46 @@ def _is_galactic_stellar_type(
         return True
     spectral = str(spectral_type or "").strip().lower()
     return bool(spectral) and spectral[:2] in spectral_markers or spectral[:1] in spectral_markers
+
+
+# W2 (PART W): SIMBAD otype 中允许 rvz_redshift 按 cosmological z 解释
+# 的 allow-list. 其它 otype (恒星/星团/脉冲星/星云/MW SNR/行星/...) 的
+# rvz_redshift 实际是 radial_velocity/c 的内部编码, 不是宇宙学红移,
+# 展示会误导用户. 反向设计 (allow-list 河外) 比 legacy 的 deny-list
+# substring match 更可靠 — 后者对 otype_txt="Open (galactic) Cluster"
+# 因为子串匹配 "open cluster" ≠ "open (galactic) cluster" 失败, 导致
+# Pleiades 泄漏 z=2.01e-05.
+# 参考 http://simbad.u-strasbg.fr/simbad/sim-display?data=otypes 的
+# "Galaxy" / "AGN" / "Lensed" 三大类.
+_EXTRAGALACTIC_OTYPES: frozenset[str] = frozenset({
+    # 星系一般类型
+    "G", "GiC", "GiG", "GiP",
+    "GrG", "CGG", "ClG", "PaG", "IG",
+    # 特殊星系
+    "SBG", "H2G", "EmG", "BCG", "LSB", "LINER",
+    # 历史遗留大写变体
+    "GinCl", "GinGroup", "GinPair",
+    # AGN
+    "AGN", "AG?", "SyG", "Sy1", "Sy2", "rG",
+    "LIN", "Bla", "BLL", "BLLac", "BlLac",
+    "Q?", "QSO", "Q1", "Q2", "QuOQ",
+    # 宇宙学距离尺度事件
+    "grv", "Lev", "LeG", "LeQ", "GWE",
+})
+
+
+def _otype_is_extragalactic(otype: str | None) -> bool:
+    """W2: Return True only for object types where rvz_redshift can be
+    displayed as a cosmological redshift. All other otypes (stars, clusters,
+    MW SNR, nebulae, ...) get z stripped so the UI shows radial_velocity
+    instead.
+
+    Allow-list approach (rather than deny-list) is chosen because SIMBAD
+    has ~200+ galactic otype codes and any future addition defaults to
+    safe (strip z) behaviour."""
+    if not otype:
+        return False
+    return str(otype).strip() in _EXTRAGALACTIC_OTYPES
 
 
 class SIMBADConnector(BaseConnector):
@@ -340,12 +386,16 @@ class SIMBADConnector(BaseConnector):
         redshift = safe("rvz_redshift")
         radial_velocity = safe("rvz_radvel")
         redshift_note = None
-        if _is_galactic_stellar_type(object_type, object_type_long, spectral_type):
-            if redshift is not None:
-                redshift_note = (
-                    "SIMBAD rvz_redshift is a velocity-derived quantity for "
-                    "Galactic stellar objects; use radial_velocity km/s instead."
-                )
+        # W2 (PART W): 用 otype allow-list 判是否保留 z. 非河外 (恒星/
+        # 星团/脉冲星/星云/...) 一律剥离, 改展示 radial_velocity. 原
+        # _is_galactic_stellar_type substring 匹配对 Pleiades otype_txt
+        # "Open (galactic) Cluster" 漏判 → z=2.01e-05 泄漏给用户.
+        if redshift is not None and not _otype_is_extragalactic(object_type):
+            redshift_note = (
+                f"SIMBAD rvz_redshift for otype='{object_type}' is "
+                f"velocity-derived, not cosmological. Use radial_velocity "
+                f"km/s instead."
+            )
             redshift = None
 
         detail = {
@@ -365,7 +415,7 @@ class SIMBADConnector(BaseConnector):
         }
         if redshift_note:
             detail["redshift_note"] = redshift_note
-            detail["redshift_source"] = "not_applicable_galactic_stellar"
+            detail["redshift_source"] = "not_applicable_non_extragalactic"
         return detail
 
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
@@ -527,16 +577,21 @@ class SIMBADConnector(BaseConnector):
 
             spectral_type = extra.get("sp_type") or extra.get("SP_TYPE")
             object_type_long = extra.get("otype_txt") or extra.get("OTYPE_TXT")
-            if _is_galactic_stellar_type(obj_type, object_type_long, spectral_type):
+            # W2 (PART W): 非河外 otype 剥离 z — 替代 legacy _is_galactic_stellar_type
+            # substring 匹配 (后者对 "Open (galactic) Cluster" 失败, Pleiades 泄漏).
+            # allow-list 更严格: 只明确的河外 otype 保留 z, 其它默认剥离.
+            if not _otype_is_extragalactic(obj_type):
                 if redshift is not None:
                     extra["redshift_note"] = (
-                        "SIMBAD rvz_redshift is a velocity-derived quantity for "
-                        "Galactic stellar objects; use radial_velocity km/s instead."
+                        f"SIMBAD rvz_redshift for otype={obj_type!r} is "
+                        f"velocity-derived, not cosmological. Use "
+                        f"radial_velocity km/s instead."
                     )
-                    extra["redshift_source"] = "not_applicable_galactic_stellar"
+                    extra["redshift_source"] = "not_applicable_non_extragalactic"
                 redshift = None
             if radial_velocity is not None:
                 extra["radial_velocity_km_s"] = radial_velocity
+            _ = spectral_type, object_type_long  # retained for future use
 
             objects.append(
                 AstroObject(
