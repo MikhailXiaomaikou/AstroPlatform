@@ -171,6 +171,7 @@ def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
     """Add the v2 nested provenance object without replacing v1 fields."""
     existing = result.get("provenance")
     provenance = dict(existing) if isinstance(existing, dict) else {}
+    extracted_field_bibcodes, extracted_field_coverage = _extract_field_bibcodes(result)
     provenance["reproducibility"] = dict(
         provenance.get("reproducibility")
         if isinstance(provenance.get("reproducibility"), dict)
@@ -182,17 +183,20 @@ def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
     datasets = provenance.get("datasets", result.get("datasets", []))
     provenance["datasets"] = datasets if isinstance(datasets, list) else []
 
-    field_bibcodes = provenance.get("field_bibcodes", result.get("field_bibcodes"))
+    field_bibcodes = provenance.get(
+        "field_bibcodes",
+        result.get("field_bibcodes", extracted_field_bibcodes),
+    )
     if hasattr(field_bibcodes, "to_dict"):
         field_bibcodes = field_bibcodes.to_dict()
     provenance["field_bibcodes"] = field_bibcodes if isinstance(field_bibcodes, dict) else None
 
     coverage = provenance.get("coverage", result.get("coverage"))
     coverage_dict = dict(coverage) if isinstance(coverage, dict) else {}
-    coverage_dict.setdefault("field_level", None)
+    coverage_dict.setdefault("field_level", extracted_field_coverage)
     coverage_dict.setdefault(
         "primary_citation_source",
-        "field_level" if provenance["field_bibcodes"] else (
+        "field_level" if _field_bibcodes_available(provenance["field_bibcodes"]) else (
             "table_level" if provenance["datasets"] else "none"
         ),
     )
@@ -200,6 +204,99 @@ def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
 
     result["provenance"] = provenance
     return result
+
+
+def _extract_field_bibcodes(result: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Best-effort field-bibcode extraction from row or columnar payloads."""
+    try:
+        from app.services.provenance_v2.field_bibcode_extractor import FieldBibcodeExtractor
+    except Exception:
+        return None, None
+
+    columns, rows = _rows_for_field_bibcode_extraction(result)
+    if not columns or not rows:
+        return None, None
+    try:
+        field_bibcodes, coverage = FieldBibcodeExtractor().extract(columns, rows)
+    except Exception:
+        return None, None
+    coverage_dict = coverage.to_dict()
+    return (
+        field_bibcodes.to_dict() if coverage.available else None,
+        coverage_dict,
+    )
+
+
+def _field_bibcodes_available(field_bibcodes: Any) -> bool:
+    if not isinstance(field_bibcodes, dict):
+        return False
+    columns = field_bibcodes.get("columns")
+    if not isinstance(columns, dict):
+        return False
+    return any(isinstance(values, list) and any(str(v).strip() for v in values) for values in columns.values())
+
+
+def _rows_for_field_bibcode_extraction(result: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
+    columns = [str(column) for column in result.get("columns", []) if str(column).strip()]
+    rows = result.get("rows")
+    if isinstance(rows, list) and rows:
+        if isinstance(rows[0], dict):
+            row_dicts = [row for row in rows if isinstance(row, dict)]
+            if not columns and row_dicts:
+                columns = [str(column) for column in row_dicts[0].keys()]
+            return columns, row_dicts
+        if columns:
+            return columns, [
+                {
+                    column: row[index] if isinstance(row, (list, tuple)) and index < len(row) else None
+                    for index, column in enumerate(columns)
+                }
+                for row in rows
+            ]
+
+    data = result.get("data")
+    if isinstance(data, list) and data:
+        if isinstance(data[0], dict):
+            row_dicts = [row for row in data if isinstance(row, dict)]
+            if not columns and row_dicts:
+                columns = [str(column) for column in row_dicts[0].keys()]
+            return columns, row_dicts
+        if columns:
+            return columns, [
+                {
+                    column: row[index] if isinstance(row, (list, tuple)) and index < len(row) else None
+                    for index, column in enumerate(columns)
+                }
+                for row in data
+            ]
+    if isinstance(data, dict) and data:
+        if not columns:
+            columns = [str(column) for column in data.keys()]
+        lengths = [
+            len(values)
+            for values in data.values()
+            if isinstance(values, list)
+        ]
+        row_count = max(lengths, default=0)
+        return columns, [
+            {
+                column: (
+                    values[index]
+                    if isinstance(values := data.get(column), list) and index < len(values)
+                    else None
+                )
+                for column in columns
+            }
+            for index in range(row_count)
+        ]
+
+    results = result.get("results")
+    if isinstance(results, list) and results and isinstance(results[0], dict):
+        row_dicts = [row for row in results if isinstance(row, dict)]
+        columns = [str(column) for column in row_dicts[0].keys()] if row_dicts else []
+        return columns, row_dicts
+
+    return [], []
 
 
 # Tool-name → default classification mapping for current HEAD tools (53 tools).
