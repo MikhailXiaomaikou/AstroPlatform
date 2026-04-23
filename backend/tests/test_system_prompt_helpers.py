@@ -99,6 +99,21 @@ def test_gcvs_registry_has_real_column_names():
         assert required in col_names, f"GCVS registry missing column: {required}"
 
 
+def test_system_prompt_mandates_english_only_reply():
+    """X (PART X 方案 D): SYSTEM_PROMPT 明确要求 final reply 必须英文,
+    删除了旧的 'Always respond in the same language' 冲突规则."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    # 必须含新 English-only 段
+    assert "English-only reply rule" in SYSTEM_PROMPT
+    assert "MUST be in standard English" in SYSTEM_PROMPT
+    # 旧冲突规则必须删
+    assert "Always respond in the same language" not in SYSTEM_PROMPT
+    # 允许范围说明
+    assert "Greek" in SYSTEM_PROMPT or "α" in SYSTEM_PROMPT
+    assert "Å" in SYSTEM_PROMPT
+
+
 def test_vizier_common_mistakes_covers_gcvs_traps():
     """W4: VIZIER_COMMON_MISTAKES suggests correct column when AI guesses
     wrong GCVS column name."""

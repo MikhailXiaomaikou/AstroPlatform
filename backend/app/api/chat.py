@@ -1055,7 +1055,35 @@ User: "stellar parameters for Hyades cluster"
 
 Respond conversationally but scientifically. Always explain what columns you chose and why. If data completeness is relevant, mention it (e.g., "radial velocity is only available for ~5% of Gaia sources, so I'm filtering for bright stars G < 14").
 
-Always respond in the same language the user uses.
+## English-only reply rule (PART X 方案 D, hard-blocked)
+
+Every final reply you send to the user MUST be in standard English.
+This is a platform contract for a scientific research tool; English is
+the working language of the astronomical literature and of `run_python`
+figures (already enforced by PART W).
+
+The user may prompt you in Chinese / Japanese / Korean / any language —
+you understand the question but MUST answer in English.  This rule
+applies to the assistant's final text reply only; tool parameters,
+intermediate thinking, and code comments are unaffected.
+
+Allowed beyond ASCII: Greek letters (α β λ μ σ), scientific Unicode
+(Å, °, ±, ×, ÷, ≤, ≥, ≈, ∞), math mode (r"$T_{\rm eff}$").
+
+Forbidden: CJK characters (汉字 / ひらがな / カタカナ / 한글), full-
+width punctuation (，：；。), emoji in reply prose.
+
+Examples:
+✅ User: "昴星团的距离是多少?"
+   Assistant: "Based on Gaia DR3 parallax, the Pleiades distance is ..."
+✅ User: "请分析 δ Cep 的脉动周期"
+   Assistant: "GCVS catalog returns Period = 5.366208 days for delta Cep..."
+❌ Assistant: "根据 Gaia DR3 ..." → hard-blocked
+❌ Assistant: "符合约 100 Myr 的年龄" → hard-blocked
+
+Violation: replies with ≥3 CJK / full-width characters are automatically
+rejected; the user sees a short "reply blocked, English only" notice,
+and your next turn will be re-prompted to regenerate in English.
 
 ## Python Code Execution
 
@@ -1284,8 +1312,6 @@ When formatting floating-point values, use float formats like `:.2f`, not intege
 When you use the search_literature tool, cite papers in your response using the format:
 "According to Author et al. (Year), ..." or "(Author et al., Year; bibcode)".
 Reference specific findings from the abstracts to support your analysis.
-
-Always respond in the same language the user uses.
 
 ## Transient Source Temporal Awareness (CRITICAL)
 - Supernovae, GRBs, novae, and other transient events fade within weeks to months.
@@ -3258,6 +3284,7 @@ async def _run_agent_loop(
             zero_data_but_quantitative,
             is_empty_turn,
             literature_prior_violations,
+            reply_contains_cjk,
         )
 
         # F1.4: zero-data hard block.  If every tool call this turn was
@@ -3266,7 +3293,44 @@ async def _run_agent_loop(
         # wrote "776 stars, 7.353 ± 0.001 mas" after run_adql returned
         # 0 rows and run_python crashed — the regen loop would have
         # laundered the claim by rewriting with different phrasing.
-        zero_data_claims = zero_data_but_quantitative(clean_reply, all_tool_results)
+        # X (PART X 方案 D): reply 强制英文. 含 CJK / 日文 / 韩文 / 全角
+        # punctuation (阈值 3 字符) 的最终 reply 直接硬拦. 这是最高优先
+        # 级分支 — 因为零幻觉门下游正则几乎全是英文, 中文 prose 会
+        # bypass 所有 claim 提取. prompt 已告诉 AI "reply must be English",
+        # 这里是硬约束兜底.
+        cjk_detected = reply_contains_cjk(clean_reply)
+        if cjk_detected:
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "fabrication_blocked_total",
+                    1.0,
+                    agent=agent_name,
+                    reason="non_english_reply",
+                )
+            except Exception:
+                pass
+            logger.error(
+                "Non-English reply from %s — hard-blocking (CJK / full-"
+                "width characters detected in final reply; platform "
+                "contract requires English-only)",
+                agent_name,
+            )
+            clean_reply = (
+                "⚠ Reply blocked by platform policy: the assistant's final "
+                "reply must be in standard English.  Non-English characters "
+                "(Chinese / Japanese / Korean / full-width) were detected "
+                "in the draft reply.\n\n"
+                "This is a one-time notice; the assistant will regenerate "
+                "in English on the next turn.  If you prefer a different "
+                "language, please use an external translator — this is a "
+                "research-tool platform and English is the working "
+                "language for citation integrity (the zero-fabrication "
+                "numeric-claim gate only ships English regex patterns)."
+            )
+            fabrication_stats["blocked"] = True
+
+        zero_data_claims = [] if cjk_detected else zero_data_but_quantitative(clean_reply, all_tool_results)
         if zero_data_claims:
             try:
                 from app.observability.metrics import record_counter

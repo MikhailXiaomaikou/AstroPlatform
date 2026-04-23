@@ -531,15 +531,39 @@ def test_literature_prior_age_passes_when_fit_isochrone_ran():
     assert literature_prior_violations("The best-fit age is 100 Myr.", tool_results) == []
 
 
-def test_literature_prior_age_chinese_caught_by_zh_pattern():
-    """W1: 中文 "年龄: ~100 Myr" 同样被 age_myr_zh pattern 捕获."""
-    from app.services.claim_validator import literature_prior_violations
-    tool_results = [
-        {"tool": "run_adql", "input": {}, "result": {"data": {"rows": [{"x": 1}]}}},
-    ]
-    vios = literature_prior_violations("年龄: ~100 Myr (年轻疏散星团)", tool_results)
-    assert len(vios) >= 1
-    assert any(c.label == "age_myr_zh" for c in vios)
+def test_reply_contains_cjk_detects_chinese_prose():
+    """X (PART X 方案 D): reply 中文 prose 触发 CJK guard hardblock."""
+    from app.services.claim_validator import reply_contains_cjk
+    assert reply_contains_cjk("符合昴星团约 100 Myr 的年龄")
+    assert reply_contains_cjk("根据 Gaia DR3 ...")
+    assert reply_contains_cjk("年龄: ~100 Myr (年轻疏散星团)")
+
+
+def test_reply_contains_cjk_english_passes():
+    """X: 纯英文 reply 不触发 CJK guard."""
+    from app.services.claim_validator import reply_contains_cjk
+    assert not reply_contains_cjk("The Pleiades age is approximately 100 Myr.")
+    assert not reply_contains_cjk("")
+    assert not reply_contains_cjk("GCVS catalog returns Period = 5.366208 days.")
+
+
+def test_reply_contains_cjk_scientific_unicode_passes():
+    """X: 希腊字母 / Å / ° / ± / ≥ / ≈ 等科学 Unicode 在 DejaVu 字体支持
+    范围内, 不算 CJK, guard 放行."""
+    from app.services.claim_validator import reply_contains_cjk
+    assert not reply_contains_cjk(r"$\alpha$ Cen A, $T_{\rm eff}$ = 5800 K")
+    assert not reply_contains_cjk("6563 Å H-alpha, ±0.3 mag, ≈5780 K, RA 180°")
+    assert not reply_contains_cjk("naïve façade")
+
+
+def test_reply_contains_cjk_threshold_tolerates_single_char():
+    """X: 阈值 2 — 单个 CJK 字符 (例如引用专名) 不触发, 避免 false-positive.
+    但 >= 2 字符的 prose 引导词 (根据 / 符合 / 与 / 年龄) 必然命中."""
+    from app.services.claim_validator import reply_contains_cjk
+    assert not reply_contains_cjk("A 一 B")   # 1 CJK, below threshold
+    assert reply_contains_cjk("根据")          # 2 CJK at threshold
+    assert reply_contains_cjk("符合约")        # 3 CJK
+    assert reply_contains_cjk("一" * 10)       # well above
 
 
 def test_literature_prior_distance_passes_with_run_adql():

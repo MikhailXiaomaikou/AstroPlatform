@@ -82,15 +82,11 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("distance_kpc", re.compile(rf"\bdistance\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*kpc\b", re.I)),
     ("distance_mpc", re.compile(rf"\bdistance\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*Mpc\b", re.I)),
     ("period_days", re.compile(rf"\bperiod\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*days?\b", re.I)),
+    # Pre-PART-W 中文 pattern (period / distance): 保留给旧测试兼容.
+    # X (PART X 方案 D): reply 强制英文之后这两条几乎不会触发 — 因为含
+    # CJK 的 reply 已在上游被硬拦. 保留仅作最后兜底.
     ("period_days_zh", re.compile(rf"(?:周期|脉动周期|轨道周期)\s*(?:值)?\s*(?:为|是|=|≈|~|约为)?\s*{_NUM}\s*(?:天|日)\b", re.I)),
     ("distance_pc_zh", re.compile(rf"(?:距离|距离估算|距离约为)\s*(?:值)?\s*(?:为|是|=|≈|~|约为)?\s*{_NUM}\s*pc\b", re.I)),
-    # W1 (PART W): 中文 label 的 age/mass claim. AI 在 Pleiades 用
-    # "年龄: ~100 Myr (年轻疏散星团)" / "年龄 ≈ 100 Myr" 绕过 age_myr
-    # 英文正则. 新 _zh 版抓所有带中文 label 的形式, 允许多个 marker 连缀
-    # (e.g. `: ~` 两个 punctuation 同时出现).
-    ("age_myr_zh", re.compile(rf"(?:年龄|年龄约|大致年龄|估计年龄)(?:\s*(?:值|为|是|≈|~|约|约为|:|：|=))*\s*{_NUM}\s*(?:Myr|百万年)", re.I)),
-    ("age_gyr_zh", re.compile(rf"(?:年龄|年龄约|大致年龄|估计年龄)(?:\s*(?:值|为|是|≈|~|约|约为|:|：|=))*\s*{_NUM}\s*(?:Gyr|亿年)", re.I)),
-    ("mass_solar_zh", re.compile(rf"(?:质量|恒星质量|星团质量)(?:\s*(?:值|为|是|≈|~|约|约为|:|：|=))*\s*{_NUM}\s*(?:M_sun|M☉|太阳质量)", re.I)),
     ("percent_claim", re.compile(
         rf"(?:误差|偏差|相对误差|差异|agreement|error|offset)\s*(?:为|是|=|≈|~|about|around|approximately|approx\.?)?\s*{_NUM}\s*%",
         re.I,
@@ -694,13 +690,8 @@ _LITERATURE_PRIOR_LABELS_REQUIRE_TOOL: dict[str, tuple[str, ...]] = {
     # 要么从 dossier 拿现成的 (get_object_dossier).
     "age_myr": ("fit_isochrone", "search_literature", "get_object_dossier"),
     "age_gyr": ("fit_isochrone", "search_literature", "get_object_dossier"),
-    "age_myr_zh": ("fit_isochrone", "search_literature", "get_object_dossier"),
-    "age_gyr_zh": ("fit_isochrone", "search_literature", "get_object_dossier"),
     # mass: 除了拟合 / 文献 / dossier, 也可从 Gaia / SDSS 质量列拿 (run_adql).
     "mass_solar": (
-        "fit_isochrone", "search_literature", "get_object_dossier", "run_adql",
-    ),
-    "mass_solar_zh": (
         "fit_isochrone", "search_literature", "get_object_dossier", "run_adql",
     ),
     # distance: Gaia parallax (run_adql / get_object_info), extinction helper
@@ -715,10 +706,9 @@ _LITERATURE_PRIOR_LABELS_REQUIRE_TOOL: dict[str, tuple[str, ...]] = {
     "distance_mpc": (
         "search_literature", "get_object_dossier", "get_object_info",
     ),
-    "distance_pc_zh": (
-        "run_adql", "search_literature", "get_object_dossier",
-        "get_object_info", "get_extinction",
-    ),
+    # 中文 label 已从 _PATTERNS 移除 (PART X 方案 D — reply 强制英文),
+    # 所以 _zh 键不再需要. 中文 prose 在 chat.py 的 reply_contains_cjk
+    # hardblock 上游就被拦下, 不会走到 claim 提取.
 }
 
 
@@ -752,3 +742,47 @@ def literature_prior_violations(reply: str, tool_results: Any) -> list[Claim]:
         if not any(t in tools_run for t in allowed):
             violations.append(c)
     return violations
+
+
+# X (PART X 方案 D): reply 强制英文 — 含 CJK / 日文 / 韩文 / 全角
+# punctuation 的最终回复直接硬拦. 复用 PART W figure-language-guard
+# 的正则范围 (CJK Unified / Hiragana / Katakana / Hangul / Full-width).
+# Greek 字母 (U+0370-U+03FF) + Å / ° / ± / ≤ / ≥ 等科学 Unicode 不在
+# 匹配范围, DejaVu Sans 能正常显示所以允许.
+#
+# 为何 reply 强制英文:
+# 1. 避免 label 黑名单补丁式扩展 ("年龄: ~100 Myr" / "N Myr 的年龄" /
+#    "大约 N Myr 年纪" 无限语序变体)
+# 2. 对齐 run_python 图表文字规则 (PART W), 整个平台数值输出一致英文
+# 3. 科研场景 (论文复现 / 审稿) 本来就是英文工作语言
+_CJK_REPLY_PATTERN = re.compile(
+    "["
+    "　-〿"  # CJK punctuation
+    "぀-ゟ"  # Hiragana
+    "゠-ヿ"  # Katakana
+    "㐀-䶿"  # CJK Ext A
+    "一-鿿"  # CJK Unified Ideographs
+    "가-힯"  # Hangul Syllables
+    "＀-￯"  # Full-width ASCII
+    "]"
+)
+
+# 阈值 2: 单字符 false-positive 容忍 (e.g. 引号内引用的中文单字 "昴"),
+# 但 "根据..." / "符合..." / "与文献一致" 等 prose 引导词 (通常 2+ CJK)
+# 必然命中. 自然语言中文 reply 总字数远超 2.
+_CJK_REPLY_THRESHOLD = 2
+
+
+def reply_contains_cjk(reply: str, threshold: int = _CJK_REPLY_THRESHOLD) -> bool:
+    """X (PART X 方案 D): return True if the final assistant reply contains
+    >= ``threshold`` CJK / Japanese / Korean / full-width characters.
+
+    Used as a hard-block signal in ``_run_agent_loop``: English-only
+    replies are a platform contract (documented in SYSTEM_PROMPT), and
+    violations are caught here as defense in depth — regex patterns
+    upstream cover English phrasings only, so Chinese prose would
+    otherwise bypass the zero-fabrication gate.
+    """
+    if not reply:
+        return False
+    return len(_CJK_REPLY_PATTERN.findall(reply)) >= threshold
