@@ -2393,16 +2393,35 @@ function deleteLocalChatSession(id: string): void {
   writeLocalChatSessions(readLocalChatSessions().filter((session) => session.id !== id));
 }
 
-function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
-  const steps = [
-    { label: "Export as notebook", prompt: "Export this session as a Jupyter notebook" },
-    { label: "Run sensitivity analysis", prompt: "Run a sensitivity analysis on these results" },
-    { label: "Search related literature", prompt: "Search for related papers on ADS" },
-  ];
+// W6 (PART W): "Validate assumptions first" 是 NextStepsPanel 新增的
+// 首项. B3/B4 回归里发现缺少一个"报告前主动验证每个数值 claim 的工具
+// 归属"的入口 — 点击后让 AI 逐条列出每个数值 claim 的 tool_result 来源,
+// 或明确说 "not measured this turn". 这是零幻觉门的配套 UX: 哪些数字
+// 没 tool 支撑, AI 自己先检查, 不等 validator 兜底 block.
+// Exported 以便 ChatPage.test.tsx 做回归.
+export const NEXT_STEPS_PANEL_ACTIONS: Array<{ label: string; prompt: string }> = [
+  {
+    label: "Validate assumptions first",
+    prompt:
+      "Before we write up the results, please re-verify each of our " +
+      "key assumptions using the tools we actually called this turn. " +
+      "List every numeric claim that would go into a report (age, " +
+      "distance, mass, period, class, membership count, ...) and for " +
+      "each one state which tool_result supplied the value, or say " +
+      "'not measured this turn'. If any assumption has no tool backing, " +
+      "propose the minimum extra tool calls needed (search_literature " +
+      "for a citation, fit_isochrone for a new fit, run_adql for a Gaia " +
+      "column).",
+  },
+  { label: "Export as notebook", prompt: "Export this session as a Jupyter notebook" },
+  { label: "Run sensitivity analysis", prompt: "Run a sensitivity analysis on these results" },
+  { label: "Search related literature", prompt: "Search for related papers on ADS" },
+];
 
+function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "8px 0", borderTop: "1px solid var(--color-border)" }}>
-      {steps.map((s, i) => (
+      {NEXT_STEPS_PANEL_ACTIONS.map((s, i) => (
         <button key={i} className="btn-ghost btn-small" onClick={() => onSend(s.prompt)} style={{ fontSize: "0.75rem" }}>
           {s.label}
         </button>

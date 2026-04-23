@@ -560,3 +560,24 @@ describe("ChatPage", () => {
     expect(screen.getByText("Tool returned no data")).toBeInTheDocument();
   });
 });
+
+
+describe("NextStepsPanel (W6 PART W) next-step actions", () => {
+  it("exports NEXT_STEPS_PANEL_ACTIONS with Validate assumptions first as the leading action", async () => {
+    const { NEXT_STEPS_PANEL_ACTIONS } = await import("../pages/Chat/ChatPage");
+    expect(NEXT_STEPS_PANEL_ACTIONS.length).toBe(4);
+    expect(NEXT_STEPS_PANEL_ACTIONS[0].label).toBe("Validate assumptions first");
+    const prompt = NEXT_STEPS_PANEL_ACTIONS[0].prompt;
+    expect(prompt).toMatch(/re-verify each of our key assumptions/i);
+    expect(prompt).toMatch(/tool_result supplied the value/);
+    expect(prompt).toMatch(/not measured this turn/);
+  });
+
+  it("keeps the three legacy next-step actions in place", async () => {
+    const { NEXT_STEPS_PANEL_ACTIONS } = await import("../pages/Chat/ChatPage");
+    const labels = NEXT_STEPS_PANEL_ACTIONS.map((s) => s.label);
+    expect(labels).toContain("Export as notebook");
+    expect(labels).toContain("Run sensitivity analysis");
+    expect(labels).toContain("Search related literature");
+  });
+});
