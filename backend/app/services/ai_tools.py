@@ -2059,9 +2059,14 @@ async def _exec_adql(
 
     # On timeout, retry with reduced cone radius (halve, then quarter)
     retry_log = []
+    # X4 (PART X): 记录 radius shrink 的 original / final 值, 最后塞进
+    # adql_result 让前端渲染醒目 banner. B6 Pleiades 0.75° → 0.375° 把
+    # 成员数腰斩, AI 没察觉 — 前端 banner 强制可见能让用户和 AI 都看到.
+    radius_shrink_original: float | None = None
+    radius_shrink_final: float | None = None
     if result is None:
         # Find CIRCLE('ICRS', ra, dec, radius) and halve the radius
-        def _halve_radius(q: str, factor: float = 0.5) -> str | None:
+        def _halve_radius(q: str, factor: float = 0.5) -> tuple[str | None, float | None, float | None]:
             pattern = _re.compile(
                 r"(CIRCLE\s*\(\s*'ICRS'\s*,\s*[-+]?\d+\.?\d*\s*,\s*[-+]?\d+\.?\d*\s*,\s*)([-+]?\d+\.?\d*)",
                 _re.IGNORECASE,
@@ -2070,8 +2075,12 @@ async def _exec_adql(
             if m:
                 old_r = float(m.group(2))
                 new_r = old_r * factor
-                return pattern.sub(lambda _m: f"{_m.group(1)}{new_r}", q, count=1)
-            return None
+                return (
+                    pattern.sub(lambda _m: f"{_m.group(1)}{new_r}", q, count=1),
+                    old_r,
+                    new_r,
+                )
+            return (None, None, None)
 
         for attempt, factor in enumerate([0.5, 0.25], start=1):
             if _time_left() < 30:
@@ -2082,7 +2091,7 @@ async def _exec_adql(
                     factor=factor,
                 )
                 break
-            reduced = _halve_radius(query, factor)
+            reduced, _old_r, _new_r = _halve_radius(query, factor)
             if reduced is None:
                 break
             retry_log.append(f"attempt {attempt}: radius × {factor}")
@@ -2097,6 +2106,10 @@ async def _exec_adql(
             result = await _try_query(reduced)
             if result is not None:
                 query = reduced  # remember the successful query
+                # X4 (PART X): 记录 original / final radius 给前端 banner
+                if radius_shrink_original is None:
+                    radius_shrink_original = _old_r
+                radius_shrink_final = _new_r
                 await _emit_progress(
                     "radius_retry_success",
                     f"ADQL succeeded after cone radius × {factor}",
@@ -2233,6 +2246,22 @@ async def _exec_adql(
         adql_result["attempt_log"] = attempt_log[-20:]
     if _dialect_warnings:
         adql_result["dialect_warnings"] = _dialect_warnings
+
+    # X4 (PART X): 半径 auto-shrink 醒目字段. 前端 AutoToolResult
+    # run_adql 分支读 radius_auto_reduced=true 时渲染黄色 banner (不折叠)
+    # 提示成员数可能被腰斩 — 修复 B6 Pleiades 0.75°→0.375° 无警告问题.
+    if radius_shrink_original is not None and radius_shrink_final is not None:
+        adql_result["radius_auto_reduced"] = True
+        adql_result["original_radius_deg"] = radius_shrink_original
+        adql_result["final_radius_deg"] = radius_shrink_final
+        _prev_note = adql_result.get("note") or ""
+        _warn_note = (
+            f"⚠ Search radius auto-reduced from "
+            f"{radius_shrink_original:.4g}° to {radius_shrink_final:.4g}° "
+            f"(TAP timeout on original query). Membership count may be "
+            f"smaller than expected."
+        )
+        adql_result["note"] = f"{_warn_note} {_prev_note}".strip()
 
     await _emit_progress(
         "query_success",

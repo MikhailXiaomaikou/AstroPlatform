@@ -1207,12 +1207,41 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     // showed the query, but run_adql auto-results did not.
     const queryText = typeof result.query === "string" ? (result.query as string) : "";
     const serviceName = typeof result.service === "string" ? (result.service as string) : "";
+    // X4 (PART X): 半径 auto-shrink 醒目 banner (不折叠). 修复 B6 Pleiades
+    // 半径 0.75° → 0.375° 无警告问题.
+    const radiusAutoReduced = result.radius_auto_reduced === true;
+    const originalRadiusDeg = typeof result.original_radius_deg === "number"
+      ? result.original_radius_deg
+      : null;
+    const finalRadiusDeg = typeof result.final_radius_deg === "number"
+      ? result.final_radius_deg
+      : null;
     return (
       <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
         <div style={{ color: "#2e7d32", fontWeight: 600 }}>
           ✓ {successMessage}: {rowCount} rows, {cols.length} columns
           {serviceName ? ` · ${serviceName}` : ""}
         </div>
+        {radiusAutoReduced && originalRadiusDeg !== null && finalRadiusDeg !== null && (
+          <div
+            style={{
+              padding: "6px 10px",
+              margin: "4px 0",
+              background: "rgba(255, 200, 0, 0.15)",
+              borderLeft: "3px solid #e8a800",
+              fontSize: "0.75rem",
+              lineHeight: 1.4,
+              color: "var(--color-text-primary, #1a1a1a)",
+            }}
+          >
+            ⚠ Search radius auto-reduced from{" "}
+            <strong>{originalRadiusDeg}°</strong> to{" "}
+            <strong>{finalRadiusDeg}°</strong>{" "}
+            (TAP timeout on original query). Membership count may be
+            smaller than expected — consider tighter filters if you need
+            the full original radius.
+          </div>
+        )}
         <div>
           Columns: {cols.slice(0, 5).join(", ")}{cols.length > 5 ? "..." : ""}
         </div>

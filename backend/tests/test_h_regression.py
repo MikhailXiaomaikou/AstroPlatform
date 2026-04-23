@@ -1351,6 +1351,43 @@ def test_high_velocity_star_tool_computes_vtan_in_python():
     assert "SQRT" not in result["query"]
 
 
+def test_x4_exec_adql_flags_radius_reduction():
+    """X4 (PART X): _exec_adql 在 radius × 0.5 auto-retry 成功时返回
+    `radius_auto_reduced=True` + original_radius_deg + final_radius_deg,
+    让前端 AutoToolResult 渲染醒目 banner. 修复 B6 Pleiades 半径腰斩
+    无警告问题."""
+    from app.services.ai_tools import _exec_adql
+
+    call_count = {"n": 0}
+
+    async def fake_execute_adql_query(req, *args, **kwargs):
+        """第一次 raise timeout, 第二次成功."""
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("TAP timeout after 60s")
+        return {
+            "columns": ["source_id"],
+            "data": {"source_id": [1, 2, 3]},
+            "row_count": 3,
+        }
+
+    query_with_circle = (
+        "SELECT TOP 100 source_id FROM gaiadr3.gaia_source "
+        "WHERE CONTAINS(POINT('ICRS',ra,dec), CIRCLE('ICRS',56.75,24.12,0.75))=1"
+    )
+    with patch("app.api.integration.execute_adql_query", side_effect=fake_execute_adql_query):
+        result = asyncio.run(_exec_adql({
+            "service": "gaia",
+            "query": query_with_circle,
+        }))
+
+    # 半径应从 0.75 → 0.375 (× 0.5)
+    assert result.get("radius_auto_reduced") is True
+    assert abs(result.get("original_radius_deg") - 0.75) < 1e-9
+    assert abs(result.get("final_radius_deg") - 0.375) < 1e-9
+    assert "auto-reduced" in (result.get("note") or "").lower()
+
+
 def test_w5_exec_adql_result_carries_query_and_service():
     """W5 (PART W): _exec_adql 返回值必须含 `query` 和 `service` 字段,
     这样前端 AutoToolResult run_adql 分支可以渲染执行过的 SQL
