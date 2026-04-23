@@ -11,7 +11,9 @@ from app.services.provenance_v2.field_level_schema import (
 )
 from app.services.provenance_v2.registry_loader import (
     check_freshness,
+    dataset_from_registry,
     load_registry,
+    normalize_service_key,
     resolve_service,
 )
 
@@ -20,6 +22,8 @@ __all__ = [
     "FieldLevelCoverage",
     "PrimaryCitationSource",
     "check_freshness",
+    "dataset_from_registry",
     "load_registry",
+    "normalize_service_key",
     "resolve_service",
 ]

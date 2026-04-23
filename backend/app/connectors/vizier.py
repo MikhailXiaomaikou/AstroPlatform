@@ -13,6 +13,7 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+from app.services.provenance_v2.ivoa_dataorigin_resolver import resolve_ivoa_dataorigin
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,7 @@ class VizierConnector(BaseConnector):
 
     def _table_to_objects(self, table: Table) -> list[AstroObject]:
         objects = []
+        provenance_dataset = self._provenance_for_table(table)
         # Detect RA/Dec column names (VizieR uses various conventions)
         ra_col = self._find_col(table, ("_RAJ2000", "RAJ2000", "RA_ICRS", "ra", "RA"))
         dec_col = self._find_col(table, ("_DEJ2000", "DEJ2000", "DE_ICRS", "dec", "DEC"))
@@ -245,9 +247,32 @@ class VizierConnector(BaseConnector):
                     ra=ra,
                     dec=dec,
                     magnitude=mag,
+                    extra={"_provenance_dataset": provenance_dataset} if provenance_dataset else {},
                 )
             )
         return objects
+
+    def _provenance_for_table(self, table: Table) -> dict | None:
+        catalog_hint = self._catalog_hint_from_table(table)
+        service_hint = "2mass" if catalog_hint and "II/246" in catalog_hint else "vizier"
+        return resolve_ivoa_dataorigin(
+            table,
+            service_hint=service_hint,
+            archive_version=catalog_hint,
+        )
+
+    @staticmethod
+    def _catalog_hint_from_table(table: Table) -> str | None:
+        meta = getattr(table, "meta", {}) or {}
+        text_parts = [str(value) for value in meta.values()]
+        text_parts.extend(str(column) for column in getattr(table, "colnames", []))
+        text = " ".join(text_parts)
+        match = re.search(r"\b(?:[IVB]{1,3}|J)/[A-Za-z0-9+_.]+(?:/[A-Za-z0-9+_.]+)*", text)
+        if match:
+            return match.group(0)
+        if "_2MASS" in getattr(table, "colnames", []) or "2MASS" in getattr(table, "colnames", []):
+            return "II/246"
+        return None
 
     @staticmethod
     def _find_col(table: Table, candidates: tuple[str, ...]) -> str | None:

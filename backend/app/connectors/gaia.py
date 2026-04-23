@@ -10,6 +10,7 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+from app.services.provenance_v2.param_scanner_resolver import resolve_param_provenance
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,7 @@ class GaiaConnector(BaseConnector):
 
     def _table_to_objects(self, table: Table) -> list[AstroObject]:
         objects = []
+        provenance_dataset = resolve_param_provenance(getattr(table, "meta", {}), service_hint="gaia")
         for row in table:
             ra = float(row["ra"]) if "ra" in row.colnames else 0.0
             dec = float(row["dec"]) if "dec" in row.colnames else 0.0
@@ -202,7 +204,7 @@ class GaiaConnector(BaseConnector):
             # rather than being filled with a stellar-kinematic misnomer.
             redshift = None
 
-            extra: dict = {}
+            extra: dict = {"_provenance_dataset": provenance_dataset} if provenance_dataset else {}
             if parallax is not None:
                 extra["parallax"] = parallax
                 # D7.14 — auto-compute distance when parallax is positive.

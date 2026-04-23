@@ -8,6 +8,7 @@ from astropy.table import Table
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+from app.services.provenance_v2.non_standard_info_resolver import resolve_info_provenance
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +247,8 @@ class NEDConnector(BaseConnector):
                 except (ValueError, TypeError):
                     pass
 
-        extra: dict = {}
+        provenance_dataset = resolve_info_provenance(item.get("INFO") or item.get("Info"), service_hint="ned")
+        extra: dict = {"_provenance_dataset": provenance_dataset} if provenance_dataset else {}
         for key in ("Morphology", "morphology", "morph_type"):
             if key in preferred:
                 extra["morphology"] = _ned_str(preferred[key])

@@ -180,8 +180,13 @@ def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
         else {}
     )
 
-    datasets = provenance.get("datasets", result.get("datasets", []))
-    provenance["datasets"] = datasets if isinstance(datasets, list) else []
+    datasets = _collect_datasets(result, provenance)
+    provenance["datasets"] = datasets
+    _fill_top_level_provenance_from_datasets(result, datasets)
+    if provenance["reproducibility"] and "archive_version" not in provenance["reproducibility"]:
+        archive_version = _archive_version_from_datasets(datasets)
+        if archive_version:
+            provenance["reproducibility"]["archive_version"] = archive_version
 
     field_bibcodes = provenance.get(
         "field_bibcodes",
@@ -196,9 +201,7 @@ def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
     coverage_dict.setdefault("field_level", extracted_field_coverage)
     coverage_dict.setdefault(
         "primary_citation_source",
-        "field_level" if _field_bibcodes_available(provenance["field_bibcodes"]) else (
-            "table_level" if provenance["datasets"] else "none"
-        ),
+        _primary_citation_source(provenance["field_bibcodes"], provenance["datasets"]),
     )
     provenance["coverage"] = coverage_dict
 
@@ -234,6 +237,133 @@ def _field_bibcodes_available(field_bibcodes: Any) -> bool:
     if not isinstance(columns, dict):
         return False
     return any(isinstance(values, list) and any(str(v).strip() for v in values) for values in columns.values())
+
+
+def _collect_datasets(result: dict[str, Any], provenance: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[Any] = []
+    existing = provenance.get("datasets", result.get("datasets", []))
+    if isinstance(existing, list):
+        candidates.extend(existing)
+    elif isinstance(existing, dict):
+        candidates.append(existing)
+
+    candidates.extend(_datasets_from_rows(result))
+
+    service_dataset = _dataset_from_service_hint(result.get("service") or result.get("source"))
+    if service_dataset:
+        candidates.append(service_dataset)
+
+    return _dedupe_datasets(candidates)
+
+
+def _datasets_from_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    datasets: list[dict[str, Any]] = []
+    for row_collection in (result.get("results"), result.get("rows"), result.get("data")):
+        if not isinstance(row_collection, list):
+            continue
+        for row in row_collection:
+            if not isinstance(row, dict):
+                continue
+            explicit = _row_provenance_dataset(row)
+            if explicit:
+                datasets.append(explicit)
+            fallback = _dataset_from_service_hint(row.get("source") or row.get("service"))
+            if fallback:
+                datasets.append(fallback)
+    return datasets
+
+
+def _row_provenance_dataset(row: dict[str, Any]) -> dict[str, Any] | None:
+    for container in (row, row.get("extra") if isinstance(row.get("extra"), dict) else None):
+        if not isinstance(container, dict):
+            continue
+        dataset = container.get("_provenance_dataset") or container.get("provenance_dataset")
+        if isinstance(dataset, dict):
+            return dict(dataset)
+    return None
+
+
+def _dataset_from_service_hint(hint: Any) -> dict[str, Any] | None:
+    if hint in (None, ""):
+        return None
+    try:
+        from app.services.provenance_v2.registry_loader import dataset_from_registry
+
+        return dataset_from_registry(str(hint))
+    except Exception:
+        return None
+
+
+def _dedupe_datasets(candidates: list[Any]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str, str]] = set()
+    result: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        dataset = {str(key): value for key, value in candidate.items() if value not in (None, "", [])}
+        key = (
+            str(dataset.get("ivoid") or "").lower(),
+            str(dataset.get("service_key") or dataset.get("service_name") or "").lower(),
+            str(dataset.get("archive_version") or "").lower(),
+            str(dataset.get("article") or "").lower(),
+        )
+        if not any(key) or key in seen:
+            continue
+        seen.add(key)
+        result.append(dataset)
+    return result
+
+
+def _fill_top_level_provenance_from_datasets(result: dict[str, Any], datasets: list[dict[str, Any]]) -> None:
+    if not result.get("source_urls"):
+        urls: list[str] = []
+        for dataset in datasets:
+            for value in dataset.get("source_urls") or []:
+                if value:
+                    urls.append(str(value))
+            for key in ("reference_url", "credits_page_url"):
+                if dataset.get(key):
+                    urls.append(str(dataset[key]))
+        result["source_urls"] = _dedupe_strings(urls)
+    if not result.get("archive_ids"):
+        ids: list[str] = []
+        for dataset in datasets:
+            for value in dataset.get("archive_ids") or []:
+                if value:
+                    ids.append(str(value))
+            for key in ("ivoid", "service_key"):
+                if dataset.get(key):
+                    ids.append(str(dataset[key]))
+        result["archive_ids"] = _dedupe_strings(ids)
+
+
+def _archive_version_from_datasets(datasets: list[dict[str, Any]]) -> str | None:
+    versions = _dedupe_strings(str(dataset.get("archive_version")) for dataset in datasets if dataset.get("archive_version"))
+    if not versions:
+        return None
+    return versions[0] if len(versions) == 1 else ", ".join(versions)
+
+
+def _primary_citation_source(field_bibcodes: Any, datasets: list[dict[str, Any]]) -> str:
+    if _field_bibcodes_available(field_bibcodes):
+        return "field_level"
+    if not datasets:
+        return "none"
+    if any(str(dataset.get("source_authority") or "") != "project_registry" for dataset in datasets):
+        return "table_level"
+    return "registry"
+
+
+def _dedupe_strings(values: Any) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def _rows_for_field_bibcode_extraction(result: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:

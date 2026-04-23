@@ -12,6 +12,7 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+from app.services.provenance_v2.registry_loader import dataset_from_registry
 
 logger = logging.getLogger(__name__)
 
@@ -477,6 +478,7 @@ class SIMBADConnector(BaseConnector):
 
     def _table_to_objects(self, table: Table) -> list[AstroObject]:
         objects = []
+        provenance_dataset = dataset_from_registry("simbad", source_authority="project_registry")
         for row in table:
             # RA/Dec — new astroquery returns decimal degrees directly
             ra = 0.0
@@ -546,7 +548,7 @@ class SIMBADConnector(BaseConnector):
                         pass
 
             # Collect all extra columns into extra dict
-            extra: dict = {}
+            extra: dict = {"_provenance_dataset": provenance_dataset} if provenance_dataset else {}
             skip = {"main_id", "MAIN_ID", "ra", "RA", "dec", "DEC", "otype", "OTYPE",
                     "V", "FLUX_V", "flux_V", "rvz_redshift", "Z_VALUE",
                     "oid", "hpx", "nbref", "update_date",

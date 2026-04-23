@@ -5,10 +5,28 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date, datetime
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 REGISTRY_PATH = Path(__file__).with_name("fallback_registry.yaml")
+logger = logging.getLogger(__name__)
+
+DEFAULT_ARCHIVE_VERSIONS = {
+    "vizier": "VizieR live",
+    "gaia": "Gaia DR3",
+    "simbad": "SIMBAD current",
+    "ned": "NED current",
+    "2mass": "2MASS PSC II/246",
+}
+
+DEFAULT_SOURCE_AUTHORITIES = {
+    "vizier": "datacenter_ivoa_compliant",
+    "gaia": "datacenter_non_standard_tag",
+    "simbad": "project_registry",
+    "ned": "datacenter_non_standard_info",
+    "2mass": "datacenter_ivoa_compliant",
+}
 
 
 def load_registry(path: str | Path | None = None) -> dict[str, Any]:
@@ -66,6 +84,70 @@ def resolve_service(hint: str, registry: dict[str, Any] | None = None) -> dict[s
     return None
 
 
+def normalize_service_key(hint: str | None) -> str | None:
+    """Map connector aliases/catalog hints to the registry's service keys."""
+    if not hint:
+        return None
+    raw = str(hint).strip().lower()
+    aliases = {
+        "gaia_dr3": "gaia",
+        "twomass": "2mass",
+        "two_mass": "2mass",
+        "ii/246": "2mass",
+    }
+    if raw in aliases:
+        return aliases[raw]
+    resolved = resolve_service(raw)
+    if resolved:
+        return str(resolved.get("service_key") or raw)
+    return raw
+
+
+def dataset_from_registry(
+    hint: str | None,
+    *,
+    source_authority: str | None = None,
+    archive_version: str | None = None,
+    supplements: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Build one dataset-level provenance payload from registry + supplements."""
+    service_key = normalize_service_key(hint)
+    if not service_key:
+        return None
+    entry = resolve_service(service_key)
+    if not entry:
+        logger.warning("provenance registry has no service entry for %s", service_key)
+        return None
+    provenance = deepcopy(entry.get("provenance") or {})
+    if not isinstance(provenance, dict):
+        provenance = {}
+    provenance["service_key"] = service_key
+    provenance.setdefault("service_name", _display_name(service_key))
+    if supplements:
+        provenance.update({k: v for k, v in supplements.items() if v not in (None, "", [])})
+    provenance.setdefault("archive_version", archive_version or DEFAULT_ARCHIVE_VERSIONS.get(service_key))
+    provenance.setdefault(
+        "source_authority",
+        source_authority or DEFAULT_SOURCE_AUTHORITIES.get(service_key, "project_registry"),
+    )
+    provenance.setdefault(
+        "source_urls",
+        _dedupe(
+            str(value)
+            for value in (
+                provenance.get("reference_url"),
+                provenance.get("credits_page_url"),
+            )
+            if value
+        ),
+    )
+    provenance.setdefault(
+        "archive_ids",
+        _dedupe(str(value) for value in (provenance.get("ivoid"), provenance.get("service_key")) if value),
+    )
+    return provenance
+
+
 def check_freshness(
     registry: dict[str, Any] | None = None,
     *,
@@ -104,3 +186,25 @@ def _entry_with_key(service_key: str, entry: Any) -> dict[str, Any]:
     if isinstance(provenance, dict):
         provenance.setdefault("service_key", service_key)
     return cloned
+
+
+def _display_name(service_key: str) -> str:
+    return {
+        "vizier": "VizieR",
+        "gaia": "Gaia DR3",
+        "simbad": "SIMBAD",
+        "ned": "NED",
+        "2mass": "2MASS",
+    }.get(service_key, service_key)
+
+
+def _dedupe(values: Any) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result

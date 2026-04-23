@@ -12,6 +12,7 @@ import astropy.units as u
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+from app.services.provenance_v2.ivoa_dataorigin_resolver import resolve_ivoa_dataorigin
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,11 @@ class TwoMASSConnector(BaseConnector):
 
     def _table_to_objects(self, table: Table) -> list[AstroObject]:
         objects = []
+        provenance_dataset = resolve_ivoa_dataorigin(
+            table,
+            service_hint="2mass",
+            archive_version=TWOMASS_CATALOG,
+        )
         for row in table:
             ra = 0.0
             dec = 0.0
@@ -190,7 +196,7 @@ class TwoMASSConnector(BaseConnector):
                     pass
 
             # Collect J, H, K photometry in extra
-            extra: dict = {}
+            extra: dict = {"_provenance_dataset": provenance_dataset} if provenance_dataset else {}
             for band in ("Jmag", "Hmag", "Kmag", "e_Jmag", "e_Hmag", "e_Kmag"):
                 if band in row.colnames:
                     try:
