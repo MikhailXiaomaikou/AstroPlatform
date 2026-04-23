@@ -1,0 +1,117 @@
+{
+  "version": "2026-04-23",
+  "maintainer": "standard-astro",
+  "schema_version": 1,
+  "services": {
+    "vizier": {
+      "match_patterns": [
+        "tapvizier.u-strasbg.fr",
+        "vizier.u-strasbg.fr",
+        "CDS.VizieR"
+      ],
+      "provenance": {
+        "service_key": "vizier",
+        "service_name": "VizieR",
+        "ivoid": "ivo://CDS.VizieR",
+        "publisher": "CDS",
+        "credits_page_url": "https://vizier.cds.unistra.fr/vizier/cite.htx",
+        "acknowledgement_template": "The VizieR catalogue access tool, CDS, Strasbourg, France (DOI: 10.26093/cds/vizier)."
+      },
+      "metadata": {
+        "last_verified": "2026-04-23",
+        "notes": "Path A preferred; registry is minimal fallback."
+      }
+    },
+    "gaia": {
+      "match_patterns": [
+        "gea.esac.esa.int/tap-server",
+        "gaiadr3.",
+        "gaia_dr3"
+      ],
+      "provenance": {
+        "service_key": "gaia",
+        "service_name": "Gaia DR3",
+        "ivoid": "ivo://esavo/gaia/dr3",
+        "article": "2023A&A...674A...1G",
+        "creator": "Gaia Collaboration",
+        "publisher": "European Space Agency / Gaia Archive",
+        "publication_date": "2023-06-13",
+        "reference_url": "https://gea.esac.esa.int/archive/",
+        "credits_page_url": "https://www.cosmos.esa.int/web/gaia-users/archive/credits",
+        "acknowledgement_template": "This work has made use of data from the European Space Agency (ESA) mission Gaia, processed by the Gaia Data Processing and Analysis Consortium (DPAC)."
+      },
+      "metadata": {
+        "last_verified": "2026-04-23",
+        "alert_on": "Gaia DR4 release"
+      }
+    },
+    "simbad": {
+      "match_patterns": [
+        "simbad.cds.unistra.fr",
+        "simbad.u-strasbg.fr",
+        "simbad.harvard.edu"
+      ],
+      "provenance": {
+        "service_key": "simbad",
+        "service_name": "SIMBAD",
+        "ivoid": "ivo://simbad.u-strasbg/simbad",
+        "article": "2000A&AS..143....9W",
+        "creator": "SIMBAD team (CDS)",
+        "publisher": "CDS",
+        "publication_date": "2000-11-01",
+        "reference_url": "https://simbad.cds.unistra.fr/",
+        "credits_page_url": "https://simbad.cds.unistra.fr/guide/ch14.htx",
+        "acknowledgement_template": "This research has made use of the SIMBAD database, operated at CDS, Strasbourg, France (Wenger et al. 2000)."
+      },
+      "metadata": {
+        "last_verified": "2026-04-23",
+        "notes": "SIMBAD emits no DataOrigin metadata. Registry provides table-level metadata; field-level bibcodes are extracted separately."
+      }
+    },
+    "ned": {
+      "match_patterns": [
+        "ned.ipac.caltech.edu/tap",
+        "ned.ipac.caltech.edu"
+      ],
+      "provenance": {
+        "service_key": "ned",
+        "service_name": "NED",
+        "ivoid": "ivo://ned.ipac/objdir",
+        "article": "1991ASSL..171...89H",
+        "creator": "Helou, G. & Madore, B. F.",
+        "publisher": "NASA/IPAC Extragalactic Database (NED)",
+        "publication_date": "1991-01-01",
+        "reference_url": "https://ned.ipac.caltech.edu/",
+        "credits_page_url": "https://ned.ipac.caltech.edu/acknowledge",
+        "acknowledgement_template": "This research has made use of the NASA/IPAC Extragalactic Database (NED), funded by NASA and operated by Caltech."
+      },
+      "metadata": {
+        "last_verified": "2026-04-23"
+      }
+    },
+    "2mass": {
+      "match_patterns": [
+        "II/246",
+        "2mass",
+        "fp_psc",
+        "twomass"
+      ],
+      "provenance": {
+        "service_key": "2mass",
+        "service_name": "2MASS",
+        "ivoid": "ivo://CDS.VizieR/II/246",
+        "article": "2006AJ....131.1163S",
+        "creator": "Skrutskie et al.",
+        "publisher": "CDS / IPAC",
+        "publication_date": "2006-02-01",
+        "reference_url": "https://irsa.ipac.caltech.edu/Missions/2mass.html",
+        "credits_page_url": "https://irsa.ipac.caltech.edu/Missions/2mass.html#ack",
+        "acknowledgement_template": "This publication makes use of data products from the Two Micron All Sky Survey, a joint project of the University of Massachusetts and IPAC/Caltech, funded by NASA and NSF."
+      },
+      "metadata": {
+        "last_verified": "2026-04-23",
+        "notes": "Primary path is VizieR II/246; this entry is fallback only."
+      }
+    }
+  }
+}

@@ -164,6 +164,41 @@ def attach_provenance(
         warnings=merged_warnings,
     )
     result.update(contract)
+    return _attach_nested_provenance(result)
+
+
+def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
+    """Add the v2 nested provenance object without replacing v1 fields."""
+    existing = result.get("provenance")
+    provenance = dict(existing) if isinstance(existing, dict) else {}
+    provenance["reproducibility"] = dict(
+        provenance.get("reproducibility")
+        if isinstance(provenance.get("reproducibility"), dict)
+        else result.get("reproducibility")
+        if isinstance(result.get("reproducibility"), dict)
+        else {}
+    )
+
+    datasets = provenance.get("datasets", result.get("datasets", []))
+    provenance["datasets"] = datasets if isinstance(datasets, list) else []
+
+    field_bibcodes = provenance.get("field_bibcodes", result.get("field_bibcodes"))
+    if hasattr(field_bibcodes, "to_dict"):
+        field_bibcodes = field_bibcodes.to_dict()
+    provenance["field_bibcodes"] = field_bibcodes if isinstance(field_bibcodes, dict) else None
+
+    coverage = provenance.get("coverage", result.get("coverage"))
+    coverage_dict = dict(coverage) if isinstance(coverage, dict) else {}
+    coverage_dict.setdefault("field_level", None)
+    coverage_dict.setdefault(
+        "primary_citation_source",
+        "field_level" if provenance["field_bibcodes"] else (
+            "table_level" if provenance["datasets"] else "none"
+        ),
+    )
+    provenance["coverage"] = coverage_dict
+
+    result["provenance"] = provenance
     return result
 
 
@@ -283,7 +318,7 @@ def normalize_tool_result(
 
     if "data_origin" in result and "analysis_status" in result:
         # Still inject the banner if we detected empty, even on a pre-stamped result
-        return result
+        return _attach_nested_provenance(result)
 
     if result.get("error"):
         if _has_partial_payload(tool_name, result) and result.get("__do_not_claim__") is not True:
