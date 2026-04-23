@@ -99,6 +99,20 @@ def test_gcvs_registry_has_real_column_names():
         assert required in col_names, f"GCVS registry missing column: {required}"
 
 
+def test_system_prompt_has_clustering_failure_checks():
+    """X2 (PART X): SYSTEM_PROMPT 教 AI 识别 DBSCAN/HDBSCAN silent-failure
+    信号 (n_clusters=0 / all-outlier / matching-count). B6 Pleiades 回归里
+    AI 把 outliers 当成员导致错误 CMD 分析. 规则存在即可, 不测具体行为."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "Clustering algorithm failure" in SYSTEM_PROMPT
+    assert "n_clusters" in SYSTEM_PROMPT
+    # 三条关键检查
+    assert "90%+" in SYSTEM_PROMPT or "90% are outliers" in SYSTEM_PROMPT
+    # B6 反例被显式写入 prompt
+    assert "DBSCAN found 0 clusters" in SYSTEM_PROMPT or "0 clusters" in SYSTEM_PROMPT
+
+
 def test_system_prompt_mandates_english_only_reply():
     """X (PART X 方案 D): SYSTEM_PROMPT 明确要求 final reply 必须英文,
     删除了旧的 'Always respond in the same language' 冲突规则."""

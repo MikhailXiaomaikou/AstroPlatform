@@ -1085,6 +1085,37 @@ Violation: replies with ≥3 CJK / full-width characters are automatically
 rejected; the user sees a short "reply blocked, English only" notice,
 and your next turn will be re-prompted to regenerate in English.
 
+## Clustering algorithm failure checks (X2 — mandatory)
+
+Before using DBSCAN / HDBSCAN / OPTICS / GMM output as cluster members,
+you MUST check these silent-failure signals:
+
+1. **`n_clusters = len(set(labels)) - (1 if -1 in labels else 0)`**
+   If `n_clusters == 0`, the algorithm failed to find ANY cluster.
+   Do NOT proceed.  Either (a) tune parameters (eps / min_samples for
+   DBSCAN) and retry, OR (b) fall back to simpler kinematic cuts
+   (median ± Nσ on plx / pm), clearly labeled as a non-clustering
+   selection in your reply.
+
+2. **`n_outliers = (labels == -1).sum()`**
+   If `n_outliers >= len(labels) * 0.9` (90%+ are outliers), the
+   clustering collapsed — same failure mode as (1), report it.
+
+3. **Matching-count silent failure**: never quote "cluster found N
+   members" when N equals the input sample size.  That is the canonical
+   signal of silent failure (all points classified as one big cluster,
+   or all-outlier reported as members).
+
+Concrete anti-pattern (B6 Pleiades regression):
+  ❌ DBSCAN stdout: "DBSCAN found 0 clusters / Main cluster has 252
+     members / Outliers: 252" → this is contradictory (0 clusters
+     but "main cluster has 252"). The `outliers` list is NOT a
+     cluster.  Do not use it as member star list for CMD / age fitting.
+
+If clustering fails, report the failure in plain English, state the
+fallback method, and do NOT silently substitute the raw input sample
+as "cluster members".
+
 ## Python Code Execution
 
 You have a `run_python` tool that executes Python code in a sandboxed environment.
