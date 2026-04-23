@@ -30,9 +30,12 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
+
+from app.common.regex import AUTHOR_YEAR_RE, BIBCODE_RE, IVOID_RE
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,12 @@ logger = logging.getLogger(__name__)
 # fabrication (the model tends to invent round numbers or swap digits) while
 # still matching a tool value re-stated with one-decimal-place precision.
 DEFAULT_TOLERANCE = 0.01
+CITATION_VALIDATOR_HARDBLOCK = os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 # Regex catalogue of astronomical numeric claims.  Each entry extracts a
 # float from a phrase the model commonly produces.  Order matters: the first
@@ -289,6 +298,13 @@ class ValidationResult:
             "'not determined by my tools':\n" + "\n".join(lines)
             + "\n\n" + universe_note + strict_note
         )
+
+
+@dataclass
+class CitationViolation:
+    kind: str
+    match_text: str
+    line_number: int
 
 
 def _strip_markdown_code(text: str) -> str:
@@ -542,6 +558,199 @@ def validate_claims(
         universe_size=universe_size,
         strict_mode=strict_mode,
     )
+
+
+def citation_validator_hardblock_enabled() -> bool:
+    return os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    } or CITATION_VALIDATOR_HARDBLOCK
+
+
+def citation_violations_should_block(violations: list[CitationViolation]) -> bool:
+    return bool(violations) and citation_validator_hardblock_enabled()
+
+
+def _build_valid_bibcode_pool(tool_results: Any) -> set[str]:
+    """Collect every tool-sourced bibcode that may support a reply citation."""
+    pool: set[str] = set()
+    for node in _iter_dict_nodes(tool_results):
+        for key in ("bibcode", "article"):
+            value = node.get(key)
+            if value:
+                pool.update(_bibcodes_from_text(str(value)))
+
+        provenance = node.get("provenance")
+        if isinstance(provenance, dict):
+            for dataset in provenance.get("datasets") or []:
+                if isinstance(dataset, dict) and dataset.get("article"):
+                    pool.update(_bibcodes_from_text(str(dataset["article"])))
+            pool.update(_bibcodes_from_field_payload(provenance.get("field_bibcodes")))
+
+        datasets = node.get("datasets")
+        if isinstance(datasets, list):
+            for dataset in datasets:
+                if isinstance(dataset, dict) and dataset.get("article"):
+                    pool.update(_bibcodes_from_text(str(dataset["article"])))
+
+        pool.update(_bibcodes_from_field_payload(node.get("field_bibcodes")))
+    return pool
+
+
+def provenance_citation_violations(
+    reply: str,
+    tool_results: Any,
+    *,
+    strict: bool = False,
+) -> list[CitationViolation]:
+    """Flag bibcode or author-year citations not present in tool provenance."""
+    if not reply:
+        return []
+    valid_bibcodes = _build_valid_bibcode_pool(tool_results)
+    violations: list[CitationViolation] = []
+
+    for match in BIBCODE_RE.finditer(reply):
+        bibcode = _normalize_bibcode(match.group(1) if match.groups() else match.group(0))
+        if not bibcode:
+            continue
+        if bibcode not in valid_bibcodes:
+            violations.append(CitationViolation(
+                kind="invalid_bibcode",
+                match_text=bibcode,
+                line_number=_line_number(reply, match.start()),
+            ))
+
+    for match in AUTHOR_YEAR_RE.finditer(_strip_markdown_code(reply)):
+        author, year = match.group(1), match.group(2)
+        match_text = match.group(0).strip()
+        if not strict and _author_year_looks_like_noise(author, match_text):
+            continue
+        if _author_year_is_suspicious(author, year, valid_bibcodes):
+            violations.append(CitationViolation(
+                kind="suspicious_author_year",
+                match_text=match_text,
+                line_number=_line_number(reply, match.start()),
+            ))
+
+    for violation in violations:
+        _record_citation_violation_metric(violation.kind)
+        logger.warning(
+            "Citation provenance violation: kind=%s match=%r line=%d",
+            violation.kind,
+            violation.match_text,
+            violation.line_number,
+        )
+    return violations
+
+
+def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
+    lines = [
+        f"- {violation.kind}: {violation.match_text} (line {violation.line_number})"
+        for violation in violations
+    ]
+    return (
+        "⚠ Reply withheld: the model attempted to cite references that were "
+        "not present in this turn's tool provenance. The unsupported citations were:\n\n"
+        + "\n".join(lines)
+        + "\n\nPlease re-run the relevant archive or literature query so the citation "
+        "appears in tool_results before using it."
+    )
+
+
+def _iter_dict_nodes(payload: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(payload, dict):
+        yield payload
+        for value in payload.values():
+            yield from _iter_dict_nodes(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            yield from _iter_dict_nodes(item)
+
+
+def _bibcodes_from_field_payload(payload: Any) -> set[str]:
+    bibcodes: set[str] = set()
+    if not isinstance(payload, dict):
+        return bibcodes
+    columns = payload.get("columns")
+    if not isinstance(columns, dict):
+        return bibcodes
+    for values in columns.values():
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            bibcodes.update(_bibcodes_from_text(str(value)))
+    return bibcodes
+
+
+def _bibcodes_from_text(text: str) -> set[str]:
+    bibcodes: set[str] = set()
+    for match in BIBCODE_RE.finditer(text or ""):
+        normalized = _normalize_bibcode(match.group(1) if match.groups() else match.group(0))
+        if normalized:
+            bibcodes.add(normalized)
+    return bibcodes
+
+
+def _normalize_bibcode(raw: str) -> str:
+    return str(raw or "").strip().strip(".,;:)]}\"'")
+
+
+def _author_year_is_suspicious(
+    author: str,
+    year: str,
+    valid_bibcodes: set[str],
+) -> bool:
+    year_prefix = str(year)
+    matches = [bibcode for bibcode in valid_bibcodes if bibcode.startswith(year_prefix)]
+    if not matches:
+        return True
+
+    author_initial = author[0].upper() if author else ""
+    for bibcode in matches:
+        if bibcode and bibcode[-1] == author_initial:
+            return False
+
+    return len(matches) < 2
+
+
+def _author_year_looks_like_noise(author: str, match_text: str) -> bool:
+    if "et al" in match_text.lower():
+        return False
+    if "(" in match_text or "[" in match_text:
+        return False
+    return author in {
+        "April",
+        "August",
+        "December",
+        "February",
+        "Figure",
+        "January",
+        "July",
+        "June",
+        "March",
+        "May",
+        "November",
+        "October",
+        "Section",
+        "September",
+        "Table",
+    }
+
+
+def _line_number(text: str, offset: int) -> int:
+    return text[:offset].count("\n") + 1
+
+
+def _record_citation_violation_metric(kind: str) -> None:
+    try:
+        from app.observability.metrics import record_counter
+
+        reason = "invalid_bibcode" if kind == "invalid_bibcode" else "suspicious_author_year"
+        record_counter("fabrication_blocked_total", 1.0, reason=reason)
+    except Exception:
+        pass
 
 
 def build_regeneration_prompt(result: ValidationResult) -> str:

@@ -3316,6 +3316,9 @@ async def _run_agent_loop(
             is_empty_turn,
             literature_prior_violations,
             reply_contains_cjk,
+            provenance_citation_violations,
+            citation_violations_should_block,
+            blocked_citation_reply_text,
         )
 
         # F1.4: zero-data hard block.  If every tool call this turn was
@@ -3432,77 +3435,88 @@ async def _run_agent_loop(
             fabrication_stats["blocked"] = True
 
         elif True:
-            for attempt in range(2):
-                validation = validate_claims(clean_reply, all_tool_results)
-                if validation.ok:
-                    break
-                fabrication_stats["pass"] = attempt + 1
-                fabrication_stats["regenerations"] += 1
-                try:
-                    from app.observability.metrics import record_counter
-                    record_counter(
-                        "fabrication_detected_total",
-                        1.0,
-                        agent=agent_name,
-                        attempt=str(attempt + 1),
-                    )
-                except Exception:
-                    pass
-                logger.warning(
-                    "Fabrication detected in %s reply (attempt %d): %d uncited claim(s): %s",
-                    agent_name, attempt + 1, len(validation.uncited),
-                    [c.label for c in validation.uncited],
+            citation_violations = provenance_citation_violations(clean_reply, all_tool_results)
+            if citation_violations and citation_violations_should_block(citation_violations):
+                logger.error(
+                    "Citation provenance gate BLOCKED reply from %s (%d violations)",
+                    agent_name,
+                    len(citation_violations),
                 )
-                # Push the correction as a follow-up user message; no tools.
-                working_messages.append({
-                    "role": "assistant",
-                    "content": clean_reply,
-                })
-                working_messages.append({
-                    "role": "user",
-                    "content": build_regeneration_prompt(validation),
-                })
-                try:
-                    regen = await _llm_messages_create(
-                        system=system,
-                        messages=working_messages,
-                        tools=[],  # no tools — prose rewrite only
-                        provider_api_keys=provider_api_keys,
-                        agent_name=agent_name,
-                        preferred_backend=preferred_backend,
-                    )
-                    regenerated = str(regen.get("content", "") or "").strip()
-                except Exception as exc:
-                    logger.warning("Regeneration call failed: %s", exc)
-                    break
-                if not regenerated:
-                    break
-                clean_reply = regenerated
-                text_parts.append("\n[regenerated]\n" + regenerated)
-            else:
-                # Two attempts did not cure it — block the reply entirely.
-                validation = validate_claims(clean_reply, all_tool_results)
-                if not validation.ok:
+                clean_reply = blocked_citation_reply_text(citation_violations)
+                fabrication_stats["blocked"] = True
+
+            if not fabrication_stats["blocked"]:
+                for attempt in range(2):
+                    validation = validate_claims(clean_reply, all_tool_results)
+                    if validation.ok:
+                        break
+                    fabrication_stats["pass"] = attempt + 1
+                    fabrication_stats["regenerations"] += 1
                     try:
                         from app.observability.metrics import record_counter
-                        record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="regen_exhausted")
+                        record_counter(
+                            "fabrication_detected_total",
+                            1.0,
+                            agent=agent_name,
+                            attempt=str(attempt + 1),
+                        )
                     except Exception:
                         pass
-                    logger.error(
-                        "Fabrication gate BLOCKED reply from %s (%d uncited)",
-                        agent_name, len(validation.uncited),
+                    logger.warning(
+                        "Fabrication detected in %s reply (attempt %d): %d uncited claim(s): %s",
+                        agent_name, attempt + 1, len(validation.uncited),
+                        [c.label for c in validation.uncited],
                     )
-                    clean_reply = blocked_reply_text(validation)
-                    fabrication_stats["blocked"] = True
-            if fabrication_stats["regenerations"]:
-                try:
-                    from app.observability.metrics import record_counter
-                    record_counter(
-                        "reply_regeneration_total", float(fabrication_stats["regenerations"]),
-                        agent=agent_name,
-                    )
-                except Exception:
-                    pass
+                    # Push the correction as a follow-up user message; no tools.
+                    working_messages.append({
+                        "role": "assistant",
+                        "content": clean_reply,
+                    })
+                    working_messages.append({
+                        "role": "user",
+                        "content": build_regeneration_prompt(validation),
+                    })
+                    try:
+                        regen = await _llm_messages_create(
+                            system=system,
+                            messages=working_messages,
+                            tools=[],  # no tools — prose rewrite only
+                            provider_api_keys=provider_api_keys,
+                            agent_name=agent_name,
+                            preferred_backend=preferred_backend,
+                        )
+                        regenerated = str(regen.get("content", "") or "").strip()
+                    except Exception as exc:
+                        logger.warning("Regeneration call failed: %s", exc)
+                        break
+                    if not regenerated:
+                        break
+                    clean_reply = regenerated
+                    text_parts.append("\n[regenerated]\n" + regenerated)
+                else:
+                    # Two attempts did not cure it — block the reply entirely.
+                    validation = validate_claims(clean_reply, all_tool_results)
+                    if not validation.ok:
+                        try:
+                            from app.observability.metrics import record_counter
+                            record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="regen_exhausted")
+                        except Exception:
+                            pass
+                        logger.error(
+                            "Fabrication gate BLOCKED reply from %s (%d uncited)",
+                            agent_name, len(validation.uncited),
+                        )
+                        clean_reply = blocked_reply_text(validation)
+                        fabrication_stats["blocked"] = True
+                if fabrication_stats["regenerations"]:
+                    try:
+                        from app.observability.metrics import record_counter
+                        record_counter(
+                            "reply_regeneration_total", float(fabrication_stats["regenerations"]),
+                            agent=agent_name,
+                        )
+                    except Exception:
+                        pass
         # F1.2: track whether this turn ran the claim gate so the
         # fallback-synthesis branch below knows to apply it too.
         _claim_gate_ran = True
@@ -3693,6 +3707,9 @@ async def _run_orchestrated_chat(
         try:
             from app.services.claim_validator import (
                 blocked_reply_text,
+                blocked_citation_reply_text,
+                citation_violations_should_block,
+                provenance_citation_violations,
                 validate_claims,
                 zero_data_but_quantitative,
             )
@@ -3703,8 +3720,15 @@ async def _run_orchestrated_chat(
             # turn so a later agent cannot accidentally launder unsupported
             # numbers from an earlier rewrite/handoff.
             zero_data_claims = zero_data_but_quantitative(merged_reply, merged_tool_results)
+            citation_violations = provenance_citation_violations(merged_reply, merged_tool_results)
             validation = validate_claims(merged_reply, merged_tool_results)
-            if zero_data_claims or not validation.ok:
+            if citation_violations and citation_violations_should_block(citation_violations):
+                logger.error(
+                    "Citation provenance gate BLOCKED merged reply (%d violations)",
+                    len(citation_violations),
+                )
+                merged_reply = blocked_citation_reply_text(citation_violations)
+            elif zero_data_claims or not validation.ok:
                 try:
                     from app.observability.metrics import record_counter
                     record_counter(

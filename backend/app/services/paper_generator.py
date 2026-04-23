@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from importlib.metadata import version
 
@@ -12,10 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.citations import _get_bibtex_sync
+from app.common.regex import BIBCODE_RE as _BIBCODE_RE
 from app.models.schemas import ChatSession
 from app.services.event_collector import track_event
-
-_BIBCODE_RE = re.compile(r"\b(\d{4}[A-Za-z][A-Za-z&.]+\.+\S+)")
 
 _ACKNOWLEDGMENTS = {
     "gaia": "This work has made use of data from the European Space Agency (ESA) mission Gaia.",
