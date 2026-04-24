@@ -2144,9 +2144,27 @@ interface StoredMessage {
   _pending?: { started_at: number };
 }
 
-function loadChatHistory(): DisplayMessage[] {
+const ANON_CHAT_SCOPE = "anon";
+const CHAT_HISTORY_STORAGE_KEY = "astro_chat_history";
+const CHAT_DRAFT_STORAGE_KEY = "astro_chat_draft";
+const CHAT_AUTOSAVE_DRAFT_STORAGE_KEY = "astro_chat_autosave_draft";
+const CURRENT_CHAT_SESSION_STORAGE_KEY = "astro_current_chat_session_id";
+const LOCAL_CHAT_SESSIONS_STORAGE_KEY = "astro_local_chat_sessions";
+
+type ChatStorageUser = { id?: string | null } | null | undefined;
+
+function chatStorageScope(user: ChatStorageUser): string {
+  const id = String(user?.id || "").trim();
+  return id ? `user:${id}` : ANON_CHAT_SCOPE;
+}
+
+function scopedChatStorageKey(baseKey: string, scope: string): string {
+  return `${baseKey}:${scope}`;
+}
+
+function loadChatHistory(scope: string): DisplayMessage[] {
   try {
-    const raw = localStorage.getItem("astro_chat_history");
+    const raw = localStorage.getItem(scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, scope));
     if (!raw) return [];
     const stored = JSON.parse(raw) as StoredMessage[];
     return stored.map((m) => ({
@@ -2248,10 +2266,11 @@ function _pruneToolResults(stored: StoredMessage[]): boolean {
   return false;
 }
 
-function safeSetChatHistory(messages: DisplayMessage[]): { written: boolean; droppedMessages: number } {
+function safeSetChatHistory(messages: DisplayMessage[], scope: string): { written: boolean; droppedMessages: number } {
   let stored = serializeStored(messages);
   let payload = JSON.stringify(stored);
   let droppedMessages = 0;
+  const storageKey = scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, scope);
 
   // Pass 1: if over cap, strip heavy tool_result payloads oldest-first.
   while (payload.length > CHAT_HISTORY_SOFT_CAP_BYTES && _pruneToolResults(stored)) {
@@ -2265,7 +2284,8 @@ function safeSetChatHistory(messages: DisplayMessage[]): { written: boolean; dro
   }
 
   try {
-    localStorage.setItem("astro_chat_history", payload);
+    localStorage.setItem(storageKey, payload);
+    localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
     return { written: true, droppedMessages };
   } catch {
     // QuotaExceededError — fall back to keeping only the last 20 messages
@@ -2275,7 +2295,8 @@ function safeSetChatHistory(messages: DisplayMessage[]): { written: boolean; dro
       while (_pruneToolResults(stored)) {
         /* strip all tool results */
       }
-      localStorage.setItem("astro_chat_history", JSON.stringify(stored));
+      localStorage.setItem(storageKey, JSON.stringify(stored));
+      localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
       return { written: true, droppedMessages: Math.max(droppedMessages, messages.length - 20) };
     } catch {
       return { written: false, droppedMessages };
@@ -2283,8 +2304,8 @@ function safeSetChatHistory(messages: DisplayMessage[]): { written: boolean; dro
   }
 }
 
-function saveChatHistory(messages: DisplayMessage[]): void {
-  safeSetChatHistory(messages);
+function saveChatHistory(messages: DisplayMessage[], scope: string): void {
+  safeSetChatHistory(messages, scope);
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -2327,8 +2348,6 @@ function generateLatexFallback(msgs: DisplayMessage[]): string {
   lines.push("\\end{document}");
   return lines.join("\n");
 }
-
-const LOCAL_CHAT_SESSIONS_KEY = "astro_local_chat_sessions";
 
 interface LocalChatSession {
   id: string;
@@ -2429,9 +2448,13 @@ function setPaperSectionText(
   return next;
 }
 
-function readLocalChatSessions(): LocalChatSession[] {
+function localChatSessionsKey(scope: string): string {
+  return scopedChatStorageKey(LOCAL_CHAT_SESSIONS_STORAGE_KEY, scope);
+}
+
+function readLocalChatSessions(scope: string): LocalChatSession[] {
   try {
-    const raw = localStorage.getItem(LOCAL_CHAT_SESSIONS_KEY);
+    const raw = localStorage.getItem(localChatSessionsKey(scope));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -2440,16 +2463,17 @@ function readLocalChatSessions(): LocalChatSession[] {
   }
 }
 
-function writeLocalChatSessions(sessions: LocalChatSession[]) {
+function writeLocalChatSessions(sessions: LocalChatSession[], scope: string) {
   try {
-    localStorage.setItem(LOCAL_CHAT_SESSIONS_KEY, JSON.stringify(sessions));
+    localStorage.setItem(localChatSessionsKey(scope), JSON.stringify(sessions));
+    localStorage.removeItem(LOCAL_CHAT_SESSIONS_STORAGE_KEY);
   } catch {
     // ignore storage failures
   }
 }
 
-function summarizeLocalSessions(): ChatSessionSummary[] {
-  return readLocalChatSessions().map(({ id, title, message_count, updated_at }) => ({
+function summarizeLocalSessions(scope: string): ChatSessionSummary[] {
+  return readLocalChatSessions(scope).map(({ id, title, message_count, updated_at }) => ({
     id,
     title,
     message_count,
@@ -2459,9 +2483,10 @@ function summarizeLocalSessions(): ChatSessionSummary[] {
 
 function saveLocalChatSession(
   messages: Array<{ role: string; content: string; actions?: unknown[] }>,
+  scope: string,
   sessionId?: string | null,
 ): { id: string } {
-  const sessions = readLocalChatSessions();
+  const sessions = readLocalChatSessions(scope);
   const id = sessionId || crypto.randomUUID();
   const title = messages.find((m) => m.role === "user")?.content.slice(0, 60) || "New Chat";
   const updated_at = new Date().toISOString();
@@ -2473,16 +2498,16 @@ function saveLocalChatSession(
     messages,
   };
   const next = [session, ...sessions.filter((s) => s.id !== id)].slice(0, 20);
-  writeLocalChatSessions(next);
+  writeLocalChatSessions(next, scope);
   return { id };
 }
 
-function loadLocalChatSession(id: string): LocalChatSession | null {
-  return readLocalChatSessions().find((session) => session.id === id) || null;
+function loadLocalChatSession(id: string, scope: string): LocalChatSession | null {
+  return readLocalChatSessions(scope).find((session) => session.id === id) || null;
 }
 
-function deleteLocalChatSession(id: string): void {
-  writeLocalChatSessions(readLocalChatSessions().filter((session) => session.id !== id));
+function deleteLocalChatSession(id: string, scope: string): void {
+  writeLocalChatSessions(readLocalChatSessions(scope).filter((session) => session.id !== id), scope);
 }
 
 // W6 (PART W): "Validate assumptions first" 是 NextStepsPanel 新增的
@@ -2524,6 +2549,7 @@ function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
 
 export default function ChatPage() {
   const { user } = useAuth();
+  const storageScope = useMemo(() => chatStorageScope(user), [user?.id]);
   const { t } = useI18n();
   const { track } = useTracking();
   const [hasKey, setHasKey] = useState(() => hasStoredAiKey());
@@ -2556,7 +2582,7 @@ export default function ChatPage() {
     if (!hasKey && hasStoredAiKey()) setHasKey(true);
   }); // intentionally no deps — runs every render but only sets state once
 
-  const [messages, setMessages] = useState<DisplayMessage[]>(loadChatHistory);
+  const [messages, setMessages] = useState<DisplayMessage[]>(() => loadChatHistory(storageScope));
   const conversationProvenance = useConversationProvenance(messages);
   const [input, setInput] = useState("");
   const [pageError, _setPageError] = useState<string | null>(null);
@@ -2611,6 +2637,7 @@ export default function ChatPage() {
   const [shareLoading, setShareLoading] = useState(false);
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentSessionScopeRef = useRef(storageScope);
 
   const showToast = useCallback((message: string, tone: ToastState["tone"] = "success") => {
     setToast({ message, tone });
@@ -2704,8 +2731,12 @@ export default function ChatPage() {
       listChatSessions().then(setSessions).catch(() => setSessions([]));
       return;
     }
-    setSessions(summarizeLocalSessions());
-  }, [user]);
+    setSessions(summarizeLocalSessions(storageScope));
+  }, [storageScope, user]);
+
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
 
   const loadCollaborationState = useCallback(async (sessionId: string) => {
     if (!user) return;
@@ -2725,11 +2756,11 @@ export default function ChatPage() {
       try {
         return await saveChatSession(data, sessionId || undefined);
       } catch {
-        return saveLocalChatSession(data, sessionId);
+        return saveLocalChatSession(data, storageScope, sessionId);
       }
     }
-    return saveLocalChatSession(data, sessionId);
-  }, [user]);
+    return saveLocalChatSession(data, storageScope, sessionId);
+  }, [storageScope, user]);
 
   const ensurePersistedSession = useCallback(async () => {
     if (messages.length === 0) {
@@ -2862,6 +2893,14 @@ export default function ChatPage() {
   }, [paperDraft, paperEditorJson, paperFormat, paperSessionId, paperTab, paperValidation?.overall_status, showToast]);
 
   useEffect(() => {
+    const historyKey = scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, storageScope);
+    const draftKey = scopedChatStorageKey(CHAT_DRAFT_STORAGE_KEY, storageScope);
+    const autosaveDraftKey = scopedChatStorageKey(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY, storageScope);
+    const currentSessionKey = scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, storageScope);
+    const scopedSessionId = localStorage.getItem(currentSessionKey);
+    setCurrentSessionId(scopedSessionId);
+    if (!scopedSessionId) setCurrentSessionTitle("");
+
     // If caller requested a new session, clear history first
     const newSession = localStorage.getItem("astro_chat_new_session");
     if (newSession) {
@@ -2869,31 +2908,35 @@ export default function ChatPage() {
       setMessages([]);
       setCurrentSessionId(null);
       pythonSessionIdRef.current = crypto.randomUUID();
-      localStorage.removeItem("astro_chat_history");
-      localStorage.removeItem("astro_chat_autosave_draft");
+      localStorage.removeItem(historyKey);
+      localStorage.removeItem(autosaveDraftKey);
+    } else {
+      setMessages(loadChatHistory(storageScope));
     }
 
-    const draft = localStorage.getItem("astro_chat_draft");
+    const draft = localStorage.getItem(draftKey);
     if (draft) {
       setInput(draft);
-      localStorage.removeItem("astro_chat_draft");
+      localStorage.removeItem(draftKey);
     }
+    localStorage.removeItem(CHAT_DRAFT_STORAGE_KEY);
 
     // One-time migration: legacy `astro_chat_autosave_draft` is retired; fold
     // its content into astro_chat_history if the latter is empty, then clean up.
     if (!newSession && !draft) {
       try {
-        const autosaved = localStorage.getItem("astro_chat_autosave_draft");
+        const autosaved = localStorage.getItem(autosaveDraftKey);
         if (autosaved) {
           const parsed = JSON.parse(autosaved) as DisplayMessage[];
-          if (parsed.length > 0 && loadChatHistory().length === 0) {
+          if (parsed.length > 0 && loadChatHistory(storageScope).length === 0) {
             const recovered = parsed.map((m) => ({ ...m, actionResults: new Map() }));
             setMessages(recovered);
-            safeSetChatHistory(recovered);
+            safeSetChatHistory(recovered, storageScope);
           }
         }
       } catch { /* ignore */ }
-      localStorage.removeItem("astro_chat_autosave_draft");
+      localStorage.removeItem(autosaveDraftKey);
+      localStorage.removeItem(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY);
     }
 
     // Refresh-resume: if the last restored message is a pending marker, try
@@ -2901,10 +2944,10 @@ export default function ChatPage() {
     // the client lost the stream).  Falls through to the in-UI "interrupted,
     // retry" bubble if the server has no newer reply either.
     if (!newSession) {
-      const restored = loadChatHistory();
+      const restored = loadChatHistory(storageScope);
       const last = restored[restored.length - 1];
       if (last && last._pending && last.role === "assistant") {
-        const sid = localStorage.getItem("astro_current_chat_session_id");
+        const sid = localStorage.getItem(currentSessionKey);
         if (sid && user) {
           void loadChatSession(sid)
             .then((session) => {
@@ -2941,7 +2984,7 @@ export default function ChatPage() {
     // was silently wiping figures on every page reload for any session with
     // >~5 plots.
     if (!newSession) {
-      const restored = loadChatHistory();
+      const restored = loadChatHistory(storageScope);
       const hasOffloadedFigures = restored.some((m) =>
         (m.actions || []).some((a) => {
           const tr = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
@@ -2949,7 +2992,7 @@ export default function ChatPage() {
           return tr.__offloaded__ === true || tr.__figures_offloaded__ !== undefined;
         }),
       );
-      const sid = localStorage.getItem("astro_current_chat_session_id");
+      const sid = localStorage.getItem(currentSessionKey);
       if (hasOffloadedFigures && sid && user) {
         void loadChatSession(sid)
           .then((session) => {
@@ -2983,7 +3026,7 @@ export default function ChatPage() {
           .catch(() => { /* keep locally-pruned state if server unreachable */ });
       }
     }
-  }, []);
+  }, [storageScope, user, showToast]);
 
   useEffect(() => {
     localStorage.setItem("astro_chat_sidebar_collapsed", sidebarCollapsed ? "1" : "0");
@@ -2993,12 +3036,18 @@ export default function ChatPage() {
   // (refresh-resume) can ask the server about the right session without
   // waiting for the sidebar list to hydrate.
   useEffect(() => {
-    if (currentSessionId) {
-      localStorage.setItem("astro_current_chat_session_id", currentSessionId);
-    } else {
-      localStorage.removeItem("astro_current_chat_session_id");
+    if (currentSessionScopeRef.current !== storageScope) {
+      currentSessionScopeRef.current = storageScope;
+      return;
     }
-  }, [currentSessionId]);
+    const currentSessionKey = scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, storageScope);
+    if (currentSessionId) {
+      localStorage.setItem(currentSessionKey, currentSessionId);
+      localStorage.removeItem(CURRENT_CHAT_SESSION_STORAGE_KEY);
+    } else {
+      localStorage.removeItem(currentSessionKey);
+    }
+  }, [currentSessionId, storageScope]);
 
   // Chat persistence: a single debounced scheduler replaces the old three-path
   // write (astro_chat_history on every setMessages + astro_chat_autosave_draft
@@ -3077,7 +3126,7 @@ export default function ChatPage() {
 
   const handleLoadSession = async (id: string) => {
     try {
-      const session = user ? await loadChatSession(id) : loadLocalChatSession(id);
+      const session = user ? await loadChatSession(id) : loadLocalChatSession(id, storageScope);
       if (!session) return;
       const loaded: DisplayMessage[] = session.messages.map((m: Record<string, unknown>) => ({
         id: crypto.randomUUID(),
@@ -3090,7 +3139,7 @@ export default function ChatPage() {
       setCurrentSessionTitle((session as { title?: string }).title || "");
       setSaveStatus("saved");
       pythonSessionIdRef.current = crypto.randomUUID();
-      saveChatHistory(loaded);
+      saveChatHistory(loaded, storageScope);
     } catch { /* ignore */ }
   };
 
@@ -3106,8 +3155,8 @@ export default function ChatPage() {
     setCurrentSessionTitle("");
     setSaveStatus("idle");
     pythonSessionIdRef.current = crypto.randomUUID();
-    localStorage.removeItem("astro_chat_history");
-    localStorage.removeItem("astro_chat_autosave_draft");
+    localStorage.removeItem(scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, storageScope));
+    localStorage.removeItem(scopedChatStorageKey(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY, storageScope));
     // G6.1: also clear the workspace-context keys that the chat request
     // auto-injects.  Without this the old session's ADQL / search / FITS
     // results follow the user into the "new" session, which is exactly
@@ -3118,7 +3167,7 @@ export default function ChatPage() {
     localStorage.removeItem("astro_last_adql_rows");
     localStorage.removeItem("astro_adql_result_sets");
     localStorage.removeItem("astro_last_search");
-    localStorage.removeItem("astro_current_chat_session_id");
+    localStorage.removeItem(scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, storageScope));
   };
 
   const handleRenameSession = async (newTitle: string) => {
@@ -3146,7 +3195,7 @@ export default function ChatPage() {
       if (user) {
         await deleteChatSession(id);
       } else {
-        deleteLocalChatSession(id);
+        deleteLocalChatSession(id, storageScope);
       }
       refreshSessions();
       if (currentSessionId === id) setCurrentSessionId(null);
@@ -3174,7 +3223,7 @@ export default function ChatPage() {
         setMessages(loaded);
         setCurrentSessionId(result.id);
         pythonSessionIdRef.current = crypto.randomUUID();
-        saveChatHistory(loaded);
+        saveChatHistory(loaded, storageScope);
         refreshSessions();
         showToast(`Imported "${result.title}" (${result.message_count} messages)`, "success");
       } catch (err) {
@@ -3200,7 +3249,7 @@ export default function ChatPage() {
         setMessages(loaded);
         setCurrentSessionId(pendingSessionId);
         pythonSessionIdRef.current = crypto.randomUUID();
-        saveChatHistory(loaded);
+        saveChatHistory(loaded, storageScope);
       })
       .catch(() => {
         showToast("Could not load the requested session", "error");
@@ -3285,13 +3334,13 @@ export default function ChatPage() {
         actions: m.actions as ChatAction[] | undefined,
       }));
       setMessages(loaded);
-      saveChatHistory(loaded);
+      saveChatHistory(loaded, storageScope);
       await loadCollaborationState(currentSessionId);
       showToast("Snapshot restored", "success");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to restore snapshot", "error");
     }
-  }, [currentSessionId, loadCollaborationState, showToast]);
+  }, [currentSessionId, loadCollaborationState, showToast, storageScope]);
 
   const handleCompareSnapshots = useCallback(async () => {
     if (!currentSessionId || snapshotCompareSelection.length !== 2) return;
@@ -3323,8 +3372,8 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    saveChatHistory(messages);
-  }, [messages]);
+    saveChatHistory(messages, storageScope);
+  }, [messages, storageScope]);
 
   const [dragOver, setDragOver] = useState(false);
   const pendingSendRef = useRef(false);
@@ -3430,7 +3479,7 @@ export default function ChatPage() {
             ? { ...m, actions: actions.length > 0 ? actions : undefined }
             : m,
         );
-        saveChatHistory(next);
+        saveChatHistory(next, storageScope);
         return next;
       });
     };

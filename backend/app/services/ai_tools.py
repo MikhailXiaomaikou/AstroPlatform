@@ -1551,9 +1551,9 @@ async def _execute_tool_inner(
         elif tool_name == "get_last_search_results":
             return _exec_get_cached_results(tool_input)
         elif tool_name == "validate_analysis":
-            return await _exec_validate_analysis(tool_input, chat_session_id or python_session_id)
+            return await _exec_validate_analysis(tool_input, chat_session_id or python_session_id, user_id=user_id)
         elif tool_name == "generate_paper_draft":
-            return await _exec_generate_paper_draft(tool_input, chat_session_id or python_session_id)
+            return await _exec_generate_paper_draft(tool_input, chat_session_id or python_session_id, user_id=user_id)
         elif tool_name == "run_pipeline":
             return await _exec_run_pipeline(tool_input)
         elif tool_name == "generate_proposal":
@@ -4138,7 +4138,37 @@ def _resolve_session_id(tool_input: dict, python_session_id: str) -> str | None:
     return fallback or None
 
 
-async def _exec_validate_analysis(inp: dict, python_session_id: str = "default") -> dict:
+async def _require_tool_session_owner(session_id: str, user_id: str | None, db: Any) -> dict[str, Any] | None:
+    """Return a structured error unless the current user owns ``session_id``."""
+    if not user_id:
+        return {"error": "Sign in before validating or generating a paper from a saved chat session."}
+    try:
+        import uuid as _uuid
+        from sqlalchemy import select as _select
+        from app.models.schemas import ChatSession as _ChatSession
+
+        sid = _uuid.UUID(str(session_id))
+        uid = _uuid.UUID(str(user_id))
+        session = (
+            await db.execute(
+                _select(_ChatSession.id).where(
+                    _ChatSession.id == sid,
+                    _ChatSession.user_id == uid,
+                )
+            )
+        ).scalar_one_or_none()
+    except ValueError:
+        return {"error": "Invalid session ID. Save the current chat session first."}
+    if session is None:
+        return {"error": "Session not found for the current account."}
+    return None
+
+
+async def _exec_validate_analysis(
+    inp: dict,
+    python_session_id: str = "default",
+    user_id: str | None = None,
+) -> dict:
     from app.models.database import async_session
     from app.services.analysis_validator import validate_analysis
 
@@ -4147,6 +4177,9 @@ async def _exec_validate_analysis(inp: dict, python_session_id: str = "default")
         return {"error": "session_id is required. Save the current chat session first."}
 
     async with async_session() as db:
+        owner_error = await _require_tool_session_owner(session_id, user_id, db)
+        if owner_error:
+            return owner_error
         try:
             validation = await validate_analysis(session_id, db)
         except Exception as exc:
@@ -4154,7 +4187,11 @@ async def _exec_validate_analysis(inp: dict, python_session_id: str = "default")
     return validation
 
 
-async def _exec_generate_paper_draft(inp: dict, python_session_id: str = "default") -> dict:
+async def _exec_generate_paper_draft(
+    inp: dict,
+    python_session_id: str = "default",
+    user_id: str | None = None,
+) -> dict:
     from app.models.database import async_session
     from app.services.paper_generator import generate_paper_draft
 
@@ -4164,6 +4201,9 @@ async def _exec_generate_paper_draft(inp: dict, python_session_id: str = "defaul
 
     journal_format = str(inp.get("journal_format", "aastex") or "aastex").strip().lower()
     async with async_session() as db:
+        owner_error = await _require_tool_session_owner(session_id, user_id, db)
+        if owner_error:
+            return owner_error
         try:
             generated = await generate_paper_draft(session_id, journal_format, db)
         except Exception as exc:

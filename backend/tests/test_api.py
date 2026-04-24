@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.auth import create_access_token, hash_password
-from app.models.schemas import ChatSession, DataFile, PaperDraft, PipelineRun, PipelineTemplateDB, RunResult, User
+from app.models.schemas import ChatSession, DataFile, PaperDraft, PipelineRun, RunResult, User
 from app.utils.usernames import username_from_email
 
 
@@ -76,6 +76,52 @@ class TestAuthEndpoints:
             json={"username": "ghostastro", "password": "whatever123"},
         )
         assert resp.status_code == 401
+
+
+class TestChatSessionPrivacy:
+    async def _register_headers(self, app_client, username: str) -> dict[str, str]:
+        resp = await app_client.post(
+            "/api/auth/register",
+            json={"username": username, "password": "longpassword123"},
+        )
+        assert resp.status_code == 201
+        return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    async def test_sessions_are_scoped_to_current_account(self, app_client):
+        owner_headers = await self._register_headers(app_client, "chatowner")
+        other_headers = await self._register_headers(app_client, "chatother")
+
+        save_resp = await app_client.post(
+            "/api/chat/sessions/save",
+            json={
+                "title": "Private session",
+                "messages": [{"role": "user", "content": "private science note"}],
+            },
+            headers=owner_headers,
+        )
+        assert save_resp.status_code == 200
+        session_id = save_resp.json()["id"]
+
+        owner_list = await app_client.get("/api/chat/sessions", headers=owner_headers)
+        assert owner_list.status_code == 200
+        assert [item["id"] for item in owner_list.json()] == [session_id]
+
+        other_list = await app_client.get("/api/chat/sessions", headers=other_headers)
+        assert other_list.status_code == 200
+        assert other_list.json() == []
+
+        other_get = await app_client.get(f"/api/chat/sessions/{session_id}", headers=other_headers)
+        assert other_get.status_code == 404
+
+        other_rename = await app_client.patch(
+            f"/api/chat/sessions/{session_id}",
+            json={"title": "Stolen"},
+            headers=other_headers,
+        )
+        assert other_rename.status_code == 404
+
+        other_delete = await app_client.delete(f"/api/chat/sessions/{session_id}", headers=other_headers)
+        assert other_delete.status_code == 404
 
 
 class TestDataSearchEndpoint:

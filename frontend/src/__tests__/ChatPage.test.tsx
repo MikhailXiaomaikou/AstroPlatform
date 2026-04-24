@@ -22,9 +22,22 @@ vi.mock("../i18n", () => ({
 }));
 
 // ── Mock auth context ──
+const authState = vi.hoisted(() => ({
+  user: null as null | {
+    id: string;
+    username: string;
+    email: string;
+    subscription_tier: string;
+    stripe_customer_id: string | null;
+    display_name: string | null;
+    avatar_url: string | null;
+    google_linked: boolean;
+  },
+}));
+
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({
-    user: null,
+    user: authState.user,
     loading: false,
     login: vi.fn(),
     register: vi.fn(),
@@ -113,6 +126,7 @@ function renderChatPage() {
 describe("ChatPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.user = null;
     localStorage.clear();
     sessionStorage.clear();
   });
@@ -123,6 +137,33 @@ describe("ChatPage", () => {
     renderChatPage();
     // The page should render something visible
     expect(document.querySelector(".chat-input-area")).toBeTruthy();
+  });
+
+  it("does not show legacy global chat history to a signed-in account", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    authState.user = {
+      id: "user-b",
+      username: "user-b",
+      email: "user-b@example.com",
+      subscription_tier: "solo",
+      stripe_customer_id: null,
+      display_name: "User B",
+      avatar_url: null,
+      google_linked: false,
+    };
+    localStorage.setItem(
+      "astro_chat_history",
+      JSON.stringify([{ id: "legacy", role: "user", content: "other account secret" }]),
+    );
+    localStorage.setItem(
+      "astro_chat_history:user:user-b",
+      JSON.stringify([{ id: "own", role: "user", content: "my account chat" }]),
+    );
+
+    renderChatPage();
+
+    expect(screen.queryByText("other account secret")).not.toBeInTheDocument();
+    expect(await screen.findByText("my account chat")).toBeInTheDocument();
   });
 
   // ── API key prompt ──
@@ -266,7 +307,7 @@ describe("ChatPage", () => {
     fireEvent.click(sendBtn);
 
     await waitFor(() => {
-      const raw = localStorage.getItem("astro_chat_history");
+      const raw = localStorage.getItem("astro_chat_history:anon");
       expect(raw).toBeTruthy();
       const stored = JSON.parse(raw || "[]") as Array<{
         role?: string;
@@ -348,7 +389,7 @@ describe("ChatPage", () => {
     fireEvent.click(sendBtn);
 
     await waitFor(() => {
-      const raw = localStorage.getItem("astro_chat_history");
+      const raw = localStorage.getItem("astro_chat_history:anon");
       const stored = JSON.parse(raw || "[]") as Array<{
         role?: string;
         actions?: Array<{ _tool_call_id?: string; tool_result?: { row_count?: number } }>;
