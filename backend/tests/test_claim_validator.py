@@ -173,7 +173,8 @@ def test_line_relation_stats_blocked_when_measurement_workflow_has_zero_rows():
     }
     blocked = blocked_line_relation_reply_text(claims)
     assert "publication-ready measurement-table fit" in blocked
-    assert "search_literature" in blocked
+    assert "search_literature" not in blocked
+    assert "fit_line_lfr" not in blocked
 
 
 def test_search_literature_abstracts_do_not_support_line_relation_stats():
@@ -214,6 +215,79 @@ def test_publication_ready_line_fit_supports_relation_stats():
         "Slope beta = 0.50, intercept alpha = 8.0, Pearson r = 0.92, p = 0.001.",
         tool_results,
     ) == []
+
+
+def test_cited_run_python_mcmc_supports_relation_stats():
+    tool_results = [{
+        "tool": "run_python",
+        "input": {"data_source": "cached:latest_literature_tables:82fdb062"},
+        "result": {
+            "success": True,
+            "data_origin": "cached_real",
+            "stdout": (
+                "Bayesian Linear Regression for the [CII] line relation.\n"
+                "alpha/intercept = 9.823 +/- 0.467\n"
+                "beta/slope = 0.766 +/- 0.188\n"
+                "sigma_int/intrinsic scatter = 0.315 dex\n"
+                "Citation: Bethermin et al. (2020; arXiv:2002.00962)"
+            ),
+            "variables": {
+                "method": "emcee MCMC",
+                "slope": 0.766,
+                "intercept": 9.823,
+                "intrinsic_scatter": 0.315,
+                "citation": "arXiv:2002.00962",
+            },
+        },
+    }]
+
+    assert measurement_data_available(tool_results, domain="line_lfr", require_fit=True)
+    assert unsupported_line_relation_stat_claims(
+        "Slope beta = 0.766, intercept alpha = 9.823, intrinsic scatter = 0.315 dex.",
+        tool_results,
+    ) == []
+
+
+def test_run_python_line_fit_without_citation_does_not_support_stats():
+    tool_results = [{
+        "tool": "run_python",
+        "input": {"data_source": "cached:latest_literature_tables:82fdb062"},
+        "result": {
+            "success": True,
+            "data_origin": "cached_real",
+            "stdout": (
+                "Bayesian [CII] MCMC fit: slope = 0.766, "
+                "intercept = 9.823, intrinsic scatter = 0.315 dex."
+            ),
+        },
+    }]
+
+    claims = unsupported_line_relation_stat_claims("Slope beta = 0.766.", tool_results)
+
+    assert claims
+    assert not measurement_data_available(tool_results, domain="line_lfr", require_fit=True)
+
+
+def test_synthetic_run_python_line_fit_does_not_support_stats():
+    tool_results = [{
+        "tool": "run_python",
+        "input": {"data_source": "none_not_analyzing_real_data"},
+        "result": {
+            "success": True,
+            "__tool_status__": "SYNTHETIC",
+            "__do_not_claim__": True,
+            "data_origin": "synthetic",
+            "stdout": (
+                "Fake [CII] relation: slope = 0.766, intercept = 9.823, "
+                "intrinsic scatter = 0.315 dex. Citation: arXiv:2002.00962"
+            ),
+        },
+    }]
+
+    claims = unsupported_line_relation_stat_claims("Slope beta = 0.766.", tool_results)
+
+    assert claims
+    assert not measurement_data_available(tool_results, domain="line_lfr", require_fit=True)
 
 
 def test_non_publication_ready_line_fit_does_not_support_headline_stats():

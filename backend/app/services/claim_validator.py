@@ -1353,6 +1353,100 @@ def line_relation_stat_claims(reply: str) -> list[Claim]:
     return claims
 
 
+_LINE_FIT_REAL_DATA_SOURCES = {
+    "latest_adql",
+    "latest_search",
+    "latest_lightcurve",
+    "latest_sdss_sql",
+    "latest_literature_tables",
+}
+_LINE_FIT_REAL_DATA_PREFIXES = ("cached:", "fits:", "uploaded:", "user_upload:")
+_LINE_FIT_REAL_ORIGINS = {"real_archive", "cached_real", "user_uploaded"}
+_LINE_FIT_CONTEXT_RE = re.compile(
+    r"(?:\[?\s*C\s*II\s*\]?|L\s*'?\s*\[?\s*C\s*II\s*\]?|FWHM|"
+    r"line[-\s]*(?:relation|width|fit)|Bayesian|MCMC|emcee)",
+    re.I,
+)
+_LINE_FIT_SLOPE_RE = re.compile(
+    rf"\b(?:slope|beta|β)\b[\"']?\s*(?:is|was|=|≈|~|:)?\s*{_NUM}",
+    re.I,
+)
+_LINE_FIT_INTERCEPT_RE = re.compile(
+    rf"\b(?:intercept|alpha|α)\b[\"']?\s*(?:is|was|=|≈|~|:)?\s*{_NUM}",
+    re.I,
+)
+_LINE_FIT_SCATTER_RE = re.compile(
+    rf"\b(?:intrinsic[_\s-]*scatter|sigma[_\s-]*(?:int|intrinsic)|scatter|rms)\b"
+    rf"[\"']?\s*(?:is|was|=|≈|~|:)?\s*{_NUM}",
+    re.I,
+)
+
+
+def _line_fit_payload_text(result: dict[str, Any]) -> str:
+    """Compact run_python output into text for fit-evidence checks."""
+    fields: list[Any] = []
+    for key in (
+        "stdout",
+        "variables",
+        "summary",
+        "analysis_summary",
+        "llm_summary",
+        "caption",
+        "figure_caption",
+        "provenance",
+    ):
+        value = result.get(key)
+        if value not in (None, "", [], {}):
+            fields.append(value)
+    text = json.dumps(fields, default=str, ensure_ascii=False)
+    return text[:80_000]
+
+
+def _entry_declares_real_line_fit_source(entry: dict[str, Any], result: dict[str, Any]) -> bool:
+    tool_input = entry.get("input") if isinstance(entry.get("input"), dict) else {}
+    declared = str(
+        tool_input.get("data_source")
+        or result.get("data_source")
+        or ""
+    ).strip()
+    if declared == "none_not_analyzing_real_data":
+        return False
+    if declared in _LINE_FIT_REAL_DATA_SOURCES or declared.startswith(_LINE_FIT_REAL_DATA_PREFIXES):
+        return True
+    origin = str(result.get("data_origin") or "").strip().lower()
+    return origin in _LINE_FIT_REAL_ORIGINS
+
+
+def _run_python_contains_citable_line_fit(entry: dict[str, Any], result: dict[str, Any]) -> bool:
+    """Return True for a successful, cited, non-synthetic Python line fit.
+
+    R2.7 exposed a false positive in the measurement-zero gate: a real
+    cached-measurement MCMC performed in run_python can be citable even when
+    the dedicated fit_line_lfr tool was not elevated to publication_ready.
+    Keep this narrow: the cell must use a real data source, finish
+    successfully, include slope/intercept/scatter evidence, carry a source
+    citation, and mention the line-LFR context.
+    """
+    if result.get("success") is not True:
+        return False
+    if not _entry_declares_real_line_fit_source(entry, result):
+        return False
+    text = _line_fit_payload_text(result)
+    if not text.strip() or not _LINE_FIT_CONTEXT_RE.search(text):
+        return False
+    if not (
+        _LINE_FIT_SLOPE_RE.search(text)
+        and _LINE_FIT_INTERCEPT_RE.search(text)
+        and _LINE_FIT_SCATTER_RE.search(text)
+    ):
+        return False
+    return bool(
+        BIBCODE_RE.search(text)
+        or ARXIV_ID_RE.search(text)
+        or DOI_RE.search(text)
+    )
+
+
 def measurement_data_available(
     tool_results: Any,
     *,
@@ -1379,6 +1473,10 @@ def measurement_data_available(
             if bool(result.get("publication_ready")) and n_used >= min_rows:
                 return True
             continue
+        if require_fit and tool_name == "run_python":
+            if _run_python_contains_citable_line_fit(entry, result):
+                return True
+            continue
         if not require_fit and tool_name in {"extract_literature_tables", "search_line_measurements"}:
             rows = result.get("line_measurements")
             count = result.get("line_measurement_count")
@@ -1399,17 +1497,24 @@ def unsupported_line_relation_stat_claims(reply: str, tool_results: Any) -> list
 
 
 def blocked_line_relation_reply_text(claims: list[Claim]) -> str:
-    lines = [f"- {claim.label}: {claim.raw}" for claim in claims]
+    seen: set[tuple[str, str]] = set()
+    lines: list[str] = []
+    for claim in claims:
+        key = (claim.label, claim.raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(f"- {claim.label}: {claim.raw}")
     return (
         "⚠ Reply withheld: the assistant attempted to report line-relation "
         "statistics, but no publication-ready measurement-table fit succeeded "
         "this turn.\n\n"
         + "\n".join(lines)
-        + "\n\n`search_literature` paper abstracts can support context and "
-        "citations, but slope/intercept/scatter/r/p claims require cited "
-        "`line_measurements` and `fit_line_lfr(publication_ready=true)`. "
-        "Run table extraction/fitting first, or state that the relation was "
-        "not determined by the tools."
+        + "\n\nPaper searches and exploratory outputs can support context, "
+        "but headline slope/intercept/scatter/r/p claims require a cited, "
+        "publication-ready measurement-table fit from this turn. Ask for a "
+        "publication-ready fit, or state that the relation was not determined "
+        "by the tools."
     )
 
 

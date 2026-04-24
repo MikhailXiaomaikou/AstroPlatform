@@ -46,3 +46,27 @@ def test_local_diagnostic_sanitizer_truncates_large_payloads():
     assert result["rows"][-1] == "[truncated 10 items]"
     assert "truncated" in result["stdout"]
 
+
+def test_local_diagnostic_replay_includes_line_relation_gate(tmp_path):
+    from app.services.local_diagnostics import (
+        build_diagnostic_bundle,
+        replay_diagnostic_bundle,
+        write_diagnostic_bundle,
+    )
+
+    bundle = build_diagnostic_bundle(
+        prompt="fit [CII]",
+        tool_results=[{
+            "tool": "search_literature",
+            "result": {
+                "success": True,
+                "results": [{"title": "ALPINE", "bibcode": "2020A&A...643A...2B"}],
+            },
+        }],
+        final_reply="Slope beta = 0.77 and intrinsic scatter = 0.31 dex.",
+    )
+
+    replay = replay_diagnostic_bundle(write_diagnostic_bundle(bundle, tmp_path))
+
+    assert replay["line_relation_violations"]
+    assert replay["would_withhold"] is True
