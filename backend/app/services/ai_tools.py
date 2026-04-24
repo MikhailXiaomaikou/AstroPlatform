@@ -599,6 +599,21 @@ TOOLS = [
                     "type": "integer",
                     "description": "Minimum citeable rows required for a publication-ready fit. Default: 5.",
                 },
+                "fit_method_requested": {
+                    "type": "string",
+                    "enum": ["auto", "ols", "bayesian_xyerr"],
+                    "description": (
+                        "Desired fitting method. 'auto' (default) picks the best "
+                        "available path. 'ols' is plain scipy.linregress, never a "
+                        "downgrade. 'bayesian_xyerr' requests Bayesian linear "
+                        "regression with errors on both axes (linmix-style, Kelly "
+                        "2007); requires fwhm_err_km_s and log_luminosity_err on "
+                        "every row. If the request cannot be honored the tool "
+                        "returns __tool_status__='METHOD_DOWNGRADED' with a "
+                        "concrete reason — do NOT describe the fit as Bayesian "
+                        "when that happens."
+                    ),
+                },
             },
         },
     },
@@ -3492,12 +3507,21 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
                 reason = "missing_numeric_values"
             else:
                 citation = row.get("citation") if isinstance(row.get("citation"), dict) else {}
+                # M2: carry v2 schema fields through so the downgrade /
+                # cosmology-mismatch / lensing checks below can inspect
+                # per-row error, μ, and source_cosmology values without
+                # a second cache read.  None = "paper did not report".
                 accepted.append({
                     "source_name": row.get("source_name"),
                     "redshift": row.get("redshift"),
                     "line_id": row.get("line_id") or line_id,
                     "log_luminosity": log_luminosity,
+                    "log_luminosity_err": _finite_float(row.get("log_luminosity_err")),
                     "fwhm_km_s": fwhm,
+                    "fwhm_err_km_s": _finite_float(row.get("fwhm_err_km_s")),
+                    "mu_lens": _finite_float(row.get("mu_lens")),
+                    "is_lensed": row.get("is_lensed"),
+                    "source_cosmology": row.get("source_cosmology"),
                     "table_label": row.get("table_label") or citation.get("table_label"),
                     "bibcode": row.get("bibcode") or citation.get("bibcode"),
                     "arxiv_id": row.get("arxiv_id") or citation.get("arxiv_id"),
@@ -3563,7 +3587,12 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
 
     y_model = alpha + beta * x
     residuals = y - y_model
-    scatter_dex = float(np.sqrt(np.mean(residuals ** 2)))
+    # M2: residual_rms_dex is the physically correct name for
+    # sqrt(mean(residuals**2)) in an OLS fit.  scatter_dex stays as a
+    # deprecated alias for one release so existing downstream consumers
+    # don't break; the Bayesian path added in M3 will expose a separate
+    # intrinsic_scatter_dex with posterior summaries.
+    residual_rms_dex = float(np.sqrt(np.mean(residuals ** 2)))
     publication_ready = n_used >= min_rows and all(_row_has_citation(row) for row in accepted)
     citation_keys = sorted({
         str(row.get("bibcode") or row.get("arxiv_id") or row.get("doi") or "").strip()
@@ -3576,11 +3605,76 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         if str(row.get("table_label") or "").strip()
     })
 
+    # ── M2: fit-method routing ──────────────────────────────────────
+    # fit_method_requested has three legal values:
+    #   auto           — pick the best available method (M2 = OLS; M3
+    #                    will upgrade this to Bayesian when both-axis
+    #                    errors are available).
+    #   ols            — explicit OLS, never a downgrade.
+    #   bayesian_xyerr — explicit Bayesian two-axis regression.  In M2
+    #                    the Bayesian backend is not yet wired, so this
+    #                    always triggers METHOD_DOWNGRADED with a
+    #                    concrete reason.
+    requested = str(inp.get("fit_method_requested") or "auto").strip().lower()
+    if requested not in ("auto", "ols", "bayesian_xyerr"):
+        requested = "auto"
+    n_x_err = sum(1 for r in accepted if r.get("fwhm_err_km_s") is not None)
+    n_y_err = sum(1 for r in accepted if r.get("log_luminosity_err") is not None)
+    both_errs_available = n_x_err == n_used and n_y_err == n_used and n_used > 0
+
+    fit_method = "ols"
+    fit_method_downgrade_reason: str | None = None
+    if requested == "bayesian_xyerr":
+        if not both_errs_available:
+            missing_bits = []
+            if n_x_err < n_used:
+                missing_bits.append(f"fwhm_err_km_s on {n_x_err}/{n_used} rows")
+            if n_y_err < n_used:
+                missing_bits.append(f"log_luminosity_err on {n_y_err}/{n_used} rows")
+            fit_method_downgrade_reason = (
+                "bayesian_xyerr requires per-row two-axis errors; sample has "
+                + "; ".join(missing_bits) + ". Fell back to OLS."
+            )
+        else:
+            fit_method_downgrade_reason = (
+                "bayesian_xyerr backend not yet wired (scheduled in M3 of the "
+                "line-relation remediation plan). Fell back to OLS."
+            )
+    is_method_downgraded = fit_method_downgrade_reason is not None
+
+    # ── M2: cosmology mismatch detection ────────────────────────────
+    # We do NOT auto-recompute DL — that's the M5 job.  Here we only
+    # surface a mismatch warning so the AI / UI / claim_validator can
+    # react.
+    try:
+        from app.services.cosmology import cosmology_manifest as _cm
+        _current_cosmo = _cm()
+    except Exception:
+        _current_cosmo = {"name": "unknown"}
+    sample_cosmo_names: set[str] = set()
+    for r in accepted:
+        sc = r.get("source_cosmology")
+        if isinstance(sc, dict):
+            nm = str(sc.get("name") or "").strip()
+            if nm:
+                sample_cosmo_names.add(nm)
+    current_cosmo_name = str(_current_cosmo.get("name") or "unknown")
+    cosmology_mismatch = bool(
+        sample_cosmo_names and any(n != current_cosmo_name for n in sample_cosmo_names)
+    )
+
+    # ── M2: lensing bookkeeping ─────────────────────────────────────
+    # At this milestone the fit does NOT demagnify.  demagnify_sample is
+    # a separate M4 tool.  We only *count* lensed / unknown status.
+    n_lensed = sum(1 for r in accepted if r.get("is_lensed") is True)
+    n_unlensed = sum(1 for r in accepted if r.get("is_lensed") is False)
+    n_lensed_unknown = sum(1 for r in accepted if r.get("is_lensed") is None)
+
     result = {
         "success": True,
         "tool": "fit_line_lfr",
         "result_granularity": "literature_measurement_fit",
-        "supports_measurement_claims": publication_ready,
+        "supports_measurement_claims": publication_ready and not is_method_downgraded,
         "cache_key": resolved_cache_key,
         "line_id": line_id,
         "model": "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)",
@@ -3595,7 +3689,33 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "pearson_p": p_value,
         "spearman_r": spearman_r,
         "spearman_p": spearman_p,
-        "scatter_dex": scatter_dex,
+        # M2: residual_rms_dex is the canonical name; scatter_dex is a
+        # deprecated alias kept for one release.  Do NOT treat this as
+        # Bayesian intrinsic scatter σ_int — that arrives in M3.
+        "residual_rms_dex": residual_rms_dex,
+        "scatter_dex": residual_rms_dex,
+        # M2: method declaration fields.  These are always present so
+        # downstream UI / claim_validator / PDF export can detect a
+        # silent methodology downgrade just from the tool_result shape.
+        "fit_method": fit_method,
+        "fit_method_requested": requested,
+        "fit_method_downgrade_reason": fit_method_downgrade_reason,
+        "error_axes_available": {
+            "x_err_rows": n_x_err,
+            "y_err_rows": n_y_err,
+            "both_axes_available": both_errs_available,
+        },
+        # M2: cosmology bookkeeping.
+        "cosmology_used": current_cosmo_name,
+        "cosmology_manifest": _current_cosmo,
+        "sample_source_cosmologies": sorted(sample_cosmo_names),
+        "cosmology_mismatch": cosmology_mismatch,
+        # M2: lensing bookkeeping.  demagnified count stays 0 in M2
+        # because we haven't run demagnify_sample yet; populated in M4.
+        "lensed_sources_demagnified": 0,
+        "n_lensed": n_lensed,
+        "n_unlensed": n_unlensed,
+        "n_lensed_unknown": n_lensed_unknown,
         "publication_ready": publication_ready,
         "fit_inputs_preview": accepted[:12],
         "rejected_summary": rejected[:20],
@@ -3631,8 +3751,25 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
                 },
                 "primary_citation_source": "field_level" if citation_keys else "none",
             },
+            # M2: method provenance node — the cross-fire target for
+            # claim_validator in M6.
+            "method_provenance": {
+                "fit_method": fit_method,
+                "fit_method_requested": requested,
+                "fit_method_downgrade_reason": fit_method_downgrade_reason,
+                "cosmology_used": current_cosmo_name,
+                "cosmology_mismatch": cosmology_mismatch,
+                "lensed_sources_demagnified": 0,
+                "n_lensed_unknown": n_lensed_unknown,
+            },
         },
     }
+
+    # ── M2: __tool_status__ priority.  PARTIAL (data insufficiency)
+    # outranks METHOD_DOWNGRADED (methodology mismatch) because a caller
+    # who can't trust the numbers at all also can't trust the method
+    # label.  When both are absent the reply returns without a status
+    # banner (tool_result_normalizer will mark it COMPLETED).
     if not publication_ready:
         result["__tool_status__"] = "PARTIAL"
         result["analysis_status"] = "partial"
@@ -3642,6 +3779,29 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
             "or with incomplete citations. Describe it as exploratory only; do not "
             "claim a publication-ready relation."
         )
+    elif is_method_downgraded:
+        result["__tool_status__"] = "METHOD_DOWNGRADED"
+        result["analysis_status"] = "method_downgraded"
+        result["__do_not_claim__"] = True
+        result["__message_to_model__"] = (
+            f"fit_method_requested={requested!r} but the tool actually ran "
+            f"{fit_method!r}: {fit_method_downgrade_reason} "
+            "Do NOT describe this fit as Bayesian or two-axis-error regression "
+            "in the reply; state explicitly that it was an OLS fallback and why."
+        )
+    if cosmology_mismatch:
+        # Warning runs in parallel to the status.  We attach a non-fatal
+        # banner so the AI must acknowledge the cosmology drift but the
+        # result still counts as "fit ran".
+        result.setdefault("warnings", []).append({
+            "code": "cosmology_mismatch",
+            "message": (
+                f"Sample source_cosmology contains {sorted(sample_cosmo_names)!r} "
+                f"but the current server cosmology is {current_cosmo_name!r}. "
+                "Luminosities may need recomputation via compare_luminosity_distances "
+                "(M5) before the fit is publication-ready."
+            ),
+        })
     return result
 
 

@@ -38,9 +38,15 @@ FAILED = "failed"
 # empty stdout and no figures).  Distinct from FAILED so the UI / LLM /
 # metrics can tell the two apart.
 EMPTY = "empty"
+# M2: the tool ran but the fit method actually used differs from the
+# method_requested by the caller (e.g. user asked for Bayesian two-axis
+# errors but the tool fell back to OLS because err columns were missing
+# or the Bayesian backend is unavailable).  UI should paint this red so
+# the methodology downgrade is never silent.
+METHOD_DOWNGRADED = "method_downgraded"
 
 _VALID_ORIGINS = {REAL_ARCHIVE, CACHED_REAL, USER_UPLOADED, SYNTHETIC, UNAVAILABLE}
-_VALID_STATUS = {COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED, EMPTY}
+_VALID_STATUS = {COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED, EMPTY, METHOD_DOWNGRADED}
 
 # Build-time tool version; populated by the Dockerfile via
 # `ARG TOOL_VERSION` / `ENV TOOL_VERSION=...`.  Falls back to "dev" when
@@ -73,6 +79,11 @@ _STOCHASTIC_TOOLS: frozenset[str] = frozenset({
     "gp_detrend_lightcurve", "fit_rv_orbit", "estimate_photo_z_pro",
     "lomb_scargle_period", "fit_sersic_morphology",
     "analyze_spectrum_pro", "sensitivity_analysis",
+    # M2: fit_line_lfr will route to Bayesian (linmix, M3) or bootstrap
+    # (subsample significance, M4) when error columns are available.  Both
+    # are stochastic; the OLS path is deterministic but goes through the
+    # same envelope, so we seed it too for provenance consistency.
+    "fit_line_lfr",
 })
 
 
