@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback, lazy, memo, Suspense } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   sendChatMessage,
   executeChatAction,
@@ -2436,6 +2437,11 @@ function safeSetChatHistory(messages: DisplayMessage[], scope: string): { writte
 }
 
 function saveChatHistory(messages: DisplayMessage[], scope: string): void {
+  if (messages.length === 0) {
+    localStorage.removeItem(scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, scope));
+    localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
+    return;
+  }
   safeSetChatHistory(messages, scope);
 }
 
@@ -2680,6 +2686,7 @@ function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
 
 export default function ChatPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const storageScope = useMemo(() => chatStorageScope(user), [user?.id]);
   const { t } = useI18n();
   const { track } = useTracking();
@@ -3328,6 +3335,7 @@ export default function ChatPage() {
     messagesRef.current = [];
     currentSessionIdRef.current = null;
     chatGenerationIdRef.current = crypto.randomUUID();
+    const freshChatToken = chatGenerationIdRef.current;
     setMessages([]);
     setCurrentSessionId(null);
     setCurrentSessionTitle("");
@@ -3348,6 +3356,7 @@ export default function ChatPage() {
     localStorage.removeItem("astro_adql_result_sets");
     localStorage.removeItem("astro_last_search");
     localStorage.removeItem(scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, storageScope));
+    navigate("/chat", { replace: true, state: { freshChatToken } });
   };
 
   const handleRenameSession = async (newTitle: string) => {

@@ -427,7 +427,12 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
             r"(source|object|galaxy)(name|id)",
             r"^(sourceid|objectid|galaxyid)$",
         ])
-        redshift_idx = _find_column(columns, [r"^(z|redshift)$", r"zspec"])
+        redshift_idx = _find_column(columns, [
+            r"^(z|redshift)$",
+            r"zspec",
+            r"^z(?:cii|ci|line|sys|source|src|gal|galaxy|alma|lya|lyalpha)?$",
+            r"^redshift(?:cii|line|source|galaxy)?$",
+        ])
         line_idx = _find_column(columns, [r"^line$", r"transition"])
         luminosity_idx = _find_column(columns, [
             r"log.*l.*cii", r"lcii", r"lc", r"lineluminos", r"luminos",

@@ -88,6 +88,9 @@ def test_line_measurement_ready_cache_suppresses_synthetic_python():
 def test_run_python_sandbox_crash_detection_and_disable_threshold():
     from app.api.chat import (
         RUN_PYTHON_DISABLE_AFTER_CRASHES,
+        _looks_like_unfinished_reply,
+        _render_unfinished_reply_fallback,
+        _run_python_missing_key,
         _run_python_sandbox_crashed,
         _tool_disable_threshold,
     )
@@ -107,5 +110,18 @@ def test_run_python_sandbox_crash_detection_and_disable_threshold():
 
     assert _run_python_sandbox_crashed(malformed_empty_stderr)
     assert not _run_python_sandbox_crashed(non_crash_failure)
+    assert _run_python_missing_key({
+        "error": "Traceback...\nKeyError: 'luminosity'",
+        "error_class": "key_error",
+    }) == "luminosity"
     assert _tool_disable_threshold("run_python") == RUN_PYTHON_DISABLE_AFTER_CRASHES == 2
     assert _tool_disable_threshold("run_adql") == 3
+    assert _looks_like_unfinished_reply(
+        "Let me work with the actual ALPINE data that was previously extracted:"
+    )
+    fallback = _render_unfinished_reply_fallback(
+        "Let me work with the actual ALPINE data that was previously extracted:",
+        [{"tool": "extract_literature_tables"}, {"tool": "run_python"}],
+    )
+    assert "ended before completion" in fallback
+    assert "extract_literature_tables, run_python" in fallback

@@ -4276,11 +4276,29 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             pass
     if response.get("error_class") == "key_error":
         missing_key = _missing_key_from_error(str(response.get("error") or ""))
+        line_measurement_note = ""
+        if missing_key in {
+            "luminosity",
+            "log_luminosity",
+            "fwhm",
+            "fwhm_km_s",
+            "redshift",
+            "source_name",
+        }:
+            line_measurement_note = (
+                " For literature line-measurement caches, the canonical columns are "
+                "`source_name`, `redshift`, `line_id`, `log_luminosity`, "
+                "`fwhm_km_s`, `quality_flags`, and `citation`. If you filtered or "
+                "renamed a DataFrame, re-print `df.columns` after that step and "
+                "use `df.get('log_luminosity')` / `df.get('fwhm_km_s')` instead "
+                "of assuming a generic `luminosity` column."
+            )
         response["hint"] = (
             f"KeyError for column {missing_key!r}. Inspect available columns before indexing "
             "(for example: `rows = get_adql_results(); print(rows[0].keys())`), "
             f"then use `row.get({missing_key!r})` or the exact available column name. "
             "Do not invent a replacement source_id or assume every catalog row has one."
+            + line_measurement_note
         )
     # R5 O1 + R6 post: stderr 作为一级字段**总是**写进 response, 即便空串.
     # 诊断角度看, "stderr=''" 跟 "stderr not set" 是完全不同的信号:

@@ -259,6 +259,8 @@ describe("ChatPage", () => {
 
     fireEvent.click(screen.getByText("chat.new_chat"));
     await waitFor(() => expect(screen.getByTestId("fresh-chat-ready")).toBeInTheDocument());
+    expect(localStorage.getItem("astro_current_chat_session_id:anon")).toBeNull();
+    expect(localStorage.getItem("astro_chat_history:anon")).toBeNull();
 
     const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
     const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;

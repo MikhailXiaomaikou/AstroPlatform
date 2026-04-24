@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -3147,6 +3148,54 @@ def _run_python_sandbox_crashed(result: Any) -> bool:
     )
 
 
+def _run_python_missing_key(result: Any) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    text = "\n".join(
+        str(result.get(key) or "")
+        for key in ("error", "stderr", "traceback")
+    )
+    match = re.search(r"KeyError:\s*['\"]([^'\"]+)['\"]", text)
+    if match:
+        return match.group(1)
+    if str(result.get("error_class") or "").lower() == "key_error":
+        return "unknown"
+    return None
+
+
+def _looks_like_unfinished_reply(reply: str) -> bool:
+    stripped = str(reply or "").strip()
+    if not stripped:
+        return False
+    if stripped.endswith((":", "：")):
+        return True
+    last_line = next((line.strip() for line in reversed(stripped.splitlines()) if line.strip()), "")
+    return bool(re.search(
+        r"\b(?:let me|i will|i'll|i am going to|next,?\s*i|now\s+i)\b[^.\n!?]*[:：]\s*$",
+        last_line,
+        re.I,
+    ))
+
+
+def _render_unfinished_reply_fallback(reply: str, tool_results: list[dict]) -> str:
+    tool_names = []
+    for entry in tool_results:
+        if isinstance(entry, dict):
+            name = str(entry.get("tool") or entry.get("name") or "").strip()
+            if name and name not in tool_names:
+                tool_names.append(name)
+    tool_summary = ", ".join(tool_names) if tool_names else "none"
+    return (
+        "⚠ The assistant draft ended before completion, so the platform replaced "
+        "the half-written prose with this safe summary.\n\n"
+        f"Tools run this turn: {tool_summary}. The tool cards below are the "
+        "authoritative output for this attempt. I cannot add slope/intercept/"
+        "scatter/correlation values unless a cited measurement-table fit "
+        "succeeded in this same turn. Please continue from the displayed tool "
+        "outputs or ask for a narrower next step."
+    )
+
+
 async def _run_agent_loop(
     *,
     system: str,
@@ -3247,6 +3296,7 @@ async def _run_agent_loop(
     synthetic_run_python_count = 0  # G3.3 counter
     user_requested_synthetic_demo = _user_requested_synthetic_demo(messages)
     fit_ready_literature_cache_keys: list[str] = []
+    run_python_key_error_counts: dict[str, int] = {}
 
     hit_iteration_cap = False
     hit_deadline = False
@@ -3432,6 +3482,14 @@ async def _run_agent_loop(
             if tool_name == "run_python" and isinstance(result, dict):
                 if _run_python_sandbox_crashed(result):
                     tool_failure_counts["run_python"] = tool_failure_counts.get("run_python", 0) + 1
+                missing_key = _run_python_missing_key(result)
+                if missing_key:
+                    run_python_key_error_counts[missing_key] = run_python_key_error_counts.get(missing_key, 0) + 1
+                    if run_python_key_error_counts[missing_key] >= 2:
+                        tool_failure_counts["run_python"] = max(
+                            tool_failure_counts.get("run_python", 0),
+                            RUN_PYTHON_DISABLE_AFTER_CRASHES,
+                        )
 
             # G3.1 + H0.7: mark data-fetch failures for the G3.4 disable gate.
             # H0.7: timeouts / payload_too_large / row_count=0 are "soft"
@@ -3920,6 +3978,19 @@ async def _run_agent_loop(
         _claim_gate_ran = False
         # Still need is_empty_turn for the fallback branch below.
         from app.services.claim_validator import is_empty_turn  # noqa: F401
+
+    if clean_reply.strip() and not fabrication_stats.get("blocked") and _looks_like_unfinished_reply(clean_reply):
+        try:
+            from app.observability.metrics import record_counter
+            record_counter("incomplete_reply_fallback_total", 1.0, agent=agent_name)
+        except Exception:
+            pass
+        logger.warning(
+            "Incomplete trailing reply detected in %s agent loop; replacing with safe fallback. tail=%r",
+            agent_name,
+            clean_reply[-160:],
+        )
+        clean_reply = _render_unfinished_reply_fallback(clean_reply, all_tool_results)
 
     actions.extend(_tool_results_to_actions(all_tool_results))
 
