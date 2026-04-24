@@ -2770,9 +2770,20 @@ export default function ChatPage() {
   const [snapshotCompareSelection, setSnapshotCompareSelection] = useState<string[]>([]);
   const [snapshotDiff, setSnapshotDiff] = useState<SessionSnapshotDiff | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
+  const messagesRef = useRef<DisplayMessage[]>(messages);
+  const currentSessionIdRef = useRef<string | null>(currentSessionId);
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
+  const chatGenerationIdRef = useRef<string>(crypto.randomUUID());
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSessionScopeRef = useRef(storageScope);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
 
   const showToast = useCallback((message: string, tone: ToastState["tone"] = "success") => {
     setToast({ message, tone });
@@ -3066,6 +3077,9 @@ export default function ChatPage() {
     const newSession = localStorage.getItem("astro_chat_new_session");
     if (newSession) {
       localStorage.removeItem("astro_chat_new_session");
+      messagesRef.current = [];
+      currentSessionIdRef.current = null;
+      chatGenerationIdRef.current = crypto.randomUUID();
       setMessages([]);
       setCurrentSessionId(null);
       pythonSessionIdRef.current = crypto.randomUUID();
@@ -3311,11 +3325,16 @@ export default function ChatPage() {
         return;
       }
     }
+    messagesRef.current = [];
+    currentSessionIdRef.current = null;
+    chatGenerationIdRef.current = crypto.randomUUID();
     setMessages([]);
     setCurrentSessionId(null);
     setCurrentSessionTitle("");
     setSaveStatus("idle");
+    setInput("");
     pythonSessionIdRef.current = crypto.randomUUID();
+    pendingSavePayloadRef.current = null;
     localStorage.removeItem(scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, storageScope));
     localStorage.removeItem(scopedChatStorageKey(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY, storageScope));
     // G6.1: also clear the workspace-context keys that the chat request
@@ -3566,6 +3585,10 @@ export default function ChatPage() {
   const handleSend = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text || loading) return;
+    const activeMessages = messagesRef.current;
+    const activeSessionId = currentSessionIdRef.current;
+    const activePythonSessionId = pythonSessionIdRef.current;
+    const activeGenerationId = chatGenerationIdRef.current;
 
     const userMsg: DisplayMessage = {
       id: crypto.randomUUID(),
@@ -3645,7 +3668,8 @@ export default function ChatPage() {
       });
     };
 
-    const updatedMessages = [...messages, userMsg, pendingMarker];
+    const updatedMessages = [...activeMessages, userMsg, pendingMarker];
+    messagesRef.current = updatedMessages;
     setMessages(updatedMessages);
     // H0.5: clear input whenever the text we're sending matches the
     // current input state (i.e. came from the user, not an external
@@ -3668,7 +3692,7 @@ export default function ChatPage() {
       const wsContext: Record<string, unknown> = {};
       try {
         const lastSearch = localStorage.getItem("astro_last_search");
-        if (lastSearch) wsContext.last_search = JSON.parse(lastSearch);
+        if (lastSearch && activeGenerationId === chatGenerationIdRef.current) wsContext.last_search = JSON.parse(lastSearch);
       } catch { /* ignore */ }
       try {
         const workspace = localStorage.getItem("astro_workspace_files");
@@ -3687,24 +3711,27 @@ export default function ChatPage() {
       } catch { /* ignore */ }
       try {
         const lastAdql = localStorage.getItem("astro_last_adql");
-        if (lastAdql) wsContext.last_adql = JSON.parse(lastAdql);
+        if (lastAdql && activeGenerationId === chatGenerationIdRef.current) wsContext.last_adql = JSON.parse(lastAdql);
       } catch { /* ignore */ }
       try {
         const lastAdqlRows = localStorage.getItem("astro_last_adql_rows");
-        if (lastAdqlRows) wsContext.last_adql_rows = JSON.parse(lastAdqlRows);
+        if (lastAdqlRows && activeGenerationId === chatGenerationIdRef.current) wsContext.last_adql_rows = JSON.parse(lastAdqlRows);
       } catch { /* ignore */ }
       try {
         const lastAdqlResultSets = localStorage.getItem("astro_adql_result_sets");
-        if (lastAdqlResultSets) wsContext.last_adql_result_sets = JSON.parse(lastAdqlResultSets);
+        if (lastAdqlResultSets && activeGenerationId === chatGenerationIdRef.current) wsContext.last_adql_result_sets = JSON.parse(lastAdqlResultSets);
       } catch { /* ignore */ }
-      wsContext.python_session_id = pythonSessionIdRef.current;
-      wsContext.current_session_id = currentSessionId;
+      wsContext.python_session_id = activePythonSessionId;
+      wsContext.current_session_id = activeSessionId;
 
       // R0d: create a fresh AbortController per request so the Stop button
       // can cancel this stream specifically.
       const abort = new AbortController();
       chatAbortRef.current = abort;
       const response = await sendChatMessage(chatHistory, wsContext, onThinking, abort.signal, onActions);
+      if (activeGenerationId !== chatGenerationIdRef.current) {
+        return;
+      }
 
       // F3.2: carry forward any _abstention that arrived on a thinking event
       // before the final reply.  Without this the card would flash and
@@ -3974,6 +4001,11 @@ export default function ChatPage() {
                 </span>
               )}
               {!currentSessionId && "Ask about astronomical objects, build pipelines, or run ADQL queries"}
+              {!currentSessionId && messages.length === 0 && (
+                <span data-testid="fresh-chat-ready" hidden>
+                  fresh chat ready
+                </span>
+              )}
             </p>
           </div>
           <div style={{ display: "flex", gap: "0.4rem" }}>

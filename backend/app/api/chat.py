@@ -3119,6 +3119,34 @@ def _suppressed_line_measurement_python_result(cache_keys: list[str]) -> dict:
     }
 
 
+DISABLE_AFTER_FAILURES = 3
+RUN_PYTHON_DISABLE_AFTER_CRASHES = 2
+
+
+def _tool_disable_threshold(tool_name: str) -> int:
+    return RUN_PYTHON_DISABLE_AFTER_CRASHES if tool_name == "run_python" else DISABLE_AFTER_FAILURES
+
+
+def _run_python_sandbox_crashed(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    error_class = str(result.get("error_class") or "").lower()
+    error_text = str(result.get("error") or "").lower()
+    stderr_empty = not str(result.get("stderr") or "").strip()
+    failed = result.get("success") is False or bool(result.get("error"))
+    crash_like = (
+        error_class in {"sandbox_crash", "subprocesscrash"}
+        or "subprocess crashed" in error_text
+        or "subprocess crash" in error_text
+        or "malformed" in error_text
+    )
+    return (
+        failed
+        and crash_like
+        and stderr_empty
+    )
+
+
 async def _run_agent_loop(
     *,
     system: str,
@@ -3216,7 +3244,6 @@ async def _run_agent_loop(
     # later Python cells have no real cache to analyze.  Track them separately
     # so fallback/demo code is suppressed as ∅ Empty instead of AUTO/SYNTHETIC.
     empty_data_fetches: set[str] = set()
-    DISABLE_AFTER_FAILURES = 3
     synthetic_run_python_count = 0  # G3.3 counter
     user_requested_synthetic_demo = _user_requested_synthetic_demo(messages)
     fit_ready_literature_cache_keys: list[str] = []
@@ -3242,11 +3269,11 @@ async def _run_agent_loop(
         # G3.4: filter tools that have failed too many times this turn.
         visible_tools = [
             t for t in tools
-            if tool_failure_counts.get(t.get("name", ""), 0) < DISABLE_AFTER_FAILURES
+            if tool_failure_counts.get(t.get("name", ""), 0) < _tool_disable_threshold(t.get("name", ""))
         ]
         disabled_this_turn = [
             t.get("name") for t in tools
-            if tool_failure_counts.get(t.get("name", ""), 0) >= DISABLE_AFTER_FAILURES
+            if tool_failure_counts.get(t.get("name", ""), 0) >= _tool_disable_threshold(t.get("name", ""))
         ]
 
         # Append a runtime note to the system message when any tools are
@@ -3257,7 +3284,7 @@ async def _run_agent_loop(
                 system
                 + "\n\n[RUNTIME: the following tools have been removed from "
                 + "your toolkit this turn because they failed "
-                + f"{DISABLE_AFTER_FAILURES}+ times already: "
+                + "their per-tool failure threshold already: "
                 + f"{disabled_this_turn}. Do NOT attempt to call them by "
                 + "name (they are not in your schema). Either use a DIFFERENT "
                 + "tool with DIFFERENT parameters, or emit "
@@ -3401,6 +3428,10 @@ async def _run_agent_loop(
                     cache_key = str(result.get("cache_key") or "latest_literature_tables")
                     if cache_key not in fit_ready_literature_cache_keys:
                         fit_ready_literature_cache_keys.append(cache_key)
+
+            if tool_name == "run_python" and isinstance(result, dict):
+                if _run_python_sandbox_crashed(result):
+                    tool_failure_counts["run_python"] = tool_failure_counts.get("run_python", 0) + 1
 
             # G3.1 + H0.7: mark data-fetch failures for the G3.4 disable gate.
             # H0.7: timeouts / payload_too_large / row_count=0 are "soft"
@@ -3650,6 +3681,8 @@ async def _run_agent_loop(
             blocked_citation_reply_text,
             unsupported_literature_narrative_violations,
             blocked_unsupported_narrative_reply_text,
+            unsupported_line_relation_stat_claims,
+            blocked_line_relation_reply_text,
         )
 
         # F1.4: zero-data hard block.  If every tool call this turn was
@@ -3721,6 +3754,24 @@ async def _run_agent_loop(
             try:
                 from app.observability.metrics import record_counter
                 record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="zero_data")
+            except Exception:
+                pass
+
+        elif (
+            line_relation_claims := unsupported_line_relation_stat_claims(
+                clean_reply, all_tool_results
+            )
+        ):
+            logger.error(
+                "Line-relation measurement gate BLOCKED reply from %s (%d claims)",
+                agent_name,
+                len(line_relation_claims),
+            )
+            clean_reply = blocked_line_relation_reply_text(line_relation_claims)
+            fabrication_stats["blocked"] = True
+            try:
+                from app.observability.metrics import record_counter
+                record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="measurement_zero")
             except Exception:
                 pass
 
@@ -4064,8 +4115,10 @@ async def _run_orchestrated_chat(
                 blocked_reply_text,
                 blocked_citation_reply_text,
                 blocked_unsupported_narrative_reply_text,
+                blocked_line_relation_reply_text,
                 citation_violations_should_block,
                 provenance_citation_violations,
+                unsupported_line_relation_stat_claims,
                 unsupported_literature_narrative_violations,
                 validate_claims,
                 zero_data_but_quantitative,
@@ -4077,12 +4130,21 @@ async def _run_orchestrated_chat(
             # turn so a later agent cannot accidentally launder unsupported
             # numbers from an earlier rewrite/handoff.
             zero_data_claims = zero_data_but_quantitative(merged_reply, merged_tool_results)
+            line_relation_claims = unsupported_line_relation_stat_claims(
+                merged_reply, merged_tool_results
+            )
             unsupported_narrative = unsupported_literature_narrative_violations(
                 merged_reply, merged_tool_results
             )
             citation_violations = provenance_citation_violations(merged_reply, merged_tool_results)
             validation = validate_claims(merged_reply, merged_tool_results)
-            if unsupported_narrative:
+            if line_relation_claims:
+                logger.error(
+                    "Line-relation measurement gate BLOCKED merged reply (%d claims)",
+                    len(line_relation_claims),
+                )
+                merged_reply = blocked_line_relation_reply_text(line_relation_claims)
+            elif unsupported_narrative:
                 logger.error(
                     "Unsupported narrative gate BLOCKED merged reply (%d violations)",
                     len(unsupported_narrative),

@@ -411,6 +411,59 @@ _UNSUPPORTED_NARRATIVE_PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 
+_LINE_RELATION_STAT_PATTERNS: list[tuple[str, re.Pattern]] = [
+    (
+        "line_relation_equation",
+        re.compile(
+            rf"\b(?:FWHM|line\s+width)\s*[=:]\s*"
+            rf"\(?\s*{_NUM}(?:\s*(?:±|\+/-)\s*{_NUM})?\s*\)?\s*"
+            rf"(?:×|\*|x|times)\s*(?:log\s*)?(?:L\s*'?\s*\[?\s*C\s*II\s*\]?|L_?CII|LCII|luminosity)"
+            rf"[^.\n]{{0,80}}",
+            re.I,
+        ),
+    ),
+    (
+        "line_relation_slope",
+        re.compile(
+            rf"\b(?:slope|beta|β)\s*(?:is|was|=|≈|~|:)?\s*{_NUM}"
+            rf"(?:\s*(?:±|\+/-)\s*{_NUM})?\b",
+            re.I,
+        ),
+    ),
+    (
+        "line_relation_intercept",
+        re.compile(
+            rf"\b(?:intercept|alpha|α)\s*(?:is|was|=|≈|~|:)?\s*{_NUM}"
+            rf"(?:\s*(?:±|\+/-)\s*{_NUM})?\b",
+            re.I,
+        ),
+    ),
+    (
+        "line_relation_scatter",
+        re.compile(
+            rf"\b(?:intrinsic\s+scatter|scatter|rms)\s*(?:is|was|=|≈|~|:)?\s*{_NUM}"
+            rf"(?:\s*(?:±|\+/-)\s*{_NUM})?\s*(?:dex|km\s*/?\s*s|km\s*s-?1)?\b",
+            re.I,
+        ),
+    ),
+    (
+        "line_relation_correlation",
+        re.compile(
+            rf"\b(?:Pearson\s+r|Spearman\s*(?:rho|ρ)|correlation\s+coefficient|r)\s*"
+            rf"(?:is|was|=|≈|~|:)?\s*{_NUM}\b",
+            re.I,
+        ),
+    ),
+    (
+        "line_relation_p_value",
+        re.compile(
+            rf"\b(?:p[-\s]?value|p)\s*(?:is|was|=|≈|~|:)\s*{_NUM}\b",
+            re.I,
+        ),
+    ),
+]
+
+
 def _strip_markdown_code(text: str) -> str:
     """在抽取 prose 数值 claim 前移除 markdown 代码区。
 
@@ -1270,6 +1323,94 @@ def zero_data_but_quantitative(reply: str, tool_results: Any) -> list[Claim]:
     if not is_empty_turn(tool_results):
         return []
     return extract_claims(reply)
+
+
+def _parse_float(raw: Any) -> float | None:
+    try:
+        value = float(str(raw).replace("−", "-").strip())
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def line_relation_stat_claims(reply: str) -> list[Claim]:
+    """Extract relation-level statistics that require a successful fit tool."""
+    stripped = _strip_markdown_code(reply or "")
+    claims: list[Claim] = []
+    seen: set[tuple[str, int, int, float]] = set()
+    for label, pattern in _LINE_RELATION_STAT_PATTERNS:
+        for match in pattern.finditer(stripped):
+            groups = match.groups() or ()
+            for group in groups:
+                value = _parse_float(group)
+                if value is None:
+                    continue
+                key = (label, match.start(), match.end(), value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                claims.append(Claim(label, match.group(0).strip(), value, match.start(), match.end()))
+    return claims
+
+
+def measurement_data_available(
+    tool_results: Any,
+    *,
+    domain: str = "line_lfr",
+    require_fit: bool = False,
+    min_rows: int = 5,
+) -> bool:
+    """Return whether current-turn tools produced claimable measurement data.
+
+    For line-LFR statistics, paper abstracts are not enough.  Headline
+    slope/intercept/scatter/r/p claims require a publication-ready fit result.
+    """
+    if domain != "line_lfr":
+        return False
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        tool_name, result = _entry_tool_and_result(entry)
+        if not isinstance(result, dict) or not _payload_is_claimable_success(tool_name, result):
+            continue
+        if tool_name == "fit_line_lfr":
+            n_used = int(result.get("n_used") or 0)
+            if bool(result.get("publication_ready")) and n_used >= min_rows:
+                return True
+            continue
+        if not require_fit and tool_name in {"extract_literature_tables", "search_line_measurements"}:
+            rows = result.get("line_measurements")
+            count = result.get("line_measurement_count")
+            if isinstance(rows, list) and rows:
+                return True
+            if isinstance(count, int) and count > 0:
+                return True
+    return False
+
+
+def unsupported_line_relation_stat_claims(reply: str, tool_results: Any) -> list[Claim]:
+    claims = line_relation_stat_claims(reply)
+    if not claims:
+        return []
+    if measurement_data_available(tool_results, domain="line_lfr", require_fit=True):
+        return []
+    return claims
+
+
+def blocked_line_relation_reply_text(claims: list[Claim]) -> str:
+    lines = [f"- {claim.label}: {claim.raw}" for claim in claims]
+    return (
+        "⚠ Reply withheld: the assistant attempted to report line-relation "
+        "statistics, but no publication-ready measurement-table fit succeeded "
+        "this turn.\n\n"
+        + "\n".join(lines)
+        + "\n\n`search_literature` paper abstracts can support context and "
+        "citations, but slope/intercept/scatter/r/p claims require cited "
+        "`line_measurements` and `fit_line_lfr(publication_ready=true)`. "
+        "Run table extraction/fitting first, or state that the relation was "
+        "not determined by the tools."
+    )
 
 
 def dump_tool_universe(tool_results: Any, limit: int = 50) -> str:

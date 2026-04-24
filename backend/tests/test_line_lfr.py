@@ -84,3 +84,28 @@ def test_line_measurement_ready_cache_suppresses_synthetic_python():
     assert result["__tool_status__"] == "EMPTY"
     assert "fit_line_lfr" in result["__message_to_model__"]
 
+
+def test_run_python_sandbox_crash_detection_and_disable_threshold():
+    from app.api.chat import (
+        RUN_PYTHON_DISABLE_AFTER_CRASHES,
+        _run_python_sandbox_crashed,
+        _tool_disable_threshold,
+    )
+
+    malformed_empty_stderr = {
+        "error": "run_python returned an empty response (tool response malformed; check backend logs)",
+        "error_class": "SubprocessCrash",
+        "stdout": "",
+        "stderr": "",
+    }
+    non_crash_failure = {
+        "success": False,
+        "error": "NameError: name 'source_id' is not defined",
+        "error_class": "runtime_error",
+        "stderr": "Traceback...",
+    }
+
+    assert _run_python_sandbox_crashed(malformed_empty_stderr)
+    assert not _run_python_sandbox_crashed(non_crash_failure)
+    assert _tool_disable_threshold("run_python") == RUN_PYTHON_DISABLE_AFTER_CRASHES == 2
+    assert _tool_disable_threshold("run_adql") == 3

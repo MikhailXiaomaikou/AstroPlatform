@@ -11,8 +11,12 @@ import pytest
 
 from app.services.claim_validator import (
     blocked_reply_text,
+    blocked_line_relation_reply_text,
     build_regeneration_prompt,
     extract_claims,
+    line_relation_stat_claims,
+    measurement_data_available,
+    unsupported_line_relation_stat_claims,
     validate_claims,
 )
 
@@ -111,6 +115,139 @@ def test_cosmology_claims_pass_with_publication_ready_mcmc_result():
     ]
     r = validate_claims("The posterior gives H0 = 70 km/s/Mpc and w0 = -1.1.", tool_results)
     assert r.ok
+
+
+def test_line_relation_stats_blocked_when_measurement_workflow_has_zero_rows():
+    tool_results = [
+        {
+            "tool": "search_literature",
+            "result": {
+                "success": True,
+                "results": [{"title": "ALPINE survey", "bibcode": "2020A&A...643A...2B"}],
+            },
+        },
+        {
+            "tool": "extract_literature_tables",
+            "result": {
+                "success": True,
+                "tables": [],
+                "line_measurements": [],
+                "line_measurement_count": 0,
+                "__tool_status__": "EMPTY",
+            },
+        },
+        {
+            "tool": "fit_line_lfr",
+            "result": {
+                "success": True,
+                "__tool_status__": "PARTIAL",
+                "__do_not_claim__": True,
+                "publication_ready": False,
+                "n_used": 0,
+            },
+        },
+        {
+            "tool": "run_python",
+            "result": {
+                "success": False,
+                "error_class": "SubprocessCrash",
+                "error": "run_python returned an empty response (tool response malformed; check backend logs)",
+                "stdout": "",
+                "stderr": "",
+            },
+        },
+    ]
+    reply = (
+        "The relation is FWHM = (128 ± 39) × log L'[CII] + (-831 ± 339) km/s.\n"
+        "Intrinsic scatter = 60 ± 20 km/s. Pearson r = 0.338, p = 3.2e-3."
+    )
+
+    claims = unsupported_line_relation_stat_claims(reply, tool_results)
+
+    assert claims
+    assert {claim.label for claim in claims} >= {
+        "line_relation_equation",
+        "line_relation_scatter",
+        "line_relation_correlation",
+        "line_relation_p_value",
+    }
+    blocked = blocked_line_relation_reply_text(claims)
+    assert "publication-ready measurement-table fit" in blocked
+    assert "search_literature" in blocked
+
+
+def test_search_literature_abstracts_do_not_support_line_relation_stats():
+    tool_results = [{
+        "tool": "search_literature",
+        "result": {
+            "success": True,
+            "results": [{"title": "A [CII] survey", "bibcode": "2022MNRAS.517.2508W"}],
+        },
+    }]
+
+    claims = unsupported_line_relation_stat_claims(
+        "Slope beta = 0.21, intercept alpha = 0.0, Spearman rho = 0.52.",
+        tool_results,
+    )
+
+    assert claims
+    assert not measurement_data_available(tool_results, domain="line_lfr", require_fit=True)
+
+
+def test_publication_ready_line_fit_supports_relation_stats():
+    tool_results = [{
+        "tool": "fit_line_lfr",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "n_used": 74,
+            "alpha": 8.0,
+            "beta": 0.5,
+            "pearson_r": 0.92,
+            "pearson_p": 0.001,
+            "scatter_dex": 0.12,
+        },
+    }]
+
+    assert measurement_data_available(tool_results, domain="line_lfr", require_fit=True)
+    assert unsupported_line_relation_stat_claims(
+        "Slope beta = 0.50, intercept alpha = 8.0, Pearson r = 0.92, p = 0.001.",
+        tool_results,
+    ) == []
+
+
+def test_non_publication_ready_line_fit_does_not_support_headline_stats():
+    tool_results = [{
+        "tool": "fit_line_lfr",
+        "result": {
+            "success": True,
+            "__tool_status__": "PARTIAL",
+            "__do_not_claim__": True,
+            "publication_ready": False,
+            "n_used": 3,
+            "beta": 0.5,
+        },
+    }]
+
+    claims = unsupported_line_relation_stat_claims("Slope beta = 0.50.", tool_results)
+
+    assert claims
+
+
+def test_line_relation_stat_extractor_catches_r2_5_shapes():
+    claims = line_relation_stat_claims(
+        "FWHM = (128 ± 39) × log L'[CII] + (-831 ± 339) km/s; "
+        "intrinsic scatter = 60 ± 20 km/s; Pearson r = 0.338; "
+        "Spearman ρ = 0.356; p-value = 3.2e-3."
+    )
+    labels = {claim.label for claim in claims}
+
+    assert {
+        "line_relation_equation",
+        "line_relation_scatter",
+        "line_relation_correlation",
+        "line_relation_p_value",
+    } <= labels
 
 
 def test_cosmology_prior_bounds_do_not_support_posterior_claims():
