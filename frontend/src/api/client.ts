@@ -1361,10 +1361,18 @@ export interface AnalysisValidationResult {
 
 export interface PaperDraftResponse {
   id: string;
+  session_id?: string;
   paper_json: Record<string, unknown>;
   latex_source: string;
   bibtex: string;
   validation: AnalysisValidationResult;
+  journal_format?: string;
+  is_public?: boolean;
+  public_token?: string | null;
+  public_url?: string | null;
+  published_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export async function saveChatSession(
@@ -1492,6 +1500,9 @@ export interface SharedSessionPayload {
       latex_source: string;
       bibtex: string;
       validation: Record<string, unknown>;
+      is_public?: boolean;
+      public_url?: string | null;
+      published_at?: string | null;
       created_at: string | null;
       updated_at: string | null;
     }>;
@@ -1647,6 +1658,21 @@ export async function generatePaperDraft(
   return data;
 }
 
+export async function listPaperDrafts(): Promise<PaperDraftResponse[]> {
+  const { data } = await api.get<PaperDraftResponse[]>("/api/paper");
+  return data;
+}
+
+export async function getPaperDraft(paperId: string): Promise<PaperDraftResponse> {
+  const { data } = await api.get<PaperDraftResponse>(`/api/paper/${paperId}`);
+  return data;
+}
+
+export async function getPublicPaperDraft(token: string): Promise<PaperDraftResponse> {
+  const { data } = await api.get<PaperDraftResponse>(`/api/paper/public/${token}`);
+  return data;
+}
+
 export async function updatePaperDraft(
   paperId: string,
   paperJson: Record<string, unknown>,
@@ -1654,6 +1680,16 @@ export async function updatePaperDraft(
   const { data } = await api.put<PaperDraftResponse>(`/api/paper/${paperId}`, {
     paper_json: paperJson,
   });
+  return data;
+}
+
+export async function publishPaperDraft(paperId: string): Promise<PaperDraftResponse> {
+  const { data } = await api.post<PaperDraftResponse>(`/api/paper/${paperId}/publish`);
+  return data;
+}
+
+export async function unpublishPaperDraft(paperId: string): Promise<PaperDraftResponse> {
+  const { data } = await api.delete<PaperDraftResponse>(`/api/paper/${paperId}/publish`);
   return data;
 }
 

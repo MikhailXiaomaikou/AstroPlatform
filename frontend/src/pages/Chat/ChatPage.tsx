@@ -31,6 +31,8 @@ import {
   exportChatLatex,
   exportChatBibTeX,
   generatePaperDraft,
+  publishPaperDraft,
+  unpublishPaperDraft,
   type ChatMessage,
   type ChatAction,
   type ThinkingEvent,
@@ -2880,6 +2882,32 @@ export default function ChatPage() {
     }
   }, [paperDraft, paperEditorJson, showToast]);
 
+  const handleTogglePaperPublish = useCallback(async () => {
+    if (!paperDraft) return;
+    setPaperSaving(true);
+    try {
+      const updated = paperDraft.is_public
+        ? await unpublishPaperDraft(paperDraft.id)
+        : await publishPaperDraft(paperDraft.id);
+      setPaperDraft(updated);
+      setPaperEditorJson(updated.paper_json);
+      if (updated.is_public && updated.public_url) {
+        const absolute = new URL(updated.public_url, window.location.origin).toString();
+        if (navigator.clipboard?.writeText) {
+          void navigator.clipboard.writeText(absolute).catch(() => {});
+        }
+        showToast("Paper draft published and link copied", "success");
+      } else {
+        showToast("Paper draft unpublished", "success");
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "Paper publication update failed";
+      showToast(detail, "error");
+    } finally {
+      setPaperSaving(false);
+    }
+  }, [paperDraft, showToast]);
+
   const handleRegeneratePaperSection = useCallback(async () => {
     if (!paperSessionId || !paperEditorJson) return;
     setPaperGenerating(true);
@@ -4470,6 +4498,14 @@ export default function ChatPage() {
                     {paperSaving ? "Saving..." : "Save Changes"}
                   </button>
                   <button
+                    className={paperDraft.is_public ? "btn-secondary btn-small" : "btn-primary btn-small"}
+                    disabled={paperSaving}
+                    onClick={() => { void handleTogglePaperPublish(); }}
+                    title={paperDraft.is_public ? "Remove the public draft link" : "Create a public read-only draft link"}
+                  >
+                    {paperDraft.is_public ? "Unpublish Draft" : "Publish Draft"}
+                  </button>
+                  <button
                     className="btn-secondary btn-small"
                     onClick={() => {
                       downloadBlob(
@@ -4494,6 +4530,22 @@ export default function ChatPage() {
                 </>
               )}
             </div>
+
+            {paperDraft?.is_public && paperDraft.public_url && (
+              <div style={{
+                marginBottom: 16,
+                padding: "0.6rem 0.8rem",
+                borderRadius: 6,
+                border: "1px solid rgba(46,106,78,0.28)",
+                background: "rgba(46,106,78,0.08)",
+                fontSize: "0.85rem",
+              }}>
+                Published read-only draft:{" "}
+                <a href={paperDraft.public_url} target="_blank" rel="noopener noreferrer">
+                  {new URL(paperDraft.public_url, window.location.origin).toString()}
+                </a>
+              </div>
+            )}
 
             {paperLoading && (
               <div className="fits-loading" style={{ marginBottom: 16 }}>Inspecting session and running validation...</div>

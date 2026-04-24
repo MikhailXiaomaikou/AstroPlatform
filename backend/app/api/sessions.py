@@ -45,6 +45,12 @@ class SnapshotRequest(BaseModel):
     name: str
 
 
+def _paper_public_url(draft: PaperDraft) -> str | None:
+    if not draft.is_public or not draft.public_token:
+        return None
+    return f"/papers/public/{draft.public_token}"
+
+
 def _serialize_paper_draft(draft: PaperDraft) -> dict:
     return {
         "id": str(draft.id),
@@ -53,6 +59,9 @@ def _serialize_paper_draft(draft: PaperDraft) -> dict:
         "latex_source": draft.latex_source,
         "bibtex": draft.bibtex,
         "validation": deepcopy(draft.validation or {}),
+        "is_public": bool(draft.is_public),
+        "public_url": _paper_public_url(draft),
+        "published_at": draft.published_at.isoformat() if draft.published_at else None,
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
         "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
     }
@@ -94,11 +103,14 @@ async def _serialize_session(
     session: ChatSession,
     db: AsyncSession,
     message_limit: int = 100,
+    include_private_papers: bool = True,
 ) -> dict:
+    paper_query = select(PaperDraft).where(PaperDraft.session_id == session.id)
+    if not include_private_papers:
+        paper_query = paper_query.where(PaperDraft.is_public.is_(True))
     paper_drafts = (
         await db.execute(
-            select(PaperDraft)
-            .where(PaperDraft.session_id == session.id)
+            paper_query
             .order_by(PaperDraft.updated_at.desc(), PaperDraft.created_at.desc())
             .limit(20)
         )
@@ -139,6 +151,9 @@ async def _restore_paper_drafts(session: ChatSession, snapshot_data: dict, db: A
                 latex_source=str(raw.get("latex_source") or ""),
                 bibtex=str(raw.get("bibtex") or ""),
                 validation=deepcopy(raw.get("validation") or {}),
+                is_public=False,
+                public_token=None,
+                published_at=None,
             )
         )
 
@@ -272,7 +287,7 @@ async def get_shared_session(
     user: User | None = Depends(get_optional_user),
 ):
     shared, session = await _load_shared_session(token, db)
-    session_payload = await _serialize_session(session, db)
+    session_payload = await _serialize_session(session, db, include_private_papers=False)
     comments = (
         await db.execute(
             select(SessionComment).where(SessionComment.session_id == session.id).order_by(SessionComment.created_at.asc())
@@ -312,7 +327,7 @@ async def fork_shared_session(
     if shared.access_level not in {"fork", "comment"}:
         raise HTTPException(status_code=403, detail="This shared session is view-only")
 
-    session_payload = await _serialize_session(session, db)
+    session_payload = await _serialize_session(session, db, include_private_papers=False)
     forked = ChatSession(
         user_id=user.id,
         title=f"Fork of {session.title}",
@@ -330,6 +345,9 @@ async def fork_shared_session(
                 latex_source=str(raw.get("latex_source") or ""),
                 bibtex=str(raw.get("bibtex") or ""),
                 validation=deepcopy(raw.get("validation") or {}),
+                is_public=False,
+                public_token=None,
+                published_at=None,
             )
         )
     db.add(SessionFork(session_id=forked.id, forked_from=session.id, user_id=user.id))

@@ -2,6 +2,8 @@
 
 **AI-native professional astronomy research platform** — data discovery, spectral/photometric analysis, statistical inference, visual pipelines, team collaboration, and publication export in one unified web interface.
 
+Paper drafts generated from AI sessions are private to the owner account by default. A draft becomes publicly readable only after the owner explicitly uses **Publish Draft**, which creates a revocable `/papers/public/:token` link.
+
 Built with React 19 + FastAPI + **60 AI tools** + **35 pipeline nodes** + **24 archive connector keys** + provenance-v2 citation guardrails across 16 astronomy research domains.
 
 ## Core Workflows

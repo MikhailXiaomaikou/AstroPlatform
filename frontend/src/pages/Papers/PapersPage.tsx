@@ -1,138 +1,233 @@
+import { useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
+import {
+  getPublicPaperDraft,
+  listPaperDrafts,
+  publishPaperDraft,
+  unpublishPaperDraft,
+  type PaperDraftResponse,
+} from "../../api/client";
+import { useAuth } from "../../context/AuthContext";
 import { useI18n } from "../../i18n";
 
-/**
- * Papers page stub — matches demo #page-papers layout.
- * Full manuscript editor + compile pipeline land in Phase J4.
- */
+function paperTitle(draft: PaperDraftResponse | null): string {
+  return String(draft?.paper_json?.title || "Untitled paper draft");
+}
+
+function publicAbsoluteUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  return new URL(path, window.location.origin).toString();
+}
+
+function downloadText(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function PapersPage() {
+  const { token } = useParams();
+  const { user, loading: authLoading } = useAuth();
   const { t } = useI18n();
+  const [drafts, setDrafts] = useState<PaperDraftResponse[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [publicDraft, setPublicDraft] = useState<PaperDraftResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const selected = useMemo(() => {
+    if (token) return publicDraft;
+    return drafts.find((draft) => draft.id === selectedId) || drafts[0] || null;
+  }, [drafts, publicDraft, selectedId, token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        if (token) {
+          const draft = await getPublicPaperDraft(token);
+          if (!cancelled) setPublicDraft(draft);
+          return;
+        }
+        if (!user) {
+          if (!cancelled) setDrafts([]);
+          return;
+        }
+        const owned = await listPaperDrafts();
+        if (cancelled) return;
+        setDrafts(owned);
+        setSelectedId((current) => current || owned[0]?.id || null);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Could not load paper drafts");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    if (!authLoading || token) {
+      void load();
+    }
+    return () => { cancelled = true; };
+  }, [authLoading, token, user]);
+
+  async function handleTogglePublish(draft: PaperDraftResponse) {
+    setBusyId(draft.id);
+    try {
+      const updated = draft.is_public
+        ? await unpublishPaperDraft(draft.id)
+        : await publishPaperDraft(draft.id);
+      setDrafts((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+      if (updated.is_public && updated.public_url && navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(publicAbsoluteUrl(updated.public_url) || updated.public_url).catch(() => {});
+      }
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const publicUrl = publicAbsoluteUrl(selected?.public_url);
 
   return (
     <div className="journal-page">
       <div className="page-head">
         <div>
-          <h1>{t("nav.papers")}</h1>
+          <h1>{token ? "Published Draft" : t("nav.papers")}</h1>
           <div className="page-sub">
-            <em>aastex 631 · bibstyle aasjournal · draft manuscripts from your sessions</em>
+            <em>
+              {token
+                ? "read-only public manuscript draft"
+                : "private manuscript drafts from your saved chat sessions"}
+            </em>
           </div>
         </div>
         <div className="badge-row">
-          <span className="j-tag verified">✓ 0 uncited</span>
+          <span className={selected?.is_public ? "j-tag verified" : "j-tag"}>
+            {selected?.is_public ? "published" : "private"}
+          </span>
         </div>
       </div>
 
-      <div className="three-col">
-        <aside className="side-left">
-          <div className="j-side-block">
-            <h4>Manuscripts</h4>
-            <a className="j-side-item active">
-              <span>NGC 752 · cluster age</span>
-              <em>draft · 14 refs</em>
-            </a>
-            <a className="j-side-item">
-              <span>M13 · Bayesian age</span>
-              <em>draft · 22 refs</em>
-            </a>
-            <div className="j-side-group">Submitted</div>
-            <a className="j-side-item">
-              <span>QSO BH mass set</span>
-              <em>2026-02-14</em>
-            </a>
-          </div>
-          <div className="j-side-block">
-            <h4>Templates</h4>
-            <a className="j-side-item"><span>aastex 631</span><em>default</em></a>
-            <a className="j-side-item"><span>mnras</span></a>
-            <a className="j-side-item"><span>A&amp;A longauthor</span></a>
-          </div>
-        </aside>
+      {loading && <div className="fits-loading">Loading paper drafts...</div>}
+      {error && <div className="error-banner">{error}</div>}
+      {!loading && !token && !user && (
+        <div className="note-card">
+          <strong>Sign in to view your paper drafts.</strong>
+          <p className="fits-hint">
+            Drafts are private to your account by default. Use Publish Draft to create a public read-only link.
+          </p>
+        </div>
+      )}
+      {!loading && !token && user && drafts.length === 0 && (
+        <div className="note-card">
+          <strong>No paper drafts yet.</strong>
+          <p className="fits-hint">Generate a draft from an AI Assistant session to see it here.</p>
+        </div>
+      )}
 
-        <main>
-          <div className="page-head">
-            <div>
-              <h1>NGC 752 · draft</h1>
-              <div className="page-sub">
-                <em>14 refs · 1 figure · 1 table · ✓ 0 uncited</em>
+      {selected && (
+        <div className="three-col">
+          {!token && (
+            <aside className="side-left">
+              <div className="j-side-block">
+                <h4>Your Drafts</h4>
+                {drafts.map((draft) => (
+                  <button
+                    key={draft.id}
+                    type="button"
+                    className={`j-side-item ${selected?.id === draft.id ? "active" : ""}`}
+                    onClick={() => setSelectedId(draft.id)}
+                    style={{ width: "100%", textAlign: "left" }}
+                  >
+                    <span>{paperTitle(draft)}</span>
+                    <em>{draft.journal_format || "aastex"} · {draft.is_public ? "published" : "private"}</em>
+                  </button>
+                ))}
               </div>
-            </div>
-            <div className="badge-row">
-              <button className="btn-journal-ghost">Compile</button>
-              <button className="btn-journal-ghost">Download .tex</button>
-              <button className="btn-journal-primary">Open in Overleaf →</button>
-            </div>
-          </div>
+            </aside>
+          )}
 
-          <div className="manuscript">
-            <div className="ms-page">
-              <div className="ms-title">A turnoff-based age for NGC 752 from Gaia DR3 photometry</div>
-              <div className="ms-authors">K. Chen and Standard Astro (collab.)</div>
-              <div className="ms-affil">
-                <em>Dept. of Astronomy · OpenClaw Research &nbsp;·&nbsp; Standard Astro Platform</em>
-              </div>
-              <div className="ms-abstract">
-                <strong>Abstract —</strong> We retrieve 176 high-probability members of the open cluster NGC 752
-                from Gaia DR3 via a proper-motion plus parallax membership cut and fit a PARSEC 1.2S isochrone
-                with a two-stage grid search. We obtain an age of 1.56 Gyr at a distance of 441 pc with
-                [Fe/H] = +0.02, consistent with the literature.
-              </div>
-              <div className="ms-twocol">
-                <div>
-                  <h4>1. Introduction</h4>
-                  <p>The open cluster NGC 752 has long served as a calibrator for intermediate-age main-sequence
-                    evolution. Its proximity and modest reddening make it a natural benchmark for Gaia-era
-                    photometric ages.</p>
-                  <h4>2. Data</h4>
-                  <p>All photometry and astrometry are drawn from Gaia DR3. We query the cluster field with a
-                    0.5° cone and apply proper-motion envelopes around (pmα, pmδ) = (+9.8, −11.8) mas yr⁻¹.</p>
-                </div>
-                <div>
-                  <h4>3. Method</h4>
-                  <p>The main-sequence turnoff is identified by binning the dereddened BP−RP axis in 0.10-mag
-                    bins; the bluest bin containing ≥3 stars yields the turnoff colour and median M_G.</p>
-                  <h4>4. Result</h4>
-                  <p>The best-fit is age = 1.56 Gyr, d = 441 pc, [Fe/H] = +0.02, A_V = 0.12, with χ²_red = 1.08.</p>
+          <main>
+            <div className="page-head">
+              <div>
+                <h1>{paperTitle(selected)}</h1>
+                <div className="page-sub">
+                  <em>
+                    {selected.journal_format || "aastex"}
+                    {selected.updated_at ? ` · updated ${new Date(selected.updated_at).toLocaleString()}` : ""}
+                  </em>
                 </div>
               </div>
+              <div className="badge-row">
+                {!token && (
+                  <button
+                    className={selected.is_public ? "btn-journal-ghost" : "btn-journal-primary"}
+                    disabled={busyId === selected.id}
+                    onClick={() => { void handleTogglePublish(selected); }}
+                  >
+                    {selected.is_public ? "Unpublish Draft" : "Publish Draft"}
+                  </button>
+                )}
+                <button
+                  className="btn-journal-ghost"
+                  onClick={() => downloadText(`${paperTitle(selected).replace(/\s+/g, "_")}.tex`, selected.latex_source, "application/x-tex")}
+                >
+                  Download .tex
+                </button>
+                <button
+                  className="btn-journal-ghost"
+                  onClick={() => downloadText(`${paperTitle(selected).replace(/\s+/g, "_")}.bib`, selected.bibtex, "application/x-bibtex")}
+                >
+                  Download BibTeX
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div className="compile-log">
-            <div className="cl-head">Compile log · aastex631</div>
-            <pre className="cl-body">{`[LaTeX] aastex631 v1.0.4
-[refs ] resolved 14/14 bibcodes via ADS
-[fig  ] embedded Fig. 1 at 300 DPI
-[gate ] claim_validator: 0 uncited numeric claims
-[done ] output: ms_ngc752.pdf (6 pages, 312 KB)`}</pre>
-          </div>
-        </main>
+            {publicUrl && (
+              <div className="note-card" style={{ marginBottom: 16 }}>
+                <strong>Public read-only link</strong>
+                <p className="fits-hint" style={{ marginTop: 6 }}>
+                  <a href={selected.public_url || "#"} target="_blank" rel="noopener noreferrer">{publicUrl}</a>
+                </p>
+              </div>
+            )}
 
-        <aside className="side-right">
-          <div className="j-side-block">
-            <h4>Figures</h4>
-            <div className="thumb">
-              <div className="thumb-img"><span>CMD · NGC 752</span></div>
-              <div className="thumb-caption"><em>Fig. 1</em> · column width · PDF 300 DPI</div>
+            <div className="manuscript">
+              <div className="ms-page">
+                <div className="ms-title">{paperTitle(selected)}</div>
+                <div className="ms-abstract">
+                  <strong>Abstract -- </strong>
+                  {String(selected.paper_json.abstract || "No abstract generated yet.")}
+                </div>
+                <pre className="cl-body" style={{ whiteSpace: "pre-wrap", maxHeight: 520, overflow: "auto" }}>
+                  {selected.latex_source}
+                </pre>
+              </div>
             </div>
-          </div>
-          <div className="j-side-block">
-            <h4>References</h4>
-            <ol className="ref-list">
-              <li>Bressan A. <em>et al.</em> 2012, MNRAS, 427, 127.</li>
-              <li>Cantat-Gaudin T. <em>et al.</em> 2020, A&amp;A, 640, A1.</li>
-              <li>Twarog B. A. <em>et al.</em> 1997, AJ, 114, 2556.</li>
-              <li>Agüeros M. A. <em>et al.</em> 2018, ApJ, 862, 33.</li>
-              <li>Gaia Collaboration 2023, A&amp;A, 674, A1.</li>
-            </ol>
-          </div>
-          <div className="j-side-block">
-            <h4>Reproducibility</h4>
-            <div className="row"><span className="k">tool_version</span><span className="v">fd19886</span></div>
-            <div className="row"><span className="k">seed</span><span className="v">20260417</span></div>
-            <div className="row"><span className="k">run_id</span><span className="v">7f2a9c…</span></div>
-          </div>
-        </aside>
-      </div>
+          </main>
+
+          <aside className="side-right">
+            <div className="j-side-block">
+              <h4>Validation</h4>
+              <div className="row"><span className="k">status</span><span className="v">{selected.validation?.overall_status || "unknown"}</span></div>
+              <div className="row"><span className="k">score</span><span className="v">{selected.validation?.score ?? "n/a"}</span></div>
+            </div>
+            <div className="j-side-block">
+              <h4>Privacy</h4>
+              <p className="fits-hint">
+                Drafts are account-scoped by default. Publishing creates a read-only public link; unpublishing revokes it.
+              </p>
+            </div>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

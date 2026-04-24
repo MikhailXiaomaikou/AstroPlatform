@@ -30,7 +30,7 @@ Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; t
 | `Pipeline` | React Flow canvas, 35-node palette, quick templates (6 including open-cluster), template/version store |
 | `ADQL` | Multi-service TAP editor, syntax highlight, result forwarding into chat, plot builder |
 | `Workspace` | User files (FITS / VOTable / result sets), tags, notes, batch upload/export |
-| `Papers` | Three-column LaTeX manuscript editor (manuscripts / editor / figures & refs) |
+| `Papers` | Account-scoped LaTeX manuscript drafts; drafts are private by default and can be explicitly published as read-only links |
 | `Observations` | Transient feed, alerts, anomalies, follow-up recommendations |
 | `Team` | Friends, shared datasets, shared pipelines, activity feed, comments |
 | `Account` / `Settings` / `Billing` / `ResearchHistory` | Profile, keys (Fernet-encrypted), subscription, opt-in memory |
@@ -287,8 +287,8 @@ Core entities (see `app/models/schemas.py`):
 - `DataFile` — FITS/VOTable/CSV metadata, user-scoped.
 - `PipelineRun`, `RunResult`, `PipelineTemplateDB`, `PipelineVersion` — Pipeline lineage.
 - `ChatSession` — Chat history; indexed on `(user_id, created_at)`.
-- `PaperDraft` — Generated paper drafts in structured JSON.
-- `SharedSession`, `SessionFork`, `SessionComment`, `SessionSnapshot` — Collaboration.
+- `PaperDraft` — Generated paper drafts in structured JSON. Owner-scoped by `user_id`; `is_public` + `public_token` are required before a read-only draft is exposed at `/papers/public/:token`.
+- `SharedSession`, `SessionFork`, `SessionComment`, `SessionSnapshot` — Collaboration. Shared sessions include only paper drafts that have been explicitly published; private drafts stay account-only.
 - `UserResearchProfile`, `SessionEmbedding` — Opt-in memory.
 - `UserEvent`, `InferenceLog` — Analytics + cost.
 - Tables for alerts, anomalies, teams, setup keys, schedules.

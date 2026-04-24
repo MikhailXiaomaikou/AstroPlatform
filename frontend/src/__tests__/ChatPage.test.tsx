@@ -125,6 +125,8 @@ vi.mock("../api/client", () => ({
   exportChatLatex: vi.fn(),
   exportChatBibTeX: vi.fn(),
   generatePaperDraft: vi.fn(),
+  publishPaperDraft: vi.fn(),
+  unpublishPaperDraft: vi.fn(),
   updatePaperDraft: vi.fn(),
   validatePaperSession: vi.fn(),
 }));

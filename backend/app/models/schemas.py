@@ -342,6 +342,9 @@ class PaperDraft(Base):
     latex_source: Mapped[str] = mapped_column(Text, nullable=False)
     bibtex: Mapped[str] = mapped_column(Text, nullable=False, default="")
     validation: Mapped[dict | None] = mapped_column(JSONType())
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    public_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

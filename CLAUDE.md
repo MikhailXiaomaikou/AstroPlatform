@@ -66,7 +66,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data 
 
 ### Frontend (`frontend/src/`)
 
-- `pages/` — 18 page directories: DataBrowser, Pipeline, Chat (AI assistant with persistent sidebar + HonestAbstentionCard), ADQL, Workspace, Team, Account, Observations, Auth, Landing, Help, SharedSession, Papers (three-col LaTeX manuscript editor), AlertDashboard, AnomalyExplorer, Billing, ResearchHistory, Settings
+- `pages/` — 18 page directories: DataBrowser, Pipeline, Chat (AI assistant with persistent sidebar + HonestAbstentionCard), ADQL, Workspace, Team, Account, Observations, Auth, Landing, Help, SharedSession, Papers (account-scoped LaTeX drafts; publish creates read-only `/papers/public/:token` links), AlertDashboard, AnomalyExplorer, Billing, ResearchHistory, Settings
 - `styles/journal.css` — ~2 k-line Journal-Edition stylesheet (newspaper palette: paper #fbfaf5 / ink #1a1a1a / burgundy accent #7b2d26 / deep blue #2a5d7b / forest green #2e6a4e / plum #6b4a7e). MUST be imported AFTER `App.css` in `App.tsx` so same-specificity overrides win the cascade
 - `App.tsx` — Journal-masthead two-row nav (8 tabs: Home / AI Assistant / Browse / ADQL / Pipeline / Sessions / Papers / Account) + chip-style 4-lang switcher + theme toggle + user card. Theme migration key is `astro_theme_v2` (defaults light)
 - `components/viz/` — SpectrumViewer, LightCurveViewer (**both auto-upgrade to Plotly `scattergl` when N > 5000**), ImageCutoutViewer, MCMCDiagnostics, PlotBuilder (Plotly, publication-quality; Fit checkbox now shows ✓ / "(not supported)" per chart type), AladinViewer, ProvenanceGraph

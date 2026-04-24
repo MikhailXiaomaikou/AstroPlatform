@@ -373,6 +373,7 @@ function App() {
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/account" element={<AccountPage />} />
                 <Route path="/papers" element={<PapersPage />} />
+                <Route path="/papers/public/:token" element={<PapersPage />} />
                 <Route path="/research" element={<Navigate to="/account" replace />} />
                 <Route path="/settings" element={<Navigate to="/account" replace />} />
                 <Route path="/shared/:token" element={<SharedSessionPage />} />

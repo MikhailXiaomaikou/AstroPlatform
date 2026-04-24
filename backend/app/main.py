@@ -197,6 +197,33 @@ def _migrate_add_columns(connection):
                 except Exception:
                     pass
 
+    # --- PaperDraft explicit publication controls ---
+    if "paper_drafts" in inspector.get_table_names():
+        existing_pd = {c["name"] for c in inspector.get_columns("paper_drafts")}
+        paper_migrations = [
+            ("is_public", "BOOLEAN DEFAULT 0 NOT NULL"),
+            ("public_token", "VARCHAR(64)"),
+            ("published_at", "TIMESTAMP"),
+        ]
+        for col_name, col_type in paper_migrations:
+            if col_name not in existing_pd:
+                try:
+                    connection.execute(sqlalchemy.text(
+                        f"ALTER TABLE paper_drafts ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info("Added column paper_drafts.%s", col_name)
+                except Exception:
+                    pass
+        try:
+            connection.execute(sqlalchemy.text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_paper_drafts_public_token ON paper_drafts (public_token)"
+            ))
+            connection.execute(sqlalchemy.text(
+                "CREATE INDEX IF NOT EXISTS ix_paper_drafts_is_public ON paper_drafts (is_public)"
+            ))
+        except Exception:
+            pass
+
     # --- PipelineComment parent_comment_id column ---
     if "pipeline_comments" in inspector.get_table_names():
         existing_pc = {c["name"] for c in inspector.get_columns("pipeline_comments")}

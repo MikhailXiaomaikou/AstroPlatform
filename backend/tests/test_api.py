@@ -124,6 +124,83 @@ class TestChatSessionPrivacy:
         assert other_delete.status_code == 404
 
 
+class TestPaperDraftPrivacy:
+    async def _register_headers(self, app_client, username: str) -> tuple[dict[str, str], str]:
+        resp = await app_client.post(
+            "/api/auth/register",
+            json={"username": username, "password": "longpassword123"},
+        )
+        assert resp.status_code == 201
+        return {"Authorization": f"Bearer {resp.json()['access_token']}"}, resp.json()["access_token"]
+
+    async def test_paper_drafts_are_private_until_published(self, app_client, db_session):
+        owner = User(
+            id=uuid.uuid4(),
+            username="paperowner",
+            email="paperowner@example.com",
+            password_hash=hash_password("securepassword123"),
+            subscription_tier="solo",
+        )
+        other = User(
+            id=uuid.uuid4(),
+            username="paperother",
+            email="paperother@example.com",
+            password_hash=hash_password("securepassword123"),
+            subscription_tier="solo",
+        )
+        session = ChatSession(
+            id=uuid.uuid4(),
+            user_id=owner.id,
+            title="Private paper session",
+            messages=[{"role": "user", "content": "draft"}],
+        )
+        draft = PaperDraft(
+            id=uuid.uuid4(),
+            user_id=owner.id,
+            session_id=session.id,
+            journal_format="aastex",
+            paper_json={"title": "Private Draft"},
+            latex_source="\\documentclass{aastex631}",
+            bibtex="@article{x, title={X}}",
+            validation={"overall_status": "PASS", "score": 1.0},
+        )
+        db_session.add_all([owner, other, session, draft])
+        await db_session.commit()
+        owner_headers = {"Authorization": f"Bearer {create_access_token(owner.id)}"}
+        other_headers = {"Authorization": f"Bearer {create_access_token(other.id)}"}
+
+        owner_list = await app_client.get("/api/paper", headers=owner_headers)
+        assert owner_list.status_code == 200
+        assert owner_list.json()[0]["paper_json"]["title"] == "Private Draft"
+        assert owner_list.json()[0]["is_public"] is False
+
+        other_list = await app_client.get("/api/paper", headers=other_headers)
+        assert other_list.status_code == 200
+        assert other_list.json() == []
+
+        other_get = await app_client.get(f"/api/paper/{draft.id}", headers=other_headers)
+        assert other_get.status_code == 404
+
+        public_before = await app_client.get("/api/paper/public/not-a-real-token")
+        assert public_before.status_code == 404
+
+        publish = await app_client.post(f"/api/paper/{draft.id}/publish", headers=owner_headers)
+        assert publish.status_code == 200
+        assert publish.json()["is_public"] is True
+        token = publish.json()["public_token"]
+
+        public_after = await app_client.get(f"/api/paper/public/{token}")
+        assert public_after.status_code == 200
+        assert public_after.json()["paper_json"]["title"] == "Private Draft"
+
+        unpublish = await app_client.delete(f"/api/paper/{draft.id}/publish", headers=owner_headers)
+        assert unpublish.status_code == 200
+        assert unpublish.json()["is_public"] is False
+
+        public_revoked = await app_client.get(f"/api/paper/public/{token}")
+        assert public_revoked.status_code == 404
+
+
 class TestDataSearchEndpoint:
     async def test_search_returns_list(self, app_client):
         """Search endpoint should return a list (even if connectors error out)."""
@@ -1209,6 +1286,15 @@ class TestCollaborationAndMemoryEndpoints:
         assert shared_resp.status_code == 200
         assert shared_resp.json()["session"]["title"] == "Shared M31 Session"
         assert shared_resp.json()["can_fork"] is True
+        assert shared_resp.json()["session"]["paper_drafts"] == []
+
+        publish_resp = await app_client.post(f"/api/paper/{draft.id}/publish", headers=owner_headers)
+        assert publish_resp.status_code == 200
+        assert publish_resp.json()["is_public"] is True
+        assert publish_resp.json()["public_url"].startswith("/papers/public/")
+
+        shared_resp = await app_client.get(f"/api/shared/{share_body['share_token']}", headers=collab_headers)
+        assert shared_resp.status_code == 200
         assert len(shared_resp.json()["session"]["paper_drafts"]) == 1
         assert shared_resp.json()["session"]["paper_drafts"][0]["paper_json"]["title"] == "Initial Draft"
 
