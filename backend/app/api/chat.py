@@ -2504,6 +2504,27 @@ def _strip_actions_from_reply(text: str) -> str:
     return re.sub(r"<actions>.*?</actions>", "", text, flags=re.DOTALL).strip()
 
 
+_INTERNAL_TOOL_MARKER_RE = __import__("re").compile(
+    r"""<(?P<tag>
+            tools_returned_nothing|toolsreturnednothing|
+            functions?|internal
+        )\b[^>]*(?:/>\s*|>.*?</(?P=tag)>\s*)""",
+    __import__("re").VERBOSE | __import__("re").DOTALL | __import__("re").IGNORECASE,
+)
+
+
+def _strip_internal_tool_markers_from_reply(text: str) -> str:
+    """Remove internal XML/tool-control tags when the model leaks them into prose.
+
+    A reply that is only <tools_returned_nothing/> is handled by the
+    structured-abstention parser below.  Mixed prose + XML is a leak, so strip
+    the tag and let the remaining prose go through the normal validators.
+    """
+    if not text:
+        return ""
+    return _INTERNAL_TOOL_MARKER_RE.sub("", text).strip()
+
+
 # F2.3: <tools_returned_nothing/> structured abstention parser.
 # The model's entire reply is supposed to be a single self-closing XML tag
 # when tools had no data.  We parse permissively: attribute order doesn't
@@ -3728,6 +3749,8 @@ async def _run_agent_loop(
             "honest_abstention": True,
             "abstention_reason": reason,
         }
+    else:
+        clean_reply = _strip_internal_tool_markers_from_reply(clean_reply)
 
     # R2: zero-fabrication gate.  Validate every numeric claim in the reply
     # against the tool_results collected this turn; if any claim can't be
@@ -4188,6 +4211,7 @@ async def _run_orchestrated_chat(
         merged_actions.extend(result["actions"])
         merged_tool_results.extend(result.get("tool_results", []))
     merged_reply = await orchestrator.merge_responses(agent_results)
+    merged_reply = _strip_internal_tool_markers_from_reply(merged_reply)
     if merged_reply.strip():
         try:
             from app.services.claim_validator import (

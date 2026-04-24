@@ -89,6 +89,64 @@ def test_fit_line_lfr_partial_when_too_few_rows():
     assert result["__do_not_claim__"] is True
 
 
+def test_fit_line_lfr_gracefully_handles_raw_only_cache():
+    from app.services.ai_tools import _exec_fit_line_lfr, store_search_results
+
+    cache_key = "unit_line_lfr_raw_only_cache"
+    store_search_results(cache_key, {
+        "tables": [{"columns": ["z bin", "N"], "rows": [["4-5", "12"]]}],
+        "line_measurements": [],
+    })
+
+    result = _exec_fit_line_lfr({"cache_key": cache_key}, "default")
+
+    assert result["success"] is True
+    assert result["__tool_status__"] == "PARTIAL"
+    assert result["cache_found"] is True
+    assert result["publication_ready"] is False
+    assert result["__do_not_claim__"] is True
+
+
+def test_fit_line_lfr_falls_back_from_session_table_key_to_fit_ready_cache():
+    from app.services.ai_tools import (
+        FIT_READY_LITERATURE_CACHE_KEY,
+        _exec_fit_line_lfr,
+        store_search_results,
+    )
+
+    store_search_results(FIT_READY_LITERATURE_CACHE_KEY, {"line_measurements": _measurement_rows()})
+
+    result = _exec_fit_line_lfr(
+        {"cache_key": "latest_literature_tables:missing-session"},
+        "default",
+    )
+
+    assert result["success"] is True
+    assert result["publication_ready"] is True
+    assert result["resolved_cache_key"] == FIT_READY_LITERATURE_CACHE_KEY
+
+
+def test_cii_literature_relevance_filter_rejects_off_topic_papers():
+    from app.services.ai_tools import (
+        _literature_result_is_cii_relevant,
+        _query_requires_cii_relevance,
+    )
+
+    assert _query_requires_cii_relevance("high-z [CII] LFR FWHM relation")
+    assert _literature_result_is_cii_relevant({
+        "title": "ALPINE [CII] survey of high-redshift galaxies",
+        "abstract": "We measure [CII] luminosities and FWHM line widths.",
+    })
+    assert not _literature_result_is_cii_relevant({
+        "title": "Co-optimization of power line shutoff under wildfire ignition risk",
+        "abstract": "Power grids and wildfire risk.",
+    })
+    assert not _literature_result_is_cii_relevant({
+        "title": "Nuclear mass table in deformed relativistic Hartree-Bogoliubov theory",
+        "abstract": "A nuclear physics mass table.",
+    })
+
+
 def test_line_measurement_ready_cache_suppresses_synthetic_python():
     from app.api.chat import (
         _should_suppress_line_measurement_synthetic_python,

@@ -3197,6 +3197,31 @@ def _exec_pipeline(inp: dict) -> dict:
     }
 
 
+def _query_requires_cii_relevance(query: str) -> bool:
+    q = str(query or "").lower()
+    return bool(re.search(r"(?:\[?\s*c\s*ii\s*\]?|lcii|l\s*\[\s*cii\s*\]|158\s*(?:um|μm|micron))", q))
+
+
+def _literature_result_is_cii_relevant(row: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in ("title", "abstract", "pub", "bibcode")
+    ).lower()
+    strong = (
+        "c ii" in text or "cii" in text or "[cii]" in text or
+        "158" in text or "alpine" in text or "rebels" in text or "alma" in text
+    )
+    context = any(token in text for token in (
+        "galax", "redshift", "far-infrared", "far infrared", "line", "fwhm",
+        "luminos", "interstellar", "star-form", "emission",
+    ))
+    bad_domain = any(token in text for token in (
+        "wildfire", "power line", "shutoff", "hartree", "bogoliubov",
+        "nuclear mass table", "deformed relativistic",
+    ))
+    return strong and context and not bad_domain
+
+
 async def _exec_literature(inp: dict) -> dict:
     try:
         from functools import partial
@@ -3226,19 +3251,26 @@ async def _exec_literature(inp: dict) -> dict:
         if not raw:
             raw = await loop.run_in_executor(None, partial(_search_literature_arxiv, query, 8))
             source = "arxiv_free_text"
+        filtered_for_domain = False
+        if raw and _query_requires_cii_relevance(query):
+            filtered = [row for row in raw if _literature_result_is_cii_relevant(row)]
+            filtered_for_domain = len(filtered) != len(raw)
+            raw = filtered
         if not raw:
             return {
                 "results": [],
                 "source": source,
+                "filtered_for_domain": filtered_for_domain,
                 "message": (
                     "No papers found via ADS object search, ADS free-text search, "
-                    "or arXiv fallback."
+                    "or arXiv fallback after applying the [CII] relevance filter."
                 ),
             }
         return {
             "source": source,
             "result_granularity": "paper_abstract",
             "supports_measurement_claims": False,
+            "filtered_for_domain": filtered_for_domain,
             "results": [
                 {
                     "title": r["title"],
@@ -3345,27 +3377,54 @@ def _measurement_rows_from_cache_payload(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _resolve_literature_measurement_cache(cache_key: str, python_session_id: str | None) -> tuple[list[dict[str, Any]], str]:
+FIT_READY_LITERATURE_CACHE_KEY = "latest_literature_measurements"
+
+
+def _literature_measurement_cache_candidates(cache_key: str, python_session_id: str | None) -> list[str]:
     requested = (cache_key or "latest_literature_tables").strip() or "latest_literature_tables"
     candidates = [requested]
     session_key = _session_cache_key(requested, python_session_id)
     if session_key:
         candidates.insert(0, session_key)
-    if requested == "latest_literature_tables":
-        session_default = _session_cache_key("latest_literature_tables", python_session_id)
-        if session_default:
-            candidates.insert(0, session_default)
+    if requested.startswith("latest_literature_tables"):
+        candidates.extend([
+            _session_cache_key("latest_literature_tables", python_session_id),
+            _session_cache_key(FIT_READY_LITERATURE_CACHE_KEY, python_session_id),
+            FIT_READY_LITERATURE_CACHE_KEY,
+            "latest_literature_tables",
+        ])
+    if requested.startswith("latest_literature_measurements"):
+        candidates.extend([
+            _session_cache_key(FIT_READY_LITERATURE_CACHE_KEY, python_session_id),
+            FIT_READY_LITERATURE_CACHE_KEY,
+            _session_cache_key("latest_literature_tables", python_session_id),
+            "latest_literature_tables",
+        ])
+    if requested.startswith(("arXiv:", "arxiv:")):
+        arxiv_id = requested.split(":", 1)[1]
+        candidates.append(f"literature_tables:arxiv:{arxiv_id}")
+    if re.match(r"^\d{4}\.\d{4,5}", requested):
+        candidates.append(f"literature_tables:arxiv:{requested}")
+    return [candidate for candidate in candidates if candidate]
+
+
+def _resolve_literature_measurement_cache(cache_key: str, python_session_id: str | None) -> tuple[list[dict[str, Any]], str, bool]:
+    requested = (cache_key or "latest_literature_tables").strip() or "latest_literature_tables"
+    candidates = _literature_measurement_cache_candidates(requested, python_session_id)
 
     seen: set[str] = set()
+    cache_found = False
     for candidate in candidates:
         if not candidate or candidate in seen:
             continue
         seen.add(candidate)
         payload = get_cached_results(candidate)
+        if payload is not None:
+            cache_found = True
         rows = _measurement_rows_from_cache_payload(payload)
         if rows:
-            return rows, candidate
-    return [], requested
+            return rows, candidate, True
+    return [], requested, cache_found
 
 
 def _line_matches_filter(row: dict[str, Any], line_filter: str) -> bool:
@@ -3540,18 +3599,33 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
     cache_key = str(inp.get("cache_key") or "latest_literature_tables").strip() or "latest_literature_tables"
     line_id = str(inp.get("line_id") or "[CII]").strip() or "[CII]"
     min_rows = int(inp.get("min_rows") or 5)
-    rows, resolved_cache_key = _resolve_literature_measurement_cache(cache_key, python_session_id)
+    rows, resolved_cache_key, cache_found = _resolve_literature_measurement_cache(cache_key, python_session_id)
     if not rows:
         return {
-            "success": False,
-            "__tool_status__": "EMPTY",
-            "analysis_status": "empty",
-            "error": f"No cached line_measurements found for cache_key={cache_key!r}.",
+            "success": True,
+            "__tool_status__": "PARTIAL" if cache_found else "EMPTY",
+            "analysis_status": "partial" if cache_found else "empty",
+            "message": (
+                f"No normalized line_measurements found for cache_key={cache_key!r}."
+                if cache_found else
+                f"No cached literature measurement payload found for cache_key={cache_key!r}."
+            ),
             "error_class": "missing_measurement_cache",
             "cache_key": cache_key,
+            "resolved_cache_key": resolved_cache_key,
+            "cache_found": cache_found,
+            "n_available": 0,
+            "n_used": 0,
+            "publication_ready": False,
+            "__do_not_claim__": True,
             "__message_to_model__": (
-                "No fit-ready literature measurement rows are cached. Run "
-                "extract_literature_tables on a relevant arXiv paper first."
+                "No fit-ready literature measurement rows are available from this cache. "
+                "If extract_literature_tables returned raw tables only, say that the table "
+                "needs column mapping. Do not claim a fitted luminosity-FWHM relation."
+            ),
+            "__suggested_next_step__": (
+                "Run extract_literature_tables on the exact paper containing source-level "
+                "L[CII] and FWHM rows, or pass a cache key containing normalized line_measurements."
             ),
         }
 
@@ -3663,6 +3737,7 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "result_granularity": "literature_measurement_fit",
         "supports_measurement_claims": publication_ready,
         "cache_key": resolved_cache_key,
+        "resolved_cache_key": resolved_cache_key,
         "line_id": line_id,
         "model": "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)",
         "n_available": len(rows),
@@ -3753,6 +3828,14 @@ async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "d
     store_search_results(cache_key, cache_value)
     if cache_key != "latest_literature_tables":
         store_search_results("latest_literature_tables", cache_value)
+    if line_measurements:
+        fit_ready_key = _session_cache_key(FIT_READY_LITERATURE_CACHE_KEY, python_session_id) or FIT_READY_LITERATURE_CACHE_KEY
+        store_search_results(fit_ready_key, cache_value)
+        if fit_ready_key != FIT_READY_LITERATURE_CACHE_KEY:
+            store_search_results(FIT_READY_LITERATURE_CACHE_KEY, cache_value)
+        arxiv_id = str(payload.get("arxiv_id") or "").strip()
+        if arxiv_id:
+            store_search_results(f"literature_tables:arxiv:{arxiv_id}", cache_value)
 
     bibcodes = [
         str(row.get("bibcode") or "").strip()
