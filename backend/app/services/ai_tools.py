@@ -3271,12 +3271,51 @@ def _arxiv_id_from_table_input(inp: dict[str, Any]) -> str:
     return ""
 
 
+# Schema v2 adds per-row fields required by the Bayesian fit path
+# (two-axis errors) plus lensing/cosmology bookkeeping.  Rows stored
+# under v1 are migrated on read (see _normalize_measurement_to_v2).
+_LITERATURE_SCHEMA_VERSION = 2
+
+# Keys a v2 row must carry (value may be None when the source paper
+# didn't report the quantity).  We do not require AI/regex to extract
+# them; downstream tools (fit_line_lfr, demagnify_sample) decide how
+# to handle nulls.
+_V2_MEASUREMENT_KEYS: tuple[str, ...] = (
+    "fwhm_err_km_s",
+    "log_luminosity_err",
+    "mu_lens",
+    "is_lensed",
+    "source_cosmology",
+)
+
+
+def _normalize_measurement_to_v2(row: dict[str, Any]) -> dict[str, Any]:
+    """Ensure a single line_measurement dict carries the v2 schema keys.
+
+    Called on both the write path (when caching fresh extraction
+    results) and the read path (when resolving older v1 cache entries).
+    Idempotent — v2 rows pass through unchanged.  None is the explicit
+    sentinel for "paper did not report this quantity" so callers can
+    distinguish it from "field missing from schema".
+    """
+    if not isinstance(row, dict):
+        return row
+    out = dict(row)
+    for key in _V2_MEASUREMENT_KEYS:
+        if key not in out:
+            out[key] = None
+    return out
+
+
 def _literature_table_cache_payload(payload: dict[str, Any], cache_key: str) -> dict[str, Any]:
     """Cache literature-table data in a structured, downstream-readable shape."""
-    line_measurements = payload.get("line_measurements") or []
+    raw_measurements = payload.get("line_measurements") or []
+    line_measurements = [
+        _normalize_measurement_to_v2(row) for row in raw_measurements if isinstance(row, dict)
+    ]
     tables = payload.get("tables") or []
     return {
-        "schema_version": 1,
+        "schema_version": _LITERATURE_SCHEMA_VERSION,
         "kind": "literature_tables",
         "cache_key": cache_key,
         "arxiv_id": payload.get("arxiv_id"),
@@ -3333,14 +3372,23 @@ def _literature_tables_llm_summary(payload: dict[str, Any], cache_key: str) -> d
 
 
 def _measurement_rows_from_cache_payload(payload: Any) -> list[dict[str, Any]]:
+    # Every returned row goes through _normalize_measurement_to_v2 so
+    # downstream code can rely on the v2 schema regardless of whether
+    # the cache entry was written under schema_version=1 or =2.
     if isinstance(payload, dict):
         for key in ("line_measurements", "measurements", "rows", "data", "results"):
             value = payload.get(key)
             if isinstance(value, list):
-                return [dict(row) for row in value if isinstance(row, dict)]
+                return [
+                    _normalize_measurement_to_v2(dict(row))
+                    for row in value if isinstance(row, dict)
+                ]
         return []
     if isinstance(payload, list):
-        return [dict(row) for row in payload if isinstance(row, dict)]
+        return [
+            _normalize_measurement_to_v2(dict(row))
+            for row in payload if isinstance(row, dict)
+        ]
     return []
 
 

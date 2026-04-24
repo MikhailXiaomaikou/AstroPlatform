@@ -436,6 +436,11 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
         luminosity_err_idx = _find_column(columns, [r"(err|sigma|unc).*l.*cii", r"l.*cii(err|sigma|unc)"])
         fwhm_err_idx = _find_column(columns, [r"(err|sigma|unc).*fwhm", r"fwhm(err|sigma|unc)"])
         flux_idx = _find_column(columns, [r"flux", r"integrated"])
+        # Gravitational lensing magnification column.  Common names in
+        # ALPINE/REBELS/cluster-lensed papers: "mu", "μ", "magnification".
+        # μ ≳ 1.05 is the conventional "lensed" threshold; anything <=1
+        # or missing means the source is either unlensed or we don't know.
+        mu_idx = _find_column(columns, [r"^mu$", r"magnif(ication)?", r"mu_?lens", r"μ"])
         if source_idx is None or luminosity_idx is None or fwhm_idx is None:
             continue
 
@@ -467,6 +472,13 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
                 quality_flags.append("luminosity_limit")
             if any(token in raw_fwhm for token in ("<", ">")):
                 quality_flags.append("fwhm_limit")
+            mu_value = _parse_number(cell(mu_idx)) if mu_idx is not None else None
+            if mu_value is not None and mu_value > 1.05:
+                is_lensed_flag: bool | None = True
+            elif mu_value is not None:
+                is_lensed_flag = False
+            else:
+                is_lensed_flag = None
             measurements.append({
                 "source_name": source_name,
                 "redshift": _parse_number(cell(redshift_idx)),
@@ -479,10 +491,19 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
                 "fwhm_km_s": fwhm_value,
                 "fwhm_err_km_s": fwhm_err,
                 "flux": _parse_number(cell(flux_idx)),
+                # Schema v2 fields: lensing + paper-level cosmology.
+                # mu_lens / is_lensed come from the table when the paper
+                # reported them; source_cosmology is paper-level and stays
+                # None here — populated by the caller if parsed from the
+                # paper abstract / front matter.
+                "mu_lens": mu_value,
+                "is_lensed": is_lensed_flag,
+                "source_cosmology": None,
                 "raw_values": {
                     "luminosity": raw_luminosity,
                     "fwhm": raw_fwhm,
                     "redshift": cell(redshift_idx),
+                    "mu": cell(mu_idx) if mu_idx is not None else "",
                 },
                 "quality_flags": quality_flags,
                 "citation": citation,
