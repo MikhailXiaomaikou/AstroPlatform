@@ -3,12 +3,21 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies
+# WeasyPrint (used by the chat-to-PDF export) requires Pango + Cairo +
+# HarfBuzz at runtime; without these the import itself succeeds but
+# rendering raises OSError.  fonts-noto-cjk covers Chinese glyphs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     gfortran \
     fontconfig \
     fonts-noto-cjk \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libcairo2 \
+    libharfbuzz0b \
+    libgdk-pixbuf-2.0-0 \
+    shared-mime-info \
     && rm -rf /var/lib/apt/lists/* \
     && fc-cache -fv
 

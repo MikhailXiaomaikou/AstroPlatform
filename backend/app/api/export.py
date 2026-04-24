@@ -589,6 +589,426 @@ async def export_chat_as_markdown(req: ChatMarkdownRequest):
     )
 
 
+# ── Chat → PDF Export (WeasyPrint) ──────────────────────────────────
+# 渲染富 PDF:markdown 正文 + 代码高亮 + 内嵌 figure + 工具结果全量表
+# + provenance 元数据.  import 一律 lazy,本机缺图形库时端点只会
+# 在调用时抛 501,不会影响模块加载.
+
+import base64 as _b64
+import html as _html
+import io as _io
+
+
+def _md_to_html(text: str) -> str:
+    """把消息正文 markdown 渲染为 HTML(含 fenced code / 表格)."""
+    if not text:
+        return ""
+    try:
+        import markdown as _md
+        return _md.markdown(
+            text,
+            extensions=["fenced_code", "tables", "nl2br"],
+            output_format="html5",
+        )
+    except Exception:
+        return f"<p>{_html.escape(text)}</p>"
+
+
+def _pygments_css() -> str:
+    try:
+        from pygments.formatters import HtmlFormatter
+        return HtmlFormatter(style="friendly", cssclass="src").get_style_defs(".src")
+    except Exception:
+        return ""
+
+
+def _highlight_code(code: str, lang: str = "python") -> str:
+    """Pygments 代码高亮;失败回退为转义的 <pre>."""
+    try:
+        from pygments import highlight
+        from pygments.lexers import get_lexer_by_name
+        from pygments.formatters import HtmlFormatter
+        try:
+            lexer = get_lexer_by_name(lang, stripall=True)
+        except Exception:
+            lexer = get_lexer_by_name("text", stripall=True)
+        return highlight(code, lexer, HtmlFormatter(cssclass="src"))
+    except Exception:
+        return f"<pre class='src'>{_html.escape(code)}</pre>"
+
+
+def _optimize_png_b64(b64: str) -> str:
+    """用 Pillow optimize=True 重编码,无损省 10–30%.
+    任何失败(PIL 缺失 / 数据破损 / 非 PNG)都原样返回."""
+    try:
+        from PIL import Image
+        raw = _b64.b64decode(b64)
+        img = Image.open(_io.BytesIO(raw))
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        new = _b64.b64encode(buf.getvalue()).decode("ascii")
+        return new if len(new) < len(b64) else b64
+    except Exception:
+        return b64
+
+
+_PDF_STATUS_COLORS = {
+    "EMPTY": "#a08000",
+    "FAILED": "#7b2d26",
+    "SYNTHETIC": "#7b2d26",
+    "PARTIAL": "#a08000",
+    "UNAVAILABLE": "#555",
+    "OK": "#2e6a4e",
+}
+
+
+def _status_chip(status: str) -> str:
+    if not status:
+        return ""
+    color = _PDF_STATUS_COLORS.get(status.upper(), "#555")
+    return (
+        f'<span class="chip" style="background:{color};color:white;">'
+        f"{_html.escape(status)}</span>"
+    )
+
+
+def _kv_table(obj: dict, title: str | None = None, keep_internal: bool = False) -> str:
+    if not obj:
+        return ""
+    rows = []
+    internal_whitelist = {"__tool_status__", "__do_not_claim__", "__message_to_model__"}
+    for k, v in obj.items():
+        if k.startswith("_") and not keep_internal and k not in internal_whitelist:
+            continue
+        rows.append(
+            f"<tr><th>{_html.escape(str(k))}</th>"
+            f"<td>{_html.escape(str(v))[:500]}</td></tr>"
+        )
+    if not rows:
+        return ""
+    header = f"<h4>{_html.escape(title)}</h4>" if title else ""
+    return header + "<table class='kv'>" + "".join(rows) + "</table>"
+
+
+def _rows_table(rows: list, caption: str | None = None) -> str:
+    """把 list[dict] 全量渲染为 HTML 表格(不截断;PDF FlateDecode
+    自己做流压缩)."""
+    if not rows or not isinstance(rows[0], dict):
+        return ""
+    cols: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for k in row.keys():
+            if k not in seen:
+                seen.add(k)
+                cols.append(k)
+    head = "<tr>" + "".join(f"<th>{_html.escape(str(c))}</th>" for c in cols) + "</tr>"
+    body = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        tds = []
+        for c in cols:
+            v = row.get(c, "")
+            if v is None:
+                tds.append("<td class='muted'>–</td>")
+            else:
+                tds.append(f"<td>{_html.escape(str(v))[:200]}</td>")
+        body.append("<tr>" + "".join(tds) + "</tr>")
+    cap = (
+        f"<caption>{_html.escape(caption)} — {len(rows)} rows</caption>"
+        if caption else ""
+    )
+    return (
+        "<div class='rows-wrap'><table class='rows'>"
+        + cap + "<thead>" + head + "</thead>"
+        + "<tbody>" + "".join(body) + "</tbody>"
+        + "</table></div>"
+    )
+
+
+def _render_run_python(result: dict) -> str:
+    """run_python 专用:error → stdout → figures → variables → stderr."""
+    parts: list[str] = []
+    error = result.get("error")
+    tb = result.get("traceback")
+    stdout = result.get("stdout") or ""
+    stderr = result.get("stderr") or ""
+    figures = result.get("figures") or []
+    if not isinstance(figures, list):
+        figures = []
+    variables = result.get("variables") or {}
+    variable_types = result.get("variable_types") or {}
+
+    if error:
+        parts.append(
+            f"<h4 class='err'>Error</h4>"
+            f"<pre class='err-box'>{_html.escape(str(error))}</pre>"
+        )
+    if tb:
+        parts.append(
+            f"<h4 class='err'>Traceback</h4>"
+            f"<pre class='err-box'>{_html.escape(str(tb))}</pre>"
+        )
+    if stdout.strip():
+        parts.append(
+            f"<h4>stdout</h4>"
+            f"<pre class='stdout'>{_html.escape(stdout)}</pre>"
+        )
+
+    for i, b64 in enumerate(figures, 1):
+        if not isinstance(b64, str) or not b64:
+            continue
+        optimized = _optimize_png_b64(b64)
+        parts.append(
+            f"<figure class='fig'>"
+            f"<img src='data:image/png;base64,{optimized}' alt='Figure {i}' />"
+            f"<figcaption>Figure {i}</figcaption></figure>"
+        )
+
+    if variables:
+        rows = []
+        for name, value in variables.items():
+            typ = variable_types.get(name, "")
+            rows.append(
+                f"<tr><th>{_html.escape(str(name))}</th>"
+                f"<td class='mono'>{_html.escape(str(typ))}</td>"
+                f"<td class='mono'>{_html.escape(str(value))[:400]}</td></tr>"
+            )
+        parts.append(
+            "<h4>Variables</h4><table class='kv kv3'>"
+            "<tr><th>name</th><th>type</th><th>value</th></tr>"
+            + "".join(rows) + "</table>"
+        )
+
+    if stderr.strip():
+        parts.append(
+            f"<h4>stderr</h4>"
+            f"<pre class='stderr'>{_html.escape(stderr)}</pre>"
+        )
+
+    return "\n".join(parts)
+
+
+def _render_generic_tool_result(result: dict) -> str:
+    """通用 tool_result:先 rows/data 类,再 provenance,再其他标量."""
+    if not isinstance(result, dict):
+        return f"<pre>{_html.escape(str(result))[:2000]}</pre>"
+    parts: list[str] = []
+    tabular_keys = ("rows", "data", "objects", "matches", "results")
+    for key in tabular_keys:
+        v = result.get(key)
+        if isinstance(v, list) and v:
+            parts.append(_rows_table(v, caption=key))
+
+    provenance_keys = (
+        "__tool_status__", "__do_not_claim__", "__message_to_model__",
+        "provenance", "data_origin", "analysis_status",
+    )
+    for key in provenance_keys:
+        v = result.get(key)
+        if v is None:
+            continue
+        if isinstance(v, dict):
+            parts.append(_kv_table(v, title=key, keep_internal=True))
+        else:
+            parts.append(
+                f"<p><strong>{_html.escape(key)}:</strong> "
+                f"{_html.escape(str(v))[:500]}</p>"
+            )
+
+    skip = set(tabular_keys) | set(provenance_keys) | {
+        "figures", "variables", "variable_types",
+        "stdout", "stderr", "traceback", "error", "success",
+    }
+    scalar: dict = {}
+    nested: list[tuple[str, dict]] = []
+    for k, v in result.items():
+        if k in skip:
+            continue
+        if isinstance(v, dict):
+            nested.append((k, v))
+        elif isinstance(v, list):
+            if v and isinstance(v[0], dict):
+                parts.append(_rows_table(v, caption=k))
+            else:
+                scalar[k] = str(v)[:500]
+        else:
+            scalar[k] = v
+    if scalar:
+        parts.append(_kv_table(scalar))
+    for title, dct in nested:
+        parts.append(_kv_table(dct, title=title))
+    return "\n".join(parts)
+
+
+def _render_action_block(action: dict) -> str:
+    if not isinstance(action, dict):
+        return ""
+    action_type = str(action.get("action", "unknown"))
+    tool_result = action.get("tool_result")
+    tool_result = tool_result if isinstance(tool_result, dict) else None
+    status = ""
+    if tool_result:
+        status = str(
+            tool_result.get("__tool_status__")
+            or tool_result.get("analysis_status")
+            or ""
+        )
+    chip = _status_chip(status)
+
+    out = [
+        "<section class='action'>",
+        f"<h3>Action: {_html.escape(action_type)} {chip}</h3>",
+    ]
+
+    params = action.get("params") or action.get("tool_input") or {}
+    if isinstance(params, dict) and params:
+        if action_type == "run_python":
+            code = params.get("code") or action.get("code") or ""
+            if code:
+                out.append("<h4>Code</h4>")
+                out.append(_highlight_code(str(code), lang="python"))
+            other = {k: v for k, v in params.items() if k != "code"}
+            if other:
+                out.append(_kv_table(other, title="Parameters"))
+        else:
+            out.append(_kv_table(params, title="Parameters"))
+
+    if tool_result:
+        out.append("<h4>Result</h4>")
+        if action_type == "run_python":
+            out.append(_render_run_python(tool_result))
+        else:
+            out.append(_render_generic_tool_result(tool_result))
+
+    out.append("</section>")
+    return "\n".join(out)
+
+
+def _render_chat_html(req: "ChatMarkdownRequest") -> str:
+    body_parts: list[str] = []
+    for msg in req.messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        actions = msg.get("actions") or []
+        role_label = {"user": "User", "assistant": "AI Assistant"}.get(
+            role, role or "Message"
+        )
+        body_parts.append(
+            f"<section class='msg msg-{_html.escape(role)}'>"
+            f"<h2>{_html.escape(role_label)}</h2>"
+            f"<div class='content'>{_md_to_html(str(content))}</div>"
+        )
+        for action in actions:
+            body_parts.append(_render_action_block(action))
+        body_parts.append("</section>")
+
+    style = """
+      @page { size: A4; margin: 2cm 1.6cm; }
+      body { font-family: 'Noto Sans CJK SC', 'Noto Sans', Helvetica, Arial, sans-serif;
+             font-size: 10pt; line-height: 1.45; color: #1a1a1a; }
+      h1 { font-size: 20pt; border-bottom: 2px solid #1a1a1a; padding-bottom: 6pt;
+           margin-bottom: 6pt; }
+      h2 { font-size: 13pt; color: #7b2d26; margin-top: 18pt; padding-top: 6pt;
+           border-top: 1px solid #ddd; }
+      h3 { font-size: 11pt; color: #2a5d7b; margin-top: 10pt; margin-bottom: 4pt; }
+      h4 { font-size: 10pt; color: #444; margin: 6pt 0 3pt; }
+      .meta { color: #555; font-size: 9pt; margin-bottom: 12pt; }
+      section.msg { page-break-inside: auto; }
+      section.action { margin: 6pt 0 6pt 8pt; padding: 6pt 8pt;
+                       border-left: 3px solid #2a5d7b; background: #f8f8f5;
+                       page-break-inside: auto; }
+      .content { margin-bottom: 8pt; }
+      .content p { margin: 3pt 0; }
+      .content code { background: #f2f0ea; padding: 1px 3px; border-radius: 2px;
+                      font-family: 'SF Mono', Menlo, Consolas, monospace;
+                      font-size: 9pt; }
+      .content pre { background: #f2f0ea; padding: 6pt; border-radius: 3pt;
+                     font-family: 'SF Mono', Menlo, Consolas, monospace;
+                     font-size: 8.5pt; line-height: 1.3;
+                     white-space: pre-wrap; word-wrap: break-word; }
+      .chip { display: inline-block; padding: 1px 6px; border-radius: 6px;
+              font-size: 8pt; margin-left: 6pt; vertical-align: middle; }
+      pre, .src, .stdout, .stderr, .err-box {
+        font-family: 'SF Mono', Menlo, Consolas, monospace;
+        font-size: 8.5pt; line-height: 1.3;
+        white-space: pre-wrap; word-wrap: break-word;
+        background: #f2f0ea; padding: 6pt; border-radius: 3pt;
+        border: 1px solid #e0ddd2;
+      }
+      .err-box { background: #fbeaea; border-color: #e0b8b8; }
+      .stderr { background: #fff8e4; border-color: #e0d4a8; }
+      figure.fig { margin: 8pt 0; text-align: center; page-break-inside: avoid; }
+      figure.fig img { max-width: 100%; height: auto; }
+      figure.fig figcaption { font-size: 8pt; color: #555; margin-top: 3pt; }
+      table { border-collapse: collapse; font-size: 8.5pt; margin: 4pt 0;
+              width: 100%; }
+      table.kv th { text-align: left; width: 25%; background: #eee;
+                    padding: 2pt 4pt; vertical-align: top;
+                    font-weight: normal; color: #333; }
+      table.kv td { padding: 2pt 4pt; border-bottom: 1px solid #eee;
+                    vertical-align: top; }
+      table.kv3 th:nth-child(2) { width: 12%; }
+      table.rows { font-size: 7.5pt; }
+      table.rows th { background: #2a5d7b; color: white; padding: 2pt 3pt;
+                      text-align: left; border: 1px solid #1a4561; }
+      table.rows td { padding: 1pt 3pt; border: 1px solid #ddd;
+                      vertical-align: top; }
+      table.rows caption { font-style: italic; color: #555; font-size: 8pt;
+                           text-align: left; margin-bottom: 2pt;
+                           caption-side: top; }
+      .mono { font-family: 'SF Mono', Menlo, Consolas, monospace; }
+      .muted { color: #999; }
+      .err { color: #7b2d26; }
+      footer { margin-top: 18pt; padding-top: 6pt; border-top: 1px solid #ccc;
+               color: #666; font-size: 8pt; text-align: center; }
+    """
+
+    pygments_css = _pygments_css()
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>{_html.escape(req.title)}</title>
+<style>{style}
+{pygments_css}</style></head>
+<body>
+<h1>{_html.escape(req.title)}</h1>
+<p class="meta">
+  Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} &middot;
+  Messages: {len(req.messages)}
+</p>
+{''.join(body_parts)}
+<footer>Generated by Standard Astro AI Research Assistant</footer>
+</body></html>"""
+
+
+@router.post("/report/pdf/from-chat")
+async def export_chat_as_pdf(req: ChatMarkdownRequest):
+    """把 chat session 导出为富 PDF:markdown 正文 + 代码高亮 +
+    所有 figure 内嵌 + 工具结果全量 + provenance."""
+    try:
+        from weasyprint import HTML  # noqa: PLC0415
+    except Exception as exc:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "PDF export unavailable on this server "
+                f"(WeasyPrint import failed: {exc})."
+            ),
+        )
+    html_str = _render_chat_html(req)
+    pdf_bytes = HTML(string=html_str).write_pdf()
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'attachment; filename="ai_research_chat.pdf"'
+        },
+    )
+
+
 class WorkflowExportRequest(_BaseModel):
     """Export a chat session's AI tool calls as a reproducible Python script."""
     tool_calls: list[dict] = []  # [{tool, input, result}]

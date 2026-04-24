@@ -28,6 +28,7 @@ import {
   restoreSessionSnapshot,
   diffSessionSnapshots,
   exportChatMarkdown,
+  exportChatPDF,
   exportChatNotebook,
   exportChatLatex,
   exportChatBibTeX,
@@ -2494,7 +2495,7 @@ interface LocalChatSession {
   messages: Array<{ role: string; content: string; actions?: unknown[] }>;
 }
 
-type ExportAction = "markdown" | "notebook" | "latex" | "bibtex";
+type ExportAction = "markdown" | "pdf" | "notebook" | "latex" | "bibtex";
 type JournalFormat = "aastex" | "mnras" | "aa";
 type ShareAccessLevel = "view" | "fork" | "comment";
 type PaperTab =
@@ -2736,6 +2737,7 @@ export default function ChatPage() {
   const chatAbortRef = useRef<AbortController | null>(null);
   const [exporting, setExporting] = useState<Record<ExportAction, boolean>>({
     markdown: false,
+    pdf: false,
     notebook: false,
     latex: false,
     bibtex: false,
@@ -2849,6 +2851,7 @@ export default function ChatPage() {
       const savedToWorkspace = await rememberExportInWorkspace(blob, filename, exportKind);
       const exportEventMap: Record<ExportAction, string> = {
         markdown: "export.paper_draft",
+        pdf: "export.paper_draft",
         notebook: "export.notebook",
         latex: "export.latex",
         bibtex: "export.paper_draft",
@@ -4066,6 +4069,22 @@ export default function ChatPage() {
                 }}
               >
                 {exporting.markdown ? "Exporting..." : t("common.export")}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                disabled={exporting.pdf}
+                onClick={() => {
+                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  void handleExport(
+                    "pdf",
+                    "PDF",
+                    "ai_research_chat.pdf",
+                    () => exportChatPDF(data),
+                  );
+                }}
+              >
+                {exporting.pdf ? "Exporting..." : "PDF"}
               </button>
               <button
                 type="button"

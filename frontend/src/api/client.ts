@@ -813,6 +813,21 @@ export async function exportChatMarkdown(
   return data;
 }
 
+// ── Chat → PDF Export ──
+// 富 PDF:markdown 正文 + 代码高亮 + 全量 figure 内嵌 + tool 结果表
+// + provenance.  后端走 WeasyPrint.
+
+export async function exportChatPDF(
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>,
+  title?: string,
+): Promise<Blob> {
+  const { data } = await api.post("/api/export/report/pdf/from-chat", {
+    messages,
+    title: title || "AI Research Chat",
+  }, { responseType: "blob" });
+  return data;
+}
+
 // ── Chat → Notebook Export ──
 
 export async function exportChatNotebook(
