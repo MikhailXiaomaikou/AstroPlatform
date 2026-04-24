@@ -2,14 +2,14 @@
 
 **AI-native professional astronomy research platform** — data discovery, spectral/photometric analysis, statistical inference, visual pipelines, team collaboration, and publication export in one unified web interface.
 
-Built with React 19 + FastAPI + **52 AI tools** + **35 pipeline nodes** + **23 data archive connectors** + **literature-cited workflow guidance** across 16 astronomy research domains.
+Built with React 19 + FastAPI + **57 AI tools** + **35 pipeline nodes** + **24 archive connector keys** + provenance-v2 citation guardrails across 16 astronomy research domains.
 
 ## Core Workflows
 
 | Module | Description |
 |--------|-------------|
-| **Data Browser** | Query 23 astronomical archives from one place. Inspect merged results, preview FITS headers/spectra/images, cross-match catalogs, and fetch files into your workspace. |
-| **AI Assistant** | 52-tool research agent that auto-selects the right data source, writes ADQL, analyzes spectra, fits isochrones/transits/RV orbits, computes SFR, runs Python, builds pipelines, reviews literature, and drafts papers. Now with object-class-specific workflows (open clusters / globular clusters / RR Lyrae / Cepheids / EB / galaxies / X-ray sources / pulsars / white dwarfs / ...). |
+| **Data Browser** | Query the active provenance-v2 sources (VizieR, Gaia DR3, SIMBAD, NED, 2MASS) from one place. Non-v2 sources are still visible but maintenance-gated until their `archive_version` provenance is upgraded. |
+| **AI Assistant** | 57-tool research agent that auto-selects the right data source, writes ADQL, analyzes spectra, fits isochrones/transits/RV orbits, computes SFR, runs Python, builds pipelines, reviews literature, and drafts papers. Now with object-class-specific workflows (open clusters / globular clusters / RR Lyrae / Cepheids / EB / galaxies / X-ray sources / pulsars / white dwarfs / ...). |
 | **Pipeline Studio** | Visual DAG editor with 35 node types spanning CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
 | **ADQL Query** | Multi-service TAP editor with syntax highlighting, template library, and federated queries across Gaia DR3, SIMBAD, VizieR, CADC, and NED — with automatic retry on timeout (reducing cone radius). |
 | **Workspace** | Persistent file storage for FITS, VOTable, and analysis results. Batch search, saved searches, and data export. |
@@ -18,25 +18,37 @@ Built with React 19 + FastAPI + **52 AI tools** + **35 pipeline nodes** + **23 d
 
 ## Scientific Capabilities
 
-### Data Access (23 connectors + VO protocols)
+### Data Access (5 active provenance-v2 sources + 19 maintenance-gated connectors)
+
+The connector registry currently has 24 source keys. During the provenance-v2 rollout, only sources with populated citation and `archive_version` provenance are active:
+
+**Active sources**
+- VizieR (`vizier`)
+- Gaia DR3 (`gaia`)
+- SIMBAD (`simbad`)
+- NED (`ned`)
+- 2MASS (`2mass`, implemented by `twomass.py`)
+
+**Maintenance-gated until upgraded**
+- SDSS / SDSS spectra, MAST, JWST, ESO, IRSA, Chandra, XMM-Newton, AllWISE, ALMA, LAMOST, DESI, Pan-STARRS, NVSS, FIRST, JPL Horizons, ATNF Pulsar, SPARC, FRBSTATS
+- The direct `run_sdss_sql` AI tool is also maintenance-gated until SDSS emits independent provenance with `archive_version`
+
+Gated sources return `__tool_status__="UNAVAILABLE"` with instructions for the AI to suggest the 5 active alternatives. The legacy connector modules are kept in the repo for re-enable work.
 
 **Optical/NIR spectroscopy and photometry**
-- SDSS, Gaia DR3, SIMBAD, VizieR, LAMOST DR9, DESI EDR, Pan-STARRS, 2MASS
+- Gaia DR3, SIMBAD, VizieR, 2MASS active; SDSS, LAMOST DR9, DESI EDR, and Pan-STARRS are currently maintenance-gated
 
 **Space observatories**
-- MAST (HST, Kepler, TESS), JWST, ESO (VLT, MUSE, VISTA), IRSA, XMM-Newton, Chandra
+- MAST (HST, Kepler, TESS), JWST, ESO (VLT, MUSE, VISTA), IRSA, XMM-Newton, and Chandra are currently maintenance-gated
 
 **Multi-wavelength**
-- NED, AllWISE, ALMA
+- NED active; AllWISE and ALMA are currently maintenance-gated
 
 **Radio**
-- NVSS, FIRST (spectral index + luminosity analysis)
+- NVSS and FIRST are currently maintenance-gated
 
-**Specialized / domain-specific** (new)
-- **JPL Horizons** — solar system ephemerides (via `astroquery.jplhorizons`)
-- **ATNF Pulsar Catalogue** — 3,400+ radio pulsars with P, Ṗ, DM, YMW16/NE2001 distances (via `psrqpy`)
-- **SPARC** — 175 disk-galaxy rotation curves from Lelli+ 2016 AJ 152, 157
-- **FRBSTATS** — CHIME/FRB public catalogue of fast radio bursts
+**Specialized / domain-specific**
+- JPL Horizons, ATNF Pulsar Catalogue, SPARC, and FRBSTATS remain registered but maintenance-gated
 
 **VO Standards:** SIA v2, SSA, federated TAP, SAMP bidirectional, VOTable import/export, registry discovery (pyvo)
 
@@ -229,14 +241,19 @@ M_G → T_eff conversion from Tremblay+ 2019. Supports DA/DB atmospheres and mas
 - DOI-ready metadata generation (DataCite compatible)
 - Reproducibility package export (DAG + params + environment + instructions)
 - Jupyter notebook export (pipeline / chat / search workflows)
+- Provenance-v2 tool-result envelope with nested `provenance.datasets`, `provenance.field_bibcodes`, `provenance.coverage`, and reproducibility fields (`run_id`, `query_hash`, `archive_version`, `tool_version`)
+- Field-level bibcode extraction for SIMBAD/NED-style result columns and table-level registry fallbacks for the active 5 sources
+- Citation validator checks replies against the tool-sourced bibcode pool. It warns by default and can hard-block with `PROVENANCE_VALIDATOR_HARDBLOCK=true`
+- Registry freshness is enforced at backend startup; stale fallback provenance blocks serving traffic until corrected
+- Chat UI surfaces a Data Sources panel and Copy Acknowledgement button; maintenance-gated tools get a separate `UNAVAILABLE` visual state
 
-## AI Assistant — 52 Tools
+## AI Assistant — 57 Tools
 
 The AI assistant can invoke any platform capability. All tools are literature-cited where applicable.
 
 | Category | Tools |
 |----------|-------|
-| **Search** | search_objects, run_adql (with auto timeout retry), get_object_info, get_object_dossier, batch_object_search, query_vo_service |
+| **Search** | search_objects, run_adql (with auto timeout retry), query_high_velocity_stars, run_sdss_sql (maintenance-gated), get_object_info, get_object_dossier, batch_object_search, query_vo_service |
 | **Spectroscopy** | analyze_spectrum, analyze_spectrum_pro, classify_transient_spectrum |
 | **Photometry** | extract_photometry, extract_sources, estimate_photo_z, estimate_photo_z_pro |
 | **Galaxy analysis** (NEW) | **compute_galaxy_sfr** (K&E 2012), **fit_sersic_morphology** (statmorph) |
@@ -247,14 +264,14 @@ The AI assistant can invoke any platform capability. All tools are literature-ci
 | **Clusters** | fit_isochrone (PARSEC + turnoff fallback), auto-extract from Gaia |
 | **Image** | reduce_ccd_image, solve_astrometry, process_image |
 | **Statistics** | validate_analysis, sensitivity_analysis |
-| **Pipeline** | generate_pipeline, run_pipeline, modify_pipeline |
+| **Pipeline** | generate_pipeline, run_pipeline |
 | **Literature** | search_literature, read_arxiv_paper, literature_review |
 | **Transients** | query_transients, classify_transient |
 | **Radio** | radio_analysis (spectral index / luminosity / crossmatch) |
 | **Code** | run_python (sandbox: numpy/scipy/astropy/specutils/dynesty/dask + 25+ new packages; see below) |
 | **Collaboration** | share_with_team, invite_team_member |
 | **Export** | export_results, workspace_export, read_fits_header, get_provenance |
-| **Research** | generate_paper_draft, generate_proposal, research_workflow, analyze_cross_wavelength, crossmatch_catalogs, get_followup_recommendation, get_last_search_results |
+| **Research** | generate_paper_draft, generate_proposal, research_workflow, full_research_report, analyze_cross_wavelength, crossmatch_catalogs, get_followup_recommendation, get_last_search_results, query_gaia_cluster, get_extinction |
 
 ### Python Sandbox (run_python tool)
 
@@ -376,7 +393,7 @@ The audit specifically removed LLM-hallucinated values (e.g. the old "Casagrande
 | Auth | JWT + bcrypt + Google OAuth, Fernet-encrypted API keys |
 | Deployment | Render blueprint (render.yaml), Docker Compose |
 | i18n | 4 languages (English, Chinese, French, Spanish) |
-| Testing | 800+ tests (767 backend pytest + 29 E2E integration + frontend vitest) |
+| Testing | Backend pytest suite + frontend Vitest suite (currently 148 frontend tests) + strict frontend build |
 | Reliability | Subprocess-isolated Python sandbox, connector response cache, upstream rate-limiting, Prometheus `/metrics` endpoint |
 
 ## Repository Layout
@@ -387,7 +404,7 @@ backend/
     ai/                 Routed inference + orchestrator + specialist agent prompts
     analysis/           CCD reduction and image-analysis helpers
     api/                28 FastAPI routers (auth, chat, data, pipeline, export, provenance, ...)
-    connectors/         23 archive adapters (+4 new: jpl, atnf_pulsar, sparc, frbstats)
+    connectors/         24 connector keys; 5 active v2 sources, 19 maintenance-gated
     middleware/         Request tracking + correlation ID middleware
     models/             SQLAlchemy models (20+ tables) + DB bootstrap
     pipeline/
@@ -397,7 +414,7 @@ backend/
                         time-domain, image processing, provenance, transient, literature, ...)
   data/
     line_catalogs/      NIST spectral line catalog (90 lines)
-  tests/                697 backend tests + 29 E2E tests
+  tests/                Backend pytest suite, including provenance-v2 and B7 citation regressions
   .venv/                Python environment with 19 newly-installed astronomy packages
 
 frontend/
@@ -487,7 +504,7 @@ VITE_GOOGLE_CLIENT_ID=...
 ## Testing
 
 ```bash
-# Backend (697 pytest + 29 E2E)
+# Backend
 cd backend && .venv/bin/python -m pytest tests/ -q --no-cov
 
 # E2E smoke tests

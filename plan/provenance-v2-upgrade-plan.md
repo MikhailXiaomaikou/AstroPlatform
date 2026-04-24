@@ -1,8 +1,8 @@
 # Provenance v2 Upgrade — Codex-Adapted Execution Plan
 
-**Status**: Ready for execution
-**Target**: Raise citation tracking from 4/10 to 8/10; close `archive_version` and UI transparency gaps
-**Execution mode**: Seven milestones, each commit-worthy, executed sequentially. `M2` and `M3` remain parallelizable after `M1`.
+**Status**: Implemented in this repository (M0-M6 complete)
+**Target**: Raised citation tracking and closed the main `archive_version` / UI transparency gaps for the 5 active provenance-v2 sources
+**Execution mode**: Historical milestone plan. Keep it as the audit trail and re-enable template for future connector upgrades.
 
 This is a repo-adapted version of the original plan. The core technical intent is unchanged:
 - Same seven milestones
@@ -11,13 +11,13 @@ This is a repo-adapted version of the original plan. The core technical intent i
 - Same acceptance discipline
 - Same commit-message intent
 
-Only the execution surface has been normalized to this repository so Codex can run it directly.
+Only the execution surface has been normalized to this repository so Codex can run it directly. As of the current code, the resulting implementation lives under `backend/app/services/provenance_v2/`, `backend/app/services/result_provenance.py`, `backend/app/services/claim_validator.py`, `backend/app/api/chat.py`, `frontend/src/components/chat/`, `frontend/src/hooks/`, and `frontend/src/pages/Chat/ChatPage.tsx`.
 
 ## 0. How to use this plan in this repo
 
 ### Canonical context file
 
-For Codex, register this plan in `AGENTS.md`:
+This repository currently registers the roadmap in `CLAUDE.md`:
 
 ```md
 Primary roadmap: ./plan/provenance-v2-upgrade-plan.md. Work one milestone per session.

@@ -12,7 +12,7 @@ Standard Astro uses FastAPI, which auto-generates interactive API documentation.
 
 ## Authentication
 
-All `/api/*` endpoints require a JWT token in the `Authorization` header:
+Authenticated account, workspace, session, and team endpoints require a JWT token in the `Authorization` header. Chat and some data-search endpoints also accept optional auth for beta/local usage:
 
 ```
 Authorization: Bearer <your-jwt-token>
@@ -32,6 +32,7 @@ Obtain a token via:
 | GET | `/health` | Service status + version |
 | GET | `/health/stats` | Uptime, request counts, error rate, top endpoints |
 | GET | `/health/detailed` | External service probe results (SIMBAD, Gaia, VizieR) |
+| GET | `/metrics` | Prometheus text metrics, including provenance-v2 connector and citation counters |
 | GET | `/api/inference/stats` | AI model usage statistics (tokens, latency, cost) |
 | GET | `/api/inference/health` | AI backend connection status |
 
@@ -46,11 +47,15 @@ Obtain a token via:
 | POST | `/api/integration/adql/query` | Execute ADQL on TAP services |
 | POST | `/api/integration/votable/upload` | Upload + convert VOTable to FITS |
 
+The source registry currently exposes 24 connector keys. The active provenance-v2 sources are `vizier`, `gaia`, `simbad`, `ned`, and `2mass`; the other 19 keys return an `UNAVAILABLE` maintenance payload instead of executing legacy connector code. Direct SDSS SQL (`run_sdss_sql`) is gated the same way until it emits independent `archive_version` provenance.
+
 ### AI Assistant
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/chat/message` | Send message (SSE streaming response) |
+| POST | `/api/chat/message/stream` | Streaming chat endpoint used by the frontend agent loop |
+| GET | `/api/chat/ai_backend_status` | Reports whether server-side or browser-provided AI backends are available |
 | GET | `/api/chat/sessions` | List chat sessions |
 | GET | `/api/chat/session/{id}` | Get session messages |
 
@@ -89,6 +94,8 @@ Obtain a token via:
 | GET | `/api/provenance/{id}/export/ivoa` | IVOA ProvDM XML |
 | GET | `/api/provenance/{id}/doi-metadata` | DataCite DOI metadata |
 | GET | `/api/provenance/{id}/requirements.txt` | Pinned environment |
+
+Tool results also carry inline provenance. The backward-compatible top-level fields (`reproducibility`, `data_origin`, `analysis_status`, `source_urls`, `archive_ids`, `warnings`) remain, and provenance-v2 adds a nested `provenance` object with `datasets`, `field_bibcodes`, `coverage`, and copied reproducibility metadata. Generated papers and the frontend acknowledgement button read from this nested object.
 
 ### Team & Collaboration
 

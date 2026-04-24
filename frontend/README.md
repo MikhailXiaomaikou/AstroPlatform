@@ -1,73 +1,45 @@
-# React + TypeScript + Vite
+# Standard Astro Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 + TypeScript + Vite frontend for the Standard Astro research platform.
 
-Currently, two official plugins are available:
+## Commands
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev      # Vite dev server on :5173
+npm test         # Vitest
+npm run build    # tsc -b && vite build
+npm run lint     # ESLint
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+`npm run build` is the production gate. TypeScript is strict: `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`, and `erasableSyntaxOnly` are enabled, so type-only imports must use `import type`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Runtime Configuration
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+VITE_API_URL=https://your-backend.example
+VITE_GOOGLE_CLIENT_ID=...
 ```
+
+When `VITE_API_URL` is omitted, the API client defaults to `http://localhost:8000`.
+
+## Key Areas
+
+- `src/App.tsx` — Journal masthead navigation, backend wake-up banner, theme/language shell.
+- `src/pages/Chat/ChatPage.tsx` — AI assistant SSE loop, action cards, provenance panels, honest abstention, maintenance-gated tool rendering.
+- `src/components/chat/DataSourcesPanel.tsx` — Per-tool-result provenance display: service, `archive_version`, ivoid, article/bibcode, source authority, field-bibcode counts.
+- `src/components/chat/AckButton.tsx` — Clipboard acknowledgement generator from conversation provenance.
+- `src/hooks/useConversationProvenance.ts` — Aggregates and dedupes provenance across chat turns.
+- `src/pages/DataBrowser/*` — Multi-source search UI. Non-v2 sources render as under-maintenance chips during the provenance-v2 rollout.
+- `src/api/client.ts` — Axios + SSE client with one-shot Render cold-start retry.
+
+## Provenance-v2 UI Rules
+
+- Active data sources are VizieR, Gaia DR3, SIMBAD, NED, and 2MASS.
+- Gated sources such as SDSS, Chandra, JWST, MAST, and radio catalogs must display as **Maintenance** / `UNAVAILABLE`, not generic FAILED or EMPTY states.
+- Tool cards may show Data Sources and Copy Acknowledgement controls when nested `provenance` is present.
+- Do not redesign the existing SYNTHETIC, FAILED, or EMPTY semantics when changing provenance UI.
+
+## Tests
+
+The current frontend suite is 148 Vitest cases, including ChatPage, DataSourcesPanel, AckButton, SearchBar maintenance-gating, visualization components, and common utilities.

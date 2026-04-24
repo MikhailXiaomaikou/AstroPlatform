@@ -1,6 +1,14 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Primary roadmap/audit trail: `./plan/provenance-v2-upgrade-plan.md`. Provenance v2 M0-M6 are implemented; use that plan as the rollback/re-enable guide and keep future connector upgrades milestone-scoped.
+
+Roadmap execution rules for this repo:
+- Read the full milestone before editing any file.
+- Verify assumptions with `rg -n` against the current tree; line numbers in the plan are advisory, not binding.
+- Use the repo's real paths: `backend/app/services/...`, `backend/app/api/chat.py`, `frontend/src/...`, and flat `backend/tests/...`.
+- Show the diff to the user before any commit, and run the milestone acceptance commands before offering that commit.
+
+This file provides guidance to coding agents working with this repository.
 
 ## Build & Run Commands
 
@@ -44,17 +52,17 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data 
 ### Backend (`backend/app/`)
 
 - `api/` — **28 FastAPI routers** (auth, chat, data, pipeline, export, paper, sessions, team, research, alerts, anomalies, citations, citation_graph, crossmatch, integration, arxiv, workspace, settings, followup, dossier, provenance, visualization, scheduler, isochrones, inference, events, health, ws)
-- `connectors/` — **22 astronomical database connectors** (SDSS, Gaia, SIMBAD, VizieR, MAST, NED, 2MASS/twomass, AllWISE, Chandra, XMM, ALMA, ESO, IRSA, JWST, LAMOST, DESI, Pan-STARRS, JPL Horizons, ATNF Pulsar, SPARC, FRBSTATS, radio [NVSS+FIRST]). All extend `BaseConnector` in `base.py` with `search()` / `fetch()` / `normalize()` methods
+- `connectors/` — **24 connector keys** in `registry.py`. Provenance-v2 currently activates 5 keys (`vizier`, `gaia`, `simbad`, `ned`, `2mass`) and gates the other 19 as `UNAVAILABLE` before connector import. `2mass` is implemented in `twomass.py`; SDSS direct SQL (`run_sdss_sql`) is also maintenance-gated until it has independent `archive_version` provenance.
 - `pipeline/nodes/` — **35 processing nodes** (CCD reduction, spectroscopy, photometry, time-domain, image processing, Bayesian inference, ML clustering, custom scripts, plotting)
-- `services/` — 30+ service modules: ai_tools (**55 tools**), astro_analysis, spectral_analysis_pro, photo_z_pro, bayesian_inference, time_domain_pro, image_processing_pro, parsec_fetcher, transient_classifier, literature_engine, memory_service, code_executor, **claim_validator** (zero-fabrication regex gate with ±1% and strict-mode ±0.1% tolerances), **result_provenance** (EMPTY/FAILED status + `__tool_status__` / `__do_not_claim__` / `__message_to_model__` upstream banners + reproducibility envelope), provenance (versioned environment manifest), dossier_generator, vo_services, **connector_cache** (content-addressed, Null/SQLite/Redis, singleflight), **workflow_checkpoint** (resumable multi-step AI workflows), **sandbox/subprocess_backend** (crash-isolated `multiprocessing` spawn + rlimit + killpg + F0 payload-completeness guard)
+- `services/` — 30+ service modules: ai_tools (**57 tools**), astro_analysis, spectral_analysis_pro, photo_z_pro, bayesian_inference, time_domain_pro, image_processing_pro, parsec_fetcher, transient_classifier, literature_engine, memory_service, code_executor, **claim_validator** (zero-fabrication numeric gate + provenance-v2 citation validator), **result_provenance** (EMPTY/FAILED/UNAVAILABLE/SYNTHETIC banners + reproducibility envelope + nested `provenance` object), **provenance_v2** (fallback registry, field-level schema/extractor, resolver helpers), provenance (versioned environment manifest), dossier_generator, vo_services, **connector_cache** (content-addressed, Null/SQLite/Redis, singleflight), **workflow_checkpoint** (resumable multi-step AI workflows), **sandbox/subprocess_backend** (crash-isolated `multiprocessing` spawn + rlimit + killpg + F0 payload-completeness guard)
 - `connectors/throttle.py` — Per-connector upstream rate limiter (`asyncio.Semaphore` + stdlib token bucket), per-archive ToS policies
 - `connectors/retry.py` — Transient-only retry set + circuit breaker (closed/half-open/open)
-- `observability/metrics.py` — Stdlib-only Prometheus registry exposed at `GET /metrics`. Current counters include `fabrication_blocked_total{agent,reason}`, `honest_abstention_total{agent,reason}`, `structured_abstention_emitted_total`, `empty_tool_result_total`, `sandbox_silent_failure_total`, `zero_data_but_claims_total`, plus connector + sanity counters
+- `observability/metrics.py` — Stdlib-only Prometheus registry exposed at `GET /metrics`. Current counters include `fabrication_blocked_total{agent,reason}` and citation reasons (`invalid_bibcode`, `suspicious_author_year`), `connector_gated_total{connector_name}`, `honest_abstention_total{agent,reason}`, `structured_abstention_emitted_total`, `empty_tool_result_total`, `sandbox_silent_failure_total`, `zero_data_but_claims_total`, plus connector + sanity counters
 - `pipeline/nodes/__init__.py` — `NODE_COST` registry; `dag_has_heavy_nodes()` gates `/api/pipeline/run` with `503` when `PIPELINE_MODE != "celery"` and heavy nodes are present
 - `models/schemas.py` — 20+ SQLAlchemy models. Uses custom `UUIDType` and `JSONType` for SQLite/PostgreSQL portability
 - `ai/` — Orchestrator + inference router + specialist agent prompts (Claude / OpenAI / DeepSeek routing)
 - `auth.py` — JWT with bcrypt + Google OAuth. `get_current_user()` (required) and `get_optional_user()` (optional) as FastAPI dependencies
-- `api/chat.py` — **SYSTEM_PROMPT is ~57 KB / ~14 K tokens with 46 sections**, including `ZERO-FABRICATION CONTRACT`, `STRUCTURED ABSTENTION`, `ADQL aggregate-function semantics`, and `Cluster / association analysis idioms` at the top; literature-cited workflows for 16+ object classes below. Also defines `_parse_abstention_tag` / `_classify_abstention_reason` / `_render_abstention_card` for the `<tools_returned_nothing/>` structured-abstention flow and `GET /api/chat/ai_backend_status` for the F4 pre-send Send-button gate
+- `api/chat.py` — **SYSTEM_PROMPT is ~57 KB / ~14 K tokens with 46 sections**, including provenance-v2 citation hierarchy, `ZERO-FABRICATION CONTRACT`, `STRUCTURED ABSTENTION`, `ADQL aggregate-function semantics`, and `Cluster / association analysis idioms` at the top; literature-cited workflows for 16+ object classes below. Also defines `_parse_abstention_tag` / `_classify_abstention_reason` / `_render_abstention_card` for the `<tools_returned_nothing/>` structured-abstention flow and `GET /api/chat/ai_backend_status` for the F4 pre-send Send-button gate
 
 ### Frontend (`frontend/src/`)
 
@@ -64,7 +72,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data 
 - `components/viz/` — SpectrumViewer, LightCurveViewer (**both auto-upgrade to Plotly `scattergl` when N > 5000**), ImageCutoutViewer, MCMCDiagnostics, PlotBuilder (Plotly, publication-quality; Fit checkbox now shows ✓ / "(not supported)" per chart type), AladinViewer, ProvenanceGraph
 - `components/nodes/` — 35-node palette + parameter editor + validation; Journal-palette accent stripes by node family
 - `components/pipeline/autoLayout.ts` — Pure-stdlib layered DAG layout via Kahn longest-path; `PipelineCanvas` exposes it as the **Auto Layout** button (no `elkjs` / `dagre`)
-- `components/chat/` — Claude-desktop-style MarkdownText, chat sidebar, figure expand modal
+- `components/chat/` — Claude-desktop-style MarkdownText, chat sidebar, figure expand modal, DataSourcesPanel, and AckButton
 - `api/client.ts` — Axios client with SSE streaming support. Base URL from `VITE_API_URL`, JWT auto-attached, `AbortController` on search + chat. `ThinkingEvent` union includes `honest_abstention` variant; `getAIBackendStatus()` feeds the F4 pre-send gate
 - `context/AuthContext.tsx` — Auth state with login/register/setupKeyLogin/logout. Logout only on 401/403, not transient errors
 - `i18n/index.tsx` — 4 languages (en/zh/fr/es), ~200+ keys including `pipeline.template_open_cluster`
@@ -73,7 +81,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data 
 
 1. **Search**: User query → Data Browser → connector.search() across selected sources → concurrent dispatch with per-source timeout → normalize via `_astro_to_result()` → sanitize NaN via `_safe_float()` / `_sanitize_extra()` → cache full results under `"latest"` key
 2. **ADQL**: User/AI writes ADQL → `execute_adql_query()` (standalone function, not route-handler-only) → **auto-retry on 408/502/503 with halved cone radius** → full result under `"latest_adql"` cache key, AI sees first 100 rows + note
-3. **AI Chat**: Frontend sends messages + `current_session_id` + `python_session_id` → backend builds runtime context (system prompt + specialist agents + filtered tool list) → inference_router calls LLM → `_run_agent_loop` dispatches tool calls concurrently (max 12 iterations, per-tool deadlines: `fit_isochrone` 180 s / `fit_transit_model` + `transit_search_bls` 120 s / rest 45 s; agent-loop outer 360 s; 12 s SSE heartbeats) → every tool return flows through `result_provenance.normalize_tool_result` which stamps `__tool_status__` banners on EMPTY/FAILED + a reproducibility envelope → final reply goes through abstention parser → claim validator → optional regen → SSE stream → auto-save after each turn → auto-title from first user message
+3. **AI Chat**: Frontend sends messages + `current_session_id` + `python_session_id` → backend builds runtime context (system prompt + specialist agents + filtered tool list) → inference_router calls LLM → `_run_agent_loop` dispatches tool calls concurrently (max 12 iterations, per-tool deadlines: `fit_isochrone` 180 s / `fit_transit_model` + `transit_search_bls` 120 s / rest 45 s; agent-loop outer 360 s; 12 s SSE heartbeats) → every tool return flows through `result_provenance.normalize_tool_result` which stamps `__tool_status__` banners on EMPTY/FAILED/UNAVAILABLE/SYNTHETIC plus reproducibility and nested provenance → final reply goes through abstention parser → numeric + citation claim validator → optional regen/hardblock → SSE stream → auto-save after each turn → auto-title from first user message
 4. **NaN safety**: Every path from connector to API response MUST go through `_astro_to_result()` which uses `_safe_float()`. ADQL query results separately handled in `execute_adql_query()` — masked astropy values → None, not NaN
 5. **FITS Upload**: `POST /api/data/fits/upload` → `_validate_path()` (uses `relative_to()` not string prefix) → `data/fits/uploads/` → browseable via `GET /api/data/fits/browse` → usable as pipeline input
 6. **AI Pipeline Generation**: User describes workflow in chat → AI returns `generate_pipeline` action with full DAG → saved as template → loadable in Pipeline Editor
@@ -96,9 +104,9 @@ UI: tool_result with `__tool_status__="SYNTHETIC"` or `data_origin="synthetic"` 
 
 Tests: `tests/test_synthetic_code_detector.py` (12 fixtures), `tests/test_synthetic_fallback_regression.py` (end-to-end), `tests/test_result_provenance.py` (sanitizer). Token-level CI regression + debug endpoint `/api/chat/_debug_last_prompt` (env-gated) for verifying the guard reaches the LLM.
 
-### Data access & TAP timeouts (Post-H, 2026-04-20)
+### Data access & TAP timeouts (Post-H + provenance-v2, 2026-04-24)
 
-**ADQL services**: Gaia (`gaia`), VizieR (`vizier`), CADC (`cadc`), SIMBAD (`simbad`). **SDSS has no native ADQL** — 3 paths instead: `search_objects(sources=["sdss"])` via SkyServer SQL, `sources=["sdss_spec"]` for spec-only, OR `run_adql(service="vizier", query="... V/154/sdss17 ...")`.
+**ADQL services**: Gaia (`gaia`), VizieR (`vizier`), CADC (`cadc`), SIMBAD (`simbad`). **SDSS has no native ADQL**. During provenance-v2 rollout, `sdss`, `sdss_spec`, and direct `run_sdss_sql` are maintenance-gated because they do not yet emit independent `archive_version` provenance. For small schema-aware checks, use the VizieR SDSS mirror via `run_adql(service="vizier", query="... V/154/sdss17 ...")` until SDSS is re-enabled.
 
 **V/154/sdss17 real columns** (not the AI's usual guesses): lowercase `ra`/`dec` (NOT `RAJ2000`), `u`/`g`/`r`/`i`/`z` (NOT `psfMag_*`/`petroMag_*`), `class` (3=galaxy, 6=star), `zsp`/`zph` (NOT `redshift`), `objID` (capital ID). `catalog_registry.py` has the full schema; `VIZIER_COMMON_MISTAKES` has precise hints for AI's common guesses.
 
@@ -121,11 +129,19 @@ Free-tier dynos sleep after 15 min idle. `api/client.ts` has an axios response i
 Three layers of defence + one positive incentive, every layer tested:
 
 1. **Upstream banners** (`services/result_provenance.py`): `_is_empty_payload` + `_inject_empty_banner` / `_inject_failed_banner` prepend `{__tool_status__, __do_not_claim__, __message_to_model__, __suggested_next_step__}` at the FRONT of the tool_result dict so the LLM reads them first. `analysis_status` gets a dedicated `EMPTY` value distinct from `FAILED`.
-2. **Claim validator** (`services/claim_validator.py`): extracts numeric claims from the reply via regex (redshift, mass, age, `Mean Parallax: X`, `776 stars`, `X ± Y mas`, etc.), harvests the numeric universe from `tool_results` recursively, matches at ±1 % (default) or ±0.1 % (strict mode when universe < 10 entries — F1.3). `is_empty_turn` + `zero_data_but_quantitative` implement the F1.4 hard block.
-3. **Structured abstention** (`api/chat.py` `_parse_abstention_tag` + `_classify_abstention_reason` + `_render_abstention_card`): when all tools are EMPTY/FAILED the model emits `<tools_returned_nothing failed_tools="..." empty_tools="..." rationale="..." suggested_next_step="..."/>` as its ENTIRE reply; the backend renders a canonical Markdown card (no prose generation = no fabrication pressure) and emits an SSE `honest_abstention` event.
+2. **Claim validator** (`services/claim_validator.py`): extracts numeric claims from the reply via regex (redshift, mass, age, `Mean Parallax: X`, `776 stars`, `X ± Y mas`, etc.), harvests the numeric universe from `tool_results` recursively, matches at ±1 % (default) or ±0.1 % (strict mode when universe < 10 entries — F1.3). It also builds a provenance-v2 bibcode pool from dataset articles, field-level bibcodes, and literature-search bibcodes; invalid bibcode and suspicious author-year citations increment `fabrication_blocked_total{reason=...}` and warn by default. `PROVENANCE_VALIDATOR_HARDBLOCK=true` turns citation violations into hard blocks. `is_empty_turn` + `zero_data_but_quantitative` implement the F1.4 hard block.
+3. **Structured abstention** (`api/chat.py` `_parse_abstention_tag` + `_classify_abstention_reason` + `_render_abstention_card`): when all tools are EMPTY/FAILED/UNAVAILABLE the model emits `<tools_returned_nothing failed_tools="..." empty_tools="..." rationale="..." suggested_next_step="..."/>` as its ENTIRE reply; the backend renders a canonical Markdown card (no prose generation = no fabrication pressure) and emits an SSE `honest_abstention` event.
 4. **Positive reward loop**: `honest_abstention_total` + `structured_abstention_emitted_total` counters are emitted on the honest path; `fabrication_blocked_total{reason}` + `fabrication_detected_total{attempt}` + `zero_data_but_claims_total` on the punishment path. The frontend renders honest abstentions as a **celebratory** pale-blue ✓ card (`HonestAbstentionCard`), not a negative "error" bubble.
 
 When adding new tools or modifying the agent loop: preserve these invariants. `tests/test_claim_validator.py`, `tests/test_abstention_parser.py`, `tests/test_result_provenance.py`, and `tests/test_sandbox_crash_paths.py` will fail fast on regressions.
+
+### Provenance-v2 rollout (DO NOT regress)
+
+- Active connector keys are exactly `vizier`, `gaia`, `simbad`, `ned`, and `2mass`. The other 19 keys in `CONNECTORS_KEYS` return the `UNAVAILABLE` maintenance banner before connector import.
+- Direct data tools are not exemptions. `run_sdss_sql` is gated as `sdss` until it emits independent `archive_version` provenance.
+- `backend/app/main.py` runs `check_freshness()` during startup. Any stale fallback-registry entry logs `provenance_registry_freshness_blocker` and raises, so stale provenance blocks serving traffic.
+- Tool results must preserve old top-level fields (`reproducibility`, `data_origin`, `analysis_status`, `source_urls`, `archive_ids`, `warnings`) while adding nested `provenance.datasets`, `provenance.field_bibcodes`, and `provenance.coverage`.
+- Frontend UNAVAILABLE is a Maintenance state, separate from FAILED and EMPTY. `DataSourcesPanel` and `AckButton` surface archive versions, bibcodes, authority cues, and acknowledgement text.
 
 ### NaN Handling
 SIMBAD/astropy return masked values that become `float('nan')` and break `json.dumps`. Every path from connector to API response MUST go through `_astro_to_result()` which uses `_safe_float()`:

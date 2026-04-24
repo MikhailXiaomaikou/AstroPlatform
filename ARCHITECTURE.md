@@ -1,6 +1,6 @@
 # Standard Astro Architecture
 
-**Current as of Phase F (reward-for-honesty architecture) + the Journal Edition UI overhaul.** Reflects the actual checked-in code, not an aspirational roadmap. Update when modules, flows, or deployment assumptions materially change.
+**Current as of Provenance v2 + the Journal Edition UI overhaul.** Reflects the actual checked-in code, not an aspirational roadmap. Update when modules, flows, or deployment assumptions materially change.
 
 ## 1. System Shape
 
@@ -12,9 +12,9 @@ Standard Astro is a full-stack astronomy research platform with four runtime lay
 
 3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem or S3 for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines.
 
-4. **External services** — 22 astronomy archive connectors, NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local).
+4. **External services** — 24 astronomy connector keys, with 5 provenance-v2 active sources and 19 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local).
 
-Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **55-tool catalog** (§3).
+Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **57-tool catalog** (§3).
 
 ## 2. Frontend Architecture
 
@@ -49,10 +49,11 @@ Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; t
 - [`src/i18n/index.tsx`](./frontend/src/i18n/index.tsx) — 4-language flat dictionary; ~200+ keys.
 - [`src/styles/journal.css`](./frontend/src/styles/journal.css) — 2 k-line Journal-Edition stylesheet overriding chat / pipeline / browse / ADQL / sessions / account to the newspaper palette; loaded **after** `App.css` so same-specificity rules win the cascade.
 
-### Chat UI specifics (Phase F3)
+### Chat UI specifics
 
 - **`HonestAbstentionCard`** (`ChatPage.tsx`) renders the pale-blue ✓ bubble when the SSE `honest_abstention` event arrives. Shows failed/empty tool list, model's rationale, suggested next step, and a "Try it" button that prefills the chat input.
-- **`AutoToolResult` status chips** — action card switches left border to red (`.tool-failed`) or amber (`.tool-empty`) based on `__tool_status__` / `analysis_status` / `success` / `error` from the provenance envelope. The `auto` badge swaps to "❌ Failed" or "∅ Empty" for failed/empty turns.
+- **`AutoToolResult` status chips** — action card switches left border and badge based on `__tool_status__` / `analysis_status` / `success` / `error` from the provenance envelope. FAILED remains red, EMPTY remains amber, UNAVAILABLE renders as a separate Maintenance state, and SYNTHETIC keeps the loud synthetic warning.
+- **`DataSourcesPanel` + `AckButton`** — tool results with nested provenance expose service name, `archive_version`, ivoid, bibcode/article, authority cues, field-bibcode counts, and a copyable acknowledgement template.
 - **`.chat-reply-failure-preamble`** — collapsible ⚠ strip above a prose reply when any tool that turn failed/empty, preserving the validation signal for happy-path replies.
 - **`ActionCard`** is memoized (`React.memo`) keyed on `reproducibility.run_id`, so streaming SSE events don't remount earlier cards and invalidate refs.
 - **Pending marker** — an assistant bubble with `_pending: { started_at }` renders a spinner; after 60 s it offers Retry; reconciled against `getChatSession` on page reload.
@@ -60,7 +61,7 @@ Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; t
 
 ### TypeScript constraints
 
-Strict build (`tsc -b && vite build`) is non-negotiable: `strict`, `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`, `erasableSyntaxOnly`. Types must be imported with `import type`. 8 test files × **118 vitest tests** currently green.
+Strict build (`tsc -b && vite build`) is non-negotiable: `strict`, `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`, `erasableSyntaxOnly`. Types must be imported with `import type`. The current frontend suite is **148 vitest tests**.
 
 ## 3. Backend Architecture
 
@@ -99,20 +100,20 @@ Entrypoint: [`backend/app/main.py`](./backend/app/main.py). FastAPI app factory 
 - [`app/ai/orchestrator.py`](./backend/app/ai/orchestrator.py) — Intent classification, specialist-context assembly, tool-subset filtering.
 - [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Routes to Claude / OpenAI / DeepSeek / local, logs cost/latency, falls back across backends on failure. Raises `InferenceError("No configured AI backends are available…")` on no-key paths (now surfaced pre-send by F4.2).
 - `app/ai/agents/*` — Specialist prompt fragments (data, analysis, literature, observation, visualization, spectrum).
-- [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **55-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
+- [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **57-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
 - [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), ~57 KB / ~14 k-token `SYSTEM_PROMPT` (46 sections), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser.
 
-#### Tool catalogue (55)
+#### Tool catalogue (57)
 
 Newly added in Phase F6:
 - **`query_gaia_cluster`** — Composes Gaia DR3 member-selection ADQL from structured params (center name → Sesame/SIMBAD resolve → parallax + PM + RUWE + G-mag cuts). Keeps SQL out of the LLM's hot path so F2.1 EMPTY banners fire cleanly on 0-row returns.
 - **`get_extinction`** — A_V / E(B-V) at a sky position. Primary path SFD98 via `dustmaps.sfd`; exp-disk analytic fallback when `dustmaps` unavailable. Band-specific A_band via Cardelli+ 1989 ratios.
 
-The rest of the catalogue is organized (see `result_provenance.py` `_DATA_TOOLS` / `_COMPUTE_TOOLS` / `_REFERENCE_TOOLS`):
+The catalogue is organized through `result_provenance.py` `_DATA_TOOLS` / `_COMPUTE_TOOLS` / `_REFERENCE_TOOLS`:
 
-- **Data tools (15)**: `search_objects`, `run_adql`, `get_object_info`, `get_object_dossier`, `query_transients`, `search_lightcurve`, `crossmatch_catalogs`, `batch_object_search`, `describe_tap_table`, `query_vo_service`, `get_last_search_results`, `read_fits_header`, `get_provenance`, `query_gaia_cluster`, `get_extinction`.
-- **Compute tools (31)**: `run_python`, `generate_pipeline`, `run_pipeline`, `validate_analysis`, `generate_paper_draft`, `fit_isochrone`, `estimate_photo_z[_pro]`, `analyze_spectrum[_pro]`, `sensitivity_analysis`, `fit_transit_model`, `gp_detrend_lightcurve`, `detect_stellar_flares`, `transit_search_bls`, `reduce_ccd_image`, `solve_astrometry`, `extract_photometry`, `extract_sources`, `classify_transient[_spectrum]`, `compute_galaxy_sfr`, `fit_rv_orbit`, `fit_sersic_morphology`, `x_ray_spectral_fit`, `pulsar_derived_quantities`, `analyze_cross_wavelength`, `radio_analysis`, `process_image`, `share_with_team`, `invite_team_member`, `export_results`, `workspace_export`.
-- **Reference tools (9)**: `search_literature`, `read_arxiv_paper`, `literature_review`, `research_workflow`, `generate_proposal`, `get_followup_recommendation`, `full_research_report`, `analyze_spectrum`, `estimate_photo_z`.
+- **Data tools (17)**: `search_objects`, `run_adql`, `query_high_velocity_stars`, `run_sdss_sql` (maintenance-gated as SDSS), `get_object_info`, `get_object_dossier`, `query_transients`, `search_lightcurve`, `crossmatch_catalogs`, `batch_object_search`, `describe_tap_table`, `query_vo_service`, `get_last_search_results`, `read_fits_header`, `get_provenance`, `query_gaia_cluster`, `get_extinction`.
+- **Compute tools (33)**: `run_python`, `generate_pipeline`, `run_pipeline`, `validate_analysis`, `generate_paper_draft`, `fit_isochrone`, `estimate_photo_z[_pro]`, `analyze_spectrum[_pro]`, `sensitivity_analysis`, `fit_transit_model`, `gp_detrend_lightcurve`, `detect_stellar_flares`, `transit_search_bls`, `reduce_ccd_image`, `solve_astrometry`, `extract_photometry`, `extract_sources`, `classify_transient[_spectrum]`, `compute_galaxy_sfr`, `fit_rv_orbit`, `fit_sersic_morphology`, `x_ray_spectral_fit`, `pulsar_derived_quantities`, `analyze_cross_wavelength`, `radio_analysis`, `process_image`, `share_with_team`, `invite_team_member`, `export_results`, `workspace_export`.
+- **Reference tools (7)**: `search_literature`, `read_arxiv_paper`, `literature_review`, `research_workflow`, `generate_proposal`, `get_followup_recommendation`, `full_research_report`.
 
 `result_provenance.ALL_KNOWN_TOOLS` is asserted to equal `{t["name"] for t in TOOLS}` in `tests/test_result_provenance.py`; adding a tool without classifying it breaks CI.
 
@@ -155,7 +156,7 @@ Reviewer cycle on 5 reproduction papers surfaced ~20 real issues. PART H fixes c
 
 - **V/154/sdss17 schema injection** (`services/catalog_registry.py`). Real SDSS DR17 VizieR column list (`ra`/`dec`/`u`/`g`/`r`/`i`/`z`/`objID`/`class`/`zsp`/`zph`) replaces the AI's guesses (`RAJ2000`/`petroMag_r`/`redshift`). `VIZIER_COMMON_MISTAKES` has AI-facing hints for each wrong name. ADQL preset buttons updated to use real columns.
 
-- **System prompt SDSS section** (`api/chat.py` SYSTEM_PROMPT). ADQL Usage Rules #1 expanded to document the 3 SDSS paths (`sources=["sdss"]`, `sources=["sdss_spec"]`, VizieR mirror) with fallback recommendation when VizieR returns 503.
+- **System prompt SDSS section** (`api/chat.py` SYSTEM_PROMPT). ADQL Usage Rules document that SDSS has no native ADQL. In the current provenance-v2 rollout, `sdss`, `sdss_spec`, and direct `run_sdss_sql` are maintenance-gated until SDSS emits independent `archive_version` provenance; use the VizieR SDSS mirror for small schema-aware checks.
 
 - **arXiv fallback for Literature Search** (`api/citations.py`). ADS 401/429 or empty response → automatic arXiv API query (Atom XML parse), returns same shape with `source: "arxiv"`. Fixes Paper 4 "Literature Search EMPTY".
 
@@ -190,7 +191,7 @@ Three-layer fix:
 
 **Known limit**: anonymous users have no server copy; the tiered pruner extends figure survival in localStorage but extreme sessions can still lose figures. Future fix: migrate figure storage to IndexedDB (GB scale) keyed on `(sessionId, messageId, figureIndex)`.
 
-### Zero-fabrication architecture (Phase F core)
+### Zero-fabrication and citation provenance
 
 This is the load-bearing trust layer. Three layers of defence + one positive incentive.
 
@@ -204,19 +205,22 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
    - `validate_claims(reply, tool_results)` harvests the numeric universe from `tool_results` recursively and matches each claim at ±1 % (default). F1.3 strict mode: if the universe has < 10 entries, tolerance tightens to 0.1 % to prevent accidental index / row-count matches.
    - `is_empty_turn(tool_results)` + `zero_data_but_quantitative(reply, tool_results)` implement the F1.4 hard block — if every tool this turn is empty/failed and the reply still contains any numeric claim, skip straight to the block path.
    - `blocked_reply_text(...)` renders a user-facing block message that includes the tool-universe snapshot (F1.5) so failures are legible.
+   - Provenance-v2 citation checks build a valid bibcode pool from `provenance.datasets[*].article`, `provenance.field_bibcodes`, and literature-search `bibcode` fields. Invalid bibcodes and suspicious author-year citations increment `fabrication_blocked_total{reason="invalid_bibcode"|"suspicious_author_year"}`. Warning mode is the default; `PROVENANCE_VALIDATOR_HARDBLOCK=true` turns citation violations into reply blocks.
 
 3. **Structured abstention** — parser in [`app/api/chat.py`](./backend/app/api/chat.py).
-   - System prompt (§ STRUCTURED ABSTENTION) instructs the LLM: when every tool's `__tool_status__` is EMPTY or FAILED, the entire reply must be a single `<tools_returned_nothing failed_tools="..." empty_tools="..." rationale="..." suggested_next_step="..."/>` tag.
+   - System prompt (§ STRUCTURED ABSTENTION) instructs the LLM: when every tool's `__tool_status__` is EMPTY, FAILED, or UNAVAILABLE, the entire reply must be a single `<tools_returned_nothing failed_tools="..." empty_tools="..." rationale="..." suggested_next_step="..."/>` tag.
    - `_parse_abstention_tag` (permissive: self-closing / open-close, single/double quotes, surrounding whitespace; rejects prose before/after), `_classify_abstention_reason` (empty / failed / mixed / no_tools), `_render_abstention_card` emits canonical Markdown — model never generates prose here, so no fabrication pressure.
    - Backend emits an SSE `{"type": "honest_abstention", "payload": {...}}` event that the frontend routes into `DisplayMessage._abstention` → renders `HonestAbstentionCard`.
    - Claim validator is bypassed on this path (there's nothing to validate).
 
-4. **Agent-loop integration**: F1.4 zero-data hard block fires first; otherwise the regeneration loop runs up to 2 attempts, then block with the full universe snapshot. Fallback synthesis for empty LLM replies is now also gated through `validate_claims` (F1.2). Counter `fabrication_blocked_total{reason=zero_data|regen_exhausted|fallback_synthesis}` + `fabrication_detected_total{attempt}` + `reply_regeneration_total` track the punishment side; `honest_abstention_total{reason}` + `structured_abstention_emitted_total` track the reward side.
+4. **Agent-loop integration**: F1.4 zero-data hard block fires first; otherwise the regeneration loop runs up to 2 attempts, then block with the full universe snapshot. Fallback synthesis for empty LLM replies is now also gated through `validate_claims` (F1.2). Numeric and citation counters under `fabrication_blocked_total{reason=...}` + `fabrication_detected_total{attempt}` + `reply_regeneration_total` track the punishment side; `honest_abstention_total{reason}` + `structured_abstention_emitted_total` track the reward side.
 
 ### Data access layer
 
-- `app/connectors/*` — **22 archive adapters** (sdss, gaia, simbad, vizier, mast, ned, 2mass/twomass, allwise, chandra, xmm, alma, eso, irsa, jwst, lamost, desi, panstarrs, jpl, atnf_pulsar, sparc, frbstats, radio). Common interface `BaseConnector.search()` / `fetch()` / `normalize()`.
-- [`app/connectors/registry.py`](./backend/app/connectors/registry.py) — Lazy registry.
+- `app/connectors/*` — **24 connector keys**. The active provenance-v2 keys are `vizier`, `gaia`, `simbad`, `ned`, and `2mass`. The other 19 keys (`sdss`, `sdss_spec`, `mast`, `chandra`, `allwise`, `alma`, `eso`, `irsa`, `jwst`, `lamost`, `desi`, `panstarrs`, `xmm`, `nvss`, `first`, `jpl`, `atnf_pulsar`, `sparc`, `frbstats`) return an `UNAVAILABLE` maintenance banner before connector import.
+- [`app/connectors/registry.py`](./backend/app/connectors/registry.py) — Lazy registry plus availability gate.
+- [`app/connectors/availability.py`](./backend/app/connectors/availability.py) — `V2_AVAILABLE_CONNECTORS`, maintenance response builder, and `connector_gated_total{connector_name}` metric hook.
+- [`app/services/provenance_v2/*`](./backend/app/services/provenance_v2) — Fallback registry, freshness checks, field-level schema/extractor, and DataOrigin/PARAM/INFO resolver helpers. Startup blocks on stale registry entries.
 - [`app/connectors/throttle.py`](./backend/app/connectors/throttle.py) — Per-connector `asyncio.Semaphore` + stdlib token bucket; per-archive ToS defaults (Gaia 5 req/s & 2 concurrent, SDSS 2 req/s, VizieR 10 req/s, SIMBAD 10 req/s, MAST 5 req/s & 2 concurrent, …). Raises `ThrottleTimeout` on sustained overflow.
 - [`app/connectors/retry.py`](./backend/app/connectors/retry.py) — Transient-only retry set (`httpx.TimeoutException`, `httpx.ConnectError`, `ConnectionError`, `TimeoutError`) + circuit breaker with closed/half-open/open states; `circuit_breaker_open_total` + `connector_error_total` counters.
 - [`app/services/connector_cache.py`](./backend/app/services/connector_cache.py) — Content-addressed cache keyed on `sha256(connector + endpoint + sorted(params))`. Backends: `RedisBackend` → `SQLiteBackend` → `NullBackend` (auto-select). Tiered TTLs: 24 h metadata, 1 h cones, 15 min ADQL. Singleflight dedup via a module-level `set[asyncio.Task]` with `task.add_done_callback(_tasks.discard)` so GC can't drop the shared future.
@@ -265,7 +269,8 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 - [`app/observability/metrics.py`](./backend/app/observability/metrics.py) — Stdlib-only Prometheus-compatible registry (no `prometheus-client` dep). Thread-safe counters + histograms; `GET /metrics` emits OpenMetrics text.
 - **Counter inventory** (production currently emits):
   - Connector: `connector_requests_total{source}`, `connector_error_total{connector,source,kind}`, `circuit_breaker_open_total{connector}`, `astro_object_invalid_total`.
-  - Fabrication gate: `fabrication_detected_total{agent,attempt}`, `fabrication_blocked_total{agent,reason}`, `reply_regeneration_total{agent}`, `zero_data_but_claims_total{agent,claim_count}`.
+  - Fabrication gate: `fabrication_detected_total{agent,attempt}`, `fabrication_blocked_total{agent,reason}`, `reply_regeneration_total{agent}`, `zero_data_but_claims_total{agent,claim_count}`. Citation reasons include `invalid_bibcode` and `suspicious_author_year`.
+  - Provenance rollout: `connector_gated_total{connector_name}`.
   - Honest path: `honest_abstention_total{agent,reason}`, `structured_abstention_emitted_total{agent}`.
   - Tool health: `empty_tool_result_total{tool}`, `empty_tool_call_total{tool}`, `sandbox_silent_failure_total{tool}`.
   - Science quality: `sanity_warning_total{tool}`, `mcmc_insufficient_sampling_total`.
@@ -307,11 +312,11 @@ SQLite (dev) portability via custom `UUIDType` + `JSONType`. Alembic-managed mig
 1. SSE POST `/api/chat/message/stream` with messages + context (`python_session_id`, `current_session_id`, last search / ADQL result set / uploaded FITS, etc.).
 2. Runtime = `SYSTEM_PROMPT` (57 KB, 46 sections) + specialist-agent fragments + filtered tool list.
 3. `inference_router.route(...)` → tool loop (max 12 iterations). Per-tool deadlines: `fit_isochrone` 180 s, `fit_transit_model`/`transit_search_bls` 120 s, `estimate_photo_z_pro` 90 s, rest 45 s. Agent-loop outer 360 s; connection heartbeats every 12 s to defeat proxy idle-kill.
-4. Tool returns flow through `normalize_tool_result` → `__tool_status__` banner + reproducibility envelope + sanity warnings.
+4. Tool returns flow through `normalize_tool_result` → `__tool_status__` banner + reproducibility envelope + nested provenance + sanity warnings.
 5. Final reply goes through:
    1. `_parse_abstention_tag` → if `<tools_returned_nothing/>` → render card, emit SSE, return.
    2. `zero_data_but_quantitative(reply, tool_results)` → if empty turn + numeric claim → hard block.
-   3. `validate_claims(...)` with `strict_when_empty` → up to 2 regeneration attempts; then block.
+   3. `validate_claims(...)` with `strict_when_empty`, plus provenance citation validation → up to 2 regeneration attempts for numeric failures; citation violations warn by default and hard-block only when configured.
    4. Fallback synthesis (empty LLM reply) — also validated.
 6. SSE events: `text` (final reply), `agent_text` (live thinking), `tool_call`, `tool_result` (`live: true` during loop + final consolidated), `status` (heartbeats), `honest_abstention`, `error`, `done`.
 7. Auto-save after each turn; auto-title from first user message; F4 pre-send gate blocks `Send` when no AI backend is configured.
@@ -331,22 +336,22 @@ Session share tokens → read / comment / fork URLs. Snapshots serialise current
 ~57 KB / ~14 k tokens / **46 sections**. Highlights (top-of-prompt first):
 
 1. **DATA RELEASE PINS** — Gaia DR3, SDSS DR18, 2MASS PSC, etc. Never mix releases silently.
-2. **ZERO-FABRICATION CONTRACT** — ±1 % tool-cited rule, now extended to cardinalities ("N stars").
-3. **STRUCTURED ABSTENTION** — when all tools this turn are EMPTY/FAILED, the entire reply must be a single `<tools_returned_nothing.../>` tag; the system renders a card. Inventing prose is penalised.
-4. **ADQL aggregate-function semantics (F7.1)** — STDDEV/VAR are population, not sample; σ/√N for SEM.
-5. **Cluster / association idioms (F7.2)** — prefer `query_gaia_cluster` + `get_extinction` over hand-written SQL; on EMPTY emit abstention instead of inventing member counts.
-6-46. Domain workflows: database decision tree, Gaia column completeness + specialised tables, GSP-Phot quality flags, extinction routing (SFD for low-E(B-V)), open / globular cluster, variable star (RR Lyrae / Cepheid / EB), distance hierarchy, spectroscopic catalog choice, dust maps (SFD / Bayestar / Green / Marshall), X-ray spectral fitting (Sherpa, HI4PI, Wilms abundances), SFR estimators (K&E 2012), RV orbit fitting, rotation curves (SPARC + galpy), stellar atmospheres (ATLAS9/MARCS/PHOENIX), galaxy morphology (Sérsic / galfit / statmorph), IMF, cluster virial scaling, pulsars (YMW16 DM, Lorimer & Kramer), WD cooling (Bédard+2020), brown dwarfs (Kirkpatrick 2005), IFU kinematics (Voronoi + pPXF), AGN SED decomposition (CIGALE, Vestergaard-Peterson BH mass), Galactic streams (GD-1, Sgr, Gaia-Enceladus), solar system (JPL Horizons), specialised-domain references (FRB, GW, lensing, BAO, CMB, N-body, microlensing, chemical evolution, adaptive optics, VLBI), data-integrity rules (no simulated data), pipeline DAG generation, action JSON format, SIMBAD basic-table columns.
+2. **Data provenance reporting** — field-level bibcodes first, table-level dataset article second, registry fallback last; no invented bibcodes or memorized author-year substitutes.
+3. **ZERO-FABRICATION CONTRACT** — ±1 % tool-cited rule, now extended to cardinalities ("N stars").
+4. **STRUCTURED ABSTENTION** — when all tools this turn are EMPTY/FAILED/UNAVAILABLE, the entire reply must be a single `<tools_returned_nothing.../>` tag; the system renders a card. Inventing prose is penalised.
+5. **ADQL aggregate-function semantics (F7.1)** — STDDEV/VAR are population, not sample; σ/√N for SEM.
+6. **Cluster / association idioms (F7.2)** — prefer `query_gaia_cluster` + `get_extinction` over hand-written SQL; on EMPTY emit abstention instead of inventing member counts.
+7-46. Domain workflows: database decision tree, Gaia column completeness + specialised tables, GSP-Phot quality flags, extinction routing (SFD for low-E(B-V)), open / globular cluster, variable star (RR Lyrae / Cepheid / EB), distance hierarchy, spectroscopic catalog choice, dust maps (SFD / Bayestar / Green / Marshall), X-ray spectral fitting (Sherpa, HI4PI, Wilms abundances), SFR estimators (K&E 2012), RV orbit fitting, rotation curves (SPARC + galpy), stellar atmospheres (ATLAS9/MARCS/PHOENIX), galaxy morphology (Sérsic / galfit / statmorph), IMF, cluster virial scaling, pulsars (YMW16 DM, Lorimer & Kramer), WD cooling (Bédard+2020), brown dwarfs (Kirkpatrick 2005), IFU kinematics (Voronoi + pPXF), AGN SED decomposition (CIGALE, Vestergaard-Peterson BH mass), Galactic streams (GD-1, Sgr, Gaia-Enceladus), solar system (JPL Horizons), specialised-domain references (FRB, GW, lensing, BAO, CMB, N-body, microlensing, chemical evolution, adaptive optics, VLBI), data-integrity rules (no simulated data), pipeline DAG generation, action JSON format, SIMBAD basic-table columns.
 
 Every formula/constant is cited to author + year + journal + page. A prior audit removed LLM-hallucinated values (e.g. corrected Gaia `A_G/A_V=0.789` per Wang & Chen 2019; rewrote `wd_cooling_age` as 13-point Bédard+2020 interpolation).
 
 ## 7. External integrations
 
-### Astronomy archives (22)
+### Astronomy archives
 
-- **Optical / NIR**: SDSS, Gaia DR3, SIMBAD, VizieR, MAST, NED, 2MASS, AllWISE, Pan-STARRS, LAMOST DR9, DESI EDR.
-- **Space / multi-wavelength**: Chandra, XMM-Newton, JWST, ESO, IRSA, ALMA.
-- **Radio**: `radio.py` (NVSS + FIRST).
-- **Specialised**: JPL Horizons, ATNF PSRCAT, SPARC, FRBSTATS.
+- **Active provenance-v2 sources**: VizieR, Gaia DR3, SIMBAD, NED, 2MASS.
+- **Maintenance-gated connector keys**: SDSS, SDSS spectra, MAST, Chandra, AllWISE, ALMA, ESO, IRSA, JWST, LAMOST, DESI, Pan-STARRS, XMM-Newton, NVSS, FIRST, JPL Horizons, ATNF PSRCAT, SPARC, FRBSTATS.
+- Gated sources return `UNAVAILABLE` / Maintenance rather than FAILED/EMPTY and do not execute legacy query code.
 
 ### Other
 
@@ -392,8 +397,8 @@ Push to `main` → Render auto-deploy. Render free tier sleeps after 15 min idle
 
 ## 10. Testing
 
-- **Backend**: 35 `.py` test files, **907 pytest cases pass**. Major modules: `test_api`, `test_claim_validator` (25 tests), `test_abstention_parser` (15), `test_sandbox_crash_paths` (9), `test_sandbox_isolation` (8), `test_result_provenance` (with EMPTY banner + ALL_KNOWN_TOOLS assertion), `test_connector_cache`, `test_connector_throttle`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, `test_e2e_full`, `test_e2e_pleiades`. Golden-path fixtures under `backend/tests/golden/`.
-- **Frontend**: 8 `.test.tsx` files, **118 vitest cases pass**. Coverage: ChatPage, ActionCard, PlotBuilder, DataBrowser, ADQLPage, FITSBrowser, ProvenanceGraph, common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
+- **Backend**: pytest suite under `backend/tests/`. Major modules include `test_api`, `test_claim_validator`, `test_citation_validation`, `test_b7_regression`, `test_abstention_parser`, `test_sandbox_crash_paths`, `test_sandbox_isolation`, `test_result_provenance`, `test_connector_availability_gate`, `test_provenance_registry_loader`, `test_provenance_v2_connectors`, `test_connector_cache`, `test_connector_throttle`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, and e2e smoke tests. Golden-path fixtures live under `backend/tests/golden/`.
+- **Frontend**: **148 vitest cases pass**. Coverage includes ChatPage, DataSourcesPanel, AckButton, SearchBar maintenance-gating, ActionCard, PlotBuilder, DataBrowser, ADQLPage, FITSBrowser, ProvenanceGraph, common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
 - **CI**: GitHub Actions runs backend pytest + frontend `tsc + vite build + vitest` + ruff lint on every push.
 - **Physical-regression targets** (manual): NGC 1647 (open cluster, Frasca+2026), M53 (globular + RR Lyrae), Tom 2 blue stragglers (Rain+2021), Vel OB1, white dwarf LF, Pleiades IMF, NGC 752 isochrone age ∈ [1.2, 2.0] Gyr.
 
