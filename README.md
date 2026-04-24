@@ -8,7 +8,7 @@ Built with React 19 + FastAPI + **57 AI tools** + **35 pipeline nodes** + **24 a
 
 | Module | Description |
 |--------|-------------|
-| **Data Browser** | Query the active provenance-v2 sources (VizieR, Gaia DR3, SIMBAD, NED, 2MASS) from one place. Non-v2 sources are still visible but maintenance-gated until their `archive_version` provenance is upgraded. |
+| **Data Browser** | Query the active provenance-v2 sources (VizieR, Gaia DR3, SIMBAD, NED, 2MASS, ALMA observation metadata) from one place. Non-v2 sources are still visible but maintenance-gated until their `archive_version` provenance is upgraded. |
 | **AI Assistant** | 57-tool research agent that auto-selects the right data source, writes ADQL, analyzes spectra, fits isochrones/transits/RV orbits, computes SFR, runs Python, builds pipelines, reviews literature, and drafts papers. Now with object-class-specific workflows (open clusters / globular clusters / RR Lyrae / Cepheids / EB / galaxies / X-ray sources / pulsars / white dwarfs / ...). |
 | **Pipeline Studio** | Visual DAG editor with 35 node types spanning CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
 | **ADQL Query** | Multi-service TAP editor with syntax highlighting, template library, and federated queries across Gaia DR3, SIMBAD, VizieR, CADC, and NED — with automatic retry on timeout (reducing cone radius). |
@@ -18,7 +18,7 @@ Built with React 19 + FastAPI + **57 AI tools** + **35 pipeline nodes** + **24 a
 
 ## Scientific Capabilities
 
-### Data Access (5 active provenance-v2 sources + 19 maintenance-gated connectors)
+### Data Access (6 active provenance-v2 sources + 18 maintenance-gated connectors)
 
 The connector registry currently has 24 source keys. During the provenance-v2 rollout, only sources with populated citation and `archive_version` provenance are active:
 
@@ -28,12 +28,13 @@ The connector registry currently has 24 source keys. During the provenance-v2 ro
 - SIMBAD (`simbad`)
 - NED (`ned`)
 - 2MASS (`2mass`, implemented by `twomass.py`)
+- ALMA Science Archive observation metadata (`alma`)
 
 **Maintenance-gated until upgraded**
-- SDSS / SDSS spectra, MAST, JWST, ESO, IRSA, Chandra, XMM-Newton, AllWISE, ALMA, LAMOST, DESI, Pan-STARRS, NVSS, FIRST, JPL Horizons, ATNF Pulsar, SPARC, FRBSTATS
+- SDSS / SDSS spectra, MAST, JWST, ESO, IRSA, Chandra, XMM-Newton, AllWISE, LAMOST, DESI, Pan-STARRS, NVSS, FIRST, JPL Horizons, ATNF Pulsar, SPARC, FRBSTATS
 - The direct `run_sdss_sql` AI tool is also maintenance-gated until SDSS emits independent provenance with `archive_version`
 
-Gated sources return `__tool_status__="UNAVAILABLE"` with instructions for the AI to suggest the 5 active alternatives. The legacy connector modules are kept in the repo for re-enable work.
+Gated sources return `__tool_status__="UNAVAILABLE"` with instructions for the AI to suggest the 6 active alternatives. The legacy connector modules are kept in the repo for re-enable work.
 
 **Optical/NIR spectroscopy and photometry**
 - Gaia DR3, SIMBAD, VizieR, 2MASS active; SDSS, LAMOST DR9, DESI EDR, and Pan-STARRS are currently maintenance-gated
@@ -42,7 +43,7 @@ Gated sources return `__tool_status__="UNAVAILABLE"` with instructions for the A
 - MAST (HST, Kepler, TESS), JWST, ESO (VLT, MUSE, VISTA), IRSA, XMM-Newton, and Chandra are currently maintenance-gated
 
 **Multi-wavelength**
-- NED active; AllWISE and ALMA are currently maintenance-gated
+- NED and ALMA observation metadata active; AllWISE is currently maintenance-gated. ALMA does not provide derived line luminosity or FWHM values without a cited line-measurement table.
 
 **Radio**
 - NVSS and FIRST are currently maintenance-gated
@@ -242,7 +243,7 @@ M_G → T_eff conversion from Tremblay+ 2019. Supports DA/DB atmospheres and mas
 - Reproducibility package export (DAG + params + environment + instructions)
 - Jupyter notebook export (pipeline / chat / search workflows)
 - Provenance-v2 tool-result envelope with nested `provenance.datasets`, `provenance.field_bibcodes`, `provenance.coverage`, and reproducibility fields (`run_id`, `query_hash`, `archive_version`, `tool_version`)
-- Field-level bibcode extraction for SIMBAD/NED-style result columns and table-level registry fallbacks for the active 5 sources
+- Field-level bibcode extraction for SIMBAD/NED-style result columns and table-level registry fallbacks for the active 6 sources, including ALMA observation metadata
 - Citation validator checks replies against the tool-sourced bibcode pool. It warns by default and can hard-block with `PROVENANCE_VALIDATOR_HARDBLOCK=true`
 - Registry freshness is enforced at backend startup; stale fallback provenance blocks serving traffic until corrected
 - Chat UI surfaces a Data Sources panel and Copy Acknowledgement button; maintenance-gated tools get a separate `UNAVAILABLE` visual state
@@ -404,7 +405,7 @@ backend/
     ai/                 Routed inference + orchestrator + specialist agent prompts
     analysis/           CCD reduction and image-analysis helpers
     api/                28 FastAPI routers (auth, chat, data, pipeline, export, provenance, ...)
-    connectors/         24 connector keys; 5 active v2 sources, 19 maintenance-gated
+    connectors/         24 connector keys; 6 active v2 sources, 18 maintenance-gated
     middleware/         Request tracking + correlation ID middleware
     models/             SQLAlchemy models (20+ tables) + DB bootstrap
     pipeline/

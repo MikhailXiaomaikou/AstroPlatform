@@ -644,7 +644,7 @@ describe("ChatPage", () => {
           analysis_status: "failed",
           error: "Connector(s) under maintenance during the provenance v2 rollout: sdss.",
           unavailable_sources: ["sdss"],
-          available_alternatives: ["vizier", "gaia", "simbad", "ned", "2mass"],
+          available_alternatives: ["vizier", "gaia", "simbad", "ned", "2mass", "alma"],
         },
         _auto_executed: true,
       }],
@@ -659,7 +659,7 @@ describe("ChatPage", () => {
 
     await screen.findByText("Maintenance");
     expect(screen.getByText("Source under maintenance")).toBeInTheDocument();
-    expect(screen.getByText(/Available alternatives: vizier, gaia, simbad, ned, 2mass/)).toBeInTheDocument();
+    expect(screen.getByText(/Available alternatives: vizier, gaia, simbad, ned, 2mass, alma/)).toBeInTheDocument();
     expect(screen.queryByText("❌ Failed")).not.toBeInTheDocument();
     expect(screen.queryByText(/Error: Connector/)).not.toBeInTheDocument();
   });

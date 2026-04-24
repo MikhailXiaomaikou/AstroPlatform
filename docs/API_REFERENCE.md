@@ -47,7 +47,7 @@ Obtain a token via:
 | POST | `/api/integration/adql/query` | Execute ADQL on TAP services |
 | POST | `/api/integration/votable/upload` | Upload + convert VOTable to FITS |
 
-The source registry currently exposes 24 connector keys. The active provenance-v2 sources are `vizier`, `gaia`, `simbad`, `ned`, and `2mass`; the other 19 keys return an `UNAVAILABLE` maintenance payload instead of executing legacy connector code. Direct SDSS SQL (`run_sdss_sql`) is gated the same way until it emits independent `archive_version` provenance.
+The source registry currently exposes 24 connector keys. The active provenance-v2 sources are `vizier`, `gaia`, `simbad`, `ned`, `2mass`, and `alma`; the other 18 keys return an `UNAVAILABLE` maintenance payload instead of executing legacy connector code. ALMA is active for Science Archive observation metadata only, not derived line luminosity or FWHM measurements. Direct SDSS SQL (`run_sdss_sql`) is gated the same way until it emits independent `archive_version` provenance.
 
 ### AI Assistant
 

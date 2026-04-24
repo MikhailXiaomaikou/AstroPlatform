@@ -35,8 +35,8 @@ const FAQ_DATA: FaqItem[] = [
       zh: "Standard Astro 能搜索哪些数据库？",
     },
     a: {
-      en: "We connect to 14 major astronomical archives including SIMBAD, Gaia, SDSS, MAST, VizieR, NED, 2MASS, Chandra, ALMA, AllWISE, ESO, IRSA, JWST, and LAMOST. You can search them simultaneously or choose specific sources.",
-      zh: "我们连接了 14 个主要天文数据库，包括 SIMBAD、Gaia、SDSS、MAST、VizieR、NED、2MASS、Chandra、ALMA、AllWISE、ESO、IRSA、JWST 和 LAMOST。您可以同时搜索或选择特定数据源。",
+      en: "During the provenance-v2 rollout, the active searchable sources are SIMBAD, Gaia, VizieR, NED, 2MASS, and ALMA Science Archive observation metadata. Other connectors remain visible but are marked under maintenance until their archive-version provenance is upgraded. ALMA currently provides observation metadata; derived line luminosities and FWHM values need a cited line-measurement table or literature search.",
+      zh: "在 provenance-v2 推出期间，当前可用的数据源是 SIMBAD、Gaia、VizieR、NED、2MASS，以及 ALMA Science Archive 的观测元数据。其他 connector 仍会显示，但会标记为维护中，直到补齐 archive-version provenance。ALMA 当前提供观测元数据；派生的谱线光度和 FWHM 需要有引用支撑的谱线测量表或文献检索。",
     },
   },
   {

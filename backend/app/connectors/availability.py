@@ -8,8 +8,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-V2_AVAILABLE_CONNECTORS = frozenset({"vizier", "gaia", "simbad", "ned", "2mass"})
-AVAILABLE_ALTERNATIVES = ("vizier", "gaia", "simbad", "ned", "2mass")
+V2_AVAILABLE_CONNECTORS = frozenset({"vizier", "gaia", "simbad", "ned", "2mass", "alma"})
+AVAILABLE_ALTERNATIVES = ("vizier", "gaia", "simbad", "ned", "2mass", "alma")
 
 
 class ConnectorUnavailableError(RuntimeError):
@@ -58,11 +58,11 @@ def build_unavailable_response(
             f"Tool `{tool_name}` could not use connector(s) {label!r}: {message} "
             "You MUST NOT claim any numerical result from the unavailable connector(s). "
             "Tell the user the source is temporarily under maintenance and suggest "
-            "VizieR, Gaia DR3, SIMBAD, NED, or 2MASS as available alternatives."
+            "VizieR, Gaia DR3, SIMBAD, NED, 2MASS, or ALMA as available alternatives."
         ),
         "__suggested_next_step__": (
             "Retry with one or more available v2 sources: "
-            "vizier, gaia, simbad, ned, or 2mass."
+            "vizier, gaia, simbad, ned, 2mass, or alma."
         ),
     }
     response = dict(banner)

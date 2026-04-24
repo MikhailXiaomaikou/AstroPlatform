@@ -15,6 +15,7 @@ export interface ProvenanceDataset {
   credits_page_url?: string;
   acknowledgement_template?: string;
   source_urls?: string[];
+  standard?: string;
 }
 
 export interface ConversationProvenance {
@@ -58,6 +59,7 @@ function normalizeDataset(value: unknown): ProvenanceDataset | null {
     credits_page_url: asString(value.credits_page_url),
     acknowledgement_template: asString(value.acknowledgement_template),
     source_urls: sourceUrls.length > 0 ? sourceUrls : undefined,
+    standard: asString(value.standard),
   };
   if (!dataset.service_key && !dataset.service_name && !dataset.ivoid && !dataset.article) {
     return null;

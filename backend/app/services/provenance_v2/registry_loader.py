@@ -18,6 +18,7 @@ DEFAULT_ARCHIVE_VERSIONS = {
     "simbad": "SIMBAD current",
     "ned": "NED current",
     "2mass": "2MASS PSC II/246",
+    "alma": "ALMA Science Archive current",
 }
 
 DEFAULT_SOURCE_AUTHORITIES = {
@@ -26,6 +27,7 @@ DEFAULT_SOURCE_AUTHORITIES = {
     "simbad": "project_registry",
     "ned": "datacenter_non_standard_info",
     "2mass": "datacenter_ivoa_compliant",
+    "alma": "datacenter_ivoa_compliant",
 }
 
 
@@ -94,6 +96,7 @@ def normalize_service_key(hint: str | None) -> str | None:
         "twomass": "2mass",
         "two_mass": "2mass",
         "ii/246": "2mass",
+        "alma science archive": "alma",
     }
     if raw in aliases:
         return aliases[raw]
@@ -195,6 +198,7 @@ def _display_name(service_key: str) -> str:
         "simbad": "SIMBAD",
         "ned": "NED",
         "2mass": "2MASS",
+        "alma": "ALMA Science Archive",
     }.get(service_key, service_key)
 
 

@@ -27,6 +27,16 @@ const provenancePayload = {
         credits_page_url: "https://simbad.cds.unistra.fr/guide/ch14.htx",
         source_authority: "project_registry",
       },
+      {
+        service_key: "alma",
+        service_name: "ALMA Science Archive",
+        archive_version: "ALMA Science Archive current",
+        ivoid: "ivo://almascience.org/alma/science-archive",
+        publisher: "ALMA Partnership (ESO / AUI-NRAO / NAOJ)",
+        credits_page_url: "https://almascience.nrao.edu/alma-data/publication-acknowledgement",
+        source_authority: "datacenter_ivoa_compliant",
+        standard: "ObsCore",
+      },
     ],
     field_bibcodes: {
       columns: {
@@ -46,10 +56,13 @@ describe("DataSourcesPanel", () => {
     expect(screen.getByText("Data Sources")).toBeInTheDocument();
     expect(screen.getAllByText("Gaia DR3").length).toBeGreaterThan(0);
     expect(screen.getByText("SIMBAD")).toBeInTheDocument();
+    expect(screen.getByText("ALMA Science Archive")).toBeInTheDocument();
+    expect(screen.getByText("ALMA Science Archive current")).toBeInTheDocument();
     expect(screen.getByText("2023A&A...674A...1G")).toBeInTheDocument();
     expect(screen.getByText("2 per-value references")).toBeInTheDocument();
     expect(screen.getByLabelText("source authority: PARAM")).toBeInTheDocument();
     expect(screen.getByLabelText("source authority: Registry")).toBeInTheDocument();
+    expect(screen.getByLabelText("source authority: IVOA / ObsCore")).toBeInTheDocument();
   });
 });
 
@@ -68,6 +81,7 @@ describe("AckButton", () => {
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(expect.stringContaining("Gaia Archive")));
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining("2000A&AS..143....9W"));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("ALMA Partnership"));
     expect(onCopied).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
   });

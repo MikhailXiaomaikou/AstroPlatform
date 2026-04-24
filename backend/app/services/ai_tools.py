@@ -181,17 +181,18 @@ TOOLS = [
         "name": "search_objects",
         "description": (
             "Search astronomical databases for objects by name, coordinates, or scientific criteria. "
-            "Searches SIMBAD, Gaia, SDSS, NED, LAMOST, etc. Returns object names, positions, types, magnitudes, redshifts. "
+            "During provenance-v2 rollout it can query SIMBAD, Gaia, VizieR, NED, 2MASS, and ALMA observation metadata. "
+            "Returns object names, positions, types, magnitudes, redshifts, and archive metadata where available. "
             "Gaia results include extra fields: extra.bp_rp, extra.parallax, extra.pmra, extra.pmdec, "
             "extra.ruwe, extra.phot_bp_mean_mag, extra.phot_rp_mean_mag. "
-            "LAMOST results include spectroscopic parameters in extra fields. "
+            "ALMA results are observation metadata only and do not provide derived line luminosity or FWHM measurements. "
             "Use these for HR diagrams, membership selection, and isochrone fitting."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Object name or search description (e.g. 'M31', 'NGC 1068', 'high redshift quasars')"},
-                "sources": {"type": "array", "items": {"type": "string"}, "description": "Data sources to query (e.g. ['simbad', 'gaia', 'sdss']). Default: ['simbad']"},
+                "sources": {"type": "array", "items": {"type": "string"}, "description": "Data sources to query (e.g. ['simbad', 'gaia', 'alma']). Default: ['simbad']"},
                 "radius": {"type": "number", "description": "Search radius in degrees. Default: 0.1"},
             },
             "required": ["query"],
@@ -1771,6 +1772,16 @@ def _auto_select_sources(query: str) -> list[str]:
         return ["simbad", "ned"]
     if _has("star", "stellar", "parallax", "binary", "variable", "hr diagram", "cmd") or "proper motion" in q:
         return ["gaia", "simbad"]
+    if (
+        _has("alma", "submillimeter", "sub-mm", "millimeter", "mm", "cii")
+        or "[cii]" in q
+        or "[c ii]" in q
+        or "158μm" in q
+        or "158um" in q
+        or "far infrared" in q
+        or "far-infrared" in q
+    ):
+        return ["alma", "simbad", "ned"]
     if _has("galaxy", "galaxies", "cluster", "group") or "morpholog" in q:
         return ["simbad", "ned", "sdss"]
     if _has("infrared", "wise", "2mass", "dust"):
@@ -1906,7 +1917,7 @@ async def _exec_search(inp: dict, python_session_id: str = "default") -> dict:
     }
     if unavailable_sources:
         result["unavailable_sources"] = unavailable_sources
-        result["available_alternatives"] = ["vizier", "gaia", "simbad", "ned", "2mass"]
+        result["available_alternatives"] = ["vizier", "gaia", "simbad", "ned", "2mass", "alma"]
         result["warnings"] = [
             (
                 "Some requested sources are temporarily under maintenance during "

@@ -358,6 +358,18 @@ _UNSUPPORTED_NARRATIVE_PATTERNS: list[tuple[str, re.Pattern]] = [
             re.I,
         ),
     ),
+    (
+        "unsupported_line_property_relation",
+        re.compile(
+            r"\b(?:(?:log\s*)?L\s*\[?\s*C\s*II\s*\]?|L_?CII|LCII|"
+            r"line\s+luminosit(?:y|ies))[^.\n;:()]{0,120}"
+            r"(?:FWHM|line\s+width|velocity\s+dispersion|relation|correlation)\b|"
+            r"\b(?:FWHM|line\s+width|velocity\s+dispersion)[^.\n;:()]{0,120}"
+            r"(?:(?:log\s*)?L\s*\[?\s*C\s*II\s*\]?|L_?CII|LCII|"
+            r"line\s+luminosit(?:y|ies))\b",
+            re.I,
+        ),
+    ),
 ]
 
 
@@ -714,7 +726,11 @@ def unsupported_literature_narrative_violations(
     if not reply:
         return []
 
-    if _tool_successfully_ran(tool_results, "search_literature"):
+    if (
+        _tool_successfully_ran(tool_results, "search_literature")
+        or _tool_successfully_ran(tool_results, "search_line_measurements")
+        or _tool_successfully_ran(tool_results, "fit_line_lfr")
+    ):
         return []
 
     stripped_reply = _strip_markdown_code(reply)

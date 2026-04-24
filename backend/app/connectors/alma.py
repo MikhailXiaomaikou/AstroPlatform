@@ -8,11 +8,30 @@ from typing import TYPE_CHECKING
 
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
+from app.services.provenance_v2.registry_loader import dataset_from_registry
 
 if TYPE_CHECKING:
     from astropy.table import Table
 
 logger = logging.getLogger(__name__)
+
+
+def _alma_provenance_dataset() -> dict:
+    dataset = dataset_from_registry(
+        "alma",
+        source_authority="datacenter_ivoa_compliant",
+        archive_version="ALMA Science Archive current",
+        supplements={"standard": "ObsCore"},
+    )
+    return dataset or {
+        "service_key": "alma",
+        "service_name": "ALMA Science Archive",
+        "archive_version": "ALMA Science Archive current",
+        "source_authority": "datacenter_ivoa_compliant",
+        "standard": "ObsCore",
+        "reference_url": "https://almascience.eso.org/alma-data/archive",
+        "credits_page_url": "https://almascience.nrao.edu/alma-data/publication-acknowledgement",
+    }
 
 
 class ALMAConnector(BaseConnector):
@@ -56,6 +75,11 @@ class ALMAConnector(BaseConnector):
         if table is None or len(table) == 0:
             return []
 
+        return self._table_to_objects(table)
+
+    def _table_to_objects(self, table: Table) -> list[AstroObject]:
+        """Convert an ALMA ObsCore result table to normalized objects."""
+        provenance_dataset = _alma_provenance_dataset()
         results = []
         for row in table[:50]:
             obs_id = str(row["obs_id"]) if "obs_id" in table.colnames else ""
@@ -63,12 +87,46 @@ class ALMAConnector(BaseConnector):
             obj_ra = float(row["s_ra"]) if "s_ra" in table.colnames else 0.0
             obj_dec = float(row["s_dec"]) if "s_dec" in table.colnames else 0.0
 
-            extra: dict = {}
+            source_urls = [
+                str(value)
+                for value in (
+                    *(provenance_dataset.get("source_urls") or []),
+                    provenance_dataset.get("reference_url"),
+                    provenance_dataset.get("credits_page_url"),
+                )
+                if value
+            ]
+            archive_ids = [
+                str(value)
+                for value in (
+                    *(provenance_dataset.get("archive_ids") or []),
+                    provenance_dataset.get("ivoid"),
+                    provenance_dataset.get("service_key"),
+                )
+                if value
+            ]
+            extra: dict = {
+                "_provenance_dataset": provenance_dataset,
+                "archive_version": provenance_dataset.get("archive_version"),
+                "source_urls": source_urls,
+                "archive_ids": archive_ids,
+                "standard": "ObsCore",
+                "measurement_scope": "observation_metadata_only",
+                "line_measurements_available": False,
+                "line_measurement_note": (
+                    "ALMA archive rows describe observations. Derived line luminosity "
+                    "or FWHM values require a cited line-measurement table."
+                ),
+            }
+            if "proposal_id" in table.colnames:
+                extra["proposal_id"] = str(row["proposal_id"])
             if "frequency" in table.colnames:
                 try:
                     extra["frequency_ghz"] = float(row["frequency"])
                 except (ValueError, TypeError):
                     pass
+            if "frequency_support" in table.colnames:
+                extra["frequency_support"] = str(row["frequency_support"])
             if "bandwidth" in table.colnames:
                 try:
                     extra["bandwidth_ghz"] = float(row["bandwidth"])

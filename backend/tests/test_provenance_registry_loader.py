@@ -6,13 +6,13 @@ import logging
 import pytest
 
 
-def test_load_registry_has_five_services():
+def test_load_registry_has_six_services():
     from app.services.provenance_v2.registry_loader import load_registry
 
     registry = load_registry()
 
     assert registry["schema_version"] == 1
-    assert set(registry["services"]) == {"vizier", "gaia", "simbad", "ned", "2mass"}
+    assert set(registry["services"]) == {"vizier", "gaia", "simbad", "ned", "2mass", "alma"}
 
 
 def test_resolve_service_by_key_url_catalog_and_ivoid():
@@ -24,6 +24,7 @@ def test_resolve_service_by_key_url_catalog_and_ivoid():
     assert resolve_service("https://gea.esac.esa.int/tap-server/tap", registry)["service_key"] == "gaia"
     assert resolve_service("II/246/out", registry)["service_key"] == "2mass"
     assert resolve_service("ivo://ned.ipac/objdir", registry)["service_key"] == "ned"
+    assert resolve_service("https://almascience.eso.org/alma-data/archive", registry)["service_key"] == "alma"
 
 
 def test_check_freshness_warns_for_stale_entries():

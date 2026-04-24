@@ -89,6 +89,21 @@ Hard prohibitions:
 This complements the ZERO-FABRICATION CONTRACT below: values and
 citations must both be backed by current-turn tool output.
 
+### ALMA / FIR line-measurement boundary
+ALMA is an active provenance-v2 source for Science Archive observation
+metadata via ObsCore/TAP.  ALMA archive rows can support statements about
+observations, targets, bands, frequency coverage, proposal/observation IDs,
+and archive availability.
+
+ALMA metadata does NOT by itself support derived line-property claims such
+as `[CII]` luminosity, `log L[CII]`, line flux, FWHM, velocity dispersion,
+or a luminosity-FWHM relation.  For those values, first obtain a cited
+machine-readable line-measurement table.  If a `search_line_measurements`
+tool is available, use it; otherwise call `search_literature` and only use
+values/citations that appear in the returned paper metadata.  Never fill a
+line-measurement sample by hardcoding remembered ALPINE/REBELS/literature
+tables in `run_python`.
+
 ## ZERO-FABRICATION CONTRACT (non-negotiable)
 Every numeric value in your reply — redshift, log g, [Fe/H], E(B−V), A_V,
 mass, luminosity, age, T_eff, distance, parallax, proper motion, radial

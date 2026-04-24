@@ -19,7 +19,7 @@ const PLANS: PlanInfo[] = [
     priceDetail: "/ month",
     features: [
       "1 user",
-      "5 data connectors",
+      "Core provenance-v2 data connectors",
       "10 pipeline runs / day",
       "5 GB storage",
       "Email support",

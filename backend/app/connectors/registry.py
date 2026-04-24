@@ -16,6 +16,7 @@ def _init():
     global _connectors
     if _connectors is None:
         from app.connectors.gaia import GaiaConnector
+        from app.connectors.alma import ALMAConnector
         from app.connectors.simbad import SIMBADConnector
         from app.connectors.vizier import VizierConnector
         from app.connectors.ned import NEDConnector
@@ -23,6 +24,7 @@ def _init():
 
         _connectors = {
             "gaia": GaiaConnector(),
+            "alma": ALMAConnector(),
             "simbad": SIMBADConnector(),
             "vizier": VizierConnector(),
             "ned": NEDConnector(),

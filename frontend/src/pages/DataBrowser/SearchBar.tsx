@@ -17,7 +17,8 @@ const ALL_SOURCES = ["sdss", "gaia", "simbad", "vizier", "mast", "ned", "2mass",
 // registry-backed citation support. Others are gated in the backend
 // (backend/app/connectors/availability.py V2_AVAILABLE_CONNECTORS) and
 // disabled here so the user can't manually select them either.
-const V2_AVAILABLE_SOURCES = new Set(["vizier", "gaia", "simbad", "ned", "2mass"]);
+const V2_AVAILABLE_SOURCES = new Set(["vizier", "gaia", "simbad", "ned", "2mass", "alma"]);
+const V2_AVAILABLE_LABEL = "vizier / gaia / simbad / ned / 2mass / alma";
 const isSourceAvailable = (s: string): boolean => V2_AVAILABLE_SOURCES.has(s);
 const DEFAULT_SOURCES = ["gaia", "simbad", "vizier"];
 const DEFAULT_ADV_SOURCES = ["simbad", "ned", "2mass"];
@@ -249,7 +250,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                     title={
                       available
                         ? (SOURCE_TOOLTIPS[s] || s.toUpperCase())
-                        : `${s.toUpperCase()} — under maintenance (provenance v2 rollout). Only vizier / gaia / simbad / ned / 2mass are active.`
+                        : `${s.toUpperCase()} — under maintenance (provenance v2 rollout). Only ${V2_AVAILABLE_LABEL} are active.`
                     }
                   >
                     {s.toUpperCase()}{!available ? " · 维护中" : ""}
@@ -530,7 +531,7 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
                     title={
                       available
                         ? (SOURCE_TOOLTIPS[s] || s.toUpperCase())
-                        : `${s.toUpperCase()} — under maintenance (provenance v2 rollout). Only vizier / gaia / simbad / ned / 2mass are active.`
+                        : `${s.toUpperCase()} — under maintenance (provenance v2 rollout). Only ${V2_AVAILABLE_LABEL} are active.`
                     }
                   >
                     {s.toUpperCase()}{!available ? " · 维护中" : ""}

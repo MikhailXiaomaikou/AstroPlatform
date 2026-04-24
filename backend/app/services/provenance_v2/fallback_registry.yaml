@@ -112,6 +112,32 @@
         "last_verified": "2026-04-23",
         "notes": "Primary path is VizieR II/246; this entry is fallback only."
       }
+    },
+    "alma": {
+      "match_patterns": [
+        "almascience.eso.org",
+        "almascience.nrao.edu",
+        "almascience.nao.ac.jp",
+        "almascience.org",
+        "ALMA Science Archive",
+        "ivo://almascience.org"
+      ],
+      "provenance": {
+        "service_key": "alma",
+        "service_name": "ALMA Science Archive",
+        "ivoid": "ivo://almascience.org/alma/science-archive",
+        "standard": "ObsCore",
+        "creator": "Joint ALMA Observatory",
+        "publisher": "ALMA Partnership (ESO / AUI-NRAO / NAOJ)",
+        "publication_date": "2011-09-30",
+        "reference_url": "https://almascience.eso.org/alma-data/archive",
+        "credits_page_url": "https://almascience.nrao.edu/alma-data/publication-acknowledgement",
+        "acknowledgement_template": "This paper makes use of the following ALMA data: ADS/JAO.ALMA. ALMA is a partnership of ESO (representing its member states), NSF (USA), and NINS (Japan), together with NRC (Canada), NSTC and ASIAA (Taiwan), and KASI (Republic of Korea), in cooperation with the Republic of Chile. The Joint ALMA Observatory is operated by ESO, AUI/NRAO, and NAOJ."
+      },
+      "metadata": {
+        "last_verified": "2026-04-24",
+        "notes": "ALMA v2 entry covers Science Archive observation metadata via ObsCore/TAP. It does not provide derived line luminosities or FWHM measurements."
+      }
     }
   }
 }

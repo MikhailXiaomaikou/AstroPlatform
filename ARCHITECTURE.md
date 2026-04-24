@@ -12,7 +12,7 @@ Standard Astro is a full-stack astronomy research platform with four runtime lay
 
 3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem or S3 for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines.
 
-4. **External services** — 24 astronomy connector keys, with 5 provenance-v2 active sources and 19 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local).
+4. **External services** — 24 astronomy connector keys, with 6 provenance-v2 active sources (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`) and 18 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local). ALMA is active for Science Archive observation metadata, not derived line luminosity/FWHM measurements.
 
 Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **57-tool catalog** (§3).
 
@@ -217,7 +217,7 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 
 ### Data access layer
 
-- `app/connectors/*` — **24 connector keys**. The active provenance-v2 keys are `vizier`, `gaia`, `simbad`, `ned`, and `2mass`. The other 19 keys (`sdss`, `sdss_spec`, `mast`, `chandra`, `allwise`, `alma`, `eso`, `irsa`, `jwst`, `lamost`, `desi`, `panstarrs`, `xmm`, `nvss`, `first`, `jpl`, `atnf_pulsar`, `sparc`, `frbstats`) return an `UNAVAILABLE` maintenance banner before connector import.
+- `app/connectors/*` — **24 connector keys**. The active provenance-v2 keys are `vizier`, `gaia`, `simbad`, `ned`, `2mass`, and `alma`. The other 18 keys (`sdss`, `sdss_spec`, `mast`, `chandra`, `allwise`, `eso`, `irsa`, `jwst`, `lamost`, `desi`, `panstarrs`, `xmm`, `nvss`, `first`, `jpl`, `atnf_pulsar`, `sparc`, `frbstats`) return an `UNAVAILABLE` maintenance banner before connector import. ALMA is active for Science Archive observation metadata only, not derived line luminosity or FWHM measurements.
 - [`app/connectors/registry.py`](./backend/app/connectors/registry.py) — Lazy registry plus availability gate.
 - [`app/connectors/availability.py`](./backend/app/connectors/availability.py) — `V2_AVAILABLE_CONNECTORS`, maintenance response builder, and `connector_gated_total{connector_name}` metric hook.
 - [`app/services/provenance_v2/*`](./backend/app/services/provenance_v2) — Fallback registry, freshness checks, field-level schema/extractor, and DataOrigin/PARAM/INFO resolver helpers. Startup blocks on stale registry entries.

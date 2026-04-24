@@ -36,7 +36,7 @@ function linkForIvoid(dataset: ProvenanceDataset): string | undefined {
   return dataset.credits_page_url || dataset.reference_url || dataset.source_urls?.[0];
 }
 
-function AuthorityCue({ authority }: { authority?: string }) {
+function AuthorityCue({ authority, standard }: { authority?: string; standard?: string }) {
   const meta = authority ? AUTHORITY_META[authority] : undefined;
   const fallback = {
     label: authority || "Unknown",
@@ -44,14 +44,16 @@ function AuthorityCue({ authority }: { authority?: string }) {
     title: authority ? `Source authority: ${authority}` : "Source authority unavailable",
   };
   const cue = meta || fallback;
+  const label = standard ? `${cue.label} / ${standard}` : cue.label;
+  const title = standard ? `${cue.title}; standard: ${standard}` : cue.title;
   return (
     <span
       className={`data-source-authority data-source-authority-${cue.tone}`}
-      title={cue.title}
-      aria-label={`source authority: ${cue.label}`}
+      title={title}
+      aria-label={`source authority: ${label}`}
     >
       <span className="data-source-authority-dot" aria-hidden="true" />
-      {cue.label}
+      {label}
     </span>
   );
 }
@@ -62,7 +64,7 @@ function DataSourceItem({ dataset }: { dataset: ProvenanceDataset }) {
     <article className="data-source-item">
       <div className="data-source-item-header">
         <strong>{displayName(dataset)}</strong>
-        <AuthorityCue authority={dataset.source_authority} />
+        <AuthorityCue authority={dataset.source_authority} standard={dataset.standard} />
       </div>
       <dl className="data-source-fields">
         {dataset.archive_version && (

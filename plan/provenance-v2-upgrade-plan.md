@@ -1,7 +1,7 @@
 # Provenance v2 Upgrade — Codex-Adapted Execution Plan
 
 **Status**: Implemented in this repository (M0-M6 complete)
-**Target**: Raised citation tracking and closed the main `archive_version` / UI transparency gaps for the 5 active provenance-v2 sources
+**Target**: Raised citation tracking and closed the main `archive_version` / UI transparency gaps for the 6 active provenance-v2 sources
 **Execution mode**: Historical milestone plan. Keep it as the audit trail and re-enable template for future connector upgrades.
 
 This is a repo-adapted version of the original plan. The core technical intent is unchanged:
@@ -11,7 +11,7 @@ This is a repo-adapted version of the original plan. The core technical intent i
 - Same acceptance discipline
 - Same commit-message intent
 
-Only the execution surface has been normalized to this repository so Codex can run it directly. As of the current code, the resulting implementation lives under `backend/app/services/provenance_v2/`, `backend/app/services/result_provenance.py`, `backend/app/services/claim_validator.py`, `backend/app/api/chat.py`, `frontend/src/components/chat/`, `frontend/src/hooks/`, and `frontend/src/pages/Chat/ChatPage.tsx`.
+Only the execution surface has been normalized to this repository so Codex can run it directly. As of the current code, the resulting implementation lives under `backend/app/services/provenance_v2/`, `backend/app/services/result_provenance.py`, `backend/app/services/claim_validator.py`, `backend/app/api/chat.py`, `frontend/src/components/chat/`, `frontend/src/hooks/`, and `frontend/src/pages/Chat/ChatPage.tsx`. ALMA has since been re-enabled as a v2 source for Science Archive observation metadata only.
 
 ## 0. How to use this plan in this repo
 
@@ -170,7 +170,7 @@ backend/tests/
 
 **Repo-specific implementation note**:
 - In this repo, the safest place to prevent import-time connector execution is `backend/app/connectors/registry.py`.
-- Whitelist the 5 v2 connectors by key: `{"vizier", "gaia", "simbad", "ned", "2mass"}`.
+- Whitelist the 6 v2 connectors by key: `{"vizier", "gaia", "simbad", "ned", "2mass", "alma"}`.
 - Do not hardcode a stale gated-connector count; gate every key in `CONNECTORS_KEYS` that is not whitelisted.
 - Direct tools that bypass `CONNECTORS_KEYS` are not implicit exceptions. If a direct source such as `run_sdss_sql` does not emit independent provenance with `archive_version`, return the same `UNAVAILABLE` maintenance banner until it is upgraded.
 
@@ -188,14 +188,14 @@ backend/tests/
 - Skip or gate existing live tests that assume the now-disabled connectors remain queryable
 
 **Non-changes**:
-- Do not modify the 19 gated connector modules themselves
+- Do not modify the 18 gated connector modules themselves
 - Do not change the tool surface
-- Do not touch the 5 v2 connectors
+- Do not touch the 6 v2 connectors except for scoped provenance upgrades
 
 **Acceptance**:
 - From `backend/`: `python3 -m pytest tests/test_connector_availability_gate.py -q`
 - From `backend/`: `python3 -m pytest tests/test_connectors.py tests/test_result_provenance.py -q`
-- Manual smoke: a gated connector such as `chandra` returns the maintenance banner and the model is instructed to suggest the 5 available alternatives
+- Manual smoke: a gated connector such as `chandra` returns the maintenance banner and the model is instructed to suggest the 6 available alternatives
 
 **Commit message**:
 
@@ -203,7 +203,7 @@ backend/tests/
 feat(connectors): gate non-v2 data sources as under-maintenance
 
 - Feature-gate unsupported sources at dispatch level
-- 5 v2 connector keys (`vizier`, `gaia`, `simbad`, `ned`, `2mass`) remain active
+- 6 v2 connector keys (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`) remain active
 - Gated sources return __tool_status__=UNAVAILABLE banner with
   __do_not_claim__ + __message_to_model__ instructions for the AI
 - Protects users from un-provenanced data during the v2 rollout
@@ -238,7 +238,7 @@ backend/tests/
 - Instead, add new schema helpers in `services/provenance_v2/` and make `result_provenance.py` serialize them into the new nested `result["provenance"]` object.
 
 **Tasks**:
-- Add `fallback_registry.yaml` with the same 5 initial services from the original plan
+- Add `fallback_registry.yaml` with the original 5 services plus ALMA after its v2 metadata upgrade
 - Implement `load_registry()`, `resolve_service()`, `check_freshness()`
 - Add `FieldBibcodes`, `FieldLevelCoverage`, and `PrimaryCitationSource`
 - Extend `attach_provenance()` / `normalize_tool_result()` so payloads can optionally carry:
@@ -262,8 +262,8 @@ backend/tests/
 ```text
 feat(provenance): add fallback registry and extend schema for field bibcodes
 
-- New fallback_registry.yaml with 5 initial service keys (`vizier`, `gaia`,
-  `simbad`, `ned`, `2mass`)
+- New fallback_registry.yaml with active service keys (`vizier`, `gaia`,
+  `simbad`, `ned`, `2mass`, `alma`)
 - New registry_loader with freshness check
 - New field-level schema helpers
 - Extended tool-result provenance payload with field_bibcodes,
@@ -318,9 +318,9 @@ feat(provenance): add FieldBibcodeExtractor for per-value bibcode extraction
 - No value-level scanning beyond matched bibcode columns
 ```
 
-### M3 — Fill `archive_version` + wire registry for 5 initial sources
+### M3 — Fill `archive_version` + wire registry for active sources
 
-**Goal**: Populate provenance metadata for the 5 active sources in this repo.
+**Goal**: Populate provenance metadata for the active sources in this repo.
 
 **Files touched**:
 
@@ -330,7 +330,8 @@ backend/app/connectors/
 ├── gaia.py                          [MODIFY]
 ├── simbad.py                        [MODIFY]
 ├── ned.py                           [MODIFY]
-└── twomass.py                       [MODIFY]
+├── twomass.py                       [MODIFY]
+└── alma.py                          [POST-M6 UPGRADE — observation metadata only]
 
 backend/app/services/provenance_v2/
 ├── ivoa_dataorigin_resolver.py      [NEW]
@@ -348,28 +349,30 @@ backend/app/services/provenance_v2/
 - SIMBAD: Path D via registry fallback
 - NED: Path C via non-standard `INFO` scan plus registry supplement
 - 2MASS: same path as VizieR, with registry fallback only
+- ALMA: registry-backed ObsCore/TAP observation metadata; do not treat ALMA archive rows as derived line-luminosity or FWHM measurements
 - Set `archive_version`, `source_urls`, `archive_ids`, `source_authority`, and nested `provenance.datasets[*]`
 
 **Non-changes**:
-- Do not touch any gated connector
+- Do not touch any still-gated connector
 - Do not alter query shapes
 - Do not change cache semantics
 
 **Acceptance**:
 - From `backend/`: `python3 -m pytest tests/test_connectors.py -k "vizier or gaia or simbad or ned or twomass" -q`
-- Add and run targeted provenance tests for the 5 connectors
+- Add and run targeted provenance tests for the active connectors
 - Confirm resolver failures log warnings and do not crash the connector
 
 **Commit message**:
 
 ```text
-feat(connectors): fill archive_version + provenance for 5 initial sources
+feat(connectors): fill archive_version + provenance for active sources
 
 - VizieR: Path A via astropy extract_data_origin
 - Gaia DR3: Path B via PARAM scanner + registry supplement
 - SIMBAD: Path D via registry (no DataOrigin emission)
 - NED: Path C via PROVIDER INFO + registry supplement
 - 2MASS: Path A via VizieR (II/246)
+- ALMA: registry-backed ObsCore observation metadata (post-M6 upgrade)
 
 Closes archive_version 0% fill rate for focus sources.
 ```
@@ -556,7 +559,7 @@ The original definition of done remains, translated to this repo's surface:
 - All existing backend tests still pass
 - All new tests pass
 - All non-v2 connector keys return `UNAVAILABLE` without executing legacy query code
-- The 5 active sources populate `archive_version`
+- The 6 active sources populate `archive_version`
 - Citation fabrications are warning-flagged by default and blockable via config
 - The UI surfaces provenance and acknowledgement text without regressing current chat behavior
 - Both new metrics families appear in `/metrics`:

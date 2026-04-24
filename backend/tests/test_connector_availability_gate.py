@@ -11,10 +11,10 @@ def test_only_v2_connectors_are_available():
     from app.connectors.availability import V2_AVAILABLE_CONNECTORS, is_available
     from app.connectors.registry import CONNECTORS_KEYS
 
-    assert V2_AVAILABLE_CONNECTORS == {"vizier", "gaia", "simbad", "ned", "2mass"}
+    assert V2_AVAILABLE_CONNECTORS == {"vizier", "gaia", "simbad", "ned", "2mass", "alma"}
 
     gated = set(CONNECTORS_KEYS) - V2_AVAILABLE_CONNECTORS
-    assert len(gated) == 19
+    assert len(gated) == 18
     assert all(not is_available(source) for source in gated)
     assert all(is_available(source) for source in V2_AVAILABLE_CONNECTORS)
 
@@ -59,7 +59,7 @@ def test_active_connector_initialization_skips_gated_modules():
     connector = registry.get_connector("gaia")
 
     assert connector.source_name == "gaia"
-    assert set(registry._connectors) == {"gaia", "simbad", "vizier", "ned", "2mass"}
+    assert set(registry._connectors) == {"gaia", "alma", "simbad", "vizier", "ned", "2mass"}
     assert "app.connectors.sdss" not in sys.modules
     assert "app.connectors.chandra" not in sys.modules
     assert "app.connectors.allwise" not in sys.modules
@@ -81,7 +81,7 @@ async def test_search_objects_returns_unavailable_banner_for_gated_source():
     assert "app.connectors.chandra" not in sys.modules
     assert result["__tool_status__"] == "UNAVAILABLE"
     assert result["__do_not_claim__"] is True
-    assert "VizieR, Gaia DR3, SIMBAD, NED, or 2MASS" in result["__message_to_model__"]
+    assert "VizieR, Gaia DR3, SIMBAD, NED, 2MASS, or ALMA" in result["__message_to_model__"]
     assert result["results"] == []
     assert result["total"] == 0
     assert result["per_source"][0]["source"] == "chandra"
@@ -107,7 +107,7 @@ async def test_run_sdss_sql_is_gated_until_provenance_ready():
     assert result["__tool_status__"] == "UNAVAILABLE"
     assert result["__do_not_claim__"] is True
     assert result["unavailable_sources"] == ["sdss"]
-    assert result["available_alternatives"] == ["vizier", "gaia", "simbad", "ned", "2mass"]
+    assert result["available_alternatives"] == ["vizier", "gaia", "simbad", "ned", "2mass", "alma"]
 
     counters = metrics.snapshot()["counters"]["connector_gated_total"]
     assert counters[((("connector_name", "sdss"),))] == 1.0

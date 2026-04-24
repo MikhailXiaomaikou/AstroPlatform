@@ -1,7 +1,7 @@
 /**
  * SearchBar — Provenance v2 rollout: non-v2 connectors must be
  * rendered as disabled + marked "维护中", unclickable.  Only vizier /
- * gaia / simbad / ned / 2mass are selectable.
+ * gaia / simbad / ned / 2mass / alma are selectable.
  */
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
@@ -16,13 +16,12 @@ vi.mock("../api/client", () => ({
 
 import SearchBar from "../pages/DataBrowser/SearchBar";
 
-const V2_SOURCES = ["vizier", "gaia", "simbad", "ned", "2mass"];
+const V2_SOURCES = ["vizier", "gaia", "simbad", "ned", "2mass", "alma"];
 const GATED_SOURCES = [
   "sdss",
   "mast",
   "chandra",
   "allwise",
-  "alma",
   "eso",
   "irsa",
   "jwst",

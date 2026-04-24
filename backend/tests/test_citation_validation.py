@@ -96,3 +96,46 @@ def test_hardblock_flag_tracks_environment(monkeypatch):
 
     monkeypatch.setenv("PROVENANCE_VALIDATOR_HARDBLOCK", "true")
     assert citation_violations_should_block(violations) is True
+
+
+def test_alma_metadata_does_not_support_cii_luminosity_fwhm_claims():
+    from app.services.claim_validator import unsupported_literature_narrative_violations
+
+    tool_results = [
+        {
+            "tool": "search_objects",
+            "result": {
+                "success": True,
+                "results": [
+                    {
+                        "source": "alma",
+                        "extra": {
+                            "measurement_scope": "observation_metadata_only",
+                            "line_measurements_available": False,
+                            "line_measurement_note": (
+                                "ALMA archive rows describe observations. Derived line luminosity "
+                                "or FWHM values require a cited line-measurement table."
+                            ),
+                        },
+                    }
+                ],
+                "provenance": {
+                    "datasets": [
+                        {
+                            "service_key": "alma",
+                            "service_name": "ALMA Science Archive",
+                            "archive_version": "ALMA Science Archive current",
+                        }
+                    ]
+                },
+            },
+        }
+    ]
+
+    violations = unsupported_literature_narrative_violations(
+        "The log L[CII]-FWHM relation is visible in the ALMA metadata sample.",
+        tool_results,
+    )
+
+    assert violations
+    assert violations[0].kind == "unsupported_literature_narrative"
