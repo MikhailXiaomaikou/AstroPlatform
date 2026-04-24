@@ -177,7 +177,15 @@ function isUnavailableToolAction(action: ChatAction): boolean {
 }
 
 function summarizeTurnActions(actions: ChatAction[] | undefined) {
-  const acts = actions || [];
+  const seen = new Set<string>();
+  const acts = (actions || []).filter((action) => {
+    const id = String((action as Record<string, unknown>)._tool_call_id || "");
+    if (!id) return true;
+    const key = `${String((action as Record<string, unknown>).action || "")}:${id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   const synthetic = acts.filter(isSyntheticToolAction);
   const unavailable = acts.filter(isUnavailableToolAction);
   const failed = acts.filter((action) => {
@@ -198,7 +206,10 @@ function summarizeTurnActions(actions: ChatAction[] | undefined) {
     const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
     return status === "EMPTY";
   });
-  const total = acts.filter((action) => !!(action as Record<string, unknown>)._auto_executed).length;
+  const total = acts.filter((action) => {
+    const record = action as Record<string, unknown>;
+    return !!record._auto_executed || !!record.tool_result;
+  }).length;
   return { synthetic, unavailable, failed, empty, total };
 }
 
@@ -422,6 +433,7 @@ function ActionCardInner({
     analyze_spectrum: "Spectrum Analysis",
     search_literature: "Literature Search",
     extract_literature_tables: "Extract Literature Tables",
+    fit_line_lfr: "Fit Line Relation",
     get_last_search_results: "Search Results",
     read_arxiv_paper: "Read Paper",
     run_python: "Python Code",
@@ -446,6 +458,7 @@ function ActionCardInner({
     analyze_spectrum: "🔬",
     search_literature: "📚",
     extract_literature_tables: "📄",
+    fit_line_lfr: "📈",
     get_last_search_results: "📋",
     read_arxiv_paper: "📄",
     run_python: "🐍",
@@ -1430,6 +1443,9 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           <span className={`tool-status-chip ${measurements.length > 0 ? "tool-status-chip-completed" : "tool-status-chip-partial"}`}>
             {measurements.length > 0 ? `${measurements.length} usable line measurement${measurements.length === 1 ? "" : "s"}` : "needs column mapping"}
           </span>
+          {measurements.length > 0 ? (
+            <span className="tool-status-chip tool-status-chip-completed">Ready for fitting</span>
+          ) : null}
           {result.cache_key ? (
             <code style={{ fontSize: "0.7rem" }}>cache: {String(result.cache_key)}</code>
           ) : null}
@@ -1470,6 +1486,41 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
             </div>
           );
         })}
+      </div>
+    );
+  }
+
+  if (toolName === "fit_line_lfr") {
+    const publicationReady = result.publication_ready === true;
+    const nUsed = Number(result.n_used || 0);
+    const beta = typeof result.beta === "number" ? result.beta : undefined;
+    const alpha = typeof result.alpha === "number" ? result.alpha : undefined;
+    const scatter = typeof result.scatter_dex === "number" ? result.scatter_dex : undefined;
+    const citations = ((result.citation_summary as Record<string, unknown> | undefined)?.citations || []) as string[];
+    return (
+      <div style={{ fontSize: "0.75rem" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <span className={`tool-status-chip ${publicationReady ? "tool-status-chip-completed" : "tool-status-chip-partial"}`}>
+            {publicationReady ? "Publication-ready" : "Exploratory only"}
+          </span>
+          <span className="tool-status-chip tool-status-chip-completed">{nUsed} fitted rows</span>
+          {result.cache_key ? <code style={{ fontSize: "0.7rem" }}>cache: {String(result.cache_key)}</code> : null}
+        </div>
+        {alpha !== undefined && beta !== undefined ? (
+          <div style={{ marginBottom: 6 }}>
+            log L = {alpha.toFixed(3)} + {beta.toFixed(3)} log(FWHM/100 km/s)
+          </div>
+        ) : null}
+        <div style={{ color: "var(--color-text-secondary)" }}>
+          {typeof result.pearson_r === "number" ? <span>r={Number(result.pearson_r).toFixed(3)} · </span> : null}
+          {typeof result.pearson_p === "number" ? <span>p={Number(result.pearson_p).toExponential(2)} · </span> : null}
+          {scatter !== undefined ? <span>scatter={scatter.toFixed(3)} dex</span> : null}
+        </div>
+        {citations.length > 0 ? (
+          <div style={{ marginTop: 6, color: "var(--color-text-tertiary)" }}>
+            Citations: {citations.slice(0, 4).join(", ")}{citations.length > 4 ? `, +${citations.length - 4} more` : ""}
+          </div>
+        ) : null}
       </div>
     );
   }

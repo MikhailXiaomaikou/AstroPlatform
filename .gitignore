@@ -39,3 +39,7 @@ Thumbs.db
 
 # Build artifacts
 *.log
+
+# Local-only AI diagnostic bundles
+.local/
+backend/.diagnostics/

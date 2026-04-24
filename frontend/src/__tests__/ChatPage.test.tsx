@@ -538,6 +538,63 @@ describe("ChatPage", () => {
     expect(screen.getByText(/mean=3.0/)).toBeInTheDocument();
   });
 
+  it("shows literature table measurements as fit-ready and renders line-fit results", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "Fit completed.",
+      actions: [
+        {
+          action: "extract_literature_tables",
+          tool_result: {
+            success: true,
+            cache_key: "latest_literature_tables:test",
+            tables: [{
+              name: "Table 2",
+              columns: ["Source", "log L[CII]", "FWHM"],
+              rows: [["ALPINE_001", "8.1", "240"]],
+              row_count: 1,
+            }],
+            line_measurements: [
+              { source_name: "ALPINE_001", log_luminosity: 8.1, fwhm_km_s: 240 },
+            ],
+            line_measurement_count: 1,
+          },
+          _auto_executed: true,
+          _tool_call_id: "tables-1",
+        },
+        {
+          action: "fit_line_lfr",
+          tool_result: {
+            success: true,
+            publication_ready: true,
+            n_used: 6,
+            cache_key: "latest_literature_tables:test",
+            alpha: 8.0,
+            beta: 0.5,
+            pearson_r: 0.92,
+            pearson_p: 0.001,
+            scatter_dex: 0.12,
+            citation_summary: { citations: ["arXiv:2211.04968"] },
+          },
+          _auto_executed: true,
+          _tool_call_id: "fit-1",
+        },
+      ],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "fit cii relation" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText("Ready for fitting");
+    expect(screen.getByText("Publication-ready")).toBeInTheDocument();
+    expect(screen.getByText(/log L = 8\.000 \+ 0\.500/)).toBeInTheDocument();
+    expect(screen.getByText(/arXiv:2211\.04968/)).toBeInTheDocument();
+  });
+
   it("does not render literal undefined in object info cards", async () => {
     vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
     vi.mocked(sendChatMessage).mockResolvedValueOnce({

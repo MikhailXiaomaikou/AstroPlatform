@@ -222,3 +222,61 @@ def test_unseen_doi_is_citation_violation():
 
     assert violations
     assert violations[0].kind == "invalid_doi"
+
+
+def test_generic_cii_ranges_require_measurement_rows():
+    from app.services.claim_validator import unsupported_literature_narrative_violations
+
+    reply = (
+        "[CII] luminosities typically range from ~10^7 to 10^9 L_sun, "
+        "and FWHM generally spans 100-600 km/s."
+    )
+    tool_results = [{"tool": "search_literature", "result": {"success": True, "results": []}}]
+
+    violations = unsupported_literature_narrative_violations(reply, tool_results)
+
+    assert violations
+    assert all(v.kind == "unsupported_literature_narrative" for v in violations)
+
+
+def test_publication_ready_line_fit_supports_generic_cii_ranges():
+    from app.services.claim_validator import unsupported_literature_narrative_violations
+
+    reply = (
+        "[CII] luminosities typically range from ~10^7 to 10^9 L_sun, "
+        "and FWHM generally spans 100-600 km/s."
+    )
+    tool_results = [{
+        "tool": "fit_line_lfr",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "n_used": 12,
+            "alpha": 8.0,
+            "beta": 0.5,
+        },
+    }]
+
+    assert unsupported_literature_narrative_violations(reply, tool_results) == []
+
+
+def test_unseen_author_year_still_flags_after_literature_search():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "search_literature",
+        "result": {
+            "success": True,
+            "results": [{
+                "title": "ALPINE survey",
+                "authors": ["Le Fèvre, O."],
+                "year": "2019",
+                "bibcode": "2019A&A...625A..51L",
+            }],
+        },
+    }]
+
+    violations = provenance_citation_violations("Carniani et al. (2020) measured [CII].", tool_results)
+
+    assert violations
+    assert violations[0].kind == "suspicious_author_year"

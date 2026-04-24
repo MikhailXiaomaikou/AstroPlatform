@@ -576,6 +576,33 @@ TOOLS = [
         },
     },
     {
+        "name": "fit_line_lfr",
+        "description": (
+            "Fit a line-luminosity versus FWHM relation from cached, cited literature "
+            "measurement rows. Use this immediately after extract_literature_tables "
+            "returns usable line_measurements for tasks like [CII] log L-FWHM. "
+            "This tool consumes real row-level table provenance; do not replace it "
+            "with run_python over hardcoded or synthetic literature samples."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cache_key": {
+                    "type": "string",
+                    "description": "Cache key from extract_literature_tables. Default: latest_literature_tables.",
+                },
+                "line_id": {
+                    "type": "string",
+                    "description": "Line filter, e.g. '[CII]' or 'CII'. Default: [CII].",
+                },
+                "min_rows": {
+                    "type": "integer",
+                    "description": "Minimum citeable rows required for a publication-ready fit. Default: 5.",
+                },
+            },
+        },
+    },
+    {
         "name": "research_workflow",
         "description": (
             "Plan and execute a complete research workflow from hypothesis to conclusion. "
@@ -1572,6 +1599,8 @@ async def _execute_tool_inner(
             return await _exec_literature(tool_input)
         elif tool_name == "extract_literature_tables":
             return await _exec_extract_literature_tables(tool_input, python_session_id)
+        elif tool_name == "fit_line_lfr":
+            return _exec_fit_line_lfr(tool_input, python_session_id)
         elif tool_name == "run_python":
             return await _exec_run_python(tool_input, python_session_id)
         elif tool_name == "get_last_search_results":
@@ -3242,6 +3271,332 @@ def _arxiv_id_from_table_input(inp: dict[str, Any]) -> str:
     return ""
 
 
+def _literature_table_cache_payload(payload: dict[str, Any], cache_key: str) -> dict[str, Any]:
+    """Cache literature-table data in a structured, downstream-readable shape."""
+    line_measurements = payload.get("line_measurements") or []
+    tables = payload.get("tables") or []
+    return {
+        "schema_version": 1,
+        "kind": "literature_tables",
+        "cache_key": cache_key,
+        "arxiv_id": payload.get("arxiv_id"),
+        "title": payload.get("title"),
+        "authors": payload.get("authors") or [],
+        "year": payload.get("year"),
+        "bibcode": payload.get("bibcode"),
+        "doi": payload.get("doi"),
+        "source_url": payload.get("source_url"),
+        "line_measurements": line_measurements,
+        "tables": tables,
+        "source_summary": {
+            "line_measurement_count": len(line_measurements),
+            "raw_table_count": len(tables),
+            "supports_measurement_claims": bool(line_measurements),
+        },
+    }
+
+
+def _literature_tables_llm_summary(payload: dict[str, Any], cache_key: str) -> dict[str, Any]:
+    line_measurements = payload.get("line_measurements") or []
+    tables = payload.get("tables") or []
+    preview_rows: list[dict[str, Any]] = []
+    for row in line_measurements[:10]:
+        if not isinstance(row, dict):
+            continue
+        citation = row.get("citation") if isinstance(row.get("citation"), dict) else {}
+        preview_rows.append({
+            "source_name": row.get("source_name"),
+            "redshift": row.get("redshift"),
+            "line_id": row.get("line_id"),
+            "log_luminosity": row.get("log_luminosity"),
+            "fwhm_km_s": row.get("fwhm_km_s"),
+            "table_label": row.get("table_label") or citation.get("table_label"),
+            "citation": row.get("bibcode") or row.get("arxiv_id") or citation.get("bibcode") or citation.get("arxiv_id"),
+        })
+    return {
+        "cache_key": cache_key,
+        "raw_table_count": len(tables),
+        "line_measurement_count": len(line_measurements),
+        "fit_ready": bool(line_measurements),
+        "measurement_schema": [
+            "source_name", "redshift", "line_id", "log_luminosity",
+            "fwhm_km_s", "quality_flags", "citation",
+        ],
+        "preview_rows": preview_rows,
+        "next_step": (
+            f"Call fit_line_lfr(cache_key='{cache_key}') to fit the relation from these cited rows. "
+            "Do not use synthetic run_python or hardcoded literature samples."
+            if line_measurements else
+            "No normalized line_measurements were detected; do not fit until columns are mapped."
+        ),
+    }
+
+
+def _measurement_rows_from_cache_payload(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        for key in ("line_measurements", "measurements", "rows", "data", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [dict(row) for row in value if isinstance(row, dict)]
+        return []
+    if isinstance(payload, list):
+        return [dict(row) for row in payload if isinstance(row, dict)]
+    return []
+
+
+def _resolve_literature_measurement_cache(cache_key: str, python_session_id: str | None) -> tuple[list[dict[str, Any]], str]:
+    requested = (cache_key or "latest_literature_tables").strip() or "latest_literature_tables"
+    candidates = [requested]
+    session_key = _session_cache_key(requested, python_session_id)
+    if session_key:
+        candidates.insert(0, session_key)
+    if requested == "latest_literature_tables":
+        session_default = _session_cache_key("latest_literature_tables", python_session_id)
+        if session_default:
+            candidates.insert(0, session_default)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        payload = get_cached_results(candidate)
+        rows = _measurement_rows_from_cache_payload(payload)
+        if rows:
+            return rows, candidate
+    return [], requested
+
+
+def _line_matches_filter(row: dict[str, Any], line_filter: str) -> bool:
+    target = re.sub(r"[^a-z0-9]+", "", (line_filter or "").lower())
+    if not target:
+        return True
+    line_text = " ".join(
+        str(row.get(key) or "")
+        for key in ("line_id", "transition", "line", "table_label")
+    )
+    raw_values = row.get("raw_values")
+    if isinstance(raw_values, dict):
+        line_text += " " + " ".join(str(v) for v in raw_values.values())
+    normalized = re.sub(r"[^a-z0-9]+", "", line_text.lower())
+    if not normalized:
+        # Normalized literature-table rows with log L + FWHM and no explicit
+        # line label are still better handled by this typed fitter than by
+        # model-authored synthetic Python.
+        return True
+    return target in normalized or ("cii" in target and "cii" in normalized)
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_has_citation(row: dict[str, Any]) -> bool:
+    citation = row.get("citation") if isinstance(row.get("citation"), dict) else {}
+    return bool(
+        row.get("bibcode") or row.get("arxiv_id")
+        or citation.get("bibcode") or citation.get("arxiv_id")
+        or citation.get("doi")
+    )
+
+
+def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
+    """Fit log L(line) as a function of log10(FWHM / 100 km/s)."""
+    cache_key = str(inp.get("cache_key") or "latest_literature_tables").strip() or "latest_literature_tables"
+    line_id = str(inp.get("line_id") or "[CII]").strip() or "[CII]"
+    min_rows = int(inp.get("min_rows") or 5)
+    rows, resolved_cache_key = _resolve_literature_measurement_cache(cache_key, python_session_id)
+    if not rows:
+        return {
+            "success": False,
+            "__tool_status__": "EMPTY",
+            "analysis_status": "empty",
+            "error": f"No cached line_measurements found for cache_key={cache_key!r}.",
+            "error_class": "missing_measurement_cache",
+            "cache_key": cache_key,
+            "__message_to_model__": (
+                "No fit-ready literature measurement rows are cached. Run "
+                "extract_literature_tables on a relevant arXiv paper first."
+            ),
+        }
+
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        reason = ""
+        flags = row.get("quality_flags") if isinstance(row.get("quality_flags"), list) else []
+        if not _line_matches_filter(row, line_id):
+            reason = "line_filter"
+        elif any("limit" in str(flag).lower() for flag in flags):
+            reason = "limit_flag"
+        elif not _row_has_citation(row):
+            reason = "missing_citation"
+        else:
+            log_luminosity = _finite_float(row.get("log_luminosity"))
+            fwhm = _finite_float(row.get("fwhm_km_s"))
+            if log_luminosity is None or fwhm is None or fwhm <= 0:
+                reason = "missing_numeric_values"
+            else:
+                citation = row.get("citation") if isinstance(row.get("citation"), dict) else {}
+                accepted.append({
+                    "source_name": row.get("source_name"),
+                    "redshift": row.get("redshift"),
+                    "line_id": row.get("line_id") or line_id,
+                    "log_luminosity": log_luminosity,
+                    "fwhm_km_s": fwhm,
+                    "table_label": row.get("table_label") or citation.get("table_label"),
+                    "bibcode": row.get("bibcode") or citation.get("bibcode"),
+                    "arxiv_id": row.get("arxiv_id") or citation.get("arxiv_id"),
+                    "doi": citation.get("doi"),
+                    "row_index": row.get("row_index", idx),
+                    "citation": citation,
+                })
+        if reason:
+            rejected.append({
+                "source_name": row.get("source_name"),
+                "reason": reason,
+                "row_index": row.get("row_index", idx),
+            })
+
+    n_used = len(accepted)
+    if n_used < 2:
+        return {
+            "success": True,
+            "__tool_status__": "PARTIAL",
+            "analysis_status": "partial",
+            "cache_key": resolved_cache_key,
+            "line_id": line_id,
+            "n_available": len(rows),
+            "n_used": n_used,
+            "n_rejected": len(rejected),
+            "rejected_summary": rejected[:20],
+            "publication_ready": False,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "Fewer than two citeable line-measurement rows survived filtering. "
+                "Do not claim a fitted luminosity-FWHM relation."
+            ),
+        }
+
+    import numpy as np
+
+    x = np.array([math.log10(row["fwhm_km_s"] / 100.0) for row in accepted], dtype=float)
+    y = np.array([row["log_luminosity"] for row in accepted], dtype=float)
+    beta = alpha = r_value = p_value = beta_stderr = alpha_stderr = None
+    spearman_r = spearman_p = None
+    try:
+        from scipy import stats as _stats
+
+        fit = _stats.linregress(x, y)
+        beta = float(fit.slope)
+        alpha = float(fit.intercept)
+        r_value = float(fit.rvalue)
+        p_value = float(fit.pvalue)
+        beta_stderr = float(fit.stderr) if fit.stderr is not None else None
+        alpha_stderr = float(getattr(fit, "intercept_stderr", math.nan))
+        if alpha_stderr is not None and not math.isfinite(alpha_stderr):
+            alpha_stderr = None
+        if n_used >= 3:
+            spearman = _stats.spearmanr(x, y)
+            spearman_r = float(spearman.statistic)
+            spearman_p = float(spearman.pvalue)
+    except Exception:
+        coeff = np.polyfit(x, y, 1)
+        beta = float(coeff[0])
+        alpha = float(coeff[1])
+        if n_used >= 2:
+            r_value = float(np.corrcoef(x, y)[0, 1])
+
+    y_model = alpha + beta * x
+    residuals = y - y_model
+    scatter_dex = float(np.sqrt(np.mean(residuals ** 2)))
+    publication_ready = n_used >= min_rows and all(_row_has_citation(row) for row in accepted)
+    citation_keys = sorted({
+        str(row.get("bibcode") or row.get("arxiv_id") or row.get("doi") or "").strip()
+        for row in accepted
+        if str(row.get("bibcode") or row.get("arxiv_id") or row.get("doi") or "").strip()
+    })
+    table_labels = sorted({
+        str(row.get("table_label") or "").strip()
+        for row in accepted
+        if str(row.get("table_label") or "").strip()
+    })
+
+    result = {
+        "success": True,
+        "tool": "fit_line_lfr",
+        "result_granularity": "literature_measurement_fit",
+        "supports_measurement_claims": publication_ready,
+        "cache_key": resolved_cache_key,
+        "line_id": line_id,
+        "model": "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)",
+        "n_available": len(rows),
+        "n_used": n_used,
+        "n_rejected": len(rejected),
+        "alpha": alpha,
+        "alpha_stderr": alpha_stderr,
+        "beta": beta,
+        "beta_stderr": beta_stderr,
+        "pearson_r": r_value,
+        "pearson_p": p_value,
+        "spearman_r": spearman_r,
+        "spearman_p": spearman_p,
+        "scatter_dex": scatter_dex,
+        "publication_ready": publication_ready,
+        "fit_inputs_preview": accepted[:12],
+        "rejected_summary": rejected[:20],
+        "citation_summary": {
+            "citation_count": len(citation_keys),
+            "citations": citation_keys[:20],
+            "table_labels": table_labels[:20],
+        },
+        "provenance": {
+            "datasets": [{
+                "service_key": "literature_table_fit",
+                "service_name": "Literature measurement table fit",
+                "archive_version": "cached literature table rows",
+                "source_authority": "paper_table",
+                "article": citation_keys[0] if citation_keys else "",
+                "reference_url": "",
+                "source_urls": [],
+                "acknowledgement_template": (
+                    "This fit used machine-readable measurements extracted from cited paper tables; "
+                    "verify the original table rows before publication."
+                ),
+            }],
+            "field_bibcodes": {
+                "columns": {"fit_input_citations": citation_keys},
+                "mapping": {"fit_input_citations": "line_measurements"},
+                "source_column_pattern": "literature_table_fit_input",
+            } if citation_keys else None,
+            "coverage": {
+                "field_level": {
+                    "available": bool(citation_keys),
+                    "bibcode_columns_found": 1 if citation_keys else 0,
+                    "unique_bibcodes": len(set(citation_keys)),
+                },
+                "primary_citation_source": "field_level" if citation_keys else "none",
+            },
+        },
+    }
+    if not publication_ready:
+        result["__tool_status__"] = "PARTIAL"
+        result["analysis_status"] = "partial"
+        result["__do_not_claim__"] = True
+        result["__message_to_model__"] = (
+            f"The line-relation fit used {n_used} rows, below min_rows={min_rows} "
+            "or with incomplete citations. Describe it as exploratory only; do not "
+            "claim a publication-ready relation."
+        )
+    return result
+
+
 async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "default") -> dict:
     """Extract arXiv tables and cache any normalized measurement rows."""
     from app.api.arxiv import extract_arxiv_tables_payload
@@ -3264,8 +3619,8 @@ async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "d
 
     line_measurements = payload.get("line_measurements") or []
     tables = payload.get("tables") or []
-    cache_value = line_measurements if line_measurements else tables
     cache_key = _session_cache_key("latest_literature_tables", python_session_id) or "latest_literature_tables"
+    cache_value = _literature_table_cache_payload(payload, cache_key)
     store_search_results(cache_key, cache_value)
     if cache_key != "latest_literature_tables":
         store_search_results("latest_literature_tables", cache_value)
@@ -3313,6 +3668,8 @@ async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "d
         "line_measurements": line_measurements,
         "line_measurement_count": len(line_measurements),
         "cache_key": cache_key,
+        "fit_ready": bool(line_measurements),
+        "llm_summary": _literature_tables_llm_summary(payload, cache_key),
         "provenance": {
             "datasets": [dataset],
             "field_bibcodes": field_bibcodes if bibcodes else None,
@@ -3334,6 +3691,12 @@ async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "d
             "Raw literature tables were extracted, but no normalized line_measurements were detected. "
             "You may summarize the table availability and citation, but do not quote L[CII], FWHM, "
             "or fit a relation unless a measurement table is mapped."
+        )
+    else:
+        result["__message_to_model__"] = (
+            f"Extracted {len(line_measurements)} normalized line_measurements and cached them as "
+            f"{cache_key}. For a luminosity/FWHM relation, call fit_line_lfr with this cache_key. "
+            "Do NOT create a synthetic or hardcoded literature dataframe in run_python."
         )
     return result
 

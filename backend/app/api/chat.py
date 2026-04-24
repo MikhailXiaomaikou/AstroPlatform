@@ -113,6 +113,11 @@ paper/abstract-level evidence only: it supports paper discovery and citation,
 not table measurements.  Quote `[CII]` luminosity, FWHM, line flux, slope, or
 correlation values only from returned `line_measurements` rows, and cite the
 paper plus table label, e.g. "Table 2 of Author et al. (2022; arXiv:xxxx)".
+If `extract_literature_tables` returns `line_measurement_count > 0`, the next
+step for a luminosity/FWHM relation is `fit_line_lfr(cache_key=...)` or
+`run_python(data_source="cached:<cache_key>")` reading `get_cached_results()`.
+Never say the table could not be extracted when the tool returned usable
+measurement rows; state the count/cache key and continue with the fit tool.
 Never fill a line-measurement sample by hardcoding remembered
 ALPINE/REBELS/literature tables in `run_python`.
 
@@ -1439,6 +1444,9 @@ aperture photometry. Use it when users upload a FITS image and want to find obje
 
 ALWAYS use these functions when applicable — they produce publication-quality output.
 When the user asks for analysis, statistics, or plots, use run_python. Don't describe — DO IT.
+Exception: when a dedicated fitting tool exists for a cited measurement table
+(for example `fit_line_lfr` after `extract_literature_tables`), use that tool
+instead of writing ad hoc or synthetic Python.
 If code errors, read the traceback, fix the code, and run again.
 When formatting floating-point values, use float formats like `:.2f`, not integer-only formats like `%d`.
 
@@ -3032,6 +3040,85 @@ def _tool_results_to_actions(all_tool_results: list[dict]) -> list[dict]:
     return actions
 
 
+def _line_measurement_count_from_result(result: Any) -> int:
+    if not isinstance(result, dict):
+        return 0
+    explicit = result.get("line_measurement_count")
+    if isinstance(explicit, int):
+        return max(0, explicit)
+    rows = result.get("line_measurements")
+    if isinstance(rows, list):
+        return len(rows)
+    summary = result.get("llm_summary")
+    if isinstance(summary, dict) and isinstance(summary.get("line_measurement_count"), int):
+        return max(0, int(summary["line_measurement_count"]))
+    return 0
+
+
+def _line_fit_context(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(token in lowered for token in (
+        "[cii]", "c ii", "cii", "l[cii]", "lcii", "line luminosity",
+        "fwhm", "line width", "linewidth", "alma", "alpine", "rebels",
+        "relation", "correlation", "regression", "fit", "fitting",
+    ))
+
+
+def _run_python_reads_real_cache(code: str) -> bool:
+    return any(token in str(code or "") for token in (
+        "get_cached_results(", "get_search_results(", "get_adql_results(",
+        "get_adql_result_sets(", "load_fits(",
+    ))
+
+
+def _should_suppress_line_measurement_synthetic_python(
+    tool_call: dict,
+    *,
+    fit_ready_cache_keys: list[str],
+    latest_user_text: str,
+    user_requested_synthetic_demo: bool,
+) -> bool:
+    if tool_call.get("name") != "run_python" or not fit_ready_cache_keys:
+        return False
+    if user_requested_synthetic_demo:
+        return False
+    tool_input = tool_call.get("input") if isinstance(tool_call.get("input"), dict) else {}
+    declared = str(tool_input.get("data_source") or "").strip()
+    if declared and declared != "none_not_analyzing_real_data":
+        return False
+    code = str(tool_input.get("code") or "")
+    if _run_python_reads_real_cache(code):
+        return False
+    context = "\n".join([
+        latest_user_text,
+        str(tool_input.get("description") or ""),
+        code,
+    ])
+    return _line_fit_context(context)
+
+
+def _suppressed_line_measurement_python_result(cache_keys: list[str]) -> dict:
+    cache_key = cache_keys[-1] if cache_keys else "latest_literature_tables"
+    return {
+        "success": True,
+        "__tool_status__": "EMPTY",
+        "analysis_status": "empty",
+        "data_origin": "unavailable",
+        "row_count": 0,
+        "suppressed_reason": "fit_ready_literature_measurements_available",
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            f"run_python was suppressed because fit-ready literature measurement "
+            f"rows are already cached as {cache_key}. You MUST call "
+            f"fit_line_lfr(cache_key='{cache_key}') or read cached rows with "
+            "data_source='cached:<key>'. Do not create synthetic or hardcoded "
+            "literature samples for this fitting task."
+        ),
+        "__suggested_next_step__": f"Call fit_line_lfr with cache_key={cache_key}.",
+        "cache_key": cache_key,
+    }
+
+
 async def _run_agent_loop(
     *,
     system: str,
@@ -3115,7 +3202,7 @@ async def _run_agent_loop(
         "search_objects", "run_adql", "search_lightcurve", "query_transients",
         "crossmatch_catalogs", "query_gaia_cluster", "get_object_info",
         "get_object_dossier", "get_extinction", "search_literature",
-        "query_high_velocity_stars",
+        "extract_literature_tables", "query_high_velocity_stars",
     }
     # G3.4 + H0.7: tool → failure count this turn.  When ≥
     # DISABLE_AFTER_FAILURES, the tool is removed from the `tools`
@@ -3132,6 +3219,7 @@ async def _run_agent_loop(
     DISABLE_AFTER_FAILURES = 3
     synthetic_run_python_count = 0  # G3.3 counter
     user_requested_synthetic_demo = _user_requested_synthetic_demo(messages)
+    fit_ready_literature_cache_keys: list[str] = []
 
     hit_iteration_cap = False
     hit_deadline = False
@@ -3188,6 +3276,20 @@ async def _run_agent_loop(
 
         if checkpoint_note:
             system_this_call = system_this_call + "\n\n" + checkpoint_note
+
+        if fit_ready_literature_cache_keys:
+            latest_cache = fit_ready_literature_cache_keys[-1]
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: extract_literature_tables has already returned "
+                + f"fit-ready line_measurements cached as {latest_cache}. For any "
+                + "[CII]/line-luminosity/FWHM relation, call "
+                + f"fit_line_lfr(cache_key='{latest_cache}') next, or use "
+                + f"run_python with data_source='cached:{latest_cache}' and "
+                + "get_cached_results(). Do NOT declare "
+                + "data_source='none_not_analyzing_real_data' or hardcode "
+                + "ALPINE/REBELS/literature sample rows.]"
+            )
 
         seconds_left = _loop_deadline - _time.monotonic()
         if seconds_left <= soft_reminder_s:
@@ -3252,9 +3354,27 @@ async def _run_agent_loop(
             })
         working_messages.append({"role": "assistant", "content": assistant_content})
 
+        suppressed_tool_results: dict[str, dict] = {}
+        real_tool_calls: list[dict] = []
+        for tool_call in tool_calls_in_turn:
+            if _should_suppress_line_measurement_synthetic_python(
+                tool_call,
+                fit_ready_cache_keys=fit_ready_literature_cache_keys,
+                latest_user_text=latest_user_text,
+                user_requested_synthetic_demo=user_requested_synthetic_demo,
+            ):
+                suppressed_tool_results[tool_call["id"]] = {
+                    "id": tool_call["id"],
+                    "name": tool_call["name"],
+                    "input": tool_call["input"],
+                    "result": _suppressed_line_measurement_python_result(fit_ready_literature_cache_keys),
+                }
+            else:
+                real_tool_calls.append(tool_call)
+
         tool_result_blocks = []
-        executed_tools = await _execute_tool_calls(
-            tool_calls_in_turn,
+        real_executed_tools = await _execute_tool_calls(
+            real_tool_calls,
             provider_api_keys.get("anthropic", ""),
             provider_api_keys,
             python_session_id,
@@ -3265,10 +3385,22 @@ async def _run_agent_loop(
             summary_reserve_s=summary_reserve_s,
             workflow_budget_mode=budget_mode,
             tool_deadline_scale=float(budget.get("tool_deadline_scale", 1.0)),
-        )
+        ) if real_tool_calls else []
+        real_by_id = {tc["id"]: tc for tc in real_executed_tools}
+        executed_tools = [
+            suppressed_tool_results.get(tc["id"]) or real_by_id[tc["id"]]
+            for tc in tool_calls_in_turn
+        ]
         for tc in executed_tools:
             result = tc["result"]
             tool_name = tc.get("name", "")
+
+            if tool_name in {"extract_literature_tables", "search_line_measurements"} and isinstance(result, dict):
+                measurement_count = _line_measurement_count_from_result(result)
+                if measurement_count > 0:
+                    cache_key = str(result.get("cache_key") or "latest_literature_tables")
+                    if cache_key not in fit_ready_literature_cache_keys:
+                        fit_ready_literature_cache_keys.append(cache_key)
 
             # G3.1 + H0.7: mark data-fetch failures for the G3.4 disable gate.
             # H0.7: timeouts / payload_too_large / row_count=0 are "soft"

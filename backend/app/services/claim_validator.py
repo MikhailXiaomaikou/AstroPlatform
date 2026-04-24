@@ -393,6 +393,21 @@ _UNSUPPORTED_NARRATIVE_PATTERNS: list[tuple[str, re.Pattern]] = [
             re.I,
         ),
     ),
+    (
+        "unsupported_line_property_relation",
+        re.compile(
+            r"\b(?:typically|generally|usually|commonly|often)[^.\n;:()]{0,80}"
+            r"(?:range|ranges|span|spans|between)[^.\n;:()]{0,140}"
+            r"(?:L\s*\[?\s*C\s*II\s*\]?|L_?CII|LCII|"
+            r"line\s+luminosit(?:y|ies)|FWHM|line\s+width|velocity\s+width|"
+            r"L☉|L_sun|km\s*/?\s*s|km\s*s-?1)|"
+            r"\b(?:L\s*\[?\s*C\s*II\s*\]?|L_?CII|LCII|line\s+luminosit(?:y|ies)|"
+            r"FWHM|line\s+width|velocity\s+width)[^.\n;:()]{0,100}"
+            r"(?:typically|generally|usually|commonly|often)[^.\n;:()]{0,80}"
+            r"(?:range|ranges|span|spans|between)\b",
+            re.I,
+        ),
+    ),
 ]
 
 
@@ -864,7 +879,7 @@ def _line_measurement_rows_available(tool_results: Any) -> bool:
         if not _payload_is_claimable_success(tool_name, result):
             continue
         if tool_name == "fit_line_lfr":
-            return True
+            return bool(result.get("publication_ready"))
         rows = result.get("line_measurements") if isinstance(result, dict) else None
         if isinstance(rows, list) and rows:
             return True
