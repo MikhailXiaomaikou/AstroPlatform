@@ -86,11 +86,30 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     # forms like `age ~100 Myr` were captured).
     ("age_gyr", re.compile(rf"\bage(?:\s*(?:of|=|≈|~|is|:|：|about|approximately|roughly|around))*\s*{_NUM}\s*Gyr\b", re.I)),
     ("age_myr", re.compile(rf"\bage(?:\s*(?:of|=|≈|~|is|:|：|about|approximately|roughly|around))*\s*{_NUM}\s*Myr\b", re.I)),
+    ("age_myr", re.compile(
+        rf"\b(?:cluster\s+age|age\s+estimate|best[-\s]*fit\s+age|"
+        rf"literature\s+age|typical\s+(?:age\s+)?(?:for|of)\s+[^.\n;:()]*?)"
+        rf"[^.\n]*?{_NUM}\s*Myr\b|"
+        rf"\b{_NUM}\s*Myr\b[^.\n]{{0,120}}\b(?:age|old|literature|typical)\b",
+        re.I,
+    )),
     ("teff_k", re.compile(rf"\bT(?:_?eff)?\s*[=≈~]\s*{_NUM}\s*K\b", re.I)),
     ("distance_pc", re.compile(rf"\bdistance\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*pc\b", re.I)),
     ("distance_kpc", re.compile(rf"\bdistance\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*kpc\b", re.I)),
     ("distance_mpc", re.compile(rf"\bdistance\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*Mpc\b", re.I)),
     ("period_days", re.compile(rf"\bperiod\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*days?\b", re.I)),
+    ("period_change_rate", re.compile(
+        rf"\b(?:dP\s*/\s*dt|period\s+(?:change|derivative)|"
+        rf"rate\s+of\s+period\s+change)[^.\n;:()]*?{_NUM}"
+        rf"(?:\s*(?:day\s*/\s*day|d\s*/\s*d|s\s*/\s*yr|"
+        rf"sec(?:ond)?s?\s*/\s*yr))?",
+        re.I,
+    )),
+    ("period_ppm", re.compile(
+        rf"\b{_NUM}\s*ppm\b[^.\n;:()]*\b(?:period|change|stability|evolution)\b|"
+        rf"\b(?:period|change|stability|evolution)[^.\n;:()]*?{_NUM}\s*ppm\b",
+        re.I,
+    )),
     # Pre-PART-W 中文 pattern (period / distance): 保留给旧测试兼容.
     # X (PART X 方案 D): reply 强制英文之后这两条几乎不会触发 — 因为含
     # CJK 的 reply 已在上游被硬拦. 保留仅作最后兜底.
@@ -307,6 +326,41 @@ class CitationViolation:
     line_number: int
 
 
+_UNSUPPORTED_NARRATIVE_PATTERNS: list[tuple[str, re.Pattern]] = [
+    (
+        "literature_fallback",
+        re.compile(
+            r"\b(?:literature\s+values?|from\s+the\s+literature|"
+            r"typical\s+(?:for|of|from)\s+[^.\n;:()]{0,80}literature|"
+            r"(?:known|textbook)\s+values?)\b",
+            re.I,
+        ),
+    ),
+    (
+        "unsupported_history",
+        re.compile(
+            r"\b(?:Goodricke|prototype\s+Classical\s+Cepheid|"
+            r"monitored\s+for\s+[^.\n;:()]{0,40}(?:years?|centur(?:y|ies))|"
+            r"(?:monitored|observed|known|studied|tracked|discovered|discovery)"
+            r"[^.\n;:()]{0,80}\bsince\s+\d{4}|"
+            r"\bsince\s+\d{4}[^.\n;:()]{0,80}\b(?:discovery|Goodricke|observations?|monitoring)|"
+            r"stability\s+over\s+centur(?:y|ies)|remarkable\s+stability\s+over\s+centur(?:y|ies))\b",
+            re.I,
+        ),
+    ),
+    (
+        "unsupported_period_change",
+        re.compile(
+            r"\b(?:dP\s*/\s*dt|period\s+(?:change|derivative)|"
+            r"evolutionary\s+change|expected\s+evolutionary\s+change|"
+            r"stability\s+over\s+centur(?:y|ies)|day\s*/\s*day|"
+            r"sec(?:ond)?s?\s*/\s*yr)\b",
+            re.I,
+        ),
+    ),
+]
+
+
 def _strip_markdown_code(text: str) -> str:
     """在抽取 prose 数值 claim 前移除 markdown 代码区。
 
@@ -358,7 +412,7 @@ def extract_claims(text: str) -> list[Claim]:
                     continue
                 seen.add(key)
                 claim_label = label
-                if pattern.groups and pattern.groups > 1:
+                if pattern.groups and pattern.groups > 1 and label not in {"age_myr", "period_ppm"}:
                     claim_label = f"{label}.g{grp_idx}"
                 claims.append(Claim(
                     label=claim_label,
@@ -645,6 +699,71 @@ def provenance_citation_violations(
     return violations
 
 
+def unsupported_literature_narrative_violations(
+    reply: str,
+    tool_results: Any,
+) -> list[CitationViolation]:
+    """Hard-block unsupported literature/history prose, not only citations.
+
+    B12/B13 exposed a gap: the assistant stopped inventing explicit
+    author-year citations, but still laundered synthetic stdout or training
+    priors as prose ("literature values", "monitored since 1784", dP/dt).
+    These claims need a current-turn literature/tool source even when they
+    contain no bibcode-shaped token.
+    """
+    if not reply:
+        return []
+
+    if _tool_successfully_ran(tool_results, "search_literature"):
+        return []
+
+    stripped_reply = _strip_markdown_code(reply)
+    supported_payload_text = _claimable_tool_text(tool_results)
+    violations: list[CitationViolation] = []
+    seen: set[tuple[str, str, int]] = set()
+
+    for kind, pattern in _UNSUPPORTED_NARRATIVE_PATTERNS:
+        for match in pattern.finditer(stripped_reply):
+            match_text = match.group(0).strip()
+            if not match_text:
+                continue
+            if match_text.lower() in supported_payload_text:
+                continue
+            key = (kind, match_text.lower(), match.start())
+            if key in seen:
+                continue
+            seen.add(key)
+            violations.append(CitationViolation(
+                kind="unsupported_literature_narrative",
+                match_text=match_text,
+                line_number=_line_number(reply, match.start()),
+            ))
+
+    for violation in violations:
+        _record_citation_violation_metric(violation.kind)
+        logger.warning(
+            "Unsupported narrative provenance violation: match=%r line=%d",
+            violation.match_text,
+            violation.line_number,
+        )
+    return violations
+
+
+def blocked_unsupported_narrative_reply_text(violations: list[CitationViolation]) -> str:
+    lines = [
+        f"- {violation.match_text} (line {violation.line_number})"
+        for violation in violations
+    ]
+    return (
+        "⚠ Reply withheld: the model attempted to use literature, historical, "
+        "or physical-context claims that were not present in this turn's "
+        "non-synthetic tool results.\n\n"
+        + "\n".join(lines)
+        + "\n\nRun `search_literature` or a dedicated measurement tool first, "
+        "or state that the value/context was not determined by the tools."
+    )
+
+
 def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
     lines = [
         f"- {violation.kind}: {violation.match_text} (line {violation.line_number})"
@@ -667,6 +786,82 @@ def _iter_dict_nodes(payload: Any) -> Iterable[dict[str, Any]]:
     elif isinstance(payload, list):
         for item in payload:
             yield from _iter_dict_nodes(item)
+
+
+def _entry_tool_and_result(entry: Any) -> tuple[str | None, dict[str, Any] | None]:
+    if not isinstance(entry, dict):
+        return None, None
+    tool_name = str(entry.get("tool") or entry.get("name") or "").strip() or None
+    result = entry.get("result") if isinstance(entry.get("result"), dict) else entry
+    return tool_name, result if isinstance(result, dict) else None
+
+
+def _payload_is_claimable_success(tool_name: str | None, result: dict[str, Any] | None) -> bool:
+    if not result:
+        return False
+    status_values = [
+        str(result.get(key) or "").strip().upper()
+        for key in ("analysis_status", "__tool_status__", "status", "data_origin")
+        if result.get(key) is not None
+    ]
+    if (
+        result.get("__do_not_claim__") is True
+        or result.get("success") is False
+        or bool(result.get("error"))
+        or any(s in {"EMPTY", "FAILED", "UNAVAILABLE", "SYNTHETIC", "SIMULATED_DEMO"} for s in status_values)
+        or str(result.get("data_origin") or "").lower() in {"synthetic", "unavailable"}
+        or result.get("row_count") == 0
+        or result.get("found") == 0
+    ):
+        return False
+
+    for key in ("data", "rows", "results"):
+        if key in result:
+            value = result.get(key)
+            if value in (None, [], {}):
+                return False
+
+    if tool_name == "search_literature":
+        return bool(result.get("bibcode") or result.get("results") or result.get("data"))
+    if tool_name == "fit_isochrone":
+        return bool(
+            result.get("best_fit")
+            or result.get("age_myr") is not None
+            or result.get("best_log_age") is not None
+        )
+    if tool_name == "get_extinction":
+        return bool(result.get("e_b_v") is not None or result.get("a_v") is not None)
+
+    return True
+
+
+def _successful_tool_names(tool_results: Any) -> set[str]:
+    names: set[str] = set()
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries or []:
+        tool_name, result = _entry_tool_and_result(entry)
+        if tool_name and _payload_is_claimable_success(tool_name, result):
+            names.add(tool_name)
+    return names
+
+
+def _tool_successfully_ran(tool_results: Any, tool_name: str) -> bool:
+    return tool_name in _successful_tool_names(tool_results)
+
+
+def _claimable_tool_text(tool_results: Any) -> str:
+    """Lowercase JSON text for non-synthetic, claimable tool payloads only."""
+    chunks: list[str] = []
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries or []:
+        tool_name, result = _entry_tool_and_result(entry)
+        if not _payload_is_claimable_success(tool_name, result):
+            continue
+        try:
+            chunks.append(json.dumps(result, default=str).lower())
+        except TypeError:
+            chunks.append(str(result).lower())
+    return "\n".join(chunks)
 
 
 def _bibcodes_from_field_payload(payload: Any) -> set[str]:
@@ -747,7 +942,14 @@ def _record_citation_violation_metric(kind: str) -> None:
     try:
         from app.observability.metrics import record_counter
 
-        reason = "invalid_bibcode" if kind == "invalid_bibcode" else "suspicious_author_year"
+        if kind in {
+            "invalid_bibcode",
+            "suspicious_author_year",
+            "unsupported_literature_narrative",
+        }:
+            reason = kind
+        else:
+            reason = "suspicious_author_year"
         record_counter("fabrication_blocked_total", 1.0, reason=reason)
     except Exception:
         pass
@@ -925,10 +1127,10 @@ def literature_prior_violations(reply: str, tool_results: Any) -> list[Claim]:
     """W1 (PART W): 检测 textbook-prior 式 age/mass/distance 引用.
 
     当 reply 里出现这些 label 的数字 claim, 但本轮 tool_results 里没有任何
-    对应测量/引用工具的调用 (fit_isochrone / search_literature /
+    对应成功且可引用的测量/引用工具结果 (fit_isochrone / search_literature /
     get_object_dossier / run_adql / get_object_info / get_extinction), 返回
     违规 claim 列表. 比 validate_claims 的 ±1% universe 匹配更严: 独立于
-    universe 里是否偶然有相近数字, 直接按 "有没有跑该工具" 判断.
+    universe 里是否偶然有相近数字, 直接按 "有没有成功产出可引用结果" 判断.
 
     Args:
         reply: assistant 回复原文
@@ -937,18 +1139,15 @@ def literature_prior_violations(reply: str, tool_results: Any) -> list[Claim]:
     Returns:
         违规 claim 列表. 空 list 表示所有相关 claim 都有对应工具支撑.
     """
-    tools_run: set[str] = set()
-    if isinstance(tool_results, list):
-        for entry in tool_results:
-            if isinstance(entry, dict) and "tool" in entry:
-                tools_run.add(str(entry["tool"]))
+    successful_tools = _successful_tool_names(tool_results)
     claims = extract_claims(reply)
     violations: list[Claim] = []
     for c in claims:
-        allowed = _LITERATURE_PRIOR_LABELS_REQUIRE_TOOL.get(c.label)
+        base_label = c.label.split(".g", 1)[0]
+        allowed = _LITERATURE_PRIOR_LABELS_REQUIRE_TOOL.get(base_label)
         if allowed is None:
             continue
-        if not any(t in tools_run for t in allowed):
+        if not any(t in successful_tools for t in allowed):
             violations.append(c)
     return violations
 

@@ -77,6 +77,10 @@ Hard prohibitions:
 - Never invent bibcodes or author names not present in tool_results.
 - Never substitute memorized citations from training data, such as
   "Fernie 1995" or "Berdnikov 2008", for tool-sourced citations.
+- Never use unsupported "literature values", "typical from literature",
+  historical context, physical priors, or period-change claims unless
+  they appear in non-synthetic tool_results from this turn, preferably
+  via `search_literature`.
 - If a query returns no provenance, say: "no authoritative citation
   obtained this turn; consult the data center directly."
 - Author-year citations must correspond to a bibcode in the current
@@ -160,12 +164,28 @@ the technique" / "generate an example" (no real data expected), you
 may use `run_python(code=..., data_source="none_not_analyzing_real_data")`.
 The output gets a visible ⚠ SYNTHETIC banner in the UI.  You MUST open
 your reply with: "**⚠ Demonstration with synthetic data — not a real
-observation.**" and label every number as illustrative.
+observation.**" and label every number as illustrative.  You MUST NOT
+use any facts, numbers, historical context, literature priors, physical
+interpretations, or conclusions from synthetic stdout / variables /
+figures in a real-data answer.
 
 If you're uncertain which case the user is in, **default to Option A**.
 Converting a failed real-data request into a synthetic demo without
 asking is exactly the behaviour the zero-fabrication gate exists to
 prevent.
+
+## Cluster / CMD age workflow
+
+For open-cluster CMD analysis, cluster age must come from the tool chain,
+not from memory.  Prefer `query_gaia_cluster` for member candidates,
+`get_extinction` for reddening, and `fit_isochrone` for age.  `run_python`
+may filter members, compute summary statistics, or plot the CMD from real
+cached rows, but if `fit_isochrone` fails or returns empty you MUST NOT
+write "typical literature age" / "~125 Myr" / "literature values" unless
+you explicitly call `search_literature` and cite the returned paper.
+When Gaia/ADQL results include `abs_g_mag`, use that derived column; do
+not hand-roll parallax-to-distance-modulus unless necessary, and if you
+do, state the parallax units explicitly.
 
 ## W3 — Catalog-only reporting is ALWAYS allowed
 
@@ -2478,6 +2498,77 @@ def _classify_abstention_reason(all_tool_results: list[dict]) -> str:
     return "no_tools"
 
 
+def _sequence_or_mapping_is_empty(value: Any) -> bool:
+    return isinstance(value, (list, tuple, dict, set)) and len(value) == 0
+
+
+def _is_failed_or_empty_data_fetch(result: Any) -> bool:
+    """Return True when a data-fetch result has no citeable payload.
+
+    This intentionally includes soft failures such as timeouts and retry
+    budget exhaustion.  They should not disable the tool immediately, but
+    they must suppress later synthetic Python substitutions in the same
+    turn.
+    """
+    if not isinstance(result, dict):
+        return False
+    status_tokens: list[str] = []
+    for key in ("analysis_status", "__tool_status__", "status", "data_origin"):
+        value = result.get(key)
+        if isinstance(value, str):
+            status_tokens.append(value.strip().upper())
+
+    err_str = str(result.get("error") or "").lower()
+    err_class = str(result.get("error_class") or "").lower()
+    message_to_model = str(result.get("__message_to_model__") or "").lower()
+
+    if any(s in {"EMPTY", "FAILED", "UNAVAILABLE"} for s in status_tokens):
+        return True
+    if result.get("success") is False or bool(result.get("error")):
+        return True
+    if result.get("row_count") == 0 or result.get("found") == 0:
+        return True
+    if "timeout" in err_str or "timed out" in err_str or "timeout" in err_class:
+        return True
+    if "retry budget" in err_str or "retry budget" in message_to_model:
+        return True
+
+    for key in ("data", "results", "rows"):
+        if key in result and _sequence_or_mapping_is_empty(result.get(key)):
+            return True
+    return False
+
+
+def _user_requested_synthetic_demo(messages: list[dict] | None) -> bool:
+    text_parts: list[str] = []
+    for message in messages or []:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            text_parts.append(content)
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    text_parts.append(item["text"])
+    text = " ".join(text_parts).lower()
+    return any(
+        keyword in text
+        for keyword in (
+            "demonstrate",
+            "demo",
+            "example",
+            "synthetic",
+            "mock",
+            "toy model",
+            "show me how",
+            "tutorial",
+            "演示",
+            "示例",
+        )
+    )
+
+
 def _render_abstention_card(attrs: dict, reason: str) -> str:
     """F2.3: canonical Markdown card rendered from the abstention tag.
     The model does NOT write this prose — we do, so we control the
@@ -2971,6 +3062,7 @@ async def _run_agent_loop(
     empty_data_fetches: set[str] = set()
     DISABLE_AFTER_FAILURES = 3
     synthetic_run_python_count = 0  # G3.3 counter
+    user_requested_synthetic_demo = _user_requested_synthetic_demo(messages)
 
     hit_iteration_cap = False
     hit_deadline = False
@@ -3124,15 +3216,14 @@ async def _run_agent_loop(
                 # "Retryable" / soft failures — user/AI can adjust parameters.
                 soft_failure = (
                     "timeout" in err_str or "timed out" in err_str
+                    or "retry budget" in err_str
                     or "payload_too_large" in err_class
                     or "too large" in err_str
                     or result.get("row_count") == 0  # empty result is not a connector failure
+                    or result.get("found") == 0
                     or any(s == "EMPTY" for s in status_tokens)
                 )
-                empty_failure = (
-                    result.get("row_count") == 0
-                    or any(s == "EMPTY" for s in status_tokens)
-                )
+                empty_failure = _is_failed_or_empty_data_fetch(result)
                 hard_failure = (
                     result.get("success") is False
                     or bool(result.get("error"))
@@ -3168,6 +3259,7 @@ async def _run_agent_loop(
                 has_real_origin = origin in {"real_archive", "cached_real", "user_uploaded"}
                 if (
                     failed_data_fetches
+                    and not user_requested_synthetic_demo
                     and not has_real_origin
                     and (not is_real_source_declared or declared_empty_dependency)
                 ):
@@ -3180,9 +3272,11 @@ async def _run_agent_loop(
                             f"Tool `run_python` produced no citeable data because "
                             f"data-fetch tools {sorted(failed_data_fetches)} failed "
                             f"earlier this turn and this call did not read a real "
-                            f"data source. You MUST NOT cite any number from this "
-                            f"call. Emit <tools_returned_nothing/> with the failed "
-                            f"tool names instead of substituting synthetic data."
+                            f"data source. You MUST NOT use any facts, numbers, "
+                            f"historical context, literature priors, physical "
+                            f"interpretations, or conclusions from this call. "
+                            f"Emit <tools_returned_nothing/> with the failed tool "
+                            f"names instead of substituting synthetic data."
                         ),
                         "__suggested_next_step__": (
                             "Report that the requested real data could not be retrieved "
@@ -3352,6 +3446,8 @@ async def _run_agent_loop(
             provenance_citation_violations,
             citation_violations_should_block,
             blocked_citation_reply_text,
+            unsupported_literature_narrative_violations,
+            blocked_unsupported_narrative_reply_text,
         )
 
         # F1.4: zero-data hard block.  If every tool call this turn was
@@ -3425,6 +3521,19 @@ async def _run_agent_loop(
                 record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="zero_data")
             except Exception:
                 pass
+
+        elif (
+            unsupported_narrative_claims := unsupported_literature_narrative_violations(
+                clean_reply, all_tool_results
+            )
+        ):
+            logger.error(
+                "Unsupported narrative gate BLOCKED reply from %s (%d violations)",
+                agent_name,
+                len(unsupported_narrative_claims),
+            )
+            clean_reply = blocked_unsupported_narrative_reply_text(unsupported_narrative_claims)
+            fabrication_stats["blocked"] = True
 
         elif literature_prior_violations(clean_reply, all_tool_results):
             # W1 (PART W): 文献先验硬 block. 比 zero_data_but_quantitative 松 —
@@ -3741,8 +3850,10 @@ async def _run_orchestrated_chat(
             from app.services.claim_validator import (
                 blocked_reply_text,
                 blocked_citation_reply_text,
+                blocked_unsupported_narrative_reply_text,
                 citation_violations_should_block,
                 provenance_citation_violations,
+                unsupported_literature_narrative_violations,
                 validate_claims,
                 zero_data_but_quantitative,
             )
@@ -3753,9 +3864,18 @@ async def _run_orchestrated_chat(
             # turn so a later agent cannot accidentally launder unsupported
             # numbers from an earlier rewrite/handoff.
             zero_data_claims = zero_data_but_quantitative(merged_reply, merged_tool_results)
+            unsupported_narrative = unsupported_literature_narrative_violations(
+                merged_reply, merged_tool_results
+            )
             citation_violations = provenance_citation_violations(merged_reply, merged_tool_results)
             validation = validate_claims(merged_reply, merged_tool_results)
-            if citation_violations and citation_violations_should_block(citation_violations):
+            if unsupported_narrative:
+                logger.error(
+                    "Unsupported narrative gate BLOCKED merged reply (%d violations)",
+                    len(unsupported_narrative),
+                )
+                merged_reply = blocked_unsupported_narrative_reply_text(unsupported_narrative)
+            elif citation_violations and citation_violations_should_block(citation_violations):
                 logger.error(
                     "Citation provenance gate BLOCKED merged reply (%d violations)",
                     len(citation_violations),

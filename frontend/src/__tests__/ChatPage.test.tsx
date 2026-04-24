@@ -451,7 +451,7 @@ describe("ChatPage", () => {
       actions: [{
         action: "run_python",
         tool_result: {
-          success: false,
+          success: true,
           stdout: "mean=3.0\n",
           __tool_status__: "SYNTHETIC",
           __do_not_claim__: true,
@@ -469,7 +469,34 @@ describe("ChatPage", () => {
     fireEvent.click(sendBtn);
 
     await screen.findByText(/Synthetic stdout is shown for audit only/);
+    expect(screen.getByText(/Facts, numbers, and conclusions from synthetic tools/)).toBeInTheDocument();
     expect(screen.getByText(/mean=3.0/)).toBeInTheDocument();
+  });
+
+  it("does not render literal undefined in object info cards", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "Done",
+      actions: [{
+        action: "get_object_info",
+        tool_result: {
+          name: "Pleiades",
+          object_type: "undefined",
+          cross_ids: ["M 45"],
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "object info pleiades" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText("Pleiades");
+    expect(screen.queryByText("undefined")).not.toBeInTheDocument();
   });
 
   it("marks malformed run_python crash output as failed", async () => {

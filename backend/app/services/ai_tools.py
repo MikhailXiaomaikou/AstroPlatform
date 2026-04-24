@@ -451,7 +451,8 @@ TOOLS = [
             "generating a plot template, listing helper functions with available_functions(), "
             "or checking helper signatures before a real analysis), declare "
             "`data_source=\"none_not_analyzing_real_data\"`. The system will mark the output as "
-            "SYNTHETIC and the zero-fabrication gate will block citing its numbers."
+            "SYNTHETIC and the zero-fabrication gate will block using its facts, numbers, "
+            "or conclusions in a real-data answer."
         ),
         "input_schema": {
             "type": "object",
@@ -476,7 +477,7 @@ TOOLS = [
                         "'none_not_analyzing_real_data' (not analyzing observational data: "
                         "synthetic/pedagogical/Monte-Carlo data, or helper introspection such as "
                         "available_functions(); output will be marked SYNTHETIC/not citable for "
-                        "scientific numbers). "
+                        "scientific facts, numbers, or conclusions). "
                         "If a real data-fetch tool FAILED earlier this turn, choosing "
                         "'none_not_analyzing_real_data' to replace it is forbidden — emit "
                         "<tools_returned_nothing/> instead."
@@ -3193,6 +3194,61 @@ def _bump_run_python_attempt_idx(session_id: str) -> int:
     return _session_run_python_count[session_id]
 
 
+_ABS_MAG_CONTEXT_RE = re.compile(
+    r"(?:M_G|M\s*_\s*G|abs(?:olute)?\s+(?:G\s+)?mag(?:nitude)?|absolute_magnitude)"
+    r"[^-+\d\n]{0,40}"
+    r"([-+]?(?:\d+(?:\.\d+)?|\.\d+))"
+    r"(?:\s*(?:to|[-–—])\s*([-+]?(?:\d+(?:\.\d+)?|\.\d+)))?",
+    re.I,
+)
+
+
+def _unphysical_cmd_magnitudes(payload: dict[str, Any]) -> list[float]:
+    text_parts: list[str] = []
+    for key in ("stdout", "stderr"):
+        if payload.get(key):
+            text_parts.append(str(payload[key]))
+    variables = payload.get("variables")
+    if variables:
+        text_parts.append(str(variables))
+
+    values: list[float] = []
+    for match in _ABS_MAG_CONTEXT_RE.finditer("\n".join(text_parts)):
+        for group in match.groups():
+            if group is None:
+                continue
+            try:
+                value = float(group)
+            except ValueError:
+                continue
+            if math.isfinite(value) and (value < -30.0 or value > 20.0):
+                values.append(value)
+    return values
+
+
+def _apply_cmd_sanity_guard(response: dict[str, Any]) -> dict[str, Any]:
+    """Mark unphysical CMD absolute magnitudes as unciteable partial output."""
+    bad_values = _unphysical_cmd_magnitudes(response)
+    if not bad_values:
+        return response
+
+    warning = (
+        "Unphysical CMD absolute magnitude detected "
+        f"({', '.join(f'{v:g}' for v in bad_values[:4])}); likely parallax-unit "
+        "or distance-modulus error. Do not cite CMD-derived magnitudes, age, "
+        "distance, or extinction from this Python output."
+    )
+    warnings = list(response.get("warnings") or [])
+    warnings.append(warning)
+    response["warnings"] = warnings
+    response["__tool_status__"] = "PARTIAL"
+    response["analysis_status"] = "partial"
+    response["__do_not_claim__"] = True
+    response["__message_to_model__"] = warning
+    response["cmd_sanity_error"] = "unphysical_absolute_magnitude"
+    return response
+
+
 async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dict:
     """Execute Python code in sandboxed environment."""
     from app.services.code_executor import execute_python
@@ -3616,6 +3672,14 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                 )
         except Exception:
             pass
+    if response.get("error_class") == "key_error":
+        missing_key = _missing_key_from_error(str(response.get("error") or ""))
+        response["hint"] = (
+            f"KeyError for column {missing_key!r}. Inspect available columns before indexing "
+            "(for example: `rows = get_adql_results(); print(rows[0].keys())`), "
+            f"then use `row.get({missing_key!r})` or the exact available column name. "
+            "Do not invent a replacement source_id or assume every catalog row has one."
+        )
     # R5 O1 + R6 post: stderr 作为一级字段**总是**写进 response, 即便空串.
     # 诊断角度看, "stderr=''" 跟 "stderr not set" 是完全不同的信号:
     #   前者 = 子进程 child main 跑过且写了 stderr 捕获, 真的没东西输出
@@ -3647,6 +3711,8 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     if auto_fix_note:
         response["auto_fix_note"] = auto_fix_note
 
+    response = _apply_cmd_sanity_guard(response)
+
     if response.get("success") is False and not (
         response.get("stdout")
         or response.get("figures")
@@ -3667,8 +3733,10 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             "__message_to_model__": (
                 "This run_python call was declared data_source="
                 "'none_not_analyzing_real_data'. Its numerical output is NOT "
-                "from real observations. You MUST NOT cite any number from "
-                "this call's stdout/variables/figures in your final reply. "
+                "from real observations. You MUST NOT use any facts, numbers, "
+                "historical context, literature priors, physical interpretations, "
+                "or conclusions from this call's stdout/variables/figures in "
+                "your final reply. "
                 "If the user asked for real data analysis, emit "
                 "<tools_returned_nothing/> instead — do not use this synthetic "
                 "run to stand in for a failed data fetch."
@@ -3703,8 +3771,8 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             combined["analysis_status"] = "failed"
             combined["__message_to_model__"] = (
                 banner["__message_to_model__"]
-                + " The Python execution also failed; do not treat stdout as "
-                "a completed synthetic result."
+                + " The Python execution also failed; do not treat stdout, "
+                "variables, figures, or conclusions as a completed synthetic result."
             )
         else:
             combined["analysis_status"] = "simulated_demo"
@@ -3771,6 +3839,8 @@ def _classify_sandbox_error(err: str) -> str:
         return "sandbox_crash"
     if "nameerror" in low:
         return "name_error"
+    if "keyerror" in low:
+        return "key_error"
     if "importerror" in low or "modulenotfounderror" in low:
         return "import_error"
     if "systemexit" in low:
@@ -3778,6 +3848,11 @@ def _classify_sandbox_error(err: str) -> str:
     if "syntaxerror" in low or "indentationerror" in low:
         return "syntax_error"
     return "runtime_error"
+
+
+def _missing_key_from_error(err: str) -> str:
+    match = re.search(r"KeyError:\s*['\"]([^'\"]+)['\"]", err or "")
+    return match.group(1) if match else "unknown"
 
 
 async def _exec_analyze_spectrum_pro(inp: dict) -> dict:

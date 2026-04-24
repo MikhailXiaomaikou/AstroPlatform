@@ -226,7 +226,11 @@ function ToolTurnSummary({
           <span>{noDataCount} no-data</span>
         )}
         {` of ${total} tool${total === 1 ? "" : "s"} this turn. `}
-        {hasSynthetic && <strong>Numbers from synthetic tools are NOT from observations — do NOT cite them.</strong>}
+        {hasSynthetic && (
+          <strong>
+            Facts, numbers, and conclusions from synthetic tools are NOT observations — do NOT use them.
+          </strong>
+        )}
       </summary>
       <div style={{ marginTop: 6, fontSize: "0.78rem" }}>
         {synthetic.length > 0 && (
@@ -1340,7 +1344,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     // Backend SDSS normalization now returns "Unknown" (see
     // sdss.py), but older cached data may still be empty — render
     // "—" rather than the literal string "undefined".
-    const objType = result.object_type ? String(result.object_type) : "—";
+    const objType = displayValue(result.object_type, "—");
     return (
       <div style={{ fontSize: "0.78rem" }}>
         <strong>{String(result.name)}</strong> — {objType}
@@ -1796,8 +1800,8 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const photometry = result.photometry as Record<string, unknown> | undefined;
     const astrometry = result.astrometry as Record<string, unknown> | undefined;
     const redshift = result.redshift as Record<string, unknown> | undefined;
-    const objType = String(result.object_type || "");
-    const specType = String(result.spectral_type || "");
+    const objType = displayValue(result.object_type, "");
+    const specType = displayValue(result.spectral_type, "");
     const crossIds = Array.isArray(result.cross_ids) ? (result.cross_ids as string[]) : [];
     const sourcesResponded = (result.sources_responded as string[] | number | undefined);
     const name = String(obj?.name || "Unknown");

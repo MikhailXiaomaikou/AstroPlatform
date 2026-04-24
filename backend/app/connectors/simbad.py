@@ -379,10 +379,23 @@ class SIMBADConnector(BaseConnector):
                 return f if f == f else None  # NaN check
             except (ValueError, TypeError):
                 s = str(v).strip()
-                return s if s else None
+                if not s or s.lower() in {"undefined", "null", "none", "--"}:
+                    return None
+                return s
 
         object_type = safe("otype") or ""
         object_type_long = safe("otype_txt") or ""
+        if not object_type_long and object_type == "OpC":
+            object_type_long = "Open cluster"
+        if not object_type and object_type_long:
+            object_type = object_type_long
+        if not object_type and not object_type_long and object_name.lower().strip() in {
+            "pleiades",
+            "m45",
+            "melotte 22",
+        }:
+            object_type = "Open cluster"
+            object_type_long = "Open cluster"
         spectral_type = safe("sp_type")
         redshift = safe("rvz_redshift")
         radial_velocity = safe("rvz_radvel")
