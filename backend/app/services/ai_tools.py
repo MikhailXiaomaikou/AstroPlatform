@@ -2570,6 +2570,14 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
     `get_cached_results('latest_sdss_sql')` 或简单的 `get_adql_results()`
     拿到完整行.
     """
+    from app.connectors.availability import build_unavailable_response, record_connector_gated
+    from app.services.provenance_v2.registry_loader import dataset_from_registry, resolve_service
+
+    sdss_dataset = dataset_from_registry("sdss") if resolve_service("sdss") else None
+    if not (sdss_dataset and sdss_dataset.get("archive_version")):
+        record_connector_gated("sdss")
+        return build_unavailable_response("sdss", tool_name="run_sdss_sql")
+
     from app.connectors.sdss_sql import execute_sdss_sql
 
     query = str(inp.get("query") or "").strip()
@@ -2670,6 +2678,7 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
         "row_count": row_count,
         "showing": min(VIEW_ROWS, row_count),
         "has_data": row_count > 0,
+        "datasets": [sdss_dataset],
         "note": (
             f"Showing first {VIEW_ROWS} of {row_count} rows. Full data is cached — "
             "in run_python access via get_cached_results('latest_sdss_sql')."

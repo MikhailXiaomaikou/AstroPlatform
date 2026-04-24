@@ -51,6 +51,7 @@ from app.models.database import engine, Base
 from app.rate_limit import limiter
 from app.middleware.event_tracking import EventTrackingMiddleware
 from app.services.event_collector import event_collector, periodic_flush
+from app.services.provenance_v2.registry_loader import check_freshness
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +216,24 @@ def _migrate_add_columns(connection):
                 pass
 
 
+def _enforce_provenance_registry_freshness(*, warn_days: int = 180) -> None:
+    """Block startup when fallback provenance entries are stale."""
+    warnings = check_freshness(warn_days=warn_days)
+    if not warnings:
+        logger.info("Provenance registry freshness check passed")
+        return
+
+    for warning in warnings:
+        logger.error("provenance_registry_freshness_blocker %s", warning)
+    raise RuntimeError(
+        "Provenance registry freshness check failed: " + "; ".join(warnings)
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _enforce_provenance_registry_freshness()
+
     # M8: gate create_all on non-production environments.  In production the
     # schema is managed via Alembic; re-running create_all on every startup
     # takes DDL locks (noticeable stalls on PostgreSQL with a large schema)

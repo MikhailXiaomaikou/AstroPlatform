@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
+import logging
+
+import pytest
 
 
 def test_load_registry_has_five_services():
@@ -41,3 +44,20 @@ def test_missing_registry_file_is_graceful(tmp_path):
     registry = load_registry(tmp_path / "missing.yaml")
 
     assert registry["services"] == {}
+
+
+def test_startup_blocks_on_registry_freshness_warning(monkeypatch, caplog):
+    from app import main
+
+    monkeypatch.setattr(
+        main,
+        "check_freshness",
+        lambda warn_days=180: ["vizier: registry entry is 181 days old"],
+    )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="Provenance registry freshness check failed"):
+            main._enforce_provenance_registry_freshness()
+
+    assert "provenance_registry_freshness_blocker" in caplog.text
+    assert "vizier" in caplog.text

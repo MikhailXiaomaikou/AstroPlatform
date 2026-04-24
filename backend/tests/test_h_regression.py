@@ -13,6 +13,7 @@ Covers the key fixes from the 5-paper reviewer cycle:
 from __future__ import annotations
 
 import asyncio
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -1106,114 +1107,62 @@ def test_sdss_adql_error_routes_bulk_samples_to_run_sdss_sql():
     assert "PhotoObjAll JOIN SpecObjAll" in msg
 
 
-def test_run_sdss_sql_missing_query_returns_actionable_error():
-    """J3: 缺 query 要返回带示例的错误, 跟 K2 的 search_lightcurve 语义
-    一致, 让 AI 一次就能补对."""
+def test_run_sdss_sql_missing_query_returns_maintenance_while_gated():
+    """The maintenance gate fires before argument validation while provenance is absent."""
     from app.services.ai_tools import _exec_run_sdss_sql
 
     result = asyncio.run(_exec_run_sdss_sql({}))
-    assert result.get("error_class") == "missing_argument"
-    assert result.get("argument") == "query"
-    # 错误消息里必须带一个可 copy-paste 的例子
-    assert "SELECT" in str(result.get("error", ""))
-    assert "FROM" in str(result.get("error", ""))
+    assert result["__tool_status__"] == "UNAVAILABLE"
+    assert result["unavailable_sources"] == ["sdss"]
+    assert "provenance v2 rollout" in result["error"]
 
 
-def test_run_sdss_sql_dispatches_to_connector():
-    """J3: execute_tool(run_sdss_sql) 真的调 _exec_run_sdss_sql →
-    execute_sdss_sql, 而不是掉进 'unknown tool' 分支."""
+def test_run_sdss_sql_is_gated_until_provenance_upgrade():
+    """run_sdss_sql stays registered but returns maintenance until provenance lands."""
     from app.services.ai_tools import execute_tool
 
-    fake_conn_result = {
-        "columns": ["objID", "ra", "dec"],
-        "data": {"objID": [111], "ra": [180.0], "dec": [0.0]},
-        "column_aliases": {"objid": "objID", "ra": "ra", "dec": "dec"},
-        "row_count": 1,
-        "service": "sdss",
-        "dr": "18",
-        "query": "SELECT TOP 1 objID, ra, dec FROM PhotoObjAll WHERE mode=1",
-    }
+    sys.modules.pop("app.connectors.sdss_sql", None)
+    res = asyncio.run(execute_tool(
+        "run_sdss_sql",
+        {"query": "SELECT TOP 1 objID, ra, dec FROM PhotoObjAll WHERE mode=1"},
+        api_key="",
+    ))
 
-    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0, max_attempts=1):
-        return fake_conn_result
-
-    with patch("app.connectors.sdss_sql.execute_sdss_sql", side_effect=fake_execute_sdss_sql):
-        res = asyncio.run(execute_tool(
-            "run_sdss_sql",
-            {"query": "SELECT TOP 1 objID, ra, dec FROM PhotoObjAll WHERE mode=1"},
-            api_key="",
-        ))
-
-    # execute_tool 会走 result_provenance 包一层, 原字段应该仍在
-    assert res.get("row_count") == 1
-    assert "objID" in res.get("columns", [])
-    assert res.get("column_aliases", {}).get("objid") == "objID"
-    assert res.get("service") == "sdss"
+    assert "app.connectors.sdss_sql" not in sys.modules
+    assert res["__tool_status__"] == "UNAVAILABLE"
+    assert res["unavailable_sources"] == ["sdss"]
+    assert res["data_origin"] == "unavailable"
 
 
-def test_run_sdss_sql_writes_session_scoped_cache_with_case_aliases():
+def test_run_sdss_sql_does_not_write_cache_while_gated():
     from app.services import ai_tools
     from app.services.ai_tools import _exec_run_sdss_sql
 
     ai_tools._search_result_cache.clear()
-    fake_conn_result = {
-        "columns": ["objID", "petroMag_r", "zErr"],
-        "data": {
-            "objID": [111],
-            "petroMag_r": [17.2],
-            "zErr": [0.001],
-        },
-        "column_aliases": {"objid": "objID", "petromag_r": "petroMag_r", "zerr": "zErr"},
-        "row_count": 1,
-        "service": "sdss",
-        "dr": "18",
-        "query": "SELECT TOP 1 objID, petroMag_r, zErr FROM PhotoObjAll",
-    }
+    sys.modules.pop("app.connectors.sdss_sql", None)
 
-    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0, max_attempts=1):
-        return fake_conn_result
+    res = asyncio.run(_exec_run_sdss_sql(
+        {"query": "SELECT TOP 1 objID, petroMag_r, zErr FROM PhotoObjAll"},
+        python_session_id="chat-sdss",
+    ))
 
-    with patch("app.connectors.sdss_sql.execute_sdss_sql", side_effect=fake_execute_sdss_sql):
-        res = asyncio.run(_exec_run_sdss_sql(
-            {"query": "SELECT TOP 1 objID, petroMag_r, zErr FROM PhotoObjAll"},
-            python_session_id="chat-sdss",
-        ))
-
-    assert res["columns"] == ["objID", "petroMag_r", "zErr"]
-    cache = ai_tools.get_cached_results("latest_sdss_sql:chat-sdss")
-    assert cache["petroMag_r"] == [17.2]
-    assert cache["petromag_r"] == [17.2]
-    assert cache["zErr"] == [0.001]
-    assert cache["zerr"] == [0.001]
+    assert "app.connectors.sdss_sql" not in sys.modules
+    assert res["__tool_status__"] == "UNAVAILABLE"
+    assert ai_tools.get_cached_results("latest_sdss_sql:chat-sdss") is None
 
 
-def test_run_sdss_sql_long_mode_uses_three_attempts():
+def test_run_sdss_sql_long_mode_is_still_gated():
     from app.services.ai_tools import _exec_run_sdss_sql
 
-    seen: dict[str, object] = {}
+    sys.modules.pop("app.connectors.sdss_sql", None)
+    res = asyncio.run(_exec_run_sdss_sql({
+        "query": "SELECT TOP 1 objID FROM PhotoObjAll",
+        "_workflow_budget_mode": "long",
+    }))
 
-    async def fake_execute_sdss_sql(query, dr="18", timeout_s=120.0, max_attempts=1):
-        seen["timeout_s"] = timeout_s
-        seen["max_attempts"] = max_attempts
-        return {
-            "columns": ["objID"],
-            "data": {"objID": [111]},
-            "column_aliases": {"objid": "objID"},
-            "row_count": 1,
-            "service": "sdss",
-            "dr": "18",
-            "query": query,
-        }
-
-    with patch("app.connectors.sdss_sql.execute_sdss_sql", side_effect=fake_execute_sdss_sql):
-        res = asyncio.run(_exec_run_sdss_sql({
-            "query": "SELECT TOP 1 objID FROM PhotoObjAll",
-            "_workflow_budget_mode": "long",
-        }))
-
-    assert res["row_count"] == 1
-    assert seen["timeout_s"] == 240.0
-    assert seen["max_attempts"] == 3
+    assert "app.connectors.sdss_sql" not in sys.modules
+    assert res["__tool_status__"] == "UNAVAILABLE"
+    assert res["unavailable_sources"] == ["sdss"]
 
 
 # ---------- M1: long workflow budget + checkpoint + MW high-velocity helper ----------

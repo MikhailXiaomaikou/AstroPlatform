@@ -161,17 +161,24 @@ function isSyntheticToolAction(action: ChatAction): boolean {
   return status === "SYNTHETIC" || origin === "synthetic";
 }
 
+function isUnavailableToolAction(action: ChatAction): boolean {
+  const result = getActionToolResult(action);
+  if (!result) return false;
+  const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
+  return status === "UNAVAILABLE";
+}
+
 function summarizeTurnActions(actions: ChatAction[] | undefined) {
   const acts = actions || [];
   const synthetic = acts.filter(isSyntheticToolAction);
+  const unavailable = acts.filter(isUnavailableToolAction);
   const failed = acts.filter((action) => {
-    if (isSyntheticToolAction(action)) return false;
+    if (isSyntheticToolAction(action) || isUnavailableToolAction(action)) return false;
     const result = getActionToolResult(action);
     if (!result) return false;
     const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
     return status !== "PARTIAL" && (
       status === "FAILED"
-      || status === "UNAVAILABLE"
       || result.success === false
       || (typeof result.error === "string" && result.error.trim() !== "")
     );
@@ -184,7 +191,7 @@ function summarizeTurnActions(actions: ChatAction[] | undefined) {
     return status === "EMPTY";
   });
   const total = acts.filter((action) => !!(action as Record<string, unknown>)._auto_executed).length;
-  return { synthetic, failed, empty, total };
+  return { synthetic, unavailable, failed, empty, total };
 }
 
 function ToolTurnSummary({
@@ -194,10 +201,11 @@ function ToolTurnSummary({
   actions?: ChatAction[];
   live?: boolean;
 }) {
-  const { synthetic, failed, empty, total } = summarizeTurnActions(actions);
-  if ((failed.length + empty.length + synthetic.length) === 0 || total === 0) return null;
+  const { synthetic, unavailable, failed, empty, total } = summarizeTurnActions(actions);
+  if ((failed.length + empty.length + synthetic.length + unavailable.length) === 0 || total === 0) return null;
 
   const hasSynthetic = synthetic.length > 0;
+  const noDataCount = unavailable.length + failed.length + empty.length;
   return (
     <details
       className="chat-reply-failure-preamble"
@@ -213,9 +221,9 @@ function ToolTurnSummary({
         {synthetic.length > 0 && (
           <strong>{synthetic.length} SYNTHETIC{synthetic.length === 1 ? "" : ""}</strong>
         )}
-        {synthetic.length > 0 && (failed.length + empty.length > 0) ? " + " : ""}
-        {(failed.length + empty.length) > 0 && (
-          <span>{failed.length + empty.length} no-data</span>
+        {synthetic.length > 0 && noDataCount > 0 ? " + " : ""}
+        {noDataCount > 0 && (
+          <span>{noDataCount} no-data</span>
         )}
         {` of ${total} tool${total === 1 ? "" : "s"} this turn. `}
         {hasSynthetic && <strong>Numbers from synthetic tools are NOT from observations — do NOT cite them.</strong>}
@@ -227,6 +235,7 @@ function ToolTurnSummary({
           </div>
         )}
         {failed.length > 0 && <div>Failed: {failed.map((action) => action.action).join(", ")}</div>}
+        {unavailable.length > 0 && <div>Maintenance: {unavailable.map((action) => action.action).join(", ")}</div>}
         {empty.length > 0 && <div>Empty: {empty.map((action) => action.action).join(", ")}</div>}
       </div>
     </details>
@@ -468,12 +477,13 @@ function ActionCardInner({
     && (explicitFail || hasErrorField || toolStatus === "FAILED" || malformedRunPython);
   const isToolSynthetic = !fatalRunPythonFailure && (toolStatus === "SYNTHETIC" || dataOrigin === "synthetic");
   const isToolPartial = !isToolSynthetic && toolStatus === "PARTIAL";
-  const isToolFailed = !isToolSynthetic && !isToolPartial && (toolStatus === "FAILED" || toolStatus === "UNAVAILABLE" || explicitFail || hasErrorField || malformedRunPython || fatalRunPythonFailure);
+  const isToolUnavailable = !isToolSynthetic && !isToolPartial && toolStatus === "UNAVAILABLE";
+  const isToolFailed = !isToolSynthetic && !isToolPartial && !isToolUnavailable && (toolStatus === "FAILED" || explicitFail || hasErrorField || malformedRunPython || fatalRunPythonFailure);
   const isToolEmpty = !isToolSynthetic && !isToolFailed && toolStatus === "EMPTY";
 
   return (
     <div
-      className={`chat-action-card${isAutoExecuted ? " auto-executed" : ""}${isToolFailed ? " tool-failed" : ""}${isToolEmpty ? " tool-empty" : ""}${isToolSynthetic ? " tool-synthetic" : ""}`}
+      className={`chat-action-card${isAutoExecuted ? " auto-executed" : ""}${isToolFailed ? " tool-failed" : ""}${isToolUnavailable ? " tool-unavailable" : ""}${isToolEmpty ? " tool-empty" : ""}${isToolSynthetic ? " tool-synthetic" : ""}`}
     >
       <div className="chat-action-header">
         <span className="chat-action-icon">
@@ -483,10 +493,10 @@ function ActionCardInner({
           {labels[action.action] || action.action}
           {isAutoExecuted && (
             <span
-              className={`auto-badge${isToolFailed ? " failed" : ""}${isToolEmpty ? " empty" : ""}${isToolSynthetic ? " failed" : ""}`}
-              title={isToolSynthetic ? "Synthetic data — not from real observations" : isToolPartial ? "Tool produced partial output before failing" : isToolFailed ? "Tool failed" : isToolEmpty ? "Tool returned no data" : "Auto-executed"}
+              className={`auto-badge${isToolFailed ? " failed" : ""}${isToolUnavailable ? " unavailable" : ""}${isToolEmpty ? " empty" : ""}${isToolSynthetic ? " failed" : ""}`}
+              title={isToolSynthetic ? "Synthetic data — not from real observations" : isToolPartial ? "Tool produced partial output before failing" : isToolUnavailable ? "Tool source temporarily unavailable for provenance maintenance" : isToolFailed ? "Tool failed" : isToolEmpty ? "Tool returned no data" : "Auto-executed"}
             >
-              {isToolSynthetic ? "⚠ SYNTHETIC" : isToolPartial ? "⚠ Partial" : isToolFailed ? "❌ Failed" : isToolEmpty ? "∅ Empty" : "auto"}
+              {isToolSynthetic ? "⚠ SYNTHETIC" : isToolPartial ? "⚠ Partial" : isToolUnavailable ? "Maintenance" : isToolFailed ? "❌ Failed" : isToolEmpty ? "∅ Empty" : "auto"}
             </span>
           )}
           {sanityWarnings.length > 0 && (
@@ -1163,6 +1173,27 @@ function compactStderrWarnings(text: string): { text: string; folded: boolean; o
 }
 
 function AutoToolResult({ toolName, result }: { toolName: string; result: Record<string, unknown> }) {
+  const resultStatus = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
+  if (resultStatus === "UNAVAILABLE") {
+    const message = typeof result.user_facing_message === "string" && result.user_facing_message.trim()
+      ? result.user_facing_message
+      : typeof result.error === "string" && result.error.trim()
+        ? result.error
+        : "This source is temporarily unavailable while its provenance metadata is being upgraded.";
+    const alternatives = Array.isArray(result.available_alternatives)
+      ? (result.available_alternatives as unknown[]).filter((item): item is string => typeof item === "string")
+      : [];
+    return (
+      <div className="tool-unavailable-message">
+        <strong>Source under maintenance</strong>
+        <div>{message}</div>
+        {alternatives.length > 0 && (
+          <div>Available alternatives: {alternatives.join(", ")}</div>
+        )}
+      </div>
+    );
+  }
+
   if (result.error) {
     return <div style={{ color: "var(--color-red)", fontSize: "0.8rem" }}>Error: {String(result.error)}</div>;
   }

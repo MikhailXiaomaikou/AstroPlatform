@@ -88,3 +88,26 @@ async def test_search_objects_returns_unavailable_banner_for_gated_source():
 
     counters = metrics.snapshot()["counters"]["connector_gated_total"]
     assert counters[((("connector_name", "chandra"),))] == 1.0
+
+
+async def test_run_sdss_sql_is_gated_until_provenance_ready():
+    from app.observability.metrics import get_registry
+    from app.services.ai_tools import _exec_run_sdss_sql
+
+    sys.modules.pop("app.connectors.sdss_sql", None)
+    metrics = get_registry()
+    metrics.reset()
+
+    result = await _exec_run_sdss_sql(
+        {"query": "SELECT TOP 1 objID FROM PhotoObjAll"},
+        python_session_id="availability-test",
+    )
+
+    assert "app.connectors.sdss_sql" not in sys.modules
+    assert result["__tool_status__"] == "UNAVAILABLE"
+    assert result["__do_not_claim__"] is True
+    assert result["unavailable_sources"] == ["sdss"]
+    assert result["available_alternatives"] == ["vizier", "gaia", "simbad", "ned", "2mass"]
+
+    counters = metrics.snapshot()["counters"]["connector_gated_total"]
+    assert counters[((("connector_name", "sdss"),))] == 1.0

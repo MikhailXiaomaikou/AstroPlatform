@@ -603,6 +603,39 @@ describe("ChatPage", () => {
     expect(screen.getByText("2023A&A...674A...1G")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy Acknowledgement" })).toBeInTheDocument();
   });
+
+  it("renders unavailable sources as maintenance rather than failed", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "SDSS is temporarily unavailable.",
+      actions: [{
+        action: "run_sdss_sql",
+        tool_result: {
+          __tool_status__: "UNAVAILABLE",
+          __do_not_claim__: true,
+          data_origin: "unavailable",
+          analysis_status: "failed",
+          error: "Connector(s) under maintenance during the provenance v2 rollout: sdss.",
+          unavailable_sources: ["sdss"],
+          available_alternatives: ["vizier", "gaia", "simbad", "ned", "2mass"],
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "query SDSS" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText("Maintenance");
+    expect(screen.getByText("Source under maintenance")).toBeInTheDocument();
+    expect(screen.getByText(/Available alternatives: vizier, gaia, simbad, ned, 2mass/)).toBeInTheDocument();
+    expect(screen.queryByText("❌ Failed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Error: Connector/)).not.toBeInTheDocument();
+  });
 });
 
 
