@@ -632,6 +632,9 @@ class TestAITools:
         assert "reduce_ccd_image" in names
         assert "solve_astrometry" in names
         assert "extract_photometry" in names
+        assert "fit_cosmology_mcmc" in names
+        assert "run_cobaya_cosmology" in names
+        assert "get_cosmology_run_status" in names
 
     @pytest.mark.asyncio
     async def test_generate_pipeline(self):

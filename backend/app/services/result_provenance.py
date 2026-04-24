@@ -429,7 +429,7 @@ def _rows_for_field_bibcode_extraction(result: dict[str, Any]) -> tuple[list[str
     return [], []
 
 
-# Tool-name → default classification mapping for current HEAD tools (53 tools).
+# Tool-name → default classification mapping for current HEAD tools.
 # Keep in sync with TOOLS in app/services/ai_tools.py.  The union of the three
 # sets MUST equal the tool registry, or unclassified tools silently fall
 # through to UNAVAILABLE/PARTIAL and the LLM downgrades their results.
@@ -457,7 +457,8 @@ _COMPUTE_TOOLS = {
     "x_ray_spectral_fit", "pulsar_derived_quantities",
     "analyze_cross_wavelength", "radio_analysis", "process_image",
     "share_with_team", "invite_team_member", "export_results",
-    "workspace_export",
+    "workspace_export", "fit_cosmology_mcmc", "run_cobaya_cosmology",
+    "get_cosmology_run_status",
 }
 _REFERENCE_TOOLS = {
     "search_literature", "read_arxiv_paper", "literature_review",

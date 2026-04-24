@@ -42,6 +42,7 @@ import {
 } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
 import AckButton from "../../components/chat/AckButton";
+import CosmologyMCMCPanel from "../../components/chat/CosmologyMCMCPanel";
 import DataSourcesPanel from "../../components/chat/DataSourcesPanel";
 import ErrorBoundary from "../../components/ErrorBoundary";
 import { useI18n } from "../../i18n";
@@ -404,6 +405,9 @@ function ActionCardInner({
     get_last_search_results: "Search Results",
     read_arxiv_paper: "Read Paper",
     run_python: "Python Code",
+    fit_cosmology_mcmc: "Cosmology MCMC",
+    run_cobaya_cosmology: "Cobaya Cosmology",
+    get_cosmology_run_status: "Cosmology Job Status",
   };
 
   const icons: Record<string, string> = {
@@ -424,6 +428,9 @@ function ActionCardInner({
     get_last_search_results: "📋",
     read_arxiv_paper: "📄",
     run_python: "🐍",
+    fit_cosmology_mcmc: "📉",
+    run_cobaya_cosmology: "📉",
+    get_cosmology_run_status: "⏱",
   };
 
   const isAutoExecuted = !!(action as Record<string, unknown>)._auto_executed;
@@ -1381,6 +1388,13 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
         ))}
       </div>
     );
+  }
+
+  if (toolName === "fit_cosmology_mcmc" || toolName === "run_cobaya_cosmology" || toolName === "get_cosmology_run_status") {
+    const nestedResult = result.result && typeof result.result === "object"
+      ? result.result as Record<string, unknown>
+      : result;
+    return <CosmologyMCMCPanel result={nestedResult} />;
   }
 
   // Pipeline

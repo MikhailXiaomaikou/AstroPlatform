@@ -61,7 +61,7 @@ Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; t
 
 ### TypeScript constraints
 
-Strict build (`tsc -b && vite build`) is non-negotiable: `strict`, `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`, `erasableSyntaxOnly`. Types must be imported with `import type`. The current frontend suite is **148 vitest tests**.
+Strict build (`tsc -b && vite build`) is non-negotiable: `strict`, `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`, `erasableSyntaxOnly`. Types must be imported with `import type`. The current frontend suite is **150 vitest tests**.
 
 ## 3. Backend Architecture
 
@@ -231,6 +231,7 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 - [`app/services/spectral_analysis_pro.py`](./backend/app/services/spectral_analysis_pro.py) — NIST line ID, heliocentric correction, IFU kinematics.
 - [`app/services/photo_z_pro.py`](./backend/app/services/photo_z_pro.py) — 30 SED templates + Calzetti dust + Madau IGM + Bayesian priors.
 - [`app/services/bayesian_inference.py`](./backend/app/services/bayesian_inference.py) — ArviZ-based ESS / R-hat / HDI / WAIC / LOO; `mcmc_insufficient_sampling_total` counter flags `ess_bulk<400` or `rhat>1.05`.
+- [`app/services/cosmology_mcmc.py`](./backend/app/services/cosmology_mcmc.py) — typed distance-modulus cosmology MCMC for `flat_lcdm`, `flat_wcdm`, and `flat_w0wa_cdm`; emcee runs synchronously for small jobs, Cobaya is a controlled optional interface, and posterior numbers are citeable only when `publication_ready=true`.
 - [`app/services/time_domain_pro.py`](./backend/app/services/time_domain_pro.py) — GP detrending, `BoxLeastSquares` + bootstrap FAP, flare detection, transit fitting with covariance matrix.
 - [`app/services/image_processing_pro.py`](./backend/app/services/image_processing_pro.py) — Reproject, mosaic, PSF match, deblend, cutouts.
 - [`app/services/transient_classifier.py`](./backend/app/services/transient_classifier.py) — Random-forest light-curve classifier + template spectral matching.
@@ -397,8 +398,8 @@ Push to `main` → Render auto-deploy. Render free tier sleeps after 15 min idle
 
 ## 10. Testing
 
-- **Backend**: pytest suite under `backend/tests/`. Major modules include `test_api`, `test_claim_validator`, `test_citation_validation`, `test_b7_regression`, `test_abstention_parser`, `test_sandbox_crash_paths`, `test_sandbox_isolation`, `test_result_provenance`, `test_connector_availability_gate`, `test_provenance_registry_loader`, `test_provenance_v2_connectors`, `test_connector_cache`, `test_connector_throttle`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, and e2e smoke tests. Golden-path fixtures live under `backend/tests/golden/`.
-- **Frontend**: **148 vitest cases pass**. Coverage includes ChatPage, DataSourcesPanel, AckButton, SearchBar maintenance-gating, ActionCard, PlotBuilder, DataBrowser, ADQLPage, FITSBrowser, ProvenanceGraph, common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
+- **Backend**: pytest suite under `backend/tests/`. Major modules include `test_api`, `test_claim_validator`, `test_citation_validation`, `test_b7_regression`, `test_cosmology_mcmc`, `test_abstention_parser`, `test_sandbox_crash_paths`, `test_sandbox_isolation`, `test_result_provenance`, `test_connector_availability_gate`, `test_provenance_registry_loader`, `test_provenance_v2_connectors`, `test_connector_cache`, `test_connector_throttle`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, and e2e smoke tests. Golden-path fixtures live under `backend/tests/golden/`.
+- **Frontend**: **150 vitest cases pass**. Coverage includes ChatPage, DataSourcesPanel, CosmologyMCMCPanel, AckButton, SearchBar maintenance-gating, ActionCard, PlotBuilder, DataBrowser, ADQLPage, FITSBrowser, ProvenanceGraph, common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
 - **CI**: GitHub Actions runs backend pytest + frontend `tsc + vite build + vitest` + ruff lint on every push.
 - **Physical-regression targets** (manual): NGC 1647 (open cluster, Frasca+2026), M53 (globular + RR Lyrae), Tom 2 blue stragglers (Rain+2021), Vel OB1, white dwarf LF, Pleiades IMF, NGC 752 isochrone age ∈ [1.2, 2.0] Gyr.
 

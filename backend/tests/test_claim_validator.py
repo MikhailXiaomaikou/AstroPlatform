@@ -46,6 +46,12 @@ def test_extract_exoplanet_radius_ratio_claims():
     assert any(c.label == "radius_ratio" and c.value == pytest.approx(0.157) for c in claims)
 
 
+def test_extract_cosmology_parameter_claims():
+    claims = extract_claims("We find H0 = 70 km/s/Mpc, Om0 = 0.31, w0 = -1.1, wa = 0.2.")
+    labels = {c.label for c in claims}
+    assert {"cosmology_h0", "cosmology_om0", "cosmology_w0", "cosmology_wa"} <= labels
+
+
 # -------------------- validate_claims --------------------
 
 
@@ -66,6 +72,45 @@ def test_validate_flags_fabricated_number():
     assert not r.ok
     assert len(r.uncited) == 1
     assert r.uncited[0].label == "parallax_mas"
+
+
+def test_cosmology_claims_require_publication_ready_mcmc_result():
+    tool_results = [
+        {
+            "tool": "fit_cosmology_mcmc",
+            "result": {
+                "success": True,
+                "__tool_status__": "PARTIAL",
+                "__do_not_claim__": True,
+                "publication_ready": False,
+                "parameters": {
+                    "H0": {"median": 70.0},
+                    "w0": {"median": -1.1},
+                },
+            },
+        }
+    ]
+    r = validate_claims("The posterior gives H0 = 70 km/s/Mpc and w0 = -1.1.", tool_results)
+    assert not r.ok
+    assert {claim.label for claim in r.uncited} >= {"cosmology_h0", "cosmology_w0"}
+
+
+def test_cosmology_claims_pass_with_publication_ready_mcmc_result():
+    tool_results = [
+        {
+            "tool": "fit_cosmology_mcmc",
+            "result": {
+                "success": True,
+                "publication_ready": True,
+                "parameters": {
+                    "H0": {"median": 70.0},
+                    "w0": {"median": -1.1},
+                },
+            },
+        }
+    ]
+    r = validate_claims("The posterior gives H0 = 70 km/s/Mpc and w0 = -1.1.", tool_results)
+    assert r.ok
 
 
 def test_validate_flags_uncited_radius_ratio():

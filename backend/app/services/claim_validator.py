@@ -75,6 +75,21 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     )),
     ("redshift_z", re.compile(rf"\bz\s*[=≈~]\s*{_NUM}\b", re.I)),
     ("redshift_word", re.compile(rf"\bredshift\s*(?:of|=|≈|~|is)?\s*{_NUM}\b", re.I)),
+    ("cosmology_h0", re.compile(
+        rf"\bH_?0\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}"
+        rf"(?:\s*km\s*s(?:ec)?(?:ond)?\s*[-/]?\s*Mpc(?:\^-?1)?|\s*km/?s/?Mpc)?\b",
+        re.I,
+    )),
+    ("cosmology_om0", re.compile(
+        rf"\b(?:Om0|Omega_?m|OmegaM|Ω_m|ΩM)\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b",
+        re.I,
+    )),
+    ("cosmology_w0", re.compile(rf"\bw_?0\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b", re.I)),
+    ("cosmology_wa", re.compile(rf"\bw_?a\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b", re.I)),
+    ("cosmology_sigma8", re.compile(
+        rf"\b(?:sigma_?8|σ_?8)\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b",
+        re.I,
+    )),
     ("log_g", re.compile(rf"\blog\s*g\s*[=≈~]\s*{_NUM}\b", re.I)),
     ("metallicity", re.compile(rf"\[Fe\s*/\s*H\]\s*[=≈~]\s*{_NUM}\b", re.I)),
     ("e_bv", re.compile(rf"E\s*\(\s*B\s*[-−]\s*V\s*\)\s*[=≈~]\s*{_NUM}\b", re.I)),

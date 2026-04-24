@@ -41,6 +41,7 @@ class SessionArtifacts:
     tool_results: list[dict]
     provenance_datasets: list[dict]
     provenance_runs: list[dict]
+    cosmology_runs: list[dict]
     source_urls: list[str]
 
 
@@ -86,6 +87,7 @@ def _extract_actions(messages: list[dict]) -> SessionArtifacts:
     tool_results: list[dict] = []
     provenance_datasets: list[dict] = []
     provenance_runs: list[dict] = []
+    cosmology_runs: list[dict] = []
     source_urls: list[str] = []
 
     for message in messages:
@@ -127,6 +129,9 @@ def _extract_actions(messages: list[dict]) -> SessionArtifacts:
                         **run,
                     })
                 source_urls.extend(_extract_source_urls(result_dict))
+                cosmology = _extract_cosmology_provenance(result_dict)
+                if cosmology:
+                    cosmology_runs.append(cosmology)
                 bibcodes.extend(_extract_bibcodes_from_provenance(result_dict))
             if isinstance(tool_result, dict) and tool_result.get("bibcode"):
                 bibcodes.append(str(tool_result["bibcode"]))
@@ -148,6 +153,7 @@ def _extract_actions(messages: list[dict]) -> SessionArtifacts:
         tool_results=tool_results,
         provenance_datasets=_dedupe_datasets(provenance_datasets),
         provenance_runs=_dedupe_runs(provenance_runs),
+        cosmology_runs=_dedupe_cosmology_runs(cosmology_runs),
         source_urls=list(dict.fromkeys(source_urls)),
     )
 
@@ -221,6 +227,25 @@ def _extract_bibcodes_from_provenance(tool_result: dict) -> list[str]:
     return bibcodes
 
 
+def _extract_cosmology_provenance(tool_result: dict) -> dict | None:
+    provenance = tool_result.get("provenance")
+    cosmology = provenance.get("cosmology") if isinstance(provenance, dict) else None
+    if not isinstance(cosmology, dict):
+        return None
+    keys = (
+        "model",
+        "sampler",
+        "priors",
+        "data_hash",
+        "random_seed",
+        "package_versions",
+        "chain_diagnostics",
+        "publication_ready",
+    )
+    result = {key: cosmology.get(key) for key in keys if key in cosmology}
+    return result or None
+
+
 def _dedupe_datasets(datasets: list[dict]) -> list[dict]:
     seen: set[tuple[str, str, str, str]] = set()
     deduped: list[dict] = []
@@ -235,6 +260,22 @@ def _dedupe_datasets(datasets: list[dict]) -> list[dict]:
             continue
         seen.add(key)
         deduped.append(dict(dataset))
+    return deduped
+
+
+def _dedupe_cosmology_runs(runs: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[dict] = []
+    for run in runs:
+        key = (
+            str(run.get("model") or ""),
+            str(run.get("sampler") or ""),
+            str(run.get("data_hash") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(run)
     return deduped
 
 
@@ -312,6 +353,16 @@ def _build_data_provenance_text(artifacts: SessionArtifacts) -> str:
         lines.append("; ".join(field for field in fields if field))
     if artifacts.source_urls:
         lines.append("Source URLs: " + "; ".join(artifacts.source_urls))
+    for run in artifacts.cosmology_runs:
+        diagnostics = run.get("chain_diagnostics") if isinstance(run.get("chain_diagnostics"), dict) else {}
+        status = diagnostics.get("overall_status") or "unknown"
+        ready = run.get("publication_ready")
+        lines.append(
+            "Cosmology MCMC provenance: "
+            f"model={run.get('model')}; sampler={run.get('sampler')}; "
+            f"data_hash={run.get('data_hash')}; random_seed={run.get('random_seed')}; "
+            f"diagnostics={status}; publication_ready={ready}."
+        )
     return "\n".join(lines)
 
 

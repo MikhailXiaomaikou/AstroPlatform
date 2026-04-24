@@ -619,6 +619,84 @@ TOOLS = [
         },
     },
     {
+        "name": "fit_cosmology_mcmc",
+        "description": (
+            "Fit H0/Om0/w0/wa to a real distance-modulus table using a bounded emcee MCMC. "
+            "Input rows must contain z, mu, and sigma_mu; no remembered or synthetic cosmology "
+            "samples are allowed. Use this after obtaining a real table from the user, an archive, "
+            "or a cited literature table. Results are citeable only when publication_ready=true."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Inline distance-modulus rows with z, mu, sigma_mu.",
+                },
+                "cache_key": {
+                    "type": "string",
+                    "description": "Optional cache key such as latest_adql or latest_search containing rows.",
+                },
+                "model": {
+                    "type": "string",
+                    "enum": ["flat_lcdm", "flat_wcdm", "flat_w0wa_cdm"],
+                    "description": "Cosmology model to fit.",
+                },
+                "priors": {
+                    "type": "object",
+                    "description": "Optional tightened prior bounds, e.g. {\"H0\": [60, 80]}.",
+                },
+                "n_walkers": {"type": "integer", "description": "emcee walkers (default 32)."},
+                "n_steps": {"type": "integer", "description": "emcee steps (default 800)."},
+                "n_burn": {"type": "integer", "description": "burn-in steps (default 200)."},
+                "random_seed": {"type": "integer", "description": "deterministic random seed."},
+                "background": {
+                    "type": "boolean",
+                    "description": "Run as a background job; long chains are background automatically.",
+                },
+            },
+        },
+    },
+    {
+        "name": "run_cobaya_cosmology",
+        "description": (
+            "Run a controlled Cobaya distance-modulus cosmology fit. Accepts typed rows and bounded "
+            "priors only; raw Cobaya YAML and arbitrary likelihood code are not accepted. If Cobaya "
+            "is unavailable, returns UNAVAILABLE rather than fake posterior values."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Inline distance-modulus rows with z, mu, sigma_mu.",
+                },
+                "cache_key": {"type": "string", "description": "Optional cache key containing rows."},
+                "model": {
+                    "type": "string",
+                    "enum": ["flat_lcdm", "flat_wcdm", "flat_w0wa_cdm"],
+                    "description": "Cosmology model to fit.",
+                },
+                "priors": {"type": "object", "description": "Optional tightened prior bounds."},
+                "random_seed": {"type": "integer", "description": "deterministic random seed."},
+                "max_samples": {"type": "integer", "description": "Cobaya sample budget."},
+            },
+        },
+    },
+    {
+        "name": "get_cosmology_run_status",
+        "description": "Poll the status/result of a background cosmology MCMC or Cobaya job.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "Job ID returned by fit_cosmology_mcmc."},
+            },
+            "required": ["job_id"],
+        },
+    },
+    {
         "name": "get_object_dossier",
         "description": (
             "Generate a comprehensive cross-match dossier for a sky position. "
@@ -1487,6 +1565,12 @@ async def _execute_tool_inner(
             return await _exec_estimate_photo_z(tool_input)
         elif tool_name == "fit_isochrone":
             return await _exec_fit_isochrone(tool_input)
+        elif tool_name == "fit_cosmology_mcmc":
+            return await _exec_fit_cosmology_mcmc(tool_input, python_session_id)
+        elif tool_name == "run_cobaya_cosmology":
+            return await _exec_run_cobaya_cosmology(tool_input, python_session_id)
+        elif tool_name == "get_cosmology_run_status":
+            return _exec_get_cosmology_run_status(tool_input)
         elif tool_name == "get_object_dossier":
             return await _exec_get_dossier(tool_input)
         elif tool_name == "get_followup_recommendation":
@@ -4530,6 +4614,124 @@ async def _exec_estimate_photo_z(inp: dict) -> dict:
                 sub["z_grid"] = f"[{len(sub['z_grid'])} values]"
 
     return result
+
+
+def _cosmology_rows_from_input(inp: dict, python_session_id: str | None) -> list[dict[str, Any]]:
+    rows = inp.get("rows")
+    if isinstance(rows, list) and rows:
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    cache_key = str(inp.get("cache_key") or "").strip()
+    if not cache_key:
+        raise ValueError("fit_cosmology_mcmc requires rows or cache_key")
+    session_key = _session_cache_key(cache_key, python_session_id)
+    payload = get_cached_results(session_key or cache_key)
+    if payload is None and session_key:
+        payload = get_cached_results(cache_key)
+    if payload is None:
+        raise ValueError(f"No cached rows found for cache_key={cache_key!r}")
+    if isinstance(payload, list):
+        return [dict(row) for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        for key in ("rows", "data", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [dict(row) for row in value if isinstance(row, dict)]
+            if isinstance(value, dict):
+                columns = list(value.keys())
+                lengths = [len(v) for v in value.values() if isinstance(v, list)]
+                if lengths:
+                    n = min(lengths)
+                    return [
+                        {column: value.get(column, [None] * n)[index] for column in columns}
+                        for index in range(n)
+                    ]
+    raise ValueError(f"Cached payload {cache_key!r} does not contain row objects")
+
+
+async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> dict:
+    from app.services.cosmology_mcmc import (
+        fit_cosmology_emcee,
+        should_run_background,
+        submit_emcee_job,
+    )
+
+    try:
+        rows = _cosmology_rows_from_input(inp, python_session_id)
+        model = str(inp.get("model") or "flat_lcdm")
+        n_walkers = int(inp.get("n_walkers") or 32)
+        n_steps = int(inp.get("n_steps") or 800)
+        n_burn = int(inp.get("n_burn") or 200)
+        random_seed = inp.get("random_seed")
+        random_seed_int = int(random_seed) if random_seed is not None else None
+        kwargs = {
+            "rows": rows,
+            "model": model,
+            "priors": inp.get("priors"),
+            "n_walkers": n_walkers,
+            "n_steps": n_steps,
+            "n_burn": n_burn,
+            "random_seed": random_seed_int,
+        }
+        if should_run_background(n_walkers, n_steps, bool(inp.get("background", False))):
+            return submit_emcee_job(**kwargs)
+        return await asyncio.to_thread(fit_cosmology_emcee, **kwargs)
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "Cosmology MCMC did not produce a valid posterior. Do not quote "
+                "H0, Om0, w0, wa, sigma8, or posterior constraints from this call."
+            ),
+        }
+
+
+async def _exec_run_cobaya_cosmology(inp: dict, python_session_id: str | None) -> dict:
+    from app.services.cosmology_mcmc import run_cobaya_cosmology
+
+    try:
+        rows = _cosmology_rows_from_input(inp, python_session_id)
+        return await asyncio.to_thread(
+            run_cobaya_cosmology,
+            rows,
+            model=str(inp.get("model") or "flat_lcdm"),
+            priors=inp.get("priors"),
+            random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
+            max_samples=int(inp.get("max_samples") or 4000),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "Cobaya cosmology did not produce a valid posterior. Do not quote "
+                "cosmology constraints from this call."
+            ),
+        }
+
+
+def _exec_get_cosmology_run_status(inp: dict) -> dict:
+    from app.services.cosmology_mcmc import get_cosmology_job_status
+
+    job_id = str(inp.get("job_id") or "").strip()
+    if not job_id:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": "job_id is required",
+            "error_class": "missing_job_id",
+        }
+    return get_cosmology_job_status(job_id)
 
 
 async def _exec_fit_isochrone(inp: dict) -> dict:
