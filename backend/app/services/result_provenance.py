@@ -461,7 +461,7 @@ _COMPUTE_TOOLS = {
     "get_cosmology_run_status",
 }
 _REFERENCE_TOOLS = {
-    "search_literature", "read_arxiv_paper", "literature_review",
+    "search_literature", "read_arxiv_paper", "extract_literature_tables", "literature_review",
     "research_workflow", "generate_proposal", "get_followup_recommendation",
     "full_research_report",
 }

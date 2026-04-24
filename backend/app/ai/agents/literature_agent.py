@@ -9,7 +9,7 @@ LITERATURE_AGENT = SpecialistAgent(
     tool_names=[
         "search_literature",
         "read_arxiv_paper",
+        "extract_literature_tables",
         "generate_paper_draft",
     ],
 )
-

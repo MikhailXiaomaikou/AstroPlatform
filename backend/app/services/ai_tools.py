@@ -346,7 +346,9 @@ TOOLS = [
         "description": (
             "Search NASA ADS for academic papers about an astronomical object or topic, "
             "with arXiv fallback when ADS has no key/results. Returns titles, authors, "
-            "years, abstracts, and source metadata that you can cite in your response."
+            "years, abstracts, and source metadata that you can cite in your response. "
+            "This is paper/abstract-level only; it does not provide measurement-table "
+            "values such as L[CII] or FWHM."
         ),
         "input_schema": {
             "type": "object",
@@ -549,6 +551,28 @@ TOOLS = [
                 "arxiv_id": {"type": "string", "description": "arXiv paper ID (e.g. '2301.12345')"},
             },
             "required": ["arxiv_id"],
+        },
+    },
+    {
+        "name": "extract_literature_tables",
+        "description": (
+            "Extract machine-readable tables from an arXiv/ar5iv paper and attach "
+            "row-level citation provenance. Use this after search_literature when "
+            "the user asks to compile literature samples, fit relations, or quote "
+            "paper-table measurements such as log L[CII], FWHM, redshift, flux, "
+            "or line widths. First phase supports arXiv IDs/URLs only; ADS-only "
+            "bibcodes without an arXiv identifier are not auto-converted."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "arxiv_id": {"type": "string", "description": "arXiv ID, arXiv:ID, or arxiv.org URL"},
+                "arxiv_url": {"type": "string", "description": "Optional arXiv abs/pdf URL"},
+                "paper": {
+                    "type": "object",
+                    "description": "Optional paper object from search_literature containing bibcode/arxiv_url/title/authors/year.",
+                },
+            },
         },
     },
     {
@@ -1546,6 +1570,8 @@ async def _execute_tool_inner(
             return _exec_pipeline(tool_input)
         elif tool_name == "search_literature":
             return await _exec_literature(tool_input)
+        elif tool_name == "extract_literature_tables":
+            return await _exec_extract_literature_tables(tool_input, python_session_id)
         elif tool_name == "run_python":
             return await _exec_run_python(tool_input, python_session_id)
         elif tool_name == "get_last_search_results":
@@ -3181,6 +3207,8 @@ async def _exec_literature(inp: dict) -> dict:
             }
         return {
             "source": source,
+            "result_granularity": "paper_abstract",
+            "supports_measurement_claims": False,
             "results": [
                 {
                     "title": r["title"],
@@ -3195,6 +3223,119 @@ async def _exec_literature(inp: dict) -> dict:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+def _arxiv_id_from_table_input(inp: dict[str, Any]) -> str:
+    for key in ("arxiv_id", "arxiv_url", "url"):
+        value = str(inp.get(key) or "").strip()
+        if value:
+            return value
+    paper = inp.get("paper")
+    if isinstance(paper, dict):
+        for key in ("arxiv_id", "arxiv_url", "url"):
+            value = str(paper.get(key) or "").strip()
+            if value:
+                return value
+        bibcode = str(paper.get("bibcode") or "").strip()
+        if bibcode.lower().startswith("arxiv:"):
+            return bibcode
+    return ""
+
+
+async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "default") -> dict:
+    """Extract arXiv tables and cache any normalized measurement rows."""
+    from app.api.arxiv import extract_arxiv_tables_payload
+
+    raw_id = _arxiv_id_from_table_input(inp)
+    if not raw_id:
+        return {
+            "success": False,
+            "error": "extract_literature_tables requires arxiv_id, arxiv_url, or paper.bibcode='arXiv:<id>'.",
+            "error_class": "missing_arxiv_id",
+        }
+    try:
+        payload = await extract_arxiv_tables_payload(raw_id)
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"Literature table extraction failed: {exc}",
+            "error_class": "literature_table_extraction_failed",
+        }
+
+    line_measurements = payload.get("line_measurements") or []
+    tables = payload.get("tables") or []
+    cache_value = line_measurements if line_measurements else tables
+    cache_key = _session_cache_key("latest_literature_tables", python_session_id) or "latest_literature_tables"
+    store_search_results(cache_key, cache_value)
+    if cache_key != "latest_literature_tables":
+        store_search_results("latest_literature_tables", cache_value)
+
+    bibcodes = [
+        str(row.get("bibcode") or "").strip()
+        for row in line_measurements
+        if isinstance(row, dict) and str(row.get("bibcode") or "").strip()
+    ]
+    if not bibcodes and payload.get("bibcode"):
+        bibcodes = [str(payload["bibcode"])]
+
+    source_url = str(payload.get("source_url") or "").strip()
+    dataset = {
+        "service_key": "literature_table",
+        "service_name": "Literature measurement table",
+        "archive_version": "arXiv/ar5iv live source",
+        "source_authority": "paper_table",
+        "article": str(payload.get("bibcode") or ""),
+        "publisher": "arXiv",
+        "reference_url": source_url,
+        "source_urls": [source_url] if source_url else [],
+        "acknowledgement_template": (
+            "This work used machine-readable tables extracted from the cited literature; "
+            "verify the original paper table before publication."
+        ),
+    }
+    field_bibcodes = {
+        "columns": {"literature_table_bibcode": bibcodes},
+        "mapping": {"literature_table_bibcode": "line_measurements"},
+        "source_column_pattern": "literature_table_row_citation",
+    }
+    result = {
+        "success": True,
+        "arxiv_id": payload.get("arxiv_id"),
+        "title": payload.get("title"),
+        "authors": payload.get("authors") or [],
+        "year": payload.get("year"),
+        "bibcode": payload.get("bibcode"),
+        "doi": payload.get("doi"),
+        "source_url": source_url,
+        "result_granularity": "paper_table",
+        "supports_measurement_claims": bool(line_measurements),
+        "tables": tables,
+        "line_measurements": line_measurements,
+        "line_measurement_count": len(line_measurements),
+        "cache_key": cache_key,
+        "provenance": {
+            "datasets": [dataset],
+            "field_bibcodes": field_bibcodes if bibcodes else None,
+            "coverage": {
+                "field_level": {
+                    "available": bool(bibcodes),
+                    "bibcode_columns_found": 1 if bibcodes else 0,
+                    "unique_bibcodes": len(set(bibcodes)),
+                },
+                "primary_citation_source": "field_level" if bibcodes else "table_level",
+            },
+        },
+        "warnings": [] if line_measurements else [
+            "Tables were extracted, but no reliable line-measurement schema was detected. Do not fit L[CII]-FWHM until columns are mapped."
+        ],
+    }
+    if not line_measurements:
+        result["__message_to_model__"] = (
+            "Raw literature tables were extracted, but no normalized line_measurements were detected. "
+            "You may summarize the table availability and citation, but do not quote L[CII], FWHM, "
+            "or fit a relation unless a measurement table is mapped."
+        )
+    return result
 
 
 _VALID_DATA_SOURCES = {

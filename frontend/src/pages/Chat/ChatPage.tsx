@@ -421,6 +421,7 @@ function ActionCardInner({
     get_object_info: "Object Info",
     analyze_spectrum: "Spectrum Analysis",
     search_literature: "Literature Search",
+    extract_literature_tables: "Extract Literature Tables",
     get_last_search_results: "Search Results",
     read_arxiv_paper: "Read Paper",
     run_python: "Python Code",
@@ -444,6 +445,7 @@ function ActionCardInner({
     get_object_info: "🌌",
     analyze_spectrum: "🔬",
     search_literature: "📚",
+    extract_literature_tables: "📄",
     get_last_search_results: "📋",
     read_arxiv_paper: "📄",
     run_python: "🐍",
@@ -1405,6 +1407,69 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
             ) : null}
           </div>
         ))}
+      </div>
+    );
+  }
+
+  if (toolName === "extract_literature_tables") {
+    const tables = (Array.isArray(result.tables) ? result.tables : []) as Array<{
+      name?: string;
+      caption?: string;
+      columns?: string[];
+      rows?: string[][];
+      row_count?: number;
+      extraction_method?: string;
+    }>;
+    const measurements = (Array.isArray(result.line_measurements) ? result.line_measurements : []) as Array<Record<string, unknown>>;
+    return (
+      <div style={{ fontSize: "0.75rem" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <span className="tool-status-chip tool-status-chip-completed">
+            {tables.length} raw table{tables.length === 1 ? "" : "s"}
+          </span>
+          <span className={`tool-status-chip ${measurements.length > 0 ? "tool-status-chip-completed" : "tool-status-chip-partial"}`}>
+            {measurements.length > 0 ? `${measurements.length} usable line measurement${measurements.length === 1 ? "" : "s"}` : "needs column mapping"}
+          </span>
+          {result.cache_key ? (
+            <code style={{ fontSize: "0.7rem" }}>cache: {String(result.cache_key)}</code>
+          ) : null}
+        </div>
+        {measurements.length > 0 && (
+          <div style={{ marginBottom: 8, color: "var(--color-text-secondary)" }}>
+            Typed rows can support fitting; cite the paper and table label for quoted values.
+          </div>
+        )}
+        {tables.slice(0, 3).map((table, tableIndex) => {
+          const columns = Array.isArray(table.columns) ? table.columns : [];
+          const rows = Array.isArray(table.rows) ? table.rows : [];
+          return (
+            <div key={`${table.name || "table"}-${tableIndex}`} style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                {table.name || table.caption || `Table ${tableIndex + 1}`}
+                {table.extraction_method ? (
+                  <span style={{ color: "var(--color-text-tertiary)", fontWeight: 400 }}> · {table.extraction_method}</span>
+                ) : null}
+              </div>
+              <div className="chat-result-table-scroll">
+                <table className="chat-result-table">
+                  <thead>
+                    <tr>{columns.map((column, columnIndex) => <th key={columnIndex}>{column}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {rows.slice(0, 8).map((row, rowIndex) => (
+                      <tr key={rowIndex}>
+                        {row.slice(0, columns.length || row.length).map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {(table.row_count || rows.length) > 8 && (
+                <p className="chat-result-more">Showing 8 of {table.row_count || rows.length} rows</p>
+              )}
+            </div>
+          );
+        })}
       </div>
     );
   }

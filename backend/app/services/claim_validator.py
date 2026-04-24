@@ -35,7 +35,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from app.common.regex import AUTHOR_YEAR_RE, BIBCODE_RE
+from app.common.regex import ARXIV_ID_RE, AUTHOR_YEAR_RE, BIBCODE_RE, DOI_RE
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,14 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     )),
     ("redshift_z", re.compile(rf"\bz\s*[=≈~]\s*{_NUM}\b", re.I)),
     ("redshift_word", re.compile(rf"\bredshift\s*(?:of|=|≈|~|is)?\s*{_NUM}\b", re.I)),
+    ("line_log_lcii", re.compile(
+        rf"\b(?:log\s*)?L\s*\[?\s*C\s*II\s*\]?\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b",
+        re.I,
+    )),
+    ("line_fwhm", re.compile(
+        rf"\b(?:FWHM|line\s+width)\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\s*(?:km\s*/?\s*s|km\s*s-?1)?\b",
+        re.I,
+    )),
     ("cosmology_h0", re.compile(
         rf"\bH_?0\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}"
         rf"(?:\s*km\s*s(?:ec)?(?:ond)?\s*[-/]?\s*Mpc(?:\^-?1)?|\s*km/?s/?Mpc)?\b",
@@ -687,6 +695,41 @@ def _build_valid_bibcode_pool(tool_results: Any) -> set[str]:
     return pool
 
 
+def _build_valid_arxiv_pool(tool_results: Any) -> set[str]:
+    pool: set[str] = set()
+    for node in _iter_dict_nodes(tool_results):
+        for key in ("arxiv_id", "bibcode", "article", "source_url", "reference_url"):
+            value = node.get(key)
+            if not value:
+                continue
+            pool.update(_arxiv_ids_from_text(str(value)))
+    return pool
+
+
+def _build_valid_doi_pool(tool_results: Any) -> set[str]:
+    pool: set[str] = set()
+    for node in _iter_dict_nodes(tool_results):
+        for key in ("doi", "source_url", "reference_url"):
+            value = node.get(key)
+            if not value:
+                continue
+            pool.update(_dois_from_text(str(value)))
+    return pool
+
+
+def _build_author_year_support(tool_results: Any) -> set[tuple[str, str]]:
+    support: set[tuple[str, str]] = set()
+    for node in _iter_dict_nodes(tool_results):
+        year = str(node.get("year") or "").strip()[:4]
+        authors = node.get("authors") or node.get("author")
+        if not year or not isinstance(authors, list) or not authors:
+            continue
+        first = _author_key(str(authors[0]))
+        if first:
+            support.add((first, year))
+    return support
+
+
 def provenance_citation_violations(
     reply: str,
     tool_results: Any,
@@ -697,6 +740,9 @@ def provenance_citation_violations(
     if not reply:
         return []
     valid_bibcodes = _build_valid_bibcode_pool(tool_results)
+    valid_arxiv_ids = _build_valid_arxiv_pool(tool_results)
+    valid_dois = _build_valid_doi_pool(tool_results)
+    author_year_support = _build_author_year_support(tool_results)
     violations: list[CitationViolation] = []
 
     for match in BIBCODE_RE.finditer(reply):
@@ -710,12 +756,30 @@ def provenance_citation_violations(
                 line_number=_line_number(reply, match.start()),
             ))
 
+    for match in ARXIV_ID_RE.finditer(reply):
+        arxiv_id = _normalize_arxiv_id(match.group(1))
+        if arxiv_id and arxiv_id not in valid_arxiv_ids:
+            violations.append(CitationViolation(
+                kind="invalid_arxiv_id",
+                match_text=f"arXiv:{arxiv_id}",
+                line_number=_line_number(reply, match.start()),
+            ))
+
+    for match in DOI_RE.finditer(reply):
+        doi = _normalize_doi(match.group(0))
+        if doi and doi not in valid_dois:
+            violations.append(CitationViolation(
+                kind="invalid_doi",
+                match_text=doi,
+                line_number=_line_number(reply, match.start()),
+            ))
+
     for match in AUTHOR_YEAR_RE.finditer(_strip_markdown_code(reply)):
         author, year = match.group(1), match.group(2)
         match_text = match.group(0).strip()
         if not strict and _author_year_looks_like_noise(author, match_text):
             continue
-        if _author_year_is_suspicious(author, year, valid_bibcodes):
+        if _author_year_is_suspicious(author, year, valid_bibcodes, author_year_support):
             violations.append(CitationViolation(
                 kind="suspicious_author_year",
                 match_text=match_text,
@@ -748,19 +812,14 @@ def unsupported_literature_narrative_violations(
     if not reply:
         return []
 
-    if (
-        _tool_successfully_ran(tool_results, "search_literature")
-        or _tool_successfully_ran(tool_results, "search_line_measurements")
-        or _tool_successfully_ran(tool_results, "fit_line_lfr")
-    ):
-        return []
-
     stripped_reply = _strip_markdown_code(reply)
     supported_payload_text = _claimable_tool_text(tool_results)
     violations: list[CitationViolation] = []
     seen: set[tuple[str, str, int]] = set()
 
     for kind, pattern in _UNSUPPORTED_NARRATIVE_PATTERNS:
+        if _unsupported_narrative_kind_is_supported(kind, tool_results):
+            continue
         for match in pattern.finditer(stripped_reply):
             match_text = match.group(0).strip()
             if not match_text:
@@ -785,6 +844,31 @@ def unsupported_literature_narrative_violations(
             violation.line_number,
         )
     return violations
+
+
+def _unsupported_narrative_kind_is_supported(kind: str, tool_results: Any) -> bool:
+    if kind == "unsupported_line_property_relation":
+        return _line_measurement_rows_available(tool_results)
+    return (
+        _tool_successfully_ran(tool_results, "search_literature")
+        or _line_measurement_rows_available(tool_results)
+        or _tool_successfully_ran(tool_results, "fit_line_lfr")
+    )
+
+
+def _line_measurement_rows_available(tool_results: Any) -> bool:
+    for entry in tool_results if isinstance(tool_results, list) else [tool_results]:
+        tool_name, result = _entry_tool_and_result(entry)
+        if tool_name not in {"extract_literature_tables", "search_line_measurements", "fit_line_lfr"}:
+            continue
+        if not _payload_is_claimable_success(tool_name, result):
+            continue
+        if tool_name == "fit_line_lfr":
+            return True
+        rows = result.get("line_measurements") if isinstance(result, dict) else None
+        if isinstance(rows, list) and rows:
+            return True
+    return False
 
 
 def blocked_unsupported_narrative_reply_text(violations: list[CitationViolation]) -> str:
@@ -931,16 +1015,61 @@ def _bibcodes_from_text(text: str) -> set[str]:
     return bibcodes
 
 
+def _arxiv_ids_from_text(text: str) -> set[str]:
+    ids: set[str] = set()
+    text = str(text or "")
+    for match in ARXIV_ID_RE.finditer(text):
+        normalized = _normalize_arxiv_id(match.group(1))
+        if normalized:
+            ids.add(normalized)
+    # Bare IDs are common inside structured `arxiv_id` fields.
+    bare = re.fullmatch(r"\s*([0-9]{4}\.[0-9]{4,5}(?:v\d+)?|[a-z-]+/[0-9]{7}(?:v\d+)?)\s*", text, re.I)
+    if bare:
+        normalized = _normalize_arxiv_id(bare.group(1))
+        if normalized:
+            ids.add(normalized)
+    return ids
+
+
+def _dois_from_text(text: str) -> set[str]:
+    return {_normalize_doi(match.group(0)) for match in DOI_RE.finditer(str(text or ""))}
+
+
 def _normalize_bibcode(raw: str) -> str:
     return str(raw or "").strip().strip(".,;:)]}\"'")
+
+
+def _normalize_arxiv_id(raw: str) -> str:
+    value = str(raw or "").strip().strip(".,;:)]}\"'")
+    value = re.sub(r"^arxiv:\s*", "", value, flags=re.I)
+    return value
+
+
+def _normalize_doi(raw: str) -> str:
+    return str(raw or "").strip().strip(".,;:)]}\"'").lower()
+
+
+def _author_key(raw: str) -> str:
+    value = str(raw or "").strip()
+    if "," in value:
+        value = value.split(",", 1)[0]
+    else:
+        parts = value.split()
+        value = parts[-1] if parts else ""
+    return re.sub(r"[^a-z]", "", value.lower())
 
 
 def _author_year_is_suspicious(
     author: str,
     year: str,
     valid_bibcodes: set[str],
+    author_year_support: set[tuple[str, str]] | None = None,
 ) -> bool:
     year_prefix = str(year)
+    author_key = _author_key(author)
+    if author_key and (author_key, year_prefix) in (author_year_support or set()):
+        return False
+
     matches = [bibcode for bibcode in valid_bibcodes if bibcode.startswith(year_prefix)]
     if not matches:
         return True

@@ -23,6 +23,7 @@ export interface ConversationProvenance {
   fieldBibcodesByColumn: Record<string, string[]>;
   field_bibcodes: Record<string, string[]>;
   fieldBibcodeCount: number;
+  measurementReferenceCount: number;
   fullyCovered: boolean;
   fully_covered: boolean;
   acknowledgementText: string;
@@ -147,6 +148,25 @@ function extractFieldBibcodes(toolResult: UnknownRecord): Record<string, string[
   return result;
 }
 
+function extractMeasurementReferences(toolResult: UnknownRecord): string[] {
+  const rows = Array.isArray(toolResult.line_measurements)
+    ? toolResult.line_measurements
+    : [];
+  const refs: string[] = [];
+  for (const row of rows) {
+    if (!isRecord(row)) continue;
+    const citation = isRecord(row.citation) ? row.citation : {};
+    const bibcode = asString(row.bibcode) || asString(citation.bibcode);
+    const arxivId = asString(row.arxiv_id) || asString(citation.arxiv_id);
+    const tableLabel = asString(row.table_label) || asString(citation.table_label);
+    const ref = bibcode || (arxivId ? `arXiv:${arxivId}` : undefined);
+    if (ref) {
+      refs.push(tableLabel ? `${ref} ${tableLabel}` : ref);
+    }
+  }
+  return refs;
+}
+
 export function buildAcknowledgementText(datasets: ProvenanceDataset[]): string {
   const lines = ["This research has made use of the following resources:", ""];
   if (datasets.length === 0) {
@@ -172,6 +192,7 @@ export function aggregateConversationProvenance(source: unknown): ConversationPr
   const datasetsByKey = new Map<string, ProvenanceDataset>();
   const fieldBibcodesByColumn: Record<string, string[]> = {};
   const uniqueFieldBibcodes = new Set<string>();
+  const uniqueMeasurementRefs = new Set<string>();
 
   for (const toolResult of collectToolResults(source)) {
     for (const dataset of extractDatasets(toolResult)) {
@@ -185,6 +206,10 @@ export function aggregateConversationProvenance(source: unknown): ConversationPr
       fieldBibcodesByColumn[column] = [...existing, ...values];
       for (const value of values) uniqueFieldBibcodes.add(value);
     }
+
+    for (const ref of extractMeasurementReferences(toolResult)) {
+      uniqueMeasurementRefs.add(ref);
+    }
   }
 
   const datasets = Array.from(datasetsByKey.values());
@@ -197,6 +222,7 @@ export function aggregateConversationProvenance(source: unknown): ConversationPr
     fieldBibcodesByColumn,
     field_bibcodes: fieldBibcodesByColumn,
     fieldBibcodeCount: uniqueFieldBibcodes.size,
+    measurementReferenceCount: uniqueMeasurementRefs.size,
     fullyCovered,
     fully_covered: fullyCovered,
     acknowledgementText: buildAcknowledgementText(datasets),

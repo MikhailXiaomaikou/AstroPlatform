@@ -45,6 +45,18 @@ const provenancePayload = {
       },
     },
   },
+  line_measurements: [
+    {
+      source_name: "MACS1149-JD1",
+      bibcode: "arXiv:2211.04968",
+      table_label: "Table 2",
+      citation: {
+        bibcode: "arXiv:2211.04968",
+        arxiv_id: "2211.04968",
+        table_label: "Table 2",
+      },
+    },
+  ],
 };
 
 describe("DataSourcesPanel", () => {
@@ -60,6 +72,7 @@ describe("DataSourcesPanel", () => {
     expect(screen.getByText("ALMA Science Archive current")).toBeInTheDocument();
     expect(screen.getByText("2023A&A...674A...1G")).toBeInTheDocument();
     expect(screen.getByText("2 per-value references")).toBeInTheDocument();
+    expect(screen.getByText("1 measurement table reference")).toBeInTheDocument();
     expect(screen.getByLabelText("source authority: PARAM")).toBeInTheDocument();
     expect(screen.getByLabelText("source authority: Registry")).toBeInTheDocument();
     expect(screen.getByLabelText("source authority: IVOA / ObsCore")).toBeInTheDocument();

@@ -106,10 +106,15 @@ ALMA metadata does NOT by itself support derived line-property claims such
 as `[CII]` luminosity, `log L[CII]`, line flux, FWHM, velocity dispersion,
 or a luminosity-FWHM relation.  For those values, first obtain a cited
 machine-readable line-measurement table.  If a `search_line_measurements`
-tool is available, use it; otherwise call `search_literature` and only use
-values/citations that appear in the returned paper metadata.  Never fill a
-line-measurement sample by hardcoding remembered ALPINE/REBELS/literature
-tables in `run_python`.
+tool is available, use it; otherwise call `search_literature` to identify
+candidate papers and then `extract_literature_tables` for any arXiv/ar5iv
+paper that may contain the sample table.  `search_literature` by itself is
+paper/abstract-level evidence only: it supports paper discovery and citation,
+not table measurements.  Quote `[CII]` luminosity, FWHM, line flux, slope, or
+correlation values only from returned `line_measurements` rows, and cite the
+paper plus table label, e.g. "Table 2 of Author et al. (2022; arXiv:xxxx)".
+Never fill a line-measurement sample by hardcoding remembered
+ALPINE/REBELS/literature tables in `run_python`.
 
 ### Cosmology MCMC workflow
 For cosmological parameter constraints (H0, Om0/Omega_m, w0, wa, sigma8,
@@ -1439,7 +1444,10 @@ When formatting floating-point values, use float formats like `:.2f`, not intege
 
 When you use the search_literature tool, cite papers in your response using the format:
 "According to Author et al. (Year), ..." or "(Author et al., Year; bibcode)".
-Reference specific findings from the abstracts to support your analysis.
+Reference specific findings from the abstracts to support literature context only. If the
+user asks for numerical sample compilation or fitting from a paper, call
+`extract_literature_tables` and use returned `line_measurements`; abstract text alone
+does not support measurement-table values.
 
 ## Transient Source Temporal Awareness (CRITICAL)
 - Supernovae, GRBs, novae, and other transient events fade within weeks to months.

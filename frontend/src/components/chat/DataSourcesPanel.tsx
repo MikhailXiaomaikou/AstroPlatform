@@ -28,6 +28,9 @@ function displayName(dataset: ProvenanceDataset): string {
 }
 
 function adsUrl(bibcode: string): string {
+  if (bibcode.toLowerCase().startsWith("arxiv:")) {
+    return `https://arxiv.org/abs/${encodeURIComponent(bibcode.replace(/^arXiv:/i, ""))}`;
+  }
   return `https://ui.adsabs.harvard.edu/abs/${encodeURIComponent(bibcode)}/abstract`;
 }
 
@@ -113,7 +116,7 @@ function DataSourceItem({ dataset }: { dataset: ProvenanceDataset }) {
 }
 
 export default function DataSourcesPanel({ summary }: { summary: ConversationProvenance }) {
-  if (summary.datasets.length === 0 && summary.fieldBibcodeCount === 0) {
+  if (summary.datasets.length === 0 && summary.fieldBibcodeCount === 0 && summary.measurementReferenceCount === 0) {
     return null;
   }
 
@@ -129,6 +132,11 @@ export default function DataSourcesPanel({ summary }: { summary: ConversationPro
             {summary.fieldBibcodeCount} per-value reference{summary.fieldBibcodeCount === 1 ? "" : "s"}
           </span>
         )}
+        {summary.measurementReferenceCount > 0 && (
+          <span className="field-bibcode-count">
+            {summary.measurementReferenceCount} measurement table reference{summary.measurementReferenceCount === 1 ? "" : "s"}
+          </span>
+        )}
       </summary>
       <div className="data-sources-panel-body">
         {summary.datasets.map((dataset) => (
@@ -138,6 +146,11 @@ export default function DataSourcesPanel({ summary }: { summary: ConversationPro
           <div className="field-bibcode-detail">
             <strong>{summary.fieldBibcodeCount}</strong> field-level bibcode{summary.fieldBibcodeCount === 1 ? "" : "s"} captured from{" "}
             {Object.keys(summary.fieldBibcodesByColumn).join(", ")}
+          </div>
+        )}
+        {summary.measurementReferenceCount > 0 && (
+          <div className="field-bibcode-detail">
+            <strong>{summary.measurementReferenceCount}</strong> literature-table reference{summary.measurementReferenceCount === 1 ? "" : "s"} support typed measurement rows.
           </div>
         )}
       </div>

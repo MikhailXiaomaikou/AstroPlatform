@@ -139,3 +139,86 @@ def test_alma_metadata_does_not_support_cii_luminosity_fwhm_claims():
 
     assert violations
     assert violations[0].kind == "unsupported_literature_narrative"
+
+
+def test_search_literature_alone_does_not_support_cii_relation_claims():
+    from app.services.claim_validator import unsupported_literature_narrative_violations
+
+    tool_results = [
+        {
+            "tool": "search_literature",
+            "result": {
+                "success": True,
+                "result_granularity": "paper_abstract",
+                "supports_measurement_claims": False,
+                "results": [
+                    {
+                        "title": "ALPINE survey",
+                        "authors": ["Example, A."],
+                        "year": "2022",
+                        "bibcode": "arXiv:2211.04968",
+                    }
+                ],
+            },
+        }
+    ]
+
+    violations = unsupported_literature_narrative_violations(
+        "The log L[CII]-FWHM relation is visible in the literature sample.",
+        tool_results,
+    )
+
+    assert violations
+
+
+def test_literature_table_measurements_support_cii_relation_and_arxiv_author_year():
+    from app.services.claim_validator import (
+        provenance_citation_violations,
+        unsupported_literature_narrative_violations,
+        validate_claims,
+    )
+
+    tool_results = [
+        {
+            "tool": "extract_literature_tables",
+            "result": {
+                "success": True,
+                "line_measurements": [
+                    {
+                        "source_name": "MACS1149-JD1",
+                        "log_luminosity": 8.15,
+                        "fwhm_km_s": 245.0,
+                        "bibcode": "arXiv:2211.04968",
+                        "arxiv_id": "2211.04968",
+                        "citation": {
+                            "bibcode": "arXiv:2211.04968",
+                            "arxiv_id": "2211.04968",
+                            "authors": ["Example, A."],
+                            "year": "2022",
+                            "table_label": "Table 2",
+                        },
+                    }
+                ],
+            },
+        }
+    ]
+    reply = (
+        "Table 2 of Example et al. (2022; arXiv:2211.04968) gives "
+        "log L[CII] = 8.15 and FWHM = 245 km/s."
+    )
+
+    assert unsupported_literature_narrative_violations(reply, tool_results) == []
+    assert provenance_citation_violations(reply, tool_results) == []
+    assert validate_claims(reply, tool_results).ok
+
+
+def test_unseen_doi_is_citation_violation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    violations = provenance_citation_violations(
+        "The table is available at doi:10.9999/example.fake.",
+        _tool_with_dataset("2023A&A...674A...1G"),
+    )
+
+    assert violations
+    assert violations[0].kind == "invalid_doi"
