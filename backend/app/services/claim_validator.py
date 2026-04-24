@@ -35,7 +35,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from app.common.regex import AUTHOR_YEAR_RE, BIBCODE_RE, IVOID_RE
+from app.common.regex import AUTHOR_YEAR_RE, BIBCODE_RE
 
 logger = logging.getLogger(__name__)
 
