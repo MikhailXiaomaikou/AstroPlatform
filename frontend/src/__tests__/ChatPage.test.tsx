@@ -121,7 +121,6 @@ vi.mock("../api/client", () => ({
   restoreSessionSnapshot: vi.fn(),
   diffSessionSnapshots: vi.fn(),
   exportChatMarkdown: vi.fn(),
-  exportChatPDF: vi.fn(),
   exportChatNotebook: vi.fn(),
   exportChatLatex: vi.fn(),
   exportChatBibTeX: vi.fn(),
@@ -232,51 +231,6 @@ describe("ChatPage", () => {
     renderChatPage();
 
     expect(screen.getByText("chat.new_chat")).toBeInTheDocument();
-  });
-
-  it("sends a clean request when New Chat is followed by an immediate send", async () => {
-    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
-    localStorage.setItem(
-      "astro_chat_history:anon",
-      JSON.stringify([
-        { id: "old-u", role: "user", content: "old R2.4 prompt" },
-        { id: "old-a", role: "assistant", content: "old r = 0.338 result" },
-      ]),
-    );
-    localStorage.setItem("astro_current_chat_session_id:anon", "old-session");
-    localStorage.setItem("astro_last_search", JSON.stringify({ query: "old literature context" }));
-    localStorage.setItem("astro_last_adql", JSON.stringify({ query: "old adql context" }));
-    let capturedMessages: unknown[] = [];
-    let capturedContext: Record<string, unknown> = {};
-    vi.mocked(sendChatMessage).mockImplementation(async (messages, context) => {
-      capturedMessages = messages;
-      capturedContext = (context || {}) as Record<string, unknown>;
-      return { reply: "Fresh done", actions: [] };
-    });
-
-    renderChatPage();
-    expect(await screen.findByText("old R2.4 prompt")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText("chat.new_chat"));
-    await waitFor(() => expect(screen.getByTestId("fresh-chat-ready")).toBeInTheDocument());
-    expect(localStorage.getItem("astro_current_chat_session_id:anon")).toBeNull();
-    expect(localStorage.getItem("astro_chat_history:anon")).toBeNull();
-
-    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
-    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
-    fireEvent.change(textarea, { target: { value: "new R2.5 prompt" } });
-    fireEvent.click(sendBtn);
-
-    await waitFor(() => expect(sendChatMessage).toHaveBeenCalledTimes(1));
-    expect(capturedMessages).toEqual([
-      { role: "user", content: "new R2.5 prompt" },
-      { role: "assistant", content: "" },
-    ]);
-    expect(capturedContext.current_session_id).toBeNull();
-    expect(capturedContext.python_session_id).toEqual(expect.any(String));
-    expect(capturedContext.last_search).toBeUndefined();
-    expect(capturedContext.last_adql).toBeUndefined();
-    await screen.findByText("Fresh done");
   });
 
   it("shows import button", () => {

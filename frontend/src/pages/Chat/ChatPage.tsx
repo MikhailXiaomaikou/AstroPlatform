@@ -1,5 +1,4 @@
 import { useState, useMemo, useRef, useEffect, useCallback, lazy, memo, Suspense } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   sendChatMessage,
   executeChatAction,
@@ -28,7 +27,6 @@ import {
   restoreSessionSnapshot,
   diffSessionSnapshots,
   exportChatMarkdown,
-  exportChatPDF,
   exportChatNotebook,
   exportChatLatex,
   exportChatBibTeX,
@@ -2438,11 +2436,6 @@ function safeSetChatHistory(messages: DisplayMessage[], scope: string): { writte
 }
 
 function saveChatHistory(messages: DisplayMessage[], scope: string): void {
-  if (messages.length === 0) {
-    localStorage.removeItem(scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, scope));
-    localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
-    return;
-  }
   safeSetChatHistory(messages, scope);
 }
 
@@ -2495,7 +2488,7 @@ interface LocalChatSession {
   messages: Array<{ role: string; content: string; actions?: unknown[] }>;
 }
 
-type ExportAction = "markdown" | "pdf" | "notebook" | "latex" | "bibtex";
+type ExportAction = "markdown" | "notebook" | "latex" | "bibtex";
 type JournalFormat = "aastex" | "mnras" | "aa";
 type ShareAccessLevel = "view" | "fork" | "comment";
 type PaperTab =
@@ -2687,7 +2680,6 @@ function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
 
 export default function ChatPage() {
   const { user } = useAuth();
-  const navigate = useNavigate();
   const storageScope = useMemo(() => chatStorageScope(user), [user?.id]);
   const { t } = useI18n();
   const { track } = useTracking();
@@ -2737,7 +2729,6 @@ export default function ChatPage() {
   const chatAbortRef = useRef<AbortController | null>(null);
   const [exporting, setExporting] = useState<Record<ExportAction, boolean>>({
     markdown: false,
-    pdf: false,
     notebook: false,
     latex: false,
     bibtex: false,
@@ -2779,20 +2770,9 @@ export default function ChatPage() {
   const [snapshotCompareSelection, setSnapshotCompareSelection] = useState<string[]>([]);
   const [snapshotDiff, setSnapshotDiff] = useState<SessionSnapshotDiff | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
-  const messagesRef = useRef<DisplayMessage[]>(messages);
-  const currentSessionIdRef = useRef<string | null>(currentSessionId);
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
-  const chatGenerationIdRef = useRef<string>(crypto.randomUUID());
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSessionScopeRef = useRef(storageScope);
-
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-
-  useEffect(() => {
-    currentSessionIdRef.current = currentSessionId;
-  }, [currentSessionId]);
 
   const showToast = useCallback((message: string, tone: ToastState["tone"] = "success") => {
     setToast({ message, tone });
@@ -2851,7 +2831,6 @@ export default function ChatPage() {
       const savedToWorkspace = await rememberExportInWorkspace(blob, filename, exportKind);
       const exportEventMap: Record<ExportAction, string> = {
         markdown: "export.paper_draft",
-        pdf: "export.paper_draft",
         notebook: "export.notebook",
         latex: "export.latex",
         bibtex: "export.paper_draft",
@@ -3087,9 +3066,6 @@ export default function ChatPage() {
     const newSession = localStorage.getItem("astro_chat_new_session");
     if (newSession) {
       localStorage.removeItem("astro_chat_new_session");
-      messagesRef.current = [];
-      currentSessionIdRef.current = null;
-      chatGenerationIdRef.current = crypto.randomUUID();
       setMessages([]);
       setCurrentSessionId(null);
       pythonSessionIdRef.current = crypto.randomUUID();
@@ -3335,17 +3311,11 @@ export default function ChatPage() {
         return;
       }
     }
-    messagesRef.current = [];
-    currentSessionIdRef.current = null;
-    chatGenerationIdRef.current = crypto.randomUUID();
-    const freshChatToken = chatGenerationIdRef.current;
     setMessages([]);
     setCurrentSessionId(null);
     setCurrentSessionTitle("");
     setSaveStatus("idle");
-    setInput("");
     pythonSessionIdRef.current = crypto.randomUUID();
-    pendingSavePayloadRef.current = null;
     localStorage.removeItem(scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, storageScope));
     localStorage.removeItem(scopedChatStorageKey(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY, storageScope));
     // G6.1: also clear the workspace-context keys that the chat request
@@ -3359,7 +3329,6 @@ export default function ChatPage() {
     localStorage.removeItem("astro_adql_result_sets");
     localStorage.removeItem("astro_last_search");
     localStorage.removeItem(scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, storageScope));
-    navigate("/chat", { replace: true, state: { freshChatToken } });
   };
 
   const handleRenameSession = async (newTitle: string) => {
@@ -3597,10 +3566,6 @@ export default function ChatPage() {
   const handleSend = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text || loading) return;
-    const activeMessages = messagesRef.current;
-    const activeSessionId = currentSessionIdRef.current;
-    const activePythonSessionId = pythonSessionIdRef.current;
-    const activeGenerationId = chatGenerationIdRef.current;
 
     const userMsg: DisplayMessage = {
       id: crypto.randomUUID(),
@@ -3680,8 +3645,7 @@ export default function ChatPage() {
       });
     };
 
-    const updatedMessages = [...activeMessages, userMsg, pendingMarker];
-    messagesRef.current = updatedMessages;
+    const updatedMessages = [...messages, userMsg, pendingMarker];
     setMessages(updatedMessages);
     // H0.5: clear input whenever the text we're sending matches the
     // current input state (i.e. came from the user, not an external
@@ -3704,7 +3668,7 @@ export default function ChatPage() {
       const wsContext: Record<string, unknown> = {};
       try {
         const lastSearch = localStorage.getItem("astro_last_search");
-        if (lastSearch && activeGenerationId === chatGenerationIdRef.current) wsContext.last_search = JSON.parse(lastSearch);
+        if (lastSearch) wsContext.last_search = JSON.parse(lastSearch);
       } catch { /* ignore */ }
       try {
         const workspace = localStorage.getItem("astro_workspace_files");
@@ -3723,27 +3687,24 @@ export default function ChatPage() {
       } catch { /* ignore */ }
       try {
         const lastAdql = localStorage.getItem("astro_last_adql");
-        if (lastAdql && activeGenerationId === chatGenerationIdRef.current) wsContext.last_adql = JSON.parse(lastAdql);
+        if (lastAdql) wsContext.last_adql = JSON.parse(lastAdql);
       } catch { /* ignore */ }
       try {
         const lastAdqlRows = localStorage.getItem("astro_last_adql_rows");
-        if (lastAdqlRows && activeGenerationId === chatGenerationIdRef.current) wsContext.last_adql_rows = JSON.parse(lastAdqlRows);
+        if (lastAdqlRows) wsContext.last_adql_rows = JSON.parse(lastAdqlRows);
       } catch { /* ignore */ }
       try {
         const lastAdqlResultSets = localStorage.getItem("astro_adql_result_sets");
-        if (lastAdqlResultSets && activeGenerationId === chatGenerationIdRef.current) wsContext.last_adql_result_sets = JSON.parse(lastAdqlResultSets);
+        if (lastAdqlResultSets) wsContext.last_adql_result_sets = JSON.parse(lastAdqlResultSets);
       } catch { /* ignore */ }
-      wsContext.python_session_id = activePythonSessionId;
-      wsContext.current_session_id = activeSessionId;
+      wsContext.python_session_id = pythonSessionIdRef.current;
+      wsContext.current_session_id = currentSessionId;
 
       // R0d: create a fresh AbortController per request so the Stop button
       // can cancel this stream specifically.
       const abort = new AbortController();
       chatAbortRef.current = abort;
       const response = await sendChatMessage(chatHistory, wsContext, onThinking, abort.signal, onActions);
-      if (activeGenerationId !== chatGenerationIdRef.current) {
-        return;
-      }
 
       // F3.2: carry forward any _abstention that arrived on a thinking event
       // before the final reply.  Without this the card would flash and
@@ -4013,11 +3974,6 @@ export default function ChatPage() {
                 </span>
               )}
               {!currentSessionId && "Ask about astronomical objects, build pipelines, or run ADQL queries"}
-              {!currentSessionId && messages.length === 0 && (
-                <span data-testid="fresh-chat-ready" hidden>
-                  fresh chat ready
-                </span>
-              )}
             </p>
           </div>
           <div style={{ display: "flex", gap: "0.4rem" }}>
@@ -4069,22 +4025,6 @@ export default function ChatPage() {
                 }}
               >
                 {exporting.markdown ? "Exporting..." : t("common.export")}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary btn-small"
-                disabled={exporting.pdf}
-                onClick={() => {
-                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
-                  void handleExport(
-                    "pdf",
-                    "PDF",
-                    "ai_research_chat.pdf",
-                    () => exportChatPDF(data),
-                  );
-                }}
-              >
-                {exporting.pdf ? "Exporting..." : "PDF"}
               </button>
               <button
                 type="button"

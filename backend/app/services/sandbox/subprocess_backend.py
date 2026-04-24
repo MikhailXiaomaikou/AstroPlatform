@@ -347,17 +347,6 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
             "PingFang SC", "Microsoft YaHei", "SimHei", "DejaVu Sans",
         ]
         matplotlib.rcParams["axes.unicode_minus"] = False
-        # Anti-overlap defaults: tight_layout on every figure, savefig trims
-        # excess margins, and slightly-smaller default font sizes so axis
-        # labels / ticks / legend don't collide even when user code omits
-        # plt.tight_layout().  Users can still override any of these.
-        matplotlib.rcParams["figure.autolayout"] = True
-        matplotlib.rcParams["savefig.bbox"] = "tight"
-        matplotlib.rcParams["axes.titlesize"] = 11
-        matplotlib.rcParams["axes.labelsize"] = 10
-        matplotlib.rcParams["xtick.labelsize"] = 9
-        matplotlib.rcParams["ytick.labelsize"] = 9
-        matplotlib.rcParams["legend.fontsize"] = 9
         import matplotlib.pyplot as plt
         import numpy as np
         saved_figures, original_savefig, restore_savefig = _install_savefig_capture(plt, stderr_buf)

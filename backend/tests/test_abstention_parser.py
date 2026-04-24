@@ -11,7 +11,6 @@ from app.api.chat import (
     _parse_abstention_tag,
     _classify_abstention_reason,
     _render_abstention_card,
-    _strip_internal_tool_markers_from_reply,
 )
 
 
@@ -109,24 +108,6 @@ def test_parse_rejects_normal_reply():
 
 def test_parse_rejects_empty_reply():
     assert _parse_abstention_tag("") is None
-
-
-def test_strip_embedded_internal_abstention_marker_from_prose():
-    reply = (
-        "Unfortunately, the fit could not be performed.\n"
-        "<toolsreturnednothing failedtools=\"fitlinelfr\" "
-        "rationale=\"No cached line measurements\" "
-        "suggestednext_step=\"Search again\"/>\n"
-        "I can explain the limitation."
-    )
-
-    cleaned = _strip_internal_tool_markers_from_reply(reply)
-
-    assert "toolsreturnednothing" not in cleaned
-    assert "failedtools" not in cleaned
-    assert "fitlinelfr" not in cleaned
-    assert "Unfortunately" in cleaned
-    assert "explain the limitation" in cleaned
 
 
 # ---------- Reason classification ----------

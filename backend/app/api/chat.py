@@ -5,7 +5,6 @@ import inspect
 import json
 import logging
 import os
-import re
 import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -121,14 +120,6 @@ Never say the table could not be extracted when the tool returned usable
 measurement rows; state the count/cache key and continue with the fit tool.
 Never fill a line-measurement sample by hardcoding remembered
 ALPINE/REBELS/literature tables in `run_python`.
-
-### Reference cosmology constants
-When the user asks for the Riess+2011 / Suzuki+2012 cosmology, use the exact
-values `H0 = 73.8 km/s/Mpc` and `Om0 = 0.295`.  Do not substitute `Om0=0.25`,
-Planck/WMAP defaults, rounded values, or remembered alternatives.  If you are
-not certain which reference cosmology was requested, ask or state that the
-cosmology was not determined; do not guess.  Results computed with mismatched
-reference constants are not citeable.
 
 ### Cosmology MCMC workflow
 For cosmological parameter constraints (H0, Om0/Omega_m, w0, wa, sigma8,
@@ -2504,27 +2495,6 @@ def _strip_actions_from_reply(text: str) -> str:
     return re.sub(r"<actions>.*?</actions>", "", text, flags=re.DOTALL).strip()
 
 
-_INTERNAL_TOOL_MARKER_RE = __import__("re").compile(
-    r"""<(?P<tag>
-            tools_returned_nothing|toolsreturnednothing|
-            functions?|internal
-        )\b[^>]*(?:/>\s*|>.*?</(?P=tag)>\s*)""",
-    __import__("re").VERBOSE | __import__("re").DOTALL | __import__("re").IGNORECASE,
-)
-
-
-def _strip_internal_tool_markers_from_reply(text: str) -> str:
-    """Remove internal XML/tool-control tags when the model leaks them into prose.
-
-    A reply that is only <tools_returned_nothing/> is handled by the
-    structured-abstention parser below.  Mixed prose + XML is a leak, so strip
-    the tag and let the remaining prose go through the normal validators.
-    """
-    if not text:
-        return ""
-    return _INTERNAL_TOOL_MARKER_RE.sub("", text).strip()
-
-
 # F2.3: <tools_returned_nothing/> structured abstention parser.
 # The model's entire reply is supposed to be a single self-closing XML tag
 # when tools had no data.  We parse permissively: attribute order doesn't
@@ -3149,82 +3119,6 @@ def _suppressed_line_measurement_python_result(cache_keys: list[str]) -> dict:
     }
 
 
-DISABLE_AFTER_FAILURES = 3
-RUN_PYTHON_DISABLE_AFTER_CRASHES = 2
-
-
-def _tool_disable_threshold(tool_name: str) -> int:
-    return RUN_PYTHON_DISABLE_AFTER_CRASHES if tool_name == "run_python" else DISABLE_AFTER_FAILURES
-
-
-def _run_python_sandbox_crashed(result: Any) -> bool:
-    if not isinstance(result, dict):
-        return False
-    error_class = str(result.get("error_class") or "").lower()
-    error_text = str(result.get("error") or "").lower()
-    stderr_empty = not str(result.get("stderr") or "").strip()
-    failed = result.get("success") is False or bool(result.get("error"))
-    crash_like = (
-        error_class in {"sandbox_crash", "subprocesscrash"}
-        or "subprocess crashed" in error_text
-        or "subprocess crash" in error_text
-        or "malformed" in error_text
-    )
-    return (
-        failed
-        and crash_like
-        and stderr_empty
-    )
-
-
-def _run_python_missing_key(result: Any) -> str | None:
-    if not isinstance(result, dict):
-        return None
-    text = "\n".join(
-        str(result.get(key) or "")
-        for key in ("error", "stderr", "traceback")
-    )
-    match = re.search(r"KeyError:\s*['\"]([^'\"]+)['\"]", text)
-    if match:
-        return match.group(1)
-    if str(result.get("error_class") or "").lower() == "key_error":
-        return "unknown"
-    return None
-
-
-def _looks_like_unfinished_reply(reply: str) -> bool:
-    stripped = str(reply or "").strip()
-    if not stripped:
-        return False
-    if stripped.endswith((":", "：")):
-        return True
-    last_line = next((line.strip() for line in reversed(stripped.splitlines()) if line.strip()), "")
-    return bool(re.search(
-        r"\b(?:let me|i will|i'll|i am going to|next,?\s*i|now\s+i)\b[^.\n!?]*[:：]\s*$",
-        last_line,
-        re.I,
-    ))
-
-
-def _render_unfinished_reply_fallback(reply: str, tool_results: list[dict]) -> str:
-    tool_names = []
-    for entry in tool_results:
-        if isinstance(entry, dict):
-            name = str(entry.get("tool") or entry.get("name") or "").strip()
-            if name and name not in tool_names:
-                tool_names.append(name)
-    tool_summary = ", ".join(tool_names) if tool_names else "none"
-    return (
-        "⚠ The assistant draft ended before completion, so the platform replaced "
-        "the half-written prose with this safe summary.\n\n"
-        f"Tools run this turn: {tool_summary}. The tool cards below are the "
-        "authoritative output for this attempt. I cannot add slope/intercept/"
-        "scatter/correlation values unless a cited measurement-table fit "
-        "succeeded in this same turn. Please continue from the displayed tool "
-        "outputs or ask for a narrower next step."
-    )
-
-
 async def _run_agent_loop(
     *,
     system: str,
@@ -3322,10 +3216,10 @@ async def _run_agent_loop(
     # later Python cells have no real cache to analyze.  Track them separately
     # so fallback/demo code is suppressed as ∅ Empty instead of AUTO/SYNTHETIC.
     empty_data_fetches: set[str] = set()
+    DISABLE_AFTER_FAILURES = 3
     synthetic_run_python_count = 0  # G3.3 counter
     user_requested_synthetic_demo = _user_requested_synthetic_demo(messages)
     fit_ready_literature_cache_keys: list[str] = []
-    run_python_key_error_counts: dict[str, int] = {}
 
     hit_iteration_cap = False
     hit_deadline = False
@@ -3348,11 +3242,11 @@ async def _run_agent_loop(
         # G3.4: filter tools that have failed too many times this turn.
         visible_tools = [
             t for t in tools
-            if tool_failure_counts.get(t.get("name", ""), 0) < _tool_disable_threshold(t.get("name", ""))
+            if tool_failure_counts.get(t.get("name", ""), 0) < DISABLE_AFTER_FAILURES
         ]
         disabled_this_turn = [
             t.get("name") for t in tools
-            if tool_failure_counts.get(t.get("name", ""), 0) >= _tool_disable_threshold(t.get("name", ""))
+            if tool_failure_counts.get(t.get("name", ""), 0) >= DISABLE_AFTER_FAILURES
         ]
 
         # Append a runtime note to the system message when any tools are
@@ -3363,7 +3257,7 @@ async def _run_agent_loop(
                 system
                 + "\n\n[RUNTIME: the following tools have been removed from "
                 + "your toolkit this turn because they failed "
-                + "their per-tool failure threshold already: "
+                + f"{DISABLE_AFTER_FAILURES}+ times already: "
                 + f"{disabled_this_turn}. Do NOT attempt to call them by "
                 + "name (they are not in your schema). Either use a DIFFERENT "
                 + "tool with DIFFERENT parameters, or emit "
@@ -3507,18 +3401,6 @@ async def _run_agent_loop(
                     cache_key = str(result.get("cache_key") or "latest_literature_tables")
                     if cache_key not in fit_ready_literature_cache_keys:
                         fit_ready_literature_cache_keys.append(cache_key)
-
-            if tool_name == "run_python" and isinstance(result, dict):
-                if _run_python_sandbox_crashed(result):
-                    tool_failure_counts["run_python"] = tool_failure_counts.get("run_python", 0) + 1
-                missing_key = _run_python_missing_key(result)
-                if missing_key:
-                    run_python_key_error_counts[missing_key] = run_python_key_error_counts.get(missing_key, 0) + 1
-                    if run_python_key_error_counts[missing_key] >= 2:
-                        tool_failure_counts["run_python"] = max(
-                            tool_failure_counts.get("run_python", 0),
-                            RUN_PYTHON_DISABLE_AFTER_CRASHES,
-                        )
 
             # G3.1 + H0.7: mark data-fetch failures for the G3.4 disable gate.
             # H0.7: timeouts / payload_too_large / row_count=0 are "soft"
@@ -3749,8 +3631,6 @@ async def _run_agent_loop(
             "honest_abstention": True,
             "abstention_reason": reason,
         }
-    else:
-        clean_reply = _strip_internal_tool_markers_from_reply(clean_reply)
 
     # R2: zero-fabrication gate.  Validate every numeric claim in the reply
     # against the tool_results collected this turn; if any claim can't be
@@ -3770,8 +3650,6 @@ async def _run_agent_loop(
             blocked_citation_reply_text,
             unsupported_literature_narrative_violations,
             blocked_unsupported_narrative_reply_text,
-            unsupported_line_relation_stat_claims,
-            blocked_line_relation_reply_text,
         )
 
         # F1.4: zero-data hard block.  If every tool call this turn was
@@ -3843,24 +3721,6 @@ async def _run_agent_loop(
             try:
                 from app.observability.metrics import record_counter
                 record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="zero_data")
-            except Exception:
-                pass
-
-        elif (
-            line_relation_claims := unsupported_line_relation_stat_claims(
-                clean_reply, all_tool_results
-            )
-        ):
-            logger.error(
-                "Line-relation measurement gate BLOCKED reply from %s (%d claims)",
-                agent_name,
-                len(line_relation_claims),
-            )
-            clean_reply = blocked_line_relation_reply_text(line_relation_claims)
-            fabrication_stats["blocked"] = True
-            try:
-                from app.observability.metrics import record_counter
-                record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="measurement_zero")
             except Exception:
                 pass
 
@@ -4009,19 +3869,6 @@ async def _run_agent_loop(
         _claim_gate_ran = False
         # Still need is_empty_turn for the fallback branch below.
         from app.services.claim_validator import is_empty_turn  # noqa: F401
-
-    if clean_reply.strip() and not fabrication_stats.get("blocked") and _looks_like_unfinished_reply(clean_reply):
-        try:
-            from app.observability.metrics import record_counter
-            record_counter("incomplete_reply_fallback_total", 1.0, agent=agent_name)
-        except Exception:
-            pass
-        logger.warning(
-            "Incomplete trailing reply detected in %s agent loop; replacing with safe fallback. tail=%r",
-            agent_name,
-            clean_reply[-160:],
-        )
-        clean_reply = _render_unfinished_reply_fallback(clean_reply, all_tool_results)
 
     actions.extend(_tool_results_to_actions(all_tool_results))
 
@@ -4211,17 +4058,14 @@ async def _run_orchestrated_chat(
         merged_actions.extend(result["actions"])
         merged_tool_results.extend(result.get("tool_results", []))
     merged_reply = await orchestrator.merge_responses(agent_results)
-    merged_reply = _strip_internal_tool_markers_from_reply(merged_reply)
     if merged_reply.strip():
         try:
             from app.services.claim_validator import (
                 blocked_reply_text,
                 blocked_citation_reply_text,
                 blocked_unsupported_narrative_reply_text,
-                blocked_line_relation_reply_text,
                 citation_violations_should_block,
                 provenance_citation_violations,
-                unsupported_line_relation_stat_claims,
                 unsupported_literature_narrative_violations,
                 validate_claims,
                 zero_data_but_quantitative,
@@ -4233,21 +4077,12 @@ async def _run_orchestrated_chat(
             # turn so a later agent cannot accidentally launder unsupported
             # numbers from an earlier rewrite/handoff.
             zero_data_claims = zero_data_but_quantitative(merged_reply, merged_tool_results)
-            line_relation_claims = unsupported_line_relation_stat_claims(
-                merged_reply, merged_tool_results
-            )
             unsupported_narrative = unsupported_literature_narrative_violations(
                 merged_reply, merged_tool_results
             )
             citation_violations = provenance_citation_violations(merged_reply, merged_tool_results)
             validation = validate_claims(merged_reply, merged_tool_results)
-            if line_relation_claims:
-                logger.error(
-                    "Line-relation measurement gate BLOCKED merged reply (%d claims)",
-                    len(line_relation_claims),
-                )
-                merged_reply = blocked_line_relation_reply_text(line_relation_claims)
-            elif unsupported_narrative:
+            if unsupported_narrative:
                 logger.error(
                     "Unsupported narrative gate BLOCKED merged reply (%d violations)",
                     len(unsupported_narrative),

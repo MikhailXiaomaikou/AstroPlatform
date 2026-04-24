@@ -121,7 +121,6 @@ def replay_diagnostic_bundle(path: str | Path) -> dict[str, Any]:
     provenance/narrative validators against captured tool outputs.
     """
     from app.services.claim_validator import (
-        unsupported_line_relation_stat_claims,
         provenance_citation_violations,
         unsupported_literature_narrative_violations,
         validate_claims,
@@ -133,13 +132,11 @@ def replay_diagnostic_bundle(path: str | Path) -> dict[str, Any]:
     numeric = validate_claims(reply, tool_results)
     citation = provenance_citation_violations(reply, tool_results)
     unsupported = unsupported_literature_narrative_violations(reply, tool_results)
-    line_relation = unsupported_line_relation_stat_claims(reply, tool_results)
     return {
         "bundle_id": bundle.get("bundle_id"),
         "numeric_ok": numeric.ok,
         "uncited_numeric_claims": [claim.__dict__ for claim in numeric.uncited],
         "citation_violations": [violation.__dict__ for violation in citation],
         "unsupported_narrative_violations": [violation.__dict__ for violation in unsupported],
-        "line_relation_violations": [claim.__dict__ for claim in line_relation],
-        "would_withhold": bool(numeric.uncited or unsupported or line_relation),
+        "would_withhold": bool(numeric.uncited or unsupported),
     }

@@ -5,7 +5,6 @@ handles the tool_use → result → next message cycle automatically.
 """
 
 import asyncio
-import json
 import logging
 import math
 import re
@@ -3197,31 +3196,6 @@ def _exec_pipeline(inp: dict) -> dict:
     }
 
 
-def _query_requires_cii_relevance(query: str) -> bool:
-    q = str(query or "").lower()
-    return bool(re.search(r"(?:\[?\s*c\s*ii\s*\]?|lcii|l\s*\[\s*cii\s*\]|158\s*(?:um|μm|micron))", q))
-
-
-def _literature_result_is_cii_relevant(row: dict[str, Any]) -> bool:
-    text = " ".join(
-        str(row.get(key) or "")
-        for key in ("title", "abstract", "pub", "bibcode")
-    ).lower()
-    strong = (
-        "c ii" in text or "cii" in text or "[cii]" in text or
-        "158" in text or "alpine" in text or "rebels" in text or "alma" in text
-    )
-    context = any(token in text for token in (
-        "galax", "redshift", "far-infrared", "far infrared", "line", "fwhm",
-        "luminos", "interstellar", "star-form", "emission",
-    ))
-    bad_domain = any(token in text for token in (
-        "wildfire", "power line", "shutoff", "hartree", "bogoliubov",
-        "nuclear mass table", "deformed relativistic",
-    ))
-    return strong and context and not bad_domain
-
-
 async def _exec_literature(inp: dict) -> dict:
     try:
         from functools import partial
@@ -3251,26 +3225,19 @@ async def _exec_literature(inp: dict) -> dict:
         if not raw:
             raw = await loop.run_in_executor(None, partial(_search_literature_arxiv, query, 8))
             source = "arxiv_free_text"
-        filtered_for_domain = False
-        if raw and _query_requires_cii_relevance(query):
-            filtered = [row for row in raw if _literature_result_is_cii_relevant(row)]
-            filtered_for_domain = len(filtered) != len(raw)
-            raw = filtered
         if not raw:
             return {
                 "results": [],
                 "source": source,
-                "filtered_for_domain": filtered_for_domain,
                 "message": (
                     "No papers found via ADS object search, ADS free-text search, "
-                    "or arXiv fallback after applying the [CII] relevance filter."
+                    "or arXiv fallback."
                 ),
             }
         return {
             "source": source,
             "result_granularity": "paper_abstract",
             "supports_measurement_claims": False,
-            "filtered_for_domain": filtered_for_domain,
             "results": [
                 {
                     "title": r["title"],
@@ -3377,54 +3344,27 @@ def _measurement_rows_from_cache_payload(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-FIT_READY_LITERATURE_CACHE_KEY = "latest_literature_measurements"
-
-
-def _literature_measurement_cache_candidates(cache_key: str, python_session_id: str | None) -> list[str]:
+def _resolve_literature_measurement_cache(cache_key: str, python_session_id: str | None) -> tuple[list[dict[str, Any]], str]:
     requested = (cache_key or "latest_literature_tables").strip() or "latest_literature_tables"
     candidates = [requested]
     session_key = _session_cache_key(requested, python_session_id)
     if session_key:
         candidates.insert(0, session_key)
-    if requested.startswith("latest_literature_tables"):
-        candidates.extend([
-            _session_cache_key("latest_literature_tables", python_session_id),
-            _session_cache_key(FIT_READY_LITERATURE_CACHE_KEY, python_session_id),
-            FIT_READY_LITERATURE_CACHE_KEY,
-            "latest_literature_tables",
-        ])
-    if requested.startswith("latest_literature_measurements"):
-        candidates.extend([
-            _session_cache_key(FIT_READY_LITERATURE_CACHE_KEY, python_session_id),
-            FIT_READY_LITERATURE_CACHE_KEY,
-            _session_cache_key("latest_literature_tables", python_session_id),
-            "latest_literature_tables",
-        ])
-    if requested.startswith(("arXiv:", "arxiv:")):
-        arxiv_id = requested.split(":", 1)[1]
-        candidates.append(f"literature_tables:arxiv:{arxiv_id}")
-    if re.match(r"^\d{4}\.\d{4,5}", requested):
-        candidates.append(f"literature_tables:arxiv:{requested}")
-    return [candidate for candidate in candidates if candidate]
-
-
-def _resolve_literature_measurement_cache(cache_key: str, python_session_id: str | None) -> tuple[list[dict[str, Any]], str, bool]:
-    requested = (cache_key or "latest_literature_tables").strip() or "latest_literature_tables"
-    candidates = _literature_measurement_cache_candidates(requested, python_session_id)
+    if requested == "latest_literature_tables":
+        session_default = _session_cache_key("latest_literature_tables", python_session_id)
+        if session_default:
+            candidates.insert(0, session_default)
 
     seen: set[str] = set()
-    cache_found = False
     for candidate in candidates:
         if not candidate or candidate in seen:
             continue
         seen.add(candidate)
         payload = get_cached_results(candidate)
-        if payload is not None:
-            cache_found = True
         rows = _measurement_rows_from_cache_payload(payload)
         if rows:
-            return rows, candidate, True
-    return [], requested, cache_found
+            return rows, candidate
+    return [], requested
 
 
 def _line_matches_filter(row: dict[str, Any], line_filter: str) -> bool:
@@ -3457,134 +3397,6 @@ def _finite_float(value: Any) -> float | None:
         return None
 
 
-def _first_finite_from_keys(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
-    for key in keys:
-        value = _finite_float(row.get(key))
-        if value is not None:
-            return value
-    return None
-
-
-def _line_log_luminosity_from_row(row: dict[str, Any]) -> float | None:
-    log_luminosity = _first_finite_from_keys(row, (
-        "log_luminosity",
-        "log_lcii",
-        "log_luminosity_lsun",
-        "log_l_cii",
-        "logL_CII",
-    ))
-    if log_luminosity is not None:
-        return log_luminosity
-    luminosity = _first_finite_from_keys(row, (
-        "luminosity",
-        "l_cii",
-        "lcii",
-        "line_luminosity",
-        "L_CII",
-    ))
-    if luminosity is not None and luminosity > 0:
-        # Literature-table normalizers sometimes preserve linear Lsun values
-        # rather than log10(L/Lsun).  Convert here instead of rejecting the row.
-        return math.log10(luminosity)
-    return None
-
-
-def _line_fwhm_from_row(row: dict[str, Any]) -> float | None:
-    return _first_finite_from_keys(row, (
-        "fwhm_km_s",
-        "fwhm",
-        "FWHM",
-        "line_width",
-        "linewidth",
-        "velocity_width",
-        "dv",
-    ))
-
-
-_REFERENCE_COSMOLOGY_RE = re.compile(r"(?:Riess|Suzuki|Union\s*2\.?1|Union2\.?1)", re.I)
-_H0_RE = re.compile(
-    r"\b(?:H0|H_0|H₀|Hubble\s+constant)\s*(?:=|:|is|was|≈|~)?\s*([-+]?\d+(?:\.\d+)?)",
-    re.I,
-)
-_OM0_RE = re.compile(
-    r"\b(?:Om0|Omega_?m|OmegaM|Ω_m|Ωₘ|Ωm|matter\s+density)\s*"
-    r"(?:=|:|is|was|≈|~)?\s*([-+]?(?:\d+(?:\.\d+)?|\.\d+))",
-    re.I,
-)
-
-
-def _numbers_from_pattern(pattern: re.Pattern[str], text: str) -> list[float]:
-    values: list[float] = []
-    for match in pattern.finditer(text):
-        value = _finite_float(match.group(1))
-        if value is not None:
-            values.append(value)
-    return values
-
-
-def _append_model_message(result: dict[str, Any], message: str) -> None:
-    existing = str(result.get("__message_to_model__") or "").strip()
-    result["__message_to_model__"] = f"{existing} {message}".strip() if existing else message
-
-
-def _apply_reference_cosmology_sanity_guard(response: dict[str, Any], code: str = "") -> dict[str, Any]:
-    """Downgrade known-reference cosmology calculations with wrong constants.
-
-    R2.8 showed the model using the requested Riess+2011/Suzuki+2012 context
-    but substituting Om0=0.25.  The luminosity-distance effect is small, but
-    the provenance contract is not: if the reference is named, the constants
-    must match the reference values before the result can support claims.
-    """
-    text_parts = [
-        code,
-        str(response.get("stdout") or ""),
-        json.dumps(response.get("variables") or {}, default=str, ensure_ascii=False),
-    ]
-    text = "\n".join(part for part in text_parts if part)
-    if not text.strip():
-        return response
-
-    h0_values = _numbers_from_pattern(_H0_RE, text)
-    om0_values = _numbers_from_pattern(_OM0_RE, text)
-    references_known_pair = bool(_REFERENCE_COSMOLOGY_RE.search(text))
-    riess_like_h0 = any(abs(value - 73.8) <= 0.2 for value in h0_values)
-    should_check_suzuki_om0 = references_known_pair or riess_like_h0
-    wrong_om0 = [
-        value for value in om0_values
-        if should_check_suzuki_om0 and abs(value - 0.295) > 0.01
-    ]
-    wrong_h0 = [
-        value for value in h0_values
-        if references_known_pair and "riess" in text.lower() and abs(value - 73.8) > 0.2
-    ]
-    if not wrong_om0 and not wrong_h0:
-        return response
-
-    warnings = list(response.get("cosmology_reference_warnings") or [])
-    if wrong_om0:
-        warnings.append(
-            "Suzuki+2012/Union2.1 reference cosmology requires Om0=0.295; "
-            f"found Om0={wrong_om0[0]:g}."
-        )
-    if wrong_h0:
-        warnings.append(
-            "Riess+2011 reference cosmology requires H0=73.8 km/s/Mpc; "
-            f"found H0={wrong_h0[0]:g}."
-        )
-    response["cosmology_reference_warnings"] = warnings
-    if str(response.get("__tool_status__") or "").upper() != "FAILED":
-        response["__tool_status__"] = "PARTIAL"
-        response["analysis_status"] = "partial"
-    response["__do_not_claim__"] = True
-    _append_model_message(
-        response,
-        "Reference cosmology constants are inconsistent with the named source. "
-        "Re-run the calculation with Riess+2011 H0=73.8 and Suzuki+2012 Om0=0.295 "
-        "before citing luminosity distances, luminosities, or fit results from this run.",
-    )
-    return response
-
-
 def _row_has_citation(row: dict[str, Any]) -> bool:
     citation = row.get("citation") if isinstance(row.get("citation"), dict) else {}
     return bool(
@@ -3599,33 +3411,18 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
     cache_key = str(inp.get("cache_key") or "latest_literature_tables").strip() or "latest_literature_tables"
     line_id = str(inp.get("line_id") or "[CII]").strip() or "[CII]"
     min_rows = int(inp.get("min_rows") or 5)
-    rows, resolved_cache_key, cache_found = _resolve_literature_measurement_cache(cache_key, python_session_id)
+    rows, resolved_cache_key = _resolve_literature_measurement_cache(cache_key, python_session_id)
     if not rows:
         return {
-            "success": True,
-            "__tool_status__": "PARTIAL" if cache_found else "EMPTY",
-            "analysis_status": "partial" if cache_found else "empty",
-            "message": (
-                f"No normalized line_measurements found for cache_key={cache_key!r}."
-                if cache_found else
-                f"No cached literature measurement payload found for cache_key={cache_key!r}."
-            ),
+            "success": False,
+            "__tool_status__": "EMPTY",
+            "analysis_status": "empty",
+            "error": f"No cached line_measurements found for cache_key={cache_key!r}.",
             "error_class": "missing_measurement_cache",
             "cache_key": cache_key,
-            "resolved_cache_key": resolved_cache_key,
-            "cache_found": cache_found,
-            "n_available": 0,
-            "n_used": 0,
-            "publication_ready": False,
-            "__do_not_claim__": True,
             "__message_to_model__": (
-                "No fit-ready literature measurement rows are available from this cache. "
-                "If extract_literature_tables returned raw tables only, say that the table "
-                "needs column mapping. Do not claim a fitted luminosity-FWHM relation."
-            ),
-            "__suggested_next_step__": (
-                "Run extract_literature_tables on the exact paper containing source-level "
-                "L[CII] and FWHM rows, or pass a cache key containing normalized line_measurements."
+                "No fit-ready literature measurement rows are cached. Run "
+                "extract_literature_tables on a relevant arXiv paper first."
             ),
         }
 
@@ -3641,8 +3438,8 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         elif not _row_has_citation(row):
             reason = "missing_citation"
         else:
-            log_luminosity = _line_log_luminosity_from_row(row)
-            fwhm = _line_fwhm_from_row(row)
+            log_luminosity = _finite_float(row.get("log_luminosity"))
+            fwhm = _finite_float(row.get("fwhm_km_s"))
             if log_luminosity is None or fwhm is None or fwhm <= 0:
                 reason = "missing_numeric_values"
             else:
@@ -3737,7 +3534,6 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "result_granularity": "literature_measurement_fit",
         "supports_measurement_claims": publication_ready,
         "cache_key": resolved_cache_key,
-        "resolved_cache_key": resolved_cache_key,
         "line_id": line_id,
         "model": "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)",
         "n_available": len(rows),
@@ -3828,14 +3624,6 @@ async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "d
     store_search_results(cache_key, cache_value)
     if cache_key != "latest_literature_tables":
         store_search_results("latest_literature_tables", cache_value)
-    if line_measurements:
-        fit_ready_key = _session_cache_key(FIT_READY_LITERATURE_CACHE_KEY, python_session_id) or FIT_READY_LITERATURE_CACHE_KEY
-        store_search_results(fit_ready_key, cache_value)
-        if fit_ready_key != FIT_READY_LITERATURE_CACHE_KEY:
-            store_search_results(FIT_READY_LITERATURE_CACHE_KEY, cache_value)
-        arxiv_id = str(payload.get("arxiv_id") or "").strip()
-        if arxiv_id:
-            store_search_results(f"literature_tables:arxiv:{arxiv_id}", cache_value)
 
     bibcodes = [
         str(row.get("bibcode") or "").strip()
@@ -4488,29 +4276,11 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             pass
     if response.get("error_class") == "key_error":
         missing_key = _missing_key_from_error(str(response.get("error") or ""))
-        line_measurement_note = ""
-        if missing_key in {
-            "luminosity",
-            "log_luminosity",
-            "fwhm",
-            "fwhm_km_s",
-            "redshift",
-            "source_name",
-        }:
-            line_measurement_note = (
-                " For literature line-measurement caches, the canonical columns are "
-                "`source_name`, `redshift`, `line_id`, `log_luminosity`, "
-                "`fwhm_km_s`, `quality_flags`, and `citation`. If you filtered or "
-                "renamed a DataFrame, re-print `df.columns` after that step and "
-                "use `df.get('log_luminosity')` / `df.get('fwhm_km_s')` instead "
-                "of assuming a generic `luminosity` column."
-            )
         response["hint"] = (
             f"KeyError for column {missing_key!r}. Inspect available columns before indexing "
             "(for example: `rows = get_adql_results(); print(rows[0].keys())`), "
             f"then use `row.get({missing_key!r})` or the exact available column name. "
             "Do not invent a replacement source_id or assume every catalog row has one."
-            + line_measurement_note
         )
     # R5 O1 + R6 post: stderr 作为一级字段**总是**写进 response, 即便空串.
     # 诊断角度看, "stderr=''" 跟 "stderr not set" 是完全不同的信号:
@@ -4544,7 +4314,6 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         response["auto_fix_note"] = auto_fix_note
 
     response = _apply_cmd_sanity_guard(response)
-    response = _apply_reference_cosmology_sanity_guard(response, code)
 
     if response.get("success") is False and not (
         response.get("stdout")

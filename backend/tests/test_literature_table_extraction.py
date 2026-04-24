@@ -66,26 +66,6 @@ def test_latex_deluxetable_can_normalize_cii_rows():
     assert measurements[0]["fwhm_km_s"] == 280.0
 
 
-def test_cii_specific_redshift_column_normalizes():
-    from app.api.arxiv import _attach_row_citations, _normalize_line_measurements
-
-    tables = [{
-        "table_id": "html_1",
-        "label": "Table A1",
-        "caption": "[CII] line measurements",
-        "columns": ["Source", "z_CII", "log L[CII]", "FWHM"],
-        "rows": [["ALPINE_001", "4.57", "8.42", "260"]],
-    }]
-    tables = _attach_row_citations(tables, {
-        "bibcode": "arXiv:2211.04968",
-        "arxiv_id": "2211.04968",
-    })
-
-    measurements = _normalize_line_measurements(tables)
-
-    assert measurements[0]["redshift"] == 4.57
-
-
 def test_raw_table_without_required_columns_is_not_measurement_ready():
     from app.api.arxiv import _attach_row_citations, _normalize_line_measurements
 
