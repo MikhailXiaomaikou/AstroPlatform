@@ -45,6 +45,36 @@ def test_fit_line_lfr_consumes_cached_literature_measurements():
     assert result["citation_summary"]["citations"] == ["arXiv:2211.04968"]
 
 
+def test_fit_line_lfr_accepts_common_measurement_aliases():
+    import math
+
+    from app.services.ai_tools import _exec_fit_line_lfr, store_search_results
+
+    rows = []
+    for idx in range(6):
+        fwhm = 100 + idx * 50
+        x = math.log10(fwhm / 100.0)
+        rows.append({
+            "source_name": f"ALPINE_ALIAS_{idx:03d}",
+            "line_id": "[CII] 158um",
+            "luminosity": 10 ** (8.0 + 0.5 * x),
+            "FWHM": float(fwhm),
+            "quality_flags": [],
+            "citation": {"arxiv_id": "2002.00962", "table_label": "Table A1"},
+            "arxiv_id": "2002.00962",
+        })
+    cache_key = "unit_line_lfr_alias_cache"
+    store_search_results(cache_key, {"line_measurements": rows})
+
+    result = _exec_fit_line_lfr({"cache_key": cache_key, "line_id": "[CII]"}, "default")
+
+    assert result["success"] is True
+    assert result["publication_ready"] is True
+    assert result["n_used"] == 6
+    assert abs(result["beta"] - 0.5) < 1e-9
+    assert abs(result["alpha"] - 8.0) < 1e-9
+
+
 def test_fit_line_lfr_partial_when_too_few_rows():
     from app.services.ai_tools import _exec_fit_line_lfr, store_search_results
 
@@ -83,6 +113,37 @@ def test_line_measurement_ready_cache_suppresses_synthetic_python():
     result = _suppressed_line_measurement_python_result(["latest_literature_tables:test"])
     assert result["__tool_status__"] == "EMPTY"
     assert "fit_line_lfr" in result["__message_to_model__"]
+
+
+def test_reference_cosmology_guard_blocks_wrong_suzuki_om0():
+    from app.services.ai_tools import _apply_reference_cosmology_sanity_guard
+
+    result = _apply_reference_cosmology_sanity_guard(
+        {
+            "success": True,
+            "stdout": "Cosmology: Riess+2011 H0 = 73.8, Suzuki+2012 Ωₘ = 0.25",
+        },
+        "from astropy.cosmology import FlatLambdaCDM\ncosmo = FlatLambdaCDM(H0=73.8, Om0=0.25)",
+    )
+
+    assert result["__tool_status__"] == "PARTIAL"
+    assert result["__do_not_claim__"] is True
+    assert "Om0=0.295" in result["__message_to_model__"]
+
+
+def test_reference_cosmology_guard_allows_correct_suzuki_om0():
+    from app.services.ai_tools import _apply_reference_cosmology_sanity_guard
+
+    result = _apply_reference_cosmology_sanity_guard(
+        {
+            "success": True,
+            "stdout": "Cosmology: Riess+2011 H0 = 73.8, Suzuki+2012 Om0 = 0.295",
+        },
+        "cosmo = FlatLambdaCDM(H0=73.8, Om0=0.295)",
+    )
+
+    assert "__do_not_claim__" not in result
+    assert "cosmology_reference_warnings" not in result
 
 
 def test_run_python_sandbox_crash_detection_and_disable_threshold():

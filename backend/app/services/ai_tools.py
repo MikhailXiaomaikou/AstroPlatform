@@ -5,6 +5,7 @@ handles the tool_use → result → next message cycle automatically.
 """
 
 import asyncio
+import json
 import logging
 import math
 import re
@@ -3397,6 +3398,134 @@ def _finite_float(value: Any) -> float | None:
         return None
 
 
+def _first_finite_from_keys(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = _finite_float(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _line_log_luminosity_from_row(row: dict[str, Any]) -> float | None:
+    log_luminosity = _first_finite_from_keys(row, (
+        "log_luminosity",
+        "log_lcii",
+        "log_luminosity_lsun",
+        "log_l_cii",
+        "logL_CII",
+    ))
+    if log_luminosity is not None:
+        return log_luminosity
+    luminosity = _first_finite_from_keys(row, (
+        "luminosity",
+        "l_cii",
+        "lcii",
+        "line_luminosity",
+        "L_CII",
+    ))
+    if luminosity is not None and luminosity > 0:
+        # Literature-table normalizers sometimes preserve linear Lsun values
+        # rather than log10(L/Lsun).  Convert here instead of rejecting the row.
+        return math.log10(luminosity)
+    return None
+
+
+def _line_fwhm_from_row(row: dict[str, Any]) -> float | None:
+    return _first_finite_from_keys(row, (
+        "fwhm_km_s",
+        "fwhm",
+        "FWHM",
+        "line_width",
+        "linewidth",
+        "velocity_width",
+        "dv",
+    ))
+
+
+_REFERENCE_COSMOLOGY_RE = re.compile(r"(?:Riess|Suzuki|Union\s*2\.?1|Union2\.?1)", re.I)
+_H0_RE = re.compile(
+    r"\b(?:H0|H_0|H₀|Hubble\s+constant)\s*(?:=|:|is|was|≈|~)?\s*([-+]?\d+(?:\.\d+)?)",
+    re.I,
+)
+_OM0_RE = re.compile(
+    r"\b(?:Om0|Omega_?m|OmegaM|Ω_m|Ωₘ|Ωm|matter\s+density)\s*"
+    r"(?:=|:|is|was|≈|~)?\s*([-+]?(?:\d+(?:\.\d+)?|\.\d+))",
+    re.I,
+)
+
+
+def _numbers_from_pattern(pattern: re.Pattern[str], text: str) -> list[float]:
+    values: list[float] = []
+    for match in pattern.finditer(text):
+        value = _finite_float(match.group(1))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _append_model_message(result: dict[str, Any], message: str) -> None:
+    existing = str(result.get("__message_to_model__") or "").strip()
+    result["__message_to_model__"] = f"{existing} {message}".strip() if existing else message
+
+
+def _apply_reference_cosmology_sanity_guard(response: dict[str, Any], code: str = "") -> dict[str, Any]:
+    """Downgrade known-reference cosmology calculations with wrong constants.
+
+    R2.8 showed the model using the requested Riess+2011/Suzuki+2012 context
+    but substituting Om0=0.25.  The luminosity-distance effect is small, but
+    the provenance contract is not: if the reference is named, the constants
+    must match the reference values before the result can support claims.
+    """
+    text_parts = [
+        code,
+        str(response.get("stdout") or ""),
+        json.dumps(response.get("variables") or {}, default=str, ensure_ascii=False),
+    ]
+    text = "\n".join(part for part in text_parts if part)
+    if not text.strip():
+        return response
+
+    h0_values = _numbers_from_pattern(_H0_RE, text)
+    om0_values = _numbers_from_pattern(_OM0_RE, text)
+    references_known_pair = bool(_REFERENCE_COSMOLOGY_RE.search(text))
+    riess_like_h0 = any(abs(value - 73.8) <= 0.2 for value in h0_values)
+    should_check_suzuki_om0 = references_known_pair or riess_like_h0
+    wrong_om0 = [
+        value for value in om0_values
+        if should_check_suzuki_om0 and abs(value - 0.295) > 0.01
+    ]
+    wrong_h0 = [
+        value for value in h0_values
+        if references_known_pair and "riess" in text.lower() and abs(value - 73.8) > 0.2
+    ]
+    if not wrong_om0 and not wrong_h0:
+        return response
+
+    warnings = list(response.get("cosmology_reference_warnings") or [])
+    if wrong_om0:
+        warnings.append(
+            "Suzuki+2012/Union2.1 reference cosmology requires Om0=0.295; "
+            f"found Om0={wrong_om0[0]:g}."
+        )
+    if wrong_h0:
+        warnings.append(
+            "Riess+2011 reference cosmology requires H0=73.8 km/s/Mpc; "
+            f"found H0={wrong_h0[0]:g}."
+        )
+    response["cosmology_reference_warnings"] = warnings
+    if str(response.get("__tool_status__") or "").upper() != "FAILED":
+        response["__tool_status__"] = "PARTIAL"
+        response["analysis_status"] = "partial"
+    response["__do_not_claim__"] = True
+    _append_model_message(
+        response,
+        "Reference cosmology constants are inconsistent with the named source. "
+        "Re-run the calculation with Riess+2011 H0=73.8 and Suzuki+2012 Om0=0.295 "
+        "before citing luminosity distances, luminosities, or fit results from this run.",
+    )
+    return response
+
+
 def _row_has_citation(row: dict[str, Any]) -> bool:
     citation = row.get("citation") if isinstance(row.get("citation"), dict) else {}
     return bool(
@@ -3438,8 +3567,8 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         elif not _row_has_citation(row):
             reason = "missing_citation"
         else:
-            log_luminosity = _finite_float(row.get("log_luminosity"))
-            fwhm = _finite_float(row.get("fwhm_km_s"))
+            log_luminosity = _line_log_luminosity_from_row(row)
+            fwhm = _line_fwhm_from_row(row)
             if log_luminosity is None or fwhm is None or fwhm <= 0:
                 reason = "missing_numeric_values"
             else:
@@ -4332,6 +4461,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         response["auto_fix_note"] = auto_fix_note
 
     response = _apply_cmd_sanity_guard(response)
+    response = _apply_reference_cosmology_sanity_guard(response, code)
 
     if response.get("success") is False and not (
         response.get("stdout")

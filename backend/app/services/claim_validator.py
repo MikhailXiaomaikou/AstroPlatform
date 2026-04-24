@@ -145,7 +145,9 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("parallax_mas", re.compile(rf"\bparallax\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*mas\b", re.I)),
     ("proper_motion", re.compile(rf"\bproper\s*motion\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*mas", re.I)),
     ("radial_velocity", re.compile(rf"\b(?:radial\s*velocity|RV)\s*(?:of|=|≈|~|is)?\s*{_NUM}\s*km/?s", re.I)),
-    ("magnitude", re.compile(rf"\b(?:V|G|B|R|J|H|K)\s*[=≈~]\s*{_NUM}\s*(?:mag)?\b", re.I)),
+    # Keep broad-band single-letter magnitudes case-sensitive so relation
+    # prose like "Pearson r ≈ 0.45" is not misread as R-band magnitude.
+    ("magnitude", re.compile(rf"\b(?:V|G|B|R|J|H|K)\s*[=≈~]\s*{_NUM}\s*(?:mag)?\b")),
 
     # F1.1: labelled colon form — e.g. "Mean Parallax: 7.353 ± 0.001 mas",
     # "Distance: 136.0 ± 0.0 pc", "Member Star Count: 776 stars".  The
@@ -1376,7 +1378,7 @@ _LINE_FIT_INTERCEPT_RE = re.compile(
     re.I,
 )
 _LINE_FIT_SCATTER_RE = re.compile(
-    rf"\b(?:intrinsic[_\s-]*scatter|sigma[_\s-]*(?:int|intrinsic)|scatter|rms)\b"
+    rf"\b(?:intrinsic[_\s-]*scatter|sigma[_\s-]*(?:int|intrinsic)|σ[_\s-]*(?:int|intrinsic)|scatter|rms)\b"
     rf"[\"']?\s*(?:is|was|=|≈|~|:)?\s*{_NUM}",
     re.I,
 )
@@ -1384,7 +1386,7 @@ _LINE_FIT_SCATTER_RE = re.compile(
 
 def _line_fit_payload_text(result: dict[str, Any]) -> str:
     """Compact run_python output into text for fit-evidence checks."""
-    fields: list[Any] = []
+    fields: list[str] = []
     for key in (
         "stdout",
         "variables",
@@ -1393,12 +1395,20 @@ def _line_fit_payload_text(result: dict[str, Any]) -> str:
         "llm_summary",
         "caption",
         "figure_caption",
+        "figures",
+        "metadata",
+        "diagnostics",
+        "chain_diagnostics",
+        "posterior_summary",
         "provenance",
     ):
         value = result.get(key)
         if value not in (None, "", [], {}):
-            fields.append(value)
-    text = json.dumps(fields, default=str, ensure_ascii=False)
+            if isinstance(value, str):
+                fields.append(value)
+            else:
+                fields.append(json.dumps(value, default=str, ensure_ascii=False))
+    text = "\n".join(fields)
     return text[:80_000]
 
 

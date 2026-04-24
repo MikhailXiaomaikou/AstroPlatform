@@ -228,14 +228,13 @@ def test_cited_run_python_mcmc_supports_relation_stats():
                 "Bayesian Linear Regression for the [CII] line relation.\n"
                 "alpha/intercept = 9.823 +/- 0.467\n"
                 "beta/slope = 0.766 +/- 0.188\n"
-                "sigma_int/intrinsic scatter = 0.315 dex\n"
+                "σ_int = 0.315 dex\n"
                 "Citation: Bethermin et al. (2020; arXiv:2002.00962)"
             ),
             "variables": {
                 "method": "emcee MCMC",
                 "slope": 0.766,
                 "intercept": 9.823,
-                "intrinsic_scatter": 0.315,
                 "citation": "arXiv:2002.00962",
             },
         },
@@ -322,6 +321,12 @@ def test_line_relation_stat_extractor_catches_r2_5_shapes():
         "line_relation_correlation",
         "line_relation_p_value",
     } <= labels
+
+
+def test_lowercase_relation_r_is_not_parsed_as_band_magnitude():
+    claims = extract_claims("The relation has Pearson r ≈ 0.45.")
+
+    assert all(claim.label != "magnitude" for claim in claims)
 
 
 def test_cosmology_prior_bounds_do_not_support_posterior_claims():

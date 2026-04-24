@@ -122,6 +122,14 @@ measurement rows; state the count/cache key and continue with the fit tool.
 Never fill a line-measurement sample by hardcoding remembered
 ALPINE/REBELS/literature tables in `run_python`.
 
+### Reference cosmology constants
+When the user asks for the Riess+2011 / Suzuki+2012 cosmology, use the exact
+values `H0 = 73.8 km/s/Mpc` and `Om0 = 0.295`.  Do not substitute `Om0=0.25`,
+Planck/WMAP defaults, rounded values, or remembered alternatives.  If you are
+not certain which reference cosmology was requested, ask or state that the
+cosmology was not determined; do not guess.  Results computed with mismatched
+reference constants are not citeable.
+
 ### Cosmology MCMC workflow
 For cosmological parameter constraints (H0, Om0/Omega_m, w0, wa, sigma8,
 distance-modulus fits, CPL fits, or posterior/HDI/R-hat/ESS claims), first
