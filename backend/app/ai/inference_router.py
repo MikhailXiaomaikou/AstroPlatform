@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 
 import httpx
 
+from app.ai.model_profiles import ModelProfile, resolve_model_profile
 from app.models.database import async_session
 from app.models.schemas import InferenceLog
 
@@ -110,6 +111,7 @@ class LLMBackend(ABC):
         api_key: str | None = None,
         provider_api_keys: dict[str, str] | None = None,
         request_timeout: float | None = None,
+        model_profile: ModelProfile | None = None,
     ) -> dict:
         raise NotImplementedError
 
@@ -124,7 +126,7 @@ class ClaudeBackend(LLMBackend):
     def __init__(self):
         self._model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
-    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None):
+    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None, model_profile=None):
         try:
             import anthropic
         except ImportError as exc:
@@ -136,7 +138,7 @@ class ClaudeBackend(LLMBackend):
         client = anthropic.Anthropic(api_key=key)
         response = await asyncio.to_thread(
             client.messages.create,
-            model=self._model,
+            model=(model_profile.resolved_model_id if model_profile and model_profile.provider == "anthropic" else self._model),
             system=system or "",
             messages=messages,
             tools=tools or [],
@@ -160,6 +162,8 @@ class ClaudeBackend(LLMBackend):
             "usage": usage,
             "stop_reason": getattr(response, "stop_reason", None),
             "backend_name": "claude",
+            "model_name": (model_profile.resolved_model_id if model_profile and model_profile.provider == "anthropic" else self._model),
+            "model_profile": (model_profile.id if model_profile else "anthropic:default"),
         }
 
     def model_name(self) -> str:
@@ -179,7 +183,145 @@ class OpenAICompatibleBackend(LLMBackend):
 
     provider_name = ""
 
-    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None):
+    def _profile(self, model_profile: str | ModelProfile | None) -> ModelProfile | None:
+        if isinstance(model_profile, str):
+            model_profile = resolve_model_profile(self.provider_name, model_profile)
+        if model_profile and model_profile.provider == self.provider_name:
+            return model_profile
+        return None
+
+    def _resolved_model_name(self, model_profile: str | ModelProfile | None) -> str:
+        profile = self._profile(model_profile)
+        if profile:
+            return profile.resolved_model_id
+        return os.getenv(self._model_env, self.model_name())
+
+    def _tool_specs(self, tools: list[dict] | None) -> list[dict]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+                },
+            }
+            for tool in (tools or [])
+        ]
+
+    def _responses_tool_specs(self, tools: list[dict] | None) -> list[dict]:
+        return [
+            {
+                "type": "function",
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+            }
+            for tool in (tools or [])
+        ]
+
+    def _decode_tool_arguments(self, raw: object) -> dict:
+        if isinstance(raw, dict):
+            return raw
+        try:
+            decoded = json.loads(str(raw or "{}"))
+            return decoded if isinstance(decoded, dict) else {}
+        except Exception:
+            return {}
+
+    def _parse_responses_output(self, data: dict) -> tuple[str, list[dict], str | None]:
+        text_parts: list[str] = []
+        tool_calls: list[dict] = []
+        stop_reason = data.get("status")
+
+        for item in data.get("output") or []:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "message":
+                for part in item.get("content") or []:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") in {"output_text", "text"}:
+                        value = part.get("text") or part.get("content")
+                        if isinstance(value, str):
+                            text_parts.append(value)
+            elif item_type in {"output_text", "text"}:
+                value = item.get("text") or item.get("content")
+                if isinstance(value, str):
+                    text_parts.append(value)
+            elif item_type == "function_call":
+                tool_calls.append({
+                    "id": item.get("call_id") or item.get("id") or str(uuid.uuid4()),
+                    "name": item.get("name"),
+                    "input": self._decode_tool_arguments(item.get("arguments")),
+                })
+
+        # Some Responses API SDK/proxy shims expose the same content under
+        # output_text. Keep this tolerant so tests and alternate gateways work.
+        if not text_parts and isinstance(data.get("output_text"), str):
+            text_parts.append(str(data["output_text"]))
+
+        return "\n\n".join(part for part in text_parts if part).strip(), tool_calls, str(stop_reason) if stop_reason else None
+
+    async def _complete_responses_api(
+        self,
+        messages,
+        *,
+        system=None,
+        tools=None,
+        max_tokens=4096,
+        temperature=0.0,
+        headers=None,
+        request_timeout=None,
+        model_profile: ModelProfile,
+    ):
+        payload = {
+            "model": model_profile.resolved_model_id,
+            "input": _normalize_openai_messages(messages),
+            "max_output_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if system:
+            payload["instructions"] = system
+        if tools:
+            payload["tools"] = self._responses_tool_specs(tools)
+            payload["tool_choice"] = "auto"
+        if model_profile.supports_reasoning:
+            payload["reasoning"] = {"effort": model_profile.reasoning_effort or "medium"}
+
+        timeout = request_timeout or 120.0
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(f"{self._base_url}/responses", json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.TimeoutException:
+            raise InferenceError(f"{self.backend_label} request timed out after {timeout}s — try a shorter query or fewer tools")
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500] if exc.response else ""
+            raise InferenceError(f"{self.backend_label} HTTP {exc.response.status_code}: {body}")
+        except httpx.HTTPError as exc:
+            raise InferenceError(f"{self.backend_label} connection error: {exc}")
+
+        content_text, tool_calls, stop_reason = self._parse_responses_output(data)
+        if not content_text and not tool_calls:
+            raise InferenceError(f"{self.backend_label} returned an empty completion")
+        usage = data.get("usage") or {}
+        return {
+            "content": content_text,
+            "tool_calls": tool_calls,
+            "usage": {
+                "input_tokens": int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0),
+                "output_tokens": int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0),
+            },
+            "stop_reason": stop_reason,
+            "backend_name": self.backend_label,
+            "model_name": model_profile.resolved_model_id,
+            "model_profile": model_profile.id,
+        }
+
+    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None, model_profile=None):
         key = (
             api_key
             or (provider_api_keys or {}).get(self.provider_name)
@@ -188,34 +330,40 @@ class OpenAICompatibleBackend(LLMBackend):
         if not key and self._key_env != "LOCAL_MODEL_API_KEY":
             raise InferenceError(f"{self.backend_label} API key is not configured")
 
+        profile = self._profile(model_profile)
+
         payload_messages = []
         if system:
             payload_messages.append({"role": "system", "content": system})
         payload_messages.extend(_normalize_openai_messages(messages))
 
+        headers = {"Content-Type": "application/json"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+
+        if profile and profile.endpoint == "responses":
+            return await self._complete_responses_api(
+                messages,
+                system=system,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                headers=headers,
+                request_timeout=request_timeout,
+                model_profile=profile,
+            )
+
         payload = {
-            "model": os.getenv(self._model_env, self.model_name()),
+            "model": self._resolved_model_name(profile),
             "messages": payload_messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if profile and profile.extra_payload:
+            payload.update(profile.extra_payload)
         if tools:
-            payload["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool["name"],
-                        "description": tool.get("description", ""),
-                        "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
-                    },
-                }
-                for tool in tools
-            ]
+            payload["tools"] = self._tool_specs(tools)
             payload["tool_choice"] = "auto"
-
-        headers = {"Content-Type": "application/json"}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
 
         timeout = request_timeout or 120.0
         try:
@@ -264,6 +412,8 @@ class OpenAICompatibleBackend(LLMBackend):
             },
             "stop_reason": choice.get("finish_reason"),
             "backend_name": self.backend_label,
+            "model_name": str(payload["model"]),
+            "model_profile": profile.id if profile else None,
         }
 
     def model_name(self) -> str:
@@ -288,10 +438,10 @@ class LocalBackend(OpenAICompatibleBackend):
     def __init__(self):
         super().__init__(model_env="LOCAL_MODEL_NAME", key_env="LOCAL_MODEL_API_KEY", base_url=os.getenv("LOCAL_MODEL_BASE_URL", "http://localhost:8000/v1"))
 
-    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None):
+    async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None, model_profile=None):
         if not os.getenv("LOCAL_MODEL_ENABLED", ""):
             raise InferenceError("Local model backend is not enabled. Set LOCAL_MODEL_ENABLED=1 and provide an OpenAI-compatible server.")
-        return await super().complete(messages, system=system, tools=tools, max_tokens=max_tokens, temperature=temperature, api_key=api_key, provider_api_keys=provider_api_keys, request_timeout=request_timeout)
+        return await super().complete(messages, system=system, tools=tools, max_tokens=max_tokens, temperature=temperature, api_key=api_key, provider_api_keys=provider_api_keys, request_timeout=request_timeout, model_profile=model_profile)
 
     def model_name(self) -> str:
         return os.getenv("LOCAL_MODEL_NAME", "local-model")
@@ -340,11 +490,18 @@ class InferenceRouter:
             return bool(os.getenv("LOCAL_MODEL_ENABLED", ""))
         return backend_name in self.backends
 
-    async def route(self, agent_name: str, messages: list[dict], *, system: str | None = None, tools: list[dict] | None = None, api_key: str | None = None, provider_api_keys: dict[str, str] | None = None, backend_timeout: float = 60.0, preferred_backend: str | None = None, **kwargs) -> dict:
+    def _provider_for_backend(self, backend_name: str) -> str:
+        if backend_name == "claude":
+            return "anthropic"
+        return backend_name
+
+    async def route(self, agent_name: str, messages: list[dict], *, system: str | None = None, tools: list[dict] | None = None, api_key: str | None = None, provider_api_keys: dict[str, str] | None = None, backend_timeout: float = 60.0, preferred_backend: str | None = None, model_profile: str | ModelProfile | None = None, **kwargs) -> dict:
         primary = preferred_backend or self.agent_routing.get(agent_name, "claude")
         attempted = [primary] + [item for item in self.fallback_chain if item != primary]
         attempted_errors: list[tuple[str, Exception]] = []
         attempted_configured = 0
+        primary_provider = self._provider_for_backend(primary)
+        primary_profile = resolve_model_profile(primary_provider, model_profile)
         for backend_name in attempted:
             backend = self.backends.get(backend_name)
             if backend is None:
@@ -353,15 +510,42 @@ class InferenceRouter:
                 logger.info("Skipping unavailable inference backend %s for %s", backend_name, agent_name)
                 continue
             attempted_configured += 1
+            backend_provider = self._provider_for_backend(backend_name)
+            backend_profile = (
+                resolve_model_profile(backend_provider, model_profile)
+                if backend_name == primary
+                else resolve_model_profile(backend_provider, None)
+            )
+            fallback_from = primary_profile.id if backend_name != primary else None
             started = time.perf_counter()
             try:
                 result = await asyncio.wait_for(
-                    backend.complete(messages, system=system, tools=tools, api_key=api_key, provider_api_keys=provider_api_keys, request_timeout=backend_timeout, **kwargs),
+                    backend.complete(
+                        messages,
+                        system=system,
+                        tools=tools,
+                        api_key=api_key,
+                        provider_api_keys=provider_api_keys,
+                        request_timeout=backend_timeout,
+                        model_profile=backend_profile,
+                        **kwargs,
+                    ),
                     timeout=backend_timeout,
                 )
+                if fallback_from:
+                    result["fallback_from"] = fallback_from
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 try:
-                    await self.log_inference(agent_name, backend_name, result.get("usage", {}), success=True, latency_ms=latency_ms)
+                    await self.log_inference(
+                        agent_name,
+                        backend_name,
+                        result.get("usage", {}),
+                        success=True,
+                        latency_ms=latency_ms,
+                        model_name=result.get("model_name") or backend_profile.resolved_model_id,
+                        model_profile=result.get("model_profile") or backend_profile.id,
+                        fallback_from=fallback_from,
+                    )
                 except Exception:
                     logger.debug("Failed to log inference (non-fatal)")
                 return result
@@ -369,7 +553,17 @@ class InferenceRouter:
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 attempted_errors.append((backend_name, exc))
                 try:
-                    await self.log_inference(agent_name, backend_name, {}, success=False, latency_ms=latency_ms, error=str(exc))
+                    await self.log_inference(
+                        agent_name,
+                        backend_name,
+                        {},
+                        success=False,
+                        latency_ms=latency_ms,
+                        error=str(exc),
+                        model_name=backend_profile.resolved_model_id,
+                        model_profile=backend_profile.id,
+                        fallback_from=fallback_from,
+                    )
                 except Exception:
                     logger.debug("Failed to log inference error (non-fatal)")
                 logger.warning("Inference backend %s failed for %s: %s", backend_name, agent_name, exc)
@@ -384,7 +578,19 @@ class InferenceRouter:
             raise InferenceError(f"All configured AI backends failed: {details}")
         raise InferenceError("No inference backends could be used for this request.")
 
-    async def log_inference(self, agent: str, backend: str, usage: dict, success: bool, latency_ms: int, error: str | None = None):
+    async def log_inference(
+        self,
+        agent: str,
+        backend: str,
+        usage: dict,
+        success: bool,
+        latency_ms: int,
+        error: str | None = None,
+        *,
+        model_name: str | None = None,
+        model_profile: str | None = None,
+        fallback_from: str | None = None,
+    ):
         prices = {
             "claude": (0.000003, 0.000015),
             "openai": (0.000001, 0.000004),
@@ -406,6 +612,9 @@ class InferenceRouter:
                     success=success,
                     error=error,
                     cost_usd=cost,
+                    model_name=model_name,
+                    model_profile=model_profile,
+                    fallback_from=fallback_from,
                 )
             )
             await db.commit()

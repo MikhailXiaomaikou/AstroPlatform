@@ -5,6 +5,11 @@ import {
   getStoredApiKeys,
   writeStoredApiKeys,
   getStoredAiProvider,
+  getPreferredAiModelProfile,
+  writeStoredAiProvider,
+  writeStoredAiModelProfile,
+  AI_MODEL_OPTIONS,
+  DEFAULT_AI_MODEL_BY_PROVIDER,
 } from "../../api/client";
 import type { ProviderMeta } from "../../api/client";
 
@@ -32,24 +37,15 @@ function getStoredPreferredProvider(): string {
   return getStoredAiProvider() || "anthropic";
 }
 
-function saveStoredPreferredProvider(provider: string) {
-  try {
-    sessionStorage.setItem("astro_ai_provider", provider);
-    // Mirror to localStorage only when the user has opted into persistence.
-    if (localStorage.getItem("astro_api_keys_persist") === "1") {
-      localStorage.setItem("astro_ai_provider", provider);
-    } else {
-      localStorage.removeItem("astro_ai_provider");
-    }
-  } catch {
-    /* ignore */
-  }
+function getDefaultModel(provider: string): string {
+  return DEFAULT_AI_MODEL_BY_PROVIDER[provider] || `${provider}:default`;
 }
 
 export default function SettingsPage() {
   const [keys, setKeys] = useState<Record<string, string>>(getStoredKeys);
   const [selectedProvider, setSelectedProvider] = useState("anthropic");
   const [preferredProvider, setPreferredProvider] = useState(getStoredPreferredProvider);
+  const [preferredModel, setPreferredModel] = useState(() => getPreferredAiModelProfile(getStoredPreferredProvider()) || "anthropic:default");
   const [keyInput, setKeyInput] = useState("");
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
@@ -58,8 +54,16 @@ export default function SettingsPage() {
   }, [keys]);
 
   useEffect(() => {
-    saveStoredPreferredProvider(preferredProvider);
+    writeStoredAiProvider(preferredProvider);
+    const options = AI_MODEL_OPTIONS[preferredProvider] || [];
+    if (!options.some((option) => option.id === preferredModel)) {
+      setPreferredModel(getDefaultModel(preferredProvider));
+    }
   }, [preferredProvider]);
+
+  useEffect(() => {
+    writeStoredAiModelProfile(preferredModel);
+  }, [preferredModel]);
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -69,6 +73,7 @@ export default function SettingsPage() {
     setKeys(next);
     if (CHAT_PROVIDERS.includes(selectedProvider as typeof CHAT_PROVIDERS[number])) {
       setPreferredProvider(selectedProvider);
+      setPreferredModel(getPreferredAiModelProfile(selectedProvider) || getDefaultModel(selectedProvider));
     }
     setKeyInput("");
     setMessage({ type: "ok", text: `${PROVIDERS[selectedProvider]?.name || selectedProvider} key saved.` });
@@ -99,8 +104,9 @@ export default function SettingsPage() {
       <section className="settings-section">
         <h2>AI API Keys</h2>
         <p className="settings-desc">
-          Configure API keys for AI providers. The AI assistant can route across Anthropic, OpenAI,
-          and DeepSeek based on your preferred provider and available keys. Keys are stored in your browser locally.
+          Configure API keys for AI providers. The AI assistant uses your manually selected
+          provider and model; fallback is only used when that backend fails. Keys are stored
+          in your browser locally.
         </p>
 
         <div className="settings-key-form" style={{ marginBottom: 12 }}>
@@ -118,6 +124,23 @@ export default function SettingsPage() {
               ))}
             </select>
           </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+            <span>Model</span>
+            <select
+              value={preferredModel}
+              onChange={(e) => setPreferredModel(e.target.value)}
+              className="settings-select"
+            >
+              {(AI_MODEL_OPTIONS[preferredProvider] || []).map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}{option.detail ? ` - ${option.detail}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="settings-desc" style={{ marginTop: 8 }}>
+            Model selection is manual. Fallbacks are only used if the selected backend fails.
+          </p>
         </div>
 
         {configuredKeys.length > 0 && (

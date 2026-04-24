@@ -98,7 +98,8 @@ Entrypoint: [`backend/app/main.py`](./backend/app/main.py). FastAPI app factory 
 ### AI layer
 
 - [`app/ai/orchestrator.py`](./backend/app/ai/orchestrator.py) — Intent classification, specialist-context assembly, tool-subset filtering.
-- [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Routes to Claude / OpenAI / DeepSeek / local, logs cost/latency, falls back across backends on failure. Raises `InferenceError("No configured AI backends are available…")` on no-key paths (now surfaced pre-send by F4.2).
+- [`app/ai/model_profiles.py`](./backend/app/ai/model_profiles.py) — Manual provider/model registry. Current profiles: Claude default, OpenAI GPT-5.5 alias (falls back to `gpt-5.4` unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro, DeepSeek V4 Flash, and local default.
+- [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Calls the user-selected model profile, logs cost/latency/model/fallback metadata, and falls back across backends only after the selected backend fails. Raises `InferenceError("No configured AI backends are available…")` on no-key paths (now surfaced pre-send by F4.2).
 - `app/ai/agents/*` — Specialist prompt fragments (data, analysis, literature, observation, visualization, spectrum).
 - [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **57-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
 - [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), ~57 KB / ~14 k-token `SYSTEM_PROMPT` (46 sections), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser.
@@ -312,7 +313,7 @@ SQLite (dev) portability via custom `UUIDType` + `JSONType`. Alembic-managed mig
 
 1. SSE POST `/api/chat/message/stream` with messages + context (`python_session_id`, `current_session_id`, last search / ADQL result set / uploaded FITS, etc.).
 2. Runtime = `SYSTEM_PROMPT` (57 KB, 46 sections) + specialist-agent fragments + filtered tool list.
-3. `inference_router.route(...)` → tool loop (max 12 iterations). Per-tool deadlines: `fit_isochrone` 180 s, `fit_transit_model`/`transit_search_bls` 120 s, `estimate_photo_z_pro` 90 s, rest 45 s. Agent-loop outer 360 s; connection heartbeats every 12 s to defeat proxy idle-kill.
+3. `inference_router.route(...)` receives the validated manual `model_profile` from chat context, then enters the tool loop (max 12 iterations). Per-tool deadlines: `fit_isochrone` 180 s, `fit_transit_model`/`transit_search_bls` 120 s, `estimate_photo_z_pro` 90 s, rest 45 s. Agent-loop outer 360 s; connection heartbeats every 12 s to defeat proxy idle-kill.
 4. Tool returns flow through `normalize_tool_result` → `__tool_status__` banner + reproducibility envelope + nested provenance + sanity warnings.
 5. Final reply goes through:
    1. `_parse_abstention_tag` → if `<tools_returned_nothing/>` → render card, emit SSE, return.

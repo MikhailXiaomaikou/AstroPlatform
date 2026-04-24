@@ -30,6 +30,11 @@ Object.defineProperty(globalThis, "localStorage", { value: localStorageMock });
 describe("API client configuration", () => {
   beforeEach(() => {
     localStorageMock.clear();
+    try {
+      sessionStorage.clear();
+    } catch {
+      /* ignore */
+    }
     vi.clearAllMocks();
   });
 
@@ -80,6 +85,11 @@ describe("API client configuration", () => {
 describe("Auth helper functions", () => {
   beforeEach(() => {
     localStorageMock.clear();
+    try {
+      sessionStorage.clear();
+    } catch {
+      /* ignore */
+    }
     vi.clearAllMocks();
   });
 
@@ -250,6 +260,7 @@ describe("Auth helper functions", () => {
       anthropic: "sk-ant-test",
     });
     store["astro_ai_provider"] = "openai";
+    store["astro_ai_model_profile"] = "openai:gpt-5.5";
 
     const { sendChatMessage } = await import("../api/client");
 
@@ -278,8 +289,20 @@ describe("Auth helper functions", () => {
     expect(result.reply).toBe("Hello");
     expect(result.actions).toHaveLength(1);
     expect(result.actions[0].action).toBe("search_objects");
+    const requestBody = JSON.parse(String(mockFetch.mock.calls[0][1]?.body || "{}"));
+    expect(requestBody.context.api_provider).toBe("openai");
+    expect(requestBody.context.model_profile).toBe("openai:gpt-5.5");
 
     vi.unstubAllGlobals();
+  });
+
+  it("getPreferredAiModelProfile defaults by provider and rejects cross-provider storage", async () => {
+    store["astro_ai_provider"] = "deepseek";
+    store["astro_ai_model_profile"] = "openai:gpt-5.5";
+    const { getPreferredAiModelProfile } = await import("../api/client");
+
+    expect(getPreferredAiModelProfile("deepseek")).toBe("deepseek:v4-pro");
+    expect(getPreferredAiModelProfile("openai")).toBe("openai:gpt-5.5");
   });
 
   it("sendChatMessage streams live tool_result actions before final response", async () => {

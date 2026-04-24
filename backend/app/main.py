@@ -184,6 +184,19 @@ def _migrate_add_columns(connection):
             except Exception:
                 pass
 
+    # --- InferenceLog manual model selection metadata ---
+    if "inference_logs" in inspector.get_table_names():
+        existing_il = {c["name"] for c in inspector.get_columns("inference_logs")}
+        for col_name in ["model_name", "model_profile", "fallback_from"]:
+            if col_name not in existing_il:
+                try:
+                    connection.execute(sqlalchemy.text(
+                        f"ALTER TABLE inference_logs ADD COLUMN {col_name} VARCHAR(255)"
+                    ))
+                    logger.info("Added column inference_logs.%s", col_name)
+                except Exception:
+                    pass
+
     # --- PipelineComment parent_comment_id column ---
     if "pipeline_comments" in inspector.get_table_names():
         existing_pc = {c["name"] for c in inspector.get_columns("pipeline_comments")}

@@ -4,6 +4,10 @@ import {
   executeChatAction,
   getStoredApiKeys,
   writeStoredApiKeys,
+  writeStoredAiProvider,
+  getPreferredAiProvider,
+  getPreferredAiModelProfile,
+  AI_MODEL_OPTIONS,
   searchADS,
   getBibTeX,
   logOperation,
@@ -37,6 +41,7 @@ import {
   type SessionSnapshotDiff,
   type AnalysisValidationResult,
   type PaperDraftResponse,
+  type AIModelProfile,
   updatePaperDraft,
   validatePaperSession,
 } from "../../api/client";
@@ -250,6 +255,18 @@ function ToolTurnSummary({
 function hasStoredAiKey(): boolean {
   const keys = getStoredApiKeys();
   return Object.values(keys).some((v) => typeof v === "string" && v.trim().length > 0);
+}
+
+function modelDisplayLabel(profile: AIModelProfile | null): string {
+  const provider = getPreferredAiProvider() || "anthropic";
+  const profileId = getPreferredAiModelProfile(provider);
+  const localOption = (AI_MODEL_OPTIONS[provider] || []).find((option) => option.id === profileId);
+  const label = profile?.display_name || localOption?.label || profileId || "Claude default";
+  const resolved = profile?.resolved_model_id;
+  if (profileId === "openai:gpt-5.5" && resolved && resolved !== "gpt-5.5") {
+    return `${label} -> ${resolved} fallback`;
+  }
+  return label;
 }
 
 function buildMinimalChatHistory(messages: DisplayMessage[]): ChatMessage[] {
@@ -2084,11 +2101,7 @@ function ApiKeyPrompt({ onSaved }: { onSaved: () => void }) {
     const keys = getStoredApiKeys();
     keys[provider] = key;
     writeStoredApiKeys(keys);
-    try {
-      sessionStorage.setItem("astro_ai_provider", provider);
-    } catch {
-      /* ignore */
-    }
+    writeStoredAiProvider(provider);
     onSaved();
   }
 
@@ -2559,15 +2572,19 @@ export default function ChatPage() {
   // server keys).  Either-or is enough to enable the Send button.
   const [serverBackendReady, setServerBackendReady] = useState<boolean | null>(null);
   const [serverBackendList, setServerBackendList] = useState<string[]>([]);
+  const [selectedModelStatus, setSelectedModelStatus] = useState<AIModelProfile | null>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const { getAIBackendStatus } = await import("../../api/client");
-        const status = await getAIBackendStatus();
+        const provider = getPreferredAiProvider();
+        const modelProfile = getPreferredAiModelProfile(provider);
+        const status = await getAIBackendStatus(provider, modelProfile);
         if (cancelled) return;
         setServerBackendReady(!status.needs_setup);
         setServerBackendList(status.configured_backends);
+        setSelectedModelStatus(status.selected_model_status || null);
       } catch {
         if (cancelled) return;
         setServerBackendReady(null); // unknown — don't block
@@ -4076,6 +4093,21 @@ export default function ChatPage() {
 
       <div className="chat-messages">
         {pageError && <div className="error-banner">{pageError}</div>}
+        {aiBackendReady && (
+          <div
+            style={{
+              background: "rgba(78, 201, 176, 0.07)",
+              border: "1px solid rgba(78, 201, 176, 0.24)",
+              borderLeft: "3px solid #4ec9b0",
+              padding: "0.45rem 0.75rem",
+              borderRadius: 6,
+              margin: "0.4rem 0",
+              fontSize: "0.8rem",
+            }}
+          >
+            Using {modelDisplayLabel(selectedModelStatus)}. Model selection is manual; fallback only runs after backend failure.
+          </div>
+        )}
         {/* F4.1: top-of-chat banner when NEITHER a browser-stored key
             NOR a server-side backend is configured.  Using the same
             ApiKeyPrompt body below handles the key entry — this banner

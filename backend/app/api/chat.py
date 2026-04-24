@@ -11,12 +11,19 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from starlette.requests import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.inference_router import InferenceError, inference_router
+from app.ai.model_profiles import (
+    DEFAULT_MODEL_BY_PROVIDER,
+    ModelProfile,
+    all_model_profiles,
+    available_model_profiles,
+    resolve_model_profile,
+)
 from app.ai.orchestrator import orchestrator
 from app.auth import get_current_user, get_optional_user
 from app.rate_limit import limiter
@@ -1659,6 +1666,18 @@ def _preferred_backend(context: dict | None) -> str | None:
     return provider_to_backend.get(provider)
 
 
+def _preferred_model_profile(context: dict | None) -> ModelProfile | None:
+    provider = str((context or {}).get("api_provider") or "").strip().lower()
+    if provider not in {"anthropic", "openai", "deepseek", "local"}:
+        return None
+    requested = (
+        (context or {}).get("model_profile")
+        or (context or {}).get("ai_model_profile")
+        or (context or {}).get("model")
+    )
+    return resolve_model_profile(provider, str(requested) if requested is not None else None)
+
+
 _DEFAULT_WORKFLOW_BUDGET = {
     "mode": "default",
     "agent_loop_seconds": 360.0,
@@ -2087,6 +2106,7 @@ async def chat_message_stream(
         # Reuse the same logic but yield intermediate results
         provider_api_keys = _provider_api_keys(req.context, user)
         preferred_backend = _preferred_backend(req.context)
+        preferred_model_profile = _preferred_model_profile(req.context)
 
         claude_messages: list[dict] = _normalize_messages(req.messages)
 
@@ -2334,6 +2354,7 @@ async def chat_message_stream(
                         provider_api_keys=provider_api_keys,
                         python_session_id=python_session_id,
                         preferred_backend=preferred_backend,
+                        model_profile=preferred_model_profile,
                         chat_session_id=chat_session_id,
                         on_event=_emit,
                         workflow_budget=workflow_budget,
@@ -2737,6 +2758,7 @@ async def _llm_messages_create(
     provider_api_keys: dict[str, str],
     agent_name: str = "orchestrator",
     preferred_backend: str | None = None,
+    model_profile: ModelProfile | None = None,
 ):
     """Route one model turn through the inference router."""
     # G7.3: if debug-prompt capture is on, snapshot the system + first
@@ -2773,6 +2795,7 @@ async def _llm_messages_create(
         tools=tools,
         provider_api_keys=provider_api_keys,
         preferred_backend=preferred_backend,
+        model_profile=model_profile,
         max_tokens=4096,
         temperature=0.0,
         # Timeout budget (R0c tightens single-LLM cap after R0b added
@@ -3010,6 +3033,7 @@ async def _run_agent_loop(
     agent_name: str,
     python_session_id: str,
     preferred_backend: str | None = None,
+    model_profile: ModelProfile | None = None,
     user_id: str | None = None,
     chat_session_id: str | None = None,
     on_event: Callable[[dict], Awaitable[None]] | None = None,
@@ -3185,6 +3209,7 @@ async def _run_agent_loop(
             provider_api_keys=provider_api_keys,
             agent_name=agent_name,
             preferred_backend=preferred_backend,
+            model_profile=model_profile,
         )
 
         text = str(response.get("content", "") or "")
@@ -3663,6 +3688,7 @@ async def _run_agent_loop(
                             provider_api_keys=provider_api_keys,
                             agent_name=agent_name,
                             preferred_backend=preferred_backend,
+                            model_profile=model_profile,
                         )
                         regenerated = str(regen.get("content", "") or "").strip()
                     except Exception as exc:
@@ -3792,6 +3818,7 @@ async def _run_orchestrated_chat(
     provider_api_keys: dict[str, str],
     python_session_id: str,
     preferred_backend: str | None = None,
+    model_profile: ModelProfile | None = None,
     user_id: str | None = None,
     chat_session_id: str | None = None,
     on_event: Callable[[dict], Awaitable[None]] | None = None,
@@ -3807,8 +3834,13 @@ async def _run_orchestrated_chat(
             "workflow_budget" in _loop_sig.parameters
             or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in _loop_sig.parameters.values())
         )
+        _loop_accepts_model_profile = (
+            "model_profile" in _loop_sig.parameters
+            or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in _loop_sig.parameters.values())
+        )
     except Exception:
         _loop_accepts_workflow_budget = True
+        _loop_accepts_model_profile = True
 
     if len(agent_names) == 1:
         loop_kwargs = {
@@ -3823,6 +3855,8 @@ async def _run_orchestrated_chat(
             "chat_session_id": chat_session_id,
             "on_event": on_event,
         }
+        if _loop_accepts_model_profile:
+            loop_kwargs["model_profile"] = model_profile
         if _loop_accepts_workflow_budget:
             loop_kwargs["workflow_budget"] = workflow_budget
         single = await _run_agent_loop(**loop_kwargs)
@@ -3856,6 +3890,8 @@ async def _run_orchestrated_chat(
             "chat_session_id": chat_session_id,
             "on_event": on_event,
         }
+        if _loop_accepts_model_profile:
+            loop_kwargs["model_profile"] = model_profile
         if _loop_accepts_workflow_budget:
             loop_kwargs["workflow_budget"] = workflow_budget
         result = await _run_agent_loop(**loop_kwargs)
@@ -3986,6 +4022,8 @@ async def debug_last_prompt(
 @router.get("/ai_backend_status")
 async def ai_backend_status(
     request: Request,
+    api_provider: str | None = Query(default=None),
+    model_profile: str | None = Query(default=None),
     user: User | None = Depends(get_optional_user),
 ):
     """F4.2: report which AI backends are configured so the frontend can
@@ -4023,9 +4061,23 @@ async def ai_backend_status(
         except Exception:
             pass
 
+    selected_provider = str(api_provider or "").strip().lower() or (
+        "anthropic" if "anthropic" in configured else (configured[0] if configured else "anthropic")
+    )
+    selected_profile = resolve_model_profile(selected_provider, model_profile)
+    profiles_by_id = all_model_profiles()
+    default_models = {
+        provider: profiles_by_id[profile_id].to_public_dict()
+        for provider, profile_id in DEFAULT_MODEL_BY_PROVIDER.items()
+        if profile_id in profiles_by_id
+    }
+
     return {
         "configured_backends": configured,
         "needs_setup": len(configured) == 0,
+        "available_models": available_model_profiles(),
+        "default_model_by_provider": default_models,
+        "selected_model_status": selected_profile.to_public_dict(),
     }
 
 
@@ -4045,6 +4097,7 @@ async def chat_message(
     """
     provider_api_keys = _provider_api_keys(req.context, user)
     preferred_backend = _preferred_backend(req.context)
+    preferred_model_profile = _preferred_model_profile(req.context)
     workflow_budget = _workflow_budget_config(_infer_workflow_budget_mode(req))
 
     claude_messages: list[dict] = _normalize_messages(req.messages)
@@ -4061,6 +4114,7 @@ async def chat_message(
             provider_api_keys=provider_api_keys,
             python_session_id=python_session_id,
             preferred_backend=preferred_backend,
+            model_profile=preferred_model_profile,
             user_id=str(user.id) if user else None,
             chat_session_id=chat_session_id,
             workflow_budget=workflow_budget,

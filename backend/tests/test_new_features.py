@@ -343,6 +343,27 @@ class TestInferenceRouting:
         assert _preferred_backend({"api_provider": "anthropic"}) == "claude"
         assert _preferred_backend({"api_provider": "google"}) is None
 
+    def test_preferred_model_profile_validates_provider(self):
+        from app.api.chat import _preferred_model_profile
+
+        openai_profile = _preferred_model_profile({"api_provider": "openai", "model_profile": "openai:gpt-5.5"})
+        assert openai_profile is not None
+        assert openai_profile.id == "openai:gpt-5.5"
+        assert openai_profile.resolved_model_id == "gpt-5.4"
+
+        deepseek_profile = _preferred_model_profile({"api_provider": "deepseek", "model_profile": "openai:gpt-5.5"})
+        assert deepseek_profile is not None
+        assert deepseek_profile.id == "deepseek:v4-pro"
+
+    def test_gpt55_alias_uses_admin_override(self, monkeypatch):
+        from app.ai.model_profiles import resolve_model_profile
+
+        monkeypatch.setenv("OPENAI_GPT55_MODEL", "gpt-5.5-real")
+        profile = resolve_model_profile("openai", "openai:gpt-5.5")
+
+        assert profile.api_ready is True
+        assert profile.resolved_model_id == "gpt-5.5-real"
+
     @pytest.mark.asyncio
     async def test_inference_router_skips_unavailable_local_backend(self, monkeypatch):
         from app.ai.inference_router import InferenceRouter
@@ -479,6 +500,112 @@ class TestInferenceRouting:
 
         assert result["tool_calls"][0]["name"] == "search_objects"
         assert result["tool_calls"][0]["input"]["query"] == "M31"
+
+    @pytest.mark.asyncio
+    async def test_openai_gpt55_profile_uses_responses_api(self, monkeypatch):
+        from app.ai.inference_router import OpenAIBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = OpenAIBackend()
+        captured: dict = {}
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "Hello from GPT-5.5 alias"}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 11, "output_tokens": 7},
+                    "status": "completed",
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, *, json=None, headers=None):
+                captured["url"] = url
+                captured["payload"] = json
+                return FakeResponse()
+
+        monkeypatch.setattr("app.ai.inference_router.httpx.AsyncClient", FakeClient)
+
+        profile = resolve_model_profile("openai", "openai:gpt-5.5")
+        result = await backend.complete(
+            [{"role": "user", "content": "hello"}],
+            provider_api_keys={"openai": "sk-openai-test"},
+            model_profile=profile,
+        )
+
+        assert captured["url"].endswith("/responses")
+        assert captured["payload"]["model"] == "gpt-5.4"
+        assert result["content"] == "Hello from GPT-5.5 alias"
+        assert result["model_profile"] == "openai:gpt-5.5"
+
+    @pytest.mark.asyncio
+    async def test_deepseek_v4_profiles_set_model_payload(self, monkeypatch):
+        from app.ai.inference_router import DeepSeekBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = DeepSeekBackend()
+        captured: list[dict] = []
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                captured.append(kwargs["json"])
+                return FakeResponse()
+
+        monkeypatch.setattr("app.ai.inference_router.httpx.AsyncClient", FakeClient)
+
+        pro = resolve_model_profile("deepseek", "deepseek:v4-pro")
+        await backend.complete(
+            [{"role": "user", "content": "hello"}],
+            provider_api_keys={"deepseek": "sk-deepseek-test"},
+            model_profile=pro,
+        )
+        assert captured[-1]["model"] == "deepseek-v4-pro"
+        assert captured[-1]["reasoning_effort"] == "high"
+        assert captured[-1]["thinking"] == {"type": "enabled"}
+
+        flash = resolve_model_profile("deepseek", "deepseek:v4-flash")
+        await backend.complete(
+            [{"role": "user", "content": "hello"}],
+            provider_api_keys={"deepseek": "sk-deepseek-test"},
+            model_profile=flash,
+        )
+        assert captured[-1]["model"] == "deepseek-v4-flash"
+        assert "reasoning_effort" not in captured[-1]
 
     def test_adql_results_unwraps_single_resultset_wrapper(self):
         from app.services.ai_tools import store_search_results

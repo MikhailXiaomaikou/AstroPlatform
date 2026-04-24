@@ -1387,10 +1387,30 @@ export async function saveChatSession(
 export interface AIBackendStatus {
   configured_backends: string[];
   needs_setup: boolean;
+  available_models?: AIModelProfile[];
+  default_model_by_provider?: Record<string, AIModelProfile>;
+  selected_model_status?: AIModelProfile;
 }
 
-export async function getAIBackendStatus(): Promise<AIBackendStatus> {
-  const { data } = await api.get("/api/chat/ai_backend_status");
+export interface AIModelProfile {
+  id: string;
+  provider: string;
+  model_id: string;
+  display_name: string;
+  api_ready: boolean;
+  resolved_model_id: string;
+  supports_tools: boolean;
+  supports_reasoning: boolean;
+  endpoint?: string;
+  reasoning_effort?: string | null;
+  note?: string | null;
+}
+
+export async function getAIBackendStatus(provider?: string | null, modelProfile?: string | null): Promise<AIBackendStatus> {
+  const params: Record<string, string> = {};
+  if (provider) params.api_provider = provider;
+  if (modelProfile) params.model_profile = modelProfile;
+  const { data } = await api.get("/api/chat/ai_backend_status", { params });
   return data;
 }
 
@@ -1646,7 +1666,32 @@ export async function updatePaperDraft(
 // upgrading "migrates" material into sessionStorage.
 const API_KEYS_STORAGE = "astro_api_keys";
 const AI_PROVIDER_STORAGE = "astro_ai_provider";
+const AI_MODEL_PROFILE_STORAGE = "astro_ai_model_profile";
 const PERSIST_FLAG_STORAGE = "astro_api_keys_persist";
+
+export const DEFAULT_AI_MODEL_BY_PROVIDER: Record<string, string> = {
+  anthropic: "anthropic:default",
+  openai: "openai:gpt-5.5",
+  deepseek: "deepseek:v4-pro",
+  local: "local:default",
+};
+
+export const AI_MODEL_OPTIONS: Record<string, Array<{ id: string; label: string; detail?: string }>> = {
+  anthropic: [
+    { id: "anthropic:default", label: "Claude default" },
+  ],
+  openai: [
+    { id: "openai:gpt-5.5", label: "GPT-5.5", detail: "API soon; currently resolves to gpt-5.4 fallback" },
+    { id: "openai:gpt-5.4", label: "GPT-5.4" },
+  ],
+  deepseek: [
+    { id: "deepseek:v4-pro", label: "DeepSeek V4 Pro", detail: "Thinking enabled, high reasoning effort" },
+    { id: "deepseek:v4-flash", label: "DeepSeek V4 Flash" },
+  ],
+  local: [
+    { id: "local:default", label: "Local default" },
+  ],
+};
 
 function _shouldPersist(): boolean {
   try {
@@ -1711,6 +1756,68 @@ export function getStoredAiProvider(): string | null {
   return trimmed ? trimmed : null;
 }
 
+export function writeStoredAiProvider(provider: string): void {
+  const value = provider.trim();
+  if (!value) return;
+  try {
+    sessionStorage.setItem(AI_PROVIDER_STORAGE, value);
+  } catch {
+    /* ignore */
+  }
+  if (_shouldPersist()) {
+    try {
+      localStorage.setItem(AI_PROVIDER_STORAGE, value);
+    } catch {
+      /* ignore */
+    }
+  } else {
+    try {
+      localStorage.removeItem(AI_PROVIDER_STORAGE);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export function getStoredAiModelProfile(): string | null {
+  const raw = _readFirstDefined(AI_MODEL_PROFILE_STORAGE);
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : null;
+}
+
+export function writeStoredAiModelProfile(modelProfile: string): void {
+  const value = modelProfile.trim();
+  if (!value) return;
+  try {
+    sessionStorage.setItem(AI_MODEL_PROFILE_STORAGE, value);
+  } catch {
+    /* ignore */
+  }
+  if (_shouldPersist()) {
+    try {
+      localStorage.setItem(AI_MODEL_PROFILE_STORAGE, value);
+    } catch {
+      /* ignore */
+    }
+  } else {
+    try {
+      localStorage.removeItem(AI_MODEL_PROFILE_STORAGE);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export function getPreferredAiModelProfile(provider?: string | null): string | null {
+  const selectedProvider = provider || getPreferredAiProvider() || getStoredAiProvider() || "anthropic";
+  const stored = getStoredAiModelProfile();
+  if (stored && stored.startsWith(`${selectedProvider}:`)) {
+    return stored;
+  }
+  return DEFAULT_AI_MODEL_BY_PROVIDER[selectedProvider] || null;
+}
+
 export function getStoredApiKeys(): Record<string, string> {
   const raw = _readFirstDefined(API_KEYS_STORAGE) || "{}";
   try {
@@ -1733,10 +1840,7 @@ export function getStoredApiKeys(): Record<string, string> {
 export function getPreferredAiProvider(): string | null {
   const storedProvider = getStoredAiProvider();
   const keys = getStoredApiKeys();
-  if (storedProvider === "local") {
-    return "local";
-  }
-  if (storedProvider && keys[storedProvider]) {
+  if (storedProvider && ["anthropic", "openai", "deepseek", "local"].includes(storedProvider)) {
     return storedProvider;
   }
   for (const provider of ["anthropic", "openai", "deepseek"]) {
@@ -1756,12 +1860,14 @@ export async function sendChatMessage(
 ): Promise<ChatResponse> {
   const apiKeys = getStoredApiKeys();
   const apiProvider = getPreferredAiProvider();
+  const modelProfile = getPreferredAiModelProfile(apiProvider);
   const body = {
     messages,
     context: {
       ...context,
       ...(Object.keys(apiKeys).length ? { api_keys: apiKeys } : {}),
       ...(apiProvider ? { api_provider: apiProvider } : {}),
+      ...(modelProfile ? { model_profile: modelProfile } : {}),
     },
   };
 

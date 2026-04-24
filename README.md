@@ -386,7 +386,7 @@ The audit specifically removed LLM-hallucinated values (e.g. the old "Casagrande
 |-------|-------|
 | Frontend | React 19, TypeScript strict, Vite, React Router, React Flow, Plotly, Aladin Lite |
 | Backend | FastAPI, SQLAlchemy async, Pydantic v2, SSE streaming |
-| AI | Claude (default), OpenAI, DeepSeek, local model backends |
+| AI | Manual provider/model selection across Claude default, OpenAI GPT-5.5 alias (resolves to GPT-5.4 unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro/Flash, and local OpenAI-compatible backends |
 | Astronomy core | astropy, astroquery, specutils, photutils, reproject, emcee, dynesty, ArviZ, batman, celerite2, lightkurve, pyvo, sep, dust_extinction, dask |
 | Astronomy extended (expanded sandbox) | sherpa, radvel, thejoker, galpy, pysme, statmorph, vorbin, ppxf, dustmaps, healpy, pint, psrqpy, lenstronomy, MulensModel, treecorr, yt |
 | Background | Celery + Redis (optional, sync fallback) |
