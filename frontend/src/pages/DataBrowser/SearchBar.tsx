@@ -13,8 +13,14 @@ interface Props {
 }
 
 const ALL_SOURCES = ["sdss", "gaia", "simbad", "vizier", "mast", "ned", "2mass", "chandra", "allwise", "alma", "eso", "irsa", "jwst", "lamost", "desi"];
-const DEFAULT_SOURCES = ["sdss", "gaia", "simbad"];
-const DEFAULT_ADV_SOURCES = ["simbad", "alma", "mast"];
+// Provenance v2 rollout: only these connectors have archive_version +
+// registry-backed citation support. Others are gated in the backend
+// (backend/app/connectors/availability.py V2_AVAILABLE_CONNECTORS) and
+// disabled here so the user can't manually select them either.
+const V2_AVAILABLE_SOURCES = new Set(["vizier", "gaia", "simbad", "ned", "2mass"]);
+const isSourceAvailable = (s: string): boolean => V2_AVAILABLE_SOURCES.has(s);
+const DEFAULT_SOURCES = ["gaia", "simbad", "vizier"];
+const DEFAULT_ADV_SOURCES = ["simbad", "ned", "2mass"];
 
 const OBJECT_TYPES = [
   "AGN",
@@ -110,15 +116,19 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
       });
   }, []);
 
-  const toggleSource = (s: string) =>
+  const toggleSource = (s: string) => {
+    if (!isSourceAvailable(s)) return;  // gated under-maintenance source
     setSources((prev) =>
       prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
     );
+  };
 
-  const toggleAdvSource = (s: string) =>
+  const toggleAdvSource = (s: string) => {
+    if (!isSourceAvailable(s)) return;
     setAdvSources((prev) =>
       prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
     );
+  };
 
   const submitQuickSearch = (nextQuery = query) => {
     const trimmed = nextQuery.trim();
@@ -222,17 +232,30 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
 
           <div className="search-options">
             <div className="segmented-control">
-              {ALL_SOURCES.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  className={`segment-btn${sources.includes(s) ? " active" : ""}`}
-                  onClick={() => toggleSource(s)}
-                  title={SOURCE_TOOLTIPS[s] || s.toUpperCase()}
-                >
-                  {s.toUpperCase()}
-                </button>
-              ))}
+              {ALL_SOURCES.map((s) => {
+                const available = isSourceAvailable(s);
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    className={
+                      `segment-btn` +
+                      (sources.includes(s) ? " active" : "") +
+                      (available ? "" : " maintenance")
+                    }
+                    onClick={() => toggleSource(s)}
+                    disabled={!available}
+                    aria-disabled={!available}
+                    title={
+                      available
+                        ? (SOURCE_TOOLTIPS[s] || s.toUpperCase())
+                        : `${s.toUpperCase()} — under maintenance (provenance v2 rollout). Only vizier / gaia / simbad / ned / 2mass are active.`
+                    }
+                  >
+                    {s.toUpperCase()}{!available ? " · 维护中" : ""}
+                  </button>
+                );
+              })}
             </div>
 
             <label className="radius-label">
@@ -490,17 +513,30 @@ export default function SearchBar({ onSearch, onAdvancedSearch, loading }: Props
           {/* Source selection */}
           <div className="search-options">
             <div className="segmented-control">
-              {ALL_SOURCES.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  className={`segment-btn${advSources.includes(s) ? " active" : ""}`}
-                  onClick={() => toggleAdvSource(s)}
-                  title={SOURCE_TOOLTIPS[s] || s.toUpperCase()}
-                >
-                  {s.toUpperCase()}
-                </button>
-              ))}
+              {ALL_SOURCES.map((s) => {
+                const available = isSourceAvailable(s);
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    className={
+                      `segment-btn` +
+                      (advSources.includes(s) ? " active" : "") +
+                      (available ? "" : " maintenance")
+                    }
+                    onClick={() => toggleAdvSource(s)}
+                    disabled={!available}
+                    aria-disabled={!available}
+                    title={
+                      available
+                        ? (SOURCE_TOOLTIPS[s] || s.toUpperCase())
+                        : `${s.toUpperCase()} — under maintenance (provenance v2 rollout). Only vizier / gaia / simbad / ned / 2mass are active.`
+                    }
+                  >
+                    {s.toUpperCase()}{!available ? " · 维护中" : ""}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

@@ -1437,6 +1437,31 @@ table.keys td a { color: var(--accent-2); font-style: italic; cursor: pointer; }
   color: var(--ink) !important;
 }
 
+/* Provenance v2 rollout: non-v2 connectors are visible but unclickable. */
+.segment-btn.maintenance {
+  opacity: 0.38;
+  cursor: not-allowed !important;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--paper-2, #f5f2ed),
+    var(--paper-2, #f5f2ed) 6px,
+    rgba(123, 45, 38, 0.08) 6px,
+    rgba(123, 45, 38, 0.08) 12px
+  ) !important;
+  text-decoration: line-through;
+  font-size: 10px !important;
+}
+.segment-btn.maintenance:hover {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--paper-2, #f5f2ed),
+    var(--paper-2, #f5f2ed) 6px,
+    rgba(123, 45, 38, 0.08) 6px,
+    rgba(123, 45, 38, 0.08) 12px
+  ) !important;
+  border-color: var(--rule) !important;
+}
+
 /* Radius field — demo bs-radius look */
 .radius-label {
   display: flex; align-items: center; gap: 10px;
