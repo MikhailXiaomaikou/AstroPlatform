@@ -29,8 +29,29 @@ def get_rate_limit_key(request: Request) -> str:
                 return f"user:{user_id}"
         except Exception:
             pass
-    # Fallback to IP
-    return request.client.host if request.client else "unknown"
+    # Fallback to client IP. Behind Render / nginx / Cloudflare,
+    # request.client.host is often the proxy address, which would make all
+    # guests share one bucket. Prefer standard forwarded headers here.
+    return f"ip:{get_client_ip(request) or 'unknown'}"
+
+
+def get_client_ip(request: Request) -> str | None:
+    """Best-effort public client IP for anonymous limits and audit fields."""
+    for header in ("CF-Connecting-IP", "X-Real-IP"):
+        value = request.headers.get(header, "").strip()
+        if value:
+            return value[:64]
+
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        for part in forwarded_for.split(","):
+            value = part.strip()
+            if value:
+                return value[:64]
+
+    if request.client:
+        return request.client.host[:64]
+    return None
 
 
 limiter = Limiter(

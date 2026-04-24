@@ -17,7 +17,7 @@ from starlette.requests import Request
 from app.api.auth import _require_admin
 from app.models.database import get_db
 from app.models.schemas import Comment
-from app.rate_limit import limiter
+from app.rate_limit import get_client_ip, limiter
 
 logger = logging.getLogger(__name__)
 
@@ -119,14 +119,7 @@ async def create_comment(
 
     # 记 IP (request.client.host 在 Render 后面的 proxy 可能是 proxy IP;
     # 首选 X-Forwarded-For 里的第一条)
-    client_ip: str | None = None
-    fwd = request.headers.get("X-Forwarded-For", "")
-    if fwd:
-        client_ip = fwd.split(",")[0].strip()
-    elif request.client:
-        client_ip = request.client.host
-    if client_ip and len(client_ip) > 64:
-        client_ip = client_ip[:64]
+    client_ip = get_client_ip(request)
 
     comment = Comment(
         id=uuid.uuid4(),

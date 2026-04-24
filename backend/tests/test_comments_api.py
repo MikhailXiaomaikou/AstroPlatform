@@ -11,6 +11,10 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+
+from app.auth import create_access_token
+from app.rate_limit import get_rate_limit_key
 
 
 async def test_post_and_get_comment_roundtrip(app_client):
@@ -175,3 +179,27 @@ async def test_ip_not_exposed_in_public_view(app_client):
     r2 = await app_client.get("/api/comments")
     for c in r2.json()["comments"]:
         assert "client_ip" not in c
+
+
+def test_guest_rate_limit_key_prefers_forwarded_ip():
+    request = SimpleNamespace(
+        headers={
+            "X-Forwarded-For": "203.0.113.10, 10.0.0.1",
+        },
+        client=SimpleNamespace(host="10.0.0.99"),
+    )
+
+    assert get_rate_limit_key(request) == "ip:203.0.113.10"
+
+
+def test_authenticated_rate_limit_key_still_uses_user_id():
+    token = create_access_token("user-123")
+    request = SimpleNamespace(
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-Forwarded-For": "203.0.113.10",
+        },
+        client=SimpleNamespace(host="10.0.0.99"),
+    )
+
+    assert get_rate_limit_key(request) == "user:user-123"
