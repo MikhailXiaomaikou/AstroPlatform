@@ -73,6 +73,60 @@ def test_emcee_fit_is_seed_reproducible_and_not_publication_ready_for_short_chai
     assert first["provenance"]["cosmology"]["random_seed"] == 1234
 
 
+def test_inline_rows_remain_unciteable_even_with_good_diagnostics(monkeypatch):
+    import app.services.cosmology_mcmc as cm
+
+    def fake_diagnostics(_chain, names):
+        return {
+            "parameters": {
+                name: {
+                    "median": 70.0 if name == "H0" else 0.3,
+                    "hdi_low_94": 69.0 if name == "H0" else 0.25,
+                    "hdi_high_94": 71.0 if name == "H0" else 0.35,
+                    "rhat": 1.0,
+                    "ess_bulk": 1000.0,
+                    "ess_tail": 900.0,
+                    "status": "good",
+                }
+                for name in names
+            },
+            "overall_status": "converged",
+            "publication_ready": True,
+            "insufficient_params": [],
+            "thresholds": {"ess_min": 400.0, "rhat_max": 1.05},
+        }
+
+    monkeypatch.setattr(cm, "_chain_diagnostics_from_emcee_chain", fake_diagnostics)
+
+    inline = cm.fit_cosmology_emcee(
+        toy_distance_modulus_rows(),
+        model="flat_lcdm",
+        n_walkers=10,
+        n_steps=10,
+        n_burn=2,
+        random_seed=3,
+        input_data_origin="inline_unverified",
+    )
+    assert inline["publication_ready"] is False
+    assert inline["__do_not_claim__"] is True
+    assert inline["data_origin"] == "unavailable"
+    assert "inline/unverified rows" in inline["warnings"][0]
+
+    cached = cm.fit_cosmology_emcee(
+        toy_distance_modulus_rows(),
+        model="flat_lcdm",
+        n_walkers=10,
+        n_steps=10,
+        n_burn=2,
+        random_seed=3,
+        input_data_origin="cached_real",
+        source_cache_key="latest_adql",
+    )
+    assert cached["publication_ready"] is True
+    assert cached["input_rows_verified"] is True
+    assert "__do_not_claim__" not in cached
+
+
 def test_background_status_roundtrip():
     from app.services.cosmology_mcmc import get_cosmology_job_status, submit_emcee_job
 
@@ -87,6 +141,7 @@ def test_background_status_roundtrip():
     status = get_cosmology_job_status(queued["job_id"])
     assert status["job_id"] == queued["job_id"]
     assert status["status"] in {"running", "completed", "failed"}
+    assert status["background_backend"] == "in_process_ephemeral"
 
 
 def test_cobaya_unavailable_is_structured_when_missing_or_disabled(monkeypatch):
@@ -102,3 +157,4 @@ def test_cobaya_unavailable_is_structured_when_missing_or_disabled(monkeypatch):
     assert result["__tool_status__"] == "UNAVAILABLE"
     assert result["__do_not_claim__"] is True
     assert result["provenance"]["cosmology"]["sampler"] == "cobaya"
+    assert "phase-1 disabled" in result["error"]

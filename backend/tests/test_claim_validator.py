@@ -113,6 +113,32 @@ def test_cosmology_claims_pass_with_publication_ready_mcmc_result():
     assert r.ok
 
 
+def test_cosmology_prior_bounds_do_not_support_posterior_claims():
+    tool_results = [
+        {
+            "tool": "fit_cosmology_mcmc",
+            "result": {
+                "success": True,
+                "publication_ready": True,
+                "parameters": {
+                    "H0": {"median": 70.0},
+                    "Om0": {"median": 0.31},
+                },
+                "priors": {
+                    "H0": [50.0, 90.0],
+                    "Om0": [0.05, 0.6],
+                },
+                "chain_diagnostics": {
+                    "thresholds": {"ess_min": 400.0, "rhat_max": 1.05},
+                },
+            },
+        }
+    ]
+    r = validate_claims("The posterior gives H0 = 50 km/s/Mpc and Om0 = 0.05.", tool_results)
+    assert not r.ok
+    assert {claim.label for claim in r.uncited} >= {"cosmology_h0", "cosmology_om0"}
+
+
 def test_validate_flags_uncited_radius_ratio():
     r = validate_claims("The planet-to-star radius ratio is 0.157.", [])
     assert not r.ok

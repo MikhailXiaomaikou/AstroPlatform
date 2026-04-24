@@ -624,7 +624,9 @@ TOOLS = [
             "Fit H0/Om0/w0/wa to a real distance-modulus table using a bounded emcee MCMC. "
             "Input rows must contain z, mu, and sigma_mu; no remembered or synthetic cosmology "
             "samples are allowed. Use this after obtaining a real table from the user, an archive, "
-            "or a cited literature table. Results are citeable only when publication_ready=true."
+            "or a cited literature table. Direct inline rows are audit-only and not citeable; "
+            "use cache_key from a real prior tool for publication-ready posterior claims. "
+            "Results are citeable only when publication_ready=true."
         ),
         "input_schema": {
             "type": "object",
@@ -632,7 +634,7 @@ TOOLS = [
                 "rows": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "Inline distance-modulus rows with z, mu, sigma_mu.",
+                    "description": "Inline distance-modulus rows with z, mu, sigma_mu. Audit-only unless backed by cache_key.",
                 },
                 "cache_key": {
                     "type": "string",
@@ -662,8 +664,9 @@ TOOLS = [
         "name": "run_cobaya_cosmology",
         "description": (
             "Run a controlled Cobaya distance-modulus cosmology fit. Accepts typed rows and bounded "
-            "priors only; raw Cobaya YAML and arbitrary likelihood code are not accepted. If Cobaya "
-            "is unavailable, returns UNAVAILABLE rather than fake posterior values."
+            "priors only; raw Cobaya YAML and arbitrary likelihood code are not accepted. Phase 1 "
+            "keeps Cobaya UNAVAILABLE until posterior summarization lands; use fit_cosmology_mcmc "
+            "for citeable short-chain emcee fits."
         ),
         "input_schema": {
             "type": "object",
@@ -4616,10 +4619,10 @@ async def _exec_estimate_photo_z(inp: dict) -> dict:
     return result
 
 
-def _cosmology_rows_from_input(inp: dict, python_session_id: str | None) -> list[dict[str, Any]]:
+def _cosmology_rows_from_input(inp: dict, python_session_id: str | None) -> tuple[list[dict[str, Any]], str, str | None]:
     rows = inp.get("rows")
     if isinstance(rows, list) and rows:
-        return [dict(row) for row in rows if isinstance(row, dict)]
+        return [dict(row) for row in rows if isinstance(row, dict)], "inline_unverified", None
 
     cache_key = str(inp.get("cache_key") or "").strip()
     if not cache_key:
@@ -4631,12 +4634,12 @@ def _cosmology_rows_from_input(inp: dict, python_session_id: str | None) -> list
     if payload is None:
         raise ValueError(f"No cached rows found for cache_key={cache_key!r}")
     if isinstance(payload, list):
-        return [dict(row) for row in payload if isinstance(row, dict)]
+        return [dict(row) for row in payload if isinstance(row, dict)], "cached_real", cache_key
     if isinstance(payload, dict):
         for key in ("rows", "data", "results"):
             value = payload.get(key)
             if isinstance(value, list):
-                return [dict(row) for row in value if isinstance(row, dict)]
+                return [dict(row) for row in value if isinstance(row, dict)], "cached_real", cache_key
             if isinstance(value, dict):
                 columns = list(value.keys())
                 lengths = [len(v) for v in value.values() if isinstance(v, list)]
@@ -4645,7 +4648,7 @@ def _cosmology_rows_from_input(inp: dict, python_session_id: str | None) -> list
                     return [
                         {column: value.get(column, [None] * n)[index] for column in columns}
                         for index in range(n)
-                    ]
+                    ], "cached_real", cache_key
     raise ValueError(f"Cached payload {cache_key!r} does not contain row objects")
 
 
@@ -4657,7 +4660,7 @@ async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> 
     )
 
     try:
-        rows = _cosmology_rows_from_input(inp, python_session_id)
+        rows, input_data_origin, source_cache_key = _cosmology_rows_from_input(inp, python_session_id)
         model = str(inp.get("model") or "flat_lcdm")
         n_walkers = int(inp.get("n_walkers") or 32)
         n_steps = int(inp.get("n_steps") or 800)
@@ -4672,6 +4675,8 @@ async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> 
             "n_steps": n_steps,
             "n_burn": n_burn,
             "random_seed": random_seed_int,
+            "input_data_origin": input_data_origin,
+            "source_cache_key": source_cache_key,
         }
         if should_run_background(n_walkers, n_steps, bool(inp.get("background", False))):
             return submit_emcee_job(**kwargs)
@@ -4695,7 +4700,7 @@ async def _exec_run_cobaya_cosmology(inp: dict, python_session_id: str | None) -
     from app.services.cosmology_mcmc import run_cobaya_cosmology
 
     try:
-        rows = _cosmology_rows_from_input(inp, python_session_id)
+        rows, _input_data_origin, _source_cache_key = _cosmology_rows_from_input(inp, python_session_id)
         return await asyncio.to_thread(
             run_cobaya_cosmology,
             rows,

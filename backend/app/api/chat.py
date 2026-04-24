@@ -110,10 +110,14 @@ distance-modulus fits, CPL fits, or posterior/HDI/R-hat/ESS claims), first
 obtain a real typed table.  The phase-1 supported table is
 `distance_modulus` with columns `z`, `mu`, and `sigma_mu`.
 
-Use `fit_cosmology_mcmc` for short bounded emcee fits.  Use
-`run_cobaya_cosmology` only through its typed config interface; never write
-raw Cobaya YAML or arbitrary likelihood code in `run_python`.  Long chains
-may return a job id; poll `get_cosmology_run_status`.
+Use `fit_cosmology_mcmc` for short bounded emcee fits.  Citeable fits must
+read rows from a platform `cache_key` produced by a real data/literature
+tool.  Inline `rows` are audit-only because they could be remembered or
+synthetic tables, and they will not support posterior claims.  Cobaya is a
+phase-1 controlled interface that currently returns UNAVAILABLE until
+posterior summarization lands; never write raw Cobaya YAML or arbitrary
+likelihood code in `run_python`.  Long emcee chains may return an ephemeral
+job id; poll `get_cosmology_run_status`.
 
 Only quote H0/Om0/w0/wa/sigma8/posterior numbers when the MCMC tool result
 has `publication_ready=true`.  If `publication_ready=false`, R-hat/ESS are

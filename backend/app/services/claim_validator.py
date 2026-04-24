@@ -516,6 +516,13 @@ _METADATA_KEYS_BLACKLIST: frozenset[str] = frozenset({
     "run_id", "query_hash", "tool_version", "archive_version",
     "random_seed", "session_id", "user_id", "chat_session_id",
     "python_session_id",
+    # Model configuration / diagnostics. These may contain numbers close to
+    # scientific claims (e.g. H0 prior bounds [50, 90]) but are not posterior
+    # measurements and must not support reply claims.
+    "priors", "prior", "thresholds", "proposal", "ref",
+    "package_versions", "cobaya_info",
+    "n_walkers", "n_steps", "n_burn", "n_samples", "n_rows",
+    "input_rows_verified",
     # 结果状态标志 (虽然多数是字符串或 bool, 偶尔是 code)
     "success", "error_class", "argument", "error_code",
     "analysis_status", "__tool_status__", "data_origin",
@@ -862,6 +869,11 @@ def _payload_is_claimable_success(tool_name: str | None, result: dict[str, Any] 
         )
     if tool_name == "get_extinction":
         return bool(result.get("e_b_v") is not None or result.get("a_v") is not None)
+    if tool_name in {"fit_cosmology_mcmc", "run_cobaya_cosmology"}:
+        return result.get("publication_ready") is True
+    if tool_name == "get_cosmology_run_status":
+        nested = result.get("result")
+        return isinstance(nested, dict) and nested.get("publication_ready") is True
 
     return True
 

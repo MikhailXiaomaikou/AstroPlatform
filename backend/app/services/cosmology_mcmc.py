@@ -13,7 +13,6 @@ import importlib.metadata
 import json
 import logging
 import math
-import os
 import threading
 import time
 import uuid
@@ -43,6 +42,9 @@ RHAT_PUBLICATION_THRESHOLD = 1.05
 
 _JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = threading.Lock()
+_JOB_TTL_SECONDS = 3600
+_MAX_JOBS = 64
+CLAIMABLE_INPUT_ORIGINS = frozenset({"cached_real"})
 
 
 @dataclass(frozen=True)
@@ -199,6 +201,8 @@ def fit_cosmology_emcee(
     n_steps: int = 800,
     n_burn: int = 200,
     random_seed: int | None = None,
+    input_data_origin: str = "inline_unverified",
+    source_cache_key: str | None = None,
 ) -> dict[str, Any]:
     """Run a bounded emcee fit and return posterior summary + provenance."""
     import emcee
@@ -242,7 +246,9 @@ def fit_cosmology_emcee(
     flat_samples = chain.reshape(-1, ndim)
     diagnostics = _chain_diagnostics_from_emcee_chain(chain, names)
     parameter_summary = diagnostics["parameters"]
-    publication_ready = bool(diagnostics.get("publication_ready"))
+    diagnostics_publication_ready = bool(diagnostics.get("publication_ready"))
+    input_is_claimable = input_data_origin in CLAIMABLE_INPUT_ORIGINS
+    publication_ready = diagnostics_publication_ready and input_is_claimable
 
     result: dict[str, Any] = {
         "success": True,
@@ -263,6 +269,9 @@ def fit_cosmology_emcee(
         "priors": _priors_to_json(sanitized_priors),
         "data_hash": dataset.data_hash,
         "random_seed": seed,
+        "input_data_origin": input_data_origin,
+        "source_cache_key": source_cache_key,
+        "input_rows_verified": input_is_claimable,
         "package_versions": package_versions(["astropy", "emcee", "arviz", "numpy"]),
     }
     result["provenance"] = {
@@ -272,14 +281,21 @@ def fit_cosmology_emcee(
         result["__tool_status__"] = "PARTIAL"
         result["analysis_status"] = "PARTIAL"
         result["__do_not_claim__"] = True
+        if not input_is_claimable:
+            result["data_origin"] = "unavailable"
+            reason = (
+                "Cosmology MCMC used inline/unverified rows. Inline rows are audit-only "
+                "because the model could have supplied remembered or synthetic tables. "
+                "Re-run from a platform cache_key backed by a real data/literature tool."
+            )
+        else:
+            reason = "MCMC diagnostics did not meet ESS/R-hat publication thresholds."
         result["__message_to_model__"] = (
-            "Cosmology MCMC ran but did not meet publication diagnostics. "
-            "Do not cite H0, Om0, w0, wa, sigma8, HDI, or posterior constraints "
-            "from this result. State that sampling was not publication-ready."
+            reason
+            + " Do not cite H0, Om0, w0, wa, sigma8, HDI, or posterior constraints "
+            "from this result."
         )
-        result["warnings"] = [
-            "MCMC diagnostics did not meet ESS/R-hat publication thresholds."
-        ]
+        result["warnings"] = [reason]
     return result
 
 
@@ -290,12 +306,18 @@ def should_run_background(n_walkers: int, n_steps: int, force_background: bool =
 def submit_emcee_job(**kwargs: Any) -> dict[str, Any]:
     job_id = f"cosmo-{uuid.uuid4().hex[:12]}"
     with _JOBS_LOCK:
+        _cleanup_jobs_locked()
         _JOBS[job_id] = {
             "job_id": job_id,
             "status": "running",
             "created_at": time.time(),
             "sampler": "emcee",
             "model": kwargs.get("model", "flat_lcdm"),
+            "background_backend": "in_process_ephemeral",
+            "warning": (
+                "Background cosmology jobs are ephemeral in this deployment and "
+                "may be lost on process restart; use only for short follow-up polling."
+            ),
         }
 
     def _target() -> None:
@@ -319,16 +341,24 @@ def submit_emcee_job(**kwargs: Any) -> dict[str, Any]:
         "success": True,
         "__tool_status__": "PARTIAL",
         "analysis_status": "QUEUED",
+        "data_origin": "unavailable",
         "job_id": job_id,
         "status": "running",
         "sampler": "emcee",
         "model": kwargs.get("model", "flat_lcdm"),
-        "message": "Cosmology MCMC job started in the background; poll get_cosmology_run_status.",
+        "background_backend": "in_process_ephemeral",
+        "__do_not_claim__": True,
+        "message": (
+            "Cosmology MCMC job started in an in-process ephemeral background worker; "
+            "poll get_cosmology_run_status. Do not quote posterior values until a "
+            "completed result returns publication_ready=true."
+        ),
     }
 
 
 def get_cosmology_job_status(job_id: str) -> dict[str, Any]:
     with _JOBS_LOCK:
+        _cleanup_jobs_locked()
         job = dict(_JOBS.get(str(job_id), {}))
     if not job:
         return {
@@ -349,83 +379,20 @@ def run_cobaya_cosmology(
     random_seed: int | None = None,
     max_samples: int = 4000,
 ) -> dict[str, Any]:
-    """Run a controlled Cobaya distance-modulus fit when Cobaya is enabled.
-
-    The first deployment keeps Cobaya optional.  Missing imports or disabled
-    runtime return a structured UNAVAILABLE response rather than synthetic
-    fallback results.
-    """
+    """Return a controlled Cobaya placeholder until posterior summaries land."""
     dataset = validate_distance_modulus_rows(rows)
     sanitized_priors = sanitize_priors(model, priors)
     seed = int(random_seed if random_seed is not None else 20260424)
     info = build_cobaya_info(dataset, model, sanitized_priors, seed=seed, max_samples=max_samples)
-    try:
-        import cobaya  # noqa: F401
-        from cobaya.run import run
-    except Exception as exc:
-        return _cobaya_unavailable(
-            "Cobaya is not installed in this runtime.",
-            exc,
-            info,
-            dataset,
-            model,
-            sanitized_priors,
-            seed,
-        )
-
-    if os.getenv("COBAYA_COSMOLOGY_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on"}:
-        return _cobaya_unavailable(
-            "Cobaya package is present but COBAYA_COSMOLOGY_ENABLED is not enabled for this deployment.",
-            None,
-            info,
-            dataset,
-            model,
-            sanitized_priors,
-            seed,
-        )
-
-    try:
-        updated_info, sampler = run(info)
-        products = sampler.products()
-        return {
-            "success": True,
-            "sampler": "cobaya",
-            "model": model,
-            "observable": "distance_modulus",
-            "publication_ready": False,
-            "__tool_status__": "PARTIAL",
-            "analysis_status": "PARTIAL",
-            "__do_not_claim__": True,
-            "message": "Cobaya completed; posterior summarization is intentionally conservative in phase 1.",
-            "cobaya_info": _public_cobaya_info(info),
-            "cobaya_products_keys": sorted(products.keys()) if isinstance(products, dict) else [],
-            "priors": _priors_to_json(sanitized_priors),
-            "data_hash": dataset.data_hash,
-            "random_seed": seed,
-            "package_versions": package_versions(["cobaya", "astropy", "numpy"]),
-            "provenance": {
-                "cosmology": {
-                    "model": model,
-                    "sampler": "cobaya",
-                    "priors": _priors_to_json(sanitized_priors),
-                    "data_hash": dataset.data_hash,
-                    "random_seed": seed,
-                    "package_versions": package_versions(["cobaya", "astropy", "numpy"]),
-                    "chain_diagnostics": {"publication_ready": False},
-                }
-            },
-        }
-    except Exception as exc:
-        logger.exception("Cobaya cosmology run failed")
-        return _cobaya_unavailable(
-            "Cobaya run failed for the controlled distance-modulus likelihood.",
-            exc,
-            info,
-            dataset,
-            model,
-            sanitized_priors,
-            seed,
-        )
+    return _cobaya_unavailable(
+        "Cobaya cosmology is phase-1 disabled until posterior sample summarization is implemented; use fit_cosmology_mcmc for citeable short-chain fits.",
+        None,
+        info,
+        dataset,
+        model,
+        sanitized_priors,
+        seed,
+    )
 
 
 def build_cobaya_info(
@@ -609,10 +576,30 @@ def _cosmology_provenance(result: dict[str, Any]) -> dict[str, Any]:
         "priors": result.get("priors"),
         "data_hash": result.get("data_hash"),
         "random_seed": result.get("random_seed"),
+        "input_data_origin": result.get("input_data_origin"),
+        "source_cache_key": result.get("source_cache_key"),
+        "input_rows_verified": result.get("input_rows_verified"),
         "package_versions": result.get("package_versions"),
         "chain_diagnostics": result.get("chain_diagnostics"),
         "publication_ready": result.get("publication_ready"),
     }
+
+
+def _cleanup_jobs_locked() -> None:
+    now = time.time()
+    expired = [
+        job_id
+        for job_id, job in _JOBS.items()
+        if now - float(job.get("created_at") or now) > _JOB_TTL_SECONDS
+    ]
+    for job_id in expired:
+        _JOBS.pop(job_id, None)
+    if len(_JOBS) <= _MAX_JOBS:
+        return
+    for job_id, _ in sorted(_JOBS.items(), key=lambda item: float(item[1].get("created_at") or 0)):
+        if len(_JOBS) <= _MAX_JOBS:
+            break
+        _JOBS.pop(job_id, None)
 
 
 def package_versions(distributions: list[str]) -> dict[str, str]:
