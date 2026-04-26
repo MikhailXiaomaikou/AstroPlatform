@@ -23,6 +23,10 @@ anthropic>=0.43.0,<1
 celery[redis]>=5.3.6,<6
 redis[hiredis]>=5.0.1,<6
 matplotlib>=3.8.3,<4
+# PART AD C6: AI run_python sometimes reaches for seaborn for prettier
+# statistical plots (regplot, pairplot, kdeplot). Pre-AC the sandbox
+# raised ModuleNotFoundError and the AI fell back to bare matplotlib.
+seaborn>=0.13,<1
 plotly>=5.24.1,<6
 reportlab>=4.1.0,<5
 pandas>=2.2.0,<3
