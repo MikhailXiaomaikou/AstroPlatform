@@ -172,3 +172,28 @@ def test_system_prompt_has_demagnify_no_op_rule() -> None:
     assert "no-op declaration" in SYSTEM_PROMPT
     assert "0 lensed sources detected" in SYSTEM_PROMPT
     assert "demagnify_sample skipped" in SYSTEM_PROMPT
+
+
+def test_system_prompt_has_cite_after_extract_rule() -> None:
+    """PART AG C3 — M6 audit reproducer: AI cited Bothwell 2013 in prose
+    without first running a tool to ground it. The new rule mandates
+    extract-or-search BEFORE citation, with a generic-phrasing fallback
+    when the lookup fails.
+    """
+    from app.api.chat import SYSTEM_PROMPT
+
+    # Section header
+    assert "Cite-after-extract" in SYSTEM_PROMPT
+
+    # Required tools spelled out (so the AI knows what to call first)
+    assert 'extract_literature_tables(arxiv_id="...")' in SYSTEM_PROMPT
+    assert 'search_literature(query="<author>' in SYSTEM_PROMPT
+
+    # Generic-phrasing fallback when lookup fails
+    assert "prior [CII] surveys at z>4" in SYSTEM_PROMPT or "prior [CII] surveys" in SYSTEM_PROMPT
+
+    # M6 reproducer paper names listed so the AI can resolve them
+    # against the platform's pre-warmed cache list
+    assert "Bothwell 2013" in SYSTEM_PROMPT or "1308.4708" in SYSTEM_PROMPT
+    assert "Capak+2015" in SYSTEM_PROMPT or "1605.03581" in SYSTEM_PROMPT
+    assert "REBELS" in SYSTEM_PROMPT
