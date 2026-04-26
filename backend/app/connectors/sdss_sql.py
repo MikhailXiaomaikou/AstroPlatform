@@ -141,6 +141,10 @@ def _parse_skyserver_json(payload, query: str, dr: str) -> dict:
             "service": "sdss",
             "dr": dr,
             "query": query,
+            # PART Y Batch 6 (audit): stamp archive_version on empty results
+            # too so claim_validator / paper_generator can still attribute
+            # the (empty) lookup to a specific SDSS DR.
+            "archive_version": f"SDSS DR{dr}",
         }
 
     # 列名从第一行的 keys 取, 保持原始顺序.
@@ -168,4 +172,7 @@ def _parse_skyserver_json(payload, query: str, dr: str) -> dict:
         "service": "sdss",
         "dr": dr,
         "query": query,
+        # PART Y Batch 6 (audit): stamp archive_version so downstream
+        # consumers know exactly which SDSS DR the row came from.
+        "archive_version": f"SDSS DR{dr}",
     }

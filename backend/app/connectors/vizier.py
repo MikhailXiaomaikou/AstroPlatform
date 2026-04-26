@@ -255,10 +255,13 @@ class VizierConnector(BaseConnector):
     def _provenance_for_table(self, table: Table) -> dict | None:
         catalog_hint = self._catalog_hint_from_table(table)
         service_hint = "2mass" if catalog_hint and "II/246" in catalog_hint else "vizier"
+        # PART Y Batch 6 (audit): never let archive_version fall to None
+        # when the catalog hint regex misses; default to the service name.
+        archive_version = catalog_hint or ("2MASS" if service_hint == "2mass" else "VizieR")
         return resolve_ivoa_dataorigin(
             table,
             service_hint=service_hint,
-            archive_version=catalog_hint,
+            archive_version=archive_version,
         )
 
     @staticmethod
