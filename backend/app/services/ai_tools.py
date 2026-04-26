@@ -589,7 +589,21 @@ TOOLS = [
             "properties": {
                 "cache_key": {
                     "type": "string",
-                    "description": "Cache key from extract_literature_tables. Default: latest_literature_tables.",
+                    "description": "Single cache key from extract_literature_tables. Default: latest_literature_tables. Use `cache_keys` instead when fitting across multiple surveys.",
+                },
+                "cache_keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Multiple cache keys to UNION before fitting. "
+                        "Use this when the user wants a robust line "
+                        "relation across more than one survey: pass "
+                        "the cache_keys returned by separate "
+                        "extract_literature_tables calls (e.g. ALPINE "
+                        "+ REBELS + Capak+2015 + Bothwell+13). Rows are "
+                        "deduped by (source_name, bibcode). When set, "
+                        "`cache_key` is ignored."
+                    ),
                 },
                 "line_id": {
                     "type": "string",
@@ -3594,6 +3608,46 @@ def _resolve_literature_measurement_cache(cache_key: str, python_session_id: str
     return [], requested
 
 
+def _resolve_multiple_literature_caches(
+    cache_keys: list[str],
+    python_session_id: str | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """PART AF C2 — union multiple literature caches into one row list.
+
+    M5 audit reproducer: AI extracted ALPINE (74 rows) + REBELS (13
+    rows) into separate caches but fit_line_lfr only saw the most
+    recent one. Now the tool can pass `cache_keys=[...]` and we
+    merge across keys, deduping by source_name (or arxiv_id+row_index
+    when name collides across surveys with different objects).
+
+    Returns (merged_rows, list_of_resolved_keys_actually_loaded).
+    """
+    merged: list[dict[str, Any]] = []
+    resolved_keys: list[str] = []
+    seen_source_keys: set[str] = set()
+    for raw_key in cache_keys:
+        key = (raw_key or "").strip()
+        if not key:
+            continue
+        rows, resolved = _resolve_literature_measurement_cache(key, python_session_id)
+        if not rows:
+            continue
+        resolved_keys.append(resolved)
+        for row in rows:
+            # Dedupe by (source_name, bibcode) — same source from same
+            # paper twice would be redundant; same source name across
+            # different bibcodes can legitimately co-exist (different
+            # surveys' independent measurements of e.g. HZ7).
+            sname = str(row.get("source_name") or "").strip()
+            bib = str(row.get("bibcode") or row.get("arxiv_id") or "").strip()
+            dedupe_key = f"{sname}::{bib}"
+            if dedupe_key in seen_source_keys:
+                continue
+            seen_source_keys.add(dedupe_key)
+            merged.append(row)
+    return merged, resolved_keys
+
+
 def _line_matches_filter(row: dict[str, Any], line_filter: str) -> bool:
     target = re.sub(r"[^a-z0-9]+", "", (line_filter or "").lower())
     if not target:
@@ -3764,10 +3818,34 @@ def _split_rows_by_redshift(
 
 def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
     """Fit log L(line) as a function of log10(FWHM / 100 km/s)."""
-    cache_key = str(inp.get("cache_key") or "latest_literature_tables").strip() or "latest_literature_tables"
+    # PART AF C2 — accept either a single cache_key OR a list of
+    # cache_keys to union before fitting. Lists win when both are
+    # passed (lets the AI strictly add a second survey without
+    # accidentally falling back to the single-cache path).
+    cache_keys_in = inp.get("cache_keys")
+    if isinstance(cache_keys_in, list) and any(
+        isinstance(k, str) and k.strip() for k in cache_keys_in
+    ):
+        rows, resolved_keys = _resolve_multiple_literature_caches(
+            [str(k) for k in cache_keys_in if isinstance(k, str)],
+            python_session_id,
+        )
+        # Use the first resolved key as the "primary" cache_key for
+        # downstream attribution. The list of all resolved keys is
+        # surfaced separately on the result so the UI can show which
+        # surveys actually contributed.
+        resolved_cache_key = resolved_keys[0] if resolved_keys else "+".join(
+            str(k) for k in cache_keys_in if isinstance(k, str)
+        )
+        cache_key = str(cache_keys_in[0]) if cache_keys_in else "latest_literature_tables"
+        all_resolved_cache_keys = resolved_keys
+    else:
+        cache_key = str(inp.get("cache_key") or "latest_literature_tables").strip() or "latest_literature_tables"
+        rows, resolved_cache_key = _resolve_literature_measurement_cache(cache_key, python_session_id)
+        all_resolved_cache_keys = [resolved_cache_key] if rows else []
+
     line_id = str(inp.get("line_id") or "[CII]").strip() or "[CII]"
     min_rows = int(inp.get("min_rows") or 5)
-    rows, resolved_cache_key = _resolve_literature_measurement_cache(cache_key, python_session_id)
     if not rows:
         return {
             "success": False,
@@ -4276,6 +4354,10 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         # (main / subsample-low-z / subsample-high-z / cosmology-Riess22)
         # are distinguishable in the UI without parsing the prose.
         "variant_label": str(inp.get("variant_label") or "main").strip() or "main",
+        # PART AF C2: surface every cache_key that contributed when the
+        # caller used cache_keys=[...]. Empty list => single-cache path.
+        "contributing_cache_keys": list(all_resolved_cache_keys),
+        "n_surveys_merged": len(all_resolved_cache_keys),
         # M2: lensing bookkeeping.  demagnified count stays 0 unless
         # the rows came from a __demag cache (set in M4 by demagnify_sample).
         "lensed_sources_demagnified": sum(
