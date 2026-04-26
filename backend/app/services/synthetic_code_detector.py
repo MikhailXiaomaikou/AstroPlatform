@@ -36,21 +36,33 @@ class DetectionResult:
     has_time_linspace: bool = False
     has_schematic_phase_curve: bool = False
     has_constant_redshift_sequence: bool = False
+    has_large_literal_array: bool = False
     suspicious_keywords: list[str] = field(default_factory=list)
     reads_real_data: bool = False
     reads_time_series_data: bool = False
     legitimate_random_context: bool = False
+    actual_mcmc_usage: bool = False  # PART Y Batch 3
     notes: list[str] = field(default_factory=list)
 
 
 # Functions / modules whose presence legitimises np.random usage — MCMC,
 # bootstrap, dynesty, etc. all need genuine random numbers.
-_LEGIT_RANDOM_IDENTIFIERS = {
+#
+# PART Y Batch 3: split into "module name" (just imported / referenced) vs
+# "actual usage" (an MCMC sampler or bootstrap routine is genuinely called).
+# Bare `import emcee` should NOT exempt np.random.normal — the audit found
+# AI agents writing `import emcee` then fabricating data with np.random and
+# never calling any sampler.
+_LEGIT_RANDOM_MODULE_NAMES = {
     "emcee", "dynesty", "ultranest", "arviz", "pymc", "pymc3",
-    "bootstrap", "resample", "permute", "jackknife",
-    "EnsembleSampler", "NestedSampler", "sample_prior",
     "mcmc", "MCMC",
 }
+_LEGIT_RANDOM_USAGE_NAMES = {
+    "EnsembleSampler", "NestedSampler", "sample_prior",
+    "bootstrap", "resample", "permute", "jackknife",
+    "run_mcmc", "sample",
+}
+_LEGIT_RANDOM_IDENTIFIERS = _LEGIT_RANDOM_MODULE_NAMES | _LEGIT_RANDOM_USAGE_NAMES
 
 # Real-data reader helpers — their presence indicates the code IS working
 # on actual observational data, even if it also generates some randomness.
@@ -87,10 +99,12 @@ class _CodeVisitor(ast.NodeVisitor):
         self.real_data_reader_calls: list[str] = []
         self.time_series_reader_calls: list[str] = []
         self.legit_random_refs: list[str] = []
+        self.legit_random_actual_usages: list[str] = []  # PART Y Batch 3
         self.suspicious_var_names: list[str] = []
         self.constant_redshift_sequences: list[str] = []
         self.phase_axis_generators: list[str] = []
         self.schematic_curve_assignments: list[str] = []
+        self.large_literal_arrays: list[str] = []  # PART Y Batch 3
 
     def _attribute_chain(self, node: ast.AST) -> str:
         """Return a dotted chain like 'np.random.normal' if possible."""
@@ -107,9 +121,27 @@ class _CodeVisitor(ast.NodeVisitor):
         chain = self._attribute_chain(node.func)
         if not chain and isinstance(node.func, ast.Name):
             chain = node.func.id
-        # np.random.*
+        # np.random.* / numpy.random.*
         if "np.random" in chain or "numpy.random" in chain:
             self.np_random_calls.append(chain)
+        # PART Y Batch 3: scipy.stats.*.rvs / scipy.stats.norm.rvs etc. ARE
+        # random number generation just like np.random. Audit found AI
+        # agents writing `from scipy.stats import norm; norm.rvs(size=100)`
+        # to bypass the np.random detector — count it the same way.
+        if "scipy.stats" in chain or chain.endswith(".rvs"):
+            self.np_random_calls.append(chain)
+        # PART Y Batch 3: stdlib `random` module — random.gauss, random.uniform,
+        # random.choice, etc. Same fabrication risk as np.random.
+        if chain.startswith("random."):
+            tail = chain.split(".", 1)[1]
+            if tail in {
+                "random", "uniform", "gauss", "normalvariate", "choice",
+                "sample", "shuffle", "randint", "betavariate",
+                "lognormvariate", "expovariate", "vonmisesvariate",
+                "weibullvariate", "triangular", "paretovariate",
+                "gammavariate",
+            }:
+                self.np_random_calls.append(chain)
         # np.linspace / np.arange — only flagged if used to build a "time"
         # axis (detected by surrounding usage, checked in run()).
         if chain in {"np.linspace", "numpy.linspace", "np.arange", "numpy.arange"}:
@@ -132,6 +164,22 @@ class _CodeVisitor(ast.NodeVisitor):
             first = node.args[0]
             if isinstance(first, ast.Constant) and str(first.value) == "latest_lightcurve":
                 self.time_series_reader_calls.append("get_cached_results(latest_lightcurve)")
+        # PART Y Batch 3: actual MCMC usage — distinguishing import vs call.
+        # `EnsembleSampler(...)` / `bootstrap(...)` count; `import emcee` alone
+        # does NOT (handled in visit_Import / visit_ImportFrom).
+        last_attr = chain.rsplit(".", 1)[-1] if chain else ""
+        if last_attr in _LEGIT_RANDOM_USAGE_NAMES:
+            self.legit_random_actual_usages.append(chain or last_attr)
+        # PART Y Batch 3: large literal arrays via np.array([many constants])
+        # are fabricated data. Audit case: `np.array([0.5, 0.51, ..., 50 vals])`.
+        if chain in {"np.array", "numpy.array", "np.asarray", "numpy.asarray"} and node.args:
+            first = node.args[0]
+            if isinstance(first, (ast.List, ast.Tuple)) and len(first.elts) >= 8:
+                if all(
+                    isinstance(el, ast.Constant) and isinstance(el.value, (int, float))
+                    for el in first.elts
+                ):
+                    self.large_literal_arrays.append(f"{chain}([{len(first.elts)} const])")
         self.generic_visit(node)
 
     def _target_names(self, target: ast.AST) -> list[str]:
@@ -155,20 +203,36 @@ class _CodeVisitor(ast.NodeVisitor):
 
     def _is_constant_numeric_sequence(self, node: ast.AST) -> bool:
         # [0.05] * n 或 np.full(n, 0.05) 这类“整列单值”的假样本。
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
-            left = node.left
-            if (
-                isinstance(left, ast.List)
-                and len(left.elts) == 1
-                and isinstance(left.elts[0], ast.Constant)
-                and isinstance(left.elts[0].value, (int, float))
-            ):
-                return True
+        if isinstance(node, ast.BinOp):
+            if isinstance(node.op, ast.Mult):
+                left = node.left
+                if (
+                    isinstance(left, ast.List)
+                    and len(left.elts) == 1
+                    and isinstance(left.elts[0], ast.Constant)
+                    and isinstance(left.elts[0].value, (int, float))
+                ):
+                    return True
+            # PART Y Batch 3: `np.zeros(N) + 0.5` / `np.ones(N) * 2.0` 这种
+            # 用 zeros/ones 当 constant 列再加偏移 — 仍是合成数据.
+            for child in (node.left, node.right):
+                if isinstance(child, ast.Call):
+                    inner_chain = self._attribute_chain(child.func)
+                    if inner_chain in {
+                        "np.zeros", "numpy.zeros",
+                        "np.ones", "numpy.ones",
+                        "np.full", "numpy.full",
+                    }:
+                        return True
         if isinstance(node, ast.Call):
             chain = self._attribute_chain(node.func)
             if chain in {"np.full", "numpy.full"} and len(node.args) >= 2:
                 fill = node.args[1]
                 return isinstance(fill, ast.Constant) and isinstance(fill.value, (int, float))
+            # PART Y Batch 3: np.zeros(N) / np.ones(N) used as a constant
+            # data column (audit: `np.zeros(100) + 0.01` style fabrication).
+            if chain in {"np.zeros", "numpy.zeros", "np.ones", "numpy.ones"} and node.args:
+                return True
         return False
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -333,7 +397,11 @@ def analyze(code: str) -> DetectionResult:
     result.reads_real_data = bool(visitor.real_data_reader_calls)
     result.reads_time_series_data = bool(visitor.time_series_reader_calls)
     result.legitimate_random_context = bool(visitor.legit_random_refs)
+    result.actual_mcmc_usage = bool(visitor.legit_random_actual_usages)
     result.has_constant_redshift_sequence = bool(visitor.constant_redshift_sequences)
+    result.has_large_literal_array = bool(visitor.large_literal_arrays)
+    if visitor.large_literal_arrays:
+        result.notes.append(f"large_literal_arrays: {visitor.large_literal_arrays}")
 
     # np.linspace / np.arange are only suspicious when the variable
     # assigned holds the word "time" / "t" / "bjd" / "mjd" — cheap lexical
@@ -380,6 +448,8 @@ def analyze(code: str) -> DetectionResult:
         hard_signals += 1
     if result.has_schematic_phase_curve:
         hard_signals += 1
+    if result.has_large_literal_array:
+        hard_signals += 1
 
     if hard_signals == 0:
         result.verdict = "clean"
@@ -390,16 +460,26 @@ def analyze(code: str) -> DetectionResult:
         # schematic phase curve 后冒充真实折叠光变。
         if result.has_schematic_phase_curve:
             result.verdict = "suspicious"
-        elif result.has_np_random and not result.legitimate_random_context:
+        elif result.has_np_random and not result.actual_mcmc_usage:
             result.verdict = "suspicious" if hard_signals >= 2 else "clean"
+        elif result.has_large_literal_array:
+            # 真实 reader + 大字面量数组共存罕见: 通常是 reader 拿到 catalog,
+            # 字面量数组是 fabricated 比对; 标 suspicious.
+            result.verdict = "suspicious"
         else:
             result.verdict = "clean"
-    elif result.legitimate_random_context:
-        # MCMC / bootstrap 等 legitimate random 语境, 没有真实 reader 时
-        # 仍可能只是方法演示；保守降级, 不硬判 synthetic。
-        result.verdict = "clean" if hard_signals == 1 else "suspicious"
+    elif result.actual_mcmc_usage:
+        # PART Y Batch 3: 真正调用了 MCMC sampler / bootstrap (不只是 import).
+        # 容许 1 个 hard signal (那个 signal 通常就是 np.random); 多个仍判 suspicious.
+        result.verdict = "clean" if hard_signals <= 1 else "suspicious"
     else:
+        # PART Y Batch 3: 单 `import emcee` / `import arviz` 不再豁免.
+        # 现在落到 else 分支跟"完全无 legit context"同样处理.
         if result.has_constant_redshift_sequence:
+            result.verdict = "synthetic"
+            return result
+        if result.has_large_literal_array and result.has_np_random:
+            # 大字面量 + 随机生成 + 没真实数据 = 直接合成
             result.verdict = "synthetic"
             return result
         # Random without any real-data anchor ⇒ synthetic
