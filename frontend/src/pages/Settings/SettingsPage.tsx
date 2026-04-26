@@ -53,17 +53,24 @@ export default function SettingsPage() {
     saveStoredKeys(keys);
   }, [keys]);
 
+  // PART Y Q3: persist provider on change. Resetting model to a valid
+  // option for the new provider used to live here (set-state-in-effect
+  // error under React 19); now it's done event-driven via selectProvider.
   useEffect(() => {
     writeStoredAiProvider(preferredProvider);
-    const options = AI_MODEL_OPTIONS[preferredProvider] || [];
-    if (!options.some((option) => option.id === preferredModel)) {
-      setPreferredModel(getDefaultModel(preferredProvider));
-    }
   }, [preferredProvider]);
 
   useEffect(() => {
     writeStoredAiModelProfile(preferredModel);
   }, [preferredModel]);
+
+  const selectProvider = (next: string) => {
+    setPreferredProvider(next);
+    const options = AI_MODEL_OPTIONS[next] || [];
+    if (!options.some((option) => option.id === preferredModel)) {
+      setPreferredModel(getDefaultModel(next));
+    }
+  };
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -85,7 +92,7 @@ export default function SettingsPage() {
     setKeys(next);
     if (preferredProvider === provider) {
       const fallback = CHAT_PROVIDERS.find((candidate) => Boolean(next[candidate])) || "anthropic";
-      setPreferredProvider(fallback);
+      selectProvider(fallback);
     }
     setMessage({ type: "ok", text: `${PROVIDERS[provider]?.name || provider} key removed.` });
   }
@@ -114,7 +121,7 @@ export default function SettingsPage() {
             <span>Preferred AI provider for chat</span>
             <select
               value={preferredProvider}
-              onChange={(e) => setPreferredProvider(e.target.value)}
+              onChange={(e) => selectProvider(e.target.value)}
               className="settings-select"
             >
               {CHAT_PROVIDERS.map((provider) => (

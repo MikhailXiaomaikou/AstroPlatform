@@ -1,7 +1,16 @@
 /**
  * i18n with React Context — language changes trigger global re-render.
  * Supports: English, Chinese, French, Spanish.
+ *
+ * PART Y Q3: this file deliberately co-exports the I18nProvider component
+ * with companion hooks (useT/useLang/useI18n), the t() raw lookup, and
+ * the LANG_NAMES / ALL_LANGS metadata constants. That mixed-export shape
+ * is the canonical React Context idiom — splitting it across multiple
+ * files would force every consumer (~50 components) to update imports
+ * for no observable user benefit. HMR fast-refresh penalty for these
+ * exports is accepted.
  */
+/* eslint-disable react-refresh/only-export-components */
 
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 

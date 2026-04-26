@@ -2647,6 +2647,9 @@ function deleteLocalChatSession(id: string, scope: string): void {
 // 或明确说 "not measured this turn". 这是零幻觉门的配套 UX: 哪些数字
 // 没 tool 支撑, AI 自己先检查, 不等 validator 兜底 block.
 // Exported 以便 ChatPage.test.tsx 做回归.
+// PART Y Q3: HMR fast-refresh 对此文件失效是已知接受的代价 — 拆分常量到
+// 独立文件需要更新测试 import 路径, 收益小.
+// eslint-disable-next-line react-refresh/only-export-components
 export const NEXT_STEPS_PANEL_ACTIONS: Array<{ label: string; prompt: string }> = [
   {
     label: "Validate assumptions first",

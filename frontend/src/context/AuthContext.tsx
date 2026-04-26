@@ -99,6 +99,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// PART Y Q3: keep `useAuth` in the same file as the Provider — classic
+// React Context pattern; splitting would require every consumer to update
+// import path. Fast-refresh limitation for this hook is acceptable.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   return useContext(AuthContext);
 }
