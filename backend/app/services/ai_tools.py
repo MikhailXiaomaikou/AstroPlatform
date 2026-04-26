@@ -614,7 +614,69 @@ TOOLS = [
                         "when that happens."
                     ),
                 },
+                "subsample_splits": {
+                    "type": "array",
+                    "description": (
+                        "Optional redshift bin definitions for a subsample "
+                        "comparison (e.g. z<1 vs z>=1). Each item: "
+                        "{name: str, z_min?: float, z_max?: float}. When "
+                        "len >= 2 the tool fits each subsample with "
+                        "bootstrap-OLS and reports Δβ + p-value for every "
+                        "adjacent pair, so 'redshift dependence' claims "
+                        "carry a real significance number, not just "
+                        "side-by-side slopes."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "z_min": {"type": "number"},
+                            "z_max": {"type": "number"},
+                        },
+                    },
+                },
+                "subsample_n_boot": {
+                    "type": "integer",
+                    "description": "Bootstrap iterations per subsample (default 2000).",
+                },
             },
+        },
+    },
+    {
+        "name": "demagnify_sample",
+        "description": (
+            "Apply gravitational-lensing demagnification to a literature "
+            "sample. Reads cached line_measurements, subtracts log10(μ) "
+            "from log_luminosity for every source listed in mu_map, and "
+            "writes the corrected rows to a NEW cache key (default suffix "
+            "'__demag') so the original is preserved. Use this BEFORE "
+            "fit_line_lfr when any sample sources are gravitationally "
+            "lensed; then call fit_line_lfr(cache_key=<new>) on the "
+            "demagnified cache."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cache_key": {
+                    "type": "string",
+                    "description": "Source cache key. Default: latest_literature_tables.",
+                },
+                "mu_map": {
+                    "type": "object",
+                    "description": (
+                        "Per-source magnification factors. Two equivalent "
+                        "forms: '\"SRC-A\": 5.0' (just μ) or "
+                        "'\"SRC-B\": {\"mu\": 3.0, \"reference\": \"Foo+24\"}' "
+                        "(μ + cited source for the μ value). Reference "
+                        "is recorded in provenance."
+                    ),
+                },
+                "output_cache_key": {
+                    "type": "string",
+                    "description": "Override the default <input>__demag suffix.",
+                },
+            },
+            "required": ["mu_map"],
         },
     },
     {
@@ -1616,6 +1678,8 @@ async def _execute_tool_inner(
             return await _exec_extract_literature_tables(tool_input, python_session_id)
         elif tool_name == "fit_line_lfr":
             return _exec_fit_line_lfr(tool_input, python_session_id)
+        elif tool_name == "demagnify_sample":
+            return _exec_demagnify_sample(tool_input, python_session_id)
         elif tool_name == "run_python":
             return await _exec_run_python(tool_input, python_session_id)
         elif tool_name == "get_last_search_results":
@@ -3469,6 +3533,135 @@ def _row_has_citation(row: dict[str, Any]) -> bool:
     )
 
 
+# ── M4 helpers: subsample significance + demagnify_sample ──────────
+
+
+def _bootstrap_ols_betas(
+    x: "np.ndarray", y: "np.ndarray", n_boot: int, rng: "np.random.Generator",
+) -> "np.ndarray":
+    """Return n_boot bootstrap-resampled OLS slopes from (x, y).
+
+    Pure numpy + scipy; no x-axis errors are propagated (bootstrap
+    over rows is an OLS-friendly approximation).  Caller carries the
+    'x_errors not propagated in bootstrap' caveat into reporting.
+    """
+    import numpy as np
+    n = len(x)
+    if n < 2:
+        return np.zeros(0, dtype=float)
+    betas = np.empty(n_boot, dtype=float)
+    try:
+        from scipy import stats as _stats
+        for i in range(n_boot):
+            idx = rng.integers(0, n, size=n)
+            xs = x[idx]
+            ys = y[idx]
+            try:
+                fit = _stats.linregress(xs, ys)
+                betas[i] = float(fit.slope)
+            except Exception:
+                betas[i] = float("nan")
+    except Exception:
+        for i in range(n_boot):
+            idx = rng.integers(0, n, size=n)
+            try:
+                betas[i] = float(np.polyfit(x[idx], y[idx], 1)[0])
+            except Exception:
+                betas[i] = float("nan")
+    return betas[~np.isnan(betas)]
+
+
+def _subsample_significance_from_betas(
+    beta1: "np.ndarray", beta2: "np.ndarray",
+) -> dict[str, Any]:
+    """Compute Δβ summary from two bootstrap / posterior β arrays.
+
+    Works for both bootstrap-OLS arrays and Bayesian-posterior arrays
+    because the math is identical: pair them up via shuffled indices,
+    take the per-pair difference, and compute the two-sided p-value
+    that Δβ has crossed zero.
+    """
+    import numpy as np
+    if beta1.size == 0 or beta2.size == 0:
+        return {
+            "delta_beta": None,
+            "delta_beta_stderr": None,
+            "p_value": None,
+            "hdi_overlap": None,
+            "interpretation": "insufficient_samples",
+        }
+    n = min(beta1.size, beta2.size)
+    # Pair by random shuffle so we don't rely on bootstrap iteration
+    # order having any meaning across the two subsamples.
+    rng = np.random.default_rng(0)
+    perm1 = rng.permutation(beta1.size)[:n]
+    perm2 = rng.permutation(beta2.size)[:n]
+    delta = beta1[perm1] - beta2[perm2]
+    delta_mean = float(np.mean(delta))
+    delta_std = float(np.std(delta))
+    # Two-sided p-value: probability mass on the side of zero opposite
+    # the mean; ×2 for two-sided.  Capped at 1.0.
+    if delta_mean >= 0:
+        tail = float(np.mean(delta < 0))
+    else:
+        tail = float(np.mean(delta > 0))
+    p_value = float(min(1.0, 2.0 * tail))
+    # 94% HDI overlap (cheap proxy: do the central 94% intervals
+    # overlap?).  Useful as a categorical hint; the p-value above is
+    # the actual significance.
+    lo1, hi1 = float(np.percentile(beta1, 3)), float(np.percentile(beta1, 97))
+    lo2, hi2 = float(np.percentile(beta2, 3)), float(np.percentile(beta2, 97))
+    overlap = max(0.0, min(hi1, hi2) - max(lo1, lo2))
+    pooled = max(hi1 - lo1, hi2 - lo2, 1e-12)
+    hdi_overlap_frac = overlap / pooled
+    if p_value < 0.01:
+        interpretation = "significantly_different"
+    elif p_value < 0.05:
+        interpretation = "marginal_significance"
+    elif p_value < 0.32:
+        interpretation = "weak_evidence"
+    else:
+        interpretation = "consistent"
+    return {
+        "delta_beta": round(delta_mean, 6),
+        "delta_beta_stderr": round(delta_std, 6),
+        "p_value": round(p_value, 6),
+        "hdi_overlap_fraction": round(hdi_overlap_frac, 4),
+        "interpretation": interpretation,
+    }
+
+
+def _split_rows_by_redshift(
+    accepted: list[dict[str, Any]],
+    splits: list[dict[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Apply a list of redshift-bin filters to accepted rows.
+
+    Each split entry: ``{"name": "z<1", "z_min": ..., "z_max": ...}``
+    where z_min/z_max are inclusive lower / exclusive upper bounds.
+    Returns ``[(name, [rows...]), ...]`` preserving input order.
+    """
+    out: list[tuple[str, list[dict[str, Any]]]] = []
+    for split in splits or []:
+        if not isinstance(split, dict):
+            continue
+        name = str(split.get("name") or "subsample").strip() or "subsample"
+        z_min = split.get("z_min")
+        z_max = split.get("z_max")
+        sub: list[dict[str, Any]] = []
+        for row in accepted:
+            z = _finite_float(row.get("redshift"))
+            if z is None:
+                continue
+            if z_min is not None and z < float(z_min):
+                continue
+            if z_max is not None and z >= float(z_max):
+                continue
+            sub.append(row)
+        out.append((name, sub))
+    return out
+
+
 def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
     """Fit log L(line) as a function of log10(FWHM / 100 km/s)."""
     cache_key = str(inp.get("cache_key") or "latest_literature_tables").strip() or "latest_literature_tables"
@@ -3522,6 +3715,10 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
                     "mu_lens": _finite_float(row.get("mu_lens")),
                     "is_lensed": row.get("is_lensed"),
                     "source_cosmology": row.get("source_cosmology"),
+                    # M4: propagate the demagnify marker so
+                    # lensed_sources_demagnified counts correctly when
+                    # the cache came from demagnify_sample (key __demag).
+                    "_demagnified": row.get("_demagnified"),
                     "table_label": row.get("table_label") or citation.get("table_label"),
                     "bibcode": row.get("bibcode") or citation.get("bibcode"),
                     "arxiv_id": row.get("arxiv_id") or citation.get("arxiv_id"),
@@ -3722,6 +3919,81 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
     n_unlensed = sum(1 for r in accepted if r.get("is_lensed") is False)
     n_lensed_unknown = sum(1 for r in accepted if r.get("is_lensed") is None)
 
+    # ── M4: subsample-significance test ─────────────────────────────
+    # When the caller passes subsample_splits=[{name, z_min?, z_max?}],
+    # we fit each subsample independently with bootstrap-OLS, then
+    # compute Δβ + p-value for every adjacent pair.  Bayesian path is
+    # not used per-subsample (it would multiply MCMC cost by N
+    # subsamples) — bootstrap is the workhorse here.
+    subsample_test: dict[str, Any] | None = None
+    splits_input = inp.get("subsample_splits")
+    if isinstance(splits_input, list) and len(splits_input) >= 2:
+        rng_sub = np.random.default_rng(int(inp.get("seed") or 20260426))
+        n_boot = int(inp.get("subsample_n_boot") or 2000)
+        sub_groups = _split_rows_by_redshift(accepted, splits_input)
+        per_subsample: list[dict[str, Any]] = []
+        beta_arrays: list[np.ndarray] = []
+        for name, sub_rows in sub_groups:
+            if len(sub_rows) < 3:
+                per_subsample.append({
+                    "name": name, "n": len(sub_rows),
+                    "beta": None, "beta_stderr_boot": None,
+                    "skipped_reason": "fewer_than_3_rows",
+                })
+                beta_arrays.append(np.zeros(0))
+                continue
+            xs = np.array(
+                [math.log10(r["fwhm_km_s"] / 100.0) for r in sub_rows], dtype=float,
+            )
+            ys = np.array([r["log_luminosity"] for r in sub_rows], dtype=float)
+            betas_boot = _bootstrap_ols_betas(xs, ys, n_boot, rng_sub)
+            try:
+                from scipy import stats as _ss
+                pf = _ss.linregress(xs, ys)
+                beta_point = float(pf.slope)
+            except Exception:
+                beta_point = (
+                    float(np.polyfit(xs, ys, 1)[0]) if len(xs) >= 2 else float("nan")
+                )
+            per_subsample.append({
+                "name": name, "n": len(sub_rows),
+                "beta": round(beta_point, 6),
+                "beta_stderr_boot": round(float(np.std(betas_boot)), 6) if betas_boot.size else None,
+            })
+            beta_arrays.append(betas_boot)
+
+        # Pairwise Δβ + p-value for every adjacent pair (1↔2, 2↔3, ...)
+        # plus extreme pair (first ↔ last).
+        comparisons: list[dict[str, Any]] = []
+        for i in range(len(beta_arrays) - 1):
+            sig = _subsample_significance_from_betas(beta_arrays[i], beta_arrays[i + 1])
+            comparisons.append({
+                "name_a": per_subsample[i]["name"],
+                "name_b": per_subsample[i + 1]["name"],
+                **sig,
+            })
+        if len(beta_arrays) > 2:
+            sig_extreme = _subsample_significance_from_betas(beta_arrays[0], beta_arrays[-1])
+            comparisons.append({
+                "name_a": per_subsample[0]["name"],
+                "name_b": per_subsample[-1]["name"],
+                **sig_extreme,
+            })
+
+        subsample_test = {
+            "method": "bootstrap_ols",
+            "n_boot": n_boot,
+            "subsamples": per_subsample,
+            "comparisons": comparisons,
+            "caveat": (
+                "Bootstrap over rows propagates y-axis errors implicitly via "
+                "scatter but does NOT propagate per-row x-axis (FWHM) errors. "
+                "For redshift-dependent slope claims at high precision use "
+                "fit_method_requested='bayesian_xyerr' on each subsample "
+                "directly."
+            ),
+        }
+
     result = {
         "success": True,
         "tool": "fit_line_lfr",
@@ -3776,12 +4048,17 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "cosmology_manifest": _current_cosmo,
         "sample_source_cosmologies": sorted(sample_cosmo_names),
         "cosmology_mismatch": cosmology_mismatch,
-        # M2: lensing bookkeeping.  demagnified count stays 0 in M2
-        # because we haven't run demagnify_sample yet; populated in M4.
-        "lensed_sources_demagnified": 0,
+        # M2: lensing bookkeeping.  demagnified count stays 0 unless
+        # the rows came from a __demag cache (set in M4 by demagnify_sample).
+        "lensed_sources_demagnified": sum(
+            1 for r in accepted if r.get("_demagnified") is True
+        ),
         "n_lensed": n_lensed,
         "n_unlensed": n_unlensed,
         "n_lensed_unknown": n_lensed_unknown,
+        # M4: subsample significance test result (None when the caller
+        # didn't pass subsample_splits).
+        "subsample_significance_test": subsample_test,
         "publication_ready": publication_ready,
         "fit_inputs_preview": accepted[:12],
         "rejected_summary": rejected[:20],
@@ -3888,6 +4165,147 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
             ),
         })
     return result
+
+
+def _exec_demagnify_sample(inp: dict, python_session_id: str = "default") -> dict:
+    """Apply gravitational-lensing demagnification to a literature sample.
+
+    Reads ``cache_key`` (default: ``latest_literature_tables``), copies
+    every row, and for sources listed in ``mu_map`` subtracts log10(μ)
+    from ``log_luminosity`` while flagging ``is_lensed=True``,
+    ``mu_lens=μ`` and ``_demagnified=True``.  Writes the modified
+    sample back to a NEW cache key (``<orig>__demag`` by default) so
+    the original is preserved — that lets the lensing-systematic error
+    budget be derived later by comparing fits run on the two cache
+    keys.
+
+    mu_map accepts two forms per source:
+        "SRC-A": 5.0
+        "SRC-B": {"mu": 3.0, "reference": "Foo+24"}
+
+    The result dict lists every row's before / after log_luminosity,
+    sources skipped because they were not in the map, and the new
+    cache key.  After this call the AI is expected to invoke
+    fit_line_lfr(cache_key=<new>) to get the demagnified-sample fit.
+    """
+    cache_key = str(
+        inp.get("cache_key") or "latest_literature_tables"
+    ).strip() or "latest_literature_tables"
+    mu_map_raw = inp.get("mu_map")
+    if not isinstance(mu_map_raw, dict) or not mu_map_raw:
+        return {
+            "success": False,
+            "error": "demagnify_sample requires a non-empty mu_map dict.",
+            "error_class": "missing_mu_map",
+            "__tool_status__": "FAILED",
+        }
+    out_cache_key = str(inp.get("output_cache_key") or f"{cache_key}__demag").strip()
+
+    rows, resolved_cache_key = _resolve_literature_measurement_cache(
+        cache_key, python_session_id,
+    )
+    if not rows:
+        return {
+            "success": False,
+            "__tool_status__": "EMPTY",
+            "error": f"No cached line_measurements found for cache_key={cache_key!r}.",
+            "error_class": "missing_measurement_cache",
+        }
+
+    # Normalize mu_map to {name: {mu: float, reference: str}}.
+    normalized_mu_map: dict[str, dict[str, Any]] = {}
+    for src, value in mu_map_raw.items():
+        if isinstance(value, dict):
+            mu_val = _finite_float(value.get("mu"))
+            ref = str(value.get("reference") or "").strip()
+        else:
+            mu_val = _finite_float(value)
+            ref = ""
+        if mu_val is None or mu_val <= 0:
+            continue
+        normalized_mu_map[str(src).strip()] = {"mu": mu_val, "reference": ref}
+
+    if not normalized_mu_map:
+        return {
+            "success": False,
+            "error": "mu_map contained no entries with a positive numeric μ.",
+            "error_class": "invalid_mu_map",
+            "__tool_status__": "FAILED",
+        }
+
+    new_rows: list[dict[str, Any]] = []
+    applied: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for row in rows:
+        new_row = dict(row)
+        name = str(new_row.get("source_name") or "").strip()
+        entry = normalized_mu_map.get(name)
+        if entry is None:
+            skipped.append({
+                "source_name": name,
+                "reason": "not_in_mu_map",
+                "is_lensed": new_row.get("is_lensed"),
+            })
+        else:
+            mu = float(entry["mu"])
+            log_l_before = _finite_float(new_row.get("log_luminosity"))
+            if log_l_before is None:
+                skipped.append({
+                    "source_name": name,
+                    "reason": "row_missing_log_luminosity",
+                })
+            else:
+                delta = math.log10(mu)
+                new_row["log_luminosity"] = log_l_before - delta
+                new_row["mu_lens"] = mu
+                new_row["is_lensed"] = True
+                new_row["_demagnified"] = True
+                new_row["_demagnify_reference"] = entry["reference"]
+                new_row["_log_luminosity_before_demag"] = log_l_before
+                applied.append({
+                    "source_name": name,
+                    "mu": mu,
+                    "log_luminosity_before": round(log_l_before, 6),
+                    "log_luminosity_after": round(new_row["log_luminosity"], 6),
+                    "delta_log_l": round(-delta, 6),
+                    "reference": entry["reference"],
+                })
+        new_rows.append(new_row)
+
+    payload = _literature_table_cache_payload(
+        {"line_measurements": new_rows, "tables": []},
+        out_cache_key,
+    )
+    payload["derived_from"] = resolved_cache_key
+    payload["demagnify_summary"] = {
+        "n_input_rows": len(rows),
+        "n_demagnified": len(applied),
+        "n_skipped": len(skipped),
+    }
+    store_search_results(out_cache_key, payload)
+    session_key = _session_cache_key(out_cache_key, python_session_id)
+    if session_key:
+        store_search_results(session_key, payload)
+
+    return {
+        "success": True,
+        "tool": "demagnify_sample",
+        "__tool_status__": "PARTIAL" if applied and skipped else None,
+        "input_cache_key": resolved_cache_key,
+        "output_cache_key": out_cache_key,
+        "n_input_rows": len(rows),
+        "n_demagnified": len(applied),
+        "n_skipped": len(skipped),
+        "applied": applied,
+        "skipped_summary": skipped[:50],
+        "__message_to_model__": (
+            f"Demagnified {len(applied)}/{len(rows)} rows. The corrected "
+            f"sample is cached at '{out_cache_key}' — pass it to fit_line_lfr "
+            f"as cache_key={out_cache_key!r} to fit on the demagnified rows. "
+            "The original cache is preserved so the lensing-systematic error "
+            "budget can be derived by comparing fits on both keys."
+        ),
+    }
 
 
 async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "default") -> dict:
