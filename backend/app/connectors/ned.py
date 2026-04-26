@@ -261,6 +261,10 @@ class NEDConnector(BaseConnector):
                 except (ValueError, TypeError):
                     pass
 
+        # PART Y Batch 4: stamp archive_version. NED is a continuously-
+        # updated extragalactic database; no DR version, use the service
+        # name as the archive_version label.
+        extra["archive_version"] = "NED"
         return AstroObject(
             source="ned",
             object_id=name,

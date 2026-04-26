@@ -328,6 +328,8 @@ class SDSSConnector(BaseConnector):
                 except (ValueError, TypeError):
                     pass
 
+            # PART Y Batch 4: stamp archive_version (SDSS DR18 PhotoObj path).
+            extra["archive_version"] = "SDSS DR18"
             objects.append(
                 AstroObject(
                     source="sdss",
@@ -453,6 +455,8 @@ class SDSSSpecOnlyConnector(SDSSConnector):
                         except (ValueError, TypeError):
                             pass
 
+            # PART Y Batch 4: stamp archive_version (SDSS DR18 SpecObj path).
+            extra["archive_version"] = "SDSS DR18"
             objects.append(
                 AstroObject(
                     source="sdss_spec",

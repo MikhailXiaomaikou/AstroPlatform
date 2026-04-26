@@ -4969,6 +4969,16 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             "get_cached_results(", "get_search_results(",
             "get_adql_results(", "get_adql_result_sets(",
             "get_latest_adql_result(", "load_fits(",
+            # PART Y Batch 4: extend X3 reverse detection. Audit found AI
+            # could declare 'none_not_analyzing_real_data' while the code
+            # actually fetched real lightcurves / read real FITS / pulled
+            # CSV — these readers were not in the X3 string list.
+            "search_lightcurve(", "lightkurve.",
+            "Table.read(", "fits.open(",
+            "pd.read_csv(", "pd.read_parquet(",
+            "load_votable(", "load_csv(",
+            "astro.search_lightcurve(", "astro.download_and_clean_lightcurve(",
+            "astroquery",
         )
         reads_real_cache = any(p in code for p in _REAL_CACHE_READERS)
         if reads_real_cache:

@@ -540,23 +540,50 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool, progress_call
                 })
             return table
         except Exception as e:
-            # L17 (audit 2026-04-20): 区分 4xx (permanent, 不换 mirror) vs
+            # L17 + PART Y Batch 4 audit: 区分 4xx (permanent, 不换 mirror) vs
             # 5xx / 网络错 (transient, 换 mirror).  404 = 表不存在 /
             # 400 = SQL 语法错, 下一个 mirror 也会返回同样错, 浪费
             # wall-clock.  只对 5xx / timeout / connection 错试下一个.
+            #
+            # PART Y Batch 4: prefer the real status_code attribute from
+            # httpx exceptions; fall back to keyword string matching only
+            # when no httpx response is available. The old "404 in str(e)"
+            # path could mis-classify error messages like "row 400 of ..."
+            # as a permanent 4xx and skip valid mirrors.
             err_str = str(e).lower()
-            is_permanent = any(
-                hint in err_str
-                for hint in (
-                    "404", "400", "422", "403", "401",
-                    "syntax", "parse", "unknown column", "unknown table",
-                    "bad request", "forbidden",
+            status_code = None
+            try:
+                import httpx
+                if isinstance(e, httpx.HTTPStatusError):
+                    status_code = e.response.status_code
+            except Exception:
+                pass
+
+            if status_code is not None:
+                is_permanent = (400 <= status_code < 500) and status_code not in (408, 429)
+            else:
+                # Fallback: keyword hints (avoids numeric-string false positives
+                # like "row 400 of ..." being matched as HTTP 400).
+                is_permanent = any(
+                    hint in err_str
+                    for hint in (
+                        "syntax", "parse", "unknown column", "unknown table",
+                        "bad request", "forbidden",
+                    )
                 )
-            )
-            # 408 / 429 虽是 4xx 但属 transient (rate-limit / 超时), 仍换
-            # mirror; 这里从 "permanent" 里排除
-            if "408" in err_str or "429" in err_str:
-                is_permanent = False
+                # Conservative: also accept "HTTP <code>" / "status <code>"
+                # phrasings used by astroquery wrappers.
+                for code in ("400", "401", "403", "404", "422"):
+                    if (
+                        f"http {code}" in err_str
+                        or f"status {code}" in err_str
+                        or f"http/{code}" in err_str
+                        or f"({code})" in err_str
+                    ):
+                        is_permanent = True
+                        break
+                if "408" in err_str or "429" in err_str or "timeout" in err_str:
+                    is_permanent = False
             if is_permanent:
                 if progress_callback:
                     progress_callback({

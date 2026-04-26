@@ -280,6 +280,9 @@ class GaiaConnector(BaseConnector):
                             pass
                         break
 
+            # PART Y Batch 4: stamp archive_version so claim_validator,
+            # paper_generator, and the UI can tell DR2 vs DR3 vs future DR4.
+            extra["archive_version"] = "Gaia DR3"
             objects.append(
                 AstroObject(
                     source="gaia",

@@ -608,6 +608,10 @@ class SIMBADConnector(BaseConnector):
                 extra["radial_velocity_km_s"] = radial_velocity
             _ = spectral_type, object_type_long  # retained for future use
 
+            # PART Y Batch 4: stamp archive_version. SIMBAD is a continually
+            # updated cross-ID database, no fixed DR version, so use the
+            # service name as the archive_version label.
+            extra["archive_version"] = "SIMBAD"
             objects.append(
                 AstroObject(
                     source="simbad",
