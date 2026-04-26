@@ -4102,22 +4102,36 @@ async def _run_agent_loop(
 
         elif True:
             citation_violations = provenance_citation_violations(clean_reply, all_tool_results)
-            # M6: extend the citation-violation set with methodology
-            # mismatches (Bayesian promised but OLS ran, demagnify count
-            # claimed > actual).  Same gate decides whether the reply is
-            # blocked; the blocked-reply text is shared.
+            # M6 + PART AB: methodology mismatches (Bayesian promised but
+            # OLS ran, demagnify count claimed > actual) gate the reply
+            # the same way citation violations do, but render through a
+            # DIFFERENT blocked-reply text (`blocked_methodology_reply_text`)
+            # so the user gets the right fix instruction. Pre-PART-AB the
+            # method violations were rendered through the citation text,
+            # which told the user to "re-run the archive query" — that's
+            # the wrong fix for a methodology mismatch (no archive query
+            # makes the word "Bayesian" appear in tool_results).
             method_violations = methodology_consistency_violations(
                 clean_reply, all_tool_results,
             )
-            if method_violations:
-                citation_violations = list(citation_violations) + list(method_violations)
-            if citation_violations and citation_violations_should_block(citation_violations):
+            all_violations = list(citation_violations) + list(method_violations)
+            if all_violations and citation_violations_should_block(all_violations):
                 logger.error(
-                    "Citation/methodology gate BLOCKED reply from %s (%d violations)",
+                    "Citation/methodology gate BLOCKED reply from %s "
+                    "(citation=%d, method=%d)",
                     agent_name,
                     len(citation_violations),
+                    len(method_violations),
                 )
-                clean_reply = blocked_citation_reply_text(citation_violations)
+                blocks: list[str] = []
+                if citation_violations:
+                    blocks.append(blocked_citation_reply_text(citation_violations))
+                if method_violations:
+                    from app.services.claim_validator import (
+                        blocked_methodology_reply_text,
+                    )
+                    blocks.append(blocked_methodology_reply_text(method_violations))
+                clean_reply = "\n\n---\n\n".join(blocks)
                 fabrication_stats["blocked"] = True
 
             if not fabrication_stats["blocked"]:

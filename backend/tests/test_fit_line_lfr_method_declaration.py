@@ -326,3 +326,114 @@ def test_method_provenance_node_populated():
     assert "bayesian_n_draws" in mp
     assert mp["intrinsic_scatter_dex"] is None
     assert mp["bayesian_n_draws"] is None
+
+
+# ── PART AB: methodology_consistency_violations gate fixes ──────────
+
+def test_methodology_violation_not_triggered_without_fit_line_lfr_success():
+    """PART AB trigger fix: when fit_line_lfr never ran (or only failed),
+    a prose mention of "Bayesian" in the reply must NOT raise a
+    method_mismatch violation. Otherwise R2.4 M2 reproduces — 0 tool
+    calls + the user's prompt mentioning "Bayesian linear regression"
+    would block the reply pre-flight.
+    """
+    from app.services.claim_validator import methodology_consistency_violations
+
+    # Case 1: empty tool_results
+    out1 = methodology_consistency_violations(
+        "We could use a Bayesian linmix fit here.",
+        [],
+    )
+    assert out1 == [], "empty tool_results should produce zero violations"
+
+    # Case 2: fit_line_lfr ran but FAILED (banner-stamped)
+    out2 = methodology_consistency_violations(
+        "We could use a Bayesian linmix fit here.",
+        [{
+            "tool": "fit_line_lfr",
+            "result": {
+                "success": False,
+                "__tool_status__": "FAILED",
+                "error": "no rows",
+            },
+        }],
+    )
+    assert out2 == [], "FAILED fit_line_lfr should not enable method_mismatch"
+
+    # Case 3: fit_line_lfr ran but EMPTY
+    out3 = methodology_consistency_violations(
+        "We could use a Bayesian fit here.",
+        [{
+            "tool": "fit_line_lfr",
+            "result": {
+                "success": True,
+                "__tool_status__": "EMPTY",
+                "row_count": 0,
+            },
+        }],
+    )
+    assert out3 == [], "EMPTY fit_line_lfr should not enable method_mismatch"
+
+
+def test_methodology_violation_triggers_only_on_real_success_with_wrong_method():
+    """The actual bug: fit_line_lfr ran successfully with OLS, but the
+    prose claims it was Bayesian. Now the gate fires correctly."""
+    from app.services.claim_validator import methodology_consistency_violations
+
+    out = methodology_consistency_violations(
+        "We ran a Bayesian xyerr fit and the slope is 1.05.",
+        [{
+            "tool": "fit_line_lfr",
+            "result": {
+                "success": True,
+                "fit_method": "ols",  # actual method that ran — NOT bayesian
+                "publication_ready": True,
+                "slope": 1.05,
+            },
+        }],
+    )
+    assert len(out) == 1
+    assert out[0].kind == "method_mismatch"
+
+
+def test_blocked_methodology_reply_text_uses_method_specific_advice():
+    """PART AB route fix: method_mismatch violations rendered through
+    `blocked_methodology_reply_text` get the right fix instruction
+    (call fit_line_lfr with bayesian_xyerr) — NOT the citation-flavour
+    "re-run the archive query" message."""
+    from app.services.claim_validator import (
+        blocked_methodology_reply_text,
+        CitationViolation,
+    )
+
+    text = blocked_methodology_reply_text([
+        CitationViolation(
+            kind="method_mismatch",
+            match_text="Bayesian",
+            line_number=21,
+        ),
+    ])
+    # Right phrasing for the method violation
+    assert "fit_method_requested=\"bayesian_xyerr\"" in text
+    assert "Bayesian" in text
+    # NOT the citation-flavour misleading hint
+    assert "re-run the archive" not in text
+    assert "re-run the relevant archive or literature" not in text
+
+
+def test_blocked_methodology_reply_text_separates_demag_from_method():
+    """When both bayesian and demagnify violations exist, they get
+    separate explanations and separate fix instructions."""
+    from app.services.claim_validator import (
+        blocked_methodology_reply_text,
+        CitationViolation,
+    )
+
+    text = blocked_methodology_reply_text([
+        CitationViolation(kind="method_mismatch", match_text="Bayesian", line_number=4),
+        CitationViolation(kind="demagnify_count_mismatch", match_text="demagnified 12 sources", line_number=8),
+    ])
+    assert "Bayesian" in text
+    assert "demagnified 12 sources" in text
+    assert "demagnify_sample" in text
+    assert "fit_method_requested=\"bayesian_xyerr\"" in text

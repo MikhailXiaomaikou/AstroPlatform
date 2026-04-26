@@ -888,7 +888,17 @@ _DEMAGNIFY_COUNT_RE = re.compile(
 
 
 def _collect_tool_results_for(tool_results: Any, tool_name: str) -> list[dict]:
-    """Return every claimable tool_result dict for the named tool."""
+    """Return every claimable success tool_result dict for the named tool.
+
+    PART AB: filter out FAILED / EMPTY / SYNTHETIC results so the
+    methodology-consistency check only fires when the named tool
+    actually produced a real, claimable result. Otherwise a turn that
+    didn't really run fit_line_lfr (e.g. tool was disabled, returned
+    EMPTY, or wasn't called at all) would still trigger a
+    method_mismatch on a prose mention of "Bayesian", as in the
+    R2.4 M2 audit where 0 tool calls + a method-name mention in the
+    user prompt blocked the reply pre-flight.
+    """
     out: list[dict] = []
     entries = tool_results if isinstance(tool_results, list) else [tool_results]
     for entry in entries or []:
@@ -899,8 +909,13 @@ def _collect_tool_results_for(tool_results: Any, tool_name: str) -> list[dict]:
             name
             or (str(result.get("tool")) if isinstance(result.get("tool"), str) else None)
         )
-        if candidate_name == tool_name:
-            out.append(result)
+        if candidate_name != tool_name:
+            continue
+        # Drop unclaimable results — banner-stamped EMPTY / FAILED /
+        # SYNTHETIC, plus explicit success=False payloads.
+        if not _payload_is_claimable_success(tool_name, result):
+            continue
+        out.append(result)
     return out
 
 
@@ -1022,6 +1037,61 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
         + "\n\nPlease re-run the relevant archive or literature query so the citation "
         "appears in tool_results before using it."
     )
+
+
+def blocked_methodology_reply_text(violations: list[CitationViolation]) -> str:
+    """PART AB — separate gate text for `method_mismatch` /
+    `demagnify_count_mismatch` so the user does not see the wrong fix
+    instruction.
+
+    The R2.4 M2 audit caught a regression where method_mismatch
+    violations were rendered through `blocked_citation_reply_text`
+    (which advises "re-run the archive query"), even though the right
+    fix for a methodology mismatch is to actually run the fit tool
+    with the requested method, OR to remove the methodology claim from
+    the prose.
+    """
+    bayesian_lines: list[str] = []
+    demag_lines: list[str] = []
+    other_lines: list[str] = []
+    for v in violations:
+        bullet = f"- {v.match_text} (line {v.line_number})"
+        if v.kind == "method_mismatch":
+            bayesian_lines.append(bullet)
+        elif v.kind == "demagnify_count_mismatch":
+            demag_lines.append(bullet)
+        else:
+            other_lines.append(f"- {v.kind}: {v.match_text} (line {v.line_number})")
+
+    parts: list[str] = [
+        "⚠ Reply withheld: the model promised methodology / counts that "
+        "the tools did not actually produce this turn."
+    ]
+    if bayesian_lines:
+        parts.append(
+            "Bayesian / linmix / two-axis-errors mentioned but no "
+            "fit_line_lfr success with `fit_method=bayesian_xyerr_*`:\n"
+            + "\n".join(bayesian_lines)
+            + "\n\nFix: call `fit_line_lfr` with "
+            "`fit_method_requested=\"bayesian_xyerr\"` first, then describe "
+            "the result. Or remove the methodology claim from the prose "
+            "and report what actually ran (OLS, slope, etc.)."
+        )
+    if demag_lines:
+        parts.append(
+            "Claimed demagnify count exceeds what `demagnify_sample` / "
+            "`fit_line_lfr` actually did:\n"
+            + "\n".join(demag_lines)
+            + "\n\nFix: call `demagnify_sample(cache_key=..., mu_map=...)` "
+            "for the missing sources, or report only the count the tool "
+            "returned."
+        )
+    if other_lines:
+        parts.append(
+            "Other methodology mismatches:\n"
+            + "\n".join(other_lines)
+        )
+    return "\n\n".join(parts)
 
 
 def _iter_dict_nodes(payload: Any) -> Iterable[dict[str, Any]]:
