@@ -1733,7 +1733,7 @@ async def _execute_tool_inner(
         elif tool_name == "search_literature":
             return await _exec_literature(tool_input)
         elif tool_name == "extract_literature_tables":
-            return await _exec_extract_literature_tables(tool_input, python_session_id)
+            return await _exec_extract_literature_tables(tool_input, python_session_id, user_id=user_id)
         elif tool_name == "fit_line_lfr":
             return _exec_fit_line_lfr(tool_input, python_session_id)
         elif tool_name == "demagnify_sample":
@@ -4629,9 +4629,96 @@ def _exec_export_sample_table(
     }
 
 
-async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "default") -> dict:
-    """Extract arXiv tables and cache any normalized measurement rows."""
+# PART Z: retry + cache wrapper around extract_arxiv_tables_payload.
+# The HTTP endpoint was already gated and rate-limited (M19), but the chat
+# tool path bypassed that and could repeatedly hit ar5iv on the AI's whim.
+# Now every chat call goes through a 24h connector_cache lookup +
+# circuit-breaker, so a paper fetched once stays cached and ar5iv outages
+# trip the breaker instead of letting AI users amplify load.
+
+async def _cached_extract_arxiv_tables_payload(arxiv_id_raw: str) -> dict:
+    """24h-cached wrapper around extract_arxiv_tables_payload.
+
+    Cache key includes a normalised arxiv_id so the various aliases
+    (`2310.12345` / `arXiv:2310.12345` / arxiv URL) hit the same entry.
+    Concurrent identical calls share a single upstream fetch via
+    connector_cache.get_or_compute's singleflight.
+    """
+    from app.api.arxiv import _clean_arxiv_id
+    from app.services.connector_cache import get_or_compute
+
+    cleaned = _clean_arxiv_id(arxiv_id_raw) or arxiv_id_raw.strip()
+    cache_key = f"arxiv_tables:v1:{cleaned}"
+
+    async def _compute():
+        return await _extract_arxiv_tables_payload_with_retry(arxiv_id_raw)
+
+    return await get_or_compute(cache_key, _compute, ttl=24 * 3600)
+
+
+def _arxiv_retryable_exceptions():
+    """Build the retry-eligible exception tuple at import time without
+    forcing httpx to be imported on cold paths.  Network timeouts and
+    transient connection failures retry; HTTPException (e.g. 404 "no
+    tables found") does NOT retry — that's a permanent semantic error.
+    """
+    try:
+        import httpx
+        return (
+            httpx.TimeoutException,
+            httpx.ConnectError,
+            httpx.RemoteProtocolError,
+            ConnectionError,
+            TimeoutError,
+            OSError,
+        )
+    except ImportError:
+        return (ConnectionError, TimeoutError, OSError)
+
+
+async def _extract_arxiv_tables_payload_with_retry(arxiv_id_raw: str) -> dict:
+    """Inner: retries via with_retry, fronted by the 24h cache above."""
     from app.api.arxiv import extract_arxiv_tables_payload
+    from app.connectors.retry import with_retry
+
+    @with_retry(
+        max_retries=2,
+        base_delay=1.0,
+        retryable_exceptions=_arxiv_retryable_exceptions(),
+    )
+    async def _do_fetch(_id: str) -> dict:
+        return await extract_arxiv_tables_payload(_id)
+
+    return await _do_fetch(arxiv_id_raw)
+
+
+async def _exec_extract_literature_tables(
+    inp: dict,
+    python_session_id: str = "default",
+    *,
+    user_id: str | None = None,
+) -> dict:
+    """Extract arXiv tables and cache any normalized measurement rows.
+
+    PART Z: this tool path was previously unauthenticated when invoked via
+    chat (the HTTP endpoint at /api/arxiv/extract-tables had M19 auth gate
+    but the chat tool dispatch bypassed it), so an anonymous chat user
+    could ask the AI to repeatedly hit ar5iv as a DoS amplifier. Now we
+    require a logged-in user_id, matching the HTTP endpoint's posture.
+    """
+    from app.api.arxiv import extract_arxiv_tables_payload
+
+    if not user_id:
+        return {
+            "success": False,
+            "error": (
+                "extract_literature_tables requires an authenticated user. "
+                "Sign in (Account page) before asking the AI to compile "
+                "literature tables; this prevents the chat from being used "
+                "to amplify load on the public ar5iv / arxiv.org services."
+            ),
+            "error_class": "not_authenticated",
+        }
 
     raw_id = _arxiv_id_from_table_input(inp)
     if not raw_id:
@@ -4641,7 +4728,7 @@ async def _exec_extract_literature_tables(inp: dict, python_session_id: str = "d
             "error_class": "missing_arxiv_id",
         }
     try:
-        payload = await extract_arxiv_tables_payload(raw_id)
+        payload = await _cached_extract_arxiv_tables_payload(raw_id)
     except Exception as exc:
         return {
             "success": False,

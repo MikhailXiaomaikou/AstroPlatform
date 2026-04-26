@@ -416,6 +416,51 @@ def _find_column(columns: list[str], patterns: list[str]) -> int | None:
     return None
 
 
+# PART Z: line-ID inference table. Each entry is (regex, canonical_label).
+# The first match wins — order specific lines (e.g. [OIII] 5007) before
+# generic ones (e.g. plain "OIII"). Wavelengths are the brightest line of
+# the doublet/multiplet for [OII], [SII], [NII] when the header doesn't
+# specify a single component.
+_LINE_ID_PATTERNS: tuple[tuple[str, str], ...] = (
+    # [CII] 158 micron — was the original hardcoded fallback
+    (r"\[?\s*c\s*ii\s*\]?(?!i)|158\s*[uµμ]m", "[CII] 158um"),
+    # Lyman alpha (1216 Å)
+    (r"ly\s*[aα]|lyman\s*[aα]|1215|1216", "Lyalpha 1216A"),
+    # Balmer
+    (r"h\s*[aα](?!lf)|halpha|6563|6562", "Halpha 6563A"),
+    (r"h\s*[βb](?![a-z])|hbeta|4861", "Hbeta 4861A"),
+    (r"h\s*[γg](?![a-z])|hgamma|4340", "Hgamma 4340A"),
+    # Forbidden / nebular
+    (r"\[?\s*o\s*iii\s*\]?|5007|4959", "[OIII] 5007A"),
+    (r"\[?\s*o\s*ii\s*\]?(?!i)|3727|3729", "[OII] 3727A"),
+    (r"\[?\s*n\s*ii\s*\]?(?!i)|6583|6548", "[NII] 6583A"),
+    (r"\[?\s*s\s*ii\s*\]?(?!i)|6716|6731", "[SII] 6716A"),
+    (r"\[?\s*ne\s*iii\s*\]?|3869", "[NeIII] 3869A"),
+    (r"\[?\s*ne\s*v\s*\]?|3426", "[NeV] 3426A"),
+    # CO rotational ladder
+    (r"co\s*\(?\s*[12]\s*-\s*[01]\s*\)?", "CO rotational"),
+    # IR cooling
+    (r"\[?\s*o\s*i\s*\]?\s*63|63\s*[uµμ]m", "[OI] 63um"),
+    (r"\[?\s*n\s*ii\s*\]?\s*122|122\s*[uµμ]m", "[NII] 122um"),
+)
+
+
+def _infer_line_id(text: str) -> str | None:
+    """Best-guess emission-line label from column headers + table caption.
+
+    Returns None when no known line is detected; callers should fall back
+    to whatever is in the per-row "line" column. Previously hardcoded to
+    [CII] 158um for any header containing "cii" / "158", which silently
+    corrupted Hα / Lyα papers.
+    """
+    if not text:
+        return None
+    for pattern, label in _LINE_ID_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            return label
+    return None
+
+
 def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     measurements: list[dict[str, Any]] = []
     for table in tables:
@@ -429,11 +474,33 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
         ])
         redshift_idx = _find_column(columns, [r"^(z|redshift)$", r"zspec"])
         line_idx = _find_column(columns, [r"^line$", r"transition"])
+        # PART Z: widen luminosity-column matching beyond [CII]-only.
+        # Real papers write "log L(Hα)", "L_Lya", "log L([OIII])", etc.
+        # _column_key strips unicode to ASCII a-z0-9, so "log L(Hα)" →
+        # "loglh" / "log L_[OIII]" → "loglloiii" / "L_Lya" → "llya".
+        # Match these via a generic "^log_?l" prefix + line-name fallback.
         luminosity_idx = _find_column(columns, [
-            r"log.*l.*cii", r"lcii", r"lc", r"lineluminos", r"luminos",
+            # Specific line-luminosity patterns (legacy + common)
+            r"log.*l.*cii", r"lcii",
+            r"log.*l.*halpha", r"^lhalpha$", r"lha\b",
+            r"log.*l.*hbeta", r"^lhbeta$",
+            r"log.*l.*ly(a|alpha)", r"^lly", r"llya",
+            r"log.*l.*oiii", r"^loiii$",
+            r"log.*l.*oii\b", r"^loii$",
+            r"log.*l.*nii", r"^lnii$",
+            r"log.*l.*sii", r"^lsii$",
+            # Generic "log L<line>" / luminosity headers
+            r"^log[_]?l[a-z]*\d*$", r"loglum", r"lineluminos", r"luminos",
+            # Last resort: solo "lc" — kept for backwards-compat with old
+            # papers that just wrote "L_C" or "Lc"
+            r"^lc$",
         ])
-        fwhm_idx = _find_column(columns, [r"fwhm", r"linewidth", r"dv", r"velocitywidth"])
-        luminosity_err_idx = _find_column(columns, [r"(err|sigma|unc).*l.*cii", r"l.*cii(err|sigma|unc)"])
+        fwhm_idx = _find_column(columns, [r"fwhm", r"linewidth", r"^dv$", r"velocitywidth"])
+        luminosity_err_idx = _find_column(columns, [
+            r"(err|sigma|unc).*l.*(cii|halpha|hbeta|ly|oiii|oii|nii|sii)",
+            r"l.*(cii|halpha|hbeta|ly|oiii|oii|nii|sii).*(err|sigma|unc)",
+            r"^(loglerr|llumerr|errlogl)$",
+        ])
         fwhm_err_idx = _find_column(columns, [r"(err|sigma|unc).*fwhm", r"fwhm(err|sigma|unc)"])
         flux_idx = _find_column(columns, [r"flux", r"integrated"])
         # Gravitational lensing magnification column.  Common names in
@@ -447,7 +514,11 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
         luminosity_header = columns[luminosity_idx]
         luminosity_is_log = "log" in luminosity_header.lower()
         luminosity_unit = _normalize_ws(luminosity_header)
-        inferred_line = "[CII] 158um" if re.search(r"c\s*ii|cii|158", " ".join(columns + [str(table.get("caption") or "")]), re.I) else None
+        # PART Z: infer line from headers + caption across multiple species.
+        # Used to be hardcoded [CII] 158um, missing Hα / Lyα / [OIII] / etc.
+        inferred_line = _infer_line_id(
+            " ".join(columns + [str(table.get("caption") or "")])
+        )
 
         for row_index, row in enumerate(rows):
             if not isinstance(row, list):

@@ -45,6 +45,9 @@ celerite2>=0.3,<1
 reproject>=0.14,<1
 photutils>=2.0,<3
 dask[dataframe]>=2024.1
+# PART Z: explicit dep for arxiv table parsing (was a transitive dep via
+# astroquery/lightkurve previously; pin so we own the version we test against).
+beautifulsoup4>=4.12,<5
 # Optional (not installed by default — requires ~1GB model grids + multinest):
 #   isochrones>=2.2  # stellar isochrone fitting with MESA/MIST grids
 pytest>=8.0.0,<9
