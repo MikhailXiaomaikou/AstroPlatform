@@ -2698,6 +2698,43 @@ _ATTR_RE = __import__("re").compile(
 )
 
 
+# PART AC C3 — substrings whose presence in run_python code indicates
+# the AI is reading REAL data from a platform cache helper or astropy /
+# astroquery / lightkurve-shaped reader. The G3.2 SYNTHETIC tainter
+# uses this to grant a reverse-direction exemption: "you didn't
+# declare data_source as a real source, but the code body proves you
+# actually read real cached data, so we won't paint the result red".
+#
+# Keep this in sync with the data_source contract validator's
+# `_REAL_DATA_READERS` set in synthetic_code_detector.py — both are
+# the same physical concept (the code is genuinely reading real data).
+_RUN_PYTHON_REAL_CACHE_READER_TOKENS = (
+    "get_cached_results(", "get_search_results(",
+    "get_adql_results(", "get_adql_result_sets(",
+    "get_latest_adql_result(", "load_fits(",
+    "search_lightcurve(", "lightkurve.",
+    "Table.read(", "fits.open(",
+    "pd.read_csv(", "pd.read_parquet(",
+    "latest_literature_tables", "latest_adql",
+    "latest_search", "latest_lightcurve",
+    "astroquery",
+)
+
+
+def _run_python_code_reads_real_cache(code: str) -> bool:
+    """PART AC C3: True when run_python code clearly reads real data.
+
+    Used as the reverse-direction exemption for the G3.2 SYNTHETIC
+    tainter. When the code body explicitly references a platform real-
+    data reader (get_cached_results, latest_literature_tables,
+    lightkurve, etc.), we trust that signal even when the input's
+    `data_source` field wasn't declared as a real source.
+    """
+    if not isinstance(code, str) or not code:
+        return False
+    return any(token in code for token in _RUN_PYTHON_REAL_CACHE_READER_TOKENS)
+
+
 _TRUNCATED_TRAILING_PUNCT = {":", ",", "—", "–", "(", "[", "{"}
 # `-` (ASCII hyphen) is intentionally NOT in this set — many sentences
 # legitimately end with it (e.g. "M-class star") — and we don't want
@@ -3762,10 +3799,24 @@ async def _run_agent_loop(
                 }.get(declared, set()))
                 origin = str(result.get("data_origin") or "").lower()
                 has_real_origin = origin in {"real_archive", "cached_real", "user_uploaded"}
+                # PART AC C3 — code-content reverse exemption.
+                # M3 audit caught the SYNTHETIC banner mis-tagging a
+                # run_python that was processing real cached literature
+                # tables (`get_cached_results("latest_literature_tables")`).
+                # The AI hadn't declared a `data_source` on input and an
+                # earlier search_literature returned 0 hits (entered
+                # failed_data_fetches), so G3.2 tainted the result. But
+                # the code body explicitly read a real cache helper —
+                # the right answer is to inspect the code, not just the
+                # input.data_source declaration.
+                reads_real_cache_in_code = _run_python_code_reads_real_cache(
+                    str(tc.get("input", {}).get("code") or "")
+                )
                 if (
                     failed_data_fetches
                     and not user_requested_synthetic_demo
                     and not has_real_origin
+                    and not reads_real_cache_in_code
                     and (not is_real_source_declared or declared_empty_dependency)
                 ):
                     # Replace the payload so stdout from fallback/demo code
