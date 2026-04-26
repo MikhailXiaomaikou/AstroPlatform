@@ -81,6 +81,15 @@ def _search_ads_sync(object_name: str) -> list[dict]:
         headers = {"Authorization": f"Bearer {ADS_API_KEY}"}
         params = {
             "q": f"object:{object_name}",
+            # PART AF C1 — fix the path PART AD C3 missed.
+            # The AI search_literature tool calls _exec_literature →
+            # _search_ads_sync (this function), NOT the ADS path
+            # in literature_engine.py that AD C3 patched. Without
+            # database:astronomy here, ADS general indexing has been
+            # leaking power-engineering / nuclear-physics / software-
+            # workshop papers into astrophysics queries (M4 1 leak,
+            # M5 3 leaks — measurable regression).
+            "fq": "database:astronomy",
             "fl": "bibcode,title,author,year,doi,pub,abstract",
             "rows": 5,
         }
@@ -194,6 +203,12 @@ def _search_literature_ads(query: str, max_results: int = 20) -> list[dict]:
     headers = {"Authorization": f"Bearer {ADS_API_KEY}"}
     params = {
         "q": query,
+        # PART AF C1 — same astronomy-database scope as
+        # _search_ads_sync. This is the second ADS path the AI
+        # search_literature tool walks (object-name search → free-text
+        # search → arXiv fallback); without fq here the free-text path
+        # also leaks non-astronomy hits.
+        "fq": "database:astronomy",
         "fl": "bibcode,title,author,year,doi,pub,abstract",
         "rows": min(max_results, 50),
         "sort": "score desc",
