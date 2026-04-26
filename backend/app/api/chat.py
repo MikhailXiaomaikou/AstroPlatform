@@ -309,6 +309,15 @@ When fitting a luminosity-FWHM (or similar line-property) relation:
    `<key>__demag` cache, then fit on that.  Report
    `lensed_sources_demagnified` and the μ source/reference for each.
 
+   **PART AF C6 — no-op declaration**: when the sample has ZERO
+   sources flagged is_lensed=true (e.g. ALPINE z=4-6 has no strong-
+   lensed sources by survey design), you MUST still write one
+   sentence in the prose stating "0 lensed sources detected in
+   sample; demagnify_sample skipped (no-op)". Silently omitting the
+   discussion implies you forgot the lensing step entirely. Any
+   reviewer reading the report should be able to see that
+   demagnification was considered AND was correctly inapplicable.
+
 5. **Cosmology cross-check**.  Before quoting a non-Planck H0/Om0
    (e.g. Riess+11 H0=73.8, Suzuki+12 Om=0.271) on a sample whose
    `source_cosmology` differs, call

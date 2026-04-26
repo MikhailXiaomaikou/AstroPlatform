@@ -162,3 +162,13 @@ def test_system_prompt_has_explicit_cosmology_call_examples() -> None:
     assert "FlatLambdaCDM_H72p0_Om0p30" in SYSTEM_PROMPT
     # Footer rule (don't ever omit target_cosmology)
     assert "without `target_cosmology=`" in SYSTEM_PROMPT
+
+
+def test_system_prompt_has_demagnify_no_op_rule() -> None:
+    """PART AF C6 — when no source is lensed, the AI must still SAY so
+    rather than silently omit the lensing discussion (M5 audit point f)."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "no-op declaration" in SYSTEM_PROMPT
+    assert "0 lensed sources detected" in SYSTEM_PROMPT
+    assert "demagnify_sample skipped" in SYSTEM_PROMPT
