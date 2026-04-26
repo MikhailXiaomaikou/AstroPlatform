@@ -4331,15 +4331,50 @@ async def _run_agent_loop(
                     len(citation_violations),
                     len(method_violations),
                 )
-                blocks: list[str] = []
+                annotations: list[str] = []
                 if citation_violations:
-                    blocks.append(blocked_citation_reply_text(citation_violations))
+                    annotations.append(blocked_citation_reply_text(citation_violations))
                 if method_violations:
                     from app.services.claim_validator import (
                         blocked_methodology_reply_text,
                     )
-                    blocks.append(blocked_methodology_reply_text(method_violations))
-                clean_reply = "\n\n---\n\n".join(blocks)
+                    annotations.append(blocked_methodology_reply_text(method_violations))
+
+                # PART AG C1 — annotate-and-attach mode (replaces the
+                # earlier withhold-all behaviour).
+                #
+                # R2.4 M6 audit caught the earlier path erasing 11 of 12
+                # visible tool cards: the model wrote a long correct
+                # prose with Python output, dataframe loads, fit_line_lfr
+                # numbers, then mentioned "Bothwell 2013" on a single line
+                # without a tool_result → guard tripped → entire reply
+                # replaced by "Reply withheld" → user lost the whole
+                # session's worth of work for one inline citation slip.
+                #
+                # New behaviour: keep the original prose (so Python
+                # output, tool cards, real analysis stay visible) and
+                # APPEND a footer with the provenance violations. The
+                # `fabrication_stats["blocked"]` flag still fires so
+                # telemetry and the frontend can chip the message; the
+                # difference is purely in the user-facing text.
+                if clean_reply.strip():
+                    annotation_block = (
+                        "\n\n---\n\n"
+                        "## ⚠ Citation / methodology provenance check failed\n\n"
+                        "The reply above was generated, but the platform's "
+                        "provenance gate flagged claims that the tool results "
+                        "this turn did not support. Treat the flagged items as "
+                        "**NOT verified** and re-run the relevant tools before "
+                        "quoting any of them in a paper.\n\n"
+                        + "\n\n---\n\n".join(annotations)
+                    )
+                    clean_reply = clean_reply.rstrip() + annotation_block
+                else:
+                    # Empty prose — rare but possible (e.g. the LLM
+                    # returned only tool_use blocks). Fall back to the
+                    # previous withhold-only message so the user has
+                    # something to read.
+                    clean_reply = "\n\n---\n\n".join(annotations)
                 fabrication_stats["blocked"] = True
 
             if not fabrication_stats["blocked"]:
