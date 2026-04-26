@@ -91,9 +91,15 @@ def test_hardblock_flag_tracks_environment(monkeypatch):
         _tool_with_dataset("2023A&A...674A...1G"),
     )
 
+    # PART Y Batch 1: 默认 (env 不设) → hardblock 开启
     monkeypatch.delenv("PROVENANCE_VALIDATOR_HARDBLOCK", raising=False)
+    assert citation_violations_should_block(violations) is True
+
+    # 显式禁用 → warn-only
+    monkeypatch.setenv("PROVENANCE_VALIDATOR_HARDBLOCK", "false")
     assert citation_violations_should_block(violations) is False
 
+    # 显式启用 → hardblock (保持向后兼容)
     monkeypatch.setenv("PROVENANCE_VALIDATOR_HARDBLOCK", "true")
     assert citation_violations_should_block(violations) is True
 

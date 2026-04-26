@@ -43,11 +43,15 @@ logger = logging.getLogger(__name__)
 # fabrication (the model tends to invent round numbers or swap digits) while
 # still matching a tool value re-stated with one-decimal-place precision.
 DEFAULT_TOLERANCE = 0.01
-CITATION_VALIDATOR_HARDBLOCK = os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
+# PART Y Batch 1: PROVENANCE_VALIDATOR_HARDBLOCK 默认开启 — citation 违规
+# (suspicious_author_year / invalid_bibcode) 默认硬拦, 跟 ZERO-FABRICATION
+# CONTRACT 的数值规则对齐. 显式 PROVENANCE_VALIDATOR_HARDBLOCK=false 才能
+# 把 citation 违规降级回 warn-only (生产紧急关闭用).
+CITATION_VALIDATOR_HARDBLOCK = os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
 }
 
 # Regex catalogue of astronomical numeric claims.  Each entry extracts a
@@ -672,12 +676,15 @@ def validate_claims(
 
 
 def citation_validator_hardblock_enabled() -> bool:
-    return os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    } or CITATION_VALIDATOR_HARDBLOCK
+    # PART Y Batch 1: 默认 True, 显式 PROVENANCE_VALIDATOR_HARDBLOCK=false
+    # 才禁用. 不再 fall back 到模块级 CITATION_VALIDATOR_HARDBLOCK 常量,
+    # 这样测试 monkeypatch.setenv / delenv 能在运行时切换状态.
+    return os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 def citation_violations_should_block(violations: list[CitationViolation]) -> bool:
