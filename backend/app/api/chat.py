@@ -3330,6 +3330,11 @@ async def _run_agent_loop(
     hit_iteration_cap = False
     hit_deadline = False
     soft_deadline_reminded = False
+    # C-X1 (P0): record the LLM stop_reason of the iteration that breaks
+    # the agent loop so the post-loop truncation gate can detect a
+    # max_tokens / length cut-off and run a safe-summary regen instead
+    # of shipping a dangling partial sentence to the UI.
+    last_stop_reason: str | None = None
     for _iteration in range(max_iterations):
         if _time.monotonic() > _loop_deadline:
             hit_deadline = True
@@ -3715,9 +3720,88 @@ async def _run_agent_loop(
         working_messages.append({"role": "user", "content": tool_result_blocks})
         # Claude uses "tool_use", OpenAI uses "tool_calls" as stop reason
         if response.get("stop_reason") not in ("tool_use", "tool_calls"):
+            last_stop_reason = response.get("stop_reason")
             break
 
     full_reply = "\n\n".join(text_parts)
+
+    # C-X1 (P0) — max_tokens / length truncation gate.
+    # When the model's reply hits the max_tokens budget mid-sentence
+    # (e.g. stops on a colon: "Let me extract the next table:") the old
+    # code shipped the dangling text straight to the UI as if it were
+    # a finished reply. This is the R2.6 / R2.10 silent-truncation
+    # regression. Detect both the Anthropic ("max_tokens") and OpenAI/
+    # DeepSeek ("length") stop reasons, then run a one-shot text-only
+    # summary regen so the user gets a clean handoff instead of a
+    # severed sentence.
+    if last_stop_reason in {"max_tokens", "length"} and full_reply.strip():
+        try:
+            from app.observability.metrics import record_counter
+            record_counter(
+                "max_tokens_truncation_total", 1.0,
+                agent=agent_name, stop_reason=str(last_stop_reason),
+            )
+        except Exception:
+            pass
+        await _emit({
+            "type": "reply_truncated",
+            "agent": agent_name,
+            "stop_reason": last_stop_reason,
+            "partial_chars": len(full_reply),
+        })
+        try:
+            safe_summary_user = (
+                "Your previous reply was cut off mid-sentence by the "
+                "model's max_tokens limit. In <= 3 sentences, write a "
+                "summary that:\n"
+                "1) Names what you actually completed using tool_results "
+                "this turn (cite bibcodes / cache_keys when relevant).\n"
+                "2) Names what you were ABOUT to do but did not complete "
+                "(e.g. 'I had not yet called compare_luminosity_distances "
+                "for Riess 2011').\n"
+                "3) Suggests the user re-prompts with the next concrete "
+                "step. Do NOT continue the original analysis — just "
+                "summarise + hand off."
+            )
+            summary_messages = list(working_messages) + [
+                {"role": "assistant", "content": full_reply},
+                {"role": "user", "content": safe_summary_user},
+            ]
+            summary_resp = await inference_router.route(
+                agent_name,
+                summary_messages,
+                system=system,
+                tools=[],  # text-only — no tool calls allowed
+                api_key=api_key,
+                provider_api_keys=provider_api_keys,
+                preferred_backend=preferred_backend,
+                model_profile=model_profile,
+                max_tokens=400,
+                temperature=0.0,
+                backend_timeout=30.0,
+            )
+            text_blocks = summary_resp.get("text") or summary_resp.get("content") or ""
+            safe_summary = str(text_blocks).strip()
+        except Exception as exc:
+            logger.warning("safe-summary regen failed: %s", exc)
+            safe_summary = ""
+
+        truncation_banner = (
+            "\n\n---\n\n"
+            "*[The model's reply was cut off mid-sentence by its "
+            "max_tokens limit. The platform regenerated a safe summary "
+            "of what was actually completed and what remains to do "
+            "next:]*\n\n"
+        )
+        if safe_summary:
+            full_reply = full_reply.rstrip() + truncation_banner + safe_summary
+        else:
+            full_reply = full_reply.rstrip() + (
+                "\n\n---\n\n*[Reply was truncated mid-sentence by the "
+                "max_tokens limit; safe-summary regen also returned "
+                "empty. Please re-ask with a narrower scope.]*"
+            )
+
     actions = _parse_actions(full_reply)
     clean_reply = _strip_actions_from_reply(full_reply)
 
