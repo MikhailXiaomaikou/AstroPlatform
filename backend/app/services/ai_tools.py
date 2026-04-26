@@ -639,6 +639,35 @@ TOOLS = [
                     "type": "integer",
                     "description": "Bootstrap iterations per subsample (default 2000).",
                 },
+                "cosmology": {
+                    "type": "string",
+                    "description": (
+                        "Optional target cosmology. When supplied as a PART AA "
+                        "preset name (planck18 / planck18_bao / freedman21_trgb "
+                        "/ riess22_shoes) or a FlatLambdaCDM_H<H0>_Om<Om> spec "
+                        "(e.g. FlatLambdaCDM_H73p8_Om0p27 for Riess+11 / "
+                        "Suzuki+12), the tool RECOMPUTES log_luminosity for "
+                        "each row from the new luminosity distance: "
+                        "log_L_new = log_L_old + 2*log10(DL_new(z) / DL_old(z)). "
+                        "DL_old is computed from the current platform default "
+                        "(planck18) — pre-AC caches stored under that assumption. "
+                        "Returns the dl_shift_summary so the systematic error "
+                        "budget is auditable. Omit / pass 'planck18' to keep the "
+                        "default Planck18 fit. The cosmology-mismatch warning "
+                        "fires only when the row-level source_cosmology disagrees "
+                        "with the chosen target."
+                    ),
+                },
+                "variant_label": {
+                    "type": "string",
+                    "description": (
+                        "Optional human-readable label for the fit variant, "
+                        "echoed back in the result so multiple fit_line_lfr "
+                        "calls in the same chat round (main / subsample / "
+                        "cosmology-Riess22 / demagnified) are distinguishable "
+                        "in the UI. Default: 'main'."
+                    ),
+                },
             },
         },
     },
@@ -3850,6 +3879,82 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
 
     import numpy as np
 
+    # ── PART AD C1 — optional DL recomputation under a target cosmology.
+    # Default behaviour (no cosmology arg): use the cached log_luminosity
+    # values as-is (they assume the source-paper cosmology, which is
+    # typically Planck18 for [CII] surveys).  When the caller passes a
+    # cosmology name / preset / FlatLambdaCDM spec, we recompute
+    # log_L_new = log_L_old + 2*log10(DL_new(z) / DL_old(z)) per row,
+    # using astropy.cosmology, and surface the per-row + summary shift.
+    requested_cosmology_name = str(inp.get("cosmology") or "").strip()
+    cosmology_recomputed = False
+    cosmology_used: dict[str, Any] | None = None
+    cosmology_baseline: dict[str, Any] | None = None
+    dl_shift_summary: dict[str, Any] | None = None
+    log_luminosity_shifts: list[float] = []
+
+    if requested_cosmology_name and requested_cosmology_name.lower() not in {"planck18", "default"}:
+        try:
+            from app.services.cosmology import (
+                build_cosmology_from_preset,
+                cosmology_manifest as _cm,
+            )
+            target_cosmo = build_cosmology_from_preset(requested_cosmology_name)
+            baseline_cosmo = build_cosmology_from_preset("planck18")
+            cosmology_used = _cosmology_manifest_for(requested_cosmology_name)
+            cosmology_baseline = _cm("planck18")
+        except Exception as exc:
+            logger.warning(
+                "fit_line_lfr: failed to build target cosmology %r: %s",
+                requested_cosmology_name, exc,
+            )
+            target_cosmo = None
+            baseline_cosmo = None
+
+        if target_cosmo is not None and baseline_cosmo is not None:
+            import astropy.units as u
+
+            adjusted_log_luminosity: list[float] = []
+            for row in accepted:
+                z = _finite_float(row.get("redshift"))
+                base_log_l = float(row["log_luminosity"])
+                if z is None or z <= 0:
+                    # No usable z → no recompute possible; keep the
+                    # cached value but flag the row.
+                    adjusted_log_luminosity.append(base_log_l)
+                    log_luminosity_shifts.append(0.0)
+                    continue
+                try:
+                    dl_old = float(baseline_cosmo.luminosity_distance(z).to(u.Mpc).value)
+                    dl_new = float(target_cosmo.luminosity_distance(z).to(u.Mpc).value)
+                except Exception:
+                    adjusted_log_luminosity.append(base_log_l)
+                    log_luminosity_shifts.append(0.0)
+                    continue
+                if dl_old <= 0 or dl_new <= 0:
+                    adjusted_log_luminosity.append(base_log_l)
+                    log_luminosity_shifts.append(0.0)
+                    continue
+                shift = 2.0 * (math.log10(dl_new) - math.log10(dl_old))
+                adjusted_log_luminosity.append(base_log_l + shift)
+                log_luminosity_shifts.append(shift)
+
+            # Replace each accepted row's log_luminosity inline so
+            # downstream subsample / variant code sees the shifted value.
+            for row, new_log_l in zip(accepted, adjusted_log_luminosity, strict=True):
+                row["log_luminosity"] = new_log_l
+            cosmology_recomputed = True
+            if log_luminosity_shifts:
+                shifts_arr = np.array(log_luminosity_shifts, dtype=float)
+                dl_shift_summary = {
+                    "median_log_l_shift_dex": round(float(np.median(shifts_arr)), 6),
+                    "max_abs_log_l_shift_dex": round(float(np.max(np.abs(shifts_arr))), 6),
+                    "min_abs_log_l_shift_dex": round(float(np.min(np.abs(shifts_arr))), 6),
+                    "n_rows_shifted": int(np.sum(np.abs(shifts_arr) > 1e-9)),
+                    "baseline_cosmology": "planck18",
+                    "target_cosmology": requested_cosmology_name,
+                }
+
     x = np.array([math.log10(row["fwhm_km_s"] / 100.0) for row in accepted], dtype=float)
     y = np.array([row["log_luminosity"] for row in accepted], dtype=float)
     beta = alpha = r_value = p_value = beta_stderr = alpha_stderr = None
@@ -4149,11 +4254,28 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
             "y_err_rows": n_y_err,
             "both_axes_available": both_errs_available,
         },
-        # M2: cosmology bookkeeping.
-        "cosmology_used": current_cosmo_name,
-        "cosmology_manifest": _current_cosmo,
+        # M2: cosmology bookkeeping.  PART AD C1: when the caller passed
+        # `cosmology=...`, cosmology_used reports the TARGET preset's
+        # manifest (with bibcode + DOI), `cosmology_recomputed` is True,
+        # and dl_shift_summary surfaces the per-row shift the recompute
+        # introduced.  When no cosmology arg was passed, we fall back
+        # to the platform default manifest as before.
+        "cosmology_used": (
+            cosmology_used["name"] if cosmology_used and cosmology_used.get("name")
+            else current_cosmo_name
+        ),
+        "cosmology_manifest": cosmology_used or _current_cosmo,
+        "cosmology_recomputed": cosmology_recomputed,
+        "cosmology_baseline": (
+            cosmology_baseline if cosmology_recomputed else None
+        ),
+        "dl_shift_summary": dl_shift_summary,
         "sample_source_cosmologies": sorted(sample_cosmo_names),
         "cosmology_mismatch": cosmology_mismatch,
+        # PART AD C5: variant label so multiple fits in one chat round
+        # (main / subsample-low-z / subsample-high-z / cosmology-Riess22)
+        # are distinguishable in the UI without parsing the prose.
+        "variant_label": str(inp.get("variant_label") or "main").strip() or "main",
         # M2: lensing bookkeeping.  demagnified count stays 0 unless
         # the rows came from a __demag cache (set in M4 by demagnify_sample).
         "lensed_sources_demagnified": sum(
