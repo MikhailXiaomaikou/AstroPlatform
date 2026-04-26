@@ -406,6 +406,22 @@ app.add_middleware(CorrelationIdMiddleware)
 # ── Security response headers ──
 MAX_REQUEST_BODY = 1_048_576  # 1 MB for non-upload endpoints
 
+# Endpoints that legitimately accept >1 MB request bodies. The default
+# 1 MB cap protects /api/chat / /api/adql / etc. from oversized payloads,
+# but chat export packages an entire transcript (text + actions +
+# embedded figure metadata) and often crosses 1 MB on long sessions.
+# Bug reproducer: M5 export → frontend reports "network error" because
+# the middleware 413'd the POST before it reached the export handler.
+_LARGE_BODY_PREFIXES = (
+    "/api/data/fits/upload",   # FITS uploads have their own MAX_UPLOAD_SIZE
+    "/api/data/upload",        # generic uploads
+    "/api/export/",            # chat -> markdown / notebook / latex / bibtex
+    "/api/integration/jupyter/export",  # notebook bundles
+    "/api/workspace/batch-upload",  # workspace bulk upload
+    "/api/paper/",             # AI-drafted paper assembly with figures
+    "/api/research/",          # full research report bundles
+)
+
 
 # T5 (PART T): `null` origin (file:// / data: URL) 只允许 admin 和公开
 # comments 两个前缀. 防止用户被诱导打开恶意 file:// HTML 后, 该 HTML
@@ -440,8 +456,9 @@ async def security_headers(request, call_next):
                 },
             )
 
-    # --- request body size gate (skip FITS upload) ---
-    if request.url.path != "/api/data/fits/upload":
+    # --- request body size gate (skip large-body endpoints) ---
+    path = request.url.path
+    if not any(path.startswith(p) for p in _LARGE_BODY_PREFIXES):
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:
