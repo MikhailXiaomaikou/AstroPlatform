@@ -861,6 +861,108 @@ def unsupported_literature_narrative_violations(
     return violations
 
 
+# ── M6: methodology-consistency check ─────────────────────────────
+# When the assistant verbally promises a Bayesian fit / two-axis
+# errors / a demagnification count, the actual fit_line_lfr or
+# demagnify_sample tool_result must back the claim up.  Otherwise
+# the methodology label is fiction even if the numbers happened to
+# come from somewhere.
+
+_BAYESIAN_PROMISE_RE = re.compile(
+    r"\b(?:bayesian|linmix|kelly\s*0?7|kelly\s*2007|"
+    r"two[\s-]?axis\s+errors?|"
+    r"errors?\s+in\s+both\s+(?:axes|x\s+and\s+y))\b",
+    re.IGNORECASE,
+)
+_DEMAGNIFY_COUNT_RE = re.compile(
+    r"\b(?:demagnif(?:ied|y(?:ing)?))\s+(\d+)\s+sources?\b",
+    re.IGNORECASE,
+)
+
+
+def _collect_tool_results_for(tool_results: Any, tool_name: str) -> list[dict]:
+    """Return every claimable tool_result dict for the named tool."""
+    out: list[dict] = []
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries or []:
+        name, result = _entry_tool_and_result(entry)
+        if not result:
+            continue
+        candidate_name = (
+            name
+            or (str(result.get("tool")) if isinstance(result.get("tool"), str) else None)
+        )
+        if candidate_name == tool_name:
+            out.append(result)
+    return out
+
+
+def methodology_consistency_violations(
+    reply: str, tool_results: Any,
+) -> list[CitationViolation]:
+    """Cross-check methodology promises in the reply against fit_line_lfr
+    / demagnify_sample tool results.  Returns violations with kind
+    'method_mismatch' (Bayesian promised, OLS actually ran) or
+    'demagnify_count_mismatch' (claimed N demagnified > what tools did).
+    """
+    if not reply:
+        return []
+    stripped = _strip_markdown_code(reply)
+    fit_results = _collect_tool_results_for(tool_results, "fit_line_lfr")
+    demag_results = _collect_tool_results_for(tool_results, "demagnify_sample")
+
+    violations: list[CitationViolation] = []
+
+    # ── Bayesian promise ──────────────────────────────────────────
+    bayesian_match = _BAYESIAN_PROMISE_RE.search(stripped)
+    if bayesian_match and fit_results:
+        any_bayesian = any(
+            str(r.get("fit_method", "")).startswith("bayesian")
+            for r in fit_results
+        )
+        if not any_bayesian:
+            violations.append(CitationViolation(
+                kind="method_mismatch",
+                match_text=bayesian_match.group(0),
+                line_number=_line_number(reply, bayesian_match.start()),
+            ))
+
+    # ── Demagnify count ───────────────────────────────────────────
+    max_demag = 0
+    for r in fit_results:
+        try:
+            max_demag = max(max_demag, int(r.get("lensed_sources_demagnified") or 0))
+        except (TypeError, ValueError):
+            pass
+    for r in demag_results:
+        try:
+            max_demag = max(max_demag, int(r.get("n_demagnified") or 0))
+        except (TypeError, ValueError):
+            pass
+    for m in _DEMAGNIFY_COUNT_RE.finditer(stripped):
+        try:
+            claimed = int(m.group(1))
+        except (TypeError, ValueError):
+            continue
+        if claimed > max_demag:
+            violations.append(CitationViolation(
+                kind="demagnify_count_mismatch",
+                match_text=m.group(0),
+                line_number=_line_number(reply, m.start()),
+            ))
+
+    for v in violations:
+        try:
+            _record_citation_violation_metric(v.kind)
+        except Exception:
+            pass
+        logger.warning(
+            "Methodology consistency violation: kind=%s match=%r line=%d",
+            v.kind, v.match_text, v.line_number,
+        )
+    return violations
+
+
 def _unsupported_narrative_kind_is_supported(kind: str, tool_results: Any) -> bool:
     if kind == "unsupported_line_property_relation":
         return _line_measurement_rows_available(tool_results)

@@ -121,6 +121,47 @@ measurement rows; state the count/cache key and continue with the fit tool.
 Never fill a line-measurement sample by hardcoding remembered
 ALPINE/REBELS/literature tables in `run_python`.
 
+### Line-relation fitting methodology (REQUIRED declarations)
+When fitting a luminosity-FWHM (or similar line-property) relation:
+
+1. **Declare the fit method**.  fit_line_lfr returns a `fit_method`
+   field on every call ("ols" | "bayesian_xyerr_linmix").  In your
+   reply, name the method that actually ran — never paraphrase OLS as
+   "Bayesian", "linmix", "Kelly 2007", or "errors in both axes".  If
+   `__tool_status__` is `METHOD_DOWNGRADED`, state explicitly that the
+   fit fell back to OLS and quote the `fit_method_downgrade_reason`.
+
+2. **Decompose slope uncertainty**.  The OLS path's `beta_stderr` is
+   pure statistical error.  Cosmology-systematic shifts must be cited
+   from `compare_luminosity_distances`; lensing-systematic shifts come
+   from comparing fits on the original cache vs the `<key>__demag`
+   cache produced by `demagnify_sample`.  Report each component
+   separately rather than collapsing them into a single ±.
+
+3. **Subsample comparisons need a real significance number**.  When
+   you report e.g. "z<1 slope=S1, z>=1 slope=S2", you MUST also pass
+   `subsample_splits=[...]` to fit_line_lfr and quote the resulting
+   `subsample_significance_test.comparisons[*].p_value` plus
+   `interpretation`.  Side-by-side slopes without a Δβ p-value or
+   HDI overlap are NOT a redshift-dependence test.
+
+4. **Lensed sources**.  Before fitting, declare per-source
+   `is_lensed=true|false|unknown`.  If any sources need correction,
+   call `demagnify_sample(cache_key=..., mu_map={...})` to produce a
+   `<key>__demag` cache, then fit on that.  Report
+   `lensed_sources_demagnified` and the μ source/reference for each.
+
+5. **Cosmology cross-check**.  Before quoting a non-Planck H0/Om0
+   (e.g. Riess+11 H0=73.8, Suzuki+12 Om=0.271) on a sample whose
+   `source_cosmology` differs, call
+   `compare_luminosity_distances(target_cosmology=...)` and cite the
+   median |ΔDL| and max |Δlog L| from its summary.
+
+6. **Final deliverable**.  When the user expects a sample table (e.g.
+   "the 74-source list"), call `export_sample_table(format="csv")`
+   (or `latex` for paper drafts) and include the result in the reply
+   — do NOT just promise a table you didn't generate.
+
 ### Cosmology MCMC workflow
 For cosmological parameter constraints (H0, Om0/Omega_m, w0, wa, sigma8,
 distance-modulus fits, CPL fits, or posterior/HDI/R-hat/ESS claims), first
@@ -3650,6 +3691,8 @@ async def _run_agent_loop(
             blocked_citation_reply_text,
             unsupported_literature_narrative_violations,
             blocked_unsupported_narrative_reply_text,
+            # M6: methodology cross-check (Bayesian / demagnify count)
+            methodology_consistency_violations,
         )
 
         # F1.4: zero-data hard block.  If every tool call this turn was
@@ -3780,9 +3823,18 @@ async def _run_agent_loop(
 
         elif True:
             citation_violations = provenance_citation_violations(clean_reply, all_tool_results)
+            # M6: extend the citation-violation set with methodology
+            # mismatches (Bayesian promised but OLS ran, demagnify count
+            # claimed > actual).  Same gate decides whether the reply is
+            # blocked; the blocked-reply text is shared.
+            method_violations = methodology_consistency_violations(
+                clean_reply, all_tool_results,
+            )
+            if method_violations:
+                citation_violations = list(citation_violations) + list(method_violations)
             if citation_violations and citation_violations_should_block(citation_violations):
                 logger.error(
-                    "Citation provenance gate BLOCKED reply from %s (%d violations)",
+                    "Citation/methodology gate BLOCKED reply from %s (%d violations)",
                     agent_name,
                     len(citation_violations),
                 )
