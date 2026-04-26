@@ -3388,25 +3388,32 @@ async def _run_agent_loop(
         if checkpoint_note:
             system_this_call = system_this_call + "\n\n" + checkpoint_note
 
-        # PART Y Batch 5 (audit follow-up): synthetic_run_python_count was
-        # previously incremented but never read. When the model has produced
-        # 3+ SYNTHETIC run_python calls in this turn — i.e. it keeps writing
-        # fabricated code even after upstream fetches failed — append a
-        # forceful instruction telling it to emit <tools_returned_nothing/>
-        # instead of the next demo run. We deliberately do NOT physically
-        # disable run_python (the model still needs it for legitimate
-        # post-cache analysis), just push hard for abstention.
-        if synthetic_run_python_count >= 3:
+        # PART Y Batch 5 + C-X2 (audit follow-up): synthetic_run_python_count
+        # was previously incremented but never read; PART Y Batch 5 wired it
+        # to a >=3 forced-abstention nudge; C-X2 tightens the threshold to
+        # >=1 because the most recent audit caught a turn where the AI
+        # reached for synthetic data once, hit the upstream guard ("I see
+        # the system is directing me to use the cached literature data"),
+        # and then kept thrashing in the cached data instead of either
+        # finding another tool path or emitting <tools_returned_nothing/>.
+        # Pushing for abstention as soon as the first SYNTHETIC run_python
+        # appears prevents the "thrash in cached data" loop while still
+        # allowing the model to recover with a DIFFERENT real-data tool.
+        # We deliberately do NOT physically disable run_python (the model
+        # still needs it for legitimate post-cache analysis), just push
+        # hard for abstention.
+        if synthetic_run_python_count >= 1:
             system_this_call = (
                 system_this_call
                 + "\n\n[RUNTIME: you have emitted "
-                + f"{synthetic_run_python_count} SYNTHETIC run_python calls "
-                + "this turn (data_source='none_not_analyzing_real_data' or "
-                + "auto-tainted because upstream fetches failed). STOP "
-                + "writing demo / synthetic code now. Emit "
-                + "<tools_returned_nothing/> with the failed_tools list as "
-                + "your entire reply, or call a DIFFERENT data-fetch tool. "
-                + "Do not produce any more SYNTHETIC output this turn.]"
+                + f"{synthetic_run_python_count} SYNTHETIC run_python "
+                + "call(s) this turn (data_source='none_not_analyzing_real_data' "
+                + "or auto-tainted because upstream fetches failed). STOP "
+                + "writing demo / synthetic code now. Either (a) call a "
+                + "DIFFERENT real-data tool with DIFFERENT parameters, or "
+                + "(b) emit <tools_returned_nothing/> with the failed_tools "
+                + "list as your ENTIRE reply. Do not produce any more "
+                + "SYNTHETIC output this turn.]"
             )
             try:
                 from app.observability.metrics import record_counter
