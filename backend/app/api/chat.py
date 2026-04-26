@@ -237,12 +237,15 @@ etc.), the order of operations is mandatory:
    provenance violation to your reply (PART AG C1) so the user
    still sees your prose but with the unverified citation flagged.
 
-The platform pre-warms a curated [CII] cache at startup
-(arXiv:2002.00962 ALPINE-Béthermin / 2009.10727 ALPINE-Le Fèvre /
-2106.13719 REBELS-Bouwens / 1605.03581 Capak / 1308.4708 Bothwell /
-2105.10474 ASPECS); these papers' tables are usually cached when
-your turn starts. If they aren't, run extract_literature_tables on
-the relevant arxiv_id BEFORE citing them.
+The platform pre-warms a curated [CII] cache at startup. The currently
+verified entry is arXiv:2002.00962 (Béthermin+2020 ALPINE master
+sample, 74 line_measurements). Other [CII] surveys (REBELS, Capak,
+Bothwell, ALPINE Le Fèvre, ASPECS) are NOT auto-cached — the parser
+either does not normalise their HTML tables yet, or the canonical
+arxiv_id was unverified in earlier audit rounds. To use them, you
+must FIRST extract_literature_tables for the specific arxiv_id and
+verify the returned `line_measurement_count > 0` BEFORE citing the
+paper by name.
 
 This complements the ZERO-FABRICATION CONTRACT below: values and
 citations must both be backed by current-turn tool output.
@@ -274,22 +277,37 @@ ALPINE/REBELS/literature tables in `run_python`.
 ### Line-relation fitting methodology (REQUIRED declarations)
 When fitting a luminosity-FWHM (or similar line-property) relation:
 
-**-2. Multi-survey sample composition (mandatory before fitting).**
-   A line-relation slope drawn from a single survey (only ALPINE,
-   only REBELS, only Bothwell+13) is NOT a robust line relation —
-   it is a survey-internal trend that may be dominated by selection.
-   Before calling `fit_line_lfr` you MUST extract at least 3
-   independent surveys' tables via `extract_literature_tables` so the
-   sample crosses survey systematics. For [CII] high-z work the
-   curated default set covers ALPINE (arXiv:2002.00962, 2009.10727),
-   REBELS (2106.13719), Capak+2015 (1605.03581), Bothwell+13
-   (1308.4708), and ASPECS (2105.10474) — pull at least 3 of these
-   before fitting. If only ALPINE rows are in your cache, prose MUST
-   say "sample is from a single survey (ALPINE); a robust slope
-   requires extension to other published [CII] datasets such as
-   REBELS / Capak+2015 / Bothwell+13 — those should be extracted
-   before drawing population conclusions." Then either extract them
-   or emit `<tools_returned_nothing/>`.
+**-2. Multi-survey sample composition (recommended; honest fallback
+required when only one survey is in the cache).**
+
+   A line-relation slope drawn from a single survey is NOT a robust
+   line relation — it is a survey-internal trend that may be
+   dominated by selection. Ideally `fit_line_lfr` runs on at least 3
+   independent surveys' tables.
+
+   HOWEVER: at this stage of the platform only the ALPINE master
+   sample (arXiv:2002.00962) is verified end-to-end through the
+   normalizer. Other [CII] arxiv ids that LOOK like they should
+   work — REBELS / Capak / Bothwell / Le Fèvre — are either not
+   yet correctly identified by the table parser, or the
+   author-year-paper match is not what the original audit assumed.
+
+   When the cache contains only ALPINE rows you MUST:
+   - State explicitly in prose: "Sample composition: ALPINE only
+     (arXiv:2002.00962, 74 sources). A multi-survey slope is the
+     statistically correct goal; the platform's parser does not yet
+     yield a non-zero line_measurement_count for the canonical
+     REBELS / Capak / Bothwell tables, so the slope reported here is
+     a single-survey value pending parser improvements."
+   - DO NOT fabricate a "Bothwell 2013" / "Capak+2015" / "REBELS"
+     entry into the prose just because the multi-survey rule
+     mentions those names; the validator gates on real tool_results,
+     not user-prompt content.
+   - You MAY still try `extract_literature_tables(arxiv_id="...")`
+     on a candidate paper. If it returns `line_measurement_count=0`,
+     report that fact in prose ("extract_literature_tables on
+     <paper> returned 0 normalisable line measurements") rather than
+     claiming the rows are in the sample.
 
 **-1. Subsample fallback transparency.**
    If the user specifies a subsample split (e.g. "compare z<1 vs

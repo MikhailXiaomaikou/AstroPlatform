@@ -23,16 +23,21 @@ from unittest.mock import patch
 import pytest
 
 
-def test_default_cii_arxiv_ids_cover_independent_surveys() -> None:
-    """Sanity: the default preload list isn't all from one survey."""
+def test_default_cii_arxiv_ids_only_verified() -> None:
+    """PART AG C4 retest fix: the DEFAULT list must only contain arxiv
+    ids that have been END-TO-END verified to yield > 0 line_measurements
+    through the full _normalize_line_measurements pipeline. PART AD C2
+    originally shipped 6 ids written from memory; 3 turned out to point
+    at unrelated physics papers (Cabibbo mixing, chiral condensate,
+    etc.). Until each candidate is locally verified, the DEFAULT stays
+    at the single confirmed ALPINE Béthermin+2020 entry."""
     from app.api.admin_literature import DEFAULT_CII_ARXIV_IDS
 
-    # 6 papers, 4 distinct landmark surveys (ALPINE / REBELS / Capak / Bothwell + ASPECS)
-    assert len(DEFAULT_CII_ARXIV_IDS) >= 5
-    assert "2002.00962" in DEFAULT_CII_ARXIV_IDS  # ALPINE Béthermin+2020
-    assert "2106.13719" in DEFAULT_CII_ARXIV_IDS  # REBELS Bouwens+2022
-    assert "1605.03581" in DEFAULT_CII_ARXIV_IDS  # Capak+2015
-    assert "1308.4708" in DEFAULT_CII_ARXIV_IDS   # Bothwell+2013
+    assert len(DEFAULT_CII_ARXIV_IDS) >= 1
+    assert "2002.00962" in DEFAULT_CII_ARXIV_IDS  # ALPINE Béthermin+2020 — verified 74 measurements
+    # NOTE: do not re-add unverified ids here without running
+    # _cached_extract_arxiv_tables_payload locally first and confirming
+    # len(payload["line_measurements"]) > 0.
 
 
 def test_preload_endpoint_fans_out_and_aggregates_counts(monkeypatch) -> None:

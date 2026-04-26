@@ -35,21 +35,33 @@ router = APIRouter(prefix="/api/admin/literature", tags=["admin-literature"])
 
 # Curated list of arXiv IDs whose tables are worth pre-warming.
 #
-# Picked to give fit_line_lfr a multi-survey [CII] sample at z>4 plus
-# a z~0 anchor:
-#  - 2002.00962  Béthermin+2020 ALPINE (z=4-6, 75-line sample)
-#  - 2009.10727  Le Fèvre+2020   ALPINE survey paper (z=4-6)
-#  - 2106.13719  Bouwens+2022   REBELS overview (z>=6.5)
-#  - 1605.03581  Capak+2015     z~5-6 [CII] HZ1-HZ10 (early ALMA)
-#  - 1308.4708   Bothwell+2013  z~3 ULIRG [CII] sample
-#  - 2105.10474  Aravena+2024   ASPECS [CII] (z~6)
+# CALIBRATION HISTORY: PART AD C2 first listed 6 arxiv ids written from
+# memory; PART AG C4 local test caught that 3 of them pointed at
+# unrelated physics papers (1605.03581 = a Cabibbo-mixing particle
+# physics paper, NOT Capak+2015 [CII]; 1308.4708 = a chiral-condensate
+# nuclear physics paper, NOT Bothwell+2013 [CII] survey; etc.). The
+# DEFAULT list is now restricted to the SINGLE id we have verified
+# end-to-end yields > 0 line_measurements through the full normalizer
+# pipeline. Adding new ids requires running them locally first and
+# confirming `len(payload["line_measurements"]) > 0`.
+#
+#  - 2002.00962  Béthermin+2020 ALPINE (z=4-6, 75-line sample) ✓ 74 measurements
+#
+# Pending verification (do NOT add to DEFAULT until checked):
+#  - REBELS [CII] line table — likely arXiv:2202.04080 (Inami+2022)
+#    or arXiv:2202.10464 (Schouws+2022), need to inspect ar5iv tables.
+#  - Bothwell+2013 SPT [CII] — likely arXiv:1304.4256 (different paper
+#    from the one I originally wrote here).
+#  - Capak+2015 [CII] — likely arXiv:1503.07596 (Nature 522 455).
+#  - ALPINE Le Fèvre+2020 survey — likely arXiv:1910.09517.
+#
+# To add a paper to the DEFAULT list, an admin should:
+#  1. Call POST /api/admin/literature/preload_cii_caches with
+#     arxiv_ids=["<candidate>"] in the request body.
+#  2. Inspect the returned `line_measurement_count` for that entry.
+#  3. Only if count > 0 is the paper a useful preload target.
 DEFAULT_CII_ARXIV_IDS: tuple[str, ...] = (
     "2002.00962",
-    "2009.10727",
-    "2106.13719",
-    "1605.03581",
-    "1308.4708",
-    "2105.10474",
 )
 
 
