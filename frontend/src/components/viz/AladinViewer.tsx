@@ -319,10 +319,14 @@ export default function AladinViewer(props: AladinViewerProps) {
       // fallback: no live readout
     }
 
+    // PART Y Q3: capture container ref into a local at effect-start so the
+    // cleanup uses the same DOM node we initialised on (the React-owned
+    // ref may have been replaced by the time cleanup runs).
+    const capturedContainer = containerRef.current;
     return () => {
       // Cleanup: Aladin Lite doesn't have a destroy method, but we can clear the container
-      if (containerRef.current) {
-        containerRef.current.innerHTML = "";
+      if (capturedContainer) {
+        capturedContainer.innerHTML = "";
       }
       aladinRef.current = null;
       initDoneRef.current = false;

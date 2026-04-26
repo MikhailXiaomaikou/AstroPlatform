@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 /* ── param schema per node type ── */
 
@@ -179,7 +179,11 @@ export default function NodeParamsEditor({
   onApply,
   onCancel,
 }: NodeParamsEditorProps) {
-  const paramDefs = NODE_PARAM_DEFS[nodeType] ?? [];
+  // PART Y Q3: useMemo so paramDefs is reference-stable across renders;
+  // the downstream useEffect at line ~211 reads it via deps.  Without
+  // useMemo a new array is created every render and that effect re-runs
+  // without cause, fighting the controlled-form state.
+  const paramDefs = useMemo(() => NODE_PARAM_DEFS[nodeType] ?? [], [nodeType]);
 
   // Initialise local form state from currentParams + defaults
   const [formValues, setFormValues] = useState<Record<string, string | number>>({});

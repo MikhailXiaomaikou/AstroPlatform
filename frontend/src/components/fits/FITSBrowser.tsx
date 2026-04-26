@@ -58,7 +58,7 @@ export default function FITSBrowser({ onSelectFile }: Props) {
     } finally {
       if (mySeq === loadSeqRef.current) setLoading(false);
     }
-  }, [filter]);
+  }, [filter, t]);
 
   useEffect(() => {
     loadFiles();

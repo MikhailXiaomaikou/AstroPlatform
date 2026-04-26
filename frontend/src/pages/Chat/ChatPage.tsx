@@ -2683,6 +2683,11 @@ function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
 
 export default function ChatPage() {
   const { user } = useAuth();
+  // PART Y Q3: depend on user?.id, not the user object — chatStorageScope
+  // is a function of identity, not of the wrapping object's reference.
+  // Re-computing on every user-object reference change would invalidate
+  // localStorage scope on every Auth refresh.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const storageScope = useMemo(() => chatStorageScope(user), [user?.id]);
   const { t } = useI18n();
   const { track } = useTracking();
@@ -2715,10 +2720,13 @@ export default function ChatPage() {
   }, []);
   const aiBackendReady = hasKey || serverBackendReady === true;
 
-  // Re-check API key on mount (picks up keys set in Settings page)
+  // Re-check API key on mount (picks up keys set in Settings page).
+  // PART Y Q3: intentionally re-runs every render to pick up cross-tab
+  // localStorage changes; the early return guards against feedback loops.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!hasKey && hasStoredAiKey()) setHasKey(true);
-  }); // intentionally no deps — runs every render but only sets state once
+  });
 
   const [messages, setMessages] = useState<DisplayMessage[]>(() => loadChatHistory(storageScope));
   const conversationProvenance = useConversationProvenance(messages);
@@ -3418,7 +3426,7 @@ export default function ChatPage() {
       .catch(() => {
         showToast("Could not load the requested session", "error");
       });
-  }, [showToast, user]);
+  }, [showToast, user, storageScope]);
 
   const handleOpenCollaboration = useCallback(async () => {
     if (!user) {

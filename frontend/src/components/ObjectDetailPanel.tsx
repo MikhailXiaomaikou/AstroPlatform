@@ -32,7 +32,7 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
       .then(setData)
       .catch((e) => setError(e instanceof Error ? e.message : t("odp.failed_to_load")))
       .finally(() => setLoading(false));
-  }, [isOpen, objectName, ra, dec]);
+  }, [isOpen, objectName, ra, dec, t]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!isOpen) return null;
