@@ -152,3 +152,56 @@ def test_vizier_common_mistakes_covers_gcvs_traps():
     hint_type = suggest_for_missing_column("Type")
     assert hint_type is not None
     assert "VarType" in hint_type
+
+
+def test_system_prompt_has_cosmology_presets_section():
+    """PART AA C3: SYSTEM_PROMPT must list the 4 PART AA presets + their
+    bibcodes so the citation validator can match a chat reply that quotes
+    "Planck18 H0=67.36" / "Riess22 SH0ES H0=73.04" against the universe.
+
+    A regression on this section means the model loses the reference
+    table and either uses an unsourced default or starts inventing
+    cosmology bibcodes from training data.
+    """
+    from app.api.chat import SYSTEM_PROMPT
+
+    # Section header
+    assert "COSMOLOGY PRESETS" in SYSTEM_PROMPT
+
+    # All 4 preset names exactly as the cosmology.py module exposes them
+    for preset in ("planck18", "planck18_bao", "freedman21_trgb", "riess22_shoes"):
+        assert preset in SYSTEM_PROMPT, f"missing preset {preset!r}"
+
+    # Anchor bibcodes — these are the citation strings the validator
+    # looks for in the tool_results universe.
+    for bibcode in (
+        "2020A&A...641A...6P",   # Planck Collab VI 2020
+        "2009ApJ...707..916F",    # Fixsen 2009 Tcmb0
+        "2021ApJ...919...16F",    # Freedman 2021 TRGB
+        "2022ApJ...934L...7R",    # Riess 2022 SH0ES
+    ):
+        assert bibcode in SYSTEM_PROMPT, f"missing bibcode {bibcode}"
+
+    # User-prompted-cosmology hook
+    assert "compare_luminosity_distances" in SYSTEM_PROMPT
+    assert "USER-PROMPTED COSMOLOGY HOOK" in SYSTEM_PROMPT
+
+
+def test_system_prompt_has_tool_retry_budget_section():
+    """C-X3: 5+ retry → escalate to abstention or different tool family."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "TOOL RETRY BUDGET" in SYSTEM_PROMPT
+    assert "5+ times this turn" in SYSTEM_PROMPT
+    assert "<tools_returned_nothing/>" in SYSTEM_PROMPT
+
+
+def test_system_prompt_defaults_fit_line_lfr_to_bayesian_xyerr():
+    """C-X3: Bayesian-by-default rule for the line-relation fit. OLS is
+    only the fallback for very small samples."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    # Rule 0 (the new one) of the methodology checklist
+    assert 'fit_method_requested="bayesian_xyerr"' in SYSTEM_PROMPT
+    assert "N >= 5" in SYSTEM_PROMPT
+    assert "OLS is the fallback" in SYSTEM_PROMPT
