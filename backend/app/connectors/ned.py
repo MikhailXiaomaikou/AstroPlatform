@@ -16,6 +16,24 @@ NED_LOOKUP_URL = "https://ned.ipac.caltech.edu/srs/ObjectLookup"
 NED_SEARCH_URL = "https://ned.ipac.caltech.edu/cgi-bin/objsearch"
 NED_REQUEST_TIMEOUT = 25.0
 
+# PART Y Batch 5 (audit L19): schema-version pin so future NED API column
+# renames (e.g. RA -> ra_deg) surface as a clear log warning instead of
+# silently returning None. The fallback list in _ned_str_value is
+# checked against this set; new column names that appear in production
+# but are not declared here log at WARNING.
+NED_API_SCHEMA_VERSION = "2025-01"
+NED_DECLARED_COLUMNS = frozenset({
+    # Sky position
+    "RA", "ra", "RA(deg)", "ra_deg",
+    "DEC", "dec", "DEC(deg)", "Dec", "dec_deg", "Declination",
+    # Object metadata
+    "Name", "Object Name", "Type", "Object Type",
+    "Velocity", "velocity", "Redshift", "z",
+    "Magnitude and Filter",
+    # Provenance
+    "References", "Notes",
+})
+
 
 class NEDConnector(BaseConnector):
     """Connector for NASA/IPAC Extragalactic Database (NED)."""

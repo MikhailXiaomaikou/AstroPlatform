@@ -382,7 +382,7 @@ def _compute_colors(magnitudes: dict, mag_errors: dict | None = None):
     return colors, color_errs
 
 
-def estimate_photo_z_ml(magnitudes: dict, mag_errors: dict | None = None) -> dict:
+def estimate_photo_z_ml(magnitudes: dict, mag_errors: dict | None = None, z_max: float = 2.0) -> dict:
     """Estimate photometric redshift using empirical colour–redshift relations.
 
     Uses a polynomial mapping of optical/NIR colours to redshift, calibrated
@@ -448,13 +448,16 @@ def estimate_photo_z_ml(magnitudes: dict, mag_errors: dict | None = None) -> dic
     z_phot = float(max(z_phot, 0.0))
 
     # ---- Gaussian P(z) ----
-    z_grid = np.linspace(0.0, 2.0, 401)
+    # PART Y Batch 5 (audit L12): z_max is now a parameter; default 2.0 for
+    # backward compat, but high-z surveys (LSST/Euclid/Roman) need larger.
+    z_grid = np.linspace(0.0, float(z_max), 401)
     pdf_z = np.exp(-0.5 * ((z_grid - z_phot) / z_err) ** 2)
     norm = _trapz(pdf_z, z_grid)
     if norm > 0:
         pdf_z = pdf_z / norm
 
     n_valid = sum(1 for c in colors if not np.isnan(c))
+    at_z_max_boundary = bool(z_phot >= (float(z_max) - 0.05))
 
     return {
         "z_phot": float(z_phot),
@@ -464,7 +467,13 @@ def estimate_photo_z_ml(magnitudes: dict, mag_errors: dict | None = None) -> dic
         "method": "empirical_colors",
         "colors_used": n_valid,
         "reliability": "demo",
-        "note": "Simplified template fitting with 7 SEDs. Use EAZY or Le Phare for publication-quality photo-z.",
+        "z_max_used": float(z_max),
+        "at_z_max_boundary": at_z_max_boundary,
+        "note": (
+            f"Simplified ML photo-z (empirical g-r/r-i polynomial; z_max={z_max}). "
+            "Use EAZY or Le Phare for publication-quality photo-z."
+            + ("  WARNING: best z_phot is at the boundary of the grid; re-run with larger z_max to confirm." if at_z_max_boundary else "")
+        ),
     }
 
 
@@ -542,7 +551,7 @@ def estimate_photo_z(
         return estimate_photo_z_template(magnitudes, mag_errors, z_max=z_max)
 
     if method == "ml":
-        return estimate_photo_z_ml(magnitudes, mag_errors)
+        return estimate_photo_z_ml(magnitudes, mag_errors, z_max=z_max)
 
     if method != "hybrid":
         raise ValueError(f"Unknown method '{method}'; use 'template', 'ml', or 'hybrid'.")
@@ -553,12 +562,12 @@ def estimate_photo_z(
     ml_result = None
 
     try:
-        template_result = estimate_photo_z_template(magnitudes, mag_errors)
+        template_result = estimate_photo_z_template(magnitudes, mag_errors, z_max=z_max)
     except Exception as exc:
         errors.append(f"template: {exc}")
 
     try:
-        ml_result = estimate_photo_z_ml(magnitudes, mag_errors)
+        ml_result = estimate_photo_z_ml(magnitudes, mag_errors, z_max=z_max)
     except Exception as exc:
         errors.append(f"ml: {exc}")
 
@@ -593,8 +602,8 @@ def estimate_photo_z(
         z_combined = (z_t + z_m) / 2.0
         z_err_combined = max(e_t, e_m)
 
-    # Combined Gaussian P(z)
-    z_grid = np.linspace(0.0, 2.0, 401)
+    # Combined Gaussian P(z) — PART Y Batch 5: respect user-supplied z_max
+    z_grid = np.linspace(0.0, float(z_max), 401)
     pdf_z = np.exp(-0.5 * ((z_grid - z_combined) / z_err_combined) ** 2)
     norm = _trapz(pdf_z, z_grid)
     if norm > 0:

@@ -416,7 +416,9 @@ CATALOG_REGISTRY: dict[str, CatalogEntry] = {
             ("magMax", "FLOAT", "Magnitude at maximum brightness"),
             ("min1", "FLOAT", "Primary minimum magnitude"),
             ("min2", "FLOAT", "Secondary minimum (eclipsing binaries)"),
-            ("magMin", "FLOAT", "Legacy alias for min1 (prefer min1)"),
+            # PART Y Batch 5 (audit): removed `magMin` — not a real CDS
+            # column. GCVS exposes min1/min2 only; AI guessing `magMin`
+            # got HTTP 400 "unknown column".
             ("Period", "DOUBLE", "Variability period [day]"),
             ("Epoch", "DOUBLE", "Epoch of maximum/primary minimum [JD - 2400000]"),
             ("SpType", "VARCHAR", "Spectral type"),

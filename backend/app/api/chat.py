@@ -3383,6 +3383,36 @@ async def _run_agent_loop(
         if checkpoint_note:
             system_this_call = system_this_call + "\n\n" + checkpoint_note
 
+        # PART Y Batch 5 (audit follow-up): synthetic_run_python_count was
+        # previously incremented but never read. When the model has produced
+        # 3+ SYNTHETIC run_python calls in this turn — i.e. it keeps writing
+        # fabricated code even after upstream fetches failed — append a
+        # forceful instruction telling it to emit <tools_returned_nothing/>
+        # instead of the next demo run. We deliberately do NOT physically
+        # disable run_python (the model still needs it for legitimate
+        # post-cache analysis), just push hard for abstention.
+        if synthetic_run_python_count >= 3:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: you have emitted "
+                + f"{synthetic_run_python_count} SYNTHETIC run_python calls "
+                + "this turn (data_source='none_not_analyzing_real_data' or "
+                + "auto-tainted because upstream fetches failed). STOP "
+                + "writing demo / synthetic code now. Emit "
+                + "<tools_returned_nothing/> with the failed_tools list as "
+                + "your entire reply, or call a DIFFERENT data-fetch tool. "
+                + "Do not produce any more SYNTHETIC output this turn.]"
+            )
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "synthetic_run_python_excess_total", 1.0,
+                    count=str(min(synthetic_run_python_count, 10)),
+                    agent=agent_name,
+                )
+            except Exception:
+                pass
+
         if fit_ready_literature_cache_keys:
             latest_cache = fit_ready_literature_cache_keys[-1]
             system_this_call = (
