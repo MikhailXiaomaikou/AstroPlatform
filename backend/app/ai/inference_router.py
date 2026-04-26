@@ -35,25 +35,40 @@ def _normalize_openai_messages(messages: list[dict]) -> list[dict]:
         text_parts = [str(block.get("text", "")) for block in content if isinstance(block, dict) and block.get("type") == "text"]
         tool_uses = [block for block in content if isinstance(block, dict) and block.get("type") == "tool_use"]
         tool_results = [block for block in content if isinstance(block, dict) and block.get("type") == "tool_result"]
+        # PART Z C6 — DeepSeek thinking-mode contract: when the previous
+        # assistant turn carried `reasoning_content`, it MUST be passed
+        # back on the next request or DeepSeek 400s with
+        # "The reasoning_content in the thinking mode must be passed
+        # back to the API." We carry it as a dedicated content block
+        # so chat.py doesn't need to know which provider produced it.
+        reasoning_blocks = [
+            block for block in content
+            if isinstance(block, dict) and block.get("type") == "reasoning_content"
+        ]
+        reasoning_text = "\n\n".join(
+            str(block.get("text") or block.get("content") or "")
+            for block in reasoning_blocks
+        ).strip()
 
         if role == "assistant" and tool_uses:
-            normalized.append(
-                {
-                    "role": "assistant",
-                    "content": "\n\n".join(part for part in text_parts if part).strip() or None,
-                    "tool_calls": [
-                        {
-                            "id": block.get("id") or str(uuid.uuid4()),
-                            "type": "function",
-                            "function": {
-                                "name": block.get("name"),
-                                "arguments": json.dumps(block.get("input") or {}),
-                            },
-                        }
-                        for block in tool_uses
-                    ],
-                }
-            )
+            msg = {
+                "role": "assistant",
+                "content": "\n\n".join(part for part in text_parts if part).strip() or None,
+                "tool_calls": [
+                    {
+                        "id": block.get("id") or str(uuid.uuid4()),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name"),
+                            "arguments": json.dumps(block.get("input") or {}),
+                        },
+                    }
+                    for block in tool_uses
+                ],
+            }
+            if reasoning_text:
+                msg["reasoning_content"] = reasoning_text
+            normalized.append(msg)
             continue
 
         if role == "user" and tool_results:
@@ -67,7 +82,10 @@ def _normalize_openai_messages(messages: list[dict]) -> list[dict]:
                 )
             continue
 
-        normalized.append({"role": role, "content": "\n\n".join(part for part in text_parts if part)})
+        msg = {"role": role, "content": "\n\n".join(part for part in text_parts if part)}
+        if role == "assistant" and reasoning_text:
+            msg["reasoning_content"] = reasoning_text
+        normalized.append(msg)
     return normalized
 
 
@@ -403,9 +421,17 @@ class OpenAICompatibleBackend(LLMBackend):
         if not content_text and not tool_calls:
             raise InferenceError(f"{self.backend_label} returned an empty completion")
         usage = data.get("usage") or {}
+        # PART Z C6: DeepSeek thinking-mode response carries
+        # `reasoning_content` alongside `content`. Surface it so the
+        # agent loop can stash it on the assistant turn and send it
+        # back next round (DeepSeek 400s otherwise).
+        reasoning_content = message.get("reasoning_content")
+        if not isinstance(reasoning_content, str):
+            reasoning_content = None
         return {
             "content": content_text,
             "tool_calls": tool_calls,
+            "reasoning_content": reasoning_content,
             "usage": {
                 "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
                 "output_tokens": int(usage.get("completion_tokens", 0) or 0),

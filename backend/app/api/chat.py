@@ -3561,6 +3561,17 @@ async def _run_agent_loop(
             break
 
         assistant_content = []
+        # PART Z C6 — DeepSeek thinking-mode contract: stash the
+        # reasoning_content the model produced this turn so the next
+        # OpenAI-compatible request can echo it back. Anthropic/OpenAI
+        # paths don't return reasoning_content; the block is dropped
+        # silently on those providers via _normalize_openai_messages.
+        reasoning_content = response.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content.strip():
+            assistant_content.append({
+                "type": "reasoning_content",
+                "text": reasoning_content,
+            })
         if text:
             assistant_content.append({"type": "text", "text": text})
         for tool_call in tool_calls_in_turn:
