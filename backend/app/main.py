@@ -320,10 +320,28 @@ async def lifespan(app: FastAPI):
     subscriber_task = asyncio.create_task(redis_subscriber())
     event_flush_task = asyncio.create_task(periodic_flush(event_collector, interval=event_collector.FLUSH_INTERVAL))
 
+    # PART AG C2 — fire-and-forget [CII] literature cache pre-warm.
+    # R2.4 M6 audit caught the AI tripping the citation guard because
+    # SYSTEM_PROMPT (PART AD C2) tells it to cite REBELS / Capak+2015 /
+    # Bothwell+13 but those papers' tables weren't in connector_cache,
+    # and `search_literature` returned 0 hits → AI cited from prior →
+    # guard withheld the entire reply. Pre-warming the cache at
+    # startup makes the curated 6-paper set resolve immediately.
+    #
+    # The task is fire-and-forget so server startup is NOT blocked on
+    # 6 ar5iv fetches (typical 15-30 s wall clock). If a fetch fails
+    # the per-paper retry circuit-breaker handles it; if all fail the
+    # platform still functions, AI just won't have those caches warm.
+    # Each fetch is funneled through `_cached_extract_arxiv_tables_payload`
+    # (24h connector_cache + retry) so a second startup within 24h is
+    # a fast no-op.
+    cii_preload_task = asyncio.create_task(_warmup_cii_caches())
+
     yield
 
     subscriber_task.cancel()
     event_flush_task.cancel()
+    cii_preload_task.cancel()
     try:
         await subscriber_task
     except asyncio.CancelledError:
@@ -333,6 +351,58 @@ async def lifespan(app: FastAPI):
         await event_flush_task
     except asyncio.CancelledError:
         pass
+    try:
+        await cii_preload_task
+    except (asyncio.CancelledError, Exception):
+        # Best-effort cleanup — preload failure must never block shutdown.
+        pass
+
+
+async def _warmup_cii_caches() -> None:
+    """PART AG C2 — fire-and-forget pre-warm of the curated [CII]
+    literature cache list at server startup.
+
+    Pulls the 6-paper default set from app.api.admin_literature so the
+    list of papers stays in one place. Each fetch is independent and
+    survived by `_cached_extract_arxiv_tables_payload`'s 24h cache, so
+    repeated startups within a day are cheap no-ops.
+
+    Failures are logged at WARNING but never re-raised — the platform
+    must not hard-fail to start because ar5iv was unreachable.
+    """
+    try:
+        # Tiny grace period so the rest of the lifespan setup finishes
+        # first (Redis subscriber, DB migrations, etc.). The preload
+        # is not time-critical; let other work go through first.
+        await asyncio.sleep(2.0)
+
+        from app.api.admin_literature import DEFAULT_CII_ARXIV_IDS
+        from app.services.ai_tools import _cached_extract_arxiv_tables_payload
+
+        async def _one(arxiv_id: str) -> tuple[str, bool]:
+            try:
+                payload = await _cached_extract_arxiv_tables_payload(arxiv_id)
+                count = len(payload.get("line_measurements") or [])
+                logger.info(
+                    "warmup_cii: arxiv:%s ok (%d line_measurements)",
+                    arxiv_id, count,
+                )
+                return arxiv_id, True
+            except Exception as exc:
+                logger.warning("warmup_cii: arxiv:%s failed: %s", arxiv_id, exc)
+                return arxiv_id, False
+
+        results = await asyncio.gather(
+            *[_one(aid) for aid in DEFAULT_CII_ARXIV_IDS],
+            return_exceptions=False,
+        )
+        succeeded = sum(1 for _, ok in results if ok)
+        logger.info(
+            "warmup_cii: pre-warm complete — %d/%d papers cached",
+            succeeded, len(DEFAULT_CII_ARXIV_IDS),
+        )
+    except Exception as exc:
+        logger.warning("warmup_cii: top-level failure: %s", exc)
 
 
 app = FastAPI(
