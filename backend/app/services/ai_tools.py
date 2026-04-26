@@ -643,6 +643,64 @@ TOOLS = [
         },
     },
     {
+        "name": "compare_luminosity_distances",
+        "description": (
+            "Compare luminosity distance + Δlog L for two cosmology choices "
+            "across the cached literature sample. Use BEFORE citing a non-"
+            "Planck H0/Om0 (e.g. Riess+11 H0=73.8, Suzuki+12 Om=0.271) on a "
+            "sample whose source_cosmology is something else. Returns per-"
+            "source ΔDL%% + Δlog L, plus median/max summary; use the result "
+            "to either recompute log_luminosity or quote the shift as a "
+            "cosmology-systematic uncertainty in the slope error budget."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cache_key": {
+                    "type": "string",
+                    "description": "Source cache key. Default: latest_literature_tables.",
+                },
+                "target_cosmology": {
+                    "type": "string",
+                    "description": (
+                        "Cosmology name (Planck18 | Planck15 | WMAP9 | WMAP7 "
+                        "| WMAP5) or FlatLambdaCDM_H<H0>_Om<Om> spec, e.g. "
+                        "FlatLambdaCDM_H73p8_Om0p27 for Riess+11 / Suzuki+12."
+                    ),
+                },
+            },
+            "required": ["target_cosmology"],
+        },
+    },
+    {
+        "name": "export_sample_table",
+        "description": (
+            "Export the cached literature sample as a machine-readable "
+            "table (csv | votable | latex | ascii). Use as the final "
+            "deliverable so the user can verify the 74-source sample "
+            "directly. The content is returned inline."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cache_key": {
+                    "type": "string",
+                    "description": "Source cache key. Default: latest_literature_tables.",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["csv", "votable", "latex", "ascii"],
+                    "description": "Output format. Default: csv.",
+                },
+                "columns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Column subset. Default: all standard fields.",
+                },
+            },
+        },
+    },
+    {
         "name": "demagnify_sample",
         "description": (
             "Apply gravitational-lensing demagnification to a literature "
@@ -1680,6 +1738,10 @@ async def _execute_tool_inner(
             return _exec_fit_line_lfr(tool_input, python_session_id)
         elif tool_name == "demagnify_sample":
             return _exec_demagnify_sample(tool_input, python_session_id)
+        elif tool_name == "compare_luminosity_distances":
+            return _exec_compare_luminosity_distances(tool_input, python_session_id)
+        elif tool_name == "export_sample_table":
+            return _exec_export_sample_table(tool_input, python_session_id)
         elif tool_name == "run_python":
             return await _exec_run_python(tool_input, python_session_id)
         elif tool_name == "get_last_search_results":
@@ -4304,6 +4366,265 @@ def _exec_demagnify_sample(inp: dict, python_session_id: str = "default") -> dic
             f"as cache_key={out_cache_key!r} to fit on the demagnified rows. "
             "The original cache is preserved so the lensing-systematic error "
             "budget can be derived by comparing fits on both keys."
+        ),
+    }
+
+
+def _cosmology_manifest_for(name: str) -> dict[str, Any]:
+    """Build a manifest dict for an arbitrary supported cosmology name."""
+    from app.services.cosmology import get_cosmology
+    cosmo = get_cosmology(name)
+    return {
+        "name": name,
+        "H0_km_s_Mpc": float(cosmo.H0.value),
+        "Om0": float(cosmo.Om0),
+        "Ob0": float(getattr(cosmo, "Ob0", 0.0) or 0.0),
+    }
+
+
+def _exec_compare_luminosity_distances(
+    inp: dict, python_session_id: str = "default",
+) -> dict:
+    """Compare luminosity distance + Δlog L for two cosmology choices.
+
+    Use this BEFORE citing a non-Planck H0/Om0 (e.g. Riess 2011 H0=73.8
+    or Suzuki 2012 Om=0.271) on a sample whose source_cosmology is
+    something else.  The tool reports per-source ΔDL and Δlog L' so the
+    AI can decide whether the cosmology-systematic shift is large
+    enough to recompute or merely cite as a < few % systematic.
+    """
+    cache_key = str(
+        inp.get("cache_key") or "latest_literature_tables"
+    ).strip() or "latest_literature_tables"
+    target_name = str(inp.get("target_cosmology") or "").strip()
+    if not target_name:
+        return {
+            "success": False,
+            "error": "target_cosmology is required (e.g. 'Planck18', 'WMAP9', or 'FlatLambdaCDM_H73p8_Om0p27').",
+            "error_class": "missing_target_cosmology",
+            "__tool_status__": "FAILED",
+        }
+    rows, resolved_cache_key = _resolve_literature_measurement_cache(
+        cache_key, python_session_id,
+    )
+    if not rows:
+        return {
+            "success": False,
+            "__tool_status__": "EMPTY",
+            "error": f"No cached line_measurements found for cache_key={cache_key!r}.",
+            "error_class": "missing_measurement_cache",
+        }
+    from app.services.cosmology import (
+        cosmology_manifest as _current_manifest,
+        get_cosmology as _get,
+    )
+
+    current_manifest = _current_manifest()
+    target_manifest = _cosmology_manifest_for(target_name)
+    current_cosmo = _get(None)
+    target_cosmo = _get(target_name)
+
+    per_source: list[dict[str, Any]] = []
+    deltas_pct: list[float] = []
+    deltas_log_l: list[float] = []
+    for row in rows:
+        z = _finite_float(row.get("redshift"))
+        if z is None or z <= 0:
+            continue
+        try:
+            dl_a = float(current_cosmo.luminosity_distance(z).to("Mpc").value)
+            dl_b = float(target_cosmo.luminosity_distance(z).to("Mpc").value)
+        except Exception:
+            continue
+        if dl_a <= 0:
+            continue
+        delta_pct = (dl_b - dl_a) / dl_a * 100.0
+        # log L ∝ 2 · log DL ⇒ Δlog L = 2 · log10(DL_b / DL_a)
+        delta_log_l = 2.0 * (math.log10(dl_b) - math.log10(dl_a))
+        per_source.append({
+            "source_name": row.get("source_name"),
+            "redshift": z,
+            "DL_current_Mpc": round(dl_a, 3),
+            "DL_target_Mpc": round(dl_b, 3),
+            "delta_pct": round(delta_pct, 4),
+            "delta_log_luminosity": round(delta_log_l, 6),
+        })
+        deltas_pct.append(delta_pct)
+        deltas_log_l.append(delta_log_l)
+
+    if not per_source:
+        return {
+            "success": False,
+            "__tool_status__": "EMPTY",
+            "error": "No rows with usable redshift were available for comparison.",
+            "error_class": "no_redshift_rows",
+        }
+    import numpy as _np
+    summary = {
+        "n_used": len(per_source),
+        "max_abs_delta_pct": round(float(_np.max(_np.abs(deltas_pct))), 4),
+        "median_abs_delta_pct": round(float(_np.median(_np.abs(deltas_pct))), 4),
+        "max_abs_delta_log_luminosity": round(
+            float(_np.max(_np.abs(deltas_log_l))), 6,
+        ),
+        "median_abs_delta_log_luminosity": round(
+            float(_np.median(_np.abs(deltas_log_l))), 6,
+        ),
+    }
+    return {
+        "success": True,
+        "tool": "compare_luminosity_distances",
+        "cache_key": resolved_cache_key,
+        "current_cosmology": current_manifest,
+        "target_cosmology": target_manifest,
+        "summary": summary,
+        "per_source": per_source[:200],
+        "n_source_total": len(per_source),
+        "__message_to_model__": (
+            f"Cosmology cross-check vs {target_name!r}: median |ΔDL|"
+            f" = {summary['median_abs_delta_pct']:.2f}%, max"
+            f" {summary['max_abs_delta_pct']:.2f}%."
+            "  If max |Δlog L| > 0.05 dex, recompute log_luminosity"
+            " before fitting; otherwise quote the shift as a"
+            " cosmology-systematic uncertainty."
+        ),
+    }
+
+
+def _exec_export_sample_table(
+    inp: dict, python_session_id: str = "default",
+) -> dict:
+    """Export the cached literature sample as a machine-readable table.
+
+    Formats supported:
+      - csv       (default; comma-separated, header row)
+      - votable   (IVOA VOTable XML via astropy)
+      - latex     (AAS deluxetable string)
+      - ascii     (fixed-width, astropy ASCII)
+
+    The table is returned inline in the result dict (`content`); the
+    caller can write it to disk or include it in a PDF/paper draft.
+    """
+    cache_key = str(
+        inp.get("cache_key") or "latest_literature_tables"
+    ).strip() or "latest_literature_tables"
+    fmt = str(inp.get("format") or "csv").strip().lower()
+    if fmt not in ("csv", "votable", "latex", "ascii"):
+        return {
+            "success": False,
+            "error": f"Unsupported format {fmt!r}. Use csv | votable | latex | ascii.",
+            "error_class": "invalid_format",
+            "__tool_status__": "FAILED",
+        }
+    rows, resolved_cache_key = _resolve_literature_measurement_cache(
+        cache_key, python_session_id,
+    )
+    if not rows:
+        return {
+            "success": False,
+            "__tool_status__": "EMPTY",
+            "error": f"No cached line_measurements found for cache_key={cache_key!r}.",
+            "error_class": "missing_measurement_cache",
+        }
+    cols_default = [
+        "source_name", "redshift", "line_id",
+        "log_luminosity", "log_luminosity_err",
+        "fwhm_km_s", "fwhm_err_km_s",
+        "mu_lens", "is_lensed",
+        "bibcode", "arxiv_id", "table_label",
+    ]
+    cols = inp.get("columns") if isinstance(inp.get("columns"), list) else cols_default
+    cols = [str(c) for c in cols if c]
+
+    def _row_value(row: dict, col: str) -> Any:
+        v = row.get(col)
+        if isinstance(v, dict):
+            return v.get("bibcode") or v.get("arxiv_id") or ""
+        return v if v is not None else ""
+
+    if fmt == "csv":
+        import csv as _csv
+        import io as _io
+        buf = _io.StringIO()
+        writer = _csv.writer(buf)
+        writer.writerow(cols)
+        for row in rows:
+            writer.writerow([_row_value(row, c) for c in cols])
+        content = buf.getvalue()
+        media_type = "text/csv"
+        ext = "csv"
+    elif fmt == "ascii":
+        try:
+            from astropy.table import Table
+            from astropy.io import ascii as _ascii
+            data = {c: [_row_value(row, c) for row in rows] for c in cols}
+            tab = Table(data)
+            buf = io.StringIO()
+            _ascii.write(tab, buf, format="fixed_width")
+            content = buf.getvalue()
+            media_type = "text/plain"
+            ext = "txt"
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": f"astropy ASCII export failed: {exc}",
+                "error_class": "astropy_failure",
+                "__tool_status__": "FAILED",
+            }
+    elif fmt == "votable":
+        try:
+            from astropy.table import Table
+            from astropy.io.votable import from_table, writeto
+            import io as _io
+            data = {c: [_row_value(row, c) for row in rows] for c in cols}
+            tab = Table(data)
+            tab.meta["cache_key"] = resolved_cache_key
+            buf = _io.BytesIO()
+            writeto(from_table(tab), buf)
+            content = buf.getvalue().decode("utf-8")
+            media_type = "application/x-votable+xml"
+            ext = "xml"
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": f"astropy VOTable export failed: {exc}",
+                "error_class": "astropy_failure",
+                "__tool_status__": "FAILED",
+            }
+    else:  # latex
+        # Plain AAS deluxetable.  No formal LaTeX rendering — the AI is
+        # expected to paste this into a paper draft.
+        header = " & ".join(cols) + r" \\"
+        lines = [
+            r"\begin{deluxetable}{" + "c" * len(cols) + r"}",
+            r"\tablecaption{Literature line-measurement sample (cache_key=" +
+            resolved_cache_key + r")}",
+            r"\tablehead{" + header + r"}",
+            r"\startdata",
+        ]
+        for row in rows:
+            lines.append(
+                " & ".join(str(_row_value(row, c)) for c in cols) + r" \\"
+            )
+        lines.extend([r"\enddata", r"\end{deluxetable}"])
+        content = "\n".join(lines)
+        media_type = "application/x-latex"
+        ext = "tex"
+    return {
+        "success": True,
+        "tool": "export_sample_table",
+        "cache_key": resolved_cache_key,
+        "format": fmt,
+        "filename": f"sample_{resolved_cache_key}.{ext}",
+        "media_type": media_type,
+        "content": content,
+        "n_rows": len(rows),
+        "columns": cols,
+        "__message_to_model__": (
+            f"Wrote a {fmt} table of {len(rows)} rows from "
+            f"{resolved_cache_key!r}.  The full content is in the "
+            "'content' field — include it as the final sample table in "
+            "your reply (or write it to disk via run_python)."
         ),
     }
 
