@@ -3970,8 +3970,19 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
             if nm:
                 sample_cosmo_names.add(nm)
     current_cosmo_name = str(_current_cosmo.get("name") or "unknown")
+
+    # PART AA: cosmology preset names are case-insensitive at the matcher
+    # boundary — the legacy astropy alias "Planck18" is the same preset as
+    # the lowercase platform default "planck18". Without this normalisation
+    # the mismatch flag would fire on every legacy fixture / saved sample.
+    def _norm_cosmo_name(n: str) -> str:
+        n = (n or "").strip()
+        return "planck18" if n in {"Planck18"} else n
+
+    current_cosmo_norm = _norm_cosmo_name(current_cosmo_name)
     cosmology_mismatch = bool(
-        sample_cosmo_names and any(n != current_cosmo_name for n in sample_cosmo_names)
+        sample_cosmo_names
+        and any(_norm_cosmo_name(n) != current_cosmo_norm for n in sample_cosmo_names)
     )
 
     # ── M2: lensing bookkeeping ─────────────────────────────────────
@@ -4371,14 +4382,36 @@ def _exec_demagnify_sample(inp: dict, python_session_id: str = "default") -> dic
 
 
 def _cosmology_manifest_for(name: str) -> dict[str, Any]:
-    """Build a manifest dict for an arbitrary supported cosmology name."""
-    from app.services.cosmology import get_cosmology
+    """Build a manifest dict for an arbitrary supported cosmology name.
+
+    PART AA: prefer the curated preset metadata (with bibcode/DOI) when
+    the requested name is a PART AA preset OR its legacy astropy alias.
+    Fall back to the raw astropy object for legacy names like WMAP9 /
+    FlatLambdaCDM_HxxOmxx so the existing comparison flow still works.
+    """
+    from app.services.cosmology import (
+        PRESETS,
+        cosmology_manifest as _preset_manifest,
+        get_cosmology,
+    )
+
+    # PART AA preset name OR legacy "Planck18" alias for the planck18
+    # preset → return the preset manifest with bibcode + DOI.
+    normalised = "planck18" if name == "Planck18" else name
+    if normalised in PRESETS:
+        return _preset_manifest(normalised)
+
+    # Legacy astropy / FlatLambdaCDM_... path: compute from astropy obj,
+    # bibcode is null because we don't claim attribution for these.
     cosmo = get_cosmology(name)
     return {
         "name": name,
         "H0_km_s_Mpc": float(cosmo.H0.value),
         "Om0": float(cosmo.Om0),
         "Ob0": float(getattr(cosmo, "Ob0", 0.0) or 0.0),
+        "bibcode": None,
+        "doi": None,
+        "reference": "Astropy legacy alias (no curated preset metadata)",
     }
 
 

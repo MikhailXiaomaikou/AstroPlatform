@@ -26,9 +26,13 @@ def test_cosmology_default_is_planck18():
     from app.services.cosmology import get_cosmology, cosmology_manifest
 
     cosmo = get_cosmology()
+    # PART AA: get_cosmology() resolves the platform default preset to the
+    # astropy Planck18 built-in (alias on the planck18 PART AA preset).
     assert cosmo.name == "Planck18"
     manifest = cosmology_manifest()
-    assert manifest["name"] == "Planck18"
+    # PART AA: preset name is now lowercase "planck18" + carries a bibcode.
+    assert manifest["name"] == "planck18"
+    assert manifest["bibcode"] == "2020A&A...641A...6P"
     assert 60 < manifest["H0_km_s_Mpc"] < 80
     assert 0.2 < manifest["Om0"] < 0.5
 

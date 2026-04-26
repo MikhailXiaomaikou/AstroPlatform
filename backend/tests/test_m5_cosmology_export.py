@@ -42,8 +42,10 @@ def _sample_rows():
 # ── compare_luminosity_distances ──────────────────────────────────────
 
 def test_cosmology_manifest_for_supports_named_cosmologies():
+    # PART AA: legacy "Planck18" alias is mapped onto the lowercase preset
+    # name so the manifest carries the correct bibcode.
     p18 = _cosmology_manifest_for("Planck18")
-    assert p18["name"] == "Planck18"
+    assert p18["name"] == "planck18"
     assert abs(p18["H0_km_s_Mpc"] - 67.4) < 0.5
     wmap9 = _cosmology_manifest_for("WMAP9")
     assert wmap9["name"] == "WMAP9"
@@ -69,7 +71,8 @@ def test_compare_luminosity_distances_returns_per_source_deltas():
             "target_cosmology": "FlatLambdaCDM_H73p8_Om0p27",
         })
     assert out["success"] is True
-    assert out["current_cosmology"]["name"] == "Planck18"
+    # PART AA: current cosmology resolves to the lowercase preset name.
+    assert out["current_cosmology"]["name"] == "planck18"
     assert out["target_cosmology"]["name"] == "FlatLambdaCDM_H73p8_Om0p27"
     assert len(out["per_source"]) == 3
     # H0 73.8 vs 67.4 → DL ~10% smaller (DL ∝ c/H0 at low z;
