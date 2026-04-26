@@ -663,9 +663,15 @@ TOOLS = [
                 "target_cosmology": {
                     "type": "string",
                     "description": (
-                        "Cosmology name (Planck18 | Planck15 | WMAP9 | WMAP7 "
-                        "| WMAP5) or FlatLambdaCDM_H<H0>_Om<Om> spec, e.g. "
-                        "FlatLambdaCDM_H73p8_Om0p27 for Riess+11 / Suzuki+12."
+                        "Cosmology name. Prefer a curated PART AA preset "
+                        "('planck18' | 'planck18_bao' | 'freedman21_trgb' | "
+                        "'riess22_shoes') — each carries a peer-reviewed "
+                        "ADS bibcode that the citation validator anchors "
+                        "against. Legacy names also accepted (Planck15 / "
+                        "WMAP9 / WMAP7 / WMAP5 — no curated bibcode), as "
+                        "is the FlatLambdaCDM_H<H0>_Om<Om> spec for "
+                        "older measurements (e.g. FlatLambdaCDM_H73p8_Om0p27 "
+                        "for Riess+11 / Suzuki+12)."
                     ),
                 },
             },

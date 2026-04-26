@@ -209,3 +209,59 @@ def test_export_respects_columns_subset():
     assert first_line == "source_name,redshift,log_luminosity"
     # FWHM column should be absent
     assert "fwhm" not in first_line.lower()
+
+
+# ── PART AA C4: compare_luminosity_distances accepts curated presets ──
+
+@pytest.mark.parametrize(
+    "preset, expected_bibcode, expected_h0",
+    [
+        ("planck18", "2020A&A...641A...6P", 67.36),
+        ("planck18_bao", "2020A&A...641A...6P", 67.66),
+        ("freedman21_trgb", "2021ApJ...919...16F", 69.8),
+        ("riess22_shoes", "2022ApJ...934L...7R", 73.04),
+    ],
+)
+def test_compare_luminosity_distances_accepts_part_aa_preset(
+    preset, expected_bibcode, expected_h0
+):
+    """PART AA C4: each curated preset name resolves to the right H0
+    AND a non-null bibcode in the tool's target_cosmology manifest.
+
+    Locks the citation contract — if a future cosmology.py refactor
+    drops a preset's bibcode, the validator's universe loses the
+    citation anchor and chat replies that quote that preset's H0
+    can no longer be verified."""
+    rows = _sample_rows()
+    with patch(
+        "app.services.ai_tools._resolve_literature_measurement_cache",
+        return_value=(rows, "lit_test"),
+    ):
+        out = _exec_compare_luminosity_distances({
+            "cache_key": "lit_test",
+            "target_cosmology": preset,
+        })
+    assert out["success"] is True
+    target = out["target_cosmology"]
+    assert target["name"] == preset
+    assert target["bibcode"] == expected_bibcode
+    assert abs(target["H0_km_s_Mpc"] - expected_h0) < 0.5
+    assert target.get("reference"), f"missing reference for {preset}"
+
+
+def test_compare_luminosity_distances_planck18_to_riess22_matches_hubble_tension():
+    """The cross-preset Δ between planck18 and riess22_shoes should
+    be ~7-8% at z>0 — the published Hubble tension number. If this
+    regresses, either the preset H0 was silently changed or the
+    cross-cosmology math broke."""
+    rows = _sample_rows()
+    with patch(
+        "app.services.ai_tools._resolve_literature_measurement_cache",
+        return_value=(rows, "lit_test"),
+    ):
+        out = _exec_compare_luminosity_distances({
+            "cache_key": "lit_test",
+            "target_cosmology": "riess22_shoes",
+        })
+    assert out["success"] is True
+    assert 5.0 < out["summary"]["max_abs_delta_pct"] < 12.0
