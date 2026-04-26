@@ -212,24 +212,91 @@ def test_normalize_line_measurements_skips_table_without_required_columns() -> N
 # _exec_extract_literature_tables — auth gate (PART Z C1, P0)
 # ---------------------------------------------------------------------------
 
-def test_exec_extract_literature_tables_rejects_anonymous() -> None:
-    """No user_id → not_authenticated. Closes the DoS-amplifier hole
-    where the chat tool path bypassed the HTTP endpoint's M19 auth gate."""
-    from app.services.ai_tools import _exec_extract_literature_tables
+def test_exec_extract_literature_tables_rate_limit_for_anonymous(monkeypatch) -> None:
+    """PART Z C5: anonymous chat sessions are allowed up to 5 calls per
+    rolling hour (the 24h cache + circuit-breaker carry the main DoS
+    defence; the limit is the thin extra layer). Calls 1-5 must
+    succeed (or fail for unrelated reasons), call 6 must hit
+    rate_limit_exceeded."""
+    from app.services import ai_tools
 
-    result = asyncio.run(
-        _exec_extract_literature_tables({"arxiv_id": "2310.12345"}, user_id=None)
-    )
+    # Reset the rate-limit registry for a clean per-session bucket.
+    ai_tools._arxiv_tool_calls.clear()  # type: ignore[attr-defined]
+
+    # Stub the upstream fetch so we don't hit ar5iv during the test.
+    async def fake_fetch(arxiv_id: str) -> dict:
+        return {
+            "arxiv_id": arxiv_id,
+            "title": "stub",
+            "tables": [],
+            "line_measurements": [],
+            "bibcode": f"arXiv:{arxiv_id}",
+            "authors": [],
+            "year": 2024,
+            "doi": None,
+            "source_url": "",
+        }
+    monkeypatch.setattr(ai_tools, "_extract_arxiv_tables_payload_with_retry", fake_fetch)
+    _install_isolated_cache(monkeypatch)
+
+    async def call_once() -> dict:
+        return await ai_tools._exec_extract_literature_tables(
+            {"arxiv_id": "2310.12345"},
+            user_id=None,
+            chat_session_id="test-anon-session",
+        )
+
+    # 5 calls within quota.
+    for i in range(5):
+        result = asyncio.run(call_once())
+        assert result.get("error_class") != "rate_limit_exceeded", (
+            f"call {i+1} unexpectedly rate-limited: {result}"
+        )
+
+    # 6th call must trip the limiter.
+    result = asyncio.run(call_once())
     assert result["success"] is False
-    assert result["error_class"] == "not_authenticated"
+    assert result["error_class"] == "rate_limit_exceeded"
+    assert result["rate_limit_used"] == 5
+    assert result["rate_limit_cap"] == 5
+    assert result["rate_limit_kind"] == "anonymous chat session"
+
+
+def test_exec_extract_literature_tables_authenticated_quota_higher(monkeypatch) -> None:
+    """Authenticated users get 50/hr (10× the anonymous cap)."""
+    from app.services import ai_tools
+
+    ai_tools._arxiv_tool_calls.clear()  # type: ignore[attr-defined]
+
+    async def fake_fetch(arxiv_id: str) -> dict:
+        return {"arxiv_id": arxiv_id, "title": "stub", "tables": [],
+                "line_measurements": [], "bibcode": f"arXiv:{arxiv_id}",
+                "authors": [], "year": 2024, "doi": None, "source_url": ""}
+    monkeypatch.setattr(ai_tools, "_extract_arxiv_tables_payload_with_retry", fake_fetch)
+    _install_isolated_cache(monkeypatch)
+
+    # 6 calls — would already trip the anonymous cap, but authenticated
+    # users have headroom up to 50.
+    for i in range(6):
+        result = asyncio.run(
+            ai_tools._exec_extract_literature_tables(
+                {"arxiv_id": "2310.12345"},
+                user_id="user-authenticated",
+                chat_session_id="any-session",
+            )
+        )
+        assert result.get("error_class") != "rate_limit_exceeded", (
+            f"authenticated call {i+1} unexpectedly rate-limited: {result}"
+        )
 
 
 def test_exec_extract_literature_tables_rejects_missing_arxiv_id() -> None:
     """Authenticated but no arxiv_id payload → missing_arxiv_id."""
     from app.services.ai_tools import _exec_extract_literature_tables
 
+    # Use a fresh user_id so we don't bleed budget from other tests.
     result = asyncio.run(
-        _exec_extract_literature_tables({}, user_id="user-test")
+        _exec_extract_literature_tables({}, user_id="user-test-no-arxiv-id")
     )
     assert result["success"] is False
     assert result["error_class"] == "missing_arxiv_id"

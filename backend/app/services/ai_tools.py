@@ -1739,7 +1739,10 @@ async def _execute_tool_inner(
         elif tool_name == "search_literature":
             return await _exec_literature(tool_input)
         elif tool_name == "extract_literature_tables":
-            return await _exec_extract_literature_tables(tool_input, python_session_id, user_id=user_id)
+            return await _exec_extract_literature_tables(
+                tool_input, python_session_id,
+                user_id=user_id, chat_session_id=chat_session_id,
+            )
         elif tool_name == "fit_line_lfr":
             return _exec_fit_line_lfr(tool_input, python_session_id)
         elif tool_name == "demagnify_sample":
@@ -4668,6 +4671,54 @@ def _exec_export_sample_table(
     }
 
 
+# PART Z C5: in-memory rolling-window rate limit for the chat-side
+# extract_literature_tables call.
+#
+# Why not Redis? Render free-tier has 1 web worker so in-memory is
+# already correct; if we go multi-worker the limit becomes per-worker
+# (effectively N×cap, still well below the published ar5iv quotas).
+# When that becomes a real problem we'll move this to connector_cache.
+_arxiv_tool_calls: dict[str, list[float]] = {}
+_ARXIV_RATE_WINDOW_S = 3600.0
+_ARXIV_ANON_CAP_PER_HOUR = 5
+_ARXIV_AUTH_CAP_PER_HOUR = 50
+
+
+def _check_arxiv_tool_rate_limit(
+    *,
+    user_id: str | None = None,
+    chat_session_id: str | None = None,
+) -> tuple[bool, int, int, str]:
+    """Returns (allowed, used_in_window, cap, key_kind).
+
+    The user_id path is per-user (50/hr), the anonymous path keys on the
+    chat_session_id (5/hr) so each open chat tab is its own quota
+    rather than every anonymous tab sharing one bucket.
+    """
+    import time as _time
+
+    now = _time.monotonic()
+    if user_id:
+        key = f"user:{user_id}"
+        cap = _ARXIV_AUTH_CAP_PER_HOUR
+        kind = "authenticated user"
+    else:
+        # Anonymous: identify by chat_session_id; fall back to a single
+        # shared bucket if even that is missing (very early bootstrap).
+        key = f"session:{chat_session_id or 'anonymous-fallback'}"
+        cap = _ARXIV_ANON_CAP_PER_HOUR
+        kind = "anonymous chat session"
+
+    cutoff = now - _ARXIV_RATE_WINDOW_S
+    timestamps = [t for t in _arxiv_tool_calls.get(key, []) if t > cutoff]
+    if len(timestamps) >= cap:
+        _arxiv_tool_calls[key] = timestamps
+        return False, len(timestamps), cap, kind
+    timestamps.append(now)
+    _arxiv_tool_calls[key] = timestamps
+    return True, len(timestamps), cap, kind
+
+
 # PART Z: retry + cache wrapper around extract_arxiv_tables_payload.
 # The HTTP endpoint was already gated and rate-limited (M19), but the chat
 # tool path bypassed that and could repeatedly hit ar5iv on the AI's whim.
@@ -4736,27 +4787,39 @@ async def _exec_extract_literature_tables(
     python_session_id: str = "default",
     *,
     user_id: str | None = None,
+    chat_session_id: str | None = None,
 ) -> dict:
     """Extract arXiv tables and cache any normalized measurement rows.
 
-    PART Z: this tool path was previously unauthenticated when invoked via
-    chat (the HTTP endpoint at /api/arxiv/extract-tables had M19 auth gate
-    but the chat tool dispatch bypassed it), so an anonymous chat user
-    could ask the AI to repeatedly hit ar5iv as a DoS amplifier. Now we
-    require a logged-in user_id, matching the HTTP endpoint's posture.
+    PART Z C1 originally hard-rejected `user_id is None` to keep
+    anonymous chat from amplifying load on ar5iv. Real-world UX showed
+    the gate was too sharp — even the platform owner kept hitting it.
+    PART Z C5 (this update): drop the hard reject, add a per-key
+    rate-limit (5/hr for anonymous, 50/hr for logged-in users). The
+    primary DoS defences are still in place — 24h connector_cache for
+    repeat fetches + circuit-breaker on httpx errors — so the rate
+    limit is a thin extra layer rather than the only one.
     """
-    from app.api.arxiv import extract_arxiv_tables_payload
+    from app.api.arxiv import extract_arxiv_tables_payload  # noqa: F401  (kept for callers)
 
-    if not user_id:
+    allowed, used, cap, key_kind = _check_arxiv_tool_rate_limit(
+        user_id=user_id, chat_session_id=chat_session_id,
+    )
+    if not allowed:
         return {
             "success": False,
             "error": (
-                "extract_literature_tables requires an authenticated user. "
-                "Sign in (Account page) before asking the AI to compile "
-                "literature tables; this prevents the chat from being used "
-                "to amplify load on the public ar5iv / arxiv.org services."
+                f"extract_literature_tables rate limit reached "
+                f"({used}/{cap} calls in the last hour for this "
+                f"{key_kind}). Anonymous chat sessions are capped at 5/hr "
+                f"to keep the public ar5iv / arxiv.org services healthy. "
+                f"Sign in at /account for the larger 50/hr authenticated "
+                f"quota, or wait for the rolling window to clear."
             ),
-            "error_class": "not_authenticated",
+            "error_class": "rate_limit_exceeded",
+            "rate_limit_used": used,
+            "rate_limit_cap": cap,
+            "rate_limit_kind": key_kind,
         }
 
     raw_id = _arxiv_id_from_table_input(inp)
