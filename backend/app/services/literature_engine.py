@@ -156,6 +156,15 @@ async def get_literature_context(
     headers = {"Authorization": f"Bearer {ads_api_key}"}
     params = {
         "q": query,
+        # PART AD C3: scope ADS to the astronomy database. Without this
+        # filter, search terms like "wildfire" / "shutoff" / "neutron"
+        # routinely matched power-engineering, nuclear-physics, or
+        # planetary-science papers that have no astrophysical content
+        # (R2.9 / M4 audit reproducer: "wildfire ignition" power-line
+        # paper appearing in a [CII] line-relation literature query).
+        # ADS supports `database:astronomy` as a filter query; this is
+        # the canonical scope for astrophysics-only searches.
+        "fq": "database:astronomy",
         "fl": ADS_FIELDS,
         "rows": fetch_rows,
         "sort": "citation_count desc",
@@ -272,6 +281,11 @@ def search_literature(topic: str, max_papers: int = 10) -> list[dict]:
     headers = {"Authorization": f"Bearer {ads_api_key}"}
     params = {
         "q": query,
+        # PART AD C3: scope to ADS astronomy database — same rationale
+        # as the async path above. Without this, search_literature
+        # tool calls have leaked power-engineering / nuclear-physics
+        # papers into astrophysics queries (R2.9 / M4 reproducer).
+        "fq": "database:astronomy",
         "fl": ADS_FIELDS,
         "rows": min(max_papers * 3, 50),
         "sort": "citation_count desc",
