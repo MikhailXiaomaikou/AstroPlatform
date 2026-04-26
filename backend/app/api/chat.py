@@ -2698,6 +2698,68 @@ _ATTR_RE = __import__("re").compile(
 )
 
 
+_TRUNCATED_TRAILING_PUNCT = {":", ",", "—", "–", "(", "[", "{"}
+# `-` (ASCII hyphen) is intentionally NOT in this set — many sentences
+# legitimately end with it (e.g. "M-class star") — and we don't want
+# false-positive truncations on those. Em-dash and en-dash are kept
+# because reply text ending on those is a strong mid-sentence signal.
+
+_TRUNCATED_TRAILING_CONNECTIVES = {
+    "or", "and", "the", "to", "of", "in", "on", "by", "for", "with",
+    "a", "an", "as", "at", "but", "if", "is", "are", "was", "were",
+    "where", "while", "from", "than", "then", "vs",
+}
+
+
+def _reply_looks_truncated(reply: str) -> bool:
+    """PART AC C2 — text-shape detection of mid-sentence termination.
+
+    Catches the M3 / R2.6 / R2.10 silent-truncation regression where
+    the provider returns stop_reason="stop" / "end_turn" but the prose
+    is obviously cut off (e.g. ends on a colon). Used as a fallback
+    signal in the main truncation gate when stop_reason looks clean.
+
+    Returns True when the reply's last meaningful character / word
+    indicates an incomplete sentence. Returns False for already-clean
+    endings (sentence-final punctuation, abstention tags, code fences).
+    """
+    if not reply:
+        return False
+    s = reply.rstrip()
+    if not s:
+        return False
+    # Already an honest abstention tag — that's a complete reply by
+    # design, not a truncation.
+    if "<tools_returned_nothing" in s or "</tools_returned_nothing>" in s:
+        return False
+    # Inside an unclosed Markdown fence — let the caller see the raw
+    # text rather than trigger a regen.
+    if s.count("```") % 2 == 1:
+        return False
+
+    last_char = s[-1]
+    if last_char in _TRUNCATED_TRAILING_PUNCT:
+        return True
+    # Sentence-final punctuation, closing quote/bracket, ellipsis →
+    # the reply has a real ending.
+    if last_char in {".", "!", "?", "…", '"', "'", "”", "’", ")", "]", "}", ";"}:
+        return False
+
+    # Trailing connective word (e.g. "...the", "...or") suggests the
+    # next clause was cut. Strip Markdown emphasis / inline-code chars
+    # and look at the final whitespace-delimited token.
+    last_line = s.split("\n")[-1].rstrip("*_`>").strip()
+    if not last_line:
+        return False
+    parts = last_line.split()
+    if not parts:
+        return False
+    last_word = parts[-1].lower().strip(".,;:!?)]}\"'`*_~—–")
+    if last_word in _TRUNCATED_TRAILING_CONNECTIVES:
+        return True
+    return False
+
+
 def _parse_abstention_tag(reply: str) -> dict | None:
     """Return attrs dict if reply is a single <tools_returned_nothing/> tag,
     else None.  Tolerates a trailing newline or surrounding whitespace."""
@@ -3825,28 +3887,41 @@ async def _run_agent_loop(
 
     full_reply = "\n\n".join(text_parts)
 
-    # C-X1 (P0) — max_tokens / length truncation gate.
+    # C-X1 / PART AC C2 — truncation gate (max_tokens OR text-shape).
     # When the model's reply hits the max_tokens budget mid-sentence
     # (e.g. stops on a colon: "Let me extract the next table:") the old
     # code shipped the dangling text straight to the UI as if it were
-    # a finished reply. This is the R2.6 / R2.10 silent-truncation
-    # regression. Detect both the Anthropic ("max_tokens") and OpenAI/
-    # DeepSeek ("length") stop reasons, then run a one-shot text-only
-    # summary regen so the user gets a clean handoff instead of a
-    # severed sentence.
-    if last_stop_reason in {"max_tokens", "length"} and full_reply.strip():
+    # a finished reply. This is the R2.6 / R2.10 / M3 silent-truncation
+    # regression.
+    #
+    # Two detection paths:
+    # 1. Provider stop_reason = max_tokens (Anthropic) / length (OpenAI / DeepSeek).
+    # 2. PART AC C2: text-shape — the reply self-evidently ends mid-sentence
+    #    (trailing colon / comma / em-dash / connective word) even when
+    #    the provider claimed stop_reason="stop". M3 audit caught this
+    #    exact case: stop_reason was clean but the prose ended on
+    #    "Let me search for additional [CII] datasets:".
+    truncated_by_stop_reason = last_stop_reason in {"max_tokens", "length"}
+    truncated_by_shape = (
+        not truncated_by_stop_reason
+        and _reply_looks_truncated(full_reply)
+    )
+    if (truncated_by_stop_reason or truncated_by_shape) and full_reply.strip():
+        truncation_reason = (
+            str(last_stop_reason) if truncated_by_stop_reason else "text_shape"
+        )
         try:
             from app.observability.metrics import record_counter
             record_counter(
                 "max_tokens_truncation_total", 1.0,
-                agent=agent_name, stop_reason=str(last_stop_reason),
+                agent=agent_name, stop_reason=truncation_reason,
             )
         except Exception:
             pass
         await _emit({
             "type": "reply_truncated",
             "agent": agent_name,
-            "stop_reason": last_stop_reason,
+            "stop_reason": truncation_reason,
             "partial_chars": len(full_reply),
         })
         try:
