@@ -149,15 +149,49 @@ def get_isochrone(log_age, metallicity=0.0, photometric_system="gaia"):
     Tries local API cache first, falls back to CMD 3.7 web API.
 
     Args:
-        log_age: log10(age/yr), e.g. 8.0 for 100 Myr, 10.0 for 10 Gyr
-        metallicity: [M/H], default 0.0 (solar)
-        photometric_system: 'gaia' or 'sdss'
+        log_age: log10(age/yr), e.g. 8.0 for 100 Myr, 10.0 for 10 Gyr.
+            Valid PARSEC range: [6.0, 10.5] (1 Myr to ~32 Gyr).
+        metallicity: [M/H], default 0.0 (solar). Valid range: [-2.5, +0.5].
+        photometric_system: 'gaia' or 'sdss'.
 
     Returns:
         pandas DataFrame with columns including mass, logTe, logg,
         and photometric magnitudes (Gmag, G_BPmag, G_RPmag for Gaia;
         umag, gmag, rmag, imag, zmag for SDSS).
     """
+    # PART Y Batch 2: input range gates. AI sometimes passes age in Gyr
+    # (e.g. log_age=5.0 meaning "5 Gyr") which is actually 100,000 yr —
+    # PARSEC silently returns garbage or a near-empty grid. Warn on out-
+    # of-range so the caller notices, and clamp metallicity warnings.
+    try:
+        _la = float(log_age)
+        if _la < 6.0 or _la > 10.5:
+            logger.warning(
+                "get_isochrone: log_age=%.3f is outside PARSEC valid range "
+                "[6.0, 10.5]. Did you pass linear age in Gyr by mistake? "
+                "(log_age=8.0 means 100 Myr, log_age=9.7 means 5 Gyr.)",
+                _la,
+            )
+    except (TypeError, ValueError):
+        pass
+    try:
+        _mh = float(metallicity)
+        if _mh < -2.5 or _mh > 0.5:
+            logger.warning(
+                "get_isochrone: metallicity [M/H]=%.3f is outside the "
+                "PARSEC tabulated range [-2.5, +0.5]; result may be "
+                "extrapolated.",
+                _mh,
+            )
+    except (TypeError, ValueError):
+        pass
+    if photometric_system not in {"gaia", "sdss"}:
+        logger.warning(
+            "get_isochrone: photometric_system=%r is not in {'gaia', 'sdss'}; "
+            "PARSEC web API may reject the request.",
+            photometric_system,
+        )
+
     import httpx
     import pandas as pd
 
@@ -1125,13 +1159,35 @@ def compute_luminosity_distance(z, H0=70.0, Om0=0.3):
     """Compute luminosity distance in Mpc.
 
     Args:
-        z: Redshift scalar or array.
+        z: Redshift scalar or array. Must be >= 0.
         H0: Hubble constant in km/s/Mpc.
         Om0: Matter density parameter in a flat Lambda-CDM cosmology.
 
     Returns:
         Scalar or array of luminosity distances in Mpc.
+
+    Raises:
+        ValueError: if any z value is negative.
     """
+    # PART Y Batch 2: physical-range gate. Negative z is unphysical (would
+    # indicate a coding error or sign-flipped Doppler shift), and very low
+    # z gives a meaningless "cosmological" distance — the user should be
+    # using a parallax-based distance instead.
+    z_arr = np.asarray(z, dtype=float)
+    if np.any(np.isnan(z_arr)):
+        raise ValueError("compute_luminosity_distance: z contains NaN")
+    if np.any(z_arr < 0):
+        raise ValueError(
+            f"compute_luminosity_distance: z must be >= 0 (got min={float(np.nanmin(z_arr)):.4g}). "
+            "Negative redshift is unphysical for cosmological distance."
+        )
+    if np.any(z_arr < 0.01) and np.any(z_arr > 0):
+        logger.warning(
+            "compute_luminosity_distance: z<0.01 detected; cosmological "
+            "distance is meaningless at this redshift. Use Gaia parallax "
+            "→ distance for nearby objects."
+        )
+
     try:
         from astropy.cosmology import FlatLambdaCDM
         import astropy.units as u

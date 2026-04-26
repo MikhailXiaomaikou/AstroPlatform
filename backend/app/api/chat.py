@@ -1475,6 +1475,12 @@ LIGHTCURVE / TIME-DOMAIN:
     than a failed first attempt.
   astro.transit_search(target, mission='kepler')
     -> {period_days, transit_time, depth, max_power}
+    NOTE: This is a *quick* BLS without bootstrap FAP, period uncertainty,
+    or period-alias detection. For publication-grade BLS, call the
+    top-level `transit_search_bls` AI tool (NOT an astro.* helper) — it
+    adds Kipping-2011 bootstrap FAP, period_err via parabolic peak fit,
+    and 1-day / sidereal alias rejection. Prefer the tool whenever you
+    intend to cite a period or depth in the final reply.
   astro.pro_fit_transit(time, flux, flux_err=None, period=1.0, t0=0.0,
       rp_rs=0.1, a_rs=10.0, inc=90.0, limb_darkening="quadratic", ld_coeffs=None)
     -> {rp_rs, a_rs, inc, t0, period, chi2, chi2_reduced, model_flux, residuals}
@@ -1488,13 +1494,29 @@ LIGHTCURVE / TIME-DOMAIN:
        `result.phase`, and `result["phase"]`.
 
 EXTINCTION / REDDENING:
-  astro.extinction_curve(wavelengths_aa, av, rv=3.1) -> a_lambda array
-  astro.deredden(wave, flux, av, rv=3.1)             -> flux_dereddened
-  astro.estimate_ebv(ra, dec)                        -> e_bv (SFD fallback)
+  astro.extinction_curve(wavelengths_aa, ebv, Rv=3.1, model='ccm89')
+    -> a_lambda array (extinction in mag at each wavelength).
+  astro.deredden(wavelength_angstrom, flux, ebv, Rv=3.1, model='ccm89')
+    -> flux_dereddened.
+  astro.dust_ebv_at_position(ra_deg, dec_deg, source='sfd')
+    -> E(B-V) at sky coordinate. Uses `dustmaps` package (SFD / Planck);
+       returns None if the map data is not installed locally. THIS is
+       the function to use for "look up reddening at a position".
+  astro.estimate_ebv(observed_color, intrinsic_color, Rv=3.1)
+    -> E(B-V) by observed_color − intrinsic_color subtraction. NOT a
+       sky-position lookup. Use this only when you already have the two
+       color values; otherwise use `dust_ebv_at_position`.
 
 ISOCHRONES / HR DIAGRAM:
-  astro.get_isochrone(age_gyr, metallicity=0.0, filter_set='gaia')
-    -> {bp_rp, abs_g, mass, ...}
+  astro.get_isochrone(log_age, metallicity=0.0, photometric_system='gaia')
+    -> pandas DataFrame with mass, logTe, logg, and photometric mags
+       (Gmag/G_BPmag/G_RPmag for gaia; umag/gmag/rmag/imag/zmag for sdss).
+    PARAMETERS (read carefully):
+      - log_age = log10(age in years). e.g. log_age=8.0 → 100 Myr,
+        log_age=9.7 → 5 Gyr, log_age=10.0 → 10 Gyr. NOT age in Gyr.
+      - Valid range: 6.0 ≤ log_age ≤ 10.5; out-of-range emits a warning.
+      - metallicity = [M/H] (solar = 0.0). Valid range: [-2.5, +0.5].
+      - photometric_system ∈ {'gaia', 'sdss'}.
   astro.fit_isochrone(bp_rp, abs_g, age_range_gyr=(0.01, 13))
     -> {best_age_gyr, distance_modulus, ...}
   astro.plot_hr_diagram(bp_rp, gmag, isochrone_ages=None, title=None)
@@ -1506,8 +1528,15 @@ CLASSIFICATION / SPECTRA:
 
 PHOTOMETRY / DISTANCES:
   astro.compute_absolute_magnitude(apparent_mag, distance_pc)
-  astro.compute_luminosity_distance(z, cosmology='planck18')
-  astro.k_correction(z, filter_name)
+  astro.compute_luminosity_distance(z, H0=70.0, Om0=0.3)
+    -> luminosity distance in Mpc (flat Lambda-CDM). For low z (z<0.01)
+       prefer a parallax-based distance instead. z must be ≥ 0; negative
+       z raises ValueError. (Use `compare_luminosity_distances` tool
+       to compare across cosmologies; do NOT pass `cosmology='planck18'`
+       — that string kwarg is not accepted.)
+  astro.k_correction(z, band)
+    -> Chilingarian 2010 polynomial; reliable for z ≤ 0.5. z > 0.5 emits
+       partial-status warning + ~0.5 mag systematic uncertainty.
 
 If you need a helper not on this list, call `astro.available_functions()` first instead of
 guessing the signature. Never invent kwargs (sector=, quarter=, campaign=) unless you verified
