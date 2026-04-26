@@ -3162,7 +3162,17 @@ async def _llm_messages_create(
         provider_api_keys=provider_api_keys,
         preferred_backend=preferred_backend,
         model_profile=model_profile,
-        max_tokens=4096,
+        # PART AF C4 — raised from 4096 to 8192. M5 audit caught a
+        # complex chat round (5 search_literature + extract + fit + 4
+        # run_python with multi-panel plots) hitting the truncation gate
+        # twice, losing 5 of 6 figures including the Bayesian fit band
+        # and Redshift Dependence Test. 8192 is supported by Claude
+        # 4.6 / 4.7 / OpenAI / DeepSeek thinking-mode and matches the
+        # `max_completion_tokens` ceiling for the responses API path.
+        # Cost trade-off: per-turn output cost can up to 2× on long
+        # turns, but a successfully-finished long turn is more valuable
+        # than a half-truncated cheap one.
+        max_tokens=8192,
         temperature=0.0,
         # Timeout budget (R0c tightens single-LLM cap after R0b added
         # per-tool deadlines):
