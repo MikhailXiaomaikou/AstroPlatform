@@ -108,48 +108,72 @@ def _attach_row_citations(tables: list[dict[str, Any]], citation_base: dict[str,
     return enriched
 
 
-def _parse_html_tables(html: str) -> list[dict]:
-    """Parse HTML tables from arXiv abstract page or HTML paper."""
-    tables = []
+def _parse_html_tables(html_text: str) -> list[dict]:
+    """Parse HTML tables from an arXiv/ar5iv HTML paper.
 
-    # Find all <table> blocks
-    table_pattern = re.compile(r'<table[^>]*>(.*?)</table>', re.DOTALL | re.IGNORECASE)
-    for idx, match in enumerate(table_pattern.finditer(html)):
-        table_html = match.group(1)
+    PART Z: replaced the previous all-regex parser with BeautifulSoup so
+    nested tags (KaTeX <span class="ltx_text">, math spans, inline
+    footnotes), malformed / unclosed HTML, and HTML entities do not
+    leak into extracted cells. Uses stdlib `html.parser` as the BS4
+    backend so we don't take on an lxml binary dep.
 
-        # Extract caption if present
-        caption_match = re.search(r'<caption[^>]*>(.*?)</caption>', table_html, re.DOTALL | re.IGNORECASE)
-        caption = ""
-        if caption_match:
-            caption = _strip_html(caption_match.group(1))
+    Only top-level <table> elements are extracted; tables nested inside
+    another <table> (e.g. some math/figure layouts) are skipped to
+    avoid producing phantom rows.
+    """
+    from bs4 import BeautifulSoup
 
-        # Extract header row
-        thead_match = re.search(r'<thead[^>]*>(.*?)</thead>', table_html, re.DOTALL | re.IGNORECASE)
-        header_html = thead_match.group(1) if thead_match else ""
+    soup = BeautifulSoup(html_text or "", "html.parser")
+    tables: list[dict] = []
 
-        # Extract header cells
-        headers = []
-        for th in re.finditer(r'<th[^>]*>(.*?)</th>', header_html, re.DOTALL | re.IGNORECASE):
-            headers.append(_strip_html(th.group(1)))
+    top_level_tables = [
+        t for t in soup.find_all("table") if not t.find_parent("table")
+    ]
+    for idx, table_tag in enumerate(top_level_tables):
+        caption_tag = table_tag.find("caption")
+        caption = (
+            _normalize_ws(caption_tag.get_text(" ", strip=True))
+            if caption_tag else ""
+        )
 
-        # If no thead, try first row
+        # Headers: prefer the first <tr> inside <thead>; fall back to the
+        # first <tr> of the table.
+        headers: list[str] = []
+        thead = table_tag.find("thead")
+        if thead:
+            head_tr = thead.find("tr")
+            if head_tr:
+                headers = [
+                    _normalize_ws(c.get_text(" ", strip=True))
+                    for c in head_tr.find_all(["th", "td"])
+                ]
         if not headers:
-            first_row = re.search(r'<tr[^>]*>(.*?)</tr>', table_html, re.DOTALL | re.IGNORECASE)
-            if first_row:
-                for cell in re.finditer(r'<t[hd][^>]*>(.*?)</t[hd]>', first_row.group(1), re.DOTALL | re.IGNORECASE):
-                    headers.append(_strip_html(cell.group(1)))
+            first_tr = table_tag.find("tr")
+            if first_tr:
+                headers = [
+                    _normalize_ws(c.get_text(" ", strip=True))
+                    for c in first_tr.find_all(["th", "td"])
+                ]
 
-        # Extract data rows
+        # Data rows: tbody if present, else all <tr> after the first when
+        # there is no <thead> (the first <tr> is then the header row we
+        # already harvested above).
+        tbody = table_tag.find("tbody")
+        if tbody:
+            tr_iter = tbody.find_all("tr")
+        else:
+            all_tr = table_tag.find_all("tr")
+            tr_iter = all_tr[1:] if (not thead and len(all_tr) > 1) else all_tr
+
         rows: list[list[str]] = []
-        tbody_match = re.search(r'<tbody[^>]*>(.*?)</tbody>', table_html, re.DOTALL | re.IGNORECASE)
-        body_html = tbody_match.group(1) if tbody_match else table_html
-
-        for tr in re.finditer(r'<tr[^>]*>(.*?)</tr>', body_html, re.DOTALL | re.IGNORECASE):
-            cells = []
-            for td in re.finditer(r'<td[^>]*>(.*?)</td>', tr.group(1), re.DOTALL | re.IGNORECASE):
-                text = _strip_html(td.group(1))
-                cells.append(text)
-            if cells and len(cells) > 1:  # Skip single-cell rows (likely captions)
+        for tr in tr_iter:
+            # Skip rows that are just a stray <td colspan="N"> caption /
+            # section divider — keep only multi-cell rows.
+            cells = [
+                _normalize_ws(c.get_text(" ", strip=True))
+                for c in tr.find_all(["td", "th"])
+            ]
+            if cells and len(cells) > 1:
                 rows.append(cells)
 
         if headers and rows:
@@ -162,7 +186,7 @@ def _parse_html_tables(html: str) -> list[dict]:
                 "rows": rows[:_MAX_TABLE_ROWS],
                 "row_count": len(rows),
                 "extraction_method": "ar5iv_html",
-                "extraction_confidence": 0.78,
+                "extraction_confidence": 0.85,  # bs4 path is more stable
                 "warnings": [],
             })
 
