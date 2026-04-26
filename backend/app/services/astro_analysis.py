@@ -1155,13 +1155,19 @@ def bpt_classify(log_nii_ha, log_oiii_hb):
     return result
 
 
-def compute_luminosity_distance(z, H0=70.0, Om0=0.3):
+def compute_luminosity_distance(z, H0=None, Om0=None, *, cosmology=None):
     """Compute luminosity distance in Mpc.
 
     Args:
         z: Redshift scalar or array. Must be >= 0.
-        H0: Hubble constant in km/s/Mpc.
-        Om0: Matter density parameter in a flat Lambda-CDM cosmology.
+        H0: Hubble constant in km/s/Mpc. Optional — see cosmology.
+        Om0: Matter density parameter in flat Lambda-CDM. Optional.
+        cosmology: PART AA preset name. One of "planck18" (default),
+            "planck18_bao", "freedman21_trgb", "riess22_shoes". When set,
+            the preset's H0/Om0 are used and any H0/Om0 kwargs are
+            ignored. When None and H0/Om0 are also None, falls back to
+            the platform default preset ("planck18") so anonymous calls
+            attribute to a cited paper.
 
     Returns:
         Scalar or array of luminosity distances in Mpc.
@@ -1169,6 +1175,24 @@ def compute_luminosity_distance(z, H0=70.0, Om0=0.3):
     Raises:
         ValueError: if any z value is negative.
     """
+    # PART AA: parameter resolution priority — explicit cosmology preset
+    # beats explicit H0/Om0 beats the platform default preset. If the
+    # caller passed explicit H0 OR Om0 we respect them (legacy ergonomics)
+    # and fill the missing one with the previous H0=70/Om0=0.3 defaults
+    # rather than the preset values.
+    from app.services.cosmology import get_preset
+
+    if cosmology is None and H0 is None and Om0 is None:
+        cosmology = "planck18"
+
+    if cosmology is not None:
+        preset = get_preset(cosmology)
+        H0_eff = preset["H0"] if preset["H0"] is not None else 67.36
+        Om0_eff = preset["Om0"] if preset["Om0"] is not None else 0.3153
+    else:
+        H0_eff = H0 if H0 is not None else 70.0
+        Om0_eff = Om0 if Om0 is not None else 0.3
+
     # PART Y Batch 2: physical-range gate. Negative z is unphysical (would
     # indicate a coding error or sign-flipped Doppler shift), and very low
     # z gives a meaningless "cosmological" distance — the user should be
@@ -1191,13 +1215,13 @@ def compute_luminosity_distance(z, H0=70.0, Om0=0.3):
     try:
         from astropy.cosmology import FlatLambdaCDM
         import astropy.units as u
-        cosmo = FlatLambdaCDM(H0=H0, Om0=Om0)
+        cosmo = FlatLambdaCDM(H0=H0_eff, Om0=Om0_eff)
         dl = cosmo.luminosity_distance(z)
         return dl.to(u.Mpc).value
     except ImportError:
         # Fallback: simple approximation for low z
         c = 299792.458  # km/s
-        return c * z / H0 * (1 + z / 2)
+        return c * z / H0_eff * (1 + z / 2)
 
 
 def compute_absolute_magnitude(
@@ -1531,15 +1555,20 @@ def batch_equivalent_width(wavelength, flux, line_centers, window=10.0, cont_win
 
 # ── Cosmological Calculator Expansion ──
 
-def cosmological_calculator(z, H0=67.4, Om0=0.315):
+def cosmological_calculator(z, H0=None, Om0=None, *, cosmology=None):
     """Compute multiple cosmological quantities at redshift z.
 
-    Uses flat ΛCDM with Planck18 defaults.
+    Uses flat ΛCDM. PART AA: defaults to the platform-default preset
+    (planck18) when no explicit H0/Om0/cosmology is given, so derived
+    quantities carry the bibcode 2020A&A...641A...6P.
 
     Args:
         z: Redshift (scalar or array).
-        H0: Hubble constant in km/s/Mpc.
-        Om0: Matter density parameter.
+        H0: Hubble constant in km/s/Mpc. Optional — see cosmology.
+        Om0: Matter density parameter. Optional.
+        cosmology: PART AA preset name ("planck18" / "planck18_bao" /
+            "freedman21_trgb" / "riess22_shoes"). Beats H0/Om0 kwargs
+            when set.
 
     Returns:
         dict with: luminosity_distance_mpc, angular_diameter_distance_mpc,
@@ -1547,9 +1576,20 @@ def cosmological_calculator(z, H0=67.4, Om0=0.315):
         distance_modulus, comoving_volume_gpc3, scale_factor.
     """
     from astropy.cosmology import FlatLambdaCDM
+    from app.services.cosmology import get_preset
     import astropy.units as u
 
-    cosmo = FlatLambdaCDM(H0=H0, Om0=Om0)
+    if cosmology is None and H0 is None and Om0 is None:
+        cosmology = "planck18"
+    if cosmology is not None:
+        preset = get_preset(cosmology)
+        H0_eff = preset["H0"] if preset["H0"] is not None else 67.36
+        Om0_eff = preset["Om0"] if preset["Om0"] is not None else 0.3153
+    else:
+        H0_eff = H0 if H0 is not None else 67.4
+        Om0_eff = Om0 if Om0 is not None else 0.315
+
+    cosmo = FlatLambdaCDM(H0=H0_eff, Om0=Om0_eff)
     z_arr = np.asarray(z, dtype=float)
 
     dl = cosmo.luminosity_distance(z_arr).to(u.Mpc).value
@@ -1573,24 +1613,38 @@ def cosmological_calculator(z, H0=67.4, Om0=0.315):
     }
 
 
-def redshift_at_age(age_gyr, H0=67.4, Om0=0.315):
+def redshift_at_age(age_gyr, H0=None, Om0=None, *, cosmology=None):
     """Find redshift corresponding to a given cosmic age in Gyr.
 
-    Uses scipy.optimize.brentq to invert age(z).
+    Uses scipy.optimize.brentq to invert age(z). PART AA: defaults to
+    the platform default preset (planck18) so the inverted z carries
+    the bibcode 2020A&A...641A...6P attribution.
 
     Args:
         age_gyr: Cosmic age in Gyr (scalar).
-        H0: Hubble constant in km/s/Mpc.
-        Om0: Matter density parameter.
+        H0: Hubble constant in km/s/Mpc. Optional — see cosmology.
+        Om0: Matter density parameter. Optional.
+        cosmology: PART AA preset name. Beats H0/Om0 kwargs when set.
 
     Returns:
         Redshift corresponding to the given cosmic age.
     """
     from astropy.cosmology import FlatLambdaCDM
+    from app.services.cosmology import get_preset
     import astropy.units as u
     from scipy.optimize import brentq
 
-    cosmo = FlatLambdaCDM(H0=H0, Om0=Om0)
+    if cosmology is None and H0 is None and Om0 is None:
+        cosmology = "planck18"
+    if cosmology is not None:
+        preset = get_preset(cosmology)
+        H0_eff = preset["H0"] if preset["H0"] is not None else 67.36
+        Om0_eff = preset["Om0"] if preset["Om0"] is not None else 0.3153
+    else:
+        H0_eff = H0 if H0 is not None else 67.4
+        Om0_eff = Om0 if Om0 is not None else 0.315
+
+    cosmo = FlatLambdaCDM(H0=H0_eff, Om0=Om0_eff)
     age_now = cosmo.age(0).to(u.Gyr).value
 
     if age_gyr <= 0 or age_gyr >= age_now:
