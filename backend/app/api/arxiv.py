@@ -496,7 +496,26 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
             r"(source|object|galaxy)(name|id)",
             r"^(sourceid|objectid|galaxyid)$",
         ])
-        redshift_idx = _find_column(columns, [r"^(z|redshift)$", r"zspec"])
+        # C-X4: ALPINE / REBELS / similar high-z survey tables put the
+        # redshift in a line-specific column ("z_CII", "z_[CII]", "z_line",
+        # "zCII", "z_phot", "z_sys", "z_CO", ...) that the previous strict
+        # pattern `^(z|redshift)$|zspec` did not catch — the row was then
+        # dropped from line_measurements with "missing redshift" even
+        # though luminosity + FWHM were both present. Widen to match any
+        # `z`-prefixed column key (after _column_key strips punctuation
+        # and lowercases). A bare `^z<digit>` (e.g. `z1`, `z2`) catches
+        # multi-component / multi-line redshift columns too.
+        redshift_idx = _find_column(columns, [
+            r"^(z|redshift)$",
+            r"^zspec$", r"^zphot$", r"^zsys$",
+            r"^zcii$", r"^zline$", r"^zco$", r"^zha$", r"^zlya$",
+            r"^z\d+$",
+            # last-resort: column key starts with "z" and is short (<= 6
+            # chars). Catches z_CII style after stripping. Don't go too
+            # generic to avoid false-matching "Z" (atomic number) or
+            # "zenith".
+            r"^z[a-z0-9]{1,5}$",
+        ])
         line_idx = _find_column(columns, [r"^line$", r"transition"])
         # PART Z: widen luminosity-column matching beyond [CII]-only.
         # Real papers write "log L(Hα)", "L_Lya", "log L([OIII])", etc.

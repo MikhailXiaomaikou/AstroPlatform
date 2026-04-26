@@ -4846,9 +4846,19 @@ async def _exec_extract_literature_tables(
     }
     if not line_measurements:
         result["__message_to_model__"] = (
-            "Raw literature tables were extracted, but no normalized line_measurements were detected. "
-            "You may summarize the table availability and citation, but do not quote L[CII], FWHM, "
-            "or fit a relation unless a measurement table is mapped."
+            f"Raw literature tables were extracted from arXiv:{payload.get('arxiv_id')} "
+            f"({len(tables)} table(s)), but ZERO normalized line_measurements were detected. "
+            "This usually means the paper's tables are missing one of the required columns "
+            "(source name, redshift, log L<line>, FWHM) — for example: REBELS often puts the "
+            "size measurements in one paper and the line measurements in a companion paper. "
+            "Allowed next steps: "
+            "(a) call `search_literature` to find the companion / measurement-table paper for "
+            "this object class, OR "
+            "(b) emit `<tools_returned_nothing failed_tools=\"extract_literature_tables\" "
+            "rationale=\"this paper's tables do not contain line measurements\"/>` if the user "
+            "asked specifically about THIS paper. "
+            "Do NOT quote L[CII] / Hα / FWHM / line widths or fit a relation unless a "
+            "measurement table is mapped, and do NOT hardcode remembered ALPINE / REBELS values."
         )
     else:
         result["__message_to_model__"] = (

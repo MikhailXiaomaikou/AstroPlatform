@@ -366,3 +366,82 @@ def test_exec_extract_literature_tables_happy_path_with_mocked_fetch(monkeypatch
 
 def _silence_unused_import_warning() -> Any:
     return pytest, asyncio
+
+
+# ---------------------------------------------------------------------------
+# C-X4: redshift column flexibility (ALPINE-style z_CII / z_phot / z_sys)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "z_col_name", ["z_CII", "z_[CII]", "z_line", "zCII", "z_phot", "z_sys", "z_CO", "zspec"]
+)
+def test_normalize_line_measurements_recognises_z_variant(z_col_name: str) -> None:
+    """ALPINE / REBELS / similar high-z surveys put the redshift in a
+    line-specific column. Pre-C-X4 the strict `^(z|redshift)$|zspec`
+    pattern dropped these rows with a silent "missing redshift" — which
+    today's audit identified as the root cause of cached samples that
+    "have luminosity and FWHM but no redshift"."""
+    from app.api.arxiv import _normalize_line_measurements
+
+    table = {
+        "table_id": "alpine-style",
+        "columns": ["Source", z_col_name, "log L_[CII]", "FWHM"],
+        "rows": [["HZ1", "5.69", "8.40", "180"]],
+        "row_citations": [{"bibcode": "2020A&A...643A...4L"}],
+        "caption": f"[CII] sample with {z_col_name} column",
+    }
+    ms = _normalize_line_measurements([table])
+    assert len(ms) == 1, (
+        f"redshift column {z_col_name!r} was not recognised; row dropped"
+    )
+    assert ms[0]["redshift"] == 5.69
+    assert ms[0]["log_luminosity"] == 8.40
+    assert ms[0]["fwhm_km_s"] == 180.0
+
+
+# ---------------------------------------------------------------------------
+# C-X4: cached 0-measurements message points to companion-paper search
+# ---------------------------------------------------------------------------
+
+def test_exec_extract_literature_tables_zero_measurements_message_is_actionable(
+    monkeypatch,
+) -> None:
+    """When the paper's tables exist but yield zero line_measurements,
+    the message_to_model must point the AI at the two valid recoveries
+    (search_literature for the companion paper, or
+    <tools_returned_nothing/>) — NOT just "do not quote L[CII]"."""
+    from app.services import ai_tools
+
+    _install_isolated_cache(monkeypatch)
+
+    async def fake_fetch(arxiv_id: str) -> dict:
+        return {
+            "arxiv_id": "2310.99999",
+            "title": "REBELS size measurements",
+            "authors": ["Test"],
+            "year": 2023,
+            "bibcode": "arXiv:2310.99999",
+            "doi": None,
+            "source_url": "https://arxiv.org/abs/2310.99999",
+            "tables": [{"table_id": "t1", "columns": ["Source", "size_kpc"], "rows": [["G1", "1.2"]]}],
+            "line_measurements": [],
+            "result_granularity": "paper_table",
+            "supports_measurement_claims": False,
+        }
+
+    monkeypatch.setattr(ai_tools, "_extract_arxiv_tables_payload_with_retry", fake_fetch)
+
+    result = asyncio.run(
+        ai_tools._exec_extract_literature_tables(
+            {"arxiv_id": "2310.99999"},
+            user_id="user-test",
+        )
+    )
+    assert result["line_measurement_count"] == 0
+    msg = result["__message_to_model__"]
+    # Two valid recoveries spelled out
+    assert "search_literature" in msg
+    assert "<tools_returned_nothing" in msg
+    # Forbidden behaviours spelled out
+    assert "hardcode" in msg
+    assert "REBELS" in msg
