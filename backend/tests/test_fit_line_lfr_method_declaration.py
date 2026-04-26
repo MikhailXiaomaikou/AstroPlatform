@@ -117,15 +117,113 @@ def test_bayesian_requested_but_errs_missing_triggers_downgrade():
     assert out["error_axes_available"]["both_axes_available"] is False
 
 
-def test_bayesian_requested_errs_available_still_downgrades_in_m2():
-    """M3 前 Bayesian 后端没接,err 齐全也必须降级,reason 明确说明."""
+def test_bayesian_requested_errs_available_runs_bayesian_in_m3(monkeypatch):
+    """M3 contract: bayesian_xyerr + err columns populated → real Bayesian
+    fit (linmix), no downgrade.  We monkeypatch kelly07_linmix_fit so the
+    test does not actually pay the MCMC cost; the integration test that
+    runs the real sampler lives in test_bayesian_linmix_kelly07.py.
+    """
     rows = _make_rows(6, with_err=True)
+
+    fake_bayes = {
+        "method": "bayesian_xyerr_linmix",
+        "alpha_median": 8.5, "alpha_hdi_94": [8.3, 8.7],
+        "beta_median": 1.2,  "beta_hdi_94": [1.0, 1.4],
+        "intrinsic_scatter_dex": 0.18,
+        "intrinsic_scatter_dex_hdi": [0.12, 0.25],
+        "parameters": {
+            "alpha": {"mean": 8.5, "median": 8.5, "std": 0.1, "hdi_low_94": 8.3, "hdi_high_94": 8.7, "ess": 800},
+            "beta":  {"mean": 1.2, "median": 1.2, "std": 0.1, "hdi_low_94": 1.0, "hdi_high_94": 1.4, "ess": 800},
+            "sigma_int": {"mean": 0.18, "median": 0.18, "std": 0.03, "hdi_low_94": 0.12, "hdi_high_94": 0.25, "ess": 800},
+        },
+        "n_draws_total": 16000, "n_chains": 4, "miniter": 4000, "maxiter": 20000, "K": 2,
+        "converged": True, "publication_ready": True,
+        "package": "linmix (vendored)", "reference": "Kelly 2007",
+    }
+    import app.services.bayesian_inference as bi
+    monkeypatch.setattr(bi, "kelly07_linmix_fit", lambda **kw: fake_bayes)
+
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"fit_method_requested": "bayesian_xyerr"})
+    # Bayesian path actually ran — no METHOD_DOWNGRADED status.
+    assert out.get("__tool_status__") != "METHOD_DOWNGRADED"
+    assert out["fit_method"] == "bayesian_xyerr_linmix"
+    assert out["fit_method_downgrade_reason"] is None
+    assert out["error_axes_available"]["both_axes_available"] is True
+    # alpha / beta now come from Bayesian medians.
+    assert out["alpha"] == 8.5
+    assert out["beta"] == 1.2
+    # M3 fields exposed.
+    assert out["intrinsic_scatter_dex"] == 0.18
+    assert out["intrinsic_scatter_dex_hdi"] == [0.12, 0.25]
+    assert out["bayesian_summary"] is fake_bayes
+    # method_provenance carries sampler bookkeeping.
+    mp = out["provenance"]["method_provenance"]
+    assert mp["intrinsic_scatter_dex"] == 0.18
+    assert mp["bayesian_n_draws"] == 16000
+    assert mp["bayesian_converged"] is True
+    assert mp["bayesian_publication_ready"] is True
+
+
+def test_bayesian_sampler_failure_falls_back_to_ols(monkeypatch):
+    """M3 contract: when err columns are present but the sampler raises,
+    we still get a sane result — OLS with METHOD_DOWNGRADED + concrete
+    reason that mentions the exception class.
+    """
+    rows = _make_rows(6, with_err=True)
+    import app.services.bayesian_inference as bi
+
+    def _boom(**kw):
+        raise RuntimeError("synthetic sampler failure")
+
+    monkeypatch.setattr(bi, "kelly07_linmix_fit", _boom)
+
     with _patch_cache(rows):
         out = _exec_fit_line_lfr({"fit_method_requested": "bayesian_xyerr"})
     assert out["__tool_status__"] == "METHOD_DOWNGRADED"
     assert out["fit_method"] == "ols"
-    assert "not yet wired" in out["fit_method_downgrade_reason"]
-    assert out["error_axes_available"]["both_axes_available"] is True
+    assert out["bayesian_error"] is not None
+    assert "RuntimeError" in out["bayesian_error"]
+    assert "synthetic sampler failure" in out["fit_method_downgrade_reason"]
+
+
+def test_auto_with_errs_picks_bayesian(monkeypatch):
+    """auto + err columns populated → Bayesian (not a downgrade)."""
+    rows = _make_rows(6, with_err=True)
+    fake_bayes = {
+        "method": "bayesian_xyerr_linmix",
+        "alpha_median": 9.0, "alpha_hdi_94": [8.8, 9.2],
+        "beta_median": 1.1,  "beta_hdi_94": [0.9, 1.3],
+        "intrinsic_scatter_dex": 0.20,
+        "intrinsic_scatter_dex_hdi": [0.15, 0.27],
+        "parameters": {
+            "alpha": {"mean": 9.0, "median": 9.0, "std": 0.1, "hdi_low_94": 8.8, "hdi_high_94": 9.2, "ess": 800},
+            "beta":  {"mean": 1.1, "median": 1.1, "std": 0.1, "hdi_low_94": 0.9, "hdi_high_94": 1.3, "ess": 800},
+            "sigma_int": {"mean": 0.2, "median": 0.2, "std": 0.03, "hdi_low_94": 0.15, "hdi_high_94": 0.27, "ess": 800},
+        },
+        "n_draws_total": 12000, "n_chains": 4, "miniter": 4000, "maxiter": 20000, "K": 2,
+        "converged": True, "publication_ready": True,
+        "package": "linmix (vendored)", "reference": "Kelly 2007",
+    }
+    import app.services.bayesian_inference as bi
+    monkeypatch.setattr(bi, "kelly07_linmix_fit", lambda **kw: fake_bayes)
+
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"fit_method_requested": "auto"})
+    assert out["fit_method"] == "bayesian_xyerr_linmix"
+    assert out.get("__tool_status__") != "METHOD_DOWNGRADED"
+    # auto carries no methodology promise → no downgrade label
+    assert out["fit_method_downgrade_reason"] is None
+
+
+def test_auto_without_errs_stays_ols_no_downgrade():
+    """auto + err columns missing → silently stays OLS, NOT a downgrade."""
+    rows = _make_rows(6, with_err=False)
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"fit_method_requested": "auto"})
+    assert out["fit_method"] == "ols"
+    assert out["fit_method_downgrade_reason"] is None
+    assert out.get("__tool_status__") != "METHOD_DOWNGRADED"
 
 
 # ── Test 4: cosmology mismatch warning ────────────────────────────────
@@ -210,7 +308,9 @@ def test_lensing_counters_when_some_rows_are_lensed():
 # ── Test 8: method_provenance 节点完整 ───────────────────────────────
 
 def test_method_provenance_node_populated():
-    rows = _make_rows(6, with_err=True, with_cosmo="Planck18")
+    """When err columns are missing, the downgrade path is taken and
+    method_provenance carries every diagnostic field."""
+    rows = _make_rows(6, with_err=False, with_cosmo="Planck18")
     with _patch_cache(rows):
         out = _exec_fit_line_lfr({"fit_method_requested": "bayesian_xyerr"})
     mp = out["provenance"]["method_provenance"]
@@ -220,3 +320,9 @@ def test_method_provenance_node_populated():
     assert "cosmology_used" in mp
     assert "cosmology_mismatch" in mp
     assert mp["lensed_sources_demagnified"] == 0
+    # M3: Bayesian-specific keys are present even when the path didn't
+    # run (all None in that case) so consumers can rely on shape.
+    assert "intrinsic_scatter_dex" in mp
+    assert "bayesian_n_draws" in mp
+    assert mp["intrinsic_scatter_dex"] is None
+    assert mp["bayesian_n_draws"] is None

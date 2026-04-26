@@ -3605,16 +3605,17 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         if str(row.get("table_label") or "").strip()
     })
 
-    # ── M2: fit-method routing ──────────────────────────────────────
-    # fit_method_requested has three legal values:
-    #   auto           — pick the best available method (M2 = OLS; M3
-    #                    will upgrade this to Bayesian when both-axis
-    #                    errors are available).
+    # ── Fit-method routing (M2 + M3) ────────────────────────────────
+    # fit_method_requested:
+    #   auto           — best available: Bayesian if both-axis errors
+    #                    are populated; OLS otherwise.  Not a downgrade
+    #                    in either case (auto carries no promise).
     #   ols            — explicit OLS, never a downgrade.
-    #   bayesian_xyerr — explicit Bayesian two-axis regression.  In M2
-    #                    the Bayesian backend is not yet wired, so this
-    #                    always triggers METHOD_DOWNGRADED with a
-    #                    concrete reason.
+    #   bayesian_xyerr — explicit Bayesian two-axis regression (linmix,
+    #                    Kelly 2007).  Falls back to OLS with
+    #                    METHOD_DOWNGRADED + concrete reason ONLY when
+    #                    the per-row error columns are missing or the
+    #                    sampler errors out.
     requested = str(inp.get("fit_method_requested") or "auto").strip().lower()
     if requested not in ("auto", "ols", "bayesian_xyerr"):
         requested = "auto"
@@ -3624,22 +3625,73 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
 
     fit_method = "ols"
     fit_method_downgrade_reason: str | None = None
-    if requested == "bayesian_xyerr":
-        if not both_errs_available:
-            missing_bits = []
-            if n_x_err < n_used:
-                missing_bits.append(f"fwhm_err_km_s on {n_x_err}/{n_used} rows")
-            if n_y_err < n_used:
-                missing_bits.append(f"log_luminosity_err on {n_y_err}/{n_used} rows")
-            fit_method_downgrade_reason = (
-                "bayesian_xyerr requires per-row two-axis errors; sample has "
-                + "; ".join(missing_bits) + ". Fell back to OLS."
+    bayes_result: dict[str, Any] | None = None
+    bayes_error: str | None = None
+
+    # Should we attempt Bayesian?  Only when explicitly requested OR
+    # when auto-mode and the data supports it.  Explicit "ols" is
+    # always honored.
+    want_bayesian = (
+        (requested == "bayesian_xyerr")
+        or (requested == "auto" and both_errs_available)
+    )
+    can_run_bayesian = want_bayesian and both_errs_available
+
+    if can_run_bayesian:
+        try:
+            from app.services.bayesian_inference import kelly07_linmix_fit
+
+            xerr_arr = np.array(
+                [r["fwhm_err_km_s"] for r in accepted], dtype=float,
             )
-        else:
-            fit_method_downgrade_reason = (
-                "bayesian_xyerr backend not yet wired (scheduled in M3 of the "
-                "line-relation remediation plan). Fell back to OLS."
+            # x = log10(FWHM/100); error propagates as 0.434 * dFWHM/FWHM
+            # (standard log-derivative).  This is approximate but is
+            # the convention LFR papers use.
+            xerr_log = (xerr_arr / np.array([r["fwhm_km_s"] for r in accepted])) / math.log(10.0)
+            yerr_log = np.array(
+                [r["log_luminosity_err"] for r in accepted], dtype=float,
             )
+            # Pick miniter modestly so a typical N≈70 cluster sample
+            # finishes in 30-60 s; linmix extends to maxiter when its
+            # internal R-hat hasn't converged yet.
+            bayes_result = kelly07_linmix_fit(
+                x=x, y=y,
+                xerr=xerr_log, yerr=yerr_log,
+                K=2, nchains=4,
+                miniter=4000, maxiter=20000,
+                seed=int(inp.get("seed") or 20260426),
+                parallelize=False,
+            )
+            fit_method = "bayesian_xyerr_linmix"
+            # Replace OLS point estimates with Bayesian medians.  The
+            # OLS values (above) become the "starting guess" reference
+            # in the result envelope.
+            alpha = float(bayes_result["alpha_median"])
+            beta = float(bayes_result["beta_median"])
+            # 94% HDI half-width / 1.88 ≈ 1-σ for unimodal posteriors;
+            # this lets downstream consumers that expect an stderr
+            # field still get something physically meaningful.
+            alpha_hdi = bayes_result["alpha_hdi_94"]
+            beta_hdi = bayes_result["beta_hdi_94"]
+            alpha_stderr = (alpha_hdi[1] - alpha_hdi[0]) / 1.88 / 2.0
+            beta_stderr = (beta_hdi[1] - beta_hdi[0]) / 1.88 / 2.0
+        except Exception as exc:
+            bayes_error = f"{type(exc).__name__}: {exc}"
+            fit_method_downgrade_reason = (
+                "bayesian_xyerr requested and error columns are present, "
+                f"but the linmix sampler failed ({bayes_error}). Fell back to OLS."
+            )
+    elif requested == "bayesian_xyerr":
+        # Explicit request, but err columns missing → real downgrade.
+        missing_bits = []
+        if n_x_err < n_used:
+            missing_bits.append(f"fwhm_err_km_s on {n_x_err}/{n_used} rows")
+        if n_y_err < n_used:
+            missing_bits.append(f"log_luminosity_err on {n_y_err}/{n_used} rows")
+        fit_method_downgrade_reason = (
+            "bayesian_xyerr requires per-row two-axis errors; sample has "
+            + "; ".join(missing_bits) + ". Fell back to OLS."
+        )
     is_method_downgraded = fit_method_downgrade_reason is not None
 
     # ── M2: cosmology mismatch detection ────────────────────────────
@@ -3689,11 +3741,25 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "pearson_p": p_value,
         "spearman_r": spearman_r,
         "spearman_p": spearman_p,
-        # M2: residual_rms_dex is the canonical name; scatter_dex is a
-        # deprecated alias kept for one release.  Do NOT treat this as
-        # Bayesian intrinsic scatter σ_int — that arrives in M3.
+        # M2: residual_rms_dex is the canonical name for the OLS-style
+        # sqrt(mean(residual^2)) on this sample.  scatter_dex is a
+        # deprecated alias kept for one release.  This is NOT the same
+        # as Bayesian intrinsic scatter — that lives in
+        # intrinsic_scatter_dex below (M3, only populated when Bayesian
+        # actually ran).
         "residual_rms_dex": residual_rms_dex,
         "scatter_dex": residual_rms_dex,
+        # M3: Bayesian intrinsic scatter σ_int (median of posterior
+        # sqrt(sigsqr) draws).  None whenever the Bayesian path didn't
+        # run.  Pair with intrinsic_scatter_dex_hdi for the 94% HDI.
+        "intrinsic_scatter_dex": (
+            bayes_result["intrinsic_scatter_dex"] if bayes_result else None
+        ),
+        "intrinsic_scatter_dex_hdi": (
+            bayes_result["intrinsic_scatter_dex_hdi"] if bayes_result else None
+        ),
+        "bayesian_summary": bayes_result,
+        "bayesian_error": bayes_error,
         # M2: method declaration fields.  These are always present so
         # downstream UI / claim_validator / PDF export can detect a
         # silent methodology downgrade just from the tool_result shape.
@@ -3752,7 +3818,8 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
                 "primary_citation_source": "field_level" if citation_keys else "none",
             },
             # M2: method provenance node — the cross-fire target for
-            # claim_validator in M6.
+            # claim_validator in M6.  M3 extends it with Bayesian
+            # sampler bookkeeping when that path ran.
             "method_provenance": {
                 "fit_method": fit_method,
                 "fit_method_requested": requested,
@@ -3761,6 +3828,24 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
                 "cosmology_mismatch": cosmology_mismatch,
                 "lensed_sources_demagnified": 0,
                 "n_lensed_unknown": n_lensed_unknown,
+                "intrinsic_scatter_dex": (
+                    bayes_result["intrinsic_scatter_dex"] if bayes_result else None
+                ),
+                "bayesian_n_draws": (
+                    bayes_result.get("n_draws_total") if bayes_result else None
+                ),
+                "bayesian_converged": (
+                    bayes_result.get("converged") if bayes_result else None
+                ),
+                "bayesian_publication_ready": (
+                    bayes_result.get("publication_ready") if bayes_result else None
+                ),
+                "bayesian_package": (
+                    bayes_result.get("package") if bayes_result else None
+                ),
+                "bayesian_reference": (
+                    bayes_result.get("reference") if bayes_result else None
+                ),
             },
         },
     }

@@ -465,3 +465,186 @@ def model_comparison_table(
                 r["verdict"] = "ruled_out"
 
     return {"ranking": rows, "best_model": rows[0]["model"] if rows else None}
+
+
+# ── Kelly 2007 linmix wrapper (M3 of line-relation remediation) ──────
+#
+# Thin adapter around the vendored linmix (jmeyers314/linmix) so the
+# fit_line_lfr Bayesian path returns a result dict in the same shape
+# the rest of this module uses (parameters w/ mean/median/std/HDI,
+# overall_status, publication_ready).  Vendored notice + LICENSE in
+# app/services/_vendored/linmix/.
+
+
+def kelly07_linmix_fit(
+    x: np.ndarray,
+    y: np.ndarray,
+    xerr: np.ndarray,
+    yerr: np.ndarray,
+    *,
+    K: int = 2,
+    nchains: int = 4,
+    miniter: int = 5000,
+    maxiter: int = 50000,
+    seed: int | None = None,
+    parallelize: bool = False,
+) -> dict[str, Any]:
+    """Bayesian linear regression with errors in both axes (Kelly 2007).
+
+    Calls into the vendored ``linmix`` package and post-processes the
+    posterior samples into the project's standard diagnostic shape.
+
+    Args:
+        x, y: observed independent / dependent variables (1-D, equal length).
+        xerr, yerr: 1-sigma per-row errors on x and y.
+        K: number of Gaussian-mixture components for the latent xi prior.
+            Kelly 2007 uses K=3 by default; we default to K=2 because
+            our typical literature samples are < 200 rows and K=3 over-
+            parameterizes when n is small.  Bumping K=3 is fine for
+            larger samples.
+        nchains: number of independent MCMC chains.  linmix's internal
+            convergence test compares them via R-hat.
+        miniter, maxiter: sampler iteration budget.  miniter is the
+            minimum draws per chain; the sampler keeps extending until
+            R-hat < 1.1 or maxiter is hit.
+        seed: integer seed (None → derived inside linmix).
+        parallelize: linmix internal multiprocessing.  Default False
+            so we do not spawn extra processes inside an already-async
+            FastAPI worker; set True only for offline / test runs.
+
+    Returns:
+        dict with keys:
+          - method: "bayesian_xyerr_linmix"
+          - parameters: {alpha: {mean, median, std, hdi_low_94,
+                                  hdi_high_94, ess}, beta: ..., sigma_int: ...}
+          - intrinsic_scatter_dex: median sqrt(sigsqr) (alias of
+            sigma_int.median for caller convenience)
+          - publication_ready: bool (all params have ESS >= 400 and
+            converged within maxiter)
+          - n_draws_total, n_chains, miniter, maxiter
+          - converged: bool (linmix internal R-hat said so)
+    """
+    from app.services._vendored.linmix import LinMix
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    xerr = np.asarray(xerr, dtype=float)
+    yerr = np.asarray(yerr, dtype=float)
+    if x.shape != y.shape or x.shape != xerr.shape or x.shape != yerr.shape:
+        raise ValueError("x, y, xerr, yerr must all share the same shape")
+    n = int(x.size)
+    if n < 5:
+        raise ValueError(f"kelly07_linmix_fit needs at least 5 rows, got {n}")
+
+    # Vendored linmix has a known reproducibility gap: with
+    # parallelize=False the Chain ctor does not receive the seed
+    # (only parallelize=True passes RandomState(seed+i) to Chain).
+    # We wrap np.random's global state so the fallback path inside
+    # Chain still uses a deterministic RNG, then restore it on exit
+    # so we don't pollute the rest of the process.
+    if seed is not None:
+        _rng_state = np.random.get_state()
+        np.random.seed(int(seed))
+    else:
+        _rng_state = None
+    try:
+        lm = LinMix(
+            x=x, y=y, xsig=xerr, ysig=yerr,
+            K=K, nchains=nchains,
+            parallelize=parallelize, seed=seed,
+        )
+        lm.run_mcmc(miniter=miniter, maxiter=maxiter, silent=True)
+    finally:
+        if _rng_state is not None:
+            np.random.set_state(_rng_state)
+
+    alpha_chain = np.asarray(lm.chain["alpha"], dtype=float)
+    beta_chain = np.asarray(lm.chain["beta"], dtype=float)
+    sigsqr_chain = np.asarray(lm.chain["sigsqr"], dtype=float)
+    # σ_int = sqrt(σ²); convert before reporting because intrinsic
+    # scatter in dex is the physically meaningful quantity for LFR.
+    sigma_int_chain = np.sqrt(np.clip(sigsqr_chain, a_min=0.0, a_max=None))
+
+    n_draws_total = int(alpha_chain.size)
+    converged = n_draws_total < maxiter * nchains  # linmix stops early on R-hat<1.1
+
+    def _summarize(samples: np.ndarray, name: str) -> dict[str, float | None | str]:
+        mean = float(np.mean(samples))
+        std = float(np.std(samples))
+        median = float(np.median(samples))
+        # 94% HDI ≈ percentile 3..97 for unimodal posteriors; use
+        # arviz when available for tighter HDI on skewed posteriors.
+        hdi_low = float(np.percentile(samples, 3.0))
+        hdi_high = float(np.percentile(samples, 97.0))
+        ess: float | None = None
+        try:
+            import arviz as az
+            # Single concatenated chain (linmix already merged) — gives
+            # a lower-bound ESS that's still useful for "is the chain
+            # informative enough" checks.
+            idata = az.from_dict(posterior={name: samples[np.newaxis, :]})
+            ess_val = az.ess(idata, method="bulk")[name]
+            ess = float(ess_val.values) if hasattr(ess_val, "values") else float(ess_val)
+            if not np.isfinite(ess):
+                ess = None
+            try:
+                hdi = az.hdi(samples, hdi_prob=0.94)
+                hdi_low = float(hdi[0])
+                hdi_high = float(hdi[1])
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.warning("ArviZ ESS unavailable for %s: %s", name, exc)
+        return {
+            "mean": round(mean, 6),
+            "std": round(std, 6),
+            "median": round(median, 6),
+            "hdi_low_94": round(hdi_low, 6),
+            "hdi_high_94": round(hdi_high, 6),
+            "ess": round(ess, 1) if ess is not None else None,
+        }
+
+    parameters = {
+        "alpha": _summarize(alpha_chain, "alpha"),
+        "beta": _summarize(beta_chain, "beta"),
+        "sigma_int": _summarize(sigma_int_chain, "sigma_int"),
+    }
+
+    # publication_ready bar: all three parameters have ESS >= 400 and
+    # the sampler converged before hitting maxiter.  ESS=None (ArviZ
+    # missing) is treated as failure to push for a stricter env later.
+    ess_threshold = 400.0
+    ess_ok = all(
+        (params.get("ess") or 0.0) >= ess_threshold
+        for params in parameters.values()
+    )
+    publication_ready = converged and ess_ok
+
+    return {
+        "method": "bayesian_xyerr_linmix",
+        "parameters": parameters,
+        "intrinsic_scatter_dex": parameters["sigma_int"]["median"],
+        "intrinsic_scatter_dex_hdi": [
+            parameters["sigma_int"]["hdi_low_94"],
+            parameters["sigma_int"]["hdi_high_94"],
+        ],
+        "alpha_median": parameters["alpha"]["median"],
+        "alpha_hdi_94": [
+            parameters["alpha"]["hdi_low_94"],
+            parameters["alpha"]["hdi_high_94"],
+        ],
+        "beta_median": parameters["beta"]["median"],
+        "beta_hdi_94": [
+            parameters["beta"]["hdi_low_94"],
+            parameters["beta"]["hdi_high_94"],
+        ],
+        "n_draws_total": n_draws_total,
+        "n_chains": int(nchains),
+        "miniter": int(miniter),
+        "maxiter": int(maxiter),
+        "K": int(K),
+        "converged": bool(converged),
+        "publication_ready": bool(publication_ready),
+        "package": "linmix (vendored, jmeyers314, BSD-2)",
+        "reference": "Kelly 2007, ApJ 665, 1489 (arXiv:0705.2774)",
+    }
