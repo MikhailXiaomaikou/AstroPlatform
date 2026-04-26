@@ -138,3 +138,27 @@ def test_system_prompt_has_subsample_fallback_rule() -> None:
     assert "0 sources" in SYSTEM_PROMPT
     # ALPINE z=4-6 example must be there so the M4 reproducer is locked
     assert "ALPINE z=4-6 has 0 sources at z<1" in SYSTEM_PROMPT
+
+
+def test_system_prompt_has_explicit_cosmology_call_examples() -> None:
+    """PART AF C3 — M5 audit: AI called compare_luminosity_distances
+    without target_cosmology because it didn't know what string to pass.
+    Lock that the prompt now spells out the exact call strings for the
+    4 most common user phrasings."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    # Header
+    assert "EXACT CALL EXAMPLES" in SYSTEM_PROMPT
+
+    # Riess+11 / Suzuki+12 → FlatLambdaCDM spec
+    assert 'compare_luminosity_distances(target_cosmology="FlatLambdaCDM_H73p8_Om0p27")' in SYSTEM_PROMPT
+    # Riess+22 → riess22_shoes preset
+    assert 'compare_luminosity_distances(target_cosmology="riess22_shoes")' in SYSTEM_PROMPT
+    # Planck18 + BAO preset
+    assert 'compare_luminosity_distances(target_cosmology="planck18_bao")' in SYSTEM_PROMPT
+    # Freedman21 TRGB preset
+    assert 'compare_luminosity_distances(target_cosmology="freedman21_trgb")' in SYSTEM_PROMPT
+    # Custom Flat spec phrasing
+    assert "FlatLambdaCDM_H72p0_Om0p30" in SYSTEM_PROMPT
+    # Footer rule (don't ever omit target_cosmology)
+    assert "without `target_cosmology=`" in SYSTEM_PROMPT
