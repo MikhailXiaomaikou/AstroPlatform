@@ -512,3 +512,108 @@ def test_exec_extract_literature_tables_zero_measurements_message_is_actionable(
     # Forbidden behaviours spelled out
     assert "hardcode" in msg
     assert "REBELS" in msg
+
+
+# ---------------------------------------------------------------------------
+# PART AC C1: log/linear schema fixes — caption + value-range detection
+# ---------------------------------------------------------------------------
+
+def test_normalize_alpine_style_caption_log_detection() -> None:
+    """ALPINE-style: column header is 'L [CII]' (no 'log') but the
+    caption says log10. Pre-AC the value would land in `luminosity`
+    instead of `log_luminosity`, breaking fit_line_lfr.
+
+    R2.4 M3 audit reproducer — 74-row cache fitted 0 rows because of
+    this exact mis-routing.
+    """
+    from app.api.arxiv import _normalize_line_measurements
+
+    table = {
+        "table_id": "alpine",
+        "columns": ["Source", "z", "L [CII]", "FWHM"],
+        "rows": [["DEIMOS_COSMOS_873756", "4.5457", "9.56", "526.0"]],
+        "row_citations": [{"bibcode": "2020A&A...643A...4L"}],
+        "caption": "ALPINE [CII] sample. log10 L_[CII] in solar luminosities.",
+    }
+    ms = _normalize_line_measurements([table])
+    assert len(ms) == 1
+    assert ms[0]["log_luminosity"] == 9.56
+    assert ms[0]["luminosity"] is None
+    assert ms[0]["luminosity_inferred_log_from"] == "caption"
+
+
+def test_normalize_value_range_log_detection_per_row() -> None:
+    """Tier 3: header has no 'log', caption has no 'log', but a known
+    line + value in [3, 13] is unambiguously log. Falls through to the
+    per-row value-range heuristic and still gets it right."""
+    from app.api.arxiv import _normalize_line_measurements
+
+    table = {
+        "table_id": "hidden",
+        "columns": ["Source", "z", "L [CII]", "FWHM"],
+        "rows": [["G1", "5.5", "8.42", "200"]],
+        "row_citations": [{"bibcode": "test"}],
+        "caption": "[CII] measurements (table with no explicit log marker)",
+    }
+    ms = _normalize_line_measurements([table])
+    assert ms[0]["log_luminosity"] == 8.42
+    assert ms[0]["luminosity_inferred_log_from"] == "value_range"
+
+
+def test_normalize_linear_luminosity_not_promoted_when_value_too_large() -> None:
+    """Sanity: a real linear luminosity (1e42 erg/s style) must NOT be
+    promoted to log just because the column header is ambiguous."""
+    from app.api.arxiv import _normalize_line_measurements
+
+    table = {
+        "table_id": "linear",
+        "columns": ["Source", "z", "L [CII]", "FWHM"],
+        "rows": [["G1", "0.5", "3.2e42", "150"]],
+        "row_citations": [{"bibcode": "test"}],
+        "caption": "Line luminosities in erg/s (no log)",
+    }
+    ms = _normalize_line_measurements([table])
+    # 3.2e42 is well outside [3, 13] → stays in `luminosity`.
+    assert ms[0]["log_luminosity"] is None
+    assert ms[0]["luminosity"] == 3.2e42
+    assert ms[0]["luminosity_inferred_log_from"] is None
+
+
+def test_fit_line_lfr_legacy_cache_schema_recovery() -> None:
+    """The R2.4 M3 audit: a 74-row literature cache written by the OLD
+    arxiv normalizer has log_luminosity=None and luminosity=9.56 (real
+    log value mis-routed). PART AC C1's fit_line_lfr fallback recovers
+    those rows in-place so users don't have to re-extract."""
+    from app.services.ai_tools import _exec_fit_line_lfr, store_search_results
+
+    legacy_cache = {
+        "kind": "literature_tables",
+        "cache_key": "latest_literature_tables",
+        "line_measurements": [
+            {
+                "source_name": f"GAL{i}",
+                "redshift": 4.5,
+                "line_id": "[CII] 158um",
+                "log_luminosity": None,           # the bug
+                "log_luminosity_err": None,
+                "luminosity": 9.0 + i * 0.05,     # real log10 value
+                "luminosity_err": 0.05,
+                "fwhm_km_s": 200 + i * 5,
+                "fwhm_err_km_s": 15,
+                "bibcode": "2020A&A...643A...4L",
+                "citation": {"bibcode": "2020A&A...643A...4L"},
+            }
+            for i in range(10)
+        ],
+        "tables": [],
+    }
+    store_search_results("latest_literature_tables", legacy_cache)
+
+    out = _exec_fit_line_lfr({
+        "cache_key": "latest_literature_tables",
+        "line_id": "[CII]",
+        "fit_method_requested": "ols",
+    })
+    assert out["success"] is True
+    assert out["n_used"] == 10
+    assert out.get("slope") is not None or out.get("beta") is not None

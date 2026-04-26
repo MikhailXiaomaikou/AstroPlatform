@@ -3766,6 +3766,20 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
             reason = "missing_citation"
         else:
             log_luminosity = _finite_float(row.get("log_luminosity"))
+            # PART AC C1 — backwards-compat for legacy cached schema.
+            # Pre-AC the arxiv normalizer mis-routed log values into the
+            # linear `luminosity` field when the column header didn't
+            # contain "log" (ALPINE / REBELS / similar). Caches written
+            # before AC therefore have log_luminosity=None despite
+            # `luminosity` carrying a real log10 value. Detect that
+            # situation here so old cache entries still fit on the next
+            # call, without forcing a re-extraction.
+            log_inferred_from_legacy = False
+            if log_luminosity is None:
+                lin_value = _finite_float(row.get("luminosity"))
+                if lin_value is not None and 3.0 <= lin_value <= 13.0:
+                    log_luminosity = lin_value
+                    log_inferred_from_legacy = True
             fwhm = _finite_float(row.get("fwhm_km_s"))
             if log_luminosity is None or fwhm is None or fwhm <= 0:
                 reason = "missing_numeric_values"
@@ -3780,7 +3794,8 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
                     "redshift": row.get("redshift"),
                     "line_id": row.get("line_id") or line_id,
                     "log_luminosity": log_luminosity,
-                    "log_luminosity_err": _finite_float(row.get("log_luminosity_err")),
+                    "log_luminosity_err": _finite_float(row.get("log_luminosity_err"))
+                    or (_finite_float(row.get("luminosity_err")) if log_inferred_from_legacy else None),
                     "fwhm_km_s": fwhm,
                     "fwhm_err_km_s": _finite_float(row.get("fwhm_err_km_s")),
                     "mu_lens": _finite_float(row.get("mu_lens")),
@@ -3796,6 +3811,15 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
                     "doi": citation.get("doi"),
                     "row_index": row.get("row_index", idx),
                     "citation": citation,
+                    # PART AC C1: record when we promoted a legacy linear
+                    # luminosity field into log_luminosity via the
+                    # value-range heuristic so the model + reviewers
+                    # can see which rows were inferred vs explicit.
+                    "log_inferred_from_value_range": log_inferred_from_legacy,
+                    "luminosity_inferred_log_from": (
+                        row.get("luminosity_inferred_log_from")
+                        or ("value_range" if log_inferred_from_legacy else None)
+                    ),
                 })
         if reason:
             rejected.append({

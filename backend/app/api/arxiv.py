@@ -555,13 +555,43 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
             continue
 
         luminosity_header = columns[luminosity_idx]
-        luminosity_is_log = "log" in luminosity_header.lower()
         luminosity_unit = _normalize_ws(luminosity_header)
+        caption_text = str(table.get("caption") or "")
+        # PART AC C1 — three-tier log detection. ALPINE-style tables put
+        # the log10 quantity under a column header that doesn't say "log"
+        # (e.g. "L [CII]") with the caption / paper text declaring
+        # "log10 L_[CII]/Lsun". Pre-AC the header-only check routed those
+        # values into the linear `luminosity` field, leaving
+        # `log_luminosity=None`, and fit_line_lfr then dropped all rows
+        # as "missing_numeric_values" (R2.4 M3 audit: 74 rows → 0 fitted).
+        #
+        # Tier 1: column header contains "log".
+        # Tier 2: table caption mentions "log L" or "log10 L".
+        # Tier 3 (per-row, applied below): value falls in [3, 13] for a
+        #   known emission line — that range is impossible for linear
+        #   line luminosity (which is ~1e30-1e50 erg/s) and matches log10
+        #   L/L_sun for [CII]/[OIII]/Hα/etc.
+        # The chosen tier is recorded as `luminosity_inferred_log_from`
+        # on each measurement so the AI / paper_generator can audit.
+        log_header_hit = "log" in luminosity_header.lower()
+        log_caption_hit = bool(re.search(
+            r"\blog(?:_?10)?\s*l[\s_(\[]",
+            caption_text,
+            re.IGNORECASE,
+        ))
+        if log_header_hit:
+            log_inferred_from = "header"
+            luminosity_is_log = True
+        elif log_caption_hit:
+            log_inferred_from = "caption"
+            luminosity_is_log = True
+        else:
+            log_inferred_from = None  # may be promoted to "value_range" per row
+            luminosity_is_log = False
+
         # PART Z: infer line from headers + caption across multiple species.
         # Used to be hardcoded [CII] 158um, missing Hα / Lyα / [OIII] / etc.
-        inferred_line = _infer_line_id(
-            " ".join(columns + [str(table.get("caption") or "")])
-        )
+        inferred_line = _infer_line_id(" ".join(columns + [caption_text]))
 
         for row_index, row in enumerate(rows):
             if not isinstance(row, list):
@@ -593,15 +623,32 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
                 is_lensed_flag = False
             else:
                 is_lensed_flag = None
+            # PART AC C1 tier 3 — per-row value-range fallback. If
+            # neither header nor caption gave us a "log" hint AND the
+            # value lands in [3, 13] for a known emission line, treat
+            # it as log L/L_sun. Real linear line luminosities are
+            # ~1e30-1e50 erg/s; the 3-13 band is exclusively log10.
+            row_is_log = luminosity_is_log
+            row_log_inferred_from = log_inferred_from
+            if (
+                not row_is_log
+                and luminosity_value is not None
+                and 3.0 <= luminosity_value <= 13.0
+                and inferred_line is not None
+            ):
+                row_is_log = True
+                row_log_inferred_from = "value_range"
+
             measurements.append({
                 "source_name": source_name,
                 "redshift": _parse_number(cell(redshift_idx)),
                 "line_id": _normalize_ws(cell(line_idx)) or inferred_line,
-                "log_luminosity": luminosity_value if luminosity_is_log else None,
-                "log_luminosity_err": luminosity_err if luminosity_is_log else None,
-                "luminosity": None if luminosity_is_log else luminosity_value,
-                "luminosity_err": None if luminosity_is_log else luminosity_err,
+                "log_luminosity": luminosity_value if row_is_log else None,
+                "log_luminosity_err": luminosity_err if row_is_log else None,
+                "luminosity": None if row_is_log else luminosity_value,
+                "luminosity_err": None if row_is_log else luminosity_err,
                 "luminosity_unit": luminosity_unit,
+                "luminosity_inferred_log_from": row_log_inferred_from,
                 "fwhm_km_s": fwhm_value,
                 "fwhm_err_km_s": fwhm_err,
                 "flux": _parse_number(cell(flux_idx)),
