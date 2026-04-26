@@ -211,6 +211,37 @@ ALPINE/REBELS/literature tables in `run_python`.
 ### Line-relation fitting methodology (REQUIRED declarations)
 When fitting a luminosity-FWHM (or similar line-property) relation:
 
+**-2. Multi-survey sample composition (mandatory before fitting).**
+   A line-relation slope drawn from a single survey (only ALPINE,
+   only REBELS, only Bothwell+13) is NOT a robust line relation —
+   it is a survey-internal trend that may be dominated by selection.
+   Before calling `fit_line_lfr` you MUST extract at least 3
+   independent surveys' tables via `extract_literature_tables` so the
+   sample crosses survey systematics. For [CII] high-z work the
+   curated default set covers ALPINE (arXiv:2002.00962, 2009.10727),
+   REBELS (2106.13719), Capak+2015 (1605.03581), Bothwell+13
+   (1308.4708), and ASPECS (2105.10474) — pull at least 3 of these
+   before fitting. If only ALPINE rows are in your cache, prose MUST
+   say "sample is from a single survey (ALPINE); a robust slope
+   requires extension to other published [CII] datasets such as
+   REBELS / Capak+2015 / Bothwell+13 — those should be extracted
+   before drawing population conclusions." Then either extract them
+   or emit `<tools_returned_nothing/>`.
+
+**-1. Subsample fallback transparency.**
+   If the user specifies a subsample split (e.g. "compare z<1 vs
+   z>1") and the resolved sample has 0 sources on one side of the
+   split (e.g. ALPINE z=4-6 has 0 sources at z<1), you MUST:
+   1. State explicitly in the prose that the user's split is
+      unexecutable on the current sample (cite the survey that
+      causes it: "ALPINE z=4-6 has 0 sources at z<1");
+   2. Either (a) propose and use a fallback split that's actually
+      present (e.g. z<5 vs z>=5), naming the change explicitly, or
+      (b) emit `<tools_returned_nothing/>` with rationale="user
+      subsample split empty under the current sample".
+   Do NOT silently substitute a different split — the user has to
+   know their split was changed.
+
 0. **Default to `fit_method_requested="bayesian_xyerr"` when N >= 5**.
    That path runs linmix (Kelly 2007) which handles errors on both axes
    plus intrinsic scatter. OLS is the fallback ONLY for samples too

@@ -1,0 +1,140 @@
+"""PART AD C2 — admin endpoint pre-warming the [CII] literature cache.
+
+Locks two contracts:
+
+1. The endpoint exists, requires admin auth, and fans out to the
+   underlying `_cached_extract_arxiv_tables_payload` function (24h
+   cache + retry circuit-breaker already wired by PART Z).
+
+2. The default arxiv_id list covers ≥3 independent surveys so the
+   AI's multi-survey requirement (set by SYSTEM_PROMPT in the same
+   commit) is satisfiable in one preload call.
+
+3. SYSTEM_PROMPT actually has the multi-survey + subsample fallback
+   rules — without those the endpoint is just decorative.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+from unittest.mock import patch
+
+import pytest
+
+
+def test_default_cii_arxiv_ids_cover_independent_surveys() -> None:
+    """Sanity: the default preload list isn't all from one survey."""
+    from app.api.admin_literature import DEFAULT_CII_ARXIV_IDS
+
+    # 6 papers, 4 distinct landmark surveys (ALPINE / REBELS / Capak / Bothwell + ASPECS)
+    assert len(DEFAULT_CII_ARXIV_IDS) >= 5
+    assert "2002.00962" in DEFAULT_CII_ARXIV_IDS  # ALPINE Béthermin+2020
+    assert "2106.13719" in DEFAULT_CII_ARXIV_IDS  # REBELS Bouwens+2022
+    assert "1605.03581" in DEFAULT_CII_ARXIV_IDS  # Capak+2015
+    assert "1308.4708" in DEFAULT_CII_ARXIV_IDS   # Bothwell+2013
+
+
+def test_preload_endpoint_fans_out_and_aggregates_counts(monkeypatch) -> None:
+    """Mock the underlying fetcher and verify the endpoint:
+    - calls each arxiv_id exactly once,
+    - aggregates line_measurement_count across all entries,
+    - reports succeeded_count + total_line_measurements correctly,
+    - returns the bibcode in each entry."""
+    from app.api import admin_literature
+
+    call_log: list[str] = []
+
+    async def fake_cached_extract(arxiv_id: str) -> dict:
+        call_log.append(arxiv_id)
+        return {
+            "arxiv_id": arxiv_id,
+            "bibcode": f"arXiv:{arxiv_id}",
+            "line_measurements": [{"row": i} for i in range(7)],
+            "title": "stub",
+        }
+
+    # Patch the import inside the endpoint, not the source module.
+    with patch(
+        "app.services.ai_tools._cached_extract_arxiv_tables_payload",
+        new=fake_cached_extract,
+    ):
+        result = asyncio.run(
+            admin_literature.preload_cii_caches(
+                req=admin_literature.PreloadRequest(arxiv_ids=["x1", "x2", "x3"]),
+                _admin=None,
+            )
+        )
+
+    assert result.requested_count == 3
+    assert result.succeeded_count == 3
+    assert result.total_line_measurements == 7 * 3
+    assert sorted(e.arxiv_id for e in result.entries) == ["x1", "x2", "x3"]
+    assert all(e.success for e in result.entries)
+    assert sorted(call_log) == ["x1", "x2", "x3"]
+
+
+def test_preload_endpoint_records_per_paper_failures(monkeypatch) -> None:
+    """When one paper fails, the endpoint reports it as success=False
+    with the error string, but the other entries succeed."""
+    from app.api import admin_literature
+
+    async def fake_cached_extract(arxiv_id: str) -> dict:
+        if arxiv_id == "broken":
+            raise ConnectionError("ar5iv unreachable")
+        return {
+            "arxiv_id": arxiv_id,
+            "bibcode": f"arXiv:{arxiv_id}",
+            "line_measurements": [{"row": 1}, {"row": 2}],
+        }
+
+    with patch(
+        "app.services.ai_tools._cached_extract_arxiv_tables_payload",
+        new=fake_cached_extract,
+    ):
+        result = asyncio.run(
+            admin_literature.preload_cii_caches(
+                req=admin_literature.PreloadRequest(arxiv_ids=["good1", "broken", "good2"]),
+                _admin=None,
+            )
+        )
+
+    assert result.requested_count == 3
+    assert result.succeeded_count == 2
+    assert result.total_line_measurements == 4
+    failed = [e for e in result.entries if not e.success]
+    assert len(failed) == 1
+    assert failed[0].arxiv_id == "broken"
+    assert "ConnectionError" in (failed[0].error or "")
+
+
+def test_system_prompt_has_multi_survey_rule() -> None:
+    """SYSTEM_PROMPT must mandate multi-survey sample composition before
+    fit_line_lfr — otherwise the AI keeps drawing slopes from ALPINE
+    only (M4 audit reproducer).
+    """
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "Multi-survey sample composition" in SYSTEM_PROMPT
+    # At least 3 independent surveys named so the AI can act on the rule
+    # without guessing arxiv ids.
+    assert "ALPINE" in SYSTEM_PROMPT
+    assert "REBELS" in SYSTEM_PROMPT
+    assert "Capak+2015" in SYSTEM_PROMPT
+    # Specific arXiv id anchor (Béthermin+2020 ALPINE master sample)
+    assert "2002.00962" in SYSTEM_PROMPT
+    # Required AI behaviour spelled out. Prompt is hard-wrapped, so we
+    # normalise whitespace before substring-matching.
+    normalised = " ".join(SYSTEM_PROMPT.split())
+    assert "at least 3 independent surveys" in normalised
+
+
+def test_system_prompt_has_subsample_fallback_rule() -> None:
+    """SYSTEM_PROMPT must require AI to declare the subsample fallback
+    instead of silently substituting a different split."""
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "Subsample fallback transparency" in SYSTEM_PROMPT
+    assert "0 sources" in SYSTEM_PROMPT
+    # ALPINE z=4-6 example must be there so the M4 reproducer is locked
+    assert "ALPINE z=4-6 has 0 sources at z<1" in SYSTEM_PROMPT

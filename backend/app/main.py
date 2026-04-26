@@ -41,6 +41,7 @@ from app.api.comments import router as comments_router
 from app.api.admin_stats import router as admin_stats_router
 from app.api.admin_trending import admin_router as admin_trending_router, public_router as trending_public_router
 from app.api.admin_sandbox import router as admin_sandbox_router
+from app.api.admin_literature import router as admin_literature_router
 from app.api.crossmatch import router as crossmatch_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router, redis_subscriber
@@ -476,6 +477,7 @@ app.include_router(admin_stats_router)
 app.include_router(admin_trending_router)
 app.include_router(trending_public_router)
 app.include_router(admin_sandbox_router)
+app.include_router(admin_literature_router)
 
 
 # ── 桌面 admin HTML 托管 ─────────────────────────────────────────────
