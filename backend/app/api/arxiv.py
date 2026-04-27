@@ -136,16 +136,41 @@ def _parse_html_tables(html_text: str) -> list[dict]:
             if caption_tag else ""
         )
 
-        # Headers: prefer the first <tr> inside <thead>; fall back to the
-        # first <tr> of the table.
+        # Headers: PART AH — handle multi-row <thead> properly.
+        # ar5iv routinely emits a 2-row thead: the first <tr> is the
+        # group banner ("REBELS", "[CII] line"), the second <tr> is
+        # the leaf-level column names ("Frequency", "z", "log L_CII",
+        # "FWHM"). Pre-AH only the first <tr> was kept, so REBELS
+        # Bouwens+2022 Table 2 had columns=['rebels', 'cii', '', '', '']
+        # and the [CII]-line columns 2-4 went unrecognised.
+        # New behaviour: union every <tr>'s cell text per column index
+        # so the leaf names aren't lost.
         headers: list[str] = []
         thead = table_tag.find("thead")
         if thead:
-            head_tr = thead.find("tr")
-            if head_tr:
+            thead_rows = thead.find_all("tr")
+            if thead_rows:
+                # Find the widest header row to determine column count.
+                widths = [
+                    len(tr.find_all(["th", "td"]))
+                    for tr in thead_rows
+                ]
+                width = max(widths) if widths else 0
+                # Collect cell texts column-by-column across all
+                # header rows. Empty cells from earlier rows are
+                # silently overwritten by later (leaf-level) rows.
+                col_texts: list[list[str]] = [[] for _ in range(width)]
+                for tr in thead_rows:
+                    cells = tr.find_all(["th", "td"])
+                    for i, cell in enumerate(cells):
+                        if i >= width:
+                            break
+                        text = _normalize_ws(cell.get_text(" ", strip=True))
+                        if text:
+                            col_texts[i].append(text)
                 headers = [
-                    _normalize_ws(c.get_text(" ", strip=True))
-                    for c in head_tr.find_all(["th", "td"])
+                    " ".join(parts) if parts else ""
+                    for parts in col_texts
                 ]
         if not headers:
             first_tr = table_tag.find("tr")
@@ -399,10 +424,39 @@ async def _fetch_arxiv_metadata(client: httpx.AsyncClient, arxiv_id: str) -> dic
 
 
 def _column_key(column: str) -> str:
-    text = _strip_latex(column).lower()
-    text = text.replace("[", "").replace("]", "")
-    text = re.sub(r"[^a-z0-9]+", "", text)
-    return text
+    """Normalise a column header for fuzzy substring matching.
+
+    PART AH (M7 path repair): ar5iv inlines LaTeX render artifacts —
+    "subscript / superscript / italic-{..} / delimited-{..} /
+    annotated" appear as DOM text alongside the rendered glyphs. Strip
+    those before the legacy compact step so 'z_phot' style headers
+    don't compact to "zphotsubscriptzphot". The result is still a
+    single lowercase alphanum string (no spaces / underscores) so
+    every existing _find_column regex keeps working — it just finds
+    its target inside a much cleaner string.
+    """
+    raw = _strip_latex(column).lower()
+    # Drop ar5iv role labels that come from the rendered span class
+    # names ("subscript", "italic-..."). Without this, "z_phot" lands
+    # in the compact key as "zphotsubscriptzphot" and the `^zphot$`-
+    # style anchored regex never matches.
+    cleaned = re.sub(
+        r"\b(?:subscript|superscript|italic-[a-z]+|roman-[a-z]+|delimited-\{[^}]*\}|delimited|annotated)\b",
+        " ",
+        raw,
+    )
+    cleaned = cleaned.replace("[", "").replace("]", "")
+    compact = re.sub(r"[^a-z0-9]+", "", cleaned)
+    # Dedupe immediate full-string doubling. ar5iv exposes both the
+    # rendered MathJax glyph AND the verbatim LaTeX source as DOM
+    # text; after compaction both copies sit side-by-side
+    # ("zphotzphot", "ciicii", "muvmuv"). Collapsing the doubled form
+    # restores the anchored-regex behaviour without forcing every
+    # caller to rewrite its patterns.
+    n = len(compact)
+    if n >= 4 and n % 2 == 0 and compact[: n // 2] == compact[n // 2:]:
+        return compact[: n // 2]
+    return compact
 
 
 def _parse_number(value: Any) -> float | None:
@@ -491,10 +545,17 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
         columns = [str(c) for c in table.get("columns") or []]
         rows = table.get("rows") if isinstance(table.get("rows"), list) else []
         row_citations = table.get("row_citations") if isinstance(table.get("row_citations"), list) else []
+        # PART AH: also match survey-prefix IDs ("REBELS ID", "ALMA ID",
+        # "SPT ID", "HZ ID") which compact to "rebelsid" / "almaid" /
+        # etc. Without this, REBELS Bouwens+2022 Table 1 dropped every
+        # row because the only candidate source column compacted to
+        # "rebelsid" and didn't match any of the legacy patterns.
         source_idx = _find_column(columns, [
             r"^(source|object|name|id|galaxy)$",
             r"(source|object|galaxy)(name|id)",
             r"^(sourceid|objectid|galaxyid)$",
+            r"^[a-z]{2,12}id$",   # rebelsid / almaid / sptid / hzid / etc.
+            r"^(rebels|alpine|aspecs|capak|bothwell|hzid)$",
         ])
         # C-X4: ALPINE / REBELS / similar high-z survey tables put the
         # redshift in a line-specific column ("z_CII", "z_[CII]", "z_line",
@@ -522,21 +583,29 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
         # _column_key strips unicode to ASCII a-z0-9, so "log L(Hα)" →
         # "loglh" / "log L_[OIII]" → "loglloiii" / "L_Lya" → "llya".
         # Match these via a generic "^log_?l" prefix + line-name fallback.
+        # PART AH: tightened generic "luminos" / "loglum" matchers to
+        # ANCHORED forms only. The previous unanchored substring match
+        # falsely flagged "SFR UV [...M⊙ yr-1]...UV luminosity..." as
+        # the luminosity column on REBELS Bouwens+2022 because the
+        # caption preamble contained the word "luminosity". Anchored
+        # matches only fire when the COMPACT KEY itself is short and
+        # luminosity-shaped, not when it merely contains the substring.
         luminosity_idx = _find_column(columns, [
             # Specific line-luminosity patterns (legacy + common)
-            r"log.*l.*cii", r"lcii",
-            r"log.*l.*halpha", r"^lhalpha$", r"lha\b",
+            r"log.*l.*cii", r"^lcii", r"^lciilcii$", r"^cii$",
+            r"log.*l.*halpha", r"^lhalpha$", r"^lha$",
             r"log.*l.*hbeta", r"^lhbeta$",
-            r"log.*l.*ly(a|alpha)", r"^lly", r"llya",
+            r"log.*l.*ly(a|alpha)", r"^lly", r"^llya",
             r"log.*l.*oiii", r"^loiii$",
-            r"log.*l.*oii\b", r"^loii$",
+            r"log.*l.*oii$", r"^loii$",
             r"log.*l.*nii", r"^lnii$",
             r"log.*l.*sii", r"^lsii$",
-            # Generic "log L<line>" / luminosity headers
-            r"^log[_]?l[a-z]*\d*$", r"loglum", r"lineluminos", r"luminos",
-            # Last resort: solo "lc" — kept for backwards-compat with old
-            # papers that just wrote "L_C" or "Lc"
-            r"^lc$",
+            # Generic "log L<line>" / "L_line" / "lineluminosity" anchored.
+            r"^log[_]?l[a-z]*\d*$", r"^loglum", r"^lineluminos",
+            r"^luminos[a-z]*$",
+            # Last resort: solo "lc" / "logl" — kept for backwards-compat
+            # with old papers that just wrote "L_C" / "log L".
+            r"^lc$", r"^logl$",
         ])
         fwhm_idx = _find_column(columns, [r"fwhm", r"linewidth", r"^dv$", r"velocitywidth"])
         luminosity_err_idx = _find_column(columns, [
