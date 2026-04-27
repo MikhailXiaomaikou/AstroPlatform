@@ -165,6 +165,109 @@ def test_bayesian_requested_errs_available_runs_bayesian_in_m3(monkeypatch):
     assert mp["bayesian_publication_ready"] is True
 
 
+def test_bayesian_linmix_path_attaches_kelly07_method_bibcode(monkeypatch):
+    """PART AH C6 — 当 bayesian_xyerr_linmix 跑通后,
+    provenance.datasets 必须带 Kelly 2007 (linmix 方法学引用) 的 bibcode
+    `2007ApJ...665.1489K`,这样 claim_validator 的 _build_valid_bibcode_pool
+    能自动认它,reply 里出现 "Kelly 2007" / "Kelly 07" 不再被当 author-year
+    fabrication 拦掉.
+
+    M7 retest #2 reproducer:6 处 citation guard violation 都说
+    `Kelly 2007 (citation context)` 是无源 author-year — 但它实际上是
+    fit_line_lfr 工具内部 hardcoded 的 method paper,不是模型编造.
+    """
+    rows = _make_rows(6, with_err=True)
+
+    fake_bayes = {
+        "method": "bayesian_xyerr_linmix",
+        "alpha_median": 8.5, "alpha_hdi_94": [8.3, 8.7],
+        "beta_median": 1.2,  "beta_hdi_94": [1.0, 1.4],
+        "intrinsic_scatter_dex": 0.18,
+        "intrinsic_scatter_dex_hdi": [0.12, 0.25],
+        "parameters": {
+            "alpha": {"mean": 8.5, "median": 8.5, "std": 0.1, "hdi_low_94": 8.3, "hdi_high_94": 8.7, "ess": 800},
+            "beta":  {"mean": 1.2, "median": 1.2, "std": 0.1, "hdi_low_94": 1.0, "hdi_high_94": 1.4, "ess": 800},
+            "sigma_int": {"mean": 0.18, "median": 0.18, "std": 0.03, "hdi_low_94": 0.12, "hdi_high_94": 0.25, "ess": 800},
+        },
+        "n_draws_total": 16000, "n_chains": 4, "miniter": 4000, "maxiter": 20000, "K": 2,
+        "converged": True, "publication_ready": True,
+        "package": "linmix (vendored)", "reference": "Kelly 2007",
+    }
+    import app.services.bayesian_inference as bi
+    monkeypatch.setattr(bi, "kelly07_linmix_fit", lambda **kw: fake_bayes)
+
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"fit_method_requested": "bayesian_xyerr"})
+
+    assert out["fit_method"] == "bayesian_xyerr_linmix"
+    datasets = out["provenance"]["datasets"]
+    method_entries = [d for d in datasets if d.get("service_key") == "method_citation"]
+    assert len(method_entries) == 1, (
+        f"linmix path must attach exactly one method_citation dataset; "
+        f"got datasets={[d.get('service_key') for d in datasets]}"
+    )
+    assert method_entries[0]["article"] == "2007ApJ...665.1489K"
+    assert method_entries[0]["source_authority"] == "method_paper"
+    # OLS-only fits MUST NOT carry the Kelly bibcode (different fit method).
+    # Sanity: the literature_table_fit dataset is still there.
+    lit_entries = [d for d in datasets if d.get("service_key") == "literature_table_fit"]
+    assert len(lit_entries) == 1
+
+
+def test_ols_only_path_does_not_attach_kelly07_bibcode(monkeypatch):
+    """The Kelly 2007 method bibcode is ONLY appended on the linmix
+    path. OLS / no-error-bars paths must not pollute the bibcode pool
+    with a method ref they did not actually use.
+    """
+    rows = _make_rows(6, with_err=False)
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"fit_method_requested": "ols"})
+    datasets = out["provenance"]["datasets"]
+    method_entries = [d for d in datasets if d.get("service_key") == "method_citation"]
+    assert len(method_entries) == 0
+
+
+def test_kelly07_bibcode_makes_validator_accept_kelly_2007_citation(monkeypatch):
+    """End-to-end: claim_validator's bibcode pool must accept
+    `2007ApJ...665.1489K` when the linmix path ran, so a reply citing
+    'Kelly 2007' (the canonical linmix reference) does not trip
+    suspicious_author_year. This was the M7 retest #2 false positive.
+    """
+    from app.services.claim_validator import _build_valid_bibcode_pool
+
+    rows = _make_rows(6, with_err=True)
+    fake_bayes = {
+        "method": "bayesian_xyerr_linmix",
+        "alpha_median": 8.5, "alpha_hdi_94": [8.3, 8.7],
+        "beta_median": 1.2,  "beta_hdi_94": [1.0, 1.4],
+        "intrinsic_scatter_dex": 0.18,
+        "intrinsic_scatter_dex_hdi": [0.12, 0.25],
+        "parameters": {
+            "alpha": {"mean": 8.5, "median": 8.5, "std": 0.1, "hdi_low_94": 8.3, "hdi_high_94": 8.7, "ess": 800},
+            "beta":  {"mean": 1.2, "median": 1.2, "std": 0.1, "hdi_low_94": 1.0, "hdi_high_94": 1.4, "ess": 800},
+            "sigma_int": {"mean": 0.18, "median": 0.18, "std": 0.03, "hdi_low_94": 0.12, "hdi_high_94": 0.25, "ess": 800},
+        },
+        "n_draws_total": 16000, "n_chains": 4, "miniter": 4000, "maxiter": 20000, "K": 2,
+        "converged": True, "publication_ready": True,
+        "package": "linmix (vendored)", "reference": "Kelly 2007",
+    }
+    import app.services.bayesian_inference as bi
+    monkeypatch.setattr(bi, "kelly07_linmix_fit", lambda **kw: fake_bayes)
+
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"fit_method_requested": "bayesian_xyerr"})
+
+    # Build a tool_results list as the agent loop would, run it through
+    # the validator's bibcode pool harvester.
+    tool_results = [{"tool": "fit_line_lfr", "result": out}]
+    pool = _build_valid_bibcode_pool(tool_results)
+    assert "2007ApJ...665.1489K" in pool, (
+        f"Kelly 2007 method bibcode missing from validator pool — "
+        f"reply citations like 'Kelly 2007' would still be flagged as "
+        f"suspicious_author_year. Pool: {sorted(pool)}"
+    )
+
+
 def test_bayesian_sampler_failure_falls_back_to_ols(monkeypatch):
     """M3 contract: when err columns are present but the sampler raises,
     we still get a sane result — OLS with METHOD_DOWNGRADED + concrete

@@ -4378,19 +4378,42 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
             "table_labels": table_labels[:20],
         },
         "provenance": {
-            "datasets": [{
-                "service_key": "literature_table_fit",
-                "service_name": "Literature measurement table fit",
-                "archive_version": "cached literature table rows",
-                "source_authority": "paper_table",
-                "article": citation_keys[0] if citation_keys else "",
-                "reference_url": "",
-                "source_urls": [],
-                "acknowledgement_template": (
-                    "This fit used machine-readable measurements extracted from cited paper tables; "
-                    "verify the original table rows before publication."
-                ),
-            }],
+            "datasets": [
+                {
+                    "service_key": "literature_table_fit",
+                    "service_name": "Literature measurement table fit",
+                    "archive_version": "cached literature table rows",
+                    "source_authority": "paper_table",
+                    "article": citation_keys[0] if citation_keys else "",
+                    "reference_url": "",
+                    "source_urls": [],
+                    "acknowledgement_template": (
+                        "This fit used machine-readable measurements extracted from cited paper tables; "
+                        "verify the original table rows before publication."
+                    ),
+                },
+            ] + ([
+                # PART AH C6: when the Bayesian xy-error sampler ran, attach
+                # the linmix method-paper bibcode (Kelly, B. C. 2007, ApJ,
+                # 665, 1489) so the claim_validator's bibcode pool accepts
+                # citations like "Kelly 2007" / "linmix (Kelly 07)" — they
+                # are NOT model-fabricated, they are the standard method
+                # reference for this fit path.
+                {
+                    "service_key": "method_citation",
+                    "service_name": "Bayesian linear regression with errors on both axes (linmix)",
+                    "archive_version": "method_paper",
+                    "source_authority": "method_paper",
+                    "article": "2007ApJ...665.1489K",
+                    "reference_url": "https://ui.adsabs.harvard.edu/abs/2007ApJ...665.1489K",
+                    "source_urls": [],
+                    "acknowledgement_template": (
+                        "Bayesian linear regression with errors on both axes "
+                        "(Kelly, B. C. 2007, ApJ, 665, 1489) implemented via "
+                        "the linmix sampler."
+                    ),
+                },
+            ] if fit_method == "bayesian_xyerr_linmix" else []),
             "field_bibcodes": {
                 "columns": {"fit_input_citations": citation_keys},
                 "mapping": {"fit_input_citations": "line_measurements"},
