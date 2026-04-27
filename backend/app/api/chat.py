@@ -4730,7 +4730,27 @@ async def _run_orchestrated_chat(
                     "Citation provenance gate BLOCKED merged reply (%d violations)",
                     len(citation_violations),
                 )
-                merged_reply = blocked_citation_reply_text(citation_violations)
+                # PART AG C1 / PART AH C5 — annotate-and-attach in the
+                # orchestrator merge path too. Pre-AH this site still
+                # used the old withhold-all behaviour; M7 retest caught
+                # an 18-tool / 348-char chat round whose entire prose
+                # was wiped because the AI snuck "arXiv:1404.7159"
+                # (a paper not in tool_results) into a citation list.
+                # Same fix as the agent-loop path: keep the prose,
+                # append a footer block.
+                if merged_reply.strip():
+                    merged_reply = merged_reply.rstrip() + (
+                        "\n\n---\n\n"
+                        "## ⚠ Citation provenance check failed\n\n"
+                        "The reply above was generated, but the platform's "
+                        "provenance gate flagged citations that the merged "
+                        "tool_results did not support. Treat the flagged "
+                        "items as **NOT verified** and re-run the relevant "
+                        "tools before quoting them in a paper.\n\n"
+                        + blocked_citation_reply_text(citation_violations)
+                    )
+                else:
+                    merged_reply = blocked_citation_reply_text(citation_violations)
             elif zero_data_claims or not validation.ok:
                 try:
                     from app.observability.metrics import record_counter
