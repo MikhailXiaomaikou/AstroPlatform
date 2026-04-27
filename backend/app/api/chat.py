@@ -348,9 +348,9 @@ required when only one survey is in the cache).**
 3. **Subsample comparisons need a real significance number**.  When
    you report e.g. "z<1 slope=S1, z>=1 slope=S2", you MUST also pass
    `subsample_splits=[...]` to fit_line_lfr and quote the resulting
-   `subsample_significance_test.comparisons[*].p_value` plus
-   `interpretation`.  Side-by-side slopes without a Δβ p-value or
-   HDI overlap are NOT a redshift-dependence test.
+   `subsample_significance_test.comparisons[*].tail_probability_two_sided`
+   plus `interpretation`.  Side-by-side slopes without a Δβ posterior-tail
+   probability or central-interval overlap are NOT a redshift-dependence test.
 
 4. **Lensed sources**.  Before fitting, declare per-source
    `is_lensed=true|false|unknown`.  If any sources need correction,
@@ -759,8 +759,10 @@ for genuinely low-extinction targets:
 - Distance < 500 pc
 - Globular clusters (high latitude, typical E(B-V) < 0.1)
 
-Instead: call `lookup_ebv_irsa(ra, dec)` (IRSA SFD 1998 / Schlafly 2011) as the
-PRIMARY extinction source. Report E(B-V) and convert: A_V = 3.1 * E(B-V).
+Instead: call `lookup_ebv_irsa(ra, dec)` / `get_extinction(ra, dec)` as the
+PRIMARY extinction source. The backend SFD path is Schlegel, Finkbeiner &
+Davis 1998 via dustmaps.sfd; only call it Schlafly-recalibrated if the tool
+result explicitly says so. Report E(B-V) and convert: A_V = 3.1 * E(B-V).
 For R-band, R_V=3.1 (standard ISM); for starburst galaxies R_V=4.05 (Calzetti+ 2000).
 Only fall back to ag_gspphot if the target is in the galactic plane (|b| < 10°)
 AND beyond 1 kpc, where SFD is known to saturate.
@@ -879,7 +881,10 @@ When in doubt call `describe_tap_table` first.
 USE THE RIGHT METHOD FOR THE DISTANCE RANGE:
 - **< 100 pc**: trigonometric parallax (Gaia accurate to <1%). distance_pc = 1000/plx_mas.
 - **100 pc - 3 kpc**: parallax with **Lindegren+2021 zero-point correction** (~-0.017 mas) and **Bailer-Jones geometric distances** when fractional parallax error > 10%.
-- **3 - 30 kpc**: standard candles. RR Lyrae P-L for old populations, Cepheid P-L for young, red clump stars (M_G ≈ 0.5), TRGB (M_G ≈ -0.5).
+- **3 - 30 kpc**: standard candles. RR Lyrae P-L for old populations,
+  Cepheid P-L for young, red clump stars with a calibrated color/metallicity
+  relation, or TRGB only through a band-specific literature calibration. Do
+  NOT use a universal Gaia-G TRGB absolute magnitude.
 - **> 30 kpc** (LMC/SMC, M31): Cepheids, RR Lyrae, eclipsing binaries (best precision), Type Ia supernovae, surface brightness fluctuations, Tully-Fisher.
 - **Cosmological (z > 0.01)**: redshift × Hubble flow (use astropy.cosmology FlatLambdaCDM with Planck18).
 
@@ -902,7 +907,9 @@ For stellar abundances of Sun-like / RGB stars: APOGEE (IR) and GALAH (optical) 
 ## Extinction / dust map options (beyond Gaia GSP-Phot)
 For any object beyond ~1 kpc, prefer external dust maps:
 
-1. **lookup_ebv(ra, dec) tool** — IRSA (SFD 1998 + Schlafly 2011 recalibration). Best for high galactic latitudes. Returns E(B-V) and A_V via R_V = 3.1.
+1. **lookup_ebv(ra, dec) / get_extinction tool** — SFD 1998 by default unless
+   the tool result explicitly reports a Schlafly 2011 recalibration. Best for
+   high galactic latitudes. Returns E(B-V) and A_V via R_V = 3.1.
 2. **Bayestar17/19 (Pan-STARRS-based 3D)** — use IRSA query for a distance slice. Best for galactic plane and intermediate distances.
 3. **Green et al. 2019 (3D dustmaps Python package)** — fully 3D, requires distance estimate.
 4. **Marshall+ 2006** — galactic plane (|b| < 10°), 2MASS-based.
@@ -4129,7 +4136,7 @@ async def _run_agent_loop(
                 summary_messages,
                 system=system,
                 tools=[],  # text-only — no tool calls allowed
-                api_key=api_key,
+                api_key=provider_api_keys.get("anthropic", ""),
                 provider_api_keys=provider_api_keys,
                 preferred_backend=preferred_backend,
                 model_profile=model_profile,

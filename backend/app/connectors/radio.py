@@ -484,11 +484,14 @@ class RadioAnalysis:
         # Convert mJy to erg/s/cm^2/Hz
         flux_cgs = flux_mJy * 1e-26  # 1 mJy = 1e-26 erg/s/cm^2/Hz
 
-        # K-correction
+        # K-correction for the convention used by spectral_index():
+        # S_nu ∝ nu^alpha.  The rest-frame luminosity at the nominal
+        # observing frequency is divided by (1+z)^(1+alpha); multiplying
+        # would overestimate steep-spectrum high-z sources.
         k_corr = (1 + redshift) ** (1 + spectral_index)
 
         # Luminosity in W/Hz
-        luminosity = 4 * 3.14159 * dl**2 * flux_cgs * k_corr / 1e7  # erg/s/Hz to W/Hz
+        luminosity = 4 * 3.14159 * dl**2 * flux_cgs / k_corr / 1e7  # erg/s/Hz to W/Hz
 
         import math
         log_l = math.log10(luminosity) if luminosity > 0 else 0
@@ -510,6 +513,10 @@ class RadioAnalysis:
             "redshift": redshift,
             "freq_MHz": freq_MHz,
             "spectral_index_assumed": spectral_index,
+            "spectral_index_convention": "S_nu ∝ nu^alpha",
+            "k_correction_factor": float(k_corr),
+            "k_correction_applied": "divide_by_(1+z)^(1+alpha)",
+            "cosmology": {"H0": 70.0, "Om0": 0.3, "source": "legacy_radio_tool_default"},
         }
 
     @staticmethod

@@ -4,7 +4,6 @@ import math
 from unittest.mock import patch
 
 import numpy as np
-import pytest
 
 from app.services.ai_tools import (
     _bootstrap_ols_betas,
@@ -62,7 +61,9 @@ def test_subsample_significance_detects_clear_difference():
     beta2 = rng.normal(2.0, 0.05, 2000)  # tight around 2.0
     sig = _subsample_significance_from_betas(beta1, beta2)
     assert sig["interpretation"] == "significantly_different"
+    assert sig["tail_probability_two_sided"] < 0.01
     assert sig["p_value"] < 0.01
+    assert "central_interval_overlap_fraction" in sig
     assert sig["delta_beta"] is not None and sig["delta_beta"] < -0.5
 
 
@@ -137,6 +138,7 @@ def test_fit_line_lfr_subsample_test_marks_clear_split():
     assert test["subsamples"][1]["n"] == 40
     cmp_pair = test["comparisons"][0]
     assert cmp_pair["interpretation"] in {"significantly_different", "marginal_significance"}
+    assert cmp_pair["tail_probability_two_sided"] is not None and cmp_pair["tail_probability_two_sided"] < 0.05
     assert cmp_pair["p_value"] is not None and cmp_pair["p_value"] < 0.05
 
 

@@ -98,7 +98,11 @@ _BAND_WAVELENGTH_UM: dict[str, float] = {
     "W4": 22.194,
 }
 
-# Zero-point fluxes in Jy for mag-to-flux conversion (AB-like approx)
+# Zero-point fluxes in Jy for mag-to-flux conversion.
+# These intentionally mix systems: SDSS entries are AB (3631 Jy), while
+# Gaia/2MASS/WISE entries are Vega-like catalog zero-points.  Treat these as
+# quick-look SED values unless the downstream analysis tracks the photometric
+# system explicitly.
 _BAND_F0_JY: dict[str, float] = {
     "u": 3631.0,
     "g": 3631.0,

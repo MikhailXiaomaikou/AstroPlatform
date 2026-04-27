@@ -637,9 +637,10 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
         # Tier 1: column header contains "log".
         # Tier 2: table caption mentions "log L" or "log10 L".
         # Tier 3 (per-row, applied below): value falls in [3, 13] for a
-        #   known emission line — that range is impossible for linear
-        #   line luminosity (which is ~1e30-1e50 erg/s) and matches log10
-        #   L/L_sun for [CII]/[OIII]/Hα/etc.
+        #   known emission line.  That often means log10 L/L_sun, but it is
+        #   still a heuristic unless the header/caption explicitly says log.
+        #   fit_line_lfr downgrades these rows from publication-ready until
+        #   a source-backed column mapping confirms the unit.
         # The chosen tier is recorded as `luminosity_inferred_log_from`
         # on each measurement so the AI / paper_generator can audit.
         log_header_hit = "log" in luminosity_header.lower()

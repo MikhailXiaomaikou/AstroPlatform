@@ -111,7 +111,7 @@ The AI assistant has explicit, literature-cited workflows for:
 - Multi-aperture photometry with local background subtraction
 - Source extraction and deblending (photutils segmentation)
 - **Auto zero-point** determination via Gaia/SDSS cross-match
-- Extinction correction with IRSA dust map E(B-V) auto-lookup (SFD 1998 / Schlafly 2011)
+- Extinction correction with SFD 1998 E(B-V) auto-lookup; Schlafly-style recalibration is reported only when the tool source explicitly provides it
 - PSF matching across bands
 - Galaxy Sersic profile fits via `statmorph` (Rodriguez-Gomez+ 2019)
 

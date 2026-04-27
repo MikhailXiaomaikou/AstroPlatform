@@ -1759,8 +1759,9 @@ def dust_ebv_at_position(ra_deg, dec_deg, source="sfd"):
 
     Uses the optional ``dustmaps`` package; returns ``None`` if the map
     data is not present on disk (first-time users see a clear log line
-    about how to download it).  Supported sources: ``sfd`` (Schlegel-
-    Finkbeiner 1998, the Planck-revised version), ``planck``
+    about how to download it).  Supported sources: ``sfd`` (Schlegel,
+    Finkbeiner & Davis 1998 via ``dustmaps.sfd.SFDQuery``; not the
+    Planck-revised map), ``planck``
     (Planck Collab XI 2014 thermal dust), ``bayestar`` (Green 2019 3D,
     requires distance — not exposed here yet).
     """

@@ -11,7 +11,10 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -3753,33 +3756,38 @@ def _subsample_significance_from_betas(
     delta = beta1[perm1] - beta2[perm2]
     delta_mean = float(np.mean(delta))
     delta_std = float(np.std(delta))
-    # Two-sided p-value: probability mass on the side of zero opposite
-    # the mean; ×2 for two-sided.  Capped at 1.0.
+    # Two-sided posterior-tail probability: probability mass on the side of
+    # zero opposite the mean; ×2 for two-sided.  Capped at 1.0.  This is not
+    # a frequentist p-value, so expose an explicitly named field and keep the
+    # old p_value key as a deprecated compatibility alias for one release.
     if delta_mean >= 0:
         tail = float(np.mean(delta < 0))
     else:
         tail = float(np.mean(delta > 0))
-    p_value = float(min(1.0, 2.0 * tail))
-    # 94% HDI overlap (cheap proxy: do the central 94% intervals
-    # overlap?).  Useful as a categorical hint; the p-value above is
-    # the actual significance.
+    tail_probability_two_sided = float(min(1.0, 2.0 * tail))
+    # Central 94% interval overlap (cheap proxy: do the central intervals
+    # overlap?).  Useful as a categorical hint; this is not an HDI.
     lo1, hi1 = float(np.percentile(beta1, 3)), float(np.percentile(beta1, 97))
     lo2, hi2 = float(np.percentile(beta2, 3)), float(np.percentile(beta2, 97))
     overlap = max(0.0, min(hi1, hi2) - max(lo1, lo2))
     pooled = max(hi1 - lo1, hi2 - lo2, 1e-12)
     hdi_overlap_frac = overlap / pooled
-    if p_value < 0.01:
+    if tail_probability_two_sided < 0.01:
         interpretation = "significantly_different"
-    elif p_value < 0.05:
+    elif tail_probability_two_sided < 0.05:
         interpretation = "marginal_significance"
-    elif p_value < 0.32:
+    elif tail_probability_two_sided < 0.32:
         interpretation = "weak_evidence"
     else:
         interpretation = "consistent"
     return {
         "delta_beta": round(delta_mean, 6),
         "delta_beta_stderr": round(delta_std, 6),
-        "p_value": round(p_value, 6),
+        "tail_probability_two_sided": round(tail_probability_two_sided, 6),
+        "central_interval_overlap_fraction": round(hdi_overlap_frac, 4),
+        # Deprecated aliases.  Kept so older UI/tests do not break while
+        # callers migrate to the scientifically precise field names above.
+        "p_value": round(tail_probability_two_sided, 6),
         "hdi_overlap_fraction": round(hdi_overlap_frac, 4),
         "interpretation": interpretation,
     }
@@ -4068,7 +4076,18 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
     # don't break; the Bayesian path added in M3 will expose a separate
     # intrinsic_scatter_dex with posterior summaries.
     residual_rms_dex = float(np.sqrt(np.mean(residuals ** 2)))
-    publication_ready = n_used >= min_rows and all(_row_has_citation(row) for row in accepted)
+    value_range_inferred_rows = sum(
+        1
+        for row in accepted
+        if row.get("luminosity_inferred_log_from") == "value_range"
+        or row.get("log_inferred_from_value_range") is True
+    )
+    has_confirmed_luminosity_units = value_range_inferred_rows == 0
+    publication_ready = (
+        n_used >= min_rows
+        and all(_row_has_citation(row) for row in accepted)
+        and has_confirmed_luminosity_units
+    )
     citation_keys = sorted({
         str(row.get("bibcode") or row.get("arxiv_id") or row.get("doi") or "").strip()
         for row in accepted
@@ -4366,6 +4385,10 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "n_lensed": n_lensed,
         "n_unlensed": n_unlensed,
         "n_lensed_unknown": n_lensed_unknown,
+        "log_luminosity_inference_summary": {
+            "value_range_inferred_rows": value_range_inferred_rows,
+            "publication_ready_requires_header_or_caption_log_units": True,
+        },
         # M4: subsample significance test result (None when the caller
         # didn't pass subsample_splits).
         "subsample_significance_test": subsample_test,
@@ -4470,9 +4493,10 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         result["analysis_status"] = "partial"
         result["__do_not_claim__"] = True
         result["__message_to_model__"] = (
-            f"The line-relation fit used {n_used} rows, below min_rows={min_rows} "
-            "or with incomplete citations. Describe it as exploratory only; do not "
-            "claim a publication-ready relation."
+            f"The line-relation fit used {n_used} rows. It is below min_rows={min_rows}, "
+            "has incomplete citations, or relies on value-range log-luminosity inference "
+            "instead of header/caption-confirmed units. Describe it as exploratory only; "
+            "do not claim a publication-ready relation."
         )
     elif is_method_downgraded:
         result["__tool_status__"] = "METHOD_DOWNGRADED"
@@ -4848,11 +4872,12 @@ def _exec_export_sample_table(
         ext = "csv"
     elif fmt == "ascii":
         try:
+            import io as _io
             from astropy.table import Table
             from astropy.io import ascii as _ascii
             data = {c: [_row_value(row, c) for row in rows] for c in cols}
             tab = Table(data)
-            buf = io.StringIO()
+            buf = _io.StringIO()
             _ascii.write(tab, buf, format="fixed_width")
             content = buf.getvalue()
             media_type = "text/plain"

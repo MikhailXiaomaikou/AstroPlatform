@@ -59,6 +59,25 @@ def test_fit_line_lfr_partial_when_too_few_rows():
     assert result["__do_not_claim__"] is True
 
 
+def test_fit_line_lfr_value_range_log_inference_is_exploratory_only():
+    from app.services.ai_tools import _exec_fit_line_lfr, store_search_results
+
+    rows = _measurement_rows(6)
+    for row in rows:
+        row["luminosity_inferred_log_from"] = "value_range"
+    cache_key = "unit_line_lfr_value_range_cache"
+    store_search_results(cache_key, {"line_measurements": rows})
+
+    result = _exec_fit_line_lfr({"cache_key": cache_key, "line_id": "[CII]"}, "default")
+
+    assert result["success"] is True
+    assert result["n_used"] == 6
+    assert result["publication_ready"] is False
+    assert result["__tool_status__"] == "PARTIAL"
+    assert result["__do_not_claim__"] is True
+    assert result["log_luminosity_inference_summary"]["value_range_inferred_rows"] == 6
+
+
 def test_line_measurement_ready_cache_suppresses_synthetic_python():
     from app.api.chat import (
         _should_suppress_line_measurement_synthetic_python,
