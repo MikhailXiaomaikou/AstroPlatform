@@ -569,6 +569,32 @@ async def export_chat_as_markdown(req: ChatMarkdownRequest):
                         lines.append(code)
                         lines.append("```")
                         lines.append("")
+                    # 内嵌 run_python 生成的图 (base64 PNG) 让 .md 双击就能看到图,
+                    # 不需要重跑 notebook. 同时把 stdout 也写进来.
+                    tool_result = action.get("tool_result")
+                    if isinstance(tool_result, dict):
+                        stdout = tool_result.get("stdout")
+                        if isinstance(stdout, str) and stdout.strip():
+                            lines.append("```")
+                            lines.append(stdout.rstrip())
+                            lines.append("```")
+                            lines.append("")
+                        figures = tool_result.get("figures")
+                        if isinstance(figures, list):
+                            for fig_idx, fig in enumerate(figures, start=1):
+                                if not isinstance(fig, str) or not fig:
+                                    continue
+                                # 兼容 "data:image/png;base64,..." 整 URI 和裸 base64.
+                                if fig.startswith("data:image"):
+                                    data_uri = fig
+                                else:
+                                    data_uri = f"data:image/png;base64,{fig}"
+                                lines.append(f"![Figure {fig_idx}]({data_uri})")
+                                lines.append("")
+                        err = tool_result.get("error")
+                        if isinstance(err, str) and err.strip():
+                            lines.append(f"> **Error:** {err.strip()}")
+                            lines.append("")
                 else:
                     params = action.get("params", {})
                     if isinstance(params, dict) and params:
@@ -1475,12 +1501,51 @@ async def export_chat_as_notebook(req: ChatToNotebookRequest):
                     or tool_input.get("code", "")
                 )
                 if code:
+                    # 把上次 run_python 的真实 stdout / figures / error 当成
+                    # Jupyter cell outputs 写出来. 这样 .ipynb 在 Jupyter /
+                    # JupyterLab / VS Code / GitHub / nbviewer / Colab 里直接
+                    # 显示图,不需要再重跑 cell (重跑也跑不出来,因为 astro.*
+                    # helper 在普通 Jupyter kernel 里没有).
+                    outputs: list[dict] = []
+                    tool_result = action.get("tool_result")
+                    if isinstance(tool_result, dict):
+                        stdout = tool_result.get("stdout")
+                        if isinstance(stdout, str) and stdout:
+                            outputs.append({
+                                "output_type": "stream",
+                                "name": "stdout",
+                                "text": stdout if stdout.endswith("\n") else stdout + "\n",
+                            })
+                        figures = tool_result.get("figures")
+                        if isinstance(figures, list):
+                            for fig in figures:
+                                if not isinstance(fig, str) or not fig:
+                                    continue
+                                # 接受 "data:image/png;base64,XXX" 或裸 base64.
+                                if fig.startswith("data:image"):
+                                    _, _, b64 = fig.partition(",")
+                                else:
+                                    b64 = fig
+                                if not b64:
+                                    continue
+                                outputs.append({
+                                    "output_type": "display_data",
+                                    "data": {"image/png": b64},
+                                    "metadata": {},
+                                })
+                        err = tool_result.get("error")
+                        if isinstance(err, str) and err.strip():
+                            outputs.append({
+                                "output_type": "stream",
+                                "name": "stderr",
+                                "text": err.rstrip() + "\n",
+                            })
                     cells.append({
                         "cell_type": "code",
                         "metadata": {},
                         "source": [code],
-                        "execution_count": None,
-                        "outputs": [],
+                        "execution_count": 1 if outputs else None,
+                        "outputs": outputs,
                     })
 
     notebook = {
