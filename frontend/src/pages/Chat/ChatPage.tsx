@@ -28,6 +28,7 @@ import {
   diffSessionSnapshots,
   exportChatMarkdown,
   exportChatNotebook,
+  exportChatHtml,
   exportChatLatex,
   exportChatBibTeX,
   generatePaperDraft,
@@ -2488,7 +2489,7 @@ interface LocalChatSession {
   messages: Array<{ role: string; content: string; actions?: unknown[] }>;
 }
 
-type ExportAction = "markdown" | "notebook" | "latex" | "bibtex";
+type ExportAction = "markdown" | "notebook" | "html" | "latex" | "bibtex";
 type JournalFormat = "aastex" | "mnras" | "aa";
 type ShareAccessLevel = "view" | "fork" | "comment";
 type PaperTab =
@@ -2741,6 +2742,7 @@ export default function ChatPage() {
   const [exporting, setExporting] = useState<Record<ExportAction, boolean>>({
     markdown: false,
     notebook: false,
+    html: false,
     latex: false,
     bibtex: false,
   });
@@ -2843,6 +2845,7 @@ export default function ChatPage() {
       const exportEventMap: Record<ExportAction, string> = {
         markdown: "export.paper_draft",
         notebook: "export.notebook",
+        html: "export.html",
         latex: "export.latex",
         bibtex: "export.paper_draft",
       };
@@ -4031,11 +4034,28 @@ export default function ChatPage() {
                     "markdown",
                     "Markdown",
                     "ai_research_chat.md",
-                    () => exportChatMarkdown(data),
+                    () => exportChatMarkdown(data, undefined, currentSessionId),
                   );
                 }}
               >
                 {exporting.markdown ? "Exporting..." : t("common.export")}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                disabled={exporting.html}
+                title="Self-contained HTML — opens in any browser, figures embedded, Ctrl+P to print as PDF"
+                onClick={() => {
+                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  void handleExport(
+                    "html",
+                    "HTML",
+                    "ai_research_chat.html",
+                    () => exportChatHtml(data, undefined, currentSessionId),
+                  );
+                }}
+              >
+                {exporting.html ? "Exporting..." : "HTML"}
               </button>
               <button
                 type="button"
@@ -4047,7 +4067,7 @@ export default function ChatPage() {
                     "notebook",
                     "Notebook",
                     "ai_research_session.ipynb",
-                    () => exportChatNotebook(data),
+                    () => exportChatNotebook(data, undefined, currentSessionId),
                   );
                 }}
               >

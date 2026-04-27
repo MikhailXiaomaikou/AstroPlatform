@@ -805,10 +805,14 @@ export async function exportSearchNotebook(
 export async function exportChatMarkdown(
   messages: Array<{ role: string; content: string; actions?: unknown[] }>,
   title?: string,
+  sessionId?: string | null,
 ): Promise<Blob> {
+  // sessionId 让后端在 figures 已被 localStorage offload 时, 从 chat_sessions
+  // DB 把完整 figures 拉回来再导出. 服务端保存的 messages 不会 prune.
   const { data } = await api.post("/api/export/report/from-chat", {
     messages,
     title: title || "AI Research Chat",
+    session_id: sessionId || null,
   }, { responseType: "blob" });
   return data;
 }
@@ -818,10 +822,28 @@ export async function exportChatMarkdown(
 export async function exportChatNotebook(
   messages: Array<{ role: string; content: string; actions?: unknown[] }>,
   title?: string,
+  sessionId?: string | null,
 ): Promise<Blob> {
   const { data } = await api.post("/api/export/notebook/from-chat", {
     messages,
     title: title || "AI Research Session",
+    session_id: sessionId || null,
+  }, { responseType: "blob" });
+  return data;
+}
+
+// ── Chat → HTML (self-contained) Export ──
+
+/** 单文件 HTML, 双击在浏览器看, 所有图 base64 内嵌, Ctrl+P 直接打 PDF. */
+export async function exportChatHtml(
+  messages: Array<{ role: string; content: string; actions?: unknown[] }>,
+  title?: string,
+  sessionId?: string | null,
+): Promise<Blob> {
+  const { data } = await api.post("/api/export/report/html-from-chat", {
+    messages,
+    title: title || "AI Research Session",
+    session_id: sessionId || null,
   }, { responseType: "blob" });
   return data;
 }

@@ -66,7 +66,8 @@ def test_markdown_export_embeds_run_python_figures_as_data_uri() -> None:
     body = resp.text
 
     # 图必须以 markdown image 形式 + data URI 出现
-    assert "![Figure 1](data:image/png;base64," in body, (
+    # PART AI: caption 是 "Figure {py_cell_idx}.{fig_idx}" 多 cell 友好.
+    assert "![Figure 1.1](data:image/png;base64," in body, (
         "Markdown export missing inline figure; figures field on tool_result "
         "was dropped. Body sample: " + body[:500]
     )
@@ -100,9 +101,10 @@ def test_markdown_export_handles_full_data_uri_and_bare_base64() -> None:
     resp = client.post("/api/export/report/from-chat", json={"messages": msgs, "title": "t"})
     assert resp.status_code == 200
     body = resp.text
-    # 两张图都要出现, 都应该带正确的 data URI 前缀
-    assert body.count("![Figure 1](data:image/png;base64,") == 1
-    assert body.count("![Figure 2](data:image/png;base64,") == 1
+    # 两张图都要出现, 都应该带正确的 data URI 前缀.
+    # 两张图来自同一个 run_python (cell #1), 编号是 1.1 和 1.2.
+    assert body.count("![Figure 1.1](data:image/png;base64,") == 1
+    assert body.count("![Figure 1.2](data:image/png;base64,") == 1
 
 
 def test_notebook_export_writes_figures_to_cell_outputs() -> None:
@@ -204,6 +206,143 @@ def test_markdown_export_skips_empty_figures_gracefully() -> None:
     body = resp.text
     assert "data:image/png" not in body
     assert "hi" in body  # stdout 仍保留
+
+
+def test_markdown_export_drops_action_dump_for_non_python_tools() -> None:
+    """PART AI: 之前每条 action 都吐 '### Action: xxx' + 全 params dict,
+    长会话会到 100+ 页. 改成一行摘要后, run_adql 200 行结果不该出现在 md 里."""
+    client = _client()
+
+    # 模拟一条 run_adql action, result 含 200 行真实数据 + columns
+    fake_rows = [{"ra": float(i), "dec": float(i)} for i in range(200)]
+    msgs = [
+        {
+            "role": "assistant",
+            "content": "Queried Gaia.",
+            "actions": [
+                {
+                    "action": "run_adql",
+                    "tool_input": {"query": "SELECT TOP 200 ra, dec FROM gaia"},
+                    "tool_result": {
+                        "row_count": 200,
+                        "columns": ["ra", "dec"],
+                        "data": fake_rows,
+                    },
+                }
+            ],
+        }
+    ]
+    resp = client.post("/api/export/report/from-chat", json={"messages": msgs, "title": "t"})
+    assert resp.status_code == 200
+    body = resp.text
+
+    # 必须有一行摘要 (含 row_count)
+    assert "200 rows" in body
+    assert "run_adql" in body
+    # 但不允许把 200 行原始数据 dump 进去
+    assert '{"ra": 199.0' not in body
+    assert "ra: 199" not in body
+    # 也不允许出现旧 "### Action:" header
+    assert "### Action:" not in body
+    # 整体长度应该 < 1000 字符 (单 action + 短消息)
+    assert len(body) < 2000, f"Markdown body too verbose: {len(body)} bytes"
+
+
+def test_markdown_export_truncates_huge_stdout() -> None:
+    """单条 run_python 打 5000 行 print 不该让 export 直接炸. 截到 head/tail."""
+    client = _client()
+    huge_stdout = "\n".join(f"line {i}" for i in range(5000))
+    msgs = [
+        {
+            "role": "assistant",
+            "content": "x",
+            "actions": [{
+                "action": "run_python",
+                "tool_input": {"code": "for i in range(5000): print(...)"},
+                "tool_result": {"success": True, "stdout": huge_stdout, "figures": []},
+            }],
+        }
+    ]
+    resp = client.post("/api/export/report/from-chat", json={"messages": msgs, "title": "t"})
+    assert resp.status_code == 200
+    body = resp.text
+
+    # 头几行应保留
+    assert "line 0" in body
+    assert "line 1" in body
+    # 尾几行应保留
+    assert "line 4999" in body
+    # 中间一定不能全部 dump (不能含 "line 2500")
+    assert "line 2500" not in body
+    # 截断标记应在
+    assert "lines truncated" in body
+    # 整体不能比原 5000 行还长
+    assert len(body) < 5000  # 30 head + 5 tail + frame ≪ 5000 lines raw
+
+
+def test_html_export_is_self_contained_and_includes_figures() -> None:
+    """新 HTML 导出: 单文件 .html 双击在浏览器看, 所有图 base64 内嵌,
+    Ctrl+P 打 PDF. 不依赖外部 CSS / JS / 图片资源."""
+    client = _client()
+    resp = client.post(
+        "/api/export/report/html-from-chat",
+        json={"messages": _sample_messages_with_figure(), "title": "Pleiades"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    body = resp.text
+
+    # HTML 框架
+    assert "<!DOCTYPE html>" in body
+    assert '<html lang="en">' in body
+    assert "<title>Pleiades</title>" in body
+
+    # 内嵌 CSS, 不引外部
+    assert "<style>" in body
+    assert 'href="http' not in body  # 不外链
+    assert '<link rel="stylesheet"' not in body  # 不外链 css
+    assert "<script src=" not in body  # 不引外部 js
+
+    # 图必须以 <img src="data:image/png;base64,..."> 内嵌
+    assert 'src="data:image/png;base64,' in body
+    assert _TINY_PNG_B64 in body
+
+    # User / Assistant 标签
+    assert "🧑 You" in body or "You" in body
+    assert "🤖 AI Assistant" in body or "AI Assistant" in body
+
+
+def test_html_export_escapes_user_content_to_prevent_xss() -> None:
+    """User 输入里的 <script> 必须被转义, 不能落地成可执行 JS."""
+    client = _client()
+    msgs = [{"role": "user", "content": "<script>alert(1)</script>"}]
+    resp = client.post("/api/export/report/html-from-chat", json={"messages": msgs, "title": "t"})
+    assert resp.status_code == 200
+    body = resp.text
+    # raw 不能出现
+    assert "<script>alert(1)</script>" not in body
+    # 转义后的形式应该出现
+    assert "&lt;script&gt;" in body
+
+
+def test_html_export_includes_table_of_contents() -> None:
+    """长会话的 HTML 导出应该有目录 (按 user message 分章)."""
+    client = _client()
+    msgs = [
+        {"role": "user", "content": "First question about Gaia"},
+        {"role": "assistant", "content": "answer 1"},
+        {"role": "user", "content": "Second question about TESS"},
+        {"role": "assistant", "content": "answer 2"},
+    ]
+    resp = client.post("/api/export/report/html-from-chat", json={"messages": msgs, "title": "t"})
+    assert resp.status_code == 200
+    body = resp.text
+    assert '<nav class="toc">' in body
+    assert "First question about Gaia" in body
+    assert "Second question about TESS" in body
+    # 每个 user 章节都有 anchor id
+    assert 'id="turn-0"' in body
+    assert 'id="turn-2"' in body
 
 
 def test_notebook_export_no_figures_still_emits_clean_cell() -> None:

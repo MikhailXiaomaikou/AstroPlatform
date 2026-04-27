@@ -12,7 +12,7 @@ export interface WorkspaceExportRegistration {
   id?: string;
   filename: string;
   storagePath: string;
-  exportKind: "markdown" | "notebook" | "latex" | "bibtex";
+  exportKind: "markdown" | "notebook" | "html" | "latex" | "bibtex";
   contentType: string;
   sizeBytes: number;
   localOnly?: boolean;

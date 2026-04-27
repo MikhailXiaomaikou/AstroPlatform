@@ -11,11 +11,209 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import get_current_user
+from app.auth import get_current_user, get_optional_user
 from app.models.database import get_db
-from app.models.schemas import PipelineRun, RunResult, User
+from app.models.schemas import ChatSession, PipelineRun, RunResult, User
 
 router = APIRouter(prefix="/api/export", tags=["export"])
+
+
+# ---------- Chat-export shared helpers (markdown / notebook / html) ----------
+
+# stdout 单 cell 截断阈值. 100+ 页报告的元凶是少数 run_python 把几千行
+# 数值或大表格 print 出来. 超过这条线就截尾, 留 head + tail 显示总行数.
+_STDOUT_HEAD_LINES = 30
+_STDOUT_TAIL_LINES = 5
+
+
+def _truncate_stdout(stdout: str) -> str:
+    """长 stdout (千行级) 截到 head + tail, 中间用一行省略号代替."""
+    if not stdout:
+        return ""
+    lines = stdout.splitlines()
+    if len(lines) <= _STDOUT_HEAD_LINES + _STDOUT_TAIL_LINES + 1:
+        return stdout.rstrip()
+    head = lines[:_STDOUT_HEAD_LINES]
+    tail = lines[-_STDOUT_TAIL_LINES:]
+    skipped = len(lines) - _STDOUT_HEAD_LINES - _STDOUT_TAIL_LINES
+    return "\n".join(
+        head + [f"... ({skipped} lines truncated) ..."] + tail
+    )
+
+
+def _action_summary_one_liner(action: dict) -> str | None:
+    """非 run_python action 的"一行摘要", 替代之前的全 params dump.
+
+    返回 None 表示这条 action 不值得在 export 里出现 (例如 unknown / 系统层级
+    元数据). 过滤掉之后, 长会话的 export 体积可以压到 1/10."""
+    name = str(action.get("action") or "").strip()
+    if not name or name in {"agent_text", "honest_abstention", "tool_progress"}:
+        return None
+
+    result = action.get("tool_result")
+    if isinstance(result, dict):
+        # 优先用结果级摘要 (各工具自己写的 summary 字段最可靠)
+        summary = result.get("summary") or result.get("note")
+        if isinstance(summary, str) and summary.strip():
+            short = summary.strip().replace("\n", " ")
+            return f"`{name}` — {short[:200]}"
+        # run_adql / search_objects 这种, 摘 row_count + columns
+        if "row_count" in result:
+            row_count = result.get("row_count")
+            cols = result.get("columns")
+            cols_preview = (
+                ", ".join(str(c) for c in cols[:6]) + ("…" if isinstance(cols, list) and len(cols) > 6 else "")
+                if isinstance(cols, list) else ""
+            )
+            tag = f"`{name}` → {row_count} rows"
+            if cols_preview:
+                tag += f" ({cols_preview})"
+            return tag
+        if "results" in result and isinstance(result["results"], list):
+            return f"`{name}` → {len(result['results'])} matches"
+        # 错误状态明示出来
+        err = result.get("error")
+        if isinstance(err, str) and err.strip():
+            return f"`{name}` → ⚠ {err.strip()[:200]}"
+        status = result.get("__tool_status__")
+        if isinstance(status, str) and status:
+            return f"`{name}` → status={status}"
+    return f"`{name}` (no summary)"
+
+
+def _figures_already_present(actions: list[dict]) -> bool:
+    """如果传上来的 actions 里至少一个 run_python 已经带了 figures bytes,
+    就不用查 DB 了. 这是 figures-offload fallback 的快速短路."""
+    for action in actions or []:
+        if not isinstance(action, dict):
+            continue
+        if action.get("action") != "run_python":
+            continue
+        result = action.get("tool_result")
+        if isinstance(result, dict):
+            figs = result.get("figures")
+            if isinstance(figs, list) and any(isinstance(f, str) and f for f in figs):
+                return True
+    return False
+
+
+def _actions_need_rehydrate(actions: list[dict]) -> bool:
+    """前端把 figures 从 localStorage prune 后, 会留下 __figures_offloaded__
+    或者 __offloaded__ 标记 (PART X). 检测到这种标记就说明需要从 DB 拉回."""
+    for action in actions or []:
+        if not isinstance(action, dict):
+            continue
+        result = action.get("tool_result")
+        if not isinstance(result, dict):
+            continue
+        if result.get("__offloaded__") is True:
+            return True
+        if isinstance(result.get("__figures_offloaded__"), int):
+            return True
+    return False
+
+
+async def _rehydrate_messages_from_db(
+    messages: list[dict],
+    session_id: str | None,
+    user: User | None,
+    db: AsyncSession,
+) -> list[dict]:
+    """如果 figures 在前端已被 offload (localStorage 4MB 软上限),
+    用 session_id + 登录态 user 从 chat_sessions DB 拉完整 messages 回来.
+
+    服务端 chat_sessions.messages JSON 字段不 prune, figures base64 还在那.
+    匹配规则: 按消息 index 对齐 + 双方 actions 数量一致 + action name 对得
+    上, 把 DB 的 tool_result.figures 复制到当前 actions 上 (其它字段保留前端
+    传上来的, 因为可能更新)."""
+    if not session_id or user is None:
+        return messages
+    if not _actions_need_rehydrate(messages) and _figures_already_present(
+        [a for m in messages for a in (m.get("actions") or []) if isinstance(m, dict)]
+    ):
+        return messages
+
+    try:
+        sid = uuid.UUID(str(session_id))
+    except (ValueError, TypeError, AttributeError):
+        return messages
+
+    row = (
+        await db.execute(
+            select(ChatSession).where(
+                ChatSession.id == sid,
+                ChatSession.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None or not row.messages:
+        return messages
+
+    db_messages = row.messages
+    out: list[dict] = []
+    for idx, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            out.append(msg)
+            continue
+        front_actions = msg.get("actions") or []
+        if idx >= len(db_messages):
+            out.append(msg)
+            continue
+        db_msg = db_messages[idx]
+        if not isinstance(db_msg, dict):
+            out.append(msg)
+            continue
+        db_actions = db_msg.get("actions") or []
+        if len(db_actions) != len(front_actions):
+            # 错位时不强行匹配, 避免把别的图安到不相干的 cell 上
+            out.append(msg)
+            continue
+        rebuilt: list[dict] = []
+        for f_act, d_act in zip(front_actions, db_actions, strict=False):
+            if not isinstance(f_act, dict) or not isinstance(d_act, dict):
+                rebuilt.append(f_act)
+                continue
+            if f_act.get("action") != d_act.get("action"):
+                rebuilt.append(f_act)
+                continue
+            f_result = f_act.get("tool_result") if isinstance(f_act.get("tool_result"), dict) else None
+            d_result = d_act.get("tool_result") if isinstance(d_act.get("tool_result"), dict) else None
+            if not d_result:
+                rebuilt.append(f_act)
+                continue
+            db_figures = d_result.get("figures")
+            if not isinstance(db_figures, list) or not any(
+                isinstance(f, str) and f for f in db_figures
+            ):
+                rebuilt.append(f_act)
+                continue
+            new_result = dict(f_result or {})
+            # 只覆盖 figures 字段, 其它字段以前端版本为准
+            new_result["figures"] = db_figures
+            new_result.pop("__figures_offloaded__", None)
+            new_result.pop("__offloaded__", None)
+            rebuilt.append({**f_act, "tool_result": new_result})
+        out.append({**msg, "actions": rebuilt})
+    return out
+
+
+def _normalize_figure_to_data_uri(fig: str) -> str | None:
+    """统一 figures 字段的两种存法: 'data:image/png;base64,XXX' 或裸 base64."""
+    if not isinstance(fig, str) or not fig:
+        return None
+    if fig.startswith("data:image"):
+        return fig
+    return f"data:image/png;base64,{fig}"
+
+
+def _normalize_figure_to_bare_base64(fig: str) -> str | None:
+    """Jupyter display_data 的 image/png 必须是裸 base64."""
+    if not isinstance(fig, str) or not fig:
+        return None
+    if fig.startswith("data:image"):
+        _, _, b64 = fig.partition(",")
+        return b64 or None
+    return fig
 
 
 async def _get_run_and_results(
@@ -522,85 +720,132 @@ class ChatMarkdownRequest(_BaseModel):
     """Export a chat session as a Markdown report."""
     messages: list[dict] = []
     title: str = "AI Research Chat"
+    # 可选 session_id: 如果提供 + 用户登录, figures 被 localStorage offload
+    # 时后端会按 session_id + user.id 从 DB 把 figures 拉回来再嵌入.
+    session_id: str | None = None
 
 
 @router.post("/report/from-chat")
-async def export_chat_as_markdown(req: ChatMarkdownRequest):
-    """Export an AI chat session as a downloadable Markdown report."""
-    lines = [
+async def export_chat_as_markdown(
+    req: ChatMarkdownRequest,
+    user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export an AI chat session as a downloadable Markdown report.
+
+    输出策略 (PART AI 重写, 解决"100+ 页 / 没图"):
+      - 不再把每个 action 都写成 ### Action 标题 + 全 params dump.
+      - run_python: 代码 + 内嵌图 + stdout (头 30 行 + 尾 5 行截断)
+      - 其他工具: 一行摘要 (如 "run_adql → 571 rows (ra, dec, plx ...)")
+      - 长 stdout 截尾, 防止单条 print 几千行炸文档.
+      - 如果前端 figures 已被 offload, 用 session_id 从 DB 拉回.
+    """
+    messages = await _rehydrate_messages_from_db(
+        list(req.messages or []), req.session_id, user, db,
+    )
+
+    lines: list[str] = [
         f"# {req.title}",
         "",
         f"**Date:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
-        f"**Messages:** {len(req.messages)}",
+        f"**Turns:** {len(messages)}",
+        "",
+        "---",
         "",
     ]
 
-    for msg in req.messages:
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
         role = msg.get("role", "")
-        content = msg.get("content", "")
-        actions = msg.get("actions", [])
+        content = (msg.get("content") or "").rstrip()
+        actions = msg.get("actions") or []
 
         if role == "user":
-            lines.append("## User")
+            lines.append("## 🧑 User")
             lines.append("")
-            lines.append(content)
-            lines.append("")
+            if content:
+                lines.append(content)
+                lines.append("")
         elif role == "assistant":
-            lines.append("## AI Assistant")
+            lines.append("## 🤖 AI Assistant")
             lines.append("")
-            lines.append(content)
+            if content:
+                lines.append(content)
+                lines.append("")
+
+        # 一行摘要先列出本回合所有非 run_python 工具调用 — 用户能扫过去
+        # 知道做了哪些事, 不再被 100+ 行 dump 淹没.
+        non_python_summaries: list[str] = []
+        python_actions: list[dict] = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            if action.get("action") == "run_python":
+                python_actions.append(action)
+            else:
+                summary = _action_summary_one_liner(action)
+                if summary:
+                    non_python_summaries.append(summary)
+        if non_python_summaries:
+            lines.append("**Tools used this turn:**")
+            lines.append("")
+            for s in non_python_summaries:
+                lines.append(f"- {s}")
             lines.append("")
 
-        for action in (actions or []):
-            if isinstance(action, dict):
-                action_type = action.get("action", "unknown")
-                lines.append(f"### Action: {action_type}")
+        # run_python 仍然展开 — 那是出图的源头.
+        for py_idx, action in enumerate(python_actions, start=1):
+            tool_input = action.get("tool_input") if isinstance(action.get("tool_input"), dict) else {}
+            params = action.get("params") if isinstance(action.get("params"), dict) else {}
+            code = (
+                action.get("code", "")
+                or (tool_input or {}).get("code", "")
+                or (params or {}).get("code", "")
+            )
+            if code:
+                lines.append(f"<details><summary>📝 Python cell #{py_idx}</summary>")
                 lines.append("")
-                if action_type == "run_python":
-                    params = action.get("params", {}) if isinstance(action.get("params"), dict) else {}
-                    tool_input = action.get("tool_input", {}) if isinstance(action.get("tool_input"), dict) else {}
-                    code = (
-                        action.get("code", "")
-                        or params.get("code", "")
-                        or tool_input.get("code", "")
+                lines.append("```python")
+                lines.append(str(code).rstrip())
+                lines.append("```")
+                lines.append("")
+                lines.append("</details>")
+                lines.append("")
+
+            tool_result = action.get("tool_result")
+            if isinstance(tool_result, dict):
+                stdout = tool_result.get("stdout")
+                if isinstance(stdout, str) and stdout.strip():
+                    truncated = _truncate_stdout(stdout)
+                    lines.append("```text")
+                    lines.append(truncated)
+                    lines.append("```")
+                    lines.append("")
+
+                figures = tool_result.get("figures")
+                if isinstance(figures, list):
+                    for fig_idx, fig in enumerate(figures, start=1):
+                        data_uri = _normalize_figure_to_data_uri(fig)
+                        if data_uri:
+                            lines.append(
+                                f"![Figure {py_idx}.{fig_idx}]({data_uri})"
+                            )
+                            lines.append("")
+
+                err = tool_result.get("error")
+                if isinstance(err, str) and err.strip():
+                    lines.append(f"> **⚠ Error:** {err.strip()[:500]}")
+                    lines.append("")
+
+                offloaded = tool_result.get("__figures_offloaded__")
+                if isinstance(offloaded, int) and offloaded > 0:
+                    lines.append(
+                        f"> *(📊 {offloaded} figure(s) were trimmed from "
+                        f"localStorage cache and could not be re-fetched. "
+                        f"Try re-running this cell to regenerate them.)*"
                     )
-                    if code:
-                        lines.append("```python")
-                        lines.append(code)
-                        lines.append("```")
-                        lines.append("")
-                    # 内嵌 run_python 生成的图 (base64 PNG) 让 .md 双击就能看到图,
-                    # 不需要重跑 notebook. 同时把 stdout 也写进来.
-                    tool_result = action.get("tool_result")
-                    if isinstance(tool_result, dict):
-                        stdout = tool_result.get("stdout")
-                        if isinstance(stdout, str) and stdout.strip():
-                            lines.append("```")
-                            lines.append(stdout.rstrip())
-                            lines.append("```")
-                            lines.append("")
-                        figures = tool_result.get("figures")
-                        if isinstance(figures, list):
-                            for fig_idx, fig in enumerate(figures, start=1):
-                                if not isinstance(fig, str) or not fig:
-                                    continue
-                                # 兼容 "data:image/png;base64,..." 整 URI 和裸 base64.
-                                if fig.startswith("data:image"):
-                                    data_uri = fig
-                                else:
-                                    data_uri = f"data:image/png;base64,{fig}"
-                                lines.append(f"![Figure {fig_idx}]({data_uri})")
-                                lines.append("")
-                        err = tool_result.get("error")
-                        if isinstance(err, str) and err.strip():
-                            lines.append(f"> **Error:** {err.strip()}")
-                            lines.append("")
-                else:
-                    params = action.get("params", {})
-                    if isinstance(params, dict) and params:
-                        for k, v in params.items():
-                            lines.append(f"- **{k}:** {v}")
-                        lines.append("")
+                    lines.append("")
 
         lines.append("---")
         lines.append("")
@@ -1443,12 +1688,21 @@ async def export_run_notebook(
 class ChatToNotebookRequest(_BaseModel):
     messages: list[dict] = []
     title: str = "AI Research Session"
+    session_id: str | None = None
 
 
 @router.post("/notebook/from-chat")
-async def export_chat_as_notebook(req: ChatToNotebookRequest):
+async def export_chat_as_notebook(
+    req: ChatToNotebookRequest,
+    user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Export an AI chat session as an executable Jupyter notebook."""
     import json as _json
+
+    messages = await _rehydrate_messages_from_db(
+        list(req.messages or []), req.session_id, user, db,
+    )
 
     cells = []
     cells.append({
@@ -1473,7 +1727,7 @@ async def export_chat_as_notebook(req: ChatToNotebookRequest):
         "outputs": [],
     })
 
-    for msg in req.messages:
+    for msg in messages:
         role = msg.get("role", "")
         content = msg.get("content", "")
         actions = msg.get("actions", [])
@@ -1562,6 +1816,314 @@ async def export_chat_as_notebook(req: ChatToNotebookRequest):
         iter([_json.dumps(notebook, indent=2)]),
         media_type="application/x-ipynb+json",
         headers={"Content-Disposition": 'attachment; filename="ai_research_session.ipynb"'},
+    )
+
+
+# ---------- HTML self-contained chat export (PART AI) ----------
+
+class ChatHtmlRequest(_BaseModel):
+    """Self-contained HTML report. 双击在浏览器看 / Ctrl+P 打 PDF."""
+    messages: list[dict] = []
+    title: str = "AI Research Session"
+    session_id: str | None = None
+
+
+def _html_escape(s: object) -> str:
+    """最小 HTML 转义, 防 user content 里的 <script> 落地. 不依赖 markupsafe."""
+    text = "" if s is None else str(s)
+    return (
+        text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
+    )
+
+
+def _render_user_content_as_html(content: str) -> str:
+    """User / Assistant 文本: 保留段落 + 简单 markdown 加粗 / inline code,
+    其余按字面渲染. 不引入 markdown 库, 防止依赖膨胀."""
+    if not content:
+        return ""
+    safe = _html_escape(content)
+    # 三种最常用: **加粗** / `inline code` / 段落 (双换行)
+    import re as _re
+    safe = _re.sub(r"\*\*([^*\n]+)\*\*", r"<strong>\1</strong>", safe)
+    safe = _re.sub(r"`([^`\n]+)`", r"<code>\1</code>", safe)
+    # 段落: 用空行分块
+    blocks = [b.strip() for b in safe.split("\n\n") if b.strip()]
+    return "".join(
+        f"<p>{block.replace(chr(10), '<br>')}</p>" for block in blocks
+    )
+
+
+_HTML_CSS = """
+:root {
+  --paper: #fbfaf5;
+  --ink: #1a1a1a;
+  --ink-muted: #555;
+  --burgundy: #7b2d26;
+  --rule: #d8d4c4;
+  --code-bg: #f4f1e6;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 16px;
+  line-height: 1.6;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 32px 48px 64px;
+}
+h1, h2, h3 { font-family: Georgia, serif; color: var(--ink); margin-top: 1.4em; }
+h1 { font-size: 2em; border-bottom: 2px solid var(--burgundy); padding-bottom: 8px; }
+h2 { font-size: 1.4em; color: var(--burgundy); }
+nav.toc {
+  background: var(--code-bg);
+  border-left: 3px solid var(--burgundy);
+  padding: 12px 18px;
+  margin: 16px 0 32px;
+  font-size: 0.92em;
+}
+nav.toc a { color: var(--ink); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+nav.toc ol { margin: 0; padding-left: 22px; }
+.turn { border-bottom: 1px solid var(--rule); padding: 16px 0; }
+.role-user { color: var(--burgundy); font-weight: 700; margin-bottom: 6px; }
+.role-assistant { color: #2a5d7b; font-weight: 700; margin-bottom: 6px; }
+.tools-summary {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 8px 14px;
+  margin: 8px 0;
+  font-size: 0.88em;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+.tools-summary ul { margin: 4px 0; padding-left: 20px; }
+details.code-block {
+  margin: 12px 0;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+details.code-block > summary {
+  cursor: pointer;
+  padding: 6px 12px;
+  background: var(--code-bg);
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  user-select: none;
+}
+pre.code, pre.stdout {
+  margin: 0;
+  padding: 12px 16px;
+  background: var(--code-bg);
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.84em;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+pre.stdout {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 4px;
+  margin: 12px 0;
+}
+figure.run-python-fig {
+  margin: 16px 0;
+  text-align: center;
+}
+figure.run-python-fig img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: white;
+}
+figure.run-python-fig figcaption {
+  font-size: 0.82em;
+  color: var(--ink-muted);
+  margin-top: 6px;
+}
+.error-banner {
+  background: #fff0f0;
+  border-left: 3px solid #c62828;
+  padding: 8px 14px;
+  margin: 12px 0;
+  font-size: 0.9em;
+}
+.offload-note {
+  background: #fff8e1;
+  border-left: 3px solid #f5a623;
+  padding: 8px 14px;
+  margin: 12px 0;
+  font-size: 0.86em;
+  color: var(--ink-muted);
+}
+footer {
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+  font-size: 0.82em;
+  color: var(--ink-muted);
+  text-align: center;
+}
+@media print {
+  body { padding: 0; max-width: none; }
+  details.code-block[open] > summary { display: none; }
+  details.code-block { border: none; }
+}
+"""
+
+
+@router.post("/report/html-from-chat")
+async def export_chat_as_html(
+    req: ChatHtmlRequest,
+    user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export the AI chat as a self-contained HTML file.
+
+    一个 .html, 双击在浏览器即开. 所有图 base64 内嵌. Ctrl+P 直接打 PDF.
+    适合分享 / 打印 / 归档比 .md 更友好的场景."""
+    messages = await _rehydrate_messages_from_db(
+        list(req.messages or []), req.session_id, user, db,
+    )
+
+    title = _html_escape(req.title or "AI Research Session")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    parts: list[str] = []
+    parts.append("<!DOCTYPE html>")
+    parts.append('<html lang="en">')
+    parts.append("<head>")
+    parts.append('<meta charset="utf-8">')
+    parts.append(f"<title>{title}</title>")
+    parts.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
+    parts.append(f"<style>{_HTML_CSS}</style>")
+    parts.append("</head>")
+    parts.append("<body>")
+    parts.append(f"<h1>{title}</h1>")
+    parts.append(f"<p style='color:var(--ink-muted)'>Generated {timestamp} · {len(messages)} turns</p>")
+
+    # Table of contents — 用 user 消息的前 60 字符当锚点
+    toc_entries: list[tuple[str, str]] = []
+    for idx, msg in enumerate(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            preview = (msg.get("content") or "").strip().splitlines()
+            label = (preview[0][:60] + "…") if (preview and len(preview[0]) > 60) else (preview[0] if preview else f"Turn {idx + 1}")
+            toc_entries.append((f"turn-{idx}", label))
+    if toc_entries:
+        parts.append('<nav class="toc">')
+        parts.append("<strong>Contents</strong>")
+        parts.append("<ol>")
+        for anchor, label in toc_entries:
+            parts.append(f'<li><a href="#{anchor}">{_html_escape(label)}</a></li>')
+        parts.append("</ol>")
+        parts.append("</nav>")
+
+    for idx, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "")
+        content = msg.get("content") or ""
+        actions = msg.get("actions") or []
+
+        anchor_id = f"turn-{idx}" if role == "user" else None
+        anchor_attr = f' id="{anchor_id}"' if anchor_id else ""
+        parts.append(f'<section class="turn"{anchor_attr}>')
+
+        if role == "user":
+            parts.append('<div class="role-user">🧑 You</div>')
+        elif role == "assistant":
+            parts.append('<div class="role-assistant">🤖 AI Assistant</div>')
+
+        if content:
+            parts.append(_render_user_content_as_html(content))
+
+        # 一行摘要列出非 run_python action
+        non_python = []
+        python_actions = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            if action.get("action") == "run_python":
+                python_actions.append(action)
+            else:
+                summary = _action_summary_one_liner(action)
+                if summary:
+                    non_python.append(summary)
+        if non_python:
+            parts.append('<div class="tools-summary"><strong>Tools used:</strong><ul>')
+            for s in non_python:
+                parts.append(f"<li>{_html_escape(s)}</li>")
+            parts.append("</ul></div>")
+
+        for py_idx, action in enumerate(python_actions, start=1):
+            tool_input = action.get("tool_input") if isinstance(action.get("tool_input"), dict) else {}
+            params = action.get("params") if isinstance(action.get("params"), dict) else {}
+            code = (
+                action.get("code", "")
+                or (tool_input or {}).get("code", "")
+                or (params or {}).get("code", "")
+            )
+            if code:
+                parts.append('<details class="code-block">')
+                parts.append(f"<summary>📝 Python cell #{py_idx}</summary>")
+                parts.append(f'<pre class="code">{_html_escape(code)}</pre>')
+                parts.append("</details>")
+
+            tool_result = action.get("tool_result")
+            if isinstance(tool_result, dict):
+                stdout = tool_result.get("stdout")
+                if isinstance(stdout, str) and stdout.strip():
+                    truncated = _truncate_stdout(stdout)
+                    parts.append(f'<pre class="stdout">{_html_escape(truncated)}</pre>')
+
+                figures = tool_result.get("figures")
+                if isinstance(figures, list):
+                    for fig_idx, fig in enumerate(figures, start=1):
+                        data_uri = _normalize_figure_to_data_uri(fig)
+                        if data_uri:
+                            parts.append('<figure class="run-python-fig">')
+                            parts.append(
+                                f'<img alt="Figure {py_idx}.{fig_idx}" '
+                                f'src="{_html_escape(data_uri)}">'
+                            )
+                            parts.append(
+                                f"<figcaption>Figure {py_idx}.{fig_idx}</figcaption>"
+                            )
+                            parts.append("</figure>")
+
+                err = tool_result.get("error")
+                if isinstance(err, str) and err.strip():
+                    parts.append(
+                        f'<div class="error-banner"><strong>⚠ Error:</strong> '
+                        f"{_html_escape(err.strip()[:500])}</div>"
+                    )
+
+                offloaded = tool_result.get("__figures_offloaded__")
+                if isinstance(offloaded, int) and offloaded > 0:
+                    parts.append(
+                        f'<div class="offload-note">📊 {offloaded} figure(s) '
+                        f"were trimmed from local cache and could not be "
+                        "rehydrated. Re-run the Python cell to regenerate.</div>"
+                    )
+
+        parts.append("</section>")
+
+    parts.append("<footer>Generated by Standard Astro AI Research Assistant</footer>")
+    parts.append("</body></html>")
+
+    html = "\n".join(parts)
+    return StreamingResponse(
+        iter([html]),
+        media_type="text/html",
+        headers={"Content-Disposition": 'attachment; filename="ai_research_chat.html"'},
     )
 
 
