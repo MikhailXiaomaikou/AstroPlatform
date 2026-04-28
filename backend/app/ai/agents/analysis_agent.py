@@ -8,6 +8,12 @@ ANALYSIS_AGENT = SpecialistAgent(
         "Use validation-minded language and prefer concrete outputs."
     ),
     tool_names=[
+        "search_literature",
+        "extract_literature_tables",
+        "fit_line_lfr",
+        "compare_luminosity_distances",
+        "demagnify_sample",
+        "export_sample_table",
         "run_python",
         "fit_isochrone",
         "estimate_photo_z",

@@ -38,10 +38,18 @@ class Orchestrator:
         }
         self.intent_patterns = {
             "data_agent": [r"\b(query|catalog|gaia|sdss|simbad|adql|cone|archive|download|photometry)\b"],
-            "analysis_agent": [r"\b(fit|analy[sz]e|correlation|regression|python|pipeline|model|validate|residual)\b"],
+            "analysis_agent": [
+                r"\b(fit|analy[sz]e|correlation|regression|python|pipeline|model|validate|residual)\b",
+                r"\b(slope|intercept|scatter|fwhm|linewidth|line[- ]?width|lfr|bayesian|mcmc|demagnif)\b",
+                r"(拟合|回归|斜率|截距|散布|线宽|红移依赖|贝叶斯|引力透镜|去放大)",
+            ],
             # Note: `paper(s)` belongs to literature, not analysis — analysis
             # handles `validate` for paper-reproduction workflows.
-            "literature_agent": [r"\b(literature|paper|papers|ads|arxiv|citation|citations|cite|prior work)\b"],
+            "literature_agent": [
+                r"\b(literature|paper|papers|ads|arxiv|citation|citations|cite|prior work|compile|compilation|sample)\b",
+                r"\b(cii|\\[cii\\]|line measurement|line measurements|measurement table|measurement tables)\b",
+                r"(文献|论文|引用|样本|汇总|编样本|表格|测量表|光度|谱线)",
+            ],
             "observation_agent": [
                 r"\b(observation|observations|observable|observing|proposal|exposure|"
                 r"visibility|airmass|follow-up|followup|transient|telescope|paranal|"
@@ -51,6 +59,13 @@ class Orchestrator:
         }
 
     def _collapse_fast_path(self, agents: list[str], user_message: str) -> tuple[list[str], str | None]:
+        if self._is_line_relation_workflow(user_message):
+            return ["analysis_agent"], (
+                "Line-relation workflow enabled: the analysis agent owns the "
+                "literature-search, table-extraction, cosmology, demagnification, "
+                "and fitting tools in one pass. Avoid running a separate "
+                "literature-agent pass that repeats searches after a fit succeeds."
+            )
         exploratory_agents = {"data_agent", "analysis_agent", "visualization_agent"}
         selected = [agent for agent in agents if agent in exploratory_agents]
         if not selected:
@@ -61,6 +76,34 @@ class Orchestrator:
                 "with data and plotting tools available, instead of serial specialist handoffs."
             )
         return agents, None
+
+    @staticmethod
+    def _is_line_relation_workflow(user_message: str) -> bool:
+        message = str(user_message or "").lower()
+        has_line = any(
+            token in message
+            for token in ("[cii]", "c ii", "cii", "158μm", "158um", "谱线")
+        )
+        has_relation = any(
+            token in message
+            for token in (
+                "fwhm",
+                "line width",
+                "linewidth",
+                "lfr",
+                "slope",
+                "intercept",
+                "scatter",
+                "regression",
+                "bayesian",
+                "线宽",
+                "斜率",
+                "截距",
+                "回归",
+                "拟合",
+            )
+        )
+        return has_line and has_relation
 
     async def classify_intent(self, user_message: str, conversation_history: list[dict] | None = None) -> list[str]:
         message = user_message.lower()
