@@ -695,9 +695,10 @@ def _build_valid_bibcode_pool(tool_results: Any) -> set[str]:
     """Collect every tool-sourced bibcode that may support a reply citation."""
     pool: set[str] = set()
     for node in _iter_dict_nodes(tool_results):
-        for key in ("bibcode", "article"):
-            value = node.get(key)
-            if value:
+        for key, value in node.items():
+            if not value:
+                continue
+            if key in {"bibcode", "article"} or key.endswith("_bibcode"):
                 pool.update(_bibcodes_from_text(str(value)))
 
         provenance = node.get("provenance")
@@ -885,6 +886,22 @@ _DEMAGNIFY_COUNT_RE = re.compile(
     r"\b(?:demagnif(?:ied|y(?:ing)?))\s+(\d+)\s+sources?\b",
     re.IGNORECASE,
 )
+_LINE_RELATION_QUANT_RE = re.compile(
+    r"\b(?:slope|intercept|intrinsic\s+scatter|sigma[_\s-]?int|"
+    r"pearson|spearman|p[-\s]?value|alpha|beta|"
+    r"r\s*=|p\s*=|[αβ]\s*=)\b",
+    re.IGNORECASE,
+)
+_EXPLORATORY_FIT_QUALIFIER_RE = re.compile(
+    r"\b(?:exploratory|not\s+(?:as\s+a\s+|a\s+)?publication[-\s]?ready|publication_ready\s*=\s*false|"
+    r"partial\s+fit|partial\s+result|not\s+for\s+publication|"
+    r"not\s+manuscript[-\s]?ready)\b",
+    re.IGNORECASE,
+)
+_PUBLICATION_READY_TRUE_RE = re.compile(
+    r"\bpublication[_\s-]?ready\s*=\s*true\b",
+    re.IGNORECASE,
+)
 
 
 def _collect_tool_results_for(tool_results: Any, tool_name: str) -> list[dict]:
@@ -919,6 +936,28 @@ def _collect_tool_results_for(tool_results: Any, tool_name: str) -> list[dict]:
     return out
 
 
+def _collect_raw_tool_results_for(tool_results: Any, tool_name: str) -> list[dict]:
+    """Return raw result dicts for a tool, including PARTIAL/__do_not_claim__.
+
+    Claimability filtering is correct for "can this support a paper claim?",
+    but methodology auditing also needs to see partial fits so it can require
+    the prose to label their statistics as exploratory.
+    """
+    out: list[dict] = []
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries or []:
+        name, result = _entry_tool_and_result(entry)
+        if not result:
+            continue
+        candidate_name = (
+            name
+            or (str(result.get("tool")) if isinstance(result.get("tool"), str) else None)
+        )
+        if candidate_name == tool_name:
+            out.append(result)
+    return out
+
+
 def methodology_consistency_violations(
     reply: str, tool_results: Any,
 ) -> list[CitationViolation]:
@@ -931,6 +970,7 @@ def methodology_consistency_violations(
         return []
     stripped = _strip_markdown_code(reply)
     fit_results = _collect_tool_results_for(tool_results, "fit_line_lfr")
+    raw_fit_results = _collect_raw_tool_results_for(tool_results, "fit_line_lfr")
     demag_results = _collect_tool_results_for(tool_results, "demagnify_sample")
 
     violations: list[CitationViolation] = []
@@ -947,6 +987,44 @@ def methodology_consistency_violations(
                 kind="method_mismatch",
                 match_text=bayesian_match.group(0),
                 line_number=_line_number(reply, bayesian_match.start()),
+            ))
+
+    # ── Publication-ready / exploratory status ───────────────────────
+    # fit_line_lfr may legitimately return slope/intercept/scatter from a
+    # real cache while marking the relation PARTIAL because units/citations
+    # still need review. Those numbers may be discussed, but the prose must
+    # label them as exploratory; sampler convergence alone does not make the
+    # top-level relation publication-ready.
+    if raw_fit_results:
+        any_overall_publication_ready = any(
+            r.get("publication_ready") is True
+            and r.get("__do_not_claim__") is not True
+            for r in raw_fit_results
+        )
+        has_partial_fit = any(
+            r.get("publication_ready") is not True
+            or r.get("__do_not_claim__") is True
+            or str(r.get("__tool_status__") or "").strip().upper() == "PARTIAL"
+            for r in raw_fit_results
+        )
+        ready_match = _PUBLICATION_READY_TRUE_RE.search(stripped)
+        if ready_match and not any_overall_publication_ready:
+            violations.append(CitationViolation(
+                kind="publication_ready_mismatch",
+                match_text=ready_match.group(0),
+                line_number=_line_number(reply, ready_match.start()),
+            ))
+        stat_match = _LINE_RELATION_QUANT_RE.search(stripped)
+        if (
+            stat_match
+            and has_partial_fit
+            and not any_overall_publication_ready
+            and not _EXPLORATORY_FIT_QUALIFIER_RE.search(stripped)
+        ):
+            violations.append(CitationViolation(
+                kind="line_relation_exploratory_label_missing",
+                match_text=stat_match.group(0),
+                line_number=_line_number(reply, stat_match.start()),
             ))
 
     # ── Demagnify count ───────────────────────────────────────────
@@ -1230,17 +1308,18 @@ def _dois_from_text(text: str) -> set[str]:
 
 
 def _normalize_bibcode(raw: str) -> str:
-    return str(raw or "").strip().strip(".,;:)]}\"'")
+    return str(raw or "").strip().strip("`.,;:)]}\"'")
 
 
 def _normalize_arxiv_id(raw: str) -> str:
-    value = str(raw or "").strip().strip(".,;:)]}\"'")
+    value = str(raw or "").strip().strip("`.,;:)]}\"'")
     value = re.sub(r"^arxiv:\s*", "", value, flags=re.I)
+    value = re.sub(r"v\d+$", "", value, flags=re.I)
     return value
 
 
 def _normalize_doi(raw: str) -> str:
-    return str(raw or "").strip().strip(".,;:)]}\"'").lower()
+    return str(raw or "").strip().strip("`.,;:)]}\"'").lower()
 
 
 def _author_key(raw: str) -> str:
@@ -1281,6 +1360,8 @@ def _author_year_looks_like_noise(author: str, match_text: str) -> bool:
         return False
     if "(" in match_text or "[" in match_text:
         return False
+    if author.upper() in {"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"}:
+        return True
     return author in {
         "April",
         "August",

@@ -218,6 +218,70 @@ def test_literature_table_measurements_support_cii_relation_and_arxiv_author_yea
     assert validate_claims(reply, tool_results).ok
 
 
+def test_arxiv_version_suffix_is_equivalent_for_table_citations():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "extract_literature_tables",
+        "result": {
+            "success": True,
+            "arxiv_id": "2002.00962v4",
+            "line_measurements": [{
+                "source_name": "ALPINE",
+                "citation": {"arxiv_id": "2002.00962v4"},
+            }],
+        },
+    }]
+
+    assert provenance_citation_violations("Béthermin et al. (2020; arXiv:2002.00962).", tool_results) == []
+
+
+def test_markdown_backtick_does_not_break_bibcode_match():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "compare_luminosity_distances",
+        "result": {
+            "success": True,
+            "current_cosmology": {"bibcode": "2020A&A...641A...6P"},
+        },
+    }]
+
+    assert provenance_citation_violations("Baseline was Planck18 `2020A&A...641A...6P`.", tool_results) == []
+
+
+def test_planck_collaboration_vi_year_is_not_author_year_noise():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "compare_luminosity_distances",
+        "result": {
+            "success": True,
+            "current_cosmology": {"bibcode": "2020A&A...641A...6P"},
+        },
+    }]
+
+    assert provenance_citation_violations("Planck Collaboration VI 2020 was the baseline.", tool_results) == []
+
+
+def test_supporting_bibcode_fields_enter_valid_pool():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "compare_luminosity_distances",
+        "result": {
+            "success": True,
+            "current_cosmology": {
+                "bibcode": "2020A&A...641A...6P",
+                "tcmb_bibcode": "2009ApJ...707..916F",
+            },
+        },
+    }]
+
+    reply = "Tcmb follows Fixsen 2009 (`2009ApJ...707..916F`)."
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
 def test_unseen_doi_is_citation_violation():
     from app.services.claim_validator import provenance_citation_violations
 

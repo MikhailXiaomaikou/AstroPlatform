@@ -11,7 +11,12 @@
 from app.services.claim_validator import methodology_consistency_violations
 
 
-def _fit_lfr_result(fit_method: str, lensed_demag: int = 0) -> dict:
+def _fit_lfr_result(
+    fit_method: str,
+    lensed_demag: int = 0,
+    *,
+    publication_ready: bool = True,
+) -> dict:
     """Build a minimal claimable fit_line_lfr tool_result envelope."""
     return {
         "tool": "fit_line_lfr",
@@ -20,7 +25,11 @@ def _fit_lfr_result(fit_method: str, lensed_demag: int = 0) -> dict:
             "success": True,
             "fit_method": fit_method,
             "lensed_sources_demagnified": lensed_demag,
-            "publication_ready": True,
+            "publication_ready": publication_ready,
+            **({} if publication_ready else {
+                "__tool_status__": "PARTIAL",
+                "__do_not_claim__": True,
+            }),
             "n_used": 50,
             "alpha": 8.0, "beta": 1.5,
         },
@@ -135,6 +144,38 @@ def test_understated_demagnify_count_no_violation():
     assert all(v.kind != "demagnify_count_mismatch" for v in violations)
 
 
+def test_partial_line_relation_stats_must_be_labeled_exploratory():
+    reply = "The slope is beta = 0.79 and intrinsic scatter is 0.32 dex."
+    tool_results = [_fit_lfr_result("bayesian_xyerr_linmix", publication_ready=False)]
+    violations = methodology_consistency_violations(reply, tool_results)
+    assert any(v.kind == "line_relation_exploratory_label_missing" for v in violations)
+
+
+def test_partial_line_relation_stats_pass_when_labeled_exploratory():
+    reply = (
+        "Exploratory only; not publication-ready: the slope is beta = 0.79 "
+        "and intrinsic scatter is 0.32 dex."
+    )
+    tool_results = [_fit_lfr_result("bayesian_xyerr_linmix", publication_ready=False)]
+    assert methodology_consistency_violations(reply, tool_results) == []
+
+
+def test_partial_line_relation_stats_pass_with_publication_ready_scope_caveat():
+    reply = (
+        "The slope is beta = 0.79 and intrinsic scatter is 0.32 dex. "
+        "This is not as a publication-ready statement about the global high-z [CII] LFR."
+    )
+    tool_results = [_fit_lfr_result("bayesian_xyerr_linmix", publication_ready=False)]
+    assert methodology_consistency_violations(reply, tool_results) == []
+
+
+def test_publication_ready_true_claim_requires_top_level_ready_fit():
+    reply = "The Bayesian chain returned publication_ready=true, so the slope is final."
+    tool_results = [_fit_lfr_result("bayesian_xyerr_linmix", publication_ready=False)]
+    violations = methodology_consistency_violations(reply, tool_results)
+    assert any(v.kind == "publication_ready_mismatch" for v in violations)
+
+
 # ── Test 5: empty/None inputs ─────────────────────────────────────────
 
 def test_empty_reply_returns_empty():
@@ -160,6 +201,7 @@ def test_system_prompt_has_methodology_section():
     assert "Line-relation fitting methodology" in SYSTEM_PROMPT
     # Key required-declaration phrases the segment contains
     assert "Declare the fit method" in SYSTEM_PROMPT
+    assert "exploratory only; not" in SYSTEM_PROMPT
     assert "Decompose slope uncertainty" in SYSTEM_PROMPT
     assert "demagnify_sample" in SYSTEM_PROMPT
     assert "compare_luminosity_distances" in SYSTEM_PROMPT

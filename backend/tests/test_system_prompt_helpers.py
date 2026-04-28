@@ -205,3 +205,15 @@ def test_system_prompt_defaults_fit_line_lfr_to_bayesian_xyerr():
     assert 'fit_method_requested="bayesian_xyerr"' in SYSTEM_PROMPT
     assert "N >= 5" in SYSTEM_PROMPT
     assert "OLS is the fallback" in SYSTEM_PROMPT
+
+
+def test_system_prompt_requires_lfr_orientation_before_coefficient_comparison():
+    """R2 loop guard: LFR slopes are only comparable when dependent
+    variable, predictor, and pivot/normalization match.
+    """
+    from app.api.chat import SYSTEM_PROMPT
+
+    normalised = " ".join(SYSTEM_PROMPT.split())
+    assert "Declare fit orientation and pivot" in SYSTEM_PROMPT
+    assert "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)" in SYSTEM_PROMPT
+    assert "NOT directly comparable" in normalised

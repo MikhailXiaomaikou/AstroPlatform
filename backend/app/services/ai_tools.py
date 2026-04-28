@@ -662,7 +662,7 @@ TOOLS = [
                         "Optional target cosmology. When supplied as a PART AA "
                         "preset name (planck18 / planck18_bao / freedman21_trgb "
                         "/ riess22_shoes) or a FlatLambdaCDM_H<H0>_Om<Om> spec "
-                        "(e.g. FlatLambdaCDM_H73p8_Om0p27 for Riess+11 / "
+                        "(e.g. FlatLambdaCDM_H73p8_Om0p295 for Riess+11 / "
                         "Suzuki+12), the tool RECOMPUTES log_luminosity for "
                         "each row from the new luminosity distance: "
                         "log_L_new = log_L_old + 2*log10(DL_new(z) / DL_old(z)). "
@@ -693,7 +693,7 @@ TOOLS = [
         "description": (
             "Compare luminosity distance + Δlog L for two cosmology choices "
             "across the cached literature sample. Use BEFORE citing a non-"
-            "Planck H0/Om0 (e.g. Riess+11 H0=73.8, Suzuki+12 Om=0.271) on a "
+            "Planck H0/Om0 (e.g. Riess+11 H0=73.8, Suzuki+12 Om=0.295) on a "
             "sample whose source_cosmology is something else. Returns per-"
             "source ΔDL%% + Δlog L, plus median/max summary; use the result "
             "to either recompute log_luminosity or quote the shift as a "
@@ -716,7 +716,7 @@ TOOLS = [
                         "against. Legacy names also accepted (Planck15 / "
                         "WMAP9 / WMAP7 / WMAP5 — no curated bibcode), as "
                         "is the FlatLambdaCDM_H<H0>_Om<Om> spec for "
-                        "older measurements (e.g. FlatLambdaCDM_H73p8_Om0p27 "
+                        "older measurements (e.g. FlatLambdaCDM_H73p8_Om0p295 "
                         "for Riess+11 / Suzuki+12)."
                     ),
                 },
@@ -3430,6 +3430,10 @@ async def _exec_literature(inp: dict) -> dict:
                     "or arXiv fallback."
                 ),
             }
+        filtered = [
+            r for r in raw
+            if not _literature_hit_should_be_hidden(r)
+        ]
         return {
             "source": source,
             "result_granularity": "paper_abstract",
@@ -3443,11 +3447,25 @@ async def _exec_literature(inp: dict) -> dict:
                     "abstract": (r.get("abstract") or "")[:500],
                     "source": r.get("source") or r.get("pub") or source,
                 }
-                for r in raw[:8]
+                for r in filtered[:8]
             ]
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+def _literature_hit_should_be_hidden(row: dict[str, Any]) -> bool:
+    """Hide search hits that are known-bad rather than merely off-topic."""
+    blob = " ".join(
+        str(row.get(key) or "")
+        for key in ("title", "abstract", "bibcode", "source", "pub")
+    ).lower()
+    known_bad_phrases = (
+        "withdrawn by arxiv administrators",
+        "contains fictitious content",
+        "submitted under a pseudonym",
+    )
+    return any(phrase in blob for phrase in known_bad_phrases)
 
 
 def _arxiv_id_from_table_input(inp: dict[str, Any]) -> str:
@@ -4310,6 +4328,16 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "cache_key": resolved_cache_key,
         "line_id": line_id,
         "model": "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)",
+        "fit_orientation": {
+            "dependent_variable": "log_luminosity",
+            "independent_variable": "log10(FWHM_km_s / 100)",
+            "normalization": "FWHM normalized by 100 km/s",
+            "equation": "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)",
+            "literature_comparison_note": (
+                "Only compare alpha/beta directly with another paper if that paper "
+                "uses the same dependent variable, independent variable, and pivot."
+            ),
+        },
         "n_available": len(rows),
         "n_used": n_used,
         "n_rejected": len(rejected),
@@ -4705,7 +4733,7 @@ def _exec_compare_luminosity_distances(
     """Compare luminosity distance + Δlog L for two cosmology choices.
 
     Use this BEFORE citing a non-Planck H0/Om0 (e.g. Riess 2011 H0=73.8
-    or Suzuki 2012 Om=0.271) on a sample whose source_cosmology is
+    or Suzuki 2012 Om=0.295) on a sample whose source_cosmology is
     something else.  The tool reports per-source ΔDL and Δlog L' so the
     AI can decide whether the cosmology-systematic shift is large
     enough to recompute or merely cite as a < few % systematic.
@@ -4717,7 +4745,7 @@ def _exec_compare_luminosity_distances(
     if not target_name:
         return {
             "success": False,
-            "error": "target_cosmology is required (e.g. 'Planck18', 'WMAP9', or 'FlatLambdaCDM_H73p8_Om0p27').",
+            "error": "target_cosmology is required (e.g. 'Planck18', 'WMAP9', or 'FlatLambdaCDM_H73p8_Om0p295').",
             "error_class": "missing_target_cosmology",
             "__tool_status__": "FAILED",
         }
@@ -5116,11 +5144,29 @@ async def _exec_extract_literature_tables(
 
     line_measurements = payload.get("line_measurements") or []
     tables = payload.get("tables") or []
-    cache_key = _session_cache_key("latest_literature_tables", python_session_id) or "latest_literature_tables"
+    latest_cache_key = _session_cache_key("latest_literature_tables", python_session_id) or "latest_literature_tables"
+    cleaned_arxiv_id = str(payload.get("arxiv_id") or raw_id).replace("arXiv:", "").strip()
+    raw_cache_key_base = f"literature_tables_raw:{cleaned_arxiv_id or 'unknown'}"
+    raw_cache_key = _session_cache_key(raw_cache_key_base, python_session_id) or raw_cache_key_base
+    cache_key = latest_cache_key if line_measurements else raw_cache_key
     cache_value = _literature_table_cache_payload(payload, cache_key)
     store_search_results(cache_key, cache_value)
-    if cache_key != "latest_literature_tables":
-        store_search_results("latest_literature_tables", cache_value)
+    if line_measurements:
+        # Only fit-ready extractions update the session's latest measurement
+        # cache.  A later raw-only / zero-measurement extraction must not wipe
+        # a previously successful ALPINE/REBELS/etc. cache; otherwise the next
+        # fit_line_lfr(default latest_literature_tables) sees an empty sample.
+        if cache_key != "latest_literature_tables":
+            store_search_results("latest_literature_tables", cache_value)
+    else:
+        existing_latest = get_cached_results(latest_cache_key)
+        if not existing_latest and latest_cache_key != "latest_literature_tables":
+            existing_latest = get_cached_results("latest_literature_tables")
+        if not existing_latest:
+            # No fit-ready cache exists yet; keeping a latest raw cache preserves
+            # old UX for "extract then inspect raw tables" while still preventing
+            # zero-row overwrites after a successful extraction.
+            store_search_results(latest_cache_key, cache_value)
 
     bibcodes = [
         str(row.get("bibcode") or "").strip()

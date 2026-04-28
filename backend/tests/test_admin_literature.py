@@ -156,7 +156,7 @@ def test_system_prompt_has_explicit_cosmology_call_examples() -> None:
     assert "EXACT CALL EXAMPLES" in SYSTEM_PROMPT
 
     # Riess+11 / Suzuki+12 → FlatLambdaCDM spec
-    assert 'compare_luminosity_distances(target_cosmology="FlatLambdaCDM_H73p8_Om0p27")' in SYSTEM_PROMPT
+    assert 'compare_luminosity_distances(target_cosmology="FlatLambdaCDM_H73p8_Om0p295")' in SYSTEM_PROMPT
     # Riess+22 → riess22_shoes preset
     assert 'compare_luminosity_distances(target_cosmology="riess22_shoes")' in SYSTEM_PROMPT
     # Planck18 + BAO preset

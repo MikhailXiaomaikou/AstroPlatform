@@ -1017,6 +1017,70 @@ def test_literature_tool_falls_back_to_free_text_arxiv():
     assert result["results"][0]["bibcode"] == "arXiv:2401.00001"
 
 
+def test_literature_tool_hides_known_bad_withdrawn_arxiv_hits():
+    """R2.9: arXiv fallback sometimes returns withdrawn/fictitious records."""
+    from app.services.ai_tools import _exec_literature
+
+    bad_paper = {
+        "title": "A Simulation and Modeling of Access Points with Definition Language",
+        "authors": ["Fake Author"],
+        "year": "2013",
+        "bibcode": "arXiv:1304.1836",
+        "abstract": (
+            "This submission has been withdrawn by arXiv administrators because "
+            "it contains fictitious content and was submitted under a pseudonym."
+        ),
+        "source": "arxiv",
+    }
+    good_paper = {
+        "title": "The ALPINE-ALMA [CII] Survey: data processing, catalogs, and statistical source properties",
+        "authors": ["M. Bethermin"],
+        "year": "2020",
+        "bibcode": "arXiv:2002.00962",
+        "abstract": "The ALPINE-ALMA large program targets the [CII] 158 micron line.",
+        "source": "arxiv",
+    }
+
+    with (
+        patch("app.api.citations._search_ads_sync", return_value=[]),
+        patch("app.api.citations._search_literature_ads", return_value=[]),
+        patch("app.api.citations._search_literature_arxiv", return_value=[bad_paper, good_paper]),
+    ):
+        result = asyncio.run(_exec_literature({"query": "[CII] ALPINE FWHM"}))
+
+    assert [row["bibcode"] for row in result["results"]] == ["arXiv:2002.00962"]
+
+
+def test_line_lfr_uses_verified_cii_seed_when_search_has_no_candidates():
+    from app.api.chat import _verified_line_relation_seed_candidates
+
+    seeds = _verified_line_relation_seed_candidates(
+        "high-z [CII] LFR: fit log L'[CII] vs log FWHM with Bayesian regression"
+    )
+
+    assert any(seed["arxiv_id"] == "2002.00962" for seed in seeds)
+    assert all("line-measurement" in seed["title"] for seed in seeds)
+    assert all(seed["score"] >= 100 for seed in seeds)
+
+
+def test_partial_fit_line_lfr_is_not_publication_ready():
+    from app.api.chat import _line_fit_partial_from_result, _line_fit_publication_ready_from_result
+
+    result = {
+        "success": True,
+        "__tool_status__": "PARTIAL",
+        "__do_not_claim__": True,
+        "publication_ready": False,
+        "n_used": 74,
+        "alpha": 8.29,
+        "beta": 0.79,
+        "intrinsic_scatter_dex": 0.32,
+    }
+
+    assert _line_fit_publication_ready_from_result(result) is False
+    assert _line_fit_partial_from_result(result) is True
+
+
 # ---------- J3: SDSS SkyServer 直连工具 run_sdss_sql ----------
 
 def test_run_sdss_sql_tool_registered():
@@ -1177,6 +1241,23 @@ def test_long_workflow_budget_inferred_for_paper_scale_prompt():
     budget = _workflow_budget_config("long")
     assert budget["agent_loop_seconds"] >= 900
     assert budget["endpoint_timeout_seconds"] > budget["agent_loop_seconds"]
+
+
+def test_long_workflow_budget_inferred_for_line_lfr_prompt():
+    from app.api.chat import ChatMessage, ChatRequest, _infer_workflow_budget_mode
+
+    req = ChatRequest(messages=[
+        ChatMessage(
+            role="user",
+            content=(
+                "我在做 high-z [CII]-detected galaxies 的 LFR 分析，"
+                "希望在 log L'[CII]–log FWHM 平面做 Bayesian linear "
+                "regression，给出 slope / intercept / intrinsic scatter。"
+            ),
+        )
+    ])
+
+    assert _infer_workflow_budget_mode(req) == "long"
 
 
 def test_execute_tool_calls_marks_adql_extended_in_long_mode():

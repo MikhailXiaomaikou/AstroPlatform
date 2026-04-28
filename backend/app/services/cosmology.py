@@ -290,7 +290,7 @@ def get_cosmology(name: str | None = None):
       - Legacy astropy aliases (``Planck18``, ``Planck15``, ``WMAP9``,
         ``WMAP7``, ``WMAP5``).
       - ``FlatLambdaCDM_H<H0>_Om<Om>`` spec, e.g.
-        ``FlatLambdaCDM_H73p8_Om0p27``.
+        ``FlatLambdaCDM_H73p8_Om0p295``.
 
     Unknown names fall back to the default preset (planck18) with a
     warning so the caller still gets a valid cosmology.
@@ -314,7 +314,7 @@ def get_cosmology(name: str | None = None):
     if key in table:
         return table[key]
 
-    # Legacy spec parser: FlatLambdaCDM_H73p8_Om0p27
+    # Legacy spec parser: FlatLambdaCDM_H73p8_Om0p295
     if key.startswith("FlatLambdaCDM"):
         parts = key.split("_")
         h0 = 67.4

@@ -514,6 +514,75 @@ def test_exec_extract_literature_tables_zero_measurements_message_is_actionable(
     assert "REBELS" in msg
 
 
+def test_zero_measurement_extract_does_not_overwrite_fit_ready_latest_cache(
+    monkeypatch,
+) -> None:
+    """R2.9 regression: a later 0-row extraction must not erase a previous
+    fit-ready latest_literature_tables:<session> cache."""
+    from app.services import ai_tools
+
+    _install_isolated_cache(monkeypatch)
+
+    async def fake_fetch(arxiv_id: str) -> dict:
+        cleaned = arxiv_id.replace("arXiv:", "")
+        if cleaned == "2002.00962":
+            return {
+                "arxiv_id": cleaned,
+                "title": "ALPINE table",
+                "authors": ["Test"],
+                "year": 2020,
+                "bibcode": "arXiv:2002.00962",
+                "doi": None,
+                "source_url": "https://arxiv.org/abs/2002.00962",
+                "tables": [],
+                "line_measurements": [
+                    {
+                        "source_name": "ALPINE-1",
+                        "redshift": 4.5,
+                        "line_id": "[CII] 158um",
+                        "log_luminosity": 8.5,
+                        "fwhm_km_s": 200.0,
+                        "bibcode": "arXiv:2002.00962",
+                    }
+                ],
+            }
+        return {
+            "arxiv_id": cleaned,
+            "title": "Raw-only companion",
+            "authors": ["Test"],
+            "year": 2022,
+            "bibcode": f"arXiv:{cleaned}",
+            "doi": None,
+            "source_url": f"https://arxiv.org/abs/{cleaned}",
+            "tables": [{"table_id": "raw", "columns": ["Source"], "rows": [["G1"]]}],
+            "line_measurements": [],
+        }
+
+    monkeypatch.setattr(ai_tools, "_extract_arxiv_tables_payload_with_retry", fake_fetch)
+
+    session = "r2-cache"
+    first = asyncio.run(ai_tools._exec_extract_literature_tables(
+        {"arxiv_id": "2002.00962"},
+        python_session_id=session,
+        user_id="user-test",
+    ))
+    second = asyncio.run(ai_tools._exec_extract_literature_tables(
+        {"arxiv_id": "2202.00000"},
+        python_session_id=session,
+        user_id="user-test",
+    ))
+
+    assert first["line_measurement_count"] == 1
+    assert second["line_measurement_count"] == 0
+    rows, resolved = ai_tools._resolve_literature_measurement_cache(
+        "latest_literature_tables",
+        session,
+    )
+    assert resolved == first["cache_key"]
+    assert len(rows) == 1
+    assert rows[0]["source_name"] == "ALPINE-1"
+
+
 # ---------------------------------------------------------------------------
 # PART AC C1: log/linear schema fixes — caption + value-range detection
 # ---------------------------------------------------------------------------

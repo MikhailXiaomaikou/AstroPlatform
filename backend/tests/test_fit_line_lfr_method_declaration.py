@@ -46,7 +46,7 @@ def _make_rows(n: int, *, with_err: bool = False, with_cosmo: str | None = None,
             row["log_luminosity_err"] = 0.1
             row["fwhm_err_km_s"] = 15.0
         if with_cosmo:
-            row["source_cosmology"] = {"name": with_cosmo, "H0": 73.8, "Om0": 0.27}
+            row["source_cosmology"] = {"name": with_cosmo, "H0": 73.8, "Om0": 0.295}
         if with_mu:
             row["mu_lens"] = 2.0
             row["is_lensed"] = True
@@ -85,6 +85,10 @@ def test_default_auto_returns_ols_with_method_fields():
     assert out["fit_method_downgrade_reason"] is None
     # auto 路径不算降级
     assert out.get("__tool_status__") != "METHOD_DOWNGRADED"
+    assert out["model"] == "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)"
+    assert out["fit_orientation"]["dependent_variable"] == "log_luminosity"
+    assert out["fit_orientation"]["independent_variable"] == "log10(FWHM_km_s / 100)"
+    assert "same dependent variable" in out["fit_orientation"]["literature_comparison_note"]
 
 
 def test_explicit_ols_never_downgrades():

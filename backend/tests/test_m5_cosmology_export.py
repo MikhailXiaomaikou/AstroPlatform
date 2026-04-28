@@ -54,10 +54,10 @@ def test_cosmology_manifest_for_supports_named_cosmologies():
 
 
 def test_cosmology_manifest_for_parses_flat_lambdacdm_spec():
-    """FlatLambdaCDM_H73p8_Om0p27 → H0=73.8, Om0=0.27 (Riess+11 / Suzuki+12 example)."""
-    m = _cosmology_manifest_for("FlatLambdaCDM_H73p8_Om0p27")
+    """FlatLambdaCDM_H73p8_Om0p295 → H0=73.8, Om0=0.295 (Riess+11 / Suzuki+12 example)."""
+    m = _cosmology_manifest_for("FlatLambdaCDM_H73p8_Om0p295")
     assert abs(m["H0_km_s_Mpc"] - 73.8) < 0.01
-    assert abs(m["Om0"] - 0.27) < 0.001
+    assert abs(m["Om0"] - 0.295) < 0.001
 
 
 def test_compare_luminosity_distances_returns_per_source_deltas():
@@ -68,12 +68,12 @@ def test_compare_luminosity_distances_returns_per_source_deltas():
     ):
         out = _exec_compare_luminosity_distances({
             "cache_key": "lit_test",
-            "target_cosmology": "FlatLambdaCDM_H73p8_Om0p27",
+            "target_cosmology": "FlatLambdaCDM_H73p8_Om0p295",
         })
     assert out["success"] is True
     # PART AA: current cosmology resolves to the lowercase preset name.
     assert out["current_cosmology"]["name"] == "planck18"
-    assert out["target_cosmology"]["name"] == "FlatLambdaCDM_H73p8_Om0p27"
+    assert out["target_cosmology"]["name"] == "FlatLambdaCDM_H73p8_Om0p295"
     assert len(out["per_source"]) == 3
     # H0 73.8 vs 67.4 → DL ~10% smaller (DL ∝ c/H0 at low z;
     # roughly 67.4/73.8 - 1 ≈ -8.7%); sign should be negative
