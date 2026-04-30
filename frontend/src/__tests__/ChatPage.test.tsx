@@ -240,6 +240,37 @@ describe("ChatPage", () => {
     expect(screen.getByText("chat.import")).toBeInTheDocument();
   });
 
+  it("sends an immediate post-new-chat message with empty history and no session id", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    localStorage.setItem(
+      "astro_chat_history:anon",
+      JSON.stringify([
+        { id: "old-u", role: "user", content: "old contaminated prompt" },
+        { id: "old-a", role: "assistant", content: "old fitted result" },
+      ]),
+    );
+    localStorage.setItem("astro_current_chat_session_id:anon", "old-session");
+    vi.mocked(sendChatMessage).mockResolvedValue({ reply: "Fresh reply", actions: [] });
+
+    renderChatPage();
+    expect(await screen.findByText("old contaminated prompt")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByText("chat.new_chat")[0]);
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "fresh prompt" } });
+    fireEvent.click(sendBtn);
+
+    await waitFor(() => expect(sendChatMessage).toHaveBeenCalled());
+    const [history, context] = vi.mocked(sendChatMessage).mock.calls[0];
+    expect(history).toEqual([
+      { role: "user", content: "fresh prompt" },
+      { role: "assistant", content: "" },
+    ]);
+    expect(context).toEqual(expect.objectContaining({ current_session_id: null }));
+    expect(JSON.stringify(history)).not.toContain("old contaminated prompt");
+  });
+
   // ── Template cards ──
 
   it("renders template cards when key is configured and no messages", () => {

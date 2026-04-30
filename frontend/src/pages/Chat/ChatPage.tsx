@@ -2761,10 +2761,12 @@ export default function ChatPage() {
   );
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const messagesRef = useRef<DisplayMessage[]>(messages);
 
   // Session management
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
   const [currentSessionTitle, setCurrentSessionTitle] = useState<string>("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem("astro_chat_sidebar_collapsed") === "1";
@@ -2786,6 +2788,14 @@ export default function ChatPage() {
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSessionScopeRef = useRef(storageScope);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
 
   const showToast = useCallback((message: string, tone: ToastState["tone"] = "success") => {
     setToast({ message, tone });
@@ -3326,7 +3336,9 @@ export default function ChatPage() {
       }
     }
     setMessages([]);
+    messagesRef.current = [];
     setCurrentSessionId(null);
+    currentSessionIdRef.current = null;
     setCurrentSessionTitle("");
     setSaveStatus("idle");
     pythonSessionIdRef.current = crypto.randomUUID();
@@ -3580,6 +3592,8 @@ export default function ChatPage() {
   const handleSend = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text || loading) return;
+    const baseMessages = messagesRef.current;
+    const sessionIdForRequest = currentSessionIdRef.current;
 
     const userMsg: DisplayMessage = {
       id: crypto.randomUUID(),
@@ -3659,7 +3673,8 @@ export default function ChatPage() {
       });
     };
 
-    const updatedMessages = [...messages, userMsg, pendingMarker];
+    const updatedMessages = [...baseMessages, userMsg, pendingMarker];
+    messagesRef.current = updatedMessages;
     setMessages(updatedMessages);
     // H0.5: clear input whenever the text we're sending matches the
     // current input state (i.e. came from the user, not an external
@@ -3712,7 +3727,7 @@ export default function ChatPage() {
         if (lastAdqlResultSets) wsContext.last_adql_result_sets = JSON.parse(lastAdqlResultSets);
       } catch { /* ignore */ }
       wsContext.python_session_id = pythonSessionIdRef.current;
-      wsContext.current_session_id = currentSessionId;
+      wsContext.current_session_id = sessionIdForRequest;
 
       // R0d: create a fresh AbortController per request so the Stop button
       // can cancel this stream specifically.

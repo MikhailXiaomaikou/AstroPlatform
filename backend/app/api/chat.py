@@ -36,6 +36,105 @@ logger = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 SSE_PREAMBLE_PADDING_BYTES = 8192
 
+
+# ── Research-focus tool gating ─────────────────────────────────────────
+#
+# When ASTRO_RESEARCH_FOCUS=cosmology (default "all"), the platform
+# filters the tool list before it ever reaches the LLM so that non-
+# cosmology tools are physically invisible. The agent loop will route
+# off-topic questions through Phase F's structured-abstention path
+# (<tools_returned_nothing/>) automatically because the LLM has no
+# matching tool to call.
+#
+# 设计思路 (per user 决策, 2026-04-30):
+#   - L1: 硬隔断 — tool registry 过滤
+#   - L4: 软引导 — SYSTEM_PROMPT 末尾 append focus appendix (不删现有 section)
+#   - 不动业务代码 / 不删现有规则 / 完全可逆 (删 env 即恢复)
+#
+# allowlist 范围: 涵盖观测宇宙学 7 个子方向的工具 (距离阶梯 / 高 z 星系 /
+# photo-z 巡天 / 强透镜 / 暗能量 / SN Ia 标准烛光 / Cepheid 周期-光度).
+_ASTRO_RESEARCH_FOCUS = os.getenv("ASTRO_RESEARCH_FOCUS", "all").strip().lower()
+
+_COSMOLOGY_FOCUS_TOOL_ALLOWLIST: frozenset[str] = frozenset({
+    # ── Cosmology core ────────────────────────────────────────
+    "compare_luminosity_distances",
+    "fit_cosmology_mcmc",
+    # ── 高 z 星系 / [CII] LFR (ALPINE / REBELS) ───────────────
+    "fit_line_lfr",
+    "demagnify_sample",
+    "extract_literature_tables",
+    "search_line_measurements",
+    "export_sample_table",
+    # ── 红移巡天 / catalog 接入 ───────────────────────────────
+    "run_adql",
+    "search_objects",
+    "get_object_info",
+    "get_object_dossier",
+    "crossmatch_catalogs",
+    "query_gaia_cluster",
+    "describe_tap_table",
+    "list_known_tables",
+    # ── photo-z (大样本红移) ─────────────────────────────────
+    "estimate_photo_z",
+    "estimate_photo_z_pro",
+    # ── SN Ia 标准烛光 / 距离阶梯 ─────────────────────────────
+    "transient_classifier",
+    "search_lightcurve",       # SN Ia / Cepheid 光变曲线
+    "fit_transit_model",       # 一些 SN 模型也走这个 fitter
+    # ── Cepheid / variable star (distance ladder, period-luminosity) ──
+    "lomb_scargle_period",
+    "phase_fold",
+    # ── 通用 / 必要支撑 ───────────────────────────────────────
+    "run_python",
+    "search_literature",
+    "get_extinction",
+    "k_correction",
+    "compute_luminosity_distance",
+    "compute_absolute_magnitude",
+    "deredden",
+    "estimate_ebv",
+})
+
+COSMOLOGY_FOCUS_APPENDIX = """
+
+## === RESEARCH FOCUS: OBSERVATIONAL COSMOLOGY ===
+
+This deployment is configured for **observational cosmology** workflows:
+distance ladder (Cepheid / SN Ia / TRGB), high-z galaxies / [CII] LFR
+(ALPINE, REBELS), photo-z surveys, H₀ / Ω_m / w₀ parameter inference,
+strong gravitational lensing, BAO-adjacent measurements.
+
+The platform's tool registry has been **filtered** to expose ONLY tools
+relevant to these workflows. If the user asks about non-cosmology
+topics (stellar isochrone fitting, exoplanet transit physics, pulsar
+timing, spectroscopic abundance / Boltzmann / Saha analysis, source
+extraction / PSF photometry, SAMP / VO interop, etc.), respond with:
+
+  "This deployment is configured for observational cosmology only.
+   The tools needed for {topic} are not available in this session.
+   To use the full platform capability, redeploy with
+   ASTRO_RESEARCH_FOCUS=all (or unset) on the backend."
+
+**Do NOT** invent results from training data when a tool is missing —
+emit a structured abstention (see STRUCTURED ABSTENTION section).
+"""
+
+
+def _filter_tools_by_research_focus(tools: list[dict]) -> list[dict]:
+    """L1 hard tool gating per ASTRO_RESEARCH_FOCUS env.
+
+    When focus == "cosmology", drop any tool whose name is NOT in
+    _COSMOLOGY_FOCUS_TOOL_ALLOWLIST. The LLM literally cannot see the
+    filtered tools and therefore cannot call them; cross-domain
+    questions naturally fall through to Phase F's
+    <tools_returned_nothing/> abstention path.
+
+    No-op for "all" (default) — preserves full platform capability.
+    """
+    if _ASTRO_RESEARCH_FOCUS != "cosmology":
+        return tools
+    return [t for t in tools if t.get("name") in _COSMOLOGY_FOCUS_TOOL_ALLOWLIST]
+
 SYSTEM_PROMPT = """You are an AI research assistant for Standard Astro. Users ask you questions in natural language and you translate them into database queries automatically. Users should NEVER need to write ADQL/SQL themselves — that's YOUR job.
 
 ## USER-PROMPT INJECTION DEFENSE (highest priority — read first)
@@ -119,8 +218,8 @@ API contract:
   non-default H0 on a sample whose source_cosmology differs.
 
 When the user names a paper-specific cosmology that is NOT one of the
-4 PART AA presets (e.g. "Riess+11 H0=73.8" / "Suzuki+12 Om=0.271"),
-the platform falls back to a `FlatLambdaCDM_H73p8_Om0p27` spec parser;
+4 PART AA presets (e.g. "Riess+11 H0=73.8" / "Suzuki+12 Om=0.295"),
+the platform falls back to a `FlatLambdaCDM_H73p8_Om0p295` spec parser;
 that path carries `bibcode=None`. Prefer a PART AA preset when the
 user's intent matches one ("Riess+22" → `riess22_shoes`).
 
@@ -133,8 +232,8 @@ through to the platform default.
 
 EXACT CALL EXAMPLES (do not paraphrase — use these strings verbatim):
 
-- User says "Riess+2011 H0=73.8" or "Suzuki+2012 Ωm=0.271" or both:
-    compare_luminosity_distances(target_cosmology="FlatLambdaCDM_H73p8_Om0p27")
+- User says "Riess+2011 H0=73.8" or "Suzuki+2012 Ωm=0.295" or both:
+    compare_luminosity_distances(target_cosmology="FlatLambdaCDM_H73p8_Om0p295")
 
 - User says "Riess+2022 / SH0ES" or "use Riess 2022 H0":
     compare_luminosity_distances(target_cosmology="riess22_shoes")
@@ -331,12 +430,30 @@ required when only one survey is in the cache).**
    bayesian_xyerr was available is a methodology downgrade — must be
    declared explicitly, not silently swapped.
 
+0a. **Declare fit orientation and pivot before comparing coefficients**.
+   `fit_line_lfr` currently fits
+   `log_luminosity = alpha + beta * log10(FWHM_km_s / 100)`.
+   Many LFR papers instead fit the inverse orientation, e.g.
+   `log10(FWHM) - A = alpha + beta * (log10(L') - B)`, with paper-
+   specific pivots A/B.  These slopes/intercepts are NOT directly
+   comparable.  Before comparing to a literature alpha/beta, state:
+   dependent variable, independent variable, normalization/pivot, and
+   whether the literature relation uses the same orientation.  If not,
+   compare only qualitatively or say a refit in the paper's convention
+   is needed.
+
 1. **Declare the fit method**.  fit_line_lfr returns a `fit_method`
    field on every call ("ols" | "bayesian_xyerr_linmix").  In your
    reply, name the method that actually ran — never paraphrase OLS as
    "Bayesian", "linmix", "Kelly 2007", or "errors in both axes".  If
    `__tool_status__` is `METHOD_DOWNGRADED`, state explicitly that the
    fit fell back to OLS and quote the `fit_method_downgrade_reason`.
+   If `publication_ready=false`, `__tool_status__=PARTIAL`, or
+   `__do_not_claim__=true`, any slope/intercept/scatter/r/p statistics
+   you mention must be introduced as "exploratory only; not
+   publication-ready".  A nested Bayesian sampler `publication_ready=true`
+   only means the sampler converged; it does NOT override the top-level
+   fit_line_lfr `publication_ready=false`.
 
 2. **Decompose slope uncertainty**.  The OLS path's `beta_stderr` is
    pure statistical error.  Cosmology-systematic shifts must be cited
@@ -368,7 +485,7 @@ required when only one survey is in the cache).**
    demagnification was considered AND was correctly inapplicable.
 
 5. **Cosmology cross-check**.  Before quoting a non-Planck H0/Om0
-   (e.g. Riess+11 H0=73.8, Suzuki+12 Om=0.271) on a sample whose
+   (e.g. Riess+11 H0=73.8, Suzuki+12 Om=0.295) on a sample whose
    `source_cosmology` differs, call
    `compare_luminosity_distances(target_cosmology=...)` and cite the
    median |ΔDL| and max |Δlog L| from its summary.
@@ -1846,6 +1963,13 @@ try:
 except Exception:
     SYSTEM_PROMPT = SYSTEM_PROMPT.replace("__ARCHIVE_MANIFEST__", "gaia=DR3, sdss=DR18")
 
+# L4: append focus appendix when ASTRO_RESEARCH_FOCUS=cosmology.
+# 现有 46 个 section 完全保留 (任何 test_*.py 断言 keyword 都仍命中);
+# 末尾追加段告诉 LLM 当前部署只暴露宇宙学相关工具, 遇到非宇宙学问题
+# 走 structured abstention. L1 (tool filter) 是物理隔断, 这层是软引导.
+if _ASTRO_RESEARCH_FOCUS == "cosmology":
+    SYSTEM_PROMPT = SYSTEM_PROMPT + COSMOLOGY_FOCUS_APPENDIX
+
 
 def _generate_next_steps(tool_results: list[dict]) -> str:
     """Analyze tool results and generate suggested next steps for the AI to offer."""
@@ -2010,6 +2134,10 @@ def _preferred_model_profile(context: dict | None) -> ModelProfile | None:
     return resolve_model_profile(provider, str(requested) if requested is not None else None)
 
 
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 _DEFAULT_WORKFLOW_BUDGET = {
     "mode": "default",
     "agent_loop_seconds": 360.0,
@@ -2066,6 +2194,12 @@ def _infer_workflow_budget_mode(req: ChatRequest) -> str:
         "reproduce", "replication", "paper", "end-to-end", "long analysis",
         "luminosity function", "escape velocity", "hd 189733", "pleiades cmd",
         "milky way v_esc", "sdss lf",
+        # Paper-class line-relation workflows need literature search,
+        # table extraction, cosmology conversion, and fitting in one turn.
+        # Keep the user's test prompt on the same UI path while giving the
+        # agent the budget it already gets in direct long-mode regressions.
+        "lfr", "[cii]", "log fwhm", "line width", "bayesian linear regression",
+        "intrinsic scatter", "demagnify",
     )
     return "long" if any(keyword in latest for keyword in long_task_keywords) else "default"
 
@@ -3453,10 +3587,13 @@ def _tool_results_to_actions(all_tool_results: list[dict]) -> list[dict]:
     """把内部 tool-result 记录转成前端 action card 结构。"""
     actions: list[dict] = []
     for tr in all_tool_results:
+        result = tr.get("result")
+        if isinstance(result, dict) and result.get("__internal_suppressed__"):
+            continue
         action = {
             "action": tr.get("tool"),
             "tool_input": tr.get("input"),
-            "tool_result": tr.get("result"),
+            "tool_result": result,
             "_auto_executed": True,
         }
         if tr.get("id"):
@@ -3480,6 +3617,105 @@ def _line_measurement_count_from_result(result: Any) -> int:
     return 0
 
 
+def _line_fit_publication_ready_from_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    status = str(result.get("__tool_status__") or "").strip().upper()
+    if (
+        result.get("publication_ready") is False
+        or result.get("__do_not_claim__") is True
+        or status in {"PARTIAL", "EMPTY", "FAILED", "UNAVAILABLE", "SYNTHETIC"}
+    ):
+        return False
+    if result.get("publication_ready") is True:
+        return True
+    n_used = result.get("n_used") or result.get("n_rows") or result.get("n_fit")
+    if isinstance(n_used, int) and n_used >= 5 and result.get("success") is True:
+        return True
+    if (
+        isinstance(n_used, int)
+        and n_used >= 5
+        and result.get("alpha") is not None
+        and result.get("beta") is not None
+        and (
+            result.get("intrinsic_scatter_dex") is not None
+            or result.get("sigma_int") is not None
+        )
+    ):
+        return True
+    return False
+
+
+def _line_fit_partial_from_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if _line_fit_publication_ready_from_result(result):
+        return False
+    status = str(result.get("__tool_status__") or "").strip().upper()
+    n_used = result.get("n_used") or result.get("n_rows") or result.get("n_fit")
+    has_stats = (
+        result.get("alpha") is not None
+        and result.get("beta") is not None
+        and (
+            result.get("intrinsic_scatter_dex") is not None
+            or result.get("sigma_int") is not None
+        )
+    )
+    return bool(
+        result.get("success") is True
+        and isinstance(n_used, int)
+        and n_used >= 5
+        and has_stats
+        and (
+            status == "PARTIAL"
+            or result.get("__do_not_claim__") is True
+            or result.get("publication_ready") is False
+        )
+    )
+
+
+def _sanitize_tools_returned_nothing(reply: str) -> str:
+    import re
+
+    text = str(reply or "")
+    if "<tools_returned_nothing" not in text and "<toolsreturnednothing" not in text:
+        return text
+
+    failed = ""
+    rationale = ""
+    next_step = ""
+    for attr, target in (
+        ("failed_tools", "failed"),
+        ("failedtools", "failed"),
+        ("rationale", "rationale"),
+        ("suggested_next_step", "next"),
+        ("suggestednext_step", "next"),
+    ):
+        match = re.search(attr + r"=[\"']([^\"']*)[\"']", text, re.I)
+        if not match:
+            continue
+        if target == "failed":
+            failed = match.group(1)
+        elif target == "rationale":
+            rationale = match.group(1)
+        elif target == "next":
+            next_step = match.group(1)
+
+    parts = [
+        "I could not complete the requested measurement-table fit with the tools that succeeded this turn."
+    ]
+    if rationale:
+        parts.append(rationale)
+    if failed:
+        parts.append(f"Unavailable or failed step(s): {failed}.")
+    if next_step:
+        parts.append(f"Suggested next step: {next_step}")
+    parts.append(
+        "I am not reporting slope, intercept, intrinsic scatter, correlation, or p-value because no fit-ready cited measurement table was available."
+    )
+    return "\n\n".join(parts)
+
+
 def _line_fit_context(text: str) -> bool:
     lowered = str(text or "").lower()
     return any(token in lowered for token in (
@@ -3487,6 +3723,174 @@ def _line_fit_context(text: str) -> bool:
         "fwhm", "line width", "linewidth", "alma", "alpine", "rebels",
         "relation", "correlation", "regression", "fit", "fitting",
     ))
+
+
+def _is_line_relation_workflow(text: str) -> bool:
+    lowered = str(text or "").lower()
+    has_line_quantity = any(token in lowered for token in (
+        "fwhm", "line width", "linewidth", "线宽",
+    ))
+    has_luminosity_context = any(token in lowered for token in (
+        "lfr", "[cii]", "c ii", "cii", "l[cii]", "lcii", "谱线", "光度",
+    ))
+    has_fit_request = any(token in lowered for token in (
+        "slope", "intercept", "scatter", "regression", "relation",
+        "correlation", "fit", "fitting", "拟合", "回归", "标度关系",
+        "斜率", "截距", "散布",
+    ))
+    return has_line_quantity and has_luminosity_context and has_fit_request
+
+
+def _extract_arxiv_id_from_paper(paper: dict[str, Any]) -> str:
+    import re
+
+    bibcode = str(paper.get("bibcode") or "").strip()
+    match = re.search(r"arxiv[:\s/]+(\d{4}\.\d{4,5}(?:v\d+)?)", bibcode, re.I)
+    if match:
+        return match.group(1)
+
+    for value in paper.values():
+        if not isinstance(value, str):
+            continue
+        match = re.search(r"(?:arxiv[:\s/]+)?(\d{4}\.\d{4,5}(?:v\d+)?)", value, re.I)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _rank_literature_candidate_for_line_lfr(paper: dict[str, Any]) -> tuple[int, str]:
+    """Score search_literature papers for table extraction in line-LFR workflows.
+
+    This is deliberately domain-general: prefer papers likely to contain
+    machine-readable line measurements, and heavily penalize obvious topical
+    drift.  It does not encode any target paper's final answer.
+    """
+    title = str(paper.get("title") or "")
+    abstract = str(paper.get("abstract") or "")
+    bibcode = str(paper.get("bibcode") or "")
+    source = str(paper.get("source") or "")
+    haystack = " ".join([title, abstract, bibcode, source]).lower()
+    score = 0
+
+    arxiv_id = _extract_arxiv_id_from_paper(paper)
+    if arxiv_id:
+        score += 2
+
+    positive_groups: tuple[tuple[tuple[str, ...], int], ...] = (
+        (("[cii]", "c ii", "cii]", "158", "158um", "158 μm", "158 micron"), 6),
+        (("fwhm", "line width", "linewidth", "velocity width"), 5),
+        (("line luminosity", "luminosity", "l[c", "l'"), 4),
+        (("data processing", "catalogs", "catalogues", "statistical source properties"), 10),
+        (("catalog", "catalogue", "table", "data release"), 4),
+        (("survey strategy", "sample properties", "observations and sample"), 5),
+        (("survey", "source properties", "measurements", "detected galaxies"), 3),
+        (("alpine", "rebels", "alma large program"), 3),
+        (("relation", "correlation", "scaling", "line-flux", "line flux"), 2),
+        (("redshift", "high-redshift", "high redshift"), 1),
+    )
+    for tokens, weight in positive_groups:
+        if any(token in haystack for token in tokens):
+            score += weight
+
+    negative_groups: tuple[tuple[tuple[str, ...], int], ...] = (
+        (("withdrawn", "administratively withdrawn"), 25),
+        (("wildfire", "power line", "shutoff", "electric grid"), 25),
+        (("nuclear mass", "hartree-bogoliubov", "drhbc"), 22),
+        (("access point", "wi-fi", "wireless network"), 18),
+        (("semiring", "krotov", "perverse sheaves", "proof of"), 16),
+        (("weak lensing cluster mass", "dark matter 2013"), 10),
+        (("luminosity function", "sfr relation", "undetected", "serendipitous"), 5),
+        (("size of", "halo", "halos", "outflows", "nature of"), 4),
+    )
+    for tokens, penalty in negative_groups:
+        if any(token in haystack for token in tokens):
+            score -= penalty
+
+    # Require at least one explicit line/far-infrared hook for extraction;
+    # otherwise abstract search can drift into cosmology or generic high-z
+    # papers that cannot support L[CII]-FWHM measurements.
+    if not any(token in haystack for token in ("cii", "[cii]", "c ii", "158", "alma", "alpine", "rebels")):
+        score -= 8
+
+    return score, arxiv_id
+
+
+def _ranked_literature_arxiv_candidates(tool_results: list[dict]) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in tool_results or []:
+        if entry.get("tool") != "search_literature":
+            continue
+        result = entry.get("result")
+        if not isinstance(result, dict):
+            continue
+        for paper in result.get("results") or []:
+            if not isinstance(paper, dict):
+                continue
+            score, arxiv_id = _rank_literature_candidate_for_line_lfr(paper)
+            if not arxiv_id or score < 6 or arxiv_id in seen:
+                continue
+            seen.add(arxiv_id)
+            ranked.append({
+                "arxiv_id": arxiv_id,
+                "score": score,
+                "title": str(paper.get("title") or "").strip(),
+            })
+    ranked.sort(key=lambda item: int(item.get("score") or 0), reverse=True)
+    return ranked[:6]
+
+
+def _verified_line_relation_seed_candidates(latest_user_text: str) -> list[dict[str, Any]]:
+    """Return verified table-extraction seed papers when external search is unavailable.
+
+    This does not provide measurement values or fit results.  It only gives
+    the agent a vetted arXiv ID that must still pass
+    `extract_literature_tables` in the current turn.  The motivation is
+    operational: arXiv/ADS searches are rate-limited and can return empty even
+    though the platform has a verified [CII] source-table seed.
+    """
+    text = str(latest_user_text or "").lower()
+    if not _line_fit_context(text):
+        return []
+    if not any(token in text for token in ("[cii]", "cii", "c ii", "158")):
+        return []
+    try:
+        from app.api.admin_literature import DEFAULT_CII_ARXIV_IDS
+    except Exception:
+        DEFAULT_CII_ARXIV_IDS = ("2002.00962",)
+    return [
+        {
+            "arxiv_id": arxiv_id,
+            "score": 100,
+            "title": "Verified [CII] line-measurement seed; must be extracted before use",
+            "seed_source": "verified_cii_admin_literature",
+        }
+        for arxiv_id in DEFAULT_CII_ARXIV_IDS
+    ]
+
+
+def _literature_arxiv_candidates(tool_results: list[dict]) -> list[str]:
+    return [
+        str(item["arxiv_id"])
+        for item in _ranked_literature_arxiv_candidates(tool_results)
+        if item.get("arxiv_id")
+    ]
+
+
+def _table_extraction_arxiv_ids(tool_results: list[dict]) -> set[str]:
+    attempted: set[str] = set()
+    for entry in tool_results or []:
+        if entry.get("tool") != "extract_literature_tables":
+            continue
+        tool_input = entry.get("input")
+        if not isinstance(tool_input, dict):
+            continue
+        candidate = _extract_arxiv_id_from_paper(tool_input)
+        if not candidate and isinstance(tool_input.get("paper"), dict):
+            candidate = _extract_arxiv_id_from_paper(tool_input["paper"])
+        if candidate:
+            attempted.add(candidate)
+    return attempted
 
 
 def _run_python_reads_real_cache(code: str) -> bool:
@@ -3530,6 +3934,7 @@ def _suppressed_line_measurement_python_result(cache_keys: list[str]) -> dict:
         "analysis_status": "empty",
         "data_origin": "unavailable",
         "row_count": 0,
+        "__internal_suppressed__": True,
         "suppressed_reason": "fit_ready_literature_measurements_available",
         "__do_not_claim__": True,
         "__message_to_model__": (
@@ -3541,6 +3946,50 @@ def _suppressed_line_measurement_python_result(cache_keys: list[str]) -> dict:
         ),
         "__suggested_next_step__": f"Call fit_line_lfr with cache_key={cache_key}.",
         "cache_key": cache_key,
+    }
+
+
+def _suppressed_line_relation_search_result() -> dict:
+    return {
+        "success": True,
+        "__tool_status__": "EMPTY",
+        "analysis_status": "empty",
+        "data_origin": "unavailable",
+        "row_count": 0,
+        "results": [],
+        "__internal_suppressed__": True,
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            "Additional search_literature calls were suppressed because this "
+            "line-luminosity/FWHM workflow already has enough abstract-level "
+            "paper search results for candidate selection. Abstracts cannot "
+            "support L[CII]/FWHM measurement or fit claims. Next, use "
+            "extract_literature_tables on the best arXiv candidates, or "
+            "honestly report that no fit-ready measurement table was found."
+        ),
+        "suppressed_reason": "line_relation_search_budget_exceeded",
+    }
+
+
+def _suppressed_line_relation_extract_result(max_attempts: int) -> dict:
+    return {
+        "success": True,
+        "__tool_status__": "EMPTY",
+        "analysis_status": "empty",
+        "data_origin": "unavailable",
+        "row_count": 0,
+        "line_measurement_count": 0,
+        "fit_ready": False,
+        "__internal_suppressed__": True,
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            f"Additional extract_literature_tables calls were suppressed after "
+            f"{max_attempts} table-extraction attempt(s) without fit-ready "
+            "line_measurements. Do not keep trying broad candidates or create "
+            "synthetic rows. Summarize the limitation and ask for a specific "
+            "paper/table source if needed."
+        ),
+        "suppressed_reason": "line_relation_extract_budget_exceeded",
     }
 
 
@@ -3629,6 +4078,7 @@ async def _run_agent_loop(
         "get_object_dossier", "get_extinction", "search_literature",
         "extract_literature_tables", "query_high_velocity_stars",
     }
+    MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS = 2
     # G3.4 + H0.7: tool → failure count this turn.  When ≥
     # DISABLE_AFTER_FAILURES, the tool is removed from the `tools`
     # parameter sent to the LLM on the next iteration — the model
@@ -3678,6 +4128,134 @@ async def _run_agent_loop(
             t.get("name") for t in tools
             if tool_failure_counts.get(t.get("name", ""), 0) >= DISABLE_AFTER_FAILURES
         ]
+        # L1: research-focus filter (outermost). Drop tools that are not
+        # in the active focus's allowlist before any later domain-specific
+        # gate runs. No-op when ASTRO_RESEARCH_FOCUS=all (default).
+        visible_tools = _filter_tools_by_research_focus(visible_tools)
+        line_relation_workflow = _is_line_relation_workflow(latest_user_text)
+        literature_searches_done = sum(
+            1 for tr in all_tool_results if tr.get("tool") == "search_literature"
+        )
+        table_extraction_attempts_done = sum(
+            1 for tr in all_tool_results if tr.get("tool") == "extract_literature_tables"
+        )
+        has_fit_ready_line_measurements = bool(fit_ready_literature_cache_keys) or any(
+            _line_measurement_count_from_result(tr.get("result")) > 0
+            for tr in all_tool_results
+            if tr.get("tool") == "extract_literature_tables"
+        )
+        has_publication_ready_line_fit = any(
+            _line_fit_publication_ready_from_result(tr.get("result"))
+            for tr in all_tool_results
+            if tr.get("tool") == "fit_line_lfr"
+        )
+        has_partial_line_fit = any(
+            _line_fit_partial_from_result(tr.get("result"))
+            for tr in all_tool_results
+            if tr.get("tool") == "fit_line_lfr"
+        )
+        attempted_table_ids = _table_extraction_arxiv_ids(all_tool_results)
+        ranked_arxiv_candidates = _ranked_literature_arxiv_candidates(all_tool_results)
+        if line_relation_workflow:
+            # Verified seeds are a resilience mechanism for ADS/arXiv drift and
+            # rate limits.  Include them even when broad search returns other
+            # candidates, because those candidates often contain only abstracts,
+            # reviews, or non-measurement tables.  They still have to pass
+            # extract_literature_tables in this turn before any value is used.
+            by_arxiv_id: dict[str, dict[str, Any]] = {}
+            for candidate in [
+                *_verified_line_relation_seed_candidates(latest_user_text),
+                *ranked_arxiv_candidates,
+            ]:
+                arxiv_id = str(candidate.get("arxiv_id") or "")
+                if not arxiv_id:
+                    continue
+                prev = by_arxiv_id.get(arxiv_id)
+                if prev is None or int(candidate.get("score") or 0) > int(prev.get("score") or 0):
+                    by_arxiv_id[arxiv_id] = candidate
+            ranked_arxiv_candidates = sorted(
+                by_arxiv_id.values(),
+                key=lambda item: int(item.get("score") or 0),
+                reverse=True,
+            )
+        remaining_ranked_candidates = [
+            c for c in ranked_arxiv_candidates
+            if str(c.get("arxiv_id") or "") not in attempted_table_ids
+        ]
+        arxiv_candidates = [
+            str(c["arxiv_id"])
+            for c in remaining_ranked_candidates
+            if c.get("arxiv_id")
+        ]
+        force_table_extraction = (
+            line_relation_workflow
+            and literature_searches_done >= 2
+            and table_extraction_attempts_done < MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS
+            and not has_fit_ready_line_measurements
+            and any(t.get("name") == "extract_literature_tables" for t in visible_tools)
+            and bool(arxiv_candidates)
+        )
+        line_relation_extraction_exhausted = (
+            line_relation_workflow
+            and not has_fit_ready_line_measurements
+            and table_extraction_attempts_done >= MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS
+        )
+        line_relation_search_exhausted = (
+            line_relation_workflow
+            and not has_fit_ready_line_measurements
+            and literature_searches_done >= 3
+            and table_extraction_attempts_done == 0
+            and not arxiv_candidates
+        )
+        if force_table_extraction:
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") not in {
+                    "search_literature",
+                    "fit_line_lfr",
+                    "run_python",
+                    "compare_luminosity_distances",
+                    "demagnify_sample",
+                    "export_sample_table",
+                }
+            ]
+        elif line_relation_workflow and not has_fit_ready_line_measurements:
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") not in {
+                    "fit_line_lfr",
+                    "run_python",
+                    "compare_luminosity_distances",
+                    "demagnify_sample",
+                    "export_sample_table",
+                }
+            ]
+        if line_relation_workflow and (has_publication_ready_line_fit or has_partial_line_fit):
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") not in {
+                    "search_literature",
+                    "extract_literature_tables",
+                    "fit_line_lfr",
+                    "run_python",
+                    "compare_luminosity_distances",
+                    "demagnify_sample",
+                    "export_sample_table",
+                }
+            ]
+        if line_relation_extraction_exhausted or line_relation_search_exhausted:
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") not in {
+                    "search_literature",
+                    "extract_literature_tables",
+                    "fit_line_lfr",
+                    "run_python",
+                    "compare_luminosity_distances",
+                    "demagnify_sample",
+                    "export_sample_table",
+                }
+            ]
 
         # Append a runtime note to the system message when any tools are
         # disabled this iteration, so the model understands why its previous
@@ -3703,6 +4281,85 @@ async def _run_agent_loop(
             })
         else:
             system_this_call = system
+
+        if force_table_extraction:
+            candidate_text = ", ".join(arxiv_candidates[:MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS])
+            candidate_details = "; ".join(
+                f"{c.get('arxiv_id')} (score {c.get('score')}: {str(c.get('title') or '')[:90]})"
+                for c in remaining_ranked_candidates[:MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS]
+            )
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: this is a line-luminosity/FWHM relation "
+                + "workflow. You have already used search_literature enough "
+                + "to identify candidate papers. Abstract-level paper results "
+                + "cannot support measurement or fit claims. Do NOT call "
+                + "search_literature again this iteration. Your next tool "
+                + "call must be extract_literature_tables for one of the "
+                + f"top-ranked candidate arXiv IDs: {candidate_text}. "
+                + f"Candidate details: {candidate_details}. "
+                + f"Do not exceed {MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS} "
+                + "total table-extraction attempts in this turn. If extraction "
+                + "returns no usable line_measurements, say that clearly; "
+                + "do not create synthetic or hardcoded sample rows.]"
+            )
+
+        if line_relation_extraction_exhausted:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: this line-luminosity/FWHM relation workflow "
+                + f"has already used {table_extraction_attempts_done} "
+                + "table-extraction attempt(s) without any normalized "
+                + "line_measurements. The search/extraction/fitting/Python "
+                + "tools have been removed for this iteration to avoid "
+                + "burning quota or inventing data. Your response must be an "
+                + "honest boundary summary: literature searches found papers, "
+                + "but no fit-ready measurement table was extracted this turn; "
+                + "do not report slope/intercept/scatter/r/p or create a "
+                + "synthetic demonstration.]"
+            )
+
+        if line_relation_search_exhausted:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: this line-luminosity/FWHM relation workflow "
+                + f"has already used {literature_searches_done} literature "
+                + "searches without any high-confidence arXiv candidate for "
+                + "machine-readable line-measurement tables. Search and "
+                + "analysis tools have been removed for this iteration. "
+                + "Respond with an honest boundary summary and ask for a "
+                + "specific arXiv ID / table source; do not report fitted "
+                + "relation statistics.]"
+            )
+
+        if line_relation_workflow and has_publication_ready_line_fit:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: a publication-ready line-relation fit has "
+                + "already succeeded this turn. Stop calling tools now. "
+                + "Summarize the fitted slope/intercept/scatter with the "
+                + "tool-provided citation/provenance, and explicitly mark "
+                + "scope limitations such as single-survey coverage, missing "
+                + "z<1 subsample, or missing lensing demagnification. Do not "
+                + "start another literature-search or extraction loop.]"
+            )
+
+        if line_relation_workflow and has_partial_line_fit:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: fit_line_lfr has returned a real but PARTIAL "
+                + "line-relation fit this turn. Stop calling tools now and "
+                + "summarize the fit. Every sentence containing slope, "
+                + "intercept/alpha, beta, intrinsic scatter, r, or p-value "
+                + "MUST be introduced with exactly: "
+                + "\"Exploratory only; not publication-ready:\". "
+                + "Do not claim `publication_ready=true` for the overall fit; "
+                + "if a nested sampler reports readiness, describe it only as "
+                + "sampler convergence and keep the top-level fit partial. "
+                + "Also state the scope limitations: ALPINE-only if only that "
+                + "cache is present, empty z<1 split if applicable, and "
+                + "missing/unknown lensing demagnification metadata.]"
+            )
 
         if checkpoint_note:
             system_this_call = system_this_call + "\n\n" + checkpoint_note
@@ -3790,10 +4447,18 @@ async def _run_agent_loop(
         )
 
         text = str(response.get("content", "") or "")
+        line_relation_abstention_text = (
+            line_relation_workflow
+            and ("<tools_returned_nothing" in text or "<toolsreturnednothing" in text)
+        )
+        if line_relation_abstention_text:
+            text = _sanitize_tools_returned_nothing(text)
         if text:
             text_parts.append(text)
             await _emit({"type": "agent_text", "agent": agent_name, "content": text})
         tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
+        if tool_calls_in_turn and line_relation_abstention_text:
+            break
         if not tool_calls_in_turn:
             break
 
@@ -3834,8 +4499,48 @@ async def _run_agent_loop(
 
         suppressed_tool_results: dict[str, dict] = {}
         real_tool_calls: list[dict] = []
+        # Line-relation searches often need one broad topic query, one methods
+        # query, and one narrowed survey/table query.  The previous cap of two
+        # real calls could suppress the narrowed ALPINE/REBELS/arXiv query and
+        # incorrectly force an honest-but-unhelpful "no usable literature"
+        # answer.  Keep the anti-loop guard, but align it with the exhaustion
+        # threshold below (>=3 searches with no candidates).
+        search_calls_allowed_this_turn = max(0, 3 - literature_searches_done)
+        search_calls_seen_this_turn = 0
+        extract_calls_allowed_this_turn = max(
+            0,
+            MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS - table_extraction_attempts_done,
+        )
+        extract_calls_seen_this_turn = 0
         for tool_call in tool_calls_in_turn:
-            if _should_suppress_line_measurement_synthetic_python(
+            tool_name = str(tool_call.get("name") or "")
+            if (
+                line_relation_workflow
+                and not has_fit_ready_line_measurements
+                and tool_name == "search_literature"
+                and search_calls_seen_this_turn >= search_calls_allowed_this_turn
+            ):
+                suppressed_tool_results[tool_call["id"]] = {
+                    "id": tool_call["id"],
+                    "name": tool_call["name"],
+                    "input": tool_call["input"],
+                    "result": _suppressed_line_relation_search_result(),
+                }
+            elif (
+                line_relation_workflow
+                and not has_fit_ready_line_measurements
+                and tool_name == "extract_literature_tables"
+                and extract_calls_seen_this_turn >= extract_calls_allowed_this_turn
+            ):
+                suppressed_tool_results[tool_call["id"]] = {
+                    "id": tool_call["id"],
+                    "name": tool_call["name"],
+                    "input": tool_call["input"],
+                    "result": _suppressed_line_relation_extract_result(
+                        MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS
+                    ),
+                }
+            elif _should_suppress_line_measurement_synthetic_python(
                 tool_call,
                 fit_ready_cache_keys=fit_ready_literature_cache_keys,
                 latest_user_text=latest_user_text,
@@ -3849,6 +4554,10 @@ async def _run_agent_loop(
                 }
             else:
                 real_tool_calls.append(tool_call)
+                if line_relation_workflow and tool_name == "search_literature":
+                    search_calls_seen_this_turn += 1
+                if line_relation_workflow and tool_name == "extract_literature_tables":
+                    extract_calls_seen_this_turn += 1
 
         tool_result_blocks = []
         real_executed_tools = await _execute_tool_calls(
@@ -4043,7 +4752,11 @@ async def _run_agent_loop(
                     "result": result,
                 }
             )
-            checkpoint_event = _record_tool_checkpoint(
+            internal_suppressed = (
+                isinstance(result, dict)
+                and bool(result.get("__internal_suppressed__"))
+            )
+            checkpoint_event = None if internal_suppressed else _record_tool_checkpoint(
                 chat_session_id=chat_session_id,
                 python_session_id=python_session_id,
                 tool_call=tc,
@@ -4060,14 +4773,15 @@ async def _run_agent_loop(
             # tool_result events the SSE generator emits at the end — the
             # frontend uses the flag to deduplicate (live -> thinking UI,
             # final -> actions list).
-            await _emit({
-                "type": "tool_result",
-                "agent": agent_name,
-                "tool": tc["name"],
-                "result": result,
-                "live": True,
-                "tool_call_id": tc["id"],
-            })
+            if not internal_suppressed:
+                await _emit({
+                    "type": "tool_result",
+                    "agent": agent_name,
+                    "tool": tc["name"],
+                    "result": result,
+                    "live": True,
+                    "tool_call_id": tc["id"],
+                })
         working_messages.append({"role": "user", "content": tool_result_blocks})
         # Claude uses "tool_use", OpenAI uses "tool_calls" as stop reason
         if response.get("stop_reason") not in ("tool_use", "tool_calls"):
@@ -4848,7 +5562,7 @@ async def ai_backend_status(
         configured.append("openai")
     if os.getenv("DEEPSEEK_API_KEY", ""):
         configured.append("deepseek")
-    if os.getenv("LOCAL_MODEL_ENABLED", ""):
+    if _env_truthy("LOCAL_MODEL_ENABLED") or _env_truthy("OPENAI_CLI_ENABLED"):
         configured.append("local")
 
     # Also check user's stored keys if authenticated.

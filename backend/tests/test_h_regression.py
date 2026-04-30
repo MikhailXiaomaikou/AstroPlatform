@@ -932,6 +932,25 @@ def test_latest_sdss_sql_cache_is_session_scoped_and_aliased():
     assert ctx["latest_sdss_sql:chat-sdss"]["zerr"] == [0.001]
 
 
+def test_get_cached_results_defaults_to_session_literature_table_cache():
+    """R2: zero-arg cache access should inspect the current fit-ready table."""
+    from app.services import ai_tools
+    from app.services.code_executor import _make_data_accessor
+
+    ai_tools._search_result_cache.clear()
+    ai_tools.store_search_results(
+        "latest_literature_tables:chat-lfr",
+        {"line_measurements": [{"source_name": "ALPINE_1"}]},
+    )
+    ai_tools.store_search_results(
+        "latest_literature_tables:other-chat",
+        {"line_measurements": [{"source_name": "OTHER"}]},
+    )
+
+    current = _make_data_accessor("chat-lfr")["get_cached_results"]()
+    assert current["line_measurements"] == [{"source_name": "ALPINE_1"}]
+
+
 def test_run_python_exposes_cache_and_introspection_helpers():
     """R18-NEW-5: 常见发现式 helper 不应 NameError。"""
     from app.services.code_executor import execute_python

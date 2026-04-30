@@ -678,9 +678,17 @@ def _make_data_accessor(session_id: str):
         scoped_key = f"latest_adql_sets:{session_id}" if session_id and session_id != "default" else None
         return (get_cached_results(scoped_key) if scoped_key else get_cached_results("latest_adql_sets")) or []
 
-    def get_cached_results_for_session(key: str):
-        """Get cached platform data, preferring this chat/session scope."""
+    def get_cached_results_for_session(key: str | None = None):
+        """Get cached platform data, preferring this chat/session scope.
+
+        If ``key`` is omitted, use the most common analysis cache produced by
+        literature-table extraction.  The helper is intentionally forgiving:
+        LLM-generated analysis snippets often discover the API by calling
+        ``get_cached_results()`` first, and that should return the current
+        measurement cache instead of failing before the user gets a result.
+        """
         from app.services.ai_tools import get_cached_results
+        key = (key or "latest_literature_tables").strip() or "latest_literature_tables"
         scoped_key = f"{key}:{session_id}" if session_id and session_id != "default" else None
         adql_keys = {
             "latest_adql", "latest_adql_set", "latest_adql_sets",
