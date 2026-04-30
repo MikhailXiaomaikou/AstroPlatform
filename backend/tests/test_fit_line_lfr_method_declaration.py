@@ -85,10 +85,18 @@ def test_default_auto_returns_ols_with_method_fields():
     assert out["fit_method_downgrade_reason"] is None
     # auto 路径不算降级
     assert out.get("__tool_status__") != "METHOD_DOWNGRADED"
-    assert out["model"] == "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)"
-    assert out["fit_orientation"]["dependent_variable"] == "log_luminosity"
+    # PART AI #2: model + fit_orientation 字符串现在含 luminosity_kind 单位
+    # 标签 (log L/L_sun 默认 vs log L_prime/(K km/s pc^2) 显式 opt-in).
+    assert out["model"] == "log10(L/L_sun) = alpha + beta * log10(FWHM_km_s / 100)"
+    assert out["fit_orientation"]["dependent_variable"] == "log10(L/L_sun)"
     assert out["fit_orientation"]["independent_variable"] == "log10(FWHM_km_s / 100)"
-    assert "same dependent variable" in out["fit_orientation"]["literature_comparison_note"]
+    assert "L_solar" in out["fit_orientation"]["literature_comparison_note"]
+    # PART AI #2: 单位字段必填
+    assert out["luminosity_kind"] == "L_solar"
+    assert out["intercept_unit"] == "log10(L/L_sun)"
+    assert "log_L per log10(FWHM/100" in out["slope_unit"]
+    assert out["n_unit_converted"] == 0  # L_solar 默认路径无转换
+    assert out["unit_conversion_failures"] == []
 
 
 def test_explicit_ols_never_downgrades():
@@ -544,3 +552,93 @@ def test_blocked_methodology_reply_text_separates_demag_from_method():
     assert "demagnified 12 sources" in text
     assert "demagnify_sample" in text
     assert "fit_method_requested=\"bayesian_xyerr\"" in text
+
+
+# ── PART AI #2: luminosity_kind 单位参数(L_solar / L_prime) ───────────
+
+
+def test_default_luminosity_kind_is_l_solar_no_conversion():
+    """默认 luminosity_kind="L_solar" 时, log_luminosity 不动, 转换计数 0."""
+    rows = _make_rows(6)
+    original_log_l = [r["log_luminosity"] for r in rows]
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"cache_key": "latest_literature_tables"})
+    assert out["luminosity_kind"] == "L_solar"
+    assert out["intercept_unit"] == "log10(L/L_sun)"
+    assert out["n_unit_converted"] == 0
+    assert out["unit_conversion_failures"] == []
+    # row.log_luminosity 没被改
+    assert [r["log_luminosity"] for r in rows] == original_log_l
+
+
+def test_explicit_l_prime_converts_all_rows_and_relabels_units():
+    """显式传 luminosity_kind="L_prime" → 所有 ALPINE z=5 行被转换 +
+    alpha 单位变成 log L_prime, 数值跟原 L_solar 偏移 +2.2 dex 量级."""
+    rows = _make_rows(6)  # z=5.0..5.5, [CII], log_L=9.0..9.25
+    with _patch_cache(rows):
+        out_solar = _exec_fit_line_lfr({"cache_key": "x"})
+        out_prime = _exec_fit_line_lfr({"cache_key": "x", "luminosity_kind": "L_prime"})
+    assert out_solar["luminosity_kind"] == "L_solar"
+    assert out_prime["luminosity_kind"] == "L_prime"
+    assert out_prime["intercept_unit"] == "log10(L_prime/(K km/s pc^2))"
+    assert "L_prime" in out_prime["model"]
+    assert "K km/s pc^2" in out_prime["model"]
+    assert out_prime["n_unit_converted"] == 6
+    assert out_prime["unit_conversion_failures"] == []
+    # alpha 在 L_prime 下应该比 L_solar 大 ~+2 dex 量级 (z=5 [CII] 单点偏移
+    # 是 +2.215, 但 fit 在 z=5.0..5.5 整段做 OLS, 截距不严格等于单点平移)
+    delta_alpha = out_prime["alpha"] - out_solar["alpha"]
+    assert 1.9 < delta_alpha < 2.4, f"expected alpha shift ~+2.0 dex, got {delta_alpha:.3f}"
+    # beta (slope) 跨 L_solar/L_prime **会**变, 因为 2·log(1+z) 项是
+    # 逐 row z-dependent shift 不是 rigid translation. z=5.0..5.5 sample
+    # 不同 z 的 shift 不同, OLS fit 后斜率自然变. 这是物理特性, 不是 bug.
+    # 但符号应保持(LFR 仍是正相关), 数量级在 ~0-10 区间.
+    assert out_prime["beta"] > 0
+    assert 0 < out_prime["beta"] < 10
+    assert 0 < out_solar["beta"] < 10
+
+
+def test_l_prime_rejects_rows_missing_redshift():
+    """转换失败的 row 不能被静默 fit, 必须入 rejected + unit_conversion_failures.
+
+    注: line_id 错误 (e.g. "BogusLine") 在更前置的 _line_matches_filter 阶段
+    就被 reject (reason="line_filter") 不进单位转换路径, 所以这里只测
+    redshift 缺失场景."""
+    rows = _make_rows(6)
+    # 把 row 2 + row 4 的 redshift 弄丢
+    rows[2]["redshift"] = None
+    rows[4]["redshift"] = None
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"cache_key": "x", "luminosity_kind": "L_prime"})
+    assert out["luminosity_kind"] == "L_prime"
+    assert out["n_used"] == 4  # 6 - 2 reject
+    assert out["n_unit_converted"] == 4
+    assert len(out["unit_conversion_failures"]) == 2
+    # 失败原因必须明示 redshift 缺失
+    failure_reasons = " ".join(f["reason"] for f in out["unit_conversion_failures"])
+    assert "redshift" in failure_reasons.lower()
+
+
+def test_l_prime_all_rows_failing_returns_failed_status_not_panic():
+    """所有 row 转换都失败时不 numpy panic, 而是早退 FAILED 给清晰错误."""
+    rows = _make_rows(6)
+    for r in rows:
+        r["redshift"] = None  # 全部去 z
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"cache_key": "x", "luminosity_kind": "L_prime"})
+    assert out["success"] is False
+    assert out["__tool_status__"] == "FAILED"
+    assert out["__do_not_claim__"] is True
+    assert out["error_class"] == "unit_conversion_all_failed"
+    assert out["luminosity_kind"] == "L_prime"
+    assert len(out["unit_conversion_failures"]) == 6
+
+
+def test_invalid_luminosity_kind_falls_back_to_l_solar():
+    """无效字符串 (typo / 大小写不严) 默认回 L_solar, 不 raise."""
+    rows = _make_rows(6)
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"cache_key": "x", "luminosity_kind": "L_brightness"})
+    assert out["luminosity_kind"] == "L_solar"
+    assert out["n_unit_converted"] == 0
+

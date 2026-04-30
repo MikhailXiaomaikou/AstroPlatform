@@ -686,6 +686,27 @@ TOOLS = [
                         "in the UI. Default: 'main'."
                     ),
                 },
+                "luminosity_kind": {
+                    "type": "string",
+                    "enum": ["L_solar", "L_prime"],
+                    "description": (
+                        "Luminosity unit for the y-axis of the fit. "
+                        "'L_solar' (default) = log10(L_line / L_sun), the form "
+                        "ALPINE/REBELS/Capak/Bothwell tables natively report. "
+                        "'L_prime' = log10(L'_line / (K km/s pc^2)), the "
+                        "brightness-temperature form used by the CO LFR "
+                        "literature (Solomon 1992; Carilli & Walter 2013). "
+                        "REQUIRED to be 'L_prime' when the user mentions CO "
+                        "LFR / Solomon / brightness temperature / K km/s pc^2 "
+                        "/ comparing slopes against CO(1-0). Conversion uses "
+                        "log10(L'/L) = 10.495 - 3*log10(nu_rest_GHz) + 2*log10(1+z); "
+                        "rows missing redshift or with unknown line_id are "
+                        "rejected (kind='unit_conversion_failed') rather than "
+                        "silently fit on mixed units. The result envelope "
+                        "carries `intercept_unit`/`slope_unit`/`luminosity_kind` "
+                        "so prose MUST quote the unit when reporting alpha."
+                    ),
+                },
             },
         },
     },
@@ -4352,6 +4373,75 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
                     "target_cosmology": requested_cosmology_name,
                 }
 
+    # PART AI #2: optional luminosity_kind conversion (L_solar ↔ L_prime).
+    # 默认 "L_solar" 不破现状; 用户/AI 想做 CO LFR 对比时显式传 "L_prime"
+    # → 全部 accepted 行按 (line_id, redshift) 转换. 转换失败 (无 z / 无
+    # line_id / 未知线 / NaN log_l) 的 row 入 rejected, kind="unit_conversion_failed",
+    # 不进 fit. 保证 fit y-axis 单位 100% 一致, 防 bundle e8d9 那种 alpha
+    # 在 L_solar (6.88) 和 L_prime (9.823) 之间漂移而 prose 不带单位.
+    requested_lum_kind = str(inp.get("luminosity_kind") or "L_solar").strip()
+    if requested_lum_kind not in {"L_solar", "L_prime"}:
+        requested_lum_kind = "L_solar"
+
+    luminosity_kind_used = requested_lum_kind
+    n_unit_converted = 0
+    unit_conversion_failures: list[dict[str, Any]] = []
+
+    if requested_lum_kind == "L_prime":
+        from app.services.luminosity_units import convert_row_luminosity_inplace
+
+        kept_after_units: list[dict[str, Any]] = []
+        for row in accepted:
+            converted = convert_row_luminosity_inplace(
+                row, "L_prime", line_id_fallback=line_id,
+            )
+            if converted.get("_unit_error"):
+                unit_conversion_failures.append({
+                    "source_name": row.get("source_name"),
+                    "row_index": row.get("row_index"),
+                    "reason": converted["_unit_error"],
+                })
+                rejected.append({
+                    "source_name": row.get("source_name"),
+                    "reason": "unit_conversion_failed",
+                    "row_index": row.get("row_index"),
+                    "detail": converted["_unit_error"],
+                })
+                continue
+            row["log_luminosity"] = converted["log_luminosity"]
+            row["luminosity_kind"] = "L_prime"
+            row["log_luminosity_transformed_from"] = converted.get(
+                "log_luminosity_transformed_from"
+            )
+            kept_after_units.append(row)
+            n_unit_converted += 1
+        accepted = kept_after_units
+        n_used = len(accepted)
+    else:
+        # 'L_solar' 路径: 把字段标上让下游 result envelope 写得清楚,
+        # 但 log_luminosity 数值不动 (cache 本来就是 L_solar).
+        for row in accepted:
+            row.setdefault("luminosity_kind", "L_solar")
+
+    if n_used == 0:
+        # 所有 row 都因转换失败被 reject — 早退给清晰错误, 不让 fit
+        # 因 numpy 空数组 panic. 外层 execute_tool 会用 normalize_tool_result
+        # 包裹 (provenance 标准化), 所以这里直接 return dict.
+        return {
+            "success": False,
+            "tool": "fit_line_lfr",
+            "error": (
+                f"All {len(rows)} rows failed luminosity_kind={requested_lum_kind} "
+                f"conversion. Most common reason: missing redshift or unknown "
+                f"line_id for the [CII]/CO ν_rest lookup. See unit_conversion_failures."
+            ),
+            "error_class": "unit_conversion_all_failed",
+            "luminosity_kind": requested_lum_kind,
+            "unit_conversion_failures": unit_conversion_failures,
+            "__tool_status__": "FAILED",
+            "__do_not_claim__": True,
+        }
+
     x = np.array([math.log10(row["fwhm_km_s"] / 100.0) for row in accepted], dtype=float)
     y = np.array([row["log_luminosity"] for row in accepted], dtype=float)
     beta = alpha = r_value = p_value = beta_stderr = alpha_stderr = None
@@ -4644,17 +4734,41 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "supports_measurement_claims": publication_ready and not is_method_downgraded,
         "cache_key": resolved_cache_key,
         "line_id": line_id,
-        "model": "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)",
+        "model": (
+            f"log10({'L/L_sun' if luminosity_kind_used == 'L_solar' else 'L_prime/(K km/s pc^2)'}) "
+            "= alpha + beta * log10(FWHM_km_s / 100)"
+        ),
         "fit_orientation": {
-            "dependent_variable": "log_luminosity",
+            "dependent_variable": (
+                f"log10(L/L_sun)" if luminosity_kind_used == "L_solar"
+                else "log10(L_prime/(K km/s pc^2))"
+            ),
             "independent_variable": "log10(FWHM_km_s / 100)",
             "normalization": "FWHM normalized by 100 km/s",
-            "equation": "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)",
+            "equation": (
+                f"log10({'L/L_sun' if luminosity_kind_used == 'L_solar' else 'L_prime/(K km/s pc^2)'}) "
+                "= alpha + beta * log10(FWHM_km_s / 100)"
+            ),
             "literature_comparison_note": (
                 "Only compare alpha/beta directly with another paper if that paper "
-                "uses the same dependent variable, independent variable, and pivot."
+                "uses the same dependent variable, independent variable, and pivot. "
+                f"This fit's y-axis is {luminosity_kind_used} "
+                f"({'log L/L_sun, ALPINE/REBELS native form' if luminosity_kind_used == 'L_solar' else 'log L_prime brightness-temperature, CO LFR / Solomon 1992 / Carilli & Walter 2013 form'})."
             ),
         },
+        # PART AI #2: explicit unit labels. prose 引用 alpha/beta 时
+        # 必须带这些 unit 字符串, 否则 SYSTEM_PROMPT 规则视为无单位陈述
+        # → claim_validator 不让过. 闭 bundle e8d9 (alpha=9.823) vs
+        # bundle 6202/84ad (alpha=6.88) 那种跨 round 漂移而 prose 不带
+        # 单位的 silent contradiction.
+        "luminosity_kind": luminosity_kind_used,
+        "intercept_unit": (
+            "log10(L/L_sun)" if luminosity_kind_used == "L_solar"
+            else "log10(L_prime/(K km/s pc^2))"
+        ),
+        "slope_unit": "dex per dex (log_L per log10(FWHM/100 km/s))",
+        "n_unit_converted": n_unit_converted,
+        "unit_conversion_failures": unit_conversion_failures,
         "n_available": len(rows),
         "n_used": n_used,
         "n_rejected": len(rejected),
