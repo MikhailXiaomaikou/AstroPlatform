@@ -97,6 +97,8 @@ The source registry currently exposes 24 connector keys. The active provenance-v
 
 Tool results also carry inline provenance. The backward-compatible top-level fields (`reproducibility`, `data_origin`, `analysis_status`, `source_urls`, `archive_ids`, `warnings`) remain, and provenance-v2 adds a nested `provenance` object with `datasets`, `field_bibcodes`, `coverage`, and copied reproducibility metadata. Generated papers and the frontend acknowledgement button read from this nested object.
 
+For literature-derived measurement workflows, `search_literature` is paper/abstract-level evidence only. Measurement claims such as line-luminosity/FWHM slopes, intercepts, intrinsic scatter, and correlation values require extracted table rows or a publication-ready fit result in the same tool turn. Built-in cosmology presets likewise do not make their manifest bibcodes globally citeable; the relevant cosmology or fit tool must return the preset provenance in the current turn.
+
 ### Team & Collaboration
 
 | Method | Endpoint | Description |

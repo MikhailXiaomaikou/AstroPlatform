@@ -4,19 +4,64 @@
 
 Paper drafts generated from AI sessions are private to the owner account by default. A draft becomes publicly readable only after the owner explicitly uses **Publish Draft**, which creates a revocable `/papers/public/:token` link.
 
-Built with React 19 + FastAPI + **60 AI tools** + **35 pipeline nodes** + **24 archive connector keys** + provenance-v2 citation guardrails across 16 astronomy research domains.
+Built with React 19 + FastAPI + **65 AI tools** + **35 pipeline nodes** + **24 archive connector keys** + provenance-v2 citation guardrails across 16 astronomy research domains.
 
 ## Core Workflows
 
 | Module | Description |
 |--------|-------------|
 | **Data Browser** | Query the active provenance-v2 sources (VizieR, Gaia DR3, SIMBAD, NED, 2MASS, ALMA observation metadata) from one place. Non-v2 sources are still visible but maintenance-gated until their `archive_version` provenance is upgraded. |
-| **AI Assistant** | 60-tool research agent that auto-selects the right data source, writes ADQL, analyzes spectra, fits isochrones/transits/RV orbits, computes SFR, runs controlled cosmology MCMC, builds pipelines, reviews literature, and drafts papers. Now with object-class-specific workflows (open clusters / globular clusters / RR Lyrae / Cepheids / EB / galaxies / X-ray sources / pulsars / white dwarfs / ...). |
+| **AI Assistant** | 65-tool research agent that auto-selects the right data source, writes ADQL, analyzes spectra, fits isochrones/transits/RV orbits, computes SFR, runs controlled cosmology MCMC, builds pipelines, reviews literature, and drafts papers. Now with object-class-specific workflows (open clusters / globular clusters / RR Lyrae / Cepheids / EB / galaxies / X-ray sources / pulsars / white dwarfs / ...). |
 | **Pipeline Studio** | Visual DAG editor with 35 node types spanning CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
 | **ADQL Query** | Multi-service TAP editor with syntax highlighting, template library, and federated queries across Gaia DR3, SIMBAD, VizieR, CADC, and NED — with automatic retry on timeout (reducing cone radius). |
 | **Workspace** | Persistent file storage for FITS, VOTable, and analysis results. Batch search, saved searches, and data export. |
 | **Team** | Real-time collaboration via WebSocket: shared pipelines/datasets, presence tracking, live comments, and session forking. |
 | **Observations** | Transient alert dashboard (ZTF/TNS) with spectroscopic classification, anomaly detection, and follow-up recommendations. |
+
+## Local Maintenance Inbox
+
+The repository includes a conservative, local-only maintenance helper for
+turning CI/deploy/AI-assistant diagnostic evidence into a reviewable report:
+
+```bash
+cd backend
+./.venv/bin/python scripts/maintenance.py report --write
+./.venv/bin/python scripts/maintenance.py lock acquire --owner codex
+./.venv/bin/python scripts/maintenance.py lock status
+./.venv/bin/python scripts/maintenance.py lock release --owner codex
+```
+
+`report` reads git state plus gitignored diagnostic bundles under
+`.local/diagnostics/`, classifies likely CI/deploy/tool/validator issues, and
+writes JSON + Markdown under `.local/maintenance/`. It is read-only: it never
+edits code, pushes, deploys, uploads diagnostics, or creates remote issues.
+Use the lock before allowing a coding agent to modify files so Codex and
+Claude Code do not collide in the same worktree.
+
+## Local OpenAI CLI Backend
+
+For private local use, the chat assistant can call the installed Codex/OpenAI
+CLI instead of hosted API keys. This uses your local CLI login/subscription and
+is disabled by default:
+
+```bash
+cd backend
+OPENAI_CLI_ENABLED=1 OPENAI_CLI_COMMAND=codex ./.venv/bin/uvicorn app.main:app --reload
+```
+
+Then open the frontend on localhost, choose **Local OpenAI CLI / server** as
+the provider, and choose **OpenAI CLI** as the model. The CLI model can request
+Standard Astro tools by returning JSON tool calls; the backend executes those
+tools, including network/archive searches, ADQL/database queries, literature
+table extraction, Python analysis, and plotting, then sends the results back
+into the next CLI turn. The backend runs
+`codex --ask-for-approval never exec --ignore-user-config --ignore-rules
+--ephemeral --sandbox read-only`, so this path is local-only and does not
+expose API keys or load user plugins. Tool execution remains inside the
+Standard Astro backend, preserving provenance and validator checks.
+`OPENAI_CLI_OUTPUT_SCHEMA` is off by default because current Codex CLI builds
+can exit non-zero with strict schemas; the backend still parses JSON tool calls
+and retries once if the CLI incorrectly claims tools are unavailable.
 
 ## Scientific Capabilities
 
@@ -233,6 +278,8 @@ M_G → T_eff conversion from Tremblay+ 2019. Supports DA/DB atmospheres and mas
 
 - NASA ADS search with citation-count ranking
 - arXiv full-text extraction
+- Literature table extraction with row-level citation provenance
+- `fit_line_lfr` for cited line-luminosity / FWHM relation fits from extracted measurement tables
 - **Citation network graph** construction (references + cited-by)
 - AI-powered bibliography synthesis
 - BibTeX export, LaTeX paper generation (AASTeX/MNRAS/A&A)
@@ -247,10 +294,11 @@ M_G → T_eff conversion from Tremblay+ 2019. Supports DA/DB atmospheres and mas
 - Provenance-v2 tool-result envelope with nested `provenance.datasets`, `provenance.field_bibcodes`, `provenance.coverage`, and reproducibility fields (`run_id`, `query_hash`, `archive_version`, `tool_version`)
 - Field-level bibcode extraction for SIMBAD/NED-style result columns and table-level registry fallbacks for the active 6 sources, including ALMA observation metadata
 - Citation validator checks replies against the tool-sourced bibcode pool. It warns by default and can hard-block with `PROVENANCE_VALIDATOR_HARDBLOCK=true`
+- Cosmology-preset manifest citations are strict: built-in preset bibcodes are not implicit citation support. A reply may cite them only when a current-turn tool, such as `compare_luminosity_distances` or a cosmology-aware fit, returns the preset provenance.
 - Registry freshness is enforced at backend startup; stale fallback provenance blocks serving traffic until corrected
 - Chat UI surfaces a Data Sources panel and Copy Acknowledgement button; maintenance-gated tools get a separate `UNAVAILABLE` visual state
 
-## AI Assistant — 57 Tools
+## AI Assistant — 65 Tools
 
 The AI assistant can invoke any platform capability. All tools are literature-cited where applicable.
 
@@ -388,7 +436,7 @@ The audit specifically removed LLM-hallucinated values (e.g. the old "Casagrande
 |-------|-------|
 | Frontend | React 19, TypeScript strict, Vite, React Router, React Flow, Plotly, Aladin Lite |
 | Backend | FastAPI, SQLAlchemy async, Pydantic v2, SSE streaming |
-| AI | Manual provider/model selection across Claude default, OpenAI GPT-5.5 alias (resolves to GPT-5.4 unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro/Flash, and local OpenAI-compatible backends |
+| AI | Manual provider/model selection across Claude default, OpenAI GPT-5.5 alias (resolves to GPT-5.4 unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro/Flash, local OpenAI-compatible backends, and local-only OpenAI CLI (`OPENAI_CLI_ENABLED=1`) |
 | Astronomy core | astropy, astroquery, specutils, photutils, reproject, emcee, dynesty, ArviZ, batman, celerite2, lightkurve, pyvo, sep, dust_extinction, dask |
 | Astronomy extended (expanded sandbox) | sherpa, radvel, thejoker, galpy, pysme, statmorph, vorbin, ppxf, dustmaps, healpy, pint, psrqpy, lenstronomy, MulensModel, treecorr, yt |
 | Background | Celery + Redis (optional, sync fallback) |

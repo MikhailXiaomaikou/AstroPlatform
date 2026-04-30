@@ -6,7 +6,7 @@ Welcome to Standard Astro, an AI-native astronomy research platform. This guide 
 
 1. Open **Data Browser** from the navigation bar
 2. Type an object name in the search box: `M31`, `NGC 1068`, `Sirius`, or `Crab Nebula`
-3. Select which active databases to query. During the provenance-v2 rollout the active sources are SIMBAD, Gaia DR3, VizieR, NED, and 2MASS; other source chips are shown as under maintenance until their `archive_version` provenance is upgraded.
+3. Select which active databases to query. During the provenance-v2 rollout the active sources are SIMBAD, Gaia DR3, VizieR, NED, 2MASS, and ALMA Science Archive observation metadata; other source chips are shown as under maintenance until their `archive_version` provenance is upgraded.
 4. Click **Search**
 5. Results appear in a merged table with coordinates, magnitudes, redshifts, and object types
 
@@ -31,9 +31,11 @@ Welcome to Standard Astro, an AI-native astronomy research platform. This guide 
 | "Estimate the photo-z for this galaxy: g=22.1, r=21.5, i=20.8" | Runs 30-template SED fitting with dust and IGM |
 | "What transients were discovered this week?" | Queries TNS/ZTF for recent alerts |
 
-The AI has access to **57 tools** covering search, spectroscopy, photometry, time-domain analysis, image processing, statistics, literature, and more. It automatically selects the right tool based on your request.
+The AI has access to **65 tools** covering search, spectroscopy, photometry, time-domain analysis, image processing, statistics, literature, and more. It automatically selects the right tool based on your request.
 
 When a tool result includes provenance, the chat card shows a **Data Sources** panel with `archive_version`, bibcodes, and source authority. The **Copy Acknowledgement** button assembles acknowledgement text from the conversation's provenance. If the AI tries a gated source such as SDSS or Chandra, the card appears as **Maintenance** rather than a generic error and suggests the active alternatives.
+
+Literature-only searches support context and citations, not measurement claims. For relation fits such as `[CII]` luminosity versus FWHM, the assistant must extract cited literature tables and run the dedicated line-relation fit before it can report slope, intercept, scatter, or correlation values. If the current tools do not return usable measurement rows, the assistant should say that directly instead of filling gaps from memory.
 
 **After each analysis**, the AI suggests 2-3 next steps. You can also use the **Next Steps panel** below the chat for quick actions: generate a paper draft, export a notebook, or run sensitivity analysis.
 
