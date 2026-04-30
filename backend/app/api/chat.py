@@ -2175,6 +2175,69 @@ def _latest_user_text(messages: list[ChatMessage]) -> str:
     return ""
 
 
+def _line_fit_method_from_prompt(text: str) -> str:
+    """Choose the requested LFR fit method from user wording."""
+    lowered = str(text or "").lower()
+    if any(
+        token in lowered
+        for token in (
+            "bayesian",
+            "贝叶斯",
+            "errors-in-both",
+            "both axes",
+            "两轴",
+            "xyerr",
+            "measurement error",
+            "测量误差",
+        )
+    ):
+        return "bayesian_xyerr"
+    return "auto"
+
+
+def _line_fit_cosmology_from_prompt(text: str) -> str | None:
+    """Map explicit paper-cosmology wording to a fit_line_lfr cosmology spec."""
+    compact = (
+        str(text or "")
+        .lower()
+        .replace(" ", "")
+        .replace("ω", "omega")
+        .replace("Ω", "omega")
+        .replace("ₘ", "m")
+    )
+    if "riess" in compact and "suzuki" in compact:
+        return "FlatLambdaCDM_H73p8_Om0p295"
+    if (
+        ("h0=73.8" in compact or "h0:73.8" in compact or "h73p8" in compact)
+        and ("om0=0.295" in compact or "omegam=0.295" in compact or "om0p295" in compact)
+    ):
+        return "FlatLambdaCDM_H73p8_Om0p295"
+    if "riess22" in compact or "riess+22" in compact:
+        return "riess22_shoes"
+    return None
+
+
+def _line_fit_subsample_splits_from_prompt(text: str) -> list[dict[str, float | str]] | None:
+    compact = str(text or "").lower().replace(" ", "")
+    wants_z1_split = any(
+        token in compact
+        for token in (
+            "z<1",
+            "z＞1",
+            "z>1",
+            "redshiftdependence",
+            "redshift依赖",
+            "红移依赖",
+        )
+    )
+    if not wants_z1_split:
+        return None
+    return [
+        {"name": "z<1", "z_min": 0.0, "z_max": 1.0},
+        {"name": "z>=1", "z_min": 1.0},
+    ]
+
+
 def _infer_workflow_budget_mode(req: ChatRequest) -> str:
     """Keep ordinary chats cheap; opt into long budget for paper-scale work."""
     context = req.context or {}
@@ -3674,6 +3737,102 @@ def _line_fit_partial_from_result(result: Any) -> bool:
     )
 
 
+def _fmt_tool_number(value: Any, digits: int = 4) -> str:
+    if isinstance(value, (int, float)):
+        return f"{float(value):.{digits}g}"
+    return "not reported"
+
+
+def _line_lfr_tool_grounded_summary(tool_results: list[dict]) -> str | None:
+    """Deterministic user-facing summary when the LLM returns empty prose."""
+    fit: dict[str, Any] | None = None
+    for entry in reversed(tool_results or []):
+        if entry.get("tool") != "fit_line_lfr":
+            continue
+        result = entry.get("result")
+        if _line_fit_publication_ready_from_result(result):
+            fit = result
+            break
+    if not fit:
+        return None
+
+    citation_summary = fit.get("citation_summary")
+    citations: list[str] = []
+    table_labels: list[str] = []
+    if isinstance(citation_summary, dict):
+        citations = [str(c) for c in citation_summary.get("citations") or [] if c]
+        table_labels = [str(t) for t in citation_summary.get("table_labels") or [] if t]
+
+    scatter = fit.get("intrinsic_scatter_dex")
+    if scatter is None:
+        scatter = fit.get("sigma_int")
+    scatter_hdi = fit.get("intrinsic_scatter_dex_hdi")
+    scatter_text = _fmt_tool_number(scatter)
+    if isinstance(scatter_hdi, list) and len(scatter_hdi) >= 2:
+        scatter_text += (
+            f" dex (94% HDI {_fmt_tool_number(scatter_hdi[0])}"
+            f"-{_fmt_tool_number(scatter_hdi[1])})"
+        )
+    else:
+        scatter_text += " dex"
+
+    subsample_note = ""
+    subs = fit.get("subsample_significance_test")
+    if isinstance(subs, dict) and isinstance(subs.get("subsamples"), list):
+        parts = []
+        for item in subs["subsamples"]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "subsample")
+            n = item.get("n")
+            beta = item.get("beta")
+            if beta is None:
+                reason = str(item.get("skipped_reason") or "not fitted")
+                parts.append(f"{name}: n={n}, {reason}")
+            else:
+                parts.append(f"{name}: n={n}, beta={_fmt_tool_number(beta)}")
+        if parts:
+            subsample_note = " Subsample check: " + "; ".join(parts) + "."
+
+    cosmology = str(fit.get("cosmology_used") or "not reported")
+    cosmo_manifest = fit.get("cosmology_manifest")
+    cosmo_cite = ""
+    if isinstance(cosmo_manifest, dict) and cosmo_manifest.get("bibcode"):
+        cosmo_cite = f" ({cosmo_manifest['bibcode']})"
+
+    n_used = fit.get("n_used")
+    n_available = fit.get("n_available")
+    source_text = "cited measurement rows"
+    if citations:
+        source_text = ", ".join(citations)
+        if table_labels:
+            source_text += " / " + ", ".join(table_labels)
+
+    return (
+        "Tool-grounded summary: the literature-table fit completed with "
+        f"publication_ready=true, so the following numbers are copied from "
+        f"`fit_line_lfr`, not from memory.\n\n"
+        f"- Model: `{fit.get('model') or 'log_luminosity = alpha + beta * log10(FWHM_km_s / 100)'}`.\n"
+        f"- Sample: {n_used} of {n_available} rows used from {source_text}.\n"
+        f"- Fit: alpha = {_fmt_tool_number(fit.get('alpha'))} +/- "
+        f"{_fmt_tool_number(fit.get('alpha_stderr'))}; beta = "
+        f"{_fmt_tool_number(fit.get('beta'))} +/- "
+        f"{_fmt_tool_number(fit.get('beta_stderr'))}; intrinsic scatter = "
+        f"{scatter_text}.\n"
+        f"- Method: {fit.get('fit_method') or 'not reported'}; "
+        f"Pearson r = {_fmt_tool_number(fit.get('pearson_r'))}, "
+        f"p = {_fmt_tool_number(fit.get('pearson_p'))}.\n"
+        f"- Cosmology used by the tool: {cosmology}{cosmo_cite}; "
+        f"cosmology_recomputed={bool(fit.get('cosmology_recomputed'))}.\n"
+        f"- Lensing: demagnified sources = {fit.get('lensed_sources_demagnified')}; "
+        f"lensing status unknown for {fit.get('n_lensed_unknown')} rows."
+        f"{subsample_note}\n\n"
+        "Scope note: this is the fit-ready table subset available this turn. "
+        "It is not automatically the full multi-survey sample of the target paper "
+        "unless additional extracted tables are merged into the cache."
+    )
+
+
 def _sanitize_tools_returned_nothing(reply: str) -> str:
     import re
 
@@ -4189,7 +4348,10 @@ async def _run_agent_loop(
         ]
         force_table_extraction = (
             line_relation_workflow
-            and literature_searches_done >= 2
+            and (
+                literature_searches_done >= 2
+                or table_extraction_attempts_done > 0
+            )
             and table_extraction_attempts_done < MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS
             and not has_fit_ready_line_measurements
             and any(t.get("name") == "extract_literature_tables" for t in visible_tools)
@@ -4291,11 +4453,11 @@ async def _run_agent_loop(
             system_this_call = (
                 system_this_call
                 + "\n\n[RUNTIME: this is a line-luminosity/FWHM relation "
-                + "workflow. You have already used search_literature enough "
-                + "to identify candidate papers. Abstract-level paper results "
-                + "cannot support measurement or fit claims. Do NOT call "
-                + "search_literature again this iteration. Your next tool "
-                + "call must be extract_literature_tables for one of the "
+                + "workflow. You have candidate papers from literature search, "
+                + "verified seed metadata, or a previous failed table extraction. "
+                + "Abstract-level paper results cannot support measurement or "
+                + "fit claims. Do NOT call search_literature again this iteration. "
+                + "Your next tool call must be extract_literature_tables for one of the "
                 + f"top-ranked candidate arXiv IDs: {candidate_text}. "
                 + f"Candidate details: {candidate_details}. "
                 + f"Do not exceed {MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS} "
@@ -4447,6 +4609,68 @@ async def _run_agent_loop(
         )
 
         text = str(response.get("content", "") or "")
+        tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
+        if force_table_extraction and not tool_calls_in_turn and arxiv_candidates:
+            # Some backends still choose to summarize despite the runtime
+            # "next call must be extract_literature_tables" instruction.  For
+            # line-relation workflows this strands a verified seed/candidate
+            # and produces an honest-but-premature boundary answer.  Make the
+            # routing deterministic: execute the top untried candidate, and
+            # let the next iteration summarize or fit based on real results.
+            text = ""
+            forced_id = f"auto_extract_{uuid.uuid4().hex}"
+            forced_arxiv = arxiv_candidates[0]
+            tool_calls_in_turn = [{
+                "id": forced_id,
+                "name": "extract_literature_tables",
+                "input": {"arxiv_id": forced_arxiv},
+            }]
+            await _emit({
+                "type": "status",
+                "message": (
+                    "Continuing line-relation workflow with the next ranked "
+                    f"literature table candidate: arXiv:{forced_arxiv}."
+                ),
+            })
+        if (
+            line_relation_workflow
+            and fit_ready_literature_cache_keys
+            and not has_publication_ready_line_fit
+            and not has_partial_line_fit
+            and not tool_calls_in_turn
+            and any(t.get("name") == "fit_line_lfr" for t in visible_tools)
+        ):
+            # Same principle as auto-extract above: once the platform has a
+            # cited, fit-ready measurement cache, do not rely on the model to
+            # remember the exact next tool call.  Execute the deterministic
+            # fit path so the turn ends with a real publication-ready or
+            # explicit partial fit, not a silent fallback summary.
+            text = ""
+            latest_cache = fit_ready_literature_cache_keys[-1]
+            fit_input: dict[str, Any] = {
+                "cache_key": latest_cache,
+                "line_id": "[CII]",
+                "fit_method_requested": _line_fit_method_from_prompt(latest_user_text),
+                "variant_label": "auto_fit_from_literature_tables",
+            }
+            target_cosmology = _line_fit_cosmology_from_prompt(latest_user_text)
+            if target_cosmology:
+                fit_input["cosmology"] = target_cosmology
+            subsample_splits = _line_fit_subsample_splits_from_prompt(latest_user_text)
+            if subsample_splits:
+                fit_input["subsample_splits"] = subsample_splits
+            tool_calls_in_turn = [{
+                "id": f"auto_fit_{uuid.uuid4().hex}",
+                "name": "fit_line_lfr",
+                "input": fit_input,
+            }]
+            await _emit({
+                "type": "status",
+                "message": (
+                    "Fitting the cached line-measurement table before summarizing "
+                    "the line-luminosity/FWHM relation."
+                ),
+            })
         line_relation_abstention_text = (
             line_relation_workflow
             and ("<tools_returned_nothing" in text or "<toolsreturnednothing" in text)
@@ -4456,7 +4680,6 @@ async def _run_agent_loop(
         if text:
             text_parts.append(text)
             await _emit({"type": "agent_text", "agent": agent_name, "content": text})
-        tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
         if tool_calls_in_turn and line_relation_abstention_text:
             break
         if not tool_calls_in_turn:
@@ -5235,7 +5458,10 @@ async def _run_agent_loop(
     # never sees a blank AI bubble. Root cause of the empty-response bug
     # observed in the WD LF test (first attempt).
     if not clean_reply.strip():
-        if all_tool_results:
+        line_lfr_summary = _line_lfr_tool_grounded_summary(all_tool_results)
+        if line_lfr_summary:
+            clean_reply = line_lfr_summary
+        elif all_tool_results:
             tool_names = ", ".join({tr["tool"] for tr in all_tool_results})
             clean_reply = (
                 f"I ran the following tools: {tool_names}. "
@@ -5622,6 +5848,8 @@ async def chat_message(
     runtime = await _build_runtime(req, user, db)
     python_session_id = (req.context or {}).get("python_session_id", "default")
     chat_session_id = (req.context or {}).get("current_session_id")
+    if not chat_session_id and python_session_id and python_session_id != "default":
+        chat_session_id = str(python_session_id)
     _prime_adql_context_cache(req.context, python_session_id)
     await _prime_python_session_from_history(req.messages, python_session_id)
 

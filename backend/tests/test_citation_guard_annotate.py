@@ -12,7 +12,6 @@ APPENDED as a footer.
 
 from __future__ import annotations
 
-from unittest.mock import patch
 from app.services.claim_validator import (
     CitationViolation,
     blocked_citation_reply_text,
@@ -34,6 +33,20 @@ def test_blocked_citation_reply_text_returns_footer_only_text() -> None:
     assert "Reply withheld" in text
     assert "Bothwell 2013" in text
     assert "(line 19)" in text
+
+
+def test_blocked_citation_reply_text_hints_for_builtin_cosmology_manifest() -> None:
+    text = blocked_citation_reply_text([
+        CitationViolation(
+            kind="invalid_bibcode",
+            match_text="2020A&A...641A...6P",
+            line_number=14,
+        ),
+    ])
+
+    assert "platform cosmology preset" in text
+    assert "compare_luminosity_distances" in text
+    assert "tool_results" in text
 
 
 def test_chat_appends_violation_footer_without_replacing_prose() -> None:

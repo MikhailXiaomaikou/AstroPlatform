@@ -264,6 +264,124 @@ def test_planck_collaboration_vi_year_is_not_author_year_noise():
     assert provenance_citation_violations("Planck Collaboration VI 2020 was the baseline.", tool_results) == []
 
 
+def test_author_year_on_line_with_valid_arxiv_is_supported():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "read_arxiv_paper",
+        "result": {
+            "success": True,
+            "arxiv_id": "2211.04968",
+            "authors": ["Wu, Y.-H.", "Gao, H.", "Wang, J.-F."],
+            "year": "2022",
+        },
+    }]
+
+    reply = "Wu, Gao & Wang (2022; arXiv:2211.04968) compiled the target sample."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
+def test_planck_vi_parenthetical_with_valid_bibcode_is_supported():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "compare_luminosity_distances",
+        "result": {
+            "success": True,
+            "current_cosmology": {"bibcode": "2020A&A...641A...6P"},
+        },
+    }]
+
+    reply = "Planck Collaboration VI (2020; bibcode `2020A&A...641A...6P`) was the baseline."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
+def test_collaboration_lead_token_supports_author_year_shorthand():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "read_arxiv_paper",
+        "result": {
+            "success": True,
+            "arxiv_id": "1807.06209",
+            "authors": ["Planck Collaboration"],
+            "year": "2018",
+        },
+    }]
+
+    reply = "The Planck 2018 baseline values are abstract-level claims from this paper."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
+def test_catalog_identifier_ngc_number_is_not_author_year():
+    from app.services.claim_validator import provenance_citation_violations
+
+    reply = "The HST TRGB + NGC 4258/Cepheid combination was mentioned as a limitation."
+
+    assert provenance_citation_violations(reply, []) == []
+
+
+def test_failed_attempted_arxiv_id_allowed_in_limitation_line():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "extract_literature_tables",
+        "input": {"arxiv_id": "1204.3674"},
+        "result": {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "error_class": "rate_limit_exceeded",
+        },
+    }]
+
+    reply = "extract_literature_tables failed for arXiv:1204.3674, so no authoritative table values were obtained."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
+def test_negative_author_year_context_does_not_trigger_citation_violation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    reply = 'No validated author-year prose citation such as "Wong et al. (2019)" was obtained.'
+
+    assert provenance_citation_violations(reply, []) == []
+
+
+def test_author_year_phrase_present_in_claimable_payload_is_supported():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "read_arxiv_paper",
+        "result": {
+            "success": True,
+            "abstract": "The abstract reports an approximately 2 sigma tension with Planck 2018.",
+        },
+    }]
+
+    reply = "The abstract also states an approximately 2 sigma tension with Planck 2018."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
+def test_author_year_phrase_allows_hyphenated_payload_variant():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "read_arxiv_paper",
+        "result": {
+            "success": True,
+            "abstract": "Comparing our result with Planck-2018 observations gives a tension.",
+        },
+    }]
+
+    reply = "The abstract states an approximately 2 sigma tension with Planck 2018."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
 def test_supporting_bibcode_fields_enter_valid_pool():
     from app.services.claim_validator import provenance_citation_violations
 

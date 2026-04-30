@@ -729,6 +729,27 @@ def _build_valid_arxiv_pool(tool_results: Any) -> set[str]:
     return pool
 
 
+def _build_attempted_arxiv_pool(tool_results: Any) -> set[str]:
+    """arXiv IDs attempted as tool inputs.
+
+    These IDs do not support science claims, but they are safe to mention in
+    honest failure/limitation lines such as "arXiv:1234.56789 could not be
+    fetched".
+    """
+    pool: set[str] = set()
+    for node in _iter_dict_nodes(tool_results):
+        tool_input = node.get("input")
+        if not isinstance(tool_input, dict):
+            continue
+        for key in ("arxiv_id", "arxiv_url", "paper"):
+            value = tool_input.get(key)
+            if isinstance(value, dict):
+                pool.update(_arxiv_ids_from_text(json.dumps(value)))
+            elif value:
+                pool.update(_arxiv_ids_from_text(str(value)))
+    return pool
+
+
 def _build_valid_doi_pool(tool_results: Any) -> set[str]:
     pool: set[str] = set()
     for node in _iter_dict_nodes(tool_results):
@@ -747,9 +768,9 @@ def _build_author_year_support(tool_results: Any) -> set[tuple[str, str]]:
         authors = node.get("authors") or node.get("author")
         if not year or not isinstance(authors, list) or not authors:
             continue
-        first = _author_key(str(authors[0]))
-        if first:
-            support.add((first, year))
+        for author in authors:
+            for key in _author_support_keys(str(author)):
+                support.add((key, year))
     return support
 
 
@@ -764,8 +785,10 @@ def provenance_citation_violations(
         return []
     valid_bibcodes = _build_valid_bibcode_pool(tool_results)
     valid_arxiv_ids = _build_valid_arxiv_pool(tool_results)
+    attempted_arxiv_ids = _build_attempted_arxiv_pool(tool_results)
     valid_dois = _build_valid_doi_pool(tool_results)
     author_year_support = _build_author_year_support(tool_results)
+    claimable_payload_text = _claimable_tool_text(tool_results)
     violations: list[CitationViolation] = []
 
     for match in BIBCODE_RE.finditer(reply):
@@ -782,6 +805,9 @@ def provenance_citation_violations(
     for match in ARXIV_ID_RE.finditer(reply):
         arxiv_id = _normalize_arxiv_id(match.group(1))
         if arxiv_id and arxiv_id not in valid_arxiv_ids:
+            line_text = _line_text(reply, match.start())
+            if arxiv_id in attempted_arxiv_ids and _line_is_nonclaim_context(line_text):
+                continue
             violations.append(CitationViolation(
                 kind="invalid_arxiv_id",
                 match_text=f"arXiv:{arxiv_id}",
@@ -797,9 +823,17 @@ def provenance_citation_violations(
                 line_number=_line_number(reply, match.start()),
             ))
 
-    for match in AUTHOR_YEAR_RE.finditer(_strip_markdown_code(reply)):
+    citation_text = _strip_markdown_code(reply)
+    for match in AUTHOR_YEAR_RE.finditer(citation_text):
         author, year = match.group(1), match.group(2)
         match_text = match.group(0).strip()
+        line_text = _line_text(citation_text, match.start())
+        if _line_is_nonclaim_context(line_text):
+            continue
+        if _line_has_valid_explicit_citation(line_text, valid_bibcodes, valid_arxiv_ids, valid_dois):
+            continue
+        if _phrase_in_claimable_payload(match_text, claimable_payload_text):
+            continue
         if not strict and _author_year_looks_like_noise(author, match_text):
             continue
         if _author_year_is_suspicious(author, year, valid_bibcodes, author_year_support):
@@ -1108,12 +1142,49 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
         f"- {violation.kind}: {violation.match_text} (line {violation.line_number})"
         for violation in violations
     ]
+    cosmology_note = _cosmology_manifest_block_note(violations)
     return (
         "⚠ Reply withheld: the model attempted to cite references that were "
         "not present in this turn's tool provenance. The unsupported citations were:\n\n"
         + "\n".join(lines)
+        + cosmology_note
         + "\n\nPlease re-run the relevant archive or literature query so the citation "
         "appears in tool_results before using it."
+    )
+
+
+def _cosmology_manifest_block_note(violations: list[CitationViolation]) -> str:
+    """Helpful strict-mode hint for built-in cosmology preset bibcodes.
+
+    We deliberately do not add these manifest bibcodes to the valid citation
+    pool implicitly.  The model must call a cosmology/compare tool this turn
+    so the manifest appears in tool_results.
+    """
+    invalid = {
+        str(v.match_text).strip()
+        for v in violations
+        if v.kind == "invalid_bibcode"
+    }
+    if not invalid:
+        return ""
+    try:
+        from app.services.cosmology import PRESETS
+    except Exception:
+        return ""
+    preset_hits = sorted({
+        str(preset.get("name") or name)
+        for name, preset in PRESETS.items()
+        if preset.get("bibcode") in invalid or preset.get("tcmb_bibcode") in invalid
+    })
+    if not preset_hits:
+        return ""
+    return (
+        "\n\nNote: one unsupported bibcode belongs to a platform cosmology "
+        f"preset ({', '.join(preset_hits)}). Strict citation mode still "
+        "requires that preset metadata to be returned by a tool in this turn. "
+        "Call a cosmology provenance tool such as `compare_luminosity_distances` "
+        "or run the relevant fit with an explicit `cosmology=` argument before "
+        "quoting the preset bibcode."
     )
 
 
@@ -1332,6 +1403,31 @@ def _author_key(raw: str) -> str:
     return re.sub(r"[^a-z]", "", value.lower())
 
 
+def _author_support_keys(raw: str) -> set[str]:
+    """Return author keys that can support author-year shorthand.
+
+    Collaboration papers are often cited as "Planck 2018" while metadata
+    stores "Planck Collaboration".  Keep the normal last-name key, but also
+    support the leading survey/collaboration token for these cases.
+    """
+    text = str(raw or "").strip()
+    keys: set[str] = set()
+    normal = _author_key(text)
+    if normal:
+        keys.add(normal)
+    parts = text.split()
+    if len(parts) >= 2 and re.sub(r"[^a-z]", "", parts[-1].lower()) in {
+        "collaboration",
+        "team",
+        "survey",
+        "consortium",
+    }:
+        lead = re.sub(r"[^a-z]", "", parts[0].lower())
+        if lead:
+            keys.add(lead)
+    return keys
+
+
 def _author_year_is_suspicious(
     author: str,
     year: str,
@@ -1356,12 +1452,12 @@ def _author_year_is_suspicious(
 
 
 def _author_year_looks_like_noise(author: str, match_text: str) -> bool:
+    if author.upper() in {"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"}:
+        return True
     if "et al" in match_text.lower():
         return False
     if "(" in match_text or "[" in match_text:
         return False
-    if author.upper() in {"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"}:
-        return True
     return author in {
         "April",
         "August",
@@ -1379,6 +1475,71 @@ def _author_year_looks_like_noise(author: str, match_text: str) -> bool:
         "September",
         "Table",
     }
+
+
+def _line_text(text: str, offset: int) -> str:
+    start = text.rfind("\n", 0, max(0, offset)) + 1
+    end = text.find("\n", offset)
+    if end < 0:
+        end = len(text)
+    return text[start:end]
+
+
+def _line_is_nonclaim_context(line: str) -> bool:
+    lowered = str(line or "").lower()
+    return any(
+        token in lowered
+        for token in (
+            "not validated",
+            "not verified",
+            "not supported",
+            "not tool-supported",
+            "unsupported",
+            "did not return",
+            "does not return",
+            "do not have",
+            "no validated",
+            "no authoritative",
+            "could not",
+            "cannot",
+            "can't",
+            "failed",
+            "failure",
+            "rate limit",
+            "retry",
+            "next step",
+            "unable",
+            "not obtained",
+        )
+    )
+
+
+def _phrase_in_claimable_payload(phrase: str, payload_text: str) -> bool:
+    import re
+
+    needle = str(phrase or "").lower()
+    haystack = str(payload_text or "").lower()
+    if needle in haystack:
+        return True
+    normalized_needle = re.sub(r"[\s\-_]+", " ", needle).strip()
+    normalized_haystack = re.sub(r"[\s\-_]+", " ", haystack)
+    return bool(normalized_needle and normalized_needle in normalized_haystack)
+
+
+def _line_has_valid_explicit_citation(
+    line: str,
+    valid_bibcodes: set[str],
+    valid_arxiv_ids: set[str],
+    valid_dois: set[str],
+) -> bool:
+    """Allow author-year shorthand when the same line has a verified citation."""
+    if _bibcodes_from_text(line) & valid_bibcodes:
+        return True
+    if _arxiv_ids_from_text(line) & valid_arxiv_ids:
+        return True
+    if _dois_from_text(line) & valid_dois:
+        return True
+    return False
 
 
 def _line_number(text: str, offset: int) -> int:
