@@ -1,595 +1,105 @@
 # Standard Astro
 
-**AI-native professional astronomy research platform** — data discovery, spectral/photometric analysis, statistical inference, visual pipelines, team collaboration, and publication export in one unified web interface.
+AI-native astronomy research platform for archive discovery, analysis,
+statistical inference, provenance tracking, collaboration, and paper export.
 
-Paper drafts generated from AI sessions are private to the owner account by default. A draft becomes publicly readable only after the owner explicitly uses **Publish Draft**, which creates a revocable `/papers/public/:token` link.
+Paper drafts generated from AI sessions are private to the owner account by
+default. A draft becomes publicly readable only after the owner explicitly uses
+**Publish Draft**, which creates a revocable `/papers/public/:token` link.
 
-Built with React 19 + FastAPI + **68 AI tools** + **35 pipeline nodes** + **24 archive connector keys** + provenance-v2 citation guardrails across 16 astronomy research domains.
+## What It Does
 
-## Core Workflows
+| Area | Summary |
+|---|---|
+| Data access | Query active provenance-v2 sources from one interface. |
+| AI assistant | Multi-tool research agent for archive queries, ADQL, literature review, table extraction, analysis, fitting, and paper drafting. |
+| Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
+| Provenance | Tool results carry citation, archive version, field bibcodes, query hashes, run IDs, and acknowledgement metadata. |
+| Cosmology | Dataset registry, likelihood config builder, MCMC tools, robustness matrix scaffolding, and chain diagnostics. |
+| Export | Paper drafts, BibTeX, acknowledgement text, notebooks, figures, and reproducibility packages. |
 
-| Module | Description |
-|--------|-------------|
-| **Data Browser** | Query the active provenance-v2 sources (VizieR, Gaia DR3, SIMBAD, NED, 2MASS, ALMA observation metadata) from one place. Non-v2 sources are still visible but maintenance-gated until their `archive_version` provenance is upgraded. |
-| **AI Assistant** | 68-tool research agent that auto-selects the right data source, writes ADQL, analyzes spectra, fits isochrones/transits/RV orbits, computes SFR, runs controlled cosmology MCMC, builds likelihood configs, builds pipelines, reviews literature, and drafts papers. Now with object-class-specific workflows (open clusters / globular clusters / RR Lyrae / Cepheids / EB / galaxies / X-ray sources / pulsars / white dwarfs / ...). |
-| **Pipeline Studio** | Visual DAG editor with 35 node types spanning CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
-| **ADQL Query** | Multi-service TAP editor with syntax highlighting, template library, and federated queries across Gaia DR3, SIMBAD, VizieR, CADC, and NED — with automatic retry on timeout (reducing cone radius). |
-| **Workspace** | Persistent file storage for FITS, VOTable, and analysis results. Batch search, saved searches, and data export. |
-| **Team** | Real-time collaboration via WebSocket: shared pipelines/datasets, presence tracking, live comments, and session forking. |
-| **Observations** | Transient alert dashboard (ZTF/TNS) with spectroscopic classification, anomaly detection, and follow-up recommendations. |
+## Active Data Sources
 
-## Local Maintenance Inbox
+The connector registry has 24 source keys. During the provenance-v2 rollout,
+sources without upgraded citation and `archive_version` metadata are
+maintenance-gated instead of silently returning weak-provenance data.
 
-The repository includes a conservative, local-only maintenance helper for
-turning CI/deploy/AI-assistant diagnostic evidence into a reviewable report:
+Active provenance-v2 sources:
 
-```bash
-cd backend
-./.venv/bin/python scripts/maintenance.py report --write
-./.venv/bin/python scripts/maintenance.py lock acquire --owner codex
-./.venv/bin/python scripts/maintenance.py lock status
-./.venv/bin/python scripts/maintenance.py lock release --owner codex
-```
-
-`report` reads git state plus gitignored diagnostic bundles under
-`.local/diagnostics/`, classifies likely CI/deploy/tool/validator issues, and
-writes JSON + Markdown under `.local/maintenance/`. It is read-only: it never
-edits code, pushes, deploys, uploads diagnostics, or creates remote issues.
-Use the lock before allowing a coding agent to modify files so Codex and
-Claude Code do not collide in the same worktree.
-
-## Local OpenAI CLI Backend
-
-For private local use, the chat assistant can call the installed Codex/OpenAI
-CLI instead of hosted API keys. This uses your local CLI login/subscription and
-is disabled by default:
-
-```bash
-cd backend
-OPENAI_CLI_ENABLED=1 OPENAI_CLI_COMMAND=codex ./.venv/bin/uvicorn app.main:app --reload
-```
-
-Then open the frontend on localhost, choose **Local OpenAI CLI / server** as
-the provider, and choose **OpenAI CLI** as the model. The CLI model can request
-Standard Astro tools by returning JSON tool calls; the backend executes those
-tools, including network/archive searches, ADQL/database queries, literature
-table extraction, Python analysis, and plotting, then sends the results back
-into the next CLI turn. The backend runs
-`codex --ask-for-approval never exec --ignore-user-config --ignore-rules
---ephemeral --sandbox read-only`, so this path is local-only and does not
-expose API keys or load user plugins. Tool execution remains inside the
-Standard Astro backend, preserving provenance and validator checks.
-`OPENAI_CLI_OUTPUT_SCHEMA` is off by default because current Codex CLI builds
-can exit non-zero with strict schemas; the backend still parses JSON tool calls
-and retries once if the CLI incorrectly claims tools are unavailable.
-
-## Scientific Capabilities
-
-### Data Access (6 active provenance-v2 sources + 18 maintenance-gated connectors)
-
-The connector registry currently has 24 source keys. During the provenance-v2 rollout, only sources with populated citation and `archive_version` provenance are active:
-
-**Active sources**
 - VizieR (`vizier`)
 - Gaia DR3 (`gaia`)
 - SIMBAD (`simbad`)
 - NED (`ned`)
-- 2MASS (`2mass`, implemented by `twomass.py`)
+- 2MASS (`2mass`)
 - ALMA Science Archive observation metadata (`alma`)
 
-**Maintenance-gated until upgraded**
-- SDSS / SDSS spectra, MAST, JWST, ESO, IRSA, Chandra, XMM-Newton, AllWISE, LAMOST, DESI, Pan-STARRS, NVSS, FIRST, JPL Horizons, ATNF Pulsar, SPARC, FRBSTATS
-- The direct `run_sdss_sql` AI tool is also maintenance-gated until SDSS emits independent provenance with `archive_version`
-
-Gated sources return `__tool_status__="UNAVAILABLE"` with instructions for the AI to suggest the 6 active alternatives. The legacy connector modules are kept in the repo for re-enable work.
-
-**Optical/NIR spectroscopy and photometry**
-- Gaia DR3, SIMBAD, VizieR, 2MASS active; SDSS, LAMOST DR9, DESI EDR, and Pan-STARRS are currently maintenance-gated
-
-**Space observatories**
-- MAST (HST, Kepler, TESS), JWST, ESO (VLT, MUSE, VISTA), IRSA, XMM-Newton, and Chandra are currently maintenance-gated
-
-**Multi-wavelength**
-- NED and ALMA observation metadata active; AllWISE is currently maintenance-gated. ALMA does not provide derived line luminosity or FWHM values without a cited line-measurement table.
-
-**Radio**
-- NVSS and FIRST are currently maintenance-gated
-
-**Specialized / domain-specific**
-- JPL Horizons, ATNF Pulsar Catalogue, SPARC, and FRBSTATS remain registered but maintenance-gated
-
-**VO Standards:** SIA v2, SSA, federated TAP, SAMP bidirectional, VOTable import/export, registry discovery (pyvo)
-
-### Gaia DR3 Specialized Tables (AI knows about them)
-
-The AI assistant can select the right Gaia table for the job:
-
-| Table | Use case |
-|---|---|
-| `gaiadr3.gaia_source` | General: positions, parallax, photometry, gspphot |
-| `gaiadr3.vari_rrlyrae` | RR Lyrae periods, types (RRab/RRc), amplitudes |
-| `gaiadr3.vari_cepheid` | Classical / Type II / anomalous Cepheids |
-| `gaiadr3.vari_eclipsing_binary` | EB periods and morphology |
-| `gaiadr3.vari_long_period_variable` | Mira / SR variables |
-| `gaiadr3.vari_summary` | Generic variability indicators |
-| `gaiadr3.nss_two_body_orbit` | Spectroscopic/astrometric binary orbit solutions |
-| `gaiadr3.binary_masses` | Resolved/unresolved binary mass solutions |
-| `gaiadr3.galaxy_candidates` | Extended-source classification |
-| `gaiadr3.qso_candidates` | QSO candidates with Gaia astrometry |
-| `gaiadr3.astrophysical_parameters` | Full GSP-Phot/GSP-Spec/MSC parameter set |
-
-### Object-Class Workflows (system prompt guidance)
-
-The AI assistant has explicit, literature-cited workflows for:
-
-- **Open clusters** (young / intermediate, < 2 Gyr, < 2 kpc) — NGC 1647, Pleiades, Hyades
-- **Globular clusters** (old, > 5 Gyr, > 5 kpc) — M53, M13, 47 Tuc
-- **RR Lyrae variables** — Oosterhoff classification, Muraveva+ 2018 P-L-Z relation
-- **Cepheids** — Ripepi+ 2019 Leavitt law (classical + Type II)
-- **Eclipsing binaries** — `vari_eclipsing_binary` + NSS orbital solutions
-- **Galaxies** — SFR calibrations from Kennicutt & Evans 2012 ARA&A Table 1 (7 bands)
-- **Galaxy rotation curves** — SPARC database + NFW/Burkert/Einasto halo models
-- **Galaxy morphology** — Sersic profiles via `galfit`/`statmorph`
-- **AGN** — BPT classification, CIGALE SED fitting, Shen+ 2011 QSO catalog
-- **X-ray sources** — Sherpa spectral fitting (phabs*powerlaw, phabs*apec, phabs*(diskbb+powerlaw))
-- **Pulsars** — ATNF catalogue + Lorimer & Kramer 2004 derived quantities
-- **White dwarfs** — Bédard+ 2020 Montreal cooling tables
-- **Brown dwarfs** — Kirkpatrick 2005 L/T/Y classification
-- **IFU spectroscopy** — Voronoi binning + pPXF (Cappellari 2017)
-- **Galactic streams** — GD-1, Sagittarius, Gaia-Enceladus analysis
-- **Solar system** — JPL Horizons ephemerides, MPC designations
-- **Stellar atmospheres** — ATLAS9 / MARCS / PHOENIX + pysme / iSpec
-
-### Spectral Analysis (specutils + NIST)
-
-- Line identification against 90-line NIST catalog (UV through NIR)
-- Gaussian / Lorentzian / Voigt profile fitting via specutils
-- Equivalent width measurement, continuum normalization
-- Velocity dispersion via cross-correlation (log-wavelength CCF)
-- Heliocentric/barycentric velocity correction
-- Auto flux calibration (3 standard star reference tables)
-- IFU datacube support: spaxel/aperture extraction, Voronoi binning, 2D velocity maps, emission line ratio maps (BPT diagnostics)
-
-### Photometry (photutils)
-
-- PSF photometry (DAOStarFinder + IntegratedGaussianPRF)
-- Multi-aperture photometry with local background subtraction
-- Source extraction and deblending (photutils segmentation)
-- **Auto zero-point** determination via Gaia/SDSS cross-match
-- Extinction correction with SFD 1998 E(B-V) auto-lookup; Schlafly-style recalibration is reported only when the tool source explicitly provides it
-- PSF matching across bands
-- Galaxy Sersic profile fits via `statmorph` (Rodriguez-Gomez+ 2019)
-
-### Photometric Redshifts
-
-- 30 parametric SED templates (E through starburst, AGN, post-starburst, LIRG/ULIRG)
-- Calzetti 2000 dust attenuation with E(B-V) grid search
-- Madau 1995 IGM absorption for z > 0.1
-- Emission line contributions scaled by UV luminosity
-- Bayesian magnitude prior (simplified from Benitez 2000)
-- Full P(z) output with 68% confidence intervals
-- Standard quality metrics: sigma_MAD, NMAD, outlier fraction
-
-### Isochrone Fitting (PARSEC CMD 3.9 + turnoff fallback)
-
-- Real PARSEC 1.2S isochrones (Bressan+ 2012) via CMD 3.9 API
-- Auto-extract `bp_rp` + `abs_mag` from last Gaia query (no manual prep)
-- Auto-estimate distance modulus from median parallax
-- 4-D grid search over age × metallicity × DM × A_V
-- **Fallback**: PARSEC-calibrated turnoff-magnitude → log(age) lookup table
-  (calibrated against Pleiades, NGC 1647, Hyades, NGC 752, M67, NGC 188)
-- Gaia DR3 extinction coefficients from Wang & Chen 2019 (A_G/A_V = 0.789)
-- Empirical +0.3 mag binary bias correction (physically motivated)
-- Validated to ±15% over 70 Myr to 7 Gyr age range
-
-### Stellar Atmospheres and Synthetic Spectra
-
-- Framework: `pysme` (Piskunov & Valenti 2017) or `ispec` (Blanco-Cuaresma+ 2014)
-- Grids: Castelli & Kurucz 2003 (ATLAS9), Gustafsson+ 2008 (MARCS), Husser+ 2013 (PHOENIX)
-- Line list: VALD3 (Ryabchikova+ 2015)
-- NLTE corrections: Mashonkina+ 2011, Amarsi+ 2020
-- Solar abundance reference: Asplund+ 2009 / 2021
-
-### Statistical Inference (dynesty + ArviZ)
-
-- MCMC sampling (emcee)
-- Nested sampling for Bayesian evidence (dynesty, ultranest)
-- Bayes factor computation with Jeffreys scale interpretation
-- Chain diagnostics: R-hat, ESS, MCSE via ArviZ (updated for new arviz API)
-- Posterior predictive checks
-- Model comparison tables (AIC/BIC/WAIC/LOO)
-- Monte Carlo error propagation and bootstrap resampling
-
-### Observational Cosmology Workflows
-
-- Curated dataset registry for DESI DR1 BAO, Pantheon+, DES-SN5YR, Union3, Planck 2018 compressed priors, ACT DR6 lensing, cosmic chronometers, and SH0ES H0 prior
-- Each dataset entry records version, citation, covariance status, units, applicable model families, source URL, and whether it is ready, external-likelihood-backed, or metadata-only
-- Controlled likelihood builder emits Cobaya- and CosmoSIS-style configs for `lcdm`, `wcdm`, `w0wa_cdm`, curved variants, and neutrino-mass variants
-- Robustness matrix generator prepares BAO-only, BAO+SN, BAO+CMB, BAO+SN+CMB, and +SH0ES combinations; results remain non-citeable until a chain runner returns `publication_ready=true`
-
-### Time-Domain Astronomy (batman + celerite2)
-
-- Lomb-Scargle periodogram + BLS transit search
-- GP detrending via celerite2 (Matern32, SHO, rotation kernels)
-- Transit model fitting via batman (Rp/Rs, a/Rs, inclination)
-- **RV orbit fitting** via radvel (Fulton+ 2018) with auto-period init from Lomb-Scargle
-- Stellar flare detection with amplitude/duration/energy measurement
-- Phase folding with interactive period adjustment
-- Variable star classification
-
-### Galaxy Dynamics (new — galpy)
-
-- Rotation curve decomposition: `V_obs² = V_gas² + ϒ_disk × V_disk² + ϒ_bulge × V_bulge² + V_halo²`
-- Halo models: NFW (Navarro+ 1996), Burkert (1995), Einasto (1965)
-- Freeman 1970 exponential disk
-- MCMC/nested-sampling fits with emcee/dynesty
-- SPARC database access via VizieR catalog J/AJ/152/157
-
-### X-Ray Spectral Analysis (new — Sherpa)
-
-- Sherpa 4.18 + standard XSPEC-style models (phabs, apec, powerlaw, diskbb)
-- Galactic absorption column from HI4PI (HI4PI Collab 2016)
-- Wilms+ 2000 abundances for tbabs
-- C-stat (Cash 1979) for low-count Poisson data
-- 90% confidence intervals via `conf` method
-
-### Star Formation Rate (new — K&E 2012)
-
-Literature-cited calibrations from Kennicutt & Evans 2012 ARA&A 50, 531 Table 1:
-
-| Band | log C | L units |
-|------|------|---------|
-| H-α | 41.27 | erg/s |
-| FUV (1500 Å) | 43.35 | νL_ν erg/s |
-| NUV (2300 Å) | 43.17 | νL_ν erg/s |
-| TIR (8-1000 μm) | 43.41 | erg/s |
-| 24 μm | 42.69 | νL_ν erg/s |
-| 70 μm | 43.23 | νL_ν erg/s |
-| 1.4 GHz | 28.20 | L_ν erg/s/Hz |
-
-Dust correction via Balmer decrement (Osterbrock 1989) or UV slope β (Meurer+ 1999). Kroupa IMF, 0.1–100 M⊙.
-
-### Pulsar Derived Quantities (new)
-
-From Lorimer & Kramer 2004 "Handbook of Pulsar Astronomy":
-- Characteristic age: τ_c = P / (2·Ṗ)
-- Surface dipole B: B_s ≈ 3.2×10¹⁹ √(P·Ṗ) Gauss
-- Spin-down luminosity: Ė = 4π²·I·Ṗ/P³ (I = 10⁴⁵ g cm²)
-
-Validated against Crab pulsar (τ_c = 1253 yr, B_s = 3.8×10¹² G — matches literature).
-
-### White Dwarf Cooling Ages (new)
-
-13-point log-log interpolation table from **Bédard+ 2020 ApJ 901, 93 Montreal cooling models** (DA, 0.6 M⊙).
-M_G → T_eff conversion from Tremblay+ 2019. Supports DA/DB atmospheres and mass scaling.
-
-### Image Processing (reproject + photutils)
-
-- Full CCD reduction pipeline: bias, dark, flat, CR rejection, WCS
-- Cosmic ray removal (astroscrappy / LACosmic)
-- Astrometric solution via astrometry.net
-- Image reprojection and mosaicking (reproject)
-- PSF matching with Gaussian kernels
-- Source deblending with morphological parameters
-- WCS-aware cutout extraction
-
-### Transient Science
-
-- ZTF + TNS + Lasair + GCN alert ingestion
-- Photometric classification (Random Forest, 8 classes)
-- **Spectroscopic classification** (template matching: SN Ia/II/Ib-c/TDE/AGN/Nova)
-- Host galaxy identification via SIMBAD
-- Light curve feature extraction and follow-up recommendations
-
-### Literature & Citations
-
-- NASA ADS search with citation-count ranking
-- arXiv full-text extraction
-- Literature table extraction with row-level citation provenance
-- `fit_line_lfr` for cited line-luminosity / FWHM relation fits from extracted measurement tables
-- **Citation network graph** construction (references + cited-by)
-- AI-powered bibliography synthesis
-- BibTeX export, LaTeX paper generation (AASTeX/MNRAS/A&A)
-
-### Reproducibility & Provenance
-
-- Automatic provenance recording per pipeline node (IVOA ProvDM)
-- Environment snapshots (pinned pip versions, Python version, platform)
-- DOI-ready metadata generation (DataCite compatible)
-- Reproducibility package export (DAG + params + environment + instructions)
-- Jupyter notebook export (pipeline / chat / search workflows)
-- Provenance-v2 tool-result envelope with nested `provenance.datasets`, `provenance.field_bibcodes`, `provenance.coverage`, and reproducibility fields (`run_id`, `query_hash`, `archive_version`, `tool_version`)
-- Field-level bibcode extraction for SIMBAD/NED-style result columns and table-level registry fallbacks for the active 6 sources, including ALMA observation metadata
-- Citation validator checks replies against the tool-sourced bibcode pool. It warns by default and can hard-block with `PROVENANCE_VALIDATOR_HARDBLOCK=true`
-- Cosmology-preset manifest citations are strict: built-in preset bibcodes are not implicit citation support. A reply may cite them only when a current-turn tool, such as `compare_luminosity_distances` or a cosmology-aware fit, returns the preset provenance.
-- Registry freshness is enforced at backend startup; stale fallback provenance blocks serving traffic until corrected
-- Chat UI surfaces a Data Sources panel and Copy Acknowledgement button; maintenance-gated tools get a separate `UNAVAILABLE` visual state
-
-## AI Assistant — 68 Tools
-
-The AI assistant can invoke any platform capability. All tools are literature-cited where applicable.
-
-| Category | Tools |
-|----------|-------|
-| **Search** | search_objects, run_adql (with auto timeout retry), query_high_velocity_stars, run_sdss_sql (maintenance-gated), get_object_info, get_object_dossier, batch_object_search, query_vo_service |
-| **Spectroscopy** | analyze_spectrum, analyze_spectrum_pro, classify_transient_spectrum |
-| **Photometry** | extract_photometry, extract_sources, estimate_photo_z, estimate_photo_z_pro |
-| **Galaxy analysis** (NEW) | **compute_galaxy_sfr** (K&E 2012), **fit_sersic_morphology** (statmorph) |
-| **Time-Domain** | search_lightcurve, gp_detrend_lightcurve, fit_transit_model, detect_stellar_flares, transit_search_bls |
-| **RV orbits** (NEW) | **fit_rv_orbit** (radvel + auto period init) |
-| **X-ray** (NEW) | **x_ray_spectral_fit** (Sherpa) |
-| **Pulsars** (NEW) | **pulsar_derived_quantities** (Lorimer & Kramer 2004) |
-| **Clusters** | fit_isochrone (PARSEC + turnoff fallback), auto-extract from Gaia |
-| **Image** | reduce_ccd_image, solve_astrometry, process_image |
-| **Statistics** | validate_analysis, sensitivity_analysis |
-| **Cosmology** | list_cosmology_datasets, build_cosmology_likelihood, build_cosmology_robustness_matrix, fit_cosmology_mcmc, run_cobaya_cosmology, get_cosmology_run_status, compare_luminosity_distances |
-| **Pipeline** | generate_pipeline, run_pipeline |
-| **Literature** | search_literature, read_arxiv_paper, literature_review |
-| **Transients** | query_transients, classify_transient |
-| **Radio** | radio_analysis (spectral index / luminosity / crossmatch) |
-| **Code** | run_python (sandbox: numpy/scipy/astropy/specutils/dynesty/dask + 25+ new packages; see below) |
-| **Collaboration** | share_with_team, invite_team_member |
-| **Export** | export_results, workspace_export, read_fits_header, get_provenance |
-| **Research** | generate_paper_draft, generate_proposal, research_workflow, full_research_report, analyze_cross_wavelength, crossmatch_catalogs, get_followup_recommendation, get_last_search_results, query_gaia_cluster, get_extinction |
-
-### Python Sandbox (run_python tool)
-
-Available libraries now include:
-
-**Core scientific stack** (existing): numpy, scipy, astropy, specutils, photutils, reproject, dask, pandas, matplotlib, sklearn, emcee, corner, dynesty, ultranest, arviz, celerite2, batman, pyvo
-
-**Added in the knowledge-base expansion:**
-- **Sherpa** (Doe+ 2007) — X-ray spectral fitting
-- **radvel** (Fulton+ 2018) — exoplanet RV orbits
-- **thejoker** (Price-Whelan+ 2017) — sparse binary RV sampling
-- **galpy** (Bovy 2015) — galactic dynamics, NFW/Burkert halos
-- **pysme** (Piskunov & Valenti 2017) — stellar parameter fitting
-- **statmorph** (Rodriguez-Gomez+ 2019) — galaxy morphology
-- **vorbin** (Cappellari & Copin 2003) — Voronoi 2D binning
-- **ppxf** (Cappellari 2017) — kinematic fitting from absorption lines
-- **astroquery** (Ginsburg+ 2019) — IVOA database wrappers (JPL, MPC, VizieR, SIMBAD, NED, Gaia, MAST, IRSA)
-- **dustmaps** (Green 2018) — SFD, Bayestar, Planck dust maps
-- **healpy** (Górski+ 2005) — HEALPix spherical data
-- **pint** (Luo+ 2021) — pulsar timing
-- **psrqpy** (Pitkin 2018) — ATNF pulsar catalogue interface
-- **lenstronomy** (Birrer & Amara 2018) — strong gravitational lensing
-- **MulensModel** (Poleski & Yee 2019) — microlensing
-- **treecorr** (Jarvis 2015) — 2-point correlation functions
-- **yt** (Turk+ 2011) — N-body / hydrodynamic simulation post-processing
-- **scikit-image** — image restoration (Lucy-Richardson deconvolution)
-- **warnings** (stdlib) — now permitted
-
-## Data Quality Guardrails
-
-The AI assistant has explicit guardrails against common pitfalls:
-
-1. **Gaia GSP-Phot warnings**: The convenience columns `teff_gspphot`, `mh_gspphot`, `ag_gspphot`, `ebpminrp_gspphot` are model fits with systematic biases for:
-   - Distant objects (>5 kpc)
-   - Low metallicity ([Fe/H] < -1.5)
-   - Crowded fields (globular cluster cores)
-   - Faint stars (G > 18)
-   - Hot stars (T_eff > 8000 K)
-
-   → Routed to SIMBAD literature values, LAMOST/APOGEE spectra, or SFD dust maps instead.
-
-2. **Extinction routing for low-E(B-V) targets**: For |b|>20° / d<500pc / globular clusters, the AI **must** use `lookup_ebv_irsa` (SFD 1998) instead of `ag_gspphot` which over-estimates A_V by 5-6× for low-extinction targets. Benchmark values hardcoded into the prompt:
-   - Pleiades A_V = 0.12, M53 A_V = 0.06, Hyades A_V = 0.03
-
-3. **Distance estimation hierarchy** (by distance range):
-   - < 100 pc → Gaia parallax direct
-   - 100 pc – 3 kpc → Lindegren+ 2021 zero-point + Bailer-Jones geometric distance when σ_plx/plx > 10%
-   - 3 – 30 kpc → Standard candles (RR Lyrae P-L, Cepheid P-L, red clump, TRGB)
-   - > 30 kpc → Extragalactic distance ladder (Cepheids, SN Ia, SBF, Tully-Fisher)
-   - cosmological → astropy.cosmology FlatLambdaCDM
-
-4. **No simulated/synthetic data**: The system prompt forbids the AI from silently falling back to mock data when queries fail. It must say "could not retrieve X from Y" and propose alternatives.
-
-5. **Blue straggler selection**: The AI has explicit BSS criteria (brighter AND bluer than MSTO but within physical envelope), avoiding the common mistake of requiring BP-RP<0 which misses most BSS.
-
-6. **Variable star periods**: For RR Lyrae / Cepheid / EB analysis, the AI always queries the dedicated `gaiadr3.vari_*` tables for published periods instead of re-deriving from photometry.
-
-7. **Empty AI response fallback**: If the language model returns zero text, the chat loop synthesizes a minimal summary from executed tool results so the user never sees a blank AI bubble.
-
-## Reliability & Infrastructure Hardening
-
-A dedicated tech-debt pass (Tiers A–D) added the following, all on stdlib-only or lightweight dependencies:
-
-### Tier A — Core stability
-- **Async-by-default pipelines** — `PIPELINE_MODE=celery` is the default; heavy node types (`BayesianFit`, `TransitFit`, `GPDetrend`, `PhotoZPro`, `SEDFit`, `ImageStack`, `Mosaic`, `PSFMatch`, `Deblend`, `CosmicRayReject`, `CustomScript`, ...) are annotated with a `cost` tag. `/api/pipeline/run` returns `503` with an explicit message when a DAG contains heavy nodes but no Celery worker is available.
-- **Crash-isolated Python sandbox** (`app/services/sandbox/subprocess_backend.py`) — `multiprocessing` *spawn* child with `resource.setrlimit` (RLIMIT_AS / RLIMIT_CPU / RLIMIT_NPROC), `setsid` process group, and `killpg(SIGKILL)` on timeout. A segfault, memory bomb, or infinite loop in user code **cannot crash the FastAPI worker**. Eight isolation tests cover infinite loop, memory bomb, `sys.exit`, hard kill, traceback capture, Matplotlib figure round-trip, and parent survival across repeated crashes.
-- **Raw connector response cache** (`app/services/connector_cache.py`) — SHA-256 content-addressed cache with Null / SQLite / Redis backends, `asyncio.Future`-based singleflight dedup, and tiered TTLs (24 h for metadata, 1 h for cone searches, 15 min for ADQL).
-- **Upstream rate-limiting** (`app/connectors/throttle.py`) — per-connector `asyncio.Semaphore` + stdlib token bucket. Default policies follow each archive's published ToS (Gaia 5 req/s 2-concurrent, SDSS 2 req/s, VizieR 10 req/s, SIMBAD 10 req/s, MAST 5 req/s 2-concurrent, etc.).
-
-### Tier B — AI correctness
-- **Router golden set** (`tests/test_orchestrator_routing.py`) — 32 hand-written query / expected-agent pairs, asserting ≥ 90 % precision across specialist agents. Widened `literature_agent` / `observation_agent` regex patterns to catch compound queries.
-- **Workflow checkpoint store** (`app/services/workflow_checkpoint.py`) — in-memory `CheckpointStep` records with 2-hour TTL and 32-step cap. Provides the substrate for resumable multi-step AI workflows (chat-loop wiring is deferred to a follow-up).
-
-### Tier C — Observability
-- **Prometheus `/metrics` endpoint** (`app/observability/metrics.py`) — stdlib-only `MetricsRegistry` with thread-safe counters and histograms; renders a subset of the OpenMetrics 0.0.4 text format compatible with Prometheus / Grafana scrapers. No external dependency.
-- **Versioned provenance** (`app/services/provenance.py`) — each recorded activity captures a `environment_manifest` (Python version, platform, pinned package versions + SHA-256 fingerprint, system-prompt hash) so old results can be reproduced exactly.
-
-### Tier D — Frontend performance
-- **Auto-WebGL viewers** — `LightCurveViewer` and `SpectrumViewer` switch to Plotly `scattergl` when `N > 5000`, fixing browser lockups on Kepler / TESS 60 k-cadence curves and DESI / MUSE high-resolution spectra. Overlays (fit lines, models) stay on SVG.
-- **Pipeline auto-layout** (`components/pipeline/autoLayout.ts`) — pure-stdlib layered DAG layout via Kahn's longest-path algorithm. A new **Auto Layout** button re-positions large DAGs deterministically with no `elkjs` / `dagre` dependency.
-
-## Physics Formulas — Literature Audit Status
-
-All astronomy formulas in the codebase have been audited against published references. Each formula is cited in the code comments (author + year + journal + page). Notable entries:
-
-| Formula | Reference | Location |
-|---|---|---|
-| Distance modulus | Hipparcos/Gaia standard | `astro_analysis.py` |
-| CCM89 extinction curve | Cardelli, Clayton & Mathis 1989 ApJ 345, 245 | `astro_analysis.py` |
-| Calzetti 2000 attenuation | Calzetti+ 2000 PASP 112, 1547 | `photo_z_pro.py` |
-| Madau 1995 IGM | Madau 1995 ApJ 441, 18 | `photo_z_pro.py` |
-| Gaia extinction coefficients (A_G/A_V=0.789) | Wang & Chen 2019 ApJ 877, 116 | `astro_analysis.py` |
-| PARSEC isochrones | Bressan+ 2012 MNRAS 427, 127 | `parsec_fetcher.py` |
-| PARSEC turnoff lookup table | Bressan+ 2012 (calibrated) | `ai_tools.py` |
-| SFR calibrations (7 bands) | Kennicutt & Evans 2012 ARA&A 50, 531 | `ai_tools.py` |
-| Pulsar τ_c, B_s, Ė | Lorimer & Kramer 2004 handbook | `ai_tools.py` |
-| RR Lyrae P-L-Z | Muraveva+ 2018 MNRAS 481, 1195 | system prompt |
-| Cepheid Leavitt law | Ripepi+ 2019 A&A 625, A14 | system prompt |
-| NFW halo profile | Navarro, Frenk & White 1996 ApJ 462, 563 | system prompt |
-| Mass function (binary) | Hilditch 2001 Eq 2.53 | `ai_tools.py` |
-| Stetson K variability index | Stetson 1996 PASP 108, 851 | `transient_classifier.py` |
-| WD Montreal cooling | Bédard+ 2020 ApJ 901, 93 | `astro_analysis.py` |
-| BSS selection | Rain+ 2021 A&A 650, A67 | system prompt |
-| Kennicutt & Evans 2012 SFR | ARA&A 50, 531 Table 1 | system prompt + tool |
-
-The audit specifically removed LLM-hallucinated values (e.g. the old "Casagrande & VandenBerg 2018" mis-attribution of 0.836 was from Jordi+ 2010; the `M_V = M_G + 0.2` bolometric correction had the wrong sign).
+Maintenance-gated sources include SDSS / SDSS spectra, MAST, JWST, ESO, IRSA,
+Chandra, XMM-Newton, AllWISE, LAMOST, DESI, Pan-STARRS, NVSS, FIRST, JPL
+Horizons, ATNF Pulsar, SPARC, and FRBSTATS. Gated sources return an
+`UNAVAILABLE` tool status and instruct the AI to suggest active alternatives.
+
+ALMA currently provides observation metadata only. Derived line luminosities,
+FWHM values, and line-relation fits require cited measurement tables from
+literature extraction or a dedicated measurement source.
+
+## Guardrails
+
+- Numerical claims are checked against current-turn tool outputs.
+- Citation claims are checked against tool-sourced bibcodes, arXiv IDs, DOIs,
+  and row-level table provenance.
+- Synthetic or demonstration outputs are marked non-citeable.
+- Paper-level literature search supports context and citations, but not
+  measurement claims unless tables are extracted and normalized.
+- Gated archive calls are distinct from failed or empty calls in the UI.
+- Data Sources panels expose `archive_version`, source authority, table/field
+  citations, credits links, and acknowledgement templates.
+
+## Scientific Coverage
+
+Standard Astro includes workflows for:
+
+- Gaia DR3 tables and variability products
+- SIMBAD/NED/VizieR/2MASS object and catalog work
+- ALMA high-redshift line-observation metadata
+- Literature search and arXiv table extraction
+- Spectral analysis, line fitting, and equivalent widths
+- Photometry, source extraction, PSF work, and extinction handling
+- Isochrone fitting and cluster analysis
+- Time-domain period, transit, flare, and RV workflows
+- Galaxy SFR, morphology, rotation-curve, and X-ray tools
+- Observational cosmology likelihood and MCMC scaffolding
+- Paper drafting, bibliography generation, and reproducibility export
 
 ## Tech Stack
 
 | Layer | Stack |
-|-------|-------|
-| Frontend | React 19, TypeScript strict, Vite, React Router, React Flow, Plotly, Aladin Lite |
+|---|---|
+| Frontend | React 19, TypeScript strict, Vite, React Router, React Flow, Plotly |
 | Backend | FastAPI, SQLAlchemy async, Pydantic v2, SSE streaming |
-| AI | Manual provider/model selection across Claude default, OpenAI GPT-5.5 alias (resolves to GPT-5.4 unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro/Flash, local OpenAI-compatible backends, and local-only OpenAI CLI (`OPENAI_CLI_ENABLED=1`) |
-| Astronomy core | astropy, astroquery, specutils, photutils, reproject, emcee, dynesty, ArviZ, batman, celerite2, lightkurve, pyvo, sep, dust_extinction, dask |
-| Astronomy extended (expanded sandbox) | sherpa, radvel, thejoker, galpy, pysme, statmorph, vorbin, ppxf, dustmaps, healpy, pint, psrqpy, lenstronomy, MulensModel, treecorr, yt |
-| Background | Celery + Redis (optional, sync fallback) |
-| Storage | PostgreSQL (prod) / SQLite (dev), local filesystem for FITS |
-| Auth | JWT + bcrypt + Google OAuth, Fernet-encrypted API keys |
-| Deployment | Render blueprint (render.yaml), Docker Compose |
-| i18n | 4 languages (English, Chinese, French, Spanish) |
-| Testing | Backend pytest suite + frontend Vitest suite (currently 148 frontend tests) + strict frontend build |
-| Reliability | Subprocess-isolated Python sandbox, connector response cache, upstream rate-limiting, Prometheus `/metrics` endpoint |
+| AI | Manual provider/model selection across Claude, OpenAI, DeepSeek, local OpenAI-compatible backends, and local-only CLI adapters |
+| Astronomy | astropy, astroquery, specutils, photutils, reproject, pyvo, lightkurve |
+| Statistics | emcee, dynesty, ArviZ, celerite2, batman, scipy, scikit-learn |
+| Storage | PostgreSQL in production, SQLite for development, filesystem FITS storage |
+| Reliability | Subprocess-isolated Python sandbox, connector cache, upstream throttling, Prometheus metrics |
 
 ## Repository Layout
 
 ```text
 backend/
   app/
-    ai/                 Routed inference + orchestrator + specialist agent prompts
-    analysis/           CCD reduction and image-analysis helpers
-    api/                28 FastAPI routers (auth, chat, data, pipeline, export, provenance, ...)
-    connectors/         24 connector keys; 6 active v2 sources, 18 maintenance-gated
-    middleware/         Request tracking + correlation ID middleware
-    models/             SQLAlchemy models (20+ tables) + DB bootstrap
-    pipeline/
-      nodes/            35 pipeline node types
-      engine.py         DAG executor with caching + provenance recording
-    services/           30 service modules (AI tools, spectral analysis, photo-z, Bayesian,
-                        time-domain, image processing, provenance, transient, literature, ...)
-  data/
-    line_catalogs/      NIST spectral line catalog (90 lines)
-  tests/                Backend pytest suite, including provenance-v2 and B7 citation regressions
-  .venv/                Python environment with 19 newly-installed astronomy packages
+    ai/                 Inference router, model profiles, specialist agents
+    api/                FastAPI routers for chat, data, auth, export, pipeline, admin
+    connectors/         Archive connector implementations and availability gates
+    pipeline/           Visual DAG engine and node implementations
+    services/           AI tools, provenance, literature, sandbox, analysis services
+  tests/                Backend pytest suite
 
 frontend/
   src/
-    api/                Typed API client (axios + SSE streaming)
-    components/
-      viz/              SpectrumViewer, LightCurveViewer, ImageCutoutViewer,
-                        MCMCDiagnostics, PlotBuilder, AladinViewer, ProvenanceGraph
-      nodes/            Pipeline node palette + parameter editor (35 types)
-      collab/           PresenceBar (real-time team presence)
-      fits/             FITS browser + preview (multi-HDU)
-      chat/             MarkdownText (GFM tables, strikethrough, code blocks)
-    pages/              DataBrowser, Pipeline, Chat, ADQL, Workspace, Team,
-                        Account, Observations, Auth, Landing, Help, SharedSession
-    i18n/               Translation keys × 4 languages
-    __tests__/          Frontend test files
-```
-
-## Quick Start
-
-### Prerequisites
-- Python 3.11+
-- Node.js 20+
-- Redis (optional, for Celery async pipelines)
-
-### Local Development
-
-```bash
-# Backend
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-# Optional: install the expanded astronomy package set
-pip install sherpa radvel thejoker galpy pysme statmorph vorbin ppxf \
-            astroquery dustmaps healpy pint psrqpy lenstronomy MulensModel \
-            treecorr yt scikit-image
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-
-# Frontend
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend: `http://localhost:5173` | Backend: `http://localhost:8000`
-
-## Environment Variables
-
-### Required (production)
-
-```bash
-DATABASE_URL=postgresql+asyncpg://...
-JWT_SECRET=<random-hex-32>
-CORS_ORIGINS=https://your-frontend.example
-```
-
-### AI Backends
-
-```bash
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...           # optional
-DEEPSEEK_API_KEY=...            # optional
-```
-
-### Optional Services
-
-```bash
-ADS_API_KEY=...                  # NASA ADS citation search
-REDIS_URL=redis://...            # caching + Celery
-PIPELINE_MODE=celery             # async pipeline execution
-GOOGLE_CLIENT_ID=...             # Google OAuth
-GOOGLE_CLIENT_SECRET=...
-ASTROMETRY_API_KEY=...           # astrometry.net WCS solving
-FERNET_KEY=...                   # API key encryption (auto-generated if not set)
-ADMIN_SECRET=...                 # admin endpoint access
-DOCKER_IMAGE_DIGEST=...          # reproducibility tracking
-```
-
-### Frontend
-
-```bash
-VITE_API_URL=https://your-backend.example
-VITE_GOOGLE_CLIENT_ID=...
-```
-
-## Testing
-
-```bash
-# Backend
-cd backend && .venv/bin/python -m pytest tests/ -q --no-cov
-
-# E2E smoke tests
-cd backend && .venv/bin/python -m pytest tests/test_e2e_full.py \
-    -m "integration and not network" -q --no-cov
-
-# Frontend
-cd frontend && npm test -- --run
-
-# Build check
-cd frontend && npm run build
-```
-
-## Deployment
-
-### Render (recommended)
-
-`render.yaml` defines the full infrastructure:
-- FastAPI web service + Celery worker + Celery beat
-- React static frontend with SPA rewrites
-- PostgreSQL + Redis
-
-### Docker Compose
-
-```bash
-docker compose up -d
+    api/                Typed API and SSE client
+    components/         Chat cards, provenance panels, visualization components
+    pages/              Chat, Data Browser, Pipeline Studio, Workspace, Account, Help
+    __tests__/          Vitest suite
 ```
 
 ## Documentation
@@ -597,11 +107,9 @@ docker compose up -d
 - Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
 - Quick start: [docs/QUICKSTART.md](./docs/QUICKSTART.md)
 - API reference: [docs/API_REFERENCE.md](./docs/API_REFERENCE.md)
-- Deployment: [DEPLOY_OPENCLAW.md](./DEPLOY_OPENCLAW.md)
-- Development notes: [CLAUDE.md](./CLAUDE.md)
+- Deployment notes: [DEPLOY_OPENCLAW.md](./DEPLOY_OPENCLAW.md)
+- Agent/development notes: [CLAUDE.md](./CLAUDE.md)
 
 ## License
 
 Released under the MIT License. See [LICENSE](./LICENSE) for details.
-
-Contributions, issues, and pull requests are welcome.
