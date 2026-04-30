@@ -554,3 +554,113 @@ def test_unseen_author_year_still_flags_after_literature_search():
 
     assert violations
     assert violations[0].kind == "suspicious_author_year"
+
+
+# ── PART AI #1: lock-down regression for diagnostics bundles 04-24 ──────
+
+
+def test_bundle_5841_warmup_reply_must_be_blocked():
+    """PART AI #1 lock-down: 04-24 warmup chat (.local/diagnostics/5841...)
+    生产时 reply 没被拦下来; 现在的 claim_validator 必须能完整抓住 3 类
+    fabrication 同时触发. 防止以后规则被弱化导致类似 reply 再通过."""
+    from app.services.claim_validator import (
+        provenance_citation_violations,
+        unsupported_literature_narrative_violations,
+        validate_claims,
+    )
+
+    reply = (
+        "[CII] luminosities typically range from ~10^7 to 10^9 L_sun, "
+        "and FWHM generally spans 100-600 km/s. Carniani et al. (2020) "
+        "measured these trends."
+    )
+    # 当时只调了 search_literature 一个工具且返回空 results
+    tool_results = [{
+        "tool": "search_literature",
+        "result": {"success": True, "results": []},
+    }]
+
+    # 1. validate_claims 必须 fail (uncited 数字)
+    result = validate_claims(reply, tool_results)
+    assert result.ok is False
+    assert len(result.uncited) >= 1
+
+    # 2. provenance citation 必须含 suspicious_author_year (Carniani 没经
+    #    extract 直接被引)
+    cite_violations = provenance_citation_violations(reply, tool_results)
+    assert any(v.kind == "suspicious_author_year" for v in cite_violations)
+    assert any("Carniani" in v.match_text for v in cite_violations)
+
+    # 3. unsupported_literature_narrative 必须含整段文学陈述
+    narrative_violations = unsupported_literature_narrative_violations(
+        reply, tool_results,
+    )
+    assert len(narrative_violations) >= 1
+
+
+def test_bundle_6202_partial_fit_with_uncited_pearson_must_be_flagged():
+    """PART AI #1 lock-down: 04-24 LFR run (.local/diagnostics/6202... 与
+    84ad...) 生产 reply 报数字, fit_line_lfr=PARTIAL, 但 reply 没说
+    exploratory. methodology validator 必须触发
+    line_relation_exploratory_label_missing; Pearson r=0.45 不在 universe
+    必须触发 validate_claims uncited."""
+    from app.services.claim_validator import (
+        methodology_consistency_violations,
+        validate_claims,
+    )
+
+    reply = (
+        "For the 74 ALPINE [CII] rows, the Bayesian fit gives slope beta = "
+        "0.75, intercept alpha = 6.88, intrinsic scatter = 0.31 dex, and "
+        "Pearson r ≈ 0.45."
+    )
+    tool_results = [{
+        "tool": "fit_line_lfr",
+        "result": {
+            "success": True,
+            "fit_method": "bayesian_xyerr_linmix",
+            "alpha": 6.88,
+            "beta": 0.75,
+            "intrinsic_scatter_dex": 0.31,
+            "n_used": 74,
+            "publication_ready": False,
+            "__tool_status__": "PARTIAL",
+            "__do_not_claim__": True,
+        },
+    }]
+
+    # validate_claims: pearson r=0.45 不在 universe
+    result = validate_claims(reply, tool_results)
+    assert result.ok is False, "Pearson r=0.45 不在 universe, 必须 fail"
+
+    # methodology: PARTIAL fit 报数字但 reply 无 exploratory label →
+    # line_relation_exploratory_label_missing
+    methodology_v = methodology_consistency_violations(reply, tool_results)
+    assert any(
+        v.kind == "line_relation_exploratory_label_missing"
+        for v in methodology_v
+    ), (
+        f"PARTIAL fit + 数字 + 无 exploratory label 必须 flag, "
+        f"got: {[v.kind for v in methodology_v]}"
+    )
+
+
+def test_bundle_e8d9_fit_lfr_bypass_must_be_blocked():
+    """PART AI #1 lock-down: 04-24 LFR run (.local/diagnostics/e8d9...)
+    只调 1 个 run_python 没调 fit_line_lfr, reply 报 LFR 数字 — Step 3
+    fit_line_lfr_bypass detector 必须抓. 这条 e2e 在 step 3 也覆盖,
+    放在这里让 4 个 bundle 完整 lock-down."""
+    from app.services.claim_validator import methodology_consistency_violations
+
+    reply = (
+        "Using the cached ALPINE measurement table, the Bayesian fit on the "
+        "L'[CII]-FWHM relation gives slope beta = 0.766, intercept alpha = "
+        "9.823, and intrinsic scatter = 0.315 dex."
+    )
+    tool_results = [{
+        "tool": "run_python",
+        "result": {"success": True, "stdout": "ok", "figures": []},
+    }]
+
+    violations = methodology_consistency_violations(reply, tool_results)
+    assert any(v.kind == "fit_line_lfr_bypass" for v in violations)
