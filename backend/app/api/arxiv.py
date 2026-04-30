@@ -119,6 +119,26 @@ def _looks_like_ar5iv_math_layout(
 def _strip_latex(value: str) -> str:
     value = value or ""
     value = re.sub(r"(?<!\\)%.*", "", value)
+    # Preserve common scientific symbols before the generic command stripper.
+    # Otherwise cosmology table labels like \Omega_m / \Delta\chi^2 become
+    # bare "_m" / "^2", which looks like the extractor omitted key terms.
+    macro_map = {
+        "Omega": "Ω",
+        "omega": "ω",
+        "Lambda": "Λ",
+        "Delta": "Δ",
+        "delta": "δ",
+        "chi": "χ",
+        "sigma": "σ",
+        "Sigma": "Σ",
+        "mu": "μ",
+        "nu": "ν",
+        "alpha": "α",
+        "beta": "β",
+        "gamma": "γ",
+    }
+    for macro, replacement in macro_map.items():
+        value = re.sub(rf"\\{macro}(?![A-Za-z])", replacement, value)
     value = re.sub(r"\\(?:mathrm|textrm|text|textbf|emph|mathbf|mathit)\{([^{}]*)\}", r"\1", value)
     value = re.sub(r"\\(?:colhead|tablehead)\{([^{}]*)\}", r"\1", value)
     value = re.sub(r"\\multicolumn\{[^{}]*\}\{[^{}]*\}\{([^{}]*)\}", r"\1", value)
@@ -127,6 +147,8 @@ def _strip_latex(value: str) -> str:
     value = re.sub(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?", " ", value)
     value = value.replace("\\", " ")
     value = re.sub(r"[{}$]", "", value)
+    value = re.sub(r"^\s*\[[^\]]*ex\]\s*", "", value)
+    value = re.sub(r"\b\d+(?:\.\d+)?pt\d*(?:\.\d+)?ex\b", " ", value)
     return _normalize_ws(value)
 
 

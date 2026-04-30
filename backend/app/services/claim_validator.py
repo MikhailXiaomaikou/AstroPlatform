@@ -88,18 +88,30 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         re.I,
     )),
     ("cosmology_h0", re.compile(
-        rf"\bH_?0\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}"
-        rf"(?:\s*km\s*s(?:ec)?(?:ond)?\s*[-/]?\s*Mpc(?:\^-?1)?|\s*km/?s/?Mpc)?\b",
+        rf"\b(?:H_?0|H₀)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}"
+        rf"(?:[ \t]*km[ \t]*s(?:ec)?(?:ond)?[ \t]*[-/]?[ \t]*Mpc(?:\^-?1)?|[ \t]*km/?s/?Mpc)?\b",
         re.I,
     )),
     ("cosmology_om0", re.compile(
-        rf"\b(?:Om0|Omega_?m|OmegaM|Ω_m|ΩM)\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b",
+        rf"\b(?:Om0|Omega_?m|OmegaM|Ω_?m|Ωₘ|ΩM)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
         re.I,
     )),
-    ("cosmology_w0", re.compile(rf"\bw_?0\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b", re.I)),
-    ("cosmology_wa", re.compile(rf"\bw_?a\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b", re.I)),
+    ("cosmology_w0", re.compile(rf"\b(?:w_?0|w₀)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b", re.I)),
+    ("cosmology_wa", re.compile(rf"\b(?:w_?a|wₐ)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b", re.I)),
     ("cosmology_sigma8", re.compile(
-        rf"\b(?:sigma_?8|σ_?8)\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b",
+        rf"\b(?:sigma_?8|σ_?8)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
+        re.I,
+    )),
+    ("significance_sigma", re.compile(
+        rf"\b{_NUM}\s*(?:σ|sigma)\b",
+        re.I,
+    )),
+    ("p_value", re.compile(
+        rf"\bp[-\s]?value\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b",
+        re.I,
+    )),
+    ("correlation_r", re.compile(
+        rf"\b(?:Pearson\s+)?r\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b",
         re.I,
     )),
     ("log_g", re.compile(rf"\blog\s*g\s*[=≈~]\s*{_NUM}\b", re.I)),
@@ -843,6 +855,15 @@ def provenance_citation_violations(
                 line_number=_line_number(reply, match.start()),
             ))
 
+    violations.extend(_paper_level_numeric_claim_violations(
+        citation_text,
+        tool_results,
+        valid_bibcodes,
+        valid_arxiv_ids,
+        valid_dois,
+        author_year_support,
+    ))
+
     for violation in violations:
         _record_citation_violation_metric(violation.kind)
         logger.warning(
@@ -1132,7 +1153,7 @@ def blocked_unsupported_narrative_reply_text(violations: list[CitationViolation]
         "or physical-context claims that were not present in this turn's "
         "non-synthetic tool results.\n\n"
         + "\n".join(lines)
-        + "\n\nRun `search_literature` or a dedicated measurement tool first, "
+        + "\n\nRun a literature search or a dedicated measurement step first, "
         "or state that the value/context was not determined by the tools."
     )
 
@@ -1143,6 +1164,18 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
         for violation in violations
     ]
     cosmology_note = _cosmology_manifest_block_note(violations)
+    if any(v.kind == "paper_numeric_missing_citation" for v in violations):
+        return (
+            "⚠ Citation provenance check failed: the assistant reported numeric "
+            "claims from paper-level literature without a supporting citation in "
+            "the same sentence. The unsupported phrases were:\n\n"
+            + "\n".join(lines)
+            + cosmology_note
+            + "\n\nFor literature-derived numbers, cite the source directly in "
+            "the sentence that contains the number, for example "
+            "`(DESI Collaboration 2024; arXiv:2404.03002)`. If multiple papers "
+            "support different numbers, split them into separate cited sentences."
+        )
     return (
         "⚠ Reply withheld: the model attempted to cite references that were "
         "not present in this turn's tool provenance. The unsupported citations were:\n\n"
@@ -1334,6 +1367,92 @@ def _claimable_tool_text(tool_results: Any) -> str:
     return "\n".join(chunks)
 
 
+_PAPER_LEVEL_TOOLS: frozenset[str] = frozenset({"search_literature", "read_arxiv_paper"})
+_CITABLE_ANALYSIS_TOOLS: frozenset[str] = frozenset({
+    "compare_luminosity_distances",
+    "demagnify_sample",
+    "fit_cosmology_mcmc",
+    "fit_isochrone",
+    "fit_line_lfr",
+    "get_cosmology_run_status",
+    "get_extinction",
+    "query_gaia_cluster",
+    "run_adql",
+    "run_cobaya_cosmology",
+    "run_python",
+    "search_line_measurements",
+})
+
+
+def _paper_level_numeric_claim_violations(
+    reply: str,
+    tool_results: Any,
+    valid_bibcodes: set[str],
+    valid_arxiv_ids: set[str],
+    valid_dois: set[str],
+    author_year_support: set[tuple[str, str]],
+) -> list[CitationViolation]:
+    """Require local citation for numbers drawn from paper-level tools.
+
+    `search_literature` and `read_arxiv_paper` are citation/context tools.
+    They can support paper-level discussion, but they do not make a global
+    paragraph of mixed numerical claims traceable.  When they are the primary
+    source of numbers in a turn, each numeric claim must carry a valid
+    same-sentence citation (arXiv/DOI/bibcode or supported author-year).
+    Dedicated measurement/fitting tools are exempt; their numeric provenance
+    is checked by the zero-fabrication and methodology gates instead.
+    """
+    if not _paper_level_numeric_citations_required(tool_results):
+        return []
+
+    violations: list[CitationViolation] = []
+    seen: set[tuple[str, int]] = set()
+    for claim in extract_claims(reply):
+        line_text = _line_text(reply, claim.start)
+        if _line_is_nonclaim_context(line_text):
+            continue
+        sentence = _sentence_text(reply, claim.start)
+        if _text_has_valid_paper_citation(
+            sentence,
+            valid_bibcodes,
+            valid_arxiv_ids,
+            valid_dois,
+            author_year_support,
+        ):
+            continue
+        key = (claim.raw, claim.start)
+        if key in seen:
+            continue
+        seen.add(key)
+        violations.append(CitationViolation(
+            kind="paper_numeric_missing_citation",
+            match_text=claim.raw,
+            line_number=_line_number(reply, claim.start),
+        ))
+    return violations
+
+
+def _paper_level_numeric_citations_required(tool_results: Any) -> bool:
+    has_paper_tool = False
+    has_analysis_tool = False
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries or []:
+        tool_name, result = _entry_tool_and_result(entry)
+        if not _payload_is_claimable_success(tool_name, result):
+            continue
+        if tool_name in _PAPER_LEVEL_TOOLS:
+            has_paper_tool = True
+        elif tool_name in _CITABLE_ANALYSIS_TOOLS:
+            has_analysis_tool = True
+
+    # Row-level extracted measurements are already table-cited and may be
+    # consumed by downstream fitting; do not force an abstract-style citation
+    # rule on those rows.
+    if _line_measurement_rows_available(tool_results):
+        has_analysis_tool = True
+    return has_paper_tool and not has_analysis_tool
+
+
 def _bibcodes_from_field_payload(payload: Any) -> set[str]:
     bibcodes: set[str] = set()
     if not isinstance(payload, dict):
@@ -1485,6 +1604,27 @@ def _line_text(text: str, offset: int) -> str:
     return text[start:end]
 
 
+def _sentence_text(text: str, offset: int) -> str:
+    line_start = text.rfind("\n", 0, max(0, offset)) + 1
+    line_end = text.find("\n", offset)
+    if line_end < 0:
+        line_end = len(text)
+    line = text[line_start:line_end]
+    local_offset = max(0, offset - line_start)
+
+    boundaries = [0]
+    boundaries.extend(match.end() for match in re.finditer(r"(?<=[.!?])\s+", line))
+    boundaries.append(len(line))
+
+    start = 0
+    end = len(line)
+    for left, right in zip(boundaries, boundaries[1:]):
+        if left <= local_offset < right or (right == len(line) and local_offset == right):
+            start, end = left, right
+            break
+    return line[start:end].strip()
+
+
 def _line_is_nonclaim_context(line: str) -> bool:
     lowered = str(line or "").lower()
     return any(
@@ -1542,6 +1682,24 @@ def _line_has_valid_explicit_citation(
     return False
 
 
+def _text_has_valid_paper_citation(
+    text: str,
+    valid_bibcodes: set[str],
+    valid_arxiv_ids: set[str],
+    valid_dois: set[str],
+    author_year_support: set[tuple[str, str]],
+) -> bool:
+    if _line_has_valid_explicit_citation(text, valid_bibcodes, valid_arxiv_ids, valid_dois):
+        return True
+    for match in AUTHOR_YEAR_RE.finditer(text):
+        author, year = match.group(1), match.group(2)
+        if _author_year_looks_like_noise(author, match.group(0)):
+            continue
+        if (_author_key(author), str(year)) in author_year_support:
+            return True
+    return False
+
+
 def _line_number(text: str, offset: int) -> int:
     return text[:offset].count("\n") + 1
 
@@ -1554,6 +1712,7 @@ def _record_citation_violation_metric(kind: str) -> None:
             "invalid_bibcode",
             "suspicious_author_year",
             "unsupported_literature_narrative",
+            "paper_numeric_missing_citation",
         }:
             reason = kind
         else:
@@ -1577,9 +1736,45 @@ def build_regeneration_prompt(result: ValidationResult) -> str:
     )
 
 
+def build_zero_data_qualitative_regeneration_prompt(result: ValidationResult) -> str:
+    """Ask the model for a qualitative-only rewrite after a zero-data trip.
+
+    This is intentionally narrower than the normal regeneration prompt.  When
+    no citable numeric universe exists, a methodological question can still
+    have a useful answer, but every number, threshold, sigma level, parameter
+    value, redshift boundary, sample count, or named quantitative result must
+    disappear.
+    """
+    return (
+        "STOP. This turn produced no citable numeric tool results.\n\n"
+        + result.describe()
+        + "\n\nRewrite your previous reply as a qualitative-only answer:\n"
+        "1. Remove every numeric value, numeric range, sigma/significance, "
+        "redshift boundary, dataset count, parameter value, and equation "
+        "coefficient.\n"
+        "2. Do not replace removed numbers with new approximations.\n"
+        "3. If the user asked about a method or expected scientific behaviour, "
+        "you may describe qualitative expectations, caveats, and next steps.\n"
+        "4. State that no quantitative result was determined in this turn.\n"
+        "5. Do not add author-year citations, bibcodes, DOIs, or arXiv IDs "
+        "unless they were already present in verified tool results.\n"
+        "6. Do not call tools. Do not mention internal validator labels or "
+        "platform function names.\n"
+        "7. Reply in standard English only.\n\n"
+        "Respond with only the corrected qualitative reply."
+    )
+
+
+def _claim_display_text(claim: Claim) -> str:
+    raw = " ".join(str(claim.raw or "").split())
+    if raw:
+        return f"- {raw}"
+    return f"- {claim.value:g}"
+
+
 def blocked_reply_text(result: ValidationResult) -> str:
     """Fallback shown to the user when the LLM cannot stop fabricating."""
-    lines = [f"- {c.label} = {c.value}" for c in result.uncited]
+    lines = [_claim_display_text(c) for c in result.uncited]
     universe_snippet = (
         f"Tools returned {result.universe_size} distinct numeric values this turn"
         + (f" (sample: {result.universe_sample[:10]})" if result.universe_sample else " (empty).")
@@ -1590,13 +1785,11 @@ def blocked_reply_text(result: ValidationResult) -> str:
     )
     return (
         "⚠ Reply withheld: the model attempted to cite values that were not "
-        "produced by any tool this turn, and failed to correct itself after "
-        "two attempts. The uncited values were:\n\n"
+        "produced by this turn's tools. The unsupported numeric phrases were:\n\n"
         + "\n".join(lines)
         + f"\n\n{universe_snippet}{strict_note}"
-        + "\n\nPlease rephrase your question — for example, ask me to "
-        "search literature for the value, or provide it explicitly in "
-        "your prompt."
+        + "\n\nPlease ask for a cited data lookup / fit, or keep the answer "
+        "qualitative until the relevant data are available."
     )
 
 

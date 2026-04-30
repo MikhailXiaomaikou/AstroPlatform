@@ -11,6 +11,7 @@ from app.api.chat import (
     _parse_abstention_tag,
     _classify_abstention_reason,
     _render_abstention_card,
+    _sanitize_tools_returned_nothing,
 )
 
 
@@ -108,6 +109,22 @@ def test_parse_rejects_normal_reply():
 
 def test_parse_rejects_empty_reply():
     assert _parse_abstention_tag("") is None
+
+
+def test_sanitize_embedded_malformed_abstention_hides_xml_and_tool_names():
+    reply = (
+        'I tried to continue. <toolsreturnednothing '
+        'failedtools="extractliteraturetables,fitlinelfr" '
+        'rationale="extractliteraturetables rate limit reached" '
+        'suggestednext_step="Run fit_line_lfr later"/>'
+    )
+    safe = _sanitize_tools_returned_nothing(reply)
+    assert "<toolsreturnednothing" not in safe
+    assert "failedtools" not in safe
+    assert "extractliteraturetables" not in safe
+    assert "fit_line_lfr" not in safe
+    assert "table extraction" in safe
+    assert "line-relation fitting" in safe
 
 
 # ---------- Reason classification ----------

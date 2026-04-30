@@ -3849,6 +3849,7 @@ def _sanitize_tools_returned_nothing(reply: str) -> str:
         ("rationale", "rationale"),
         ("suggested_next_step", "next"),
         ("suggestednext_step", "next"),
+        ("suggestednextstep", "next"),
     ):
         match = re.search(attr + r"=[\"']([^\"']*)[\"']", text, re.I)
         if not match:
@@ -3860,13 +3861,41 @@ def _sanitize_tools_returned_nothing(reply: str) -> str:
         elif target == "next":
             next_step = match.group(1)
 
+    def _user_safe_detail(value: str) -> str:
+        safe = str(value or "")
+        replacements = {
+            "extract_literature_tables": "table extraction",
+            "extractliteraturetables": "table extraction",
+            "search_literature": "literature search",
+            "searchliterature": "literature search",
+            "read_arxiv_paper": "paper reader",
+            "readarxivpaper": "paper reader",
+            "fit_line_lfr": "line-relation fitting",
+            "fitlinelfr": "line-relation fitting",
+            "line_measurements": "line measurements",
+            "linemeasurements": "line measurements",
+            "run_python": "analysis-code execution",
+            "runpython": "analysis-code execution",
+        }
+        for needle, replacement in replacements.items():
+            safe = re.sub(re.escape(needle), replacement, safe, flags=re.I)
+        safe = re.sub(r"\bfailedtools\b", "failed steps", safe, flags=re.I)
+        safe = re.sub(r"\bemptytools\b", "empty steps", safe, flags=re.I)
+        safe = re.sub(r"\bsuggestednext_?step\b", "suggested next step", safe, flags=re.I)
+        safe = re.sub(r"</?tools_?returned_?nothing[^>]*>", "", safe, flags=re.I)
+        return re.sub(r"\s+", " ", safe).strip()
+
+    failed = _user_safe_detail(failed)
+    rationale = _user_safe_detail(rationale)
+    next_step = _user_safe_detail(next_step)
+
     parts = [
-        "I could not complete the requested measurement-table fit with the tools that succeeded this turn."
+        "I could not complete the requested measurement-table fit with the data steps that succeeded this turn."
     ]
     if rationale:
         parts.append(rationale)
     if failed:
-        parts.append(f"Unavailable or failed step(s): {failed}.")
+        parts.append(f"Unavailable or failed data step(s): {failed}.")
     if next_step:
         parts.append(f"Suggested next step: {next_step}")
     parts.append(
@@ -4671,16 +4700,15 @@ async def _run_agent_loop(
                     "the line-luminosity/FWHM relation."
                 ),
             })
-        line_relation_abstention_text = (
-            line_relation_workflow
-            and ("<tools_returned_nothing" in text or "<toolsreturnednothing" in text)
+        abstention_text_in_prose = (
+            "<tools_returned_nothing" in text or "<toolsreturnednothing" in text
         )
-        if line_relation_abstention_text:
+        if abstention_text_in_prose:
             text = _sanitize_tools_returned_nothing(text)
         if text:
             text_parts.append(text)
             await _emit({"type": "agent_text", "agent": agent_name, "content": text})
-        if tool_calls_in_turn and line_relation_abstention_text:
+        if tool_calls_in_turn and abstention_text_in_prose:
             break
         if not tool_calls_in_turn:
             break
@@ -5152,6 +5180,8 @@ async def _run_agent_loop(
             "honest_abstention": True,
             "abstention_reason": reason,
         }
+    if "<tools_returned_nothing" in clean_reply or "<toolsreturnednothing" in clean_reply:
+        clean_reply = _sanitize_tools_returned_nothing(clean_reply)
 
     # R2: zero-fabrication gate.  Validate every numeric claim in the reply
     # against the tool_results collected this turn; if any claim can't be
@@ -5161,6 +5191,7 @@ async def _run_agent_loop(
         from app.services.claim_validator import (
             validate_claims,
             build_regeneration_prompt,
+            build_zero_data_qualitative_regeneration_prompt,
             blocked_reply_text,
             zero_data_but_quantitative,
             is_empty_turn,
@@ -5236,14 +5267,83 @@ async def _run_agent_loop(
                 len(zero_data_claims), agent_name,
                 [c.label for c in zero_data_claims],
             )
-            # Run validate_claims once so we get the universe snapshot
-            # for the block message (F1.5).
             validation = validate_claims(clean_reply, all_tool_results)
-            clean_reply = blocked_reply_text(validation)
-            fabrication_stats["blocked"] = True
+            qualitative_rewrite = ""
+            if validation.uncited:
+                # PART AH: zero-data turns can still answer methodological
+                # questions qualitatively.  Try one text-only rewrite that
+                # strips every unsupported number instead of immediately
+                # replacing the whole answer with a withheld block.
+                rewrite_messages = list(working_messages) + [
+                    {"role": "assistant", "content": clean_reply},
+                    {
+                        "role": "user",
+                        "content": build_zero_data_qualitative_regeneration_prompt(validation),
+                    },
+                ]
+                try:
+                    regen = await _llm_messages_create(
+                        system=system,
+                        messages=rewrite_messages,
+                        tools=[],
+                        provider_api_keys=provider_api_keys,
+                        agent_name=agent_name,
+                        preferred_backend=preferred_backend,
+                        model_profile=model_profile,
+                    )
+                    qualitative_rewrite = str(regen.get("content", "") or "").strip()
+                except Exception as exc:
+                    logger.warning("Zero-data qualitative rewrite failed: %s", exc)
+
+            if qualitative_rewrite:
+                rewrite_validation = validate_claims(qualitative_rewrite, all_tool_results)
+                rewrite_zero_data_claims = zero_data_but_quantitative(
+                    qualitative_rewrite, all_tool_results,
+                )
+                rewrite_citation_violations = provenance_citation_violations(
+                    qualitative_rewrite, all_tool_results,
+                )
+                rewrite_unsupported_narrative = unsupported_literature_narrative_violations(
+                    qualitative_rewrite, all_tool_results,
+                )
+                if (
+                    rewrite_validation.ok
+                    and not rewrite_zero_data_claims
+                    and not citation_violations_should_block(rewrite_citation_violations)
+                    and not rewrite_unsupported_narrative
+                ):
+                    clean_reply = qualitative_rewrite
+                    fabrication_stats["regenerations"] += 1
+                    try:
+                        from app.observability.metrics import record_counter
+                        record_counter(
+                            "zero_data_qualitative_rewrite_total",
+                            1.0,
+                            agent=agent_name,
+                        )
+                    except Exception:
+                        pass
+                elif rewrite_citation_violations and citation_violations_should_block(rewrite_citation_violations):
+                    clean_reply = blocked_citation_reply_text(rewrite_citation_violations)
+                    fabrication_stats["blocked"] = True
+                elif rewrite_unsupported_narrative:
+                    clean_reply = blocked_unsupported_narrative_reply_text(rewrite_unsupported_narrative)
+                    fabrication_stats["blocked"] = True
+                else:
+                    clean_reply = blocked_reply_text(rewrite_validation)
+                    fabrication_stats["blocked"] = True
+            else:
+                clean_reply = blocked_reply_text(validation)
+                fabrication_stats["blocked"] = True
             try:
                 from app.observability.metrics import record_counter
-                record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="zero_data")
+                if fabrication_stats["blocked"]:
+                    record_counter(
+                        "fabrication_blocked_total",
+                        1.0,
+                        agent=agent_name,
+                        reason="zero_data",
+                    )
             except Exception:
                 pass
 
@@ -5293,11 +5393,10 @@ async def _run_agent_loop(
                 "\n\nAdditional note: your claims matched the pattern of "
                 "citing a textbook literature value (age / mass / distance) "
                 "without running a corresponding measurement tool this turn. "
-                "If you want to cite a literature value, call "
-                "`search_literature` first so the citation lands in "
-                "tool_results; if you want to measure it, call "
-                "`fit_isochrone` / `run_adql` (Gaia parallax → distance) "
-                "/ `get_object_dossier` explicitly."
+                "If you want to cite a literature value, run a literature "
+                "search first so the citation is present in this turn. If "
+                "you want to measure it, run the corresponding measurement "
+                "workflow explicitly."
             )
             fabrication_stats["blocked"] = True
 

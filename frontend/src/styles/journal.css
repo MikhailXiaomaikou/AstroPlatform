@@ -1185,9 +1185,44 @@ table.keys td a { color: var(--accent-2); font-style: italic; cursor: pointer; }
   font-size: 12.5px;
   color: var(--ink); white-space: nowrap;
 }
+.chat-result-table.literature-table-preview {
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+}
+.chat-result-table.literature-table-preview th,
+.chat-result-table.literature-table-preview td {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
 .chat-result-table tr:hover td { background: var(--paper-2); }
 .chat-result-empty { padding: 14px; color: var(--ink-3); font-style: italic; font-size: 13px; }
 .chat-result-dedup { padding: 10px 14px 0; color: var(--ink-3); font-size: 12px; font-style: italic; }
+.line-relation-plot {
+  margin: 12px 0;
+  max-width: 720px;
+}
+.line-relation-plot svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+}
+.line-relation-plot text {
+  fill: var(--ink-2);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+}
+.line-relation-plot figcaption {
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
 .chat-result-actions {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 14px; border-top: 1px solid var(--rule-2);

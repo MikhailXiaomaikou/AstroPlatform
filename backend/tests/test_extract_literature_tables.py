@@ -290,6 +290,45 @@ def test_exec_extract_literature_tables_authenticated_quota_higher(monkeypatch) 
         )
 
 
+def test_exec_extract_literature_tables_anon_falls_back_to_python_session_bucket(monkeypatch) -> None:
+    """Fresh Chat UI turns may not have a durable chat_session_id yet.
+
+    The limiter should then use python_session_id instead of the shared
+    anonymous-fallback bucket, otherwise local 20-paper UI reruns trip the
+    public 5/hr cap after the first few fresh chats.
+    """
+    from app.services import ai_tools
+
+    ai_tools._arxiv_tool_calls.clear()  # type: ignore[attr-defined]
+
+    async def fake_fetch(arxiv_id: str) -> dict:
+        return {
+            "arxiv_id": arxiv_id,
+            "title": "stub",
+            "tables": [],
+            "line_measurements": [],
+            "bibcode": f"arXiv:{arxiv_id}",
+            "authors": [],
+            "year": 2024,
+            "doi": None,
+            "source_url": "",
+        }
+
+    monkeypatch.setattr(ai_tools, "_extract_arxiv_tables_payload_with_retry", fake_fetch)
+    _install_isolated_cache(monkeypatch)
+
+    for i in range(6):
+        result = asyncio.run(
+            ai_tools._exec_extract_literature_tables(
+                {"arxiv_id": f"2310.{12000 + i}"},
+                python_session_id=f"fresh-ui-python-session-{i}",
+                user_id=None,
+                chat_session_id=None,
+            )
+        )
+        assert result.get("error_class") != "rate_limit_exceeded", result
+
+
 def test_exec_extract_literature_tables_rejects_missing_arxiv_id() -> None:
     """Authenticated but no arxiv_id payload → missing_arxiv_id."""
     from app.services.ai_tools import _exec_extract_literature_tables

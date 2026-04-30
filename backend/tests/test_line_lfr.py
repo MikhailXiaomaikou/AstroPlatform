@@ -43,6 +43,9 @@ def test_fit_line_lfr_consumes_cached_literature_measurements():
     assert abs(result["beta"] - 0.5) < 1e-9
     assert abs(result["alpha"] - 8.0) < 1e-9
     assert result["citation_summary"]["citations"] == ["arXiv:2211.04968"]
+    assert result["plot_data"]["n_points"] == 6
+    assert len(result["plot_data"]["x"]) == 6
+    assert len(result["plot_data"]["fit_line"]["x"]) == 2
 
 
 def test_fit_line_lfr_partial_when_too_few_rows():

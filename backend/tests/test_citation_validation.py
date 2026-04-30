@@ -357,11 +357,12 @@ def test_author_year_phrase_present_in_claimable_payload_is_supported():
         "tool": "read_arxiv_paper",
         "result": {
             "success": True,
+            "arxiv_id": "1807.06209",
             "abstract": "The abstract reports an approximately 2 sigma tension with Planck 2018.",
         },
     }]
 
-    reply = "The abstract also states an approximately 2 sigma tension with Planck 2018."
+    reply = "The abstract also states an approximately 2 sigma tension with Planck 2018 (arXiv:1807.06209)."
 
     assert provenance_citation_violations(reply, tool_results) == []
 
@@ -373,13 +374,98 @@ def test_author_year_phrase_allows_hyphenated_payload_variant():
         "tool": "read_arxiv_paper",
         "result": {
             "success": True,
+            "arxiv_id": "1807.06209",
             "abstract": "Comparing our result with Planck-2018 observations gives a tension.",
         },
     }]
 
-    reply = "The abstract states an approximately 2 sigma tension with Planck 2018."
+    reply = "The abstract states an approximately 2 sigma tension with Planck 2018 (arXiv:1807.06209)."
 
     assert provenance_citation_violations(reply, tool_results) == []
+
+
+def test_paper_level_numeric_claim_requires_same_sentence_citation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "read_arxiv_paper",
+        "result": {
+            "success": True,
+            "arxiv_id": "2404.03002",
+            "authors": ["DESI Collaboration"],
+            "year": "2024",
+            "abstract": "DESI BAO gives Omega_m = 0.295 +/- 0.015.",
+        },
+    }]
+
+    violations = provenance_citation_violations(
+        "DESI BAO gives Ωm = 0.295 ± 0.015.",
+        tool_results,
+    )
+
+    assert violations
+    assert violations[0].kind == "paper_numeric_missing_citation"
+    assert "Ωm" in violations[0].match_text
+
+
+def test_paper_level_numeric_claim_with_same_sentence_arxiv_is_supported():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "read_arxiv_paper",
+        "result": {
+            "success": True,
+            "arxiv_id": "2404.03002",
+            "authors": ["DESI Collaboration"],
+            "year": "2024",
+            "abstract": "DESI BAO gives Omega_m = 0.295 +/- 0.015.",
+        },
+    }]
+
+    reply = "DESI BAO gives Ωm = 0.295 ± 0.015 (DESI Collaboration 2024; arXiv:2404.03002)."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
+def test_paper_level_numeric_claim_needs_citation_in_same_sentence():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "search_literature",
+        "result": {
+            "success": True,
+            "results": [{
+                "title": "DESI 2024",
+                "authors": ["DESI Collaboration"],
+                "year": "2024",
+                "arxiv_id": "2404.03002",
+            }],
+        },
+    }]
+
+    reply = "DESI Collaboration (2024) reports the BAO constraints. Ωm = 0.295 ± 0.015."
+    violations = provenance_citation_violations(reply, tool_results)
+
+    assert violations
+    assert violations[0].kind == "paper_numeric_missing_citation"
+
+
+def test_non_paper_tool_numeric_claim_does_not_need_paper_sentence_citation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "compare_luminosity_distances",
+        "result": {
+            "success": True,
+            "current_cosmology": {
+                "H0": 73.8,
+                "Om0": 0.295,
+                "bibcode": "2011ApJ...730..119R",
+            },
+        },
+    }]
+
+    assert provenance_citation_violations("H0 = 73.8 km/s/Mpc.", tool_results) == []
 
 
 def test_supporting_bibcode_fields_enter_valid_pool():

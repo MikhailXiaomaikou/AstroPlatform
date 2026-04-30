@@ -123,3 +123,11 @@ def test_table_extraction_status_distinguishes_raw_only_from_measurement_ready()
     assert _table_extraction_status([], [])[0] == "no_tables"
     assert _table_extraction_status([{"columns": ["Target"], "rows": [["A"]]}], [])[0] == "raw_only"
     assert _table_extraction_status([{"columns": ["Source"], "rows": [["A"]]}], [{"source_name": "A"}])[0] == "measurement_ready"
+
+
+def test_latex_cleaning_preserves_cosmology_symbols():
+    from app.api.arxiv import _strip_latex
+
+    assert _strip_latex(r"\Omega_m") == "Ω_m"
+    assert _strip_latex(r"\Delta\chi^2") == "Δχ^2"
+    assert _strip_latex(r"\\[0.5ex] w_a") == "w_a"

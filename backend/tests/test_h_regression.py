@@ -1070,6 +1070,96 @@ def test_literature_tool_hides_known_bad_withdrawn_arxiv_hits():
     assert [row["bibcode"] for row in result["results"]] == ["arXiv:2002.00962"]
 
 
+def test_literature_tool_filters_off_topic_particle_physics_for_cosmology_query():
+    """DESI/SN cosmology searches must not surface CKM/BESIII decay papers."""
+    from app.services.ai_tools import _exec_literature
+
+    off_topic = {
+        "title": "Precise measurement of the CKM angle gamma with a novel approach",
+        "authors": ["BESIII Collaboration", "LHCb Collaboration"],
+        "year": "2026",
+        "bibcode": "arXiv:2604.05712",
+        "abstract": "A measurement of the CKM angle is performed using electron-positron collisions.",
+        "source": "arxiv",
+    }
+    on_topic = {
+        "title": "DESI 2024 VI: Cosmological Constraints from the Measurements of Baryon Acoustic Oscillations",
+        "authors": ["DESI Collaboration"],
+        "year": "2024",
+        "bibcode": "arXiv:2404.03002",
+        "abstract": "We present cosmological results from DESI DR1 BAO and dark energy constraints.",
+        "source": "arxiv",
+    }
+
+    with (
+        patch("app.api.citations._search_ads_sync", return_value=[]),
+        patch("app.api.citations._search_literature_ads", return_value=[off_topic, on_topic]),
+        patch("app.api.citations._search_literature_arxiv", return_value=[]),
+    ):
+        result = asyncio.run(_exec_literature({"query": "DESI DR1 BAO SN Ia dark energy ΛCDM"}))
+
+    assert [row["bibcode"] for row in result["results"]] == ["arXiv:2404.03002"]
+    assert result["filtered_out_count"] == 1
+
+
+def test_literature_tool_filters_generic_particle_physics_school_but_keeps_cosmology_review():
+    """R2 UI rerun: generic particle-physics conference hits should not
+    leak into SH0ES/cosmology searches, while cosmological-parameters reviews
+    from the Particle Data Book remain valid context hits.
+    """
+    from app.services.ai_tools import _exec_literature
+
+    school = {
+        "title": "Proceedings of the IFJ PAN Particle Physics Summer Student Alumni Conference 2022",
+        "authors": ["Dominik Derendarz"],
+        "year": "2022",
+        "bibcode": "arXiv:2201.00001",
+        "abstract": "A student conference on particle physics and spectrogram representations.",
+        "source": "arxiv",
+    }
+    cosmology_review = {
+        "title": "The Cosmological Parameters",
+        "authors": ["Ofer Lahav", "Andrew R. Liddle"],
+        "year": "2019",
+        "bibcode": "2019pdg..book...25L",
+        "abstract": "A Review of Particle Physics article summarizing cosmological parameters, CMB, Hubble constant, and dark energy constraints.",
+        "source": "ads",
+    }
+
+    with (
+        patch("app.api.citations._search_ads_sync", return_value=[]),
+        patch("app.api.citations._search_literature_ads", return_value=[school, cosmology_review]),
+        patch("app.api.citations._search_literature_arxiv", return_value=[]),
+    ):
+        result = asyncio.run(_exec_literature({"query": "SH0ES H0 cosmological parameters Hubble constant"}))
+
+    assert [row["bibcode"] for row in result["results"]] == ["2019pdg..book...25L"]
+    assert result["filtered_out_count"] == 1
+
+
+def test_literature_tool_returns_empty_when_all_cosmology_hits_are_off_topic():
+    from app.services.ai_tools import _exec_literature
+
+    off_topic = {
+        "title": "First measurement of a rare charm decay at BESIII",
+        "authors": ["BESIII Collaboration"],
+        "year": "2025",
+        "bibcode": "arXiv:2501.00001",
+        "abstract": "We report a branching fraction measured at an electron-positron collider.",
+        "source": "arxiv",
+    }
+
+    with (
+        patch("app.api.citations._search_ads_sync", return_value=[]),
+        patch("app.api.citations._search_literature_ads", return_value=[off_topic]),
+        patch("app.api.citations._search_literature_arxiv", return_value=[]),
+    ):
+        result = asyncio.run(_exec_literature({"query": "DESI DR1 BAO Pantheon Union3 Gaussian Process"}))
+
+    assert result["results"] == []
+    assert result["filtered_out_count"] == 1
+
+
 def test_line_lfr_uses_verified_cii_seed_when_search_has_no_candidates():
     from app.api.chat import _verified_line_relation_seed_candidates
 

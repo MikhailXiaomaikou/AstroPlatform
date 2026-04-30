@@ -12,6 +12,7 @@ import pytest
 from app.services.claim_validator import (
     blocked_reply_text,
     build_regeneration_prompt,
+    build_zero_data_qualitative_regeneration_prompt,
     extract_claims,
     validate_claims,
 )
@@ -235,7 +236,28 @@ def test_blocked_reply_text_is_user_friendly():
     assert not r.ok
     text = blocked_reply_text(r)
     assert "withheld" in text.lower()
-    assert "rephrase" in text.lower()
+    assert "cited data lookup" in text.lower()
+    assert "redshift_z" not in text
+
+
+def test_blocked_reply_text_does_not_leak_internal_group_labels():
+    r = validate_claims("H0 = 67.0 km/s/Mpc and H0 = 73.0 km/s/Mpc.", [])
+    assert not r.ok
+    text = blocked_reply_text(r)
+    assert "value_bare_unit" not in text
+    assert "g1" not in text
+    assert "67.0" in text
+    assert "73.0" in text
+
+
+def test_zero_data_qualitative_rewrite_prompt_allows_method_answer_without_numbers():
+    r = validate_claims("A DESI+SN comparison may show a 2 sigma deviation at z = 0.4.", [])
+    assert not r.ok
+    prompt = build_zero_data_qualitative_regeneration_prompt(r)
+    assert "qualitative-only answer" in prompt
+    assert "Remove every numeric value" in prompt
+    assert "method or expected scientific behaviour" in prompt
+    assert "Do not call tools" in prompt
 
 
 # -------------------- F1.1: Pleiades fabrication regression --------------------

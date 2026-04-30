@@ -7,6 +7,7 @@ handles the tool_use → result → next message cycle automatically.
 import asyncio
 import logging
 import math
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -3541,14 +3542,17 @@ async def _exec_literature(inp: dict) -> dict:
                     "or arXiv fallback."
                 ),
             }
-        filtered = [
+        visible = [
             r for r in raw
             if not _literature_hit_should_be_hidden(r)
         ]
+        filtered, filtered_out_count = _filter_literature_hits_for_query(query, visible)
         return {
             "source": source,
             "result_granularity": "paper_abstract",
             "supports_measurement_claims": False,
+            "filtered_out_count": filtered_out_count,
+            "relevance_filter": "query_keyword_overlap",
             "results": [
                 {
                     "title": r["title"],
@@ -3577,6 +3581,172 @@ def _literature_hit_should_be_hidden(row: dict[str, Any]) -> bool:
         "submitted under a pseudonym",
     )
     return any(phrase in blob for phrase in known_bad_phrases)
+
+
+_LITERATURE_STOPWORDS: frozenset[str] = frozenset({
+    "about", "after", "again", "against", "also", "analysis", "and", "are",
+    "between", "both", "can", "could", "data", "different", "does", "for",
+    "from", "give", "given", "have", "into", "model", "models", "more",
+    "over", "paper", "papers", "result", "results", "sample", "samples",
+    "show", "the", "their", "these", "this", "through", "using", "when",
+    "with", "would",
+})
+
+_COSMOLOGY_QUERY_MARKERS: tuple[str, ...] = (
+    "desi", "bao", "baryon acoustic", "pantheon", "union3", "des-5yr",
+    "des 5yr", "sn ia", "sne ia", "supernova", "lcdm", "Λcdm", "dark energy",
+    "gaussian process", "om(z)", "w_tot", "h0", "omega", "Ω",
+)
+_LINE_QUERY_MARKERS: tuple[str, ...] = (
+    "[cii]", "cii", "c ii", "158", "fwhm", "line width", "line luminosity",
+    "line-flux", "lfr", "alpine", "rebels", "alma",
+)
+_OFF_TOPIC_HIGH_ENERGY_MARKERS: tuple[str, ...] = (
+    "besiii", "lhcb", "ckm angle", "charmonium", "branching fraction",
+    "decay asymmetry", "w-annihilation", "semileptonic decay", "j/ψ",
+    "j/psi", "electron-positron collider", "b meson", "d_s", "lambda_c",
+    "ξ", "xi baryon",
+)
+_OFF_TOPIC_GENERAL_MARKERS: tuple[str, ...] = (
+    "wildfire", "power line", "shutoff", "electric grid", "nuclear mass",
+    "hartree-bogoliubov", "drhbc", "access point", "wi-fi",
+    "wireless network", "semiring", "perverse sheaves",
+)
+_COSMOLOGY_RELEVANCE_ANCHORS: tuple[str, ...] = (
+    "cosmolog", "hubble", "dark energy", "bao", "baryon acoustic",
+    "supernova", "supernovae", "pantheon", "cmb", "planck", "desi",
+    "weak lensing", "sigma8", "omega_m", "omegam", "lcdm",
+)
+
+
+def _filter_literature_hits_for_query(
+    query: str,
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    if not rows:
+        return [], 0
+
+    domain = _literature_query_domain(query)
+    if domain == "generic":
+        return rows, 0
+
+    scored = [
+        (_literature_relevance_score(query, row, domain), row)
+        for row in rows
+    ]
+    kept = [row for score, row in scored if score >= 2]
+    if not kept:
+        logger.info(
+            "search_literature relevance filter removed all hits domain=%s query=%r",
+            domain,
+            query[:120],
+        )
+        return [], len(rows)
+    kept.sort(key=lambda row: _literature_relevance_score(query, row, domain), reverse=True)
+    filtered_out = len(rows) - len(kept)
+    if filtered_out:
+        logger.info(
+            "search_literature relevance filter removed %d/%d hits domain=%s query=%r",
+            filtered_out,
+            len(rows),
+            domain,
+            query[:120],
+        )
+    return kept, filtered_out
+
+
+def _literature_query_domain(query: str) -> str:
+    normalized = _normalize_literature_text(query)
+    if any(marker in normalized for marker in _LINE_QUERY_MARKERS):
+        return "line"
+    if any(_normalize_literature_text(marker) in normalized for marker in _COSMOLOGY_QUERY_MARKERS):
+        return "cosmology"
+    return "generic"
+
+
+def _literature_relevance_score(query: str, row: dict[str, Any], domain: str) -> int:
+    query_norm = _normalize_literature_text(query)
+    blob = _normalize_literature_text(" ".join(
+        str(row.get(key) or "")
+        for key in ("title", "abstract", "bibcode", "source", "pub")
+    ))
+    score = 0
+
+    query_terms = _literature_query_terms(query_norm)
+    for term in query_terms:
+        if term in blob:
+            score += 2
+
+    for phrase in _literature_priority_phrases(query_norm):
+        if phrase in blob:
+            score += 4
+
+    if domain == "cosmology":
+        if any(marker in blob for marker in ("desi", "bao", "baryon acoustic", "dark energy", "supernova", "pantheon", "union3", "lcdm", "cosmolog")):
+            score += 3
+        if any(marker in blob for marker in _OFF_TOPIC_HIGH_ENERGY_MARKERS):
+            score -= 14
+        # "Review of Particle Physics — Cosmological Parameters" is a
+        # legitimate cosmology hit, but generic particle-physics schools or
+        # collider proceedings are not.  Penalize the latter only when no
+        # cosmology anchor appears anywhere in the hit.
+        if "particle physics" in blob and not any(
+            marker in blob for marker in _COSMOLOGY_RELEVANCE_ANCHORS
+        ):
+            score -= 14
+    elif domain == "line":
+        if any(marker in blob for marker in ("cii", "c ii", "158", "alma", "alpine", "rebels", "fwhm", "line width")):
+            score += 3
+        if any(marker in blob for marker in ("high redshift", "galax", "survey", "source properties", "catalog")):
+            score += 1
+
+    if any(marker in blob for marker in _OFF_TOPIC_GENERAL_MARKERS):
+        score -= 14
+
+    return score
+
+
+def _normalize_literature_text(text: str) -> str:
+    normalized = str(text or "").lower()
+    normalized = normalized.replace("λ", "lambda").replace("Λ", "lambda")
+    normalized = normalized.replace("ω", "omega").replace("Ω", "omega")
+    normalized = normalized.replace("₀", "0").replace("ₐ", "a").replace("ₘ", "m")
+    normalized = normalized.replace("μ", "mu").replace("‑", "-").replace("–", "-").replace("—", "-")
+    normalized = re.sub(r"[^a-z0-9+\-_'\\[\\]()./ ]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _literature_query_terms(query_norm: str) -> set[str]:
+    raw_terms = set(re.findall(r"[a-z0-9][a-z0-9+'-]{2,}", query_norm))
+    terms = {
+        term
+        for term in raw_terms
+        if term not in _LITERATURE_STOPWORDS and not term.isdigit()
+    }
+    # Expand common astronomy/cosmology shorthands into the words most often
+    # present in ADS abstracts and titles.
+    if "bao" in terms:
+        terms.update({"baryon", "acoustic", "oscillation"})
+    if "desi" in terms:
+        terms.update({"spectroscopic", "instrument"})
+    if "sn" in terms or "sne" in terms:
+        terms.update({"supernova", "supernovae"})
+    if "lcdm" in terms or "lambda" in terms:
+        terms.update({"cosmolog", "dark", "energy"})
+    return terms
+
+
+def _literature_priority_phrases(query_norm: str) -> set[str]:
+    phrases: set[str] = set()
+    for phrase in (
+        "desi dr1", "dark energy spectroscopic instrument", "baryon acoustic",
+        "gaussian process", "pantheon plus", "pantheon+", "des-5yr",
+        "des 5yr", "union3", "lrg1", "c ii", "[cii]", "line width",
+        "line luminosity", "158 micron", "158 mu m",
+    ):
+        if phrase in query_norm:
+            phrases.add(phrase)
+    return phrases
 
 
 def _arxiv_id_from_table_input(inp: dict[str, Any]) -> str:
@@ -4443,6 +4613,30 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
             ),
         }
 
+    x_min = float(np.min(x))
+    x_max = float(np.max(x))
+    if math.isclose(x_min, x_max):
+        x_min -= 0.05
+        x_max += 0.05
+    fit_x = [x_min, x_max]
+    fit_y = [float(alpha + beta * xx) for xx in fit_x]
+    plot_data = {
+        "x": [round(float(v), 6) for v in x.tolist()],
+        "y": [round(float(v), 6) for v in y.tolist()],
+        "labels": [
+            str(row.get("source_name") or f"row_{idx}")
+            for idx, row in enumerate(accepted)
+        ],
+        "fit_line": {
+            "x": [round(v, 6) for v in fit_x],
+            "y": [round(v, 6) for v in fit_y],
+        },
+        "x_label": "log10(FWHM / 100 km/s)",
+        "y_label": "log L",
+        "equation": "log_luminosity = alpha + beta * log10(FWHM_km_s / 100)",
+        "n_points": n_used,
+    }
+
     result = {
         "success": True,
         "tool": "fit_line_lfr",
@@ -4543,6 +4737,7 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         # M4: subsample significance test result (None when the caller
         # didn't pass subsample_splits).
         "subsample_significance_test": subsample_test,
+        "plot_data": plot_data,
         "publication_ready": publication_ready,
         "fit_inputs_preview": accepted[:12],
         "rejected_summary": rejected[:20],
@@ -5111,6 +5306,23 @@ _ARXIV_ANON_CAP_PER_HOUR = 5
 _ARXIV_AUTH_CAP_PER_HOUR = 50
 
 
+def _arxiv_rate_cap(*, user_id: str | None) -> int:
+    env_name = (
+        "ARXIV_TABLE_AUTH_CAP_PER_HOUR"
+        if user_id
+        else "ARXIV_TABLE_ANON_CAP_PER_HOUR"
+    )
+    default = _ARXIV_AUTH_CAP_PER_HOUR if user_id else _ARXIV_ANON_CAP_PER_HOUR
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default cap=%d", env_name, raw, default)
+        return default
+
+
 def _check_arxiv_tool_rate_limit(
     *,
     user_id: str | None = None,
@@ -5127,13 +5339,13 @@ def _check_arxiv_tool_rate_limit(
     now = _time.monotonic()
     if user_id:
         key = f"user:{user_id}"
-        cap = _ARXIV_AUTH_CAP_PER_HOUR
+        cap = _arxiv_rate_cap(user_id=user_id)
         kind = "authenticated user"
     else:
         # Anonymous: identify by chat_session_id; fall back to a single
         # shared bucket if even that is missing (very early bootstrap).
         key = f"session:{chat_session_id or 'anonymous-fallback'}"
-        cap = _ARXIV_ANON_CAP_PER_HOUR
+        cap = _arxiv_rate_cap(user_id=None)
         kind = "anonymous chat session"
 
     cutoff = now - _ARXIV_RATE_WINDOW_S
@@ -5229,8 +5441,14 @@ async def _exec_extract_literature_tables(
     """
     from app.api.arxiv import extract_arxiv_tables_payload  # noqa: F401  (kept for callers)
 
+    # Prefer the real chat session id, but fall back to the Python/session
+    # runtime id.  Browser/UI fresh-chat flows can reach the tool executor
+    # before a durable chat_session_id exists; using only
+    # "anonymous-fallback" turned a 20-paper local UI benchmark into one
+    # shared 5/hr bucket after the first few turns.
+    limit_session_id = chat_session_id or python_session_id
     allowed, used, cap, key_kind = _check_arxiv_tool_rate_limit(
-        user_id=user_id, chat_session_id=chat_session_id,
+        user_id=user_id, chat_session_id=limit_session_id,
     )
     if not allowed:
         return {

@@ -605,6 +605,15 @@ describe("ChatPage", () => {
             pearson_r: 0.92,
             pearson_p: 0.001,
             scatter_dex: 0.12,
+            plot_data: {
+              x: [0, 0.3, 0.6],
+              y: [8.0, 8.15, 8.3],
+              labels: ["A", "B", "C"],
+              fit_line: { x: [0, 0.6], y: [8.0, 8.3] },
+              n_points: 3,
+              x_label: "log10(FWHM / 100 km/s)",
+              y_label: "log L",
+            },
             citation_summary: { citations: ["arXiv:2211.04968"] },
           },
           _auto_executed: true,
@@ -623,7 +632,71 @@ describe("ChatPage", () => {
     await screen.findByText("Ready for fitting");
     expect(screen.getByText("Publication-ready")).toBeInTheDocument();
     expect(screen.getByText(/log L = 8\.000 \+ 0\.500/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Line relation fit preview")).toBeInTheDocument();
     expect(screen.getByText(/arXiv:2211\.04968/)).toBeInTheDocument();
+  });
+
+  it("labels extraction/schema warnings as data warnings", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "Tables extracted.",
+      actions: [{
+        action: "extract_literature_tables",
+        tool_result: {
+          success: true,
+          tables: [{ columns: ["w_0", "w_a"], rows: [["-1", "0"]] }],
+          warnings: [
+            "Raw paper tables were extracted, but no reliable line-measurement schema was detected.",
+          ],
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "extract paper tables" } });
+    fireEvent.click(sendBtn);
+
+    const warningChip = await screen.findByText(/1 data warning/);
+    expect(warningChip).toBeInTheDocument();
+    expect(warningChip).toHaveAttribute(
+      "title",
+      "Raw paper tables were extracted, but no reliable line-measurement schema was detected.",
+    );
+    expect(warningChip).toHaveAttribute(
+      "aria-label",
+      "data warning: Raw paper tables were extracted, but no reliable line-measurement schema was detected.",
+    );
+    expect(screen.queryByText(/1 sanity warning/)).not.toBeInTheDocument();
+  });
+
+  it("keeps physical range warnings labeled as sanity warnings", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockResolvedValueOnce({
+      reply: "Done",
+      actions: [{
+        action: "run_adql",
+        tool_result: {
+          row_count: 1,
+          warnings: [
+            "results[0].parallax = -2 is negative; Gaia allows it but derived distance is meaningless without a prior.",
+          ],
+        },
+        _auto_executed: true,
+      }],
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "query parallax" } });
+    fireEvent.click(sendBtn);
+
+    expect(await screen.findByText(/1 sanity warning/)).toBeInTheDocument();
   });
 
   it("does not render literal undefined in object info cards", async () => {

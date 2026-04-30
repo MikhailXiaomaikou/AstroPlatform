@@ -104,6 +104,102 @@ function ClickableFigure({ src, alt }: { src: string; alt: string }) {
   );
 }
 
+type LineRelationPlotData = {
+  x?: number[];
+  y?: number[];
+  labels?: string[];
+  fit_line?: { x?: number[]; y?: number[] };
+  x_label?: string;
+  y_label?: string;
+  n_points?: number;
+};
+
+function isNumericSanityWarning(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    text.includes("negative parallax")
+    || text.includes("derived distance is meaningless")
+    || text.includes("unphysical absolute magnitude")
+    || text.includes("outside [0, 360)")
+    || text.includes("outside [-90, 90]")
+    || text.includes("outside [-30, 20]")
+    || text.includes("blueshift this large")
+    || text.includes("log g")
+    || text.includes("distance modulus")
+    || text.includes("negative; unphysical")
+    || text.includes("exactly zero; check units")
+    || text.includes("exactly zero; check abundance")
+  );
+}
+
+function LineRelationPlot({ plotData }: { plotData: LineRelationPlotData }) {
+  const x = Array.isArray(plotData.x) ? plotData.x.filter((v) => Number.isFinite(v)) : [];
+  const y = Array.isArray(plotData.y) ? plotData.y.filter((v) => Number.isFinite(v)) : [];
+  if (x.length < 2 || y.length < 2 || x.length !== y.length) return null;
+
+  const width = 640;
+  const height = 360;
+  const pad = { left: 58, right: 22, top: 26, bottom: 52 };
+  const fitX = (plotData.fit_line?.x || []).filter((v) => Number.isFinite(v));
+  const fitY = (plotData.fit_line?.y || []).filter((v) => Number.isFinite(v));
+  const minMax = (values: number[]) => {
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = max - min || 1;
+    return [min - span * 0.08, max + span * 0.08] as const;
+  };
+  const [xMin, xMax] = minMax([...x, ...fitX]);
+  const [yMin, yMax] = minMax([...y, ...fitY]);
+  const xScale = (v: number) => pad.left + ((v - xMin) / (xMax - xMin || 1)) * (width - pad.left - pad.right);
+  const yScale = (v: number) => height - pad.bottom - ((v - yMin) / (yMax - yMin || 1)) * (height - pad.top - pad.bottom);
+  const labels = Array.isArray(plotData.labels) ? plotData.labels : [];
+
+  return (
+    <figure className="line-relation-plot" aria-label="Line relation fit preview">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img">
+        <title>Line relation fit preview</title>
+        <rect x={0} y={0} width={width} height={height} rx={4} fill="var(--color-surface, #fff)" />
+        <line x1={pad.left} y1={height - pad.bottom} x2={width - pad.right} y2={height - pad.bottom} stroke="var(--color-separator, #ddd)" />
+        <line x1={pad.left} y1={pad.top} x2={pad.left} y2={height - pad.bottom} stroke="var(--color-separator, #ddd)" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const xv = xMin + (xMax - xMin) * t;
+          const yv = yMin + (yMax - yMin) * t;
+          return (
+            <g key={t}>
+              <line x1={xScale(xv)} y1={pad.top} x2={xScale(xv)} y2={height - pad.bottom} stroke="rgba(0,0,0,0.06)" />
+              <line x1={pad.left} y1={yScale(yv)} x2={width - pad.right} y2={yScale(yv)} stroke="rgba(0,0,0,0.06)" />
+              <text x={xScale(xv)} y={height - pad.bottom + 18} textAnchor="middle">{xv.toFixed(2)}</text>
+              <text x={pad.left - 8} y={yScale(yv) + 4} textAnchor="end">{yv.toFixed(2)}</text>
+            </g>
+          );
+        })}
+        {fitX.length >= 2 && fitY.length >= 2 && (
+          <line
+            x1={xScale(fitX[0])}
+            y1={yScale(fitY[0])}
+            x2={xScale(fitX[1])}
+            y2={yScale(fitY[1])}
+            stroke="var(--color-accent, #9f3a38)"
+            strokeWidth={2.5}
+          />
+        )}
+        {x.map((xv, i) => (
+          <circle key={`${xv}-${i}`} cx={xScale(xv)} cy={yScale(y[i])} r={3.3} fill="var(--color-ink, #1f1f1f)">
+            <title>{labels[i] ? `${labels[i]}: ` : ""}{xv.toFixed(3)}, {y[i].toFixed(3)}</title>
+          </circle>
+        ))}
+        <text x={(pad.left + width - pad.right) / 2} y={height - 12} textAnchor="middle">{plotData.x_label || "x"}</text>
+        <text x={16} y={(pad.top + height - pad.bottom) / 2} textAnchor="middle" transform={`rotate(-90 16 ${(pad.top + height - pad.bottom) / 2})`}>
+          {plotData.y_label || "y"}
+        </text>
+      </svg>
+      <figcaption>
+        Line fit preview from {plotData.n_points || x.length} cited measurement rows.
+      </figcaption>
+    </figure>
+  );
+}
+
 interface ThinkingStep {
   kind: "agent_text" | "tool_call" | "tool_progress" | "tool_result" | "status" | "tools_disabled" | "workflow_budget" | "workflow_checkpoint";
   agent?: string;
@@ -480,14 +576,19 @@ function ActionCardInner({
   const cardResult = autoResult && typeof autoResult === "object" ? autoResult : result;
   const toolProvenance = useConversationProvenance(cardResult);
 
-  // R3: surface numeric_sanity_warnings on the card as a ⚠ chip.  The
-  // warnings list is attached by normalize_tool_result in the backend.
+  // R3: surface backend warnings on the card as a ⚠ chip.  Numeric
+  // physical-range checks keep the "sanity warning" label; extraction/schema
+  // warnings use a broader "data warning" label so raw-table issues are not
+  // confused with physically impossible values.
   const rawWarnings = cardResult && typeof cardResult === "object" && "warnings" in cardResult
     ? (cardResult as { warnings?: unknown }).warnings
     : null;
-  const sanityWarnings: string[] = Array.isArray(rawWarnings)
+  const warningMessages: string[] = Array.isArray(rawWarnings)
     ? rawWarnings.filter((w): w is string => typeof w === "string")
     : [];
+  const hasNumericSanityWarning = warningMessages.some(isNumericSanityWarning)
+    || (cardResult && typeof cardResult === "object" && typeof (cardResult as Record<string, unknown>).cmd_sanity_error === "string");
+  const warningLabel = hasNumericSanityWarning ? "sanity warning" : "data warning";
 
   // F3.1: loud failure/empty surfacing.  The backend stamps
   // __tool_status__ = FAILED or EMPTY (F2.1), and analysis_status =
@@ -552,10 +653,11 @@ function ActionCardInner({
               {isToolSynthetic ? "⚠ SYNTHETIC" : isToolPartial ? "⚠ Partial" : isToolUnavailable ? "Maintenance" : isToolFailed ? "❌ Failed" : isToolEmpty ? "∅ Empty" : "auto"}
             </span>
           )}
-          {sanityWarnings.length > 0 && (
+          {warningMessages.length > 0 && (
             <span
               className="sanity-warning-chip"
-              title={sanityWarnings.join("\n")}
+              title={warningMessages.join("\n")}
+              aria-label={`${warningLabel}: ${warningMessages.join("; ")}`}
               style={{
                 marginLeft: 6,
                 padding: "1px 6px",
@@ -567,7 +669,7 @@ function ActionCardInner({
                 cursor: "help",
               }}
             >
-              ⚠ {sanityWarnings.length} sanity warning{sanityWarnings.length === 1 ? "" : "s"}
+              ⚠ {warningMessages.length} {warningLabel}{warningMessages.length === 1 ? "" : "s"}
             </span>
           )}
         </span>
@@ -1475,14 +1577,14 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
                 ) : null}
               </div>
               <div className="chat-result-table-scroll">
-                <table className="chat-result-table">
+                <table className="chat-result-table literature-table-preview">
                   <thead>
-                    <tr>{columns.map((column, columnIndex) => <th key={columnIndex}>{column}</th>)}</tr>
+                    <tr>{columns.map((column, columnIndex) => <th key={columnIndex} title={column}>{column}</th>)}</tr>
                   </thead>
                   <tbody>
                     {rows.slice(0, 8).map((row, rowIndex) => (
                       <tr key={rowIndex}>
-                        {row.slice(0, columns.length || row.length).map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}
+                        {row.slice(0, columns.length || row.length).map((cell, cellIndex) => <td key={cellIndex} title={cell}>{cell}</td>)}
                       </tr>
                     ))}
                   </tbody>
@@ -1518,6 +1620,9 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           <div style={{ marginBottom: 6 }}>
             log L = {alpha.toFixed(3)} + {beta.toFixed(3)} log(FWHM/100 km/s)
           </div>
+        ) : null}
+        {result.plot_data && typeof result.plot_data === "object" ? (
+          <LineRelationPlot plotData={result.plot_data as LineRelationPlotData} />
         ) : null}
         <div style={{ color: "var(--color-text-secondary)" }}>
           {typeof result.pearson_r === "number" ? <span>r={Number(result.pearson_r).toFixed(3)} · </span> : null}
