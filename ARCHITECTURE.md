@@ -1,6 +1,6 @@
 # Standard Astro Architecture
 
-**Current as of Provenance v2 + the Journal Edition UI overhaul.** Reflects the actual checked-in code, not an aspirational roadmap. Update when modules, flows, or deployment assumptions materially change.
+**Current as of Provenance v2 + the Journal Edition UI overhaul + literature-table / cosmology workflow hardening.** Reflects the actual checked-in code, not an aspirational roadmap. Update when modules, flows, or deployment assumptions materially change.
 
 ## 1. System Shape
 
@@ -14,7 +14,7 @@ Standard Astro is a full-stack astronomy research platform with four runtime lay
 
 4. **External services** — 24 astronomy connector keys, with 6 provenance-v2 active sources (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`) and 18 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local). ALMA is active for Science Archive observation metadata, not derived line luminosity/FWHM measurements.
 
-Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **57-tool catalog** (§3).
+Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **65-tool catalog** (§3).
 
 ## 2. Frontend Architecture
 
@@ -98,23 +98,23 @@ Entrypoint: [`backend/app/main.py`](./backend/app/main.py). FastAPI app factory 
 ### AI layer
 
 - [`app/ai/orchestrator.py`](./backend/app/ai/orchestrator.py) — Intent classification, specialist-context assembly, tool-subset filtering.
-- [`app/ai/model_profiles.py`](./backend/app/ai/model_profiles.py) — Manual provider/model registry. Current profiles: Claude default, OpenAI GPT-5.5 alias (falls back to `gpt-5.4` unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro, DeepSeek V4 Flash, and local default.
-- [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Calls the user-selected model profile, logs cost/latency/model/fallback metadata, and falls back across backends only after the selected backend fails. Raises `InferenceError("No configured AI backends are available…")` on no-key paths (now surfaced pre-send by F4.2).
+- [`app/ai/model_profiles.py`](./backend/app/ai/model_profiles.py) — Manual provider/model registry. Current profiles: Claude default, OpenAI GPT-5.5 alias (falls back to `gpt-5.4` unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro, DeepSeek V4 Flash, local OpenAI-compatible backends, and the local-only OpenAI CLI profile.
+- [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Calls the user-selected model profile, logs cost/latency/model/fallback metadata, and falls back across backends only after the selected backend fails. The local OpenAI CLI path is enabled only with `OPENAI_CLI_ENABLED=1`; it runs the CLI in ephemeral read-only mode and still returns JSON tool calls to the Standard Astro backend, so network/archive searches, ADQL/database queries, Python analysis, plotting, and provenance checks remain server-side. Raises `InferenceError("No configured AI backends are available…")` on no-key paths (now surfaced pre-send by F4.2).
 - `app/ai/agents/*` — Specialist prompt fragments (data, analysis, literature, observation, visualization, spectrum).
-- [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **57-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
-- [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), ~57 KB / ~14 k-token `SYSTEM_PROMPT` (46 sections), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser.
+- [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **65-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
+- [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), ~57 KB / ~14 k-token `SYSTEM_PROMPT` (46 sections), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser, and deterministic literature-table / `fit_line_lfr` follow-up for line-relation prompts when the model has found papers or fit-ready measurement caches but skipped the required tool.
 
-#### Tool catalogue (57)
+#### Tool catalogue (65)
 
-Newly added in Phase F6:
+Domain-specific additions include:
 - **`query_gaia_cluster`** — Composes Gaia DR3 member-selection ADQL from structured params (center name → Sesame/SIMBAD resolve → parallax + PM + RUWE + G-mag cuts). Keeps SQL out of the LLM's hot path so F2.1 EMPTY banners fire cleanly on 0-row returns.
 - **`get_extinction`** — A_V / E(B-V) at a sky position. Primary path SFD98 via `dustmaps.sfd`; exp-disk analytic fallback when `dustmaps` unavailable. Band-specific A_band via Cardelli+ 1989 ratios.
 
 The catalogue is organized through `result_provenance.py` `_DATA_TOOLS` / `_COMPUTE_TOOLS` / `_REFERENCE_TOOLS`:
 
 - **Data tools (17)**: `search_objects`, `run_adql`, `query_high_velocity_stars`, `run_sdss_sql` (maintenance-gated as SDSS), `get_object_info`, `get_object_dossier`, `query_transients`, `search_lightcurve`, `crossmatch_catalogs`, `batch_object_search`, `describe_tap_table`, `query_vo_service`, `get_last_search_results`, `read_fits_header`, `get_provenance`, `query_gaia_cluster`, `get_extinction`.
-- **Compute tools (33)**: `run_python`, `generate_pipeline`, `run_pipeline`, `validate_analysis`, `generate_paper_draft`, `fit_isochrone`, `estimate_photo_z[_pro]`, `analyze_spectrum[_pro]`, `sensitivity_analysis`, `fit_transit_model`, `gp_detrend_lightcurve`, `detect_stellar_flares`, `transit_search_bls`, `reduce_ccd_image`, `solve_astrometry`, `extract_photometry`, `extract_sources`, `classify_transient[_spectrum]`, `compute_galaxy_sfr`, `fit_rv_orbit`, `fit_sersic_morphology`, `x_ray_spectral_fit`, `pulsar_derived_quantities`, `analyze_cross_wavelength`, `radio_analysis`, `process_image`, `share_with_team`, `invite_team_member`, `export_results`, `workspace_export`.
-- **Reference tools (7)**: `search_literature`, `read_arxiv_paper`, `literature_review`, `research_workflow`, `generate_proposal`, `get_followup_recommendation`, `full_research_report`.
+- **Compute tools (39)**: `run_python`, `generate_pipeline`, `run_pipeline`, `validate_analysis`, `generate_paper_draft`, `fit_isochrone`, `estimate_photo_z`, `estimate_photo_z_pro`, `analyze_spectrum`, `analyze_spectrum_pro`, `sensitivity_analysis`, `compare_luminosity_distances`, `demagnify_sample`, `fit_line_lfr`, `fit_cosmology_mcmc`, `run_cobaya_cosmology`, `get_cosmology_run_status`, `fit_transit_model`, `gp_detrend_lightcurve`, `detect_stellar_flares`, `transit_search_bls`, `reduce_ccd_image`, `solve_astrometry`, `extract_photometry`, `extract_sources`, `classify_transient`, `classify_transient_spectrum`, `compute_galaxy_sfr`, `fit_rv_orbit`, `fit_sersic_morphology`, `x_ray_spectral_fit`, `pulsar_derived_quantities`, `analyze_cross_wavelength`, `radio_analysis`, `process_image`, `share_with_team`, `invite_team_member`, `export_results`, `workspace_export`.
+- **Reference tools (9)**: `search_literature`, `read_arxiv_paper`, `extract_literature_tables`, `export_sample_table`, `literature_review`, `research_workflow`, `generate_proposal`, `get_followup_recommendation`, `full_research_report`.
 
 `result_provenance.ALL_KNOWN_TOOLS` is asserted to equal `{t["name"] for t in TOOLS}` in `tests/test_result_provenance.py`; adding a tool without classifying it breaks CI.
 
@@ -207,6 +207,8 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
    - `is_empty_turn(tool_results)` + `zero_data_but_quantitative(reply, tool_results)` implement the F1.4 hard block — if every tool this turn is empty/failed and the reply still contains any numeric claim, skip straight to the block path.
    - `blocked_reply_text(...)` renders a user-facing block message that includes the tool-universe snapshot (F1.5) so failures are legible.
    - Provenance-v2 citation checks build a valid bibcode pool from `provenance.datasets[*].article`, `provenance.field_bibcodes`, and literature-search `bibcode` fields. Invalid bibcodes and suspicious author-year citations increment `fabrication_blocked_total{reason="invalid_bibcode"|"suspicious_author_year"}`. Warning mode is the default; `PROVENANCE_VALIDATOR_HARDBLOCK=true` turns citation violations into reply blocks.
+   - Literature-derived measurement claims are stricter than paper-context claims: `search_literature` abstracts can support background/citation context, but line-luminosity/FWHM slopes, intercepts, intrinsic scatter, correlations, and sample-fit claims require extracted measurement rows or a publication-ready `fit_line_lfr` result in the current turn.
+   - Built-in cosmology-preset manifest bibcodes are not globally citeable. A reply may cite Planck/Riess/Suzuki/etc. preset papers only when a current-turn tool such as `compare_luminosity_distances` or a cosmology-aware fit returned that preset provenance.
 
 3. **Structured abstention** — parser in [`app/api/chat.py`](./backend/app/api/chat.py).
    - System prompt (§ STRUCTURED ABSTENTION) instructs the LLM: when every tool's `__tool_status__` is EMPTY, FAILED, or UNAVAILABLE, the entire reply must be a single `<tools_returned_nothing failed_tools="..." empty_tools="..." rationale="..." suggested_next_step="..."/>` tag.
@@ -222,6 +224,7 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 - [`app/connectors/registry.py`](./backend/app/connectors/registry.py) — Lazy registry plus availability gate.
 - [`app/connectors/availability.py`](./backend/app/connectors/availability.py) — `V2_AVAILABLE_CONNECTORS`, maintenance response builder, and `connector_gated_total{connector_name}` metric hook.
 - [`app/services/provenance_v2/*`](./backend/app/services/provenance_v2) — Fallback registry, freshness checks, field-level schema/extractor, and DataOrigin/PARAM/INFO resolver helpers. Startup blocks on stale registry entries.
+- [`app/api/arxiv.py`](./backend/app/api/arxiv.py) + `extract_literature_tables` — arXiv/ar5iv/LaTeX table extraction path. Raw tables carry table/caption/row provenance, and normalized line-measurement rows carry citation metadata so downstream `fit_line_lfr` can support relation statistics without relying on model memory.
 - [`app/connectors/throttle.py`](./backend/app/connectors/throttle.py) — Per-connector `asyncio.Semaphore` + stdlib token bucket; per-archive ToS defaults (Gaia 5 req/s & 2 concurrent, SDSS 2 req/s, VizieR 10 req/s, SIMBAD 10 req/s, MAST 5 req/s & 2 concurrent, …). Raises `ThrottleTimeout` on sustained overflow.
 - [`app/connectors/retry.py`](./backend/app/connectors/retry.py) — Transient-only retry set (`httpx.TimeoutException`, `httpx.ConnectError`, `ConnectionError`, `TimeoutError`) + circuit breaker with closed/half-open/open states; `circuit_breaker_open_total` + `connector_error_total` counters.
 - [`app/services/connector_cache.py`](./backend/app/services/connector_cache.py) — Content-addressed cache keyed on `sha256(connector + endpoint + sorted(params))`. Backends: `RedisBackend` → `SQLiteBackend` → `NullBackend` (auto-select). Tiered TTLs: 24 h metadata, 1 h cones, 15 min ADQL. Singleflight dedup via a module-level `set[asyncio.Task]` with `task.add_done_callback(_tasks.discard)` so GC can't drop the shared future.
@@ -341,9 +344,11 @@ Session share tokens → read / comment / fork URLs. Snapshots serialise current
 2. **Data provenance reporting** — field-level bibcodes first, table-level dataset article second, registry fallback last; no invented bibcodes or memorized author-year substitutes.
 3. **ZERO-FABRICATION CONTRACT** — ±1 % tool-cited rule, now extended to cardinalities ("N stars").
 4. **STRUCTURED ABSTENTION** — when all tools this turn are EMPTY/FAILED/UNAVAILABLE, the entire reply must be a single `<tools_returned_nothing.../>` tag; the system renders a card. Inventing prose is penalised.
-5. **ADQL aggregate-function semantics (F7.1)** — STDDEV/VAR are population, not sample; σ/√N for SEM.
-6. **Cluster / association idioms (F7.2)** — prefer `query_gaia_cluster` + `get_extinction` over hand-written SQL; on EMPTY emit abstention instead of inventing member counts.
-7-46. Domain workflows: database decision tree, Gaia column completeness + specialised tables, GSP-Phot quality flags, extinction routing (SFD for low-E(B-V)), open / globular cluster, variable star (RR Lyrae / Cepheid / EB), distance hierarchy, spectroscopic catalog choice, dust maps (SFD / Bayestar / Green / Marshall), X-ray spectral fitting (Sherpa, HI4PI, Wilms abundances), SFR estimators (K&E 2012), RV orbit fitting, rotation curves (SPARC + galpy), stellar atmospheres (ATLAS9/MARCS/PHOENIX), galaxy morphology (Sérsic / galfit / statmorph), IMF, cluster virial scaling, pulsars (YMW16 DM, Lorimer & Kramer), WD cooling (Bédard+2020), brown dwarfs (Kirkpatrick 2005), IFU kinematics (Voronoi + pPXF), AGN SED decomposition (CIGALE, Vestergaard-Peterson BH mass), Galactic streams (GD-1, Sgr, Gaia-Enceladus), solar system (JPL Horizons), specialised-domain references (FRB, GW, lensing, BAO, CMB, N-body, microlensing, chemical evolution, adaptive optics, VLBI), data-integrity rules (no simulated data), pipeline DAG generation, action JSON format, SIMBAD basic-table columns.
+5. **Literature-table / line-relation workflow** — `search_literature` is context only; measurement statistics require `extract_literature_tables` / cited line measurements / `fit_line_lfr`.
+6. **Cosmology workflow** — distance/modulus/fitting claims must use a declared cosmology preset or typed tool output; prompt wording like Riess+2011/Suzuki+2012 maps to `FlatLambdaCDM_H73p8_Om0p295`.
+7. **ADQL aggregate-function semantics (F7.1)** — STDDEV/VAR are population, not sample; σ/√N for SEM.
+8. **Cluster / association idioms (F7.2)** — prefer `query_gaia_cluster` + `get_extinction` over hand-written SQL; on EMPTY emit abstention instead of inventing member counts.
+9-46. Domain workflows: database decision tree, Gaia column completeness + specialised tables, GSP-Phot quality flags, extinction routing (SFD for low-E(B-V)), open / globular cluster, variable star (RR Lyrae / Cepheid / EB), distance hierarchy, spectroscopic catalog choice, dust maps (SFD / Bayestar / Green / Marshall), X-ray spectral fitting (Sherpa, HI4PI, Wilms abundances), SFR estimators (K&E 2012), RV orbit fitting, rotation curves (SPARC + galpy), stellar atmospheres (ATLAS9/MARCS/PHOENIX), galaxy morphology (Sérsic / galfit / statmorph), IMF, cluster virial scaling, pulsars (YMW16 DM, Lorimer & Kramer), WD cooling (Bédard+2020), brown dwarfs (Kirkpatrick 2005), IFU kinematics (Voronoi + pPXF), AGN SED decomposition (CIGALE, Vestergaard-Peterson BH mass), Galactic streams (GD-1, Sgr, Gaia-Enceladus), solar system (JPL Horizons), specialised-domain references (FRB, GW, lensing, BAO, CMB, N-body, microlensing, chemical evolution, adaptive optics, VLBI), data-integrity rules (no simulated data), pipeline DAG generation, action JSON format, SIMBAD basic-table columns.
 
 Every formula/constant is cited to author + year + journal + page. A prior audit removed LLM-hallucinated values (e.g. corrected Gaia `A_G/A_V=0.789` per Wang & Chen 2019; rewrote `wd_cooling_age` as 13-point Bédard+2020 interpolation).
 
@@ -351,9 +356,10 @@ Every formula/constant is cited to author + year + journal + page. A prior audit
 
 ### Astronomy archives
 
-- **Active provenance-v2 sources**: VizieR, Gaia DR3, SIMBAD, NED, 2MASS.
-- **Maintenance-gated connector keys**: SDSS, SDSS spectra, MAST, Chandra, AllWISE, ALMA, ESO, IRSA, JWST, LAMOST, DESI, Pan-STARRS, XMM-Newton, NVSS, FIRST, JPL Horizons, ATNF PSRCAT, SPARC, FRBSTATS.
+- **Active provenance-v2 sources**: VizieR, Gaia DR3, SIMBAD, NED, 2MASS, ALMA Science Archive observation metadata.
+- **Maintenance-gated connector keys**: SDSS, SDSS spectra, MAST, Chandra, AllWISE, ESO, IRSA, JWST, LAMOST, DESI, Pan-STARRS, XMM-Newton, NVSS, FIRST, JPL Horizons, ATNF PSRCAT, SPARC, FRBSTATS.
 - Gated sources return `UNAVAILABLE` / Maintenance rather than FAILED/EMPTY and do not execute legacy query code.
+- ALMA is not a line-measurement source in v2. Derived `[CII]` luminosity, line flux, and FWHM values must come from cited literature tables or future dedicated measurement tools.
 
 ### Other
 
