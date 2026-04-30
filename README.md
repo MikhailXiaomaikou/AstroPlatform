@@ -137,7 +137,7 @@ frontend/
 - Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
 - Quick start: [docs/QUICKSTART.md](./docs/QUICKSTART.md)
 - API reference: [docs/API_REFERENCE.md](./docs/API_REFERENCE.md)
-- Deployment notes: [DEPLOY_OPENCLAW.md](./DEPLOY_OPENCLAW.md)
+- Deployment notes: [DEPLOYMENT.md](./DEPLOYMENT.md)
 - Agent/development notes: [CLAUDE.md](./CLAUDE.md)
 
 ## License

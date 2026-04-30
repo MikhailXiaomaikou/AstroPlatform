@@ -123,4 +123,4 @@ For full functionality, configure these in **Account** settings:
 
 - **API Documentation**: Visit `{your-backend-url}/docs` for the interactive Swagger UI
 - **Architecture**: See [ARCHITECTURE.md](../ARCHITECTURE.md) for system design details
-- **Deployment**: See [DEPLOY_OPENCLAW.md](../DEPLOY_OPENCLAW.md) for self-hosting instructions
+- **Deployment**: See [DEPLOYMENT.md](../DEPLOYMENT.md) for self-hosting instructions
