@@ -16,6 +16,106 @@ Standard Astro is a full-stack astronomy research platform with four runtime lay
 
 Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **68-tool catalog** (§3).
 
+### Runtime topology
+
+```text
+Browser SPA (React/Vite)
+  ├─ REST: auth, workspace, data, papers, admin, settings
+  ├─ SSE: /api/chat/message streaming assistant turns
+  └─ WebSocket: collaboration, presence, long-running progress
+
+FastAPI web process
+  ├─ Router layer: auth/data/chat/pipeline/export/paper/admin/...
+  ├─ AI layer: orchestrator → inference_router → selected model backend
+  ├─ Tool layer: ai_tools dispatcher → connectors / analysis services / sandbox
+  ├─ Guardrail layer: provenance normalizer → claim validator → citation gate
+  └─ Persistence layer: SQLAlchemy metadata + filesystem/S3 artifacts + cache
+
+Background / external services
+  ├─ Celery worker + beat for heavy pipeline nodes
+  ├─ Redis or SQLite connector cache + singleflight
+  ├─ Archive services: Gaia, VizieR, SIMBAD, NED, 2MASS, ALMA metadata
+  ├─ Literature services: ADS, arXiv, ar5iv, LaTeX source extraction
+  └─ Model providers: Claude, OpenAI, DeepSeek, local OpenAI-compatible, local CLI
+```
+
+The key design constraint is that **the model never owns data access**. The
+LLM proposes structured tool calls; the backend executes them, wraps results in
+provenance, then sends the normalized payload back to the model. This preserves
+one enforcement point for archive availability, synthetic-data detection,
+numeric validation, citation validation, rate limits, and UI status chips.
+
+### Request lifecycles
+
+**Chat turn**
+
+1. Frontend posts a user message to `/api/chat/message` and opens an SSE stream.
+2. `chat.py` assembles the system prompt, user/session context, selected model
+   profile, visible tool schema, and research-focus filters.
+3. `inference_router` calls the selected provider. The provider returns prose,
+   tool calls, or both.
+4. For each tool call, `ai_tools.execute_tool()` dispatches to connectors,
+   analysis services, literature extraction, cosmology services, or the Python
+   sandbox.
+5. `result_provenance.normalize_tool_result()` adds reproducibility metadata,
+   data-origin status, empty/failed/synthetic/unavailable banners, and nested
+   dataset/field provenance.
+6. The loop repeats until no tool calls remain, a deterministic follow-up tool
+   is injected, or iteration/deadline limits fire.
+7. The final prose passes the zero-fabrication validator, citation validator,
+   unsupported-narrative gate, and methodology consistency checks.
+8. The frontend renders the reply, tool cards, Data Sources panel, warnings,
+   figures, and acknowledgement controls.
+
+**Archive/data query**
+
+1. UI or AI tool selects a connector key.
+2. `connectors.availability` blocks non-v2 keys before importing legacy code.
+3. Active connectors query the upstream archive through throttle/retry/cache
+   wrappers.
+4. Connector output is normalized into table-like rows plus provenance fields.
+5. Empty, failed, unavailable, and synthetic states are represented explicitly
+   rather than being flattened into generic errors.
+
+**Literature table / line-relation workflow**
+
+1. `search_literature` returns paper-level citations and abstracts only.
+2. `extract_literature_tables` fetches arXiv/ar5iv/LaTeX tables, attaches
+   paper/table/row citations, and normalizes line-measurement rows when column
+   mapping is reliable.
+3. Fit-ready measurement rows are cached under session keys and can feed
+   `fit_line_lfr`, `demagnify_sample`, or `export_sample_table`.
+4. Relation statistics are citeable only when they come from current-turn
+   measurement rows or a publication-ready fit result; abstract search alone
+   cannot support slope/intercept/scatter claims.
+
+**Pipeline execution**
+
+1. Frontend submits a DAG to `pipeline` routes.
+2. The backend validates graph shape, node parameters, and heavy-node cost.
+3. Light DAGs can run synchronously; heavy DAGs require Celery mode.
+4. Each node records provenance and cached artifacts for workspace/export.
+
+### Persistence and trust boundaries
+
+| Boundary | Trusted input | Guard |
+|---|---|---|
+| Browser → backend | JWT, typed request payloads, SSE subscriptions | Auth, Pydantic validation, rate limit, CORS |
+| LLM → tool executor | JSON tool-call name + arguments | Tool schema, research-focus filtering, availability gate |
+| Tool → LLM | Normalized tool result | Provenance envelope, status banners, synthetic detector |
+| Python sandbox → backend | Pickled/JSON execution result | Spawn isolation, payload caps, error-class tripwire |
+| Literature text → final answer | Paper abstracts, extracted rows | Row-level citation, paper-level numeric citation gate |
+| Local cache / Redis → backend | Cached connector payloads | Restricted unpickler allowlist + TTL + content keys |
+| Draft paper → public web | Owner-created draft | Private by default; explicit Publish Draft creates revocable token |
+
+### Deployment shape
+
+Render deployment uses a FastAPI web service, React static frontend, Postgres,
+Redis, and optional Celery worker/beat. The same code also supports local
+development, but production assumptions are stricter: migrations rather than
+`create_all`, explicit `JWT_SECRET`, non-wildcard CORS, encrypted user API
+keys, and no debug endpoints unless explicitly enabled.
+
 ## 2. Frontend Architecture
 
 Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; the two-row **journal-masthead** holds an 8-tab primary nav (Home / AI Assistant / Browse / ADQL / Pipeline / Sessions / Papers / Account) plus a chip-style 4-language switcher (EN / 中文 / FR / ES), theme toggle, and user menu.

@@ -70,6 +70,36 @@ Standard Astro includes workflows for:
 - Observational cosmology likelihood and MCMC scaffolding
 - Paper drafting, bibliography generation, and reproducibility export
 
+## Reference Literature
+
+The codebase keeps scientific constants, formula choices, and workflow priors
+anchored to explicit literature references. This table is a compact map of the
+main references currently used by tools, prompts, and validation fixtures.
+
+| Area | Reference | Used for |
+|---|---|---|
+| Extinction law | Cardelli, Clayton & Mathis 1989, ApJ 345, 245 | CCM89 optical/IR extinction curve |
+| Dust attenuation | Calzetti et al. 2000, ApJ 533, 682 | Starburst attenuation in photo-z / SED workflows |
+| IGM absorption | Madau 1995, ApJ 441, 18 | High-redshift IGM absorption approximation |
+| Gaia extinction coefficients | Wang & Chen 2019, ApJ 877, 116 | Gaia-band extinction ratios |
+| PARSEC isochrones | Bressan et al. 2012, MNRAS 427, 127 | Isochrone fitting and turnoff fallback calibration |
+| RR Lyrae PLZ | Muraveva et al. 2018, MNRAS 481, 1195 | RR Lyrae distance workflow guidance |
+| Cepheid Leavitt law | Ripepi et al. 2019, A&A 625, A14 | Cepheid distance workflow guidance |
+| Star-formation rates | Kennicutt & Evans 2012, ARA&A 50, 531 | Hα, UV, IR, and radio SFR calibrations |
+| Pulsar derived quantities | Lorimer & Kramer 2004, Handbook of Pulsar Astronomy | Characteristic age, surface B, spin-down luminosity |
+| Binary mass function | Hilditch 2001, An Introduction to Close Binary Stars | Spectroscopic binary mass-function relation |
+| Variability index | Stetson 1996, PASP 108, 851 | Stetson K variability statistic |
+| White dwarf cooling | Bédard et al. 2020, ApJ 901, 93 | Montreal cooling-age interpolation |
+| NFW halo | Navarro, Frenk & White 1996, ApJ 462, 563 | Dark-matter halo profile guidance |
+| SPARC rotation curves | Lelli, McGaugh & Schombert 2016, AJ 152, 157 | Galaxy rotation-curve catalog context |
+| [CII] ALPINE tables | Béthermin et al. 2020, A&A 643, A2 | High-z [CII] table extraction and LFR tests |
+| Gaia DR3 | Gaia Collaboration 2023, A&A 674, A1 | Gaia DR3 table-level citation |
+| SIMBAD | Wenger et al. 2000, A&AS 143, 9 | SIMBAD registry citation |
+| 2MASS | Skrutskie et al. 2006, AJ 131, 1163 | 2MASS registry citation |
+| DESI DR1 BAO | DESI Collaboration 2024, arXiv:2404.03002 | Observational-cosmology registry entry |
+| SH0ES prior | Riess et al. 2011 / 2022 | H0 prior provenance in cosmology workflows |
+| Supernova cosmology | Suzuki et al. 2012, ApJ 746, 85 | Union-style Ωm / SN cosmology context |
+
 ## Tech Stack
 
 | Layer | Stack |
