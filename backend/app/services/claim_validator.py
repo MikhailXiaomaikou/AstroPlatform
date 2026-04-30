@@ -957,6 +957,26 @@ _PUBLICATION_READY_TRUE_RE = re.compile(
     r"\bpublication[_\s-]?ready\s*=\s*true\b",
     re.IGNORECASE,
 )
+# PART AI #3: LFR-context signature — reply 必须明显在做 line luminosity-FWHM
+# relation (而不是 isochrone slope / photometry alpha 之类), bypass detector
+# 才触发. 防误伤其它工作流.
+_LFR_CONTEXT_RE = re.compile(
+    r"(?:"
+    r"\bL[' ]?\s*\[?\s*CII\s*\]?"               # L'[CII], L'CII, L [CII]
+    r"|\bLFR\b"
+    r"|luminosity[\s-]+FWHM"
+    r"|L[- ]FWHM\s+relation"
+    r"|line[\s-]+luminosity[\s-]+(?:FWHM|width)"
+    r"|line[\s-]+(?:width|FWHM)[\s-]+(?:relation|fit)"
+    r"|\[CII\][^.\n]{0,80}(?:fit|relation|regression)"
+    r"|(?:fit|regression)[^.\n]{0,80}\[CII\]"
+    r"|\bL'\s*-?\s*FWHM"
+    r"|brightness[\s-]+temperature"
+    r"|Solomon[\s-]?(?:1992|92)"
+    r"|Carilli\s*(?:&|and)\s*Walter"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def _collect_tool_results_for(tool_results: Any, tool_name: str) -> list[dict]:
@@ -1080,6 +1100,24 @@ def methodology_consistency_violations(
                 kind="line_relation_exploratory_label_missing",
                 match_text=stat_match.group(0),
                 line_number=_line_number(reply, stat_match.start()),
+            ))
+
+    # ── PART AI #3: fit_line_lfr bypass detection ────────────────────
+    # Bundle e8d9 reproducer: reply 里报 LFR 数字 (slope/intercept/scatter)
+    # 但本轮没调 fit_line_lfr — AI 在 run_python 里自己用 cached rows 跑
+    # OLS/linmix 然后 prose 当数字报, 完全绕过 fit_line_lfr 的 PARTIAL gate
+    # + cosmology recompute + lensing demagnify + Bayesian diagnostics.
+    # 这条检查独立于 raw_fit_results, 因为 raw_fit_results 是空才触发.
+    # 限定只在 reply 明显在做 LFR 工作流 (LFR keyword + 数字) 时触发,
+    # 防误伤 isochrone slope / photometry alpha 等其它工作流的合法用法.
+    if not raw_fit_results:
+        lfr_ctx_match = _LFR_CONTEXT_RE.search(stripped)
+        bypass_stat_match = _LINE_RELATION_QUANT_RE.search(stripped)
+        if lfr_ctx_match and bypass_stat_match:
+            violations.append(CitationViolation(
+                kind="fit_line_lfr_bypass",
+                match_text=bypass_stat_match.group(0),
+                line_number=_line_number(reply, bypass_stat_match.start()),
             ))
 
     # ── Demagnify count ───────────────────────────────────────────

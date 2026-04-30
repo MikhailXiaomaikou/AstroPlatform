@@ -216,3 +216,70 @@ def test_chat_module_imports_methodology_helper():
     import app.api.chat as chat_module
     src = open(chat_module.__file__).read()
     assert "methodology_consistency_violations" in src
+
+
+# ── PART AI #3: fit_line_lfr bypass detection ───────────────────────────
+
+
+def test_lfr_bypass_with_no_fit_tool_called_triggers_violation():
+    """Bundle e8d9 reproducer: reply 报 LFR slope/intercept/scatter 但本轮
+    没调 fit_line_lfr → 触发 fit_line_lfr_bypass violation.
+    防 LLM 在 run_python 里自己 fit 然后 prose 报数字这种绕过 PARTIAL gate."""
+    from app.services.claim_validator import methodology_consistency_violations
+
+    reply = (
+        "Using the cached ALPINE measurement table, the Bayesian fit on the "
+        "L'[CII]-FWHM relation gives slope beta = 0.766, intercept alpha = "
+        "9.823, and intrinsic scatter = 0.315 dex."
+    )
+    tool_results = [
+        {"tool": "extract_literature_tables", "result": {"success": True, "line_measurements": [{"row": 1}]}},
+        {"tool": "run_python", "result": {"success": True, "stdout": "ok", "figures": []}},
+    ]
+    violations = methodology_consistency_violations(reply, tool_results)
+    assert any(v.kind == "fit_line_lfr_bypass" for v in violations)
+
+
+def test_lfr_bypass_with_fit_tool_called_does_NOT_trigger():
+    """只要本轮真调过 fit_line_lfr (即便 PARTIAL), bypass detector 不再
+    触发, 留给 line_relation_exploratory_label_missing 之类更精确检查."""
+    from app.services.claim_validator import methodology_consistency_violations
+
+    reply = "L_prime[CII] LFR fit: slope = 0.79."
+    tool_results = [_fit_lfr_result("ols", publication_ready=True)]
+    violations = methodology_consistency_violations(reply, tool_results)
+    assert all(v.kind != "fit_line_lfr_bypass" for v in violations)
+
+
+def test_lfr_bypass_with_unrelated_slope_keyword_does_NOT_trigger():
+    """isochrone slope / photometry alpha 等其它工作流也用 'slope' 词,
+    bypass detector 只在 LFR-context (L'[CII] / LFR / luminosity-FWHM 等)
+    出现时才触发. 防误伤."""
+    from app.services.claim_validator import methodology_consistency_violations
+
+    reply = (
+        "The CMD isochrone fit gives a turnoff slope of 0.45 in the "
+        "Gaia BP-RP plane. This does not relate to line luminosity."
+    )
+    tool_results = [
+        {"tool": "fit_isochrone", "result": {"success": True, "best_age_gyr": 1.5}},
+    ]
+    violations = methodology_consistency_violations(reply, tool_results)
+    assert all(v.kind != "fit_line_lfr_bypass" for v in violations)
+
+
+def test_lfr_bypass_alternate_lfr_keywords_also_trigger():
+    """_LFR_CONTEXT_RE 应匹配多种 LFR 措辞: Solomon 1992 / brightness
+    temperature / Carilli & Walter / luminosity-FWHM 等."""
+    from app.services.claim_validator import methodology_consistency_violations
+
+    for ctx_phrase in [
+        "Following Solomon 1992 brightness temperature convention, the slope is 0.8.",
+        "The Carilli & Walter 2013 reference relation predicts intercept = 9.5.",
+        # 注: _LINE_RELATION_QUANT_RE 要求 "intrinsic scatter" 而非裸 "scatter"
+        "Our L-FWHM relation fit yields intrinsic scatter = 0.32 dex.",
+    ]:
+        violations = methodology_consistency_violations(ctx_phrase, [])
+        assert any(v.kind == "fit_line_lfr_bypass" for v in violations), (
+            f"bypass detector missed LFR context: {ctx_phrase!r}"
+        )
