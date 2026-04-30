@@ -470,6 +470,7 @@ _COMPUTE_TOOLS = {
     "share_with_team", "invite_team_member", "export_results",
     "workspace_export", "fit_cosmology_mcmc", "run_cobaya_cosmology",
     "get_cosmology_run_status",
+    "build_cosmology_likelihood", "build_cosmology_robustness_matrix",
     # PART Y Batch 1 (audit follow-up): newer compute tools — line-relation
     # fitting on cited literature tables, luminosity-distance comparison
     # across cosmologies, gravitational-lensing demagnification of a sample.
@@ -482,6 +483,7 @@ _REFERENCE_TOOLS = {
     # PART Y Batch 1 (audit follow-up): export_sample_table emits a
     # citable machine-readable table from a cached sample, no new analysis.
     "export_sample_table",
+    "list_cosmology_datasets",
 }
 
 # Introspection helper for tests / CI: full known tool set.

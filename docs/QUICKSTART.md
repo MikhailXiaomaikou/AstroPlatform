@@ -31,7 +31,7 @@ Welcome to Standard Astro, an AI-native astronomy research platform. This guide 
 | "Estimate the photo-z for this galaxy: g=22.1, r=21.5, i=20.8" | Runs 30-template SED fitting with dust and IGM |
 | "What transients were discovered this week?" | Queries TNS/ZTF for recent alerts |
 
-The AI has access to **65 tools** covering search, spectroscopy, photometry, time-domain analysis, image processing, statistics, literature, and more. It automatically selects the right tool based on your request.
+The AI has access to **68 tools** covering search, spectroscopy, photometry, time-domain analysis, image processing, statistics, literature, cosmology likelihood building, and more. It automatically selects the right tool based on your request.
 
 When a tool result includes provenance, the chat card shows a **Data Sources** panel with `archive_version`, bibcodes, and source authority. The **Copy Acknowledgement** button assembles acknowledgement text from the conversation's provenance. If the AI tries a gated source such as SDSS or Chandra, the card appears as **Maintenance** rather than a generic error and suggests the active alternatives.
 

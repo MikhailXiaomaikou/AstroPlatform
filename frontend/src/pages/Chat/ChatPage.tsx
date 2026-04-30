@@ -51,6 +51,7 @@ import {
 import MarkdownText from "../../components/chat/MarkdownText";
 import AckButton from "../../components/chat/AckButton";
 import CosmologyMCMCPanel from "../../components/chat/CosmologyMCMCPanel";
+import CosmologyLikelihoodPanel from "../../components/chat/CosmologyLikelihoodPanel";
 import DataSourcesPanel from "../../components/chat/DataSourcesPanel";
 import ErrorBoundary from "../../components/ErrorBoundary";
 import { useI18n } from "../../i18n";
@@ -439,6 +440,9 @@ function ActionCardInner({
     read_arxiv_paper: "Read Paper",
     run_python: "Python Code",
     fit_cosmology_mcmc: "Cosmology MCMC",
+    list_cosmology_datasets: "Cosmology Datasets",
+    build_cosmology_likelihood: "Likelihood Builder",
+    build_cosmology_robustness_matrix: "Robustness Matrix",
     run_cobaya_cosmology: "Cobaya Cosmology",
     get_cosmology_run_status: "Cosmology Job Status",
   };
@@ -464,6 +468,9 @@ function ActionCardInner({
     read_arxiv_paper: "📄",
     run_python: "🐍",
     fit_cosmology_mcmc: "📉",
+    list_cosmology_datasets: "🧭",
+    build_cosmology_likelihood: "🧩",
+    build_cosmology_robustness_matrix: "▦",
     run_cobaya_cosmology: "📉",
     get_cosmology_run_status: "⏱",
   };
@@ -1531,6 +1538,14 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
       ? result.result as Record<string, unknown>
       : result;
     return <CosmologyMCMCPanel result={nestedResult} />;
+  }
+
+  if (
+    toolName === "list_cosmology_datasets"
+    || toolName === "build_cosmology_likelihood"
+    || toolName === "build_cosmology_robustness_matrix"
+  ) {
+    return <CosmologyLikelihoodPanel result={result} />;
   }
 
   // Pipeline

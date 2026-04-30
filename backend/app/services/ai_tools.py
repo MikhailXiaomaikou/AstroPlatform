@@ -938,6 +938,111 @@ TOOLS = [
         },
     },
     {
+        "name": "list_cosmology_datasets",
+        "description": (
+            "List the curated observational-cosmology dataset registry. Entries "
+            "include version, citation, covariance, units, applicable models, "
+            "source URL, and whether Standard Astro can run the likelihood "
+            "directly or only generate an external config. Use this before "
+            "planning DESI/Pantheon+/DES-SN/Union3/Planck/ACT/CC/SH0ES analyses."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "probe": {
+                    "type": "string",
+                    "description": "Optional probe filter: bao, sn, cmb_compressed, cmb_lensing, hz, h0_prior.",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["ready", "external_likelihood", "metadata_only"],
+                    "description": "Optional status filter.",
+                },
+            },
+        },
+    },
+    {
+        "name": "build_cosmology_likelihood",
+        "description": (
+            "Build a controlled Cobaya/CosmoSIS-style likelihood config from "
+            "registered cosmology datasets and bounded priors. This prepares "
+            "DESI BAO, Pantheon+, DES-SN, Union3, Planck compressed, ACT DR6, "
+            "cosmic chronometer, and SH0ES-prior combinations. It returns "
+            "CONFIG_READY only; do not quote posterior constraints until a "
+            "chain runner returns publication_ready=true."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "enum": [
+                        "lcdm", "wcdm", "w0wa_cdm", "ok_lcdm",
+                        "ok_wcdm", "ok_w0wa_cdm", "lcdm_mnu",
+                        "w0wa_cdm_mnu",
+                    ],
+                    "description": "Cosmological model family.",
+                },
+                "dataset_keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Dataset keys from list_cosmology_datasets.",
+                },
+                "priors": {
+                    "type": "object",
+                    "description": "Optional tightened prior bounds, e.g. {\"w0\": [-1.5, -0.5]}.",
+                },
+                "sampler": {
+                    "type": "string",
+                    "description": "Sampler label for generated config. Default: mcmc.",
+                },
+                "output_format": {
+                    "type": "string",
+                    "enum": ["cobaya", "cosmosis", "both"],
+                    "description": "Which config style to return. Default: both.",
+                },
+            },
+            "required": ["model", "dataset_keys"],
+        },
+    },
+    {
+        "name": "build_cosmology_robustness_matrix",
+        "description": (
+            "Generate the standard robustness matrix for observational "
+            "cosmology: BAO only, BAO+SN, BAO+CMB, BAO+SN+CMB, and optional "
+            "SH0ES H0-prior variants. The output is a set of chain configs "
+            "with guardrails; it is not a posterior result."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "enum": [
+                        "lcdm", "wcdm", "w0wa_cdm", "ok_lcdm",
+                        "ok_wcdm", "ok_w0wa_cdm", "lcdm_mnu",
+                        "w0wa_cdm_mnu",
+                    ],
+                    "description": "Cosmological model family.",
+                },
+                "supernova_sets": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "SN dataset alternatives. Default: Pantheon+, DES-SN5YR, Union3.",
+                },
+                "include_h0_prior": {
+                    "type": "boolean",
+                    "description": "Whether to include +SH0ES variants. Default: true.",
+                },
+                "sampler": {
+                    "type": "string",
+                    "description": "Sampler label for generated configs. Default: mcmc.",
+                },
+            },
+            "required": ["model"],
+        },
+    },
+    {
         "name": "get_object_dossier",
         "description": (
             "Generate a comprehensive cross-match dossier for a sky position. "
@@ -1825,6 +1930,12 @@ async def _execute_tool_inner(
             return await _exec_run_cobaya_cosmology(tool_input, python_session_id)
         elif tool_name == "get_cosmology_run_status":
             return _exec_get_cosmology_run_status(tool_input)
+        elif tool_name == "list_cosmology_datasets":
+            return _exec_list_cosmology_datasets(tool_input)
+        elif tool_name == "build_cosmology_likelihood":
+            return _exec_build_cosmology_likelihood(tool_input)
+        elif tool_name == "build_cosmology_robustness_matrix":
+            return _exec_build_cosmology_robustness_matrix(tool_input)
         elif tool_name == "get_object_dossier":
             return await _exec_get_dossier(tool_input)
         elif tool_name == "get_followup_recommendation":
@@ -3544,6 +3655,12 @@ def _literature_table_cache_payload(payload: dict[str, Any], cache_key: str) -> 
         "source_summary": {
             "line_measurement_count": len(line_measurements),
             "raw_table_count": len(tables),
+            "extraction_status": payload.get("extraction_status") or (
+                "measurement_ready" if line_measurements else "raw_only"
+            ),
+            "normalization_status": payload.get("normalization_status") or (
+                "line_measurements_detected" if line_measurements else "no_line_measurement_schema"
+            ),
             "supports_measurement_claims": bool(line_measurements),
         },
     }
@@ -3570,6 +3687,12 @@ def _literature_tables_llm_summary(payload: dict[str, Any], cache_key: str) -> d
         "cache_key": cache_key,
         "raw_table_count": len(tables),
         "line_measurement_count": len(line_measurements),
+        "extraction_status": payload.get("extraction_status") or (
+            "measurement_ready" if line_measurements else "raw_only"
+        ),
+        "normalization_status": payload.get("normalization_status") or (
+            "line_measurements_detected" if line_measurements else "no_line_measurement_schema"
+        ),
         "fit_ready": bool(line_measurements),
         "measurement_schema": [
             "source_name", "redshift", "line_id", "log_luminosity",
@@ -5042,7 +5165,7 @@ async def _cached_extract_arxiv_tables_payload(arxiv_id_raw: str) -> dict:
     from app.services.connector_cache import get_or_compute
 
     cleaned = _clean_arxiv_id(arxiv_id_raw) or arxiv_id_raw.strip()
-    cache_key = f"arxiv_tables:v1:{cleaned}"
+    cache_key = f"arxiv_tables:v3:{cleaned}"
 
     async def _compute():
         return await _extract_arxiv_tables_payload_with_retry(arxiv_id_raw)
@@ -5210,6 +5333,13 @@ async def _exec_extract_literature_tables(
         "tables": tables,
         "line_measurements": line_measurements,
         "line_measurement_count": len(line_measurements),
+        "raw_table_count": len(tables),
+        "extraction_status": payload.get("extraction_status") or (
+            "measurement_ready" if line_measurements else "raw_only"
+        ),
+        "normalization_status": payload.get("normalization_status") or (
+            "line_measurements_detected" if line_measurements else "no_line_measurement_schema"
+        ),
         "cache_key": cache_key,
         "fit_ready": bool(line_measurements),
         "llm_summary": _literature_tables_llm_summary(payload, cache_key),
@@ -5225,15 +5355,25 @@ async def _exec_extract_literature_tables(
                 "primary_citation_source": "field_level" if bibcodes else "table_level",
             },
         },
-        "warnings": [] if line_measurements else [
+        "warnings": list(payload.get("warnings") or ([] if line_measurements else [
             "Tables were extracted, but no reliable line-measurement schema was detected. Do not fit L[CII]-FWHM until columns are mapped."
-        ],
+        ])),
     }
-    if not line_measurements:
+    if not line_measurements and not tables:
+        result["__message_to_model__"] = (
+            f"No data tables were detected in arXiv:{payload.get('arxiv_id')}. "
+            "This is a semantic no-data result, not permission to infer measurements "
+            "from the abstract or from memory. Allowed next steps: search for a "
+            "companion measurement-table paper, or tell the user that this paper does "
+            "not expose a machine-readable table through the current extractor. "
+            "Do NOT quote L[CII] / Hα / FWHM / line widths or fit a relation."
+        )
+    elif not line_measurements:
         result["__message_to_model__"] = (
             f"Raw literature tables were extracted from arXiv:{payload.get('arxiv_id')} "
-            f"({len(tables)} table(s)), but ZERO normalized line_measurements were detected. "
-            "This usually means the paper's tables are missing one of the required columns "
+            f"({len(tables)} table(s)), but no normalized line_measurements were detected. "
+            "Treat this as a raw-only extraction, not as a fit-ready measurement table. "
+            "It usually means the paper's tables are missing one of the required columns "
             "(source name, redshift, log L<line>, FWHM) — for example: REBELS often puts the "
             "size measurements in one paper and the line measurements in a companion paper. "
             "Allowed next steps: "
@@ -6844,6 +6984,64 @@ def _exec_get_cosmology_run_status(inp: dict) -> dict:
             "error_class": "missing_job_id",
         }
     return get_cosmology_job_status(job_id)
+
+
+def _exec_list_cosmology_datasets(inp: dict) -> dict:
+    from app.services.cosmology_likelihoods import list_cosmology_datasets
+
+    return list_cosmology_datasets(
+        probe=str(inp.get("probe") or "").strip() or None,
+        status=str(inp.get("status") or "").strip() or None,
+    )
+
+
+def _exec_build_cosmology_likelihood(inp: dict) -> dict:
+    from app.services.cosmology_likelihoods import build_likelihood_config
+
+    try:
+        dataset_keys = inp.get("dataset_keys") or []
+        if not isinstance(dataset_keys, list):
+            raise ValueError("dataset_keys must be a list")
+        return build_likelihood_config(
+            model=str(inp.get("model") or ""),
+            dataset_keys=[str(key) for key in dataset_keys],
+            priors=inp.get("priors"),
+            sampler=str(inp.get("sampler") or "mcmc"),
+            output_format=str(inp.get("output_format") or "both"),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
+def _exec_build_cosmology_robustness_matrix(inp: dict) -> dict:
+    from app.services.cosmology_likelihoods import build_robustness_matrix
+
+    try:
+        supernova_sets = inp.get("supernova_sets")
+        if supernova_sets is not None and not isinstance(supernova_sets, list):
+            raise ValueError("supernova_sets must be a list")
+        return build_robustness_matrix(
+            model=str(inp.get("model") or ""),
+            supernova_sets=([str(key) for key in supernova_sets] if supernova_sets else None),
+            include_h0_prior=bool(inp.get("include_h0_prior", True)),
+            sampler=str(inp.get("sampler") or "mcmc"),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
 
 
 async def _exec_fit_isochrone(inp: dict) -> dict:

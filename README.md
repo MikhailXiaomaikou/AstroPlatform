@@ -4,14 +4,14 @@
 
 Paper drafts generated from AI sessions are private to the owner account by default. A draft becomes publicly readable only after the owner explicitly uses **Publish Draft**, which creates a revocable `/papers/public/:token` link.
 
-Built with React 19 + FastAPI + **65 AI tools** + **35 pipeline nodes** + **24 archive connector keys** + provenance-v2 citation guardrails across 16 astronomy research domains.
+Built with React 19 + FastAPI + **68 AI tools** + **35 pipeline nodes** + **24 archive connector keys** + provenance-v2 citation guardrails across 16 astronomy research domains.
 
 ## Core Workflows
 
 | Module | Description |
 |--------|-------------|
 | **Data Browser** | Query the active provenance-v2 sources (VizieR, Gaia DR3, SIMBAD, NED, 2MASS, ALMA observation metadata) from one place. Non-v2 sources are still visible but maintenance-gated until their `archive_version` provenance is upgraded. |
-| **AI Assistant** | 65-tool research agent that auto-selects the right data source, writes ADQL, analyzes spectra, fits isochrones/transits/RV orbits, computes SFR, runs controlled cosmology MCMC, builds pipelines, reviews literature, and drafts papers. Now with object-class-specific workflows (open clusters / globular clusters / RR Lyrae / Cepheids / EB / galaxies / X-ray sources / pulsars / white dwarfs / ...). |
+| **AI Assistant** | 68-tool research agent that auto-selects the right data source, writes ADQL, analyzes spectra, fits isochrones/transits/RV orbits, computes SFR, runs controlled cosmology MCMC, builds likelihood configs, builds pipelines, reviews literature, and drafts papers. Now with object-class-specific workflows (open clusters / globular clusters / RR Lyrae / Cepheids / EB / galaxies / X-ray sources / pulsars / white dwarfs / ...). |
 | **Pipeline Studio** | Visual DAG editor with 35 node types spanning CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
 | **ADQL Query** | Multi-service TAP editor with syntax highlighting, template library, and federated queries across Gaia DR3, SIMBAD, VizieR, CADC, and NED — with automatic retry on timeout (reducing cone radius). |
 | **Workspace** | Persistent file storage for FITS, VOTable, and analysis results. Batch search, saved searches, and data export. |
@@ -200,6 +200,13 @@ The AI assistant has explicit, literature-cited workflows for:
 - Model comparison tables (AIC/BIC/WAIC/LOO)
 - Monte Carlo error propagation and bootstrap resampling
 
+### Observational Cosmology Workflows
+
+- Curated dataset registry for DESI DR1 BAO, Pantheon+, DES-SN5YR, Union3, Planck 2018 compressed priors, ACT DR6 lensing, cosmic chronometers, and SH0ES H0 prior
+- Each dataset entry records version, citation, covariance status, units, applicable model families, source URL, and whether it is ready, external-likelihood-backed, or metadata-only
+- Controlled likelihood builder emits Cobaya- and CosmoSIS-style configs for `lcdm`, `wcdm`, `w0wa_cdm`, curved variants, and neutrino-mass variants
+- Robustness matrix generator prepares BAO-only, BAO+SN, BAO+CMB, BAO+SN+CMB, and +SH0ES combinations; results remain non-citeable until a chain runner returns `publication_ready=true`
+
 ### Time-Domain Astronomy (batman + celerite2)
 
 - Lomb-Scargle periodogram + BLS transit search
@@ -298,7 +305,7 @@ M_G → T_eff conversion from Tremblay+ 2019. Supports DA/DB atmospheres and mas
 - Registry freshness is enforced at backend startup; stale fallback provenance blocks serving traffic until corrected
 - Chat UI surfaces a Data Sources panel and Copy Acknowledgement button; maintenance-gated tools get a separate `UNAVAILABLE` visual state
 
-## AI Assistant — 65 Tools
+## AI Assistant — 68 Tools
 
 The AI assistant can invoke any platform capability. All tools are literature-cited where applicable.
 
@@ -315,6 +322,7 @@ The AI assistant can invoke any platform capability. All tools are literature-ci
 | **Clusters** | fit_isochrone (PARSEC + turnoff fallback), auto-extract from Gaia |
 | **Image** | reduce_ccd_image, solve_astrometry, process_image |
 | **Statistics** | validate_analysis, sensitivity_analysis |
+| **Cosmology** | list_cosmology_datasets, build_cosmology_likelihood, build_cosmology_robustness_matrix, fit_cosmology_mcmc, run_cobaya_cosmology, get_cosmology_run_status, compare_luminosity_distances |
 | **Pipeline** | generate_pipeline, run_pipeline |
 | **Literature** | search_literature, read_arxiv_paper, literature_review |
 | **Transients** | query_transients, classify_transient |

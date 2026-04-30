@@ -30,6 +30,11 @@ class ArxivTableResponse(BaseModel):
     tables: list[dict]  # [{name, columns, rows}]
     line_measurements: list[dict] = Field(default_factory=list)
     cache_key: str | None = None
+    raw_table_count: int = 0
+    line_measurement_count: int = 0
+    extraction_status: str = "unknown"
+    normalization_status: str = "unknown"
+    warnings: list[str] = Field(default_factory=list)
 
 
 _MAX_TABLE_ROWS = 200
@@ -65,6 +70,50 @@ def _normalize_ws(value: str) -> str:
 
 def _strip_html(value: str) -> str:
     return _normalize_ws(re.sub(r"<[^>]+>", " ", value or ""))
+
+
+def _looks_like_ar5iv_math_layout(
+    table_tag: Any,
+    caption: str,
+    headers: list[str],
+    rows: list[list[str]],
+) -> bool:
+    """Return True for ar5iv equation-layout tables, not data tables."""
+    class_attr = table_tag.get("class") if hasattr(table_tag, "get") else []
+    if isinstance(class_attr, str):
+        classes = {class_attr}
+    else:
+        classes = {str(c) for c in (class_attr or [])}
+    class_text = " ".join(classes).lower()
+    if any(token in class_text for token in ("equation", "eqn", "ltx_align", "ltx_math")):
+        return True
+
+    if caption:
+        return False
+
+    cells = [cell for cell in headers]
+    for row in rows:
+        cells.extend(str(cell) for cell in row)
+    nonempty = [_normalize_ws(cell) for cell in cells if _normalize_ws(cell)]
+    if not nonempty:
+        return True
+
+    first_cell = nonempty[0].lower()
+    if first_cell in {"comments:", "subjects:", "journal-ref:", "doi:", "report-no:"}:
+        return True
+
+    joined = " ".join(nonempty).lower()
+    equation_markers = (
+        "\\frac", "\\rm", "\\left", "\\right", "\\sum", "\\int",
+        "superscript", "subscript", "displaystyle", "h^", "omega_",
+    )
+    has_equation_marker = any(marker in joined for marker in equation_markers)
+    has_table_words = bool(re.search(
+        r"\b(source|object|redshift|fwhm|flux|luminosity|distance|sample|"
+        r"galaxy|cluster|survey|bao|snia|host)\b",
+        joined,
+    ))
+    return has_equation_marker and not has_table_words
 
 
 def _strip_latex(value: str) -> str:
@@ -201,7 +250,7 @@ def _parse_html_tables(html_text: str) -> list[dict]:
             if cells and len(cells) > 1:
                 rows.append(cells)
 
-        if headers and rows:
+        if headers and rows and not _looks_like_ar5iv_math_layout(table_tag, caption, headers, rows):
             tables.append({
                 "table_id": _table_id("html", idx),
                 "label": f"Table {idx + 1}",
@@ -216,6 +265,27 @@ def _parse_html_tables(html_text: str) -> list[dict]:
             })
 
     return tables
+
+
+def _table_extraction_status(
+    tables: list[dict[str, Any]],
+    line_measurements: list[dict[str, Any]],
+) -> tuple[str, str, list[str]]:
+    if line_measurements:
+        return "measurement_ready", "line_measurements_detected", []
+    if tables:
+        return (
+            "raw_only",
+            "no_line_measurement_schema",
+            [
+                "Raw paper tables were extracted, but no reliable line-measurement schema was detected.",
+            ],
+        )
+    return (
+        "no_tables",
+        "no_tables",
+        ["No data tables were detected in the arXiv/ar5iv source."],
+    )
 
 
 def _extract_braced(block: str, command: str) -> str:
@@ -781,9 +851,6 @@ async def extract_arxiv_tables_payload(arxiv_id_raw: str) -> dict[str, Any]:
             except Exception as exc:
                 logger.warning("arXiv source fetch failed for %s: %s", arxiv_id, exc)
 
-    if not all_tables:
-        raise HTTPException(status_code=404, detail=f"No tables found in arXiv:{arxiv_id}")
-
     citation_base = {
         "bibcode": metadata.get("bibcode") or f"arXiv:{arxiv_id}",
         "arxiv_id": arxiv_id,
@@ -795,6 +862,7 @@ async def extract_arxiv_tables_payload(arxiv_id_raw: str) -> dict[str, Any]:
     }
     tables = _attach_row_citations(all_tables, citation_base)
     line_measurements = _normalize_line_measurements(tables)
+    extraction_status, normalization_status, warnings = _table_extraction_status(tables, line_measurements)
     return {
         "arxiv_id": arxiv_id,
         "title": metadata.get("title") or arxiv_id,
@@ -805,6 +873,11 @@ async def extract_arxiv_tables_payload(arxiv_id_raw: str) -> dict[str, Any]:
         "source_url": citation_base["source_url"],
         "tables": tables,
         "line_measurements": line_measurements,
+        "raw_table_count": len(tables),
+        "line_measurement_count": len(line_measurements),
+        "extraction_status": extraction_status,
+        "normalization_status": normalization_status,
+        "warnings": warnings,
         "result_granularity": "paper_table",
         "supports_measurement_claims": bool(line_measurements),
     }

@@ -39,6 +39,42 @@ def test_html_table_gets_row_citations_and_line_measurements():
     assert measurements[0]["citation"]["arxiv_id"] == "2211.04968"
 
 
+def test_ar5iv_equation_layout_tables_are_not_counted_as_data_tables():
+    from app.api.arxiv import _parse_html_tables
+
+    html = """
+    <html><body>
+      <table class="ltx_equation">
+        <tr><td>H^{2}(a)=\\frac{8\\pi G}{3}\\rho(a)</td><td>(1)</td></tr>
+      </table>
+      <table>
+        <caption>Table 1. [CII] line measurements</caption>
+        <thead><tr><th>Source</th><th>z</th><th>log L[CII]</th><th>FWHM</th></tr></thead>
+        <tbody><tr><td>REBELS-01</td><td>7.1</td><td>8.4</td><td>210</td></tr></tbody>
+      </table>
+    </body></html>
+    """
+
+    tables = _parse_html_tables(html)
+
+    assert len(tables) == 1
+    assert tables[0]["caption"] == "Table 1. [CII] line measurements"
+
+
+def test_ar5iv_metadata_tables_are_not_counted_as_data_tables():
+    from app.api.arxiv import _parse_html_tables
+
+    html = """
+    <html><body>
+      <table>
+        <tr><th>Comments:</th><td>18 pages and 6 figures</td></tr>
+      </table>
+    </body></html>
+    """
+
+    assert _parse_html_tables(html) == []
+
+
 def test_latex_deluxetable_can_normalize_cii_rows():
     from app.api.arxiv import _attach_row_citations, _normalize_line_measurements, _parse_latex_tables
 
@@ -79,3 +115,11 @@ def test_raw_table_without_required_columns_is_not_measurement_ready():
     tables = _attach_row_citations(tables, {"bibcode": "arXiv:2211.04968", "arxiv_id": "2211.04968"})
 
     assert _normalize_line_measurements(tables) == []
+
+
+def test_table_extraction_status_distinguishes_raw_only_from_measurement_ready():
+    from app.api.arxiv import _table_extraction_status
+
+    assert _table_extraction_status([], [])[0] == "no_tables"
+    assert _table_extraction_status([{"columns": ["Target"], "rows": [["A"]]}], [])[0] == "raw_only"
+    assert _table_extraction_status([{"columns": ["Source"], "rows": [["A"]]}], [{"source_name": "A"}])[0] == "measurement_ready"
