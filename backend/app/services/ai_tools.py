@@ -4740,7 +4740,7 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         ),
         "fit_orientation": {
             "dependent_variable": (
-                f"log10(L/L_sun)" if luminosity_kind_used == "L_solar"
+                "log10(L/L_sun)" if luminosity_kind_used == "L_solar"
                 else "log10(L_prime/(K km/s pc^2))"
             ),
             "independent_variable": "log10(FWHM_km_s / 100)",
