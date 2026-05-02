@@ -4490,7 +4490,14 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         keys.append("union3")
     if any(tok in prompt for tok in ("cmb", "planck")):
         keys.append("planck2018_compressed")
-    if "act dr6" in prompt or "act lens" in prompt or "act-era" in prompt or "act era" in prompt:
+    if (
+        "act dr6" in prompt
+        or "act lens" in prompt
+        or "act-era" in prompt
+        or "act era" in prompt
+        or "cmb lensing" in prompt
+        or "cmb-lensing" in prompt
+    ):
         keys.append("act_dr6_lensing")
     if any(tok in prompt for tok in ("kids", "kilo-degree")):
         keys.append("kids1000_wl")

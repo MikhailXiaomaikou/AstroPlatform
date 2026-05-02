@@ -248,6 +248,31 @@ def test_with_and_without_cmb_is_not_parsed_as_cmb_exclusion() -> None:
     ]
 
 
+def test_generic_cmb_lensing_routes_to_act_dr6_lensing() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_models_from_prompt,
+    )
+
+    prompt = (
+        "I am testing whether CMB lensing plus CMB compressed products can say "
+        "anything about neutrino mass. Use registered likelihood products only "
+        "and block any m_nu number unless the chain is publication-ready for that model."
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+    assert _cosmology_models_from_prompt(prompt) == ["lcdm_mnu"]
+    calls = _cosmology_likelihood_build_calls_from_prompt(prompt)
+    assert calls[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+
+
 def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,
