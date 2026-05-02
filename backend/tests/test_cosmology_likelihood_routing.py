@@ -193,6 +193,32 @@ def test_act_era_cross_check_prompt_is_a_cosmology_workflow() -> None:
     ]
 
 
+def test_spt_workflow_lists_planck_act_but_suppresses_surrogate_posterior() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_likelihood_run_calls_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
+
+    prompt = (
+        "I am checking an SPT-3G damping-tail CMB workflow. Use registered "
+        "SPT/Planck/ACT products if present; if the SPT likelihood is "
+        "external-only, do not produce posterior numbers."
+    )
+
+    assert _is_cosmology_likelihood_workflow(prompt) is True
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+    assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+    assert _cosmology_likelihood_run_calls_from_prompt(prompt) == []
+
+
 def test_des_sn_workflow_does_not_turn_negated_bao_into_matrix() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,

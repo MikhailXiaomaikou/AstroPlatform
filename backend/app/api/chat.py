@@ -4352,7 +4352,7 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
     prompt = str(text or "").lower()
     dataset_tokens = (
         "bao", "baryon acoustic", "sn ia", "supernova", "pantheon",
-        "des-sn", "union3", "cmb", "planck", "act dr6", "sh0es",
+        "des-sn", "union3", "cmb", "planck", "act dr6", "spt", "spt-3g", "sh0es",
         "cosmic chronometer", "weak lensing", "weak-lensing",
         "cosmic shear", "cosmic-shear", "kids",
         "des y3", "hsc", "galaxy lensing", "trgb", "freedman",
@@ -4382,6 +4382,18 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         and any(tok in prompt for tok in model_tokens)
         and any(tok in prompt for tok in planning_tokens)
     )
+
+
+def _cosmology_prompt_mentions_act(text: str) -> bool:
+    prompt = str(text or "").lower()
+    return bool(re.search(r"\bact\b", prompt)) or any(tok in prompt for tok in (
+        "act dr6", "act lens", "act-era", "act era",
+    ))
+
+
+def _cosmology_prompt_mentions_spt(text: str) -> bool:
+    prompt = str(text or "").lower()
+    return bool(re.search(r"\bspt\b", prompt)) or "spt-3g" in prompt
 
 
 def _cosmology_prompt_forbids_family(text: str, aliases: tuple[str, ...]) -> bool:
@@ -4512,10 +4524,7 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     if any(tok in prompt for tok in ("cmb", "planck")):
         keys.append("planck2018_compressed")
     if (
-        "act dr6" in prompt
-        or "act lens" in prompt
-        or "act-era" in prompt
-        or "act era" in prompt
+        _cosmology_prompt_mentions_act(prompt)
         or "cmb lensing" in prompt
         or "cmb-lensing" in prompt
     ):
@@ -4683,6 +4692,11 @@ def _cosmology_likelihood_run_calls_from_prompt(text: str) -> list[dict[str, Any
     dataset_keys = _cosmology_dataset_keys_from_prompt(text)
     models = _cosmology_models_from_prompt(text)
     if not dataset_keys or not models:
+        return []
+    if _cosmology_prompt_mentions_spt(text):
+        # SPT-3G damping-tail likelihoods are not yet executable in the
+        # registry.  Do not substitute Planck/ACT compressed posteriors for an
+        # SPT workflow; the assistant should report config/registry status.
         return []
     run_models = ["lcdm"] if "lcdm" in models else [models[0]]
     if _should_build_cosmology_robustness_matrix(text):
