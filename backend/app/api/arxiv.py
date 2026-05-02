@@ -119,6 +119,7 @@ def _looks_like_ar5iv_math_layout(
 def _strip_latex(value: str) -> str:
     value = value or ""
     value = re.sub(r"(?<!\\)%.*", "", value)
+    value = re.sub(r"\\(?:ldots|cdots|dots|ellipsis)(?![A-Za-z])", "...", value)
     # Preserve common scientific symbols before the generic command stripper.
     # Otherwise cosmology table labels like \Omega_m / \Delta\chi^2 become
     # bare "_m" / "^2", which looks like the extractor omitted key terms.
@@ -296,11 +297,18 @@ def _table_extraction_status(
     if line_measurements:
         return "measurement_ready", "line_measurements_detected", []
     if tables:
+        diagnostics = _line_measurement_column_diagnostics(tables)
+        detail = (
+            " ".join(diagnostics[:4])
+            if diagnostics
+            else "No candidate source/redshift/luminosity/FWHM column set was found."
+        )
         return (
             "raw_only",
             "no_line_measurement_schema",
             [
-                "Raw paper tables were extracted, but no reliable line-measurement schema was detected.",
+                "Raw paper tables were extracted, but no reliable line-measurement schema was detected. "
+                + detail,
             ],
         )
     return (
@@ -584,6 +592,69 @@ def _find_column(columns: list[str], patterns: list[str]) -> int | None:
             if regex.search(key):
                 return idx
     return None
+
+
+def _line_measurement_column_diagnostics(tables: list[dict[str, Any]]) -> list[str]:
+    """Explain why raw tables did not normalize into line measurements.
+
+    This is intentionally heuristic and user-facing: it helps the model and UI
+    distinguish "no table" from "table exists but needs column mapping".
+    """
+    diagnostics: list[str] = []
+    for table in tables[:5]:
+        columns = [str(c) for c in table.get("columns") or []]
+        if not columns:
+            continue
+        source_idx = _find_column(columns, [
+            r"^(source|object|name|id|galaxy)$",
+            r"(source|object|galaxy)(name|id)",
+            r"^(sourceid|objectid|galaxyid)$",
+            r"^[a-z]{2,12}id$",
+            r"^(rebels|alpine|aspecs|capak|bothwell|hzid)$",
+        ])
+        redshift_idx = _find_column(columns, [
+            r"^(z|redshift)$",
+            r"^zspec$", r"^zphot$", r"^zsys$",
+            r"^zcii$", r"^zline$", r"^zco$", r"^zha$", r"^zlya$",
+            r"^z\d+$",
+            r"^z[a-z0-9]{1,5}$",
+        ])
+        luminosity_idx = _find_column(columns, [
+            r"log.*l.*cii", r"^lcii", r"^lciilcii$", r"^cii$",
+            r"log.*l.*halpha", r"^lhalpha$", r"^lha$",
+            r"log.*l.*hbeta", r"^lhbeta$",
+            r"log.*l.*ly(a|alpha)", r"^lly", r"^llya",
+            r"log.*l.*oiii", r"^loiii$",
+            r"log.*l.*oii$", r"^loii$",
+            r"log.*l.*nii", r"^lnii$",
+            r"log.*l.*sii", r"^lsii$",
+            r"^log[_]?l[a-z]*\d*$", r"^loglum", r"^lineluminos",
+            r"^luminos[a-z]*$",
+            r"^lc$", r"^logl$",
+        ])
+        fwhm_idx = _find_column(columns, [r"fwhm", r"linewidth", r"^dv$", r"velocitywidth"])
+        missing = [
+            name
+            for name, idx in (
+                ("source/object", source_idx),
+                ("redshift", redshift_idx),
+                ("line luminosity", luminosity_idx),
+                ("FWHM/line width", fwhm_idx),
+            )
+            if idx is None
+        ]
+        if not missing:
+            diagnostics.append(
+                f"Table {table.get('label') or table.get('table_id') or table.get('name') or '?'} "
+                "has apparent required columns but no numeric rows survived parsing; inspect row formatting."
+            )
+            continue
+        preview = ", ".join(_normalize_ws(c) for c in columns[:8])
+        diagnostics.append(
+            f"Table {table.get('label') or table.get('table_id') or table.get('name') or '?'} "
+            f"is missing: {', '.join(missing)}. Columns seen: {preview}."
+        )
+    return diagnostics
 
 
 # PART Z: line-ID inference table. Each entry is (regex, canonical_label).

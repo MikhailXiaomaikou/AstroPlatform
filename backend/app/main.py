@@ -321,12 +321,11 @@ async def lifespan(app: FastAPI):
     event_flush_task = asyncio.create_task(periodic_flush(event_collector, interval=event_collector.FLUSH_INTERVAL))
 
     # PART AG C2 — fire-and-forget [CII] literature cache pre-warm.
-    # R2.4 M6 audit caught the AI tripping the citation guard because
-    # SYSTEM_PROMPT (PART AD C2) tells it to cite REBELS / Capak+2015 /
-    # Bothwell+13 but those papers' tables weren't in connector_cache,
-    # and `search_literature` returned 0 hits → AI cited from prior →
-    # guard withheld the entire reply. Pre-warming the cache at
-    # startup makes the curated 6-paper set resolve immediately.
+    # R2 audits caught the AI citing remembered REBELS / Capak / Bothwell
+    # table values when no fit-ready measurement cache existed.  Startup
+    # pre-warms only the verified seed list from app.api.admin_literature
+    # (currently ALPINE/Béthermin+2020); pending papers stay out until
+    # the table extractor proves they yield line_measurements > 0.
     #
     # The task is fire-and-forget so server startup is NOT blocked on
     # 6 ar5iv fetches (typical 15-30 s wall clock). If a fetch fails
@@ -359,13 +358,13 @@ async def lifespan(app: FastAPI):
 
 
 async def _warmup_cii_caches() -> None:
-    """PART AG C2 — fire-and-forget pre-warm of the curated [CII]
-    literature cache list at server startup.
+    """PART AG C2 — fire-and-forget pre-warm of the verified [CII]
+    literature measurement seed list at server startup.
 
-    Pulls the 6-paper default set from app.api.admin_literature so the
-    list of papers stays in one place. Each fetch is independent and
-    survived by `_cached_extract_arxiv_tables_payload`'s 24h cache, so
-    repeated startups within a day are cheap no-ops.
+    Pulls the default seed list from app.api.admin_literature so the list
+    of papers stays in one place. Each fetch is independent and survived
+    by `_cached_extract_arxiv_tables_payload`'s 24h cache, so repeated
+    startups within a day are cheap no-ops.
 
     Failures are logged at WARNING but never re-raised — the platform
     must not hard-fail to start because ar5iv was unreachable.

@@ -84,6 +84,7 @@ _STOCHASTIC_TOOLS: frozenset[str] = frozenset({
     # are stochastic; the OLS path is deterministic but goes through the
     # same envelope, so we seed it too for provenance consistency.
     "fit_line_lfr",
+    "astro_statistics_toolbox",
 })
 
 
@@ -474,7 +475,9 @@ _COMPUTE_TOOLS = {
     # PART Y Batch 1 (audit follow-up): newer compute tools — line-relation
     # fitting on cited literature tables, luminosity-distance comparison
     # across cosmologies, gravitational-lensing demagnification of a sample.
-    "fit_line_lfr", "compare_luminosity_distances", "demagnify_sample",
+    "prepare_spectral_measurements", "fit_line_lfr",
+    "astro_statistics_toolbox",
+    "compare_luminosity_distances", "demagnify_sample",
 }
 _REFERENCE_TOOLS = {
     "search_literature", "read_arxiv_paper", "extract_literature_tables", "literature_review",

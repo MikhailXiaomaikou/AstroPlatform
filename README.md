@@ -16,6 +16,8 @@ default. A draft becomes publicly readable only after the owner explicitly uses
 | Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
 | Provenance | Tool results carry citation, archive version, field bibcodes, query hashes, run IDs, and acknowledgement metadata. |
 | Cosmology | Dataset registry, likelihood config builder, MCMC tools, robustness matrix scaffolding, and chain diagnostics. |
+| Spectral measurements | Literature-table rows can be validated as fit-ready spectral measurements before line-relation fitting. |
+| Statistics | Deterministic robust summaries, regression helpers, bootstrap intervals, and censored-data summaries reduce ad-hoc analysis code. |
 | Export | Paper drafts, BibTeX, acknowledgement text, notebooks, figures, and reproducibility packages. |
 
 ## Active Data Sources
@@ -137,6 +139,7 @@ frontend/
 - Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
 - Quick start: [docs/QUICKSTART.md](./docs/QUICKSTART.md)
 - API reference: [docs/API_REFERENCE.md](./docs/API_REFERENCE.md)
+- Source mapping: [docs/SOURCE_MAPPING.md](./docs/SOURCE_MAPPING.md)
 - Deployment notes: [DEPLOYMENT.md](./DEPLOYMENT.md)
 - Agent/development notes: [CLAUDE.md](./CLAUDE.md)
 

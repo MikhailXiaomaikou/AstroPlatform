@@ -125,9 +125,26 @@ def test_table_extraction_status_distinguishes_raw_only_from_measurement_ready()
     assert _table_extraction_status([{"columns": ["Source"], "rows": [["A"]]}], [{"source_name": "A"}])[0] == "measurement_ready"
 
 
+def test_raw_only_status_reports_missing_measurement_columns():
+    from app.api.arxiv import _table_extraction_status
+
+    tables = [{
+        "table_id": "t1",
+        "columns": ["Source", "z", "log L[CII]"],
+        "rows": [["HZ1", "5.7", "8.4"]],
+    }]
+
+    _, status, warnings = _table_extraction_status(tables, [])
+
+    assert status == "no_line_measurement_schema"
+    assert "missing: FWHM/line width" in warnings[0]
+    assert "Columns seen: Source, z, log L[CII]" in warnings[0]
+
+
 def test_latex_cleaning_preserves_cosmology_symbols():
     from app.api.arxiv import _strip_latex
 
     assert _strip_latex(r"\Omega_m") == "Ω_m"
     assert _strip_latex(r"\Delta\chi^2") == "Δχ^2"
     assert _strip_latex(r"\\[0.5ex] w_a") == "w_a"
+    assert _strip_latex(r"W_0\ldots") == "W_0..."

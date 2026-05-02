@@ -39,6 +39,14 @@ def test_fit_line_lfr_consumes_cached_literature_measurements():
 
     assert result["success"] is True
     assert result["publication_ready"] is True
+    assert result["publication_readiness"]["status"] == "publication_ready_relation"
+    assert result["publication_readiness"]["checks"]["minimum_rows"]["passed"] is True
+    assert result["publication_readiness"]["checks"]["citations"]["passed"] is True
+    assert result["relation_claimability"] == {
+        "can_claim_relation": True,
+        "claim_scope": "publication_ready_relation",
+        "blocking_reasons": [],
+    }
     assert result["n_used"] == 6
     assert abs(result["beta"] - 0.5) < 1e-9
     assert abs(result["alpha"] - 8.0) < 1e-9
@@ -60,6 +68,9 @@ def test_fit_line_lfr_partial_when_too_few_rows():
     assert result["publication_ready"] is False
     assert result["__tool_status__"] == "PARTIAL"
     assert result["__do_not_claim__"] is True
+    assert result["publication_readiness"]["status"] == "exploratory_only"
+    assert result["relation_claimability"]["can_claim_relation"] is False
+    assert "below_min_rows" in result["relation_claimability"]["blocking_reasons"]
 
 
 def test_fit_line_lfr_value_range_log_inference_is_exploratory_only():
@@ -78,6 +89,8 @@ def test_fit_line_lfr_value_range_log_inference_is_exploratory_only():
     assert result["publication_ready"] is False
     assert result["__tool_status__"] == "PARTIAL"
     assert result["__do_not_claim__"] is True
+    assert result["relation_claimability"]["can_claim_relation"] is False
+    assert "unconfirmed_luminosity_units" in result["relation_claimability"]["blocking_reasons"]
     assert result["log_luminosity_inference_summary"]["value_range_inferred_rows"] == 6
 
 

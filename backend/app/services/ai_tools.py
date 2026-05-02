@@ -580,6 +580,34 @@ TOOLS = [
         },
     },
     {
+        "name": "prepare_spectral_measurements",
+        "description": (
+            "Validate and summarize cited spectral line measurement rows from a "
+            "literature-table cache. Use this for any emission/absorption line "
+            "sample ([CII], CO, Halpha, Lyalpha, [OIII], etc.) before fitting, "
+            "exporting, or comparing surveys. It reports line inventory, fit-ready "
+            "row counts, missing fields, citation counts, and ranges; it does not "
+            "fit a relation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cache_key": {
+                    "type": "string",
+                    "description": "Cache key from extract_literature_tables. Default: latest_literature_tables.",
+                },
+                "line_id": {
+                    "type": "string",
+                    "description": "Optional line filter, e.g. [CII], CO(1-0), Halpha, Lyalpha, [OIII] 5007.",
+                },
+                "min_fit_rows": {
+                    "type": "integer",
+                    "description": "Minimum complete cited rows required to mark the sample fit-ready. Default: 5.",
+                },
+            },
+        },
+    },
+    {
         "name": "fit_line_lfr",
         "description": (
             "Fit a line-luminosity versus FWHM relation from cached, cited literature "
@@ -708,6 +736,36 @@ TOOLS = [
                     ),
                 },
             },
+        },
+    },
+    {
+        "name": "astro_statistics_toolbox",
+        "description": (
+            "Run deterministic statistical helpers on supplied arrays: robust summary, "
+            "OLS/weighted/ODR/Theil-Sen linear regression, bootstrap linear regression, "
+            "and descriptive censored-data summaries for upper limits. Prefer this over "
+            "ad-hoc run_python for common statistics when the data arrays are already "
+            "available from real tools."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "analysis_type": {
+                    "type": "string",
+                    "enum": ["robust_summary", "linear_regression", "bootstrap_linear_regression", "censored_summary"],
+                    "description": "Statistic to run.",
+                },
+                "values": {"type": "array", "items": {"type": "number"}, "description": "Values for robust_summary or censored_summary."},
+                "is_upper_limit": {"type": "array", "items": {"type": "boolean"}, "description": "Flags for censored_summary; true means upper limit."},
+                "x": {"type": "array", "items": {"type": "number"}, "description": "x values for regression."},
+                "y": {"type": "array", "items": {"type": "number"}, "description": "y values for regression."},
+                "x_err": {"type": "array", "items": {"type": "number"}, "description": "Optional x uncertainties."},
+                "y_err": {"type": "array", "items": {"type": "number"}, "description": "Optional y uncertainties."},
+                "method": {"type": "string", "enum": ["auto", "ols", "weighted", "odr", "theil_sen"], "description": "Regression method."},
+                "n_bootstrap": {"type": "integer", "description": "Bootstrap iterations when applicable."},
+                "seed": {"type": "integer", "description": "Random seed for bootstrap resampling."},
+            },
+            "required": ["analysis_type"],
         },
     },
     {
@@ -1916,8 +1974,12 @@ async def _execute_tool_inner(
                 tool_input, python_session_id,
                 user_id=user_id, chat_session_id=chat_session_id,
             )
+        elif tool_name == "prepare_spectral_measurements":
+            return _exec_prepare_spectral_measurements(tool_input, python_session_id)
         elif tool_name == "fit_line_lfr":
             return _exec_fit_line_lfr(tool_input, python_session_id)
+        elif tool_name == "astro_statistics_toolbox":
+            return _exec_astro_statistics_toolbox(tool_input)
         elif tool_name == "demagnify_sample":
             return _exec_demagnify_sample(tool_input, python_session_id)
         elif tool_name == "compare_luminosity_distances":
@@ -4156,6 +4218,59 @@ def _split_rows_by_redshift(
     return out
 
 
+def _exec_prepare_spectral_measurements(inp: dict, python_session_id: str = "default") -> dict:
+    cache_key = str(inp.get("cache_key") or "latest_literature_tables").strip() or "latest_literature_tables"
+    rows, resolved_cache_key = _resolve_literature_measurement_cache(cache_key, python_session_id)
+    inline_rows = inp.get("rows")
+    if not rows and isinstance(inline_rows, list):
+        rows = [row for row in inline_rows if isinstance(row, dict)]
+        resolved_cache_key = "inline_rows"
+    if not rows:
+        return {
+            "success": False,
+            "__tool_status__": "EMPTY",
+            "analysis_status": "empty",
+            "tool": "prepare_spectral_measurements",
+            "error": f"No cached line_measurements found for cache_key={cache_key!r}.",
+            "error_class": "missing_measurement_cache",
+            "cache_key": cache_key,
+            "__message_to_model__": (
+                "No row-level spectral measurements are cached. Run "
+                "extract_literature_tables first, then retry this workbench."
+            ),
+        }
+    from app.services.spectral_measurement_workbench import prepare_spectral_measurements
+
+    result = prepare_spectral_measurements(
+        rows,
+        line_id=inp.get("line_id"),
+        min_fit_rows=int(inp.get("min_fit_rows") or 5),
+    )
+    result["cache_key"] = resolved_cache_key
+    result["source_cache_key"] = resolved_cache_key
+    if not result.get("fit_ready"):
+        result["__tool_status__"] = "PARTIAL"
+        result["analysis_status"] = "partial"
+        result["__do_not_claim__"] = True
+        result["__message_to_model__"] = (
+            "The spectral measurement workbench found rows, but too few complete "
+            "cited measurements are fit-ready. Report the gap; do not claim line "
+            "statistics or fitted relations from this sample."
+        )
+    return result
+
+
+def _exec_astro_statistics_toolbox(inp: dict) -> dict:
+    from app.services.astro_statistics import run_statistics_toolbox
+
+    result = run_statistics_toolbox(inp)
+    result.setdefault("tool", "astro_statistics_toolbox")
+    if result.get("success") is False:
+        result.setdefault("__tool_status__", "FAILED")
+        result.setdefault("__do_not_claim__", True)
+    return result
+
+
 def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
     """Fit log L(line) as a function of log10(FWHM / 100 km/s)."""
     # PART AF C2 — accept either a single cache_key OR a list of
@@ -4277,6 +4392,21 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
 
     n_used = len(accepted)
     if n_used < 2:
+        partial_readiness = {
+            "status": "not_publication_ready",
+            "checks": {
+                "minimum_rows": {
+                    "passed": False,
+                    "n_used": n_used,
+                    "required": max(2, min_rows),
+                },
+                "citations": {
+                    "passed": False,
+                    "rows_with_citations": 0,
+                    "n_used": n_used,
+                },
+            },
+        }
         return {
             "success": True,
             "__tool_status__": "PARTIAL",
@@ -4288,6 +4418,12 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
             "n_rejected": len(rejected),
             "rejected_summary": rejected[:20],
             "publication_ready": False,
+            "publication_readiness": partial_readiness,
+            "relation_claimability": {
+                "can_claim_relation": False,
+                "claim_scope": "exploratory_only",
+                "blocking_reasons": ["fewer_than_two_citeable_rows", "below_min_rows"],
+            },
             "__do_not_claim__": True,
             "__message_to_model__": (
                 "Fewer than two citeable line-measurement rows survived filtering. "
@@ -4589,6 +4725,67 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         )
     is_method_downgraded = fit_method_downgrade_reason is not None
 
+    citation_ready_rows = sum(1 for row in accepted if _row_has_citation(row))
+    readiness_checks: dict[str, Any] = {
+        "minimum_rows": {
+            "passed": n_used >= min_rows,
+            "n_used": n_used,
+            "required": min_rows,
+        },
+        "citations": {
+            "passed": citation_ready_rows == n_used,
+            "rows_with_citations": citation_ready_rows,
+            "n_used": n_used,
+        },
+        "confirmed_luminosity_units": {
+            "passed": has_confirmed_luminosity_units,
+            "value_range_inferred_rows": value_range_inferred_rows,
+            "requires_header_or_caption_log_units": True,
+        },
+        "method_not_downgraded": {
+            "passed": not is_method_downgraded,
+            "fit_method_requested": requested,
+            "fit_method": fit_method,
+            "reason": fit_method_downgrade_reason,
+        },
+    }
+    if fit_method == "bayesian_xyerr_linmix" or requested == "bayesian_xyerr":
+        readiness_checks["bayesian_sampler"] = {
+            "passed": bool(bayes_result and bayes_result.get("publication_ready") is True),
+            "converged": bayes_result.get("converged") if bayes_result else False,
+            "publication_ready": bayes_result.get("publication_ready") if bayes_result else False,
+            "error": bayes_error,
+        }
+
+    relation_blocking_reasons: list[str] = []
+    if n_used < min_rows:
+        relation_blocking_reasons.append("below_min_rows")
+    if citation_ready_rows < n_used:
+        relation_blocking_reasons.append("incomplete_citations")
+    if not has_confirmed_luminosity_units:
+        relation_blocking_reasons.append("unconfirmed_luminosity_units")
+    if is_method_downgraded:
+        relation_blocking_reasons.append("method_downgraded")
+    if fit_method == "bayesian_xyerr_linmix" and bayes_result and bayes_result.get("publication_ready") is False:
+        relation_blocking_reasons.append("bayesian_sampler_not_publication_ready")
+
+    relation_can_claim = not relation_blocking_reasons
+    relation_claim_scope = (
+        "publication_ready_relation" if relation_can_claim
+        else "method_mismatch" if is_method_downgraded and publication_ready
+        else "exploratory_only"
+    )
+    relation_claimability = {
+        "can_claim_relation": relation_can_claim,
+        "claim_scope": relation_claim_scope,
+        "blocking_reasons": relation_blocking_reasons,
+    }
+    publication_readiness = {
+        "status": relation_claim_scope,
+        "data_checks_publication_ready": publication_ready,
+        "checks": readiness_checks,
+    }
+
     # ── M2: cosmology mismatch detection ────────────────────────────
     # We do NOT auto-recompute DL — that's the M5 job.  Here we only
     # surface a mismatch warning so the AI / UI / claim_validator can
@@ -4731,7 +4928,9 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "success": True,
         "tool": "fit_line_lfr",
         "result_granularity": "literature_measurement_fit",
-        "supports_measurement_claims": publication_ready and not is_method_downgraded,
+        "supports_measurement_claims": relation_can_claim,
+        "publication_readiness": publication_readiness,
+        "relation_claimability": relation_claimability,
         "cache_key": resolved_cache_key,
         "line_id": line_id,
         "model": (
@@ -4952,11 +5151,12 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         result["__tool_status__"] = "PARTIAL"
         result["analysis_status"] = "partial"
         result["__do_not_claim__"] = True
+        blocking_reason_text = ", ".join(relation_blocking_reasons) or "unknown"
         result["__message_to_model__"] = (
             f"The line-relation fit used {n_used} rows. It is below min_rows={min_rows}, "
             "has incomplete citations, or relies on value-range log-luminosity inference "
             "instead of header/caption-confirmed units. Describe it as exploratory only; "
-            "do not claim a publication-ready relation."
+            f"do not claim a publication-ready relation. Blocking reasons: {blocking_reason_text}."
         )
     elif is_method_downgraded:
         result["__tool_status__"] = "METHOD_DOWNGRADED"

@@ -1,16 +1,15 @@
 """PART AD C2 — admin endpoint to pre-warm the literature-table cache.
 
-Audit M4 caught a regression where every chat round only had ALPINE
-[CII] data because no other survey paper had been extracted into
-`connector_cache` yet. This endpoint lets a platform admin pre-warm
-the cache for a curated list of [CII] survey / sample papers so the
-next chat round that asks for "fit a [CII] L-FWHM relation" already
-has multi-survey rows to draw from.
+Audit M4 caught a regression where chat rounds drifted into remembered
+[CII] samples when no fit-ready paper table had been extracted into
+`connector_cache`. This endpoint lets a platform admin pre-warm the
+cache for curated [CII] survey / sample papers after each candidate has
+been locally verified to produce normalized `line_measurements`.
 
-Each entry is a real published [CII] line-measurement table referenced
-by its arXiv ID. The default set covers ~5 high-z (z>4) and ~1 z~0
-landmark surveys so a fit_line_lfr at any z range has at least one
-non-ALPINE source.
+The default set is intentionally conservative: it contains only the
+ALPINE table paper that is verified end-to-end today. Multi-survey LFR
+work still requires adding more verified entries here, not memorized
+paper names.
 
 The endpoint runs each fetch through `_cached_extract_arxiv_tables_payload`
 which already has the 24h connector_cache + retry circuit-breaker, so
@@ -26,6 +25,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.api.auth import require_admin_any
+from app.services.source_mapping import VERIFIED_LITERATURE_MEASUREMENT_SEEDS
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +59,10 @@ router = APIRouter(prefix="/api/admin/literature", tags=["admin-literature"])
 #     arxiv_ids=["<candidate>"] in the request body.
 #  2. Inspect the returned `line_measurement_count` for that entry.
 #  3. Only if count > 0 is the paper a useful preload target.
-DEFAULT_CII_ARXIV_IDS: tuple[str, ...] = (
-    "2002.00962",
+DEFAULT_CII_ARXIV_IDS: tuple[str, ...] = tuple(
+    entry.arxiv_id
+    for entry in VERIFIED_LITERATURE_MEASUREMENT_SEEDS
+    if entry.line_id == "[CII]" and entry.usable_for_fit_line_lfr
 )
 
 
@@ -69,7 +71,7 @@ class PreloadRequest(BaseModel):
         default=None,
         description=(
             "Optional override for the curated [CII] paper list. "
-            "When omitted, the platform's default 6-paper set is used."
+            "When omitted, the platform's verified default seed list is used."
         ),
     )
     line_id: str = Field(

@@ -366,8 +366,10 @@ not table measurements.  Quote `[CII]` luminosity, FWHM, line flux, slope, or
 correlation values only from returned `line_measurements` rows, and cite the
 paper plus table label, e.g. "Table 2 of Author et al. (2022; arXiv:xxxx)".
 If `extract_literature_tables` returns `line_measurement_count > 0`, the next
-step for a luminosity/FWHM relation is `fit_line_lfr(cache_key=...)` or
-`run_python(data_source="cached:<cache_key>")` reading `get_cached_results()`.
+step for a spectral-line sample is `prepare_spectral_measurements(cache_key=...)`
+to validate fit-ready rows and line inventory, then `fit_line_lfr(cache_key=...)`
+for luminosity/FWHM relation statistics. Use `astro_statistics_toolbox` for
+standard robust summaries/regressions before falling back to custom Python.
 Never say the table could not be extracted when the tool returned usable
 measurement rows; state the count/cache key and continue with the fit tool.
 Never fill a line-measurement sample by hardcoding remembered
@@ -1875,8 +1877,9 @@ aperture photometry. Use it when users upload a FITS image and want to find obje
 
 ALWAYS use these functions when applicable — they produce publication-quality output.
 When the user asks for analysis, statistics, or plots, use run_python. Don't describe — DO IT.
-Exception: when a dedicated fitting tool exists for a cited measurement table
-(for example `fit_line_lfr` after `extract_literature_tables`), use that tool
+Exception: when a dedicated statistics/fitting tool exists for cited rows
+(for example `prepare_spectral_measurements`, `fit_line_lfr`, or
+`astro_statistics_toolbox` after `extract_literature_tables`), use that tool
 instead of writing ad hoc or synthetic Python.
 If code errors, read the traceback, fix the code, and run again.
 When formatting floating-point values, use float formats like `:.2f`, not integer-only formats like `%d`.
