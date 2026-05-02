@@ -203,6 +203,24 @@ def test_des_sn_workflow_does_not_turn_negated_bao_into_matrix() -> None:
     ]
 
 
+def test_with_and_without_cmb_is_not_parsed_as_cmb_exclusion() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    prompt = (
+        "I am checking robustness across DESI BAO plus multiple SN "
+        "compilations. Build the available robustness matrix for Pantheon+, "
+        "DES-SN, and Union3, with and without CMB if executable."
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "desi_dr1_bao",
+        "pantheon_plus",
+        "des_sn5yr",
+        "union3",
+        "planck2018_compressed",
+    ]
+
+
 def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,

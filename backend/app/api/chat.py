@@ -4400,7 +4400,10 @@ def _cosmology_prompt_forbids_family(text: str, aliases: tuple[str, ...]) -> boo
             index = prompt.find(negator, start)
             if index < 0:
                 break
-            window = prompt[index : index + 96]
+            window = prompt[max(0, index - 16) : index + 96]
+            if "with and without" in window or "with/without" in window:
+                start = index + len(negator)
+                continue
             if any(alias in window for alias in aliases):
                 return True
             start = index + len(negator)
