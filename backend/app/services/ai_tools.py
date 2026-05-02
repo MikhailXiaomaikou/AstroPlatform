@@ -1024,7 +1024,8 @@ TOOLS = [
             "include version, citation, covariance, units, applicable models, "
             "source URL, and whether Standard Astro can run the likelihood "
             "directly or only generate an external config. Use this before "
-            "planning DESI/Pantheon+/DES-SN/Union3/Planck/ACT/CC/SH0ES analyses."
+            "planning DESI/SDSS+6dF BAO/Pantheon+/DES-SN/Union3/Planck/ACT/"
+            "KiDS/DES/HSC weak-lensing/CC/SH0ES analyses."
         ),
         "input_schema": {
             "type": "object",
@@ -1046,8 +1047,9 @@ TOOLS = [
         "description": (
             "Build a controlled Cobaya/CosmoSIS-style likelihood config from "
             "registered cosmology datasets and bounded priors. This prepares "
-            "DESI BAO, Pantheon+, DES-SN, Union3, Planck compressed, ACT DR6, "
-            "cosmic chronometer, and SH0ES-prior combinations. It returns "
+            "DESI or SDSS+6dF BAO, Pantheon+, DES-SN, Union3, Planck compressed, "
+            "ACT DR6, KiDS/DES/HSC weak-lensing, cosmic chronometer, and "
+            "SH0ES-prior combinations. It returns "
             "CONFIG_READY only; do not quote posterior constraints until a "
             "chain runner returns publication_ready=true."
         ),
@@ -1086,6 +1088,43 @@ TOOLS = [
         },
     },
     {
+        "name": "run_cosmology_likelihood_chain",
+        "description": (
+            "Run the phase-1 compressed Gaussian observational-cosmology likelihood "
+            "for registered datasets that include published mean/covariance summaries. "
+            "This can produce citeable preliminary H0/Omega_m/sigma8/S8/tension results "
+            "only when publication_ready=true. It does not run full external ACT/Planck/"
+            "BAO/SN weak-lensing likelihood packages; datasets without compressed "
+            "summaries are reported as datasets_not_run."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "enum": [
+                        "lcdm", "wcdm", "w0wa_cdm", "ok_lcdm",
+                        "ok_wcdm", "ok_w0wa_cdm", "lcdm_mnu",
+                        "w0wa_cdm_mnu",
+                    ],
+                    "description": "Cosmological model family. Phase-1 compressed execution is publication-ready for lcdm only.",
+                },
+                "dataset_keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Dataset keys from list_cosmology_datasets.",
+                },
+                "priors": {
+                    "type": "object",
+                    "description": "Optional tightened prior bounds for compressed parameters.",
+                },
+                "random_seed": {"type": "integer", "description": "Deterministic sample seed."},
+                "n_samples": {"type": "integer", "description": "Posterior sample count for display summaries."},
+            },
+            "required": ["model", "dataset_keys"],
+        },
+    },
+    {
         "name": "build_cosmology_robustness_matrix",
         "description": (
             "Generate the standard robustness matrix for observational "
@@ -1118,6 +1157,40 @@ TOOLS = [
                     "type": "string",
                     "description": "Sampler label for generated configs. Default: mcmc.",
                 },
+            },
+            "required": ["model"],
+        },
+    },
+    {
+        "name": "run_cosmology_robustness_matrix",
+        "description": (
+            "Execute the standard observational-cosmology robustness matrix using "
+            "registered compressed Gaussian likelihoods where available. Config-only "
+            "cells remain non-runnable and must be described as needing external chains."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "enum": [
+                        "lcdm", "wcdm", "w0wa_cdm", "ok_lcdm",
+                        "ok_wcdm", "ok_w0wa_cdm", "lcdm_mnu",
+                        "w0wa_cdm_mnu",
+                    ],
+                    "description": "Cosmological model family.",
+                },
+                "supernova_sets": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "SN dataset alternatives. Default: Pantheon+, DES-SN5YR, Union3.",
+                },
+                "include_h0_prior": {
+                    "type": "boolean",
+                    "description": "Whether to include +SH0ES variants. Default: true.",
+                },
+                "random_seed": {"type": "integer", "description": "Deterministic sample seed."},
+                "n_samples": {"type": "integer", "description": "Posterior sample count per runnable cell."},
             },
             "required": ["model"],
         },
@@ -2018,8 +2091,12 @@ async def _execute_tool_inner(
             return _exec_list_cosmology_datasets(tool_input)
         elif tool_name == "build_cosmology_likelihood":
             return _exec_build_cosmology_likelihood(tool_input)
+        elif tool_name == "run_cosmology_likelihood_chain":
+            return _exec_run_cosmology_likelihood_chain(tool_input)
         elif tool_name == "build_cosmology_robustness_matrix":
             return _exec_build_cosmology_robustness_matrix(tool_input)
+        elif tool_name == "run_cosmology_robustness_matrix":
+            return _exec_run_cosmology_robustness_matrix(tool_input)
         elif tool_name == "get_object_dossier":
             return await _exec_get_dossier(tool_input)
         elif tool_name == "get_followup_recommendation":
@@ -7627,6 +7704,35 @@ def _exec_build_cosmology_likelihood(inp: dict) -> dict:
         }
 
 
+def _exec_run_cosmology_likelihood_chain(inp: dict) -> dict:
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    try:
+        dataset_keys = inp.get("dataset_keys") or []
+        if not isinstance(dataset_keys, list):
+            raise ValueError("dataset_keys must be a list")
+        return run_likelihood_chain(
+            model=str(inp.get("model") or ""),
+            dataset_keys=[str(key) for key in dataset_keys],
+            priors=inp.get("priors"),
+            random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
+            n_samples=int(inp.get("n_samples") or 4000),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "Compressed cosmology likelihood execution failed. Do not quote "
+                "posterior constraints, S8/H0/Omega_m tensions, AIC/BIC, or significance."
+            ),
+        }
+
+
 def _exec_build_cosmology_robustness_matrix(inp: dict) -> dict:
     from app.services.cosmology_likelihoods import build_robustness_matrix
 
@@ -7648,6 +7754,35 @@ def _exec_build_cosmology_robustness_matrix(inp: dict) -> dict:
             "error": str(exc),
             "error_class": exc.__class__.__name__,
             "__do_not_claim__": True,
+        }
+
+
+def _exec_run_cosmology_robustness_matrix(inp: dict) -> dict:
+    from app.services.cosmology_likelihoods import run_robustness_matrix
+
+    try:
+        supernova_sets = inp.get("supernova_sets")
+        if supernova_sets is not None and not isinstance(supernova_sets, list):
+            raise ValueError("supernova_sets must be a list")
+        return run_robustness_matrix(
+            model=str(inp.get("model") or ""),
+            supernova_sets=([str(key) for key in supernova_sets] if supernova_sets else None),
+            include_h0_prior=bool(inp.get("include_h0_prior", True)),
+            random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
+            n_samples=int(inp.get("n_samples") or 4000),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "Compressed cosmology robustness execution failed. Do not quote "
+                "robustness, posterior shifts, AIC/BIC, or tension claims."
+            ),
         }
 
 

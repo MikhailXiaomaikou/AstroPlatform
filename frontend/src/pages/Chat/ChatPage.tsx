@@ -540,6 +540,8 @@ function ActionCardInner({
     list_cosmology_datasets: "Cosmology Datasets",
     build_cosmology_likelihood: "Likelihood Builder",
     build_cosmology_robustness_matrix: "Robustness Matrix",
+    run_cosmology_likelihood_chain: "Cosmology Chain",
+    run_cosmology_robustness_matrix: "Robustness Run",
     run_cobaya_cosmology: "Cobaya Cosmology",
     get_cosmology_run_status: "Cosmology Job Status",
   };
@@ -568,6 +570,8 @@ function ActionCardInner({
     list_cosmology_datasets: "🧭",
     build_cosmology_likelihood: "🧩",
     build_cosmology_robustness_matrix: "▦",
+    run_cosmology_likelihood_chain: "📉",
+    run_cosmology_robustness_matrix: "▦",
     run_cobaya_cosmology: "📉",
     get_cosmology_run_status: "⏱",
   };
@@ -1639,7 +1643,12 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     );
   }
 
-  if (toolName === "fit_cosmology_mcmc" || toolName === "run_cobaya_cosmology" || toolName === "get_cosmology_run_status") {
+  if (
+    toolName === "fit_cosmology_mcmc"
+    || toolName === "run_cobaya_cosmology"
+    || toolName === "get_cosmology_run_status"
+    || toolName === "run_cosmology_likelihood_chain"
+  ) {
     const nestedResult = result.result && typeof result.result === "object"
       ? result.result as Record<string, unknown>
       : result;
@@ -1650,6 +1659,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     toolName === "list_cosmology_datasets"
     || toolName === "build_cosmology_likelihood"
     || toolName === "build_cosmology_robustness_matrix"
+    || toolName === "run_cosmology_robustness_matrix"
   ) {
     return <CosmologyLikelihoodPanel result={result} />;
   }

@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
+
+import numpy as np
 
 from app.services.cosmology_mcmc import DEFAULT_PRIORS
 
@@ -30,6 +33,7 @@ CosmologyModel = Literal[
 ]
 
 DatasetStatus = Literal["ready", "external_likelihood", "metadata_only"]
+ExecutionMode = Literal["config_only", "compressed_gaussian", "external_cobaya", "external_cosmosis"]
 
 
 SUPPORTED_MODELS: dict[str, tuple[str, ...]] = {
@@ -81,6 +85,27 @@ class CovarianceSpec:
 
 
 @dataclass(frozen=True)
+class CompressedLikelihoodSpec:
+    """Small published Gaussian summary likelihood.
+
+    This is deliberately not a prose conclusion.  It is a data vector,
+    covariance matrix, and precise source locator that can be combined by
+    the phase-1 analytic runner while full external likelihood packages
+    remain out of process.
+    """
+
+    parameters: tuple[str, ...]
+    mean: tuple[float, ...]
+    covariance: tuple[tuple[float, ...], ...]
+    source_locator: str
+    approximation: str
+    units: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class CosmologyDatasetEntry:
     key: str
     display_name: str
@@ -98,11 +123,15 @@ class CosmologyDatasetEntry:
     cobaya_likelihood: str | None = None
     cosmosis_module: str | None = None
     nuisance_parameters: tuple[str, ...] = field(default_factory=tuple)
+    execution_mode: ExecutionMode = "config_only"
+    compressed_likelihood: CompressedLikelihoodSpec | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["citations"] = [citation.to_dict() for citation in self.citations]
         result["covariance"] = self.covariance.to_dict()
+        if self.compressed_likelihood is not None:
+            result["compressed_likelihood"] = self.compressed_likelihood.to_dict()
         return result
 
 
@@ -123,6 +152,7 @@ SN_MODELS: tuple[CosmologyModel, ...] = ALL_MODELS
 BAO_MODELS: tuple[CosmologyModel, ...] = ALL_MODELS
 CMB_MODELS: tuple[CosmologyModel, ...] = ALL_MODELS
 H0_MODELS: tuple[CosmologyModel, ...] = ALL_MODELS
+WL_MODELS: tuple[CosmologyModel, ...] = ALL_MODELS
 
 
 _REGISTRY: dict[str, CosmologyDatasetEntry] = {
@@ -154,6 +184,41 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         notes="Use as BAO-only or combined late-universe distance anchor; requires rd prior or CMB calibration.",
         cobaya_likelihood="external:desilike.desi_dr1_bao",
         cosmosis_module="likelihood/bao/desi1-dr1/desi1_dr1.py",
+        execution_mode="external_cobaya",
+    ),
+    "sdss_6df_bao": CosmologyDatasetEntry(
+        key="sdss_6df_bao",
+        display_name="SDSS + 6dF BAO compilation",
+        version="6dFGS + SDSS/BOSS/eBOSS DR16 BAO public compilation",
+        probe="bao",
+        status="external_likelihood",
+        observables=("DM_over_rd", "DH_over_rd", "DV_over_rd", "H_rd", "D_A_over_rd"),
+        units={"distance_ratios": "dimensionless", "redshift": "dimensionless"},
+        applicable_models=BAO_MODELS,
+        likelihood_family="gaussian_bao",
+        covariance=CovarianceSpec(
+            kind="block covariance",
+            provided=True,
+            description=(
+                "Legacy low-redshift BAO compilation used by pre-DESI ACT/Planck "
+                "cross-checks; includes 6dFGS and SDSS/BOSS/eBOSS measurements."
+            ),
+            url="https://svn.sdss.org/public/data/eboss/DR16cosmo/tags/v1_0_1/",
+            format="SDSS/eBOSS DR16 BAO likelihood data products",
+        ),
+        source_url="https://svn.sdss.org/public/data/eboss/DR16cosmo/tags/v1_0_1/",
+        citations=(
+            DatasetCitation(label="Beutler et al. 6dFGS BAO", year=2011, arxiv="1106.3366"),
+            DatasetCitation(label="Alam et al. BOSS DR12 BAO", year=2017, arxiv="1607.03155"),
+            DatasetCitation(label="eBOSS Collaboration DR16 cosmology", year=2021, arxiv="2007.08991"),
+        ),
+        notes=(
+            "Prefer this over DESI DR1 when reproducing ACT DR6 lensing-era "
+            "BAO combinations or papers that explicitly say BAO from SDSS and 6dF."
+        ),
+        cobaya_likelihood="external:bao.sdss_6df_legacy",
+        cosmosis_module="likelihood/bao/sdss_dr16_6df/sdss_6df_bao.py",
+        execution_mode="external_cobaya",
     ),
     "pantheon_plus": CosmologyDatasetEntry(
         key="pantheon_plus",
@@ -181,6 +246,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cobaya_likelihood="external:sn.pantheon_plus",
         cosmosis_module="Pantheon+_Data/5_COSMOLOGY/cosmosis_likelihoods",
         nuisance_parameters=("M_B",),
+        execution_mode="external_cobaya",
     ),
     "des_sn5yr": CosmologyDatasetEntry(
         key="des_sn5yr",
@@ -208,6 +274,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cobaya_likelihood="external:sn.des_sn5yr",
         cosmosis_module="external:DES-SN5YR",
         nuisance_parameters=("M_B",),
+        execution_mode="external_cobaya",
     ),
     "union3": CosmologyDatasetEntry(
         key="union3",
@@ -234,6 +301,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cobaya_likelihood="external:sn.union3",
         cosmosis_module="external:Union3/UNITY1.5",
         nuisance_parameters=("M_B",),
+        execution_mode="external_cobaya",
     ),
     "planck2018_compressed": CosmologyDatasetEntry(
         key="planck2018_compressed",
@@ -260,6 +328,25 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         notes="Compressed CMB prior, not a replacement for the full Planck likelihood in extended models.",
         cobaya_likelihood="external:planck_2018_distance_prior",
         cosmosis_module="external:planck2018_distance_priors",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("H0", "omegam", "sigma8", "S8"),
+            mean=(67.36, 0.3153, 0.8111, 0.832),
+            covariance=(
+                (0.54**2, 0.0, 0.0, 0.0),
+                (0.0, 0.0073**2, 0.0, 0.0),
+                (0.0, 0.0, 0.0060**2, 0.0),
+                (0.0, 0.0, 0.0, 0.013**2),
+            ),
+            units={
+                "H0": "km s^-1 Mpc^-1",
+                "omegam": "dimensionless",
+                "sigma8": "dimensionless",
+                "S8": "dimensionless",
+            },
+            source_locator="Planck Collaboration VI 2020 Table 2 baseline; S8 derived summary.",
+            approximation="Diagonal compressed ΛCDM posterior summary; not the full Planck likelihood.",
+        ),
     ),
     "act_dr6_lensing": CosmologyDatasetEntry(
         key="act_dr6_lensing",
@@ -286,6 +373,143 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         notes="Requires ACT likelihood data and external code; pair carefully with Planck CMB to avoid double-counting lensing.",
         cobaya_likelihood="external:act_dr6_lenslike.ACTDR6LensLike",
         cosmosis_module="external:act_dr6_lenslike",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("H0", "sigma8", "S8"),
+            mean=(68.1, 0.812, 0.831),
+            covariance=(
+                (1.0**2, 0.0, 0.0),
+                (0.0, 0.013**2, 0.0),
+                (0.0, 0.0, 0.023**2),
+            ),
+            units={
+                "H0": "km s^-1 Mpc^-1",
+                "sigma8": "dimensionless",
+                "S8": "dimensionless",
+            },
+            source_locator="Madhavacheril et al. ACT DR6 lensing abstract joint ACT+Planck-lensing summary.",
+            approximation=(
+                "Diagonal ACT+Planck CMB-lensing compressed summary. Use for preliminary "
+                "consistency checks only; do not combine as statistically independent from Planck lensing."
+            ),
+        ),
+    ),
+    "kids1000_wl": CosmologyDatasetEntry(
+        key="kids1000_wl",
+        display_name="KiDS-1000 cosmic shear",
+        version="KiDS-1000 cosmic-shear likelihood / 2-point statistics",
+        probe="weak_lensing",
+        status="external_likelihood",
+        observables=("xi_plus", "xi_minus", "S8", "Omega_m"),
+        units={"xi": "dimensionless", "S8": "dimensionless", "Omega_m": "dimensionless"},
+        applicable_models=WL_MODELS,
+        likelihood_family="cosmic_shear_2pt",
+        covariance=CovarianceSpec(
+            kind="tomographic two-point covariance",
+            provided=True,
+            description="KiDS-1000 tomographic cosmic-shear two-point covariance and likelihood products.",
+            url="https://arxiv.org/abs/2007.15633",
+            format="KiDS-1000 public likelihood products / paper tables",
+        ),
+        source_url="https://arxiv.org/abs/2007.15633",
+        citations=(
+            DatasetCitation(label="Asgari et al. KiDS-1000 cosmic shear", year=2021, arxiv="2007.15633"),
+        ),
+        notes=(
+            "Galaxy weak-lensing comparison branch for S8 consistency checks. "
+            "Requires nuisance treatment for intrinsic alignments, shear calibration, and redshift calibration."
+        ),
+        cobaya_likelihood="external:kids1000",
+        cosmosis_module="external:kids1000",
+        nuisance_parameters=("A_IA", "m_bias", "delta_z"),
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("S8",),
+            mean=(0.759,),
+            covariance=((0.0225**2,),),
+            units={"S8": "dimensionless"},
+            source_locator="Asgari et al. KiDS-1000 cosmic shear abstract/fiducial S8 summary.",
+            approximation="Symmetrized 68% S8-only compressed summary; nuisance parameters marginalized in source analysis.",
+        ),
+    ),
+    "des_y3_3x2pt": CosmologyDatasetEntry(
+        key="des_y3_3x2pt",
+        display_name="DES Y3 3x2pt weak lensing + clustering",
+        version="DES Year 3 3x2pt cosmology likelihood",
+        probe="weak_lensing",
+        status="external_likelihood",
+        observables=("xi_plus", "xi_minus", "gamma_t", "w_theta", "S8", "Omega_m"),
+        units={"correlations": "dimensionless", "S8": "dimensionless", "Omega_m": "dimensionless"},
+        applicable_models=WL_MODELS,
+        likelihood_family="3x2pt",
+        covariance=CovarianceSpec(
+            kind="3x2pt covariance",
+            provided=True,
+            description="DES Y3 cosmic shear, galaxy-galaxy lensing, and clustering covariance.",
+            url="https://des.ncsa.illinois.edu/releases/y3a2/Y3key-products",
+            format="DES Y3 likelihood / CosmoSIS data products",
+        ),
+        source_url="https://des.ncsa.illinois.edu/releases/y3a2/Y3key-products",
+        citations=(
+            DatasetCitation(label="DES Collaboration Year 3 3x2pt cosmology", year=2022, arxiv="2105.13549"),
+        ),
+        notes=(
+            "Galaxy weak-lensing comparison branch for S8 consistency checks; "
+            "do not treat as independent of DES-SN because it is a different probe from the same survey."
+        ),
+        cobaya_likelihood="external:des_y3_3x2pt",
+        cosmosis_module="external:des-y3-3x2pt",
+        nuisance_parameters=("A_IA", "m_bias", "delta_z", "galaxy_bias"),
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("S8",),
+            mean=(0.776,),
+            covariance=((0.017**2,),),
+            units={"S8": "dimensionless"},
+            source_locator="DES Collaboration Year 3 3x2pt ΛCDM S8 summary.",
+            approximation="S8-only compressed summary; full DES Y3 nuisance/covariance is external.",
+        ),
+    ),
+    "hsc_y1_cosmic_shear": CosmologyDatasetEntry(
+        key="hsc_y1_cosmic_shear",
+        display_name="HSC Y1 cosmic shear",
+        version="HSC SSP first-year cosmic-shear likelihood",
+        probe="weak_lensing",
+        status="external_likelihood",
+        observables=("xi_plus", "xi_minus", "S8", "Omega_m"),
+        units={"xi": "dimensionless", "S8": "dimensionless", "Omega_m": "dimensionless"},
+        applicable_models=WL_MODELS,
+        likelihood_family="cosmic_shear_2pt",
+        covariance=CovarianceSpec(
+            kind="mock-derived tomographic covariance",
+            provided=True,
+            description="HSC first-year tomographic cosmic-shear two-point covariance from realistic mocks.",
+            url="https://arxiv.org/abs/1906.06041",
+            format="HSC Y1 cosmic-shear likelihood / paper tables",
+        ),
+        source_url="https://arxiv.org/abs/1906.06041",
+        citations=(
+            DatasetCitation(label="Hamana et al. HSC Y1 cosmic shear", year=2020, arxiv="1906.06041"),
+        ),
+        notes=(
+            "Galaxy weak-lensing comparison branch for S8 consistency checks. "
+            "Useful for ACT DR6-style KiDS/DES/HSC comparison, but requires HSC-specific nuisance settings."
+        ),
+        cobaya_likelihood="external:hsc_y1_cosmic_shear",
+        cosmosis_module="external:hsc-y1-cosmic-shear",
+        nuisance_parameters=("A_IA", "m_bias", "delta_z"),
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("S8", "omegam"),
+            mean=(0.823, 0.332),
+            covariance=(
+                (0.030**2, 0.0),
+                (0.0, 0.073**2),
+            ),
+            units={"S8": "dimensionless", "omegam": "dimensionless"},
+            source_locator="Hamana et al. HSC Y1 cosmic shear abstract ΛCDM summary.",
+            approximation="Symmetrized S8/Omega_m compressed summary; covariance off-diagonal unavailable here.",
+        ),
     ),
     "cosmic_chronometers": CosmologyDatasetEntry(
         key="cosmic_chronometers",
@@ -312,6 +536,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         notes="Do not treat diagonal-only CC errors as publication-grade if the systematic covariance was omitted.",
         cobaya_likelihood="external:cosmic_chronometers",
         cosmosis_module="external:hz/cosmic_chronometers",
+        execution_mode="external_cobaya",
     ),
     "shoes_h0_riess22": CosmologyDatasetEntry(
         key="shoes_h0_riess22",
@@ -337,6 +562,15 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         notes="Use only when the analysis explicitly includes a local-distance-ladder H0 prior.",
         cobaya_likelihood="gaussian:H0=73.04,sigma=1.04",
         cosmosis_module="prior H0 = gaussian 73.04 1.04",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("H0",),
+            mean=(73.04,),
+            covariance=((1.04**2,),),
+            units={"H0": "km s^-1 Mpc^-1"},
+            source_locator="Riess et al. 2022 SH0ES H0 prior.",
+            approximation="Scalar Gaussian H0 prior; not an Ωm/S8 constraint.",
+        ),
     ),
 }
 
@@ -488,6 +722,461 @@ def build_robustness_matrix(
             "request publication-ready chains before making scientific claims."
         ),
     }
+
+
+RUNNER_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
+    "H0": (50.0, 90.0),
+    "omegam": (0.05, 0.6),
+    "sigma8": (0.4, 1.2),
+    "S8": (0.4, 1.2),
+}
+
+
+def run_likelihood_chain(
+    *,
+    model: str,
+    dataset_keys: list[str],
+    priors: dict[str, Any] | None = None,
+    random_seed: int | None = None,
+    n_samples: int = 4000,
+) -> dict[str, Any]:
+    """Run the phase-1 compressed Gaussian cosmology likelihood.
+
+    This combines only registry entries with an explicit
+    ``CompressedLikelihoodSpec``.  External BAO/SN/full-CMB likelihood
+    packages are reported as not-run rather than approximated silently.
+    """
+    model_key = _validate_model(model)
+    entries = _validate_dataset_selection(model_key, dataset_keys)
+    seed = int(random_seed if random_seed is not None else 20260502)
+    sample_count = max(256, min(int(n_samples or 4000), 20000))
+    compressed_entries = [entry for entry in entries if entry.compressed_likelihood is not None]
+    skipped_entries = [entry for entry in entries if entry.compressed_likelihood is None]
+
+    if not compressed_entries:
+        return _compressed_runner_unavailable(
+            model_key=model_key,
+            entries=entries,
+            seed=seed,
+            reason="No selected dataset has a registered compressed Gaussian likelihood.",
+        )
+
+    if model_key != "lcdm":
+        return _compressed_runner_unavailable(
+            model_key=model_key,
+            entries=entries,
+            seed=seed,
+            reason=(
+                "Phase-1 compressed likelihoods are calibrated as ΛCDM summary "
+                "constraints; extended-model parameters require the external "
+                "Cobaya/CosmoSIS likelihood packages."
+            ),
+        )
+
+    parameter_order = _compressed_parameter_order(compressed_entries)
+    if not parameter_order:
+        return _compressed_runner_unavailable(
+            model_key=model_key,
+            entries=entries,
+            seed=seed,
+            reason="Selected compressed likelihoods contain no supported phase-1 parameters.",
+        )
+    prior_bounds = _sanitize_runner_priors(parameter_order, priors)
+    precision = np.zeros((len(parameter_order), len(parameter_order)), dtype=float)
+    information = np.zeros(len(parameter_order), dtype=float)
+    invalid_specs: list[str] = []
+
+    for entry in compressed_entries:
+        spec = entry.compressed_likelihood
+        if spec is None:
+            continue
+        try:
+            params = list(spec.parameters)
+            mean = np.asarray(spec.mean, dtype=float)
+            cov = np.asarray(spec.covariance, dtype=float)
+            if mean.shape != (len(params),) or cov.shape != (len(params), len(params)):
+                raise ValueError("mean/covariance dimensions do not match parameters")
+            cov_inv = np.linalg.inv(cov)
+            idx = [parameter_order.index(param) for param in params if param in parameter_order]
+            local_idx = [params.index(param) for param in params if param in parameter_order]
+            if not idx:
+                continue
+            sub_inv = cov_inv[np.ix_(local_idx, local_idx)]
+            sub_mean = mean[local_idx]
+            precision[np.ix_(idx, idx)] += sub_inv
+            information[idx] += sub_inv @ sub_mean
+        except Exception as exc:
+            invalid_specs.append(f"{entry.key}: {exc}")
+
+    try:
+        posterior_cov = np.linalg.inv(precision)
+        posterior_mean = posterior_cov @ information
+    except Exception as exc:
+        return _compressed_runner_unavailable(
+            model_key=model_key,
+            entries=entries,
+            seed=seed,
+            reason=f"Compressed likelihood precision matrix is singular ({exc}).",
+        )
+
+    prior_violations = [
+        name
+        for name, value in zip(parameter_order, posterior_mean, strict=True)
+        if not (prior_bounds[name][0] <= float(value) <= prior_bounds[name][1])
+    ]
+    rng = np.random.default_rng(seed)
+    samples = rng.multivariate_normal(posterior_mean, posterior_cov, size=sample_count)
+    summaries = {
+        name: _posterior_summary(samples[:, index])
+        for index, name in enumerate(parameter_order)
+    }
+    chi2 = _combined_chi2(compressed_entries, parameter_order, posterior_mean)
+    k = len(parameter_order)
+    n_constraints = sum(
+        len(entry.compressed_likelihood.parameters)
+        for entry in compressed_entries
+        if entry.compressed_likelihood is not None
+    )
+    aic = chi2 + 2.0 * k
+    bic = chi2 + math.log(max(n_constraints, 1)) * k
+    tensions = _pairwise_tensions(compressed_entries)
+    result_hash = _config_hash(
+        model_key,
+        [entry.key for entry in compressed_entries],
+        {name: prior_bounds[name] for name in parameter_order},
+        f"compressed_gaussian:{seed}:{sample_count}",
+    )
+    warnings = [
+        "Compressed Gaussian summary likelihood; use as preliminary consistency check, not full external likelihood.",
+    ]
+    if skipped_entries:
+        warnings.append(
+            "Datasets not run in compressed phase: "
+            + ", ".join(entry.key for entry in skipped_entries)
+            + ". Generate external Cobaya/CosmoSIS configs for those datasets."
+        )
+    if invalid_specs:
+        warnings.extend(invalid_specs)
+    if prior_violations:
+        warnings.append("Posterior mean outside configured prior bounds for: " + ", ".join(prior_violations))
+
+    publication_ready = not invalid_specs and not prior_violations
+    result: dict[str, Any] = {
+        "success": True,
+        "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
+        "analysis_status": "COMPRESSED_CHAIN_READY" if publication_ready else "PARTIAL",
+        "publication_ready": publication_ready,
+        "claim_scope": "compressed_likelihood_preliminary",
+        "compressed_likelihood_preliminary": True,
+        "model": model_key,
+        "model_label": MODEL_LABELS[model_key],
+        "sampler": "compressed_gaussian_analytic",
+        "parameters": summaries,
+        "posterior_summary": summaries,
+        "derived_params": {
+            name: summaries[name]
+            for name in ("S8", "sigma8", "omegam", "H0")
+            if name in summaries
+        },
+        "pairwise_tensions": tensions,
+        "fit_statistics": {
+            "chi2": round(float(chi2), 6),
+            "delta_chi2": 0.0,
+            "aic": round(float(aic), 6),
+            "bic": round(float(bic), 6),
+            "n_constraints": int(n_constraints),
+            "n_parameters": int(k),
+        },
+        "chain_diagnostics": {
+            "overall_status": "analytic_gaussian",
+            "publication_ready": publication_ready,
+            "rhat": 1.0,
+            "ess_bulk": sample_count,
+            "n_draws": sample_count,
+            "n_chains": 1,
+            "thresholds": {"ess_min": 400, "rhat_max": 1.05},
+        },
+        "datasets_used": [entry.to_dict() for entry in compressed_entries],
+        "datasets_not_run": [entry.to_dict() for entry in skipped_entries],
+        "dataset_keys": [entry.key for entry in entries],
+        "priors": {name: list(bounds) for name, bounds in prior_bounds.items()},
+        "random_seed": seed,
+        "n_samples": sample_count,
+        "runner_hash": result_hash,
+        "warnings": warnings,
+        "__message_to_model__": (
+            "This is a publication-ready compressed-Gaussian preliminary result, "
+            "not a full external likelihood run. You may quote posterior/tension "
+            "numbers only with that caveat and only for datasets_used; do not "
+            "claim that datasets_not_run were included in the numerical posterior."
+        ),
+        "provenance": {
+            "cosmology_likelihood": {
+                "registry_version": "2026-04-30",
+                "runner": "compressed_gaussian_analytic",
+                "runner_hash": result_hash,
+                "dataset_keys": [entry.key for entry in entries],
+                "datasets_used": [entry.key for entry in compressed_entries],
+                "datasets_not_run": [entry.key for entry in skipped_entries],
+                "citations": _collect_citations(entries),
+                "compressed_sources": [
+                    {
+                        "dataset_key": entry.key,
+                        "source_locator": entry.compressed_likelihood.source_locator
+                        if entry.compressed_likelihood else None,
+                        "approximation": entry.compressed_likelihood.approximation
+                        if entry.compressed_likelihood else None,
+                    }
+                    for entry in compressed_entries
+                ],
+                "publication_ready": publication_ready,
+            },
+        },
+    }
+    if not publication_ready:
+        result["__do_not_claim__"] = True
+    return result
+
+
+def run_robustness_matrix(
+    *,
+    model: str,
+    supernova_sets: list[str] | None = None,
+    include_h0_prior: bool = True,
+    random_seed: int | None = None,
+    n_samples: int = 4000,
+) -> dict[str, Any]:
+    model_key = _validate_model(model)
+    sn_keys = supernova_sets or ["pantheon_plus", "des_sn5yr", "union3"]
+    combos: list[tuple[str, list[str]]] = [
+        ("BAO only", ["desi_dr1_bao"]),
+        ("BAO + CMB", ["desi_dr1_bao", "planck2018_compressed"]),
+        ("BAO + CMB + weak lensing", [
+            "desi_dr1_bao",
+            "planck2018_compressed",
+            "kids1000_wl",
+            "des_y3_3x2pt",
+            "hsc_y1_cosmic_shear",
+        ]),
+    ]
+    for sn_key in sn_keys:
+        label = get_cosmology_dataset(sn_key).display_name
+        combos.append((f"BAO + {label}", ["desi_dr1_bao", sn_key]))
+        combos.append((f"BAO + {label} + CMB", ["desi_dr1_bao", sn_key, "planck2018_compressed"]))
+    if include_h0_prior:
+        combos.extend([
+            (label + " + SH0ES H0", keys + ["shoes_h0_riess22"])
+            for label, keys in list(combos)
+        ])
+
+    matrix: list[dict[str, Any]] = []
+    base_seed = int(random_seed if random_seed is not None else 20260502)
+    for index, (label, keys) in enumerate(combos):
+        try:
+            run = run_likelihood_chain(
+                model=model_key,
+                dataset_keys=keys,
+                random_seed=base_seed + index,
+                n_samples=n_samples,
+            )
+            matrix.append({
+                "label": label,
+                "dataset_keys": keys,
+                "runnable": bool(run.get("publication_ready")),
+                "publication_ready": bool(run.get("publication_ready")),
+                "result": run,
+                "warnings": run.get("warnings", []),
+            })
+        except Exception as exc:
+            matrix.append({
+                "label": label,
+                "dataset_keys": keys,
+                "runnable": False,
+                "publication_ready": False,
+                "error": str(exc),
+                "error_class": exc.__class__.__name__,
+            })
+
+    ready_cells = [row for row in matrix if row.get("publication_ready")]
+    return {
+        "success": True,
+        "__tool_status__": "COMPLETED" if ready_cells else "PARTIAL",
+        "analysis_status": "COMPRESSED_ROBUSTNESS_READY" if ready_cells else "PARTIAL",
+        "publication_ready": bool(ready_cells),
+        "claim_scope": "compressed_likelihood_preliminary",
+        "model": model_key,
+        "matrix_size": len(matrix),
+        "ready_cells": len(ready_cells),
+        "matrix": matrix,
+        "warnings": [
+            "Robustness matrix uses compressed Gaussian summaries where available; config-only cells are not numerical evidence.",
+        ],
+        "__message_to_model__": (
+            "Summarize only cells with publication_ready=true as compressed preliminary "
+            "results. For non-runnable cells, say the external likelihood/config is still needed."
+        ),
+    }
+
+
+def _compressed_runner_unavailable(
+    *,
+    model_key: str,
+    entries: list[CosmologyDatasetEntry],
+    seed: int,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "success": True,
+        "__tool_status__": "PARTIAL",
+        "analysis_status": "CONFIG_READY",
+        "publication_ready": False,
+        "__do_not_claim__": True,
+        "model": model_key,
+        "model_label": MODEL_LABELS.get(model_key, model_key),
+        "sampler": "compressed_gaussian_analytic",
+        "dataset_keys": [entry.key for entry in entries],
+        "datasets": [entry.to_dict() for entry in entries],
+        "datasets_used": [],
+        "datasets_not_run": [entry.to_dict() for entry in entries],
+        "random_seed": seed,
+        "warnings": [reason],
+        "__message_to_model__": (
+            reason
+            + " Do not quote posterior constraints, S8/H0/Omega_m tensions, "
+            "AIC/BIC, or significance from this result."
+        ),
+        "provenance": {
+            "cosmology_likelihood": {
+                "registry_version": "2026-04-30",
+                "runner": "compressed_gaussian_analytic",
+                "dataset_keys": [entry.key for entry in entries],
+                "datasets_used": [],
+                "datasets_not_run": [entry.key for entry in entries],
+                "citations": _collect_citations(entries),
+                "publication_ready": False,
+            }
+        },
+    }
+
+
+def _compressed_parameter_order(entries: list[CosmologyDatasetEntry]) -> list[str]:
+    order: list[str] = []
+    for entry in entries:
+        spec = entry.compressed_likelihood
+        if spec is None:
+            continue
+        for param in spec.parameters:
+            if param in RUNNER_PARAMETER_PRIORS and param not in order:
+                order.append(param)
+    # Keep familiar cosmology params first for stable UI/test output.
+    preferred = ["H0", "omegam", "sigma8", "S8"]
+    return [param for param in preferred if param in order] + [
+        param for param in order if param not in preferred
+    ]
+
+
+def _sanitize_runner_priors(
+    parameters: list[str],
+    priors: dict[str, Any] | None,
+) -> dict[str, tuple[float, float]]:
+    user = priors or {}
+    if not isinstance(user, dict):
+        raise ValueError("priors must be an object")
+    unknown = set(user) - set(parameters)
+    if unknown:
+        raise ValueError(f"priors include unsupported compressed-runner parameters: {sorted(unknown)}")
+    out: dict[str, tuple[float, float]] = {}
+    for name in parameters:
+        default_low, default_high = RUNNER_PARAMETER_PRIORS[name]
+        raw = user.get(name, (default_low, default_high))
+        if isinstance(raw, dict):
+            low_raw, high_raw = raw.get("min"), raw.get("max")
+        elif isinstance(raw, (list, tuple)) and len(raw) == 2:
+            low_raw, high_raw = raw
+        else:
+            raise ValueError(f"prior for {name} must be [min, max]")
+        low, high = float(low_raw), float(high_raw)
+        if not (math.isfinite(low) and math.isfinite(high)) or low >= high:
+            raise ValueError(f"prior for {name} must have finite min < max")
+        if low < default_low or high > default_high:
+            raise ValueError(f"prior for {name} must stay within [{default_low}, {default_high}]")
+        out[name] = (low, high)
+    return out
+
+
+def _posterior_summary(values: np.ndarray) -> dict[str, Any]:
+    return {
+        "mean": round(float(np.mean(values)), 6),
+        "std": round(float(np.std(values)), 6),
+        "median": round(float(np.median(values)), 6),
+        "hdi_low_94": round(float(np.percentile(values, 3.0)), 6),
+        "hdi_high_94": round(float(np.percentile(values, 97.0)), 6),
+        "rhat": 1.0,
+        "ess_bulk": int(values.size),
+        "ess_tail": int(values.size),
+        "status": "analytic_gaussian",
+    }
+
+
+def _combined_chi2(
+    entries: list[CosmologyDatasetEntry],
+    parameter_order: list[str],
+    posterior_mean: np.ndarray,
+) -> float:
+    params = {name: float(posterior_mean[index]) for index, name in enumerate(parameter_order)}
+    total = 0.0
+    for entry in entries:
+        spec = entry.compressed_likelihood
+        if spec is None:
+            continue
+        names = [name for name in spec.parameters if name in params]
+        if not names:
+            continue
+        local_idx = [list(spec.parameters).index(name) for name in names]
+        mean = np.asarray(spec.mean, dtype=float)[local_idx]
+        cov = np.asarray(spec.covariance, dtype=float)[np.ix_(local_idx, local_idx)]
+        residual = np.asarray([params[name] for name in names], dtype=float) - mean
+        total += float(residual.T @ np.linalg.inv(cov) @ residual)
+    return total
+
+
+def _pairwise_tensions(entries: list[CosmologyDatasetEntry]) -> list[dict[str, Any]]:
+    tensions: list[dict[str, Any]] = []
+    specs = [
+        (entry, entry.compressed_likelihood)
+        for entry in entries
+        if entry.compressed_likelihood is not None
+    ]
+    for i, (left_entry, left_spec) in enumerate(specs):
+        if left_spec is None:
+            continue
+        for right_entry, right_spec in specs[i + 1:]:
+            if right_spec is None:
+                continue
+            common = [
+                name for name in left_spec.parameters
+                if name in right_spec.parameters and name in RUNNER_PARAMETER_PRIORS
+            ]
+            for name in common:
+                li = list(left_spec.parameters).index(name)
+                ri = list(right_spec.parameters).index(name)
+                left_var = float(left_spec.covariance[li][li])
+                right_var = float(right_spec.covariance[ri][ri])
+                denom = math.sqrt(max(left_var + right_var, 0.0))
+                if denom <= 0:
+                    continue
+                delta = float(left_spec.mean[li] - right_spec.mean[ri])
+                tensions.append({
+                    "parameter": name,
+                    "dataset_a": left_entry.key,
+                    "dataset_b": right_entry.key,
+                    "delta": round(delta, 6),
+                    "sigma": round(abs(delta) / denom, 3),
+                    "value_a": float(left_spec.mean[li]),
+                    "value_b": float(right_spec.mean[ri]),
+                })
+    tensions.sort(key=lambda item: float(item["sigma"]), reverse=True)
+    return tensions
 
 
 def _validate_model(model: str) -> str:

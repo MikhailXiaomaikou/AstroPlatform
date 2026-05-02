@@ -114,6 +114,44 @@ def test_cosmology_claims_pass_with_publication_ready_mcmc_result():
     assert r.ok
 
 
+def test_cosmology_claims_pass_with_publication_ready_compressed_likelihood_result():
+    tool_results = [
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "success": True,
+                "publication_ready": True,
+                "claim_scope": "compressed_likelihood_preliminary",
+                "parameters": {
+                    "H0": {"median": 68.1},
+                    "S8": {"median": 0.831},
+                },
+            },
+        }
+    ]
+    r = validate_claims(
+        "The compressed-likelihood preliminary result gives H0 = 68.1 km/s/Mpc and S8 = 0.831.",
+        tool_results,
+    )
+    assert r.ok
+
+
+def test_cosmology_claims_reject_config_only_likelihood_result():
+    tool_results = [
+        {
+            "tool": "build_cosmology_likelihood",
+            "result": {
+                "success": True,
+                "publication_ready": False,
+                "priors": {"H0": [50.0, 90.0]},
+            },
+        }
+    ]
+    r = validate_claims("The posterior gives H0 = 68.1 km/s/Mpc and S8 = 0.831.", tool_results)
+    assert not r.ok
+    assert {claim.label for claim in r.uncited} >= {"cosmology_h0", "cosmology_s8"}
+
+
 def test_cosmology_prior_bounds_do_not_support_posterior_claims():
     tool_results = [
         {

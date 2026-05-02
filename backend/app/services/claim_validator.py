@@ -102,6 +102,10 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         rf"\b(?:sigma_?8|σ_?8)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
         re.I,
     )),
+    ("cosmology_s8", re.compile(
+        rf"\b(?:S_?8)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
+        re.I,
+    )),
     ("significance_sigma", re.compile(
         rf"\b{_NUM}\s*(?:σ|sigma)\b",
         re.I,
@@ -1411,7 +1415,12 @@ def _payload_is_claimable_success(tool_name: str | None, result: dict[str, Any] 
         )
     if tool_name == "get_extinction":
         return bool(result.get("e_b_v") is not None or result.get("a_v") is not None)
-    if tool_name in {"fit_cosmology_mcmc", "run_cobaya_cosmology"}:
+    if tool_name in {
+        "fit_cosmology_mcmc",
+        "run_cobaya_cosmology",
+        "run_cosmology_likelihood_chain",
+        "run_cosmology_robustness_matrix",
+    }:
         return result.get("publication_ready") is True
     if tool_name == "get_cosmology_run_status":
         nested = result.get("result")
@@ -1459,6 +1468,8 @@ _CITABLE_ANALYSIS_TOOLS: frozenset[str] = frozenset({
     "get_cosmology_run_status",
     "get_extinction",
     "query_gaia_cluster",
+    "run_cosmology_likelihood_chain",
+    "run_cosmology_robustness_matrix",
     "run_adql",
     "run_cobaya_cosmology",
     "run_python",

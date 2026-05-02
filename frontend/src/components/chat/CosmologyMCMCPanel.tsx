@@ -23,12 +23,16 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
   const publicationReady = result.publication_ready === true;
   const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
   const parameterNames = Object.keys(params);
+  const usedCount = Array.isArray(result.datasets_used) ? result.datasets_used.length : undefined;
+  const notRunCount = Array.isArray(result.datasets_not_run) ? result.datasets_not_run.length : undefined;
+  const compressed = result.compressed_likelihood_preliminary === true;
 
   return (
     <div style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
         <strong style={{ color: "var(--color-text-primary)" }}>Cosmology MCMC</strong>
         <span>{String(result.model || "model?")} · {String(result.sampler || "sampler?")}</span>
+        {compressed && <span style={{ fontSize: "0.72rem" }}>compressed likelihood</span>}
         <span
           style={{
             border: publicationReady ? "1px solid var(--color-green)" : "1px solid #d99a00",
@@ -56,6 +60,21 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
           }}
         >
           Posterior numbers are not citeable until ESS/R-hat diagnostics pass.
+        </div>
+      )}
+
+      {compressed && (
+        <div
+          style={{
+            padding: "6px 8px",
+            borderLeft: "3px solid #2fbf71",
+            background: "rgba(34, 197, 94, 0.08)",
+            color: "var(--color-text-primary)",
+            marginBottom: 8,
+          }}
+        >
+          Preliminary compressed-Gaussian result. Used {usedCount ?? 0} compressed dataset(s)
+          {notRunCount ? `; ${notRunCount} selected dataset(s) still need external likelihood chains.` : "."}
         </div>
       )}
 

@@ -9,15 +9,19 @@ def test_registry_contains_required_observational_cosmology_datasets():
 
     assert {
         "desi_dr1_bao",
+        "sdss_6df_bao",
         "pantheon_plus",
         "des_sn5yr",
         "union3",
         "planck2018_compressed",
         "act_dr6_lensing",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
         "cosmic_chronometers",
         "shoes_h0_riess22",
     } <= keys
-    assert registry["dataset_count"] >= 8
+    assert registry["dataset_count"] >= 12
 
     for entry in registry["datasets"]:
         assert entry["version"]
@@ -26,6 +30,69 @@ def test_registry_contains_required_observational_cosmology_datasets():
         assert entry["covariance"]["kind"]
         assert entry["units"]
         assert entry["applicable_models"]
+        assert entry["execution_mode"] in {
+            "config_only",
+            "compressed_gaussian",
+            "external_cobaya",
+            "external_cosmosis",
+        }
+
+
+def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints():
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    result = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=[
+            "planck2018_compressed",
+            "act_dr6_lensing",
+            "kids1000_wl",
+            "des_y3_3x2pt",
+            "hsc_y1_cosmic_shear",
+        ],
+        random_seed=123,
+        n_samples=1000,
+    )
+
+    assert result["success"] is True
+    assert result["publication_ready"] is True
+    assert result["analysis_status"] == "COMPRESSED_CHAIN_READY"
+    assert result["claim_scope"] == "compressed_likelihood_preliminary"
+    assert set(result["parameters"]) >= {"H0", "omegam", "sigma8", "S8"}
+    assert result["parameters"]["S8"]["median"] == pytest.approx(0.804, abs=0.02)
+    assert result["chain_diagnostics"]["rhat"] == 1.0
+    assert result["fit_statistics"]["aic"] > 0
+    assert any(item["parameter"] == "S8" for item in result["pairwise_tensions"])
+    assert len(result["datasets_used"]) == 5
+
+
+def test_compressed_likelihood_runner_keeps_config_only_datasets_out_of_posterior():
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    result = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["sdss_6df_bao", "planck2018_compressed"],
+        random_seed=123,
+        n_samples=512,
+    )
+
+    assert result["publication_ready"] is True
+    assert [entry["key"] for entry in result["datasets_used"]] == ["planck2018_compressed"]
+    assert [entry["key"] for entry in result["datasets_not_run"]] == ["sdss_6df_bao"]
+    assert "not run in compressed phase" in " ".join(result["warnings"])
+
+
+def test_compressed_likelihood_runner_refuses_extended_model_publication_claims():
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    result = run_likelihood_chain(
+        model="lcdm_mnu",
+        dataset_keys=["planck2018_compressed", "act_dr6_lensing"],
+    )
+
+    assert result["publication_ready"] is False
+    assert result["__do_not_claim__"] is True
+    assert "extended-model parameters" in result["warnings"][0]
 
 
 def test_likelihood_builder_emits_guarded_cobaya_and_cosmosis_config():
@@ -52,6 +119,39 @@ def test_likelihood_builder_emits_guarded_cobaya_and_cosmosis_config():
     }
     assert result["priors"]["w0"] == [-1.5, -0.4]
     assert "DESI Collaboration" in str(result["provenance"]["cosmology_likelihood"]["citations"])
+
+
+def test_likelihood_builder_can_plan_act_era_bao_and_weak_lensing_comparison():
+    from app.services.cosmology_likelihoods import build_likelihood_config
+
+    result = build_likelihood_config(
+        model="lcdm",
+        dataset_keys=[
+            "sdss_6df_bao",
+            "planck2018_compressed",
+            "act_dr6_lensing",
+            "kids1000_wl",
+            "des_y3_3x2pt",
+            "hsc_y1_cosmic_shear",
+        ],
+    )
+
+    assert result["success"] is True
+    assert result["publication_ready"] is False
+    assert result["__do_not_claim__"] is True
+    assert set(result["cobaya"]["likelihood"]) == {
+        "sdss_6df_bao",
+        "planck2018_compressed",
+        "act_dr6_lensing",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+    }
+    citations = str(result["provenance"]["cosmology_likelihood"]["citations"])
+    assert "eBOSS Collaboration" in citations
+    assert "KiDS-1000" in citations
+    assert "DES Collaboration" in citations
+    assert "HSC Y1" in citations
 
 
 def test_likelihood_builder_rejects_unsupported_prior_and_duplicate_dataset():
@@ -112,3 +212,12 @@ async def test_ai_tool_wrappers_expose_registry_and_config_guardrails():
     assert config["success"] is True
     assert config["__tool_status__"] == "PARTIAL"
     assert config["publication_ready"] is False
+
+    chain = await execute_tool(
+        "run_cosmology_likelihood_chain",
+        {"model": "lcdm", "dataset_keys": ["planck2018_compressed", "shoes_h0_riess22"]},
+        python_session_id="test",
+    )
+    assert chain["success"] is True
+    assert chain["publication_ready"] is True
+    assert set(chain["parameters"]) >= {"H0", "omegam", "sigma8", "S8"}

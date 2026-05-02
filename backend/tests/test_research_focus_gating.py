@@ -99,6 +99,8 @@ def test_focus_cosmology_keeps_core_cosmology_tools(monkeypatch) -> None:
         {"name": "list_cosmology_datasets"},
         {"name": "build_cosmology_likelihood"},
         {"name": "build_cosmology_robustness_matrix"},
+        {"name": "run_cosmology_likelihood_chain"},
+        {"name": "run_cosmology_robustness_matrix"},
         {"name": "compare_luminosity_distances"},
         {"name": "fit_line_lfr"},
         {"name": "demagnify_sample"},

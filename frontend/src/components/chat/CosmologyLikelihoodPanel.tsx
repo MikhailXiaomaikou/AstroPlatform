@@ -14,6 +14,8 @@ type DatasetEntry = {
   source_url?: string;
   covariance?: { kind?: string; provided?: boolean; description?: string };
   citations?: Citation[];
+  execution_mode?: string;
+  compressed_likelihood?: { parameters?: string[]; source_locator?: string };
 };
 
 function asArray<T>(value: unknown): T[] {
@@ -30,8 +32,11 @@ function statusTone(status: string | undefined): { label: string; color: string;
   if (key === "ready") {
     return { label: "ready", color: "#1b7f42", bg: "rgba(34, 197, 94, 0.10)", border: "#2fbf71" };
   }
-  if (key === "external_likelihood") {
+  if (key === "external_likelihood" || key === "external_cobaya" || key === "external_cosmosis") {
     return { label: "external likelihood", color: "#8a5b00", bg: "rgba(255, 183, 0, 0.13)", border: "#d99a00" };
+  }
+  if (key === "compressed_gaussian") {
+    return { label: "compressed gaussian", color: "#155e75", bg: "rgba(14, 165, 233, 0.10)", border: "#0ea5e9" };
   }
   return { label: key.replace(/_/g, " "), color: "#7b2d26", bg: "rgba(123, 45, 38, 0.10)", border: "#b66a61" };
 }
@@ -73,12 +78,18 @@ function DatasetList({ datasets }: { datasets: DatasetEntry[] }) {
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <strong style={{ color: "var(--color-text-primary)" }}>{entry.display_name || entry.key}</strong>
               <Badge status={entry.status}>{statusTone(entry.status).label}</Badge>
+              {entry.execution_mode ? <Badge status={entry.execution_mode}>{entry.execution_mode.replace(/_/g, " ")}</Badge> : null}
               {entry.probe ? <span style={{ color: "var(--color-text-tertiary)" }}>{entry.probe}</span> : null}
             </div>
             <div style={{ marginTop: 4, color: "var(--color-text-secondary)" }}>
               {entry.version || "version not reported"} · covariance: {entry.covariance?.kind || "not reported"}
               {entry.covariance?.provided === false ? " (recipe/manual)" : ""}
             </div>
+            {entry.compressed_likelihood ? (
+              <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.72rem", marginTop: 2 }}>
+                executable compressed params: {asArray<string>(entry.compressed_likelihood.parameters).join(", ")}
+              </div>
+            ) : null}
             {citation ? (
               <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.72rem", marginTop: 2 }}>
                 {citation.label}{citation.year ? ` (${citation.year})` : ""}{citation.arxiv ? ` · arXiv:${citation.arxiv}` : ""}
@@ -109,6 +120,7 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
         <strong style={{ color: "var(--color-text-primary)" }}>{title}</strong>
         {result.model ? <span>{String(result.model)}</span> : null}
         {hasConfig ? <Badge status="external_likelihood">config only</Badge> : null}
+        {result.analysis_status === "COMPRESSED_ROBUSTNESS_READY" ? <Badge status="ready">compressed results</Badge> : null}
         {result.dataset_count != null ? <span>{String(result.dataset_count)} datasets</span> : null}
         {result.matrix_size != null ? <span>{String(result.matrix_size)} runs</span> : null}
       </div>
@@ -140,6 +152,13 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
               <div style={{ color: "var(--color-text-tertiary)" }}>
                 {asArray<string>(row.dataset_keys).join(" + ")} · config {shortHash(row.config_hash)}
               </div>
+              {row.result && typeof row.result === "object" ? (
+                <div style={{ marginTop: 3, color: row.publication_ready ? "#1b7f42" : "#8a5b00" }}>
+                  {row.publication_ready ? "compressed posterior ready" : "not runnable as posterior"}
+                  {" · "}
+                  used {asArray<DatasetEntry>((row.result as Record<string, unknown>).datasets_used).length} compressed dataset(s)
+                </div>
+              ) : null}
             </div>
           ))}
         </div>

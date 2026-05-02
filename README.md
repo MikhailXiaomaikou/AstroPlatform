@@ -69,7 +69,7 @@ Standard Astro includes workflows for:
 - Isochrone fitting and cluster analysis
 - Time-domain period, transit, flare, and RV workflows
 - Galaxy SFR, morphology, rotation-curve, and X-ray tools
-- Observational cosmology likelihood and MCMC scaffolding
+- Observational cosmology likelihood configs plus compressed Gaussian posterior runner
 - Paper drafting, bibliography generation, and reproducibility export
 
 ## Reference Literature
@@ -99,6 +99,12 @@ main references currently used by tools, prompts, and validation fixtures.
 | SIMBAD | Wenger et al. 2000, A&AS 143, 9 | SIMBAD registry citation |
 | 2MASS | Skrutskie et al. 2006, AJ 131, 1163 | 2MASS registry citation |
 | DESI DR1 BAO | DESI Collaboration 2024, arXiv:2404.03002 | Observational-cosmology registry entry |
+| SDSS + 6dF BAO | Beutler et al. 2011; Alam et al. 2017; eBOSS Collaboration 2021 | ACT-era / pre-DESI BAO likelihood planning |
+| ACT DR6 lensing | Madhavacheril et al. 2024, arXiv:2304.05203 | Compressed CMB-lensing S8/H0 consistency checks |
+| Planck 2018 | Planck Collaboration VI 2020, A&A 641, A6 | Compressed CMB baseline and ΛCDM comparison |
+| KiDS-1000 cosmic shear | Asgari et al. 2021, arXiv:2007.15633 | Weak-lensing S8 comparison branch |
+| DES Y3 3x2pt | DES Collaboration 2022, arXiv:2105.13549 | Galaxy weak-lensing + clustering comparison branch |
+| HSC Y1 cosmic shear | Hamana et al. 2020, arXiv:1906.06041 | HSC weak-lensing S8 comparison branch |
 | SH0ES prior | Riess et al. 2011 / 2022 | H0 prior provenance in cosmology workflows |
 | Supernova cosmology | Suzuki et al. 2012, ApJ 746, 85 | Union-style Ωm / SN cosmology context |
 

@@ -53,13 +53,18 @@ Rules:
 
 ## Observational Cosmology Registry
 
-The cosmology likelihood registry is metadata/config-first.  It currently
-tracks DESI DR1 BAO, Pantheon+, DES-SN 5YR, Union3, Planck compressed
-distance priors, ACT DR6 lensing, cosmic chronometers, and SH0ES H0 prior.
+The cosmology likelihood registry is metadata/config-first with a phase-1
+compressed Gaussian execution path. It currently tracks DESI DR1 BAO,
+SDSS+6dF/SDSS-BOSS/eBOSS BAO, Pantheon+, DES-SN 5YR, Union3, Planck
+compressed priors, ACT DR6 lensing, KiDS-1000, DES Y3, HSC weak-lensing
+comparison branches, cosmic chronometers, and SH0ES H0 prior.
 
-These entries can build guarded Cobaya/CosmoSIS-style configs and
-robustness matrices.  They do not become claimable cosmological constraints
-until an actual chain run returns `publication_ready=true` with diagnostics.
+Config-only entries can build guarded Cobaya/CosmoSIS-style configs and
+robustness matrices but cannot support posterior claims. Entries with
+`execution_mode=compressed_gaussian` can run `run_cosmology_likelihood_chain`
+for preliminary compressed posterior/tension summaries. Those numbers are
+claimable only with `publication_ready=true` and must be described as
+compressed-likelihood preliminary, not as full external likelihood results.
 
 ## Re-enable Checklist
 

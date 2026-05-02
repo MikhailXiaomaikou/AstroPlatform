@@ -47,4 +47,35 @@ describe("CosmologyMCMCPanel", () => {
     expect(screen.getByText("data_hash=abcdef123456")).toBeInTheDocument();
     expect(screen.getByText("diagnostics=check_required")).toBeInTheDocument();
   });
+
+  it("shows compressed likelihood caveat and dataset coverage", () => {
+    render(
+      <CosmologyMCMCPanel
+        result={{
+          sampler: "compressed_gaussian_analytic",
+          model: "lcdm",
+          publication_ready: true,
+          compressed_likelihood_preliminary: true,
+          datasets_used: [{ key: "planck2018_compressed" }],
+          datasets_not_run: [{ key: "sdss_6df_bao" }],
+          chain_diagnostics: { overall_status: "analytic_gaussian" },
+          parameters: {
+            S8: {
+              median: 0.831,
+              hdi_low_94: 0.79,
+              hdi_high_94: 0.87,
+              rhat: 1,
+              ess_bulk: 4000,
+              status: "analytic_gaussian",
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("publication-ready")).toBeInTheDocument();
+    expect(screen.getByText("compressed likelihood")).toBeInTheDocument();
+    expect(screen.getByText(/Preliminary compressed-Gaussian result/)).toBeInTheDocument();
+    expect(screen.getByText(/1 selected dataset/)).toBeInTheDocument();
+  });
 });

@@ -15,6 +15,7 @@ describe("CosmologyLikelihoodPanel", () => {
               version: "DR1 2024 BAO likelihood",
               probe: "bao",
               status: "external_likelihood",
+              execution_mode: "external_cobaya",
               covariance: { kind: "block covariance", provided: true },
               citations: [{ label: "DESI Collaboration", year: 2024, arxiv: "2404.03002" }],
             },
@@ -26,6 +27,7 @@ describe("CosmologyLikelihoodPanel", () => {
     expect(screen.getByText("Cosmology Dataset Registry")).toBeInTheDocument();
     expect(screen.getByText("DESI DR1 BAO")).toBeInTheDocument();
     expect(screen.getByText("external likelihood")).toBeInTheDocument();
+    expect(screen.getByText("external cobaya")).toBeInTheDocument();
     expect(screen.getByText(/block covariance/)).toBeInTheDocument();
     expect(screen.getByText(/arXiv:2404.03002/)).toBeInTheDocument();
   });
@@ -66,5 +68,31 @@ describe("CosmologyLikelihoodPanel", () => {
     expect(screen.getByText("BAO only")).toBeInTheDocument();
     expect(screen.getByText("BAO + Pantheon+ + CMB")).toBeInTheDocument();
     expect(screen.getByText(/desi_dr1_bao \+ pantheon_plus \+ planck2018_compressed/)).toBeInTheDocument();
+  });
+
+  it("shows executable compressed robustness cells", () => {
+    render(
+      <CosmologyLikelihoodPanel
+        result={{
+          model: "lcdm",
+          analysis_status: "COMPRESSED_ROBUSTNESS_READY",
+          matrix_size: 1,
+          matrix: [
+            {
+              label: "BAO + CMB + weak lensing",
+              dataset_keys: ["desi_dr1_bao", "planck2018_compressed", "kids1000_wl"],
+              publication_ready: true,
+              result: {
+                datasets_used: [{ key: "planck2018_compressed" }, { key: "kids1000_wl" }],
+              },
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("compressed results")).toBeInTheDocument();
+    expect(screen.getByText(/compressed posterior ready/)).toBeInTheDocument();
+    expect(screen.getByText(/used 2 compressed dataset/)).toBeInTheDocument();
   });
 });

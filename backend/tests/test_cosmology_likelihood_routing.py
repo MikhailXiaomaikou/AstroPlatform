@@ -75,6 +75,17 @@ def test_multi_sn_comparison_routes_to_robustness_matrix() -> None:
     assert calls[0]["input"]["include_h0_prior"] is False
 
 
+def test_shoes_h0_prior_prompt_routes_to_registry_key() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    prompt = "请用 DESI DR1 BAO + SH0ES H0 prior 检查 flat ΛCDM 的 H0 consistency。"
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "desi_dr1_bao",
+        "shoes_h0_riess22",
+    ]
+
+
 def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,
@@ -88,7 +99,7 @@ def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
     )
 
     assert _cosmology_dataset_keys_from_prompt(prompt) == [
-        "desi_dr1_bao",
+        "sdss_6df_bao",
         "planck2018_compressed",
         "act_dr6_lensing",
     ]
@@ -96,3 +107,54 @@ def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
 
     calls = _cosmology_likelihood_build_calls_from_prompt(prompt)
     assert [call["input"]["model"] for call in calls] == ["lcdm", "ok_lcdm", "lcdm_mnu"]
+
+
+def test_act_dr6_weak_lensing_prompt_routes_to_act_era_bao_and_wl_surveys() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_likelihood_run_calls_from_prompt,
+    )
+
+    prompt = (
+        "我在做 CMB lensing 与低红移距离数据的观测宇宙学交叉检验。"
+        "请基于 ACT DR6 CMB lensing、Planck CMB lensing/primary CMB、"
+        "BAO 数据和 weak-lensing survey 的可用资料，规划并尝试评估 "
+        "ΛCDM 下的 S8/H0/Ωm consistency、与 galaxy weak lensing 的 S8 差异，"
+        "以及 neutrino-mass/curvature 扩展该如何检验。"
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "sdss_6df_bao",
+        "planck2018_compressed",
+        "act_dr6_lensing",
+        "des_y3_3x2pt",
+        "kids1000_wl",
+        "hsc_y1_cosmic_shear",
+    ]
+    calls = _cosmology_likelihood_build_calls_from_prompt(prompt)
+    assert [call["input"]["model"] for call in calls] == ["lcdm", "ok_lcdm", "lcdm_mnu"]
+    assert all(
+        call["input"]["dataset_keys"]
+        == [
+            "sdss_6df_bao",
+            "planck2018_compressed",
+            "act_dr6_lensing",
+            "des_y3_3x2pt",
+            "kids1000_wl",
+            "hsc_y1_cosmic_shear",
+        ]
+        for call in calls
+    )
+
+    run_calls = _cosmology_likelihood_run_calls_from_prompt(prompt)
+    assert [call["name"] for call in run_calls] == ["run_cosmology_likelihood_chain"]
+    assert run_calls[0]["input"]["model"] == "lcdm"
+    assert run_calls[0]["input"]["dataset_keys"] == [
+        "sdss_6df_bao",
+        "planck2018_compressed",
+        "act_dr6_lensing",
+        "des_y3_3x2pt",
+        "kids1000_wl",
+        "hsc_y1_cosmic_shear",
+    ]

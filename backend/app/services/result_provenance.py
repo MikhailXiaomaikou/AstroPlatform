@@ -85,6 +85,8 @@ _STOCHASTIC_TOOLS: frozenset[str] = frozenset({
     # same envelope, so we seed it too for provenance consistency.
     "fit_line_lfr",
     "astro_statistics_toolbox",
+    "run_cosmology_likelihood_chain",
+    "run_cosmology_robustness_matrix",
 })
 
 
@@ -472,6 +474,7 @@ _COMPUTE_TOOLS = {
     "workspace_export", "fit_cosmology_mcmc", "run_cobaya_cosmology",
     "get_cosmology_run_status",
     "build_cosmology_likelihood", "build_cosmology_robustness_matrix",
+    "run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix",
     # PART Y Batch 1 (audit follow-up): newer compute tools — line-relation
     # fitting on cited literature tables, luminosity-distance comparison
     # across cosmologies, gravitational-lensing demagnification of a sample.
