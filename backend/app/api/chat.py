@@ -3902,6 +3902,114 @@ def _statistics_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     )
 
 
+def _cosmology_tool_grounded_summary(tool_results: list[dict]) -> str | None:
+    """Deterministic cosmology summary when the LLM returns empty prose."""
+    registry: dict[str, Any] | None = None
+    config: dict[str, Any] | None = None
+    chain: dict[str, Any] | None = None
+    for entry in tool_results or []:
+        result = entry.get("result")
+        if not isinstance(result, dict):
+            continue
+        tool = entry.get("tool")
+        if tool == "list_cosmology_datasets":
+            registry = result
+        elif tool in {"build_cosmology_likelihood", "build_cosmology_robustness_matrix"}:
+            config = result
+        elif tool in {"run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix"}:
+            chain = result
+
+    if not any((registry, config, chain)):
+        return None
+
+    dataset_names: list[str] = []
+    data_product_notes: list[str] = []
+    if isinstance(registry, dict):
+        for item in registry.get("datasets") or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("display_name") or item.get("key") or "").strip()
+            if name:
+                dataset_names.append(name)
+            products = item.get("data_products")
+            if isinstance(products, list) and products:
+                data_product_notes.append(f"{name}: {len(products)} machine-readable product(s)")
+
+    lines = ["Tool-grounded cosmology summary:"]
+    if dataset_names:
+        lines.append(f"- Registry selection: {', '.join(dataset_names)}.")
+    if data_product_notes:
+        lines.append(f"- Data products: {'; '.join(data_product_notes)}.")
+
+    if isinstance(config, dict):
+        model = config.get("model") or config.get("model_label") or "not reported"
+        config_hash = str(config.get("config_hash") or "")[:12] or "not reported"
+        lines.append(
+            f"- Likelihood configuration: model={model}, config_hash={config_hash}. "
+            "This is configuration metadata, not a posterior result."
+        )
+
+    if isinstance(chain, dict):
+        ready = chain.get("publication_ready") is True and chain.get("__do_not_claim__") is not True
+        used = [
+            str(item.get("display_name") or item.get("key") or "").strip()
+            for item in (chain.get("datasets_used") or [])
+            if isinstance(item, dict)
+        ]
+        not_run = [
+            str(item.get("display_name") or item.get("key") or "").strip()
+            for item in (chain.get("datasets_not_run") or [])
+            if isinstance(item, dict)
+        ]
+        if ready:
+            params = chain.get("parameters")
+            param_parts: list[str] = []
+            if isinstance(params, dict):
+                for name in ("H0", "omegam", "sigma8", "S8"):
+                    item = params.get(name)
+                    if not isinstance(item, dict):
+                        continue
+                    median = item.get("median")
+                    hdi = item.get("hdi_94")
+                    text = f"{name}={_fmt_tool_number(median)}"
+                    if isinstance(hdi, list) and len(hdi) >= 2:
+                        text += f" (94% HDI {_fmt_tool_number(hdi[0])}-{_fmt_tool_number(hdi[1])})"
+                    param_parts.append(text)
+            lines.append(
+                "- Posterior status: publication-ready for the compressed-likelihood "
+                "preliminary runner."
+            )
+            if used:
+                lines.append(f"- Numerically included datasets: {', '.join(used)}.")
+            if not_run:
+                lines.append(
+                    f"- Not included in the numerical posterior: {', '.join(not_run)}; "
+                    "these still require external likelihood execution."
+                )
+            if param_parts:
+                lines.append("- Compressed preliminary parameters: " + "; ".join(param_parts) + ".")
+            lines.append(
+                "Scope note: these numbers are compressed-likelihood preliminary results, "
+                "not a full external Cobaya/CosmoSIS likelihood reproduction."
+            )
+        else:
+            reason = "no publication-ready compressed posterior was produced"
+            warnings = chain.get("warnings")
+            if isinstance(warnings, list) and warnings:
+                reason = str(warnings[0])
+            lines.append(f"- Posterior status: not publication-ready ({reason}).")
+            if not_run:
+                lines.append(
+                    f"- Dataset(s) requiring external likelihood execution: {', '.join(not_run)}."
+                )
+            lines.append(
+                "Therefore this turn can document data products and build configs, "
+                "but it cannot support H0/Omega_m/S8/tension or dark-energy posterior claims."
+            )
+
+    return "\n".join(lines) if len(lines) > 1 else None
+
+
 def _sanitize_tools_returned_nothing(reply: str) -> str:
     import re
 
@@ -4241,7 +4349,8 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
     dataset_tokens = (
         "bao", "baryon acoustic", "sn ia", "supernova", "pantheon",
         "des-sn", "union3", "cmb", "planck", "act dr6", "sh0es",
-        "cosmic chronometer", "weak lensing", "cosmic shear", "kids",
+        "cosmic chronometer", "weak lensing", "weak-lensing",
+        "cosmic shear", "kids",
         "des y3", "hsc", "galaxy lensing",
     )
     model_tokens = (
@@ -4249,6 +4358,7 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "cpl", "omega_m", "ωm", "Ωm", "h0", "h₀", "posterior", "后验",
         "likelihood", "协方差", "covariance", "robustness",
         "pull", "outlier", "residual", "bin-level", "分红移",
+        "s8", "sigma8", "σ8", "tension", "consistency",
     )
     planning_tokens = (
         "available", "可用", "dataset", "数据集", "prior", "引用",
@@ -5219,10 +5329,12 @@ async def _run_agent_loop(
                     "inline x/y arrays before summarizing the regression."
                 ),
             })
-        if cosmology_registry_pending and (
-            not tool_calls_in_turn
-            or any(tc.get("name") != "list_cosmology_datasets" for tc in tool_calls_in_turn)
-        ):
+        if cosmology_registry_pending:
+            # Keep cosmology routing deterministic. Some backends call
+            # list_cosmology_datasets without the narrowed dataset_keys input,
+            # which floods the model with the entire registry and can trigger
+            # memory/Python detours. The auto-selected key list is the safe
+            # contract for the rest of this turn.
             registry_dataset_keys = _cosmology_dataset_keys_from_prompt(latest_user_text)
             text = ""
             tool_calls_in_turn = [{
@@ -6194,6 +6306,10 @@ async def _run_agent_loop(
             stats_summary = _statistics_tool_grounded_summary(all_tool_results)
             if stats_summary:
                 clean_reply = stats_summary
+        if not clean_reply.strip():
+            cosmology_summary = _cosmology_tool_grounded_summary(all_tool_results)
+            if cosmology_summary:
+                clean_reply = cosmology_summary
         if not clean_reply.strip():
             if all_tool_results:
                 tool_names = ", ".join({tr["tool"] for tr in all_tool_results})

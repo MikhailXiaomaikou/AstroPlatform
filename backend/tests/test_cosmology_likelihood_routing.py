@@ -229,7 +229,13 @@ def test_supernova_only_prompt_does_not_route_to_bao_robustness_matrix() -> None
 
 
 def test_s8_consistency_defaults_to_lcdm_only_without_dark_energy_request() -> None:
-    from app.api.chat import _cosmology_models_from_prompt
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_likelihood_run_calls_from_prompt,
+        _cosmology_models_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
 
     prompt = (
         "我在做 galaxy weak-lensing surveys 的 S8 consistency 检验。请基于 "
@@ -237,7 +243,56 @@ def test_s8_consistency_defaults_to_lcdm_only_without_dark_energy_request() -> N
         "只用本轮工具结果比较 S8 posterior。"
     )
 
+    assert _is_cosmology_likelihood_workflow(prompt)
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "planck2018_compressed",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+    ]
     assert _cosmology_models_from_prompt(prompt) == ["lcdm"]
+    assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+    ]
+    assert _cosmology_likelihood_run_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+    ]
+
+
+def test_english_kids_s8_tension_prompt_routes_deterministically() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_likelihood_run_calls_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
+
+    prompt = (
+        "I am checking a galaxy weak-lensing S8 analysis inspired by KiDS-1000. "
+        "Use registered weak-lensing and CMB compressed datasets to determine "
+        "whether this turn can support an S8 tension claim; do not quote "
+        "non-tool paper values."
+    )
+
+    assert _is_cosmology_likelihood_workflow(prompt)
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "planck2018_compressed",
+        "kids1000_wl",
+    ]
+    assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "kids1000_wl",
+    ]
+    assert _cosmology_likelihood_run_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "kids1000_wl",
+    ]
 
 
 def test_pre_desi_bao_prompt_uses_sdss_not_desi() -> None:
@@ -271,3 +326,73 @@ def test_desi_bin_outlier_prompt_routes_to_cosmology_registry_not_python() -> No
     assert _is_cosmology_likelihood_workflow(prompt)
     assert _cosmology_dataset_keys_from_prompt(prompt) == ["desi_dr1_bao"]
     assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["name"] == "build_cosmology_likelihood"
+
+
+def test_empty_cosmology_prose_fallback_summarizes_config_only_turn() -> None:
+    from app.api.chat import _cosmology_tool_grounded_summary
+
+    summary = _cosmology_tool_grounded_summary([
+        {
+            "tool": "list_cosmology_datasets",
+            "result": {
+                "datasets": [
+                    {
+                        "key": "desi_dr1_bao",
+                        "display_name": "DESI DR1 BAO",
+                        "data_products": [{"role": "measurement_vector"}],
+                    }
+                ],
+            },
+        },
+        {
+            "tool": "build_cosmology_likelihood",
+            "result": {
+                "model": "lcdm",
+                "config_hash": "abcdef1234567890",
+                "publication_ready": False,
+            },
+        },
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "warnings": ["No selected dataset has a registered compressed Gaussian likelihood."],
+                "datasets_not_run": [{"key": "desi_dr1_bao", "display_name": "DESI DR1 BAO"}],
+            },
+        },
+    ])
+
+    assert summary is not None
+    assert "DESI DR1 BAO" in summary
+    assert "1 machine-readable product" in summary
+    assert "config_hash=abcdef123456" in summary
+    assert "not publication-ready" in summary
+    assert "cannot support H0/Omega_m/S8/tension" in summary
+    assert "language model did not return" not in summary
+
+
+def test_empty_cosmology_prose_fallback_can_report_publication_ready_compressed_chain() -> None:
+    from app.api.chat import _cosmology_tool_grounded_summary
+
+    summary = _cosmology_tool_grounded_summary([
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "publication_ready": True,
+                "datasets_used": [{"key": "planck2018_compressed", "display_name": "Planck 2018 compressed distance priors"}],
+                "datasets_not_run": [{"key": "desi_dr1_bao", "display_name": "DESI DR1 BAO"}],
+                "parameters": {
+                    "H0": {"median": 67.36, "hdi_94": [66.3, 68.4]},
+                    "S8": {"median": 0.804, "hdi_94": [0.787, 0.821]},
+                },
+            },
+        }
+    ])
+
+    assert summary is not None
+    assert "publication-ready" in summary
+    assert "compressed-likelihood preliminary" in summary
+    assert "H0=67.36" in summary
+    assert "S8=0.804" in summary
+    assert "DESI DR1 BAO" in summary
