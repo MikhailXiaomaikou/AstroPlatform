@@ -273,6 +273,22 @@ def test_generic_cmb_lensing_routes_to_act_dr6_lensing() -> None:
     ]
 
 
+def test_hz_cosmic_chronometer_prompt_routes_to_registry() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
+
+    prompt = (
+        "I am checking an H(z) cosmic-chronometer expansion-history workflow. "
+        "Use registered cosmic-chronometer data if executable; otherwise explain "
+        "what external table or covariance is missing."
+    )
+
+    assert _is_cosmology_likelihood_workflow(prompt) is True
+    assert _cosmology_dataset_keys_from_prompt(prompt) == ["cosmic_chronometers"]
+
+
 def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,

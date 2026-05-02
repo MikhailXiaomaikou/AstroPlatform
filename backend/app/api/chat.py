@@ -4353,7 +4353,8 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "cosmic shear", "cosmic-shear", "kids",
         "des y3", "hsc", "galaxy lensing", "trgb", "freedman",
         "h0licow", "time-delay", "time delay", "strong-lens",
-        "strong lens", "megamaser",
+        "strong lens", "megamaser", "cosmic-chronometer", "h(z)",
+        "expansion-history", "expansion history",
     )
     model_tokens = (
         "dark energy", "暗能量", "lcdm", "λcdm", "wcdm", "w0wa",
