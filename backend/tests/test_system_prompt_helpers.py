@@ -54,6 +54,17 @@ def test_system_prompt_warns_against_guessing_kwargs():
     assert "Never invent kwargs" in SYSTEM_PROMPT or "do not guess" in SYSTEM_PROMPT.lower()
 
 
+def test_system_prompt_has_model_independent_cosmology_guardrails():
+    from app.api.chat import SYSTEM_PROMPT
+
+    assert "Gaussian Process" in SYSTEM_PROMPT
+    assert "Om(z) = (E(z)^2 - 1) / ((1+z)^3 - 1)" in SYSTEM_PROMPT
+    assert "do not replace the requested non-parametric workflow" in SYSTEM_PROMPT
+    assert "LRG bin near `z_eff≈0.51`" in SYSTEM_PROMPT
+    assert "bin-level" in SYSTEM_PROMPT
+    assert "residuals, pulls" in SYSTEM_PROMPT
+
+
 def test_system_prompt_routes_transit_fits_to_pro_helper():
     """R20: HD 189733b / Mandel-Agol 场景优先走平台 transit fit helper."""
     from app.api.chat import SYSTEM_PROMPT

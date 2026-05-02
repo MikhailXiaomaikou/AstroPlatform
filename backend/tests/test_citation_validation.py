@@ -567,6 +567,43 @@ def test_publication_ready_line_fit_supports_generic_cii_ranges():
     assert unsupported_literature_narrative_violations(reply, tool_results) == []
 
 
+def test_desi_lrg_bin_tension_requires_bin_level_evidence():
+    from app.services.claim_validator import unsupported_literature_narrative_violations
+
+    reply = "The DESI LRG bin at z_eff≈0.51 shows tension with ΛCDM."
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {
+            "success": True,
+            "datasets": [{"key": "desi_dr1_bao", "version": "DR1"}],
+        },
+    }]
+
+    violations = unsupported_literature_narrative_violations(reply, tool_results)
+
+    assert violations
+    assert violations[0].kind == "unsupported_literature_narrative"
+
+
+def test_desi_lrg_bin_assessment_supports_bin_tension_language():
+    from app.services.claim_validator import unsupported_literature_narrative_violations
+
+    reply = "The DESI LRG bin at z_eff≈0.51 shows tension with ΛCDM."
+    tool_results = [{
+        "tool": "assess_bao_bin_anomaly",
+        "result": {
+            "success": True,
+            "bin_level_assessment": [{
+                "bin": "LRG z_eff=0.51",
+                "pull_sigma": 2.1,
+                "interpretation": "mild tension",
+            }],
+        },
+    }]
+
+    assert unsupported_literature_narrative_violations(reply, tool_results) == []
+
+
 def test_unseen_author_year_still_flags_after_literature_search():
     from app.services.claim_validator import provenance_citation_violations
 

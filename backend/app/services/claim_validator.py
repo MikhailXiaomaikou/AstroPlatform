@@ -424,6 +424,19 @@ _UNSUPPORTED_NARRATIVE_PATTERNS: list[tuple[str, re.Pattern]] = [
             re.I,
         ),
     ),
+    (
+        "unsupported_bao_bin_anomaly",
+        re.compile(
+            r"\b(?:DESI|BAO|LRG)[^.\n;:()]{0,120}"
+            r"(?:z_?eff|z\s*=|redshift)[^.\n;:()]{0,40}"
+            r"(?:0\.51|0\.510|0\.5)[^.\n;:()]{0,160}"
+            r"(?:tension|outlier|anomal(?:y|ous)|deviation|pull|high|low)\b|"
+            r"\b(?:tension|outlier|anomal(?:y|ous)|deviation|pull)[^.\n;:()]{0,120}"
+            r"(?:DESI|BAO|LRG)[^.\n;:()]{0,120}"
+            r"(?:z_?eff|z\s*=|redshift)[^.\n;:()]{0,40}(?:0\.51|0\.510|0\.5)\b",
+            re.I,
+        ),
+    ),
 ]
 
 
@@ -1164,6 +1177,8 @@ def methodology_consistency_violations(
 def _unsupported_narrative_kind_is_supported(kind: str, tool_results: Any) -> bool:
     if kind == "unsupported_line_property_relation":
         return _line_measurement_rows_available(tool_results)
+    if kind == "unsupported_bao_bin_anomaly":
+        return _bao_bin_anomaly_assessment_available(tool_results)
     return (
         _tool_successfully_ran(tool_results, "search_literature")
         or _line_measurement_rows_available(tool_results)
@@ -1183,6 +1198,30 @@ def _line_measurement_rows_available(tool_results: Any) -> bool:
         rows = result.get("line_measurements") if isinstance(result, dict) else None
         if isinstance(rows, list) and rows:
             return True
+    return False
+
+
+def _bao_bin_anomaly_assessment_available(tool_results: Any) -> bool:
+    """True only when a tool returned bin-level BAO residual/pull evidence."""
+    for entry in tool_results if isinstance(tool_results, list) else [tool_results]:
+        tool_name, result = _entry_tool_and_result(entry)
+        if not _payload_is_claimable_success(tool_name, result):
+            continue
+        if tool_name in {"assess_bao_bin_anomaly", "run_gp_reconstruction"}:
+            return True
+        if not isinstance(result, dict):
+            continue
+        for key in (
+            "bin_level_assessment",
+            "bao_bin_residuals",
+            "bin_residuals",
+            "outlier_assessment",
+            "residual_pulls",
+            "pull_sigma",
+        ):
+            value = result.get(key)
+            if value not in (None, [], {}):
+                return True
     return False
 
 

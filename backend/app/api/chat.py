@@ -526,6 +526,21 @@ was not determined to publication quality.  Do not substitute Planck,
 Pantheon, DESI, ALPINE/REBELS, or remembered literature constraints unless
 those numbers appear in this turn's non-synthetic tool results.
 
+For model-independent late-time reconstructions (Gaussian Process / GP
+reconstruction of H(z), E(z), Om diagnostics, or total equation-of-state),
+do not replace the requested non-parametric workflow with parametric
+posterior numbers.  If a dedicated GP reconstruction tool or a real
+SN+BAO table is unavailable, say so and provide a configuration/analysis
+plan only.  When discussing the Om diagnostic, use
+`Om(z) = (E(z)^2 - 1) / ((1+z)^3 - 1)` for a spatially flat reference;
+do not write ad-hoc formulas such as `(H0/H(z))^2 - ...`.
+For DESI BAO bin-level anomaly/outlier/tension questions (for example the
+LRG bin near `z_eff≈0.51`), do not infer an anomaly from dataset-registry
+metadata or likelihood-config availability.  Only state that a particular
+bin is high/low/tension/outlier when a current-turn tool returns bin-level
+residuals, pulls, or a GP comparison.  Otherwise say that the bin-level
+anomaly check was not assessed by the tools.
+
 ## ZERO-FABRICATION CONTRACT (non-negotiable)
 Every numeric value in your reply — redshift, log g, [Fe/H], E(B−V), A_V,
 mass, luminosity, age, T_eff, distance, parallax, proper motion, radial
@@ -4237,7 +4252,7 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         keys.append("desi_dr1_bao")
     if any(tok in prompt for tok in ("pantheon", "supernova", "sn ia", "sn")):
         keys.append("pantheon_plus")
-    if "des-sn" in prompt or "des sn" in prompt:
+    if any(tok in prompt for tok in ("des-sn", "des sn", "des-5yr", "des 5yr", "desy5")):
         keys.append("des_sn5yr")
     if "union3" in prompt or "unity" in prompt:
         keys.append("union3")
@@ -4254,6 +4269,18 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     return list(dict.fromkeys(keys))
 
 
+def _cosmology_supernova_sets_from_prompt(text: str) -> list[str]:
+    prompt = str(text or "").lower()
+    keys: list[str] = []
+    if any(tok in prompt for tok in ("pantheon", "supernova", "sn ia", "sn")):
+        keys.append("pantheon_plus")
+    if any(tok in prompt for tok in ("des-sn", "des sn", "des-5yr", "des 5yr", "desy5")):
+        keys.append("des_sn5yr")
+    if "union3" in prompt or "unity" in prompt:
+        keys.append("union3")
+    return list(dict.fromkeys(keys))
+
+
 def _cosmology_models_from_prompt(text: str) -> list[str]:
     prompt = str(text or "").lower()
     models: list[str] = []
@@ -4263,9 +4290,23 @@ def _cosmology_models_from_prompt(text: str) -> list[str]:
         models.append("wcdm")
     if "w0wa" in prompt or "cpl" in prompt:
         models.append("w0wa_cdm")
-    if not models and _is_cosmology_likelihood_workflow(text):
+    if not models and (
+        _is_cosmology_likelihood_workflow(text)
+        or _should_build_cosmology_robustness_matrix(text)
+    ):
         models = ["lcdm", "wcdm", "w0wa_cdm"]
     return list(dict.fromkeys(models))
+
+
+def _should_build_cosmology_robustness_matrix(text: str) -> bool:
+    prompt = str(text or "").lower()
+    sn_sets = _cosmology_supernova_sets_from_prompt(prompt)
+    robustness_tokens = (
+        "robust", "鲁棒", "consistency", "一致", "compare", "比较",
+        "discrepancy", "tension", "张力", "互相", "组合", "compilation",
+        "des-5yr", "desy5", "union3",
+    )
+    return len(sn_sets) >= 2 and any(tok in prompt for tok in robustness_tokens)
 
 
 def _cosmology_likelihood_build_calls_from_prompt(text: str) -> list[dict[str, Any]]:
@@ -4273,6 +4314,22 @@ def _cosmology_likelihood_build_calls_from_prompt(text: str) -> list[dict[str, A
     models = _cosmology_models_from_prompt(text)
     if not dataset_keys or not models:
         return []
+    if _should_build_cosmology_robustness_matrix(text):
+        sn_sets = _cosmology_supernova_sets_from_prompt(text)
+        return [
+            {
+                "id": f"auto_cosmo_matrix_{uuid.uuid4().hex}",
+                "name": "build_cosmology_robustness_matrix",
+                "input": {
+                    "model": model,
+                    "supernova_sets": sn_sets,
+                    "include_h0_prior": "sh0es" in str(text or "").lower()
+                    or "h0 prior" in str(text or "").lower()
+                    or "h₀ prior" in str(text or "").lower(),
+                },
+            }
+            for model in models
+        ]
     return [
         {
             "id": f"auto_cosmo_config_{uuid.uuid4().hex}",
@@ -4971,7 +5028,7 @@ async def _run_agent_loop(
                     "registry before summarizing dataset availability."
                 ),
             })
-        if cosmology_likelihood_config_pending and not tool_calls_in_turn:
+        if cosmology_likelihood_config_pending:
             text = ""
             tool_calls_in_turn = deepcopy(cosmology_likelihood_build_calls)
             forced_tool_call_override = True

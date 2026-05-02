@@ -39,3 +39,38 @@ def test_cosmology_likelihood_workflow_ignores_plain_literature_requests() -> No
         "帮我找几篇关于 BAO 重建算法的综述论文，先不用做模型约束。"
     )
 
+
+def test_multi_sn_comparison_routes_to_robustness_matrix() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_supernova_sets_from_prompt,
+    )
+
+    prompt = (
+        "用 Pantheon+、DES-5YR、Union3 与 DESI DR1 BAO 做模型无关 GP "
+        "重构，并比较 SN compilation 的 consistency。"
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "desi_dr1_bao",
+        "pantheon_plus",
+        "des_sn5yr",
+        "union3",
+    ]
+    assert _cosmology_supernova_sets_from_prompt(prompt) == [
+        "pantheon_plus",
+        "des_sn5yr",
+        "union3",
+    ]
+
+    calls = _cosmology_likelihood_build_calls_from_prompt(prompt)
+    assert [call["name"] for call in calls] == [
+        "build_cosmology_robustness_matrix",
+        "build_cosmology_robustness_matrix",
+        "build_cosmology_robustness_matrix",
+    ]
+    assert [call["input"]["model"] for call in calls] == ["lcdm", "wcdm", "w0wa_cdm"]
+    assert calls[0]["input"]["supernova_sets"] == ["pantheon_plus", "des_sn5yr", "union3"]
+    assert calls[0]["input"]["include_h0_prior"] is False
+
