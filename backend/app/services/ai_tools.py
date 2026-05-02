@@ -1153,6 +1153,10 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Whether to include +SH0ES variants. Default: true.",
                 },
+                "include_weak_lensing": {
+                    "type": "boolean",
+                    "description": "Whether to add weak-lensing robustness cells. Default: false unless the user asks for WL/cosmic shear.",
+                },
                 "sampler": {
                     "type": "string",
                     "description": "Sampler label for generated configs. Default: mcmc.",
@@ -1188,6 +1192,10 @@ TOOLS = [
                 "include_h0_prior": {
                     "type": "boolean",
                     "description": "Whether to include +SH0ES variants. Default: true.",
+                },
+                "include_weak_lensing": {
+                    "type": "boolean",
+                    "description": "Whether to add weak-lensing robustness cells. Default: false unless the user asks for WL/cosmic shear.",
                 },
                 "random_seed": {"type": "integer", "description": "Deterministic sample seed."},
                 "n_samples": {"type": "integer", "description": "Posterior sample count per runnable cell."},
@@ -7744,6 +7752,7 @@ def _exec_build_cosmology_robustness_matrix(inp: dict) -> dict:
             model=str(inp.get("model") or ""),
             supernova_sets=([str(key) for key in supernova_sets] if supernova_sets else None),
             include_h0_prior=bool(inp.get("include_h0_prior", True)),
+            include_weak_lensing=bool(inp.get("include_weak_lensing", False)),
             sampler=str(inp.get("sampler") or "mcmc"),
         )
     except Exception as exc:
@@ -7768,6 +7777,7 @@ def _exec_run_cosmology_robustness_matrix(inp: dict) -> dict:
             model=str(inp.get("model") or ""),
             supernova_sets=([str(key) for key in supernova_sets] if supernova_sets else None),
             include_h0_prior=bool(inp.get("include_h0_prior", True)),
+            include_weak_lensing=bool(inp.get("include_weak_lensing", False)),
             random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
             n_samples=int(inp.get("n_samples") or 4000),
         )

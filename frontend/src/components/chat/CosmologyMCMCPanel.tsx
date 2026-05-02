@@ -26,6 +26,8 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
   const usedCount = Array.isArray(result.datasets_used) ? result.datasets_used.length : undefined;
   const notRunCount = Array.isArray(result.datasets_not_run) ? result.datasets_not_run.length : undefined;
   const compressed = result.compressed_likelihood_preliminary === true;
+  const warnings = Array.isArray(result.warnings) ? result.warnings.filter((item): item is string => typeof item === "string") : [];
+  const unavailableReason = warnings[0] || String(result.__message_to_model__ || "");
 
   return (
     <div style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
@@ -59,7 +61,9 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
             marginBottom: 8,
           }}
         >
-          Posterior numbers are not citeable until ESS/R-hat diagnostics pass.
+          {parameterNames.length > 0
+            ? "Posterior numbers are not citeable until ESS/R-hat diagnostics pass."
+            : unavailableReason || "No executable compressed likelihood was available for this selection."}
         </div>
       )}
 

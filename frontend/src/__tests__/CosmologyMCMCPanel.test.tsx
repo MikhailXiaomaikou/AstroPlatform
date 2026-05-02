@@ -78,4 +78,23 @@ describe("CosmologyMCMCPanel", () => {
     expect(screen.getByText(/Preliminary compressed-Gaussian result/)).toBeInTheDocument();
     expect(screen.getByText(/1 selected dataset/)).toBeInTheDocument();
   });
+
+  it("shows no-executable-likelihood reason instead of convergence warning when no parameters exist", () => {
+    render(
+      <CosmologyMCMCPanel
+        result={{
+          sampler: "compressed_gaussian_analytic",
+          model: "lcdm",
+          publication_ready: false,
+          analysis_status: "NO_COMPRESSED_LIKELIHOOD",
+          warnings: ["No selected dataset has a registered compressed Gaussian likelihood."],
+          parameters: {},
+        }}
+      />,
+    );
+
+    expect(screen.getByText("not publication-ready")).toBeInTheDocument();
+    expect(screen.getByText(/No selected dataset has a registered compressed Gaussian likelihood/)).toBeInTheDocument();
+    expect(screen.queryByText(/ESS\/R-hat diagnostics pass/)).not.toBeInTheDocument();
+  });
 });

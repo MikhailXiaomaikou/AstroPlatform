@@ -192,6 +192,42 @@ def test_robustness_matrix_generates_bao_sn_cmb_h0_variants():
     assert all(row["requires_chain_run"] for row in matrix["matrix"])
 
 
+def test_executed_robustness_matrix_only_adds_weak_lensing_when_requested():
+    from app.services.cosmology_likelihoods import run_robustness_matrix
+
+    without_wl = run_robustness_matrix(
+        model="lcdm",
+        supernova_sets=["pantheon_plus"],
+        include_h0_prior=False,
+        include_weak_lensing=False,
+    )
+    with_wl = run_robustness_matrix(
+        model="lcdm",
+        supernova_sets=["pantheon_plus"],
+        include_h0_prior=False,
+        include_weak_lensing=True,
+    )
+
+    labels_without = {row["label"] for row in without_wl["matrix"]}
+    labels_with = {row["label"] for row in with_wl["matrix"]}
+
+    assert "BAO + CMB + weak lensing" not in labels_without
+    assert "BAO + CMB + weak lensing" in labels_with
+
+
+def test_compressed_runner_reports_no_executable_likelihood_reason():
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    result = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["pantheon_plus", "des_sn5yr", "union3"],
+    )
+
+    assert result["publication_ready"] is False
+    assert result["analysis_status"] == "NO_COMPRESSED_LIKELIHOOD"
+    assert "No selected dataset has a registered compressed Gaussian likelihood" in result["warnings"][0]
+
+
 @pytest.mark.asyncio
 async def test_ai_tool_wrappers_expose_registry_and_config_guardrails():
     from app.services.ai_tools import execute_tool

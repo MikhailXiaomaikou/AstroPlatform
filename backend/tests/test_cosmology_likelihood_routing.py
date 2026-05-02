@@ -65,12 +65,8 @@ def test_multi_sn_comparison_routes_to_robustness_matrix() -> None:
     ]
 
     calls = _cosmology_likelihood_build_calls_from_prompt(prompt)
-    assert [call["name"] for call in calls] == [
-        "build_cosmology_robustness_matrix",
-        "build_cosmology_robustness_matrix",
-        "build_cosmology_robustness_matrix",
-    ]
-    assert [call["input"]["model"] for call in calls] == ["lcdm", "wcdm", "w0wa_cdm"]
+    assert [call["name"] for call in calls] == ["build_cosmology_robustness_matrix"]
+    assert [call["input"]["model"] for call in calls] == ["lcdm"]
     assert calls[0]["input"]["supernova_sets"] == ["pantheon_plus", "des_sn5yr", "union3"]
     assert calls[0]["input"]["include_h0_prior"] is False
 
@@ -158,3 +154,104 @@ def test_act_dr6_weak_lensing_prompt_routes_to_act_era_bao_and_wl_surveys() -> N
         "kids1000_wl",
         "hsc_y1_cosmic_shear",
     ]
+
+
+def test_cmb_only_prompt_respects_explicit_dataset_exclusions() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_likelihood_run_calls_from_prompt,
+    )
+
+    prompt = (
+        "我在做 CMB-only consistency 检验。请基于 Planck compressed prior "
+        "与 ACT DR6 CMB lensing 的可用资料，在 flat ΛCDM 下只比较 "
+        "H0、Ωm、σ8、S8；不要加入 BAO、SN 或 weak lensing。"
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+    assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+    assert _cosmology_likelihood_run_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+
+
+def test_supernova_only_prompt_does_not_route_to_bao_robustness_matrix() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_likelihood_run_calls_from_prompt,
+        _should_build_cosmology_robustness_matrix,
+    )
+
+    prompt = (
+        "我在做 Type Ia supernova compilation 的稳健性检查。请基于 "
+        "Pantheon+、DES-SN 5YR、Union3 的可用资料，在 flat ΛCDM 下判断 "
+        "本轮是否能得到 posterior；如果只能生成外部 likelihood 配置，"
+        "请不要给 H0/Ωm/S8 数值。"
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "pantheon_plus",
+        "des_sn5yr",
+        "union3",
+    ]
+    assert _should_build_cosmology_robustness_matrix(prompt) is False
+    assert [call["name"] for call in _cosmology_likelihood_build_calls_from_prompt(prompt)] == [
+        "build_cosmology_likelihood"
+    ]
+    assert [call["name"] for call in _cosmology_likelihood_run_calls_from_prompt(prompt)] == [
+        "run_cosmology_likelihood_chain"
+    ]
+
+
+def test_s8_consistency_defaults_to_lcdm_only_without_dark_energy_request() -> None:
+    from app.api.chat import _cosmology_models_from_prompt
+
+    prompt = (
+        "我在做 galaxy weak-lensing surveys 的 S8 consistency 检验。请基于 "
+        "KiDS-1000、DES Y3 3x2pt、HSC Y1 与 Planck compressed prior 的可用资料，"
+        "只用本轮工具结果比较 S8 posterior。"
+    )
+
+    assert _cosmology_models_from_prompt(prompt) == ["lcdm"]
+
+
+def test_pre_desi_bao_prompt_uses_sdss_not_desi() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    prompt = (
+        "我在做 pre-DESI BAO 与 CMB 的一致性测试。请基于 "
+        "SDSS/BOSS/eBOSS/6dF BAO compilation 和 Planck compressed prior，"
+        "在 flat ΛCDM 下判断是否能得到 posterior。"
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "sdss_6df_bao",
+        "planck2018_compressed",
+    ]
+
+
+def test_desi_bin_outlier_prompt_routes_to_cosmology_registry_not_python() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
+
+    prompt = (
+        "我在做 DESI DR1 BAO 分红移 bin 的稳健性检查。请基于 DESI DR1 BAO "
+        "可用资料判断是否能评估某个 redshift bin 的 pull/outlier；"
+        "如果没有 bin-level residual 工具，请不要给异常显著性。"
+    )
+
+    assert _is_cosmology_likelihood_workflow(prompt)
+    assert _cosmology_dataset_keys_from_prompt(prompt) == ["desi_dr1_bao"]
+    assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["name"] == "build_cosmology_likelihood"

@@ -663,6 +663,7 @@ def build_robustness_matrix(
     model: str,
     supernova_sets: list[str] | None = None,
     include_h0_prior: bool = True,
+    include_weak_lensing: bool = False,
     sampler: str = "mcmc",
 ) -> dict[str, Any]:
     model_key = _validate_model(model)
@@ -943,6 +944,7 @@ def run_robustness_matrix(
     model: str,
     supernova_sets: list[str] | None = None,
     include_h0_prior: bool = True,
+    include_weak_lensing: bool = False,
     random_seed: int | None = None,
     n_samples: int = 4000,
 ) -> dict[str, Any]:
@@ -951,14 +953,18 @@ def run_robustness_matrix(
     combos: list[tuple[str, list[str]]] = [
         ("BAO only", ["desi_dr1_bao"]),
         ("BAO + CMB", ["desi_dr1_bao", "planck2018_compressed"]),
-        ("BAO + CMB + weak lensing", [
-            "desi_dr1_bao",
-            "planck2018_compressed",
-            "kids1000_wl",
-            "des_y3_3x2pt",
-            "hsc_y1_cosmic_shear",
-        ]),
     ]
+    if include_weak_lensing:
+        combos.append((
+            "BAO + CMB + weak lensing",
+            [
+                "desi_dr1_bao",
+                "planck2018_compressed",
+                "kids1000_wl",
+                "des_y3_3x2pt",
+                "hsc_y1_cosmic_shear",
+            ],
+        ))
     for sn_key in sn_keys:
         label = get_cosmology_dataset(sn_key).display_name
         combos.append((f"BAO + {label}", ["desi_dr1_bao", sn_key]))
@@ -1007,6 +1013,7 @@ def run_robustness_matrix(
         "model": model_key,
         "matrix_size": len(matrix),
         "ready_cells": len(ready_cells),
+        "include_weak_lensing": bool(include_weak_lensing),
         "matrix": matrix,
         "warnings": [
             "Robustness matrix uses compressed Gaussian summaries where available; config-only cells are not numerical evidence.",
@@ -1028,7 +1035,7 @@ def _compressed_runner_unavailable(
     return {
         "success": True,
         "__tool_status__": "PARTIAL",
-        "analysis_status": "CONFIG_READY",
+        "analysis_status": "NO_COMPRESSED_LIKELIHOOD",
         "publication_ready": False,
         "__do_not_claim__": True,
         "model": model_key,

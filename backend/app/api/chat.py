@@ -4244,6 +4244,7 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "dark energy", "暗能量", "lcdm", "λcdm", "wcdm", "w0wa",
         "cpl", "omega_m", "ωm", "Ωm", "h0", "h₀", "posterior", "后验",
         "likelihood", "协方差", "covariance", "robustness",
+        "pull", "outlier", "residual", "bin-level", "分红移",
     )
     planning_tokens = (
         "available", "可用", "dataset", "数据集", "prior", "引用",
@@ -4257,13 +4258,85 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
     )
 
 
+def _cosmology_prompt_forbids_family(text: str, aliases: tuple[str, ...]) -> bool:
+    """Return True when the prompt explicitly excludes a probe family.
+
+    This is intentionally conservative and local: it only looks for probe
+    aliases inside a short negation span, so ordinary phrases such as
+    "config-only/no posterior" do not accidentally ban a dataset family.
+    """
+    prompt = str(text or "").lower()
+    negators = (
+        "不要加入", "不要使用", "不要引入", "不加入", "不使用", "不引入",
+        "别加入", "别使用", "排除", "without", "exclude",
+    )
+    for negator in negators:
+        start = 0
+        while True:
+            index = prompt.find(negator, start)
+            if index < 0:
+                break
+            window = prompt[index : index + 96]
+            if any(alias in window for alias in aliases):
+                return True
+            start = index + len(negator)
+    return False
+
+
+def _cosmology_forbidden_probe_families(text: str) -> set[str]:
+    return {
+        family
+        for family, aliases in {
+            "bao": ("bao", "baryon acoustic", "desi", "sdss", "boss", "eboss", "6df"),
+            "sn": ("sn", "sn ia", "supernova", "pantheon", "des-sn", "union3"),
+            "cmb": ("cmb", "planck", "act dr6", "act lens"),
+            "wl": ("weak lensing", "weak-lensing", "cosmic shear", "kids", "des y3", "hsc"),
+            "h0": ("sh0es", "h0 prior", "h₀ prior"),
+            "hz": ("chronometer", "h(z)", "cosmic chronometer"),
+        }.items()
+        if _cosmology_prompt_forbids_family(text, aliases)
+    }
+
+
+def _cosmology_probe_family_for_dataset(key: str) -> str:
+    if key in {"desi_dr1_bao", "sdss_6df_bao"}:
+        return "bao"
+    if key in {"pantheon_plus", "des_sn5yr", "union3"}:
+        return "sn"
+    if key in {"planck2018_compressed", "act_dr6_lensing"}:
+        return "cmb"
+    if key in {"kids1000_wl", "des_y3_3x2pt", "hsc_y1_cosmic_shear"}:
+        return "wl"
+    if key == "shoes_h0_riess22":
+        return "h0"
+    if key == "cosmic_chronometers":
+        return "hz"
+    return "other"
+
+
+def _cosmology_prompt_mentions_bao(text: str) -> bool:
+    prompt = str(text or "").lower()
+    return any(tok in prompt for tok in ("bao", "baryon acoustic", "desi", "sdss", "6df", "6dfgs", "boss", "eboss"))
+
+
+def _cosmology_prompt_mentions_weak_lensing(text: str) -> bool:
+    prompt = str(text or "").lower()
+    return any(tok in prompt for tok in (
+        "weak lensing", "weak-lensing", "weak-lensing survey",
+        "weak lensing survey", "galaxy lensing", "cosmic shear",
+        "kids", "kilo-degree", "des y3", "des-y3", "hsc",
+    ))
+
+
 def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     prompt = str(text or "").lower()
+    forbidden = _cosmology_forbidden_probe_families(prompt)
     keys: list[str] = []
-    if "desi" in prompt:
+    pre_desi_bao = any(tok in prompt for tok in ("pre-desi", "pre desi", "non-desi", "non desi", "pre-desi bao"))
+    if "desi" in prompt and not pre_desi_bao:
         keys.append("desi_dr1_bao")
     elif any(tok in prompt for tok in ("bao", "baryon acoustic")):
-        if any(tok in prompt for tok in ("act dr6", "act lens", "sdss", "6df", "6dfgs", "eboss", "boss")):
+        if pre_desi_bao or any(tok in prompt for tok in ("act dr6", "act lens", "sdss", "6df", "6dfgs", "eboss", "boss")):
             keys.append("sdss_6df_bao")
         else:
             keys.append("desi_dr1_bao")
@@ -4292,7 +4365,11 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         keys.append("shoes_h0_riess22")
     if not keys and _is_cosmology_likelihood_workflow(text):
         keys = ["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"]
-    return list(dict.fromkeys(keys))
+    return [
+        key
+        for key in dict.fromkeys(keys)
+        if _cosmology_probe_family_for_dataset(key) not in forbidden
+    ]
 
 
 def _cosmology_supernova_sets_from_prompt(text: str) -> list[str]:
@@ -4340,13 +4417,21 @@ def _cosmology_models_from_prompt(text: str) -> list[str]:
         _is_cosmology_likelihood_workflow(text)
         or _should_build_cosmology_robustness_matrix(text)
     ):
-        models = ["lcdm", "wcdm", "w0wa_cdm"]
+        if any(tok in prompt for tok in (
+            "dark energy", "暗能量", "wcdm", "w0wa", "cpl",
+            "模型比较", "model comparison", "compare model",
+        )):
+            models = ["lcdm", "wcdm", "w0wa_cdm"]
+        else:
+            models = ["lcdm"]
     return list(dict.fromkeys(models))
 
 
 def _should_build_cosmology_robustness_matrix(text: str) -> bool:
     prompt = str(text or "").lower()
     sn_sets = _cosmology_supernova_sets_from_prompt(prompt)
+    if not _cosmology_prompt_mentions_bao(prompt):
+        return False
     robustness_tokens = (
         "robust", "鲁棒", "consistency", "一致", "compare", "比较",
         "discrepancy", "tension", "张力", "互相", "组合", "compilation",
@@ -4369,6 +4454,7 @@ def _cosmology_likelihood_build_calls_from_prompt(text: str) -> list[dict[str, A
                 "input": {
                     "model": model,
                     "supernova_sets": sn_sets,
+                    "include_weak_lensing": _cosmology_prompt_mentions_weak_lensing(text),
                     "include_h0_prior": "sh0es" in str(text or "").lower()
                     or "h0 prior" in str(text or "").lower()
                     or "h₀ prior" in str(text or "").lower(),
@@ -4405,6 +4491,7 @@ def _cosmology_likelihood_run_calls_from_prompt(text: str) -> list[dict[str, Any
                 "input": {
                     "model": model,
                     "supernova_sets": sn_sets,
+                    "include_weak_lensing": _cosmology_prompt_mentions_weak_lensing(text),
                     "include_h0_prior": "sh0es" in str(text or "").lower()
                     or "h0 prior" in str(text or "").lower()
                     or "h₀ prior" in str(text or "").lower(),
