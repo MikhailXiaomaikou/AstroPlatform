@@ -4358,7 +4358,8 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "des y3", "hsc", "galaxy lensing", "trgb", "freedman",
         "h0licow", "time-delay", "time delay", "strong-lens",
         "strong lens", "megamaser", "cosmic-chronometer", "h(z)",
-        "expansion-history", "expansion history",
+        "expansion-history", "expansion history", "observational-cosmology",
+        "observational cosmology", "cosmology probes",
     )
     model_tokens = (
         "dark energy", "暗能量", "lcdm", "λcdm", "wcdm", "w0wa",
@@ -4368,7 +4369,7 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "s8", "sigma8", "σ8", "tension", "consistency",
         "cross-check", "cross check", "workflow",
         "constraint", "constraints", "compressed product",
-        "compressed products",
+        "compressed products", "chain", "chains",
     )
     planning_tokens = (
         "available", "可用", "dataset", "数据集", "prior", "引用",
@@ -4453,7 +4454,7 @@ def _cosmology_probe_family_for_dataset(key: str) -> str:
         return "bao"
     if key in {"pantheon_plus", "des_sn5yr", "union3"}:
         return "sn"
-    if key in {"planck2018_compressed", "act_dr6_lensing"}:
+    if key in {"planck2018_compressed", "act_dr6_lensing", "spt3g_cmb"}:
         return "cmb"
     if key in {"kids1000_wl", "des_y3_3x2pt", "hsc_y1_cosmic_shear"}:
         return "wl"
@@ -4529,6 +4530,8 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         or "cmb-lensing" in prompt
     ):
         keys.append("act_dr6_lensing")
+    if _cosmology_prompt_mentions_spt(prompt):
+        keys.append("spt3g_cmb")
     if any(tok in prompt for tok in ("kids", "kilo-degree")):
         keys.append("kids1000_wl")
     if any(tok in prompt for tok in ("des y3", "des-y3", "dark energy survey", "galaxy weak lensing")):
@@ -4572,7 +4575,9 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         and ("h0 prior" in prompt or "h₀ prior" in prompt)
     ):
         keys.append("shoes_h0_riess22")
-    if not keys and _is_cosmology_likelihood_workflow(text):
+    if not keys and _cosmology_likelihood_executable_only_prompt(prompt):
+        keys = ["planck2018_compressed", "act_dr6_lensing", "kids1000_wl"]
+    elif not keys and _is_cosmology_likelihood_workflow(text):
         keys = ["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"]
     return [
         key
@@ -4727,6 +4732,15 @@ def _cosmology_likelihood_run_calls_from_prompt(text: str) -> list[dict[str, Any
         }
         for model in run_models
     ]
+
+
+def _cosmology_likelihood_executable_only_prompt(text: str) -> bool:
+    prompt = str(text or "").lower()
+    return (
+        ("registry" in prompt or "registered" in prompt)
+        and any(tok in prompt for tok in ("executable chain", "executable chains", "可执行"))
+        and ("observational-cosmology" in prompt or "observational cosmology" in prompt or "probes" in prompt)
+    )
 
 
 def _should_suppress_line_measurement_synthetic_python(
