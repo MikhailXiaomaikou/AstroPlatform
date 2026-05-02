@@ -733,7 +733,7 @@ def _build_valid_bibcode_pool(tool_results: Any) -> set[str]:
 def _build_valid_arxiv_pool(tool_results: Any) -> set[str]:
     pool: set[str] = set()
     for node in _iter_dict_nodes(tool_results):
-        for key in ("arxiv_id", "bibcode", "article", "source_url", "reference_url"):
+        for key in ("arxiv", "arxiv_id", "bibcode", "article", "source_url", "reference_url"):
             value = node.get(key)
             if not value:
                 continue
@@ -778,10 +778,15 @@ def _build_author_year_support(tool_results: Any) -> set[tuple[str, str]]:
     for node in _iter_dict_nodes(tool_results):
         year = str(node.get("year") or "").strip()[:4]
         authors = node.get("authors") or node.get("author")
-        if not year or not isinstance(authors, list) or not authors:
+        label = node.get("label")
+        if not year:
             continue
-        for author in authors:
-            for key in _author_support_keys(str(author)):
+        if isinstance(authors, list) and authors:
+            for author in authors:
+                for key in _author_support_keys(str(author)):
+                    support.add((key, year))
+        if isinstance(label, str) and label.strip():
+            for key in _author_support_keys(label):
                 support.add((key, year))
     return support
 

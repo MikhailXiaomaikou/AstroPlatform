@@ -94,6 +94,11 @@ def test_focus_cosmology_keeps_core_cosmology_tools(monkeypatch) -> None:
 
     must_survive = [
         {"name": "fit_cosmology_mcmc"},
+        {"name": "run_cobaya_cosmology"},
+        {"name": "get_cosmology_run_status"},
+        {"name": "list_cosmology_datasets"},
+        {"name": "build_cosmology_likelihood"},
+        {"name": "build_cosmology_robustness_matrix"},
         {"name": "compare_luminosity_distances"},
         {"name": "fit_line_lfr"},
         {"name": "demagnify_sample"},
@@ -139,6 +144,8 @@ def test_focus_cosmology_mixed_list_only_keeps_allowlisted(monkeypatch) -> None:
 
     mixed = [
         {"name": "fit_cosmology_mcmc"},   # keep
+        {"name": "list_cosmology_datasets"},  # keep
+        {"name": "build_cosmology_likelihood"},  # keep
         {"name": "fit_isochrone"},         # drop
         {"name": "fit_line_lfr"},          # keep
         {"name": "equivalent_width"},      # drop
@@ -146,7 +153,13 @@ def test_focus_cosmology_mixed_list_only_keeps_allowlisted(monkeypatch) -> None:
     ]
     out = chat._filter_tools_by_research_focus(mixed)
     names = [t["name"] for t in out]
-    assert names == ["fit_cosmology_mcmc", "fit_line_lfr", "run_python"]
+    assert names == [
+        "fit_cosmology_mcmc",
+        "list_cosmology_datasets",
+        "build_cosmology_likelihood",
+        "fit_line_lfr",
+        "run_python",
+    ]
 
 
 def test_focus_cosmology_preserves_tool_dict_intact(monkeypatch) -> None:

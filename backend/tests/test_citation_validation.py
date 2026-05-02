@@ -468,6 +468,39 @@ def test_non_paper_tool_numeric_claim_does_not_need_paper_sentence_citation():
     assert provenance_citation_violations("H0 = 73.8 km/s/Mpc.", tool_results) == []
 
 
+def test_cosmology_registry_arxiv_and_label_citations_are_supported():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {
+            "success": True,
+            "datasets": [{
+                "display_name": "DESI DR1 BAO",
+                "citations": [{
+                    "label": "DESI Collaboration 2024 DR1 BAO cosmology",
+                    "year": 2024,
+                    "arxiv": "2404.03002",
+                }],
+            }, {
+                "display_name": "Pantheon+",
+                "citations": [{
+                    "label": "Scolnic et al. Pantheon+ sample",
+                    "year": 2022,
+                    "arxiv": "2112.03863",
+                }],
+            }],
+        },
+    }]
+
+    reply = (
+        "DESI DR1 BAO is cited as DESI Collaboration (2024; arXiv:2404.03002). "
+        "Pantheon+ is cited as Scolnic et al. (2022; arXiv:2112.03863)."
+    )
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
 def test_supporting_bibcode_fields_enter_valid_pool():
     from app.services.claim_validator import provenance_citation_violations
 

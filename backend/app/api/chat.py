@@ -60,6 +60,11 @@ _COSMOLOGY_FOCUS_TOOL_ALLOWLIST: frozenset[str] = frozenset({
     # ── Cosmology core ────────────────────────────────────────
     "compare_luminosity_distances",
     "fit_cosmology_mcmc",
+    "run_cobaya_cosmology",
+    "get_cosmology_run_status",
+    "list_cosmology_datasets",
+    "build_cosmology_likelihood",
+    "build_cosmology_robustness_matrix",
     # ── 高 z 星系 / [CII] LFR (ALPINE / REBELS) ───────────────
     "fit_line_lfr",
     "demagnify_sample",
@@ -4201,6 +4206,87 @@ def _inline_statistics_tool_call_from_prompt(text: str) -> dict[str, Any] | None
     }
 
 
+def _is_cosmology_likelihood_workflow(text: str) -> bool:
+    prompt = str(text or "").lower()
+    dataset_tokens = (
+        "bao", "baryon acoustic", "sn ia", "supernova", "pantheon",
+        "des-sn", "union3", "cmb", "planck", "act dr6", "sh0es",
+        "cosmic chronometer",
+    )
+    model_tokens = (
+        "dark energy", "暗能量", "lcdm", "λcdm", "wcdm", "w0wa",
+        "cpl", "omega_m", "ωm", "Ωm", "h0", "h₀", "posterior", "后验",
+        "likelihood", "协方差", "covariance", "robustness",
+    )
+    planning_tokens = (
+        "available", "可用", "dataset", "数据集", "prior", "引用",
+        "compare", "比较", "constraint", "约束", "model", "模型",
+        "chain", "配置", "cobaya", "cosmosis",
+    )
+    return (
+        any(tok in prompt for tok in dataset_tokens)
+        and any(tok in prompt for tok in model_tokens)
+        and any(tok in prompt for tok in planning_tokens)
+    )
+
+
+def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
+    prompt = str(text or "").lower()
+    keys: list[str] = []
+    if any(tok in prompt for tok in ("bao", "baryon acoustic", "desi")):
+        keys.append("desi_dr1_bao")
+    if any(tok in prompt for tok in ("pantheon", "supernova", "sn ia", "sn")):
+        keys.append("pantheon_plus")
+    if "des-sn" in prompt or "des sn" in prompt:
+        keys.append("des_sn5yr")
+    if "union3" in prompt or "unity" in prompt:
+        keys.append("union3")
+    if any(tok in prompt for tok in ("cmb", "planck")):
+        keys.append("planck2018_compressed")
+    if "act dr6" in prompt or "act lens" in prompt:
+        keys.append("act_dr6_lensing")
+    if "chronometer" in prompt or "cc" in prompt:
+        keys.append("cosmic_chronometers")
+    if "sh0es" in prompt or "h0 prior" in prompt or "h₀ prior" in prompt:
+        keys.append("shoes_h0_prior")
+    if not keys and _is_cosmology_likelihood_workflow(text):
+        keys = ["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"]
+    return list(dict.fromkeys(keys))
+
+
+def _cosmology_models_from_prompt(text: str) -> list[str]:
+    prompt = str(text or "").lower()
+    models: list[str] = []
+    if "lcdm" in prompt or "λcdm" in prompt:
+        models.append("lcdm")
+    if "wcdm" in prompt:
+        models.append("wcdm")
+    if "w0wa" in prompt or "cpl" in prompt:
+        models.append("w0wa_cdm")
+    if not models and _is_cosmology_likelihood_workflow(text):
+        models = ["lcdm", "wcdm", "w0wa_cdm"]
+    return list(dict.fromkeys(models))
+
+
+def _cosmology_likelihood_build_calls_from_prompt(text: str) -> list[dict[str, Any]]:
+    dataset_keys = _cosmology_dataset_keys_from_prompt(text)
+    models = _cosmology_models_from_prompt(text)
+    if not dataset_keys or not models:
+        return []
+    return [
+        {
+            "id": f"auto_cosmo_config_{uuid.uuid4().hex}",
+            "name": "build_cosmology_likelihood",
+            "input": {
+                "model": model,
+                "dataset_keys": dataset_keys,
+                "output_format": "both",
+            },
+        }
+        for model in models
+    ]
+
+
 def _should_suppress_line_measurement_synthetic_python(
     tool_call: dict,
     *,
@@ -4397,6 +4483,8 @@ async def _run_agent_loop(
     user_requested_synthetic_demo = _user_requested_synthetic_demo(messages)
     fit_ready_literature_cache_keys: list[str] = []
     inline_statistics_call = _inline_statistics_tool_call_from_prompt(latest_user_text)
+    cosmology_likelihood_workflow = _is_cosmology_likelihood_workflow(latest_user_text)
+    cosmology_likelihood_build_calls = _cosmology_likelihood_build_calls_from_prompt(latest_user_text)
 
     hit_iteration_cap = False
     hit_deadline = False
@@ -4461,6 +4549,24 @@ async def _run_agent_loop(
             for tr in all_tool_results
         )
         inline_statistics_pending = inline_statistics_call is not None and not inline_statistics_done
+        cosmology_registry_done = any(
+            tr.get("tool") == "list_cosmology_datasets"
+            for tr in all_tool_results
+        )
+        cosmology_likelihood_config_done = any(
+            tr.get("tool") in {
+                "build_cosmology_likelihood",
+                "build_cosmology_robustness_matrix",
+            }
+            for tr in all_tool_results
+        )
+        cosmology_registry_pending = cosmology_likelihood_workflow and not cosmology_registry_done
+        cosmology_likelihood_config_pending = (
+            cosmology_likelihood_workflow
+            and cosmology_registry_done
+            and not cosmology_likelihood_config_done
+            and bool(cosmology_likelihood_build_calls)
+        )
         attempted_table_ids = _table_extraction_arxiv_ids(all_tool_results)
         ranked_arxiv_candidates = _ranked_literature_arxiv_candidates(all_tool_results)
         if line_relation_workflow:
@@ -4576,6 +4682,21 @@ async def _run_agent_loop(
             ]
         elif inline_statistics_call is not None and inline_statistics_done:
             visible_tools = []
+        elif cosmology_registry_pending:
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") == "list_cosmology_datasets"
+            ]
+        elif cosmology_likelihood_config_pending:
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") in {
+                    "build_cosmology_likelihood",
+                    "build_cosmology_robustness_matrix",
+                }
+            ]
+        elif cosmology_likelihood_workflow and cosmology_likelihood_config_done:
+            visible_tools = []
 
         # Append a runtime note to the system message when any tools are
         # disabled this iteration, so the model understands why its previous
@@ -4669,6 +4790,36 @@ async def _run_agent_loop(
                 + "the regression result for the user's inline arrays. Stop "
                 + "calling tools and summarize only the tool-provided slope, "
                 + "intercept, method, and residual diagnostics.]"
+            )
+        elif cosmology_registry_pending:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: the user is asking about observational "
+                + "cosmology datasets/likelihoods/model comparison. The only "
+                + "available tool this iteration is list_cosmology_datasets. "
+                + "Call it before literature search or prose so the answer is "
+                + "grounded in the curated registry with versions, covariance, "
+                + "units, applicability, source URLs, and citations.]"
+            )
+        elif cosmology_likelihood_config_pending:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: the curated cosmology dataset registry has "
+                + "already returned. The only available tools this iteration "
+                + "are build_cosmology_likelihood and "
+                + "build_cosmology_robustness_matrix. Build guarded configs "
+                + "for the requested model/dataset combinations. These "
+                + "configs are not posterior chains; do not quote posterior "
+                + "constraints unless a later chain returns publication_ready=true.]"
+            )
+        elif cosmology_likelihood_workflow and cosmology_likelihood_config_done:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: cosmology registry/config tools already "
+                + "returned for this turn. Stop calling tools. Summarize the "
+                + "registered datasets, which likelihood configs can be "
+                + "generated, and which posterior/chain claims remain "
+                + "unsupported.]"
             )
 
         if line_relation_workflow and has_publication_ready_line_fit:
@@ -4787,17 +4938,48 @@ async def _run_agent_loop(
 
         text = str(response.get("content", "") or "")
         tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
+        forced_tool_call_override = False
         if inline_statistics_pending and (
             not tool_calls_in_turn
             or any(tc.get("name") != "astro_statistics_toolbox" for tc in tool_calls_in_turn)
         ):
             text = ""
             tool_calls_in_turn = [deepcopy(inline_statistics_call)]
+            forced_tool_call_override = True
             await _emit({
                 "type": "status",
                 "message": (
                     "Running the deterministic statistics toolbox on the "
                     "inline x/y arrays before summarizing the regression."
+                ),
+            })
+        if cosmology_registry_pending and (
+            not tool_calls_in_turn
+            or any(tc.get("name") != "list_cosmology_datasets" for tc in tool_calls_in_turn)
+        ):
+            text = ""
+            tool_calls_in_turn = [{
+                "id": f"auto_cosmo_registry_{uuid.uuid4().hex}",
+                "name": "list_cosmology_datasets",
+                "input": {},
+            }]
+            forced_tool_call_override = True
+            await _emit({
+                "type": "status",
+                "message": (
+                    "Listing the curated observational-cosmology dataset "
+                    "registry before summarizing dataset availability."
+                ),
+            })
+        if cosmology_likelihood_config_pending and not tool_calls_in_turn:
+            text = ""
+            tool_calls_in_turn = deepcopy(cosmology_likelihood_build_calls)
+            forced_tool_call_override = True
+            await _emit({
+                "type": "status",
+                "message": (
+                    "Building guarded cosmology likelihood configs for the "
+                    "requested model/dataset combinations."
                 ),
             })
         if force_table_extraction and not tool_calls_in_turn and arxiv_candidates:
@@ -4815,6 +4997,7 @@ async def _run_agent_loop(
                 "name": "extract_literature_tables",
                 "input": {"arxiv_id": forced_arxiv},
             }]
+            forced_tool_call_override = True
             await _emit({
                 "type": "status",
                 "message": (
@@ -4854,6 +5037,7 @@ async def _run_agent_loop(
                 "name": "fit_line_lfr",
                 "input": fit_input,
             }]
+            forced_tool_call_override = True
             await _emit({
                 "type": "status",
                 "message": (
@@ -5196,7 +5380,10 @@ async def _run_agent_loop(
                 })
         working_messages.append({"role": "user", "content": tool_result_blocks})
         # Claude uses "tool_use", OpenAI uses "tool_calls" as stop reason
-        if response.get("stop_reason") not in ("tool_use", "tool_calls"):
+        if (
+            not forced_tool_call_override
+            and response.get("stop_reason") not in ("tool_use", "tool_calls")
+        ):
             last_stop_reason = response.get("stop_reason")
             break
 
