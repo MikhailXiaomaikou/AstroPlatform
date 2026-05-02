@@ -528,6 +528,10 @@ runner result is only a preliminary summary likelihood, not a full external
 ACT/Planck/BAO/SN/DES/KiDS/HSC likelihood.  Quote numbers only for
 `datasets_used`; explicitly say which `datasets_not_run` still require
 external Cobaya/CosmoSIS likelihoods.
+When citing registry datasets, copy the registry citation label and year
+exactly as returned by the tool. Do not shorten, update, or normalize
+collaboration citations from memory (for example, never turn a registry
+entry's `eBOSS Collaboration ... (2020)` into `Collaboration 2021`).
 
 Only quote H0/Om0/w0/wa/sigma8/posterior numbers when the MCMC tool result
 or compressed likelihood runner has `publication_ready=true`.  If
