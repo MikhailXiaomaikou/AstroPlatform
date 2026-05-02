@@ -3,6 +3,8 @@
 AI-native astronomy research platform for archive discovery, analysis,
 statistical inference, provenance tracking, collaboration, and paper export.
 
+Recent project changes are tracked in [CHANGELOG.md](./CHANGELOG.md).
+
 Paper drafts generated from AI sessions are private to the owner account by
 default. A draft becomes publicly readable only after the owner explicitly uses
 **Publish Draft**, which creates a revocable `/papers/public/:token` link.
