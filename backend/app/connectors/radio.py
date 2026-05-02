@@ -470,15 +470,27 @@ class RadioAnalysis:
 
     @staticmethod
     def radio_luminosity(flux_mJy: float, redshift: float, freq_MHz: float = 1400,
-                         spectral_index: float = -0.7) -> dict:
+                         spectral_index: float = -0.7,
+                         cosmology: str | None = None) -> dict:
         """Compute radio luminosity from flux density and redshift.
 
-        Uses standard cosmology (H0=70, Om=0.3, Ol=0.7).
+        Cosmology selection (changed from hardcoded H0=70, Om0=0.3 in
+        2026-05-02 hardcoded-fix sweep):
+          - cosmology=None (default) → platform default preset (Planck18:
+            H0=67.36, Om0=0.3153). Matches what fit_line_lfr / cosmology_mcmc
+            use, so radio luminosity stays comparable cross-tool.
+          - cosmology="planck18_bao" / "riess22_shoes" / "freedman21_trgb"
+            etc. → PART AA presets registered in app.services.cosmology.
+          - The previous WMAP5/7-era default (H0=70, Om0=0.3) produced
+            ~4% larger luminosity_distance at z=2 than Planck18; that was
+            a silent inconsistency between this tool and every other
+            cosmology-aware tool on the platform.
         """
-        from astropy.cosmology import FlatLambdaCDM
         import astropy.units as u
+        from app.services.cosmology import build_cosmology_from_preset, cosmology_manifest
 
-        cosmo = FlatLambdaCDM(H0=70, Om0=0.3)
+        cosmo = build_cosmology_from_preset(cosmology)
+        cosmo_manifest = cosmology_manifest(cosmology)
         dl = cosmo.luminosity_distance(redshift).to(u.cm).value
 
         # Convert mJy to erg/s/cm^2/Hz
@@ -516,7 +528,13 @@ class RadioAnalysis:
             "spectral_index_convention": "S_nu ∝ nu^alpha",
             "k_correction_factor": float(k_corr),
             "k_correction_applied": "divide_by_(1+z)^(1+alpha)",
-            "cosmology": {"H0": 70.0, "Om0": 0.3, "source": "legacy_radio_tool_default"},
+            "cosmology": {
+                "name": cosmo_manifest.get("name") or "planck18",
+                "H0": cosmo_manifest.get("H0_km_s_Mpc"),
+                "Om0": cosmo_manifest.get("Om0"),
+                "bibcode": cosmo_manifest.get("bibcode"),
+                "source": "platform_preset_via_build_cosmology_from_preset",
+            },
         }
 
     @staticmethod
