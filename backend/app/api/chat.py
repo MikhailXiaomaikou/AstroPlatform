@@ -4361,7 +4361,7 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "likelihood", "协方差", "covariance", "robustness",
         "pull", "outlier", "residual", "bin-level", "分红移",
         "s8", "sigma8", "σ8", "tension", "consistency",
-        "cross-check", "cross check",
+        "cross-check", "cross check", "workflow",
         "constraint", "constraints", "compressed product",
         "compressed products",
     )
@@ -4592,6 +4592,9 @@ def _cosmology_models_from_prompt(text: str) -> list[str]:
 def _should_build_cosmology_robustness_matrix(text: str) -> bool:
     prompt = str(text or "").lower()
     sn_sets = _cosmology_supernova_sets_from_prompt(prompt)
+    forbidden = _cosmology_forbidden_probe_families(prompt)
+    if "bao" in forbidden:
+        return False
     if not _cosmology_prompt_mentions_bao(prompt):
         return False
     robustness_tokens = (

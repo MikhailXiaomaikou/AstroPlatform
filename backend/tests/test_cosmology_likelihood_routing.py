@@ -175,6 +175,34 @@ def test_act_era_cross_check_prompt_is_a_cosmology_workflow() -> None:
     ]
 
 
+def test_des_sn_workflow_does_not_turn_negated_bao_into_matrix() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
+
+    prompt = (
+        "I am testing a DES-SN 5YR supernova cosmology workflow. Use DES-SN "
+        "and optionally Pantheon+/Union3 only if requested by registry routing; "
+        "do not add BAO or CMB unless needed for the stated analysis."
+    )
+
+    assert _is_cosmology_likelihood_workflow(prompt) is True
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "pantheon_plus",
+        "des_sn5yr",
+        "union3",
+    ]
+    calls = _cosmology_likelihood_build_calls_from_prompt(prompt)
+    assert [call["name"] for call in calls] == ["build_cosmology_likelihood"]
+    assert calls[0]["input"]["dataset_keys"] == [
+        "pantheon_plus",
+        "des_sn5yr",
+        "union3",
+    ]
+
+
 def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,
