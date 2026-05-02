@@ -366,6 +366,203 @@ def _build_data_provenance_text(artifacts: SessionArtifacts) -> str:
     return "\n".join(lines)
 
 
+def _format_fit_value(value: object, fmt: str = ".4g") -> str:
+    """Best-effort numeric format for the fit diagnostics renderer; returns
+    "N/A" on None / non-numeric so the section never displays empty cells."""
+    if value is None:
+        return "N/A"
+    if isinstance(value, bool):
+        return str(value)
+    try:
+        return format(float(value), fmt)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def build_fit_line_lfr_diagnostics_section(
+    artifacts: SessionArtifacts,
+) -> str | None:
+    """PART AI #5/#6 — render the most recent fit_line_lfr tool_result as
+    a paper-ready Markdown section covering:
+      - readiness checks (5 gates: rows / citations / units / method /
+        Bayesian sampler)
+      - relation_claimability (can_claim + blocking_reasons)
+      - Bayesian diagnostics (rhat, ESS, HDI 94%, n_chains, package, ref)
+      - lensing_summary (5 buckets including papers_default_lensed)
+      - cosmology recompute audit
+      - sample composition (n_used, surveys merged, line_id)
+
+    Returns None when no fit_line_lfr result is in this session — the
+    caller treats None as "skip this section in the draft".
+    """
+    fit_results = [
+        r for r in artifacts.tool_results
+        if isinstance(r, dict) and r.get("tool") == "fit_line_lfr"
+        and r.get("success") is True
+    ]
+    if not fit_results:
+        return None
+    fit = fit_results[-1]  # 用本 session 最新一次成功 fit
+
+    lines: list[str] = []
+    lines.append("## Fit Diagnostics: line luminosity-FWHM relation")
+    lines.append("")
+
+    # ── Sample composition ───────────────────────────────────────────
+    line_id = fit.get("line_id") or "(unspecified)"
+    n_used = fit.get("n_used")
+    n_surveys = fit.get("n_surveys_merged")
+    contributing = fit.get("contributing_cache_keys") or []
+    lines.append(f"**Sample**: {n_used} rows of {line_id} used in fit; "
+                 f"{n_surveys} surveys merged")
+    if contributing:
+        lines.append(f"  ; contributing cache keys: {', '.join(map(str, contributing[:5]))}"
+                     + ("..." if len(contributing) > 5 else ""))
+    lines.append("")
+
+    # ── Fit equation + units ─────────────────────────────────────────
+    lines.append("**Model**:")
+    lines.append("")
+    lines.append("```")
+    lines.append(str(fit.get("model") or ""))
+    lines.append("```")
+    lines.append("")
+    lines.append(f"- intercept_unit: `{fit.get('intercept_unit') or 'N/A'}`")
+    lines.append(f"- slope_unit: `{fit.get('slope_unit') or 'N/A'}`")
+    lines.append(f"- luminosity_kind: `{fit.get('luminosity_kind') or 'L_solar (default)'}`")
+    n_unit_converted = fit.get("n_unit_converted")
+    if n_unit_converted:
+        lines.append(f"- n_rows_unit_converted: {n_unit_converted}")
+    lines.append("")
+
+    # ── Best-fit values ──────────────────────────────────────────────
+    lines.append("**Best-fit values**:")
+    lines.append("")
+    fit_method = fit.get("fit_method") or "(unknown)"
+    lines.append(f"- fit_method: `{fit_method}`"
+                 + (f"  (downgraded from `{fit.get('fit_method_requested')}`: "
+                    f"{fit.get('fit_method_downgrade_reason')})"
+                    if fit.get("fit_method_downgrade_reason") else ""))
+    alpha = _format_fit_value(fit.get("alpha"))
+    alpha_err = _format_fit_value(fit.get("alpha_stderr"))
+    beta = _format_fit_value(fit.get("beta"))
+    beta_err = _format_fit_value(fit.get("beta_stderr"))
+    lines.append(f"- alpha (intercept) = {alpha} +/- {alpha_err}")
+    lines.append(f"- beta (slope)      = {beta} +/- {beta_err}")
+    lines.append(f"- residual_rms_dex  = {_format_fit_value(fit.get('residual_rms_dex'))}")
+    intrinsic = fit.get("intrinsic_scatter_dex")
+    if intrinsic is not None:
+        hdi = fit.get("intrinsic_scatter_dex_hdi") or [None, None]
+        lines.append(
+            f"- intrinsic_scatter_dex = {_format_fit_value(intrinsic)} "
+            f"[94% HDI: {_format_fit_value(hdi[0])}, {_format_fit_value(hdi[1])}]"
+        )
+    lines.append(f"- pearson_r = {_format_fit_value(fit.get('pearson_r'))}")
+    lines.append(f"- spearman_r = {_format_fit_value(fit.get('spearman_r'))}")
+    lines.append("")
+
+    # ── Bayesian diagnostics (if Bayesian path ran) ──────────────────
+    bayes = fit.get("bayesian_summary")
+    if isinstance(bayes, dict):
+        lines.append("**Bayesian sampler diagnostics** (Kelly 2007 linmix):")
+        lines.append("")
+        lines.append(f"- package: `{bayes.get('package') or 'n/a'}`")
+        lines.append(f"- reference: {bayes.get('reference') or 'n/a'}")
+        lines.append(f"- n_chains: {bayes.get('n_chains')}; "
+                     f"n_draws_total: {bayes.get('n_draws_total')}; "
+                     f"K = {bayes.get('K')}")
+        lines.append(f"- converged: {bayes.get('converged')}; "
+                     f"publication_ready: {bayes.get('publication_ready')}")
+        params = bayes.get("parameters") or {}
+        if isinstance(params, dict):
+            for pname in ("alpha", "beta", "sigma_int"):
+                p = params.get(pname)
+                if not isinstance(p, dict):
+                    continue
+                lines.append(
+                    f"  - {pname}: median = {_format_fit_value(p.get('median'))}, "
+                    f"std = {_format_fit_value(p.get('std'))}, "
+                    f"94% HDI = [{_format_fit_value(p.get('hdi_low_94'))}, "
+                    f"{_format_fit_value(p.get('hdi_high_94'))}], "
+                    f"ess = {p.get('ess')}, rhat = {_format_fit_value(p.get('rhat'))}"
+                )
+        lines.append("")
+
+    # ── Readiness gates ──────────────────────────────────────────────
+    readiness = fit.get("publication_readiness") or {}
+    checks = readiness.get("checks") if isinstance(readiness, dict) else None
+    if isinstance(checks, dict):
+        lines.append("**Publication readiness gates**:")
+        lines.append("")
+        for gate_name, gate in checks.items():
+            if not isinstance(gate, dict):
+                continue
+            mark = "✓" if gate.get("passed") else "✗"
+            extra: list[str] = []
+            for k, v in gate.items():
+                if k == "passed":
+                    continue
+                extra.append(f"{k}={v}")
+            lines.append(f"- {mark} `{gate_name}`: " + ("; ".join(extra) if extra else ""))
+        status = readiness.get("status") or "(unknown)"
+        lines.append("")
+        lines.append(f"**Overall status**: `{status}`")
+        lines.append("")
+
+    # ── Relation claimability ────────────────────────────────────────
+    claim = fit.get("relation_claimability")
+    if isinstance(claim, dict):
+        can = claim.get("can_claim_relation")
+        scope = claim.get("claim_scope")
+        blockers = claim.get("blocking_reasons") or []
+        lines.append("**Claim scope**:")
+        lines.append("")
+        lines.append(f"- can_claim_relation: {can}")
+        lines.append(f"- claim_scope: `{scope}`")
+        if blockers:
+            lines.append(f"- blocking_reasons: {', '.join(map(str, blockers))}")
+        lines.append("")
+
+    # ── Lensing summary ──────────────────────────────────────────────
+    lensing = fit.get("lensing_summary")
+    if isinstance(lensing, dict):
+        lines.append("**Lensing coverage**:")
+        lines.append("")
+        lines.append(f"- n_unlensed_in_fit: {lensing.get('n_unlensed_in_fit')}")
+        lines.append(f"- n_lensed_demagnified_in_fit: {lensing.get('n_lensed_demagnified_in_fit')}")
+        lines.append(f"- n_lensed_skipped_no_mu: {lensing.get('n_lensed_skipped_no_mu')}")
+        lines.append(f"- n_lensed_unknown: {lensing.get('n_lensed_unknown')}")
+        papers = lensing.get("papers_default_lensed") or []
+        if papers:
+            lines.append(
+                f"- papers_default_lensed: "
+                f"{', '.join(str(p) for p in papers[:5])}"
+                + ("..." if len(papers) > 5 else "")
+            )
+        lines.append("")
+
+    # ── Cosmology recompute audit ────────────────────────────────────
+    if fit.get("cosmology_recomputed"):
+        used = fit.get("cosmology_used") or {}
+        baseline = fit.get("cosmology_baseline") or {}
+        shift = fit.get("dl_shift_summary") or {}
+        lines.append("**Cosmology recomputation**:")
+        lines.append("")
+        lines.append(f"- cosmology_used: {used.get('name') or '(unspecified)'} "
+                     f"(H0 = {used.get('H0_km_s_Mpc')}, Om0 = {used.get('Om0')})")
+        lines.append(f"- baseline: {baseline.get('name') or '(unspecified)'} "
+                     f"(H0 = {baseline.get('H0_km_s_Mpc')}, Om0 = {baseline.get('Om0')})")
+        if shift:
+            lines.append(
+                f"- median_log_l_shift_dex: {shift.get('median_log_l_shift_dex')}, "
+                f"max_abs: {shift.get('max_abs_log_l_shift_dex')}, "
+                f"n_rows_shifted: {shift.get('n_rows_shifted')}"
+            )
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _build_results_tables(artifacts: SessionArtifacts) -> list[dict]:
     tables: list[dict] = []
     for action in artifacts.search_calls:
@@ -394,6 +591,11 @@ def _build_default_paper_json(artifacts: SessionArtifacts, journal_format: str) 
     methods_citations = artifacts.bibcodes[2:3]
     results_text = artifacts.assistant_text[-1] if artifacts.assistant_text else "The session produced a set of exploratory findings that should be reviewed and refined before submission."
 
+    # PART AI #5/#6: 当本 session 含 fit_line_lfr 成功结果时, 自动插入
+    # 一段 readiness/claimability/Bayesian/lensing 完整诊断 — 让 paper
+    # draft 能复现审稿人想看的 publication_readiness 证据链.
+    fit_lfr_section = build_fit_line_lfr_diagnostics_section(artifacts)
+
     return {
         "title": primary_question[:120],
         "abstract": (
@@ -404,6 +606,7 @@ def _build_default_paper_json(artifacts: SessionArtifacts, journal_format: str) 
             "The present draft should be treated as a structured starting point for a full manuscript, with explicit attention to "
             "sample definitions, uncertainties, and comparison to prior work."
         ),
+        **({"fit_line_lfr_diagnostics": fit_lfr_section} if fit_lfr_section else {}),
         "introduction": {
             "text": (
                 f"This session was motivated by the question: {primary_question}. "
