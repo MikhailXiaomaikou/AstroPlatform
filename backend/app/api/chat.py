@@ -6399,17 +6399,41 @@ async def _run_agent_loop(
                     # Two attempts did not cure it — block the reply entirely.
                     validation = validate_claims(clean_reply, all_tool_results)
                     if not validation.ok:
-                        try:
-                            from app.observability.metrics import record_counter
-                            record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="regen_exhausted")
-                        except Exception:
-                            pass
-                        logger.error(
-                            "Fabrication gate BLOCKED reply from %s (%d uncited)",
-                            agent_name, len(validation.uncited),
+                        tool_grounded_summary = (
+                            _line_lfr_tool_grounded_summary(all_tool_results)
+                            or _statistics_tool_grounded_summary(all_tool_results)
+                            or _cosmology_tool_grounded_summary(all_tool_results)
                         )
-                        clean_reply = blocked_reply_text(validation)
-                        fabrication_stats["blocked"] = True
+                        if tool_grounded_summary:
+                            summary_validation = validate_claims(
+                                tool_grounded_summary, all_tool_results,
+                            )
+                            if summary_validation.ok:
+                                clean_reply = tool_grounded_summary
+                                validation = summary_validation
+                                fabrication_stats["regenerations"] += 1
+                                try:
+                                    from app.observability.metrics import record_counter
+                                    record_counter(
+                                        "tool_grounded_regeneration_total",
+                                        1.0,
+                                        agent=agent_name,
+                                        reason="regen_exhausted",
+                                    )
+                                except Exception:
+                                    pass
+                        if not validation.ok:
+                            try:
+                                from app.observability.metrics import record_counter
+                                record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="regen_exhausted")
+                            except Exception:
+                                pass
+                            logger.error(
+                                "Fabrication gate BLOCKED reply from %s (%d uncited)",
+                                agent_name, len(validation.uncited),
+                            )
+                            clean_reply = blocked_reply_text(validation)
+                            fabrication_stats["blocked"] = True
                 if fabrication_stats["regenerations"]:
                     try:
                         from app.observability.metrics import record_counter

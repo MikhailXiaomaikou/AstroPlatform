@@ -228,6 +228,23 @@ def test_external_likelihood_config_ready_is_not_full_posterior_overclaim():
     assert methodology_consistency_violations(reply, tool_results) == []
 
 
+def test_no_publication_ready_external_likelihood_heading_is_not_overclaim():
+    reply = (
+        "**No Publication-Ready External Likelihood**: the configuration was "
+        "built, but the full external likelihood machinery was not run."
+    )
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": False,
+            "__tool_status__": "PARTIAL",
+        },
+    }]
+
+    assert methodology_consistency_violations(reply, tool_results) == []
+
+
 # ── Test 5: empty/None inputs ─────────────────────────────────────────
 
 def test_empty_reply_returns_empty():

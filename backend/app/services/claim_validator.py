@@ -1141,7 +1141,9 @@ def methodology_consistency_violations(
     # before that user-facing readiness claim is allowed.
     for full_match in _FULL_EXTERNAL_LIKELIHOOD_READY_RE.finditer(stripped):
         sentence = _sentence_text(reply, full_match.start())
-        if _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE.search(sentence):
+        line = _line_text(reply, full_match.start())
+        context = f"{line} {sentence}"
+        if _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE.search(context):
             continue
         if not _full_external_likelihood_ready_available(tool_results):
             violations.append(CitationViolation(
