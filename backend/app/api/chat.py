@@ -4532,13 +4532,17 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         keys.append("act_dr6_lensing")
     if _cosmology_prompt_mentions_spt(prompt):
         keys.append("spt3g_cmb")
+    specific_wl_requested = any(tok in prompt for tok in (
+        "kids", "kilo-degree", "des y3", "des-y3", "dark energy survey",
+        "hsc", "hyper suprime",
+    ))
     if any(tok in prompt for tok in ("kids", "kilo-degree")):
         keys.append("kids1000_wl")
     if any(tok in prompt for tok in ("des y3", "des-y3", "dark energy survey", "galaxy weak lensing")):
         keys.append("des_y3_3x2pt")
     if any(tok in prompt for tok in ("hsc", "hyper suprime")):
         keys.append("hsc_y1_cosmic_shear")
-    if any(tok in prompt for tok in ("weak-lensing survey", "weak lensing survey", "weak-lensing surveys", "weak lensing surveys", "galaxy lensing", "cosmic shear")):
+    if _cosmology_prompt_mentions_weak_lensing(prompt) and not specific_wl_requested:
         for key in ("kids1000_wl", "des_y3_3x2pt", "hsc_y1_cosmic_shear"):
             keys.append(key)
     if "chronometer" in prompt or "cc" in prompt:

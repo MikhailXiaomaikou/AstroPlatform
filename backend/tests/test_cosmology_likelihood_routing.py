@@ -253,6 +253,50 @@ def test_generic_executable_observational_cosmology_prompt_routes_to_registry_ch
     ]
 
 
+def test_chinese_multiprobe_prompt_routes_generic_weak_lensing() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_likelihood_run_calls_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
+
+    prompt = (
+        "我在做观测宇宙学多探针一致性检查。请只基于已注册且本轮可执行的"
+        "数据产品评估 Planck/ACT、BAO、SN 和 weak-lensing 的可用性；"
+        "不能执行的 likelihood 只报告配置状态，不要给 posterior 数值。"
+    )
+
+    assert _is_cosmology_likelihood_workflow(prompt) is True
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "desi_dr1_bao",
+        "pantheon_plus",
+        "planck2018_compressed",
+        "act_dr6_lensing",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+    ]
+    assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "desi_dr1_bao",
+        "pantheon_plus",
+        "planck2018_compressed",
+        "act_dr6_lensing",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+    ]
+    assert _cosmology_likelihood_run_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "desi_dr1_bao",
+        "pantheon_plus",
+        "planck2018_compressed",
+        "act_dr6_lensing",
+        "kids1000_wl",
+        "des_y3_3x2pt",
+        "hsc_y1_cosmic_shear",
+    ]
+
+
 def test_des_sn_workflow_does_not_turn_negated_bao_into_matrix() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,
