@@ -985,7 +985,7 @@ _FULL_EXTERNAL_LIKELIHOOD_READY_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE = re.compile(
-    r"\b(?:not|no|without|requires?|require|would|future|pending|not\s+run|not\s+included|still\s+need|"
+    r"\b(?:not|no|without|requires?|required|require|would|future|pending|not\s+run|not\s+included|still\s+need|"
     r"config(?:uration)?|workflow)\b",
     re.IGNORECASE,
 )

@@ -6234,8 +6234,42 @@ async def _run_agent_loop(
                 agent_name,
                 len(unsupported_narrative_claims),
             )
-            clean_reply = blocked_unsupported_narrative_reply_text(unsupported_narrative_claims)
-            fabrication_stats["blocked"] = True
+            tool_grounded_summary = (
+                _line_lfr_tool_grounded_summary(all_tool_results)
+                or _statistics_tool_grounded_summary(all_tool_results)
+                or _cosmology_tool_grounded_summary(all_tool_results)
+            )
+            if tool_grounded_summary:
+                summary_validation = validate_claims(tool_grounded_summary, all_tool_results)
+                summary_citation_violations = provenance_citation_violations(
+                    tool_grounded_summary, all_tool_results,
+                )
+                summary_unsupported = unsupported_literature_narrative_violations(
+                    tool_grounded_summary, all_tool_results,
+                )
+                if (
+                    summary_validation.ok
+                    and not citation_violations_should_block(summary_citation_violations)
+                    and not summary_unsupported
+                ):
+                    clean_reply = tool_grounded_summary
+                    fabrication_stats["regenerations"] += 1
+                    try:
+                        from app.observability.metrics import record_counter
+                        record_counter(
+                            "tool_grounded_regeneration_total",
+                            1.0,
+                            agent=agent_name,
+                            reason="unsupported_narrative",
+                        )
+                    except Exception:
+                        pass
+                else:
+                    clean_reply = blocked_unsupported_narrative_reply_text(unsupported_narrative_claims)
+                    fabrication_stats["blocked"] = True
+            else:
+                clean_reply = blocked_unsupported_narrative_reply_text(unsupported_narrative_claims)
+                fabrication_stats["blocked"] = True
 
         elif literature_prior_violations(clean_reply, all_tool_results):
             # W1 (PART W): 文献先验硬 block. 比 zero_data_but_quantitative 松 —
