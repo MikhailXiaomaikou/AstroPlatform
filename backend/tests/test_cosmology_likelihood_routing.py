@@ -203,6 +203,33 @@ def test_des_sn_workflow_does_not_turn_negated_bao_into_matrix() -> None:
     ]
 
 
+def test_sn_only_negation_does_not_exclude_preceding_sn_datasets() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_forbidden_probe_families,
+        _cosmology_likelihood_run_calls_from_prompt,
+    )
+
+    prompt = (
+        "I am doing a supernova-only compilation check with Pantheon+, DES-SN, "
+        "and Union3. Do not include BAO, CMB, weak lensing, or H0 priors. "
+        "If no executable SN likelihood is available, say so without posterior numbers."
+    )
+
+    assert _cosmology_forbidden_probe_families(prompt) == {"bao", "cmb", "wl", "h0"}
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "pantheon_plus",
+        "des_sn5yr",
+        "union3",
+    ]
+    calls = _cosmology_likelihood_run_calls_from_prompt(prompt)
+    assert calls[0]["input"]["dataset_keys"] == [
+        "pantheon_plus",
+        "des_sn5yr",
+        "union3",
+    ]
+
+
 def test_with_and_without_cmb_is_not_parsed_as_cmb_exclusion() -> None:
     from app.api.chat import _cosmology_dataset_keys_from_prompt
 

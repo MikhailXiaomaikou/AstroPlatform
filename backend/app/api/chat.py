@@ -4404,7 +4404,9 @@ def _cosmology_prompt_forbids_family(text: str, aliases: tuple[str, ...]) -> boo
             if "with and without" in window or "with/without" in window:
                 start = index + len(negator)
                 continue
-            if any(alias in window for alias in aliases):
+            post_window = prompt[index + len(negator) : index + len(negator) + 96]
+            post_window = re.split(r"[.;\n]", post_window, maxsplit=1)[0]
+            if any(alias in post_window for alias in aliases):
                 return True
             start = index + len(negator)
     return False
