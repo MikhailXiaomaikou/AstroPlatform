@@ -4290,6 +4290,26 @@ def _cosmology_models_from_prompt(text: str) -> list[str]:
         models.append("wcdm")
     if "w0wa" in prompt or "cpl" in prompt:
         models.append("w0wa_cdm")
+    wants_curvature = any(tok in prompt for tok in (
+        "curvature", "curved", "non-flat", "nonflat", "omega_k",
+        "omegak", "Ωk", "曲率", "非平坦",
+    ))
+    wants_neutrino_mass = any(tok in prompt for tok in (
+        "neutrino", "mnu", "m_ν", "mν", "sum m", "Σm", "Σmν",
+        "nu mass", "中微子",
+    ))
+    if wants_curvature:
+        if "w0wa_cdm" in models:
+            models.append("ok_w0wa_cdm")
+        elif "wcdm" in models:
+            models.append("ok_wcdm")
+        else:
+            models.append("ok_lcdm")
+    if wants_neutrino_mass:
+        if "w0wa_cdm" in models:
+            models.append("w0wa_cdm_mnu")
+        else:
+            models.append("lcdm_mnu")
     if not models and (
         _is_cosmology_likelihood_workflow(text)
         or _should_build_cosmology_robustness_matrix(text)

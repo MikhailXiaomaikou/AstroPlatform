@@ -604,6 +604,30 @@ def test_desi_lrg_bin_assessment_supports_bin_tension_language():
     assert unsupported_literature_narrative_violations(reply, tool_results) == []
 
 
+def test_registry_first_author_label_supports_author_year_citation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {
+            "success": True,
+            "datasets": [{
+                "key": "planck2018_compressed",
+                "citations": [{
+                    "label": "Chen, Huang & Wang distance priors",
+                    "year": 2019,
+                    "arxiv": "1808.05724",
+                    "doi": "10.1088/1475-7516/2019/02/028",
+                }],
+            }],
+        },
+    }]
+
+    reply = "Planck compressed priors follow Chen, Huang & Wang (2019)."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
 def test_unseen_author_year_still_flags_after_literature_search():
     from app.services.claim_validator import provenance_citation_violations
 

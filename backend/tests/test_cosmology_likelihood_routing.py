@@ -74,3 +74,25 @@ def test_multi_sn_comparison_routes_to_robustness_matrix() -> None:
     assert calls[0]["input"]["supernova_sets"] == ["pantheon_plus", "des_sn5yr", "union3"]
     assert calls[0]["input"]["include_h0_prior"] is False
 
+
+def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_models_from_prompt,
+    )
+
+    prompt = (
+        "请基于 ACT DR6 CMB lensing、Planck primary CMB、BAO 数据，"
+        "评估 ΛCDM consistency，并说明 neutrino-mass/curvature 扩展如何检验。"
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "desi_dr1_bao",
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+    assert _cosmology_models_from_prompt(prompt) == ["lcdm", "ok_lcdm", "lcdm_mnu"]
+
+    calls = _cosmology_likelihood_build_calls_from_prompt(prompt)
+    assert [call["input"]["model"] for call in calls] == ["lcdm", "ok_lcdm", "lcdm_mnu"]

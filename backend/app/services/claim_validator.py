@@ -1608,8 +1608,10 @@ def _author_support_keys(raw: str) -> set[str]:
     """Return author keys that can support author-year shorthand.
 
     Collaboration papers are often cited as "Planck 2018" while metadata
-    stores "Planck Collaboration".  Keep the normal last-name key, but also
-    support the leading survey/collaboration token for these cases.
+    stores "Planck Collaboration".  Registry labels also often start with
+    the first author and continue with a title fragment, e.g. "Chen, Huang
+    & Wang distance priors".  Keep the normal last-name key, but also support
+    the leading author/survey/collaboration token for these metadata labels.
     """
     text = str(raw or "").strip()
     keys: set[str] = set()
@@ -1617,6 +1619,30 @@ def _author_support_keys(raw: str) -> set[str]:
     if normal:
         keys.add(normal)
     parts = text.split()
+    if parts:
+        lead = re.sub(r"[^a-z]", "", parts[0].lower())
+        if lead and len(lead) >= 3:
+            keys.add(lead)
+    seen_et_al = False
+    for part in parts:
+        cleaned = re.sub(r"[^a-z]", "", part.lower())
+        if not cleaned:
+            continue
+        if cleaned in {"et", "al", "and"}:
+            if cleaned in {"et", "al"}:
+                seen_et_al = True
+            continue
+        if seen_et_al:
+            break
+        # Registry citation labels usually start with a short author list
+        # followed by lower-case title words ("Chen, Huang & Wang distance
+        # priors").  Capture those leading capitalized author tokens so
+        # "Wang (2019)" is supported by the same label.
+        if part[:1].isupper() or part[:1] in {"&"}:
+            if len(cleaned) >= 3:
+                keys.add(cleaned)
+            continue
+        break
     if len(parts) >= 2 and re.sub(r"[^a-z]", "", parts[-1].lower()) in {
         "collaboration",
         "team",
