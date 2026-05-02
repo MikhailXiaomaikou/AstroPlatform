@@ -211,6 +211,23 @@ def test_compressed_chain_scope_caveat_does_not_trigger_full_likelihood_claim():
     assert methodology_consistency_violations(reply, tool_results) == []
 
 
+def test_external_likelihood_config_ready_is_not_full_posterior_overclaim():
+    reply = (
+        "The DES-SN workflow is ready for external Cobaya/CosmoSIS execution, "
+        "but posterior constraints require running the full external likelihood."
+    )
+    tool_results = [{
+        "tool": "build_cosmology_likelihood",
+        "result": {
+            "success": True,
+            "status": "CONFIG_READY",
+            "datasets_used": [{"execution_mode": "external_cobaya"}],
+        },
+    }]
+
+    assert methodology_consistency_violations(reply, tool_results) == []
+
+
 # ── Test 5: empty/None inputs ─────────────────────────────────────────
 
 def test_empty_reply_returns_empty():

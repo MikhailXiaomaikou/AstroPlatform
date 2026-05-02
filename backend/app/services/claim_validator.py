@@ -985,7 +985,8 @@ _FULL_EXTERNAL_LIKELIHOOD_READY_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE = re.compile(
-    r"\b(?:not|no|without|requires?|require|would|future|pending|not\s+run|not\s+included|still\s+need)\b",
+    r"\b(?:not|no|without|requires?|require|would|future|pending|not\s+run|not\s+included|still\s+need|"
+    r"config(?:uration)?|workflow)\b",
     re.IGNORECASE,
 )
 # PART AI #3: LFR-context signature — reply 必须明显在做 line luminosity-FWHM

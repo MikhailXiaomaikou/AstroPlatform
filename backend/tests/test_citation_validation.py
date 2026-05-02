@@ -558,6 +558,34 @@ def test_cosmology_registry_arxiv_and_label_citations_are_supported():
     assert provenance_citation_violations(reply, tool_results) == []
 
 
+def test_cosmology_registry_dataset_doi_supports_des_sn_data_release():
+    from app.services.claim_validator import provenance_citation_violations
+    from app.services.cosmology_likelihoods import list_cosmology_datasets
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": list_cosmology_datasets(dataset_keys=["des_sn5yr"]),
+    }]
+
+    reply = "The DES-SN5YR release is citeable as doi:10.5281/zenodo.12720778."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
+def test_planck_registry_release_year_supports_planck_2018_shorthand():
+    from app.services.claim_validator import provenance_citation_violations
+    from app.services.cosmology_likelihoods import list_cosmology_datasets
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": list_cosmology_datasets(dataset_keys=["planck2018_compressed"]),
+    }]
+
+    reply = "The CMB branch uses the Planck 2018 compressed prior."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
 def test_cosmology_registry_collaboration_label_supports_generic_author_year():
     from app.services.claim_validator import provenance_citation_violations
 

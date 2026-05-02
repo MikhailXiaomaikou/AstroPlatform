@@ -386,7 +386,12 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         source_url="https://zenodo.org/records/12720778",
         citations=(
             DatasetCitation(label="DES Collaboration 2024 SN cosmology", year=2024, arxiv="2401.02929"),
-            DatasetCitation(label="DES-SN5YR data products", year=2024, arxiv="2406.05046"),
+            DatasetCitation(
+                label="DES-SN5YR data products",
+                year=2024,
+                arxiv="2406.05046",
+                doi="10.5281/zenodo.12720778",
+            ),
         ),
         notes="Photometrically classified DES SN sample; useful robustness partner for Pantheon+/Union3.",
         cobaya_likelihood="external:sn.des_sn5yr",
@@ -440,6 +445,13 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         source_url="https://wiki.cosmos.esa.int/planck-legacy-archive/",
         citations=(
+            DatasetCitation(
+                label="Planck 2018 final release",
+                year=2018,
+                arxiv="1807.06209",
+                doi="10.1051/0004-6361/201833910",
+                bibcode="2020A&A...641A...6P",
+            ),
             DatasetCitation(
                 label="Planck Collaboration VI 2020",
                 year=2020,
