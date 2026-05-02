@@ -247,6 +247,7 @@ describe("ChatPage", () => {
       JSON.stringify([
         { id: "old-u", role: "user", content: "old contaminated prompt" },
         { id: "old-a", role: "assistant", content: "old fitted result" },
+        { id: "old-u2", role: "user", content: "old follow-up that would have triggered unsaved confirm" },
       ]),
     );
     localStorage.setItem("astro_current_chat_session_id:anon", "old-session");

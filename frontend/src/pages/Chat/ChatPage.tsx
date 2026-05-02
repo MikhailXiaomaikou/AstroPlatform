@@ -2414,6 +2414,29 @@ function scopedChatStorageKey(baseKey: string, scope: string): string {
   return `${baseKey}:${scope}`;
 }
 
+function clearFreshChatStorage(scope: string): void {
+  const exactKeys = new Set([
+    scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, scope),
+    scopedChatStorageKey(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY, scope),
+    scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, scope),
+    CHAT_HISTORY_STORAGE_KEY,
+    CHAT_AUTOSAVE_DRAFT_STORAGE_KEY,
+    CURRENT_CHAT_SESSION_STORAGE_KEY,
+  ]);
+  for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+    const key = localStorage.key(i);
+    if (!key) continue;
+    if (
+      exactKeys.has(key)
+      || key.startsWith(`${CHAT_HISTORY_STORAGE_KEY}:`)
+      || key.startsWith(`${CHAT_AUTOSAVE_DRAFT_STORAGE_KEY}:`)
+      || key.startsWith(`${CURRENT_CHAT_SESSION_STORAGE_KEY}:`)
+    ) {
+      localStorage.removeItem(key);
+    }
+  }
+}
+
 function loadChatHistory(scope: string): DisplayMessage[] {
   try {
     const raw = localStorage.getItem(scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, scope));
@@ -2810,6 +2833,7 @@ export default function ChatPage() {
   // localStorage scope on every Auth refresh.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const storageScope = useMemo(() => chatStorageScope(user), [user?.id]);
+  const freshChatRequestedAtBoot = new URLSearchParams(window.location.search).has("fresh_chat");
   const { t } = useI18n();
   const { track } = useTracking();
   const [hasKey, setHasKey] = useState(() => hasStoredAiKey());
@@ -2849,7 +2873,9 @@ export default function ChatPage() {
     if (!hasKey && hasStoredAiKey()) setHasKey(true);
   });
 
-  const [messages, setMessages] = useState<DisplayMessage[]>(() => loadChatHistory(storageScope));
+  const [messages, setMessages] = useState<DisplayMessage[]>(() => (
+    freshChatRequestedAtBoot ? [] : loadChatHistory(storageScope)
+  ));
   const conversationProvenance = useConversationProvenance(messages);
   const [input, setInput] = useState("");
   const [pageError, _setPageError] = useState<string | null>(null);
@@ -2906,6 +2932,8 @@ export default function ChatPage() {
   const [snapshotDiff, setSnapshotDiff] = useState<SessionSnapshotDiff | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
+  const freshChatRequestRef = useRef(false);
+  const newChatNavigatingRef = useRef(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSessionScopeRef = useRef(storageScope);
 
@@ -3198,7 +3226,6 @@ export default function ChatPage() {
   }, [paperDraft, paperEditorJson, paperFormat, paperSessionId, paperTab, paperValidation?.overall_status, showToast]);
 
   useEffect(() => {
-    const historyKey = scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, storageScope);
     const draftKey = scopedChatStorageKey(CHAT_DRAFT_STORAGE_KEY, storageScope);
     const autosaveDraftKey = scopedChatStorageKey(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY, storageScope);
     const currentSessionKey = scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, storageScope);
@@ -3207,14 +3234,27 @@ export default function ChatPage() {
     if (!scopedSessionId) setCurrentSessionTitle("");
 
     // If caller requested a new session, clear history first
-    const newSession = localStorage.getItem("astro_chat_new_session");
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlRequestedFreshChat = urlParams.has("fresh_chat");
+    const newSession = localStorage.getItem("astro_chat_new_session") || urlRequestedFreshChat;
     if (newSession) {
       localStorage.removeItem("astro_chat_new_session");
       setMessages([]);
+      messagesRef.current = [];
       setCurrentSessionId(null);
+      currentSessionIdRef.current = null;
+      freshChatRequestRef.current = true;
       pythonSessionIdRef.current = crypto.randomUUID();
-      localStorage.removeItem(historyKey);
-      localStorage.removeItem(autosaveDraftKey);
+      clearFreshChatStorage(storageScope);
+      if (urlRequestedFreshChat) {
+        urlParams.delete("fresh_chat");
+        const nextQuery = urlParams.toString();
+        window.history.replaceState(
+          null,
+          "",
+          `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`,
+        );
+      }
     } else {
       setMessages(loadChatHistory(storageScope));
     }
@@ -3449,21 +3489,25 @@ export default function ChatPage() {
   };
 
   const handleNewChat = () => {
-    // Confirm if there are unsaved messages
-    if (messages.length >= 3 && saveStatus === "unsaved") {
-      if (!window.confirm("Start a new chat? Your current conversation has unsaved changes.")) {
-        return;
-      }
-    }
+    // Start a genuinely fresh chat synchronously. The old native confirm
+    // dialog could be dismissed by automation/browser timing, leaving users
+    // visually on the old session while they thought they had started a new
+    // one. Existing chat persistence keeps prior sessions available from the
+    // sidebar, so the primary action here must be deterministic.
     setMessages([]);
     messagesRef.current = [];
     setCurrentSessionId(null);
     currentSessionIdRef.current = null;
     setCurrentSessionTitle("");
     setSaveStatus("idle");
+    freshChatRequestRef.current = true;
     pythonSessionIdRef.current = crypto.randomUUID();
-    localStorage.removeItem(scopedChatStorageKey(CHAT_HISTORY_STORAGE_KEY, storageScope));
-    localStorage.removeItem(scopedChatStorageKey(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY, storageScope));
+    pendingSavePayloadRef.current = null;
+    if (serverSaveTimerRef.current) {
+      clearTimeout(serverSaveTimerRef.current);
+      serverSaveTimerRef.current = null;
+    }
+    clearFreshChatStorage(storageScope);
     // G6.1: also clear the workspace-context keys that the chat request
     // auto-injects.  Without this the old session's ADQL / search / FITS
     // results follow the user into the "new" session, which is exactly
@@ -3474,8 +3518,37 @@ export default function ChatPage() {
     localStorage.removeItem("astro_last_adql_rows");
     localStorage.removeItem("astro_adql_result_sets");
     localStorage.removeItem("astro_last_search");
-    localStorage.removeItem(scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, storageScope));
   };
+
+  useEffect(() => {
+    const handleFreshChatCapture = (event: MouseEvent) => {
+      const target = event.target instanceof Element
+        ? event.target.closest("[data-fresh-chat='true']")
+        : null;
+      if (!target) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (newChatNavigatingRef.current) return;
+      newChatNavigatingRef.current = true;
+      setMessages([]);
+      messagesRef.current = [];
+      setCurrentSessionId(null);
+      currentSessionIdRef.current = null;
+      setCurrentSessionTitle("");
+      setSaveStatus("idle");
+      freshChatRequestRef.current = true;
+      pythonSessionIdRef.current = crypto.randomUUID();
+      clearFreshChatStorage(storageScope);
+      localStorage.setItem("astro_chat_new_session", "1");
+      window.location.href = `/chat?fresh_chat=1&_=${Date.now()}`;
+    };
+    document.addEventListener("mousedown", handleFreshChatCapture, true);
+    document.addEventListener("click", handleFreshChatCapture, true);
+    return () => {
+      document.removeEventListener("mousedown", handleFreshChatCapture, true);
+      document.removeEventListener("click", handleFreshChatCapture, true);
+    };
+  }, [storageScope]);
 
   const handleRenameSession = async (newTitle: string) => {
     const trimmed = newTitle.trim();
@@ -3712,8 +3785,14 @@ export default function ChatPage() {
   const handleSend = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text || loading) return;
-    const baseMessages = messagesRef.current;
-    const sessionIdForRequest = currentSessionIdRef.current;
+    const startFresh = freshChatRequestRef.current;
+    const baseMessages = startFresh ? [] : messagesRef.current;
+    const sessionIdForRequest = startFresh ? null : currentSessionIdRef.current;
+    if (startFresh) {
+      currentSessionIdRef.current = null;
+      setCurrentSessionId(null);
+      freshChatRequestRef.current = false;
+    }
 
     const userMsg: DisplayMessage = {
       id: crypto.randomUUID(),
@@ -4016,14 +4095,17 @@ export default function ChatPage() {
       {/* Persistent session sidebar (like Claude desktop) */}
       <aside className="chat-sidebar" aria-label="Chat sessions">
         <div className="chat-sidebar-header">
-          <button
-            type="button"
-            className="chat-sidebar-new"
-            onClick={handleNewChat}
-            title="New chat"
-          >
-            <span style={{ fontSize: "1.1rem" }}>+</span> New chat
-          </button>
+          <form action="/chat" method="get" style={{ margin: 0 }}>
+            <input type="hidden" name="fresh_chat" value="1" />
+            <button
+              type="submit"
+              className="chat-sidebar-new"
+              data-fresh-chat="true"
+              title="New chat"
+            >
+              <span style={{ fontSize: "1.1rem" }}>+</span> New chat
+            </button>
+          </form>
           <button
             type="button"
             className="chat-sidebar-toggle"
