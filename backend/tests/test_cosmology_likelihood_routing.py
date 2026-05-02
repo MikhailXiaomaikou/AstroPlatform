@@ -82,6 +82,36 @@ def test_shoes_h0_prior_prompt_routes_to_registry_key() -> None:
     ]
 
 
+def test_trgb_h0_prompt_routes_to_trgb_not_shoes() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    prompt = (
+        "I am testing a TRGB distance-ladder H0 workflow as an alternative "
+        "to Cepheid-calibrated SH0ES. Use any registered TRGB/H0 prior "
+        "products if available."
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == ["trgb_h0_freedman19"]
+
+
+def test_time_delay_and_megamaser_h0_prompts_route_to_specific_priors() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    lens_prompt = (
+        "I am studying strong-lens time-delay cosmography as an H0 constraint. "
+        "Use registered H0-prior or likelihood products if present."
+    )
+    megamaser_prompt = (
+        "I am checking geometric megamaser H0 constraints. Use registered "
+        "megamaser/H0 prior products if present."
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(lens_prompt) == ["h0licow_h0"]
+    assert _cosmology_dataset_keys_from_prompt(megamaser_prompt) == [
+        "megamaser_h0_pesce20",
+    ]
+
+
 def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,

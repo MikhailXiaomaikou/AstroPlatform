@@ -4410,7 +4410,11 @@ def _cosmology_forbidden_probe_families(text: str) -> set[str]:
             "sn": ("sn", "sn ia", "supernova", "pantheon", "des-sn", "union3"),
             "cmb": ("cmb", "planck", "act dr6", "act lens"),
             "wl": ("weak lensing", "weak-lensing", "cosmic shear", "kids", "des y3", "hsc"),
-            "h0": ("sh0es", "h0 prior", "h₀ prior"),
+            "h0": (
+                "sh0es", "h0 prior", "h₀ prior", "trgb", "freedman",
+                "h0licow", "time-delay", "time delay", "strong-lens",
+                "strong lens", "megamaser",
+            ),
             "hz": ("chronometer", "h(z)", "cosmic chronometer"),
         }.items()
         if _cosmology_prompt_forbids_family(text, aliases)
@@ -4426,7 +4430,12 @@ def _cosmology_probe_family_for_dataset(key: str) -> str:
         return "cmb"
     if key in {"kids1000_wl", "des_y3_3x2pt", "hsc_y1_cosmic_shear"}:
         return "wl"
-    if key == "shoes_h0_riess22":
+    if key in {
+        "shoes_h0_riess22",
+        "trgb_h0_freedman19",
+        "h0licow_h0",
+        "megamaser_h0_pesce20",
+    }:
         return "h0"
     if key == "cosmic_chronometers":
         return "hz"
@@ -4480,7 +4489,32 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
             keys.append(key)
     if "chronometer" in prompt or "cc" in prompt:
         keys.append("cosmic_chronometers")
-    if "sh0es" in prompt or "h0 prior" in prompt or "h₀ prior" in prompt:
+    explicit_h0_prior_selected = False
+    if "trgb" in prompt or "freedman" in prompt:
+        keys.append("trgb_h0_freedman19")
+        explicit_h0_prior_selected = True
+    if any(tok in prompt for tok in ("h0licow", "time-delay", "time delay", "strong-lens", "strong lens")):
+        keys.append("h0licow_h0")
+        explicit_h0_prior_selected = True
+    if "megamaser" in prompt or "maser" in prompt:
+        keys.append("megamaser_h0_pesce20")
+        explicit_h0_prior_selected = True
+    wants_shoes = "sh0es" in prompt or "riess" in prompt
+    wants_shoes_alongside_specific_anchor = any(
+        tok in prompt
+        for tok in (
+            "compare against sh0es", "compare with sh0es", "vs sh0es",
+            "versus sh0es", "+ sh0es", "plus sh0es", "include sh0es",
+            "combine with sh0es",
+        )
+    )
+    if wants_shoes and (not explicit_h0_prior_selected or wants_shoes_alongside_specific_anchor):
+        keys.append("shoes_h0_riess22")
+        explicit_h0_prior_selected = True
+    elif (
+        not explicit_h0_prior_selected
+        and ("h0 prior" in prompt or "h₀ prior" in prompt)
+    ):
         keys.append("shoes_h0_riess22")
     if not keys and _is_cosmology_likelihood_workflow(text):
         keys = ["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"]
