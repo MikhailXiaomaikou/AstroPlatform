@@ -4271,6 +4271,17 @@ def _exec_astro_statistics_toolbox(inp: dict) -> dict:
     return result
 
 
+def _is_paper_lensed_by_default_safe_in_fit(bibcode: str | None) -> bool:
+    """Wrapper around cii_paper_metadata.is_paper_lensed_by_default that
+    swallows import errors so fit_line_lfr keeps working even if the
+    metadata module is missing on a given branch."""
+    try:
+        from app.services.cii_paper_metadata import is_paper_lensed_by_default
+        return is_paper_lensed_by_default(bibcode)
+    except Exception:
+        return False
+
+
 def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
     """Fit log L(line) as a function of log10(FWHM / 100 km/s)."""
     # PART AF C2 — accept either a single cache_key OR a list of
@@ -4574,6 +4585,50 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
             "error_class": "unit_conversion_all_failed",
             "luminosity_kind": requested_lum_kind,
             "unit_conversion_failures": unit_conversion_failures,
+            "__tool_status__": "FAILED",
+            "__do_not_claim__": True,
+        }
+
+    # PART AI #6: lensing coverage check — is_lensed=True 但 mu_lens=None
+    # 且不是 demagnify_sample 修过的 row, 不能进 fit (luminosity 还没
+    # demagnify, 用了会污染 LFR slope). 移到 rejected 让用户/AI 看到
+    # 必须先调 demagnify_sample.
+    n_lensed_skipped_no_mu = 0
+    accepted_after_lensing: list[dict[str, Any]] = []
+    for row in accepted:
+        is_lensed = row.get("is_lensed") is True
+        has_mu = row.get("mu_lens") is not None
+        already_demag = bool(row.get("_demagnified"))
+        if is_lensed and not has_mu and not already_demag:
+            n_lensed_skipped_no_mu += 1
+            rejected.append({
+                "source_name": row.get("source_name"),
+                "reason": "lensed_no_mu_correction",
+                "row_index": row.get("row_index"),
+                "detail": (
+                    "is_lensed=True from paper-level metadata or table flag, "
+                    "but no mu_lens value available. Call demagnify_sample "
+                    "with an explicit mu_map={source_name: mu_value} to get "
+                    "demagnified luminosity, then re-run fit_line_lfr."
+                ),
+                "bibcode": row.get("bibcode"),
+            })
+            continue
+        accepted_after_lensing.append(row)
+    accepted = accepted_after_lensing
+    n_used = len(accepted)
+
+    if n_used == 0 and n_lensed_skipped_no_mu > 0:
+        return {
+            "success": False,
+            "tool": "fit_line_lfr",
+            "error": (
+                f"All {n_lensed_skipped_no_mu} rows are flagged as lensed but "
+                f"none have mu_lens to demagnify. Call demagnify_sample first "
+                f"with mu_map={{source_name: mu, ...}}, then re-run fit_line_lfr."
+            ),
+            "error_class": "all_rows_lensed_no_mu",
+            "n_lensed_skipped_no_mu": n_lensed_skipped_no_mu,
             "__tool_status__": "FAILED",
             "__do_not_claim__": True,
         }
@@ -5043,6 +5098,26 @@ def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
         "n_lensed": n_lensed,
         "n_unlensed": n_unlensed,
         "n_lensed_unknown": n_lensed_unknown,
+        # PART AI #6: 综合 lensing 状态. 闭审稿人 "0 lensed sources detected"
+        # 那条硬伤 — 该数字原来是 ALPINE table 没 μ 列就当 0 报, 不是真
+        # 科学结论. 现在 lensing_summary 明确分 5 类: 未 lensing 入 fit /
+        # lensing 已 demagnify 入 fit / lensing 但缺 μ 被 reject / 表无
+        # 信息 unknown / paper-level metadata 默认 lensed.
+        "lensing_summary": {
+            "n_unlensed_in_fit": n_unlensed,
+            "n_lensed_demagnified_in_fit": sum(
+                1 for r in accepted if r.get("is_lensed") is True
+                and r.get("_demagnified") is True
+            ),
+            "n_lensed_skipped_no_mu": n_lensed_skipped_no_mu,
+            "n_lensed_unknown": n_lensed_unknown,
+            "papers_default_lensed": sorted({
+                r.get("bibcode")
+                for r in (rows or [])
+                if r.get("bibcode")
+                and _is_paper_lensed_by_default_safe_in_fit(r.get("bibcode"))
+            }),
+        },
         "log_luminosity_inference_summary": {
             "value_range_inferred_rows": value_range_inferred_rows,
             "publication_ready_requires_header_or_caption_log_units": True,

@@ -702,6 +702,16 @@ def _infer_line_id(text: str) -> str | None:
     return None
 
 
+def _is_paper_lensed_by_default_safe(bibcode: str | None) -> bool:
+    """Wrapper that swallows import errors so arxiv.py keeps working
+    even if cii_paper_metadata is missing or broken on a given branch."""
+    try:
+        from app.services.cii_paper_metadata import is_paper_lensed_by_default
+        return is_paper_lensed_by_default(bibcode)
+    except Exception:
+        return False
+
+
 def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     measurements: list[dict[str, Any]] = []
     for table in tables:
@@ -890,8 +900,23 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
                 # reported them; source_cosmology is paper-level and stays
                 # None here — populated by the caller if parsed from the
                 # paper abstract / front matter.
+                #
+                # PART AI #6: when the table did not expose μ but the paper
+                # is in our paper-level registry as `all_sources_lensed`
+                # (SPT-SMG, Capak+2015, etc.), set is_lensed=True with
+                # mu_lens=None so fit_line_lfr can reject the row with
+                # `kind="lensed_no_mu_correction"` instead of silently
+                # treating it as unlensed. The check fires only when the
+                # table-derived flag is None or False (do not override a
+                # table that explicitly said "no lensing").
                 "mu_lens": mu_value,
-                "is_lensed": is_lensed_flag,
+                "is_lensed": (
+                    True if (
+                        mu_value is None
+                        and not is_lensed_flag
+                        and _is_paper_lensed_by_default_safe(citation.get("bibcode"))
+                    ) else is_lensed_flag
+                ),
                 "source_cosmology": None,
                 "raw_values": {
                     "luminosity": raw_luminosity,
