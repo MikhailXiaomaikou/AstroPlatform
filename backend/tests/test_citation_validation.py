@@ -731,6 +731,29 @@ def test_registry_first_author_label_supports_author_year_citation():
     assert provenance_citation_violations(reply, tool_results) == []
 
 
+def test_desi_registry_alias_supports_adame_author_year_citation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {
+            "success": True,
+            "datasets": [{
+                "key": "desi_dr1_bao",
+                "citations": [{
+                    "label": "Adame et al. DESI Collaboration DR1 BAO cosmology",
+                    "year": 2024,
+                    "arxiv": "2404.03002",
+                }],
+            }],
+        },
+    }]
+
+    reply = "The DESI DR1 BAO dataset is described by Adame et al. (2024)."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
 def test_unseen_author_year_still_flags_after_literature_search():
     from app.services.claim_validator import provenance_citation_violations
 

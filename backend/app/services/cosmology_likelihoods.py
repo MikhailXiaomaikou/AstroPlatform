@@ -199,6 +199,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 year=2024,
                 arxiv="2404.03002",
             ),
+            DatasetCitation(
+                label="Adame et al. DESI Collaboration DR1 BAO cosmology",
+                year=2024,
+                arxiv="2404.03002",
+            ),
         ),
         notes="Use as BAO-only or combined late-universe distance anchor; requires rd prior or CMB calibration.",
         cobaya_likelihood="external:desilike.desi_dr1_bao",

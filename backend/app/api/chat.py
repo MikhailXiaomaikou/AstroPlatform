@@ -4476,7 +4476,17 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         "pre-desi bao", "before desi", "rather than desi",
         "not desi",
     ))
-    if "desi" in prompt and not pre_desi_bao:
+    desi_or_pre_desi = any(tok in prompt for tok in (
+        "desi or pre-desi",
+        "desi or pre desi",
+        "desi/pre-desi",
+        "desi/pre desi",
+        "desi and pre-desi",
+        "desi and pre desi",
+    ))
+    if desi_or_pre_desi:
+        keys.extend(["desi_dr1_bao", "sdss_6df_bao"])
+    elif "desi" in prompt and not pre_desi_bao:
         keys.append("desi_dr1_bao")
     elif any(tok in prompt for tok in ("bao", "baryon acoustic")):
         if pre_desi_bao or any(tok in prompt for tok in ("act dr6", "act lens", "sdss", "6df", "6dfgs", "eboss", "boss")):
@@ -5257,6 +5267,23 @@ async def _run_agent_loop(
                 + "compressed-likelihood result is already present. Summarize "
                 + "registered datasets, runnable compressed results, and which "
                 + "posterior/chain claims remain unsupported.]"
+            )
+
+        if (
+            cosmology_likelihood_workflow
+            and _cosmology_prompt_mentions_bao(latest_user_text)
+            and (
+                "cmb" in _cosmology_forbidden_probe_families(latest_user_text)
+                or "h0" in _cosmology_forbidden_probe_families(latest_user_text)
+            )
+        ):
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: this is a BAO-only request without CMB "
+                + "calibration and/or H0 priors. Do not introduce Planck "
+                + "sound-horizon numbers, H0 values, or author-year citations "
+                + "for excluded probes. State that absolute H0/rd-calibrated "
+                + "claims are not determined by this tool turn.]"
             )
 
         if line_relation_workflow and has_publication_ready_line_fit:

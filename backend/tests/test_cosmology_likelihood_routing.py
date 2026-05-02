@@ -289,6 +289,25 @@ def test_hz_cosmic_chronometer_prompt_routes_to_registry() -> None:
     assert _cosmology_dataset_keys_from_prompt(prompt) == ["cosmic_chronometers"]
 
 
+def test_bao_only_desi_or_pre_desi_routes_both_without_cmb_h0() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_forbidden_probe_families,
+    )
+
+    prompt = (
+        "I am doing a BAO-only distance-ratio check without CMB calibration or H0 prior. "
+        "Use DESI or pre-DESI BAO products as appropriate, and do not infer absolute H0 "
+        "without rd calibration."
+    )
+
+    assert _cosmology_forbidden_probe_families(prompt) == {"cmb", "h0"}
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "desi_dr1_bao",
+        "sdss_6df_bao",
+    ]
+
+
 def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,
