@@ -65,3 +65,53 @@ def test_astro_statistics_toolbox_dispatches_regression() -> None:
     assert result["success"] is True
     assert result["tool"] == "astro_statistics_toolbox"
     assert result["slope"] == 2.0
+
+
+def test_inline_statistics_prompt_routes_to_toolbox_with_uniform_errors() -> None:
+    from app.api.chat import _inline_statistics_tool_call_from_prompt
+
+    call = _inline_statistics_tool_call_from_prompt(
+        "我有一组真实观测点：x=[0,1,2,3,4,5]，y=[1,3,5,7,9,11]，"
+        "每个点的x和y误差都是0.1。请用平台内置统计工具做线性回归。"
+    )
+
+    assert call is not None
+    assert call["name"] == "astro_statistics_toolbox"
+    assert call["input"]["analysis_type"] == "linear_regression"
+    assert call["input"]["x"] == [0, 1, 2, 3, 4, 5]
+    assert call["input"]["y"] == [1, 3, 5, 7, 9, 11]
+    assert call["input"]["x_err"] == [0.1] * 6
+    assert call["input"]["y_err"] == [0.1] * 6
+
+
+def test_inline_statistics_prompt_ignores_arrays_without_regression_request() -> None:
+    from app.api.chat import _inline_statistics_tool_call_from_prompt
+
+    assert _inline_statistics_tool_call_from_prompt("x=[1,2,3], y=[4,5,6]") is None
+
+
+def test_statistics_tool_grounded_summary_reports_regression_values() -> None:
+    from app.api.chat import _statistics_tool_grounded_summary
+
+    summary = _statistics_tool_grounded_summary([
+        {
+            "tool": "astro_statistics_toolbox",
+            "result": {
+                "success": True,
+                "analysis_type": "linear_regression",
+                "method": "odr",
+                "n": 6,
+                "slope": 2.0,
+                "slope_stderr": 0.0,
+                "intercept": 1.0,
+                "intercept_stderr": 0.0,
+                "residual_rms": 0.0,
+                "publication_ready": True,
+            },
+        }
+    ])
+
+    assert summary is not None
+    assert "astro_statistics_toolbox" in summary
+    assert "Slope: 2" in summary
+    assert "Intercept: 1" in summary

@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -93,6 +94,7 @@ _COSMOLOGY_FOCUS_TOOL_ALLOWLIST: frozenset[str] = frozenset({
     "compute_absolute_magnitude",
     "deredden",
     "estimate_ebv",
+    "astro_statistics_toolbox",
 })
 
 COSMOLOGY_FOCUS_APPENDIX = """
@@ -3836,6 +3838,35 @@ def _line_lfr_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     )
 
 
+def _statistics_tool_grounded_summary(tool_results: list[dict]) -> str | None:
+    """Deterministic summary for inline-array statistics when prose is empty."""
+    stats: dict[str, Any] | None = None
+    for entry in reversed(tool_results or []):
+        if entry.get("tool") != "astro_statistics_toolbox":
+            continue
+        result = entry.get("result")
+        if isinstance(result, dict) and result.get("success") is True:
+            stats = result
+            break
+    if not stats:
+        return None
+    analysis_type = str(stats.get("analysis_type") or "")
+    if analysis_type != "linear_regression":
+        return None
+
+    return (
+        "Tool-grounded statistics summary: I used `astro_statistics_toolbox` "
+        "on the x/y arrays supplied in this turn.\n\n"
+        f"- Method: {stats.get('method') or 'not reported'}; n = {stats.get('n')}.\n"
+        f"- Slope: {_fmt_tool_number(stats.get('slope'))} +/- "
+        f"{_fmt_tool_number(stats.get('slope_stderr'))}.\n"
+        f"- Intercept: {_fmt_tool_number(stats.get('intercept'))} +/- "
+        f"{_fmt_tool_number(stats.get('intercept_stderr'))}.\n"
+        f"- Residual RMS: {_fmt_tool_number(stats.get('residual_rms'))}.\n"
+        f"- publication_ready={bool(stats.get('publication_ready'))}."
+    )
+
+
 def _sanitize_tools_returned_nothing(reply: str) -> str:
     import re
 
@@ -4091,6 +4122,85 @@ def _run_python_reads_real_cache(code: str) -> bool:
     ))
 
 
+_NUMBER_RE = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+
+
+def _parse_inline_numeric_array(text: str, name: str) -> list[float] | None:
+    """Parse a small user-supplied array like x=[0,1,2] from chat text."""
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9_]){re.escape(name)}\s*[:=：＝]\s*[\[\(（]\s*([^\]\)）]+?)\s*[\]\)）]",
+        re.I,
+    )
+    match = pattern.search(str(text or ""))
+    if not match:
+        return None
+    values = [float(v) for v in re.findall(_NUMBER_RE, match.group(1))]
+    return values or None
+
+
+def _parse_inline_uniform_error(text: str, axis: str, n: int) -> list[float] | None:
+    """Parse phrases like 'x误差都是0.1' or 'x and y errors are 0.1'."""
+    if n <= 0:
+        return None
+    lower = str(text or "").lower()
+    both_axis = axis in {"x", "y"} and re.search(
+        rf"(?:x\s*(?:和|and|/|,|，)\s*y|每个点.*?x.*?y|both\s+x\s+and\s+y)"
+        rf".{{0,30}}(?:误差|error|uncertaint).*?(?:都是|均为|为|=|are|is)?\s*({_NUMBER_RE})",
+        lower,
+        re.I | re.S,
+    )
+    if both_axis:
+        return [float(both_axis.group(1))] * n
+    axis_match = re.search(
+        rf"(?<![a-z0-9_]){re.escape(axis)}(?:[_\s-]*(?:err|error|uncertainty)|\s*误差)"
+        rf".{{0,20}}(?:都是|均为|为|=|are|is)?\s*({_NUMBER_RE})",
+        lower,
+        re.I | re.S,
+    )
+    if axis_match:
+        return [float(axis_match.group(1))] * n
+    array = (
+        _parse_inline_numeric_array(text, f"{axis}_err")
+        or _parse_inline_numeric_array(text, f"{axis}err")
+    )
+    if array and len(array) == n:
+        return array
+    return None
+
+
+def _inline_statistics_tool_call_from_prompt(text: str) -> dict[str, Any] | None:
+    """Return a deterministic statistics tool call for explicit inline data."""
+    prompt = str(text or "")
+    x = _parse_inline_numeric_array(prompt, "x")
+    y = _parse_inline_numeric_array(prompt, "y")
+    if not x or not y or len(x) != len(y) or len(x) < 2:
+        return None
+    lowered = prompt.lower()
+    regression_tokens = (
+        "linear regression", "line fit", "fit a line", "regression",
+        "线性回归", "拟合", "斜率", "截距",
+    )
+    if not any(tok in lowered for tok in regression_tokens):
+        return None
+    tool_input: dict[str, Any] = {
+        "analysis_type": "linear_regression",
+        "x": x,
+        "y": y,
+        "method": "auto",
+    }
+    x_err = _parse_inline_uniform_error(prompt, "x", len(x))
+    y_err = _parse_inline_uniform_error(prompt, "y", len(y))
+    if x_err:
+        tool_input["x_err"] = x_err
+    if y_err:
+        tool_input["y_err"] = y_err
+    return {
+        "id": f"auto_stats_{uuid.uuid4().hex}",
+        "name": "astro_statistics_toolbox",
+        "input": tool_input,
+    }
+
+
 def _should_suppress_line_measurement_synthetic_python(
     tool_call: dict,
     *,
@@ -4286,6 +4396,7 @@ async def _run_agent_loop(
     synthetic_run_python_count = 0  # G3.3 counter
     user_requested_synthetic_demo = _user_requested_synthetic_demo(messages)
     fit_ready_literature_cache_keys: list[str] = []
+    inline_statistics_call = _inline_statistics_tool_call_from_prompt(latest_user_text)
 
     hit_iteration_cap = False
     hit_deadline = False
@@ -4345,6 +4456,11 @@ async def _run_agent_loop(
             for tr in all_tool_results
             if tr.get("tool") == "fit_line_lfr"
         )
+        inline_statistics_done = any(
+            tr.get("tool") == "astro_statistics_toolbox"
+            for tr in all_tool_results
+        )
+        inline_statistics_pending = inline_statistics_call is not None and not inline_statistics_done
         attempted_table_ids = _table_extraction_arxiv_ids(all_tool_results)
         ranked_arxiv_candidates = _ranked_literature_arxiv_candidates(all_tool_results)
         if line_relation_workflow:
@@ -4450,6 +4566,16 @@ async def _run_agent_loop(
                     "export_sample_table",
                 }
             ]
+        if inline_statistics_pending:
+            # The user supplied the numerical arrays directly. Use the
+            # deterministic statistics tool as the citable path; do not let
+            # the model detour through run_python and trigger synthetic output.
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") == "astro_statistics_toolbox"
+            ]
+        elif inline_statistics_call is not None and inline_statistics_done:
+            visible_tools = []
 
         # Append a runtime note to the system message when any tools are
         # disabled this iteration, so the model understands why its previous
@@ -4524,6 +4650,25 @@ async def _run_agent_loop(
                 + "Respond with an honest boundary summary and ask for a "
                 + "specific arXiv ID / table source; do not report fitted "
                 + "relation statistics.]"
+            )
+
+        if inline_statistics_pending:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: the user supplied explicit x/y arrays and "
+                + "asked for a common statistical regression. The only "
+                + "available tool this iteration is astro_statistics_toolbox. "
+                + "Call it with the supplied arrays; do not use run_python, "
+                + "do not hand-calculate, and do not make qualitative "
+                + "significance claims until the statistics tool returns.]"
+            )
+        elif inline_statistics_call is not None and inline_statistics_done:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: astro_statistics_toolbox already returned "
+                + "the regression result for the user's inline arrays. Stop "
+                + "calling tools and summarize only the tool-provided slope, "
+                + "intercept, method, and residual diagnostics.]"
             )
 
         if line_relation_workflow and has_publication_ready_line_fit:
@@ -4642,6 +4787,19 @@ async def _run_agent_loop(
 
         text = str(response.get("content", "") or "")
         tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])
+        if inline_statistics_pending and (
+            not tool_calls_in_turn
+            or any(tc.get("name") != "astro_statistics_toolbox" for tc in tool_calls_in_turn)
+        ):
+            text = ""
+            tool_calls_in_turn = [deepcopy(inline_statistics_call)]
+            await _emit({
+                "type": "status",
+                "message": (
+                    "Running the deterministic statistics toolbox on the "
+                    "inline x/y arrays before summarizing the regression."
+                ),
+            })
         if force_table_extraction and not tool_calls_in_turn and arxiv_candidates:
             # Some backends still choose to summarize despite the runtime
             # "next call must be extract_literature_tables" instruction.  For
@@ -5563,20 +5721,25 @@ async def _run_agent_loop(
         line_lfr_summary = _line_lfr_tool_grounded_summary(all_tool_results)
         if line_lfr_summary:
             clean_reply = line_lfr_summary
-        elif all_tool_results:
-            tool_names = ", ".join({tr["tool"] for tr in all_tool_results})
-            clean_reply = (
-                f"I ran the following tools: {tool_names}. "
-                f"The results are shown below. "
-                f"(Note: the language model did not return a written summary — "
-                f"please review the tool outputs directly or ask me to explain them.)"
-            )
         else:
-            clean_reply = (
-                "The language model returned an empty response. This may be a "
-                "transient API issue or a prompt length problem. Please try "
-                "again with a shorter prompt, or contact support if it persists."
-            )
+            stats_summary = _statistics_tool_grounded_summary(all_tool_results)
+            if stats_summary:
+                clean_reply = stats_summary
+        if not clean_reply.strip():
+            if all_tool_results:
+                tool_names = ", ".join({tr["tool"] for tr in all_tool_results})
+                clean_reply = (
+                    f"I ran the following tools: {tool_names}. "
+                    f"The results are shown below. "
+                    f"(Note: the language model did not return a written summary — "
+                    f"please review the tool outputs directly or ask me to explain them.)"
+                )
+            else:
+                clean_reply = (
+                    "The language model returned an empty response. This may be a "
+                    "transient API issue or a prompt length problem. Please try "
+                    "again with a shorter prompt, or contact support if it persists."
+                )
         logger.warning(
             "Empty AI reply detected in %s agent loop; synthesised fallback. "
             "tool_results=%d iterations=%d",
