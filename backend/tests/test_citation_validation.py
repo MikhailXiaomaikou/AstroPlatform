@@ -111,6 +111,35 @@ def test_cosmology_registry_label_supports_author_year_citation():
     ) == []
 
 
+def test_cosmology_registry_bibcode_supports_planck_citation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "provenance": {
+                    "cosmology_likelihood": {
+                        "citations": [
+                            {
+                                "label": "Planck Collaboration VI 2020",
+                                "year": 2020,
+                                "doi": "10.1051/0004-6361/201833910",
+                                "bibcode": "2020A&A...641A...6P",
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+    ]
+
+    assert provenance_citation_violations(
+        "The Planck prior is 2020A&A...641A...6P.",
+        tool_results,
+    ) == []
+
+
 def test_hardblock_flag_tracks_environment(monkeypatch):
     from app.services.claim_validator import citation_violations_should_block, provenance_citation_violations
 

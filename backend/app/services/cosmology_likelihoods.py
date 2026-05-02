@@ -322,7 +322,12 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         source_url="https://wiki.cosmos.esa.int/planck-legacy-archive/",
         citations=(
-            DatasetCitation(label="Planck Collaboration VI 2020", year=2020, doi="10.1051/0004-6361/201833910"),
+            DatasetCitation(
+                label="Planck Collaboration VI 2020",
+                year=2020,
+                doi="10.1051/0004-6361/201833910",
+                bibcode="2020A&A...641A...6P",
+            ),
             DatasetCitation(label="Chen, Huang & Wang distance priors", year=2019, arxiv="1808.05724", doi="10.1088/1475-7516/2019/02/028"),
         ),
         notes="Compressed CMB prior, not a replacement for the full Planck likelihood in extended models.",
