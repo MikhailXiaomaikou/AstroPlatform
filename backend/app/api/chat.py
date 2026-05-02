@@ -3992,6 +3992,10 @@ def _cosmology_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                 "Scope note: these numbers are compressed-likelihood preliminary results, "
                 "not a full external Cobaya/CosmoSIS likelihood reproduction."
             )
+            lines.append(
+                "Do not describe these datasets as ready for full likelihood analyses "
+                "unless a full external Cobaya/CosmoSIS chain has actually run."
+            )
         else:
             reason = "no publication-ready compressed posterior was produced"
             warnings = chain.get("warnings")
@@ -4471,6 +4475,12 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     prompt = str(text or "").lower()
     forbidden = _cosmology_forbidden_probe_families(prompt)
     keys: list[str] = []
+    h0_anchor_context = any(tok in prompt for tok in (
+        "h0 prior", "h₀ prior", "h0-prior", "h₀-prior",
+        "h0 priors", "h₀ priors", "h0-priors", "h₀-priors",
+        "h0 constraint", "h₀ constraint", "late-universe h0",
+        "late universe h0", "distance ladder", "anchors",
+    ))
     pre_desi_bao = any(tok in prompt for tok in (
         "pre-desi", "pre desi", "non-desi", "non desi",
         "pre-desi bao", "before desi", "rather than desi",
@@ -4525,7 +4535,11 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     if "trgb" in prompt or "freedman" in prompt:
         keys.append("trgb_h0_freedman19")
         explicit_h0_prior_selected = True
-    if any(tok in prompt for tok in ("h0licow", "time-delay", "time delay", "strong-lens", "strong lens")):
+    if any(tok in prompt for tok in ("h0licow", "time-delay", "time delay", "strong-lens", "strong lens")) or (
+        h0_anchor_context
+        and "lensing" in prompt
+        and not _cosmology_prompt_mentions_weak_lensing(prompt)
+    ):
         keys.append("h0licow_h0")
         explicit_h0_prior_selected = True
     if "megamaser" in prompt or "maser" in prompt:
@@ -4537,7 +4551,8 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         for tok in (
             "compare against sh0es", "compare with sh0es", "vs sh0es",
             "versus sh0es", "+ sh0es", "plus sh0es", "include sh0es",
-            "combine with sh0es",
+            "combine with sh0es", "from sh0es", "sh0es,", "sh0es /",
+            "sh0es and", "sh0es +", "sh0es/trgb", "sh0es, trgb",
         )
     )
     if wants_shoes and (not explicit_h0_prior_selected or wants_shoes_alongside_specific_anchor):

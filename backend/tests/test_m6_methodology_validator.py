@@ -176,6 +176,41 @@ def test_publication_ready_true_claim_requires_top_level_ready_fit():
     assert any(v.kind == "publication_ready_mismatch" for v in violations)
 
 
+def test_compressed_chain_does_not_support_full_likelihood_ready_claim():
+    reply = "All registered anchors are ready for both compressed and full likelihood analyses."
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "claim_scope": "compressed_likelihood_preliminary",
+            "sampler": "compressed_gaussian_analytic",
+        },
+    }]
+
+    violations = methodology_consistency_violations(reply, tool_results)
+
+    assert any(v.kind == "full_likelihood_overclaim" for v in violations)
+
+
+def test_compressed_chain_scope_caveat_does_not_trigger_full_likelihood_claim():
+    reply = (
+        "This compressed-likelihood result is not a full external likelihood "
+        "reproduction; full likelihood analyses still require external chains."
+    )
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "claim_scope": "compressed_likelihood_preliminary",
+            "sampler": "compressed_gaussian_analytic",
+        },
+    }]
+
+    assert methodology_consistency_violations(reply, tool_results) == []
+
+
 # ── Test 5: empty/None inputs ─────────────────────────────────────────
 
 def test_empty_reply_returns_empty():

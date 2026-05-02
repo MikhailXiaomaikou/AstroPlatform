@@ -94,6 +94,24 @@ def test_trgb_h0_prompt_routes_to_trgb_not_shoes() -> None:
     assert _cosmology_dataset_keys_from_prompt(prompt) == ["trgb_h0_freedman19"]
 
 
+def test_h0_prior_comparison_routes_registered_anchors() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    prompt = (
+        "I am comparing late-universe H0 priors from SH0ES, TRGB, lensing, "
+        "and megamasers against CMB compressed constraints. Use only registered "
+        "H0-prior products; if some anchors are missing, list the registry gaps."
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "planck2018_compressed",
+        "trgb_h0_freedman19",
+        "h0licow_h0",
+        "megamaser_h0_pesce20",
+        "shoes_h0_riess22",
+    ]
+
+
 def test_time_delay_and_megamaser_h0_prompts_route_to_specific_priors() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,

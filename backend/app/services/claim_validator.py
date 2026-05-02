@@ -979,6 +979,15 @@ _PUBLICATION_READY_TRUE_RE = re.compile(
     r"\bpublication[_\s-]?ready\s*=\s*true\b",
     re.IGNORECASE,
 )
+_FULL_EXTERNAL_LIKELIHOOD_READY_RE = re.compile(
+    r"(?:\bready\b.{0,90}\bfull\s+(?:external\s+)?(?:likelihood|cobaya|cosmosis)\b|"
+    r"\bfull\s+(?:external\s+)?(?:likelihood|cobaya|cosmosis)\b.{0,90}\bready\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+_FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE = re.compile(
+    r"\b(?:not|no|without|requires?|require|would|future|pending|not\s+run|not\s+included|still\s+need)\b",
+    re.IGNORECASE,
+)
 # PART AI #3: LFR-context signature — reply 必须明显在做 line luminosity-FWHM
 # relation (而不是 isochrone slope / photometry alpha 之类), bypass detector
 # 才触发. 防误伤其它工作流.
@@ -1124,6 +1133,22 @@ def methodology_consistency_violations(
                 line_number=_line_number(reply, stat_match.start()),
             ))
 
+    # ── Cosmology compressed-vs-full likelihood scope ────────────────
+    # A compressed Gaussian chain can support preliminary posterior/tension
+    # numbers, but it does not make the selected probes "ready for full
+    # likelihood analyses."  Require an actual full external likelihood run
+    # before that user-facing readiness claim is allowed.
+    for full_match in _FULL_EXTERNAL_LIKELIHOOD_READY_RE.finditer(stripped):
+        sentence = _sentence_text(reply, full_match.start())
+        if _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE.search(sentence):
+            continue
+        if not _full_external_likelihood_ready_available(tool_results):
+            violations.append(CitationViolation(
+                kind="full_likelihood_overclaim",
+                match_text=full_match.group(0),
+                line_number=_line_number(reply, full_match.start()),
+            ))
+
     # ── PART AI #3: fit_line_lfr bypass detection ────────────────────
     # Bundle e8d9 reproducer: reply 里报 LFR 数字 (slope/intercept/scatter)
     # 但本轮没调 fit_line_lfr — AI 在 run_python 里自己用 cached rows 跑
@@ -1238,6 +1263,31 @@ def _cosmology_publication_ready_available(tool_results: Any) -> bool:
         if tool_name not in {"run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix"}:
             continue
         if _payload_is_claimable_success(tool_name, result):
+            return True
+    return False
+
+
+def _full_external_likelihood_ready_available(tool_results: Any) -> bool:
+    """Whether a full external likelihood, not compressed Gaussian, finished."""
+    for entry in tool_results if isinstance(tool_results, list) else [tool_results]:
+        tool_name, result = _entry_tool_and_result(entry)
+        if tool_name not in {
+            "run_cobaya_cosmology",
+            "get_cosmology_run_status",
+            "run_cosmology_likelihood_chain",
+            "run_cosmology_robustness_matrix",
+        }:
+            continue
+        if not _payload_is_claimable_success(tool_name, result):
+            continue
+        scope = str(result.get("claim_scope") or "").lower()
+        sampler = str(result.get("sampler") or "").lower()
+        execution_mode = str(result.get("execution_mode") or "").lower()
+        if "compressed" in scope or "compressed" in sampler or execution_mode == "compressed_gaussian":
+            continue
+        if tool_name in {"run_cobaya_cosmology", "get_cosmology_run_status"}:
+            return True
+        if execution_mode in {"external_cobaya", "external_cosmosis"}:
             return True
     return False
 
