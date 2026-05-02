@@ -4351,7 +4351,9 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "des-sn", "union3", "cmb", "planck", "act dr6", "sh0es",
         "cosmic chronometer", "weak lensing", "weak-lensing",
         "cosmic shear", "cosmic-shear", "kids",
-        "des y3", "hsc", "galaxy lensing",
+        "des y3", "hsc", "galaxy lensing", "trgb", "freedman",
+        "h0licow", "time-delay", "time delay", "strong-lens",
+        "strong lens", "megamaser",
     )
     model_tokens = (
         "dark energy", "暗能量", "lcdm", "λcdm", "wcdm", "w0wa",
