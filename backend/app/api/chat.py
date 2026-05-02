@@ -4350,7 +4350,7 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "bao", "baryon acoustic", "sn ia", "supernova", "pantheon",
         "des-sn", "union3", "cmb", "planck", "act dr6", "sh0es",
         "cosmic chronometer", "weak lensing", "weak-lensing",
-        "cosmic shear", "kids",
+        "cosmic shear", "cosmic-shear", "kids",
         "des y3", "hsc", "galaxy lensing",
     )
     model_tokens = (
@@ -4359,6 +4359,8 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "likelihood", "协方差", "covariance", "robustness",
         "pull", "outlier", "residual", "bin-level", "分红移",
         "s8", "sigma8", "σ8", "tension", "consistency",
+        "constraint", "constraints", "compressed product",
+        "compressed products",
     )
     planning_tokens = (
         "available", "可用", "dataset", "数据集", "prior", "引用",

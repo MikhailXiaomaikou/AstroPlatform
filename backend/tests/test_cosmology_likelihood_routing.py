@@ -295,6 +295,35 @@ def test_english_kids_s8_tension_prompt_routes_deterministically() -> None:
     ]
 
 
+def test_english_hsc_cosmic_shear_constraint_prompt_routes_deterministically() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_likelihood_run_calls_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
+
+    prompt = (
+        "I am testing an HSC Y1 cosmic-shear comparison against CMB constraints. "
+        "Use registered HSC, Planck, and any compatible executable compressed "
+        "products; avoid broad unrelated datasets unless the prompt requires them."
+    )
+
+    assert _is_cosmology_likelihood_workflow(prompt)
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "planck2018_compressed",
+        "hsc_y1_cosmic_shear",
+    ]
+    assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "hsc_y1_cosmic_shear",
+    ]
+    assert _cosmology_likelihood_run_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "planck2018_compressed",
+        "hsc_y1_cosmic_shear",
+    ]
+
+
 def test_pre_desi_bao_prompt_uses_sdss_not_desi() -> None:
     from app.api.chat import _cosmology_dataset_keys_from_prompt
 
