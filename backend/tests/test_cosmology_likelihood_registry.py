@@ -313,3 +313,108 @@ async def test_ai_tool_wrappers_expose_registry_and_config_guardrails():
     assert chain["success"] is True
     assert chain["publication_ready"] is True
     assert set(chain["parameters"]) >= {"H0", "omegam", "sigma8", "S8"}
+
+
+# ── PART AI follow-up: spec papers #12-#15 H0 ladder + SPT-3G CMB ──────
+
+
+def test_trgb_freedman19_h0_prior_registered() -> None:
+    """spec paper #15: TRGB Freedman+ 2019 H0 = 69.8 ± 1.9 km/s/Mpc.
+    Distance-ladder anchor 之间 SH0ES (Cepheid) 和 Planck (CMB inverse)."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("trgb_h0_freedman19")
+    assert entry.probe == "h0_prior"
+    assert entry.execution_mode == "compressed_gaussian"
+    cl = entry.compressed_likelihood
+    assert cl is not None
+    assert cl.parameters == ("H0",)
+    assert cl.mean == (69.8,)
+    assert cl.covariance == ((1.9 ** 2,),)
+    arxivs = [c.arxiv for c in entry.citations if c.arxiv]
+    assert "1907.05922" in arxivs
+
+
+def test_h0licow_h0_prior_registered_with_symmetric_sigma() -> None:
+    """spec paper #13: H0LiCOW XIII Wong+ 2020 H0 = 73.3 +1.7/-1.8.
+    我们用 1.75 的对称 Gaussian 近似."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("h0licow_h0")
+    cl = entry.compressed_likelihood
+    assert cl.mean == (73.3,)
+    assert cl.covariance == ((1.75 ** 2,),)
+    arxivs = [c.arxiv for c in entry.citations if c.arxiv]
+    assert "1907.04869" in arxivs
+    # 必须明确说 sigma 是对称化近似 (避免审稿人误以为是真实 1D Gaussian)
+    assert "symmetr" in cl.approximation.lower()
+
+
+def test_megamaser_pesce20_h0_prior_registered() -> None:
+    """spec paper #14: Pesce+ 2020 megamaser H0 = 73.9 ± 3.0 — 几何
+    anchor, 完全独立于 Cepheid/TRGB/SN Ia 阶梯."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("megamaser_h0_pesce20")
+    cl = entry.compressed_likelihood
+    assert cl.mean == (73.9,)
+    assert cl.covariance == ((3.0 ** 2,),)
+    arxivs = [c.arxiv for c in entry.citations if c.arxiv]
+    assert "2001.09213" in arxivs
+    # notes 或 approximation 必须显式说"几何 anchor / 独立于阶梯"
+    note_blob = (entry.notes or "").lower() + (cl.approximation or "").lower()
+    assert "geometric" in note_blob or "anchor" in note_blob
+
+
+def test_spt3g_cmb_external_likelihood_registered() -> None:
+    """spec paper #12: SPT-3G Balkenhol+ 2023 TT/TE/EE damping-tail.
+    External Cobaya likelihood (不能压缩成几维 Gaussian, 全 power
+    spectrum data product)."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("spt3g_cmb")
+    assert entry.probe == "cmb"
+    assert entry.execution_mode == "external_cobaya"
+    assert entry.likelihood_family == "cmb_powerspectrum"
+    # 必须含完整 TT/TE/EE 三 observable
+    assert set(entry.observables) >= {"TT", "TE", "EE"}
+    arxivs = [c.arxiv for c in entry.citations if c.arxiv]
+    assert "2212.05642" in arxivs
+    # 必须含至少几个标准 nuisance (kappa / dust)
+    assert "kappa" in entry.nuisance_parameters
+
+
+def test_all_4_h0_anchors_share_observable_and_models() -> None:
+    """全 4 个 H0 anchor (TRGB / SH0ES / H0LiCOW / Megamaser) 必须
+    expose H0 作为唯一 observable, applicable_models 必须含
+    lcdm/wcdm/w0wa_cdm (H0 prior 跟具体模型无关)."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    h0_anchors = [
+        "shoes_h0_riess22",
+        "trgb_h0_freedman19",
+        "h0licow_h0",
+        "megamaser_h0_pesce20",
+    ]
+    for key in h0_anchors:
+        entry = get_cosmology_dataset(key)
+        assert entry.observables == ("H0",), f"{key} observables wrong"
+        assert "lcdm" in entry.applicable_models
+        assert "wcdm" in entry.applicable_models
+        assert "w0wa_cdm" in entry.applicable_models
+
+
+def test_h0_anchor_means_span_known_tension_range() -> None:
+    """4 个 H0 anchor mean 值合起来必须横跨 'H0 tension 区间' 69-74,
+    才能让 cosmology_mcmc 用作互相对照."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    means = []
+    for key in ("trgb_h0_freedman19", "shoes_h0_riess22",
+                "h0licow_h0", "megamaser_h0_pesce20"):
+        entry = get_cosmology_dataset(key)
+        means.append(entry.compressed_likelihood.mean[0])
+    assert min(means) <= 70.0   # TRGB 端
+    assert max(means) >= 73.0   # SH0ES / H0LiCOW / Megamaser 端
+    # 横跨 ~3-4 km/s/Mpc, 即真实张力区间
+    assert max(means) - min(means) >= 3.0

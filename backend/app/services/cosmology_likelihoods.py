@@ -713,6 +713,188 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             approximation="Scalar Gaussian H0 prior; not an Ωm/S8 constraint.",
         ),
     ),
+    # ── PART AI follow-up: spec papers #12-#15 (除 SH0ES 之外的 4 个 H0 阶梯
+    # alternates + SPT-3G CMB) ──────────────────────────────────────────
+    "trgb_h0_freedman19": CosmologyDatasetEntry(
+        key="trgb_h0_freedman19",
+        display_name="TRGB H0 prior (Freedman+ 2019)",
+        version="Freedman et al. 2019 TRGB Carnegie-Chicago Hubble Program",
+        probe="h0_prior",
+        status="ready",
+        observables=("H0",),
+        units={"H0": "km s^-1 Mpc^-1"},
+        applicable_models=H0_MODELS,
+        likelihood_family="gaussian_prior",
+        covariance=CovarianceSpec(
+            kind="1D gaussian variance",
+            provided=True,
+            description="H0 = 69.8 +/- 1.9 km/s/Mpc (TRGB tip-of-RGB calibration).",
+            url="https://doi.org/10.3847/1538-4357/ab2f73",
+            format="scalar Gaussian prior",
+        ),
+        source_url="https://doi.org/10.3847/1538-4357/ab2f73",
+        citations=(
+            DatasetCitation(
+                label="Freedman et al. TRGB H0 (CCHP)",
+                year=2019,
+                arxiv="1907.05922",
+                doi="10.3847/1538-4357/ab2f73",
+            ),
+        ),
+        notes=(
+            "Independent distance-ladder anchor (TRGB tip-of-RGB) that sits "
+            "between SH0ES (Cepheid+SN Ia) and Planck. Use as a SH0ES "
+            "alternate / cross-check; do NOT combine with SH0ES naively "
+            "without modelling the shared SN Ia rung."
+        ),
+        cobaya_likelihood="gaussian:H0=69.8,sigma=1.9",
+        cosmosis_module="prior H0 = gaussian 69.8 1.9",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("H0",),
+            mean=(69.8,),
+            covariance=((1.9**2,),),
+            units={"H0": "km s^-1 Mpc^-1"},
+            source_locator="Freedman et al. 2019 TRGB H0 prior.",
+            approximation="Scalar Gaussian H0 prior; mid-rung distance ladder anchor.",
+        ),
+    ),
+    "h0licow_h0": CosmologyDatasetEntry(
+        key="h0licow_h0",
+        display_name="H0LiCOW H0 prior (Wong+ 2020)",
+        version="H0LiCOW XIII final 6-lens time-delay H0 (Wong+ 2020)",
+        probe="h0_prior",
+        status="ready",
+        observables=("H0",),
+        units={"H0": "km s^-1 Mpc^-1"},
+        applicable_models=H0_MODELS,
+        likelihood_family="gaussian_prior",
+        covariance=CovarianceSpec(
+            kind="1D gaussian variance (asymmetric)",
+            provided=True,
+            description=(
+                "H0 = 73.3 +1.7/-1.8 km/s/Mpc from 6 lensed quasar time-delay "
+                "systems; we use the symmetric 1.75 sigma for compressed Gaussian."
+            ),
+            url="https://doi.org/10.1093/mnras/stz3094",
+            format="scalar Gaussian prior",
+        ),
+        source_url="https://doi.org/10.1093/mnras/stz3094",
+        citations=(
+            DatasetCitation(
+                label="Wong et al. H0LiCOW XIII",
+                year=2020,
+                arxiv="1907.04869",
+                doi="10.1093/mnras/stz3094",
+            ),
+        ),
+        notes=(
+            "Strong-lens time-delay H0 — geometry-only, independent of "
+            "Cepheid / TRGB / SN Ia ladders. Sigma 1.75 is the symmetric "
+            "approximation of the published +1.7/-1.8 asymmetric error; "
+            "for full likelihood prefer TDCOSMO+ updated chains."
+        ),
+        cobaya_likelihood="gaussian:H0=73.3,sigma=1.75",
+        cosmosis_module="prior H0 = gaussian 73.3 1.75",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("H0",),
+            mean=(73.3,),
+            covariance=((1.75**2,),),
+            units={"H0": "km s^-1 Mpc^-1"},
+            source_locator="Wong et al. 2020 H0LiCOW XIII H0 prior.",
+            approximation=(
+                "Scalar Gaussian H0 prior; symmetrized 1.75 sigma from "
+                "published +1.7/-1.8 asymmetric error."
+            ),
+        ),
+    ),
+    "megamaser_h0_pesce20": CosmologyDatasetEntry(
+        key="megamaser_h0_pesce20",
+        display_name="Megamaser Cosmology Project H0 (Pesce+ 2020)",
+        version="Pesce et al. 2020 6-galaxy megamaser H0",
+        probe="h0_prior",
+        status="ready",
+        observables=("H0",),
+        units={"H0": "km s^-1 Mpc^-1"},
+        applicable_models=H0_MODELS,
+        likelihood_family="gaussian_prior",
+        covariance=CovarianceSpec(
+            kind="1D gaussian variance",
+            provided=True,
+            description="H0 = 73.9 +/- 3.0 km/s/Mpc (water megamaser geometry).",
+            url="https://doi.org/10.3847/2041-8213/ab75f0",
+            format="scalar Gaussian prior",
+        ),
+        source_url="https://doi.org/10.3847/2041-8213/ab75f0",
+        citations=(
+            DatasetCitation(
+                label="Pesce et al. Megamaser Cosmology Project H0",
+                year=2020,
+                arxiv="2001.09213",
+                doi="10.3847/2041-8213/ab75f0",
+            ),
+        ),
+        notes=(
+            "Geometric H0 from 6 megamaser galaxies — completely independent "
+            "of distance-ladder rungs (no Cepheid / TRGB / SN Ia). Larger "
+            "uncertainty (3.0 km/s/Mpc) but cleanest anchor for late-Universe "
+            "H0 tension cross-checks."
+        ),
+        cobaya_likelihood="gaussian:H0=73.9,sigma=3.0",
+        cosmosis_module="prior H0 = gaussian 73.9 3.0",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("H0",),
+            mean=(73.9,),
+            covariance=((3.0**2,),),
+            units={"H0": "km s^-1 Mpc^-1"},
+            source_locator="Pesce et al. 2020 megamaser H0 prior.",
+            approximation="Scalar Gaussian H0 prior; geometric anchor only.",
+        ),
+    ),
+    "spt3g_cmb": CosmologyDatasetEntry(
+        key="spt3g_cmb",
+        display_name="SPT-3G CMB damping-tail (Balkenhol+ 2023)",
+        version="SPT-3G 2018 TT/TE/EE damping-tail likelihood",
+        probe="cmb",
+        status="external_likelihood",
+        observables=("TT", "TE", "EE"),
+        units={"power_spectrum": "uK^2"},
+        applicable_models=CMB_MODELS,
+        likelihood_family="cmb_powerspectrum",
+        covariance=CovarianceSpec(
+            kind="full TT+TE+EE block covariance",
+            provided=True,
+            description=(
+                "SPT-3G 2018 small-scale damping-tail TT/TE/EE covariance. "
+                "Most useful as an ACT/Planck cross-check at high ell."
+            ),
+            url="https://github.com/SouthPoleTelescope/spt3g_y1_dist",
+            format="external Cobaya likelihood module",
+        ),
+        source_url="https://pole.uchicago.edu/public/data/balkenhol22/",
+        citations=(
+            DatasetCitation(
+                label="Balkenhol et al. SPT-3G TT/TE/EE",
+                year=2023,
+                arxiv="2212.05642",
+                doi="10.1103/PhysRevD.108.023510",
+            ),
+        ),
+        notes=(
+            "External Cobaya likelihood; not compressible to a few-dim "
+            "Gaussian like the H0 priors — full power-spectrum data product. "
+            "Use as CMB damping-tail cross-check vs Planck/ACT."
+        ),
+        cobaya_likelihood="external:cmb.spt3g_2018",
+        cosmosis_module="likelihood/cmb/spt3g/spt3g_2018.py",
+        nuisance_parameters=(
+            "kappa", "T_dust_TT", "alpha_dust_TT",
+            "T_dust_EE", "alpha_dust_EE",
+        ),
+        execution_mode="external_cobaya",
+    ),
 }
 
 
