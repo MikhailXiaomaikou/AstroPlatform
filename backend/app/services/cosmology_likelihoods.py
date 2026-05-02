@@ -85,6 +85,23 @@ class CovarianceSpec:
 
 
 @dataclass(frozen=True)
+class DataProductSpec:
+    """Machine-readable public data product tied to a registry entry."""
+
+    product_type: str
+    role: str
+    url: str
+    format: str
+    description: str
+    columns: tuple[str, ...] = field(default_factory=tuple)
+    rows: int | None = None
+    sha256: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class CompressedLikelihoodSpec:
     """Small published Gaussian summary likelihood.
 
@@ -124,12 +141,14 @@ class CosmologyDatasetEntry:
     cosmosis_module: str | None = None
     nuisance_parameters: tuple[str, ...] = field(default_factory=tuple)
     execution_mode: ExecutionMode = "config_only"
+    data_products: tuple[DataProductSpec, ...] = field(default_factory=tuple)
     compressed_likelihood: CompressedLikelihoodSpec | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["citations"] = [citation.to_dict() for citation in self.citations]
         result["covariance"] = self.covariance.to_dict()
+        result["data_products"] = [product.to_dict() for product in self.data_products]
         if self.compressed_likelihood is not None:
             result["compressed_likelihood"] = self.compressed_likelihood.to_dict()
         return result
@@ -185,6 +204,42 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cobaya_likelihood="external:desilike.desi_dr1_bao",
         cosmosis_module="likelihood/bao/desi1-dr1/desi1_dr1.py",
         execution_mode="external_cobaya",
+        data_products=(
+            DataProductSpec(
+                product_type="bao_measurement_vector",
+                role="measurement_vector",
+                url=(
+                    "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/"
+                    "desi_2024_gaussian_bao_ALL_GCcomb_mean.txt"
+                ),
+                format="ASCII table",
+                description="DESI DR1 combined BAO Gaussian mean vector.",
+                columns=("z", "value", "quantity"),
+                rows=12,
+            ),
+            DataProductSpec(
+                product_type="bao_covariance_matrix",
+                role="covariance",
+                url=(
+                    "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/"
+                    "desi_2024_gaussian_bao_ALL_GCcomb_cov.txt"
+                ),
+                format="ASCII matrix",
+                description="DESI DR1 combined BAO Gaussian covariance matrix.",
+                rows=12,
+            ),
+            DataProductSpec(
+                product_type="bao_bin_products",
+                role="bin_level_measurements",
+                url="https://github.com/CobayaSampler/bao_data/tree/master",
+                format="ASCII mean/cov pairs",
+                description=(
+                    "Per-tracer DESI DR1 BAO mean/covariance files for BGS, LRG, "
+                    "ELG, QSO, and Lyα bins."
+                ),
+                columns=("z", "value", "quantity"),
+            ),
+        ),
     ),
     "sdss_6df_bao": CosmologyDatasetEntry(
         key="sdss_6df_bao",
@@ -247,6 +302,64 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cosmosis_module="Pantheon+_Data/5_COSMOLOGY/cosmosis_likelihoods",
         nuisance_parameters=("M_B",),
         execution_mode="external_cobaya",
+        data_products=(
+            DataProductSpec(
+                product_type="sn_distance_modulus_table",
+                role="data_table",
+                url=(
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "Pantheon%2B_Data/4_DISTANCES_AND_COVAR/Pantheon%2BSH0ES.dat"
+                ),
+                format="ASCII table",
+                description="Pantheon+SH0ES supernova distance table.",
+                columns=("CID", "zHD", "zCMB", "MU_SH0ES", "MU_SH0ES_ERR_DIAG"),
+                rows=1701,
+            ),
+            DataProductSpec(
+                product_type="sn_covariance_matrix",
+                role="covariance",
+                url=(
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "Pantheon%2B_Data/4_DISTANCES_AND_COVAR/Pantheon%2BSH0ES_STAT%2BSYS.cov"
+                ),
+                format="ASCII packed covariance",
+                description="Pantheon+SH0ES statistical plus systematic covariance matrix.",
+                rows=1701,
+            ),
+            DataProductSpec(
+                product_type="sn_covariance_matrix",
+                role="statistical_covariance",
+                url=(
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "Pantheon%2B_Data/4_DISTANCES_AND_COVAR/Pantheon%2BSH0ES_STATONLY.cov"
+                ),
+                format="ASCII packed covariance",
+                description="Pantheon+SH0ES statistical-only covariance matrix.",
+                rows=1701,
+            ),
+            DataProductSpec(
+                product_type="cosmosis_likelihood_code",
+                role="likelihood_code",
+                url=(
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "Pantheon%2B_Data/5_COSMOLOGY/cosmosis_likelihoods/"
+                    "Pantheon%2B_only_cosmosis_likelihood.py"
+                ),
+                format="Python / CosmoSIS module",
+                description="Pantheon+-only CosmoSIS likelihood wrapper.",
+            ),
+            DataProductSpec(
+                product_type="cosmosis_likelihood_code",
+                role="likelihood_code",
+                url=(
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "Pantheon%2B_Data/5_COSMOLOGY/cosmosis_likelihoods/"
+                    "Pantheon%2BSH0ES_cosmosis_likelihood.py"
+                ),
+                format="Python / CosmoSIS module",
+                description="Pantheon+SH0ES CosmoSIS likelihood wrapper.",
+            ),
+        ),
     ),
     "des_sn5yr": CosmologyDatasetEntry(
         key="des_sn5yr",
@@ -334,6 +447,29 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cobaya_likelihood="external:planck_2018_distance_prior",
         cosmosis_module="external:planck2018_distance_priors",
         execution_mode="compressed_gaussian",
+        data_products=(
+            DataProductSpec(
+                product_type="planck_likelihood_archive",
+                role="likelihood_code",
+                url=(
+                    "https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/"
+                    "CMB_spectrum_%26_Likelihood_Code"
+                ),
+                format="PLA likelihood code/data archive",
+                description="Planck Legacy Archive page for the public CMB spectrum and likelihood code.",
+            ),
+            DataProductSpec(
+                product_type="compressed_distance_prior",
+                role="compressed_prior_table",
+                url="https://arxiv.org/abs/1808.05724",
+                format="paper table",
+                description=(
+                    "Planck final-release distance-prior mean vector and covariance source "
+                    "used by the phase-1 compressed runner."
+                ),
+                columns=("R", "l_A", "ombh2", "ns"),
+            ),
+        ),
         compressed_likelihood=CompressedLikelihoodSpec(
             parameters=("H0", "omegam", "sigma8", "S8"),
             mean=(67.36, 0.3153, 0.8111, 0.832),
@@ -584,19 +720,30 @@ def list_cosmology_datasets(
     *,
     probe: str | None = None,
     status: DatasetStatus | None = None,
+    dataset_keys: list[str] | None = None,
 ) -> dict[str, Any]:
+    requested_keys = [str(key).strip() for key in (dataset_keys or []) if str(key).strip()]
+    unknown_keys = [key for key in requested_keys if key not in _REGISTRY]
+    registry_entries = (
+        [_REGISTRY[key] for key in requested_keys if key in _REGISTRY]
+        if requested_keys
+        else list(_REGISTRY.values())
+    )
     entries = [
         entry.to_dict()
-        for entry in _REGISTRY.values()
+        for entry in registry_entries
         if (probe is None or entry.probe == probe)
         and (status is None or entry.status == status)
     ]
-    entries.sort(key=lambda item: item["key"])
+    if not requested_keys:
+        entries.sort(key=lambda item: item["key"])
     return {
         "success": True,
         "registry_version": "2026-04-30",
         "dataset_count": len(entries),
         "datasets": entries,
+        "requested_dataset_keys": requested_keys,
+        "unknown_dataset_keys": unknown_keys,
         "supported_models": {
             key: {"label": MODEL_LABELS[key], "parameters": list(params)}
             for key, params in SUPPORTED_MODELS.items()

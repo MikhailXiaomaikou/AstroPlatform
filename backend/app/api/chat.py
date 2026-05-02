@@ -5223,11 +5223,16 @@ async def _run_agent_loop(
             not tool_calls_in_turn
             or any(tc.get("name") != "list_cosmology_datasets" for tc in tool_calls_in_turn)
         ):
+            registry_dataset_keys = _cosmology_dataset_keys_from_prompt(latest_user_text)
             text = ""
             tool_calls_in_turn = [{
                 "id": f"auto_cosmo_registry_{uuid.uuid4().hex}",
                 "name": "list_cosmology_datasets",
-                "input": {},
+                "input": (
+                    {"dataset_keys": registry_dataset_keys}
+                    if registry_dataset_keys
+                    else {}
+                ),
             }]
             forced_tool_call_override = True
             await _emit({

@@ -98,10 +98,11 @@ main references currently used by tools, prompts, and validation fixtures.
 | Gaia DR3 | Gaia Collaboration 2023, A&A 674, A1 | Gaia DR3 table-level citation |
 | SIMBAD | Wenger et al. 2000, A&AS 143, 9 | SIMBAD registry citation |
 | 2MASS | Skrutskie et al. 2006, AJ 131, 1163 | 2MASS registry citation |
-| DESI DR1 BAO | DESI Collaboration 2024, arXiv:2404.03002 | Observational-cosmology registry entry |
+| DESI DR1 BAO | DESI Collaboration 2024, arXiv:2404.03002 | Registry entry with public BAO mean/covariance data products |
 | SDSS + 6dF BAO | Beutler et al. 2011; Alam et al. 2017; eBOSS Collaboration 2021 | ACT-era / pre-DESI BAO likelihood planning |
+| Pantheon+ | Scolnic et al. 2022; Brout et al. 2022 | SN distance table, covariance, and CosmoSIS likelihood product links |
 | ACT DR6 lensing | Madhavacheril et al. 2024, arXiv:2304.05203 | Compressed CMB-lensing S8/H0 consistency checks |
-| Planck 2018 | Planck Collaboration VI 2020, A&A 641, A6 | Compressed CMB baseline and ΛCDM comparison |
+| Planck 2018 | Planck Collaboration VI 2020, A&A 641, A6 | Compressed CMB baseline, PLA likelihood-code link, and ΛCDM comparison |
 | KiDS-1000 cosmic shear | Asgari et al. 2021, arXiv:2007.15633 | Weak-lensing S8 comparison branch |
 | DES Y3 3x2pt | DES Collaboration 2022, arXiv:2105.13549 | Galaxy weak-lensing + clustering comparison branch |
 | HSC Y1 cosmic shear | Hamana et al. 2020, arXiv:1906.06041 | HSC weak-lensing S8 comparison branch |

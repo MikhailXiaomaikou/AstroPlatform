@@ -66,6 +66,15 @@ for preliminary compressed posterior/tension summaries. Those numbers are
 claimable only with `publication_ready=true` and must be described as
 compressed-likelihood preliminary, not as full external likelihood results.
 
+Priority executable-product coverage is now explicit in the registry:
+DESI DR1 BAO points at the public CobayaSampler `bao_data` mean/covariance
+files, Pantheon+ points at the public distance table, covariance matrices,
+and CosmoSIS likelihood wrappers, and Planck 2018 points at the Planck
+Legacy Archive likelihood-code page plus the compressed distance-prior table
+source. These links are data-product provenance for future adapters; DESI
+and Pantheon+ remain external-likelihood/config-only until a runner consumes
+those files directly.
+
 ## Re-enable Checklist
 
 To promote a gated archive connector:

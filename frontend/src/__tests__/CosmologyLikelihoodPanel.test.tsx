@@ -18,6 +18,16 @@ describe("CosmologyLikelihoodPanel", () => {
               execution_mode: "external_cobaya",
               covariance: { kind: "block covariance", provided: true },
               citations: [{ label: "DESI Collaboration", year: 2024, arxiv: "2404.03002" }],
+              data_products: [
+                {
+                  role: "measurement_vector",
+                  url: "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/desi_2024_gaussian_bao_ALL_GCcomb_mean.txt",
+                },
+                {
+                  role: "covariance",
+                  url: "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/desi_2024_gaussian_bao_ALL_GCcomb_cov.txt",
+                },
+              ],
             },
           ],
         }}
@@ -29,6 +39,8 @@ describe("CosmologyLikelihoodPanel", () => {
     expect(screen.getByText("external likelihood")).toBeInTheDocument();
     expect(screen.getByText("external cobaya")).toBeInTheDocument();
     expect(screen.getByText(/block covariance/)).toBeInTheDocument();
+    expect(screen.getByText(/machine-readable products: 2/)).toBeInTheDocument();
+    expect(screen.getByText(/measurement_vector, covariance/)).toBeInTheDocument();
     expect(screen.getByText(/arXiv:2404.03002/)).toBeInTheDocument();
   });
 

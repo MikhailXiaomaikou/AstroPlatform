@@ -16,6 +16,15 @@ type DatasetEntry = {
   citations?: Citation[];
   execution_mode?: string;
   compressed_likelihood?: { parameters?: string[]; source_locator?: string };
+  data_products?: {
+    product_type?: string;
+    role?: string;
+    url?: string;
+    format?: string;
+    description?: string;
+    columns?: string[];
+    rows?: number | null;
+  }[];
 };
 
 function asArray<T>(value: unknown): T[] {
@@ -65,6 +74,12 @@ function DatasetList({ datasets }: { datasets: DatasetEntry[] }) {
     <div style={{ display: "grid", gap: 8 }}>
       {datasets.slice(0, 10).map((entry) => {
         const citation = asArray<Citation>(entry.citations)[0];
+        const dataProducts = asArray<NonNullable<DatasetEntry["data_products"]>[number]>(entry.data_products);
+        const productRoles = dataProducts
+          .map((product) => product.role || product.product_type)
+          .filter(Boolean)
+          .slice(0, 3)
+          .join(", ");
         return (
           <div
             key={entry.key || entry.display_name}
@@ -88,6 +103,20 @@ function DatasetList({ datasets }: { datasets: DatasetEntry[] }) {
             {entry.compressed_likelihood ? (
               <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.72rem", marginTop: 2 }}>
                 executable compressed params: {asArray<string>(entry.compressed_likelihood.parameters).join(", ")}
+              </div>
+            ) : null}
+            {dataProducts.length ? (
+              <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.72rem", marginTop: 2 }}>
+                machine-readable products: {dataProducts.length}
+                {productRoles ? ` · ${productRoles}` : ""}
+                {dataProducts[0]?.url ? (
+                  <>
+                    {" · "}
+                    <a href={dataProducts[0].url} target="_blank" rel="noreferrer">
+                      source
+                    </a>
+                  </>
+                ) : null}
               </div>
             ) : null}
             {citation ? (

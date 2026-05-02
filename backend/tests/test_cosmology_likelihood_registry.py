@@ -38,6 +38,52 @@ def test_registry_contains_required_observational_cosmology_datasets():
         }
 
 
+def test_priority_datasets_expose_machine_readable_data_products():
+    from app.services.cosmology_likelihoods import list_cosmology_datasets
+
+    registry = list_cosmology_datasets(
+        dataset_keys=["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"]
+    )
+    entries = {entry["key"]: entry for entry in registry["datasets"]}
+
+    desi_products = entries["desi_dr1_bao"]["data_products"]
+    assert any(
+        product["role"] == "measurement_vector"
+        and "desi_2024_gaussian_bao_ALL_GCcomb_mean.txt" in product["url"]
+        for product in desi_products
+    )
+    assert any(
+        product["role"] == "covariance"
+        and "desi_2024_gaussian_bao_ALL_GCcomb_cov.txt" in product["url"]
+        for product in desi_products
+    )
+
+    pantheon_products = entries["pantheon_plus"]["data_products"]
+    assert any(product["role"] == "data_table" and "Pantheon%2BSH0ES.dat" in product["url"] for product in pantheon_products)
+    assert any(product["role"] == "covariance" and "STAT%2BSYS.cov" in product["url"] for product in pantheon_products)
+    assert any(product["role"] == "likelihood_code" and "cosmosis_likelihood.py" in product["url"] for product in pantheon_products)
+
+    planck_products = entries["planck2018_compressed"]["data_products"]
+    assert any(product["role"] == "likelihood_code" and "Likelihood_Code" in product["url"] for product in planck_products)
+    assert any(product["role"] == "compressed_prior_table" and product["url"] == "https://arxiv.org/abs/1808.05724" for product in planck_products)
+
+
+def test_registry_can_list_only_requested_dataset_keys_in_order():
+    from app.services.cosmology_likelihoods import list_cosmology_datasets
+
+    registry = list_cosmology_datasets(
+        dataset_keys=["pantheon_plus", "desi_dr1_bao", "not_a_dataset"]
+    )
+
+    assert [entry["key"] for entry in registry["datasets"]] == ["pantheon_plus", "desi_dr1_bao"]
+    assert registry["requested_dataset_keys"] == [
+        "pantheon_plus",
+        "desi_dr1_bao",
+        "not_a_dataset",
+    ]
+    assert registry["unknown_dataset_keys"] == ["not_a_dataset"]
+
+
 def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints():
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
@@ -239,6 +285,16 @@ async def test_ai_tool_wrappers_expose_registry_and_config_guardrails():
         "des_sn5yr",
         "union3",
     }
+
+    selected = await execute_tool(
+        "list_cosmology_datasets",
+        {"dataset_keys": ["desi_dr1_bao", "planck2018_compressed"]},
+        python_session_id="test",
+    )
+    assert [entry["key"] for entry in selected["datasets"]] == [
+        "desi_dr1_bao",
+        "planck2018_compressed",
+    ]
 
     config = await execute_tool(
         "build_cosmology_likelihood",

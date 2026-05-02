@@ -1039,6 +1039,11 @@ TOOLS = [
                     "enum": ["ready", "external_likelihood", "metadata_only"],
                     "description": "Optional status filter.",
                 },
+                "dataset_keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional explicit dataset keys to list; preserves the requested order.",
+                },
             },
         },
     },
@@ -7684,6 +7689,7 @@ def _exec_list_cosmology_datasets(inp: dict) -> dict:
     return list_cosmology_datasets(
         probe=str(inp.get("probe") or "").strip() or None,
         status=str(inp.get("status") or "").strip() or None,
+        dataset_keys=inp.get("dataset_keys") if isinstance(inp.get("dataset_keys"), list) else None,
     )
 
 
