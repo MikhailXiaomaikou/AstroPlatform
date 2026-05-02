@@ -581,6 +581,23 @@ def test_cosmology_registry_collaboration_label_supports_generic_author_year():
     assert provenance_citation_violations(reply, tool_results) == []
 
 
+def test_trgb_registry_context_citations_support_shoes_and_planck_comparison():
+    from app.services.claim_validator import provenance_citation_violations
+    from app.services.cosmology_likelihoods import list_cosmology_datasets
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": list_cosmology_datasets(dataset_keys=["trgb_h0_freedman19"]),
+    }]
+
+    reply = (
+        "The TRGB anchor is an alternative to Riess et al. (2022) SH0ES "
+        "and may be compared with the Planck 2018 CMB baseline."
+    )
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
 def test_supporting_bibcode_fields_enter_valid_pool():
     from app.services.claim_validator import provenance_citation_violations
 

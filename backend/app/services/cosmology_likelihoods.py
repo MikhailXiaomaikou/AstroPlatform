@@ -745,6 +745,23 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 arxiv="1907.05922",
                 doi="10.3847/1538-4357/ab2f73",
             ),
+            # Context-only comparison anchors referenced by the notes below.
+            # These citations make prose like "alternative to SH0ES" and
+            # "compared with Planck 2018" provenance-visible without causing
+            # the TRGB-only likelihood run to combine those datasets.
+            DatasetCitation(
+                label="Riess et al. SH0ES comparison anchor",
+                year=2022,
+                arxiv="2112.04510",
+                doi="10.3847/2041-8213/ac5c5b",
+            ),
+            DatasetCitation(
+                label="Planck 2018 CMB comparison anchor",
+                year=2018,
+                arxiv="1807.06209",
+                doi="10.1051/0004-6361/201833910",
+                bibcode="2020A&A...641A...6P",
+            ),
         ),
         notes=(
             "Independent distance-ladder anchor (TRGB tip-of-RGB) that sits "
