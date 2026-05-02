@@ -1183,6 +1183,8 @@ def _unsupported_narrative_kind_is_supported(kind: str, tool_results: Any) -> bo
         return _line_measurement_rows_available(tool_results)
     if kind == "unsupported_bao_bin_anomaly":
         return _bao_bin_anomaly_assessment_available(tool_results)
+    if kind == "literature_fallback" and _cosmology_publication_ready_available(tool_results):
+        return True
     return (
         _tool_successfully_ran(tool_results, "search_literature")
         or _line_measurement_rows_available(tool_results)
@@ -1226,6 +1228,17 @@ def _bao_bin_anomaly_assessment_available(tool_results: Any) -> bool:
             value = result.get(key)
             if value not in (None, [], {}):
                 return True
+    return False
+
+
+def _cosmology_publication_ready_available(tool_results: Any) -> bool:
+    """Whether a cosmology posterior tool produced citeable current-turn results."""
+    for entry in tool_results if isinstance(tool_results, list) else [tool_results]:
+        tool_name, result = _entry_tool_and_result(entry)
+        if tool_name not in {"run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix"}:
+            continue
+        if _payload_is_claimable_success(tool_name, result):
+            return True
     return False
 
 

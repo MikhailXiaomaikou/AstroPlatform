@@ -647,6 +647,29 @@ def test_publication_ready_line_fit_supports_generic_cii_ranges():
     assert unsupported_literature_narrative_violations(reply, tool_results) == []
 
 
+def test_publication_ready_cosmology_chain_supports_literature_source_phrase():
+    from app.services.claim_validator import unsupported_literature_narrative_violations
+
+    reply = (
+        "These compressed priors are drawn from the literature, but the quoted "
+        "H0 and S8 values below come from the publication-ready compressed chain."
+    )
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "model": "lcdm",
+            "posterior": {
+                "H0": {"median": 67.53},
+                "S8": {"median": 0.832},
+            },
+        },
+    }]
+
+    assert unsupported_literature_narrative_violations(reply, tool_results) == []
+
+
 def test_desi_lrg_bin_tension_requires_bin_level_evidence():
     from app.services.claim_validator import unsupported_literature_narrative_violations
 
