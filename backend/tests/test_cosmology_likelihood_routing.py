@@ -183,6 +183,22 @@ def test_cmb_only_prompt_respects_explicit_dataset_exclusions() -> None:
     ]
 
 
+def test_english_cmb_only_prompt_respects_do_not_include_exclusions() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    prompt = (
+        "I am doing a CMB-only consistency check. Using only the available "
+        "Planck compressed prior and ACT DR6 CMB lensing information, compare "
+        "H0, Omega_m, sigma8, and S8 under flat LCDM; do not include BAO, "
+        "SN, or weak lensing."
+    )
+
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+
+
 def test_supernova_only_prompt_does_not_route_to_bao_robustness_matrix() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,

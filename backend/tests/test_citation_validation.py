@@ -83,6 +83,34 @@ def test_field_level_bibcode_pool_supports_reply():
     assert provenance_citation_violations("Parallax uses 2020yCat.1350....0G.", tool_results) == []
 
 
+def test_cosmology_registry_label_supports_author_year_citation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "provenance": {
+                    "cosmology_likelihood": {
+                        "citations": [
+                            {
+                                "label": "Madhavacheril et al. ACT DR6 lensing",
+                                "year": 2024,
+                                "arxiv": "2304.05203",
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+    ]
+
+    assert provenance_citation_violations(
+        "The ACT DR6 lensing input follows Madhavacheril et al. (2024).",
+        tool_results,
+    ) == []
+
+
 def test_hardblock_flag_tracks_environment(monkeypatch):
     from app.services.claim_validator import citation_violations_should_block, provenance_citation_violations
 

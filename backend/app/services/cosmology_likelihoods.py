@@ -367,7 +367,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         source_url="https://lambda.gsfc.nasa.gov/product/act/actadv_dr6_lensing_lh_info.html",
         citations=(
-            DatasetCitation(label="ACT DR6 lensing likelihood", year=2024, arxiv="2304.05203"),
+            DatasetCitation(label="Madhavacheril et al. ACT DR6 lensing", year=2024, arxiv="2304.05203"),
             DatasetCitation(label="Carron, Mirmelstein & Lewis likelihood method", year=2022, arxiv="2206.07773"),
         ),
         notes="Requires ACT likelihood data and external code; pair carefully with Planck CMB to avoid double-counting lensing.",

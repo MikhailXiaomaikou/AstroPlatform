@@ -4273,6 +4273,9 @@ def _cosmology_prompt_forbids_family(text: str, aliases: tuple[str, ...]) -> boo
     negators = (
         "不要加入", "不要使用", "不要引入", "不加入", "不使用", "不引入",
         "别加入", "别使用", "排除", "without", "exclude",
+        "do not include", "do not use", "do not add",
+        "don't include", "don't use", "don't add",
+        "not include", "not use", "not add",
     )
     for negator in negators:
         start = 0
