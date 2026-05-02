@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback, lazy, memo, Suspense } from "react";
+import type { MouseEvent } from "react";
 import {
   sendChatMessage,
   executeChatAction,
@@ -2933,7 +2934,6 @@ export default function ChatPage() {
   const [shareLoading, setShareLoading] = useState(false);
   const pythonSessionIdRef = useRef<string>(crypto.randomUUID());
   const freshChatRequestRef = useRef(false);
-  const newChatNavigatingRef = useRef(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSessionScopeRef = useRef(storageScope);
 
@@ -3488,7 +3488,7 @@ export default function ChatPage() {
     } catch { /* ignore */ }
   };
 
-  const handleNewChat = () => {
+  const startFreshChat = useCallback(() => {
     // Start a genuinely fresh chat synchronously. The old native confirm
     // dialog could be dismissed by automation/browser timing, leaving users
     // visually on the old session while they thought they had started a new
@@ -3500,6 +3500,7 @@ export default function ChatPage() {
     currentSessionIdRef.current = null;
     setCurrentSessionTitle("");
     setSaveStatus("idle");
+    setInput("");
     freshChatRequestRef.current = true;
     pythonSessionIdRef.current = crypto.randomUUID();
     pendingSavePayloadRef.current = null;
@@ -3518,37 +3519,31 @@ export default function ChatPage() {
     localStorage.removeItem("astro_last_adql_rows");
     localStorage.removeItem("astro_adql_result_sets");
     localStorage.removeItem("astro_last_search");
+    localStorage.removeItem("astro_chat_new_session");
+    localStorage.removeItem("astro_chat_open_session");
+    window.history.replaceState(null, "", "/chat");
+  }, [storageScope]);
+
+  const handleNewChat = (event?: MouseEvent<HTMLAnchorElement | HTMLButtonElement>) => {
+    event?.preventDefault();
+    startFreshChat();
   };
 
   useEffect(() => {
-    const handleFreshChatCapture = (event: MouseEvent) => {
+    const handleFreshChatClick = (event: globalThis.MouseEvent) => {
       const target = event.target instanceof Element
         ? event.target.closest("[data-fresh-chat='true']")
         : null;
       if (!target) return;
       event.preventDefault();
       event.stopPropagation();
-      if (newChatNavigatingRef.current) return;
-      newChatNavigatingRef.current = true;
-      setMessages([]);
-      messagesRef.current = [];
-      setCurrentSessionId(null);
-      currentSessionIdRef.current = null;
-      setCurrentSessionTitle("");
-      setSaveStatus("idle");
-      freshChatRequestRef.current = true;
-      pythonSessionIdRef.current = crypto.randomUUID();
-      clearFreshChatStorage(storageScope);
-      localStorage.setItem("astro_chat_new_session", "1");
-      window.location.href = `/chat?fresh_chat=1&_=${Date.now()}`;
+      startFreshChat();
     };
-    document.addEventListener("mousedown", handleFreshChatCapture, true);
-    document.addEventListener("click", handleFreshChatCapture, true);
+    document.addEventListener("click", handleFreshChatClick, true);
     return () => {
-      document.removeEventListener("mousedown", handleFreshChatCapture, true);
-      document.removeEventListener("click", handleFreshChatCapture, true);
+      document.removeEventListener("click", handleFreshChatClick, true);
     };
-  }, [storageScope]);
+  }, [startFreshChat]);
 
   const handleRenameSession = async (newTitle: string) => {
     const trimmed = newTitle.trim();
@@ -4086,6 +4081,9 @@ export default function ChatPage() {
 
   return (
     <div className={`chat-page chat-page-with-sidebar${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+      {messages.length === 0 && currentSessionId === null && !loading && (
+        <span data-testid="fresh-chat-ready" hidden />
+      )}
       {toast && (
         <div className="chat-toast" style={{
           background: toast.tone === "error" ? "#ef4444" : toast.tone === "info" ? "#0ea5e9" : "#22c55e",
@@ -4095,17 +4093,16 @@ export default function ChatPage() {
       {/* Persistent session sidebar (like Claude desktop) */}
       <aside className="chat-sidebar" aria-label="Chat sessions">
         <div className="chat-sidebar-header">
-          <form action="/chat" method="get" style={{ margin: 0 }}>
-            <input type="hidden" name="fresh_chat" value="1" />
-            <button
-              type="submit"
-              className="chat-sidebar-new"
-              data-fresh-chat="true"
-              title="New chat"
-            >
-              <span style={{ fontSize: "1.1rem" }}>+</span> New chat
-            </button>
-          </form>
+          <a
+            href="/chat?fresh_chat=1"
+            role="button"
+            className="chat-sidebar-new"
+            data-fresh-chat="true"
+            title="New chat"
+            onClick={handleNewChat}
+          >
+            <span style={{ fontSize: "1.1rem" }}>+</span> New chat
+          </a>
           <button
             type="button"
             className="chat-sidebar-toggle"
@@ -4233,9 +4230,15 @@ export default function ChatPage() {
                 {paperLoading ? "Checking..." : paperGenerating ? "Generating..." : "Generate Paper Draft"}
               </button>
             )}
-            <button type="button" className="btn-secondary btn-small" onClick={handleNewChat}>
+            <a
+              href="/chat?fresh_chat=1"
+              role="button"
+              className="btn-secondary btn-small"
+              data-fresh-chat="true"
+              onClick={handleNewChat}
+            >
               {t("chat.new_chat")}
-            </button>
+            </a>
             <button type="button" className="btn-secondary btn-small" onClick={handleImportSession} title={t("chat.import_title")}>
               {t("chat.import")}
             </button>

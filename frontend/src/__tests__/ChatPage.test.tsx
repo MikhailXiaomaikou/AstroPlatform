@@ -257,6 +257,8 @@ describe("ChatPage", () => {
     expect(await screen.findByText("old contaminated prompt")).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByText("chat.new_chat")[0]);
+    expect(screen.queryByText("old contaminated prompt")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fresh-chat-ready")).toBeInTheDocument();
     const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
     const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
     fireEvent.change(textarea, { target: { value: "fresh prompt" } });
@@ -270,6 +272,26 @@ describe("ChatPage", () => {
     ]);
     expect(context).toEqual(expect.objectContaining({ current_session_id: null }));
     expect(JSON.stringify(history)).not.toContain("old contaminated prompt");
+  });
+
+  it("sidebar new chat clears local session state immediately", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    localStorage.setItem(
+      "astro_chat_history:anon",
+      JSON.stringify([{ id: "old-u", role: "user", content: "old sidebar contamination" }]),
+    );
+    localStorage.setItem("astro_current_chat_session_id:anon", "old-session");
+    localStorage.setItem("astro_chat_open_session", "old-session");
+
+    renderChatPage();
+    expect(await screen.findByText("old sidebar contamination")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle("New chat"));
+
+    expect(screen.queryByText("old sidebar contamination")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fresh-chat-ready")).toBeInTheDocument();
+    expect(localStorage.getItem("astro_current_chat_session_id:anon")).toBeNull();
+    expect(localStorage.getItem("astro_chat_open_session")).toBeNull();
   });
 
   // ── Template cards ──
