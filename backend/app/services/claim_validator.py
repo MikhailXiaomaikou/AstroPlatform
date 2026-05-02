@@ -1663,6 +1663,16 @@ def _author_support_keys(raw: str) -> set[str]:
         lead = re.sub(r"[^a-z]", "", parts[0].lower())
         if lead:
             keys.add(lead)
+    if any(
+        re.sub(r"[^a-z]", "", part.lower()) in {
+            "collaboration",
+            "team",
+            "survey",
+            "consortium",
+        }
+        for part in parts
+    ):
+        keys.add("collaboration")
     return keys
 
 

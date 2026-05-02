@@ -558,6 +558,29 @@ def test_cosmology_registry_arxiv_and_label_citations_are_supported():
     assert provenance_citation_violations(reply, tool_results) == []
 
 
+def test_cosmology_registry_collaboration_label_supports_generic_author_year():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "list_cosmology_datasets",
+        "result": {
+            "success": True,
+            "datasets": [{
+                "display_name": "SDSS + 6dF BAO compilation",
+                "citations": [{
+                    "label": "eBOSS Collaboration DR16 cosmology",
+                    "year": 2021,
+                    "arxiv": "2007.08991",
+                }],
+            }],
+        },
+    }]
+
+    reply = "The BAO compilation includes eBOSS Collaboration (2021; arXiv:2007.08991)."
+
+    assert provenance_citation_violations(reply, tool_results) == []
+
+
 def test_supporting_bibcode_fields_enter_valid_pool():
     from app.services.claim_validator import provenance_citation_violations
 

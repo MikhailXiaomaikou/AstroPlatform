@@ -4361,13 +4361,16 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "likelihood", "协方差", "covariance", "robustness",
         "pull", "outlier", "residual", "bin-level", "分红移",
         "s8", "sigma8", "σ8", "tension", "consistency",
+        "cross-check", "cross check",
         "constraint", "constraints", "compressed product",
         "compressed products",
     )
     planning_tokens = (
         "available", "可用", "dataset", "数据集", "prior", "引用",
         "compare", "比较", "constraint", "约束", "model", "模型",
-        "chain", "配置", "cobaya", "cosmosis",
+        "chain", "配置", "cobaya", "cosmosis", "workflow",
+        "posterior", "run", "executable", "product", "products",
+        "config-only", "config only",
     )
     return (
         any(tok in prompt for tok in dataset_tokens)
@@ -4462,7 +4465,11 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     prompt = str(text or "").lower()
     forbidden = _cosmology_forbidden_probe_families(prompt)
     keys: list[str] = []
-    pre_desi_bao = any(tok in prompt for tok in ("pre-desi", "pre desi", "non-desi", "non desi", "pre-desi bao"))
+    pre_desi_bao = any(tok in prompt for tok in (
+        "pre-desi", "pre desi", "non-desi", "non desi",
+        "pre-desi bao", "before desi", "rather than desi",
+        "not desi",
+    ))
     if "desi" in prompt and not pre_desi_bao:
         keys.append("desi_dr1_bao")
     elif any(tok in prompt for tok in ("bao", "baryon acoustic")):
@@ -4478,7 +4485,7 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         keys.append("union3")
     if any(tok in prompt for tok in ("cmb", "planck")):
         keys.append("planck2018_compressed")
-    if "act dr6" in prompt or "act lens" in prompt:
+    if "act dr6" in prompt or "act lens" in prompt or "act-era" in prompt or "act era" in prompt:
         keys.append("act_dr6_lensing")
     if any(tok in prompt for tok in ("kids", "kilo-degree")):
         keys.append("kids1000_wl")

@@ -125,6 +125,56 @@ def test_time_delay_and_megamaser_h0_prompts_route_to_specific_priors() -> None:
     ]
 
 
+def test_pre_desi_bao_product_workflow_routes_to_sdss_not_desi() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _cosmology_likelihood_build_calls_from_prompt,
+        _cosmology_likelihood_run_calls_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
+
+    prompt = (
+        "I am testing a pre-DESI BAO + CMB consistency workflow using "
+        "SDSS/BOSS/eBOSS/6dF-style BAO. Do not route to DESI unless "
+        "explicitly needed. Explain which BAO products are config-only "
+        "and whether any posterior can be run this turn."
+    )
+
+    assert _is_cosmology_likelihood_workflow(prompt) is True
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "sdss_6df_bao",
+        "planck2018_compressed",
+    ]
+    assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "sdss_6df_bao",
+        "planck2018_compressed",
+    ]
+    assert _cosmology_likelihood_run_calls_from_prompt(prompt)[0]["input"]["dataset_keys"] == [
+        "sdss_6df_bao",
+        "planck2018_compressed",
+    ]
+
+
+def test_act_era_cross_check_prompt_is_a_cosmology_workflow() -> None:
+    from app.api.chat import (
+        _cosmology_dataset_keys_from_prompt,
+        _is_cosmology_likelihood_workflow,
+    )
+
+    prompt = (
+        "I want an ACT-era cross-check before DESI DR1 existed. Use "
+        "SDSS/BOSS/eBOSS/6dF BAO rather than DESI, plus ACT/Planck products, "
+        "and explain executable vs config-only pieces."
+    )
+
+    assert _is_cosmology_likelihood_workflow(prompt) is True
+    assert _cosmology_dataset_keys_from_prompt(prompt) == [
+        "sdss_6df_bao",
+        "planck2018_compressed",
+        "act_dr6_lensing",
+    ]
+
+
 def test_curvature_and_neutrino_extensions_route_to_supported_models() -> None:
     from app.api.chat import (
         _cosmology_dataset_keys_from_prompt,
