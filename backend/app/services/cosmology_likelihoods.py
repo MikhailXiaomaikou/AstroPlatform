@@ -2067,6 +2067,144 @@ def _compressed_runner_unavailable(
     }
 
 
+def run_alcock_paczynski_test(
+    *,
+    omega_m_grid: tuple[float, float, int] = (0.10, 0.50, 401),
+) -> dict[str, Any]:
+    """Alcock-Paczynski geometric test on DESI DR1 BAO DM/DH ratios.
+
+    The (DM/rs) / (DH/rs) ratio at each redshift is independent of H0
+    and rs (both cancel), so it provides a pure-geometry Ωm constraint
+    that does NOT use the BAO peak amplitude — only the ratio of
+    transverse to line-of-sight distances. Inconsistency between the
+    AP-only Ωm and the BAO-amplitude Ωm signals either non-flat
+    geometry or evolving dark energy.
+
+    DESI DR1 has 5 redshift bins with both DM/rs and DH/rs measured
+    (z = 0.510 / 0.706 / 0.930 / 1.317 / 2.330). DV/rs-only bins
+    (z = 0.295, 1.491) cannot enter the AP test.
+
+    Reference: Alcock & Paczynski 1979 Nature 281 358.
+
+    Returns a dict with Ωm best-fit, 1σ band, per-z observed ratios,
+    chi² at minimum, and degrees of freedom.
+    """
+    pairs: list[tuple[float, float, float]] = []
+    cov = DESI_DR1_BAO_COVARIANCE
+    for i, (z_dm, val_dm, qty_dm) in enumerate(DESI_DR1_BAO_MEAN_VECTOR):
+        if qty_dm != "DM_over_rs":
+            continue
+        for j, (z_dh, val_dh, qty_dh) in enumerate(DESI_DR1_BAO_MEAN_VECTOR):
+            if qty_dh != "DH_over_rs" or abs(z_dh - z_dm) > 1e-6:
+                continue
+            sigma_dm_sq = cov[i][i]
+            sigma_dh_sq = cov[j][j]
+            cov_dm_dh = cov[i][j]
+            ratio = val_dm / val_dh
+            sigma_ratio_sq = (
+                sigma_dm_sq / val_dh ** 2
+                + (val_dm / val_dh ** 2) ** 2 * sigma_dh_sq
+                - 2 * (val_dm / val_dh ** 3) * cov_dm_dh
+            )
+            sigma_ratio = math.sqrt(max(sigma_ratio_sq, 1e-30))
+            pairs.append((z_dm, ratio, sigma_ratio))
+            break  # don't double-count if duplicate DH at same z
+
+    if not pairs:
+        return {
+            "tool": "alcock_paczynski_test",
+            "success": False,
+            "error": "DESI DR1 BAO MEAN_VECTOR has no (DM, DH) pairs at the same redshift.",
+            "error_class": "no_dm_dh_pairs",
+            "__tool_status__": "FAILED",
+            "__do_not_claim__": True,
+        }
+
+    omega_m_lo, omega_m_hi, omega_m_n = omega_m_grid
+    omega_m = np.linspace(omega_m_lo, omega_m_hi, int(omega_m_n))
+    h0 = np.full_like(omega_m, 70.0)  # H0 cancels in DM/DH ratio
+
+    chi2 = np.zeros_like(omega_m)
+    for z, ratio_obs, sigma_ratio in pairs:
+        dm_pred, dh_pred, _ = _flat_lcdm_distances_at_z(z, h0, omega_m)
+        ratio_pred = dm_pred / dh_pred
+        chi2 += ((ratio_obs - ratio_pred) / sigma_ratio) ** 2
+
+    best_idx = int(np.argmin(chi2))
+    omega_m_best = float(omega_m[best_idx])
+    chi2_min = float(chi2[best_idx])
+
+    # 1σ band from Δχ² < 1
+    in_1sigma_mask = (chi2 - chi2_min) < 1.0
+    in_1sigma = omega_m[in_1sigma_mask]
+    omega_m_lo_1sigma = float(in_1sigma.min()) if in_1sigma.size else omega_m_best
+    omega_m_hi_1sigma = float(in_1sigma.max()) if in_1sigma.size else omega_m_best
+
+    n_dof = max(len(pairs) - 1, 1)
+    z_pairs_payload = [
+        {
+            "z": round(z, 4),
+            "DM_DH_ratio": round(ratio, 6),
+            "sigma_ratio": round(sigma, 6),
+        }
+        for z, ratio, sigma in pairs
+    ]
+
+    return {
+        "tool": "alcock_paczynski_test",
+        "success": True,
+        "method": (
+            "DESI DR1 BAO DM/DH ratio chi-square fit. H0 and r_d cancel "
+            "in the geometric ratio, leaving Ωm as the only free "
+            "parameter under flat LCDM."
+        ),
+        "n_redshift_pairs": len(pairs),
+        "n_dof": n_dof,
+        "omega_m_best": round(omega_m_best, 6),
+        "omega_m_1sigma_low": round(omega_m_lo_1sigma, 6),
+        "omega_m_1sigma_high": round(omega_m_hi_1sigma, 6),
+        "omega_m_1sigma_half_width": round(
+            (omega_m_hi_1sigma - omega_m_lo_1sigma) / 2.0, 6
+        ),
+        "chi2_min": round(chi2_min, 4),
+        "chi2_per_dof": round(chi2_min / n_dof, 4),
+        "z_pairs": z_pairs_payload,
+        "publication_ready": True,
+        "claim_scope": "alcock_paczynski_geometric_omega_m",
+        "data_origin": "real_archive",
+        "analysis_status": "ALCOCK_PACZYNSKI_READY",
+        "citations": [
+            {
+                "label": "Alcock & Paczynski geometric test",
+                "year": 1979,
+                "doi": "10.1038/281358a0",
+                "bibcode": "1979Natur.281..358A",
+            },
+            {
+                "label": "DESI Collaboration DR1 BAO",
+                "year": 2024,
+                "arxiv": "2404.03002",
+            },
+        ],
+        "provenance": {
+            "alcock_paczynski": {
+                "input_dataset": "desi_dr1_bao",
+                "n_pairs_used": len(pairs),
+                "z_grid_min_max": [float(omega_m.min()), float(omega_m.max())],
+                "z_grid_resolution": int(omega_m_n),
+                "H0_cancellation": "DM/DH ratio is independent of H0 and r_d",
+                "model_assumed": "flat LCDM",
+                "free_parameters": ["omegam"],
+                "notes": (
+                    "AP-only Ωm vs BAO-amplitude Ωm comparison reveals "
+                    "non-flat geometry or evolving dark energy when "
+                    "discrepant > 2σ."
+                ),
+            },
+        },
+    }
+
+
 def _compressed_parameter_order(entries: list[CosmologyDatasetEntry]) -> list[str]:
     order: list[str] = []
     for entry in entries:
