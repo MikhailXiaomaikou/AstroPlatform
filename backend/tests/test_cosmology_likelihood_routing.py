@@ -773,3 +773,71 @@ def test_empty_cosmology_prose_fallback_can_report_publication_ready_compressed_
     assert "H0=67.36" in summary
     assert "S8=0.804" in summary
     assert "DESI DR1 BAO" in summary
+
+
+def test_cosmology_grounded_summary_keeps_single_h0_prior_comparison_clean() -> None:
+    from app.api.chat import (
+        _cosmology_tool_grounded_summary,
+        _unsupported_cosmology_anchor_numeric_comparison,
+    )
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "list_cosmology_datasets",
+            "result": {
+                "datasets": [
+                    {
+                        "key": "trgb_h0_freedman19",
+                        "display_name": "TRGB H0 prior (Freedman+ 2019)",
+                        "data_products": [],
+                    }
+                ],
+            },
+        },
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "publication_ready": True,
+                "datasets_used": [
+                    {
+                        "key": "trgb_h0_freedman19",
+                        "display_name": "TRGB H0 prior (Freedman+ 2019)",
+                    }
+                ],
+                "datasets_not_run": [],
+                "parameters": {
+                    "H0": {"median": 69.7853, "hdi_94": [66.3505, 73.3545]},
+                },
+                "provenance": {
+                    "cosmology_likelihood": {
+                        "publication_ready": True,
+                        "citations": [
+                            {
+                                "label": "Freedman et al. TRGB H0 (CCHP)",
+                                "year": 2019,
+                                "arxiv": "1907.05922",
+                                "doi": "10.3847/1538-4357/ab2f73",
+                            }
+                        ],
+                    }
+                },
+            },
+        },
+    ]
+
+    summary = _cosmology_tool_grounded_summary(tool_results)
+
+    assert summary is not None
+    assert "H0=69.79" in summary
+    assert "SH0ES" not in summary
+    assert "Planck" not in summary
+    assert provenance_citation_violations(summary, tool_results) == []
+    assert _unsupported_cosmology_anchor_numeric_comparison(summary, tool_results) is False
+
+    unsafe_comparison = (
+        "Planck CMB (2018): H0 = 67.36 km/s/Mpc. "
+        "SH0ES Cepheid ladder: H0 = 73.04 km/s/Mpc. "
+        "TRGB: H0 = 69.83 km/s/Mpc."
+    )
+    assert _unsupported_cosmology_anchor_numeric_comparison(unsafe_comparison, tool_results) is True

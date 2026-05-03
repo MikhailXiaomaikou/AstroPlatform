@@ -4014,6 +4014,74 @@ def _cosmology_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     return "\n".join(lines) if len(lines) > 1 else None
 
 
+def _cosmology_dataset_keys_present(tool_results: list[dict]) -> set[str]:
+    keys: set[str] = set()
+    for item in tool_results or []:
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict):
+            continue
+        for field in ("datasets", "datasets_used", "datasets_not_run"):
+            values = result.get(field)
+            if not isinstance(values, list):
+                continue
+            for entry in values:
+                if isinstance(entry, dict) and entry.get("key"):
+                    keys.add(str(entry["key"]))
+        provenance = result.get("provenance")
+        if isinstance(provenance, dict):
+            likelihood = provenance.get("cosmology_likelihood")
+            if isinstance(likelihood, dict):
+                for field in ("dataset_keys", "datasets_used", "datasets_not_run"):
+                    values = likelihood.get(field)
+                    if isinstance(values, list):
+                        keys.update(str(value) for value in values if value)
+    return keys
+
+
+_COSMOLOGY_ANCHOR_NUMERIC_PATTERNS: tuple[tuple[set[str], re.Pattern[str]], ...] = (
+    (
+        {"planck2018_compressed"},
+        re.compile(
+            r"\b(?:Planck|CMB)[^\n]{0,100}(?:H_?0|H₀|S_?8|sigma_?8|σ_?8)"
+            r"[^\n]{0,60}\d",
+            re.I,
+        ),
+    ),
+    (
+        {"shoes_h0_riess22"},
+        re.compile(
+            r"\b(?:SH0ES|Riess)[^\n]{0,100}(?:H_?0|H₀)[^\n]{0,60}\d",
+            re.I,
+        ),
+    ),
+    (
+        {"h0licow_h0"},
+        re.compile(r"\b(?:H0LiCOW|time[-\s]?delay)[^\n]{0,100}(?:H_?0|H₀)[^\n]{0,60}\d", re.I),
+    ),
+    (
+        {"megamaser_h0_pesce20"},
+        re.compile(r"\b(?:megamaser|maser)[^\n]{0,100}(?:H_?0|H₀)[^\n]{0,60}\d", re.I),
+    ),
+)
+
+
+def _unsupported_cosmology_anchor_numeric_comparison(
+    reply: str,
+    tool_results: list[dict],
+) -> bool:
+    """Catch H0/S8 comparison anchors that were not selected this turn."""
+    text = str(reply or "")
+    if not text:
+        return False
+    dataset_keys = _cosmology_dataset_keys_present(tool_results)
+    for required_keys, pattern in _COSMOLOGY_ANCHOR_NUMERIC_PATTERNS:
+        if pattern.search(text) and not (required_keys & dataset_keys):
+            return True
+    return False
+
+
 def _sanitize_tools_returned_nothing(reply: str) -> str:
     import re
 
@@ -6311,6 +6379,46 @@ async def _run_agent_loop(
             )
             fabrication_stats["blocked"] = True
 
+        elif _unsupported_cosmology_anchor_numeric_comparison(clean_reply, all_tool_results):
+            logger.error(
+                "Unsupported cosmology anchor comparison from %s — replacing with grounded summary",
+                agent_name,
+            )
+            tool_grounded_summary = _cosmology_tool_grounded_summary(all_tool_results)
+            if tool_grounded_summary:
+                summary_validation = validate_claims(tool_grounded_summary, all_tool_results)
+                summary_citation_violations = provenance_citation_violations(
+                    tool_grounded_summary,
+                    all_tool_results,
+                )
+                if (
+                    summary_validation.ok
+                    and not citation_violations_should_block(summary_citation_violations)
+                    and not _unsupported_cosmology_anchor_numeric_comparison(
+                        tool_grounded_summary,
+                        all_tool_results,
+                    )
+                ):
+                    clean_reply = tool_grounded_summary
+                    fabrication_stats["regenerations"] += 1
+                    try:
+                        from app.observability.metrics import record_counter
+                        record_counter(
+                            "tool_grounded_regeneration_total",
+                            1.0,
+                            agent=agent_name,
+                            reason="unsupported_cosmology_anchor",
+                        )
+                    except Exception:
+                        pass
+                else:
+                    clean_reply = blocked_reply_text(summary_validation)
+                    fabrication_stats["blocked"] = True
+            else:
+                validation = validate_claims(clean_reply, all_tool_results)
+                clean_reply = blocked_reply_text(validation)
+                fabrication_stats["blocked"] = True
+
         elif True:
             citation_violations = provenance_citation_violations(clean_reply, all_tool_results)
             # M6 + PART AB: methodology mismatches (Bayesian promised but
@@ -6334,51 +6442,85 @@ async def _run_agent_loop(
                     len(citation_violations),
                     len(method_violations),
                 )
-                annotations: list[str] = []
-                if citation_violations:
-                    annotations.append(blocked_citation_reply_text(citation_violations))
-                if method_violations:
-                    from app.services.claim_validator import (
-                        blocked_methodology_reply_text,
+                tool_grounded_summary = (
+                    _line_lfr_tool_grounded_summary(all_tool_results)
+                    or _statistics_tool_grounded_summary(all_tool_results)
+                    or _cosmology_tool_grounded_summary(all_tool_results)
+                )
+                recovered_with_summary = False
+                if tool_grounded_summary:
+                    summary_validation = validate_claims(tool_grounded_summary, all_tool_results)
+                    summary_citation_violations = provenance_citation_violations(
+                        tool_grounded_summary,
+                        all_tool_results,
                     )
-                    annotations.append(blocked_methodology_reply_text(method_violations))
+                    summary_method_violations = methodology_consistency_violations(
+                        tool_grounded_summary,
+                        all_tool_results,
+                    )
+                    summary_violations = list(summary_citation_violations) + list(summary_method_violations)
+                    if (
+                        summary_validation.ok
+                        and not citation_violations_should_block(summary_violations)
+                    ):
+                        clean_reply = tool_grounded_summary
+                        recovered_with_summary = True
+                        fabrication_stats["regenerations"] += 1
+                        try:
+                            from app.observability.metrics import record_counter
+                            record_counter(
+                                "tool_grounded_regeneration_total",
+                                1.0,
+                                agent=agent_name,
+                                reason="citation_methodology",
+                            )
+                        except Exception:
+                            pass
 
-                # PART AG C1 — annotate-and-attach mode (replaces the
-                # earlier withhold-all behaviour).
-                #
-                # R2.4 M6 audit caught the earlier path erasing 11 of 12
-                # visible tool cards: the model wrote a long correct
-                # prose with Python output, dataframe loads, fit_line_lfr
-                # numbers, then mentioned "Bothwell 2013" on a single line
-                # without a tool_result → guard tripped → entire reply
-                # replaced by "Reply withheld" → user lost the whole
-                # session's worth of work for one inline citation slip.
-                #
-                # New behaviour: keep the original prose (so Python
-                # output, tool cards, real analysis stay visible) and
-                # APPEND a footer with the provenance violations. The
-                # `fabrication_stats["blocked"]` flag still fires so
-                # telemetry and the frontend can chip the message; the
-                # difference is purely in the user-facing text.
-                if clean_reply.strip():
-                    annotation_block = (
-                        "\n\n---\n\n"
-                        "## ⚠ Citation / methodology provenance check failed\n\n"
-                        "The reply above was generated, but the platform's "
-                        "provenance gate flagged claims that the tool results "
-                        "this turn did not support. Treat the flagged items as "
-                        "**NOT verified** and re-run the relevant tools before "
-                        "quoting any of them in a paper.\n\n"
-                        + "\n\n---\n\n".join(annotations)
-                    )
-                    clean_reply = clean_reply.rstrip() + annotation_block
-                else:
-                    # Empty prose — rare but possible (e.g. the LLM
-                    # returned only tool_use blocks). Fall back to the
-                    # previous withhold-only message so the user has
-                    # something to read.
-                    clean_reply = "\n\n---\n\n".join(annotations)
-                fabrication_stats["blocked"] = True
+                if not recovered_with_summary:
+                    annotations: list[str] = []
+                    if citation_violations:
+                        annotations.append(blocked_citation_reply_text(citation_violations))
+                    if method_violations:
+                        from app.services.claim_validator import (
+                            blocked_methodology_reply_text,
+                        )
+                        annotations.append(blocked_methodology_reply_text(method_violations))
+
+                    # PART AG C1 — annotate-and-attach mode (replaces the
+                    # earlier withhold-all behaviour).
+                    #
+                    # R2.4 M6 audit caught the earlier path erasing 11 of 12
+                    # visible tool cards: the model wrote a long correct
+                    # prose with Python output, dataframe loads, fit_line_lfr
+                    # numbers, then mentioned "Bothwell 2013" on a single line
+                    # without a tool_result → guard tripped → entire reply
+                    # replaced by "Reply withheld" → user lost the whole
+                    # session's worth of work for one inline citation slip.
+                    #
+                    # Prefer a grounded deterministic summary when available.
+                    # If there is no safe summary, keep the original prose and
+                    # APPEND a footer with provenance violations so tool cards
+                    # and real analysis remain visible.
+                    if clean_reply.strip():
+                        annotation_block = (
+                            "\n\n---\n\n"
+                            "## ⚠ Citation / methodology provenance check failed\n\n"
+                            "The reply above was generated, but the platform's "
+                            "provenance gate flagged claims that the tool results "
+                            "this turn did not support. Treat the flagged items as "
+                            "**NOT verified** and re-run the relevant tools before "
+                            "quoting any of them in a paper.\n\n"
+                            + "\n\n---\n\n".join(annotations)
+                        )
+                        clean_reply = clean_reply.rstrip() + annotation_block
+                    else:
+                        # Empty prose — rare but possible (e.g. the LLM
+                        # returned only tool_use blocks). Fall back to the
+                        # previous withhold-only message so the user has
+                        # something to read.
+                        clean_reply = "\n\n---\n\n".join(annotations)
+                    fabrication_stats["blocked"] = True
 
             if not fabrication_stats["blocked"]:
                 for attempt in range(2):
