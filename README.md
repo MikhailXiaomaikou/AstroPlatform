@@ -14,10 +14,10 @@ default. A draft becomes publicly readable only after the owner explicitly uses
 | Area | Summary |
 |---|---|
 | Data access | Query active provenance-v2 sources from one interface. |
-| AI assistant | Multi-tool research agent for archive queries, ADQL, literature review, table extraction, analysis, fitting, and paper drafting. |
+| AI assistant | Multi-tool research agent for archive queries, ADQL, literature review, table extraction, research planning, evidence graphs, analysis, fitting, and paper drafting. |
 | Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
 | Provenance | Tool results carry citation, archive version, field bibcodes, query hashes, run IDs, and acknowledgement metadata. |
-| Cosmology | Dataset registry, likelihood config builder, MCMC tools, robustness matrix scaffolding, and chain diagnostics. |
+| Cosmology | Dataset registry, research planner, likelihood config builder, compressed posterior runner, evidence graph, robustness matrix, and chain diagnostics. |
 | Spectral measurements | Literature-table rows can be validated as fit-ready spectral measurements before line-relation fitting. |
 | Statistics | Deterministic robust summaries, regression helpers, bootstrap intervals, and censored-data summaries reduce ad-hoc analysis code. |
 | Export | Paper drafts, BibTeX, acknowledgement text, notebooks, figures, and reproducibility packages. |
@@ -72,6 +72,7 @@ Standard Astro includes workflows for:
 - Time-domain period, transit, flare, and RV workflows
 - Galaxy SFR, morphology, rotation-curve, and X-ray tools
 - Observational cosmology likelihood configs plus compressed Gaussian posterior runner
+- Research Mode planning, evidence graphs, and compressed-likelihood experiment matrices
 - Paper drafting, bibliography generation, and reproducibility export
 
 ## Reference Literature

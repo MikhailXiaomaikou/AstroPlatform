@@ -32,6 +32,17 @@ def test_cosmology_likelihood_workflow_detects_bao_sn_cmb_model_prompt() -> None
     )
 
 
+def test_research_program_workflow_detects_research_intent() -> None:
+    from app.api.chat import _is_research_program_workflow
+
+    assert _is_research_program_workflow(
+        "I want to research DESI BAO + SN + CMB robustness for dark energy."
+    )
+    assert not _is_research_program_workflow(
+        "帮我找几篇关于 BAO 重建算法的综述论文，先不用做模型约束。"
+    )
+
+
 def test_cosmology_likelihood_workflow_ignores_plain_literature_requests() -> None:
     from app.api.chat import _is_cosmology_likelihood_workflow
 

@@ -475,6 +475,7 @@ _COMPUTE_TOOLS = {
     "get_cosmology_run_status",
     "build_cosmology_likelihood", "build_cosmology_robustness_matrix",
     "run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix",
+    "run_research_matrix",
     # PART Y Batch 1 (audit follow-up): newer compute tools — line-relation
     # fitting on cited literature tables, luminosity-distance comparison
     # across cosmologies, gravitational-lensing demagnification of a sample.
@@ -489,7 +490,8 @@ _REFERENCE_TOOLS = {
     # PART Y Batch 1 (audit follow-up): export_sample_table emits a
     # citable machine-readable table from a cached sample, no new analysis.
     "export_sample_table",
-    "list_cosmology_datasets",
+    "list_cosmology_datasets", "plan_research_program",
+    "build_evidence_graph", "export_research_report",
 }
 
 # Introspection helper for tests / CI: full known tool set.

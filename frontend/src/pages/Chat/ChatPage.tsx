@@ -53,6 +53,7 @@ import MarkdownText from "../../components/chat/MarkdownText";
 import AckButton from "../../components/chat/AckButton";
 import CosmologyMCMCPanel from "../../components/chat/CosmologyMCMCPanel";
 import CosmologyLikelihoodPanel from "../../components/chat/CosmologyLikelihoodPanel";
+import ResearchProgramPanel from "../../components/chat/ResearchProgramPanel";
 import DataSourcesPanel from "../../components/chat/DataSourcesPanel";
 import ErrorBoundary from "../../components/ErrorBoundary";
 import { useI18n } from "../../i18n";
@@ -542,6 +543,10 @@ function ActionCardInner({
     build_cosmology_robustness_matrix: "Robustness Matrix",
     run_cosmology_likelihood_chain: "Cosmology Chain",
     run_cosmology_robustness_matrix: "Robustness Run",
+    plan_research_program: "Research Plan",
+    run_research_matrix: "Research Matrix",
+    build_evidence_graph: "Evidence Graph",
+    export_research_report: "Research Report",
     run_cobaya_cosmology: "Cobaya Cosmology",
     get_cosmology_run_status: "Cosmology Job Status",
   };
@@ -572,6 +577,10 @@ function ActionCardInner({
     build_cosmology_robustness_matrix: "▦",
     run_cosmology_likelihood_chain: "📉",
     run_cosmology_robustness_matrix: "▦",
+    plan_research_program: "🧭",
+    run_research_matrix: "▦",
+    build_evidence_graph: "🔗",
+    export_research_report: "📝",
     run_cobaya_cosmology: "📉",
     get_cosmology_run_status: "⏱",
   };
@@ -1662,6 +1671,15 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     || toolName === "run_cosmology_robustness_matrix"
   ) {
     return <CosmologyLikelihoodPanel result={result} />;
+  }
+
+  if (
+    toolName === "plan_research_program"
+    || toolName === "run_research_matrix"
+    || toolName === "build_evidence_graph"
+    || toolName === "export_research_report"
+  ) {
+    return <ResearchProgramPanel result={result} />;
   }
 
   // Pipeline

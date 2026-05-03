@@ -14,7 +14,7 @@ Standard Astro is a full-stack astronomy research platform with four runtime lay
 
 4. **External services** — 24 astronomy connector keys, with 6 provenance-v2 active sources (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`) and 18 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local). ALMA is active for Science Archive observation metadata, not derived line luminosity/FWHM measurements.
 
-Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **68-tool catalog** (§3).
+Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **76-tool catalog** (§3).
 
 ### Runtime topology
 
@@ -88,6 +88,21 @@ numeric validation, citation validation, rate limits, and UI status chips.
 4. Relation statistics are citeable only when they come from current-turn
    measurement rows or a publication-ready fit result; abstract search alone
    cannot support slope/intercept/scatter claims.
+
+**Research Mode workflow**
+
+1. Research-style observational-cosmology prompts first call
+   `plan_research_program`, which turns the user question into hypotheses,
+   required probes, candidate registered datasets, model families, executable
+   level, blocking gaps, and an experiment matrix.
+2. `run_research_matrix` executes only the registered compressed-likelihood
+   cells that can run today. Config-only or external-likelihood cells are
+   preserved in the matrix as gaps, not silently approximated.
+3. `build_evidence_graph` links claimable parameters back to current-turn
+   publication-ready tool runs, dataset versions, citations, and runner hashes.
+4. Final prose must follow the research copilot structure: what can be tested
+   now, executed analyses, preliminary findings, robustness, drivers, unsupported
+   pieces, and the next experiment.
 
 **Pipeline execution**
 
@@ -201,10 +216,10 @@ Entrypoint: [`backend/app/main.py`](./backend/app/main.py). FastAPI app factory 
 - [`app/ai/model_profiles.py`](./backend/app/ai/model_profiles.py) — Manual provider/model registry. Current profiles: Claude default, OpenAI GPT-5.5 alias (falls back to `gpt-5.4` unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro, DeepSeek V4 Flash, local OpenAI-compatible backends, and the local-only OpenAI CLI profile.
 - [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Calls the user-selected model profile, logs cost/latency/model/fallback metadata, and falls back across backends only after the selected backend fails. The local OpenAI CLI path is enabled only with `OPENAI_CLI_ENABLED=1`; it runs the CLI in ephemeral read-only mode and still returns JSON tool calls to the Standard Astro backend, so network/archive searches, ADQL/database queries, Python analysis, plotting, and provenance checks remain server-side. Raises `InferenceError("No configured AI backends are available…")` on no-key paths (now surfaced pre-send by F4.2).
 - `app/ai/agents/*` — Specialist prompt fragments (data, analysis, literature, observation, visualization, spectrum).
-- [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **68-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
+- [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **76-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
 - [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), ~57 KB / ~14 k-token `SYSTEM_PROMPT` (46 sections), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser, and deterministic literature-table / `fit_line_lfr` follow-up for line-relation prompts when the model has found papers or fit-ready measurement caches but skipped the required tool.
 
-#### Tool catalogue (68)
+#### Tool catalogue (76)
 
 Domain-specific additions include:
 - **`query_gaia_cluster`** — Composes Gaia DR3 member-selection ADQL from structured params (center name → Sesame/SIMBAD resolve → parallax + PM + RUWE + G-mag cuts). Keeps SQL out of the LLM's hot path so F2.1 EMPTY banners fire cleanly on 0-row returns.
@@ -213,8 +228,8 @@ Domain-specific additions include:
 The catalogue is organized through `result_provenance.py` `_DATA_TOOLS` / `_COMPUTE_TOOLS` / `_REFERENCE_TOOLS`:
 
 - **Data tools (17)**: `search_objects`, `run_adql`, `query_high_velocity_stars`, `run_sdss_sql` (maintenance-gated as SDSS), `get_object_info`, `get_object_dossier`, `query_transients`, `search_lightcurve`, `crossmatch_catalogs`, `batch_object_search`, `describe_tap_table`, `query_vo_service`, `get_last_search_results`, `read_fits_header`, `get_provenance`, `query_gaia_cluster`, `get_extinction`.
-- **Compute tools (43)**: `run_python`, `generate_pipeline`, `run_pipeline`, `validate_analysis`, `generate_paper_draft`, `fit_isochrone`, `estimate_photo_z`, `estimate_photo_z_pro`, `analyze_spectrum`, `analyze_spectrum_pro`, `sensitivity_analysis`, `compare_luminosity_distances`, `demagnify_sample`, `prepare_spectral_measurements`, `fit_line_lfr`, `astro_statistics_toolbox`, `fit_cosmology_mcmc`, `run_cobaya_cosmology`, `get_cosmology_run_status`, `build_cosmology_likelihood`, `build_cosmology_robustness_matrix`, `fit_transit_model`, `gp_detrend_lightcurve`, `detect_stellar_flares`, `transit_search_bls`, `reduce_ccd_image`, `solve_astrometry`, `extract_photometry`, `extract_sources`, `classify_transient`, `classify_transient_spectrum`, `compute_galaxy_sfr`, `fit_rv_orbit`, `fit_sersic_morphology`, `x_ray_spectral_fit`, `pulsar_derived_quantities`, `analyze_cross_wavelength`, `radio_analysis`, `process_image`, `share_with_team`, `invite_team_member`, `export_results`, `workspace_export`.
-- **Reference tools (10)**: `search_literature`, `read_arxiv_paper`, `extract_literature_tables`, `export_sample_table`, `list_cosmology_datasets`, `literature_review`, `research_workflow`, `generate_proposal`, `get_followup_recommendation`, `full_research_report`.
+- **Compute tools (46)**: `run_python`, `generate_pipeline`, `run_pipeline`, `validate_analysis`, `generate_paper_draft`, `fit_isochrone`, `estimate_photo_z`, `estimate_photo_z_pro`, `analyze_spectrum`, `analyze_spectrum_pro`, `sensitivity_analysis`, `compare_luminosity_distances`, `demagnify_sample`, `prepare_spectral_measurements`, `fit_line_lfr`, `astro_statistics_toolbox`, `fit_cosmology_mcmc`, `run_cobaya_cosmology`, `get_cosmology_run_status`, `build_cosmology_likelihood`, `build_cosmology_robustness_matrix`, `run_cosmology_likelihood_chain`, `run_cosmology_robustness_matrix`, `run_research_matrix`, `fit_transit_model`, `gp_detrend_lightcurve`, `detect_stellar_flares`, `transit_search_bls`, `reduce_ccd_image`, `solve_astrometry`, `extract_photometry`, `extract_sources`, `classify_transient`, `classify_transient_spectrum`, `compute_galaxy_sfr`, `fit_rv_orbit`, `fit_sersic_morphology`, `x_ray_spectral_fit`, `pulsar_derived_quantities`, `analyze_cross_wavelength`, `radio_analysis`, `process_image`, `share_with_team`, `invite_team_member`, `export_results`, `workspace_export`.
+- **Reference tools (13)**: `search_literature`, `read_arxiv_paper`, `extract_literature_tables`, `export_sample_table`, `list_cosmology_datasets`, `plan_research_program`, `build_evidence_graph`, `export_research_report`, `literature_review`, `research_workflow`, `generate_proposal`, `get_followup_recommendation`, `full_research_report`.
 
 `result_provenance.ALL_KNOWN_TOOLS` is asserted to equal `{t["name"] for t in TOOLS}` in `tests/test_result_provenance.py`; adding a tool without classifying it breaks CI.
 

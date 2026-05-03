@@ -4014,6 +4014,114 @@ def _cosmology_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     return "\n".join(lines) if len(lines) > 1 else None
 
 
+def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
+    """Deterministic Research Mode summary that avoids unsupported numbers."""
+    plan: dict[str, Any] | None = None
+    matrix: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
+    for entry in tool_results or []:
+        result = entry.get("result")
+        if not isinstance(result, dict):
+            continue
+        if entry.get("tool") == "plan_research_program":
+            plan = result.get("research_plan") if isinstance(result.get("research_plan"), dict) else None
+        elif entry.get("tool") == "run_research_matrix":
+            matrix = result
+        elif entry.get("tool") == "build_evidence_graph":
+            evidence = result.get("evidence_graph") if isinstance(result.get("evidence_graph"), dict) else None
+    if not plan and not matrix:
+        return None
+
+    ready_cells: list[str] = []
+    blocked_cells: list[str] = []
+    if isinstance(matrix, dict):
+        for cell in matrix.get("matrix") or []:
+            if not isinstance(cell, dict):
+                continue
+            label = str(cell.get("label") or "unnamed cell")
+            if cell.get("publication_ready") is True:
+                ready_cells.append(label)
+            else:
+                blocked_cells.append(label)
+
+    gaps = [
+        str(item)
+        for item in (plan or {}).get("blocking_gaps", [])
+        if item
+    ]
+    claimable = []
+    if isinstance(evidence, dict):
+        claimable = [str(item) for item in evidence.get("claimable_parameters") or []]
+
+    lines = [
+        "Research-mode summary:",
+        "",
+        "What can be tested now",
+        "- The research plan and matrix have been built from registered datasets and controlled runners.",
+    ]
+    if ready_cells:
+        lines.append(
+            "- Runnable compressed-likelihood preliminary cells: "
+            + ", ".join(ready_cells[:6])
+            + ("." if len(ready_cells) <= 6 else f", +{len(ready_cells) - 6} more.")
+        )
+    else:
+        lines.append("- No publication-ready compressed-likelihood cell completed this turn.")
+
+    lines.extend(["", "Executed analyses"])
+    if plan:
+        probes = ", ".join(str(item) for item in plan.get("required_probes", []) if item)
+        models = ", ".join(str(item) for item in plan.get("model_families", []) if item)
+        if probes:
+            lines.append(f"- Required probes identified: {probes}.")
+        if models:
+            lines.append(f"- Model families planned: {models}.")
+    if isinstance(matrix, dict):
+        lines.append(
+            f"- Research matrix cells evaluated: {matrix.get('ready_cells', 0)} ready out of {matrix.get('matrix_size', 0)}."
+        )
+
+    lines.extend(["", "Preliminary findings"])
+    if ready_cells:
+        lines.append(
+            "- The ready cells can support compressed-likelihood preliminary interpretation; exact posterior numbers should be read from the Research Matrix / Chain cards."
+        )
+    else:
+        lines.append("- This turn supports dataset/method availability only, not posterior claims.")
+
+    lines.extend(["", "Robustness"])
+    if blocked_cells:
+        lines.append(
+            "- Some requested robustness branches are not yet numerical evidence because they require external likelihood execution: "
+            + ", ".join(blocked_cells[:5])
+            + ("." if len(blocked_cells) <= 5 else f", +{len(blocked_cells) - 5} more.")
+        )
+    else:
+        lines.append("- All planned matrix cells that were generated are runnable in the current compressed layer.")
+
+    lines.extend(["", "What drives the result"])
+    if claimable:
+        lines.append(
+            "- Claimable parameters in the evidence graph: "
+            + ", ".join(claimable[:8])
+            + ("." if len(claimable) <= 8 else f", +{len(claimable) - 8} more.")
+        )
+    else:
+        lines.append("- No numeric claim should be made unless it appears in a publication-ready tool card.")
+
+    lines.extend(["", "What is not yet supported"])
+    if gaps:
+        lines.extend(f"- {gap}" for gap in gaps[:5])
+    else:
+        lines.append("- Full external Cobaya/CosmoSIS reproduction is still outside the compressed preliminary layer.")
+
+    lines.extend(["", "Next experiment"])
+    lines.append(
+        "- Run the missing external likelihoods or add the corresponding executable runner before making stronger research claims."
+    )
+    return "\n".join(lines)
+
+
 def _cosmology_dataset_keys_present(tool_results: list[dict]) -> set[str]:
     keys: set[str] = set()
     for item in tool_results or []:
@@ -4444,13 +4552,71 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "compare", "比较", "constraint", "约束", "model", "模型",
         "chain", "配置", "cobaya", "cosmosis", "workflow",
         "posterior", "run", "executable", "product", "products",
-        "config-only", "config only",
+        "config-only", "config only", "research", "study", "analysis",
+        "robustness", "matrix", "研究", "分析", "稳健",
     )
     return (
         any(tok in prompt for tok in dataset_tokens)
         and any(tok in prompt for tok in model_tokens)
         and any(tok in prompt for tok in planning_tokens)
     )
+
+
+def _is_research_program_workflow(text: str) -> bool:
+    prompt = str(text or "").lower()
+    research_tokens = (
+        "research", "study", "analysis", "analyze", "assess", "evaluate",
+        "compare", "test", "blind", "workflow", "robustness", "matrix",
+        "研究", "分析", "评估", "比较", "检验", "盲测", "稳健",
+        "张力", "新结论", "发现",
+    )
+    return _is_cosmology_likelihood_workflow(text) and any(
+        token in prompt for token in research_tokens
+    )
+
+
+def _research_plan_from_tool_results(tool_results: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for item in reversed(tool_results):
+        if item.get("tool") != "plan_research_program":
+            continue
+        result = item.get("result")
+        if isinstance(result, dict) and isinstance(result.get("research_plan"), dict):
+            return result["research_plan"]
+    return None
+
+
+def _compact_tool_results_for_evidence(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact: list[dict[str, Any]] = []
+    for item in tool_results:
+        result = item.get("result")
+        if isinstance(result, dict):
+            result = {
+                key: value
+                for key, value in result.items()
+                if key in {
+                    "analysis_status",
+                    "publication_ready",
+                    "claim_scope",
+                    "dataset_keys",
+                    "datasets",
+                    "datasets_used",
+                    "datasets_not_run",
+                    "parameters",
+                    "posterior_summary",
+                    "derived_params",
+                    "pairwise_tensions",
+                    "provenance",
+                    "research_plan",
+                    "matrix",
+                    "warnings",
+                }
+            }
+        compact.append({
+            "tool": item.get("tool"),
+            "input": item.get("input"),
+            "result": result,
+        })
+    return compact
 
 
 def _cosmology_prompt_mentions_act(text: str) -> bool:
@@ -5011,6 +5177,7 @@ async def _run_agent_loop(
     user_requested_synthetic_demo = _user_requested_synthetic_demo(messages)
     fit_ready_literature_cache_keys: list[str] = []
     inline_statistics_call = _inline_statistics_tool_call_from_prompt(latest_user_text)
+    research_program_workflow = _is_research_program_workflow(latest_user_text)
     cosmology_likelihood_workflow = _is_cosmology_likelihood_workflow(latest_user_text)
     cosmology_likelihood_build_calls = _cosmology_likelihood_build_calls_from_prompt(latest_user_text)
     cosmology_likelihood_run_calls = _cosmology_likelihood_run_calls_from_prompt(latest_user_text)
@@ -5078,6 +5245,30 @@ async def _run_agent_loop(
             for tr in all_tool_results
         )
         inline_statistics_pending = inline_statistics_call is not None and not inline_statistics_done
+        research_plan_done = any(
+            tr.get("tool") == "plan_research_program"
+            for tr in all_tool_results
+        )
+        research_matrix_done = any(
+            tr.get("tool") == "run_research_matrix"
+            for tr in all_tool_results
+        )
+        research_evidence_done = any(
+            tr.get("tool") == "build_evidence_graph"
+            for tr in all_tool_results
+        )
+        research_plan_pending = research_program_workflow and not research_plan_done
+        research_matrix_pending = (
+            research_program_workflow
+            and research_plan_done
+            and cosmology_likelihood_workflow
+            and not research_matrix_done
+        )
+        research_evidence_pending = (
+            research_program_workflow
+            and research_matrix_done
+            and not research_evidence_done
+        )
         cosmology_registry_done = any(
             tr.get("tool") == "list_cosmology_datasets"
             for tr in all_tool_results
@@ -5096,7 +5287,11 @@ async def _run_agent_loop(
             }
             for tr in all_tool_results
         )
-        cosmology_registry_pending = cosmology_likelihood_workflow and not cosmology_registry_done
+        cosmology_registry_pending = (
+            cosmology_likelihood_workflow
+            and not research_program_workflow
+            and not cosmology_registry_done
+        )
         cosmology_likelihood_config_pending = (
             cosmology_likelihood_workflow
             and cosmology_registry_done
@@ -5224,6 +5419,21 @@ async def _run_agent_loop(
             ]
         elif inline_statistics_call is not None and inline_statistics_done:
             visible_tools = []
+        elif research_plan_pending:
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") == "plan_research_program"
+            ]
+        elif research_matrix_pending:
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") == "run_research_matrix"
+            ]
+        elif research_evidence_pending:
+            visible_tools = [
+                t for t in visible_tools
+                if t.get("name") == "build_evidence_graph"
+            ]
         elif cosmology_registry_pending:
             visible_tools = [
                 t for t in visible_tools
@@ -5340,6 +5550,29 @@ async def _run_agent_loop(
                 + "the regression result for the user's inline arrays. Stop "
                 + "calling tools and summarize only the tool-provided slope, "
                 + "intercept, method, and residual diagnostics.]"
+            )
+        elif research_plan_pending:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: this is a research-mode request. The only "
+                + "available tool this iteration is plan_research_program. "
+                + "Call it before any posterior/fit or literature summary. "
+                + "The plan itself is not evidence for numerical claims.]"
+            )
+        elif research_matrix_pending:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: a ResearchPlan exists for this turn. The only "
+                + "available tool this iteration is run_research_matrix. Execute "
+                + "the runnable compressed-likelihood cells and mark config-only "
+                + "cells as not runnable. Do not invent missing likelihood results.]"
+            )
+        elif research_evidence_pending:
+            system_this_call = (
+                system_this_call
+                + "\n\n[RUNTIME: a research matrix has returned. The only "
+                + "available tool this iteration is build_evidence_graph. Build "
+                + "claim provenance for this turn before giving the final summary.]"
             )
         elif cosmology_registry_pending:
             system_this_call = (
@@ -5531,6 +5764,50 @@ async def _run_agent_loop(
                     "Running the deterministic statistics toolbox on the "
                     "inline x/y arrays before summarizing the regression."
                 ),
+            })
+        if research_plan_pending:
+            text = ""
+            tool_calls_in_turn = [{
+                "id": f"auto_research_plan_{uuid.uuid4().hex}",
+                "name": "plan_research_program",
+                "input": {"question": latest_user_text},
+            }]
+            forced_tool_call_override = True
+            await _emit({
+                "type": "status",
+                "message": "Planning the research program before running analyses.",
+            })
+        if research_matrix_pending:
+            text = ""
+            tool_calls_in_turn = [{
+                "id": f"auto_research_matrix_{uuid.uuid4().hex}",
+                "name": "run_research_matrix",
+                "input": {
+                    "research_plan": _research_plan_from_tool_results(all_tool_results),
+                    "question": latest_user_text,
+                },
+            }]
+            forced_tool_call_override = True
+            await _emit({
+                "type": "status",
+                "message": (
+                    "Executing the runnable cells of the research matrix and "
+                    "marking config-only gaps."
+                ),
+            })
+        if research_evidence_pending:
+            text = ""
+            tool_calls_in_turn = [{
+                "id": f"auto_evidence_graph_{uuid.uuid4().hex}",
+                "name": "build_evidence_graph",
+                "input": {
+                    "tool_results": _compact_tool_results_for_evidence(all_tool_results),
+                },
+            }]
+            forced_tool_call_override = True
+            await _emit({
+                "type": "status",
+                "message": "Building the claim provenance graph for this research turn.",
             })
         if cosmology_registry_pending:
             # Keep cosmology routing deterministic. Some backends call
@@ -6303,7 +6580,8 @@ async def _run_agent_loop(
                 len(unsupported_narrative_claims),
             )
             tool_grounded_summary = (
-                _line_lfr_tool_grounded_summary(all_tool_results)
+                _research_tool_grounded_summary(all_tool_results)
+                or _line_lfr_tool_grounded_summary(all_tool_results)
                 or _statistics_tool_grounded_summary(all_tool_results)
                 or _cosmology_tool_grounded_summary(all_tool_results)
             )
@@ -6384,7 +6662,10 @@ async def _run_agent_loop(
                 "Unsupported cosmology anchor comparison from %s — replacing with grounded summary",
                 agent_name,
             )
-            tool_grounded_summary = _cosmology_tool_grounded_summary(all_tool_results)
+            tool_grounded_summary = (
+                _research_tool_grounded_summary(all_tool_results)
+                or _cosmology_tool_grounded_summary(all_tool_results)
+            )
             if tool_grounded_summary:
                 summary_validation = validate_claims(tool_grounded_summary, all_tool_results)
                 summary_citation_violations = provenance_citation_violations(
@@ -6443,7 +6724,8 @@ async def _run_agent_loop(
                     len(method_violations),
                 )
                 tool_grounded_summary = (
-                    _line_lfr_tool_grounded_summary(all_tool_results)
+                    _research_tool_grounded_summary(all_tool_results)
+                    or _line_lfr_tool_grounded_summary(all_tool_results)
                     or _statistics_tool_grounded_summary(all_tool_results)
                     or _cosmology_tool_grounded_summary(all_tool_results)
                 )
@@ -6576,7 +6858,8 @@ async def _run_agent_loop(
                     validation = validate_claims(clean_reply, all_tool_results)
                     if not validation.ok:
                         tool_grounded_summary = (
-                            _line_lfr_tool_grounded_summary(all_tool_results)
+                            _research_tool_grounded_summary(all_tool_results)
+                            or _line_lfr_tool_grounded_summary(all_tool_results)
                             or _statistics_tool_grounded_summary(all_tool_results)
                             or _cosmology_tool_grounded_summary(all_tool_results)
                         )
@@ -6634,13 +6917,17 @@ async def _run_agent_loop(
     # never sees a blank AI bubble. Root cause of the empty-response bug
     # observed in the WD LF test (first attempt).
     if not clean_reply.strip():
-        line_lfr_summary = _line_lfr_tool_grounded_summary(all_tool_results)
-        if line_lfr_summary:
-            clean_reply = line_lfr_summary
+        research_summary = _research_tool_grounded_summary(all_tool_results)
+        if research_summary:
+            clean_reply = research_summary
         else:
-            stats_summary = _statistics_tool_grounded_summary(all_tool_results)
-            if stats_summary:
-                clean_reply = stats_summary
+            line_lfr_summary = _line_lfr_tool_grounded_summary(all_tool_results)
+            if line_lfr_summary:
+                clean_reply = line_lfr_summary
+            else:
+                stats_summary = _statistics_tool_grounded_summary(all_tool_results)
+                if stats_summary:
+                    clean_reply = stats_summary
         if not clean_reply.strip():
             cosmology_summary = _cosmology_tool_grounded_summary(all_tool_results)
             if cosmology_summary:

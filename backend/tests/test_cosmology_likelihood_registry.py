@@ -452,3 +452,102 @@ def test_h0_anchor_means_span_known_tension_range() -> None:
     assert max(means) >= 73.0   # SH0ES / H0LiCOW / Megamaser 端
     # 横跨 ~3-4 km/s/Mpc, 即真实张力区间
     assert max(means) - min(means) >= 3.0
+
+
+# ── PART AI Phase 5: SPT-SZ cluster cosmology (Bocquet+ 2019) ────────
+
+
+def test_spt_cluster_bocquet19_registered_with_sigma8_sz_constraint() -> None:
+    """spec paper #19 — SPT-SZ Bocquet+ 2019 σ8(Ωm/0.3)^0.2 = 0.766 ± 0.025
+    cluster-count cosmology. Independent σ8 anchor (no weak lensing,
+    no CMB inverse). Compressed 2D Gaussian σ8 × Ωm with ρ=-0.6
+    typical SZ degeneracy slope."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("spt_cluster_bocquet19")
+    assert entry.probe == "cluster"
+    assert entry.execution_mode == "compressed_gaussian"
+    assert entry.likelihood_family == "cluster_count"
+    cl = entry.compressed_likelihood
+    assert cl is not None
+    # 注: 参数名小写 (matches RUNNER_PARAMETER_PRIORS convention).
+    # 公开 Bocquet+19 paper 用大写 Ω_m, 平台内部 schema 用 omegam.
+    assert cl.parameters == ("sigma8", "omegam")
+    # σ8 = 0.766 (Bocquet+19 baseline)
+    assert abs(cl.mean[0] - 0.766) < 1e-6
+    # Ωm = 0.300 (Bocquet+19 fiducial)
+    assert abs(cl.mean[1] - 0.300) < 1e-6
+    # Diagonal σ correctly recovered: σ_σ8 = 0.025, σ_Ωm = 0.05
+    import math
+    assert math.isclose(math.sqrt(cl.covariance[0][0]), 0.025, abs_tol=1e-6)
+    assert math.isclose(math.sqrt(cl.covariance[1][1]), 0.050, abs_tol=1e-6)
+    # ρ = -0.6 SZ degeneracy slope direction
+    rho = cl.covariance[0][1] / (
+        math.sqrt(cl.covariance[0][0]) * math.sqrt(cl.covariance[1][1])
+    )
+    assert math.isclose(rho, -0.6, abs_tol=1e-6)
+
+    arxivs = [c.arxiv for c in entry.citations if c.arxiv]
+    assert "1812.01679" in arxivs
+
+
+def test_spt_cluster_does_not_share_observables_with_weak_lensing() -> None:
+    """SPT cluster 必须**独立**于 weak lensing — observables 不能含
+    xi_plus / xi_minus / S8 (那是 cosmic shear 字段). 这是它作为
+    sigma8 张力 independent anchor 的关键."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("spt_cluster_bocquet19")
+    assert "xi_plus" not in entry.observables
+    assert "xi_minus" not in entry.observables
+    # σ8 共享是 OK 的 (κappa-shear 也输出 σ8); Ωm 同理 (lowercase per
+    # RUNNER_PARAMETER_PRIORS convention)
+    assert "sigma8" in entry.observables
+    assert "omegam" in entry.observables
+
+
+def test_spt_cluster_chain_runner_combines_with_weak_lensing() -> None:
+    """SPT cluster + KiDS-1000 + DES Y3 + HSC Y1 联合 chain 必须可跑
+    (σ8 张力 cross-check 主流程). 5 个 dataset 都是 compressed_gaussian
+    路径, runner 应该接受."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    result = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=[
+            "spt_cluster_bocquet19",
+            "kids1000_wl",
+            "des_y3_3x2pt",
+            "hsc_y1_cosmic_shear",
+            "planck2018_compressed",
+        ],
+        random_seed=20260503,
+        n_samples=600,
+    )
+    assert result["success"] is True
+    assert result["publication_ready"] is True
+    # σ8 必须在 fit parameters 中
+    assert "sigma8" in result["parameters"]
+    assert "S8" in result["parameters"]
+    # 5 个 dataset 必须全部进 fit
+    assert len(result["datasets_used"]) == 5
+    used_keys = {entry["key"] for entry in result["datasets_used"]}
+    assert "spt_cluster_bocquet19" in used_keys
+
+
+def test_spt_cluster_alone_chain_returns_2d_constraint() -> None:
+    """单独跑 SPT cluster 必须返回 σ8/Ωm 两参数后验, 不是空."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    result = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["spt_cluster_bocquet19"],
+        random_seed=20260503,
+        n_samples=400,
+    )
+    assert result["success"] is True
+    assert "sigma8" in result["parameters"]
+    assert "omegam" in result["parameters"]
+    # σ8 中位数应该 ≈ 0.766 (compressed Gaussian center)
+    sigma8_param = result["parameters"]["sigma8"]
+    assert abs(sigma8_param["median"] - 0.766) < 0.05

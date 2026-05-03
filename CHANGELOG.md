@@ -10,6 +10,14 @@ need entries unless they change user-visible behavior or research validity.
 
 ### Added
 
+- Added Research Mode v1 for observational cosmology: `plan_research_program`
+  creates a structured research DAG, `run_research_matrix` executes runnable
+  compressed-likelihood cells while preserving config-only gaps,
+  `build_evidence_graph` links claimable parameters to current-turn tool runs
+  and dataset citations, and `export_research_report` drafts an auditable
+  Markdown report.
+- Added frontend Research Plan, Research Matrix, Evidence Graph, and Research
+  Report cards in the chat tool UI.
 - Registered machine-readable observational-cosmology data products for the
   priority executable-adapter path:
   - DESI DR1 BAO public mean vector, covariance matrix, and bin-level product
@@ -26,6 +34,8 @@ need entries unless they change user-visible behavior or research validity.
 
 ### Changed
 
+- Research-style observational-cosmology prompts are now routed through a
+  plan-first workflow before executable compressed likelihood cells are run.
 - Updated cosmology registry documentation to distinguish machine-readable
   data-product provenance from executable posterior results. DESI and
   Pantheon+ remain external-likelihood/config-only until a runner consumes
