@@ -543,7 +543,20 @@ def build_fit_line_lfr_diagnostics_section(
 
     # ── Cosmology recompute audit ────────────────────────────────────
     if fit.get("cosmology_recomputed"):
-        used = fit.get("cosmology_used") or {}
+        # Bug fix (Phase 4 e2e): fit.cosmology_used is a string (the
+        # preset name) per fit_line_lfr's result envelope. The full
+        # manifest dict (with H0_km_s_Mpc / Om0 / bibcode) lives under
+        # fit.cosmology_manifest. Earlier render code assumed dict and
+        # crashed with AttributeError when given a string.
+        raw_used = fit.get("cosmology_used")
+        if isinstance(raw_used, dict):
+            used = raw_used
+        else:
+            used = fit.get("cosmology_manifest") or {}
+            if not isinstance(used, dict):
+                used = {}
+            if isinstance(raw_used, str) and "name" not in used:
+                used = {**used, "name": raw_used}
         baseline = fit.get("cosmology_baseline") or {}
         shift = fit.get("dl_shift_summary") or {}
         lines.append("**Cosmology recomputation**:")
