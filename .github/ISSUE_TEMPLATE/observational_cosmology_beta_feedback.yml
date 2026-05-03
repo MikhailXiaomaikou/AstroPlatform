@@ -1,0 +1,121 @@
+name: Observational Cosmology Beta Feedback
+description: Share scientific feedback after testing Standard Astro's observational cosmology workflows.
+title: "[Cosmology beta]: "
+labels: ["beta-feedback", "observational-cosmology", "scientific-validation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Standard Astro. Critical scientific feedback is especially valuable.
+
+        Please do not include private data, unpublished collaboration material, credentials, or proprietary likelihood files.
+
+  - type: input
+    id: background
+    attributes:
+      label: Your background / role
+      description: Optional. Example: PhD student, postdoc, faculty, research software developer, cosmology inference user.
+      placeholder: "e.g. PhD student working on BAO / SN cosmology"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: workflow-area
+    attributes:
+      label: Workflow area tested
+      multiple: true
+      options:
+        - DESI / BAO
+        - Pantheon+ / supernova cosmology
+        - Planck / ACT compressed CMB constraints
+        - Weak lensing / S8 comparison
+        - H0 tension workflow
+        - Research planning / experiment matrix
+        - Evidence graph / provenance
+        - Fact checking / claim validation
+        - Paper or report export
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: prompt-or-task
+    attributes:
+      label: What did you ask Standard Astro to do?
+      description: Include the prompt, workflow, dataset combination, or task you tested.
+      placeholder: "Example: Plan a BAO + Pantheon+ + Planck compressed-likelihood workflow and summarize supported claims."
+    validations:
+      required: true
+
+  - type: textarea
+    id: output-summary
+    attributes:
+      label: What did the platform output?
+      description: Summarize the relevant result, claim, evidence graph, plan, or report section.
+    validations:
+      required: true
+
+  - type: textarea
+    id: useful
+    attributes:
+      label: What was scientifically useful?
+      description: Which part seemed aligned with real observational cosmology practice?
+    validations:
+      required: false
+
+  - type: textarea
+    id: unsafe-or-wrong
+    attributes:
+      label: What was unsupported, overstated, wrong, or unsafe?
+      description: Please include concrete claims that should be blocked, rewritten, or downgraded.
+      placeholder: "Example: It treated a compressed preliminary constraint as if it were a full Planck likelihood result."
+    validations:
+      required: false
+
+  - type: textarea
+    id: missing-data
+    attributes:
+      label: Missing datasets, likelihoods, priors, covariances, or citations
+      description: What would be needed before this workflow could be trusted for real research?
+    validations:
+      required: false
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence / provenance assessment
+      description: Did the evidence graph, citations, tool results, or provenance metadata support the claims? Where did the chain break?
+    validations:
+      required: false
+
+  - type: textarea
+    id: refusal-boundaries
+    attributes:
+      label: What should the system refuse to say?
+      description: List claims that should require stronger evidence, full likelihoods, external runners, or explicit assumptions.
+    validations:
+      required: false
+
+  - type: textarea
+    id: suggested-tests
+    attributes:
+      label: Suggested validation tests
+      description: Add concrete regression tests, blind tests, datasets, or benchmark papers we should use.
+    validations:
+      required: false
+
+  - type: textarea
+    id: usefulness
+    attributes:
+      label: What would make this useful in your real workflow?
+      description: UI changes, export formats, integrations, scientific guardrails, data products, or collaboration features.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: disclosure
+    attributes:
+      label: Disclosure
+      options:
+        - label: I did not include private credentials, proprietary likelihood files, or unpublished collaboration-restricted material.
+          required: true
