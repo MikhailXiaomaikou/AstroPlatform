@@ -289,6 +289,90 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cosmosis_module="likelihood/bao/sdss_dr16_6df/sdss_6df_bao.py",
         execution_mode="external_cobaya",
     ),
+    # ── PART AI Phase 5: RSD f·σ8 multi-z compilation (Alam+ 2021) ──
+    # eBOSS DR16 cosmology paper (arXiv:2007.08991) reports growth-rate
+    # measurements f·σ8 at 7 redshift bins from 6dFGS / BOSS LOWZ+CMASS
+    # / eBOSS LRG+ELG+QSO+Lyα. Independent of BAO distance ratios on
+    # the same survey — registers separately so users can run BAO-only,
+    # RSD-only, or BAO+RSD joint analyses.
+    "eboss_dr16_rsd": CosmologyDatasetEntry(
+        key="eboss_dr16_rsd",
+        display_name="eBOSS DR16 + 6dFGS + BOSS RSD f·σ8 compilation",
+        version="Alam+ 2021 RSD compilation (7 z-bins: 6dFGS, BOSS LOWZ/CMASS, eBOSS LRG/ELG/QSO/Lyα)",
+        probe="rsd",
+        status="external_likelihood",
+        observables=("f_sigma8",),
+        units={"f_sigma8": "dimensionless", "redshift": "dimensionless"},
+        applicable_models=BAO_MODELS,
+        likelihood_family="gaussian_rsd",
+        covariance=CovarianceSpec(
+            kind="block covariance (7 z-bins, mostly diagonal)",
+            provided=True,
+            description=(
+                "RSD f·σ8(z) measurements at 7 redshift bins covering "
+                "0.15 < z < 2.33. Cross-correlation between z-bins is "
+                "small (different surveys); BOSS LOWZ-CMASS is the only "
+                "non-trivial off-diagonal. Together with BAO distance "
+                "ratios this constrains σ8 growth history independent "
+                "of weak-lensing 1+z snapshots."
+            ),
+            url="https://svn.sdss.org/public/data/eboss/DR16cosmo/tags/v1_0_1/",
+            format="SDSS/eBOSS DR16 RSD likelihood data products",
+        ),
+        source_url="https://svn.sdss.org/public/data/eboss/DR16cosmo/tags/v1_0_1/",
+        citations=(
+            DatasetCitation(
+                label="Beutler et al. 6dFGS RSD",
+                year=2012, arxiv="1204.4725",
+            ),
+            DatasetCitation(
+                label="Alam et al. BOSS DR12 RSD consensus",
+                year=2017, arxiv="1607.03155",
+                doi="10.1093/mnras/stx721",
+            ),
+            DatasetCitation(
+                label="Bautista et al. eBOSS LRG RSD",
+                year=2021, arxiv="2007.08993",
+            ),
+            DatasetCitation(
+                label="de Mattia et al. eBOSS ELG RSD",
+                year=2021, arxiv="2007.09008",
+            ),
+            DatasetCitation(
+                label="Hou et al. eBOSS QSO RSD",
+                year=2021, arxiv="2007.08998",
+            ),
+            DatasetCitation(
+                label="du Mas des Bourboux et al. eBOSS Lyα BAO+RSD",
+                year=2020, arxiv="2007.08995",
+            ),
+            DatasetCitation(
+                label="Alam et al. eBOSS DR16 cosmology summary",
+                year=2021, arxiv="2007.08991",
+                doi="10.1103/PhysRevD.103.083533",
+            ),
+        ),
+        notes=(
+            "RSD f·σ8 data at z = 0.15, 0.38, 0.51, 0.70, 0.85, 1.48, "
+            "2.33. Tests whether σ8 growth history matches LCDM "
+            "prediction; independent of weak-lensing snapshot σ8 "
+            "(different epoch) AND of cluster-count σ8 (different "
+            "physics). Use as third axis of σ8 tension cross-check "
+            "alongside SPT cluster + cosmic shear. Phase-2 cobaya "
+            "execution required — compressed Gaussian path not yet "
+            "implemented because f·σ8(z) requires solving the LCDM "
+            "growth equation per parameter sample, not closed-form "
+            "from H0/Ωm."
+        ),
+        cobaya_likelihood="external:rsd.eboss_dr16_alam21",
+        cosmosis_module="likelihood/rsd/eboss_dr16/eboss_dr16_rsd.py",
+        nuisance_parameters=(
+            "rsd_systematics_LOWZ", "rsd_systematics_CMASS",
+            "rsd_systematics_LRG", "rsd_systematics_ELG",
+            "rsd_systematics_QSO",
+        ),
+        execution_mode="external_cobaya",
+    ),
     "pantheon_plus": CosmologyDatasetEntry(
         key="pantheon_plus",
         display_name="Pantheon+",

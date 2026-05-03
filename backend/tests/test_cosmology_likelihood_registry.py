@@ -551,3 +551,84 @@ def test_spt_cluster_alone_chain_returns_2d_constraint() -> None:
     # σ8 中位数应该 ≈ 0.766 (compressed Gaussian center)
     sigma8_param = result["parameters"]["sigma8"]
     assert abs(sigma8_param["median"] - 0.766) < 0.05
+
+
+# ── PART AI Phase 5: eBOSS DR16 RSD f·σ8 multi-z compilation ────────
+
+
+def test_eboss_dr16_rsd_registered() -> None:
+    """spec paper #6 RSD growth-rate side: eBOSS DR16 RSD compilation
+    (Alam+ 2021) covering z=0.15..2.33, complement to BAO distance ratios.
+    Independent of weak-lensing σ8 (1+z snapshot) AND cluster σ8 (M-T
+    counting) — third axis of σ8 tension cross-check."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("eboss_dr16_rsd")
+    assert entry.probe == "rsd"
+    assert entry.likelihood_family == "gaussian_rsd"
+    assert entry.execution_mode == "external_cobaya"
+    assert entry.observables == ("f_sigma8",)
+    # Phase-1 status: status="external_likelihood" because RSD f·σ8(z)
+    # requires solving LCDM growth equation per parameter sample, not
+    # closed-form Gaussian; phase-2 cobaya path will execute it.
+    assert entry.status == "external_likelihood"
+
+
+def test_eboss_dr16_rsd_citations_cover_all_7_z_bins() -> None:
+    """7 z-bin compilation must cite each survey's published RSD paper:
+    6dFGS / BOSS / 4 eBOSS sub-samples (LRG / ELG / QSO / Lyα) +
+    summary cosmology paper."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("eboss_dr16_rsd")
+    arxivs = {c.arxiv for c in entry.citations if c.arxiv}
+    # 6dFGS RSD (Beutler+ 2012)
+    assert "1204.4725" in arxivs
+    # BOSS DR12 consensus (Alam+ 2017)
+    assert "1607.03155" in arxivs
+    # eBOSS LRG (Bautista+ 2021)
+    assert "2007.08993" in arxivs
+    # eBOSS ELG (de Mattia+ 2021)
+    assert "2007.09008" in arxivs
+    # eBOSS QSO (Hou+ 2021)
+    assert "2007.08998" in arxivs
+    # eBOSS Lyα (du Mas des Bourboux+ 2020)
+    assert "2007.08995" in arxivs
+    # eBOSS DR16 summary cosmology (Alam+ 2021)
+    assert "2007.08991" in arxivs
+
+
+def test_eboss_dr16_rsd_complements_sdss_6df_bao_independently() -> None:
+    """sdss_6df_bao 跟 eboss_dr16_rsd 应该是**独立 dataset entries** —
+    用户能选 BAO-only / RSD-only / BAO+RSD joint, 不让 RSD 跟 BAO 在
+    一个 entry 里被强制绑定."""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    bao = get_cosmology_dataset("sdss_6df_bao")
+    rsd = get_cosmology_dataset("eboss_dr16_rsd")
+
+    # 不同 probe
+    assert bao.probe == "bao"
+    assert rsd.probe == "rsd"
+    # 不同 likelihood family
+    assert bao.likelihood_family == "gaussian_bao"
+    assert rsd.likelihood_family == "gaussian_rsd"
+    # 不同 observables (BAO 是 distance ratios, RSD 是 f·σ8)
+    assert "f_sigma8" not in bao.observables
+    assert "DM_over_rd" not in rsd.observables
+
+
+def test_eboss_dr16_rsd_nuisance_parameters_cover_per_subsample_systematics() -> None:
+    """RSD analysis 每个 sub-sample 都有独立 systematic correction
+    (modeling error in non-linear matter power spectrum). 5 个 eBOSS
+    + BOSS sub-sample 都需要 nuisance:"""
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("eboss_dr16_rsd")
+    nuisance = set(entry.nuisance_parameters)
+    # 至少含 LOWZ / CMASS / LRG / ELG / QSO 5 个 sub-sample systematics
+    assert any("LOWZ" in n for n in nuisance)
+    assert any("CMASS" in n for n in nuisance)
+    assert any("LRG" in n for n in nuisance)
+    assert any("ELG" in n for n in nuisance)
+    assert any("QSO" in n for n in nuisance)
