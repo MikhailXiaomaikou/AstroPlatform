@@ -40,6 +40,20 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
+      # PART AI Phase 5 #2 Track 2 — external_cobaya likelihood backend.
+      # COBAYA_PACKAGES_PATH points cobaya at a writable cache for likelihood
+      # data tables. It must match the directory created in backend/Dockerfile
+      # (/app/cobaya_packages, owned by the non-root `app` user).
+      - key: COBAYA_PACKAGES_PATH
+        value: /app/cobaya_packages
+      # Free / starter dynos have limited CPU; pin OpenMP thread count so a
+      # CAMB call doesn't fork worker threads that get OOM-killed.
+      - key: OMP_NUM_THREADS
+        value: "1"
+      # Step 1 ships the dependency only — the cobaya subprocess runner
+      # is shipped in step 2 and only takes effect once this flag flips on.
+      - key: EXTERNAL_COBAYA_ENABLED
+        value: "false"
 
   # ── Celery Worker ──
   - type: worker
@@ -65,6 +79,15 @@ services:
         sync: false
       - key: SANDBOX_BACKEND
         value: subprocess
+      # PART AI Phase 5 #2 Track 2 — same cobaya env as the API container so
+      # that workflow-checkpointed external_cobaya runs that resume on the
+      # Celery worker share the same likelihood cache layout.
+      - key: COBAYA_PACKAGES_PATH
+        value: /app/cobaya_packages
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: EXTERNAL_COBAYA_ENABLED
+        value: "false"
 
   # ── Celery Beat (scheduler) ──
   - type: worker
