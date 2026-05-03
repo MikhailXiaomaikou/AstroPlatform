@@ -1327,6 +1327,27 @@ def run_likelihood_chain(
             sample_count=sample_count,
         )
 
+    # PART AI Phase 5 #2 Track 2 step 2: external_cobaya dispatch.
+    # When EXTERNAL_COBAYA_ENABLED env is truthy AND every selected entry
+    # has execution_mode="external_cobaya" AND cobaya is importable, hand
+    # the run to the subprocess runner. Default off — the legacy
+    # compressed-Gaussian path below remains the production behaviour, and
+    # `cobaya_runner.dispatch_external_cobaya` itself returns a structured
+    # NOT_PUB_READY envelope until step 3 ships the adapter resolver.
+    from app.services import cobaya_runner
+
+    if cobaya_runner.is_external_enabled() and _all_external_cobaya(entries):
+        cobaya_param_order = _cobaya_parameter_order(model_key, entries)
+        cobaya_priors = _sanitize_runner_priors(cobaya_param_order, priors)
+        return cobaya_runner.dispatch_external_cobaya(
+            model_key=model_key,
+            entries=entries,
+            prior_bounds=cobaya_priors,
+            parameter_order=cobaya_param_order,
+            seed=seed,
+            sample_count=sample_count,
+        )
+
     compressed_entries = [entry for entry in entries if entry.compressed_likelihood is not None]
     skipped_entries = [entry for entry in entries if entry.compressed_likelihood is None]
 
@@ -2219,6 +2240,38 @@ def _compressed_parameter_order(entries: list[CosmologyDatasetEntry]) -> list[st
     return [param for param in preferred if param in order] + [
         param for param in order if param not in preferred
     ]
+
+
+def _all_external_cobaya(entries: list[CosmologyDatasetEntry]) -> bool:
+    """True iff every entry is registered with execution_mode='external_cobaya'.
+
+    Used as the gate for delegating run_likelihood_chain to cobaya_runner.
+    Mixed selections (some entries compressed, some external_cobaya) keep
+    the legacy compressed-Gaussian path so we never silently drop the
+    compressed datasets — those still produce a publication_ready summary
+    in the existing branch.
+    """
+    return bool(entries) and all(
+        entry.execution_mode == "external_cobaya" for entry in entries
+    )
+
+
+def _cobaya_parameter_order(
+    model_key: str,
+    entries: list[CosmologyDatasetEntry],
+) -> list[str]:
+    """Pick the parameter ordering passed to cobaya_runner.
+
+    Prefers any compressed-likelihood parameter spec the registered
+    entries expose; falls back to the intersection of
+    SUPPORTED_MODELS[model_key] with RUNNER_PARAMETER_PRIORS so that the
+    YAML cobaya_runner emits always declares params it has prior bounds for.
+    """
+    compressed_order = _compressed_parameter_order(entries)
+    if compressed_order:
+        return compressed_order
+    fallback = [p for p in SUPPORTED_MODELS[model_key] if p in RUNNER_PARAMETER_PRIORS]
+    return fallback or ["H0", "omegam"]
 
 
 def _sanitize_runner_priors(
