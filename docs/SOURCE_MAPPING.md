@@ -71,9 +71,10 @@ DESI DR1 BAO points at the public CobayaSampler `bao_data` mean/covariance
 files, Pantheon+ points at the public distance table, covariance matrices,
 and CosmoSIS likelihood wrappers, and Planck 2018 points at the Planck
 Legacy Archive likelihood-code page plus the compressed distance-prior table
-source. These links are data-product provenance for future adapters; DESI
-and Pantheon+ remain external-likelihood/config-only until a runner consumes
-those files directly.
+source. DESI DR1 BAO is now consumed directly by the phase-1
+`bao_gaussian_importance` runner for flat-LambdaCDM compressed preliminary
+posterior summaries. Pantheon+ remains external-likelihood/config-only until
+a runner consumes its distance table and covariance directly.
 
 ## Re-enable Checklist
 

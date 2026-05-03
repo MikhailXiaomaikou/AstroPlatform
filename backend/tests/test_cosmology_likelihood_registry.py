@@ -50,11 +50,13 @@ def test_priority_datasets_expose_machine_readable_data_products():
     assert any(
         product["role"] == "measurement_vector"
         and "desi_2024_gaussian_bao_ALL_GCcomb_mean.txt" in product["url"]
+        and product["sha256"] == "dd2873a0b88459a491af3c0c0307ba059f62df9211d5b976760f310565a1be68"
         for product in desi_products
     )
     assert any(
         product["role"] == "covariance"
         and "desi_2024_gaussian_bao_ALL_GCcomb_cov.txt" in product["url"]
+        and product["sha256"] == "bbafa9074b51cf1a45e0d10e4f37db8c0e80a5d1d1788857abb7fc49fb21abcc"
         for product in desi_products
     )
 
@@ -110,6 +112,38 @@ def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints(
     assert result["fit_statistics"]["aic"] > 0
     assert any(item["parameter"] == "S8" for item in result["pairwise_tensions"])
     assert len(result["datasets_used"]) == 5
+
+
+def test_desi_dr1_bao_data_product_runner_produces_publication_ready_preliminary_chain():
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    result = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["desi_dr1_bao"],
+        random_seed=123,
+        n_samples=512,
+    )
+
+    assert result["success"] is True
+    assert result["publication_ready"] is True
+    assert result["analysis_status"] == "COMPRESSED_CHAIN_READY"
+    assert result["sampler"] == "bao_gaussian_importance"
+    assert result["claim_scope"] == "compressed_likelihood_preliminary"
+    assert [entry["key"] for entry in result["datasets_used"]] == ["desi_dr1_bao"]
+    assert result["datasets_not_run"] == []
+    assert set(result["parameters"]) == {"H0", "omegam", "rd"}
+    assert result["parameters"]["omegam"]["median"] == pytest.approx(0.294, abs=0.03)
+    assert result["fit_statistics"]["n_constraints"] == 12
+    assert result["chain_diagnostics"]["proposal_ess"] >= 400
+    assert "desilike/Cobaya" in result["warnings"][0]
+    assert "prior/calibration dependent" in " ".join(result["warnings"])
+    sources = result["provenance"]["cosmology_likelihood"]["compressed_sources"]
+    assert sources[0]["dataset_key"] == "desi_dr1_bao"
+    assert any(
+        product["role"] == "measurement_vector"
+        and product["sha256"] == "dd2873a0b88459a491af3c0c0307ba059f62df9211d5b976760f310565a1be68"
+        for product in sources[0]["data_products"]
+    )
 
 
 def test_compressed_likelihood_runner_keeps_config_only_datasets_out_of_posterior():

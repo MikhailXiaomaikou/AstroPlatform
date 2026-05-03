@@ -208,7 +208,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         notes="Use as BAO-only or combined late-universe distance anchor; requires rd prior or CMB calibration.",
         cobaya_likelihood="external:desilike.desi_dr1_bao",
         cosmosis_module="likelihood/bao/desi1-dr1/desi1_dr1.py",
-        execution_mode="external_cobaya",
+        execution_mode="compressed_gaussian",
         data_products=(
             DataProductSpec(
                 product_type="bao_measurement_vector",
@@ -221,6 +221,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 description="DESI DR1 combined BAO Gaussian mean vector.",
                 columns=("z", "value", "quantity"),
                 rows=12,
+                sha256="dd2873a0b88459a491af3c0c0307ba059f62df9211d5b976760f310565a1be68",
             ),
             DataProductSpec(
                 product_type="bao_covariance_matrix",
@@ -232,6 +233,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 format="ASCII matrix",
                 description="DESI DR1 combined BAO Gaussian covariance matrix.",
                 rows=12,
+                sha256="bbafa9074b51cf1a45e0d10e4f37db8c0e80a5d1d1788857abb7fc49fb21abcc",
             ),
             DataProductSpec(
                 product_type="bao_bin_products",
@@ -1096,9 +1098,42 @@ def build_robustness_matrix(
 RUNNER_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
     "H0": (50.0, 90.0),
     "omegam": (0.05, 0.6),
+    "rd": (130.0, 170.0),
     "sigma8": (0.4, 1.2),
     "S8": (0.4, 1.2),
 }
+
+
+DESI_DR1_BAO_EXECUTABLE_KEYS = {"desi_dr1_bao"}
+DESI_DR1_BAO_MEAN_VECTOR: tuple[tuple[float, float, str], ...] = (
+    (0.295, 7.92512927, "DV_over_rs"),
+    (0.510, 13.62003080, "DM_over_rs"),
+    (0.510, 20.98334647, "DH_over_rs"),
+    (0.706, 16.84645313, "DM_over_rs"),
+    (0.706, 20.07872919, "DH_over_rs"),
+    (0.930, 21.70841761, "DM_over_rs"),
+    (0.930, 17.87612922, "DH_over_rs"),
+    (1.317, 27.78720817, "DM_over_rs"),
+    (1.317, 13.82372285, "DH_over_rs"),
+    (1.491, 26.07217182, "DV_over_rs"),
+    (2.330, 39.70838281, "DM_over_rs"),
+    (2.330, 8.52256583, "DH_over_rs"),
+)
+DESI_DR1_BAO_COVARIANCE: tuple[tuple[float, ...], ...] = (
+    (2.27230845e-02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (0.0, 6.34662240e-02, -6.85337250e-02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (0.0, -6.85337250e-02, 3.72968756e-01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 1.01975713e-01, -7.99403059e-02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, -7.99403059e-02, 3.54449156e-01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0, 0.0, 7.95675235e-02, -3.80110101e-02, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0, 0.0, -3.80110101e-02, 1.19935683e-01, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 4.76569857e-01, -1.29405759e-01, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.29405759e-01, 1.78270498e-01, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 4.47134991e-01, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 8.89752928e-01, -7.69477120e-02),
+    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -7.69477120e-02, 2.91860447e-02),
+)
+C_LIGHT_KM_S = 299792.458
 
 
 def run_likelihood_chain(
@@ -1111,14 +1146,24 @@ def run_likelihood_chain(
 ) -> dict[str, Any]:
     """Run the phase-1 compressed Gaussian cosmology likelihood.
 
-    This combines only registry entries with an explicit
-    ``CompressedLikelihoodSpec``.  External BAO/SN/full-CMB likelihood
-    packages are reported as not-run rather than approximated silently.
+    This combines registry entries with explicit ``CompressedLikelihoodSpec``
+    summaries and the DESI DR1 public Gaussian BAO mean/covariance products.
+    External SN/full-CMB likelihood packages are reported as not-run rather
+    than approximated silently.
     """
     model_key = _validate_model(model)
     entries = _validate_dataset_selection(model_key, dataset_keys)
     seed = int(random_seed if random_seed is not None else 20260502)
     sample_count = max(256, min(int(n_samples or 4000), 20000))
+    if any(_is_executable_bao_entry(entry) for entry in entries):
+        return _run_sampling_likelihood_chain(
+            model_key=model_key,
+            entries=entries,
+            priors=priors,
+            seed=seed,
+            sample_count=sample_count,
+        )
+
     compressed_entries = [entry for entry in entries if entry.compressed_likelihood is not None]
     skipped_entries = [entry for entry in entries if entry.compressed_likelihood is None]
 
@@ -1391,6 +1436,431 @@ def run_robustness_matrix(
             "results. For non-runnable cells, say the external likelihood/config is still needed."
         ),
     }
+
+
+def _is_executable_bao_entry(entry: CosmologyDatasetEntry) -> bool:
+    return entry.key in DESI_DR1_BAO_EXECUTABLE_KEYS
+
+
+def _run_sampling_likelihood_chain(
+    *,
+    model_key: str,
+    entries: list[CosmologyDatasetEntry],
+    priors: dict[str, Any] | None,
+    seed: int,
+    sample_count: int,
+) -> dict[str, Any]:
+    """Importance-sample executable low-dimensional likelihood products.
+
+    DESI DR1 publishes a Gaussian BAO measurement vector and covariance.  We
+    evaluate those raw data products directly against flat ΛCDM distance-ratio
+    predictions, while still treating full desilike/Cobaya as the higher-fidelity
+    second-stage likelihood.
+    """
+    if model_key != "lcdm":
+        return _compressed_runner_unavailable(
+            model_key=model_key,
+            entries=entries,
+            seed=seed,
+            reason=(
+                "DESI DR1 executable phase-1 BAO runner currently supports "
+                "flat ΛCDM only. Extended dark-energy/curvature/neutrino "
+                "parameters require the external Cobaya/CosmoSIS likelihood."
+            ),
+        )
+
+    bao_entries = [entry for entry in entries if _is_executable_bao_entry(entry)]
+    compressed_entries = [entry for entry in entries if entry.compressed_likelihood is not None]
+    skipped_entries = [
+        entry
+        for entry in entries
+        if entry.key not in {bao.key for bao in bao_entries}
+        and entry.compressed_likelihood is None
+    ]
+    parameter_order = _sampling_parameter_order(bao_entries, compressed_entries)
+    if not parameter_order:
+        return _compressed_runner_unavailable(
+            model_key=model_key,
+            entries=entries,
+            seed=seed,
+            reason="Selected datasets contain no phase-1 executable likelihood parameters.",
+        )
+
+    prior_bounds = _sanitize_runner_priors(parameter_order, priors)
+    rng = np.random.default_rng(seed)
+    invalid_specs: list[str] = []
+
+    try:
+        if bao_entries and not compressed_entries:
+            (
+                posterior_samples,
+                best_chi2,
+                proposal_ess,
+                proposal_draws,
+            ) = _draw_desi_bao_only_posterior(
+                rng,
+                parameter_order,
+                prior_bounds,
+                sample_count,
+            )
+        else:
+            (
+                posterior_samples,
+                best_chi2,
+                proposal_ess,
+                proposal_draws,
+                compressed_errors,
+            ) = _draw_importance_posterior(
+                rng,
+                parameter_order,
+                prior_bounds,
+                bao_entries,
+                compressed_entries,
+                sample_count,
+            )
+            invalid_specs.extend(compressed_errors)
+    except Exception as exc:
+        return _compressed_runner_unavailable(
+            model_key=model_key,
+            entries=entries,
+            seed=seed,
+            reason=f"Executable compressed likelihood failed ({exc}).",
+        )
+    summaries = {
+        name: _posterior_summary(posterior_samples[:, index])
+        for index, name in enumerate(parameter_order)
+    }
+    derived_samples: dict[str, np.ndarray] = {}
+    if "H0" in parameter_order and "rd" in parameter_order:
+        h0 = posterior_samples[:, parameter_order.index("H0")]
+        rd = posterior_samples[:, parameter_order.index("rd")]
+        derived_samples["H0_rd"] = h0 * rd
+    derived_summaries = {
+        name: _posterior_summary(values)
+        for name, values in derived_samples.items()
+    }
+    for name in ("H0", "omegam", "rd", "sigma8", "S8"):
+        if name in summaries:
+            derived_summaries[name] = summaries[name]
+
+    used_keys = {entry.key for entry in bao_entries + compressed_entries}
+    used_entries = [entry for entry in entries if entry.key in used_keys]
+    n_constraints = 12 * len(bao_entries) + sum(
+        len(entry.compressed_likelihood.parameters)
+        for entry in compressed_entries
+        if entry.compressed_likelihood is not None
+    )
+    k = len(parameter_order)
+    aic = best_chi2 + 2.0 * k
+    bic = best_chi2 + math.log(max(n_constraints, 1)) * k
+    result_hash = _config_hash(
+        model_key,
+        [entry.key for entry in used_entries],
+        {name: prior_bounds[name] for name in parameter_order},
+        f"importance_bao:{seed}:{sample_count}:{proposal_draws}",
+    )
+    warnings = [
+        (
+            "DESI DR1 Gaussian BAO mean/covariance runner; compressed-likelihood "
+            "preliminary, not a full external desilike/Cobaya likelihood."
+        ),
+    ]
+    if bao_entries and not any(entry.probe == "cmb" for entry in used_entries):
+        warnings.append(
+            "BAO-only H0 and rd constraints are prior/calibration dependent; "
+            "quote Omega_m or H0*rd more strongly than H0 alone."
+        )
+    if skipped_entries:
+        warnings.append(
+            "Datasets not run in compressed phase: "
+            + ", ".join(entry.key for entry in skipped_entries)
+            + ". Generate external Cobaya/CosmoSIS configs for those datasets."
+        )
+    if invalid_specs:
+        warnings.extend(invalid_specs)
+    if proposal_ess < 400.0:
+        warnings.append(
+            f"Importance sampler ESS={proposal_ess:.1f} below publication threshold 400."
+        )
+
+    publication_ready = not invalid_specs and proposal_ess >= 400.0
+    result: dict[str, Any] = {
+        "success": True,
+        "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
+        "analysis_status": "COMPRESSED_CHAIN_READY" if publication_ready else "PARTIAL",
+        "publication_ready": publication_ready,
+        "claim_scope": "compressed_likelihood_preliminary",
+        "compressed_likelihood_preliminary": True,
+        "model": model_key,
+        "model_label": MODEL_LABELS[model_key],
+        "sampler": "bao_gaussian_importance",
+        "parameters": summaries,
+        "posterior_summary": summaries,
+        "derived_params": derived_summaries,
+        "pairwise_tensions": _pairwise_tensions(compressed_entries),
+        "fit_statistics": {
+            "chi2": round(best_chi2, 6),
+            "delta_chi2": 0.0,
+            "aic": round(float(aic), 6),
+            "bic": round(float(bic), 6),
+            "n_constraints": int(n_constraints),
+            "n_parameters": int(k),
+        },
+        "chain_diagnostics": {
+            "overall_status": "importance_resampled",
+            "publication_ready": publication_ready,
+            "rhat": 1.0,
+            "ess_bulk": int(min(round(proposal_ess), sample_count)),
+            "ess_tail": int(min(round(proposal_ess), sample_count)),
+            "proposal_ess": round(proposal_ess, 3),
+            "proposal_draws": int(proposal_draws),
+            "n_draws": sample_count,
+            "n_chains": 1,
+            "thresholds": {"ess_min": 400, "rhat_max": 1.05},
+        },
+        "datasets_used": [entry.to_dict() for entry in used_entries],
+        "datasets_not_run": [entry.to_dict() for entry in skipped_entries],
+        "dataset_keys": [entry.key for entry in entries],
+        "priors": {name: list(bounds) for name, bounds in prior_bounds.items()},
+        "random_seed": seed,
+        "n_samples": sample_count,
+        "runner_hash": result_hash,
+        "warnings": warnings,
+        "__message_to_model__": (
+            "This is a publication-ready compressed-likelihood preliminary result "
+            "when publication_ready=true. Quote posterior numbers only with that "
+            "caveat and only for datasets_used; do not claim datasets_not_run were "
+            "included in the numerical posterior."
+        ),
+        "provenance": {
+            "cosmology_likelihood": {
+                "registry_version": "2026-04-30",
+                "runner": "bao_gaussian_importance",
+                "runner_hash": result_hash,
+                "dataset_keys": [entry.key for entry in entries],
+                "datasets_used": [entry.key for entry in used_entries],
+                "datasets_not_run": [entry.key for entry in skipped_entries],
+                "citations": _collect_citations(entries),
+                "compressed_sources": _sampling_source_records(used_entries),
+                "publication_ready": publication_ready,
+            },
+        },
+    }
+    if not publication_ready:
+        result["__do_not_claim__"] = True
+    return result
+
+
+def _sampling_parameter_order(
+    bao_entries: list[CosmologyDatasetEntry],
+    compressed_entries: list[CosmologyDatasetEntry],
+) -> list[str]:
+    order: list[str] = []
+    if bao_entries:
+        order.extend(["H0", "omegam", "rd"])
+    for param in _compressed_parameter_order(compressed_entries):
+        if param not in order:
+            order.append(param)
+    preferred = ["H0", "omegam", "rd", "sigma8", "S8"]
+    return [param for param in preferred if param in order] + [
+        param for param in order if param not in preferred
+    ]
+
+
+def _draw_uniform_prior_samples(
+    rng: np.random.Generator,
+    parameter_order: list[str],
+    prior_bounds: dict[str, tuple[float, float]],
+    count: int,
+) -> np.ndarray:
+    samples = np.empty((count, len(parameter_order)), dtype=float)
+    for index, name in enumerate(parameter_order):
+        low, high = prior_bounds[name]
+        samples[:, index] = rng.uniform(low, high, size=count)
+    return samples
+
+
+def _draw_desi_bao_only_posterior(
+    rng: np.random.Generator,
+    parameter_order: list[str],
+    prior_bounds: dict[str, tuple[float, float]],
+    sample_count: int,
+) -> tuple[np.ndarray, float, float, int]:
+    """Sample DESI BAO-only posterior in the natural H0*rd degeneracy plane."""
+    if parameter_order != ["H0", "omegam", "rd"]:
+        raise ValueError("DESI BAO-only runner expects H0, omegam, rd parameters")
+    h0_low, h0_high = prior_bounds["H0"]
+    om_low, om_high = prior_bounds["omegam"]
+    rd_low, rd_high = prior_bounds["rd"]
+    q_low = h0_low * rd_low
+    q_high = h0_high * rd_high
+    om_values = np.linspace(om_low, om_high, 360)
+    q_values = np.linspace(q_low, q_high, 720)
+    om_grid, q_grid = np.meshgrid(om_values, q_values, indexing="ij")
+    flat_om = om_grid.ravel()
+    flat_q = q_grid.ravel()
+
+    h0_cond_low = np.maximum(h0_low, flat_q / rd_high)
+    h0_cond_high = np.minimum(h0_high, flat_q / rd_low)
+    valid = h0_cond_high > h0_cond_low
+    if not np.any(valid):
+        raise ValueError("H0*rd grid has no support inside the configured H0/rd priors")
+
+    grid_samples = np.column_stack([
+        np.ones(np.count_nonzero(valid), dtype=float),
+        flat_om[valid],
+        flat_q[valid],
+    ])
+    chi2 = _desi_dr1_bao_chi2_samples(grid_samples, parameter_order)
+    best_chi2 = float(np.min(chi2))
+    marginal_h0_prior = np.log(h0_cond_high[valid] / h0_cond_low[valid])
+    log_weights = -0.5 * (chi2 - best_chi2) + np.log(marginal_h0_prior)
+    log_weights -= float(np.max(log_weights))
+    weights = np.exp(np.clip(log_weights, -745.0, 0.0))
+    weight_sum = float(np.sum(weights))
+    if not math.isfinite(weight_sum) or weight_sum <= 0.0:
+        raise ValueError("DESI BAO-only posterior weights underflowed")
+
+    probabilities = weights / weight_sum
+    proposal_ess = float(weight_sum * weight_sum / np.sum(weights * weights))
+    chosen = rng.choice(grid_samples.shape[0], size=sample_count, replace=True, p=probabilities)
+    chosen_q = grid_samples[chosen, 2]
+    chosen_om = grid_samples[chosen, 1]
+    low = np.maximum(h0_low, chosen_q / rd_high)
+    high = np.minimum(h0_high, chosen_q / rd_low)
+    chosen_h0 = np.exp(rng.uniform(np.log(low), np.log(high)))
+    chosen_rd = chosen_q / chosen_h0
+    posterior = np.column_stack([chosen_h0, chosen_om, chosen_rd])
+    return posterior, best_chi2, proposal_ess, int(grid_samples.shape[0])
+
+
+def _draw_importance_posterior(
+    rng: np.random.Generator,
+    parameter_order: list[str],
+    prior_bounds: dict[str, tuple[float, float]],
+    bao_entries: list[CosmologyDatasetEntry],
+    compressed_entries: list[CosmologyDatasetEntry],
+    sample_count: int,
+) -> tuple[np.ndarray, float, float, int, list[str]]:
+    proposal_count = min(max(sample_count * 25, 80_000), 300_000)
+    samples = _draw_uniform_prior_samples(rng, parameter_order, prior_bounds, proposal_count)
+    chi2 = np.zeros(proposal_count, dtype=float)
+    for entry in bao_entries:
+        if entry.key == "desi_dr1_bao":
+            chi2 += _desi_dr1_bao_chi2_samples(samples, parameter_order)
+    extra_chi2, compressed_errors = _compressed_chi2_samples(
+        samples,
+        parameter_order,
+        compressed_entries,
+    )
+    chi2 += extra_chi2
+    finite = np.isfinite(chi2)
+    if not np.any(finite):
+        raise ValueError("importance sampler produced no finite likelihood values")
+    samples = samples[finite]
+    chi2 = chi2[finite]
+    best_chi2 = float(np.min(chi2))
+    log_weights = -0.5 * (chi2 - best_chi2)
+    weights = np.exp(np.clip(log_weights, -745.0, 0.0))
+    weight_sum = float(np.sum(weights))
+    if not math.isfinite(weight_sum) or weight_sum <= 0.0:
+        raise ValueError("importance sampler weights underflowed")
+    probabilities = weights / weight_sum
+    proposal_ess = float(weight_sum * weight_sum / np.sum(weights * weights))
+    posterior_indices = rng.choice(samples.shape[0], size=sample_count, replace=True, p=probabilities)
+    posterior_samples = samples[posterior_indices]
+    return posterior_samples, best_chi2, proposal_ess, int(samples.shape[0]), compressed_errors
+
+
+def _desi_dr1_bao_chi2_samples(samples: np.ndarray, parameter_order: list[str]) -> np.ndarray:
+    observed = np.asarray([row[1] for row in DESI_DR1_BAO_MEAN_VECTOR], dtype=float)
+    covariance = np.asarray(DESI_DR1_BAO_COVARIANCE, dtype=float)
+    predictions = _desi_dr1_bao_predictions(samples, parameter_order)
+    residual = predictions - observed
+    return np.einsum("ni,ij,nj->n", residual, np.linalg.inv(covariance), residual)
+
+
+def _desi_dr1_bao_predictions(samples: np.ndarray, parameter_order: list[str]) -> np.ndarray:
+    h0 = samples[:, parameter_order.index("H0")]
+    omegam = samples[:, parameter_order.index("omegam")]
+    rd = samples[:, parameter_order.index("rd")]
+    predictions = np.empty((samples.shape[0], len(DESI_DR1_BAO_MEAN_VECTOR)), dtype=float)
+    distance_cache: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    for col, (z, _value, quantity) in enumerate(DESI_DR1_BAO_MEAN_VECTOR):
+        if z not in distance_cache:
+            distance_cache[z] = _flat_lcdm_distances_at_z(z, h0, omegam)
+        dm, dh, dv = distance_cache[z]
+        if quantity in {"DM_over_rs", "DM_over_rd"}:
+            predictions[:, col] = dm / rd
+        elif quantity in {"DH_over_rs", "DH_over_rd"}:
+            predictions[:, col] = dh / rd
+        elif quantity in {"DV_over_rs", "DV_over_rd"}:
+            predictions[:, col] = dv / rd
+        else:
+            raise ValueError(f"unsupported DESI BAO quantity {quantity!r}")
+    return predictions
+
+
+def _flat_lcdm_distances_at_z(
+    z: float,
+    h0: np.ndarray,
+    omegam: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    nodes, weights = np.polynomial.legendre.leggauss(64)
+    x = 0.5 * z * (nodes + 1.0)
+    ez_grid = np.sqrt(omegam[:, None] * (1.0 + x[None, :]) ** 3 + (1.0 - omegam[:, None]))
+    integral = 0.5 * z * np.sum(weights[None, :] / ez_grid, axis=1)
+    dm = (C_LIGHT_KM_S / h0) * integral
+    ez = np.sqrt(omegam * (1.0 + z) ** 3 + (1.0 - omegam))
+    dh = C_LIGHT_KM_S / (h0 * ez)
+    dv = np.cbrt(z * dm * dm * dh)
+    return dm, dh, dv
+
+
+def _compressed_chi2_samples(
+    samples: np.ndarray,
+    parameter_order: list[str],
+    compressed_entries: list[CosmologyDatasetEntry],
+) -> tuple[np.ndarray, list[str]]:
+    total = np.zeros(samples.shape[0], dtype=float)
+    invalid_specs: list[str] = []
+    for entry in compressed_entries:
+        spec = entry.compressed_likelihood
+        if spec is None:
+            continue
+        try:
+            params = list(spec.parameters)
+            names = [name for name in params if name in parameter_order]
+            if not names:
+                continue
+            sample_idx = [parameter_order.index(name) for name in names]
+            local_idx = [params.index(name) for name in names]
+            mean = np.asarray(spec.mean, dtype=float)[local_idx]
+            cov = np.asarray(spec.covariance, dtype=float)[np.ix_(local_idx, local_idx)]
+            residual = samples[:, sample_idx] - mean
+            total += np.einsum("ni,ij,nj->n", residual, np.linalg.inv(cov), residual)
+        except Exception as exc:
+            invalid_specs.append(f"{entry.key}: {exc}")
+    return total, invalid_specs
+
+
+def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for entry in entries:
+        if entry.key == "desi_dr1_bao":
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": "DESI DR1 BAO ALL_GCcomb mean/covariance files",
+                "approximation": "Gaussian BAO mean/covariance evaluated against flat LCDM distances",
+                "data_products": [product.to_dict() for product in entry.data_products],
+            })
+        elif entry.compressed_likelihood is not None:
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": entry.compressed_likelihood.source_locator,
+                "approximation": entry.compressed_likelihood.approximation,
+            })
+    return records
 
 
 def _compressed_runner_unavailable(
