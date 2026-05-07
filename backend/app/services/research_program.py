@@ -350,11 +350,14 @@ def export_research_report(
     tool_results: list[dict[str, Any]] | None = None,
     title: str | None = None,
 ) -> dict[str, Any]:
-    """Generate a lightweight auditable research report draft."""
+    """Generate a lightweight auditable research report package."""
     plan = research_plan or {}
     graph = evidence_graph or {}
     tool_results = tool_results or []
     report_title = title or plan.get("research_question") or "Standard Astro research report"
+    datasets = _report_datasets(tool_results)
+    citations = _report_citations(tool_results)
+    manifest = _report_reproducibility_manifest(tool_results)
     lines = [
         f"# {report_title}",
         "",
@@ -373,10 +376,32 @@ def export_research_report(
         status = result.get("analysis_status") or result.get("__tool_status__")
         ready = result.get("publication_ready")
         lines.append(f"- {item.get('tool') or item.get('name')}: {status}; publication_ready={ready}")
+    lines.extend(["", "## Datasets and Citations"])
+    if datasets:
+        for dataset in datasets:
+            lines.append(f"- {dataset.get('key')}: {dataset.get('display_name')} ({dataset.get('version')})")
+    else:
+        lines.append("- No dataset metadata was present in the supplied tool results.")
+    if citations:
+        lines.append("")
+        lines.append("## Bibliography")
+        for citation in citations:
+            label = citation.get("label") or citation.get("title") or citation.get("arxiv") or citation.get("doi")
+            bits = [str(label)]
+            if citation.get("year"):
+                bits.append(str(citation["year"]))
+            if citation.get("arxiv"):
+                bits.append(f"arXiv:{citation['arxiv']}")
+            if citation.get("doi"):
+                bits.append(f"doi:{citation['doi']}")
+            lines.append("- " + "; ".join(bits))
     lines.extend([
         "",
         "## Claim Provenance",
         f"- Claimable parameters: {', '.join(graph.get('claimable_parameters', [])) if isinstance(graph, dict) else 'none'}",
+        "",
+        "## Reproducibility Manifest",
+        f"- Tool runs recorded: {len(manifest)}",
         "",
         "## Limitations",
     ])
@@ -390,9 +415,120 @@ def export_research_report(
         "publication_ready": False,
         "format": "markdown",
         "markdown": markdown,
+        "bibtex": _bibtex_from_citations(citations),
+        "datasets": datasets,
+        "citations": citations,
+        "reproducibility_manifest": manifest,
+        "report_package": {
+            "files": [
+                {"path": "research_report.md", "content_type": "text/markdown", "bytes": len(markdown.encode("utf-8"))},
+                {"path": "references.bib", "content_type": "text/x-bibtex"},
+                {"path": "reproducibility_manifest.json", "content_type": "application/json"},
+            ],
+            "unsupported_claim_policy": "omit_from_results_or_move_to_limitations",
+        },
         "word_count": len(markdown.split()),
         "__message_to_model__": "This is a report draft. It does not create new scientific evidence.",
     }
+
+
+def _report_datasets(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    datasets: list[dict[str, Any]] = []
+    for item in tool_results:
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict):
+            continue
+        for key in ("datasets_used", "datasets_not_run"):
+            for dataset in result.get(key, []) if isinstance(result.get(key), list) else []:
+                if not isinstance(dataset, dict):
+                    continue
+                dataset_key = str(dataset.get("key") or dataset.get("dataset_key") or dataset.get("display_name") or "")
+                if not dataset_key or dataset_key in seen:
+                    continue
+                seen.add(dataset_key)
+                datasets.append({
+                    "key": dataset_key,
+                    "display_name": dataset.get("display_name") or dataset_key,
+                    "version": dataset.get("version") or "",
+                    "source_url": dataset.get("source_url") or "",
+                })
+        provenance = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
+        for dataset in provenance.get("datasets", []) if isinstance(provenance.get("datasets"), list) else []:
+            if not isinstance(dataset, dict):
+                continue
+            dataset_key = str(dataset.get("service_key") or dataset.get("ivoid") or dataset.get("publisher") or "")
+            if dataset_key and dataset_key not in seen:
+                seen.add(dataset_key)
+                datasets.append({
+                    "key": dataset_key,
+                    "display_name": dataset.get("service_name") or dataset_key,
+                    "version": dataset.get("archive_version") or "",
+                    "source_url": dataset.get("reference_url") or dataset.get("credits_page_url") or "",
+                })
+    return datasets
+
+
+def _report_citations(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    citations: list[dict[str, Any]] = []
+    for item in tool_results:
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict):
+            continue
+        for citation in result.get("citations", []) if isinstance(result.get("citations"), list) else []:
+            if isinstance(citation, dict):
+                key = str(citation.get("bibcode") or citation.get("arxiv") or citation.get("doi") or citation.get("label") or "")
+                if key and key not in seen:
+                    seen.add(key)
+                    citations.append(dict(citation))
+        for dataset in result.get("datasets_used", []) if isinstance(result.get("datasets_used"), list) else []:
+            if not isinstance(dataset, dict):
+                continue
+            for citation in dataset.get("citations", []) if isinstance(dataset.get("citations"), list) else []:
+                if isinstance(citation, dict):
+                    key = str(citation.get("bibcode") or citation.get("arxiv") or citation.get("doi") or citation.get("label") or "")
+                    if key and key not in seen:
+                        seen.add(key)
+                        citations.append(dict(citation))
+    return citations
+
+
+def _report_reproducibility_manifest(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    manifest: list[dict[str, Any]] = []
+    for item in tool_results:
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict):
+            continue
+        envelope = result.get("reproducibility") if isinstance(result.get("reproducibility"), dict) else {}
+        manifest.append({
+            "tool": item.get("tool") or item.get("name") or result.get("tool") or "unknown",
+            "analysis_status": result.get("analysis_status") or result.get("__tool_status__"),
+            "publication_ready": bool(result.get("publication_ready")),
+            "run_id": envelope.get("run_id"),
+            "query_hash": envelope.get("query_hash"),
+            "random_seed": envelope.get("random_seed") or result.get("random_seed"),
+            "tool_version": envelope.get("tool_version"),
+        })
+    return manifest
+
+
+def _bibtex_from_citations(citations: list[dict[str, Any]]) -> str:
+    entries: list[str] = []
+    for index, citation in enumerate(citations, start=1):
+        key = str(citation.get("bibcode") or citation.get("arxiv") or citation.get("doi") or f"ref{index}")
+        key = re.sub(r"[^A-Za-z0-9_:-]", "_", key)
+        title = str(citation.get("label") or citation.get("title") or key)
+        year = str(citation.get("year") or "")
+        fields = [f"  title = {{{title}}}"]
+        if year:
+            fields.append(f"  year = {{{year}}}")
+        if citation.get("doi"):
+            fields.append(f"  doi = {{{citation['doi']}}}")
+        if citation.get("arxiv"):
+            fields.append(f"  eprint = {{{citation['arxiv']}}}")
+        entries.append("@misc{" + key + ",\n" + ",\n".join(fields) + "\n}")
+    return "\n\n".join(entries) + ("\n" if entries else "")
 
 
 def _required_probes(text: str) -> list[str]:

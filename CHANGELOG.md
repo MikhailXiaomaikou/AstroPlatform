@@ -87,6 +87,9 @@ need entries unless they change user-visible behavior or research validity.
   Gaussian mean/covariance summaries for ACT, Planck, weak-lensing, SH0ES, and
   similar datasets even when there is no separate downloadable data-product
   file registered.
+- `export_research_report` now returns a small report package with Markdown,
+  BibTeX, dataset/citation summaries, and a reproducibility manifest instead of
+  only a prose draft.
 - Research-mode final replies now attach a Fact Check card; contradicted claims
   are replaced with a conservative tool-grounded summary.
 - Updated cosmology registry documentation to distinguish machine-readable

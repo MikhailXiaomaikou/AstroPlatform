@@ -358,6 +358,53 @@ def test_paper_tool_mining_loop_recovers_read_ids_from_round_bundles(tmp_path) -
     assert any(item["round_index"] == 2 for item in state["round_history"])
 
 
+def test_export_research_report_includes_bibtex_and_manifest() -> None:
+    from app.services.research_program import export_research_report
+
+    result = export_research_report(
+        research_plan={
+            "research_question": "BAO + CMB consistency",
+            "proposed_experiment_matrix": [
+                {"label": "CMB", "dataset_keys": ["planck2018_compressed"], "model": "lcdm"}
+            ],
+            "blocking_gaps": ["Full Planck likelihood not run."],
+        },
+        evidence_graph={"claimable_parameters": ["H0", "omegam"]},
+        tool_results=[
+            {
+                "tool": "run_cosmology_likelihood_chain",
+                "result": {
+                    "analysis_status": "COMPRESSED_CHAIN_READY",
+                    "publication_ready": True,
+                    "datasets_used": [
+                        {
+                            "key": "planck2018_compressed",
+                            "display_name": "Planck 2018 compressed",
+                            "version": "2018",
+                            "source_url": "https://pla.esac.esa.int/",
+                            "citations": [
+                                {"label": "Planck Collaboration VI", "year": 2020, "arxiv": "1807.06209"}
+                            ],
+                        }
+                    ],
+                    "reproducibility": {
+                        "run_id": "run-1",
+                        "query_hash": "abc",
+                        "tool_version": "test",
+                    },
+                },
+            }
+        ],
+    )
+
+    assert result["analysis_status"] == "RESEARCH_REPORT_READY"
+    assert "Planck 2018 compressed" in result["markdown"]
+    assert "1807.06209" in result["bibtex"]
+    assert result["datasets"][0]["key"] == "planck2018_compressed"
+    assert result["reproducibility_manifest"][0]["run_id"] == "run-1"
+    assert result["report_package"]["files"][0]["path"] == "research_report.md"
+
+
 def test_paper_candidate_pool_normalizes_scores_and_dedupes_seed_papers() -> None:
     import asyncio
 
