@@ -543,6 +543,7 @@ function ActionCardInner({
     build_cosmology_robustness_matrix: "Robustness Matrix",
     run_cosmology_likelihood_chain: "Cosmology Chain",
     run_cosmology_robustness_matrix: "Robustness Run",
+    run_nested_sampler: "Nested Sampler",
     plan_research_program: "Research Plan",
     run_research_matrix: "Research Matrix",
     build_evidence_graph: "Evidence Graph",
@@ -586,6 +587,7 @@ function ActionCardInner({
     build_cosmology_robustness_matrix: "▦",
     run_cosmology_likelihood_chain: "📉",
     run_cosmology_robustness_matrix: "▦",
+    run_nested_sampler: "📉",
     plan_research_program: "🧭",
     run_research_matrix: "▦",
     build_evidence_graph: "🔗",
@@ -1675,6 +1677,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     || toolName === "run_cobaya_cosmology"
     || toolName === "get_cosmology_run_status"
     || toolName === "run_cosmology_likelihood_chain"
+    || toolName === "run_nested_sampler"
   ) {
     const nestedResult = result.result && typeof result.result === "object"
       ? result.result as Record<string, unknown>

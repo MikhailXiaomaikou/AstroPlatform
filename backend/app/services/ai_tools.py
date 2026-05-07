@@ -1150,6 +1150,49 @@ TOOLS = [
         },
     },
     {
+        "name": "run_nested_sampler",
+        "description": (
+            "Run a controlled dynesty nested sampler on typed Gaussian likelihood "
+            "summaries. Use this for evidence/posterior diagnostics when a paper "
+            "requires nested sampling but the likelihood can be represented as "
+            "bounded parameters plus mean/covariance summaries. It never executes "
+            "user Python or raw Cobaya YAML. Results are citeable only when "
+            "publication_ready=true and must be described as controlled Gaussian "
+            "nested-sampling, not a full external likelihood."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "parameters": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": (
+                        "Parameter specs, e.g. "
+                        "[{\"name\":\"S8\",\"prior\":[0.6,1.0]}]."
+                    ),
+                },
+                "gaussian_likelihood": {
+                    "type": "object",
+                    "description": (
+                        "Single Gaussian likelihood with parameters, mean, "
+                        "covariance, and optional citation/source_url."
+                    ),
+                },
+                "likelihoods": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Optional list of Gaussian likelihood blocks to multiply.",
+                },
+                "sampler_config": {
+                    "type": "object",
+                    "description": "Optional bounded dynesty settings: nlive, dlogz, maxiter, sample.",
+                },
+                "random_seed": {"type": "integer", "description": "Deterministic random seed."},
+            },
+            "required": ["parameters"],
+        },
+    },
+    {
         "name": "build_cosmology_robustness_matrix",
         "description": (
             "Generate the standard robustness matrix for observational "
@@ -2371,6 +2414,8 @@ async def _execute_tool_inner(
             return _exec_build_cosmology_likelihood(tool_input)
         elif tool_name == "run_cosmology_likelihood_chain":
             return _exec_run_cosmology_likelihood_chain(tool_input)
+        elif tool_name == "run_nested_sampler":
+            return _exec_run_nested_sampler(tool_input)
         elif tool_name == "build_cosmology_robustness_matrix":
             return _exec_build_cosmology_robustness_matrix(tool_input)
         elif tool_name == "run_cosmology_robustness_matrix":
@@ -8054,6 +8099,41 @@ def _exec_run_cosmology_likelihood_chain(inp: dict) -> dict:
             "__message_to_model__": (
                 "Compressed cosmology likelihood execution failed. Do not quote "
                 "posterior constraints, S8/H0/Omega_m tensions, AIC/BIC, or significance."
+            ),
+        }
+
+
+def _exec_run_nested_sampler(inp: dict) -> dict:
+    from app.services.nested_sampling import run_controlled_nested_sampler
+
+    try:
+        parameters = inp.get("parameters")
+        if not isinstance(parameters, list):
+            raise ValueError("parameters must be a list")
+        likelihoods = inp.get("likelihoods")
+        return run_controlled_nested_sampler(
+            parameters=parameters,
+            gaussian_likelihood=(
+                inp.get("gaussian_likelihood")
+                if isinstance(inp.get("gaussian_likelihood"), dict)
+                else None
+            ),
+            likelihoods=likelihoods if isinstance(likelihoods, list) else None,
+            sampler_config=inp.get("sampler_config") if isinstance(inp.get("sampler_config"), dict) else None,
+            random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "publication_ready": False,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "Controlled nested sampling failed. Do not quote posterior, "
+                "evidence, Bayes factor, or sampler diagnostics from this call."
             ),
         }
 

@@ -32,6 +32,10 @@ need entries unless they change user-visible behavior or research validity.
   ASCII tables/matrices, reports shape/preview rows, verifies sha256 when
   available, and performs covariance sanity checks without claiming posterior
   constraints.
+- Added `run_nested_sampler`, a controlled dynesty nested sampler for typed
+  Gaussian likelihood summaries. It reports posterior summaries, evidence,
+  diagnostics, seed, package version, and provenance without accepting raw
+  user likelihood code or arbitrary YAML.
 - Added a bounded local paper-mining loop via `run_paper_tool_mining_loop`.
   Each round processes the next 20 unread related papers, updates local-only
   loop state, and carries the ToolSpec/gap/implementation queue into the next

@@ -17,7 +17,7 @@ default. A draft becomes publicly readable only after the owner explicitly uses
 | AI assistant | Multi-tool research agent for archive queries, ADQL, literature review, paper-to-tool mining, table extraction, research planning, evidence graphs, analysis, fitting, and paper drafting. |
 | Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
 | Provenance | Tool results carry citation, archive version, field bibcodes, query hashes, run IDs, and acknowledgement metadata. |
-| Cosmology | Dataset registry, registered data-product loader, research planner, likelihood config builder, compressed posterior runner, evidence graph, robustness matrix, and chain diagnostics. |
+| Cosmology | Dataset registry, registered data-product loader, research planner, likelihood config builder, compressed posterior runner, controlled nested sampler, evidence graph, robustness matrix, and chain diagnostics. |
 | Research infrastructure | Build paper candidate pools, mine papers for ToolSpecs, run 20-paper local mining rounds, build a tool ontology, identify platform gaps, and rank implementation queues before adding new runners. |
 | Spectral measurements | Literature-table rows can be validated as fit-ready spectral measurements before line-relation fitting. |
 | Statistics | Deterministic robust summaries, regression helpers, bootstrap intervals, and censored-data summaries reduce ad-hoc analysis code. |
@@ -73,7 +73,7 @@ Standard Astro includes workflows for:
 - Isochrone fitting and cluster analysis
 - Time-domain period, transit, flare, and RV workflows
 - Galaxy SFR, morphology, rotation-curve, and X-ray tools
-- Observational cosmology likelihood configs plus compressed Gaussian posterior runner
+- Observational cosmology likelihood configs plus compressed Gaussian posterior runner and controlled Gaussian nested sampler
 - Research Mode planning, evidence graphs, fact checks, and compressed-likelihood experiment matrices
 - Paper drafting, bibliography generation, and reproducibility export
 
