@@ -76,6 +76,9 @@ need entries unless they change user-visible behavior or research validity.
   submissions to relevance-ranked queries, and the capability map now recognizes
   `run_nested_sampler` while keeping full external likelihood packages as a
   separate missing gap.
+- Cosmology data-product loading now recognizes SN-style dimension-prefixed
+  flattened covariance files, enabling Pantheon+/similar public covariance
+  products to parse as real matrices instead of partial failures.
 - Research-mode final replies now attach a Fact Check card; contradicted claims
   are replaced with a conservative tool-grounded summary.
 - Updated cosmology registry documentation to distinguish machine-readable

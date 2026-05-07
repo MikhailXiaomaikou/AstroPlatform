@@ -116,6 +116,24 @@ async def test_load_cosmology_data_product_parses_registered_table_and_covarianc
 
 
 @pytest.mark.asyncio
+async def test_load_cosmology_data_product_parses_dimension_prefixed_sn_covariance():
+    from app.services.cosmology_data_products import load_cosmology_data_product
+
+    result = await load_cosmology_data_product(
+        dataset_key="pantheon_plus",
+        role="covariance",
+        allow_network=False,
+        content_override="2\n1.0\n0.1\n0.1\n4.0\n",
+    )
+
+    assert result["analysis_status"] == "COSMOLOGY_DATA_PRODUCT_READY"
+    assert result["parse"]["kind"] == "matrix"
+    assert result["parse"]["format_detected"] == "dimension_prefixed_flat_covariance"
+    assert result["parse"]["shape"] == [2, 2]
+    assert result["parse"]["symmetric"] is True
+
+
+@pytest.mark.asyncio
 async def test_load_cosmology_data_product_reports_unavailable_without_network_or_content():
     from app.services.cosmology_data_products import load_cosmology_data_product
 

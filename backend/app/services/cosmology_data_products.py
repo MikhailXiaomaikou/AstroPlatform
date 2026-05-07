@@ -128,7 +128,12 @@ def _parse_product_text(text: str, *, product: DataProductSpec, max_preview_rows
         return {"parse_success": False, "warnings": ["No parseable non-comment rows found."]}
     numeric_matrix = _numeric_matrix(rows)
     if product.role == "covariance" or product.product_type.endswith("covariance_matrix"):
-        return _parse_matrix(numeric_matrix, max_preview_rows=max_preview_rows)
+        matrix_format = "plain_square_matrix"
+        flat_covariance = _dimension_prefixed_flat_covariance(rows)
+        if flat_covariance is not None:
+            numeric_matrix = flat_covariance
+            matrix_format = "dimension_prefixed_flat_covariance"
+        return _parse_matrix(numeric_matrix, max_preview_rows=max_preview_rows, matrix_format=matrix_format)
     return _parse_table(rows, numeric_matrix=numeric_matrix, product=product, max_preview_rows=max_preview_rows)
 
 
@@ -164,7 +169,32 @@ def _numeric_matrix(rows: list[list[str]]) -> np.ndarray | None:
     return np.asarray(numeric_rows, dtype=float)
 
 
-def _parse_matrix(matrix: np.ndarray | None, *, max_preview_rows: int) -> dict[str, Any]:
+def _dimension_prefixed_flat_covariance(rows: list[list[str]]) -> np.ndarray | None:
+    """Parse SN-style covariance files: ``N`` followed by ``N*N`` values."""
+    values: list[float] = []
+    for row in rows:
+        for token in row:
+            try:
+                values.append(float(token))
+            except ValueError:
+                return None
+    if len(values) < 2:
+        return None
+    n = int(round(values[0]))
+    if not math.isfinite(values[0]) or n <= 0 or abs(values[0] - n) > 1e-9:
+        return None
+    remaining = values[1:]
+    if len(remaining) != n * n:
+        return None
+    return np.asarray(remaining, dtype=float).reshape((n, n))
+
+
+def _parse_matrix(
+    matrix: np.ndarray | None,
+    *,
+    max_preview_rows: int,
+    matrix_format: str,
+) -> dict[str, Any]:
     if matrix is None:
         return {"parse_success": False, "warnings": ["Covariance product contained no numeric matrix."]}
     square = matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]
@@ -181,6 +211,7 @@ def _parse_matrix(matrix: np.ndarray | None, *, max_preview_rows: int) -> dict[s
     return {
         "parse_success": finite and square,
         "kind": "matrix",
+        "format_detected": matrix_format,
         "shape": list(matrix.shape),
         "finite": finite,
         "square": square,
