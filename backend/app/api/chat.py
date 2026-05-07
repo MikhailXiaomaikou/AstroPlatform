@@ -4019,6 +4019,7 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     plan: dict[str, Any] | None = None
     matrix: dict[str, Any] | None = None
     evidence: dict[str, Any] | None = None
+    fact_check: dict[str, Any] | None = None
     for entry in tool_results or []:
         result = entry.get("result")
         if not isinstance(result, dict):
@@ -4029,6 +4030,8 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             matrix = result
         elif entry.get("tool") == "build_evidence_graph":
             evidence = result.get("evidence_graph") if isinstance(result.get("evidence_graph"), dict) else None
+        elif entry.get("tool") == "verify_research_facts":
+            fact_check = result.get("fact_check_report") if isinstance(result.get("fact_check_report"), dict) else result
     if not plan and not matrix:
         return None
 
@@ -4108,6 +4111,17 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
         )
     else:
         lines.append("- No numeric claim should be made unless it appears in a publication-ready tool card.")
+
+    if isinstance(fact_check, dict):
+        lines.extend(["", "Fact verification"])
+        lines.append(
+            f"- Fact-check status: {fact_check.get('status', 'unknown')}; "
+            f"{fact_check.get('verified_claim_count', 0)} verified, "
+            f"{fact_check.get('unsupported_claim_count', 0)} unsupported/contradicted."
+        )
+        rewrites = fact_check.get("safe_rewrites")
+        if isinstance(rewrites, list) and rewrites:
+            lines.append("- Unsafe draft claims were rewritten or should be replaced by the safe-rewrite guidance in the Fact Check card.")
 
     lines.extend(["", "What is not yet supported"])
     if gaps:
@@ -6909,6 +6923,46 @@ async def _run_agent_loop(
         _claim_gate_ran = False
         # Still need is_empty_turn for the fallback branch below.
         from app.services.claim_validator import is_empty_turn  # noqa: F401
+
+    if research_program_workflow and clean_reply.strip():
+        try:
+            from app.services.research_program import verify_research_facts
+
+            fact_input = {
+                "tool_results": _compact_tool_results_for_evidence(all_tool_results),
+                "final_reply": clean_reply,
+            }
+            fact_result = verify_research_facts(**fact_input)
+            fact_tool_result = {
+                "id": f"auto_fact_check_{uuid.uuid4().hex}",
+                "tool": "verify_research_facts",
+                "input": fact_input,
+                "result": fact_result,
+            }
+            all_tool_results.append(fact_tool_result)
+            if fact_result.get("status") == "blocked":
+                safe_summary = _research_tool_grounded_summary(all_tool_results)
+                if safe_summary:
+                    clean_reply = safe_summary
+                else:
+                    clean_reply = (
+                        "The research run completed, but fact verification found "
+                        "a contradicted claim in the draft. Please review the Fact "
+                        "Check card and rerun the missing evidence path before "
+                        "using the result."
+                    )
+                try:
+                    from app.observability.metrics import record_counter
+                    record_counter(
+                        "fabrication_blocked_total",
+                        1.0,
+                        agent=agent_name,
+                        reason="fact_verification",
+                    )
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.warning("Research fact verification skipped: %s", exc)
 
     actions.extend(_tool_results_to_actions(all_tool_results))
 

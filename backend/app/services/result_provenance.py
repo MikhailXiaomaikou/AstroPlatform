@@ -473,6 +473,7 @@ _COMPUTE_TOOLS = {
     "share_with_team", "invite_team_member", "export_results",
     "workspace_export", "fit_cosmology_mcmc", "run_cobaya_cosmology",
     "get_cosmology_run_status",
+    "load_cosmology_data_product",
     "build_cosmology_likelihood", "build_cosmology_robustness_matrix",
     "run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix",
     "run_research_matrix",
@@ -486,12 +487,16 @@ _COMPUTE_TOOLS = {
 _REFERENCE_TOOLS = {
     "search_literature", "read_arxiv_paper", "extract_literature_tables", "literature_review",
     "research_workflow", "generate_proposal", "get_followup_recommendation",
-    "full_research_report",
+    "full_research_report", "verify_research_facts",
     # PART Y Batch 1 (audit follow-up): export_sample_table emits a
     # citable machine-readable table from a cached sample, no new analysis.
     "export_sample_table",
     "list_cosmology_datasets", "plan_research_program",
     "build_evidence_graph", "export_research_report",
+    "mine_paper_tools", "run_paper_tool_mining_batch",
+    "build_tool_ontology", "build_tool_gap_matrix",
+    "rank_tool_implementation_queue", "build_paper_mining_candidate_pool",
+    "run_paper_tool_mining_loop",
 }
 
 # Introspection helper for tests / CI: full known tool set.

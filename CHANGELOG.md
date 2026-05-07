@@ -16,8 +16,30 @@ need entries unless they change user-visible behavior or research validity.
   `build_evidence_graph` links claimable parameters to current-turn tool runs
   and dataset citations, and `export_research_report` drafts an auditable
   Markdown report.
-- Added frontend Research Plan, Research Matrix, Evidence Graph, and Research
-  Report cards in the chat tool UI.
+- Added fact verification for research-mode outputs via `verify_research_facts`,
+  including checked source identifiers, unsupported/contradicted claim reporting,
+  and safe-rewrite guidance.
+- Added paper-to-tool mining infrastructure: `mine_paper_tools`,
+  `run_paper_tool_mining_batch`, `build_tool_ontology`,
+  `build_tool_gap_matrix`, and `rank_tool_implementation_queue` map full-paper
+  method/table/equation evidence into ToolSpecs, recurring capabilities, gaps,
+  and implementation priorities.
+- Added `build_paper_mining_candidate_pool` to assemble deduplicated paper
+  candidates from supplied seeds or explicitly enabled arXiv searches before
+  entering the mining loop.
+- Added `load_cosmology_data_product`, a controlled registry-backed loader for
+  machine-readable cosmology data vectors and covariance products. It parses
+  ASCII tables/matrices, reports shape/preview rows, verifies sha256 when
+  available, and performs covariance sanity checks without claiming posterior
+  constraints.
+- Added a bounded local paper-mining loop via `run_paper_tool_mining_loop`.
+  Each round processes the next 20 unread related papers, updates local-only
+  loop state, and carries the ToolSpec/gap/implementation queue into the next
+  round without treating mining output as scientific evidence.
+- Added frontend Research Plan, Research Matrix, Evidence Graph, Fact Check, and
+  Research Report cards in the chat tool UI, plus Paper Tool Mining, Tool
+  Candidate Pool, Tool Mining Loop, Tool Ontology, Tool Gap Matrix, and
+  Implementation Queue cards.
 - Registered machine-readable observational-cosmology data products for the
   priority executable-adapter path:
   - DESI DR1 BAO public mean vector, covariance matrix, and bin-level product
@@ -36,6 +58,18 @@ need entries unless they change user-visible behavior or research validity.
 
 - Research-style observational-cosmology prompts are now routed through a
   plan-first workflow before executable compressed likelihood cells are run.
+- Platform-expansion decisions now have a paper-mining path: abstract-only
+  literature hits remain low-confidence, while high-confidence ToolSpecs require
+  source spans from methods, tables, equations, appendices, or substantial full
+  text.
+- Long-running platform expansion can now be operated as repeated 20-paper
+  mining rounds with explicit state handoff, rather than one-off subjective
+  roadmap guesses.
+- The first paper-mining-driven implementation target landed: cosmology
+  data-product ingestion now validates registered public files before likelihood
+  runners consume them.
+- Research-mode final replies now attach a Fact Check card; contradicted claims
+  are replaced with a conservative tool-grounded summary.
 - Updated cosmology registry documentation to distinguish machine-readable
   data-product provenance from executable posterior results. DESI and
   Pantheon+ remain external-likelihood/config-only until a runner consumes

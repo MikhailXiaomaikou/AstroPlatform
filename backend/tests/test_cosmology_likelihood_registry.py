@@ -86,6 +86,50 @@ def test_registry_can_list_only_requested_dataset_keys_in_order():
     assert registry["unknown_dataset_keys"] == ["not_a_dataset"]
 
 
+@pytest.mark.asyncio
+async def test_load_cosmology_data_product_parses_registered_table_and_covariance():
+    from app.services.cosmology_data_products import load_cosmology_data_product
+
+    table = await load_cosmology_data_product(
+        dataset_key="desi_dr1_bao",
+        role="measurement_vector",
+        allow_network=False,
+        content_override="# z value quantity\n0.30 7.9 DV_over_rd\n0.51 13.6 DM_over_rd\n",
+    )
+    assert table["analysis_status"] == "COSMOLOGY_DATA_PRODUCT_READY"
+    assert table["parse"]["kind"] == "table"
+    assert table["parse"]["row_count"] == 2
+    assert table["parse"]["preview"][0]["z"] == pytest.approx(0.30)
+    assert table["publication_ready"] is True
+
+    cov = await load_cosmology_data_product(
+        dataset_key="desi_dr1_bao",
+        role="covariance",
+        allow_network=False,
+        content_override="1.0 0.2\n0.2 4.0\n",
+    )
+    assert cov["analysis_status"] == "COSMOLOGY_DATA_PRODUCT_READY"
+    assert cov["parse"]["kind"] == "matrix"
+    assert cov["parse"]["shape"] == [2, 2]
+    assert cov["parse"]["symmetric"] is True
+    assert cov["parse"]["positive_diagonal"] is True
+
+
+@pytest.mark.asyncio
+async def test_load_cosmology_data_product_reports_unavailable_without_network_or_content():
+    from app.services.cosmology_data_products import load_cosmology_data_product
+
+    result = await load_cosmology_data_product(
+        dataset_key="desi_dr1_bao",
+        role="measurement_vector",
+        allow_network=False,
+    )
+
+    assert result["analysis_status"] == "COSMOLOGY_DATA_PRODUCT_UNAVAILABLE"
+    assert result["__tool_status__"] == "UNAVAILABLE"
+    assert result["publication_ready"] is False
+
+
 def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints():
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
@@ -329,6 +373,13 @@ async def test_ai_tool_wrappers_expose_registry_and_config_guardrails():
         "desi_dr1_bao",
         "planck2018_compressed",
     ]
+
+    loaded = await execute_tool(
+        "load_cosmology_data_product",
+        {"dataset_key": "desi_dr1_bao", "role": "measurement_vector", "allow_network": False},
+        python_session_id="test",
+    )
+    assert loaded["__tool_status__"] == "UNAVAILABLE"
 
     config = await execute_tool(
         "build_cosmology_likelihood",

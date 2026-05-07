@@ -14,10 +14,11 @@ default. A draft becomes publicly readable only after the owner explicitly uses
 | Area | Summary |
 |---|---|
 | Data access | Query active provenance-v2 sources from one interface. |
-| AI assistant | Multi-tool research agent for archive queries, ADQL, literature review, table extraction, research planning, evidence graphs, analysis, fitting, and paper drafting. |
+| AI assistant | Multi-tool research agent for archive queries, ADQL, literature review, paper-to-tool mining, table extraction, research planning, evidence graphs, analysis, fitting, and paper drafting. |
 | Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
 | Provenance | Tool results carry citation, archive version, field bibcodes, query hashes, run IDs, and acknowledgement metadata. |
-| Cosmology | Dataset registry, research planner, likelihood config builder, compressed posterior runner, evidence graph, robustness matrix, and chain diagnostics. |
+| Cosmology | Dataset registry, registered data-product loader, research planner, likelihood config builder, compressed posterior runner, evidence graph, robustness matrix, and chain diagnostics. |
+| Research infrastructure | Build paper candidate pools, mine papers for ToolSpecs, run 20-paper local mining rounds, build a tool ontology, identify platform gaps, and rank implementation queues before adding new runners. |
 | Spectral measurements | Literature-table rows can be validated as fit-ready spectral measurements before line-relation fitting. |
 | Statistics | Deterministic robust summaries, regression helpers, bootstrap intervals, and censored-data summaries reduce ad-hoc analysis code. |
 | Export | Paper drafts, BibTeX, acknowledgement text, notebooks, figures, and reproducibility packages. |
@@ -66,13 +67,14 @@ Standard Astro includes workflows for:
 - SIMBAD/NED/VizieR/2MASS object and catalog work
 - ALMA high-redshift line-observation metadata
 - Literature search and arXiv table extraction
+- Paper candidate pools, paper-to-tool mining, 20-paper continuous loop state, ToolSpec ontology, gap matrix, and implementation queue planning
 - Spectral analysis, line fitting, and equivalent widths
 - Photometry, source extraction, PSF work, and extinction handling
 - Isochrone fitting and cluster analysis
 - Time-domain period, transit, flare, and RV workflows
 - Galaxy SFR, morphology, rotation-curve, and X-ray tools
 - Observational cosmology likelihood configs plus compressed Gaussian posterior runner
-- Research Mode planning, evidence graphs, and compressed-likelihood experiment matrices
+- Research Mode planning, evidence graphs, fact checks, and compressed-likelihood experiment matrices
 - Paper drafting, bibliography generation, and reproducibility export
 
 ## Reference Literature

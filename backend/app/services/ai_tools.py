@@ -1048,6 +1048,26 @@ TOOLS = [
         },
     },
     {
+        "name": "load_cosmology_data_product",
+        "description": (
+            "Load and validate a machine-readable cosmology data product registered "
+            "in the dataset registry, such as a BAO mean vector or covariance matrix. "
+            "Reports shape, preview rows, sha256 verification, and covariance sanity. "
+            "Does not produce posterior constraints by itself."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dataset_key": {"type": "string", "description": "Dataset key from list_cosmology_datasets."},
+                "role": {"type": "string", "description": "Optional product role, e.g. measurement_vector or covariance."},
+                "product_type": {"type": "string", "description": "Optional product type selector."},
+                "allow_network": {"type": "boolean", "description": "Fetch the registry URL when true. Default true."},
+                "max_preview_rows": {"type": "integer"},
+            },
+            "required": ["dataset_key"],
+        },
+    },
+    {
         "name": "build_cosmology_likelihood",
         "description": (
             "Build a controlled Cobaya/CosmoSIS-style likelihood config from "
@@ -1268,6 +1288,22 @@ TOOLS = [
         },
     },
     {
+        "name": "verify_research_facts",
+        "description": (
+            "Verify final research claims against the current-turn evidence graph, "
+            "tool runs, dataset registry metadata, extracted tables, and citations. "
+            "This is a checking step only; it does not create new evidence."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tool_results": {"type": "array", "items": {"type": "object"}},
+                "final_reply": {"type": "string"},
+                "evidence_graph": {"type": "object"},
+            },
+        },
+    },
+    {
         "name": "export_research_report",
         "description": (
             "Generate an auditable Markdown research report draft from a ResearchPlan, "
@@ -1282,6 +1318,157 @@ TOOLS = [
                 "tool_results": {"type": "array", "items": {"type": "object"}},
                 "title": {"type": "string"},
             },
+        },
+    },
+    {
+        "name": "mine_paper_tools",
+        "description": (
+            "Mine a full paper's methods/data/tables/equations for ToolSpec records: "
+            "data loaders, table extractors, likelihoods, samplers, fitters, diagnostics, "
+            "plotters, exporters, validators. This maps infrastructure requirements only; "
+            "it does not support scientific result claims. Abstract-only input is low "
+            "confidence and blocked from high-confidence tool extraction."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "arxiv_id": {"type": "string"},
+                "doi": {"type": "string"},
+                "bibcode": {"type": "string"},
+                "paper_url": {"type": "string"},
+                "paper_metadata": {"type": "object"},
+                "paper_text": {"type": "string", "description": "Full or substantial paper text, not just abstract."},
+                "source_sections": {
+                    "description": "Section mapping/list with text spans from methods/data/tables/appendix.",
+                    "oneOf": [
+                        {"type": "object"},
+                        {"type": "array", "items": {"type": "object"}},
+                    ],
+                },
+                "max_tools": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "run_paper_tool_mining_batch",
+        "description": (
+            "Mine ToolSpecs from a batch of paper payloads and produce ontology, "
+            "gap matrix, and implementation queue. Use for surveying 20-50 papers "
+            "before deciding what Standard Astro should build next. Output is an "
+            "infrastructure map, not a science result."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "papers": {"type": "array", "items": {"type": "object"}},
+                "domain_tag": {"type": "string"},
+                "max_papers": {"type": "integer"},
+            },
+            "required": ["papers"],
+        },
+    },
+    {
+        "name": "build_tool_ontology",
+        "description": (
+            "Cluster mined ToolSpecs by tool category and canonical capability so "
+            "the platform can see recurring research infrastructure needs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tool_specs": {"type": "array", "items": {"type": "object"}},
+            },
+            "required": ["tool_specs"],
+        },
+    },
+    {
+        "name": "build_tool_gap_matrix",
+        "description": (
+            "Compare mined ToolSpecs against current Standard Astro capabilities and "
+            "label capabilities as available, partial, missing, or blocked."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tool_specs": {"type": "array", "items": {"type": "object"}},
+                "current_tools": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["tool_specs"],
+        },
+    },
+    {
+        "name": "rank_tool_implementation_queue",
+        "description": (
+            "Rank missing/partial capability rows from a Tool Gap Matrix into an "
+            "engineering implementation queue by paper frequency, evidence, and status."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "gap_matrix": {"type": "array", "items": {"type": "object"}},
+                "max_items": {"type": "integer"},
+            },
+            "required": ["gap_matrix"],
+        },
+    },
+    {
+        "name": "build_paper_mining_candidate_pool",
+        "description": (
+            "Build a deduplicated candidate-paper pool for the paper-to-tool mining "
+            "loop. It can use supplied seed papers or, only when explicitly enabled, "
+            "live arXiv search. Candidate pools are inputs to ToolSpec mining and do "
+            "not support scientific result claims."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "domain_tag": {"type": "string"},
+                "queries": {"type": "array", "items": {"type": "string"}},
+                "seed_papers": {"type": "array", "items": {"type": "object"}},
+                "state": {"type": "object"},
+                "exclude_paper_ids": {"type": "array", "items": {"type": "string"}},
+                "max_papers": {"type": "integer"},
+                "allow_live_search": {
+                    "type": "boolean",
+                    "description": "When true, query arXiv for candidate papers. Default false.",
+                },
+                "fetch_text_preview": {
+                    "type": "boolean",
+                    "description": "Best-effort bounded PDF text preview for method/table spans. Default false.",
+                },
+                "text_preview_limit": {
+                    "type": "integer",
+                    "description": "Maximum candidate PDFs to preview when fetch_text_preview=true. Default 20.",
+                },
+                "max_pages_per_query": {
+                    "type": "integer",
+                    "description": "Maximum arXiv pages to request per query when live search is enabled. Default 2.",
+                },
+            },
+        },
+    },
+    {
+        "name": "run_paper_tool_mining_loop",
+        "description": (
+            "Run bounded consecutive paper-to-tool mining rounds. Each round selects "
+            "the next unread papers, normally 20, mines ToolSpecs, builds a gap matrix, "
+            "and updates loop state. This is local/infrastructure planning only and "
+            "does not produce scientific results."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "papers": {"type": "array", "items": {"type": "object"}},
+                "domain_tag": {"type": "string"},
+                "state": {"type": "object"},
+                "batch_size": {"type": "integer", "description": "Default 20."},
+                "max_rounds": {"type": "integer", "description": "Bounded loop count; default 1."},
+                "write_local_bundle": {
+                    "type": "boolean",
+                    "description": "Write sanitized local-only bundles under .local/paper_tool_mining.",
+                },
+            },
+            "required": ["papers"],
         },
     },
     {
@@ -2178,6 +2365,8 @@ async def _execute_tool_inner(
             return _exec_get_cosmology_run_status(tool_input)
         elif tool_name == "list_cosmology_datasets":
             return _exec_list_cosmology_datasets(tool_input)
+        elif tool_name == "load_cosmology_data_product":
+            return await _exec_load_cosmology_data_product(tool_input)
         elif tool_name == "build_cosmology_likelihood":
             return _exec_build_cosmology_likelihood(tool_input)
         elif tool_name == "run_cosmology_likelihood_chain":
@@ -2192,8 +2381,24 @@ async def _execute_tool_inner(
             return _exec_run_research_matrix(tool_input)
         elif tool_name == "build_evidence_graph":
             return _exec_build_evidence_graph(tool_input)
+        elif tool_name == "verify_research_facts":
+            return _exec_verify_research_facts(tool_input)
         elif tool_name == "export_research_report":
             return _exec_export_research_report(tool_input)
+        elif tool_name == "mine_paper_tools":
+            return _exec_mine_paper_tools(tool_input)
+        elif tool_name == "run_paper_tool_mining_batch":
+            return _exec_run_paper_tool_mining_batch(tool_input)
+        elif tool_name == "build_tool_ontology":
+            return _exec_build_tool_ontology(tool_input)
+        elif tool_name == "build_tool_gap_matrix":
+            return _exec_build_tool_gap_matrix(tool_input)
+        elif tool_name == "rank_tool_implementation_queue":
+            return _exec_rank_tool_implementation_queue(tool_input)
+        elif tool_name == "build_paper_mining_candidate_pool":
+            return await _exec_build_paper_mining_candidate_pool(tool_input)
+        elif tool_name == "run_paper_tool_mining_loop":
+            return _exec_run_paper_tool_mining_loop(tool_input)
         elif tool_name == "get_object_dossier":
             return await _exec_get_dossier(tool_input)
         elif tool_name == "get_followup_recommendation":
@@ -7777,6 +7982,28 @@ def _exec_list_cosmology_datasets(inp: dict) -> dict:
     )
 
 
+async def _exec_load_cosmology_data_product(inp: dict) -> dict:
+    from app.services.cosmology_data_products import load_cosmology_data_product
+
+    try:
+        return await load_cosmology_data_product(
+            dataset_key=str(inp.get("dataset_key") or ""),
+            role=str(inp.get("role") or "").strip() or None,
+            product_type=str(inp.get("product_type") or "").strip() or None,
+            allow_network=bool(inp.get("allow_network", True)),
+            max_preview_rows=int(inp.get("max_preview_rows") or 8),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
 def _exec_build_cosmology_likelihood(inp: dict) -> dict:
     from app.services.cosmology_likelihoods import build_likelihood_config
 
@@ -7956,6 +8183,28 @@ def _exec_build_evidence_graph(inp: dict) -> dict:
         }
 
 
+def _exec_verify_research_facts(inp: dict) -> dict:
+    from app.services.research_program import verify_research_facts
+
+    try:
+        tool_results = inp.get("tool_results")
+        evidence_graph = inp.get("evidence_graph")
+        return verify_research_facts(
+            tool_results=tool_results if isinstance(tool_results, list) else None,
+            final_reply=str(inp.get("final_reply") or "") or None,
+            evidence_graph=evidence_graph if isinstance(evidence_graph, dict) else None,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
 def _exec_export_research_report(inp: dict) -> dict:
     from app.services.research_program import export_research_report
 
@@ -7968,6 +8217,168 @@ def _exec_export_research_report(inp: dict) -> dict:
             evidence_graph=graph if isinstance(graph, dict) else None,
             tool_results=tool_results if isinstance(tool_results, list) else None,
             title=str(inp.get("title") or "") or None,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
+def _exec_mine_paper_tools(inp: dict) -> dict:
+    from app.services.paper_tool_mining import mine_paper_tools
+
+    try:
+        metadata = inp.get("paper_metadata")
+        sections = inp.get("source_sections")
+        return mine_paper_tools(
+            arxiv_id=str(inp.get("arxiv_id") or "") or None,
+            doi=str(inp.get("doi") or "") or None,
+            bibcode=str(inp.get("bibcode") or "") or None,
+            paper_url=str(inp.get("paper_url") or "") or None,
+            paper_metadata=metadata if isinstance(metadata, dict) else None,
+            paper_text=str(inp.get("paper_text") or "") or None,
+            source_sections=sections if isinstance(sections, (dict, list)) else None,
+            max_tools=int(inp.get("max_tools") or 80),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
+def _exec_run_paper_tool_mining_batch(inp: dict) -> dict:
+    from app.services.paper_tool_mining import run_paper_tool_mining_batch
+
+    try:
+        papers = inp.get("papers")
+        return run_paper_tool_mining_batch(
+            papers=papers if isinstance(papers, list) else [],
+            domain_tag=str(inp.get("domain_tag") or "observational_cosmology"),
+            max_papers=int(inp.get("max_papers") or 50),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
+def _exec_build_tool_ontology(inp: dict) -> dict:
+    from app.services.paper_tool_mining import build_tool_ontology
+
+    try:
+        specs = inp.get("tool_specs")
+        return build_tool_ontology(tool_specs=specs if isinstance(specs, list) else [])
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
+def _exec_build_tool_gap_matrix(inp: dict) -> dict:
+    from app.services.paper_tool_mining import build_tool_gap_matrix
+
+    try:
+        specs = inp.get("tool_specs")
+        current_tools = inp.get("current_tools")
+        return build_tool_gap_matrix(
+            tool_specs=specs if isinstance(specs, list) else [],
+            current_tools=([str(t) for t in current_tools] if isinstance(current_tools, list) else None),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
+def _exec_rank_tool_implementation_queue(inp: dict) -> dict:
+    from app.services.paper_tool_mining import rank_tool_implementation_queue
+
+    try:
+        matrix = inp.get("gap_matrix")
+        return rank_tool_implementation_queue(
+            gap_matrix=matrix if isinstance(matrix, list) else [],
+            max_items=int(inp.get("max_items") or 20),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
+async def _exec_build_paper_mining_candidate_pool(inp: dict) -> dict:
+    from app.services.paper_candidate_pool import build_paper_mining_candidate_pool
+
+    try:
+        queries = inp.get("queries")
+        seed_papers = inp.get("seed_papers")
+        state = inp.get("state")
+        exclude_paper_ids = inp.get("exclude_paper_ids")
+        return await build_paper_mining_candidate_pool(
+            domain_tag=str(inp.get("domain_tag") or "observational_cosmology"),
+            queries=[str(q) for q in queries] if isinstance(queries, list) else None,
+            seed_papers=seed_papers if isinstance(seed_papers, list) else None,
+            state=state if isinstance(state, dict) else None,
+            exclude_paper_ids=[str(x) for x in exclude_paper_ids] if isinstance(exclude_paper_ids, list) else None,
+            max_papers=int(inp.get("max_papers") or 60),
+            allow_live_search=bool(inp.get("allow_live_search")),
+            fetch_text_preview=bool(inp.get("fetch_text_preview")),
+            text_preview_limit=int(inp.get("text_preview_limit") or 20),
+            max_pages_per_query=int(inp.get("max_pages_per_query") or 2),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
+def _exec_run_paper_tool_mining_loop(inp: dict) -> dict:
+    from app.services.paper_tool_mining_loop import run_paper_tool_mining_loop
+
+    try:
+        papers = inp.get("papers")
+        state = inp.get("state")
+        return run_paper_tool_mining_loop(
+            papers=papers if isinstance(papers, list) else [],
+            domain_tag=str(inp.get("domain_tag") or "observational_cosmology"),
+            state=state if isinstance(state, dict) else None,
+            batch_size=int(inp.get("batch_size") or 20),
+            max_rounds=int(inp.get("max_rounds") or 1),
+            write_local_bundle=bool(inp.get("write_local_bundle")),
         )
     except Exception as exc:
         return {

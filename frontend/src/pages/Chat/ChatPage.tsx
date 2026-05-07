@@ -546,9 +546,18 @@ function ActionCardInner({
     plan_research_program: "Research Plan",
     run_research_matrix: "Research Matrix",
     build_evidence_graph: "Evidence Graph",
+    verify_research_facts: "Fact Check",
     export_research_report: "Research Report",
+    build_paper_mining_candidate_pool: "Paper Candidate Pool",
+    mine_paper_tools: "Paper Tool Mining",
+    run_paper_tool_mining_batch: "Paper Mining Batch",
+    build_tool_ontology: "Tool Ontology",
+    build_tool_gap_matrix: "Tool Gap Matrix",
+    rank_tool_implementation_queue: "Implementation Queue",
+    run_paper_tool_mining_loop: "Mining Loop",
     run_cobaya_cosmology: "Cobaya Cosmology",
     get_cosmology_run_status: "Cosmology Job Status",
+    load_cosmology_data_product: "Cosmology Data Product",
   };
 
   const icons: Record<string, string> = {
@@ -580,9 +589,18 @@ function ActionCardInner({
     plan_research_program: "🧭",
     run_research_matrix: "▦",
     build_evidence_graph: "🔗",
+    verify_research_facts: "✓",
     export_research_report: "📝",
+    build_paper_mining_candidate_pool: "📚",
+    mine_paper_tools: "⛏",
+    run_paper_tool_mining_batch: "⛏",
+    build_tool_ontology: "🗂",
+    build_tool_gap_matrix: "▦",
+    rank_tool_implementation_queue: "📋",
+    run_paper_tool_mining_loop: "🔁",
     run_cobaya_cosmology: "📉",
     get_cosmology_run_status: "⏱",
+    load_cosmology_data_product: "📦",
   };
 
   const isAutoExecuted = !!(action as Record<string, unknown>)._auto_executed;
@@ -1677,7 +1695,15 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     toolName === "plan_research_program"
     || toolName === "run_research_matrix"
     || toolName === "build_evidence_graph"
+    || toolName === "verify_research_facts"
     || toolName === "export_research_report"
+    || toolName === "build_paper_mining_candidate_pool"
+    || toolName === "mine_paper_tools"
+    || toolName === "run_paper_tool_mining_batch"
+    || toolName === "build_tool_ontology"
+    || toolName === "build_tool_gap_matrix"
+    || toolName === "rank_tool_implementation_queue"
+    || toolName === "run_paper_tool_mining_loop"
   ) {
     return <ResearchProgramPanel result={result} />;
   }

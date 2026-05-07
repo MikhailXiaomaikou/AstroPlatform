@@ -8,6 +8,7 @@ import re
 import uuid
 from typing import Any
 
+from app.common.regex import ARXIV_ID_RE, BIBCODE_RE, DOI_RE
 from app.services.cosmology_likelihoods import (
     build_likelihood_config,
     get_cosmology_dataset,
@@ -264,6 +265,80 @@ def build_evidence_graph(
         "unsupported_claim_count": len(unsupported_claims),
         "__message_to_model__": (
             "Use supported_claims only. Unsupported claims must be removed or replaced with a scope-gap statement."
+        ),
+    }
+
+
+def verify_research_facts(
+    *,
+    tool_results: list[dict[str, Any]] | None = None,
+    final_reply: str | None = None,
+    evidence_graph: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Verify research-output facts against current-turn evidence.
+
+    This layer does not create new scientific evidence. It classifies the
+    claims already present in a draft reply against publication-ready tool
+    runs, extracted tables, registry metadata, and source identifiers.
+    """
+    tool_results = tool_results or []
+    graph = evidence_graph or _latest_evidence_graph(tool_results)
+    if not graph:
+        graph_result = build_evidence_graph(tool_results=tool_results)
+        graph = graph_result.get("evidence_graph") if isinstance(graph_result, dict) else {}
+    if not isinstance(graph, dict):
+        graph = {}
+
+    claimable = {str(item).lower() for item in graph.get("claimable_parameters") or []}
+    payload_text = _tool_payload_text(tool_results)
+    dataset_index = _dataset_index_from_tool_results(tool_results)
+    ready_tools = _publication_ready_tool_ids(tool_results)
+    claims = _fact_claims_from_reply(
+        str(final_reply or ""),
+        claimable=claimable,
+        payload_text=payload_text,
+        dataset_index=dataset_index,
+        ready_tools=ready_tools,
+    )
+
+    if not claims:
+        claims.append({
+            "text": "No strong scientific fact claim detected in the checked reply.",
+            "kind": "scope",
+            "status": "verified",
+            "support_level": "tool_run" if ready_tools else "not_applicable",
+            "evidence_ids": sorted(ready_tools)[:5],
+            "safe_rewrite": "",
+        })
+
+    checked_sources = _checked_sources_from_payload(payload_text, dataset_index)
+    blocked = any(claim.get("status") == "contradicted" for claim in claims)
+    warning = any(claim.get("status") in {"unsupported", "partial"} for claim in claims)
+    status = "blocked" if blocked else "warning" if warning else "passed"
+    unsupported = [c for c in claims if c.get("status") in {"unsupported", "contradicted"}]
+    report = {
+        "status": status,
+        "claims": claims,
+        "checked_sources": checked_sources,
+        "unsupported_claim_count": len(unsupported),
+        "verified_claim_count": sum(1 for c in claims if c.get("status") == "verified"),
+        "safe_rewrites": [c.get("safe_rewrite") for c in claims if c.get("safe_rewrite")],
+    }
+    return {
+        "success": True,
+        "__tool_status__": "COMPLETED" if status == "passed" else "PARTIAL",
+        "analysis_status": "FACT_CHECK_READY",
+        "publication_ready": status == "passed",
+        "fact_check_report": report,
+        "status": status,
+        "claims": claims,
+        "checked_sources": checked_sources,
+        "warnings": [
+            "Fact verification checks claims against current-turn evidence; it does not create new evidence.",
+        ],
+        "__message_to_model__": (
+            "Use verified claims as written. Unsupported or contradicted claims must be removed "
+            "or replaced by their safe_rewrite."
         ),
     }
 
@@ -542,6 +617,208 @@ def _numeric_claim_tokens(text: str) -> list[str]:
         if re.search(pattern, text, re.I):
             tokens.append(name)
     return tokens
+
+
+def _fact_claims_from_reply(
+    text: str,
+    *,
+    claimable: set[str],
+    payload_text: str,
+    dataset_index: dict[str, dict[str, Any]],
+    ready_tools: set[str],
+) -> list[dict[str, Any]]:
+    claims: list[dict[str, Any]] = []
+    if not text.strip():
+        return claims
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        if _line_is_gap_statement(lowered):
+            continue
+        for token in _numeric_claim_tokens(stripped):
+            token_key = token.lower()
+            if token_key in claimable or _token_supported_by_alias(token_key, claimable):
+                claims.append(_fact_claim(
+                    stripped,
+                    "numeric",
+                    "verified",
+                    "tool_run",
+                    sorted(ready_tools)[:5],
+                    "",
+                ))
+            else:
+                claims.append(_fact_claim(
+                    stripped,
+                    "numeric",
+                    "unsupported",
+                    "not_applicable",
+                    [],
+                    f"Remove the {token} value/significance claim, or state that it was not determined by this turn's publication-ready tools.",
+                ))
+        if re.search(r"\bfull\s+(?:external\s+)?(?:planck|act|cobaya|cosmosis|likelihood)\b", stripped, re.I):
+            has_full = "full_external_likelihood" in claimable
+            claims.append(_fact_claim(
+                stripped,
+                "scope",
+                "verified" if has_full else "contradicted",
+                "tool_run" if has_full else "not_applicable",
+                sorted(ready_tools)[:5] if has_full else [],
+                "" if has_full else "Say this is compressed-likelihood preliminary, not a full external likelihood reproduction.",
+            ))
+        elif re.search(r"\bcompressed[-\s]?likelihood preliminary\b", stripped, re.I):
+            claims.append(_fact_claim(
+                stripped,
+                "scope",
+                "verified" if ready_tools else "partial",
+                "tool_run" if ready_tools else "dataset_registry",
+                sorted(ready_tools)[:5],
+                "" if ready_tools else "Keep the compressed-preliminary caveat, but avoid posterior numbers until a publication-ready run exists.",
+            ))
+        for dataset_key, dataset in dataset_index.items():
+            display = str(dataset.get("display_name") or dataset_key)
+            if display and display.lower() in lowered:
+                claims.append(_fact_claim(
+                    stripped,
+                    "dataset",
+                    "verified",
+                    "dataset_registry",
+                    [f"dataset:{dataset_key}"],
+                    "",
+                ))
+    for pattern, kind in (
+        (ARXIV_ID_RE, "source"),
+        (DOI_RE, "source"),
+        (BIBCODE_RE, "source"),
+    ):
+        for match in pattern.finditer(text):
+            value = match.group(0)
+            supported = value.lower() in payload_text
+            claims.append(_fact_claim(
+                value,
+                kind,
+                "verified" if supported else "unsupported",
+                "paper_metadata" if supported else "not_applicable",
+                _source_evidence_ids(value, payload_text),
+                "" if supported else f"Remove citation/source {value}, or run a source lookup/table extraction that returns it this turn.",
+            ))
+    return _dedupe_fact_claims(claims)
+
+
+def _fact_claim(
+    text: str,
+    kind: str,
+    status: str,
+    support_level: str,
+    evidence_ids: list[str],
+    safe_rewrite: str,
+) -> dict[str, Any]:
+    return {
+        "text": text,
+        "kind": kind,
+        "status": status,
+        "support_level": support_level,
+        "evidence_ids": evidence_ids,
+        "safe_rewrite": safe_rewrite,
+    }
+
+
+def _line_is_gap_statement(line: str) -> bool:
+    return any(
+        phrase in line
+        for phrase in (
+            "cannot support",
+            "did not determine",
+            "not determined",
+            "not yet supported",
+            "not publication-ready",
+            "no publication-ready",
+            "cannot claim",
+            "requires external",
+            "config-only",
+            "scope gap",
+        )
+    )
+
+
+def _token_supported_by_alias(token: str, claimable: set[str]) -> bool:
+    aliases = {
+        "omega_m": {"omegam", "omega_m", "Ωm".lower()},
+        "h0": {"h0", "H0".lower()},
+        "tension": {"tension", "s8_tension", "h0_tension", "omegam_tension"},
+        "p_value": {"p_value", "pearson_p", "spearman_p"},
+    }
+    candidates = aliases.get(token, {token})
+    return bool(candidates & claimable)
+
+
+def _latest_evidence_graph(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in reversed(tool_results):
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if isinstance(result, dict) and isinstance(result.get("evidence_graph"), dict):
+            return result["evidence_graph"]
+    return {}
+
+
+def _tool_payload_text(tool_results: list[dict[str, Any]]) -> str:
+    try:
+        return json.dumps(tool_results, default=str, sort_keys=True).lower()
+    except Exception:
+        return str(tool_results).lower()
+
+
+def _dataset_index_from_tool_results(tool_results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for item in tool_results:
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict):
+            continue
+        for dataset in _datasets_from_result(result):
+            key = str(dataset.get("key") or dataset.get("service_key") or dataset.get("display_name") or "")
+            if key:
+                index[key] = dataset
+    return index
+
+
+def _publication_ready_tool_ids(tool_results: list[dict[str, Any]]) -> set[str]:
+    ids: set[str] = set()
+    for idx, item in enumerate(tool_results):
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if isinstance(result, dict) and result.get("publication_ready") is True and result.get("__do_not_claim__") is not True:
+            ids.add(str(item.get("id") or f"tool_run:{idx}:{item.get('tool') or item.get('name') or 'tool'}"))
+    return ids
+
+
+def _checked_sources_from_payload(payload_text: str, dataset_index: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "dataset_count": len(dataset_index),
+        "arxiv_ids": sorted({m.group(0) for m in ARXIV_ID_RE.finditer(payload_text)})[:20],
+        "dois": sorted({m.group(0) for m in DOI_RE.finditer(payload_text)})[:20],
+        "bibcodes": sorted({m.group(0) for m in BIBCODE_RE.finditer(payload_text)})[:20],
+    }
+
+
+def _source_evidence_ids(value: str, payload_text: str) -> list[str]:
+    return [f"source:{value}"] if value.lower() in payload_text else []
+
+
+def _dedupe_fact_claims(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str]] = set()
+    result: list[dict[str, Any]] = []
+    for claim in claims:
+        key = (str(claim.get("text")), str(claim.get("kind")), str(claim.get("status")))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(claim)
+    return result
 
 
 def _dataset_exists(key: str) -> bool:
