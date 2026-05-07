@@ -1193,6 +1193,33 @@ TOOLS = [
         },
     },
     {
+        "name": "evaluate_chain_diagnostics",
+        "description": (
+            "Compute convergence diagnostics for explicit posterior chains: R-hat, "
+            "ESS, MCSE, HDI, draws per chain, and publication-readiness status. "
+            "This diagnoses supplied chains only; it does not run a likelihood and "
+            "cannot by itself support cosmological parameter claims."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "chains": {
+                    "type": ["object", "array"],
+                    "description": (
+                        "Either {parameter: [[chain1 draws], [chain2 draws], ...]} "
+                        "or a list of numeric row objects."
+                    ),
+                },
+                "parameters": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional parameter subset/order.",
+                },
+            },
+            "required": ["chains"],
+        },
+    },
+    {
         "name": "build_cosmology_robustness_matrix",
         "description": (
             "Generate the standard robustness matrix for observational "
@@ -2426,6 +2453,8 @@ async def _execute_tool_inner(
             return _exec_run_cosmology_likelihood_chain(tool_input)
         elif tool_name == "run_nested_sampler":
             return _exec_run_nested_sampler(tool_input)
+        elif tool_name == "evaluate_chain_diagnostics":
+            return _exec_evaluate_chain_diagnostics(tool_input)
         elif tool_name == "build_cosmology_robustness_matrix":
             return _exec_build_cosmology_robustness_matrix(tool_input)
         elif tool_name == "run_cosmology_robustness_matrix":
@@ -8145,6 +8174,30 @@ def _exec_run_nested_sampler(inp: dict) -> dict:
                 "Controlled nested sampling failed. Do not quote posterior, "
                 "evidence, Bayes factor, or sampler diagnostics from this call."
             ),
+        }
+
+
+def _exec_evaluate_chain_diagnostics(inp: dict) -> dict:
+    from app.services.chain_diagnostics import evaluate_chain_diagnostics
+
+    try:
+        chains = inp.get("chains")
+        if chains is None:
+            raise ValueError("chains is required")
+        params = inp.get("parameters")
+        return evaluate_chain_diagnostics(
+            chains=chains if isinstance(chains, (dict, list)) else {},
+            parameters=[str(p) for p in params] if isinstance(params, list) else None,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "publication_ready": False,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
         }
 
 

@@ -477,7 +477,7 @@ _COMPUTE_TOOLS = {
     "load_cosmology_data_product",
     "build_cosmology_likelihood", "build_cosmology_robustness_matrix",
     "run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix",
-    "run_nested_sampler", "run_research_matrix",
+    "run_nested_sampler", "evaluate_chain_diagnostics", "run_research_matrix",
     # PART Y Batch 1 (audit follow-up): newer compute tools — line-relation
     # fitting on cited literature tables, luminosity-distance comparison
     # across cosmologies, gravitational-lensing demagnification of a sample.

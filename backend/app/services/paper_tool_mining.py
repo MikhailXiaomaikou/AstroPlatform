@@ -80,9 +80,13 @@ PLATFORM_CAPABILITIES: dict[str, dict[str, Any]] = {
         "note": "Controlled dynesty interface for typed Gaussian likelihood summaries; full external nested likelihood packages remain future work.",
     },
     "chain_diagnostics": {
-        "status": "partial",
-        "tool_names": ["run_cosmology_likelihood_chain", "fit_cosmology_mcmc"],
-        "note": "Basic diagnostics exist; full chain dashboard still incomplete.",
+        "status": "available",
+        "tool_names": [
+            "evaluate_chain_diagnostics",
+            "run_cosmology_likelihood_chain",
+            "fit_cosmology_mcmc",
+        ],
+        "note": "Controlled R-hat/ESS/MCSE diagnostic kernel exists; richer visual dashboard remains iterative UI work.",
     },
     "robustness_matrix": {
         "status": "available",
