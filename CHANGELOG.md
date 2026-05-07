@@ -72,6 +72,10 @@ need entries unless they change user-visible behavior or research validity.
 - The first paper-mining-driven implementation target landed: cosmology
   data-product ingestion now validates registered public files before likelihood
   runners consume them.
+- Paper-mining candidate pools can now switch arXiv live search from latest
+  submissions to relevance-ranked queries, and the capability map now recognizes
+  `run_nested_sampler` while keeping full external likelihood packages as a
+  separate missing gap.
 - Research-mode final replies now attach a Fact Check card; contradicted claims
   are replaced with a conservative tool-grounded summary.
 - Updated cosmology registry documentation to distinguish machine-readable

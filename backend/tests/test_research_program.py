@@ -382,11 +382,13 @@ def test_paper_candidate_pool_normalizes_scores_and_dedupes_seed_papers() -> Non
         ],
         allow_live_search=False,
         max_papers=10,
+        sort_by="relevance",
     ))
 
     assert result["analysis_status"] == "PAPER_MINING_CANDIDATE_POOL_READY"
     assert result["candidate_count"] == 2
     assert result["live_search_enabled"] is False
+    assert result["sort_by"] == "relevance"
     assert result["candidate_papers"][0]["relevance_score"] > 0
     assert any(p["mining_readiness"] == "source_sections_ready" for p in result["candidate_papers"])
 

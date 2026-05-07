@@ -91,6 +91,8 @@ async def build_paper_mining_candidate_pool(
     fetch_text_preview: bool = False,
     text_preview_limit: int = 20,
     max_pages_per_query: int = 2,
+    sort_by: str = "submittedDate",
+    sort_order: str = "descending",
 ) -> dict[str, Any]:
     """Build a deduplicated paper candidate pool for mining.
 
@@ -113,13 +115,21 @@ async def build_paper_mining_candidate_pool(
     attempted_queries: list[str] = []
     live_errors: list[str] = []
     if allow_live_search:
+        arxiv_sort_by = _normalize_sort_by(sort_by)
+        arxiv_sort_order = _normalize_sort_order(sort_order)
         for query in (queries or DEFAULT_QUERIES.get(domain, DEFAULT_QUERIES["observational_cosmology"])):
             if len(candidates) >= limit:
                 break
             attempted_queries.append(query)
             try:
                 for page in range(max(1, min(int(max_pages_per_query or 2), 8))):
-                    live = await _search_arxiv(query, max_results=min(25, limit), start=page * 25)
+                    live = await _search_arxiv(
+                        query,
+                        max_results=min(25, limit),
+                        start=page * 25,
+                        sort_by=arxiv_sort_by,
+                        sort_order=arxiv_sort_order,
+                    )
                     candidates.extend(live)
                     unread = [c for c in _dedupe_candidates(candidates) if _paper_id(c) not in excluded_ids]
                     if len(unread) >= limit:
@@ -155,6 +165,8 @@ async def build_paper_mining_candidate_pool(
         "text_preview_requested": bool(fetch_text_preview),
         "text_preview_limit": int(text_preview_limit or 0) if fetch_text_preview else 0,
         "max_pages_per_query": int(max_pages_per_query or 0) if allow_live_search else 0,
+        "sort_by": _normalize_sort_by(sort_by),
+        "sort_order": _normalize_sort_order(sort_order),
         "warnings": [
             "Candidate pools are inputs to ToolSpec mining, not scientific evidence.",
             "Abstract-only candidates must be read or supplied with source_sections before high-confidence ToolSpecs are emitted.",
@@ -195,11 +207,21 @@ def _normalize_candidate(raw: dict[str, Any], *, source: str) -> dict[str, Any] 
     }
 
 
-async def _search_arxiv(query: str, *, max_results: int, start: int = 0) -> list[dict[str, Any]]:
+async def _search_arxiv(
+    query: str,
+    *,
+    max_results: int,
+    start: int = 0,
+    sort_by: str = "submittedDate",
+    sort_order: str = "descending",
+) -> list[dict[str, Any]]:
     encoded = urllib.parse.quote(query)
+    order = _normalize_sort_order(sort_order)
+    sort = _normalize_sort_by(sort_by)
     url = (
         "https://export.arxiv.org/api/query?"
-        f"search_query={encoded}&start={max(0, int(start))}&max_results={max_results}&sortBy=submittedDate&sortOrder=descending"
+        f"search_query={encoded}&start={max(0, int(start))}&max_results={max_results}"
+        f"&sortBy={sort}&sortOrder={order}"
     )
     async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
         response = await client.get(url)
@@ -389,6 +411,16 @@ def _clean_text(value: Any) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def _normalize_sort_by(value: Any) -> str:
+    text = str(value or "submittedDate").strip()
+    return text if text in {"relevance", "lastUpdatedDate", "submittedDate"} else "submittedDate"
+
+
+def _normalize_sort_order(value: Any) -> str:
+    text = str(value or "descending").strip()
+    return text if text in {"ascending", "descending"} else "descending"
 
 
 def _year_from_text(value: str) -> int | None:

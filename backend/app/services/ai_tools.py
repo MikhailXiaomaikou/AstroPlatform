@@ -1487,6 +1487,16 @@ TOOLS = [
                     "type": "integer",
                     "description": "Maximum arXiv pages to request per query when live search is enabled. Default 2.",
                 },
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["submittedDate", "lastUpdatedDate", "relevance"],
+                    "description": "arXiv live-search sort mode. Use relevance after recent-paper pages are exhausted.",
+                },
+                "sort_order": {
+                    "type": "string",
+                    "enum": ["ascending", "descending"],
+                    "description": "arXiv live-search sort order. Default descending.",
+                },
             },
         },
     },
@@ -8434,6 +8444,8 @@ async def _exec_build_paper_mining_candidate_pool(inp: dict) -> dict:
             fetch_text_preview=bool(inp.get("fetch_text_preview")),
             text_preview_limit=int(inp.get("text_preview_limit") or 20),
             max_pages_per_query=int(inp.get("max_pages_per_query") or 2),
+            sort_by=str(inp.get("sort_by") or "submittedDate"),
+            sort_order=str(inp.get("sort_order") or "descending"),
         )
     except Exception as exc:
         return {
