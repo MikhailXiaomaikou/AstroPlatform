@@ -99,9 +99,9 @@ PLATFORM_CAPABILITIES: dict[str, dict[str, Any]] = {
         "note": "Checks claims against current-turn evidence.",
     },
     "research_export": {
-        "status": "partial",
+        "status": "available",
         "tool_names": ["export_research_report", "generate_paper_draft"],
-        "note": "Markdown/paper draft paths exist; full reproducibility package remains partial.",
+        "note": "Research report package exports Markdown, BibTeX, dataset/citation summaries, and reproducibility manifest; richer archive bundling can iterate.",
     },
     "generic_data_loader": {
         "status": "partial",

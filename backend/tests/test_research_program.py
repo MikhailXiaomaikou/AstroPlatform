@@ -405,6 +405,25 @@ def test_export_research_report_includes_bibtex_and_manifest() -> None:
     assert result["report_package"]["files"][0]["path"] == "research_report.md"
 
 
+def test_tool_gap_matrix_knows_research_export_package_is_available() -> None:
+    from app.services.paper_tool_mining import build_tool_gap_matrix
+
+    matrix = build_tool_gap_matrix(
+        tool_specs=[
+                {
+                    "tool_category": "exporter",
+                    "canonical_capability": "research_export",
+                    "implementation_status": "available",
+                    "source_spans": [{"section": "Data availability"}],
+                }
+        ]
+    )
+
+    row = matrix["gap_matrix"][0]
+    assert row["current_status"] == "available"
+    assert "export_research_report" in row["available_platform_tools"]
+
+
 def test_paper_candidate_pool_normalizes_scores_and_dedupes_seed_papers() -> None:
     import asyncio
 
