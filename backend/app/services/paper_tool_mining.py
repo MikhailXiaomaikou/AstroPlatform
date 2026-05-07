@@ -75,9 +75,9 @@ PLATFORM_CAPABILITIES: dict[str, dict[str, Any]] = {
         "note": "emcee path exists for typed distance-modulus tables; general paper likelihoods missing.",
     },
     "nested_sampler": {
-        "status": "missing",
-        "tool_names": [],
-        "note": "No controlled MultiNest/PolyChord/dynesty interface yet.",
+        "status": "available",
+        "tool_names": ["run_nested_sampler"],
+        "note": "Controlled dynesty interface for typed Gaussian likelihood summaries; full external nested likelihood packages remain future work.",
     },
     "chain_diagnostics": {
         "status": "partial",
@@ -101,8 +101,14 @@ PLATFORM_CAPABILITIES: dict[str, dict[str, Any]] = {
     },
     "generic_data_loader": {
         "status": "partial",
-        "tool_names": ["search_objects", "run_adql", "run_sdss_sql", "query_vo_service"],
-        "note": "Archive/query loaders exist for registered astronomy sources.",
+        "tool_names": [
+            "search_objects",
+            "run_adql",
+            "run_sdss_sql",
+            "query_vo_service",
+            "load_cosmology_data_product",
+        ],
+        "note": "Archive/query loaders and registered cosmology data-product ingestion exist; more survey-specific formats remain partial.",
     },
     "external_likelihood_runner": {
         "status": "missing",
@@ -159,6 +165,14 @@ PATTERNS: list[dict[str, Any]] = [
         "inputs": ["data vector", "covariance", "model prediction"],
         "outputs": ["log_likelihood", "chi2", "posterior-ready summary"],
         "formula": "logL = -0.5 * Δ^T C^{-1} Δ",
+    },
+    {
+        "category": "likelihood",
+        "method": "Run full external likelihood package",
+        "capability": "external_likelihood_runner",
+        "regex": r"\b(full likelihood|external likelihood|official likelihood|likelihood package|planck likelihood|cobaya likelihood|cosmosis likelihood)\b",
+        "inputs": ["registered likelihood config", "dataset release files", "priors"],
+        "outputs": ["posterior chain", "evidence or fit statistics"],
     },
     {
         "category": "sampler",

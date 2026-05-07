@@ -204,7 +204,8 @@ def test_tool_ontology_gap_matrix_and_queue_rank_missing_capabilities() -> None:
             "Methods": (
                 "We evaluate the likelihood with a covariance matrix and run nested "
                 "sampling with PolyChord to compute Bayesian evidence. We also release "
-                "configuration files and chain files for reproducibility."
+                "configuration files, chain files, and the full external likelihood "
+                "package for reproducibility."
             ),
         },
     )

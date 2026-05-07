@@ -88,3 +88,22 @@ def test_ai_tool_wrapper_runs_nested_sampler():
     assert result["success"] is True
     assert result["publication_ready"] is True
     assert result["parameters"]["x"]["median"] == pytest.approx(1.0, abs=0.25)
+
+
+def test_paper_tool_gap_matrix_knows_nested_sampler_is_available():
+    from app.services.paper_tool_mining import build_tool_gap_matrix
+
+    matrix = build_tool_gap_matrix(
+        tool_specs=[
+            {
+                "tool_category": "sampler",
+                "canonical_capability": "nested_sampler",
+                "implementation_status": "available",
+                "source_spans": [{"section": "Methods"}],
+            }
+        ]
+    )
+
+    assert matrix["gap_matrix"][0]["capability"] == "nested_sampler"
+    assert matrix["gap_matrix"][0]["current_status"] == "available"
+    assert matrix["gap_matrix"][0]["available_platform_tools"] == ["run_nested_sampler"]
