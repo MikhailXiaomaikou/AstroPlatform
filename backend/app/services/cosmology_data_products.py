@@ -36,6 +36,14 @@ async def load_cosmology_data_product(
     entry = get_cosmology_dataset(str(dataset_key))
     product = _select_product(entry.data_products, role=role, product_type=product_type)
     if product is None:
+        compressed = _compressed_likelihood_data_product(
+            entry,
+            role=role,
+            product_type=product_type,
+            max_preview_rows=max_preview_rows,
+        )
+        if compressed is not None:
+            return compressed
         return {
             "success": False,
             "__tool_status__": "FAILED",
@@ -120,6 +128,87 @@ def _select_product(
             if product.product_type == product_type:
                 return product
     return products[0] if products else None
+
+
+def _compressed_likelihood_data_product(
+    entry: Any,
+    *,
+    role: str | None,
+    product_type: str | None,
+    max_preview_rows: int,
+) -> dict[str, Any] | None:
+    spec = getattr(entry, "compressed_likelihood", None)
+    if spec is None:
+        return None
+    requested = {str(role or "").strip(), str(product_type or "").strip()}
+    allowed = {
+        "",
+        "compressed_likelihood",
+        "measurement_vector",
+        "covariance",
+        "compressed_gaussian_likelihood",
+    }
+    if not requested <= allowed:
+        return None
+    cov = np.asarray(spec.covariance, dtype=float)
+    symmetric = bool(cov.ndim == 2 and cov.shape[0] == cov.shape[1] and np.allclose(cov, cov.T, rtol=1e-6, atol=1e-12))
+    positive_diagonal = bool(symmetric and np.all(np.diag(cov) > 0))
+    finite = bool(np.all(np.isfinite(cov)) and np.all(np.isfinite(np.asarray(spec.mean, dtype=float))))
+    publication_ready = bool(finite and symmetric and positive_diagonal)
+    warnings = []
+    if not symmetric:
+        warnings.append("Registered compressed covariance is not symmetric.")
+    if symmetric and not positive_diagonal:
+        warnings.append("Registered compressed covariance has non-positive diagonal entries.")
+    return {
+        "success": True,
+        "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
+        "analysis_status": "COSMOLOGY_COMPRESSED_DATA_PRODUCT_READY" if publication_ready else "COSMOLOGY_DATA_PRODUCT_PARTIAL",
+        "publication_ready": publication_ready,
+        "dataset_key": entry.key,
+        "dataset_display_name": entry.display_name,
+        "dataset_version": entry.version,
+        "product": {
+            "product_type": "compressed_gaussian_likelihood",
+            "role": "compressed_likelihood",
+            "url": entry.source_url,
+            "format": "registry mean/covariance",
+            "description": spec.approximation,
+            "columns": list(spec.parameters),
+            "rows": len(spec.parameters),
+            "sha256": None,
+        },
+        "source": "dataset_registry.compressed_likelihood",
+        "hash_verified": False,
+        "parse": {
+            "parse_success": True,
+            "kind": "compressed_gaussian_likelihood",
+            "parameters": list(spec.parameters),
+            "mean": list(spec.mean),
+            "units": dict(spec.units),
+            "covariance_shape": list(cov.shape),
+            "covariance_symmetric": symmetric,
+            "positive_diagonal": positive_diagonal,
+            "source_locator": spec.source_locator,
+            "approximation": spec.approximation,
+            "preview": {
+                "mean": list(spec.mean)[:max_preview_rows],
+                "covariance": _finite_preview(cov, max_preview_rows=max_preview_rows),
+            },
+            "warnings": warnings,
+        },
+        "warnings": [
+            "Registry compressed likelihood vector; use as data-product provenance, not a posterior by itself.",
+            *warnings,
+        ],
+        "citations": [citation.to_dict() for citation in entry.citations],
+        "claim_scope": "registered_compressed_likelihood_data_product",
+        "__message_to_model__": (
+            "This exposes a registered compressed Gaussian mean/covariance summary. "
+            "It can support claims about available compressed data vectors, but "
+            "posterior/tension claims require run_cosmology_likelihood_chain."
+        ),
+    }
 
 
 def _parse_product_text(text: str, *, product: DataProductSpec, max_preview_rows: int) -> dict[str, Any]:

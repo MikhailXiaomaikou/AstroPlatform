@@ -83,6 +83,10 @@ need entries unless they change user-visible behavior or research validity.
   kernel for explicit samples. It computes R-hat, ESS, MCSE, HDI, and
   publication-readiness status without running a likelihood or inventing
   parameter constraints.
+- `load_cosmology_data_product` can now expose registry-backed compressed
+  Gaussian mean/covariance summaries for ACT, Planck, weak-lensing, SH0ES, and
+  similar datasets even when there is no separate downloadable data-product
+  file registered.
 - Research-mode final replies now attach a Fact Check card; contradicted claims
   are replaced with a conservative tool-grounded summary.
 - Updated cosmology registry documentation to distinguish machine-readable

@@ -134,6 +134,23 @@ async def test_load_cosmology_data_product_parses_dimension_prefixed_sn_covarian
 
 
 @pytest.mark.asyncio
+async def test_load_cosmology_data_product_exposes_registered_compressed_likelihood():
+    from app.services.cosmology_data_products import load_cosmology_data_product
+
+    result = await load_cosmology_data_product(
+        dataset_key="act_dr6_lensing",
+        role="compressed_likelihood",
+        allow_network=False,
+    )
+
+    assert result["analysis_status"] == "COSMOLOGY_COMPRESSED_DATA_PRODUCT_READY"
+    assert result["publication_ready"] is True
+    assert result["parse"]["kind"] == "compressed_gaussian_likelihood"
+    assert "S8" in result["parse"]["parameters"]
+    assert result["claim_scope"] == "registered_compressed_likelihood_data_product"
+
+
+@pytest.mark.asyncio
 async def test_load_cosmology_data_product_reports_unavailable_without_network_or_content():
     from app.services.cosmology_data_products import load_cosmology_data_product
 
