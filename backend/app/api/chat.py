@@ -40,21 +40,22 @@ SSE_PREAMBLE_PADDING_BYTES = 8192
 
 # ── Research-focus tool gating ─────────────────────────────────────────
 #
-# When ASTRO_RESEARCH_FOCUS=cosmology (default "all"), the platform
-# filters the tool list before it ever reaches the LLM so that non-
-# cosmology tools are physically invisible. The agent loop will route
-# off-topic questions through Phase F's structured-abstention path
-# (<tools_returned_nothing/>) automatically because the LLM has no
-# matching tool to call.
+# When ASTRO_RESEARCH_FOCUS=cosmology (DEFAULT now, per user decision
+# 2026-05-08), the platform filters the tool list before it ever reaches
+# the LLM so that non-cosmology tools are physically invisible. The
+# agent loop will route off-topic questions through Phase F's
+# structured-abstention path (<tools_returned_nothing/>) automatically
+# because the LLM has no matching tool to call.
 #
-# 设计思路 (per user 决策, 2026-04-30):
+# 设计思路 (per user 决策, 2026-04-30 → 2026-05-08):
 #   - L1: 硬隔断 — tool registry 过滤
 #   - L4: 软引导 — SYSTEM_PROMPT 末尾 append focus appendix (不删现有 section)
-#   - 不动业务代码 / 不删现有规则 / 完全可逆 (删 env 即恢复)
+#   - 不动业务代码 / 不删现有规则 / 完全可逆 (set ASTRO_RESEARCH_FOCUS=all 恢复)
+#   - DEFAULT 从 "all" 改 "cosmology" (2026-05-08, 用户选了 cosmology focus 路径)
 #
 # allowlist 范围: 涵盖观测宇宙学 7 个子方向的工具 (距离阶梯 / 高 z 星系 /
 # photo-z 巡天 / 强透镜 / 暗能量 / SN Ia 标准烛光 / Cepheid 周期-光度).
-_ASTRO_RESEARCH_FOCUS = os.getenv("ASTRO_RESEARCH_FOCUS", "all").strip().lower()
+_ASTRO_RESEARCH_FOCUS = os.getenv("ASTRO_RESEARCH_FOCUS", "cosmology").strip().lower()
 
 _COSMOLOGY_FOCUS_TOOL_ALLOWLIST: frozenset[str] = frozenset({
     # ── Cosmology core ────────────────────────────────────────
@@ -121,8 +122,8 @@ extraction / PSF photometry, SAMP / VO interop, etc.), respond with:
 
   "This deployment is configured for observational cosmology only.
    The tools needed for {topic} are not available in this session.
-   To use the full platform capability, redeploy with
-   ASTRO_RESEARCH_FOCUS=all (or unset) on the backend."
+   To use the full platform capability, set ASTRO_RESEARCH_FOCUS=all
+   on the backend (the default since 2026-05-08 is cosmology)."
 
 **Do NOT** invent results from training data when a tool is missing —
 emit a structured abstention (see STRUCTURED ABSTENTION section).

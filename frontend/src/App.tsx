@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from "re
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { I18nProvider, useI18n, ALL_LANGS, LANG_NAMES, type Lang } from "./i18n";
 import api from "./api/client";
+import { getBackendConfig } from "./api/config";
 import { useTracking } from "./hooks/useTracking";
 import CommandPalette from "./components/CommandPalette";
 import OnboardingOverlay from "./components/OnboardingOverlay";
@@ -110,9 +111,23 @@ function NavBar() {
   const { t } = useI18n();
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // Action 6 — Cosmology Focus: hide non-cosmology nav items when the
+  // backend is running with ASTRO_RESEARCH_FOCUS=cosmology.  Routes
+  // are NOT removed (direct URL still works), only the masthead links
+  // are hidden.  null = still loading, fall back to "all" (show all).
+  const [backendFocus, setBackendFocus] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getBackendConfig()
+      .then((c) => { if (alive) setBackendFocus(c.focus); })
+      .catch(() => { if (alive) setBackendFocus("all"); });
+    return () => { alive = false; };
+  }, []);
+  const cosmoFocus = backendFocus === "cosmology";
+
   return (
     <header className="journal-masthead">
-      {/* Row 1 — brand + 8-tab nav, matches demo masthead-row */}
+      {/* Row 1 — brand + nav (8 items in "all" mode, 4 visible in "cosmology" mode) */}
       <div className="journal-masthead-row">
         <div className="journal-masthead-brand">
           <NavLink to="/" className="journal-masthead-title" aria-label="Standard Astro home">
@@ -136,10 +151,18 @@ function NavBar() {
         >
           <NavLink to="/"          end onClick={() => setMenuOpen(false)}>{t("nav.home")}</NavLink>
           <NavLink to="/chat"          onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
-          <NavLink to="/search"        onClick={() => setMenuOpen(false)}>{t("nav.browse")}</NavLink>
-          <NavLink to="/adql"          onClick={() => setMenuOpen(false)}>{t("nav.adql")}</NavLink>
-          <NavLink to="/pipeline"      onClick={() => setMenuOpen(false)}>{t("nav.pipeline")}</NavLink>
-          <NavLink to="/workspace"     onClick={() => setMenuOpen(false)}>{t("nav.sessions")}</NavLink>
+          {!cosmoFocus && (
+            <NavLink to="/search"        onClick={() => setMenuOpen(false)}>{t("nav.browse")}</NavLink>
+          )}
+          {!cosmoFocus && (
+            <NavLink to="/adql"          onClick={() => setMenuOpen(false)}>{t("nav.adql")}</NavLink>
+          )}
+          {!cosmoFocus && (
+            <NavLink to="/pipeline"      onClick={() => setMenuOpen(false)}>{t("nav.pipeline")}</NavLink>
+          )}
+          {!cosmoFocus && (
+            <NavLink to="/workspace"     onClick={() => setMenuOpen(false)}>{t("nav.sessions")}</NavLink>
+          )}
           <NavLink to="/papers"        onClick={() => setMenuOpen(false)}>{t("nav.papers")}</NavLink>
           <NavLink to="/account"       onClick={() => setMenuOpen(false)}>{t("nav.account")}</NavLink>
         </nav>

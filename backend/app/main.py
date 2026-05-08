@@ -17,6 +17,7 @@ from app.api.alerts import router as alerts_router
 from app.api.anomalies import router as anomalies_router
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
+from app.api.config import router as config_router
 from app.api.data import router as data_router
 from app.api.dossier import router as dossier_router
 from app.api.events import router as events_router, admin_router as admin_events_router
@@ -559,6 +560,7 @@ app.include_router(auth_router)
 app.include_router(citation_graph_router)
 app.include_router(citations_router)
 app.include_router(comments_router)
+app.include_router(config_router)
 app.include_router(admin_stats_router)
 app.include_router(admin_trending_router)
 app.include_router(trending_public_router)

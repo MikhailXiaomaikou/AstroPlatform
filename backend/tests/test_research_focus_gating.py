@@ -12,8 +12,10 @@ questions.
 
 Locks 4 contracts:
 
-1. Default focus is "all" — _filter_tools_by_research_focus is a
-   no-op. Existing deployments and tests do not regress.
+1. Default focus is "cosmology" — _filter_tools_by_research_focus
+   is active by default (changed 2026-05-08, user decision: focus
+   on observational cosmology, gate other domains). Set
+   ASTRO_RESEARCH_FOCUS=all to opt back into general mode.
 
 2. focus="cosmology" — the allowlist contains the core cosmology
    tools (cosmology_mcmc, fit_line_lfr, demagnify_sample, photo-z,
@@ -22,7 +24,7 @@ Locks 4 contracts:
    physics, source extraction) are dropped.
 
 3. focus="cosmology" — SYSTEM_PROMPT gains the focus appendix; the
-   46 existing sections are preserved verbatim (other test files
+   59 existing sections are preserved verbatim (other test files
    keyword-assert those sections, must not break).
 
 4. The filter applies AFTER G3.4 dynamic disable; tools removed by
@@ -49,14 +51,16 @@ def _reload_chat_with_focus(monkeypatch, focus_value: str):
     return chat_mod
 
 
-# ── Contract 1: default focus="all" is a no-op ─────────────────────
+# ── Contract 1: default focus="cosmology" filters by allowlist ─────
 
 
-def test_default_focus_is_all_no_filter(monkeypatch) -> None:
-    """No env set (or 'all') → filter must be identity. Existing
-    deployments must not see any tool removed."""
+def test_default_focus_unset_is_cosmology_filtered(monkeypatch) -> None:
+    """No env set → default is "cosmology" (changed 2026-05-08).
+    Filter must drop non-cosmology tools."""
     monkeypatch.delenv("ASTRO_RESEARCH_FOCUS", raising=False)
-    chat = _reload_chat_with_focus(monkeypatch, "all")
+    import importlib
+    import app.api.chat as chat_mod
+    importlib.reload(chat_mod)
 
     fake_tools = [
         {"name": "fit_isochrone"},
@@ -64,12 +68,16 @@ def test_default_focus_is_all_no_filter(monkeypatch) -> None:
         {"name": "equivalent_width"},
         {"name": "psf_photometry"},
     ]
-    out = chat._filter_tools_by_research_focus(fake_tools)
-    assert out == fake_tools  # identity, all 4 tools survive
+    out = chat_mod._filter_tools_by_research_focus(fake_tools)
+    survived = {t["name"] for t in out}
+    assert survived == {"fit_cosmology_mcmc"}, (
+        f"Default cosmology focus should drop fit_isochrone / "
+        f"equivalent_width / psf_photometry; survived: {survived}"
+    )
 
 
-def test_focus_unset_treated_as_all(monkeypatch) -> None:
-    monkeypatch.delenv("ASTRO_RESEARCH_FOCUS", raising=False)
+def test_focus_explicit_all_disables_filter(monkeypatch) -> None:
+    """Setting ASTRO_RESEARCH_FOCUS=all opts back into general mode."""
     chat = _reload_chat_with_focus(monkeypatch, "all")
 
     out = chat._filter_tools_by_research_focus([{"name": "anything"}])
