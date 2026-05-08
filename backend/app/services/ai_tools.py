@@ -2360,6 +2360,18 @@ async def execute_tool(
     progress_callback: Callable[[dict], Awaitable[None]] | None = None,
 ) -> dict:
     """Execute a tool call and return the result as a dict."""
+    # Action 3 (telemetry, 2026-05-08): count every tool invocation so
+    # we have real-world usage data for the cosmology-focus surgery
+    # decisions (which tools to drop from allowlist after 7 days of
+    # production traffic).  Reuses the module-level Prometheus
+    # registry; cardinality is bounded by ~87 tool names.
+    try:
+        from app.observability.metrics import record_counter
+        record_counter("tool_invoked_total", 1.0, tool=tool_name)
+    except Exception:
+        # Telemetry must never break the actual tool call.
+        pass
+
     from app.services.result_provenance import normalize_tool_result
     result = await _execute_tool_inner(
         tool_name, tool_input, api_key, provider_api_keys,

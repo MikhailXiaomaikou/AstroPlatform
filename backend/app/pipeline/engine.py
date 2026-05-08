@@ -296,6 +296,15 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
                         cached["_cached"] = True
                         node_results[node_id] = cached
                         _publish_progress(run_id, {"node_id": node_id, "status": "completed", "cached": True})
+                        # Action 3 telemetry: record cache-hit invocation.
+                        try:
+                            from app.observability.metrics import record_counter
+                            record_counter(
+                                "pipeline_node_invoked_total", 1.0,
+                                node_type=node_type, status="cached",
+                            )
+                        except Exception:
+                            pass
                         # Handle Condition nodes even on cache hit
                         if node_type == "Condition" and "error" not in cached:
                             new_skips = _compute_skipped_nodes(
@@ -318,6 +327,17 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
             except Exception as e:
                 logger.exception(f"[{run_id}] Node {node_id} ({node_type}) failed")
                 result = {"error": str(e), "node_id": node_id}
+            # Action 3 telemetry: record dispatch outcome (ok/error).  Reused
+            # for cosmology-focus surgery (which nodes are actually exercised).
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "pipeline_node_invoked_total", 1.0,
+                    node_type=node_type,
+                    status="error" if isinstance(result, dict) and "error" in result else "ok",
+                )
+            except Exception:
+                pass
             execution_time_ms = int((time.monotonic() - t0) * 1000)
             output_checksum = hashlib.sha256(
                 json.dumps(result, sort_keys=True, default=str).encode()
@@ -558,6 +578,15 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                                 "progress": completed_count / total_nodes,
                                 "cached": True,
                             })
+                            # Action 3 telemetry: cache-hit invocation (Celery path).
+                            try:
+                                from app.observability.metrics import record_counter
+                                record_counter(
+                                    "pipeline_node_invoked_total", 1.0,
+                                    node_type=node_type, status="cached",
+                                )
+                            except Exception:
+                                pass
                             continue
                     except (RedisError, ConnectionError, json.JSONDecodeError) as e:
                         logger.debug("[%s] Cache lookup failed for node %s: %s", run_id, node_id, e)
@@ -581,6 +610,16 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                     logger.exception(f"[{run_id}] Node {node_id} ({node_type}) failed")
                     result = {"error": str(e), "node_id": node_id}
                     has_errors = True
+                # Action 3 telemetry: dispatch outcome (Celery path).
+                try:
+                    from app.observability.metrics import record_counter
+                    record_counter(
+                        "pipeline_node_invoked_total", 1.0,
+                        node_type=node_type,
+                        status="error" if isinstance(result, dict) and "error" in result else "ok",
+                    )
+                except Exception:
+                    pass
                 execution_time_ms = int((time.monotonic() - t0) * 1000)
                 output_checksum = hashlib.sha256(
                     json.dumps(result, sort_keys=True, default=str).encode()
