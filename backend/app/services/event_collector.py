@@ -40,6 +40,7 @@ ALLOWED_EVENT_TYPES = {
     "export.notebook",
     "export.paper_draft",
     "export.csv",
+    "export.html",
     "error.query_failed",
     "error.analysis_failed",
     "error.ai_failed",

@@ -202,3 +202,66 @@ async def test_existing_events_stats_accepts_admin_secret(app_client, monkeypatc
     )
     assert r.status_code == 200
     assert "event_counts" in r.json()
+
+
+async def test_events_track_endpoint_accepts_anonymous_payload(app_client, monkeypatch):
+    from app.api import events
+
+    captured = []
+
+    async def fake_track(**kwargs):
+        captured.append(kwargs)
+
+    monkeypatch.setattr(events.event_collector, "track", fake_track)
+
+    r = await app_client.post(
+        "/api/events/track",
+        json={
+            "event_type": "session.started",
+            "event_data": {"referrer": ""},
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "page": "/",
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"tracked": True}
+    assert captured[0]["event_type"] == "session.started"
+    assert captured[0]["session_id"] == "11111111-1111-4111-8111-111111111111"
+    assert captured[0]["page"] == "/"
+
+
+async def test_events_track_endpoint_rejects_unsupported_type(app_client, monkeypatch):
+    from app.api import events
+
+    async def fake_track(**kwargs):
+        raise AssertionError("unsupported events should be rejected before tracking")
+
+    monkeypatch.setattr(events.event_collector, "track", fake_track)
+
+    r = await app_client.post(
+        "/api/events/track",
+        json={"event_type": "frontend.unknown", "event_data": {}},
+    )
+
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Unsupported event type"
+
+
+async def test_events_track_endpoint_allows_html_export_event(app_client, monkeypatch):
+    from app.api import events
+
+    captured = []
+
+    async def fake_track(**kwargs):
+        captured.append(kwargs)
+
+    monkeypatch.setattr(events.event_collector, "track", fake_track)
+
+    r = await app_client.post(
+        "/api/events/track",
+        json={"event_type": "export.html", "event_data": {"message_count": 2}},
+    )
+
+    assert r.status_code == 200, r.text
+    assert captured[0]["event_type"] == "export.html"

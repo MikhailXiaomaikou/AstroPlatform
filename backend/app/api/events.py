@@ -7,7 +7,7 @@ import io
 import os
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
@@ -55,7 +55,7 @@ def _parse_period(period: str) -> timedelta:
 @router.post("/track")
 @limiter.limit("100/minute")
 async def track_event_endpoint(
-    request,
+    request: Request,
     payload: TrackEventRequest,
     user: User | None = Depends(get_optional_user),
 ):

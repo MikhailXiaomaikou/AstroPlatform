@@ -22,13 +22,20 @@ def resolve_ivoa_dataorigin(
     failures warn and return registry metadata rather than failing a connector.
     """
     supplements: dict[str, Any] = {}
-    try:
-        from astropy.io.votable.dataorigin import extract_data_origin
+    if _is_known_unsupported_payload(payload):
+        logger.debug(
+            "Skipping DataOrigin extraction for %s: unsupported payload type %s",
+            service_hint,
+            type(payload).__name__,
+        )
+    else:
+        try:
+            from astropy.io.votable.dataorigin import extract_data_origin
 
-        origin = extract_data_origin(payload)
-        supplements.update(_origin_to_dict(origin))
-    except Exception as exc:
-        logger.warning("DataOrigin resolver failed for %s: %s", service_hint, exc)
+            origin = extract_data_origin(payload)
+            supplements.update(_origin_to_dict(origin))
+        except Exception as exc:
+            logger.warning("DataOrigin resolver failed for %s: %s", service_hint, exc)
 
     return dataset_from_registry(
         service_hint,
@@ -36,6 +43,14 @@ def resolve_ivoa_dataorigin(
         archive_version=archive_version,
         supplements=supplements,
     )
+
+
+def _is_known_unsupported_payload(payload: Any) -> bool:
+    try:
+        from astropy.table import Table
+    except Exception:
+        return False
+    return isinstance(payload, Table)
 
 
 def _origin_to_dict(origin: Any) -> dict[str, Any]:

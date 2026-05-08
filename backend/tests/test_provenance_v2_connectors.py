@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from astropy.table import Table
 import pytest
 
@@ -90,6 +92,24 @@ def test_connector_object_rows_carry_dataset_provenance_for_all_active_sources()
     assert alma_obj.extra["measurement_scope"] == "observation_metadata_only"
     assert alma_obj.extra["line_measurements_available"] is False
     assert alma_obj.extra["_provenance_dataset"]["standard"] == "ObsCore"
+
+
+def test_dataorigin_resolver_skips_astropy_table_warning(caplog):
+    from app.services.provenance_v2.ivoa_dataorigin_resolver import resolve_ivoa_dataorigin
+
+    caplog.set_level(logging.WARNING, logger="app.services.provenance_v2.ivoa_dataorigin_resolver")
+
+    dataset = resolve_ivoa_dataorigin(
+        Table({"RAJ2000": [1.0], "DEJ2000": [2.0]}),
+        service_hint="vizier",
+        archive_version="VizieR",
+    )
+
+    assert dataset is not None
+    assert dataset["service_key"] == "vizier"
+    assert dataset["archive_version"] == "VizieR"
+    assert dataset["source_authority"] == "datacenter_ivoa_compliant"
+    assert "DataOrigin resolver failed" not in caplog.text
 
 
 def test_search_result_row_dataset_is_lifted_into_nested_provenance():
