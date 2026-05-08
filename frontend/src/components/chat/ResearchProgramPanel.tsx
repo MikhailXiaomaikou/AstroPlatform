@@ -12,6 +12,11 @@ type ResearchPlan = {
   model_families?: string[];
   executable_level?: string;
   blocking_gaps?: string[];
+  alpha_test_protocol?: {
+    supported_scope?: string;
+    not_supported?: string;
+    required_artifacts?: string[];
+  };
   proposed_experiment_matrix?: {
     label?: string;
     dataset_keys?: string[];
@@ -95,6 +100,14 @@ function PlanView({ plan }: { plan: ResearchPlan }) {
           </div>
         </div>
       ) : null}
+      {plan.alpha_test_protocol ? (
+        <div>
+          <strong style={{ color: "var(--color-text-primary)" }}>Alpha test protocol</strong>
+          <div style={{ color: "var(--color-text-tertiary)", marginTop: 3 }}>
+            {plan.alpha_test_protocol.supported_scope || "Registered-data exploratory research only."}
+          </div>
+        </div>
+      ) : null}
       {asArray<string>(plan.blocking_gaps).length ? (
         <div style={{ color: "#8a5b00" }}>
           {asArray<string>(plan.blocking_gaps).slice(0, 3).map((gap) => <div key={gap}>⚠ {gap}</div>)}
@@ -120,7 +133,11 @@ function MatrixView({ result }: { result: Record<string, unknown> }) {
           <strong style={{ color: "var(--color-text-primary)" }}>{String(cell.label || `Cell ${index + 1}`)}</strong>
           <div style={{ color: "var(--color-text-tertiary)" }}>
             {asArray<string>(cell.dataset_keys).join(" + ")} · {String(cell.model || "lcdm")} ·{" "}
-            {cell.publication_ready ? "compressed preliminary posterior" : String(cell.execution_level || "not runnable")}
+            {cell.publication_ready
+              ? "compressed preliminary posterior"
+              : String(cell.execution_level || "not runnable") === "config_only"
+                ? "configuration only, no posterior run yet"
+                : String(cell.execution_level || "not runnable")}
           </div>
         </div>
       ))}
@@ -166,7 +183,13 @@ function FactCheckView({ result }: { result: Record<string, unknown> }) {
       {claims.slice(0, 8).map((claim, index) => (
         <div
           key={`${claim.text || index}`}
-          title={String(claim.safe_rewrite || "No rewrite needed.")}
+          title={[
+            `Claim: ${String(claim.text || "Claim")}`,
+            `Status: ${String(claim.status || "unknown")}`,
+            `Support: ${String(claim.support_level || "not_applicable")}`,
+            `Evidence: ${asArray<string>(claim.evidence_ids).join(", ") || "none"}`,
+            claim.safe_rewrite ? `Safe rewrite: ${String(claim.safe_rewrite)}` : "No rewrite needed.",
+          ].join("\n")}
           style={{ borderTop: "1px solid var(--color-border)", paddingTop: 5 }}
         >
           <div style={{ color: "var(--color-text-primary)" }}>{String(claim.text || "Claim")}</div>

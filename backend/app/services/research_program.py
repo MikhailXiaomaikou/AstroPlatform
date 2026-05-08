@@ -77,6 +77,24 @@ def plan_research_program(
             "What is not yet supported",
             "Next experiment",
         ],
+        "alpha_test_protocol": {
+            "supported_scope": (
+                "Exploratory research over registered observational-cosmology "
+                "data products and controlled runners."
+            ),
+            "not_supported": (
+                "Arbitrary paper reproduction, full external likelihood claims, "
+                "or posterior numbers from config-only / abstract-only evidence."
+            ),
+            "required_artifacts": [
+                "research plan",
+                "executed tool matrix",
+                "runnable / not-runnable cells",
+                "evidence graph",
+                "fact check report",
+                "local diagnostic bundle for blind tests",
+            ],
+        },
     }
     return {
         "success": True,
@@ -184,6 +202,17 @@ def run_research_matrix(
         "warnings": [
             "Research matrix uses executable compressed-likelihood cells where available; config-only cells are not numerical evidence.",
         ],
+        "failure_categories": [
+            "data unavailable",
+            "runner missing",
+            "wrong routing",
+            "unsupported numeric claim",
+            "source mismatch",
+            "formula/constant mismatch",
+            "result differs but explainable",
+            "hallucination",
+            "UI/process failure",
+        ],
         "__message_to_model__": (
             "Summarize only publication_ready cells as compressed-likelihood preliminary. "
             "For other cells, describe the missing runner/config gap."
@@ -217,6 +246,19 @@ def build_evidence_graph(
             "input_hash": _stable_hash(item.get("input") or item.get("tool_input") or {}),
         })
         if isinstance(result, dict):
+            result_id = f"result:{idx}:{tool}"
+            if result.get("publication_ready") is True:
+                nodes.append({
+                    "id": result_id,
+                    "type": "result",
+                    "tool": tool,
+                    "analysis_status": result.get("analysis_status"),
+                    "claim_scope": result.get("claim_scope"),
+                    "runner_hash": result.get("runner_hash") or result.get("config_hash"),
+                    "sampler": result.get("sampler"),
+                    "publication_ready": True,
+                })
+                edges.append({"from": result_id, "to": tool_id, "kind": "produced_by"})
             for dataset in _datasets_from_result(result):
                 ds_id = f"dataset:{dataset.get('key') or dataset.get('display_name')}"
                 if not any(node["id"] == ds_id for node in nodes):
@@ -238,10 +280,12 @@ def build_evidence_graph(
                         "id": claim_id,
                         "parameter": param,
                         "supporting_tool_run": tool_id,
+                        "supporting_result": result_id,
                         "scope": result.get("claim_scope"),
+                        "evidence_path": [claim_id, result_id, tool_id],
                     })
                     nodes.append({"id": claim_id, "type": "claim", "parameter": param})
-                    edges.append({"from": claim_id, "to": tool_id, "kind": "supported_by"})
+                    edges.append({"from": claim_id, "to": result_id, "kind": "supported_by"})
 
     if final_reply:
         for param in _numeric_claim_tokens(final_reply):
@@ -293,12 +337,14 @@ def verify_research_facts(
     payload_text = _tool_payload_text(tool_results)
     dataset_index = _dataset_index_from_tool_results(tool_results)
     ready_tools = _publication_ready_tool_ids(tool_results)
+    numeric_support = _numeric_support_from_tool_results(tool_results)
     claims = _fact_claims_from_reply(
         str(final_reply or ""),
         claimable=claimable,
         payload_text=payload_text,
         dataset_index=dataset_index,
         ready_tools=ready_tools,
+        numeric_support=numeric_support,
     )
 
     if not claims:
@@ -358,6 +404,7 @@ def export_research_report(
     datasets = _report_datasets(tool_results)
     citations = _report_citations(tool_results)
     manifest = _report_reproducibility_manifest(tool_results)
+    fact_report = _latest_fact_check_report(tool_results)
     lines = [
         f"# {report_title}",
         "",
@@ -400,6 +447,11 @@ def export_research_report(
         "## Claim Provenance",
         f"- Claimable parameters: {', '.join(graph.get('claimable_parameters', [])) if isinstance(graph, dict) else 'none'}",
         "",
+        "## Fact Verification",
+        f"- Status: {fact_report.get('status', 'not_run') if fact_report else 'not_run'}",
+        f"- Verified claims: {fact_report.get('verified_claim_count', 0) if fact_report else 0}",
+        f"- Unsupported/contradicted claims: {fact_report.get('unsupported_claim_count', 0) if fact_report else 0}",
+        "",
         "## Reproducibility Manifest",
         f"- Tool runs recorded: {len(manifest)}",
         "",
@@ -424,12 +476,27 @@ def export_research_report(
                 {"path": "research_report.md", "content_type": "text/markdown", "bytes": len(markdown.encode("utf-8"))},
                 {"path": "references.bib", "content_type": "text/x-bibtex"},
                 {"path": "reproducibility_manifest.json", "content_type": "application/json"},
+                {"path": "fact_check_report.json", "content_type": "application/json"},
             ],
             "unsupported_claim_policy": "omit_from_results_or_move_to_limitations",
         },
         "word_count": len(markdown.split()),
         "__message_to_model__": "This is a report draft. It does not create new scientific evidence.",
     }
+
+
+def _latest_fact_check_report(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in reversed(tool_results):
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict):
+            continue
+        if isinstance(result.get("fact_check_report"), dict):
+            return result["fact_check_report"]
+        if result.get("analysis_status") == "FACT_CHECK_READY":
+            return result
+    return {}
 
 
 def _report_datasets(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -762,6 +829,7 @@ def _fact_claims_from_reply(
     payload_text: str,
     dataset_index: dict[str, dict[str, Any]],
     ready_tools: set[str],
+    numeric_support: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
     claims: list[dict[str, Any]] = []
     if not text.strip():
@@ -776,13 +844,20 @@ def _fact_claims_from_reply(
         for token in _numeric_claim_tokens(stripped):
             token_key = token.lower()
             if token_key in claimable or _token_supported_by_alias(token_key, claimable):
+                claimed_value = _numeric_value_for_token(stripped, token_key)
+                value_status, value_rewrite, evidence_ids = _verify_claimed_numeric_value(
+                    token_key,
+                    claimed_value,
+                    numeric_support,
+                    sorted(ready_tools)[:5],
+                )
                 claims.append(_fact_claim(
                     stripped,
                     "numeric",
-                    "verified",
+                    value_status,
                     "tool_run",
-                    sorted(ready_tools)[:5],
-                    "",
+                    evidence_ids,
+                    value_rewrite,
                 ))
             else:
                 claims.append(_fact_claim(
@@ -880,13 +955,169 @@ def _line_is_gap_statement(line: str) -> bool:
 
 def _token_supported_by_alias(token: str, claimable: set[str]) -> bool:
     aliases = {
-        "omega_m": {"omegam", "omega_m", "Ωm".lower()},
+        "omegam": {"omegam", "omega_m", "om0", "Ωm".lower()},
+        "omega_m": {"omegam", "omega_m", "om0", "Ωm".lower()},
         "h0": {"h0", "H0".lower()},
         "tension": {"tension", "s8_tension", "h0_tension", "omegam_tension"},
         "p_value": {"p_value", "pearson_p", "spearman_p"},
     }
     candidates = aliases.get(token, {token})
     return bool(candidates & claimable)
+
+
+def _numeric_support_from_tool_results(tool_results: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Collect scalar summaries from publication-ready current-turn results."""
+    support: dict[str, list[dict[str, Any]]] = {}
+    for idx, item in enumerate(tool_results):
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict):
+            continue
+        if result.get("publication_ready") is not True or result.get("__do_not_claim__") is True:
+            continue
+        tool_id = str(item.get("id") or f"tool_run:{idx}:{item.get('tool') or item.get('name') or 'tool'}")
+        _collect_numeric_support_from_result(result, tool_id, support)
+    return support
+
+
+def _collect_numeric_support_from_result(
+    result: dict[str, Any],
+    tool_id: str,
+    support: dict[str, list[dict[str, Any]]],
+) -> None:
+    for source_name in ("parameters", "posterior_summary", "derived_params"):
+        source = result.get(source_name)
+        if not isinstance(source, dict):
+            continue
+        for raw_name, summary in source.items():
+            if not isinstance(summary, dict):
+                continue
+            median = _coerce_float(
+                summary.get("median")
+                if summary.get("median") is not None
+                else summary.get("mean")
+                if summary.get("mean") is not None
+                else summary.get("value")
+            )
+            if median is None:
+                continue
+            record = {
+                "parameter": str(raw_name),
+                "median": median,
+                "hdi_94": summary.get("hdi_94"),
+                "evidence_id": tool_id,
+                "source": source_name,
+            }
+            for alias in _parameter_aliases(str(raw_name)):
+                support.setdefault(alias, []).append(record)
+    matrix = result.get("matrix")
+    if isinstance(matrix, list):
+        for cell_index, cell in enumerate(matrix):
+            if (
+                isinstance(cell, dict)
+                and cell.get("publication_ready") is True
+                and isinstance(cell.get("result"), dict)
+            ):
+                _collect_numeric_support_from_result(
+                    cell["result"],
+                    f"{tool_id}:cell:{cell_index}",
+                    support,
+                )
+
+
+def _parameter_aliases(name: str) -> set[str]:
+    key = name.lower().replace("omega_m", "omegam").replace("om0", "omegam")
+    aliases = {key}
+    if key in {"h0", "h_0"}:
+        aliases.update({"h0", "h_0"})
+    if key in {"omegam", "ωm"}:
+        aliases.update({"omegam", "omega_m", "om0", "ωm"})
+    if key == "s8":
+        aliases.add("s8")
+    if key in {"sigma8", "σ8"}:
+        aliases.update({"sigma8", "σ8"})
+    if key in {"w0", "w_0"}:
+        aliases.update({"w0", "w_0"})
+    if key in {"wa", "w_a"}:
+        aliases.update({"wa", "w_a"})
+    return aliases
+
+
+def _numeric_value_for_token(line: str, token: str) -> float | None:
+    token_patterns = {
+        "h0": r"H\s*_?\s*0|H₀",
+        "omegam": r"Ω\s*_?\s*m|Omega\s*_?\s*m|omegam|Om0",
+        "omega_m": r"Ω\s*_?\s*m|Omega\s*_?\s*m|omegam|Om0",
+        "s8": r"S\s*_?\s*8",
+        "sigma8": r"sigma\s*_?\s*8|σ\s*_?\s*8",
+        "w0": r"w\s*_?\s*0",
+        "wa": r"w\s*_?\s*a",
+        "slope": r"slope|斜率|β",
+        "scatter": r"scatter|intrinsic scatter|离散",
+    }
+    pattern = token_patterns.get(token)
+    if not pattern:
+        return None
+    match = re.search(
+        rf"(?:{pattern})\s*(?:=|≈|~|is|:)?\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)",
+        line,
+        re.I,
+    )
+    if not match:
+        return None
+    return _coerce_float(match.group(1))
+
+
+def _verify_claimed_numeric_value(
+    token: str,
+    claimed_value: float | None,
+    numeric_support: dict[str, list[dict[str, Any]]],
+    fallback_evidence_ids: list[str],
+) -> tuple[str, str, list[str]]:
+    supported = numeric_support.get(token) or numeric_support.get(token.lower()) or []
+    if not supported:
+        if claimed_value is None:
+            return "verified", "", fallback_evidence_ids
+        return (
+            "unsupported",
+            f"Remove the quoted {token} value, or rerun a publication-ready tool that returns a scalar summary for {token}.",
+            fallback_evidence_ids,
+        )
+    evidence_ids = sorted({str(item.get("evidence_id")) for item in supported if item.get("evidence_id")})
+    if claimed_value is None:
+        return "verified", "", evidence_ids or fallback_evidence_ids
+    for item in supported:
+        if _numeric_value_matches_summary(claimed_value, item):
+            return "verified", "", evidence_ids or fallback_evidence_ids
+    median = supported[0].get("median")
+    return (
+        "contradicted",
+        f"Replace the quoted {token} value with the current-turn tool value near {median}, or omit the number.",
+        evidence_ids or fallback_evidence_ids,
+    )
+
+
+def _numeric_value_matches_summary(value: float, summary: dict[str, Any]) -> bool:
+    hdi = summary.get("hdi_94")
+    if isinstance(hdi, list | tuple) and len(hdi) >= 2:
+        low = _coerce_float(hdi[0])
+        high = _coerce_float(hdi[1])
+        if low is not None and high is not None:
+            width = max(abs(high - low), 1e-12)
+            return (low - 0.05 * width) <= value <= (high + 0.05 * width)
+    median = _coerce_float(summary.get("median"))
+    if median is None:
+        return False
+    tolerance = max(abs(median) * 0.02, 0.02)
+    return abs(value - median) <= tolerance
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _latest_evidence_graph(tool_results: list[dict[str, Any]]) -> dict[str, Any]:

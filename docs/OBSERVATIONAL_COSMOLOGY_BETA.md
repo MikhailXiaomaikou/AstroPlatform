@@ -10,6 +10,12 @@ Standard Astro is an AI-native astronomy research platform for archive discovery
 
 The current cosmology focus is not to claim production-grade full-likelihood inference. The goal is to test whether the platform’s research-mode planning, compressed-likelihood workflows, provenance model, and fact-checking guardrails are scientifically useful and honest enough for real exploratory work.
 
+The alpha-test contract is deliberately narrow: registered datasets and
+controlled runners may support exploratory compressed-likelihood results;
+config-only entries, paper abstracts, old chat context, and user assumptions
+may support background or scope notes only. A useful failure is one that says
+which dataset, covariance, runner, or citation is missing.
+
 ## Who we hope will try it
 
 We especially want feedback from researchers, postdocs, PhD students, and research software developers working on or near:
@@ -31,6 +37,7 @@ Please try one or more of these workflows:
 3. Ask it to build or inspect an evidence graph for a numerical cosmology claim.
 4. Ask it to compare DESI / Pantheon+ / Planck / weak-lensing evidence without overclaiming unsupported results.
 5. Ask it to draft a short research summary and check whether unsupported claims are clearly marked.
+6. Ask it to produce a research plan, executed matrix, evidence graph, fact-check report, and local diagnostic bundle for a blind-test prompt.
 
 ## Feedback we need most
 

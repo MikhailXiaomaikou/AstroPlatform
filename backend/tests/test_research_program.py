@@ -55,6 +55,10 @@ def test_evidence_graph_links_claims_to_publication_ready_runs() -> None:
     assert "omegam" in graph["claimable_parameters"]
     assert graph["unsupported_claim_count"] == 0
     assert graph["evidence_graph"]["supported_claims"]
+    assert any(node["type"] == "result" for node in graph["evidence_graph"]["nodes"])
+    first_claim = graph["evidence_graph"]["supported_claims"][0]
+    assert first_claim["supporting_result"].startswith("result:")
+    assert first_claim["evidence_path"][0].startswith("claim:")
 
 
 def test_evidence_graph_flags_unsupported_final_reply_claims() -> None:
@@ -105,6 +109,45 @@ def test_fact_verifier_accepts_publication_ready_matrix_claim_scope() -> None:
 
     assert report["status"] in {"passed", "warning"}
     assert any(claim["status"] == "verified" for claim in report["claims"])
+
+
+def test_fact_verifier_blocks_numeric_value_contradicting_ready_chain() -> None:
+    from app.services.research_program import verify_research_facts
+
+    tool_results = [
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "success": True,
+                "publication_ready": True,
+                "claim_scope": "compressed_likelihood_preliminary",
+                "parameters": {
+                    "H0": {"median": 68.1, "hdi_94": [67.5, 68.7]},
+                    "omegam": {"median": 0.31, "hdi_94": [0.29, 0.33]},
+                },
+                "datasets_used": [
+                    {"key": "desi_dr1_bao", "display_name": "DESI DR1 BAO"},
+                ],
+            },
+        }
+    ]
+
+    report = verify_research_facts(
+        tool_results=tool_results,
+        final_reply=(
+            "The compressed-likelihood preliminary result gives "
+            "H0 = 74.0 km/s/Mpc and Ωm = 0.31."
+        ),
+    )
+
+    assert report["status"] == "blocked"
+    assert any(
+        claim["status"] == "contradicted"
+        and "H0" in claim["text"]
+        and "current-turn tool value" in claim["safe_rewrite"]
+        for claim in report["claims"]
+    )
+    assert any(claim["status"] == "verified" and "Ωm" in claim["text"] for claim in report["claims"])
 
 
 def test_fact_verifier_marks_source_not_in_current_turn_unsupported() -> None:
@@ -403,6 +446,8 @@ def test_export_research_report_includes_bibtex_and_manifest() -> None:
     assert result["datasets"][0]["key"] == "planck2018_compressed"
     assert result["reproducibility_manifest"][0]["run_id"] == "run-1"
     assert result["report_package"]["files"][0]["path"] == "research_report.md"
+    assert any(file["path"] == "fact_check_report.json" for file in result["report_package"]["files"])
+    assert "## Fact Verification" in result["markdown"]
 
 
 def test_tool_gap_matrix_knows_research_export_package_is_available() -> None:

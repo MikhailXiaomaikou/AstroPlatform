@@ -98,15 +98,21 @@ numeric validation, citation validation, rate limits, and UI status chips.
 2. `run_research_matrix` executes only the registered compressed-likelihood
    cells that can run today. Config-only or external-likelihood cells are
    preserved in the matrix as gaps, not silently approximated.
-3. `build_evidence_graph` links claimable parameters back to current-turn
+3. `build_evidence_graph` links claimable parameters through explicit
+   claim → result → tool-run → dataset/citation paths, including current-turn
    publication-ready tool runs, dataset versions, citations, and runner hashes.
 4. `verify_research_facts` checks draft claims against the evidence graph,
    current-turn tools, registered datasets, extracted tables, and citation
-   identifiers. Unsupported or contradicted facts are surfaced with safe
-   rewrite guidance.
+   identifiers. For scalar posterior parameters it also checks the quoted
+   value against the current-turn summary/HDI, so a supported parameter name
+   does not automatically validate a wrong number. Unsupported or contradicted
+   facts are surfaced with safe rewrite guidance.
 5. Final prose must follow the research copilot structure: what can be tested
    now, executed analyses, preliminary findings, robustness, drivers, unsupported
    pieces, and the next experiment.
+6. Alpha-testing outputs must include the research plan, executed matrix,
+   runnable/not-runnable cells, evidence graph, fact-check report, and local
+   diagnostic bundle for blind-test review.
 
 **Paper-to-tool mining workflow**
 

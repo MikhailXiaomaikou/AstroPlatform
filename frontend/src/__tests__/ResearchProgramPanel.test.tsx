@@ -20,6 +20,9 @@ describe("ResearchProgramPanel", () => {
             proposed_experiment_matrix: [
               { label: "BAO + SN + CMB", dataset_keys: ["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"], model: "lcdm" },
             ],
+            alpha_test_protocol: {
+              supported_scope: "Exploratory registered-data research.",
+            },
             blocking_gaps: ["Pantheon+ requires external chains."],
           },
         }}
@@ -30,6 +33,7 @@ describe("ResearchProgramPanel", () => {
     expect(screen.getByText("DESI DR1 BAO")).toBeInTheDocument();
     expect(screen.getByText("Pantheon+")).toBeInTheDocument();
     expect(screen.getAllByText(/BAO \+ SN \+ CMB/).length).toBeGreaterThan(0);
+    expect(screen.getByText("Alpha test protocol")).toBeInTheDocument();
     expect(screen.getByText(/Pantheon\+ requires external chains/)).toBeInTheDocument();
   });
 
@@ -53,6 +57,7 @@ describe("ResearchProgramPanel", () => {
     expect(screen.getByText("runnable cells ready")).toBeInTheDocument();
     expect(screen.getByText(/1 \/ 2 ready/)).toBeInTheDocument();
     expect(screen.getByText(/BAO only/)).toBeInTheDocument();
+    expect(screen.getByText(/configuration only, no posterior run yet/)).toBeInTheDocument();
   });
 
   it("shows evidence graph claimability", () => {
