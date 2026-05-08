@@ -8,13 +8,13 @@ Standard Astro is a full-stack astronomy research platform with four runtime lay
 
 1. **Frontend SPA** — React 19 + TypeScript (strict) served by Vite. Pages: Data Browser, AI Chat (assistant), Pipeline Studio, ADQL, Workspace, Papers, Observations, Team, Account, Billing, Settings, Research History, Alert Dashboard, Anomaly Explorer, Landing, Help, Auth, Shared Session.
 
-2. **FastAPI backend** — Single process, 28 domain routers. SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
+2. **FastAPI backend** — Single process, 33 domain routers (`scripts/stats.sh` for live count). SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
 
 3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem or S3 for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines.
 
 4. **External services** — 24 astronomy connector keys, with 6 provenance-v2 active sources (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`) and 18 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local). ALMA is active for Science Archive observation metadata, not derived line luminosity/FWHM measurements.
 
-Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **85-tool catalog** (§3).
+Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **87-tool catalog** (§3; live count via `scripts/stats.sh`).
 
 ### Runtime topology
 
@@ -215,7 +215,7 @@ Strict build (`tsc -b && vite build`) is non-negotiable: `strict`, `noUnusedLoca
 
 Entrypoint: [`backend/app/main.py`](./backend/app/main.py). FastAPI app factory + middleware stack (CORS, rate limit, event tracking, observability); migrates any missing columns at startup via `_migrate_add_columns` (SQLite/PG safe).
 
-### API domains (28 routers)
+### API domains (33 routers — live count via `scripts/stats.sh`)
 
 | Router | Role |
 |---|---|
@@ -250,9 +250,9 @@ Entrypoint: [`backend/app/main.py`](./backend/app/main.py). FastAPI app factory 
 - [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Calls the user-selected model profile, logs cost/latency/model/fallback metadata, and falls back across backends only after the selected backend fails. The local OpenAI CLI path is enabled only with `OPENAI_CLI_ENABLED=1`; it runs the CLI in ephemeral read-only mode and still returns JSON tool calls to the Standard Astro backend, so network/archive searches, ADQL/database queries, Python analysis, plotting, and provenance checks remain server-side. Raises `InferenceError("No configured AI backends are available…")` on no-key paths (now surfaced pre-send by F4.2).
 - `app/ai/agents/*` — Specialist prompt fragments (data, analysis, literature, observation, visualization, spectrum).
 - [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **87-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
-- [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), ~57 KB / ~14 k-token `SYSTEM_PROMPT` (46 sections), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser, and deterministic literature-table / `fit_line_lfr` follow-up for line-relation prompts when the model has found papers or fit-ready measurement caches but skipped the required tool.
+- [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), ~108 KB / ~27 k-token `SYSTEM_PROMPT` (59 sections — live counts via `scripts/stats.sh`), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser, and deterministic literature-table / `fit_line_lfr` follow-up for line-relation prompts when the model has found papers or fit-ready measurement caches but skipped the required tool.
 
-#### Tool catalogue (85)
+#### Tool catalogue (87 — live count via `scripts/stats.sh`)
 
 Domain-specific additions include:
 - **`query_gaia_cluster`** — Composes Gaia DR3 member-selection ADQL from structured params (center name → Sesame/SIMBAD resolve → parallax + PM + RUWE + G-mag cuts). Keeps SQL out of the LLM's hot path so F2.1 EMPTY banners fire cleanly on 0-row returns.

@@ -1,5 +1,10 @@
 # Standard Astro
 
+> **Currently focused on observational cosmology workflows.** General-purpose
+> astronomy modules (transit fitting, photometry, isochrones, etc.) are gated
+> behind the `ASTRO_RESEARCH_FOCUS` feature flag (set to `cosmology` by default;
+> set to `general` to re-enable the full toolkit).
+
 AI-native astronomy research platform for archive discovery, analysis,
 statistical inference, provenance tracking, collaboration, and paper export.
 
