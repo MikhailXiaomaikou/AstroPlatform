@@ -1,6 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────
+# render.yaml — synced to actual Render deployment 2026-05-08.
+#
+# Currently deployed on Render: 3 services + 1 database.
+#   - standard-astro-db (Basic-256mb)
+#   - standard-astro-backend (Standard, 1 CPU / 2 GB)
+#   - standard-astro-frontend (Static)
+#
+# NOT deployed (yaml definitions kept commented at the bottom for the
+# day they're needed):
+#   - standard-astro-celery-worker
+#   - standard-astro-celery-beat
+#   - standard-astro-redis
+#
+# REDIS_URL on backend is `sync: false` — set it in the Render
+# dashboard if you want internal-cache via external Upstash/redis-cloud;
+# leaving it unset is also fine, connector_cache auto-falls back to
+# SQLite when Redis is unreachable.
+#
+# PIPELINE_MODE remains "celery" by code default but no worker is
+# deployed; heavy pipeline DAG runs (BayesianFit / ImageStack / etc.)
+# will return 503 until a Celery worker is brought up.  The cosmology
+# chat path does NOT go through Celery and is unaffected.
+# ─────────────────────────────────────────────────────────────────────
+
 databases:
   - name: standard-astro-db
-    plan: free
+    plan: basic-256mb           # 1 GB storage / 256 MB RAM / 0.1 CPU
     databaseName: astro
     user: astro
 
@@ -11,10 +36,10 @@ services:
     runtime: docker
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
-    plan: free
-    # R18: /health/deep verifies DB + Redis + AI backend so Render's
-    # auto-rollback catches bad deploys that would break chat even when
-    # the process itself is up.
+    plan: standard              # 2 GB RAM / 1 CPU
+    # /health/deep verifies DB + AI backend so Render's auto-rollback
+    # catches bad deploys that would break chat even when the process
+    # itself is up.
     healthCheckPath: /health/deep
     envVars:
       - key: ENV
@@ -23,11 +48,13 @@ services:
         fromDatabase:
           name: standard-astro-db
           property: connectionString
+      # REDIS_URL: internal redis service not deployed.  Set this in
+      # the Render dashboard (e.g. Upstash rediss://...) if you want
+      # Redis-backed connector_cache + Celery; otherwise the auto
+      # backend falls back to SQLite cache and the (currently absent)
+      # Celery worker stays unused.
       - key: REDIS_URL
-        fromService:
-          name: standard-astro-redis
-          type: redis
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: PIPELINE_MODE
@@ -41,74 +68,18 @@ services:
       - key: GOOGLE_CLIENT_ID
         sync: false
       # PART AI Phase 5 #2 Track 2 — external_cobaya likelihood backend.
-      # COBAYA_PACKAGES_PATH points cobaya at a writable cache for likelihood
-      # data tables. It must match the directory created in backend/Dockerfile
-      # (/app/cobaya_packages, owned by the non-root `app` user).
+      # COBAYA_PACKAGES_PATH points cobaya at a writable cache for
+      # likelihood data tables. It must match the directory created in
+      # backend/Dockerfile (/app/cobaya_packages, owned by `app` user).
       - key: COBAYA_PACKAGES_PATH
         value: /app/cobaya_packages
-      # Free / starter dynos have limited CPU; pin OpenMP thread count so a
-      # CAMB call doesn't fork worker threads that get OOM-killed.
+      # CAMB will fork OpenMP threads otherwise; pin to 1 so a CAMB
+      # call doesn't blow past container memory.
       - key: OMP_NUM_THREADS
         value: "1"
-      # Step 1 ships the dependency only — the cobaya subprocess runner
-      # is shipped in step 2 and only takes effect once this flag flips on.
+      # Master flag for the cobaya subprocess runner. Off by default.
       - key: EXTERNAL_COBAYA_ENABLED
         value: "false"
-
-  # ── Celery Worker ──
-  - type: worker
-    name: standard-astro-celery-worker
-    runtime: docker
-    dockerfilePath: backend/Dockerfile
-    dockerContext: backend
-    plan: free
-    dockerCommand: celery -A celery_worker worker --loglevel=info --concurrency=2
-    envVars:
-      - key: ENV
-        value: production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: standard-astro-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: standard-astro-redis
-          type: redis
-          property: connectionString
-      - key: JWT_SECRET
-        sync: false
-      - key: SANDBOX_BACKEND
-        value: subprocess
-      # PART AI Phase 5 #2 Track 2 — same cobaya env as the API container so
-      # that workflow-checkpointed external_cobaya runs that resume on the
-      # Celery worker share the same likelihood cache layout.
-      - key: COBAYA_PACKAGES_PATH
-        value: /app/cobaya_packages
-      - key: OMP_NUM_THREADS
-        value: "1"
-      - key: EXTERNAL_COBAYA_ENABLED
-        value: "false"
-
-  # ── Celery Beat (scheduler) ──
-  - type: worker
-    name: standard-astro-celery-beat
-    runtime: docker
-    dockerfilePath: backend/Dockerfile
-    dockerContext: backend
-    plan: free
-    dockerCommand: celery -A celery_worker beat --loglevel=info
-    envVars:
-      - key: ENV
-        value: production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: standard-astro-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: standard-astro-redis
-          type: redis
-          property: connectionString
 
   # ── Frontend ──
   - type: web
@@ -130,9 +101,70 @@ services:
       - key: VITE_GOOGLE_CLIENT_ID
         sync: false
 
-  # ── Redis ──
-  - type: redis
-    name: standard-astro-redis
-    plan: free
-    maxmemoryPolicy: allkeys-lru
-    ipAllowList: []
+# ─────────────────────────────────────────────────────────────────────
+# NOT-DEPLOYED service templates (commented out 2026-05-08).
+#
+# Bring these back when the platform actually needs Celery async tasks
+# (heavy pipeline nodes / scheduled jobs / Redis pub-sub).  When you
+# uncomment, also flip backend REDIS_URL above from `sync: false` back
+# to `fromService standard-astro-redis`.
+# ─────────────────────────────────────────────────────────────────────
+#
+#   # ── Celery Worker ──
+#   - type: worker
+#     name: standard-astro-celery-worker
+#     runtime: docker
+#     dockerfilePath: backend/Dockerfile
+#     dockerContext: backend
+#     plan: free
+#     dockerCommand: celery -A celery_worker worker --loglevel=info --concurrency=2
+#     envVars:
+#       - key: ENV
+#         value: production
+#       - key: DATABASE_URL
+#         fromDatabase:
+#           name: standard-astro-db
+#           property: connectionString
+#       - key: REDIS_URL
+#         fromService:
+#           name: standard-astro-redis
+#           type: redis
+#           property: connectionString
+#       - key: JWT_SECRET
+#         sync: false
+#       - key: SANDBOX_BACKEND
+#         value: subprocess
+#       - key: COBAYA_PACKAGES_PATH
+#         value: /app/cobaya_packages
+#       - key: OMP_NUM_THREADS
+#         value: "1"
+#       - key: EXTERNAL_COBAYA_ENABLED
+#         value: "false"
+#
+#   # ── Celery Beat (scheduler) ──
+#   - type: worker
+#     name: standard-astro-celery-beat
+#     runtime: docker
+#     dockerfilePath: backend/Dockerfile
+#     dockerContext: backend
+#     plan: free
+#     dockerCommand: celery -A celery_worker beat --loglevel=info
+#     envVars:
+#       - key: ENV
+#         value: production
+#       - key: DATABASE_URL
+#         fromDatabase:
+#           name: standard-astro-db
+#           property: connectionString
+#       - key: REDIS_URL
+#         fromService:
+#           name: standard-astro-redis
+#           type: redis
+#           property: connectionString
+#
+#   # ── Redis ──
+#   - type: redis
+#     name: standard-astro-redis
+#     plan: free
+#     maxmemoryPolicy: allkeys-lru
+#     ipAllowList: []
