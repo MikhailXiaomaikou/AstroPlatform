@@ -11,7 +11,6 @@ Covers pure functions in:
 - app.connectors.panstarrs (_safe_float with sentinel)
 """
 
-import math
 from unittest.mock import patch
 
 import numpy as np
@@ -719,7 +718,7 @@ class TestEnsembleDetection:
         assert "anomaly_features" in result.columns
         # Anomalies sorted to top
         if result["is_anomaly"].any():
-            assert result["is_anomaly"].iloc[0] is True or result["is_anomaly"].iloc[0] == True
+            assert bool(result["is_anomaly"].iloc[0])
 
 
 # =====================================================================
@@ -1734,11 +1733,12 @@ class TestCodeExecutor:
 
     def test_check_memory_no_warning(self):
         import io as _io
-        from app.services.code_executor import _check_memory
+        from app.services import code_executor
 
         stream = _io.StringIO()
-        usage = _check_memory(stream)
+        usage = code_executor._check_memory(stream)
         assert isinstance(usage, int)
+        assert stream.getvalue() == ""
 
     def test_execute_python_simple(self):
         from app.services.code_executor import execute_python

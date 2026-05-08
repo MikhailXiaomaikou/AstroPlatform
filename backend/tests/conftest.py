@@ -15,6 +15,21 @@ from app.models.schemas import User
 from app.utils.usernames import username_from_email
 
 
+@pytest.fixture(autouse=True)
+def stable_code_executor_memory(monkeypatch):
+    """Keep code-executor tests independent of full-suite pytest RSS.
+
+    The production sandbox memory guard intentionally checks the current
+    process RSS. A full pytest run imports heavy astronomy/ML libraries before
+    many sandbox tests execute, which can push the test runner itself above the
+    production hard limit. These tests exercise sandbox behavior, not pytest's
+    accumulated memory footprint.
+    """
+    from app.services import code_executor
+
+    monkeypatch.setattr(code_executor, "_get_memory_usage_bytes", lambda: 64 * 1024 * 1024)
+
+
 # ── In-memory SQLite engine (per-test-session) ──
 
 TEST_DB_URL = "sqlite+aiosqlite://"
