@@ -1918,6 +1918,113 @@ def _draw_desi_bao_only_posterior(
     return posterior, best_chi2, proposal_ess, int(grid_samples.shape[0])
 
 
+def _draw_gaussian_centered_proposal(
+    rng: np.random.Generator,
+    parameter_order: list[str],
+    prior_bounds: dict[str, tuple[float, float]],
+    compressed_entries: list[CosmologyDatasetEntry],
+    proposal_count: int,
+    *,
+    inflation: float = 5.0,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Build a multivariate-Gaussian importance proposal centered on the
+    tightest compressed-likelihood entry overlapping ``parameter_order``.
+
+    Returns ``(samples, log_proposal_pdf)`` so the caller can apply the
+    importance correction ``log_w = -0.5 chi² - log q(theta)``.
+
+    Returns ``None`` when there is no compressed Gaussian to anchor on, or
+    when the chosen Gaussian's prior overlap is too small after rejection
+    (caller should fall back to uniform proposal).
+
+    Picks the tightest entry by sum-of-normalized-variances (per-parameter
+    σ relative to its prior box width) so we don't compare H0 σ in km/s/Mpc
+    to Ωm σ in dimensionless.  The chosen Gaussian's covariance is scaled
+    by ``inflation² = 25`` so the 5-σ tail covers wider BAO / SN posteriors
+    that combine with it.
+    """
+    best_entry: CosmologyDatasetEntry | None = None
+    best_trace = math.inf
+    best_local_idx: list[int] = []
+    best_sample_idx: list[int] = []
+    best_names: list[str] = []
+
+    for entry in compressed_entries:
+        spec = entry.compressed_likelihood
+        if spec is None:
+            continue
+        params = list(spec.parameters)
+        names = [n for n in params if n in parameter_order]
+        if not names:
+            continue
+        local_idx = [params.index(n) for n in names]
+        cov = np.asarray(spec.covariance, dtype=float)[np.ix_(local_idx, local_idx)]
+        scales = np.array(
+            [prior_bounds[n][1] - prior_bounds[n][0] for n in names], dtype=float
+        )
+        if not np.all(scales > 0):
+            continue
+        normalized_diag = np.diagonal(cov) / (scales ** 2)
+        trace_norm = float(np.sum(normalized_diag))
+        if trace_norm < best_trace:
+            best_entry = entry
+            best_trace = trace_norm
+            best_local_idx = local_idx
+            best_sample_idx = [parameter_order.index(n) for n in names]
+            best_names = names
+
+    if best_entry is None:
+        return None
+
+    spec = best_entry.compressed_likelihood
+    assert spec is not None  # narrowed by the search above
+    gaussian_mean = np.asarray(spec.mean, dtype=float)[best_local_idx]
+    gaussian_cov = np.asarray(spec.covariance, dtype=float)[
+        np.ix_(best_local_idx, best_local_idx)
+    ] * (inflation ** 2)
+    # Numerical jitter so multivariate_normal doesn't refuse near-singular
+    # covariance for one-parameter (1×1) Gaussians.
+    gaussian_cov = gaussian_cov + np.eye(len(best_names)) * 1e-12
+
+    sign, logdet = np.linalg.slogdet(gaussian_cov)
+    if sign <= 0 or not math.isfinite(logdet):
+        return None
+    inv_cov = np.linalg.inv(gaussian_cov)
+
+    # Reject anything outside the prior box.  A 5σ-inflated Gaussian centered
+    # well inside the box should keep ≥80% of draws; if it does not (e.g.
+    # Gaussian mean near the edge), bail and let the caller use uniform.
+    over = max(int(proposal_count * 1.5), proposal_count + 1)
+    samples = np.empty((over, len(parameter_order)), dtype=float)
+    gaussian_draws = rng.multivariate_normal(gaussian_mean, gaussian_cov, size=over)
+    for k, idx in enumerate(best_sample_idx):
+        samples[:, idx] = gaussian_draws[:, k]
+    for i, name in enumerate(parameter_order):
+        if i in best_sample_idx:
+            continue
+        low, high = prior_bounds[name]
+        samples[:, i] = rng.uniform(low, high, size=over)
+
+    in_box = np.ones(over, dtype=bool)
+    for i, name in enumerate(parameter_order):
+        low, high = prior_bounds[name]
+        in_box &= (samples[:, i] >= low) & (samples[:, i] <= high)
+    samples = samples[in_box]
+    if samples.shape[0] < proposal_count:
+        return None
+    samples = samples[:proposal_count]
+
+    diffs = samples[:, best_sample_idx] - gaussian_mean
+    log_q = (
+        -0.5 * np.einsum("ni,ij,nj->n", diffs, inv_cov, diffs)
+        - 0.5 * logdet
+        - 0.5 * len(best_names) * np.log(2.0 * np.pi)
+    )
+    # Uniform-prior dimensions contribute a constant log(1/(high-low)) which
+    # cancels out of the importance ratio; intentionally omitted.
+    return samples, log_q
+
+
 def _draw_importance_posterior(
     rng: np.random.Generator,
     parameter_order: list[str],
@@ -1927,8 +2034,25 @@ def _draw_importance_posterior(
     sample_count: int,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
     proposal_count = min(max(sample_count * 25, 80_000), 300_000)
-    samples = _draw_uniform_prior_samples(rng, parameter_order, prior_bounds, proposal_count)
-    chi2 = np.zeros(proposal_count, dtype=float)
+
+    # Gaussian-centered proposal when any compressed entry has a Gaussian
+    # likelihood overlapping the sampling parameters; otherwise fall back to
+    # uniform-prior proposal.  Without this, high-precision Gaussians like
+    # Planck compressed (σ_H0=0.54, σ_Ωm=0.0073) collapse importance ESS to
+    # ~1 because the uniform proposal puts almost no mass where the
+    # likelihood is non-negligible.
+    gaussian_proposal = _draw_gaussian_centered_proposal(
+        rng, parameter_order, prior_bounds, compressed_entries, proposal_count,
+    )
+    if gaussian_proposal is not None:
+        samples, log_proposal_pdf = gaussian_proposal
+    else:
+        samples = _draw_uniform_prior_samples(
+            rng, parameter_order, prior_bounds, proposal_count
+        )
+        log_proposal_pdf = np.zeros(samples.shape[0], dtype=float)
+
+    chi2 = np.zeros(samples.shape[0], dtype=float)
     for entry in bao_entries:
         if entry.key == "desi_dr1_bao":
             chi2 += _desi_dr1_bao_chi2_samples(samples, parameter_order)
@@ -1938,13 +2062,18 @@ def _draw_importance_posterior(
         compressed_entries,
     )
     chi2 += extra_chi2
-    finite = np.isfinite(chi2)
+    finite = np.isfinite(chi2) & np.isfinite(log_proposal_pdf)
     if not np.any(finite):
         raise ValueError("importance sampler produced no finite likelihood values")
     samples = samples[finite]
     chi2 = chi2[finite]
+    log_proposal_pdf = log_proposal_pdf[finite]
     best_chi2 = float(np.min(chi2))
-    log_weights = -0.5 * (chi2 - best_chi2)
+    # Importance weight: w = p(theta|data) / q(theta).  The numerator is
+    # exp(-0.5 chi²); the denominator is the proposal pdf q.  Working in log-
+    # space and subtracting the max keeps the exp() inside float range.
+    log_weights = -0.5 * (chi2 - best_chi2) - log_proposal_pdf
+    log_weights -= float(np.max(log_weights))
     weights = np.exp(np.clip(log_weights, -745.0, 0.0))
     weight_sum = float(np.sum(weights))
     if not math.isfinite(weight_sum) or weight_sum <= 0.0:
