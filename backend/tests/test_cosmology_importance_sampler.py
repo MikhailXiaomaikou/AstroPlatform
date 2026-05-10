@@ -1,19 +1,27 @@
 """Importance-sampler regression tests for compressed-likelihood combos.
 
-Workflow 2 smoke test (2026-05-09) showed BAO + Planck-compressed CMB
-collapsing ``proposal_ess`` to ~1 against the 400 publication threshold.
-Root cause: ``_draw_importance_posterior`` used a uniform-on-prior-box
-proposal, but Planck's compressed Gaussian σ_H0=0.54 / σ_Ωm=0.0073
-occupies ~0.04% of the (H0, Ωm) prior volume, so almost no proposal
-mass landed where the joint likelihood was non-negligible.
+History:
 
-Fix: when any compressed entry has a Gaussian likelihood overlapping the
-sampling parameters, draw the proposal from a 5σ-inflated multivariate
-Gaussian centered on the tightest such entry, and apply the standard
-importance correction ``log w = -0.5 chi² - log q(theta)``.
+- 2026-05-09 (commit 3fd9f76): Workflow 2 smoke test showed BAO + Planck-
+  compressed CMB collapsing ``proposal_ess`` to ~1 against the 400
+  publication threshold.  Root cause: ``_draw_importance_posterior``
+  used a uniform-on-prior-box proposal, but Planck's compressed Gaussian
+  σ_H0=0.54 / σ_Ωm=0.0073 occupies ~0.04% of the (H0, Ωm) prior volume.
+  Layer 1 fix introduced a 5σ-inflated multivariate-Gaussian proposal
+  centered on the tightest compressed entry.
 
-These tests lock the ESS recovery and prevent regressions back to the
-ESS=1 state.
+- 2026-05-10: Prod re-test still showed ESS≈40 even after the
+  Gaussian-centered proposal.  Root cause: the legacy 3-D test fixture
+  (H0, Ωm, rd) underspecified prod, where Planck also contributes
+  σ8 + S8 — so ``parameter_order`` is actually 5-D and the Gaussian
+  proposal has 4 inflated dimensions instead of 2.  Per-dim efficiency
+  σ_t/σ_p = 1/5 compounds: 3-D = 1/25, 5-D = 1/625, ESS drops 25×.
+  Layer 1 follow-up: shrink default ``inflation`` from 5.0 to 2.5 so
+  per-dim efficiency = 0.4 and 4-dim compound = 2.5%, giving ESS in
+  the thousands while still covering BAO+Planck combined σ_H0 ≈ 0.5
+  (Planck-dominated; 2.5σ_Planck=1.35 is comfortable).
+
+Tests below pin both the 3-D fixture (legacy) and the 5-D prod path.
 """
 
 from __future__ import annotations
@@ -108,6 +116,55 @@ def test_importance_posterior_bao_plus_planck_recovers_ess():
     # tightens). Allow a 2σ_Planck = ±1.08 tolerance.
     assert 66.0 < float(np.median(posterior[:, 0])) < 69.0
     assert 0.27 < float(np.median(posterior[:, 1])) < 0.33
+
+
+def test_importance_posterior_bao_plus_planck_5d_with_sigma8_S8():
+    """Prod path regression: BAO+Planck with the **full 5-D parameter_order**
+    [H0, Ωm, rd, σ8, S8].
+
+    Why this needs its own test instead of just the 3-D one above:
+    Planck's compressed Gaussian advertises four parameters
+    (H0, Ωm, σ8, S8); ``_sampling_parameter_order`` includes them all
+    when Planck is in the dataset list, so the prod ``parameter_order``
+    is 5-D, not 3-D.  The Gaussian-centered proposal then has 4 inflated
+    dimensions.  At inflation=5.0 the per-dim efficiency 1/5 compounds
+    to 1/625 ≈ 0.16% and ESS ≈ 30 — exactly the prod regression seen
+    on 2026-05-10.  Inflation=2.5 gives 0.4⁴ ≈ 2.5%, ESS in the
+    hundreds-to-thousands range, comfortably over the 400 threshold.
+
+    Locks: 5-D ESS > 400, posterior centered on Planck-dominated
+    BAO+Planck combined H0 ≈ 67.4 / Ωm ≈ 0.31.
+    """
+    rng = np.random.default_rng(42)
+    # Mirror prod _sampling_parameter_order + _sanitize_runner_priors output
+    # for the BAO+CMB cell of the cosmology Research Matrix.
+    parameter_order = ["H0", "omegam", "rd", "sigma8", "S8"]
+    prior_bounds = {
+        "H0": (50.0, 90.0),
+        "omegam": (0.05, 0.6),
+        "rd": (130.0, 170.0),
+        "sigma8": (0.4, 1.2),
+        "S8": (0.4, 1.2),
+    }
+    bao_entries = [_entry("desi_dr1_bao")]
+    compressed_entries = [_entry("planck2018_compressed")]
+
+    posterior, _, proposal_ess, _, errors = _draw_importance_posterior(
+        rng, parameter_order, prior_bounds,
+        bao_entries, compressed_entries, sample_count=4000,
+    )
+    assert errors == [], f"Compressed-likelihood errors: {errors}"
+    assert proposal_ess > 400.0, (
+        f"5-D BAO+Planck ESS={proposal_ess:.1f} regressed below the 400 "
+        f"publication threshold.  Did inflation get bumped back up to 5.0? "
+        f"At inflation=5.0 the prod 4-Gaussian-dim path collapses to "
+        f"ESS ≈ 30; at inflation=2.5 it should stay > 400."
+    )
+    # H0 posterior must concentrate near Planck mean 67.36; 1σ_Planck = 0.54.
+    h0_median = float(np.median(posterior[:, 0]))
+    om_median = float(np.median(posterior[:, 1]))
+    assert 66.0 < h0_median < 69.0, f"H0 median {h0_median} drifted off Planck"
+    assert 0.27 < om_median < 0.34, f"Ωm median {om_median} drifted off Planck"
 
 
 def test_importance_posterior_planck_only_has_high_ess():

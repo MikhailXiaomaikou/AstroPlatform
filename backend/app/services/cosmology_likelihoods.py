@@ -1925,7 +1925,7 @@ def _draw_gaussian_centered_proposal(
     compressed_entries: list[CosmologyDatasetEntry],
     proposal_count: int,
     *,
-    inflation: float = 5.0,
+    inflation: float = 2.5,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Build a multivariate-Gaussian importance proposal centered on the
     tightest compressed-likelihood entry overlapping ``parameter_order``.
@@ -1939,9 +1939,13 @@ def _draw_gaussian_centered_proposal(
 
     Picks the tightest entry by sum-of-normalized-variances (per-parameter
     σ relative to its prior box width) so we don't compare H0 σ in km/s/Mpc
-    to Ωm σ in dimensionless.  The chosen Gaussian's covariance is scaled
-    by ``inflation² = 25`` so the 5-σ tail covers wider BAO / SN posteriors
-    that combine with it.
+    to Ωm σ in dimensionless.  Covariance is scaled by ``inflation² = 6.25``
+    so each Gaussian dim has σ_proposal = 2.5·σ_target.  Per-dim importance
+    efficiency ≈ σ_t/σ_p = 0.4; on prod's 4-Gaussian-dim path
+    (Planck H0/Ωm/σ8/S8) this gives 0.4⁴ ≈ 2.5%, ESS ≈ 2500 from a 100k
+    proposal.  Inflation=5 collapsed to 0.04% / ESS≈30 because
+    (1/5)⁴ ≈ 1.6e-3.  BAO+Planck combined σ_H0 ≈ 0.5 (Planck-dominated),
+    so 2.5σ_Planck = 1.35 still covers the joint posterior comfortably.
     """
     best_entry: CosmologyDatasetEntry | None = None
     best_trace = math.inf
