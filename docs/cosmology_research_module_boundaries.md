@@ -201,12 +201,20 @@ no logic beyond table lookup.
 
 **Dependencies**: stdlib only.
 
-**Consumers** (the file itself imports nothing project-internal, but
-these files import it):
-- `api/admin_literature` (preload caches)
-- `api/arxiv.py` (`_normalize_line_measurements` lensing fallback)
-- `api/chat.py` (SYSTEM_PROMPT line-relation idioms — currently
-  documented but not yet wired)
+**Consumers**: as of 2026-05-10 audit, **none in backend/frontend code**.
+Only `tests/test_line_relation_paper_warmup.py` imports the module.
+
+The original draft of this doc claimed `api/admin_literature`,
+`api/arxiv.py`, and `api/chat.py` were consumers — that was aspirational,
+not actual.  `rg -n "line_relation_paper_warmup|LineFamily" backend/ frontend/`
+returns only the module itself, its tests, and the export-list line.
+
+This makes the module a pure non-cosmology dormant-candidate.  Per the
+modular-platform strategy (cosmology is the first module, others are
+dormant), do NOT delete: it is paid-for capital that should move into
+`backend/app/prompts/modules/_dormant_high_z_galaxy/` or similar during
+Stage 2 M1 (modular surgery).  Leave the module + its tests in place
+until M1 routes them.
 
 **Boundary vs others**: completely independent. Sister file to
 `cii_paper_metadata.py` which serves the same role for [CII]
