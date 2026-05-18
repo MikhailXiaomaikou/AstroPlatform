@@ -1,0 +1,8 @@
+# Dormant module manifest (M1 Phase 4a, 2026-05-18)
+# NOT loaded under ASTRO_RESEARCH_FOCUS=cosmology.
+name: solar_system
+display: Solar System Objects (asteroids / comets / TNOs)
+status: dormant
+prompt_file: prompt.md
+tools:
+  # No LLM tools (prompt-only module).
