@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from "re
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { I18nProvider, useI18n, ALL_LANGS, LANG_NAMES, type Lang } from "./i18n";
 import api from "./api/client";
-import { getBackendConfig } from "./api/config";
 import { useTracking } from "./hooks/useTracking";
 import CommandPalette from "./components/CommandPalette";
 import OnboardingOverlay from "./components/OnboardingOverlay";
@@ -49,11 +48,11 @@ class ErrorBoundary extends Component<
   }
 }
 
-const DataBrowser = lazy(() => import("./pages/DataBrowser/DataBrowser"));
-const PipelineCanvas = lazy(() => import("./pages/Pipeline/PipelineCanvas"));
+// M3 (2026-05-18): DataBrowser / PipelineCanvas / ADQLPage / WorkspacePage
+// deleted as dead code. Their workflows are now driven through Chat + AI
+// tool calls; legacy direct-UI access was hidden under cosmology focus
+// since Action 6 (2026-05-08), and post-deletion deep links 404.
 const AuthPage = lazy(() => import("./pages/Auth/AuthPage"));
-const ADQLPage = lazy(() => import("./pages/ADQL/ADQLPage"));
-const WorkspacePage = lazy(() => import("./pages/Workspace/WorkspacePage"));
 const TeamPage = lazy(() => import("./pages/Team/TeamPage"));
 const HelpPage = lazy(() => import("./pages/Help/HelpPage"));
 const ChatPage = lazy(() => import("./pages/Chat/ChatPage"));
@@ -111,19 +110,10 @@ function NavBar() {
   const { t } = useI18n();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Action 6 — Cosmology Focus: hide non-cosmology nav items when the
-  // backend is running with ASTRO_RESEARCH_FOCUS=cosmology.  Routes
-  // are NOT removed (direct URL still works), only the masthead links
-  // are hidden.  null = still loading, fall back to "all" (show all).
-  const [backendFocus, setBackendFocus] = useState<string | null>(null);
-  useEffect(() => {
-    let alive = true;
-    getBackendConfig()
-      .then((c) => { if (alive) setBackendFocus(c.focus); })
-      .catch(() => { if (alive) setBackendFocus("all"); });
-    return () => { alive = false; };
-  }, []);
-  const cosmoFocus = backendFocus === "cosmology";
+  // M3 (2026-05-18): Action 6 cosmoFocus gating removed — the gated pages
+  // (/search /adql /pipeline /workspace) were deleted, so there's nothing
+  // left to hide.  backendFocus state + getBackendConfig() call no longer
+  // needed at NavBar level.
 
   return (
     <header className="journal-masthead">
@@ -151,18 +141,9 @@ function NavBar() {
         >
           <NavLink to="/"          end onClick={() => setMenuOpen(false)}>{t("nav.home")}</NavLink>
           <NavLink to="/chat"          onClick={() => setMenuOpen(false)}>{t("nav.ai_assistant")}</NavLink>
-          {!cosmoFocus && (
-            <NavLink to="/search"        onClick={() => setMenuOpen(false)}>{t("nav.browse")}</NavLink>
-          )}
-          {!cosmoFocus && (
-            <NavLink to="/adql"          onClick={() => setMenuOpen(false)}>{t("nav.adql")}</NavLink>
-          )}
-          {!cosmoFocus && (
-            <NavLink to="/pipeline"      onClick={() => setMenuOpen(false)}>{t("nav.pipeline")}</NavLink>
-          )}
-          {!cosmoFocus && (
-            <NavLink to="/workspace"     onClick={() => setMenuOpen(false)}>{t("nav.sessions")}</NavLink>
-          )}
+          {/* M3 (2026-05-18): /search /adql /pipeline /workspace removed
+              as dead-page deletion.  Their cosmology-focus NavLink was
+              already hidden via cosmoFocus check since Action 6. */}
           <NavLink to="/papers"        onClick={() => setMenuOpen(false)}>{t("nav.papers")}</NavLink>
           <NavLink to="/account"       onClick={() => setMenuOpen(false)}>{t("nav.account")}</NavLink>
         </nav>
@@ -349,12 +330,8 @@ function JournalFooter() {
             <a href="https://github.com/MikhailXiaomaikou/Standard-Astro" target="_blank" rel="noreferrer">GitHub</a>
             <NavLink to="/observations">{t("nav.observations")}</NavLink>
           </div>
-          <div>
-            <strong>{t("footer.col.science")}</strong>
-            <NavLink to="/search">{t("nav.data_browser")}</NavLink>
-            <NavLink to="/adql">{t("nav.adql")}</NavLink>
-            <NavLink to="/pipeline">{t("nav.pipeline")}</NavLink>
-          </div>
+          {/* M3 (2026-05-18): "footer.col.science" column removed —
+              science workflows now live in /chat, /papers, /observations. */}
           <div>
             <strong>{t("footer.col.community")}</strong>
             <NavLink to="/team">{t("nav.team")}</NavLink>
@@ -387,10 +364,9 @@ function App() {
             <Suspense fallback={<div className="fits-loading">Loading...</div>}>
               <Routes>
                 <Route path="/" element={<LandingPage />} />
-                <Route path="/search" element={<DataBrowser />} />
-                <Route path="/pipeline" element={<PipelineCanvas />} />
-                <Route path="/workspace" element={<WorkspacePage />} />
-                <Route path="/adql" element={<ADQLPage />} />
+                {/* M3 (2026-05-18): /search /pipeline /workspace /adql
+                    routes removed (page components deleted). Deep links
+                    now 404 by design. */}
                 <Route path="/team" element={<TeamPage />} />
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/chat" element={<ChatPage />} />
