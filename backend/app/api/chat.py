@@ -75,16 +75,15 @@ _COSMOLOGY_FOCUS_TOOL_ALLOWLIST: frozenset[str] = frozenset({
     "build_evidence_graph",
     "verify_research_facts",
     "export_research_report",
-    # ── Paper-to-tool mining infrastructure ───────────────────
+    # ── arXiv / 文献阅读 (core paper-reading, 跨 cosmology workflow 必需) ──
     "read_arxiv_paper",
     "literature_review",
-    "mine_paper_tools",
-    "run_paper_tool_mining_batch",
-    "run_paper_tool_mining_loop",
-    "build_paper_mining_candidate_pool",
-    "build_tool_ontology",
-    "build_tool_gap_matrix",
-    "rank_tool_implementation_queue",
+    # NOTE: 7 个 paper-to-tool-mining 工具 (mine_paper_tools 等) 现已归
+    # _dormant_paper_tool_mining 模块 (M1 Phase 2, 2026-05-18 用户拍板).
+    # 它们是平台元工具 (扫论文挖 ToolSpec 给我们做工程优先级排序), 不属
+    # cosmology research 本身; 暴露给 LLM 在 cosmology focus 下会增加 W2
+    # 式翻车风险 (LLM 看到 mine_paper_tools 可能绕开 chain runner 跑挖矿).
+    # 想做平台工具调研时单独激活 _dormant_paper_tool_mining 模块.
     # ── 高 z 星系 / [CII] LFR (ALPINE / REBELS) ───────────────
     "fit_line_lfr",
     "demagnify_sample",

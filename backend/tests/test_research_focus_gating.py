@@ -122,9 +122,12 @@ def test_focus_cosmology_keeps_core_cosmology_tools(monkeypatch) -> None:
         {"name": "build_evidence_graph"},
         {"name": "verify_research_facts"},
         {"name": "export_research_report"},
-        {"name": "mine_paper_tools"},
-        {"name": "build_tool_gap_matrix"},
-        {"name": "rank_tool_implementation_queue"},
+        # NOTE: 7 个 paper_tool_mining 工具 (mine_paper_tools / build_tool_gap_matrix /
+        # rank_tool_implementation_queue / build_tool_ontology /
+        # build_paper_mining_candidate_pool / run_paper_tool_mining_batch /
+        # run_paper_tool_mining_loop) 已归 _dormant_paper_tool_mining 模块
+        # (M1 Phase 2, 2026-05-18 用户拍板). cosmology focus 下不暴露 — 平台
+        # 元工具, 暴露会增加 W2 式翻车风险.
         {"name": "run_python"},
         {"name": "search_literature"},
     ]
