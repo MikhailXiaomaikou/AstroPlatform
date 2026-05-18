@@ -4,19 +4,14 @@
 
 tools:
   - astro_statistics_toolbox
-  - batch_object_search
   - crossmatch_catalogs
   - describe_tap_table
-  - export_results
   - extract_literature_tables
   - get_extinction
   - get_last_search_results
   - get_object_dossier
   - get_object_info
-  - get_provenance
-  - query_vo_service
   - read_arxiv_paper
-  - read_fits_header
   - run_adql
   - run_python
   - run_sdss_sql

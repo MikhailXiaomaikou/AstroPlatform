@@ -5,5 +5,4 @@ display: Stellar Dating + Flares
 status: dormant
 prompt_file: prompt.md
 tools:
-  - detect_stellar_flares
   - fit_isochrone

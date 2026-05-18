@@ -112,7 +112,9 @@ def test_focus_cosmology_keeps_core_cosmology_tools(monkeypatch) -> None:
         {"name": "fit_line_lfr"},
         {"name": "demagnify_sample"},
         {"name": "extract_literature_tables"},
-        {"name": "estimate_photo_z_pro"},
+        # NOTE: estimate_photo_z_pro removed from allowlist 2026-05-18 (M2 audit);
+        # it's a shell TOOLS spec with no ai_tools.py dispatch — LLM calling it
+        # gets `error_class: unknown_tool`. Deleted as dead code along with 17 others.
         {"name": "run_adql"},
         {"name": "crossmatch_catalogs"},
         {"name": "search_lightcurve"},   # Cepheid / SN Ia distance ladder

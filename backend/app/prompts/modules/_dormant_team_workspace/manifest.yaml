@@ -5,6 +5,3 @@ display: Team Workspace
 status: dormant
 prompt_file: prompt.md
 tools:
-  - invite_team_member
-  - share_with_team
-  - workspace_export

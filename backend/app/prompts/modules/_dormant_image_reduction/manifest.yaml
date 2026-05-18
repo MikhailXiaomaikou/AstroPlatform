@@ -7,6 +7,5 @@ prompt_file: prompt.md
 tools:
   - extract_photometry
   - extract_sources
-  - process_image
   - reduce_ccd_image
   - solve_astrometry

@@ -1,10 +1,8 @@
 """Result provenance and safety helpers for AI tool outputs.
-
 The chat agent must distinguish between real archive data, cached real data,
 user-supplied data, synthetic demonstrations, and unavailable data.  These
 helpers keep that contract consistent across tools and make it harder for a
 simulated example to be presented as a scientific measurement.
-
 Phase 1 / R1 — reproducibility envelope:
 Every tool return additionally carries a minimal reproducibility envelope
 (`run_id`, `tool_version`, `query_hash`, `timestamp_utc`, optional
@@ -12,9 +10,7 @@ Every tool return additionally carries a minimal reproducibility envelope
 these fields back in and get the same result (modulo archive updates
 captured in `archive_version`).
 """
-
 from __future__ import annotations
-
 import hashlib
 import json
 import math
@@ -22,13 +18,11 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-
 REAL_ARCHIVE = "real_archive"
 CACHED_REAL = "cached_real"
 USER_UPLOADED = "user_uploaded"
 SYNTHETIC = "synthetic"
 UNAVAILABLE = "unavailable"
-
 COMPLETED = "completed"
 PARTIAL = "partial"
 SIMULATED_DEMO = "simulated_demo"
@@ -44,21 +38,15 @@ EMPTY = "empty"
 # or the Bayesian backend is unavailable).  UI should paint this red so
 # the methodology downgrade is never silent.
 METHOD_DOWNGRADED = "method_downgraded"
-
 _VALID_ORIGINS = {REAL_ARCHIVE, CACHED_REAL, USER_UPLOADED, SYNTHETIC, UNAVAILABLE}
 _VALID_STATUS = {COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED, EMPTY, METHOD_DOWNGRADED}
-
 # Build-time tool version; populated by the Dockerfile via
 # `ARG TOOL_VERSION` / `ENV TOOL_VERSION=...`.  Falls back to "dev" when
 # running uvicorn locally.  Accessed lazily so tests can monkeypatch.
 def _tool_version() -> str:
     return os.getenv("TOOL_VERSION", "dev")
-
-
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
 def compute_query_hash(tool_name: str, tool_input: Any) -> str:
     """Deterministic short SHA256 of (tool_name, tool_input)."""
     try:
@@ -67,17 +55,13 @@ def compute_query_hash(tool_name: str, tool_input: Any) -> str:
     except (TypeError, ValueError):
         payload = repr((tool_name, tool_input))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
 # L20 (audit 2026-04-20): 所有随机性 tool 必须有 seed 才能 bit-exact 复现.
 # 这个集合定义哪些 tool 属于 stochastic; 若传 random_seed=None 自动从
 # query_hash 推导一个确定 seed 并在 envelope 里标
 # random_seed_source="auto_from_input".  AI/用户跑 2 次相同输入会得到
 # 同样 seed → 同样 chain / bootstrap 结果, 复现性不靠用户记.
 _STOCHASTIC_TOOLS: frozenset[str] = frozenset({
-    "bayesian_fit", "fit_transit_model", "transit_search_bls",
-    "gp_detrend_lightcurve", "fit_rv_orbit", "estimate_photo_z_pro",
-    "lomb_scargle_period", "fit_sersic_morphology",
+    "bayesian_fit", "fit_rv_orbit", "lomb_scargle_period", "fit_sersic_morphology",
     "analyze_spectrum_pro", "sensitivity_analysis",
     # M2: fit_line_lfr will route to Bayesian (linmix, M3) or bootstrap
     # (subsample significance, M4) when error columns are available.  Both
@@ -89,8 +73,6 @@ _STOCHASTIC_TOOLS: frozenset[str] = frozenset({
     "run_cosmology_robustness_matrix",
     "run_nested_sampler",
 })
-
-
 def reproducibility_envelope(
     tool_name: str,
     tool_input: Any,
@@ -100,11 +82,9 @@ def reproducibility_envelope(
     run_id: str | None = None,
 ) -> dict[str, Any]:
     """Return the minimal metadata needed to replay a tool call.
-
     Every tool result carries this so later analyses (golden-path tests,
     user-triggered replays, audit-log inspection) can verify that the same
     input against the same archive version would produce the same output.
-
     L20: 随机性工具 (bayesian_fit, bootstrap, GP, emcee 等) 若 random_seed
     缺失, 自动从 query_hash 推导确定 seed + 在 envelope 标
     random_seed_source="auto_from_input".  同样输入两次跑结果 bit-exact.
@@ -125,8 +105,6 @@ def reproducibility_envelope(
     if archive_version:
         envelope["archive_version"] = str(archive_version)
     return envelope
-
-
 def result_contract(
     *,
     data_origin: str,
@@ -151,8 +129,6 @@ def result_contract(
         "archive_ids": [str(item) for item in (archive_ids or []) if str(item).strip()],
         "warnings": warning_list,
     }
-
-
 def attach_provenance(
     payload: dict[str, Any],
     *,
@@ -180,8 +156,6 @@ def attach_provenance(
     )
     result.update(contract)
     return _attach_nested_provenance(result)
-
-
 def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
     """Add the v2 nested provenance object without replacing v1 fields."""
     existing = result.get("provenance")
@@ -194,7 +168,6 @@ def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
         if isinstance(result.get("reproducibility"), dict)
         else {}
     )
-
     datasets = _collect_datasets(result, provenance)
     provenance["datasets"] = datasets
     _fill_top_level_provenance_from_datasets(result, datasets)
@@ -202,7 +175,6 @@ def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
         archive_version = _archive_version_from_datasets(datasets)
         if archive_version:
             provenance["reproducibility"]["archive_version"] = archive_version
-
     field_bibcodes = provenance.get(
         "field_bibcodes",
         result.get("field_bibcodes", extracted_field_bibcodes),
@@ -210,7 +182,6 @@ def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
     if hasattr(field_bibcodes, "to_dict"):
         field_bibcodes = field_bibcodes.to_dict()
     provenance["field_bibcodes"] = field_bibcodes if isinstance(field_bibcodes, dict) else None
-
     coverage = provenance.get("coverage", result.get("coverage"))
     coverage_dict = dict(coverage) if isinstance(coverage, dict) else {}
     coverage_dict.setdefault("field_level", extracted_field_coverage)
@@ -219,18 +190,14 @@ def _attach_nested_provenance(result: dict[str, Any]) -> dict[str, Any]:
         _primary_citation_source(provenance["field_bibcodes"], provenance["datasets"]),
     )
     provenance["coverage"] = coverage_dict
-
     result["provenance"] = provenance
     return result
-
-
 def _extract_field_bibcodes(result: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Best-effort field-bibcode extraction from row or columnar payloads."""
     try:
         from app.services.provenance_v2.field_bibcode_extractor import FieldBibcodeExtractor
     except Exception:
         return None, None
-
     columns, rows = _rows_for_field_bibcode_extraction(result)
     if not columns or not rows:
         return None, None
@@ -243,8 +210,6 @@ def _extract_field_bibcodes(result: dict[str, Any]) -> tuple[dict[str, Any] | No
         field_bibcodes.to_dict() if coverage.available else None,
         coverage_dict,
     )
-
-
 def _field_bibcodes_available(field_bibcodes: Any) -> bool:
     if not isinstance(field_bibcodes, dict):
         return False
@@ -252,8 +217,6 @@ def _field_bibcodes_available(field_bibcodes: Any) -> bool:
     if not isinstance(columns, dict):
         return False
     return any(isinstance(values, list) and any(str(v).strip() for v in values) for values in columns.values())
-
-
 def _collect_datasets(result: dict[str, Any], provenance: dict[str, Any]) -> list[dict[str, Any]]:
     candidates: list[Any] = []
     existing = provenance.get("datasets", result.get("datasets", []))
@@ -261,16 +224,11 @@ def _collect_datasets(result: dict[str, Any], provenance: dict[str, Any]) -> lis
         candidates.extend(existing)
     elif isinstance(existing, dict):
         candidates.append(existing)
-
     candidates.extend(_datasets_from_rows(result))
-
     service_dataset = _dataset_from_service_hint(result.get("service") or result.get("source"))
     if service_dataset:
         candidates.append(service_dataset)
-
     return _dedupe_datasets(candidates)
-
-
 def _datasets_from_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     datasets: list[dict[str, Any]] = []
     for row_collection in (result.get("results"), result.get("rows"), result.get("data")):
@@ -286,8 +244,6 @@ def _datasets_from_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
             if fallback:
                 datasets.append(fallback)
     return datasets
-
-
 def _row_provenance_dataset(row: dict[str, Any]) -> dict[str, Any] | None:
     for container in (row, row.get("extra") if isinstance(row.get("extra"), dict) else None):
         if not isinstance(container, dict):
@@ -296,19 +252,14 @@ def _row_provenance_dataset(row: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(dataset, dict):
             return dict(dataset)
     return None
-
-
 def _dataset_from_service_hint(hint: Any) -> dict[str, Any] | None:
     if hint in (None, ""):
         return None
     try:
         from app.services.provenance_v2.registry_loader import dataset_from_registry
-
         return dataset_from_registry(str(hint))
     except Exception:
         return None
-
-
 def _dedupe_datasets(candidates: list[Any]) -> list[dict[str, Any]]:
     seen: set[tuple[str, str, str, str]] = set()
     result: list[dict[str, Any]] = []
@@ -327,8 +278,6 @@ def _dedupe_datasets(candidates: list[Any]) -> list[dict[str, Any]]:
         seen.add(key)
         result.append(dataset)
     return result
-
-
 def _fill_top_level_provenance_from_datasets(result: dict[str, Any], datasets: list[dict[str, Any]]) -> None:
     if not result.get("source_urls"):
         urls: list[str] = []
@@ -350,15 +299,11 @@ def _fill_top_level_provenance_from_datasets(result: dict[str, Any], datasets: l
                 if dataset.get(key):
                     ids.append(str(dataset[key]))
         result["archive_ids"] = _dedupe_strings(ids)
-
-
 def _archive_version_from_datasets(datasets: list[dict[str, Any]]) -> str | None:
     versions = _dedupe_strings(str(dataset.get("archive_version")) for dataset in datasets if dataset.get("archive_version"))
     if not versions:
         return None
     return versions[0] if len(versions) == 1 else ", ".join(versions)
-
-
 def _primary_citation_source(field_bibcodes: Any, datasets: list[dict[str, Any]]) -> str:
     if _field_bibcodes_available(field_bibcodes):
         return "field_level"
@@ -367,8 +312,6 @@ def _primary_citation_source(field_bibcodes: Any, datasets: list[dict[str, Any]]
     if any(str(dataset.get("source_authority") or "") != "project_registry" for dataset in datasets):
         return "table_level"
     return "registry"
-
-
 def _dedupe_strings(values: Any) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -379,8 +322,6 @@ def _dedupe_strings(values: Any) -> list[str]:
         seen.add(text)
         result.append(text)
     return result
-
-
 def _rows_for_field_bibcode_extraction(result: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
     columns = [str(column) for column in result.get("columns", []) if str(column).strip()]
     rows = result.get("rows")
@@ -398,7 +339,6 @@ def _rows_for_field_bibcode_extraction(result: dict[str, Any]) -> tuple[list[str
                 }
                 for row in rows
             ]
-
     data = result.get("data")
     if isinstance(data, list) and data:
         if isinstance(data[0], dict):
@@ -434,16 +374,12 @@ def _rows_for_field_bibcode_extraction(result: dict[str, Any]) -> tuple[list[str
             }
             for index in range(row_count)
         ]
-
     results = result.get("results")
     if isinstance(results, list) and results and isinstance(results[0], dict):
         row_dicts = [row for row in results if isinstance(row, dict)]
         columns = [str(column) for column in row_dicts[0].keys()] if row_dicts else []
         return columns, row_dicts
-
     return [], []
-
-
 # Tool-name → default classification mapping for current HEAD tools.
 # Keep in sync with TOOLS in app/services/ai_tools.py.  The union of the three
 # sets MUST equal the tool registry, or unclassified tools silently fall
@@ -451,9 +387,7 @@ def _rows_for_field_bibcode_extraction(result: dict[str, Any]) -> tuple[list[str
 _DATA_TOOLS = {
     "search_objects", "run_adql", "get_object_info", "get_object_dossier",
     "query_transients", "search_lightcurve", "crossmatch_catalogs",
-    "batch_object_search", "describe_tap_table", "query_vo_service",
-    "get_last_search_results", "read_fits_header", "get_provenance",
-    # F6.1 / F6.2: new high-level astro helpers
+    "describe_tap_table", "get_last_search_results", # F6.1 / F6.2: new high-level astro helpers
     "query_gaia_cluster", "get_extinction",
     # J3: SDSS SkyServer 直连 — 和 run_adql 同类, 都是 data fetch
     "run_sdss_sql",
@@ -463,16 +397,12 @@ _DATA_TOOLS = {
 _COMPUTE_TOOLS = {
     "run_python", "generate_pipeline", "run_pipeline", "validate_analysis",
     "generate_paper_draft", "fit_isochrone", "estimate_photo_z",
-    "estimate_photo_z_pro", "analyze_spectrum", "analyze_spectrum_pro",
-    "sensitivity_analysis", "fit_transit_model", "gp_detrend_lightcurve",
-    "detect_stellar_flares", "transit_search_bls", "reduce_ccd_image",
+    "analyze_spectrum", "analyze_spectrum_pro",
+    "sensitivity_analysis", "reduce_ccd_image",
     "solve_astrometry", "extract_photometry", "extract_sources",
-    "classify_transient", "classify_transient_spectrum",
-    "compute_galaxy_sfr", "fit_rv_orbit", "fit_sersic_morphology",
+    "classify_transient", "compute_galaxy_sfr", "fit_rv_orbit", "fit_sersic_morphology",
     "x_ray_spectral_fit", "pulsar_derived_quantities",
-    "analyze_cross_wavelength", "radio_analysis", "process_image",
-    "share_with_team", "invite_team_member", "export_results",
-    "workspace_export", "fit_cosmology_mcmc", "run_cobaya_cosmology",
+    "analyze_cross_wavelength", "fit_cosmology_mcmc", "run_cobaya_cosmology",
     "get_cosmology_run_status",
     "load_cosmology_data_product",
     "build_cosmology_likelihood", "build_cosmology_robustness_matrix",
@@ -486,9 +416,8 @@ _COMPUTE_TOOLS = {
     "compare_luminosity_distances", "demagnify_sample",
 }
 _REFERENCE_TOOLS = {
-    "search_literature", "read_arxiv_paper", "extract_literature_tables", "literature_review",
-    "research_workflow", "generate_proposal", "get_followup_recommendation",
-    "full_research_report", "verify_research_facts",
+    "search_literature", "read_arxiv_paper", "extract_literature_tables", "research_workflow", "generate_proposal", "get_followup_recommendation",
+    "verify_research_facts",
     # PART Y Batch 1 (audit follow-up): export_sample_table emits a
     # citable machine-readable table from a cached sample, no new analysis.
     "export_sample_table",
@@ -499,11 +428,8 @@ _REFERENCE_TOOLS = {
     "rank_tool_implementation_queue", "build_paper_mining_candidate_pool",
     "run_paper_tool_mining_loop",
 }
-
 # Introspection helper for tests / CI: full known tool set.
 ALL_KNOWN_TOOLS = _DATA_TOOLS | _COMPUTE_TOOLS | _REFERENCE_TOOLS
-
-
 def normalize_tool_result(
     tool_name: str,
     result: Any,
@@ -513,7 +439,6 @@ def normalize_tool_result(
     archive_version: str | None = None,
 ) -> dict[str, Any]:
     """Ensure every tool result is a dict with provenance metadata + envelope.
-
     The reproducibility envelope is added once per call so the payload
     always carries run_id / tool_version / query_hash / timestamp and (when
     supplied) random_seed + archive_version.  Existing envelope fields on
@@ -522,7 +447,6 @@ def normalize_tool_result(
     """
     if not isinstance(result, dict):
         result = {"value": result}
-
     # Attach envelope if not already present.  Tools that construct their
     # own envelope (e.g., pipeline-executed runs with upstream run_ids) win.
     if "reproducibility" not in result:
@@ -533,7 +457,6 @@ def normalize_tool_result(
             random_seed=random_seed,
             archive_version=archive_version,
         )
-
     # R4: best-effort unit + frame annotation for well-known astronomical
     # column names (ra/dec → deg + ICRS, parallax → mas, teff → K, …).
     # Idempotent; pre-existing `*_unit` siblings win.
@@ -542,7 +465,6 @@ def normalize_tool_result(
         annotate_known_fields(result)
     except Exception:
         pass
-
     # R3: automatically run sanity checks and fold them into the result's
     # warnings list so the UI can surface a ⚠ chip per offending field.
     # We also emit a Prometheus counter per warning class so ops can see
@@ -564,7 +486,6 @@ def normalize_tool_result(
             )
         except Exception:
             pass
-
     # F2.1: detect empty tool returns BEFORE we stamp COMPLETED. An ADQL
     # query that returned 0 rows is a legitimate "no data" outcome, not a
     # success — the LLM must not derive any claims from it.  We inject a
@@ -577,18 +498,15 @@ def normalize_tool_result(
             record_counter("empty_tool_result_total", 1.0, tool=tool_name)
         except Exception:
             pass
-
     if "data_origin" in result and "analysis_status" in result:
         # Still inject the banner if we detected empty, even on a pre-stamped result
         return _attach_nested_provenance(result)
-
     if result.get("error"):
         if _has_partial_payload(tool_name, result) and result.get("__do_not_claim__") is not True:
             result = _inject_partial_banner(result, tool_name)
             return attach_provenance(result, data_origin=REAL_ARCHIVE, analysis_status=PARTIAL)
         result = _inject_failed_banner(result, tool_name)
         return attach_provenance(result, data_origin=UNAVAILABLE, analysis_status=FAILED)
-
     if is_empty:
         # Clean-ran-but-no-data path
         if tool_name in _COMPUTE_TOOLS:
@@ -598,10 +516,8 @@ def normalize_tool_result(
         else:
             origin = UNAVAILABLE
         return attach_provenance(result, data_origin=origin, analysis_status=EMPTY)
-
     if tool_name in _DATA_TOOLS:
         return attach_provenance(result, data_origin=REAL_ARCHIVE, analysis_status=COMPLETED)
-
     if tool_name in _COMPUTE_TOOLS:
         success = bool(result.get("success", True))
         # Compute tools almost always operate on data that originated in a real
@@ -617,16 +533,11 @@ def normalize_tool_result(
                 return attach_provenance(result, data_origin=REAL_ARCHIVE, analysis_status=PARTIAL)
             result = _inject_failed_banner(result, tool_name)
         return attach_provenance(result, data_origin=origin, analysis_status=status)
-
     if tool_name in _REFERENCE_TOOLS:
         return attach_provenance(result, data_origin=REAL_ARCHIVE, analysis_status=COMPLETED)
-
     return attach_provenance(result, data_origin=UNAVAILABLE, analysis_status=PARTIAL)
-
-
 def _is_empty_payload(tool_name: str, result: dict[str, Any]) -> bool:
     """F2.1: decide whether a tool return has no data to back any claim.
-
     Conservative — we mark empty only on signals that are unambiguously
     "no result", not on merely small results.
     """
@@ -654,11 +565,8 @@ def _is_empty_payload(tool_name: str, result: dict[str, Any]) -> bool:
         if result.get("success") is True and not stdout.strip() and not figures and not variables:
             return True
     return False
-
-
 def _has_partial_payload(tool_name: str, result: dict[str, Any]) -> bool:
     """Return True when a failed tool still produced citeable partial output.
-
     This is intentionally narrow for now.  A failed `run_python` cell can still
     print useful statistics or create figures before a later statement raises;
     treating that as a total failure hides the useful output from the model and
@@ -670,8 +578,6 @@ def _has_partial_payload(tool_name: str, result: dict[str, Any]) -> bool:
     figures = result.get("figures") or []
     variables = result.get("variables") or {}
     return bool(stdout or figures or variables)
-
-
 # G1.5c: "retry"/"fallback"/"simulate" etc. appearing in a tool error string
 # can be read by the LLM as instructions ("prompt injection via error text").
 # Sanitise them before we splice error messages into __message_to_model__.
@@ -686,8 +592,6 @@ _INSTRUCTION_LIKE_TOKENS = {
     r"\bmock(?:\s+data)?\b": "[REDACTED]",
     r"\bgenerate\s+(?:realistic|example|synthetic|fake)\b": "[REDACTED]",
 }
-
-
 def _sanitize_error_message(err: str) -> str:
     """G1.5c: neutralise error-string phrasings that the LLM might read as
     instructions.  Preserves the original error if sanitization is a no-op.
@@ -699,11 +603,8 @@ def _sanitize_error_message(err: str) -> str:
     for pat, replacement in _INSTRUCTION_LIKE_TOKENS.items():
         cleaned = _re.sub(pat, replacement, cleaned, flags=_re.IGNORECASE)
     return cleaned
-
-
 def _inject_empty_banner(result: dict[str, Any], tool_name: str) -> dict[str, Any]:
     """F2.1: prepend a machine-readable banner so the LLM cannot miss it.
-
     Model sees __tool_status__, __do_not_claim__, __message_to_model__,
     __suggested_next_step__ as the first keys of the tool_result dict.
     """
@@ -723,8 +624,6 @@ def _inject_empty_banner(result: dict[str, Any], tool_name: str) -> dict[str, An
     new_result = dict(banner)
     new_result.update(result)
     return new_result
-
-
 def _inject_failed_banner(result: dict[str, Any], tool_name: str) -> dict[str, Any]:
     """F2.1 + G1.5c: same idea as empty, but for explicit tool failures.
     Error strings are passed through _sanitize_error_message to remove
@@ -746,8 +645,6 @@ def _inject_failed_banner(result: dict[str, Any], tool_name: str) -> dict[str, A
     new_result = dict(banner)
     new_result.update(result)
     return new_result
-
-
 def _inject_partial_banner(result: dict[str, Any], tool_name: str) -> dict[str, Any]:
     """Prepend a banner for failed tools that produced usable partial output."""
     raw_err = str(result.get("error") or "unknown").strip()
@@ -767,12 +664,9 @@ def _inject_partial_banner(result: dict[str, Any], tool_name: str) -> dict[str, 
     new_result = dict(banner)
     new_result.update(result)
     return new_result
-
-
 def _suggest_next_step(tool_name: str, error: str | None = None) -> str:
     """Tool-specific next-step hint that the model can echo into a
     <tools_returned_nothing suggested_next_step="..."/> tag.
-
     G1.5c: avoid the word "retry" in these strings — the LLM reads
     tool error text as context and can interpret "retry" as an
     instruction to just try again (often with synthetic data). Use
@@ -796,11 +690,8 @@ def _suggest_next_step(tool_name: str, error: str | None = None) -> str:
     if tool_name == "search_literature":
         return "The user can broaden the keyword list or try a different archive (ADS vs arXiv)."
     return "The user can adjust parameters or provide the target values explicitly."
-
-
 def numeric_sanity_warnings(payload: Any) -> list[str]:
     """Find common physically suspicious numeric outputs.
-
     Phase 1 / R3 extends the original two checks (zero uncertainty, zero
     abundance) with:
     - negative parallax (unphysical; Gaia allows it but the derived
@@ -816,7 +707,6 @@ def numeric_sanity_warnings(payload: Any) -> list[str]:
     exact offending field.
     """
     warnings: list[str] = []
-
     def _walk(value: Any, path: str = "") -> None:
         if isinstance(value, dict):
             for key, item in value.items():
@@ -859,6 +749,5 @@ def numeric_sanity_warnings(payload: Any) -> list[str]:
         elif isinstance(value, list):
             for index, item in enumerate(value[:200]):
                 _walk(item, f"{path}[{index}]")
-
     _walk(payload)
     return warnings

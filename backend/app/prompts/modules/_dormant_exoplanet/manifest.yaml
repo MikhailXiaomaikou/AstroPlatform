@@ -6,6 +6,3 @@ status: dormant
 prompt_file: prompt.md
 tools:
   - fit_rv_orbit
-  - fit_transit_model
-  - gp_detrend_lightcurve
-  - transit_search_bls
