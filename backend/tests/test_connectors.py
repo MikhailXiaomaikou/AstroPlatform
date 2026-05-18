@@ -1,7 +1,6 @@
 """Tests for data source connectors and the retry decorator."""
 
 import asyncio
-from unittest.mock import AsyncMock, patch
 
 import pytest
 

@@ -2437,16 +2437,23 @@ def _sanitize_runner_priors(
 
 
 def _posterior_summary(values: np.ndarray) -> dict[str, Any]:
+    hdi_low = round(float(np.percentile(values, 3.0)), 6)
+    hdi_high = round(float(np.percentile(values, 97.0)), 6)
     return {
         "mean": round(float(np.mean(values)), 6),
         "std": round(float(np.std(values)), 6),
         "median": round(float(np.median(values)), 6),
-        "hdi_low_94": round(float(np.percentile(values, 3.0)), 6),
-        "hdi_high_94": round(float(np.percentile(values, 97.0)), 6),
-        "rhat": 1.0,
-        "ess_bulk": int(values.size),
-        "ess_tail": int(values.size),
-        "status": "analytic_gaussian",
+        "hdi_low_94": hdi_low,
+        "hdi_high_94": hdi_high,
+        "hdi_94": [hdi_low, hdi_high],
+        # These are posterior summaries from an importance-resampled cloud,
+        # not independent MCMC chains.  The citeability diagnostic lives in
+        # chain_diagnostics.proposal_ess; do not imply per-parameter ESS=N.
+        "rhat": None,
+        "ess_bulk": None,
+        "ess_tail": None,
+        "status": "importance_resampled_summary",
+        "diagnostic_note": "Use chain_diagnostics.proposal_ess for the publication gate.",
     }
 
 

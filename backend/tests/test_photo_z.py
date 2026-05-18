@@ -3,18 +3,15 @@
 import numpy as np
 import pytest
 
-# NumPy 2.0 renamed trapz -> trapezoid
-_trapz = getattr(np, "trapezoid", None) or np.trapz
-
 from app.services.photo_z import (
-    estimate_photo_z_template,
+    ALL_BANDS,
     _build_templates,
     _synth_mag,
-    _mag_to_flux,
-    _FILTER_DEFS,
-    ALL_BANDS,
-    TEMPLATE_NAMES,
+    estimate_photo_z_template,
 )
+
+# NumPy 2.0 renamed trapz -> trapezoid
+_trapz = getattr(np, "trapezoid", None) or np.trapz
 
 
 class TestSyntheticEllipticalZ03:

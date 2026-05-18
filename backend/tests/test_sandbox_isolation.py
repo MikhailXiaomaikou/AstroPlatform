@@ -7,7 +7,6 @@ backend has its own coverage in test_code_executor.py.
 """
 
 import os
-import signal
 import sys
 from types import SimpleNamespace
 

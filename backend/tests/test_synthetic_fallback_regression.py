@@ -17,7 +17,6 @@ Three scenarios the reviewer hit:
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import patch
 
 from app.services.ai_tools import _exec_run_python
 from app.services.claim_validator import validate_claims, is_empty_turn, zero_data_but_quantitative

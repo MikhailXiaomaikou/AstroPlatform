@@ -27,7 +27,6 @@ Tests below pin both the 3-D fixture (legacy) and the 5-D prod path.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from app.services.cosmology_likelihoods import (
     _draw_gaussian_centered_proposal,

@@ -24,7 +24,6 @@ Locks the contract:
 
 from __future__ import annotations
 
-import pytest
 
 
 # ── Contract 1: 4 line families registered ────────────────────────────

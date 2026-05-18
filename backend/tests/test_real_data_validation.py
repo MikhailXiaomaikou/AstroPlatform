@@ -28,7 +28,7 @@ class TestSpectralPro:
         result = identify_lines(wave, flux, threshold_snr=3.0)
         assert len(result) >= 1
         # At least one line should be near H-alpha
-        ha_found = any(abs(l["observed_wavelength"] - 6562.79) < 10 for l in result)
+        ha_found = any(abs(line["observed_wavelength"] - 6562.79) < 10 for line in result)
         assert ha_found, f"H-alpha not found in {result}"
 
     def test_fit_gaussian_recovers_center(self):

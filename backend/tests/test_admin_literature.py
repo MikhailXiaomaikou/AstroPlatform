@@ -17,10 +17,8 @@ Locks two contracts:
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 from unittest.mock import patch
 
-import pytest
 
 
 def test_default_cii_arxiv_ids_only_verified() -> None:

@@ -5,8 +5,6 @@ import uuid
 import pytest
 
 from app.auth import create_access_token, hash_password, verify_password
-from app.models.schemas import User
-from app.utils.usernames import username_from_email
 
 
 class TestAuthSecurity:

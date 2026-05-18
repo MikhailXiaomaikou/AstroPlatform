@@ -493,7 +493,6 @@ class _CollectionWithMixedQuality:
 
     def stitch(self):
         # 检查所有 segment 的 quality dtype 是否一致
-        import numpy as np
         dtypes = set()
         for s in self._segs:
             if "quality" in s:

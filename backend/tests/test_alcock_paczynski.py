@@ -18,7 +18,6 @@ Locks:
 
 from __future__ import annotations
 
-import pytest
 
 
 def test_alcock_paczynski_runs_without_external_config() -> None:

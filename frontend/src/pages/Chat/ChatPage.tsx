@@ -4623,10 +4623,10 @@ export default function ChatPage() {
             You can add your own key below for better rate limits.
           </div>
         )}
-        {!hasKey && (
+        {!aiBackendReady && (
           <ApiKeyPrompt onSaved={() => setHasKey(true)} />
         )}
-        {hasKey && messages.length === 0 && !loading && (
+        {aiBackendReady && messages.length === 0 && !loading && (
           <div className="chat-empty">
             <div className="chat-empty-icon">&#x2728;</div>
             <h3>How can I help with your research?</h3>

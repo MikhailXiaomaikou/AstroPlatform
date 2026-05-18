@@ -133,7 +133,7 @@ vi.mock("../api/client", () => ({
 
 // ── Import component under test (after mocks) ──
 import ChatPage from "../pages/Chat/ChatPage";
-import { getStoredApiKeys, sendChatMessage } from "../api/client";
+import { getAIBackendStatus, getStoredApiKeys, sendChatMessage } from "../api/client";
 
 /* ── Helper to render with providers ── */
 
@@ -222,6 +222,31 @@ describe("ChatPage", () => {
     const saveBtn = screen.getByRole("button", { name: /Save & Start/i });
     expect(saveBtn).toBeInTheDocument();
     expect(saveBtn).toBeDisabled(); // empty input = disabled
+  });
+
+  it("hides API key prompt when a server-side backend is ready", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({});
+    vi.mocked(getAIBackendStatus).mockResolvedValueOnce({
+      configured_backends: ["local"],
+      needs_setup: false,
+      selected_model_status: {
+        id: "local:openai-cli",
+        provider: "local",
+        model_id: "openai-cli",
+        display_name: "OpenAI CLI (local subscription)",
+        api_ready: true,
+        resolved_model_id: "codex-config-default",
+        supports_tools: true,
+        supports_reasoning: false,
+      },
+    });
+
+    renderChatPage();
+
+    await waitFor(() => {
+      expect(screen.queryByText("Configure API Key")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText(/How can I help with your research/)).toBeInTheDocument();
   });
 
   // ── New chat / Import buttons ──

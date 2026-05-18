@@ -43,10 +43,21 @@ describe("ResearchProgramPanel", () => {
         result={{
           analysis_status: "RESEARCH_MATRIX_READY",
           publication_ready: true,
-          ready_cells: 1,
-          matrix_size: 2,
+          ready_cells: 2,
+          matrix_size: 3,
           matrix: [
             { label: "BAO only", model: "lcdm", dataset_keys: ["desi_dr1_bao"], publication_ready: true },
+            {
+              label: "BAO + CMB",
+              model: "lcdm",
+              dataset_keys: ["desi_dr1_bao", "planck2018_compressed"],
+              publication_ready: true,
+              execution_level: "compressed_preliminary",
+              result: {
+                parameters: { H0: { median: 67.31 } },
+                chain_diagnostics: { proposal_ess: 471.3, rhat: 1.0 },
+              },
+            },
             { label: "BAO + SN", model: "lcdm", dataset_keys: ["desi_dr1_bao", "pantheon_plus"], execution_level: "config_only" },
           ],
         }}
@@ -55,8 +66,9 @@ describe("ResearchProgramPanel", () => {
 
     expect(screen.getByText("Research Matrix")).toBeInTheDocument();
     expect(screen.getByText("runnable cells ready")).toBeInTheDocument();
-    expect(screen.getByText(/1 \/ 2 ready/)).toBeInTheDocument();
+    expect(screen.getByText(/2 \/ 3 ready/)).toBeInTheDocument();
     expect(screen.getByText(/BAO only/)).toBeInTheDocument();
+    expect(screen.getByText(/H0 median 67.310 · ESS 471 · Rhat 1.000/)).toBeInTheDocument();
     expect(screen.getByText(/configuration only, no posterior run yet/)).toBeInTheDocument();
   });
 

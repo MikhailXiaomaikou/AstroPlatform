@@ -17,11 +17,10 @@ Locks 4 contracts:
    on observational cosmology, gate other domains). Set
    ASTRO_RESEARCH_FOCUS=all to opt back into general mode.
 
-2. focus="cosmology" — the allowlist contains the core cosmology
-   tools (cosmology_mcmc, fit_line_lfr, demagnify_sample, photo-z,
-   ADQL/Gaia, distance ladder Cepheid/SN Ia helpers). Non-cosmology
-   tools (fit_isochrone for clusters, equivalent_width, pulsar
-   physics, source extraction) are dropped.
+2. focus="cosmology" — the allowlist contains executable cosmology
+   tools plus research-mode / evidence / paper-mining infrastructure.
+   Non-cosmology tools (fit_isochrone for clusters, pulsar physics,
+   source extraction) are dropped.
 
 3. focus="cosmology" — SYSTEM_PROMPT gains the focus appendix; the
    59 existing sections are preserved verbatim (other test files
@@ -117,8 +116,15 @@ def test_focus_cosmology_keeps_core_cosmology_tools(monkeypatch) -> None:
         {"name": "run_adql"},
         {"name": "crossmatch_catalogs"},
         {"name": "search_lightcurve"},   # Cepheid / SN Ia distance ladder
-        {"name": "lomb_scargle_period"},  # Cepheid period
-        {"name": "transient_classifier"},  # SN Ia
+        {"name": "classify_transient"},  # SN Ia
+        {"name": "plan_research_program"},
+        {"name": "run_research_matrix"},
+        {"name": "build_evidence_graph"},
+        {"name": "verify_research_facts"},
+        {"name": "export_research_report"},
+        {"name": "mine_paper_tools"},
+        {"name": "build_tool_gap_matrix"},
+        {"name": "rank_tool_implementation_queue"},
         {"name": "run_python"},
         {"name": "search_literature"},
     ]
@@ -127,6 +133,19 @@ def test_focus_cosmology_keeps_core_cosmology_tools(monkeypatch) -> None:
     expected_names = {t["name"] for t in must_survive}
     missing = expected_names - survived_names
     assert not missing, f"Cosmology focus dropped core tools: {missing}"
+
+
+def test_focus_cosmology_allowlist_has_no_ghost_tools(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    from app.services.ai_tools import TOOLS
+
+    tool_names = {
+        t.get("name")
+        for t in TOOLS
+        if isinstance(t, dict) and t.get("name")
+    }
+    ghosts = set(chat._COSMOLOGY_FOCUS_TOOL_ALLOWLIST) - tool_names
+    assert not ghosts, f"Cosmology focus allowlist contains nonexistent tools: {sorted(ghosts)}"
 
 
 def test_focus_cosmology_drops_non_cosmology_tools(monkeypatch) -> None:

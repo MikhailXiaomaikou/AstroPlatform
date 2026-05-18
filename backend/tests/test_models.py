@@ -3,9 +3,6 @@
 import json
 import uuid
 
-import pytest
-from sqlalchemy import create_engine, Column, Integer
-from sqlalchemy.orm import Session, DeclarativeBase
 
 from app.models.schemas import (
     DataFile,

@@ -28,7 +28,6 @@ pytestmark = pytest.mark.skipif(
     reason="subprocess sandbox uses POSIX rlimit / setsid",
 )
 
-from app.services.sandbox.base import SandboxResult  # noqa: E402
 from app.services.sandbox.subprocess_backend import SubprocessBackend  # noqa: E402
 
 
@@ -46,7 +45,7 @@ class TestSubprocessPayloadGuard:
         import os as _os
 
         r = SubprocessBackend().execute(
-            f"import os, signal; os.kill(os.getpid(), signal.SIGKILL)",
+            "import os, signal; os.kill(os.getpid(), signal.SIGKILL)",
             timeout=SMALL_TIMEOUT,
             memory_bytes=SMALL_MEMORY,
         )
@@ -62,7 +61,7 @@ class TestSubprocessPayloadGuard:
                 "without an error message",
             )
         ), f"error message should describe the crash, got: {r.error!r}"
-        assert "os" is not None  # keep linter happy about _os import ordering
+        assert "os" != None  # keep linter happy about _os import ordering
         del _os
 
     def test_empty_dict_payload_surfaces_error(self):

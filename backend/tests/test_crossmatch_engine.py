@@ -7,7 +7,6 @@ membership is exactly known.  All six join types are verified.
 import asyncio
 import math
 
-import numpy as np
 import pandas as pd
 import pytest
 

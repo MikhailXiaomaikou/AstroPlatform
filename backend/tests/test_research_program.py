@@ -44,6 +44,34 @@ def test_research_matrix_runs_executable_cells_and_marks_config_gaps() -> None:
     )
 
 
+def test_workflow2_bao_cmb_public_path_is_publication_ready() -> None:
+    """Lock the full public Research Matrix path, not just the private sampler.
+
+    Regression target: Workflow 2 BAO+CMB should no longer look like
+    ESS≈1/40 in Chat UI.  The public plan→matrix path must mark the BAO+CMB
+    cell publication-ready with H0 around the Planck-calibrated 67–68 range.
+    """
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "我想测试一个观测宇宙学 Research Matrix：DESI DR1 BAO + Pantheon+ SN + "
+        "Planck compressed CMB，flat ΛCDM。请先规划研究矩阵，再执行可运行的 "
+        "compressed-likelihood cells。请特别报告 BAO+CMB 这一格的 "
+        "publication_ready、ESS/chain diagnostics 和 H0 posterior median；"
+        "如果 Pantheon+ 只能 config-only，也请明确说明。"
+    )
+    plan = plan_research_program(question=prompt)["research_plan"]
+    result = run_research_matrix(research_plan=plan, random_seed=20260503, n_samples=4000)
+
+    bao_cmb = next(cell for cell in result["matrix"] if cell["label"] == "BAO + CMB")
+    chain = bao_cmb["result"]
+
+    assert bao_cmb["publication_ready"] is True
+    assert bao_cmb["execution_level"] == "compressed_preliminary"
+    assert chain["chain_diagnostics"]["proposal_ess"] >= 400
+    assert 67.0 <= chain["parameters"]["H0"]["median"] <= 68.0
+
+
 def test_evidence_graph_links_claims_to_publication_ready_runs() -> None:
     from app.services.research_program import build_evidence_graph, plan_research_program, run_research_matrix
 

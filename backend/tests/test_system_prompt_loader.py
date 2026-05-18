@@ -16,11 +16,7 @@ Locks 4 contracts:
 
 from __future__ import annotations
 
-import importlib
-import textwrap
-from pathlib import Path
 
-import pytest
 
 
 # ── Contract 1: empty sections directory ──────────────────────────────

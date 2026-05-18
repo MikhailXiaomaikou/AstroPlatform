@@ -33,7 +33,12 @@ function levelTone(level: string | undefined) {
   if (key.includes("compressed") || key === "full_runner") {
     return { color: "#166534", bg: "rgba(34,197,94,.12)", border: "#22c55e" };
   }
-  if (key.includes("config") || key === "mixed") {
+  if (
+    key.includes("config")
+    || key === "mixed"
+    || key.includes("partial")
+    || key.includes("executed_not_ready")
+  ) {
     return { color: "#8a5b00", bg: "rgba(245,158,11,.13)", border: "#d99a00" };
   }
   return { color: "#7f1d1d", bg: "rgba(239,68,68,.10)", border: "#ef4444" };
@@ -56,6 +61,27 @@ function Badge({ children, tone }: { children: string; tone?: string }) {
       {children}
     </span>
   );
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function fmtNumber(value: unknown, digits = 3): string {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(digits);
+}
+
+function matrixCellStatus(cell: Record<string, unknown>): string {
+  if (cell.publication_ready) return "compressed preliminary posterior";
+  const level = String(cell.execution_level || "not_available");
+  if (level === "partial_dataset_run") return "partial run; some datasets not included";
+  if (level === "executed_not_ready") return "posterior attempted; diagnostics below threshold";
+  if (level === "config_only") return "configuration only, no posterior run yet";
+  return level.replace(/_/g, " ");
 }
 
 function PlanView({ plan }: { plan: ResearchPlan }) {
@@ -130,15 +156,40 @@ function MatrixView({ result }: { result: Record<string, unknown> }) {
       </div>
       {matrix.slice(0, 10).map((cell, index) => (
         <div key={`${cell.label || index}`} style={{ borderTop: "1px solid var(--color-border)", paddingTop: 5 }}>
-          <strong style={{ color: "var(--color-text-primary)" }}>{String(cell.label || `Cell ${index + 1}`)}</strong>
-          <div style={{ color: "var(--color-text-tertiary)" }}>
-            {asArray<string>(cell.dataset_keys).join(" + ")} · {String(cell.model || "lcdm")} ·{" "}
-            {cell.publication_ready
-              ? "compressed preliminary posterior"
-              : String(cell.execution_level || "not runnable") === "config_only"
-                ? "configuration only, no posterior run yet"
-                : String(cell.execution_level || "not runnable")}
-          </div>
+          {(() => {
+            const resultObj = asRecord(cell.result);
+            const diagnostics = asRecord(resultObj.chain_diagnostics);
+            const parameters = asRecord(resultObj.parameters);
+            const h0 = asRecord(parameters.H0);
+            const notRun = asArray<Record<string, unknown>>(resultObj.datasets_not_run);
+            const warnings = asArray<string>(cell.warnings);
+            return (
+              <>
+                <strong style={{ color: "var(--color-text-primary)" }}>{String(cell.label || `Cell ${index + 1}`)}</strong>
+                <div style={{ color: "var(--color-text-tertiary)" }}>
+                  {asArray<string>(cell.dataset_keys).join(" + ")} · {String(cell.model || "lcdm")} ·{" "}
+                  {matrixCellStatus(cell)}
+                </div>
+                {Object.keys(diagnostics).length || Object.keys(h0).length ? (
+                  <div style={{ color: "var(--color-text-secondary)", fontSize: "0.74rem", marginTop: 2 }}>
+                    H0 median {fmtNumber(h0.median)} · ESS {fmtNumber(diagnostics.proposal_ess ?? diagnostics.ess_bulk, 1)}
+                    {" · "}Rhat {fmtNumber(diagnostics.rhat, 3)}
+                    {diagnostics.thresholds ? " · threshold ESS≥400/Rhat≤1.05" : ""}
+                  </div>
+                ) : null}
+                {notRun.length ? (
+                  <div style={{ color: "#8a5b00", fontSize: "0.72rem", marginTop: 2 }}>
+                    not numerically included: {notRun.map((entry) => String(entry.key || entry.display_name || "dataset")).join(", ")}
+                  </div>
+                ) : null}
+                {warnings.slice(0, 2).map((warning) => (
+                  <div key={warning} style={{ color: "#8a5b00", fontSize: "0.72rem", marginTop: 2 }}>
+                    ⚠ {warning}
+                  </div>
+                ))}
+              </>
+            );
+          })()}
         </div>
       ))}
     </div>

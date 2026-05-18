@@ -3,7 +3,6 @@ detection, dossier generation, follow-up recommendations, cross-wavelength
 analysis, literature engine, and citation graph.
 """
 
-import asyncio
 import os
 from unittest.mock import patch
 

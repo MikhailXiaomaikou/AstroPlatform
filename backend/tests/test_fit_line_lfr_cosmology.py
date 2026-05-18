@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 
 def _alpine_cache(n: int = 10) -> dict:

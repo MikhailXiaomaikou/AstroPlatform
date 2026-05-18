@@ -13,7 +13,7 @@ request. This test locks both the async and sync paths.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 
 def test_get_literature_context_uses_astronomy_database_fq(monkeypatch) -> None:

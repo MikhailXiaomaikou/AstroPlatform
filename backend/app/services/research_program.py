@@ -154,6 +154,17 @@ def run_research_matrix(
             not_run = run.get("datasets_not_run")
             all_requested_datasets_used = not isinstance(not_run, list) or len(not_run) == 0
             cell_ready = bool(run.get("publication_ready")) and all_requested_datasets_used
+            datasets_used = run.get("datasets_used")
+            any_dataset_used = isinstance(datasets_used, list) and len(datasets_used) > 0
+            chain_diagnostics = run.get("chain_diagnostics")
+            if cell_ready:
+                execution_level = "compressed_preliminary"
+            elif not all_requested_datasets_used and any_dataset_used:
+                execution_level = "partial_dataset_run"
+            elif isinstance(chain_diagnostics, dict):
+                execution_level = "executed_not_ready"
+            else:
+                execution_level = "config_only"
             config = build_likelihood_config(
                 model=model,
                 dataset_keys=cell_datasets,
@@ -165,8 +176,8 @@ def run_research_matrix(
                 "dataset_keys": cell_datasets,
                 "publication_ready": cell_ready,
                 "runnable": cell_ready,
-                "execution_level": "compressed_preliminary"
-                if cell_ready else "config_only",
+                "execution_level": execution_level,
+                "result_publication_ready": bool(run.get("publication_ready")),
                 "result": run,
                 "config_hash": config.get("config_hash"),
                 "warnings": [

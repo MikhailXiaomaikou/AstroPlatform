@@ -1,6 +1,5 @@
 """M5 验收: 1) compare_luminosity_distances 工具 2) export_sample_table 工具."""
 
-import math
 from unittest.mock import patch
 
 import pytest

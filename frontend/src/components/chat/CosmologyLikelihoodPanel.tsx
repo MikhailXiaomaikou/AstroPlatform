@@ -36,6 +36,27 @@ function shortHash(value: unknown): string {
   return text ? text.slice(0, 12) : "—";
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function fmtNumber(value: unknown, digits = 3): string {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(digits);
+}
+
+function matrixRunLabel(row: Record<string, unknown>): string {
+  if (row.publication_ready) return "compressed posterior ready";
+  const level = String(row.execution_level || "not_available");
+  if (level === "partial_dataset_run") return "partial posterior; some datasets not included";
+  if (level === "executed_not_ready") return "posterior attempted; diagnostics below threshold";
+  if (level === "config_only") return "configuration only, no posterior run yet";
+  return level.replace(/_/g, " ");
+}
+
 function statusTone(status: string | undefined): { label: string; color: string; bg: string; border: string } {
   const key = String(status || "unknown").toLowerCase();
   if (key === "ready") {
@@ -183,11 +204,34 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
               </div>
               {row.result && typeof row.result === "object" ? (
                 <div style={{ marginTop: 3, color: row.publication_ready ? "#1b7f42" : "#8a5b00" }}>
-                  {row.publication_ready ? "compressed posterior ready" : "not runnable as posterior"}
+                  {matrixRunLabel(row)}
                   {" · "}
                   used {asArray<DatasetEntry>((row.result as Record<string, unknown>).datasets_used).length} compressed dataset(s)
                 </div>
               ) : null}
+              {row.result && typeof row.result === "object" ? (() => {
+                const resultObj = asRecord(row.result);
+                const diagnostics = asRecord(resultObj.chain_diagnostics);
+                const parameters = asRecord(resultObj.parameters);
+                const h0 = asRecord(parameters.H0);
+                const notRun = asArray<DatasetEntry>(resultObj.datasets_not_run);
+                return (
+                  <>
+                    {Object.keys(diagnostics).length || Object.keys(h0).length ? (
+                      <div style={{ color: "var(--color-text-secondary)", fontSize: "0.72rem", marginTop: 2 }}>
+                        H0 median {fmtNumber(h0.median)}
+                        {" · "}ESS {fmtNumber(diagnostics.proposal_ess ?? diagnostics.ess_bulk, 1)}
+                        {" · "}Rhat {fmtNumber(diagnostics.rhat, 3)}
+                      </div>
+                    ) : null}
+                    {notRun.length ? (
+                      <div style={{ color: "#8a5b00", fontSize: "0.72rem", marginTop: 2 }}>
+                        not numerically included: {notRun.map((entry) => entry.key || entry.display_name || "dataset").join(", ")}
+                      </div>
+                    ) : null}
+                  </>
+                );
+              })() : null}
             </div>
           ))}
         </div>

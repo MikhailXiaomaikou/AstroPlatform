@@ -68,11 +68,28 @@ _COSMOLOGY_FOCUS_TOOL_ALLOWLIST: frozenset[str] = frozenset({
     "run_cosmology_likelihood_chain",
     "build_cosmology_robustness_matrix",
     "run_cosmology_robustness_matrix",
+    "load_cosmology_data_product",
+    # ── Research mode / evidence / report infrastructure ──────
+    "plan_research_program",
+    "run_research_matrix",
+    "build_evidence_graph",
+    "verify_research_facts",
+    "export_research_report",
+    # ── Paper-to-tool mining infrastructure ───────────────────
+    "read_arxiv_paper",
+    "literature_review",
+    "mine_paper_tools",
+    "run_paper_tool_mining_batch",
+    "run_paper_tool_mining_loop",
+    "build_paper_mining_candidate_pool",
+    "build_tool_ontology",
+    "build_tool_gap_matrix",
+    "rank_tool_implementation_queue",
     # ── 高 z 星系 / [CII] LFR (ALPINE / REBELS) ───────────────
     "fit_line_lfr",
     "demagnify_sample",
     "extract_literature_tables",
-    "search_line_measurements",
+    "prepare_spectral_measurements",
     "export_sample_table",
     # ── 红移巡天 / catalog 接入 ───────────────────────────────
     "run_adql",
@@ -82,26 +99,17 @@ _COSMOLOGY_FOCUS_TOOL_ALLOWLIST: frozenset[str] = frozenset({
     "crossmatch_catalogs",
     "query_gaia_cluster",
     "describe_tap_table",
-    "list_known_tables",
     # ── photo-z (大样本红移) ─────────────────────────────────
     "estimate_photo_z",
     "estimate_photo_z_pro",
     # ── SN Ia 标准烛光 / 距离阶梯 ─────────────────────────────
-    "transient_classifier",
+    "classify_transient",
     "search_lightcurve",       # SN Ia / Cepheid 光变曲线
     "fit_transit_model",       # 一些 SN 模型也走这个 fitter
-    # ── Cepheid / variable star (distance ladder, period-luminosity) ──
-    "lomb_scargle_period",
-    "phase_fold",
     # ── 通用 / 必要支撑 ───────────────────────────────────────
     "run_python",
     "search_literature",
     "get_extinction",
-    "k_correction",
-    "compute_luminosity_distance",
-    "compute_absolute_magnitude",
-    "deredden",
-    "estimate_ebv",
     "astro_statistics_toolbox",
 })
 
