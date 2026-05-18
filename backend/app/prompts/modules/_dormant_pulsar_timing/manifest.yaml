@@ -1,0 +1,8 @@
+# Dormant module manifest (M1 Phase 2, 2026-05-18)
+# NOT loaded under ASTRO_RESEARCH_FOCUS=cosmology.
+name: pulsar_timing
+display: Pulsar Timing
+status: dormant
+prompt_file: prompt.md
+tools:
+  - pulsar_derived_quantities

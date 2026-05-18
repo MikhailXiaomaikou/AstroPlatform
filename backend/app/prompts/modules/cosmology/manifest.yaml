@@ -1,0 +1,56 @@
+# Cosmology module manifest (M1 Phase 2, 2026-05-18)
+# ACTIVE — the only module loaded under ASTRO_RESEARCH_FOCUS=cosmology.
+name: cosmology
+display: Observational Cosmology
+status: active
+prompt_file: prompt.md
+
+# Tools loaded for this module = core (via core/infrastructure.yaml)
+#                              + cosmology-specific (23)
+#                              + overlap (15)
+# Total: 20 + 23 + 15 = 58 visible tools.
+tools:
+  # ── cosmology-specific (23) ──
+  - build_cosmology_likelihood
+  - build_cosmology_robustness_matrix
+  - build_evidence_graph
+  - compare_luminosity_distances
+  - demagnify_sample
+  - estimate_photo_z
+  - estimate_photo_z_pro
+  - evaluate_chain_diagnostics
+  - export_research_report
+  - export_sample_table
+  - fit_cosmology_mcmc
+  - fit_line_lfr
+  - get_cosmology_run_status
+  - list_cosmology_datasets
+  - load_cosmology_data_product
+  - plan_research_program
+  - prepare_spectral_measurements
+  - run_cobaya_cosmology
+  - run_cosmology_likelihood_chain
+  - run_cosmology_robustness_matrix
+  - run_nested_sampler
+  - run_research_matrix
+  - verify_research_facts
+  # ── overlap (15) — shared with future active modules ──
+  - analyze_cross_wavelength
+  - analyze_spectrum
+  - analyze_spectrum_pro
+  - classify_transient
+  - classify_transient_spectrum
+  - compute_galaxy_sfr
+  - full_research_report
+  - generate_proposal
+  - get_followup_recommendation
+  - literature_review
+  - query_gaia_cluster
+  - query_high_velocity_stars
+  - query_transients
+  - research_workflow
+  - search_lightcurve
+datasets:
+  # TBD M1 Phase 3 — pull from app.services.cosmology_likelihoods DATASET_REGISTRY.
+  # Will include: desi_dr1_bao, planck2018_compressed, act_dr6, pantheon_plus,
+  #               des_sn_5yr, union3, h0licow, etc.
