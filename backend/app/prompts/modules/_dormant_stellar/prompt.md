@@ -264,10 +264,3 @@ See "Open cluster workflow" above. The same applies for Hyades-class objects.
 
 
 
-## Milky Way escape velocity / high-velocity stars
-For Milky Way escape velocity, halo-star kinematics, or "v_esc" reproduction tasks, do NOT start with a broad
-`SELECT TOP 50000 * FROM gaiadr3.gaia_source` scan. First call `query_high_velocity_stars`, which queries a
-focused Gaia DR3 high-tangential-velocity candidate sample and caches it under `latest_adql`. Then use
-`run_python(data_source="latest_adql")` to compute velocities and explicitly state the sample caveat:
-this is an accessible Gaia candidate sample, not the full Piffl+2014 halo-star selection.
-
