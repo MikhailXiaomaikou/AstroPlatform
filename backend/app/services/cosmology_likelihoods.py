@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import pathlib
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -57,6 +58,12 @@ DEFAULT_BUILDER_PRIORS: dict[str, tuple[float, float]] = {
     "wa": DEFAULT_PRIORS["wa"],
     "omegak": (-0.3, 0.3),
     "mnu": (0.0, 1.0),
+    # SN Ia absolute-magnitude nuisance (Pantheon+SH0ES floats this).
+    # Pantheon+SH0ES best-fit M_B = -19.253 (Riess+ 2022 ApJL 934 L7).
+    # Narrow prior [-19.7, -18.8] keeps importance sampler ESS sane while
+    # still allowing ±0.5 mag wandering, which is far wider than the data's
+    # ~0.03 mag precision.  Wider priors blow up proposal efficiency.
+    "M_B": (-19.7, -18.8),
 }
 
 
@@ -1264,6 +1271,11 @@ RUNNER_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
     "rd": (130.0, 170.0),
     "sigma8": (0.4, 1.2),
     "S8": (0.4, 1.2),
+    # M6 (2026-05-18): Pantheon+SH0ES nuisance — SN Ia absolute magnitude.
+    # Narrow prior [-19.7, -18.8] (vs the wider DEFAULT_BUILDER_PRIORS) keeps
+    # the importance sampler proposal efficiency from collapsing; the data
+    # constrains M_B to ~0.03 mag, so ±0.5 is already very generous.
+    "M_B": (-19.7, -18.8),
 }
 
 
@@ -1626,6 +1638,17 @@ def _is_executable_bao_entry(entry: CosmologyDatasetEntry) -> bool:
     return entry.key in DESI_DR1_BAO_EXECUTABLE_KEYS
 
 
+# M6 (2026-05-18): Pantheon+SH0ES Python chi² runner — bypasses external
+# Cobaya for the SN-distance-modulus likelihood.  1701 SNe + full
+# stat+sys covariance from the 2022 data release, loaded lazily from
+# backend/data/pantheon_plus_2022/data.npz.
+PANTHEON_PLUS_EXECUTABLE_KEYS = {"pantheon_plus"}
+
+
+def _is_executable_sn_entry(entry: CosmologyDatasetEntry) -> bool:
+    return entry.key in PANTHEON_PLUS_EXECUTABLE_KEYS
+
+
 def _run_sampling_likelihood_chain(
     *,
     model_key: str,
@@ -1654,14 +1677,16 @@ def _run_sampling_likelihood_chain(
         )
 
     bao_entries = [entry for entry in entries if _is_executable_bao_entry(entry)]
+    sn_entries = [entry for entry in entries if _is_executable_sn_entry(entry)]
     compressed_entries = [entry for entry in entries if entry.compressed_likelihood is not None]
+    executable_keys = {e.key for e in bao_entries} | {e.key for e in sn_entries}
     skipped_entries = [
         entry
         for entry in entries
-        if entry.key not in {bao.key for bao in bao_entries}
+        if entry.key not in executable_keys
         and entry.compressed_likelihood is None
     ]
-    parameter_order = _sampling_parameter_order(bao_entries, compressed_entries)
+    parameter_order = _sampling_parameter_order(bao_entries, compressed_entries, sn_entries)
     if not parameter_order:
         return _compressed_runner_unavailable(
             model_key=model_key,
@@ -1675,7 +1700,7 @@ def _run_sampling_likelihood_chain(
     invalid_specs: list[str] = []
 
     try:
-        if bao_entries and not compressed_entries:
+        if bao_entries and not compressed_entries and not sn_entries:
             (
                 posterior_samples,
                 best_chi2,
@@ -1701,6 +1726,7 @@ def _run_sampling_likelihood_chain(
                 bao_entries,
                 compressed_entries,
                 sample_count,
+                sn_entries=sn_entries,
             )
             invalid_specs.extend(compressed_errors)
     except Exception as exc:
@@ -1838,14 +1864,21 @@ def _run_sampling_likelihood_chain(
 def _sampling_parameter_order(
     bao_entries: list[CosmologyDatasetEntry],
     compressed_entries: list[CosmologyDatasetEntry],
+    sn_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> list[str]:
     order: list[str] = []
     if bao_entries:
         order.extend(["H0", "omegam", "rd"])
+    if sn_entries:
+        # Pantheon+ chi² needs (H0, Ωm, M_B). H0 / Ωm overlap with BAO/CMB;
+        # M_B (SN Ia absolute-magnitude nuisance) is unique to SN.
+        for param in ("H0", "omegam", "M_B"):
+            if param not in order:
+                order.append(param)
     for param in _compressed_parameter_order(compressed_entries):
         if param not in order:
             order.append(param)
-    preferred = ["H0", "omegam", "rd", "sigma8", "S8"]
+    preferred = ["H0", "omegam", "rd", "sigma8", "S8", "M_B"]
     return [param for param in preferred if param in order] + [
         param for param in order if param not in preferred
     ]
@@ -2029,6 +2062,165 @@ def _draw_gaussian_centered_proposal(
     return samples, log_q
 
 
+# Pantheon+SH0ES proposal-only Gaussian approximation (Brout+ 2022 marginal
+# 1σ on the (H0, Ωm, M_B) plane).  This is *not* used in chi² — the real
+# Pantheon+ chi² uses the full 1701-SN covariance via _pantheon_plus_chi2_samples.
+# It exists purely to seed importance-sampling proposal draws near the SN
+# best fit so the mixture proposal can cover both Planck (H0≈67) and SN
+# (H0≈73) modes.
+_PANTHEON_PLUS_PROPOSAL_MEAN: tuple[float, float, float] = (73.04, 0.334, -19.253)
+_PANTHEON_PLUS_PROPOSAL_COV: tuple[tuple[float, float, float], ...] = (
+    (1.04 ** 2, 0.0, 0.0),
+    (0.0, 0.018 ** 2, 0.0),
+    (0.0, 0.0, 0.027 ** 2),
+)
+_PANTHEON_PLUS_PROPOSAL_NAMES: tuple[str, ...] = ("H0", "omegam", "M_B")
+
+
+def _draw_mixture_gaussian_proposal(
+    rng: np.random.Generator,
+    parameter_order: list[str],
+    prior_bounds: dict[str, tuple[float, float]],
+    compressed_entries: list[CosmologyDatasetEntry],
+    proposal_count: int,
+    *,
+    inflation: float = 2.5,
+    include_pantheon_plus: bool = False,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Mixture-Gaussian importance proposal — covers multiple posterior modes.
+
+    Builds N Gaussian components and draws ``proposal_count/N`` samples from
+    each.  Importance log-pdf is the proper mixture log-pdf
+    ``log[(1/N) Σᵢ q_i(θ)]`` so the importance ratio remains unbiased.
+
+    Components:
+      1. Best compressed-likelihood Gaussian from ``compressed_entries``
+         (typically Planck18; tightest by normalized trace).
+      2. If ``include_pantheon_plus``, a Pantheon+SH0ES proposal Gaussian
+         centered on Brout+ 2022 best fit (H0=73.04, Ωm=0.334, M_B=-19.253).
+
+    Returns ``(samples, log_q)`` or ``None`` if no component fits the
+    requested parameter_order (caller falls back to uniform).
+    """
+    components: list[tuple[np.ndarray, np.ndarray, list[int], list[str]]] = []
+
+    # Component 1: best compressed-likelihood Gaussian.
+    best_entry: CosmologyDatasetEntry | None = None
+    best_trace = math.inf
+    best_local_idx: list[int] = []
+    best_sample_idx: list[int] = []
+    best_names: list[str] = []
+    for entry in compressed_entries:
+        spec = entry.compressed_likelihood
+        if spec is None:
+            continue
+        params = list(spec.parameters)
+        names = [n for n in params if n in parameter_order]
+        if not names:
+            continue
+        local_idx = [params.index(n) for n in names]
+        cov = np.asarray(spec.covariance, dtype=float)[np.ix_(local_idx, local_idx)]
+        scales = np.array(
+            [prior_bounds[n][1] - prior_bounds[n][0] for n in names], dtype=float
+        )
+        if not np.all(scales > 0):
+            continue
+        trace_norm = float(np.sum(np.diagonal(cov) / (scales ** 2)))
+        if trace_norm < best_trace:
+            best_entry = entry
+            best_trace = trace_norm
+            best_local_idx = local_idx
+            best_sample_idx = [parameter_order.index(n) for n in names]
+            best_names = names
+    if best_entry is not None:
+        spec = best_entry.compressed_likelihood
+        assert spec is not None
+        mean = np.asarray(spec.mean, dtype=float)[best_local_idx]
+        cov = np.asarray(spec.covariance, dtype=float)[
+            np.ix_(best_local_idx, best_local_idx)
+        ]
+        components.append((mean, cov, best_sample_idx, best_names))
+
+    # Component 2: Pantheon+SH0ES proposal Gaussian (proposal-only).
+    if include_pantheon_plus:
+        names = [n for n in _PANTHEON_PLUS_PROPOSAL_NAMES if n in parameter_order]
+        if names:
+            local_idx = [
+                _PANTHEON_PLUS_PROPOSAL_NAMES.index(n) for n in names
+            ]
+            sample_idx = [parameter_order.index(n) for n in names]
+            mean = np.asarray(_PANTHEON_PLUS_PROPOSAL_MEAN, dtype=float)[local_idx]
+            cov_full = np.asarray(_PANTHEON_PLUS_PROPOSAL_COV, dtype=float)
+            cov = cov_full[np.ix_(local_idx, local_idx)]
+            components.append((mean, cov, sample_idx, names))
+
+    n_components = len(components)
+    if n_components == 0:
+        return None
+
+    # Per-component sample budget — generously oversample to survive box rejection.
+    per_comp = max(1, proposal_count // n_components)
+    over_per_comp = max(int(per_comp * 1.5), per_comp + 1)
+
+    # Per-component inflation factor — Pantheon+SH0ES proposal Gaussian
+    # is narrower (σ_H0=1.04) than Planck18 (σ_H0=0.54) but the *joint*
+    # BAO+SN+CMB posterior is much wider in H0 than either component alone
+    # because of the H0 tension.  Inflate Pantheon+ more aggressively so its
+    # proposal covers the joint posterior tail near Planck H0.
+    def _per_component_inflation(names: list[str]) -> float:
+        # SN-component Gaussian identifies itself by having "M_B" in its names.
+        if "M_B" in names:
+            return max(inflation * 2.0, 5.0)
+        return inflation
+
+    all_samples_list: list[np.ndarray] = []
+    for mean, cov, sample_idx, names in components:
+        infl = _per_component_inflation(names)
+        cov_inflated = cov * (infl ** 2) + np.eye(len(names)) * 1e-12
+        sign, _ = np.linalg.slogdet(cov_inflated)
+        if sign <= 0:
+            return None
+        samples_block = np.empty(
+            (over_per_comp, len(parameter_order)), dtype=float
+        )
+        draws = rng.multivariate_normal(mean, cov_inflated, size=over_per_comp)
+        for k, idx in enumerate(sample_idx):
+            samples_block[:, idx] = draws[:, k]
+        for i, name in enumerate(parameter_order):
+            if i not in sample_idx:
+                low, high = prior_bounds[name]
+                samples_block[:, i] = rng.uniform(low, high, size=over_per_comp)
+        in_box = np.ones(over_per_comp, dtype=bool)
+        for i, name in enumerate(parameter_order):
+            low, high = prior_bounds[name]
+            in_box &= (samples_block[:, i] >= low) & (samples_block[:, i] <= high)
+        samples_block = samples_block[in_box]
+        if samples_block.shape[0] < per_comp:
+            return None
+        all_samples_list.append(samples_block[:per_comp])
+
+    samples = np.concatenate(all_samples_list, axis=0)
+    n_total = samples.shape[0]
+
+    # Mixture log-pdf: log[(1/N) Σᵢ qᵢ(θ)].
+    log_qs = np.empty((n_total, n_components), dtype=float)
+    for i, (mean, cov, sample_idx, names) in enumerate(components):
+        infl = _per_component_inflation(names)
+        cov_inflated = cov * (infl ** 2) + np.eye(len(names)) * 1e-12
+        sign, logdet = np.linalg.slogdet(cov_inflated)
+        if sign <= 0 or not math.isfinite(logdet):
+            return None
+        inv_cov = np.linalg.inv(cov_inflated)
+        diffs = samples[:, sample_idx] - mean
+        log_qs[:, i] = (
+            -0.5 * np.einsum("ni,ij,nj->n", diffs, inv_cov, diffs)
+            - 0.5 * logdet
+            - 0.5 * len(names) * np.log(2.0 * np.pi)
+        )
+    log_q_total = -math.log(n_components) + np.logaddexp.reduce(log_qs, axis=1)
+    return samples, log_q_total
+
+
 def _draw_importance_posterior(
     rng: np.random.Generator,
     parameter_order: list[str],
@@ -2036,30 +2228,59 @@ def _draw_importance_posterior(
     bao_entries: list[CosmologyDatasetEntry],
     compressed_entries: list[CosmologyDatasetEntry],
     sample_count: int,
+    *,
+    sn_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
     proposal_count = min(max(sample_count * 25, 80_000), 300_000)
 
-    # Gaussian-centered proposal when any compressed entry has a Gaussian
-    # likelihood overlapping the sampling parameters; otherwise fall back to
-    # uniform-prior proposal.  Without this, high-precision Gaussians like
-    # Planck compressed (σ_H0=0.54, σ_Ωm=0.0073) collapse importance ESS to
-    # ~1 because the uniform proposal puts almost no mass where the
-    # likelihood is non-negligible.
-    gaussian_proposal = _draw_gaussian_centered_proposal(
-        rng, parameter_order, prior_bounds, compressed_entries, proposal_count,
-    )
-    if gaussian_proposal is not None:
-        samples, log_proposal_pdf = gaussian_proposal
-    else:
-        samples = _draw_uniform_prior_samples(
-            rng, parameter_order, prior_bounds, proposal_count
+    # Build proposal.  When SN entries are present, importance sampling on a
+    # single-component Gaussian (e.g. Planck-centered) fails because the
+    # Pantheon+ likelihood pulls posteriors toward H0≈73 / Ωm≈0.33, far from
+    # Planck's H0=67.36.  We use a *mixture* proposal: sample half from
+    # Planck's Gaussian, half from a Pantheon+SH0ES-best-fit Gaussian, so the
+    # proposal covers both modes.  The mixture log-pdf is the proper log
+    # average.
+    if sn_entries and any(e.key == "pantheon_plus" for e in sn_entries):
+        mixture_proposal = _draw_mixture_gaussian_proposal(
+            rng,
+            parameter_order,
+            prior_bounds,
+            compressed_entries,
+            proposal_count,
+            include_pantheon_plus=True,
         )
-        log_proposal_pdf = np.zeros(samples.shape[0], dtype=float)
+        if mixture_proposal is not None:
+            samples, log_proposal_pdf = mixture_proposal
+        else:
+            samples = _draw_uniform_prior_samples(
+                rng, parameter_order, prior_bounds, proposal_count
+            )
+            log_proposal_pdf = np.zeros(samples.shape[0], dtype=float)
+    else:
+        # Gaussian-centered single-component proposal when any compressed
+        # entry has a Gaussian likelihood overlapping the sampling parameters;
+        # otherwise fall back to uniform-prior proposal.  Without this,
+        # high-precision Gaussians like Planck compressed (σ_H0=0.54,
+        # σ_Ωm=0.0073) collapse importance ESS to ~1 because the uniform
+        # proposal puts almost no mass where the likelihood is non-negligible.
+        gaussian_proposal = _draw_gaussian_centered_proposal(
+            rng, parameter_order, prior_bounds, compressed_entries, proposal_count,
+        )
+        if gaussian_proposal is not None:
+            samples, log_proposal_pdf = gaussian_proposal
+        else:
+            samples = _draw_uniform_prior_samples(
+                rng, parameter_order, prior_bounds, proposal_count
+            )
+            log_proposal_pdf = np.zeros(samples.shape[0], dtype=float)
 
     chi2 = np.zeros(samples.shape[0], dtype=float)
     for entry in bao_entries:
         if entry.key == "desi_dr1_bao":
             chi2 += _desi_dr1_bao_chi2_samples(samples, parameter_order)
+    for entry in (sn_entries or []):
+        if entry.key == "pantheon_plus":
+            chi2 += _pantheon_plus_chi2_samples(samples, parameter_order)
     extra_chi2, compressed_errors = _compressed_chi2_samples(
         samples,
         parameter_order,
@@ -2116,6 +2337,88 @@ def _desi_dr1_bao_predictions(samples: np.ndarray, parameter_order: list[str]) -
         else:
             raise ValueError(f"unsupported DESI BAO quantity {quantity!r}")
     return predictions
+
+
+# M6 (2026-05-18): Pantheon+SH0ES 2022 data loader.  Lazy-loaded from a
+# ~20 MB npz committed alongside the source code (see
+# scripts/fetch_pantheon_plus.py for the regeneration script).  Holds the
+# distance-modulus table + the full 1701x1701 stat+sys covariance + its
+# inverse.  Inverse is cached because Cholesky-once-solve-many beats
+# rebuilding it inside every chain.
+_PANTHEON_PLUS_DATA_DIR = (
+    pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "pantheon_plus_2022"
+)
+_pantheon_plus_data_cache: dict[str, np.ndarray] | None = None
+
+
+def _load_pantheon_plus_data() -> dict[str, np.ndarray]:
+    global _pantheon_plus_data_cache
+    if _pantheon_plus_data_cache is not None:
+        return _pantheon_plus_data_cache
+    npz_path = _PANTHEON_PLUS_DATA_DIR / "data.npz"
+    if not npz_path.exists():
+        raise FileNotFoundError(
+            f"Pantheon+SH0ES data file missing: {npz_path}. "
+            "Run `python scripts/fetch_pantheon_plus.py` to download "
+            "the 2022 release (~20 MB)."
+        )
+    npz = np.load(npz_path)
+    cov = np.asarray(npz["cov"], dtype=np.float64)
+    _pantheon_plus_data_cache = {
+        "z_hd": np.asarray(npz["z_hd"], dtype=np.float64),
+        "z_hel": np.asarray(npz["z_hel"], dtype=np.float64),
+        "mu": np.asarray(npz["mu"], dtype=np.float64),
+        "mu_err_diag": np.asarray(npz["mu_err_diag"], dtype=np.float64),
+        "cov": cov,
+        "cov_inv": np.linalg.inv(cov),
+    }
+    return _pantheon_plus_data_cache
+
+
+# Pantheon+SH0ES baseline absolute magnitude.  The MU_SH0ES column in the
+# data release is calibrated against the SH0ES Cepheid-SN distance ladder,
+# which has M_B = -19.253 (Riess+ 2022 ApJL 934 L7).  Our likelihood lets
+# the fit move M_B away from this baseline; the offset (M_B - M_B_REF) is
+# what actually appears in the model, so at (H0=73.04, Ωm=0.334, M_B=-19.253)
+# the residual collapses to zero and χ² ≈ dof (Pantheon+SH0ES best fit).
+PANTHEON_PLUS_M_B_REF = -19.253
+
+
+def _pantheon_plus_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """χ² contribution from Pantheon+SH0ES 1701 SNe Ia.
+
+    Model: μ_model(z) = 5·log10(D_L(z; H0, Ωm) [Mpc]) + 25 + (M_B - M_B_REF)
+       where D_L = (1+z)·D_M, M_B_REF = -19.253 is the SH0ES baseline, and
+       M_B is fit as a free nuisance.  At M_B = M_B_REF + 0 the model matches
+       the SH0ES-calibrated distance modulus; offsets let the SN data
+       constrain (H0, M_B) jointly, breaking the H0 degeneracy when combined
+       with BAO/CMB.
+    χ² = (μ_obs - μ_model)ᵀ · C⁻¹ · (μ_obs - μ_model)
+
+    parameter_order must contain "H0", "omegam", "M_B".
+    """
+    data = _load_pantheon_plus_data()
+    z = data["z_hd"]
+    mu_obs = data["mu"]
+    cov_inv = data["cov_inv"]
+    h0 = samples[:, parameter_order.index("H0")]
+    omegam = samples[:, parameter_order.index("omegam")]
+    m_b = samples[:, parameter_order.index("M_B")]
+    n_sn = z.size
+    # Precompute D_M(z; H0, Ωm) for every (z, sample) pair.
+    dm_grid = np.empty((n_sn, samples.shape[0]), dtype=np.float64)
+    for j, z_j in enumerate(z):
+        dm_j, _, _ = _flat_lcdm_distances_at_z(float(z_j), h0, omegam)
+        dm_grid[j] = dm_j
+    # Luminosity distance, then distance modulus with the offset-from-SH0ES.
+    dl_grid = (1.0 + z[:, None]) * dm_grid  # (n_sn, n_samples), Mpc
+    mu_model = (
+        5.0 * np.log10(dl_grid) + 25.0 + (m_b[None, :] - PANTHEON_PLUS_M_B_REF)
+    )
+    residual = mu_obs[:, None] - mu_model  # (n_sn, n_samples)
+    return np.einsum("in,ij,jn->n", residual, cov_inv, residual)
 
 
 def _flat_lcdm_distances_at_z(

@@ -16,7 +16,20 @@ node_modules/
 dist/
 
 # Data & storage
-data/
+# M6 (2026-05-18): rewrote from blanket `data/` to specific subpaths so we
+# can vendor the Pantheon+SH0ES 2022 release (20 MB npz, needed at runtime
+# for the SN χ² runner) without pulling in user uploads / runtime caches.
+data/uploads/
+data/cache/
+data/fits/
+data/tmp/
+data/sandbox/
+data/sessions/
+backend/data/uploads/
+backend/data/cache/
+backend/data/fits/
+backend/data/tmp/
+backend/data/sessions/
 *.db
 
 # Environment
