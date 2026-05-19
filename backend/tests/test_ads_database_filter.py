@@ -72,3 +72,5 @@ def test_search_literature_sync_uses_astronomy_database_fq(monkeypatch) -> None:
         literature_engine.search_literature("AGN variability")
 
     assert captured["params"].get("fq") == "database:astronomy"
+
+

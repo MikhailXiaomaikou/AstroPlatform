@@ -3942,7 +3942,7 @@ async def _exec_literature(inp: dict) -> dict:
             "result_granularity": "paper_abstract",
             "supports_measurement_claims": False,
             "filtered_out_count": filtered_out_count,
-            "relevance_filter": "query_keyword_overlap",
+            "relevance_filter": "off_topic_blacklist",
             "results": result_papers,
             "__message_to_model__": (
                 "REQUIRED before any further tool call: read each abstract "
@@ -4015,6 +4015,25 @@ def _filter_literature_hits_for_query(
     query: str,
     rows: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
+    """Stage 6 P0c-a v2 (2026-05-19): backend filter 改成黑名单一票否决.
+
+    旧版用 keyword 积分 + score >= 2 才留, 在 cosmology query 边缘容易
+    误删 abstract 没命中 anchor 词的真 paper (prod 跑 2: 同 prompt 一次
+    24 篇一次 0 篇, 0 篇路径是 8 篇 ADS 结果全部 score<2 被删).
+
+    新版: 不积分, 只看是否命中明显 off-topic 黑名单. 细粒度 relevance
+    评分交给 6.2 强制 LLM 输出的 Direct/Marginal/Off-topic 表. backend
+    只保留 anti-leak hard-block (R2.9/M4 audit: BESIII / 电力工程论文真的
+    leak 进 cosmology 搜索过).
+
+    黑名单三类:
+      1. 已知粒子物理 off-topic (BESIII / LHCb / CKM / b meson / ...)
+      2. 通用脏词 (wildfire / 电网 / wi-fi / semiring / ...)
+      3. "particle physics" 字样但**没**任何 cosmology anchor (保留 PDG
+         "The Cosmological Parameters" 这类合法 review)
+
+    Generic domain query 不过滤 (跟旧版一致).
+    """
     if not rows:
         return [], 0
 
@@ -4022,29 +4041,35 @@ def _filter_literature_hits_for_query(
     if domain == "generic":
         return rows, 0
 
-    scored = [
-        (_literature_relevance_score(query, row, domain), row)
-        for row in rows
-    ]
-    kept = [row for score, row in scored if score >= 2]
-    if not kept:
-        logger.info(
-            "search_literature relevance filter removed all hits domain=%s query=%r",
-            domain,
-            query[:120],
-        )
-        return [], len(rows)
-    kept.sort(key=lambda row: _literature_relevance_score(query, row, domain), reverse=True)
+    kept = [row for row in rows if not _literature_hit_is_blacklisted(row, domain)]
     filtered_out = len(rows) - len(kept)
     if filtered_out:
         logger.info(
-            "search_literature relevance filter removed %d/%d hits domain=%s query=%r",
+            "search_literature blacklist removed %d/%d off-topic hits domain=%s query=%r",
             filtered_out,
             len(rows),
             domain,
             query[:120],
         )
     return kept, filtered_out
+
+
+def _literature_hit_is_blacklisted(row: dict[str, Any], domain: str) -> bool:
+    """命中任一黑名单 → True (一票否决)."""
+    blob = _normalize_literature_text(" ".join(
+        str(row.get(key) or "")
+        for key in ("title", "abstract", "bibcode", "source", "pub")
+    ))
+    if any(marker in blob for marker in _OFF_TOPIC_HIGH_ENERGY_MARKERS):
+        return True
+    if any(marker in blob for marker in _OFF_TOPIC_GENERAL_MARKERS):
+        return True
+    if domain == "cosmology":
+        if "particle physics" in blob and not any(
+            marker in blob for marker in _COSMOLOGY_RELEVANCE_ANCHORS
+        ):
+            return True
+    return False
 
 
 def _literature_query_domain(query: str) -> str:

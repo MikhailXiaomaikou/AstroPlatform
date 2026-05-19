@@ -1160,6 +1160,40 @@ def test_literature_tool_returns_empty_when_all_cosmology_hits_are_off_topic():
     assert result["filtered_out_count"] == 1
 
 
+def test_literature_filter_keeps_cosmology_papers_without_explicit_anchor():
+    """Stage 6 P0c-a v2 (2026-05-19): cosmology query + 真 cosmology paper
+    但 abstract **没**命中 anchor 词 (cosmolog/desi/bao/dark energy/...) 应
+    保留. 旧 keyword score 算法在这种边缘 abstract 上 score<2 全删, 是
+    prod 跑 2 "24→0 篇" 现象的根因之一. 新黑名单算法不积分, 只看
+    off-topic 黑名单 → 不命中 → 留.
+    """
+    from app.services.ai_tools import _exec_literature
+
+    edge_case = {
+        "title": "On the discrepancy of sigma8 measurements across surveys",
+        "authors": ["Random Author"],
+        "year": "2025",
+        "bibcode": "arXiv:2501.99999",
+        "abstract": (
+            "We propose a new method to evaluate parameter discrepancy "
+            "across modern observational surveys."
+        ),
+        "source": "arxiv",
+    }
+
+    with (
+        patch("app.api.citations._search_ads_sync", return_value=[]),
+        patch("app.api.citations._search_literature_ads", return_value=[edge_case]),
+        patch("app.api.citations._search_literature_arxiv", return_value=[]),
+    ):
+        result = asyncio.run(_exec_literature({
+            "query": "sigma8 tension cosmology parameter discrepancy"
+        }))
+
+    assert [r["bibcode"] for r in result["results"]] == ["arXiv:2501.99999"]
+    assert result["filtered_out_count"] == 0
+
+
 def test_line_lfr_uses_verified_cii_seed_when_search_has_no_candidates():
     from app.api.chat import _verified_line_relation_seed_candidates
 
