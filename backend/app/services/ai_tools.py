@@ -580,6 +580,51 @@ TOOLS = [
         },
     },
     {
+        "name": "spot_check_literature_value",
+        "description": (
+            "Stage 4 (2026-05-19) — Verify a numeric value cited from a single paper "
+            "by comparing against vendored archive data. Call BEFORE quoting a "
+            "single-source literature value when the quantity is supported. Returns "
+            "{status: passed/failed/unavailable, our_value, paper_value, "
+            "sigma_distance, reason}. Does NOT replace peer review — reduction-level "
+            "fabrication cannot be detected. Requires env LITERATURE_SPOT_CHECK_ENABLED=true. "
+            "Supported quantity types (MVP):\n"
+            "  - 'sn_distance_modulus': SN name (e.g. '2011fe') + claimed mu vs Pantheon+SH0ES 2022\n"
+            "  - 'cmb_parameter': param ∈ {H0, omegam, sigma8, S8} vs Planck 2018 baseline"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "quantity_type": {
+                    "type": "string",
+                    "enum": ["sn_distance_modulus", "cmb_parameter"],
+                    "description": "Which spot-check pipeline to run",
+                },
+                "claimed_value": {
+                    "type": "number",
+                    "description": "The numeric value the paper reports / you are about to cite",
+                },
+                "sn_name": {
+                    "type": "string",
+                    "description": "Required when quantity_type=sn_distance_modulus. Pantheon+ CID (e.g. '2011fe', '2007af').",
+                },
+                "param": {
+                    "type": "string",
+                    "description": "Required when quantity_type=cmb_parameter. One of H0/omegam/sigma8/S8 (or common aliases).",
+                },
+                "margin_sigma": {
+                    "type": "number",
+                    "description": "Tolerance in σ. Default 3.0. Above this → status=failed.",
+                },
+                "bibcode": {
+                    "type": "string",
+                    "description": "Optional source paper bibcode for provenance",
+                },
+            },
+            "required": ["quantity_type", "claimed_value"],
+        },
+    },
+    {
         "name": "prepare_spectral_measurements",
         "description": (
             "Validate and summarize cited spectral line measurement rows from a "
@@ -2159,6 +2204,8 @@ async def _execute_tool_inner(
                 tool_input, python_session_id,
                 user_id=user_id, chat_session_id=chat_session_id,
             )
+        elif tool_name == "spot_check_literature_value":
+            return _exec_spot_check_literature_value(tool_input)
         elif tool_name == "prepare_spectral_measurements":
             return _exec_prepare_spectral_measurements(tool_input, python_session_id)
         elif tool_name == "fit_line_lfr":
@@ -7152,6 +7199,95 @@ async def _exec_sensitivity_analysis(inp: dict, python_session_id: str = "defaul
             results.append({"perturbation": frac, "value": value, "error": "timeout", "success": False})
 
     return {"parameter": param, "base_value": base, "results": results}
+
+
+def _exec_spot_check_literature_value(inp: dict) -> dict:
+    """Stage 4 (2026-05-19) — Run a literature spot-check against vendored archive.
+
+    Opt-in: requires env LITERATURE_SPOT_CHECK_ENABLED=true. When disabled,
+    returns a no-op result so the AI can still call the tool but won't get
+    misleading pass/fail — this preserves "不影响整体" guarantee.
+    """
+    from app.services.literature_spot_check import (
+        check_cmb_compressed_value,
+        check_sn_distance_modulus,
+        is_spot_check_enabled,
+    )
+
+    if not is_spot_check_enabled():
+        return {
+            "success": True,
+            "spot_check_disabled": True,
+            "__message_to_model__": (
+                "Spot-check is currently disabled (LITERATURE_SPOT_CHECK_ENABLED!=true). "
+                "Proceed with citing the value but flag to the user that automatic "
+                "spot-check is unavailable in this environment."
+            ),
+        }
+
+    qtype = str(inp.get("quantity_type") or "").strip()
+    try:
+        claimed = float(inp.get("claimed_value"))
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "error": "claimed_value must be a number",
+            "error_class": "missing_claimed_value",
+        }
+    margin = float(inp.get("margin_sigma") or 3.0)
+    bibcode = str(inp.get("bibcode") or "").strip() or None
+
+    if qtype == "sn_distance_modulus":
+        sn_name = str(inp.get("sn_name") or "").strip()
+        if not sn_name:
+            return {
+                "success": False,
+                "error": "sn_distance_modulus requires sn_name (e.g. '2011fe')",
+                "error_class": "missing_sn_name",
+            }
+        result = check_sn_distance_modulus(sn_name, claimed, margin_sigma=margin)
+    elif qtype == "cmb_parameter":
+        param = str(inp.get("param") or "").strip()
+        if not param:
+            return {
+                "success": False,
+                "error": "cmb_parameter requires param (e.g. 'H0', 'omegam')",
+                "error_class": "missing_cmb_param",
+            }
+        result = check_cmb_compressed_value(param, claimed, margin_sigma=margin)
+    else:
+        return {
+            "success": False,
+            "error": (
+                f"Unknown quantity_type {qtype!r}. MVP supports: "
+                "['sn_distance_modulus', 'cmb_parameter']"
+            ),
+            "error_class": "unknown_quantity_type",
+        }
+
+    payload = result.to_dict()
+    payload["success"] = True
+    if bibcode:
+        payload["bibcode"] = bibcode
+    # Message to model is verdict-driven so AI knows whether to cite or warn
+    if result.status == "passed":
+        payload["__message_to_model__"] = (
+            f"Spot-check PASSED: claimed {qtype} value is within {result.margin_sigma:.1f}σ "
+            f"of our archive value. Cite the paper but include a brief verification note."
+        )
+    elif result.status == "failed":
+        payload["__message_to_model__"] = (
+            f"Spot-check FAILED: claimed value is {result.sigma_distance:.1f}σ away from "
+            f"our archive value (threshold {result.margin_sigma:.1f}σ). DO NOT cite this "
+            f"value as ground truth. Either flag the discrepancy to the user or use an "
+            f"independent measurement."
+        )
+    else:  # unavailable
+        payload["__message_to_model__"] = (
+            f"Spot-check UNAVAILABLE: {result.reason}. Proceed with caution and tell the "
+            f"user that automatic verification could not be performed for this value."
+        )
+    return payload
 
 
 def _exec_get_cached_results(inp: dict) -> dict:

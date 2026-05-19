@@ -46,21 +46,27 @@ def fetch(url: str) -> str:
         return r.text
 
 
-def parse_table(text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def parse_table(text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Parse the Pantheon+SH0ES.dat table.
 
     First line is a space-separated header. Subsequent lines are SNe.
-    Returns (zHD, zHEL, mu, mu_err_diag).
+    Returns (cid, zHD, zHEL, mu, mu_err_diag).
+
+    Stage 4 (2026-05-19): added `cid` (SN name, e.g. "2011fe") for the
+    literature_spot_check module. Same SN can appear in multiple rows
+    (different IDSURVEY), so the spot-check loader handles inverse-variance
+    weighted aggregation downstream.
     """
     lines = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
     header = lines[0].split()
     rows = [ln.split() for ln in lines[1:]]
     idx = {col: header.index(col) for col in header}
+    cid = np.array([r[idx["CID"]] for r in rows], dtype="U32")
     z_hd = np.array([float(r[idx["zHD"]]) for r in rows])
     z_hel = np.array([float(r[idx["zHEL"]]) for r in rows])
     mu = np.array([float(r[idx["MU_SH0ES"]]) for r in rows])
     mu_err = np.array([float(r[idx["MU_SH0ES_ERR_DIAG"]]) for r in rows])
-    return z_hd, z_hel, mu, mu_err
+    return cid, z_hd, z_hel, mu, mu_err
 
 
 def parse_covariance(text: str, n: int) -> np.ndarray:
@@ -84,11 +90,13 @@ def main() -> None:
     table_text = fetch(TABLE_URL)
     cov_text = fetch(COV_URL)
 
-    z_hd, z_hel, mu, mu_err = parse_table(table_text)
+    cid, z_hd, z_hel, mu, mu_err = parse_table(table_text)
     n = z_hd.size
     print(f"  Parsed table: {n} SNe")
     if n != 1701:
         print(f"  WARNING: expected 1701 SNe, got {n}", file=sys.stderr)
+    unique_cids = len(set(cid.tolist()))
+    print(f"  Unique CIDs: {unique_cids} (some SNe appear in multiple surveys)")
 
     cov = parse_covariance(cov_text, n)
     print(f"  Parsed covariance: {cov.shape}")
@@ -103,6 +111,7 @@ def main() -> None:
     out_path = OUT_DIR / "data.npz"
     np.savez_compressed(
         out_path,
+        cid=cid,
         z_hd=z_hd,
         z_hel=z_hel,
         mu=mu,

@@ -1727,6 +1727,82 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     return <ResearchProgramPanel result={result} />;
   }
 
+  // Stage 4 (2026-05-19): literature spot-check banner.
+  // 3 状态: passed (绿) / failed (红) / unavailable (灰)
+  // 数据 shape 来自 literature_spot_check.SpotCheckResult.to_dict().
+  if (toolName === "spot_check_literature_value") {
+    if (result.spot_check_disabled) {
+      return (
+        <div style={{ fontSize: "0.78rem", color: "#6b6b6b", fontStyle: "italic" }}>
+          ℹ Literature spot-check is disabled in this deployment
+          (LITERATURE_SPOT_CHECK_ENABLED=false).
+        </div>
+      );
+    }
+    const status = String(result.status || "unavailable");
+    const passed = status === "passed";
+    const failed = status === "failed";
+    const bg = passed
+      ? "rgba(46,106,78,.10)"
+      : failed
+        ? "rgba(239,68,68,.10)"
+        : "rgba(107,107,107,.10)";
+    const border = passed ? "#2e6a4e" : failed ? "#ef4444" : "#9b9b9b";
+    const fgColor = passed ? "#166534" : failed ? "#7f1d1d" : "#4b4b4b";
+    const icon = passed ? "✓" : failed ? "⚠" : "ℹ";
+    const label = passed
+      ? "VERIFIED"
+      : failed
+        ? "FAILED VERIFICATION"
+        : "VERIFICATION UNAVAILABLE";
+    const fmtNum = (v: unknown): string =>
+      v == null || typeof v !== "number" ? "—" : v.toFixed(4);
+    const fmtSigma = (v: unknown): string =>
+      v == null || typeof v !== "number" ? "—" : `${v.toFixed(2)}σ`;
+    return (
+      <div
+        style={{
+          fontSize: "0.78rem",
+          color: fgColor,
+          background: bg,
+          border: `1px solid ${border}`,
+          borderRadius: 4,
+          padding: "8px 12px",
+          marginTop: 4,
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>
+          {icon} Literature spot-check: {label}
+        </div>
+        <div>
+          Target: <code>{String(result.target || "")}</code> (
+          {String(result.quantity_type || "")})
+        </div>
+        <div>
+          Paper value: <strong>{fmtNum(result.paper_value)}</strong>
+          &nbsp;|&nbsp; Our value: <strong>{fmtNum(result.our_value)}</strong>
+          &nbsp;|&nbsp; Distance: <strong>{fmtSigma(result.sigma_distance)}</strong>
+          {result.margin_sigma != null && typeof result.margin_sigma === "number"
+            ? ` (threshold ${result.margin_sigma.toFixed(1)}σ)`
+            : ""}
+        </div>
+        <div style={{ marginTop: 4, opacity: 0.85 }}>
+          {String(result.reason || "")}
+        </div>
+        <div
+          style={{
+            marginTop: 4,
+            fontSize: "0.72rem",
+            opacity: 0.7,
+            fontStyle: "italic",
+          }}
+        >
+          {String(result.disclaimer || "")}
+        </div>
+      </div>
+    );
+  }
+
   // Pipeline
   // Stage 3 Bug 2: "Open in Pipeline Editor" button removed — M3 (2026-05-18)
   // deleted the /pipeline page, so this button always navigated to a 404

@@ -32,6 +32,7 @@ tools:
   - run_cosmology_robustness_matrix
   - run_nested_sampler
   - run_research_matrix
+  - spot_check_literature_value  # Stage 4 (2026-05-19): literature value verification against vendored archive
   - verify_research_facts
   # ── overlap (15) — shared with future active modules ──
   - analyze_cross_wavelength
