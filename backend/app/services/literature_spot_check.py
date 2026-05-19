@@ -15,9 +15,11 @@ p-hack / 杜撰的, AI 会直接 mine 后塞给用户. 本模块给关键 cosmol
 1. SN distance modulus — 查 Pantheon+SH0ES 2022 1701 SN catalog
 2. CMB compressed parameter (H0/Ωm/σ8/S8) — 跟 Planck 2018 baseline 一致性比对
 
-不支持 (Phase 2):
-- BAO scale (需先 vendor DESI 2024 BAO data)
+不支持 (Phase 3+):
 - Cepheid 距离梯子 (需 HST + Gaia 多源)
+
+Stage 4 Phase 2 (2026-05-19 Stage 6 P0c-D) 新增:
+- BAO 距离比 (DM/rd / DH/rd / DV/rd) vs DESI 2024 DR1 (arXiv:2404.03002)
 """
 
 from __future__ import annotations
@@ -36,6 +38,12 @@ _PANTHEON_PLUS_NPZ = (
     / "data"
     / "pantheon_plus_2022"
     / "data.npz"
+)
+
+_DESI_2024_BAO_CSV = (
+    Path(__file__).resolve().parent.parent.parent
+    / "data"
+    / "desi_2024_bao.csv"
 )
 
 
@@ -249,5 +257,142 @@ def check_cmb_compressed_value(
             f"{mean:.4f} ± {sigma:.4f} ({sigma_distance:.2f}σ apart, "
             f"threshold {margin_sigma:.1f}σ). Note: this checks consistency with "
             f"the published Planck baseline, NOT independent CMB analysis."
+        ),
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_desi_2024_bao() -> dict[tuple[float, str], tuple[float, float, str]]:
+    """Load DESI 2024 DR1 BAO measurements from vendor CSV.
+
+    Returns dict {(z_eff, quantity): (value, sigma, tracer)}. quantity is one
+    of "DM_over_rd" / "DH_over_rd" / "DV_over_rd".
+    """
+    if not _DESI_2024_BAO_CSV.exists():
+        raise FileNotFoundError(
+            f"DESI 2024 BAO CSV not vendored at {_DESI_2024_BAO_CSV}"
+        )
+    data: dict[tuple[float, str], tuple[float, float, str]] = {}
+    with open(_DESI_2024_BAO_CSV) as fp:
+        for line in fp:
+            line = line.strip()
+            if not line or line.startswith("#") or line.lower().startswith("z_eff"):
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 5:
+                continue
+            try:
+                z_eff = float(parts[0])
+                value = float(parts[2])
+                sigma = float(parts[3])
+            except ValueError:
+                continue
+            quantity = parts[1]
+            tracer = parts[4]
+            data[(z_eff, quantity)] = (value, sigma, tracer)
+    return data
+
+
+def check_bao_distance_ratio(
+    z_eff: float,
+    quantity: str,
+    claimed_value: float,
+    margin_sigma: float = 3.0,
+    z_tolerance: float = 0.05,
+) -> SpotCheckResult:
+    """Stage 6 P0c-D (Stage 4 Phase 2): BAO 距离比 spot-check vs DESI 2024 DR1.
+
+    工作流: 找 |z - z_eff_paper| <= z_tolerance 的最近 z_eff bin, 取它的
+    DESI 值跟 claimed 比. 没找到 close bin → unavailable.
+
+    Args:
+        z_eff: 论文 cite 的 z_eff (e.g. 0.51)
+        quantity: 必须是 "DM_over_rd" / "DH_over_rd" / "DV_over_rd"
+        claimed_value: 论文报告的距离比值
+        margin_sigma: 阈值, 默认 3σ
+        z_tolerance: z_eff 匹配容差, 默认 0.05
+
+    Returns:
+        SpotCheckResult — status ∈ {passed, failed, unavailable}
+
+    注意: 不处理 cross-correlation between DM/rd & DH/rd at same z_eff
+    (DESI typical r ~ -0.4 to -0.5). 这是 ±σ heuristic, 不是真 χ² 检验.
+    """
+    valid_quantities = {"DM_over_rd", "DH_over_rd", "DV_over_rd"}
+    if quantity not in valid_quantities:
+        return SpotCheckResult(
+            status="unavailable",
+            passed=False,
+            our_value=None,
+            paper_value=claimed_value,
+            sigma_distance=None,
+            margin_sigma=margin_sigma,
+            source="desi_2024_dr1_bao",
+            quantity_type=f"bao_{quantity}",
+            target=f"z={z_eff:.3f}",
+            reason=(
+                f"Quantity {quantity!r} not supported. Use one of: "
+                f"{sorted(valid_quantities)}"
+            ),
+        )
+    try:
+        bao_data = _load_desi_2024_bao()
+    except FileNotFoundError as exc:
+        return SpotCheckResult(
+            status="unavailable",
+            passed=False,
+            our_value=None,
+            paper_value=claimed_value,
+            sigma_distance=None,
+            margin_sigma=margin_sigma,
+            source="desi_2024_dr1_bao",
+            quantity_type=f"bao_{quantity}",
+            target=f"z={z_eff:.3f}",
+            reason=f"DESI 2024 BAO data unavailable: {exc}",
+        )
+    candidates = [
+        (z_paper, vs)
+        for (z_paper, q), vs in bao_data.items()
+        if q == quantity and abs(z_paper - z_eff) <= z_tolerance
+    ]
+    if not candidates:
+        available_z = sorted({z for (z, q), _ in bao_data.items() if q == quantity})
+        return SpotCheckResult(
+            status="unavailable",
+            passed=False,
+            our_value=None,
+            paper_value=claimed_value,
+            sigma_distance=None,
+            margin_sigma=margin_sigma,
+            source="desi_2024_dr1_bao",
+            quantity_type=f"bao_{quantity}",
+            target=f"z={z_eff:.3f}",
+            reason=(
+                f"No DESI 2024 {quantity} measurement within Δz={z_tolerance} "
+                f"of z={z_eff:.3f}. Available z_eff for this quantity: "
+                f"{available_z}"
+            ),
+        )
+    z_paper, (value, sigma, tracer) = min(
+        candidates, key=lambda x: abs(x[0] - z_eff)
+    )
+    sigma_distance = abs(claimed_value - value) / sigma
+    passed = sigma_distance <= margin_sigma
+    return SpotCheckResult(
+        status="passed" if passed else "failed",
+        passed=passed,
+        our_value=value,
+        paper_value=claimed_value,
+        sigma_distance=sigma_distance,
+        margin_sigma=margin_sigma,
+        source=f"desi_2024_dr1_bao ({tracer})",
+        quantity_type=f"bao_{quantity}",
+        target=f"z={z_eff:.3f}",
+        reason=(
+            f"Claimed {quantity}={claimed_value:.3f} at z={z_eff:.3f}, "
+            f"DESI 2024 ({tracer}) at z={z_paper:.3f}: {value:.3f} ± {sigma:.3f} "
+            f"({sigma_distance:.2f}σ apart, threshold {margin_sigma:.1f}σ). "
+            "Note: cross-covariance between DM/rd and DH/rd at same z_eff is "
+            "ignored in this ±σ heuristic."
         ),
     )

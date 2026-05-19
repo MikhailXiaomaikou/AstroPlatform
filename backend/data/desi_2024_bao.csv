@@ -1,0 +1,22 @@
+# DESI 2024 DR1 BAO measurements (Stage 4 Phase 2 vendor for spot-check)
+# Source: DESI Collaboration 2024 VI, arXiv:2404.03002, Table I
+# Values approximate to paper precision; cross-check the paper if exact
+# values matter. Cross-correlations between DM/rd & DH/rd at the same z_eff
+# are typically negative (r ~ -0.4 to -0.5); spot-check ignores correlation
+# (±σ heuristic only).
+#
+# Schema: z_eff,quantity,value,sigma,tracer
+# quantity values: DM_over_rd, DH_over_rd, DV_over_rd
+z_eff,quantity,value,sigma,tracer
+0.295,DV_over_rd,7.93,0.15,BGS
+0.510,DM_over_rd,13.62,0.25,LRG1
+0.510,DH_over_rd,20.98,0.61,LRG1
+0.706,DM_over_rd,16.85,0.32,LRG2
+0.706,DH_over_rd,20.08,0.60,LRG2
+0.930,DM_over_rd,21.71,0.28,LRG3+ELG1
+0.930,DH_over_rd,17.88,0.35,LRG3+ELG1
+1.317,DM_over_rd,27.79,0.69,ELG2
+1.317,DH_over_rd,13.82,0.42,ELG2
+1.491,DV_over_rd,26.07,0.67,QSO
+2.330,DM_over_rd,39.71,0.94,Lya
+2.330,DH_over_rd,8.52,0.17,Lya

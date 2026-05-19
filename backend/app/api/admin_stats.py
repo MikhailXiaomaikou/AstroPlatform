@@ -151,6 +151,73 @@ async def by_tool(
     return {"period": period, "items": items, "total_tools_seen": len(counter)}
 
 
+# ── 2b. telemetry/tool_usage: enriched dump for M2 第二轮砍工具决策 ────
+
+
+@router.get("/telemetry/tool_usage")
+async def telemetry_tool_usage(
+    period: str = Query("7d"),
+    limit: int = Query(100, ge=1, le=200),
+    _admin: None = Depends(require_admin_any),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Stage 6 P0c-F (2026-05-19): tool 使用率 telemetry dump.
+
+    跟 by-tool 同源 (user_events.ai.tool_called 聚合), 但额外加:
+      - 总调用数 (total_calls)
+      - 每工具占比 (pct_of_total)
+      - 低使用标记 (low_usage: pct < 0.5%) — 明天用户用这个决策 M2 第二轮
+        砍哪些工具
+
+    Default period=7d, limit=100 — 一次性 dump 全部工具, 让用户能
+    `curl <prod>/api/admin/stats/telemetry/tool_usage | jq` 看 JSON 分布.
+    """
+    cutoff = datetime.now(timezone.utc) - _parse_period(period)
+    rows = (
+        await db.execute(
+            select(UserEvent.event_data, UserEvent.timestamp)
+            .where(UserEvent.timestamp >= cutoff)
+            .where(UserEvent.event_type == "ai.tool_called")
+        )
+    ).all()
+
+    counter: Counter[str] = Counter()
+    last_used: dict[str, datetime] = {}
+    for ed, ts in rows:
+        if not isinstance(ed, dict):
+            continue
+        tool_name = ed.get("tool_name") or ed.get("tool") or "unknown"
+        tool_name = str(tool_name)[:80]
+        counter[tool_name] += 1
+        if tool_name not in last_used or ts > last_used[tool_name]:
+            last_used[tool_name] = ts
+
+    total_calls = sum(counter.values())
+    low_usage_pct_threshold = 0.5  # 占比 < 0.5% 视为低使用, 候选砍
+
+    items = []
+    for name, cnt in counter.most_common(limit):
+        pct = (cnt / total_calls * 100) if total_calls else 0.0
+        items.append({
+            "tool_name": name,
+            "count": cnt,
+            "pct_of_total": round(pct, 3),
+            "low_usage": pct <= low_usage_pct_threshold,
+            "last_used_at": last_used[name].isoformat() if last_used.get(name) else None,
+        })
+    low_usage_tools = [item["tool_name"] for item in items if item["low_usage"]]
+
+    return {
+        "period": period,
+        "start_time": cutoff.isoformat(),
+        "total_calls": total_calls,
+        "total_tools_seen": len(counter),
+        "low_usage_pct_threshold": low_usage_pct_threshold,
+        "low_usage_tools": low_usage_tools,
+        "items": items,
+    }
+
+
 # ── 3. by-page: 按页面访问量 ─────────────────────────────────────────
 
 @router.get("/by-page")

@@ -849,3 +849,109 @@ def test_attach_draft_to_banner_falls_back_when_reply_empty():
     banner = "⚠ Reply withheld: some reason."
     assert attach_draft_to_banner(banner, "") == banner
     assert attach_draft_to_banner(banner, "   \n\n") == banner
+
+
+def test_unclassified_literature_violations_blocks_uncited_search_paper():
+    """Stage 6 P0c-C (2026-05-19): cite 一个 search_literature 出的 paper 但
+    没调 classify_literature_relevance → violation."""
+    from app.services.claim_validator import unclassified_literature_violations
+
+    tool_results = [
+        {
+            "tool": "search_literature",
+            "result": {
+                "results": [
+                    {"bibcode": "2024A&A...678A.123S", "title": "DESI BAO"},
+                    {"bibcode": "2024arXiv2401.01001A", "title": "Other"},
+                ],
+            },
+        },
+        # 没有 classify_literature_relevance
+    ]
+    reply = "Based on 2024A&A...678A.123S, the BAO measurement gives H0 = 67."
+    violations = unclassified_literature_violations(reply, tool_results)
+    assert len(violations) == 1
+    assert violations[0].kind == "unclassified_literature"
+    assert violations[0].match_text == "2024A&A...678A.123S"
+
+
+def test_unclassified_literature_violations_passes_after_classify():
+    """调了 classify_literature_relevance 标 Direct, cite 它 → 不 violation."""
+    from app.services.claim_validator import unclassified_literature_violations
+
+    tool_results = [
+        {
+            "tool": "search_literature",
+            "result": {
+                "results": [{"bibcode": "2024A&A...678A.123S", "title": "DESI BAO"}],
+            },
+        },
+        {
+            "tool": "classify_literature_relevance",
+            "result": {
+                "classifications": [
+                    {
+                        "bibcode": "2024A&A...678A.123S",
+                        "relevance": "Direct",
+                        "reason": "DESI DR1 BAO directly answers H0 question",
+                    },
+                ],
+            },
+        },
+    ]
+    reply = "Based on 2024A&A...678A.123S, the BAO measurement gives H0 = 67."
+    violations = unclassified_literature_violations(reply, tool_results)
+    assert violations == []
+
+
+def test_unclassified_literature_violations_blocks_cited_off_topic_paper():
+    """classify 标了 Off-topic, 但 reply 还 cite → violation (kind=cited_off_topic_paper)."""
+    from app.services.claim_validator import unclassified_literature_violations
+
+    tool_results = [
+        {
+            "tool": "search_literature",
+            "result": {
+                "results": [{"bibcode": "2024A&A...678A.123S", "title": "DESI BAO"}],
+            },
+        },
+        {
+            "tool": "classify_literature_relevance",
+            "result": {
+                "classifications": [
+                    {
+                        "bibcode": "2024A&A...678A.123S",
+                        "relevance": "Off-topic",
+                        "reason": "BAO not relevant to this question",
+                    },
+                ],
+            },
+        },
+    ]
+    reply = "Based on 2024A&A...678A.123S, the BAO measurement gives H0 = 67."
+    violations = unclassified_literature_violations(reply, tool_results)
+    assert len(violations) == 1
+    assert violations[0].kind == "cited_off_topic_paper"
+    assert violations[0].match_text == "2024A&A...678A.123S"
+
+
+def test_blocked_unclassified_literature_reply_text_groups_unclassified_and_off_topic():
+    """banner text 含 2 个分组: unclassified 列表 + Off-topic 列表."""
+    from app.services.claim_validator import (
+        CitationViolation,
+        blocked_unclassified_literature_reply_text,
+    )
+
+    violations = [
+        CitationViolation(kind="unclassified_literature", match_text="2024A", line_number=3),
+        CitationViolation(kind="cited_off_topic_paper", match_text="2023B", line_number=5),
+    ]
+    text = blocked_unclassified_literature_reply_text(violations)
+    assert "Reply withheld" in text
+    assert "classify_literature_relevance" in text
+    assert "not classified" in text
+    assert "Off-topic" in text
+    assert "2024A" in text
+    assert "2023B" in text
+    assert "(line 3)" in text
+    assert "(line 5)" in text

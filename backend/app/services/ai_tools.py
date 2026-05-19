@@ -363,6 +363,54 @@ TOOLS = [
         },
     },
     {
+        # Stage 6 P0c-C (2026-05-19): hard-block 升级 — 把 Stage 5/6.2 的
+        # abstract 二筛 prompt MUST 规则 (soft) 升级成独立工具 (hard).
+        # backend claim_validator.unclassified_literature_violations 反查:
+        # search_literature 出的 paper 必须经过本工具分类才能在 narrative
+        # 中引用, 否则整段被 banner 阻止.
+        "name": "classify_literature_relevance",
+        "description": (
+            "REQUIRED after every search_literature call (hard rule, not advisory). "
+            "Read each returned paper's abstract and classify it as Direct, Marginal, "
+            "or Off-topic relative to the user's current question. Only Direct + "
+            "Marginal papers may be cited downstream; citing an unclassified or "
+            "Off-topic paper will trigger a citation hard-block on the reply."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "classifications": {
+                    "type": "array",
+                    "description": "One entry per paper returned by the most recent search_literature.",
+                    "items": {
+                        "type": "object",
+                        "required": ["bibcode", "relevance", "reason"],
+                        "properties": {
+                            "bibcode": {
+                                "type": "string",
+                                "description": "Paper bibcode exactly as returned by search_literature (e.g. 2024arXiv2404.03002D).",
+                            },
+                            "relevance": {
+                                "type": "string",
+                                "enum": ["Direct", "Marginal", "Off-topic"],
+                                "description": (
+                                    "Direct: paper directly answers the user's question. "
+                                    "Marginal: related but does not directly answer. "
+                                    "Off-topic: keyword overlap but topic mismatch."
+                                ),
+                            },
+                            "reason": {
+                                "type": "string",
+                                "description": "One-sentence reason from the abstract.",
+                            },
+                        },
+                    },
+                },
+            },
+            "required": ["classifications"],
+        },
+    },
+    {
         "name": "get_last_search_results",
         "description": (
             "Retrieve the full list of the user's most recent search results "
@@ -2199,6 +2247,10 @@ async def _execute_tool_inner(
             return _exec_pipeline(tool_input)
         elif tool_name == "search_literature":
             return await _exec_literature(tool_input)
+        elif tool_name == "classify_literature_relevance":
+            # Stage 6 P0c-C (2026-05-19): hard 屏障 — LLM 必须调它分类 paper,
+            # 否则 claim_validator.unclassified_literature_violations 会 block reply.
+            return await _exec_classify_literature_relevance(tool_input, python_session_id)
         elif tool_name == "extract_literature_tables":
             return await _exec_extract_literature_tables(
                 tool_input, python_session_id,
@@ -3928,37 +3980,112 @@ async def _exec_literature(inp: dict) -> dict:
                 "bibcode": r["bibcode"],
                 "abstract": (r.get("abstract") or "")[:500],
                 "source": r.get("source") or r.get("pub") or source,
+                # Stage 6 P0c-B (2026-05-19): ADS RETRACTED 标记透传给 LLM + 前端
+                "retracted": bool(r.get("retracted", False)),
                 **_build_paper_links(r),
             }
             for r in filtered[:8]
         ]
+        retracted_count = sum(1 for p in result_papers if p["retracted"])
         # Stage 6.2 P2 (2026-05-19): enforce abstract second-screening.
         # Stage 5 added a MUST prompt rule but AI skipped it in prod tests.
         # Add __message_to_model__ in the standard anti-fabrication pattern
         # used by the line-relation workflow (chat.py _suppressed_*); AI
         # almost never ignores this banner on the next iteration.
+        msg_to_model = (
+            "REQUIRED before any further tool call: read each abstract "
+            "above and output a Markdown table with columns "
+            "`| # | Title (short) | Relevance | One-sentence reason |`. "
+            "Relevance MUST be one of: Direct (paper directly answers the "
+            "user's question), Marginal (related but does not directly "
+            "answer), Off-topic (keyword overlap but topic mismatch). "
+            "Only Direct + Marginal papers may be cited / mined downstream; "
+            "drop Off-topic ones from your reasoning. If 0 papers are "
+            "Direct, propose a refined query instead of citing marginally-"
+            "relevant work as if it were direct."
+        )
+        if retracted_count:
+            # Stage 6 P0c-B: 严禁引用 retracted paper
+            msg_to_model = (
+                f"⚠ {retracted_count} of {len(result_papers)} returned paper(s) "
+                f"are marked RETRACTED by ADS. You MUST NOT cite or mine data "
+                f"from any paper with `retracted=true`; treat it as if it does "
+                f"not exist. In the Relevance table above, mark retracted papers "
+                f"as Off-topic with reason 'RETRACTED'.\n\n"
+                + msg_to_model
+            )
         return {
             "source": source,
             "result_granularity": "paper_abstract",
             "supports_measurement_claims": False,
             "filtered_out_count": filtered_out_count,
             "relevance_filter": "off_topic_blacklist",
+            "retracted_count": retracted_count,
             "results": result_papers,
-            "__message_to_model__": (
-                "REQUIRED before any further tool call: read each abstract "
-                "above and output a Markdown table with columns "
-                "`| # | Title (short) | Relevance | One-sentence reason |`. "
-                "Relevance MUST be one of: Direct (paper directly answers the "
-                "user's question), Marginal (related but does not directly "
-                "answer), Off-topic (keyword overlap but topic mismatch). "
-                "Only Direct + Marginal papers may be cited / mined downstream; "
-                "drop Off-topic ones from your reasoning. If 0 papers are "
-                "Direct, propose a refined query instead of citing marginally-"
-                "relevant work as if it were direct."
-            ),
+            "__message_to_model__": msg_to_model,
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+async def _exec_classify_literature_relevance(inp: dict, python_session_id: str = "default") -> dict:
+    """Stage 6 P0c-C (2026-05-19): hard 屏障升级.
+
+    旧版: search_literature return 里 `__message_to_model__` 让 LLM 输出
+    Direct/Marginal/Off-topic 表 (prompt 注入, soft). prod 测试发现 LLM
+    会跳过 (跑 1 出表, 跑 2 不出).
+
+    新版: 把分类做成独立工具. LLM 必须先调它, 之后 claim_validator
+    `unclassified_literature_violations` 反查每个 cited bibcode 是否经过
+    本工具, 没经过 → hard block reply.
+
+    本函数自身只做轻量校验 + structured return; 真正阻塞在 chat.py
+    pipeline 的 claim 校验那一步.
+    """
+    classifications = inp.get("classifications") or []
+    if not isinstance(classifications, list) or not classifications:
+        return {
+            "classifications": [],
+            "error": "classify_literature_relevance requires a non-empty `classifications` list",
+            "error_class": "missing_argument",
+            "argument": "classifications",
+        }
+    valid_relevance = {"Direct", "Marginal", "Off-topic"}
+    cleaned: list[dict[str, str]] = []
+    for c in classifications:
+        if not isinstance(c, dict):
+            continue
+        bibcode = str(c.get("bibcode") or "").strip()
+        relevance = str(c.get("relevance") or "").strip()
+        reason = str(c.get("reason") or "").strip()
+        if not bibcode or relevance not in valid_relevance:
+            continue
+        cleaned.append({"bibcode": bibcode, "relevance": relevance, "reason": reason})
+    direct = sum(1 for c in cleaned if c["relevance"] == "Direct")
+    marginal = sum(1 for c in cleaned if c["relevance"] == "Marginal")
+    off_topic = sum(1 for c in cleaned if c["relevance"] == "Off-topic")
+    msg = (
+        f"Classified {len(cleaned)} paper(s): "
+        f"{direct} Direct, {marginal} Marginal, {off_topic} Off-topic. "
+        "ONLY Direct + Marginal papers may be cited in your narrative; "
+        "downstream provenance check will hard-block any Off-topic or "
+        "unclassified bibcode."
+    )
+    if direct == 0:
+        msg += (
+            " 0 Direct papers — propose a refined search_literature query "
+            "before citing any of the Marginal papers."
+        )
+    return {
+        "classifications": cleaned,
+        "summary": {
+            "direct": direct,
+            "marginal": marginal,
+            "off_topic": off_topic,
+            "total": len(cleaned),
+        },
+        "__message_to_model__": msg,
+    }
 
 
 def _literature_hit_should_be_hidden(row: dict[str, Any]) -> bool:
@@ -7277,6 +7404,7 @@ def _exec_spot_check_literature_value(inp: dict) -> dict:
     misleading pass/fail — this preserves "不影响整体" guarantee.
     """
     from app.services.literature_spot_check import (
+        check_bao_distance_ratio,
         check_cmb_compressed_value,
         check_sn_distance_modulus,
         is_spot_check_enabled,
@@ -7323,12 +7451,35 @@ def _exec_spot_check_literature_value(inp: dict) -> dict:
                 "error_class": "missing_cmb_param",
             }
         result = check_cmb_compressed_value(param, claimed, margin_sigma=margin)
+    elif qtype == "bao_distance_ratio":
+        # Stage 6 P0c-D (2026-05-19): Stage 4 Phase 2 BAO 抽查
+        try:
+            z_eff = float(inp.get("z_eff"))
+        except (TypeError, ValueError):
+            return {
+                "success": False,
+                "error": "bao_distance_ratio requires z_eff (e.g. 0.51)",
+                "error_class": "missing_z_eff",
+            }
+        bao_quantity = str(inp.get("bao_quantity") or "").strip()
+        if bao_quantity not in {"DM_over_rd", "DH_over_rd", "DV_over_rd"}:
+            return {
+                "success": False,
+                "error": (
+                    "bao_distance_ratio requires bao_quantity ∈ "
+                    "['DM_over_rd', 'DH_over_rd', 'DV_over_rd']"
+                ),
+                "error_class": "missing_bao_quantity",
+            }
+        result = check_bao_distance_ratio(
+            z_eff, bao_quantity, claimed, margin_sigma=margin,
+        )
     else:
         return {
             "success": False,
             "error": (
                 f"Unknown quantity_type {qtype!r}. MVP supports: "
-                "['sn_distance_modulus', 'cmb_parameter']"
+                "['sn_distance_modulus', 'cmb_parameter', 'bao_distance_ratio']"
             ),
             "error_class": "unknown_quantity_type",
         }

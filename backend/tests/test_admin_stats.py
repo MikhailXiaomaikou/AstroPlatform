@@ -89,6 +89,44 @@ async def test_admin_stats_by_tool_counts_correctly(app_client, monkeypatch, db_
     assert "should_not_appear" not in items
 
 
+async def test_admin_stats_telemetry_tool_usage_dump(app_client, monkeypatch, db_session):
+    """Stage 6 P0c-F (2026-05-19): telemetry/tool_usage 返回 enriched 分布,
+    含 pct_of_total + low_usage 标记 + low_usage_tools 汇总 (供决策砍工具)."""
+    monkeypatch.setenv("ENV", "dev")
+    from app.config import settings
+    monkeypatch.setattr(settings, "admin_secret", "")
+    from app.models.schemas import UserEvent
+
+    now = datetime.now(timezone.utc)
+    # 200 次 popular_tool + 1 次 rare_tool → rare 占 0.5%, 低使用
+    for _ in range(200):
+        db_session.add(UserEvent(
+            id=uuid.uuid4(),
+            event_type="ai.tool_called",
+            event_data={"tool_name": "popular_tool"},
+            timestamp=now - timedelta(hours=1),
+        ))
+    db_session.add(UserEvent(
+        id=uuid.uuid4(),
+        event_type="ai.tool_called",
+        event_data={"tool_name": "rare_tool"},
+        timestamp=now - timedelta(hours=1),
+    ))
+    await db_session.commit()
+
+    r = await app_client.get("/api/admin/stats/telemetry/tool_usage?period=7d")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_calls"] == 201
+    items = {it["tool_name"]: it for it in body["items"]}
+    assert items["popular_tool"]["count"] == 200
+    assert items["popular_tool"]["low_usage"] is False
+    assert items["rare_tool"]["count"] == 1
+    assert items["rare_tool"]["low_usage"] is True
+    assert "rare_tool" in body["low_usage_tools"]
+    assert "popular_tool" not in body["low_usage_tools"]
+
+
 # ── 4. by-page 聚合 ─────────────────────────────────────────────────
 
 async def test_admin_stats_by_page(app_client, monkeypatch, db_session):

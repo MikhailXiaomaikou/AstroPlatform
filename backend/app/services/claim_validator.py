@@ -946,6 +946,102 @@ def unsupported_literature_narrative_violations(
     return violations
 
 
+def unclassified_literature_violations(
+    reply: str,
+    tool_results: Any,
+) -> list[CitationViolation]:
+    """Stage 6 P0c-C (2026-05-19): hard-block 引用没经 classify_literature_relevance
+    分类的 paper.
+
+    工作流:
+      1. 收集 search_literature 工具本 turn 返回的所有 paper bibcode (search_pool)
+      2. 收集 classify_literature_relevance 工具本 turn 返回的 classifications
+         (classified_relevance: bibcode → Direct/Marginal/Off-topic)
+      3. 提取 reply 中所有 bibcode / arxiv_id 引用
+      4. 任何 cited bibcode ∈ search_pool 但 ∉ classified_relevance → violation
+         (kind=unclassified_literature)
+      5. 任何 cited bibcode 在 classified_relevance 且 relevance=Off-topic →
+         violation (kind=cited_off_topic_paper)
+
+    引用了 search_pool 之外的 bibcode (例如来自 dataset 直接 reference) 不归
+    本检测处理 — provenance_citation_violations 已经覆盖那条 path.
+
+    Stage 5/6.2 用 `__message_to_model__` 做软规则 (LLM 自愿出 Direct/Marginal/Off-topic
+    表), 在 prod 测试发现 LLM 会跳过. 本函数 + chat.py pipeline + banner 把它
+    升级成强制 hard 屏障.
+    """
+    if not reply:
+        return []
+
+    search_pool: set[str] = set()
+    classified_relevance: dict[str, str] = {}
+
+    if isinstance(tool_results, list):
+        for tr in tool_results:
+            if not isinstance(tr, dict):
+                continue
+            tool_name = str(tr.get("tool") or tr.get("name") or "").strip()
+            # tool_result payload 可能在 "result" / "tool_result" / 顶层
+            payload = tr.get("result") if isinstance(tr.get("result"), dict) else tr
+            if tool_name == "search_literature":
+                papers = payload.get("results") if isinstance(payload, dict) else None
+                if not isinstance(papers, list):
+                    continue
+                for p in papers:
+                    if not isinstance(p, dict):
+                        continue
+                    bc = _normalize_bibcode(str(p.get("bibcode") or ""))
+                    if bc:
+                        search_pool.add(bc)
+            elif tool_name == "classify_literature_relevance":
+                classes = payload.get("classifications") if isinstance(payload, dict) else None
+                if not isinstance(classes, list):
+                    continue
+                for c in classes:
+                    if not isinstance(c, dict):
+                        continue
+                    bc = _normalize_bibcode(str(c.get("bibcode") or ""))
+                    rel = str(c.get("relevance") or "").strip()
+                    if bc and rel:
+                        classified_relevance[bc] = rel
+
+    if not search_pool:
+        # 本 turn 没调 search_literature, 不触发本检测
+        return []
+
+    violations: list[CitationViolation] = []
+    seen: set[str] = set()
+
+    for match in BIBCODE_RE.finditer(reply):
+        raw = match.group(1) if match.groups() else match.group(0)
+        bibcode = _normalize_bibcode(raw)
+        if not bibcode or bibcode in seen:
+            continue
+        seen.add(bibcode)
+        if bibcode in search_pool and bibcode not in classified_relevance:
+            violations.append(CitationViolation(
+                kind="unclassified_literature",
+                match_text=bibcode,
+                line_number=_line_number(reply, match.start()),
+            ))
+        elif classified_relevance.get(bibcode) == "Off-topic":
+            violations.append(CitationViolation(
+                kind="cited_off_topic_paper",
+                match_text=bibcode,
+                line_number=_line_number(reply, match.start()),
+            ))
+
+    for violation in violations:
+        _record_citation_violation_metric(violation.kind)
+        logger.warning(
+            "Unclassified literature violation: kind=%s bibcode=%r line=%d",
+            violation.kind,
+            violation.match_text,
+            violation.line_number,
+        )
+    return violations
+
+
 # ── M6: methodology-consistency check ─────────────────────────────
 # When the assistant verbally promises a Bayesian fit / two-axis
 # errors / a demagnification count, the actual fit_line_lfr or
@@ -1310,12 +1406,46 @@ def blocked_unsupported_narrative_reply_text(violations: list[CitationViolation]
     )
 
 
+def blocked_unclassified_literature_reply_text(violations: list[CitationViolation]) -> str:
+    """Stage 6 P0c-C (2026-05-19): banner for unclassified / off-topic
+    literature citations. 配 attach_draft_to_banner 在 chat.py 用."""
+    unclassified_lines = []
+    off_topic_lines = []
+    for v in violations:
+        if v.kind == "cited_off_topic_paper":
+            off_topic_lines.append(f"- {v.match_text} (line {v.line_number})")
+        else:
+            unclassified_lines.append(f"- {v.match_text} (line {v.line_number})")
+    body_parts = []
+    if unclassified_lines:
+        body_parts.append(
+            "Cited but not classified via classify_literature_relevance:\n"
+            + "\n".join(unclassified_lines)
+        )
+    if off_topic_lines:
+        body_parts.append(
+            "Cited but classified Off-topic by classify_literature_relevance:\n"
+            + "\n".join(off_topic_lines)
+        )
+    return (
+        "⚠ Reply withheld: the model cited literature paper(s) without first "
+        "running `classify_literature_relevance` on them, or cited paper(s) "
+        "that were classified Off-topic. Stage 6 P0c-C enforces strict "
+        "abstract-screening as a hard gate, not a prompt-level suggestion.\n\n"
+        + "\n\n".join(body_parts)
+        + "\n\nCall `classify_literature_relevance` on the most recent "
+        "search_literature output, mark each paper Direct / Marginal / Off-topic, "
+        "then re-write the reply citing only Direct + Marginal papers."
+    )
+
+
 def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
     lines = [
         f"- {violation.kind}: {violation.match_text} (line {violation.line_number})"
         for violation in violations
     ]
     cosmology_note = _cosmology_manifest_block_note(violations)
+    solar_system_note = _solar_system_manifest_block_note(violations)
     if any(v.kind == "paper_numeric_missing_citation" for v in violations):
         return (
             "⚠ Citation provenance check failed: the assistant reported numeric "

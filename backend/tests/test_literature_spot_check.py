@@ -164,3 +164,68 @@ def test_planck_baseline_consistent_with_cosmology_likelihoods():
             f"DRIFT: param {param!r} baseline sigma {baseline_sigma} != "
             f"cosmology_likelihoods sigma {sigma}"
         )
+
+
+# ── Stage 6 P0c-D (2026-05-19): BAO 距离比 spot-check ────────────────
+
+
+def test_bao_DM_over_rd_pass_at_desi_lrg1_value():
+    """claimed DM/rd 跟 DESI 2024 LRG1 (z=0.51) 一致 → status=passed."""
+    from app.services.literature_spot_check import check_bao_distance_ratio
+
+    result = check_bao_distance_ratio(
+        z_eff=0.51, quantity="DM_over_rd", claimed_value=13.62,
+    )
+    assert result.status == "passed"
+    assert result.passed is True
+    assert result.our_value == 13.62
+    assert result.paper_value == 13.62
+    assert result.sigma_distance == 0.0
+    assert result.source.startswith("desi_2024_dr1_bao")
+    assert result.target == "z=0.510"
+
+
+def test_bao_DM_over_rd_fail_at_wildly_off_value():
+    """claimed DM/rd 跟 DESI 差 10σ+ → status=failed."""
+    from app.services.literature_spot_check import check_bao_distance_ratio
+
+    # DESI 2024 LRG1: DM/rd = 13.62 ± 0.25. claim 20.0 → 25.5σ off.
+    result = check_bao_distance_ratio(
+        z_eff=0.51, quantity="DM_over_rd", claimed_value=20.0,
+    )
+    assert result.status == "failed"
+    assert result.passed is False
+    assert result.sigma_distance > 10.0
+
+
+def test_bao_DH_over_rd_pass_at_lya():
+    """Lyα z=2.33 DH/rd 一致性."""
+    from app.services.literature_spot_check import check_bao_distance_ratio
+
+    result = check_bao_distance_ratio(
+        z_eff=2.33, quantity="DH_over_rd", claimed_value=8.52,
+    )
+    assert result.status == "passed"
+    assert "Lya" in result.source
+
+
+def test_bao_unavailable_z_outside_desi_coverage():
+    """z=5.0 没 DESI bin → unavailable."""
+    from app.services.literature_spot_check import check_bao_distance_ratio
+
+    result = check_bao_distance_ratio(
+        z_eff=5.0, quantity="DM_over_rd", claimed_value=99.0,
+    )
+    assert result.status == "unavailable"
+    assert "within" in result.reason.lower()
+
+
+def test_bao_unavailable_for_invalid_quantity():
+    """quantity 不是 DM/DH/DV → unavailable."""
+    from app.services.literature_spot_check import check_bao_distance_ratio
+
+    result = check_bao_distance_ratio(
+        z_eff=0.51, quantity="something_invalid", claimed_value=10.0,
+    )
+    assert result.status == "unavailable"
+    assert "not supported" in result.reason

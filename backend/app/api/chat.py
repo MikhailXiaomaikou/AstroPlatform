@@ -4511,6 +4511,9 @@ async def _run_agent_loop(
             blocked_citation_reply_text,
             unsupported_literature_narrative_violations,
             blocked_unsupported_narrative_reply_text,
+            # Stage 6 P0c-C: 二筛 hard 屏障
+            unclassified_literature_violations,
+            blocked_unclassified_literature_reply_text,
             # M6: methodology cross-check (Bayesian / demagnify count)
             methodology_consistency_violations,
         )
@@ -4724,6 +4727,35 @@ async def _run_agent_loop(
                     clean_reply,
                 )
                 fabrication_stats["blocked"] = True
+
+        elif (
+            unclassified_claims := unclassified_literature_violations(
+                clean_reply, all_tool_results
+            )
+        ):
+            # Stage 6 P0c-C (2026-05-19): hard 屏障. LLM 必须先调
+            # classify_literature_relevance 才能在 narrative 里 cite
+            # search_literature 出的 paper. 没调 / cite 了 Off-topic →
+            # 整段被 banner 阻止 + draft 保留.
+            logger.error(
+                "Unclassified literature gate BLOCKED reply from %s (%d violations)",
+                agent_name, len(unclassified_claims),
+            )
+            clean_reply = attach_draft_to_banner(
+                blocked_unclassified_literature_reply_text(unclassified_claims),
+                clean_reply,
+            )
+            fabrication_stats["blocked"] = True
+            try:
+                from app.observability.metrics import record_counter
+                record_counter(
+                    "fabrication_blocked_total",
+                    1.0,
+                    agent=agent_name,
+                    reason="unclassified_literature",
+                )
+            except Exception:
+                pass
 
         elif literature_prior_violations(clean_reply, all_tool_results):
             # W1 (PART W): 文献先验硬 block. 比 zero_data_but_quantitative 松 —

@@ -1600,11 +1600,41 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           const pdfUrl = r.pdf_url as string | undefined;
           const arxivUrl = r.arxiv_url as string | undefined;
           const doiUrl = r.doi_url as string | undefined;
+          // Stage 6 P0c-B (2026-05-19): ADS RETRACTED 标记, 论文整段灰化 + 红字 banner
+          const isRetracted = Boolean(r.retracted);
           return (
-            <div key={i} style={{ fontSize: "0.75rem", padding: "4px 0", borderBottom: "1px solid var(--color-border)" }}>
+            <div
+              key={i}
+              style={{
+                fontSize: "0.75rem",
+                padding: "4px 0",
+                borderBottom: "1px solid var(--color-border)",
+                opacity: isRetracted ? 0.55 : 1,
+              }}
+            >
+              {isRetracted ? (
+                <div
+                  style={{
+                    display: "inline-block",
+                    background: "#b00020",
+                    color: "white",
+                    fontWeight: 700,
+                    fontSize: "0.7rem",
+                    padding: "1px 6px",
+                    borderRadius: 3,
+                    marginBottom: 3,
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  🚫 RETRACTED — DO NOT CITE
+                </div>
+              ) : null}
               <div>
                 <a href={adsUrl} target="_blank" rel="noopener noreferrer"
-                  style={{ color: "var(--color-accent)", textDecoration: "none" }}>
+                  style={{
+                    color: isRetracted ? "var(--color-text-tertiary)" : "var(--color-accent)",
+                    textDecoration: isRetracted ? "line-through" : "none",
+                  }}>
                   {String(r.title)}
                 </a>
               </div>

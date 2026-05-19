@@ -65,13 +65,61 @@ def _search_arxiv_sync(query: str) -> list[dict]:
         return []
 
 
+def _ads_get_with_retry(
+    url: str,
+    *,
+    params: dict,
+    headers: dict,
+    timeout: int = 15,
+    max_retries: int = 2,
+):
+    """Stage 6 P0c-E (2026-05-19): ADS 5xx / 网络异常 加 backoff retry.
+
+    429 (quota exhausted) 不 retry — 立刻重试不会变好, caller 应直接 fallback.
+    5xx (transient server error) retry up to `max_retries` 次, exponential
+    backoff (0.5s → 1s → 2s).
+
+    Returns:
+        httpx.Response if a response was received (caller checks status_code).
+        None if all attempts failed with network exceptions or 5xx exhausted.
+    """
+    import time
+
+    backoff = 0.5
+    last_resp = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = httpx.get(url, params=params, headers=headers, timeout=timeout)
+        except Exception as exc:
+            logger.warning(
+                "ADS request raised on attempt %d/%d: %s",
+                attempt + 1, max_retries + 1, exc,
+            )
+            if attempt < max_retries:
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            return None
+        last_resp = resp
+        if resp.status_code >= 500 and attempt < max_retries:
+            logger.warning(
+                "ADS returned %d (attempt %d/%d), backing off %.1fs",
+                resp.status_code, attempt + 1, max_retries + 1, backoff,
+            )
+            time.sleep(backoff)
+            backoff *= 2
+            continue
+        return resp
+    return last_resp
+
+
 def _search_ads_sync(object_name: str) -> list[dict]:
     """Query NASA ADS, fall back to arXiv API if ADS unavailable.
 
     H2.1: the Paper 4 reviewer hit "Literature Search EMPTY" even on
     common topics.  Possible causes: missing/exhausted ADS_API_KEY,
     401/429 from ADS.  We now:
-    1. Try ADS if key present
+    1. Try ADS if key present (with 5xx retry, Stage 6 P0c-E)
     2. If ADS returns 401/429 or no results, fall back to arXiv
     3. If both fail, surface an explicit error_class so the UI can say
        "literature service unavailable" instead of silently returning []
@@ -90,21 +138,25 @@ def _search_ads_sync(object_name: str) -> list[dict]:
             # workshop papers into astrophysics queries (M4 1 leak,
             # M5 3 leaks — measurable regression).
             "fq": "database:astronomy",
-            "fl": "bibcode,title,author,year,doi,pub,abstract",
+            # Stage 6 P0c-B (2026-05-19): 加 `property` 字段拿 RETRACTED tag.
+            "fl": "bibcode,title,author,year,doi,pub,abstract,property",
             "rows": 5,
         }
-        try:
-            resp = httpx.get(
-                "https://api.adsabs.harvard.edu/v1/search/query",
-                params=params, headers=headers, timeout=15,
+        resp = _ads_get_with_retry(
+            "https://api.adsabs.harvard.edu/v1/search/query",
+            params=params, headers=headers, timeout=15,
+        )
+        if resp is None:
+            logger.warning("ADS request exhausted retries; using arXiv fallback")
+        elif resp.status_code in (401, 429):
+            # Key invalid / exhausted — log and fall through to arXiv.
+            # Stage 6 P0c-E: 429 不 retry, quota 立刻不会恢复.
+            logger.warning(
+                "ADS returned %d — key may be invalid/exhausted; using arXiv fallback",
+                resp.status_code,
             )
-            if resp.status_code in (401, 429):
-                # Key invalid / exhausted — log and fall through to arXiv
-                logger.warning(
-                    "ADS returned %d — key may be invalid/exhausted; using arXiv fallback",
-                    resp.status_code,
-                )
-            else:
+        else:
+            try:
                 resp.raise_for_status()
                 docs = resp.json().get("response", {}).get("docs", [])
                 if docs:
@@ -117,12 +169,13 @@ def _search_ads_sync(object_name: str) -> list[dict]:
                             "doi": (doc.get("doi") or [None])[0],
                             "abstract": doc.get("abstract", ""),
                             "source": "ads",
+                            "retracted": "RETRACTED" in (doc.get("property") or []),
                         }
                         for doc in docs
                     ]
                 # ADS returned empty — fall through to arXiv
-        except Exception as e:
-            logger.warning("ADS search failed (%s); falling back to arXiv", e)
+            except Exception as e:
+                logger.warning("ADS search failed (%s); falling back to arXiv", e)
 
     # Path 2: arXiv fallback
     arxiv_results = _search_arxiv_sync(object_name)
@@ -209,15 +262,26 @@ def _search_literature_ads(query: str, max_results: int = 20) -> list[dict]:
         # search → arXiv fallback); without fq here the free-text path
         # also leaks non-astronomy hits.
         "fq": "database:astronomy",
-        "fl": "bibcode,title,author,year,doi,pub,abstract",
+        # Stage 6 P0c-B (2026-05-19): 加 `property` 字段拿 RETRACTED tag.
+        "fl": "bibcode,title,author,year,doi,pub,abstract,property",
         "rows": min(max_results, 50),
         "sort": "score desc",
     }
-    try:
-        resp = httpx.get(
-            "https://api.adsabs.harvard.edu/v1/search/query",
-            params=params, headers=headers, timeout=15,
+    # Stage 6 P0c-E (2026-05-19): 5xx retry, 429 不 retry (caller 返 []).
+    resp = _ads_get_with_retry(
+        "https://api.adsabs.harvard.edu/v1/search/query",
+        params=params, headers=headers, timeout=15,
+    )
+    if resp is None:
+        logger.warning("ADS literature search exhausted retries")
+        return []
+    if resp.status_code in (401, 429):
+        logger.warning(
+            "ADS literature search returned %d (quota/key issue)",
+            resp.status_code,
         )
+        return []
+    try:
         resp.raise_for_status()
         docs = resp.json().get("response", {}).get("docs", [])
         return [
@@ -229,6 +293,7 @@ def _search_literature_ads(query: str, max_results: int = 20) -> list[dict]:
                 "doi": (doc.get("doi") or [None])[0],
                 "abstract": doc.get("abstract", ""),
                 "pub": doc.get("pub", ""),
+                "retracted": "RETRACTED" in (doc.get("property") or []),
             }
             for doc in docs
         ]
