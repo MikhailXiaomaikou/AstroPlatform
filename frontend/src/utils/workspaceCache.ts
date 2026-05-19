@@ -18,7 +18,14 @@ export interface WorkspaceExportRegistration {
   localOnly?: boolean;
 }
 
-const WORKSPACE_CACHE_KEY = "astro_workspace_files";
+// Stage 3 Bug 2 修复: 给 workspace 文件缓存加 scope, 防止多账号共用同一台
+// 电脑时, 上个用户的 FITS / export 列表泄漏到下个用户的 chat 上下文.
+// scope 由 caller 提供 (一般是 `user:<id>` 或 `anon`), 跟 chat history scope 一致.
+const WORKSPACE_CACHE_KEY_BASE = "astro_workspace_files";
+
+function workspaceCacheKey(scope: string): string {
+  return `${WORKSPACE_CACHE_KEY_BASE}:${scope}`;
+}
 
 function normalizeWorkspaceFile(file: Partial<WorkspaceCacheFile> & Pick<WorkspaceCacheFile, "source" | "object_id" | "fits_path">): WorkspaceCacheFile {
   const createdAt = file.created_at || new Date().toISOString();
@@ -33,9 +40,9 @@ function normalizeWorkspaceFile(file: Partial<WorkspaceCacheFile> & Pick<Workspa
   };
 }
 
-export function readWorkspaceCache(): WorkspaceCacheFile[] {
+export function readWorkspaceCache(scope: string): WorkspaceCacheFile[] {
   try {
-    const raw = localStorage.getItem(WORKSPACE_CACHE_KEY);
+    const raw = localStorage.getItem(workspaceCacheKey(scope));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -48,15 +55,15 @@ export function readWorkspaceCache(): WorkspaceCacheFile[] {
   }
 }
 
-export function writeWorkspaceCache(files: WorkspaceCacheFile[]): void {
+export function writeWorkspaceCache(files: WorkspaceCacheFile[], scope: string): void {
   try {
-    localStorage.setItem(WORKSPACE_CACHE_KEY, JSON.stringify(files));
+    localStorage.setItem(workspaceCacheKey(scope), JSON.stringify(files));
   } catch {
     // ignore quota and storage errors
   }
 }
 
-export function mergeWorkspaceFiles(files: WorkspaceCacheFile[]): WorkspaceCacheFile[] {
+export function mergeWorkspaceFiles(files: WorkspaceCacheFile[], scope: string): WorkspaceCacheFile[] {
   const merged = new Map<string, WorkspaceCacheFile>();
   for (const file of files) {
     const normalized = normalizeWorkspaceFile(file);
@@ -75,20 +82,20 @@ export function mergeWorkspaceFiles(files: WorkspaceCacheFile[]): WorkspaceCache
     });
   }
   const mergedFiles = [...merged.values()].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-  writeWorkspaceCache(mergedFiles);
+  writeWorkspaceCache(mergedFiles, scope);
   return mergedFiles;
 }
 
-export function upsertWorkspaceFile(file: Partial<WorkspaceCacheFile> & Pick<WorkspaceCacheFile, "source" | "object_id" | "fits_path">): WorkspaceCacheFile[] {
-  const next = mergeWorkspaceFiles([normalizeWorkspaceFile(file), ...readWorkspaceCache()]);
+export function upsertWorkspaceFile(file: Partial<WorkspaceCacheFile> & Pick<WorkspaceCacheFile, "source" | "object_id" | "fits_path">, scope: string): WorkspaceCacheFile[] {
+  const next = mergeWorkspaceFiles([normalizeWorkspaceFile(file), ...readWorkspaceCache(scope)], scope);
   return next;
 }
 
-export function findWorkspaceFile(source: string, objectId: string): WorkspaceCacheFile | undefined {
-  return readWorkspaceCache().find((file) => file.source === source && file.object_id === objectId);
+export function findWorkspaceFile(source: string, objectId: string, scope: string): WorkspaceCacheFile | undefined {
+  return readWorkspaceCache(scope).find((file) => file.source === source && file.object_id === objectId);
 }
 
-export function registerWorkspaceExport(exportFile: WorkspaceExportRegistration): WorkspaceCacheFile[] {
+export function registerWorkspaceExport(exportFile: WorkspaceExportRegistration, scope: string): WorkspaceCacheFile[] {
   return upsertWorkspaceFile({
     id: exportFile.id,
     source: "export",
@@ -103,21 +110,9 @@ export function registerWorkspaceExport(exportFile: WorkspaceExportRegistration)
       content_type: exportFile.contentType,
       size_bytes: exportFile.sizeBytes,
     },
-  });
+  }, scope);
 }
 
-export function buildPipelineDraft(inputDataId: string) {
-  return {
-    nodes: [
-      { id: "n1", type: "pipeline", position: { x: 0, y: 150 }, data: { label: "Load Data", params: { fits_path: inputDataId }, nodeType: "LoadData" } },
-      { id: "n2", type: "pipeline", position: { x: 300, y: 150 }, data: { label: "Denoise", params: { sigma: 3 }, nodeType: "Denoise" } },
-      { id: "n3", type: "pipeline", position: { x: 600, y: 150 }, data: { label: "Plot", params: {}, nodeType: "InteractivePlot" } },
-    ],
-    edges: [
-      { id: "e1-2", source: "n1", target: "n2" },
-      { id: "e2-3", source: "n2", target: "n3" },
-    ],
-    inputDataId,
-    _from: "data_browser" as const,
-  };
-}
+// buildPipelineDraft removed: M3 (2026-05-18) deleted /pipeline page,
+// so this helper has 0 callers in frontend/src/. Only ChatPage.test.tsx
+// mock referenced the export — the mock entry is removed in the same commit.

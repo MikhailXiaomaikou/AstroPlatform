@@ -60,7 +60,7 @@ import { useI18n } from "../../i18n";
 import { useAuth } from "../../context/AuthContext";
 import { useTracking } from "../../hooks/useTracking";
 import { useConversationProvenance, type ConversationProvenance } from "../../hooks/useConversationProvenance";
-import { registerWorkspaceExport } from "../../utils/workspaceCache";
+import { readWorkspaceCache, registerWorkspaceExport } from "../../utils/workspaceCache";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 /* Fullscreen image/plot modal */
@@ -251,6 +251,19 @@ interface DisplayMessage {
 function getActionToolResult(action: ChatAction): Record<string, unknown> | undefined {
   const result = (action as Record<string, unknown>).tool_result;
   return result && typeof result === "object" ? result as Record<string, unknown> : undefined;
+}
+
+// Stage 3 Bug 4 修复: server 返回的 actions 字段类型是 unknown[], 不能直接强 cast
+// 成 ChatAction[]. 这里过滤掉缺 `action` 字段或形状不对的脏数据, 防止 ActionCard
+// 拿到不完整对象后渲染成空白卡片. 用在 refresh-resume / figure-rehydrate 两处.
+function validateActions(raw: unknown): ChatAction[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (a): a is ChatAction =>
+      a !== null
+      && typeof a === "object"
+      && typeof (a as { action?: unknown }).action === "string",
+  );
 }
 
 function isSyntheticToolAction(action: ChatAction): boolean {
@@ -1715,35 +1728,15 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
   }
 
   // Pipeline
+  // Stage 3 Bug 2: "Open in Pipeline Editor" button removed — M3 (2026-05-18)
+  // deleted the /pipeline page, so this button always navigated to a 404
+  // and wrote a dead `pipeline_autosave` localStorage entry that no consumer
+  // could read. We still show the AI-generated DAG inline as reference.
   if (toolName === "generate_pipeline") {
     const dag = result.dag as { nodes: Array<{ type: string }> } | undefined;
     return (
       <div style={{ fontSize: "0.78rem" }}>
         Pipeline <strong>{String(result.name)}</strong>: {dag?.nodes?.map(n => n.type).join(" → ")}
-        <div style={{ marginTop: 4 }}>
-          <button
-            className="btn-secondary btn-small"
-            type="button"
-            onClick={(e) => {
-              // F5.1: guard against stray bubbling events auto-clicking this
-              // button (user reported spontaneous /pipeline navigation mid
-              // chat-input).  Require explicit, deliberate click.
-              e.preventDefault();
-              e.stopPropagation();
-              if (dag) {
-                localStorage.setItem("pipeline_autosave", JSON.stringify({
-                  nodes: (dag as Record<string, unknown>).nodes,
-                  edges: (dag as Record<string, unknown>).edges || [],
-                  inputDataId: "example/fits/path.fits",
-                }));
-              }
-              window.location.href = "/pipeline";
-            }}
-            style={{ fontSize: "0.72rem" }}
-          >
-            Open in Pipeline Editor
-          </button>
-        </div>
       </div>
     );
   }
@@ -3029,12 +3022,12 @@ export default function ChatPage() {
         contentType: blob.type || "application/octet-stream",
         sizeBytes: blob.size,
         localOnly: false,
-      });
+      }, storageScope);
       return true;
     } catch {
       return false;
     }
-  }, [user]);
+  }, [user, storageScope]);
 
   const handleExport = useCallback(async (
     exportKind: ExportAction,
@@ -3286,6 +3279,13 @@ export default function ChatPage() {
   }, [paperDraft, paperEditorJson, paperFormat, paperSessionId, paperTab, paperValidation?.overall_status, showToast]);
 
   useEffect(() => {
+    // Stage 3 Bug 5 修复: 原 mount effect 里跑 4-5 个 setMessages, 其中两个是
+    // async (refresh-resume + figure-rehydrate) fire-and-forget, 顺序由网络
+    // 决定, 偶尔消息闪烁/乱序. 重构为:
+    //   Phase 1 (sync): 决定 initialMessages, 一次 setMessages 设进去
+    //   Phase 2 (async): 一个 loadChatSession 同时承担 refresh-resume +
+    //                    figure-rehydrate 两件事, 最后一次 setMessages 合并
+    // 总 setMessages 调用 ≤ 2 次, 没有并发 fetch.
     const draftKey = scopedChatStorageKey(CHAT_DRAFT_STORAGE_KEY, storageScope);
     const autosaveDraftKey = scopedChatStorageKey(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY, storageScope);
     const currentSessionKey = scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, storageScope);
@@ -3293,13 +3293,15 @@ export default function ChatPage() {
     setCurrentSessionId(scopedSessionId);
     if (!scopedSessionId) setCurrentSessionTitle("");
 
-    // If caller requested a new session, clear history first
+    // ── Phase 1 (sync): determine initialMessages ──
     const urlParams = new URLSearchParams(window.location.search);
     const urlRequestedFreshChat = urlParams.has("fresh_chat");
     const newSession = localStorage.getItem("astro_chat_new_session") || urlRequestedFreshChat;
+
+    let initialMessages: DisplayMessage[];
     if (newSession) {
       localStorage.removeItem("astro_chat_new_session");
-      setMessages([]);
+      initialMessages = [];
       messagesRef.current = [];
       setCurrentSessionId(null);
       currentSessionIdRef.current = null;
@@ -3316,7 +3318,7 @@ export default function ChatPage() {
         );
       }
     } else {
-      setMessages(loadChatHistory(storageScope));
+      initialMessages = loadChatHistory(storageScope);
     }
 
     const draft = localStorage.getItem(draftKey);
@@ -3328,15 +3330,14 @@ export default function ChatPage() {
 
     // One-time migration: legacy `astro_chat_autosave_draft` is retired; fold
     // its content into astro_chat_history if the latter is empty, then clean up.
-    if (!newSession && !draft) {
+    if (!newSession && !draft && initialMessages.length === 0) {
       try {
         const autosaved = localStorage.getItem(autosaveDraftKey);
         if (autosaved) {
           const parsed = JSON.parse(autosaved) as DisplayMessage[];
-          if (parsed.length > 0 && loadChatHistory(storageScope).length === 0) {
-            const recovered = parsed.map((m) => ({ ...m, actionResults: new Map() }));
-            setMessages(recovered);
-            safeSetChatHistory(recovered, storageScope);
+          if (parsed.length > 0) {
+            initialMessages = parsed.map((m) => ({ ...m, actionResults: new Map() }));
+            safeSetChatHistory(initialMessages, storageScope);
           }
         }
       } catch { /* ignore */ }
@@ -3344,69 +3345,59 @@ export default function ChatPage() {
       localStorage.removeItem(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY);
     }
 
-    // Refresh-resume: if the last restored message is a pending marker, try
-    // to reconcile against the server copy (which may have completed after
-    // the client lost the stream).  Falls through to the in-UI "interrupted,
-    // retry" bubble if the server has no newer reply either.
-    if (!newSession) {
-      const restored = loadChatHistory(storageScope);
-      const last = restored[restored.length - 1];
-      if (last && last._pending && last.role === "assistant") {
-        const sid = localStorage.getItem(currentSessionKey);
-        if (sid && user) {
-          void loadChatSession(sid)
-            .then((session) => {
-              const srvMsgs = session.messages || [];
-              const prevUser = restored[restored.length - 2];
-              // Look for an assistant reply AFTER the corresponding user
-              // message on the server.
-              if (prevUser) {
-                const idx = srvMsgs.findIndex(
-                  (sm) => sm.role === "user" && sm.content === prevUser.content,
-                );
-                if (idx >= 0 && idx + 1 < srvMsgs.length && srvMsgs[idx + 1].role === "assistant") {
-                  const adopted: DisplayMessage = {
-                    id: last.id,
-                    role: "assistant",
-                    content: srvMsgs[idx + 1].content,
-                    actions: srvMsgs[idx + 1].actions as ChatAction[] | undefined,
-                    actionResults: new Map(),
-                  };
-                  setMessages((prev) => prev.map((m) => (m.id === last.id ? adopted : m)));
-                }
-              }
-            })
-            .catch(() => { /* keep the pending/retry UI on failure */ });
-        }
-      }
-    }
+    setMessages(initialMessages);
 
-    // Figure-rehydrate: if localStorage has __offloaded__ or
-    // __figures_offloaded__ markers (from the quota pruner), fetch the
-    // full session from the server where the blob was never pruned.
-    // This fixes the "all plots disappear after reload" bug: the localStorage
-    // cap (4 MB) is tiny compared to base64 figure payloads, so the pruner
-    // was silently wiping figures on every page reload for any session with
-    // >~5 plots.
-    if (!newSession) {
-      const restored = loadChatHistory(storageScope);
-      const hasOffloadedFigures = restored.some((m) =>
-        (m.actions || []).some((a) => {
-          const tr = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
-          if (!tr || typeof tr !== "object") return false;
-          return tr.__offloaded__ === true || tr.__figures_offloaded__ !== undefined;
-        }),
-      );
-      const sid = localStorage.getItem(currentSessionKey);
-      if (hasOffloadedFigures && sid && user) {
-        void loadChatSession(sid)
-          .then((session) => {
-            const srvMsgs = session.messages || [];
-            // Rehydrate: match by (role + content prefix) and if the server
-            // version has figures, use its actions/tool_result.  Preserves
-            // local UI-only state (_abstention, _pending, etc.) from the
-            // current in-memory messages.
-            setMessages((prev) => prev.map((m) => {
+    // ── Phase 2 (async): single server fetch for refresh-resume + figure-rehydrate ──
+    if (newSession || !user) return;
+    const sid = localStorage.getItem(currentSessionKey);
+    if (!sid) return;
+
+    const last = initialMessages[initialMessages.length - 1];
+    const needRefreshResume = !!(last && last._pending && last.role === "assistant");
+    const needFigureRehydrate = initialMessages.some((m) =>
+      (m.actions || []).some((a) => {
+        const tr = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
+        if (!tr || typeof tr !== "object") return false;
+        return tr.__offloaded__ === true || tr.__figures_offloaded__ !== undefined;
+      }),
+    );
+    if (!needRefreshResume && !needFigureRehydrate) return;
+
+    void loadChatSession(sid)
+      .then((session) => {
+        const srvMsgs = session.messages || [];
+        setMessages((prev) => {
+          let nextMessages = prev;
+
+          // 2a. Refresh-resume: replace pending bubble with server reply.
+          // Falls through to the in-UI "interrupted, retry" bubble if the
+          // server has no newer reply either.
+          if (needRefreshResume && last) {
+            const prevUser = initialMessages[initialMessages.length - 2];
+            if (prevUser) {
+              const idx = srvMsgs.findIndex(
+                (sm) => sm.role === "user" && sm.content === prevUser.content,
+              );
+              if (idx >= 0 && idx + 1 < srvMsgs.length && srvMsgs[idx + 1].role === "assistant") {
+                // Stage 3 Bug 4: validateActions 过滤脏数据
+                const validated = validateActions(srvMsgs[idx + 1].actions);
+                const adopted: DisplayMessage = {
+                  id: last.id,
+                  role: "assistant",
+                  content: srvMsgs[idx + 1].content,
+                  actions: validated.length > 0 ? validated : undefined,
+                  actionResults: new Map(),
+                };
+                nextMessages = nextMessages.map((m) => (m.id === last.id ? adopted : m));
+              }
+            }
+          }
+
+          // 2b. Figure-rehydrate: replace offloaded markers with server figures.
+          // Stage 3 Bug 3: 用尾对齐 array index 匹配, content 前 50 字符 sanity.
+          if (needFigureRehydrate) {
+            const offset = srvMsgs.length - initialMessages.length;
+            nextMessages = nextMessages.map((m, localIdx) => {
               if (m.role !== "assistant" || !m.actions?.length) return m;
               const locallyOffloaded = m.actions.some((a) => {
                 const tr = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
@@ -3415,22 +3406,23 @@ export default function ChatPage() {
                 );
               });
               if (!locallyOffloaded) return m;
-              // Find matching server message by content prefix (first 200
-              // chars) to be robust to minor client-side transforms.
-              const srvMatch = srvMsgs.find(
-                (sm) => sm.role === "assistant"
-                  && typeof sm.content === "string"
-                  && sm.content.slice(0, 200) === m.content.slice(0, 200),
-              ) as { actions?: ChatAction[] } | undefined;
-              if (srvMatch?.actions?.length) {
-                return { ...m, actions: srvMatch.actions };
+              const srvIdx = localIdx + offset;
+              if (srvIdx < 0 || srvIdx >= srvMsgs.length) return m;
+              const srvMsg = srvMsgs[srvIdx];
+              if (srvMsg.role !== "assistant" || typeof srvMsg.content !== "string") return m;
+              if (srvMsg.content.slice(0, 50) !== m.content.slice(0, 50)) return m;
+              const validated = validateActions(srvMsg.actions);
+              if (validated.length > 0) {
+                return { ...m, actions: validated };
               }
               return m;
-            }));
-          })
-          .catch(() => { /* keep locally-pruned state if server unreachable */ });
-      }
-    }
+            });
+          }
+
+          return nextMessages;
+        });
+      })
+      .catch(() => { /* keep locally-pruned state if server unreachable */ });
   }, [storageScope, user, showToast]);
 
   useEffect(() => {
@@ -3569,16 +3561,11 @@ export default function ChatPage() {
       serverSaveTimerRef.current = null;
     }
     clearFreshChatStorage(storageScope);
-    // G6.1: also clear the workspace-context keys that the chat request
-    // auto-injects.  Without this the old session's ADQL / search / FITS
-    // results follow the user into the "new" session, which is exactly
-    // what the reviewer reported as "+ New chat doesn't truly reset".
-    // Reviewers saw Paper 2 and Paper 5 sharing context; these four
-    // keys were the culprit.
-    localStorage.removeItem("astro_last_adql");
-    localStorage.removeItem("astro_last_adql_rows");
-    localStorage.removeItem("astro_adql_result_sets");
-    localStorage.removeItem("astro_last_search");
+    // Stage 3 Bug 2: the 4 ADQL/search keys this used to clear (astro_last_adql,
+    // astro_last_adql_rows, astro_adql_result_sets, astro_last_search) are no
+    // longer written anywhere — M3 (2026-05-18) deleted the /adql and /search
+    // pages that produced them. Removed the dead cleanup lines. The two chat
+    // signal keys below are still live and must keep being cleared.
     localStorage.removeItem("astro_chat_new_session");
     localStorage.removeItem("astro_chat_open_session");
     window.history.replaceState(null, "", "/chat");
@@ -3947,38 +3934,16 @@ export default function ChatPage() {
 
       logOperation("chat", `Search: ${text}`);
 
-      // Build context from user's current workspace state
+      // Build context from user's current workspace state.
+      // Stage 3 Bug 2 修复: 5 个 localStorage key 在 M3 (2026-05-18) 删除
+      // /search /adql /pipeline /workspace 4 个 page 后已经没人写, 留着读
+      // 出来的只可能是上个用户 (同一台电脑) 残留的 stale 数据, 是隐私泄漏源.
+      // 全部删除. 仍然活的 astro_workspace_files 走 readWorkspaceCache(scope)
+      // 显式带用户 scope, 不再裸 getItem.
       const wsContext: Record<string, unknown> = {};
       try {
-        const lastSearch = localStorage.getItem("astro_last_search");
-        if (lastSearch) wsContext.last_search = JSON.parse(lastSearch);
-      } catch { /* ignore */ }
-      try {
-        const workspace = localStorage.getItem("astro_workspace_files");
-        if (workspace) wsContext.workspace_files = JSON.parse(workspace);
-      } catch { /* ignore */ }
-      try {
-        const pipeline = localStorage.getItem("pipeline_autosave");
-        if (pipeline) {
-          const p = JSON.parse(pipeline);
-          wsContext.current_pipeline = {
-            node_count: p.nodes?.length || 0,
-            node_types: (p.nodes || []).map((n: Record<string, unknown>) => (n.data as Record<string, unknown>)?.nodeType || n.type),
-            input_data: p.inputDataId,
-          };
-        }
-      } catch { /* ignore */ }
-      try {
-        const lastAdql = localStorage.getItem("astro_last_adql");
-        if (lastAdql) wsContext.last_adql = JSON.parse(lastAdql);
-      } catch { /* ignore */ }
-      try {
-        const lastAdqlRows = localStorage.getItem("astro_last_adql_rows");
-        if (lastAdqlRows) wsContext.last_adql_rows = JSON.parse(lastAdqlRows);
-      } catch { /* ignore */ }
-      try {
-        const lastAdqlResultSets = localStorage.getItem("astro_adql_result_sets");
-        if (lastAdqlResultSets) wsContext.last_adql_result_sets = JSON.parse(lastAdqlResultSets);
+        const workspaceFiles = readWorkspaceCache(storageScope);
+        if (workspaceFiles.length > 0) wsContext.workspace_files = workspaceFiles;
       } catch { /* ignore */ }
       wsContext.python_session_id = pythonSessionIdRef.current;
       wsContext.current_session_id = sessionIdForRequest;
