@@ -1559,26 +1559,72 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
   // Literature
   if (toolName === "search_literature") {
     const refs = (result.results as Array<Record<string, unknown>>) || [];
+    // Stage 5 (2026-05-19): inline link-chip helper. backend `_build_paper_links`
+    // returns optional fields {pdf_url, arxiv_url, doi_url, ads_url}; render
+    // any present field as a small chip the user can click directly.
+    const renderLinkChip = (
+      url: string | undefined,
+      label: string,
+      icon: string,
+    ) => {
+      if (!url) return null;
+      return (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 3,
+            padding: "1px 6px",
+            marginRight: 4,
+            fontSize: "0.68rem",
+            borderRadius: 3,
+            border: "1px solid var(--color-border)",
+            color: "var(--color-text-secondary)",
+            textDecoration: "none",
+            background: "var(--color-bg-secondary, transparent)",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {icon} {label}
+        </a>
+      );
+    };
     return (
       <div>
-        {refs.slice(0, 8).map((r, i) => (
-          <div key={i} style={{ fontSize: "0.75rem", padding: "4px 0", borderBottom: "1px solid var(--color-border)" }}>
-            <div>
-              <a href={`https://ui.adsabs.harvard.edu/abs/${r.bibcode}`} target="_blank" rel="noopener noreferrer"
-                style={{ color: "var(--color-accent)", textDecoration: "none" }}>
-                {String(r.title)}
-              </a>
-            </div>
-            <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.7rem" }}>
-              {(r.authors as string[] || []).slice(0, 3).join(", ")}{(r.authors as string[] || []).length > 3 ? " et al." : ""} ({String(r.year)})
-            </div>
-            {r.abstract ? (
-              <div style={{ color: "var(--color-text-secondary)", fontSize: "0.7rem", marginTop: 2, lineHeight: 1.3 }}>
-                {String(r.abstract).slice(0, 200)}{String(r.abstract).length > 200 ? "..." : ""}
+        {refs.slice(0, 8).map((r, i) => {
+          const adsUrl = (r.ads_url as string | undefined)
+            || (r.bibcode ? `https://ui.adsabs.harvard.edu/abs/${String(r.bibcode)}` : undefined);
+          const pdfUrl = r.pdf_url as string | undefined;
+          const arxivUrl = r.arxiv_url as string | undefined;
+          const doiUrl = r.doi_url as string | undefined;
+          return (
+            <div key={i} style={{ fontSize: "0.75rem", padding: "4px 0", borderBottom: "1px solid var(--color-border)" }}>
+              <div>
+                <a href={adsUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ color: "var(--color-accent)", textDecoration: "none" }}>
+                  {String(r.title)}
+                </a>
               </div>
-            ) : null}
-          </div>
-        ))}
+              <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.7rem" }}>
+                {(r.authors as string[] || []).slice(0, 3).join(", ")}{(r.authors as string[] || []).length > 3 ? " et al." : ""} ({String(r.year)})
+              </div>
+              {r.abstract ? (
+                <div style={{ color: "var(--color-text-secondary)", fontSize: "0.7rem", marginTop: 2, lineHeight: 1.3 }}>
+                  {String(r.abstract).slice(0, 200)}{String(r.abstract).length > 200 ? "..." : ""}
+                </div>
+              ) : null}
+              <div style={{ marginTop: 4 }}>
+                {renderLinkChip(pdfUrl, "PDF", "📄")}
+                {renderLinkChip(arxivUrl, "arXiv", "🅰")}
+                {renderLinkChip(adsUrl, "ADS", "📚")}
+                {renderLinkChip(doiUrl, "DOI", "🔗")}
+              </div>
+            </div>
+          );
+        })}
       </div>
     );
   }

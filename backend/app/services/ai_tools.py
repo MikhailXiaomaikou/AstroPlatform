@@ -3853,6 +3853,30 @@ def _exec_pipeline(inp: dict) -> dict:
     }
 
 
+def _build_paper_links(r: dict[str, Any]) -> dict[str, str]:
+    """Stage 5 (2026-05-19): build clickable URLs for one paper.
+
+    Returns a dict with any subset of {arxiv_url, pdf_url, doi_url, ads_url}.
+    ads_url is always present when bibcode exists; arxiv/pdf are present when
+    the paper is on arXiv (auto-detected); doi_url is present when DOI exists.
+    """
+    out: dict[str, str] = {}
+    bibcode = str(r.get("bibcode") or "").strip()
+    if bibcode:
+        out["ads_url"] = f"https://ui.adsabs.harvard.edu/abs/{bibcode}"
+    arxiv_url = str(r.get("arxiv_url") or "").strip()
+    if not arxiv_url and bibcode.startswith("arXiv:"):
+        arxiv_id = bibcode[len("arXiv:"):]
+        arxiv_url = f"https://arxiv.org/abs/{arxiv_id}"
+    if arxiv_url:
+        out["arxiv_url"] = arxiv_url
+        out["pdf_url"] = arxiv_url.replace("/abs/", "/pdf/")
+    doi = str(r.get("doi") or "").strip()
+    if doi:
+        out["doi_url"] = f"https://doi.org/{doi}"
+    return out
+
+
 async def _exec_literature(inp: dict) -> dict:
     try:
         from functools import partial
@@ -3910,6 +3934,7 @@ async def _exec_literature(inp: dict) -> dict:
                     "bibcode": r["bibcode"],
                     "abstract": (r.get("abstract") or "")[:500],
                     "source": r.get("source") or r.get("pub") or source,
+                    **_build_paper_links(r),
                 }
                 for r in filtered[:8]
             ]
