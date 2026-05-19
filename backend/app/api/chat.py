@@ -4500,6 +4500,7 @@ async def _run_agent_loop(
             build_regeneration_prompt,
             build_zero_data_qualitative_regeneration_prompt,
             blocked_reply_text,
+            blocked_reply_with_narrative,
             zero_data_but_quantitative,
             is_empty_turn,
             literature_prior_violations,
@@ -4637,10 +4638,14 @@ async def _run_agent_loop(
                     clean_reply = blocked_unsupported_narrative_reply_text(rewrite_unsupported_narrative)
                     fabrication_stats["blocked"] = True
                 else:
-                    clean_reply = blocked_reply_text(rewrite_validation)
+                    # Stage 6 P0: preserve AI's qualitative rewrite narrative
+                    clean_reply = blocked_reply_with_narrative(
+                        rewrite_validation, qualitative_rewrite,
+                    )
                     fabrication_stats["blocked"] = True
             else:
-                clean_reply = blocked_reply_text(validation)
+                # Stage 6 P0: preserve AI's original reply narrative
+                clean_reply = blocked_reply_with_narrative(validation, clean_reply)
                 fabrication_stats["blocked"] = True
             try:
                 from app.observability.metrics import record_counter
@@ -4731,7 +4736,16 @@ async def _run_agent_loop(
                 }),
             )
             validation = validate_claims(clean_reply, all_tool_results)
-            clean_reply = blocked_reply_text(validation) + (
+            # Stage 6 P0: keep AI's reply narrative; banner + extra note still
+            # appear on top, narrative (with unverified numbers redacted) below.
+            _original_reply_lit_anchor = clean_reply
+            clean_reply = blocked_reply_with_narrative(
+                validation, _original_reply_lit_anchor,
+            )
+            # Insert the literature-anchor guidance right after the banner,
+            # before the "---" divider that precedes the narrative.
+            _divider = "\n\n---\n\n"
+            _additional_note = (
                 "\n\nAdditional note: your claims matched the pattern of "
                 "citing a textbook literature value (age / mass / distance) "
                 "without running a corresponding measurement tool this turn. "
@@ -4778,11 +4792,15 @@ async def _run_agent_loop(
                     except Exception:
                         pass
                 else:
-                    clean_reply = blocked_reply_text(summary_validation)
+                    # Stage 6 P0: preserve tool_grounded_summary narrative
+                    clean_reply = blocked_reply_with_narrative(
+                        summary_validation, tool_grounded_summary,
+                    )
                     fabrication_stats["blocked"] = True
             else:
                 validation = validate_claims(clean_reply, all_tool_results)
-                clean_reply = blocked_reply_text(validation)
+                # Stage 6 P0: preserve AI's original reply narrative
+                clean_reply = blocked_reply_with_narrative(validation, clean_reply)
                 fabrication_stats["blocked"] = True
 
         elif True:
@@ -4976,7 +4994,12 @@ async def _run_agent_loop(
                                 "Fabrication gate BLOCKED reply from %s (%d uncited)",
                                 agent_name, len(validation.uncited),
                             )
-                            clean_reply = blocked_reply_text(validation)
+                            # Stage 6 P0: keep AI's regen-exhausted narrative
+                            # so the user sees methodology / caveats, not just
+                            # the banner. Uncited numbers are redacted in-place.
+                            clean_reply = blocked_reply_with_narrative(
+                                validation, clean_reply,
+                            )
                             fabrication_stats["blocked"] = True
                 if fabrication_stats["regenerations"]:
                     try:
@@ -5086,6 +5109,7 @@ async def _run_agent_loop(
             from app.services.claim_validator import (
                 validate_claims,
                 blocked_reply_text,
+                blocked_reply_with_narrative,
             )
             fallback_validation = validate_claims(clean_reply, all_tool_results)
             if not fallback_validation.ok:
@@ -5104,7 +5128,10 @@ async def _run_agent_loop(
                     )
                 except Exception:
                     pass
-                clean_reply = blocked_reply_text(fallback_validation)
+                # Stage 6 P0: preserve fallback-synthesis narrative
+                clean_reply = blocked_reply_with_narrative(
+                    fallback_validation, clean_reply,
+                )
                 fabrication_stats["blocked"] = True
         except Exception as e:
             logger.debug("Fallback synthesis validation skipped: %s", e)
@@ -5243,6 +5270,7 @@ async def _run_orchestrated_chat(
         try:
             from app.services.claim_validator import (
                 blocked_reply_text,
+                blocked_reply_with_narrative,
                 blocked_citation_reply_text,
                 blocked_unsupported_narrative_reply_text,
                 citation_violations_should_block,
@@ -5311,7 +5339,8 @@ async def _run_orchestrated_chat(
                     len(validation.uncited),
                     bool(zero_data_claims),
                 )
-                merged_reply = blocked_reply_text(validation)
+                # Stage 6 P0: preserve merged-reply narrative
+                merged_reply = blocked_reply_with_narrative(validation, merged_reply)
         except Exception as exc:
             logger.warning("Merged-reply claim validation failed open: %s", exc)
     return {

@@ -1988,6 +1988,60 @@ def blocked_reply_text(result: ValidationResult) -> str:
     )
 
 
+def _redact_uncited_phrases(reply: str, uncited: list[Claim]) -> str:
+    """Stage 6 P0 (2026-05-19): replace each uncited claim's raw phrase with
+    `[unverified: N]` using its precise (start, end) char offsets.
+
+    Processes claims back-to-front so earlier offsets remain valid as we
+    mutate. Overlapping spans are de-duplicated (keep the earliest).
+    """
+    if not uncited or not reply:
+        return reply
+    sorted_claims = sorted(uncited, key=lambda c: c.start)
+    deduped: list[Claim] = []
+    last_end = -1
+    for c in sorted_claims:
+        if c.start >= last_end and 0 <= c.start < c.end <= len(reply):
+            deduped.append(c)
+            last_end = c.end
+    out = reply
+    for c in reversed(deduped):
+        replacement = f"[unverified: {c.value:g}]"
+        out = out[:c.start] + replacement + out[c.end:]
+    return out
+
+
+def blocked_reply_with_narrative(
+    result: ValidationResult,
+    original_reply: str,
+) -> str:
+    """Stage 6 P0 (2026-05-19): preserve AI's narrative while flagging uncited
+    numbers.
+
+    Previous behavior (`blocked_reply_text` alone): wholesale replace AI reply
+    with the banner — users lost methodology/caveats/qualitative reasoning.
+
+    New behavior: banner on top + AI's original reply below, with uncited
+    numeric phrases redacted in-place as `[unverified: N]`. The non-numeric
+    parts of the AI's narrative (data sources, caveats, fallback rationale,
+    method choices) are preserved verbatim.
+
+    If `original_reply` is empty/whitespace, falls back to the legacy
+    banner-only behavior.
+    """
+    banner = blocked_reply_text(result)
+    stripped_original = (original_reply or "").strip()
+    if not stripped_original:
+        return banner
+    redacted = _redact_uncited_phrases(original_reply, result.uncited)
+    return (
+        banner
+        + "\n\n---\n\n"
+        + "## AI's draft response (uncited numbers redacted)\n\n"
+        + redacted
+    )
+
+
 def is_empty_turn(tool_results: Any) -> bool:
     """F1.4: was this turn's tool output effectively empty?
 

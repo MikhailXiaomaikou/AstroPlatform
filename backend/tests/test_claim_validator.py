@@ -721,3 +721,67 @@ def test_literature_prior_no_claim_labels_no_violations():
     from app.services.claim_validator import literature_prior_violations
     tool_results = [{"tool": "run_adql", "input": {}, "result": {"data": {"x": [1]}}}]
     assert literature_prior_violations("The period is 5.366 days.", tool_results) == []
+
+
+# ── Stage 6 P0: blocked_reply_with_narrative — preserve AI narrative ─────
+
+
+def test_blocked_reply_with_narrative_redacts_uncited_in_place():
+    """Stage 6 P0: when AI cites uncited numbers, we should redact them in
+    the original reply but keep the surrounding narrative (methodology,
+    caveats, qualitative explanations)."""
+    from app.services.claim_validator import (
+        blocked_reply_with_narrative,
+        validate_claims,
+    )
+    tool_results = [{
+        "tool": "fit_line_lfr",
+        "result": {"posterior": {"H0_med": 67.36, "slope_med": 0.792}},
+    }]
+    reply = (
+        "Based on the Bayesian linear regression, we find the slope is 0.792 "
+        "and the inferred H0 is 73.04 km/s/Mpc which differs from the "
+        "Planck baseline. The method used was emcee MCMC with 1500 steps."
+    )
+    validation = validate_claims(reply, tool_results)
+    assert not validation.ok
+    assert len(validation.uncited) >= 1
+    out = blocked_reply_with_narrative(validation, reply)
+    assert "Reply withheld" in out
+    assert "---" in out
+    # AI's narrative is preserved (methodology + qualitative wording)
+    assert "Bayesian linear regression" in out
+    assert "emcee MCMC" in out
+    assert "differs from the" in out
+    # The uncited number 73.04 should be redacted in the narrative section
+    assert "[unverified: 73.04]" in out
+
+
+def test_blocked_reply_with_narrative_falls_back_when_reply_empty():
+    """Empty original reply falls back to banner-only (legacy behavior)."""
+    from app.services.claim_validator import (
+        blocked_reply_text,
+        blocked_reply_with_narrative,
+        validate_claims,
+    )
+    tool_results = [{"tool": "run_python", "result": {"value": 1.0}}]
+    validation = validate_claims("The mass is 5.5 M_sun.", tool_results)
+    out_with_empty_reply = blocked_reply_with_narrative(validation, "")
+    out_banner_only = blocked_reply_text(validation)
+    assert out_with_empty_reply == out_banner_only
+
+
+def test_blocked_reply_with_narrative_handles_overlapping_spans():
+    """Redaction must handle overlapping/duplicate uncited spans without
+    corrupting the reply (dedupe by earliest span)."""
+    from app.services.claim_validator import (
+        Claim,
+        _redact_uncited_phrases,
+    )
+    reply = "Slope value 0.792 detected here."
+    uncited = [
+        Claim(label="a", raw="0.792", value=0.792, start=12, end=17),
+        Claim(label="b", raw="0.792", value=0.792, start=12, end=17),
+    ]
+    out = _redact_uncited_phrases(reply, uncited)
+    assert out == "Slope value [unverified: 0.792] detected here."
