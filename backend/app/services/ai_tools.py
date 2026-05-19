@@ -3920,24 +3920,42 @@ async def _exec_literature(inp: dict) -> dict:
             if not _literature_hit_should_be_hidden(r)
         ]
         filtered, filtered_out_count = _filter_literature_hits_for_query(query, visible)
+        result_papers = [
+            {
+                "title": r["title"],
+                "authors": r["authors"][:3],
+                "year": r["year"],
+                "bibcode": r["bibcode"],
+                "abstract": (r.get("abstract") or "")[:500],
+                "source": r.get("source") or r.get("pub") or source,
+                **_build_paper_links(r),
+            }
+            for r in filtered[:8]
+        ]
+        # Stage 6.2 P2 (2026-05-19): enforce abstract second-screening.
+        # Stage 5 added a MUST prompt rule but AI skipped it in prod tests.
+        # Add __message_to_model__ in the standard anti-fabrication pattern
+        # used by the line-relation workflow (chat.py _suppressed_*); AI
+        # almost never ignores this banner on the next iteration.
         return {
             "source": source,
             "result_granularity": "paper_abstract",
             "supports_measurement_claims": False,
             "filtered_out_count": filtered_out_count,
             "relevance_filter": "query_keyword_overlap",
-            "results": [
-                {
-                    "title": r["title"],
-                    "authors": r["authors"][:3],
-                    "year": r["year"],
-                    "bibcode": r["bibcode"],
-                    "abstract": (r.get("abstract") or "")[:500],
-                    "source": r.get("source") or r.get("pub") or source,
-                    **_build_paper_links(r),
-                }
-                for r in filtered[:8]
-            ]
+            "results": result_papers,
+            "__message_to_model__": (
+                "REQUIRED before any further tool call: read each abstract "
+                "above and output a Markdown table with columns "
+                "`| # | Title (short) | Relevance | One-sentence reason |`. "
+                "Relevance MUST be one of: Direct (paper directly answers the "
+                "user's question), Marginal (related but does not directly "
+                "answer), Off-topic (keyword overlap but topic mismatch). "
+                "Only Direct + Marginal papers may be cited / mined downstream; "
+                "drop Off-topic ones from your reasoning. If 0 papers are "
+                "Direct, propose a refined query instead of citing marginally-"
+                "relevant work as if it were direct."
+            ),
         }
     except Exception as e:
         return {"error": str(e)}
