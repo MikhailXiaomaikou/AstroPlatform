@@ -785,3 +785,67 @@ def test_blocked_reply_with_narrative_handles_overlapping_spans():
     ]
     out = _redact_uncited_phrases(reply, uncited)
     assert out == "Slope value [unverified: 0.792] detected here."
+
+
+def test_attach_draft_to_banner_with_literature_narrative_banner():
+    """Stage 6 P0a follow-up: literature_narrative banner + AI draft 拼装,
+    draft 全文保留 (banner 已经列了行号定位, 不做 redact)."""
+    from app.services.claim_validator import (
+        CitationViolation,
+        attach_draft_to_banner,
+        blocked_unsupported_narrative_reply_text,
+    )
+    violations = [
+        CitationViolation(
+            kind="literature_fallback",
+            match_text="literature values typical for this object",
+            line_number=13,
+        ),
+    ]
+    banner = blocked_unsupported_narrative_reply_text(violations)
+    draft = (
+        "Based on the search results and the Bayesian fit, the slope is "
+        "consistent with literature values typical for this object. "
+        "The methodology used was emcee MCMC with 1500 steps."
+    )
+    out = attach_draft_to_banner(banner, draft)
+    assert "Reply withheld" in out
+    assert "(line 13)" in out
+    assert "---" in out
+    assert "AI's draft response" in out
+    assert "Bayesian fit" in out
+    assert "emcee MCMC" in out
+    assert "literature values typical for this object" in out
+
+
+def test_attach_draft_to_banner_with_citation_banner():
+    """citation banner + AI draft 拼装, 保留 draft 全文."""
+    from app.services.claim_validator import (
+        CitationViolation,
+        attach_draft_to_banner,
+        blocked_citation_reply_text,
+    )
+    violations = [
+        CitationViolation(
+            kind="invalid_bibcode",
+            match_text="2024XXX..001A",
+            line_number=7,
+        ),
+    ]
+    banner = blocked_citation_reply_text(violations)
+    draft = "The fit shows H0 = 67.36 km/s/Mpc per (2024XXX..001A)."
+    out = attach_draft_to_banner(banner, draft)
+    assert "Reply withheld" in out
+    assert "(line 7)" in out
+    assert "---" in out
+    assert "AI's draft response" in out
+    assert "H0 = 67.36 km/s/Mpc" in out
+
+
+def test_attach_draft_to_banner_falls_back_when_reply_empty():
+    """空 / 纯白 draft 退回到 banner-only."""
+    from app.services.claim_validator import attach_draft_to_banner
+
+    banner = "⚠ Reply withheld: some reason."
+    assert attach_draft_to_banner(banner, "") == banner
+    assert attach_draft_to_banner(banner, "   \n\n") == banner

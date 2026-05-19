@@ -4501,6 +4501,7 @@ async def _run_agent_loop(
             build_zero_data_qualitative_regeneration_prompt,
             blocked_reply_text,
             blocked_reply_with_narrative,
+            attach_draft_to_banner,
             zero_data_but_quantitative,
             is_empty_turn,
             literature_prior_violations,
@@ -4632,10 +4633,19 @@ async def _run_agent_loop(
                     except Exception:
                         pass
                 elif rewrite_citation_violations and citation_violations_should_block(rewrite_citation_violations):
-                    clean_reply = blocked_citation_reply_text(rewrite_citation_violations)
+                    # Stage 6 P0a follow-up: preserve AI's rewrite narrative
+                    # (banner-only behavior dropped the draft entirely)
+                    clean_reply = attach_draft_to_banner(
+                        blocked_citation_reply_text(rewrite_citation_violations),
+                        qualitative_rewrite,
+                    )
                     fabrication_stats["blocked"] = True
                 elif rewrite_unsupported_narrative:
-                    clean_reply = blocked_unsupported_narrative_reply_text(rewrite_unsupported_narrative)
+                    # Stage 6 P0a follow-up: preserve AI's rewrite narrative
+                    clean_reply = attach_draft_to_banner(
+                        blocked_unsupported_narrative_reply_text(rewrite_unsupported_narrative),
+                        qualitative_rewrite,
+                    )
                     fabrication_stats["blocked"] = True
                 else:
                     # Stage 6 P0: preserve AI's qualitative rewrite narrative
@@ -4701,10 +4711,18 @@ async def _run_agent_loop(
                     except Exception:
                         pass
                 else:
-                    clean_reply = blocked_unsupported_narrative_reply_text(unsupported_narrative_claims)
+                    # Stage 6 P0a follow-up: preserve AI's reply narrative
+                    clean_reply = attach_draft_to_banner(
+                        blocked_unsupported_narrative_reply_text(unsupported_narrative_claims),
+                        clean_reply,
+                    )
                     fabrication_stats["blocked"] = True
             else:
-                clean_reply = blocked_unsupported_narrative_reply_text(unsupported_narrative_claims)
+                # Stage 6 P0a follow-up: preserve AI's reply narrative
+                clean_reply = attach_draft_to_banner(
+                    blocked_unsupported_narrative_reply_text(unsupported_narrative_claims),
+                    clean_reply,
+                )
                 fabrication_stats["blocked"] = True
 
         elif literature_prior_violations(clean_reply, all_tool_results):
@@ -5271,6 +5289,7 @@ async def _run_orchestrated_chat(
             from app.services.claim_validator import (
                 blocked_reply_text,
                 blocked_reply_with_narrative,
+                attach_draft_to_banner,
                 blocked_citation_reply_text,
                 blocked_unsupported_narrative_reply_text,
                 citation_violations_should_block,
@@ -5296,7 +5315,11 @@ async def _run_orchestrated_chat(
                     "Unsupported narrative gate BLOCKED merged reply (%d violations)",
                     len(unsupported_narrative),
                 )
-                merged_reply = blocked_unsupported_narrative_reply_text(unsupported_narrative)
+                # Stage 6 P0a follow-up: preserve merged-reply narrative
+                merged_reply = attach_draft_to_banner(
+                    blocked_unsupported_narrative_reply_text(unsupported_narrative),
+                    merged_reply,
+                )
             elif citation_violations and citation_violations_should_block(citation_violations):
                 logger.error(
                     "Citation provenance gate BLOCKED merged reply (%d violations)",

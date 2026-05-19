@@ -2011,34 +2011,55 @@ def _redact_uncited_phrases(reply: str, uncited: list[Claim]) -> str:
     return out
 
 
+def attach_draft_to_banner(
+    banner: str,
+    original_reply: str,
+    title: str = "AI's draft response (provenance check failed — see above)",
+) -> str:
+    """Stage 6 P0 follow-up (2026-05-19): 通用 helper, 把 AI 的 draft 附在任何
+    hard-block banner 后面.
+
+    跟 `blocked_reply_with_narrative` 的区别: 不做数字 redact, 只 attach.
+    用于 literature_narrative / citation / methodology 这些 detector —
+    它们抓的是整句 phrase 而不是数字, redact 后 narrative 没意义.
+    banner 自身已经列了行号定位 (e.g. `... (line 13)`), 用户能找到 detector
+    标红哪段.
+
+    如果 `original_reply` 是空/白, 退回到 banner-only.
+    """
+    stripped = (original_reply or "").strip()
+    if not stripped:
+        return banner
+    return (
+        banner
+        + "\n\n---\n\n"
+        + f"## {title}\n\n"
+        + original_reply
+    )
+
+
 def blocked_reply_with_narrative(
     result: ValidationResult,
     original_reply: str,
 ) -> str:
     """Stage 6 P0 (2026-05-19): preserve AI's narrative while flagging uncited
-    numbers.
+    numbers. Numeric-uncited path 专用 — 数字被 `[unverified: N]` 替换在原
+    narrative 中, 通过通用 `attach_draft_to_banner` 拼装最终输出.
 
     Previous behavior (`blocked_reply_text` alone): wholesale replace AI reply
     with the banner — users lost methodology/caveats/qualitative reasoning.
 
-    New behavior: banner on top + AI's original reply below, with uncited
-    numeric phrases redacted in-place as `[unverified: N]`. The non-numeric
-    parts of the AI's narrative (data sources, caveats, fallback rationale,
-    method choices) are preserved verbatim.
-
-    If `original_reply` is empty/whitespace, falls back to the legacy
-    banner-only behavior.
+    If `original_reply` is empty/whitespace, falls back to banner-only.
     """
     banner = blocked_reply_text(result)
     stripped_original = (original_reply or "").strip()
     if not stripped_original:
         return banner
     redacted = _redact_uncited_phrases(original_reply, result.uncited)
-    return (
-        banner
-        + "\n\n---\n\n"
-        + "## AI's draft response (uncited numbers redacted)\n\n"
-        + redacted
+    return attach_draft_to_banner(
+        banner,
+        redacted,
+        title="AI's draft response (uncited numbers redacted)",
     )
 
 
