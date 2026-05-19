@@ -33,6 +33,7 @@ tools:
   - run_nested_sampler
   - run_research_matrix
   - spot_check_literature_value  # Stage 4 (2026-05-19): literature value verification against vendored archive
+  - classify_literature_relevance  # Stage 6 P0c-C (2026-05-19): hard-gate 二筛升级独立工具
   - verify_research_facts
   # ── overlap (15) — shared with future active modules ──
   - analyze_cross_wavelength
