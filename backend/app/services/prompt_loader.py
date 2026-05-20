@@ -3,15 +3,15 @@
 Reads backend/app/prompts/ three-layer structure:
 
     prompts/
-    ├── base.md                            # 跨模块永久加载
+    ├── base.md                            # loaded permanently across all modules
     ├── core/
-    │   ├── infrastructure.md              # 跨模块基础设施
-    │   └── infrastructure.yaml            # core 工具清单
+    │   ├── infrastructure.md              # cross-module infrastructure
+    │   └── infrastructure.yaml            # core tool manifest
     └── modules/
         ├── cosmology/                     # active under ASTRO_RESEARCH_FOCUS=cosmology
         │   ├── prompt.md
         │   └── manifest.yaml
-        └── _dormant_*/                    # 不暴露
+        └── _dormant_*/                    # not exposed
             ├── prompt.md
             └── manifest.yaml
 
@@ -51,17 +51,21 @@ def _module_dir(name: str) -> Path:
 def _active_module_names(focus: str) -> list[str]:
     """Return active module names for a given ASTRO_RESEARCH_FOCUS.
 
-    Hardcoded(Karpathy 三相似才抽象 — 等第 3 个 active 模块再引入 ModuleRegistry):
-      - ``cosmology`` → ``["cosmology"]``
-      - ``solar_system`` → ``["solar_system"]`` (M0 2026-05-18)
-      - ``all`` / unknown / empty → 所有模块(active + 历史 _dormant_)
+    Hardcoded — 3 active modules reached (2026-05-20); ModuleRegistry
+    abstraction decision deferred to next iteration (Karpathy 三相似临界).
+      - ``cosmology`` -> ``["cosmology"]``
+      - ``solar_system`` -> ``["solar_system"]`` (M0 2026-05-18)
+      - ``exoplanet`` -> ``["exoplanet"]`` (M0 2026-05-20)
+      - ``all`` / unknown / empty -> all modules (active + historical _dormant_)
     """
     if focus == "cosmology":
         return ["cosmology"]
     if focus == "solar_system":
         return ["solar_system"]
+    if focus == "exoplanet":
+        return ["exoplanet"]
     # "all" / unknown / empty → load everything (no focus gating).
-    # 包含 active 模块(无 _dormant_ 前缀)和 dormant 模块(有 _dormant_ 前缀)。
+    # Includes active modules (no _dormant_ prefix) and dormant modules (with _dormant_ prefix).
     modules_dir = _PROMPTS_ROOT / "modules"
     seen: set[str] = set()
     active: list[str] = []
@@ -102,7 +106,7 @@ def build_system_prompt(focus: str) -> str:
     # "the LLM should see this last"). Loaded for any active-module focus
     # whose dir contains an appendix.md.  M0 2026-05-18: extended from
     # cosmology-only to support solar_system.
-    if focus in {"cosmology", "solar_system"}:
+    if focus in {"cosmology", "solar_system", "exoplanet"}:
         appendix_path = _PROMPTS_ROOT / "modules" / focus / "appendix.md"
         if appendix_path.exists():
             text = text + "\n\n" + _read_text(appendix_path)

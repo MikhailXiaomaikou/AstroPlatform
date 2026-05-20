@@ -67,9 +67,10 @@ def _coerce_float(value: Any) -> float | None:
 
 
 def _augment_adql_row(row: dict[str, Any]) -> dict[str, Any]:
-    # 保留 archive 原始列名, 同时补小写别名。SDSS SkyServer 使用 objID /
-    # petroMag_r / zErr 这种混合大小写, 但旧分析代码常写小写列名。两者都
-    # 保留可避免 KeyError, 又不隐藏真实 schema。
+    # Preserve original archive column names while also injecting lowercase aliases.
+    # SDSS SkyServer uses mixed-case names like objID / petroMag_r / zErr, but
+    # legacy analysis code often uses lowercase. Keeping both avoids KeyError
+    # without hiding the real schema.
     enriched = dict(row)
     for k, v in row.items():
         enriched.setdefault(str(k).lower(), v)
@@ -240,10 +241,11 @@ TOOLS = [
         },
     },
     {
-        # J3: SDSS 官方 SkyServer 直连.  VizieR 全部 mirror 不可达或
-        # V/154/sdss17 表 "All mirrors unavailable" 时切到这个工具 —
-        # 不经 VizieR, 直接打 SDSS 原厂 API.  语法是 T-SQL (微软 SQL
-        # Server), 不是 ADQL.
+        # J3: Direct connection to the official SDSS SkyServer. Use this tool
+        # when all VizieR mirrors are unreachable or the V/154/sdss17 table
+        # reports "All mirrors unavailable" — bypasses VizieR entirely and
+        # queries the SDSS native API. Syntax is T-SQL (Microsoft SQL Server),
+        # not ADQL.
         "name": "run_sdss_sql",
         "description": (
             "Execute a T-SQL query directly against SDSS SkyServer (DR18 by default). "
@@ -363,11 +365,12 @@ TOOLS = [
         },
     },
     {
-        # Stage 6 P0c-C (2026-05-19): hard-block 升级 — 把 Stage 5/6.2 的
-        # abstract 二筛 prompt MUST 规则 (soft) 升级成独立工具 (hard).
-        # backend claim_validator.unclassified_literature_violations 反查:
-        # search_literature 出的 paper 必须经过本工具分类才能在 narrative
-        # 中引用, 否则整段被 banner 阻止.
+        # Stage 6 P0c-C (2026-05-19): hard-block upgrade — promotes the Stage 5/6.2
+        # abstract secondary-filter prompt MUST rule (soft) to a dedicated tool (hard).
+        # The backend claim_validator.unclassified_literature_violations check
+        # requires every paper returned by search_literature to be classified
+        # through this tool before it can be cited in a narrative; otherwise the
+        # entire passage is blocked by the banner.
         "name": "classify_literature_relevance",
         "description": (
             "REQUIRED after every search_literature call (hard rule, not advisory). "
@@ -2161,14 +2164,22 @@ TOOLS = [
     },
 ]
 
-# ── M0 Commit 4 (2026-05-18): solar_system 12 个工具 schema ──
-# 集中在 ai_tools_solar_system.py, 通过 extend 注入 TOOLS (避免 9k+ ai_tools.py
-# 进一步膨胀). _exec_tool dispatch 用一个 elif 走 dispatch_solar_system.
+# ── M0 Commit 4 (2026-05-18): solar_system 12-tool schema ──
+# Consolidated in ai_tools_solar_system.py and injected into TOOLS via extend
+# (avoids further bloating the 9k+ line ai_tools.py).
+# _exec_tool dispatch routes through a single elif to dispatch_solar_system.
 from app.services.ai_tools_solar_system import (
     SOLAR_SYSTEM_TOOL_SCHEMAS as _SOLAR_SYSTEM_TOOL_SCHEMAS,
     SOLAR_SYSTEM_TOOL_NAMES as _SOLAR_SYSTEM_TOOL_NAMES,
 )
 TOOLS.extend(_SOLAR_SYSTEM_TOOL_SCHEMAS)
+
+# ── M0 2026-05-20: exoplanet 8 tools (3rd active module) ──
+from app.services.ai_tools_exoplanet import (
+    EXOPLANET_TOOL_SCHEMAS as _EXOPLANET_TOOL_SCHEMAS,
+    EXOPLANET_TOOL_NAMES as _EXOPLANET_TOOL_NAMES,
+)
+TOOLS.extend(_EXOPLANET_TOOL_SCHEMAS)
 
 
 # ── Tool Executors ──
@@ -2202,9 +2213,10 @@ async def execute_tool(
         python_session_id, user_id, chat_session_id, progress_callback,
     )
 
-    # 2026-05-20: 给 user_events 写 ai.tool_called, 让 telemetry/tool_usage
-    # endpoint 有数据. 之前消费者 (admin_stats.py) 已经写好, 但缺生产者.
-    # 只记 input 字段 keys (不记 value), 防 BYOK api_key / 大 payload 入库.
+    # 2026-05-20: write ai.tool_called to user_events so the telemetry/tool_usage
+    # endpoint has data. The consumer (admin_stats.py) was already implemented
+    # but the producer was missing. Only records input field keys (not values)
+    # to prevent BYOK api_key or large payloads from being stored in the DB.
     try:
         from app.services.event_collector import event_collector
         input_keys = sorted(tool_input.keys()) if isinstance(tool_input, dict) else []
@@ -2256,8 +2268,8 @@ async def _execute_tool_inner(
         elif tool_name == "search_literature":
             return await _exec_literature(tool_input)
         elif tool_name == "classify_literature_relevance":
-            # Stage 6 P0c-C (2026-05-19): hard 屏障 — LLM 必须调它分类 paper,
-            # 否则 claim_validator.unclassified_literature_violations 会 block reply.
+            # Stage 6 P0c-C (2026-05-19): hard barrier — LLM must call this to classify
+            # papers; otherwise claim_validator.unclassified_literature_violations blocks the reply.
             return await _exec_classify_literature_relevance(tool_input, python_session_id)
         elif tool_name == "extract_literature_tables":
             return await _exec_extract_literature_tables(
@@ -2267,8 +2279,9 @@ async def _execute_tool_inner(
         elif tool_name == "prepare_spectral_measurements":
             return _exec_prepare_spectral_measurements(tool_input, python_session_id)
         elif tool_name == "fit_line_lfr":
-            # Stage 6.3 (2026-05-20 下沉): fit_line_lfr 接受可选 arxiv_id, 内部
-            # 调 LLM extractor 抽测量 + ±1% 反查 + 写 cache, 再走原拟合.
+            # Stage 6.3 (2026-05-20 sink): fit_line_lfr now accepts an optional arxiv_id;
+            # internally calls the LLM extractor to pull measurements + ±1% cell verification
+            # + write cache, then proceeds with the original fitting flow.
             return await _exec_fit_line_lfr(tool_input, python_session_id, api_key)
         elif tool_name == "astro_statistics_toolbox":
             return _exec_astro_statistics_toolbox(tool_input)
@@ -2587,14 +2600,19 @@ async def _execute_tool_inner(
             return await _exec_query_gaia_cluster(tool_input, python_session_id)
         elif tool_name == "get_extinction":
             return await _exec_get_extinction(tool_input)
-        # ── M0 Commit 4: solar_system 12 工具集中 dispatch ──
+        # ── M0 Commit 4: solar_system 12-tool centralized dispatch ──
         elif tool_name in _SOLAR_SYSTEM_TOOL_NAMES:
             from app.services.ai_tools_solar_system import dispatch_solar_system
             return await dispatch_solar_system(tool_name, tool_input)
+        # ── M0 2026-05-20: exoplanet 8-tool centralized dispatch ──
+        elif tool_name in _EXOPLANET_TOOL_NAMES:
+            from app.services.ai_tools_exoplanet import dispatch_exoplanet
+            return await dispatch_exoplanet(tool_name, tool_input)
         else:
-            # R6-NEW-2: 给 Unknown tool 返具体 error_class + 可用工具清单,
-            # 让 AI 下一轮能自纠 (不再 hallucinate 工具名).  TOOLS 是模块
-            # 顶层 list, 每项 {"name": ..., "description": ...}.
+            # R6-NEW-2: return a concrete error_class + available tool list for unknown
+            # tools so the AI can self-correct on the next turn (no more hallucinated
+            # tool names). TOOLS is the module-level list; each entry is
+            # {"name": ..., "description": ...}.
             try:
                 available = sorted(t.get("name", "") for t in TOOLS if t.get("name"))
             except Exception:
@@ -2962,9 +2980,10 @@ async def _exec_adql(
 
     # On timeout, retry with reduced cone radius (halve, then quarter)
     retry_log = []
-    # X4 (PART X): 记录 radius shrink 的 original / final 值, 最后塞进
-    # adql_result 让前端渲染醒目 banner. B6 Pleiades 0.75° → 0.375° 把
-    # 成员数腰斩, AI 没察觉 — 前端 banner 强制可见能让用户和 AI 都看到.
+    # X4 (PART X): record the original/final radius shrink values and inject
+    # them into adql_result so the frontend can render a prominent banner.
+    # In B6, Pleiades 0.75° → 0.375° halved the member count and the AI
+    # didn't notice — the frontend banner makes it visible to both user and AI.
     radius_shrink_original: float | None = None
     radius_shrink_final: float | None = None
     if result is None:
@@ -3009,7 +3028,7 @@ async def _exec_adql(
             result = await _try_query(reduced)
             if result is not None:
                 query = reduced  # remember the successful query
-                # X4 (PART X): 记录 original / final radius 给前端 banner
+                # X4 (PART X): record original / final radius for the frontend banner
                 if radius_shrink_original is None:
                     radius_shrink_original = _old_r
                 radius_shrink_final = _new_r
@@ -3150,9 +3169,10 @@ async def _exec_adql(
     if _dialect_warnings:
         adql_result["dialect_warnings"] = _dialect_warnings
 
-    # X4 (PART X): 半径 auto-shrink 醒目字段. 前端 AutoToolResult
-    # run_adql 分支读 radius_auto_reduced=true 时渲染黄色 banner (不折叠)
-    # 提示成员数可能被腰斩 — 修复 B6 Pleiades 0.75°→0.375° 无警告问题.
+    # X4 (PART X): prominent radius auto-shrink fields. The frontend
+    # AutoToolResult run_adql branch renders a yellow (non-collapsible) banner
+    # when radius_auto_reduced=true, warning that member count may be halved.
+    # Fixes the B6 Pleiades 0.75°→0.375° silent-shrink bug.
     if radius_shrink_original is not None and radius_shrink_final is not None:
         adql_result["radius_auto_reduced"] = True
         adql_result["original_radius_deg"] = radius_shrink_original
@@ -3208,8 +3228,9 @@ def _high_velocity_component_threshold_masyr(
     min_parallax_mas: float,
     min_vtan_kms: float,
 ) -> float:
-    # 如果总切向速度超过阈值, 至少一个 PM 分量会超过总阈值 / sqrt(2)。
-    # 用最小视差换算成 mas/yr 后在 TAP 侧做粗筛, 精确 vtan 留给 Python。
+    # If total tangential velocity exceeds the threshold, at least one PM
+    # component exceeds the threshold / sqrt(2). Convert using minimum parallax
+    # to mas/yr for a coarse TAP-side filter; precise vtan computation is done in Python.
     return max(1.0, min_vtan_kms * min_parallax_mas / 4.74047 / math.sqrt(2.0))
 
 
@@ -3433,17 +3454,18 @@ async def _exec_query_high_velocity_stars(
 
 
 async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> dict:
-    """J3: 直接打 SDSS SkyServer SQL API, 不经 VizieR.
+    """J3: Query the SDSS SkyServer SQL API directly, bypassing VizieR.
 
-    VizieR 四个 mirror 全部返回 404 时 (第三次回归 Paper 3 Coma 星系
-    光度函数案例), SDSS 路径整条废.  这个工具绕开 VizieR, 直接调 SDSS
-    官方 SkyServer (有独立 uptime), 让 AI 能在 VizieR 宕机期继续做
-    PhotoObjAll / SpecObjAll / Photoz / GalSpec 查询.
+    When all four VizieR mirrors return 404 (as in the third regression of the
+    Paper 3 Coma galaxy luminosity function case), the SDSS VizieR path is
+    completely broken. This tool bypasses VizieR and calls the official SDSS
+    SkyServer directly (which has independent uptime), letting the AI continue
+    PhotoObjAll / SpecObjAll / Photoz / GalSpec queries during VizieR outages.
 
-    结果结构跟 _exec_adql 一致, 并存进 ADQL cache 池 (key `latest_sdss_sql`
-    用额外 alias), run_python 可以通过
-    `get_cached_results('latest_sdss_sql')` 或简单的 `get_adql_results()`
-    拿到完整行.
+    The result structure matches _exec_adql and is also stored in the ADQL cache
+    pool (with an extra alias key `latest_sdss_sql`). run_python can access the
+    full rows via `get_cached_results('latest_sdss_sql')` or the simpler
+    `get_adql_results()`.
     """
     from app.connectors.availability import build_unavailable_response, record_connector_gated
     from app.services.provenance_v2.registry_loader import dataset_from_registry, resolve_service
@@ -3489,7 +3511,7 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
             max_attempts=max_attempts,
         )
     except ValueError as e:
-        # SQL 语法错误 / 危险关键词: 用户可见的 4xx 语义
+        # SQL syntax error / dangerous keyword: 4xx-style user-visible semantic error
         return {
             "error": str(e),
             "error_class": "sdss_sql_syntax",
@@ -3519,14 +3541,14 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
             if alias not in cache_data and original in data:
                 cache_data[alias] = data[original]
 
-    # AI 视图: 截取前 100 行, 完整数据走 cache.
+    # AI view: truncated to first 100 rows; full data goes to cache.
     VIEW_ROWS = 100
     truncated = {col: (vals[:VIEW_ROWS] if isinstance(vals, list) else vals)
                  for col, vals in data.items()}
 
-    # 存进 ADQL cache 池 — run_python 能用 get_adql_results() 也能用
-    # get_cached_results('latest_sdss_sql').  我们额外存一个 sdss 专用
-    # key 供 AI 按数据源区分.
+    # Store in ADQL cache pool — run_python can use get_adql_results() or
+    # get_cached_results('latest_sdss_sql'). We also store under a dedicated
+    # sdss key so the AI can distinguish the data source.
     try:
         result_set = build_adql_result_set(
             service=f"sdss_dr{dr}",
@@ -3536,7 +3558,7 @@ async def _exec_run_sdss_sql(inp: dict, python_session_id: str = "default") -> d
             row_count=row_count,
         )
         store_adql_result_set(python_session_id, result_set)
-        # 显式的 sdss 别名, 让 AI 能 import 时用 `latest_sdss_sql` 标识.
+        # Explicit sdss alias so the AI can identify the source via `latest_sdss_sql`.
         sdss_key = _session_cache_key("latest_sdss_sql", python_session_id) or "latest_sdss_sql"
         store_search_results(sdss_key, cache_data)
         if python_session_id in (None, "", "default"):
@@ -3961,9 +3983,10 @@ async def _exec_literature(inp: dict) -> dict:
         loop = asyncio.get_running_loop()
         raw = await loop.run_in_executor(None, _search_ads_sync, query)
         source = "ads_or_arxiv_object"
-        # `_search_ads_sync` 偏 object:<name> 检索。审稿场景里经常问的是
-        # topic / method / catalog name, 所以 object 检索为空时再走
-        # free-text ADS 和 arXiv, 避免直接 EMPTY。
+        # `_search_ads_sync` favors object:<name> searches. In peer-review
+        # workflows the question is often about a topic / method / catalog name,
+        # so if the object search returns nothing we fall through to free-text
+        # ADS and arXiv to avoid a premature EMPTY result.
         if not raw:
             raw = await loop.run_in_executor(None, partial(_search_literature_ads, query, 8))
             source = "ads_free_text"
@@ -3992,7 +4015,7 @@ async def _exec_literature(inp: dict) -> dict:
                 "bibcode": r["bibcode"],
                 "abstract": (r.get("abstract") or "")[:500],
                 "source": r.get("source") or r.get("pub") or source,
-                # Stage 6 P0c-B (2026-05-19): ADS RETRACTED 标记透传给 LLM + 前端
+                # Stage 6 P0c-B (2026-05-19): pass the ADS RETRACTED flag through to LLM + frontend
                 "retracted": bool(r.get("retracted", False)),
                 **_build_paper_links(r),
             }
@@ -4017,7 +4040,7 @@ async def _exec_literature(inp: dict) -> dict:
             "relevant work as if it were direct."
         )
         if retracted_count:
-            # Stage 6 P0c-B: 严禁引用 retracted paper
+            # Stage 6 P0c-B: strictly prohibit citing retracted papers
             msg_to_model = (
                 f"⚠ {retracted_count} of {len(result_papers)} returned paper(s) "
                 f"are marked RETRACTED by ADS. You MUST NOT cite or mine data "
@@ -4041,18 +4064,20 @@ async def _exec_literature(inp: dict) -> dict:
 
 
 async def _exec_classify_literature_relevance(inp: dict, python_session_id: str = "default") -> dict:
-    """Stage 6 P0c-C (2026-05-19): hard 屏障升级.
+    """Stage 6 P0c-C (2026-05-19): hard barrier upgrade.
 
-    旧版: search_literature return 里 `__message_to_model__` 让 LLM 输出
-    Direct/Marginal/Off-topic 表 (prompt 注入, soft). prod 测试发现 LLM
-    会跳过 (跑 1 出表, 跑 2 不出).
+    Old approach: `__message_to_model__` in search_literature return prompted the
+    LLM to output a Direct/Marginal/Off-topic table (soft prompt injection).
+    Production testing showed the LLM skipped it (run 1 produced the table,
+    run 2 did not).
 
-    新版: 把分类做成独立工具. LLM 必须先调它, 之后 claim_validator
-    `unclassified_literature_violations` 反查每个 cited bibcode 是否经过
-    本工具, 没经过 → hard block reply.
+    New approach: classification is a dedicated tool. The LLM must call it first;
+    afterwards claim_validator's `unclassified_literature_violations` check
+    verifies that every cited bibcode passed through this tool — any that did not
+    result in a hard-blocked reply.
 
-    本函数自身只做轻量校验 + structured return; 真正阻塞在 chat.py
-    pipeline 的 claim 校验那一步.
+    This function itself only performs lightweight validation + structured return;
+    the actual blocking happens in the claim-validation step of the chat.py pipeline.
     """
     classifications = inp.get("classifications") or []
     if not isinstance(classifications, list) or not classifications:
@@ -4106,18 +4131,23 @@ async def _extract_and_cache_paper_measurements(
     python_session_id: str = "default",
     fields: list[str] | None = None,
 ) -> dict:
-    """Stage 6.3 (2026-05-20 下沉): fit_line_lfr 内部 helper — LLM 抽测量 + ±1% cell 反查 + 写 cache.
+    """Stage 6.3 (2026-05-20 sink): internal helper for fit_line_lfr —
+    LLM measurement extraction + ±1% cell verification + cache write.
 
-    spike module `llm_paper_extractor.extract_with_llm_and_verify` 提供核心逻辑
-    (fetch HTML / parse tables / score+filter / LLM call / cell ±1% 反查), 本
-    函数是 async wrapper:
-      1. run_in_executor 跑 spike module (sync httpx + LLM 调用, 防阻塞 event loop)
-      2. passed records 转 fit_line_lfr 兼容 schema, 写 session-scoped
-         `latest_literature_tables:<sid>` cache + raw `latest_literature_tables`
-      3. failed_mismatch / failed_no_cell 不进 cache (claim_validator 自动 reject AI 引用)
+    The spike module `llm_paper_extractor.extract_with_llm_and_verify` provides
+    the core logic (fetch HTML / parse tables / score+filter / LLM call / ±1%
+    cell verification). This function is an async wrapper that:
+      1. Runs the spike module in run_in_executor (sync httpx + LLM call,
+         prevents blocking the event loop)
+      2. Converts passed records to the fit_line_lfr-compatible schema and writes
+         to the session-scoped `latest_literature_tables:<sid>` cache plus the
+         raw `latest_literature_tables` key
+      3. failed_mismatch / failed_no_cell records are not cached
+         (claim_validator automatically rejects any AI citations of them)
 
-    历史: 之前是顶层 tool `extract_paper_measurements_with_llm`, 2026-05-20 晚下沉为
-    fit_line_lfr 内部依赖, 用户传 arxiv_id 给 fit_line_lfr 直接拟合, 不再两步调度.
+    History: previously a top-level tool `extract_paper_measurements_with_llm`;
+    sunk into fit_line_lfr as an internal dependency on 2026-05-20. Users now
+    pass arxiv_id directly to fit_line_lfr for a single-step workflow.
     """
     if not arxiv_id:
         return {
@@ -4272,24 +4302,27 @@ def _filter_literature_hits_for_query(
     query: str,
     rows: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
-    """Stage 6 P0c-a v2 (2026-05-19): backend filter 改成黑名单一票否决.
+    """Stage 6 P0c-a v2 (2026-05-19): backend filter changed to blocklist veto.
 
-    旧版用 keyword 积分 + score >= 2 才留, 在 cosmology query 边缘容易
-    误删 abstract 没命中 anchor 词的真 paper (prod 跑 2: 同 prompt 一次
-    24 篇一次 0 篇, 0 篇路径是 8 篇 ADS 结果全部 score<2 被删).
+    Old approach: keyword scoring, keeping only rows with score >= 2. This was
+    too aggressive at the edges of cosmology queries — a paper whose abstract
+    lacked anchor words but was genuinely relevant would be dropped (prod run 2:
+    same prompt, 24 papers one run, 0 papers the next; the 0-paper path had all
+    8 ADS results score < 2 and be discarded).
 
-    新版: 不积分, 只看是否命中明显 off-topic 黑名单. 细粒度 relevance
-    评分交给 6.2 强制 LLM 输出的 Direct/Marginal/Off-topic 表. backend
-    只保留 anti-leak hard-block (R2.9/M4 audit: BESIII / 电力工程论文真的
-    leak 进 cosmology 搜索过).
+    New approach: no scoring. Only check against an obvious off-topic blocklist.
+    Fine-grained relevance scoring is delegated to the Direct/Marginal/Off-topic
+    table that Stage 6.2 forces the LLM to output. The backend retains only the
+    anti-leak hard-block (R2.9/M4 audit: BESIII / power-engineering papers
+    genuinely leaked into cosmology searches in production).
 
-    黑名单三类:
-      1. 已知粒子物理 off-topic (BESIII / LHCb / CKM / b meson / ...)
-      2. 通用脏词 (wildfire / 电网 / wi-fi / semiring / ...)
-      3. "particle physics" 字样但**没**任何 cosmology anchor (保留 PDG
-         "The Cosmological Parameters" 这类合法 review)
+    Three blocklist categories:
+      1. Known particle-physics off-topic (BESIII / LHCb / CKM / b meson / ...)
+      2. General dirty words (wildfire / power grid / wi-fi / semiring / ...)
+      3. "particle physics" text but NO cosmology anchor (PDG
+         "The Cosmological Parameters" review is exempt)
 
-    Generic domain query 不过滤 (跟旧版一致).
+    Generic domain queries are not filtered (same as the old approach).
     """
     if not rows:
         return [], 0
@@ -4312,7 +4345,7 @@ def _filter_literature_hits_for_query(
 
 
 def _literature_hit_is_blacklisted(row: dict[str, Any], domain: str) -> bool:
-    """命中任一黑名单 → True (一票否决)."""
+    """Return True if any blocklist entry matches (single-veto logic)."""
     blob = _normalize_literature_text(" ".join(
         str(row.get(key) or "")
         for key in ("title", "abstract", "bibcode", "source", "pub")
@@ -4880,9 +4913,10 @@ async def _exec_fit_line_lfr(
 ) -> dict:
     """Fit log L(line) as a function of log10(FWHM / 100 km/s).
 
-    Stage 6.3 (2026-05-20 下沉): 可选 ``arxiv_id`` 参数 — 传了就先用 LLM
-    抽测量 + ±1% cell 反查写 cache, 再走原拟合流程. extract_paper_measurements_with_llm
-    顶层 tool 已删除, 由此处统一入口.
+    Stage 6.3 (2026-05-20 sink): optional ``arxiv_id`` parameter — when provided,
+    LLM extraction + ±1% cell verification + cache write run first, then the
+    original fitting flow proceeds. The top-level extract_paper_measurements_with_llm
+    tool has been removed; this is now the single entry point.
     """
     arxiv_id_in = str(inp.get("arxiv_id") or "").strip()
     extract_summary: dict | None = None
@@ -4924,7 +4958,7 @@ async def _exec_fit_line_lfr(
                 "arxiv_id": arxiv_id_in,
                 "extraction_summary": extract_summary,
                 "error": (
-                    f"LLM抽到 {extract_summary.get('passed_count', 0)} passed, "
+                    f"LLM extracted {extract_summary.get('passed_count', 0)} passed, "
                     f"{extract_summary.get('failed_mismatch_count', 0)} failed_mismatch, "
                     f"{extract_summary.get('failed_no_cell_count', 0)} failed_no_cell. "
                     "No row passed ±1% cell verification — cannot fit."
@@ -5175,12 +5209,15 @@ async def _exec_fit_line_lfr(
                     "target_cosmology": requested_cosmology_name,
                 }
 
-    # PART AI #2: optional luminosity_kind conversion (L_solar ↔ L_prime).
-    # 默认 "L_solar" 不破现状; 用户/AI 想做 CO LFR 对比时显式传 "L_prime"
-    # → 全部 accepted 行按 (line_id, redshift) 转换. 转换失败 (无 z / 无
-    # line_id / 未知线 / NaN log_l) 的 row 入 rejected, kind="unit_conversion_failed",
-    # 不进 fit. 保证 fit y-axis 单位 100% 一致, 防 bundle e8d9 那种 alpha
-    # 在 L_solar (6.88) 和 L_prime (9.823) 之间漂移而 prose 不带单位.
+    # PART AI #2: optional luminosity_kind conversion (L_solar <-> L_prime).
+    # Defaults to "L_solar" to preserve existing behaviour. When a user/AI
+    # explicitly passes "L_prime" for CO LFR comparison, all accepted rows are
+    # converted using (line_id, redshift). Rows that fail conversion (no z /
+    # no line_id / unknown line / NaN log_l) go to rejected with
+    # kind="unit_conversion_failed" and are excluded from the fit.
+    # This guarantees 100% consistent y-axis units and prevents the bundle e8d9
+    # style of alpha drifting between L_solar (6.88) and L_prime (9.823) while
+    # prose omits units.
     requested_lum_kind = str(inp.get("luminosity_kind") or "L_solar").strip()
     if requested_lum_kind not in {"L_solar", "L_prime"}:
         requested_lum_kind = "L_solar"
@@ -5220,15 +5257,16 @@ async def _exec_fit_line_lfr(
         accepted = kept_after_units
         n_used = len(accepted)
     else:
-        # 'L_solar' 路径: 把字段标上让下游 result envelope 写得清楚,
-        # 但 log_luminosity 数值不动 (cache 本来就是 L_solar).
+        # 'L_solar' path: tag the field so the downstream result envelope is explicit,
+        # but do not change the log_luminosity values (cache is already in L_solar).
         for row in accepted:
             row.setdefault("luminosity_kind", "L_solar")
 
     if n_used == 0:
-        # 所有 row 都因转换失败被 reject — 早退给清晰错误, 不让 fit
-        # 因 numpy 空数组 panic. 外层 execute_tool 会用 normalize_tool_result
-        # 包裹 (provenance 标准化), 所以这里直接 return dict.
+        # All rows rejected due to conversion failure — early exit with a clear
+        # error rather than letting the fit panic on an empty numpy array.
+        # The outer execute_tool wraps this in normalize_tool_result for
+        # provenance standardisation, so returning a plain dict is correct here.
         return {
             "success": False,
             "tool": "fit_line_lfr",
@@ -5244,10 +5282,11 @@ async def _exec_fit_line_lfr(
             "__do_not_claim__": True,
         }
 
-    # PART AI #6: lensing coverage check — is_lensed=True 但 mu_lens=None
-    # 且不是 demagnify_sample 修过的 row, 不能进 fit (luminosity 还没
-    # demagnify, 用了会污染 LFR slope). 移到 rejected 让用户/AI 看到
-    # 必须先调 demagnify_sample.
+    # PART AI #6: lensing coverage check — rows where is_lensed=True but
+    # mu_lens=None and _demagnified is not set cannot enter the fit (luminosity
+    # has not been demagnified; including them would bias the LFR slope).
+    # Move them to rejected so the user/AI sees that demagnify_sample must be
+    # called first.
     n_lensed_skipped_no_mu = 0
     accepted_after_lensing: list[dict[str, Any]] = []
     for row in accepted:
@@ -5665,11 +5704,12 @@ async def _exec_fit_line_lfr(
                 f"({'log L/L_sun, ALPINE/REBELS native form' if luminosity_kind_used == 'L_solar' else 'log L_prime brightness-temperature, CO LFR / Solomon 1992 / Carilli & Walter 2013 form'})."
             ),
         },
-        # PART AI #2: explicit unit labels. prose 引用 alpha/beta 时
-        # 必须带这些 unit 字符串, 否则 SYSTEM_PROMPT 规则视为无单位陈述
-        # → claim_validator 不让过. 闭 bundle e8d9 (alpha=9.823) vs
-        # bundle 6202/84ad (alpha=6.88) 那种跨 round 漂移而 prose 不带
-        # 单位的 silent contradiction.
+        # PART AI #2: explicit unit labels. Prose citations of alpha/beta must
+        # include these unit strings; the SYSTEM_PROMPT treats any claim without
+        # units as an unqualified assertion that claim_validator will block.
+        # Prevents the bundle e8d9 (alpha=9.823) vs bundle 6202/84ad (alpha=6.88)
+        # type of cross-round drift where prose omits units, creating a silent
+        # contradiction.
         "luminosity_kind": luminosity_kind_used,
         "intercept_unit": (
             "log10(L/L_sun)" if luminosity_kind_used == "L_solar"
@@ -5753,11 +5793,12 @@ async def _exec_fit_line_lfr(
         "n_lensed": n_lensed,
         "n_unlensed": n_unlensed,
         "n_lensed_unknown": n_lensed_unknown,
-        # PART AI #6: 综合 lensing 状态. 闭审稿人 "0 lensed sources detected"
-        # 那条硬伤 — 该数字原来是 ALPINE table 没 μ 列就当 0 报, 不是真
-        # 科学结论. 现在 lensing_summary 明确分 5 类: 未 lensing 入 fit /
-        # lensing 已 demagnify 入 fit / lensing 但缺 μ 被 reject / 表无
-        # 信息 unknown / paper-level metadata 默认 lensed.
+        # PART AI #6: consolidated lensing status. Fixes the reviewer objection
+        # "0 lensed sources detected" — that number originally came from the
+        # ALPINE table having no mu column, not from any scientific conclusion.
+        # lensing_summary now explicitly distinguishes 5 categories: unlensed in
+        # fit / lensed+demagnified in fit / lensed but missing mu (rejected) /
+        # no table info (unknown) / paper-level metadata defaults to lensed.
         "lensing_summary": {
             "n_unlensed_in_fit": n_unlensed,
             "n_lensed_demagnified_in_fit": sum(
@@ -6658,7 +6699,7 @@ async def _exec_extract_literature_tables(
 
 _VALID_DATA_SOURCES = {
     "latest_adql", "latest_search", "latest_lightcurve",
-    "latest_sdss_sql",  # J3: SDSS SkyServer 直连结果
+    "latest_sdss_sql",  # J3: SDSS SkyServer direct-connection results
     "latest_high_velocity_stars",
     "none_not_analyzing_real_data",
 }
@@ -6669,16 +6710,17 @@ _REAL_DATA_SOURCE_PATTERNS = {
     "latest_adql": ("get_adql_results", "get_adql_result_sets", "get_cached_results"),
     "latest_search": ("get_search_results", "get_cached_results"),
     "latest_lightcurve": ("get_cached_results", "lightkurve", "search_lightcurve"),
-    # J3: latest_sdss_sql 共享 get_cached_results / get_adql_results 的访问接口
-    # (run_sdss_sql 把结果存进 adql_result_sets 池, 复用 getter), 加上显式的
-    # latest_sdss_sql 变量名就能匹配.
+    # J3: latest_sdss_sql shares the get_cached_results / get_adql_results
+    # access interface (run_sdss_sql stores results in the adql_result_sets pool,
+    # reusing the getter). The explicit latest_sdss_sql variable name is the
+    # unique identifier.
     "latest_sdss_sql": ("get_cached_results", "get_adql_results", "latest_sdss_sql"),
     "latest_high_velocity_stars": ("get_cached_results", "get_adql_results", "latest_high_velocity_stars"),
 }
 _PLATFORM_REAL_DATA_READER_TOKENS = {
-    # 这些 helper 本身会触发真实 archive / MAST / platform cache 读取。
-    # 即使模型把 data_source 写成 latest_search 而不是 latest_lightcurve,
-    # 也不应被 G1.2 当成“没有读取真实数据”。
+    # These helpers themselves trigger real archive / MAST / platform cache reads.
+    # Even if the model declares data_source='latest_search' instead of
+    # 'latest_lightcurve', G1.2 should not treat this as “no real data read”.
     "search_lightcurve",
     "download_and_clean_lightcurve",
     "transit_search",
@@ -6686,7 +6728,7 @@ _PLATFORM_REAL_DATA_READER_TOKENS = {
 
 
 def _summarize_ast_observations(code: str, limit: int = 24) -> str:
-    """返回 AST 校验实际看见的标识符, 方便模型按错误提示自修复。"""
+    """Return the identifiers actually seen by the AST check, helping the model self-correct from error messages."""
     import ast as _ast
 
     try:
@@ -6736,9 +6778,10 @@ def _summarize_ast_observations(code: str, limit: int = 24) -> str:
     return "AST observed " + "; ".join(parts) + "."
 
 
-# X5 (PART X): 每 session 的 run_python 连续调用计数. 用来观察 "第 N 次
-# run_python 在 sandbox 崩溃" 这个 pattern — B4/B5/B6 都在第 3+ 次 crash,
-# 目前没数据定位根因. 本 counter 积累 1-2 轮 B 回归后再决定是否深度修 sandbox.
+# X5 (PART X): per-session consecutive run_python call counter. Used to observe
+# the "Nth run_python crashes in sandbox" pattern — B4/B5/B6 all crashed at
+# call 3 or later but we lack data to pinpoint the root cause. Accumulate
+# 1-2 rounds of B regressions before deciding whether to dig deeper into the sandbox.
 _session_run_python_count: dict[str, int] = {}
 _MAX_TRACKED_ATTEMPT_IDX_FOR_METRIC = 10  # cap cardinality
 
@@ -6843,9 +6886,10 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                     names_seen.add(node.id)
                 if isinstance(node, _ast_auto.Attribute):
                     names_seen.add(node.attr)
-            # J3: code 里出现 latest_sdss_sql / run_sdss_sql 变量 → SDSS
-            # cache.  这条要放在 get_adql_results 之前 check, 因为 run_sdss_sql
-            # 复用 ADQL cache 池, 变量名才是唯一区分.
+            # J3: presence of latest_sdss_sql / run_sdss_sql in the code indicates
+            # an SDSS cache source. This check must come before get_adql_results
+            # because run_sdss_sql reuses the ADQL cache pool; the variable name
+            # is the only way to distinguish them.
             if any(t in names_seen for t in ("latest_sdss_sql", "run_sdss_sql")):
                 auto_source = "latest_sdss_sql"
             elif any(t in names_seen for t in ("get_adql_results", "get_adql_result_sets")):
@@ -6984,11 +7028,12 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             # don't reject on syntax issues alone.
             found_in_ast = any(tok in code for tok in tokens_to_match)
 
-        # S1 (PART S): session-scoped history check.  R9-NEW-1 regression:
-        # AI 前一个 cell 已经 `rows = get_adql_results()`, 当前 cell 直接
-        # `df.groupby(...)` 被拒.  若 session 历史里调过 expected token,
-        # 也算过关 — 因为 subprocess replay prefix 会把那一 cell 重跑,
-        # 本 cell 里真的拿得到 real-archive 数据.
+        # S1 (PART S): session-scoped history check. R9-NEW-1 regression:
+        # the AI called `rows = get_adql_results()` in a previous cell and then
+        # `df.groupby(...)` directly in the current cell, which was rejected.
+        # If the expected token was called anywhere in the session history, it
+        # also counts as passing — the subprocess replay prefix re-executes that
+        # cell, so the current cell genuinely has access to real archive data.
         if not found_in_ast and python_session_id and python_session_id != "default":
             try:
                 from app.services.code_executor import get_session_helper_calls
@@ -7071,9 +7116,10 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             except Exception:
                 pass
         elif detection.verdict == "inert":
-            # R5 O3: 纯 literal print / 字面量算术代码 (smoke test /
-            # 环境自检). 即使 AI 声明了 data_source='none...', 也不打
-            # SYNTHETIC — 没有合成数据产生, 没有数字进入分析链.
+            # R5 O3: pure literal print / constant-arithmetic code (smoke test /
+            # environment sanity check). Even when the AI declared
+            # data_source='none...', do not mark SYNTHETIC — no synthetic data
+            # is produced and no numbers enter the analysis chain.
             is_synthetic_declared = False
             try:
                 from app.observability.metrics import record_counter
@@ -7117,10 +7163,11 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             timeout=mode_timeout,
         )
     except asyncio.TimeoutError:
-        # U2b (PART U): Round 10 观察 AI 常常首次用 mode='normal' 跑
-        # lightkurve 下载就超 75s, 必须在后续轮次里手动改 mode='slow'
-        # 绕过. 省掉 model round-trip: 如果 mode 不是 slow, 自动 retry
-        # 一次 mode='slow' (300s). 只允许一次升级避免死循环.
+        # U2b (PART U): Round 10 observation — the AI frequently exceeds 75s on
+        # the first lightkurve download with mode='normal', then manually switches
+        # to mode='slow' in a subsequent turn. Eliminate the model round-trip:
+        # if mode is not 'slow', automatically retry once with mode='slow' (300s).
+        # Only one escalation is allowed to prevent infinite loops.
         if mode != "slow":
             try:
                 result = await asyncio.wait_for(
@@ -7180,7 +7227,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         "backend": getattr(result, "backend", "unknown"),
         "duration_ms": getattr(result, "duration_ms", 0),
         "exit_code": getattr(result, "exit_code", None),
-        "mode": mode,  # 反映最终生效的 mode (可能被 U2b auto-escalate 成 slow)
+        "mode": mode,  # reflects the mode actually used (may have been auto-escalated to 'slow' by U2b)
     }
     if auto_escalated:
         response["auto_escalated_mode"] = True
@@ -7190,11 +7237,12 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             "should declare mode='slow' up front.".format(inp.get("mode") or "normal")
         )
 
-    # R5 O2: 非零 exit_code 降级 success. subprocess crash 时 child 一启
-    # 动就 payload['success']=True, 代码还没跑到 except 就崩, 父进程拿到
-    # 的 SandboxResult.success 还是 True 但 proc.exitcode=1. 让两者对齐
-    # 是 success 真实语义的基础 — 否则 UI / AI 看到 "success=true +
-    # exit_code=1" 矛盾, 不知道到底成了没.
+    # R5 O2: non-zero exit_code overrides success=True. On a subprocess crash
+    # the child sets payload['success']=True at startup; if the code crashes
+    # before reaching the except block, the parent's SandboxResult.success
+    # remains True even though proc.exitcode=1. Aligning them is the foundation
+    # of the correct success semantics — otherwise the UI / AI sees
+    # "success=true + exit_code=1" and cannot tell whether the call succeeded.
     _exit = response.get("exit_code")
     if _exit not in (None, 0) and response.get("success"):
         response["success"] = False
@@ -7247,14 +7295,16 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             f"then use `row.get({missing_key!r})` or the exact available column name. "
             "Do not invent a replacement source_id or assume every catalog row has one."
         )
-    # R5 O1 + R6 post: stderr 作为一级字段**总是**写进 response, 即便空串.
-    # 诊断角度看, "stderr=''" 跟 "stderr not set" 是完全不同的信号:
-    #   前者 = 子进程 child main 跑过且写了 stderr 捕获, 真的没东西输出
-    #   后者 = 子进程崩在 Python 解释器启动 / import, child main 没跑到,
-    #          stderr 去了 uvicorn 的 fd=2 (Render 容器日志), 客户端拿不到
-    # 用户 (和 AI) 能凭空字符串本身推断出后一种情况, 去看
-    # /api/admin/sandbox/health 拿 Python-level stderr.
-    # 原来的 `traceback` 字段保留给已失败的场景当 backwards-compat.
+    # R5 O1 + R6 post: stderr is ALWAYS written to response as a top-level field,
+    # even when it is an empty string. From a diagnostic standpoint,
+    # "stderr=''" and "stderr not set" are completely different signals:
+    #   former = the child main ran and captured stderr; it genuinely produced nothing
+    #   latter = the child crashed during Python interpreter startup / import;
+    #            child main never ran; stderr went to uvicorn fd=2 (Render container
+    #            logs), unreachable by the client
+    # Users (and the AI) can infer the second case from the empty string alone
+    # and know to check /api/admin/sandbox/health for Python-level stderr.
+    # The legacy `traceback` field is kept for backwards-compat in failure cases.
     response["stderr"] = (result.stderr or "")[:10_000]
     if not result.stderr and _exit not in (None, 0):
         response["stderr_note"] = (
@@ -7285,8 +7335,10 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         or response.get("figures")
         or response.get("variables")
     ):
-        # 没有任何可用输出的失败必须直接标 FAILED，避免前端只能显示 auto。
-        # 有 stdout/figures/variables 的失败交给 result_provenance 降级为 PARTIAL。
+        # A failure with no usable output must be marked FAILED directly,
+        # so the frontend does not fall back to showing 'auto'.
+        # Failures that still have stdout/figures/variables are downgraded to
+        # PARTIAL by result_provenance.
         response.setdefault("__tool_status__", "FAILED")
         response.setdefault("analysis_status", "failed")
 
@@ -7353,9 +7405,11 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             pass
         return combined
 
-    # X5 (PART X): 记录 sandbox 崩溃在本 session 第几次 run_python 发生.
-    # B4/B5/B6 都观察到第 3+ 次 crash 但没数据定位. 不修根因, 只埋监控.
-    # 捕获 error_class 维度也方便分类 (oom / sandbox_crash / timeout 等).
+    # X5 (PART X): record which call number in this session the sandbox crash
+    # occurred on. B4/B5/B6 all showed crashes at call 3 or later but we lack
+    # data to locate the root cause. Not fixing the root cause — just adding
+    # monitoring. Capturing the error_class dimension also helps categorise by
+    # type (oom / sandbox_crash / timeout, etc.).
     try:
         if not response.get("success"):
             from app.observability.metrics import record_counter
@@ -7373,7 +7427,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                 error_class=str(response.get("error_class", "unknown"))[:32],
             )
         else:
-            # 成功也 bump, 保持 attempt_idx 与真实调用次数同步
+            # Bump on success too, to keep attempt_idx in sync with the real call count
             _bump_run_python_attempt_idx(python_session_id)
     except Exception:
         pass
@@ -7915,9 +7969,9 @@ async def _exec_read_paper(inp: dict) -> dict:
     arxiv_id = re.sub(r'^arXiv:', '', arxiv_id, flags=re.IGNORECASE)
 
     # Fetch paper metadata from arXiv API.
-    # R6-NEW-1: arXiv 把 http → https 301 跳了, httpx 默认不 follow.
-    # 两招叠加: URL 直接写 https + 也打开 follow_redirects (有些镜像还会
-    # 再跳一次).
+    # R6-NEW-1: arXiv redirects http → https with a 301; httpx does not
+    # follow redirects by default. Two-pronged fix: write the URL with https
+    # directly + enable follow_redirects (some mirrors redirect again).
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(f"https://export.arxiv.org/api/query?id_list={arxiv_id}")
@@ -8081,15 +8135,16 @@ def _normalize_band_names(mags: dict) -> dict:
 async def _exec_estimate_photo_z(inp: dict) -> dict:
     """Run the unified photometric redshift estimator.
 
-    L5 (audit 2026-04-20): 默认 method='enhanced_template' (photo_z_pro)
-    走研究级路径.  AI 若显式要 demo 模式 (7 templates), 必须传
-    allow_demo=True — 否则返回 demo_mode_blocked 引导到 enhanced.
+    L5 (audit 2026-04-20): default method='enhanced_template' (photo_z_pro)
+    routes through the research-grade path. If the AI explicitly wants demo
+    mode (7 templates), it must pass allow_demo=True — otherwise the response
+    is demo_mode_blocked with guidance to use enhanced.
     """
     from app.services.photo_z import estimate_photo_z
 
     raw_magnitudes = inp.get("magnitudes", {})
     raw_mag_errors = inp.get("mag_errors", {})
-    # L5: 默认换 enhanced_template, 不再 silent 走 7 模板 hybrid
+    # L5: default changed to enhanced_template; no longer silently uses the 7-template hybrid
     method = inp.get("method", "enhanced_template")
     allow_demo = bool(inp.get("allow_demo", False))
 
@@ -9374,9 +9429,10 @@ async def _exec_search_lightcurve(inp: dict) -> dict:
 
     target = str(inp.get("target") or "").strip()
     mission = str(inp.get("mission") or "kepler").strip().lower()
-    # K2: 明确的 "target 缺失" 错误 — 第三次回归里 AI 第一次调用时漏了
-    # target 参数, 只看到无信息的 "target is required" 然后第二次才补回.
-    # 把示例直接写进错误消息, AI 第一次就能修对.
+    # K2: explicit "target missing" error — in the third regression the AI
+    # omitted the target parameter on the first call, saw only the uninformative
+    # "target is required", and only corrected it on the second call.
+    # Embedding an example in the error message lets the AI get it right first time.
     if not target:
         return {
             "error": (

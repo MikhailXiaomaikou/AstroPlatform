@@ -38,8 +38,15 @@ EMPTY = "empty"
 # or the Bayesian backend is unavailable).  UI should paint this red so
 # the methodology downgrade is never silent.
 METHOD_DOWNGRADED = "method_downgraded"
+# Cosmology MCMC tier (2026-05-20): chain ran with claimable input but ESS or
+# R-hat is below publication threshold. Posterior may be discussed in chat
+# (median, range, qualitative trend) but MUST NOT be cited as a published
+# constraint and is excluded from the bibcode pool.  Distinct from PARTIAL
+# (which carries __do_not_claim__=True) so EXPLORATORY-aware consumers can
+# treat it as a soft warning rather than a hard block.
+EXPLORATORY = "exploratory"
 _VALID_ORIGINS = {REAL_ARCHIVE, CACHED_REAL, USER_UPLOADED, SYNTHETIC, UNAVAILABLE}
-_VALID_STATUS = {COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED, EMPTY, METHOD_DOWNGRADED}
+_VALID_STATUS = {COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED, EMPTY, METHOD_DOWNGRADED, EXPLORATORY}
 # Build-time tool version; populated by the Dockerfile via
 # `ARG TOOL_VERSION` / `ENV TOOL_VERSION=...`.  Falls back to "dev" when
 # running uvicorn locally.  Accessed lazily so tests can monkeypatch.
@@ -55,11 +62,13 @@ def compute_query_hash(tool_name: str, tool_input: Any) -> str:
     except (TypeError, ValueError):
         payload = repr((tool_name, tool_input))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-# L20 (audit 2026-04-20): 所有随机性 tool 必须有 seed 才能 bit-exact 复现.
-# 这个集合定义哪些 tool 属于 stochastic; 若传 random_seed=None 自动从
-# query_hash 推导一个确定 seed 并在 envelope 里标
-# random_seed_source="auto_from_input".  AI/用户跑 2 次相同输入会得到
-# 同样 seed → 同样 chain / bootstrap 结果, 复现性不靠用户记.
+# L20 (audit 2026-04-20): all stochastic tools must have a seed to enable
+# bit-exact reproduction. This set defines which tools are stochastic; if
+# random_seed=None is passed, a deterministic seed is automatically derived
+# from the query_hash and recorded in the envelope as
+# random_seed_source="auto_from_input". Running the same input twice always
+# produces the same seed -> same chain/bootstrap result; the user does not
+# need to track seeds manually.
 _STOCHASTIC_TOOLS: frozenset[str] = frozenset({
     "bayesian_fit", "fit_rv_orbit", "lomb_scargle_period", "fit_sersic_morphology",
     "analyze_spectrum_pro", "sensitivity_analysis",
@@ -85,9 +94,10 @@ def reproducibility_envelope(
     Every tool result carries this so later analyses (golden-path tests,
     user-triggered replays, audit-log inspection) can verify that the same
     input against the same archive version would produce the same output.
-    L20: 随机性工具 (bayesian_fit, bootstrap, GP, emcee 等) 若 random_seed
-    缺失, 自动从 query_hash 推导确定 seed + 在 envelope 标
-    random_seed_source="auto_from_input".  同样输入两次跑结果 bit-exact.
+    L20: for stochastic tools (bayesian_fit, bootstrap, GP, emcee, etc.) with
+    no random_seed, a deterministic seed is derived from the query_hash and
+    recorded in the envelope as random_seed_source="auto_from_input". Running
+    the same input twice produces bit-exact results.
     """
     envelope: dict[str, Any] = {
         "run_id": run_id or str(uuid.uuid4()),
@@ -99,7 +109,7 @@ def reproducibility_envelope(
         envelope["random_seed"] = int(random_seed)
         envelope["random_seed_source"] = "user_provided"
     elif tool_name in _STOCHASTIC_TOOLS:
-        # 从 query_hash 前 8 char (hex) 推 32-bit seed
+        # Derive a 32-bit seed from the first 8 hex chars of query_hash
         envelope["random_seed"] = int(envelope["query_hash"][:8], 16)
         envelope["random_seed_source"] = "auto_from_input"
     if archive_version:
@@ -389,13 +399,16 @@ _DATA_TOOLS = {
     "query_transients", "search_lightcurve", "crossmatch_catalogs",
     "describe_tap_table", "get_last_search_results", # F6.1 / F6.2: new high-level astro helpers
     "query_gaia_cluster", "get_extinction",
-    # J3: SDSS SkyServer 直连 — 和 run_adql 同类, 都是 data fetch
+    # J3: direct SDSS SkyServer connection — same category as run_adql, both are data fetches
     "run_sdss_sql",
     # MW v_esc helper — focused Gaia DR3 high-velocity candidate fetch
     "query_high_velocity_stars",
-    # ── M0 Commit 4 (2026-05-18): solar_system 数据查询工具 ──
+    # ── M0 Commit 4 (2026-05-18): solar_system data query tools ──
     "query_mpc_orbit", "fetch_horizons_ephemeris", "query_sbdb_orbit",
     "query_sbdb_close_approaches", "query_sentry_risk", "query_damit_shape_model",
+    # ── M0 2026-05-20: exoplanet data query tools ──
+    "query_exoplanet_archive", "query_confirmed_planets",
+    "fetch_tess_lightcurve", "query_tess_target_list",
 }
 _COMPUTE_TOOLS = {
     "run_python", "generate_pipeline", "run_pipeline", "validate_analysis",
@@ -417,10 +430,13 @@ _COMPUTE_TOOLS = {
     "prepare_spectral_measurements", "fit_line_lfr",
     "astro_statistics_toolbox",
     "compare_luminosity_distances", "demagnify_sample",
-    # ── M0 Commit 4 (2026-05-18): solar_system 公式/分类计算工具 ──
+    # ── M0 Commit 4 (2026-05-18): solar_system formula/classification compute tools ──
     "compute_hg_magnitude", "compute_afrho", "fit_neatm_diameter_albedo",
     "compute_neo_collision_probability",
     "classify_asteroid_busdemeo", "classify_asteroid_sdss_colors",
+    # ── M0 2026-05-20: exoplanet compute tools ──
+    "fit_transit", "compute_equilibrium_temperature",
+    "compute_transit_depth", "compute_planet_density",
 }
 _REFERENCE_TOOLS = {
     "search_literature", "read_arxiv_paper", "extract_literature_tables", "research_workflow", "generate_proposal", "get_followup_recommendation",

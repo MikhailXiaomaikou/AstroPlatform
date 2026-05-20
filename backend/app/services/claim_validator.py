@@ -43,10 +43,11 @@ logger = logging.getLogger(__name__)
 # fabrication (the model tends to invent round numbers or swap digits) while
 # still matching a tool value re-stated with one-decimal-place precision.
 DEFAULT_TOLERANCE = 0.01
-# PART Y Batch 1: PROVENANCE_VALIDATOR_HARDBLOCK 默认开启 — citation 违规
-# (suspicious_author_year / invalid_bibcode) 默认硬拦, 跟 ZERO-FABRICATION
-# CONTRACT 的数值规则对齐. 显式 PROVENANCE_VALIDATOR_HARDBLOCK=false 才能
-# 把 citation 违规降级回 warn-only (生产紧急关闭用).
+# PART Y Batch 1: PROVENANCE_VALIDATOR_HARDBLOCK is on by default — citation
+# violations (suspicious_author_year / invalid_bibcode) are hard-blocked by
+# default, aligned with the ZERO-FABRICATION CONTRACT numeric rules. Set
+# PROVENANCE_VALIDATOR_HARDBLOCK=false explicitly to downgrade citation
+# violations to warn-only (emergency production kill switch).
 CITATION_VALIDATOR_HARDBLOCK = os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "true").strip().lower() not in {
     "0",
     "false",
@@ -153,9 +154,10 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         rf"\b(?:period|change|stability|evolution)[^.\n;:()]*?{_NUM}\s*ppm\b",
         re.I,
     )),
-    # Pre-PART-W 中文 pattern (period / distance): 保留给旧测试兼容.
-    # X (PART X 方案 D): reply 强制英文之后这两条几乎不会触发 — 因为含
-    # CJK 的 reply 已在上游被硬拦. 保留仅作最后兜底.
+    # Pre-PART-W Chinese patterns (period / distance): kept for backward test compatibility.
+    # X (PART X plan D): after replies are forced to English these two patterns almost never
+    # trigger — CJK-containing replies are already hard-blocked upstream. Kept only as a last
+    # fallback.
     ("period_days_zh", re.compile(rf"(?:周期|脉动周期|轨道周期)\s*(?:值)?\s*(?:为|是|=|≈|~|约为)?\s*{_NUM}\s*(?:天|日)\b", re.I)),
     ("distance_pc_zh", re.compile(rf"(?:距离|距离估算|距离约为)\s*(?:值)?\s*(?:为|是|=|≈|~|约为)?\s*{_NUM}\s*pc\b", re.I)),
     ("percent_claim", re.compile(
@@ -182,9 +184,9 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         re.I,
     )),
 
-    # R14: synthetic 诊断代码常输出无天文单位的摘要统计
-    # ("mean=3.0", "std≈1.414")。这些仍然是数值 claim, 不能从
-    # SYNTHETIC stdout 里被洗白引用。
+    # R14: synthetic diagnostic code often outputs summary statistics without
+    # astronomical units (e.g. "mean=3.0", "std≈1.414"). These are still
+    # numeric claims and must not be laundered from SYNTHETIC stdout.
     ("summary_stat", re.compile(
         rf"\b(?:mean|average|avg|std|standard\s+deviation|sigma)\s*"
         rf"(?:"
@@ -215,10 +217,11 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     # could still match a tool output at ±1%.  Forcing both-match
     # tightens the gate by the second decimal.
     #
-    # L1 (2026-04-20 audit): 补齐光谱/X-ray/射电/高红移单位, 之前漏了
+    # L1 (2026-04-20 audit): added missing spectral/X-ray/radio/high-z units:
     # Å / nm / μm / Gpc / keV / eV / MeV / erg·s⁻¹·cm⁻² / μJy / Jy / THz /
-    # kHz.  没有这些单位时整个 "6563 Å ± 1 Å", "L_X = 1e44 erg/s ± 1e42"
-    # 这类光谱 / X 射线 claim 不被抽取, 零幻觉门直接失效.
+    # kHz.  Without these units, claims like "6563 Å ± 1 Å" and
+    # "L_X = 1e44 erg/s ± 1e42" were not extracted and the zero-hallucination
+    # gate was silently bypassed.
     ("value_with_error", re.compile(
         rf"{_NUM}\s*(?:±|\+/-|\+-)\s*([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)"
         rf"\s*(?:mas|pc|kpc|Mpc|Gpc|deg|arcmin|arcsec|km/?s|mag|dex|Gyr|Myr|yr|days?|"
@@ -230,13 +233,13 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         re.I,
     )),
 
-    # L1 (audit 2026-04-20): 裸单位形式 (无 ± 误差部分, 直接 "数值 单位").
-    # 之前的 label_colon 需要前缀词 (period/distance/...), value_with_error
-    # 需要 ± 符号, 中间这种常见形式没覆盖:
+    # L1 (audit 2026-04-20): bare-unit form (no ± error, just "value unit").
+    # The prior label_colon pattern required a keyword prefix (period/distance/...),
+    # and value_with_error required a ± symbol, leaving this common form uncovered:
     #   "Hα emission at 6563 Å", "L_X = 1.5e44 erg/s", "peak at 1.4 GHz",
     #   "flux 12.3 mJy", "at z=0.5 the luminosity is 3e10 L_sun".
-    # 覆盖范围跟 value_with_error 一致, 确保波长/频率/通量/能量 claim
-    # 统一走匹配.
+    # Coverage matches value_with_error to ensure wavelength/frequency/flux/energy
+    # claims all go through the same matching path.
     ("value_bare_unit", re.compile(
         rf"{_NUM}\s*"
         rf"(mas|pc|kpc|Mpc|Gpc|arcmin|arcsec|km/?s|mag|dex|Gyr|Myr|"
@@ -255,13 +258,14 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         rf"\bRA\s*[=:]\s*{_NUM}[,\s]+Dec\s*[=:]\s*{_NUM}",
         re.I,
     )),
-    # ── M0 Commit 5 (2026-05-18): solar_system 数值规范 ──
-    # 防止 LLM 在没 query MPC/Horizons/SBDB 的情况下凭空给出小天体轨道/物理量.
+    # ── M0 Commit 5 (2026-05-18): solar_system numeric standards ──
+    # Prevents the LLM from fabricating small-body orbital/physical quantities
+    # without first querying MPC/Horizons/SBDB.
     ("semi_major_axis_au", re.compile(
         rf"\ba\s*[=≈~]\s*{_NUM}\s*(?:au|AU)\b", re.I,
     )),
     ("eccentricity", re.compile(
-        # e ∈ [0, 1): 限制 0, 0.xxx (不允许 ≥1 的值,避免误匹配 emcee/exoplanet ratio)
+        # e ∈ [0, 1): restrict to 0 or 0.xxx (values ≥1 are excluded to avoid false matches with emcee/exoplanet ratios)
         r"\b(?:e|eccentricity)\s*[=≈~]\s*(0(?:\.\d+)?)(?!\d)", re.I,
     )),
     ("orbital_inclination_deg", re.compile(
@@ -282,6 +286,24 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     )),
     ("phase_angle_deg", re.compile(
         rf"(?:α|phase\s+angle)\s*[=≈~]\s*{_NUM}\s*(?:°|deg(?:rees?)?\b)", re.I,
+    )),
+    # ── M0 2026-05-20: exoplanet numeric standards ──
+    # Prevents the LLM from fabricating planet/host parameters without first
+    # querying NASA Exoplanet Archive or TESS.
+    ("planet_radius_re", re.compile(
+        rf"\b(?:R(?:_p|p))\s*[=≈~]\s*{_NUM}\s*R(?:_?E(?:arth)?|⊕)", re.I,
+    )),
+    ("planet_mass_me", re.compile(
+        rf"\b(?:M(?:_p|p))\s*[=≈~]\s*{_NUM}\s*M(?:_?E(?:arth)?|⊕)", re.I,
+    )),
+    ("orbital_period_days", re.compile(
+        rf"\b(?:P|orbital\s+period)\s*[=≈~]\s*{_NUM}\s*(?:d|days?)\b", re.I,
+    )),
+    ("equilibrium_temperature_K", re.compile(
+        rf"\bT(?:_eq|eq)\s*[=≈~]\s*{_NUM}\s*K\b", re.I,
+    )),
+    ("transit_depth_ppm", re.compile(
+        rf"\b(?:transit\s+)?depth\s*[=≈~]\s*{_NUM}\s*ppm\b", re.I,
     )),
 ]
 
@@ -316,7 +338,7 @@ _SPELLED_NUMBER_PATTERN = re.compile(
 
 
 def _spelled_number_to_float(raw: str) -> float | None:
-    """把简单英文数字短语转成 float, 仅用于 claim 抽取兜底。"""
+    """Convert a simple English number phrase to float; used only as a claim-extraction fallback."""
     tokens = re.sub(r"[-_]", " ", raw.lower()).split()
     if not tokens:
         return None
@@ -473,10 +495,11 @@ _UNSUPPORTED_NARRATIVE_PATTERNS: list[tuple[str, re.Pattern]] = [
 
 
 def _strip_markdown_code(text: str) -> str:
-    """在抽取 prose 数值 claim 前移除 markdown 代码区。
+    """Strip markdown code blocks before extracting prose numeric claims.
 
-    工具 schema / help 回复里常有 ``limit: 24`` 这种参数默认值, 或 SQL
-    示例。它们是接口元数据, 不是天文结论, 不应进入 zero-fabrication gate。
+    Tool schema / help replies often contain parameter defaults like ``limit: 24``
+    or SQL examples. These are interface metadata, not astronomical conclusions,
+    and must not enter the zero-fabrication gate.
     """
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
     text = re.sub(r"`[^`\n]*`", " ", text)
@@ -490,11 +513,12 @@ def extract_claims(text: str) -> list[Claim]:
     Claim per captured group so both the central value AND the error bar
     (or both RA AND Dec) must match tool output.
 
-    L1 (audit 2026-04-20): 后处理去重 — 当两个 pattern 捕获**同一个数值**
-    且 span 有重叠时, 保留"语义更具体"的那一条(通常是 span 更长、包含
-    前缀标签的形式).  例如 "parallax is 9.00 mas" 同时被 parallax_mas
-    (span 4-24) 和 value_bare_unit (span 16-24) 匹到, 只保留前者.
-    避免漏检光谱单位的同时不重复计数.
+    L1 (audit 2026-04-20): post-process deduplication — when two patterns capture
+    the **same numeric value** with overlapping spans, keep the "more specific"
+    match (typically the longer span that includes a label prefix). For example,
+    "parallax is 9.00 mas" is matched by both parallax_mas (span 4-24) and
+    value_bare_unit (span 16-24); only the former is kept. This avoids missing
+    spectral-unit claims while preventing double-counting.
     """
     text = _strip_markdown_code(text)
     claims: list[Claim] = []
@@ -583,20 +607,22 @@ def _is_tainted_synthetic_payload(payload: Any) -> bool:
     )
 
 
-# L2 (audit 2026-04-20): 元数据字段黑名单.  Pleiades "776 stars"
-# laundering 的根因 — 工具返回 `{"row_count": 776}`, AI 说 "776 member
-# stars", validator 扫完数字池发现 776 在里面 (来自 row_count 这种系统
-# 字段), 放行.  审计后这些**系统性元数据 key** 上带的数字不进池子.
-# 注: 只跳过 key 一层, 不影响嵌套 value (如果数据列碰巧叫 row_count,
-# 只影响那一层, 影响范围可接受).
+# L2 (audit 2026-04-20): metadata key blacklist.  Root cause of the Pleiades
+# "776 stars" laundering — the tool returned `{"row_count": 776}`, the AI said
+# "776 member stars", and the validator found 776 in the numeric pool (sourced
+# from the system field row_count) and passed it through. After the audit,
+# numbers attached to these **systemic metadata keys** are excluded from the
+# pool. Note: only the top-level key is skipped; nested values are unaffected
+# (if a data column happens to be named row_count, only that one layer is
+# excluded — acceptable scope).
 _METADATA_KEYS_BLACKLIST: frozenset[str] = frozenset({
-    # 查询元信息
+    # Query metadata
     "row_count", "showing", "has_data", "truncated",
     "elapsed_seconds", "elapsed_ms", "timeout_s",
     "timestamp", "timestamp_utc", "created_at", "updated_at",
-    # HTTP / retry 元信息
+    # HTTP / retry metadata
     "status_code", "http_status", "attempts", "retry_count",
-    # 身份 / 复现 envelope
+    # Identity / reproducibility envelope
     "run_id", "query_hash", "tool_version", "archive_version",
     "random_seed", "session_id", "user_id", "chat_session_id",
     "python_session_id",
@@ -607,12 +633,12 @@ _METADATA_KEYS_BLACKLIST: frozenset[str] = frozenset({
     "package_versions", "cobaya_info",
     "n_walkers", "n_steps", "n_burn", "n_samples", "n_rows",
     "input_rows_verified",
-    # 结果状态标志 (虽然多数是字符串或 bool, 偶尔是 code)
+    # Result status flags (mostly strings or bools, but occasionally a code)
     "success", "error_class", "argument", "error_code",
     "analysis_status", "__tool_status__", "data_origin",
-    # 偏移 / 分页
+    # Offset / pagination
     "offset", "limit", "per_page", "page", "total_pages",
-    # 记录数元信息 (跟 row_count 同类)
+    # Row-count metadata (same category as row_count)
     "num_rows", "num_cols", "n_rows", "n_cols", "total_count",
 })
 
@@ -620,10 +646,10 @@ _METADATA_KEYS_BLACKLIST: frozenset[str] = frozenset({
 def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Iterable[float]:
     """Yield every finite numeric scalar from claimable tool payloads.
 
-    L2: 跳过 _METADATA_KEYS_BLACKLIST 里的顶层字段 — AI 不应该能引用
-    `row_count` / `timestamp` / `status_code` 这些系统字段里的数字当
-    观测结果.  _in_blacklisted_key 用来 propagate: 如果外层 key 是
-    row_count, 该子树整个不进池.
+    L2: skip top-level fields in _METADATA_KEYS_BLACKLIST — the AI must not
+    cite numbers from system fields like `row_count`, `timestamp`, or
+    `status_code` as observational results. _in_blacklisted_key propagates
+    downward: if the outer key is row_count, the entire subtree is excluded.
     """
     if _in_blacklisted_key:
         return
@@ -635,7 +661,7 @@ def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Ite
         if _is_tainted_synthetic_payload(payload):
             return
         for key, val in payload.items():
-            # L2: 系统性元数据字段整体跳过
+            # L2: skip the entire systemic metadata field
             key_str = str(key).lower() if not isinstance(key, str) else key.lower()
             if key_str in _METADATA_KEYS_BLACKLIST:
                 continue
@@ -733,9 +759,10 @@ def validate_claims(
 
 
 def citation_validator_hardblock_enabled() -> bool:
-    # PART Y Batch 1: 默认 True, 显式 PROVENANCE_VALIDATOR_HARDBLOCK=false
-    # 才禁用. 不再 fall back 到模块级 CITATION_VALIDATOR_HARDBLOCK 常量,
-    # 这样测试 monkeypatch.setenv / delenv 能在运行时切换状态.
+    # PART Y Batch 1: defaults to True; only disabled when
+    # PROVENANCE_VALIDATOR_HARDBLOCK=false is set explicitly. No longer falls
+    # back to the module-level CITATION_VALIDATOR_HARDBLOCK constant, so that
+    # tests using monkeypatch.setenv / delenv can switch the state at runtime.
     return os.getenv("PROVENANCE_VALIDATOR_HARDBLOCK", "true").strip().lower() not in {
         "0",
         "false",
@@ -990,25 +1017,26 @@ def unclassified_literature_violations(
     reply: str,
     tool_results: Any,
 ) -> list[CitationViolation]:
-    """Stage 6 P0c-C (2026-05-19): hard-block 引用没经 classify_literature_relevance
-    分类的 paper.
+    """Stage 6 P0c-C (2026-05-19): hard-block citations to papers not classified
+    by classify_literature_relevance.
 
-    工作流:
-      1. 收集 search_literature 工具本 turn 返回的所有 paper bibcode (search_pool)
-      2. 收集 classify_literature_relevance 工具本 turn 返回的 classifications
-         (classified_relevance: bibcode → Direct/Marginal/Off-topic)
-      3. 提取 reply 中所有 bibcode / arxiv_id 引用
-      4. 任何 cited bibcode ∈ search_pool 但 ∉ classified_relevance → violation
-         (kind=unclassified_literature)
-      5. 任何 cited bibcode 在 classified_relevance 且 relevance=Off-topic →
-         violation (kind=cited_off_topic_paper)
+    Workflow:
+      1. Collect all paper bibcodes returned by search_literature this turn
+         (search_pool).
+      2. Collect classifications from classify_literature_relevance this turn
+         (classified_relevance: bibcode -> Direct/Marginal/Off-topic).
+      3. Extract all bibcode / arxiv_id citations from the reply.
+      4. Any cited bibcode in search_pool but not in classified_relevance ->
+         violation (kind=unclassified_literature).
+      5. Any cited bibcode in classified_relevance with relevance=Off-topic ->
+         violation (kind=cited_off_topic_paper).
 
-    引用了 search_pool 之外的 bibcode (例如来自 dataset 直接 reference) 不归
-    本检测处理 — provenance_citation_violations 已经覆盖那条 path.
+    Bibcodes cited outside search_pool (e.g. direct dataset references) are not
+    handled here — provenance_citation_violations already covers that path.
 
-    Stage 5/6.2 用 `__message_to_model__` 做软规则 (LLM 自愿出 Direct/Marginal/Off-topic
-    表), 在 prod 测试发现 LLM 会跳过. 本函数 + chat.py pipeline + banner 把它
-    升级成强制 hard 屏障.
+    Stages 5/6.2 used `__message_to_model__` as a soft rule (LLM voluntarily
+    outputs Direct/Marginal/Off-topic), but prod testing showed the LLM skips it.
+    This function + chat.py pipeline + banner upgrades it to a hard barrier.
     """
     if not reply:
         return []
@@ -1021,7 +1049,7 @@ def unclassified_literature_violations(
             if not isinstance(tr, dict):
                 continue
             tool_name = str(tr.get("tool") or tr.get("name") or "").strip()
-            # tool_result payload 可能在 "result" / "tool_result" / 顶层
+            # tool_result payload may be under "result" / "tool_result" / top-level
             payload = tr.get("result") if isinstance(tr.get("result"), dict) else tr
             if tool_name == "search_literature":
                 papers = payload.get("results") if isinstance(payload, dict) else None
@@ -1046,7 +1074,7 @@ def unclassified_literature_violations(
                         classified_relevance[bc] = rel
 
     if not search_pool:
-        # 本 turn 没调 search_literature, 不触发本检测
+        # search_literature was not called this turn; skip this check
         return []
 
     violations: list[CitationViolation] = []
@@ -1125,9 +1153,9 @@ _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE = re.compile(
     r"config(?:uration)?|workflow)\b",
     re.IGNORECASE,
 )
-# PART AI #3: LFR-context signature — reply 必须明显在做 line luminosity-FWHM
-# relation (而不是 isochrone slope / photometry alpha 之类), bypass detector
-# 才触发. 防误伤其它工作流.
+# PART AI #3: LFR-context signature — the reply must clearly be doing line
+# luminosity-FWHM relation work (not isochrone slope / photometry alpha etc.)
+# before the bypass detector fires. Prevents false positives in other workflows.
 _LFR_CONTEXT_RE = re.compile(
     r"(?:"
     r"\bL[' ]?\s*\[?\s*CII\s*\]?"               # L'[CII], L'CII, L [CII]
@@ -1289,13 +1317,14 @@ def methodology_consistency_violations(
             ))
 
     # ── PART AI #3: fit_line_lfr bypass detection ────────────────────
-    # Bundle e8d9 reproducer: reply 里报 LFR 数字 (slope/intercept/scatter)
-    # 但本轮没调 fit_line_lfr — AI 在 run_python 里自己用 cached rows 跑
-    # OLS/linmix 然后 prose 当数字报, 完全绕过 fit_line_lfr 的 PARTIAL gate
-    # + cosmology recompute + lensing demagnify + Bayesian diagnostics.
-    # 这条检查独立于 raw_fit_results, 因为 raw_fit_results 是空才触发.
-    # 限定只在 reply 明显在做 LFR 工作流 (LFR keyword + 数字) 时触发,
-    # 防误伤 isochrone slope / photometry alpha 等其它工作流的合法用法.
+    # Bundle e8d9 reproducer: the reply reports LFR numbers (slope/intercept/scatter)
+    # but fit_line_lfr was not called this turn — the AI ran OLS/linmix inside
+    # run_python using cached rows and reported prose numbers, completely bypassing
+    # fit_line_lfr's PARTIAL gate + cosmology recompute + lensing demagnify +
+    # Bayesian diagnostics. This check is independent of raw_fit_results because
+    # it only triggers when raw_fit_results is empty. Limited to cases where the
+    # reply clearly follows the LFR workflow (LFR keyword + numbers) to avoid
+    # false positives against isochrone slope / photometry alpha etc.
     if not raw_fit_results:
         lfr_ctx_match = _LFR_CONTEXT_RE.search(stripped)
         bypass_stat_match = _LINE_RELATION_QUANT_RE.search(stripped)
@@ -1448,7 +1477,7 @@ def blocked_unsupported_narrative_reply_text(violations: list[CitationViolation]
 
 def blocked_unclassified_literature_reply_text(violations: list[CitationViolation]) -> str:
     """Stage 6 P0c-C (2026-05-19): banner for unclassified / off-topic
-    literature citations. 配 attach_draft_to_banner 在 chat.py 用."""
+    literature citations. Used with attach_draft_to_banner in chat.py."""
     unclassified_lines = []
     off_topic_lines = []
     for v in violations:
@@ -1486,6 +1515,7 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
     ]
     cosmology_note = _cosmology_manifest_block_note(violations)
     solar_system_note = _solar_system_manifest_block_note(violations)
+    exoplanet_note = _exoplanet_manifest_block_note(violations)
     if any(v.kind == "paper_numeric_missing_citation" for v in violations):
         return (
             "⚠ Citation provenance check failed: the assistant reported numeric "
@@ -1494,6 +1524,7 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
             + "\n".join(lines)
             + cosmology_note
             + solar_system_note
+            + exoplanet_note
             + "\n\nFor literature-derived numbers, cite the source directly in "
             "the sentence that contains the number, for example "
             "`(DESI Collaboration 2024; arXiv:2404.03002)`. If multiple papers "
@@ -1505,6 +1536,7 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
         + "\n".join(lines)
         + cosmology_note
         + solar_system_note
+        + exoplanet_note
         + "\n\nPlease re-run the relevant archive or literature query so the citation "
         "appears in tool_results before using it."
     )
@@ -1547,9 +1579,10 @@ def _cosmology_manifest_block_note(violations: list[CitationViolation]) -> str:
 
 # ── M0 Commit 5 (2026-05-18): solar_system canonical bibcodes ──
 #
-# 14 个 small-body 领域 keystone references.  当 LLM 在没 query
-# 对应 tool 的情况下引用这些 bibcode, claim_validator 会标 invalid_bibcode
-# 然后通过 _solar_system_manifest_block_note 提示用户该 call 哪个工具。
+# 14 keystone references in the small-body field. When the LLM cites one of
+# these bibcodes without first querying the corresponding tool, claim_validator
+# marks it as invalid_bibcode and uses _solar_system_manifest_block_note to
+# tell the user which tool to call.
 SOLAR_SYSTEM_CANONICAL_BIBCODES: dict[str, str] = {
     "1989aste.conf..524B": "Bowell+ 1989 — H, G phase function (compute_hg_magnitude)",
     "1996DPS....28.2504G": "Giorgini+ 1996 — JPL Horizons (fetch_horizons_ephemeris)",
@@ -1569,11 +1602,13 @@ SOLAR_SYSTEM_CANONICAL_BIBCODES: dict[str, str] = {
 
 
 def _solar_system_manifest_block_note(violations: list[CitationViolation]) -> str:
-    """Strict-mode hint: 引用了 solar_system canonical bibcode 但当前 turn 没 tool 返回。
+    """Strict-mode hint: a solar_system canonical bibcode was cited but no
+    corresponding tool result was returned this turn.
 
-    Mirror cosmology pattern — 不把这些 bibcode 隐式加进 valid pool, 而是
-    告知 LLM 该调用对应工具 (compute_hg_magnitude / fetch_horizons_ephemeris /
-    classify_asteroid_busdemeo / ...) 让 manifest 进入 tool_results。
+    Mirrors the cosmology pattern — these bibcodes are not implicitly added to
+    the valid pool. Instead the LLM is told which tool to call
+    (compute_hg_magnitude / fetch_horizons_ephemeris /
+    classify_asteroid_busdemeo / ...) so the manifest enters tool_results.
     """
     invalid = {
         str(v.match_text).strip()
@@ -1591,6 +1626,51 @@ def _solar_system_manifest_block_note(violations: list[CitationViolation]) -> st
     ]
     return (
         "\n\nNote: one or more unsupported bibcode(s) are platform solar_system "
+        "canonical references:\n"
+        + "\n".join(lines)
+        + "\n  Strict citation mode requires the corresponding tool to run this turn. "
+        "Call the indicated tool (in parentheses) before quoting its bibcode, "
+        "or remove the bibcode from prose."
+    )
+
+
+# ── M0 2026-05-20: exoplanet canonical bibcodes ──
+#
+# 8 keystone references in the exoplanet field. Mirror solar_system pattern:
+# when LLM cites without calling the corresponding tool, claim_validator marks
+# it as invalid_bibcode and uses _exoplanet_manifest_block_note for hint.
+EXOPLANET_CANONICAL_BIBCODES: dict[str, str] = {
+    "2002ApJ...580L.171M": "Mandel & Agol 2002 — analytic transit (fit_transit)",
+    "2003ApJ...585.1038S": "Seager & Mallén-Ornelas 2003 — T_eq / transit geometry "
+                          "(compute_equilibrium_temperature / compute_transit_depth)",
+    "2013PASP..125..989A": "Akeson+ 2013 — NASA Exoplanet Archive "
+                          "(query_exoplanet_archive / query_confirmed_planets)",
+    "2015JATIS...1a4003R": "Ricker+ 2015 — TESS mission (fetch_tess_lightcurve)",
+    "2019AJ....158..138S": "Stassun+ 2019 — TIC v8 catalog (query_tess_target_list)",
+    "2010Sci...327..977B": "Borucki+ 2010 — Kepler mission",
+    "2002A&A...391..369K": "Kovács+ 2002 — BLS box-fitting",
+    "2017Natur.542..456G": "Gillon+ 2017 — TRAPPIST-1 system",
+}
+
+
+def _exoplanet_manifest_block_note(violations: list[CitationViolation]) -> str:
+    """Strict-mode hint for exoplanet canonical bibcode without supporting tool."""
+    invalid = {
+        str(v.match_text).strip()
+        for v in violations
+        if v.kind == "invalid_bibcode"
+    }
+    if not invalid:
+        return ""
+    hits = sorted(set(invalid) & set(EXOPLANET_CANONICAL_BIBCODES.keys()))
+    if not hits:
+        return ""
+    lines = [
+        f"  - {bibcode}: {EXOPLANET_CANONICAL_BIBCODES[bibcode]}"
+        for bibcode in hits
+    ]
+    return (
+        "\n\nNote: one or more unsupported bibcode(s) are platform exoplanet "
         "canonical references:\n"
         + "\n".join(lines)
         + "\n  Strict citation mode requires the corresponding tool to run this turn. "
@@ -1713,6 +1793,12 @@ def _payload_is_claimable_success(tool_name: str | None, result: dict[str, Any] 
         "run_cosmology_likelihood_chain",
         "run_cosmology_robustness_matrix",
     }:
+        # publication_ready is True only for chain_tier="publication".
+        # chain_tier="exploratory" (2026-05-20) returns publication_ready=False
+        # by design, so EXPLORATORY MCMC results are excluded from the
+        # claimable-success set: their numbers may flow into the numeric
+        # universe (so chat-level ±1% checks pass) but they cannot be used
+        # as a citation source or bibcode pool contributor.
         return result.get("publication_ready") is True
     if tool_name == "get_cosmology_run_status":
         nested = result.get("result")
@@ -2242,16 +2328,16 @@ def attach_draft_to_banner(
     original_reply: str,
     title: str = "AI's draft response (provenance check failed — see above)",
 ) -> str:
-    """Stage 6 P0 follow-up (2026-05-19): 通用 helper, 把 AI 的 draft 附在任何
-    hard-block banner 后面.
+    """Stage 6 P0 follow-up (2026-05-19): general helper that appends the AI's
+    draft to any hard-block banner.
 
-    跟 `blocked_reply_with_narrative` 的区别: 不做数字 redact, 只 attach.
-    用于 literature_narrative / citation / methodology 这些 detector —
-    它们抓的是整句 phrase 而不是数字, redact 后 narrative 没意义.
-    banner 自身已经列了行号定位 (e.g. `... (line 13)`), 用户能找到 detector
-    标红哪段.
+    Differs from `blocked_reply_with_narrative`: does not redact numbers, only
+    attaches. Used for literature_narrative / citation / methodology detectors —
+    they flag whole phrases rather than numbers, so redaction makes the narrative
+    meaningless. The banner already lists line-number locations
+    (e.g. `... (line 13)`) so the user can find the flagged segment.
 
-    如果 `original_reply` 是空/白, 退回到 banner-only.
+    Falls back to banner-only if `original_reply` is empty/whitespace.
     """
     stripped = (original_reply or "").strip()
     if not stripped:
@@ -2269,8 +2355,9 @@ def blocked_reply_with_narrative(
     original_reply: str,
 ) -> str:
     """Stage 6 P0 (2026-05-19): preserve AI's narrative while flagging uncited
-    numbers. Numeric-uncited path 专用 — 数字被 `[unverified: N]` 替换在原
-    narrative 中, 通过通用 `attach_draft_to_banner` 拼装最终输出.
+    numbers. Numeric-uncited path only — numbers are replaced with
+    `[unverified: N]` inside the original narrative, then assembled into the
+    final output via `attach_draft_to_banner`.
 
     Previous behavior (`blocked_reply_text` alone): wholesale replace AI reply
     with the banner — users lost methodology/caveats/qualitative reasoning.
@@ -2343,6 +2430,16 @@ def is_empty_turn(tool_results: Any) -> bool:
             and str(outer.get("data_origin") or "").lower() != "synthetic"
         )
 
+        # EXPLORATORY (2026-05-20): cosmology MCMC chain with ESS/R-hat below
+        # publication threshold but above exploratory floor + claimable input.
+        # The posterior may be discussed in chat; this turn is therefore not
+        # an empty turn even when status tokens look concerning.
+        exploratory_unblocked = (
+            any(tok == "EXPLORATORY" for tok in status_tokens)
+            and inner.get("__do_not_claim__") is not True
+            and outer.get("__do_not_claim__") is not True
+        )
+
         synthetic_or_unciteable = (
             inner.get("__do_not_claim__") is True
             or outer.get("__do_not_claim__") is True
@@ -2353,6 +2450,7 @@ def is_empty_turn(tool_results: Any) -> bool:
 
         explicit_fail = (
             not partial_with_payload
+            and not exploratory_unblocked
             and (
                 inner.get("success") is False
                 or outer.get("success") is False
@@ -2389,21 +2487,24 @@ def dump_tool_universe(tool_results: Any, limit: int = 50) -> str:
     return json.dumps(vals[:limit])
 
 
-# W1 (PART W): 文献先验硬黑名单 — age/mass/distance 必须有对应测量/引用工具
-# 出现在 tool_results 才允许在 reply 里引用. 独立于 ±1% universe 匹配;
-# 即使 universe 偶然包含数字 100, "age ~100 Myr" 也会被硬拦除非本轮跑了
-# 对应工具. 防止 LLM 借 Gaia ADQL 返回表里某行的值洗白教科书先验.
+# W1 (PART W): literature-prior hard blacklist — age/mass/distance citations are
+# only allowed in a reply if the corresponding measurement/lookup tool appeared
+# in tool_results. Independent of the ±1% universe match: even if 100 happens
+# to be in the universe, "age ~100 Myr" is hard-blocked unless the corresponding
+# tool was called this turn. Prevents the LLM from laundering textbook priors by
+# borrowing a number from a Gaia ADQL row.
 _LITERATURE_PRIOR_LABELS_REQUIRE_TOOL: dict[str, tuple[str, ...]] = {
-    # age: 要么测量 (fit_isochrone), 要么引用 (search_literature),
-    # 要么从 dossier 拿现成的 (get_object_dossier).
+    # age: must be measured (fit_isochrone), cited (search_literature),
+    # or fetched from a dossier (get_object_dossier).
     "age_myr": ("fit_isochrone", "search_literature", "get_object_dossier"),
     "age_gyr": ("fit_isochrone", "search_literature", "get_object_dossier"),
-    # mass: 除了拟合 / 文献 / dossier, 也可从 Gaia / SDSS 质量列拿 (run_adql).
+    # mass: in addition to fitting / literature / dossier, may also come
+    # from a Gaia / SDSS mass column (run_adql).
     "mass_solar": (
         "fit_isochrone", "search_literature", "get_object_dossier", "run_adql",
     ),
     # distance: Gaia parallax (run_adql / get_object_info), extinction helper
-    # (get_extinction 返回含距离), dossier, 或文献引用.
+    # (get_extinction returns a distance), dossier, or literature citation.
     "distance_pc": (
         "run_adql", "search_literature", "get_object_dossier",
         "get_object_info", "get_extinction",
@@ -2414,27 +2515,31 @@ _LITERATURE_PRIOR_LABELS_REQUIRE_TOOL: dict[str, tuple[str, ...]] = {
     "distance_mpc": (
         "search_literature", "get_object_dossier", "get_object_info",
     ),
-    # 中文 label 已从 _PATTERNS 移除 (PART X 方案 D — reply 强制英文),
-    # 所以 _zh 键不再需要. 中文 prose 在 chat.py 的 reply_contains_cjk
-    # hardblock 上游就被拦下, 不会走到 claim 提取.
+    # Chinese labels were removed from _PATTERNS (PART X plan D — replies are
+    # forced to English), so _zh keys are no longer needed. Chinese prose is
+    # blocked upstream by the reply_contains_cjk hardblock in chat.py and
+    # never reaches claim extraction.
 }
 
 
 def literature_prior_violations(reply: str, tool_results: Any) -> list[Claim]:
-    """W1 (PART W): 检测 textbook-prior 式 age/mass/distance 引用.
+    """W1 (PART W): detect textbook-prior-style age/mass/distance citations.
 
-    当 reply 里出现这些 label 的数字 claim, 但本轮 tool_results 里没有任何
-    对应成功且可引用的测量/引用工具结果 (fit_isochrone / search_literature /
-    get_object_dossier / run_adql / get_object_info / get_extinction), 返回
-    违规 claim 列表. 比 validate_claims 的 ±1% universe 匹配更严: 独立于
-    universe 里是否偶然有相近数字, 直接按 "有没有成功产出可引用结果" 判断.
+    When a numeric claim with one of these labels appears in the reply but no
+    corresponding successful, citable measurement/lookup tool result is present
+    in tool_results (fit_isochrone / search_literature / get_object_dossier /
+    run_adql / get_object_info / get_extinction), return the violating claims.
+    Stricter than validate_claims' ±1% universe match: independent of whether
+    the universe happens to contain a nearby number; judged purely by whether
+    a successful, citable result was produced.
 
     Args:
-        reply: assistant 回复原文
-        tool_results: 本轮工具调用结果列表 (每条 dict 含 "tool" key)
+        reply: the assistant's raw reply text
+        tool_results: list of tool call results this turn (each dict has a "tool" key)
 
     Returns:
-        违规 claim 列表. 空 list 表示所有相关 claim 都有对应工具支撑.
+        List of violating claims. Empty list means every relevant claim is
+        supported by a corresponding tool result.
     """
     successful_tools = _successful_tool_names(tool_results)
     claims = extract_claims(reply)
@@ -2449,17 +2554,20 @@ def literature_prior_violations(reply: str, tool_results: Any) -> list[Claim]:
     return violations
 
 
-# X (PART X 方案 D): reply 强制英文 — 含 CJK / 日文 / 韩文 / 全角
-# punctuation 的最终回复直接硬拦. 复用 PART W figure-language-guard
-# 的正则范围 (CJK Unified / Hiragana / Katakana / Hangul / Full-width).
-# Greek 字母 (U+0370-U+03FF) + Å / ° / ± / ≤ / ≥ 等科学 Unicode 不在
-# 匹配范围, DejaVu Sans 能正常显示所以允许.
+# X (PART X plan D): enforce English-only replies — any final reply containing
+# CJK / Japanese / Korean / full-width punctuation is hard-blocked. Reuses the
+# regex range from the PART W figure-language guard (CJK Unified / Hiragana /
+# Katakana / Hangul / Full-width). Greek letters (U+0370-U+03FF) and scientific
+# Unicode such as Å / ° / ± / ≤ / ≥ are excluded from matching; DejaVu Sans
+# renders them correctly so they are permitted.
 #
-# 为何 reply 强制英文:
-# 1. 避免 label 黑名单补丁式扩展 ("年龄: ~100 Myr" / "N Myr 的年龄" /
-#    "大约 N Myr 年纪" 无限语序变体)
-# 2. 对齐 run_python 图表文字规则 (PART W), 整个平台数值输出一致英文
-# 3. 科研场景 (论文复现 / 审稿) 本来就是英文工作语言
+# Rationale for English-only replies:
+# 1. Avoids patch-style expansion of label blacklists (infinite word-order
+#    variants like "年龄: ~100 Myr" / "N Myr 的年龄" / "大约 N Myr 年纪").
+# 2. Aligns with the run_python figure-text rule (PART W) — all numeric output
+#    from the platform is consistently in English.
+# 3. The research context (paper reproduction / peer review) is inherently
+#    English-language work.
 _CJK_REPLY_PATTERN = re.compile(
     "["
     "　-〿"  # CJK punctuation
@@ -2472,14 +2580,15 @@ _CJK_REPLY_PATTERN = re.compile(
     "]"
 )
 
-# 阈值 2: 单字符 false-positive 容忍 (e.g. 引号内引用的中文单字 "昴"),
-# 但 "根据..." / "符合..." / "与文献一致" 等 prose 引导词 (通常 2+ CJK)
-# 必然命中. 自然语言中文 reply 总字数远超 2.
+# Threshold 2: tolerates single-character false positives (e.g. a Chinese
+# character like "昴" inside a quote), while prose lead-ins such as
+# "根据..." / "符合..." / "与文献一致" (typically 2+ CJK chars) always trigger.
+# A natural-language Chinese reply will always far exceed 2 CJK characters.
 _CJK_REPLY_THRESHOLD = 2
 
 
 def reply_contains_cjk(reply: str, threshold: int = _CJK_REPLY_THRESHOLD) -> bool:
-    """X (PART X 方案 D): return True if the final assistant reply contains
+    """X (PART X plan D): return True if the final assistant reply contains
     >= ``threshold`` CJK / Japanese / Korean / full-width characters.
 
     Used as a hard-block signal in ``_run_agent_loop``: English-only

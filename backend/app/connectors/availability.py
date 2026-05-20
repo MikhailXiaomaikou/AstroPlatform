@@ -9,11 +9,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 V2_AVAILABLE_CONNECTORS = frozenset(
-    {"vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc"}
+    {"vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc", "nasa_exoplanet_archive"}
 )
-# 用户面向 alternatives 列表(UNAVAILABLE banner 推荐). M0 Commit 2 加 jpl/mpc.
+# User-facing alternatives list (recommended in UNAVAILABLE banner). exoplanet M0 (2026-05-20)
+# adds nasa_exoplanet_archive.
 AVAILABLE_ALTERNATIVES = (
-    "vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc",
+    "vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc", "nasa_exoplanet_archive",
 )
 
 
@@ -38,8 +39,8 @@ def record_connector_gated(connector_name: str) -> None:
         from app.observability.metrics import record_counter
 
         record_counter("connector_gated_total", 1.0, connector_name=connector_name)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("metric record_counter(connector_gated_total) failed: %s", e)
 
 
 def build_unavailable_response(

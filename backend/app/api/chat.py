@@ -54,19 +54,20 @@ SSE_PREAMBLE_PADDING_BYTES = 8192
 
 _ASTRO_RESEARCH_FOCUS = os.getenv("ASTRO_RESEARCH_FOCUS", "cosmology").strip().lower()
 
-# Foci that trigger L1 hard tool gating.  Adding a new active module:
-# (1) 在此处加 focus 字面值, (2) prompt_loader._active_module_names 加分支,
-# (3) modules/<name>/manifest.yaml 写 tools 列表。 Karpathy 三相似才抽象 —
-# 等第 3 个 active 模块再换成通用 registry。
-_FOCUS_GATED_VALUES = frozenset({"cosmology", "solar_system"})
+# Foci that trigger L1 hard tool gating.  To add a new active module:
+# (1) add the focus literal here, (2) add a branch in prompt_loader._active_module_names,
+# (3) write the tools list in modules/<name>/manifest.yaml. Karpathy's rule of three:
+# now at the 3rd active module (exoplanet, 2026-05-20) — abstraction decision
+# deferred to next iteration to avoid mid-M0 refactor; collect more usage data first.
+_FOCUS_GATED_VALUES = frozenset({"cosmology", "solar_system", "exoplanet"})
 
 
 def _filter_tools_by_research_focus(tools: list[dict]) -> list[dict]:
     """L1 hard tool gating per ASTRO_RESEARCH_FOCUS env.
 
-    Foci in ``_FOCUS_GATED_VALUES`` 触发 manifest-driven 工具白名单过滤。
-    其他值("all"、""、"stellar"、typo 等)无操作 — 只有 literal 的 active
-    模块名才进入过滤路径。
+    Foci in ``_FOCUS_GATED_VALUES`` trigger manifest-driven tool whitelist filtering.
+    Other values ("all", "", "stellar", typos, etc.) are no-ops — only literal
+    active module names enter the filtering path.
     """
     if _ASTRO_RESEARCH_FOCUS not in _FOCUS_GATED_VALUES:
         return tools
@@ -222,7 +223,7 @@ def _provider_api_keys(context: dict | None, user: User | None) -> dict[str, str
             # Legacy fallback: the generic api_key field was historically used
             # for the primary hosted backend. Treat untyped keys as OpenAI-style.
             keys.setdefault("openai", context_key)
-    # 不再 fallback 到平台 env ANTHROPIC_API_KEY:平台不替匿名访客付费 (BYOK)
+    # No longer falls back to the platform env ANTHROPIC_API_KEY: the platform does not pay for anonymous visitors (BYOK).
     return keys
 
 
@@ -409,7 +410,8 @@ def _hash_tool_input(tool_input: Any) -> str:
 
     try:
         raw = json.dumps(tool_input, sort_keys=True, default=str)
-    except Exception:
+    except (TypeError, ValueError) as e:
+        logger.debug("hash_tool_input json fallback (%s): %s", type(e).__name__, e)
         raw = str(tool_input)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -453,7 +455,7 @@ def _checkpoint_result_summary(tool_name: str, result: Any) -> str:
     if result.get("figures"):
         try:
             bits.append(f"{len(result['figures'])} figures")
-        except Exception:
+        except TypeError:
             bits.append("figures")
     error = result.get("error")
     if error:
@@ -701,7 +703,7 @@ async def chat_message_stream(
         # intent classification + DB lookup + possibly ADS fetch) ran
         # first, taking 30-60 s on complex prompts.  Render / Cloudflare
         # free-tier idle-close the connection before our first yield,
-        # and the client sees "响应流在收到任何内容前被关闭".
+        # and the client sees "response stream closed before any content was received".
         # First-byte latency must stay < 5 s.
         # ══════════════════════════════════════════════════════════════
         import json as _json
@@ -860,10 +862,11 @@ async def chat_message_stream(
         chat_session_id = (req.context or {}).get("current_session_id")
         _prime_adql_context_cache(req.context, python_session_id)
 
-        # U1 (PART U): session-history replay 在长会话 + 历史 code 含网络/import
-        # 的场景 (如 lightkurve 预热) 可能花 30-60s. 这段没 heartbeat 的话
-        # Cloudflare / Render 会把 SSE 流以 idle timeout 切掉, 表现为
-        # "响应流在收到任何内容前被关闭". 用 8s 轮询 + status 事件守护.
+        # U1 (PART U): session-history replay can take 30-60 s in long sessions
+        # with historical code that performs network calls or heavy imports (e.g.
+        # lightkurve warm-up). Without a heartbeat during this period Cloudflare /
+        # Render closes the SSE stream on idle timeout, seen as "response stream
+        # closed before any content was received". Guard with an 8 s poll + status events.
         _prime_task = _aio.create_task(
             _prime_python_session_from_history(req.messages, python_session_id)
         )
@@ -931,21 +934,22 @@ async def chat_message_stream(
                 # frame — the full (truncated) JSON is already delivered
                 # to the model through the normal tool_result_blocks path.
                 #
-                # R8-OPEN-4 / Round 11 root cause: 8 KB 截断以前把**整个**
-                # tool_result 替换成 {__preview__, preview, size}, 导致前端
-                # 只拿到一个字符串 preview, 关键诊断字段 (error / error_class
-                # / stderr / traceback / success / exit_code / backend /
-                # duration_ms) 全丢. UI 只好显示 "subprocess crashed"
-                # 占位符. 当 final tool_result 因 payload-too-large 被上游
-                # 拒时更是完全没诊断信息可看. 现在保留诊断字段原样, 只把大
-                # 体积字段 (rows / data / figures / variables / stdout) 替
-                # 换成 preview/offloaded marker.
+                # R8-OPEN-4 / Round 11 root cause: the old 8 KB truncation replaced
+                # the **entire** tool_result with {__preview__, preview, size}, so
+                # the frontend received only a string preview and lost all key
+                # diagnostic fields (error / error_class / stderr / traceback /
+                # success / exit_code / backend / duration_ms). The UI fell back to
+                # the "subprocess crashed" placeholder. When a final tool_result was
+                # rejected upstream as payload-too-large, there was no diagnostic
+                # information at all. Now we preserve diagnostic fields unchanged and
+                # only replace the large-volume fields (rows / data / figures /
+                # variables / stdout) with preview/offloaded markers.
                 if evt.get("type") == "tool_result":
                     try:
                         raw = json.dumps(evt.get("result"), default=str)
                         if len(raw) > 8000 and isinstance(evt.get("result"), dict):
                             src = dict(evt["result"])
-                            # 必保留的诊断键 (即使总体积超 8KB)
+                            # Diagnostic keys that must always be preserved (even when total size exceeds 8 KB).
                             _KEEP = {
                                 "success", "error", "error_class",
                                 "stderr", "stderr_note", "traceback",
@@ -957,8 +961,8 @@ async def chat_message_stream(
                                 "row_count", "columns", "meta",
                             }
                             slim = {k: src[k] for k in _KEEP if k in src}
-                            # 大字段: rows / data / figures / variables /
-                            # stdout 替换成 marker + 前 2000 字预览
+                            # Large-volume fields: rows / data / figures / variables /
+                            # stdout are replaced with a marker + first 2000-char preview.
                             for big_key in (
                                 "rows", "data", "figures",
                                 "variables", "variable_types", "stdout",
@@ -1621,15 +1625,16 @@ async def _execute_tool_calls(
         "solve_astrometry": 90.0,     # astrometry.net can be slow
         # Note: get_extinction stays at the 45 s default — SFD lookup is
         # <1 s typical, the 3-D fallback is local analytic.
-        # J2 (2026-04-20 3rd regression): run_adql 之前靠 45 s 默认, 但
-        # integration.py 的 execute_adql_query 对大查询 (TOP>5000 / cone>1° /
-        # JOIN) 会切到 launch_job_async, async budget 300 s. 45 s 工具层
-        # deadline 先砍, async 路径根本跑不满. 给 run_adql 300 s, 跟
-        # integration 对齐. agent loop 外层 total 360 s, 一次 run_adql 占
-        # 300 s 剩 60 s 留给后续 LLM 总结, 够用.
+        # J2 (2026-04-20 3rd regression): run_adql previously relied on the 45 s
+        # default, but integration.py's execute_adql_query switches large queries
+        # (TOP>5000 / cone>1 deg / JOIN) to launch_job_async with a 300 s async
+        # budget. The 45 s tool-layer deadline cuts in first and the async path
+        # never runs to completion. Give run_adql 300 s to align with integration.
+        # The outer agent loop total is 360 s, so one run_adql taking 300 s leaves
+        # 60 s for the subsequent LLM summary — sufficient.
         "run_adql": 300.0,
-        # J3: run_sdss_sql 打 SDSS SkyServer, 内部 httpx timeout 120 s.
-        # 给一点 slack 应付大 JOIN + 解析 JSON, 跟 crossmatch_catalogs 同级.
+        # J3: run_sdss_sql hits SDSS SkyServer with an internal httpx timeout of 120 s.
+        # A bit of extra slack handles large JOINs + JSON parsing; same tier as crossmatch_catalogs.
         "run_sdss_sql": 180.0,
         # MW v_esc / halo-star workflows need a focused Gaia DR3 helper
         # rather than repeated broad source-table scans.
@@ -1637,16 +1642,24 @@ async def _execute_tool_calls(
         # MAST / lightkurve cold starts are often >45s on Render.  Keep the
         # default mode bounded, then stretch it explicitly in long mode below.
         "search_lightcurve": 90.0,
-        # ── M0 Commit 4 (2026-05-18): solar_system 工具 deadline 调整 ──
-        # Horizons 冷启动在 Render free tier 经常 >45s, 给 90s. MPC/SBDB/Sentry
-        # 单次 HTTP 调用 30s 限,加 retry/parse slack 给 60s. DAMIT 慢站 给 60s.
-        # 公式/分类工具 (HG/Afρ/NEATM/Öpik/Bus-DeMeo/Carvano) instant,默认 45s 够。
+        # ── M0 Commit 4 (2026-05-18): solar_system tool deadline adjustments ──
+        # Horizons cold-start on Render free tier is often >45 s; give it 90 s.
+        # MPC/SBDB/Sentry have a 30 s single-HTTP-call limit; add retry/parse
+        # slack to give 60 s. DAMIT is a slow host; 60 s.
+        # Formula/classification tools (HG/Afro/NEATM/Opik/Bus-DeMeo/Carvano) are instant; 45 s default is enough.
         "fetch_horizons_ephemeris": 90.0,
         "query_mpc_orbit": 60.0,
         "query_sbdb_orbit": 60.0,
         "query_sbdb_close_approaches": 60.0,
         "query_sentry_risk": 60.0,
         "query_damit_shape_model": 60.0,
+        # ── M0 2026-05-20: exoplanet tool deadlines ──
+        # TESS lightcurve download via MAST can take 60-90 s for new sectors;
+        # NEA queries usually under 30 s but give 60 s slack.
+        "fetch_tess_lightcurve": 120.0,
+        "query_exoplanet_archive": 60.0,
+        "query_confirmed_planets": 60.0,
+        "query_tess_target_list": 60.0,
     }
     _TOOL_DEADLINE_DEFAULT = 45.0
 
@@ -1671,9 +1684,11 @@ async def _execute_tool_calls(
             now = _time.monotonic()
             workflow_seconds_remaining = max(0, int(loop_deadline - now))
             tool_window_s = loop_deadline - now - summary_reserve_s
-            # R5: 临近 agent-loop 截止时间时不要再启动长工具调用。否则最后
-            # 60s 总结预算会被吃掉, 外层 420s 硬墙直接杀掉整轮。这里返回
-            # 普通 tool-shaped failure, 让下一轮 LLM 总结已有结果。
+            # R5: do not start a new long tool call when the agent-loop deadline
+            # is near. Otherwise the final 60 s summary budget gets consumed and
+            # the outer 420 s hard wall kills the entire turn. Return a regular
+            # tool-shaped failure so the next LLM iteration summarizes what was
+            # already gathered.
             if tool_window_s < 8.0:
                 return {
                     "error": (
@@ -1772,7 +1787,7 @@ async def _execute_tool_calls(
 
 
 def _tool_results_to_actions(all_tool_results: list[dict]) -> list[dict]:
-    """把内部 tool-result 记录转成前端 action card 结构。"""
+    """Convert internal tool-result records into frontend action card structures."""
     actions: list[dict] = []
     for tr in all_tool_results:
         result = tr.get("result")
@@ -2561,7 +2576,7 @@ def _parse_inline_numeric_array(text: str, name: str) -> list[float] | None:
 
 
 def _parse_inline_uniform_error(text: str, axis: str, n: int) -> list[float] | None:
-    """Parse phrases like 'x误差都是0.1' or 'x and y errors are 0.1'."""
+    """Parse phrases like 'x error is 0.1' (or the Chinese equivalent) or 'x and y errors are 0.1'."""
     if n <= 0:
         return None
     lower = str(text or "").lower()
@@ -3257,8 +3272,9 @@ async def _run_agent_loop(
         "crossmatch_catalogs", "query_gaia_cluster", "get_object_info",
         "get_object_dossier", "get_extinction", "search_literature",
         "extract_literature_tables", "query_high_velocity_stars",
-        # solar_system M0 (2026-05-20): 6 个小天体数据查询工具同样要被 G3.4 熔断
-        # 覆盖, 否则它们 hard-fail N 次都不会被 disable. C2 case 实测.
+        # solar_system M0 (2026-05-20): 6 small-body data-query tools also need
+        # G3.4 circuit-breaker coverage, otherwise they can hard-fail N times
+        # without ever being disabled. Confirmed by C2 case testing.
         "query_mpc_orbit", "fetch_horizons_ephemeris", "query_sbdb_orbit",
         "query_sbdb_close_approaches", "query_sentry_risk", "query_damit_shape_model",
     }
@@ -3270,13 +3286,14 @@ async def _run_agent_loop(
     # H0.7: raised threshold from 2 to 3, and only count RETRYABLE
     # failures (connector errors, not timeouts/payload_too_large which
     # the AI might legitimately retry with smaller scope).
-    # 2026-05-20: 显式硬拒绝 error_class 集合 — 这些不算 retryable, LLM
-    # 用同参数重试只会再次被拒. C2 case 实测: range_too_large 被 LLM
-    # 误读为 "可重试", 12 次都没熔断.
+    # 2026-05-20: Explicit hard-reject error_class set — these are not retryable;
+    # retrying with the same parameters will be rejected again. C2 case: the LLM
+    # misread range_too_large as retryable and never triggered the circuit breaker
+    # after 12 attempts.
     _HARD_REJECT_ERROR_CLASSES = frozenset({
-        "range_too_large",    # 工具本地拒绝, e.g. 100 年 daily ephemeris
-        "missing_argument",   # 必需参数缺, LLM 不补全前重试无意义
-        "invalid_argument",   # 类型/范围错, 同上
+        "range_too_large",    # rejected locally by the tool, e.g. 100-year daily ephemeris
+        "missing_argument",   # required parameter missing; retrying is pointless until the LLM fills it in
+        "invalid_argument",   # type/range error; same as above
     })
     tool_failure_counts: dict[str, int] = {}
     # R22: row_count=0 / EMPTY are soft for retry disabling, but still mean
@@ -4184,9 +4201,10 @@ async def _run_agent_loop(
                 err_str = str(result.get("error") or "").lower()
                 err_class = str(result.get("error_class") or "").lower()
                 # "Retryable" / soft failures — user/AI can adjust parameters.
-                # 2026-05-20: 显式硬拒绝 error_class 短路 — 不论 error 字符串
-                # 长什么样, 这些 class 一律算 hard, 防 future error msg 含
-                # "too large" 等关键词时被错误归入 soft.
+                # 2026-05-20: explicit hard-reject error_class short-circuit — regardless
+                # of what the error string looks like, these classes always count as hard,
+                # preventing future error messages containing keywords like "too large" from
+                # being incorrectly classified as soft.
                 soft_failure = (
                     err_class not in _HARD_REJECT_ERROR_CLASSES
                     and (
@@ -4542,7 +4560,7 @@ async def _run_agent_loop(
             blocked_citation_reply_text,
             unsupported_literature_narrative_violations,
             blocked_unsupported_narrative_reply_text,
-            # Stage 6 P0c-C: 二筛 hard 屏障
+            # Stage 6 P0c-C: second-pass hard barrier
             unclassified_literature_violations,
             blocked_unclassified_literature_reply_text,
             # M6: methodology cross-check (Bayesian / demagnify count)
@@ -4555,11 +4573,12 @@ async def _run_agent_loop(
         # wrote "776 stars, 7.353 ± 0.001 mas" after run_adql returned
         # 0 rows and run_python crashed — the regen loop would have
         # laundered the claim by rewriting with different phrasing.
-        # X (PART X 方案 D): reply 强制英文. 含 CJK / 日文 / 韩文 / 全角
-        # punctuation (阈值 3 字符) 的最终 reply 直接硬拦. 这是最高优先
-        # 级分支 — 因为零幻觉门下游正则几乎全是英文, 中文 prose 会
-        # bypass 所有 claim 提取. prompt 已告诉 AI "reply must be English",
-        # 这里是硬约束兜底.
+        # X (PART X plan D): force replies to English. Any final reply containing
+        # CJK / Japanese / Korean / full-width punctuation (threshold: 3 characters)
+        # is hard-blocked immediately. This is the highest-priority branch — because
+        # downstream zero-hallucination gate regexes are almost entirely English,
+        # Chinese prose bypasses all claim extraction. The prompt already instructs
+        # the AI that "reply must be English"; this is the hard-constraint safety net.
         cjk_detected = reply_contains_cjk(clean_reply)
         if cjk_detected:
             try:
@@ -4764,10 +4783,10 @@ async def _run_agent_loop(
                 clean_reply, all_tool_results
             )
         ):
-            # Stage 6 P0c-C (2026-05-19): hard 屏障. LLM 必须先调
-            # classify_literature_relevance 才能在 narrative 里 cite
-            # search_literature 出的 paper. 没调 / cite 了 Off-topic →
-            # 整段被 banner 阻止 + draft 保留.
+            # Stage 6 P0c-C (2026-05-19): hard barrier. The LLM must first call
+            # classify_literature_relevance before citing a search_literature paper
+            # in the narrative. If it didn't call it / cited an Off-topic paper,
+            # the whole section is blocked with a banner and the draft is preserved.
             logger.error(
                 "Unclassified literature gate BLOCKED reply from %s (%d violations)",
                 agent_name, len(unclassified_claims),
@@ -4789,10 +4808,13 @@ async def _run_agent_loop(
                 pass
 
         elif literature_prior_violations(clean_reply, all_tool_results):
-            # W1 (PART W): 文献先验硬 block. 比 zero_data_but_quantitative 松 —
-            # 这里 tool_results 有数据, 但 claim 是 age/mass/distance 这类必须
-            # 有对应测量工具支撑的量, 本轮没跑就 block, 不让 regen 循环借
-            # universe 里偶然的数字洗白 (Pleiades "~100 Myr" 场景).
+            # W1 (PART W): hard literature-prior block. Looser than
+            # zero_data_but_quantitative — here tool_results contain data, but
+            # the claim is a quantity like age/mass/distance that requires a
+            # dedicated measurement tool. If that tool wasn't run this turn,
+            # the block fires to prevent the regen loop from laundering the
+            # number with a coincidentally matching universe value (Pleiades
+            # "~100 Myr" scenario).
             lit_prior_claims = literature_prior_violations(
                 clean_reply, all_tool_results
             )
@@ -5496,7 +5518,7 @@ async def ai_backend_status(
     authenticated user has stored.  Never returns the keys themselves.
     """
     configured: list[str] = []
-    # BYOK: 只看用户自己存的 key, 不读平台 env (env 已不参与 LLM 调用)
+    # BYOK: check only the user's own stored keys; do not read the platform env (env is no longer used for LLM calls).
     if _env_truthy("LOCAL_MODEL_ENABLED") or _env_truthy("OPENAI_CLI_ENABLED"):
         configured.append("local")
 
