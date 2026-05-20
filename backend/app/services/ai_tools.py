@@ -2161,6 +2161,15 @@ TOOLS = [
     },
 ]
 
+# ── M0 Commit 4 (2026-05-18): solar_system 12 个工具 schema ──
+# 集中在 ai_tools_solar_system.py, 通过 extend 注入 TOOLS (避免 9k+ ai_tools.py
+# 进一步膨胀). _exec_tool dispatch 用一个 elif 走 dispatch_solar_system.
+from app.services.ai_tools_solar_system import (
+    SOLAR_SYSTEM_TOOL_SCHEMAS as _SOLAR_SYSTEM_TOOL_SCHEMAS,
+    SOLAR_SYSTEM_TOOL_NAMES as _SOLAR_SYSTEM_TOOL_NAMES,
+)
+TOOLS.extend(_SOLAR_SYSTEM_TOOL_SCHEMAS)
+
 
 # ── Tool Executors ──
 
@@ -2557,6 +2566,10 @@ async def _execute_tool_inner(
             return await _exec_query_gaia_cluster(tool_input, python_session_id)
         elif tool_name == "get_extinction":
             return await _exec_get_extinction(tool_input)
+        # ── M0 Commit 4: solar_system 12 工具集中 dispatch ──
+        elif tool_name in _SOLAR_SYSTEM_TOOL_NAMES:
+            from app.services.ai_tools_solar_system import dispatch_solar_system
+            return await dispatch_solar_system(tool_name, tool_input)
         else:
             # R6-NEW-2: 给 Unknown tool 返具体 error_class + 可用工具清单,
             # 让 AI 下一轮能自纠 (不再 hallucinate 工具名).  TOOLS 是模块

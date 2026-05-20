@@ -393,6 +393,9 @@ _DATA_TOOLS = {
     "run_sdss_sql",
     # MW v_esc helper — focused Gaia DR3 high-velocity candidate fetch
     "query_high_velocity_stars",
+    # ── M0 Commit 4 (2026-05-18): solar_system 数据查询工具 ──
+    "query_mpc_orbit", "fetch_horizons_ephemeris", "query_sbdb_orbit",
+    "query_sbdb_close_approaches", "query_sentry_risk", "query_damit_shape_model",
 }
 _COMPUTE_TOOLS = {
     "run_python", "generate_pipeline", "run_pipeline", "validate_analysis",
@@ -414,6 +417,10 @@ _COMPUTE_TOOLS = {
     "prepare_spectral_measurements", "fit_line_lfr",
     "astro_statistics_toolbox",
     "compare_luminosity_distances", "demagnify_sample",
+    # ── M0 Commit 4 (2026-05-18): solar_system 公式/分类计算工具 ──
+    "compute_hg_magnitude", "compute_afrho", "fit_neatm_diameter_albedo",
+    "compute_neo_collision_probability",
+    "classify_asteroid_busdemeo", "classify_asteroid_sdss_colors",
 }
 _REFERENCE_TOOLS = {
     "search_literature", "read_arxiv_paper", "extract_literature_tables", "research_workflow", "generate_proposal", "get_followup_recommendation",
