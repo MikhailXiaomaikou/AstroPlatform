@@ -55,6 +55,11 @@ import CosmologyMCMCPanel from "../../components/chat/CosmologyMCMCPanel";
 import CosmologyLikelihoodPanel from "../../components/chat/CosmologyLikelihoodPanel";
 import ResearchProgramPanel from "../../components/chat/ResearchProgramPanel";
 import DataSourcesPanel from "../../components/chat/DataSourcesPanel";
+import TablePanel from "../../components/viz/TablePanel";
+import type { TableField } from "../../components/viz/TablePanel";
+import WarningCard from "../../components/viz/WarningCard";
+import PlotlyXYPanel from "../../components/viz/PlotlyXYPanel";
+import BarChartPanel from "../../components/viz/BarChartPanel";
 import ErrorBoundary from "../../components/ErrorBoundary";
 import { useI18n } from "../../i18n";
 import { useAuth } from "../../context/AuthContext";
@@ -243,8 +248,9 @@ interface DisplayMessage {
     suggested_next_step?: string;
     reason?: string;
   };
-  // R11-NEW-1: 当错误气泡需要操作按钮 (如 payload_too_large 引导"开始新聊天")
-  // 时填此字段. UI 根据值 render 对应 CTA. 保持 undefined 不影响普通气泡.
+  // R11-NEW-1: Populated when the error bubble needs an action button
+  // (e.g. payload_too_large prompting a "Start new chat"). The UI renders the
+  // corresponding CTA based on the value. Leaving it undefined has no effect on regular bubbles.
   _action_hint?: "new_chat";
 }
 
@@ -253,9 +259,10 @@ function getActionToolResult(action: ChatAction): Record<string, unknown> | unde
   return result && typeof result === "object" ? result as Record<string, unknown> : undefined;
 }
 
-// Stage 3 Bug 4 修复: server 返回的 actions 字段类型是 unknown[], 不能直接强 cast
-// 成 ChatAction[]. 这里过滤掉缺 `action` 字段或形状不对的脏数据, 防止 ActionCard
-// 拿到不完整对象后渲染成空白卡片. 用在 refresh-resume / figure-rehydrate 两处.
+// Stage 3 Bug 4 fix: the server's actions field is typed unknown[], so it cannot be
+// directly cast to ChatAction[]. Filter out dirty entries that are missing the `action`
+// field or have the wrong shape, preventing ActionCard from receiving incomplete objects
+// that would render as blank cards. Used in both refresh-resume and figure-rehydrate paths.
 function validateActions(raw: unknown): ChatAction[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter(
@@ -573,6 +580,28 @@ function ActionCardInner({
     run_cobaya_cosmology: "Cobaya Cosmology",
     get_cosmology_run_status: "Cosmology Job Status",
     load_cosmology_data_product: "Cosmology Data Product",
+    // ── Solar System M0 (2026-05-18) ──
+    query_mpc_orbit: "MPC Orbit",
+    fetch_horizons_ephemeris: "Horizons Ephemeris",
+    query_sbdb_orbit: "SBDB Orbit",
+    query_sbdb_close_approaches: "Close Approaches",
+    query_sentry_risk: "Sentry-II Risk",
+    query_damit_shape_model: "DAMIT Shape Model",
+    compute_hg_magnitude: "H-G Phase Function",
+    compute_afrho: "Afρ Comet Activity",
+    fit_neatm_diameter_albedo: "NEATM Fit",
+    compute_neo_collision_probability: "Öpik Collision",
+    classify_asteroid_busdemeo: "Bus-DeMeo Class",
+    classify_asteroid_sdss_colors: "Carvano SDSS Class",
+    // ── Exoplanet M0 (2026-05-20) ──
+    query_exoplanet_archive: "Exoplanet Archive",
+    query_confirmed_planets: "Confirmed Planets",
+    fetch_tess_lightcurve: "TESS Lightcurve",
+    fit_transit: "Transit Fit",
+    compute_equilibrium_temperature: "Equilibrium Temperature",
+    compute_transit_depth: "Transit Depth",
+    compute_planet_density: "Planet Density",
+    query_tess_target_list: "TESS Targets",
   };
 
   const icons: Record<string, string> = {
@@ -618,6 +647,28 @@ function ActionCardInner({
     run_cobaya_cosmology: "📉",
     get_cosmology_run_status: "⏱",
     load_cosmology_data_product: "📦",
+    // ── Solar System M0 (2026-05-18) ──
+    query_mpc_orbit: "🪨",
+    fetch_horizons_ephemeris: "🛰️",
+    query_sbdb_orbit: "🌑",
+    query_sbdb_close_approaches: "⏱",
+    query_sentry_risk: "⚠️",
+    query_damit_shape_model: "🔺",
+    compute_hg_magnitude: "💫",
+    compute_afrho: "☄️",
+    fit_neatm_diameter_albedo: "🌡️",
+    compute_neo_collision_probability: "💥",
+    classify_asteroid_busdemeo: "🔭",
+    classify_asteroid_sdss_colors: "🎨",
+    // ── Exoplanet M0 (2026-05-20) ──
+    query_exoplanet_archive: "🪐",
+    query_confirmed_planets: "🌍",
+    fetch_tess_lightcurve: "📈",
+    fit_transit: "📉",
+    compute_equilibrium_temperature: "🌡️",
+    compute_transit_depth: "📏",
+    compute_planet_density: "⚖️",
+    query_tess_target_list: "⭐",
   };
 
   const isAutoExecuted = !!(action as Record<string, unknown>)._auto_executed;
@@ -732,10 +783,11 @@ function ActionCardInner({
           </button>
         )}
       </div>
-      {/* K1.C: 当 tool_result 带 __message_to_model__ 时(通常 SYNTHETIC /
-          FAILED / EMPTY 会带), 把前 400 字给用户看一眼 — reviewer 能立刻
-          区分"AI 自己声明错了 data_source"还是"系统检测判定合成".
-          现在只在 SYNTHETIC 情况下展示, 避免每个 FAILED/EMPTY 卡片都多一块. */}
+      {/* K1.C: When tool_result carries __message_to_model__ (typically SYNTHETIC /
+          FAILED / EMPTY results do), show the first 400 characters to the user so a
+          reviewer can immediately tell whether "the AI itself declared the wrong data_source"
+          or "the system detected and flagged synthetic output".
+          Only shown for SYNTHETIC to avoid adding an extra block to every FAILED/EMPTY card. */}
       {isToolSynthetic && autoResult && typeof (autoResult as Record<string, unknown>).__message_to_model__ === "string" && (
         <div
           className="chat-action-system-note"
@@ -1456,8 +1508,8 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     // showed the query, but run_adql auto-results did not.
     const queryText = typeof result.query === "string" ? (result.query as string) : "";
     const serviceName = typeof result.service === "string" ? (result.service as string) : "";
-    // X4 (PART X): 半径 auto-shrink 醒目 banner (不折叠). 修复 B6 Pleiades
-    // 半径 0.75° → 0.375° 无警告问题.
+    // X4 (PART X): Prominent non-collapsible banner for radius auto-shrink. Fixes B6 Pleiades
+    // radius 0.75 deg -> 0.375 deg silently reducing without any warning.
     const radiusAutoReduced = result.radius_auto_reduced === true;
     const originalRadiusDeg = typeof result.original_radius_deg === "number"
       ? result.original_radius_deg
@@ -1600,7 +1652,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           const pdfUrl = r.pdf_url as string | undefined;
           const arxivUrl = r.arxiv_url as string | undefined;
           const doiUrl = r.doi_url as string | undefined;
-          // Stage 6 P0c-B (2026-05-19): ADS RETRACTED 标记, 论文整段灰化 + 红字 banner
+          // Stage 6 P0c-B (2026-05-19): ADS RETRACTED flag — grey out the entire paper entry and show a red banner
           const isRetracted = Boolean(r.retracted);
           return (
             <div
@@ -1803,9 +1855,153 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     return <ResearchProgramPanel result={result} />;
   }
 
+  // ── M1 (2026-05-20): Solar System + Exoplanet Panel routing ──
+  // 20 tools mapped onto 4 generic panels (Karpathy 三相似才抽象).
+
+  // TablePanel: dict of named scalar fields (orbital elements / planet params).
+  if (
+    toolName === "query_mpc_orbit"
+    || toolName === "query_sbdb_orbit"
+    || toolName === "query_exoplanet_archive"
+    || toolName === "fit_neatm_diameter_albedo"
+    || toolName === "fit_transit"
+  ) {
+    // collect numeric fields from result (skip banner/meta keys)
+    const skipKeys = new Set([
+      "__tool_status__", "__do_not_claim__", "__message_to_model__", "__suggested_next_step__",
+      "success", "analysis_status", "data_origin", "reproducibility", "source_urls",
+      "archive_ids", "provenance", "_provenance_dataset", "results", "n_results", "n_total",
+      "designation", "target", "reference", "bibcode", "citations", "error", "error_class",
+      "method",
+    ]);
+    const fields: TableField[] = [];
+    Object.entries(result).forEach(([k, v]) => {
+      if (skipKeys.has(k)) return;
+      if (v === null || v === undefined) return;
+      if (typeof v === "number" || typeof v === "string") {
+        fields.push({ label: k, value: v });
+      }
+    });
+    // also pull orbital_elements if nested
+    const oe = result.orbital_elements;
+    if (oe && typeof oe === "object" && !Array.isArray(oe)) {
+      Object.entries(oe as Record<string, unknown>).forEach(([k, v]) => {
+        if (typeof v === "number" || typeof v === "string") {
+          fields.push({ label: k, value: v as number | string });
+        }
+      });
+    }
+    const title = (result.target as string) || (result.designation as string) || toolName;
+    const caveat = result.__do_not_claim__ ? (result.__message_to_model__ as string) : undefined;
+    return <TablePanel title={title} subtitle={toolName} fields={fields} caveat={caveat}
+              footer={result.reference ? `Reference: ${result.reference}` : undefined} />;
+  }
+
+  // WarningCard: single risk metric or single derived value with caveat.
+  if (toolName === "query_sentry_risk") {
+    const prob = (result.cumulative_impact_probability as number)
+      ?? (result.impact_probability as number)
+      ?? null;
+    const sev = (typeof prob === "number" && prob > 1e-4) ? "danger"
+      : (typeof prob === "number" && prob > 1e-7) ? "warn" : "ok";
+    return <WarningCard
+      title={`Sentry-II Risk — ${result.designation || result.target || "object"}`}
+      value={prob} unit="(100-yr cumulative)" severity={sev}
+      caveat={(result.__message_to_model__ as string) ||
+        "NASA Sentry-II is the authoritative source for NEO impact risk; Öpik upper bounds are NOT actual probabilities."}
+      footer={result.reference ? `Source: ${result.reference}` : undefined} />;
+  }
+  if (toolName === "compute_neo_collision_probability") {
+    return <WarningCard
+      title="Öpik 100-yr Upper Bound"
+      value={result.opik_upper_bound_100yr as number}
+      severity="warn"
+      caveat="This is a GEOMETRIC upper bound, NOT the actual impact probability. Real risk requires Sentry-II (typically 10⁴–10⁶× smaller)."
+      footer={(result.reference as string) || ""} />;
+  }
+  if (toolName === "compute_afrho") {
+    return <WarningCard title="Afρ Comet Activity"
+      value={result.Afrho_cm as number} unit="cm" severity="info"
+      caveat="Afρ is a phase-corrected proxy for comet dust production (A'Hearn+ 1984)."
+      footer={(result.reference as string) || ""} />;
+  }
+  if (toolName === "compute_equilibrium_temperature") {
+    return <WarningCard title="Planet T_eq"
+      value={result.T_eq_K as number} unit="K" severity="info"
+      caveat={`Albedo = ${result.albedo_used}, redistribution factor = ${result.redistribution_factor}. Archive pl_eqt often assumes A=0.`}
+      footer={(result.reference as string) || ""} />;
+  }
+  if (toolName === "compute_transit_depth") {
+    return <WarningCard title="Transit Depth"
+      value={result.depth_ppm as number} unit="ppm" severity="info"
+      caveat="Geometric (R_p / R_star)²; no limb darkening."
+      footer={(result.reference as string) || ""} />;
+  }
+  if (toolName === "compute_planet_density") {
+    return <WarningCard title="Planet Mean Density"
+      value={result.density_g_cm3 as number} unit="g/cm³" severity="info"
+      caveat={`Earth ratio: ${(result.earth_density_ratio as number)?.toFixed(2)}× (Earth=5.51, Jupiter=1.33)`}
+      footer={(result.reference as string) || ""} />;
+  }
+
+  // PlotlyXYPanel: time-series, phase functions, lightcurves.
+  if (toolName === "fetch_horizons_ephemeris") {
+    const rows = (result.rows as Array<Record<string, number>>) || [];
+    if (rows.length === 0) {
+      return <div style={{ fontSize: 12, color: "#888", padding: 8 }}>Horizons returned no rows.</div>;
+    }
+    const x = rows.map((_, i) => i);
+    const v_curve = rows.map(r => r.V ?? r.v ?? 0);
+    return <PlotlyXYPanel
+      x={x} y={v_curve}
+      x_label="epoch index" y_label="V magnitude"
+      title={`${result.target || "object"} — Horizons V curve`}
+      mode="lines+markers"
+      y_invert={true}
+      caveat={result.__do_not_claim__ ? (result.__message_to_model__ as string) : undefined} />;
+  }
+  if (toolName === "compute_hg_magnitude") {
+    const phases = (result.phase_angles_deg as number[]) || [];
+    const v_app = (result.V_apparent as number[]) || [];
+    return <PlotlyXYPanel
+      x={phases} y={v_app}
+      x_label="phase angle (deg)" y_label="V apparent"
+      title="H-G Phase Function (Bowell+ 1989)"
+      mode="lines+markers" y_invert={true} />;
+  }
+  if (toolName === "fetch_tess_lightcurve") {
+    const time = (result.time as number[]) || [];
+    const flux = (result.flux as number[]) || [];
+    return <PlotlyXYPanel
+      x={time} y={flux}
+      x_label="BTJD (BJD - 2457000)" y_label="normalized flux"
+      title={`TESS Light Curve — ${result.target || ""} (sector ${result.sector || "?"})`}
+      mode="markers" />;
+  }
+
+  // BarChartPanel: classification χ² over fixed class set.
+  if (toolName === "classify_asteroid_busdemeo") {
+    const all_chi = (result.all_chi_sq as Record<string, number>) || {};
+    return <BarChartPanel
+      categories={Object.keys(all_chi)}
+      values={Object.values(all_chi)}
+      highlight_label={result.best_class as string}
+      title={`Bus-DeMeo classification (${result.classification_system || ""})`}
+      value_label="χ²" />;
+  }
+  if (toolName === "classify_asteroid_sdss_colors") {
+    const all_chi = (result.all_chi2 as Record<string, number>) || (result.all_distances as Record<string, number>) || {};
+    return <BarChartPanel
+      categories={Object.keys(all_chi)}
+      values={Object.values(all_chi)}
+      highlight_label={result.best_class as string}
+      title={`Carvano 2010 SDSS classification (${result.classification_system || ""})`}
+      value_label="χ²" />;
+  }
+
   // Stage 4 (2026-05-19): literature spot-check banner.
-  // 3 状态: passed (绿) / failed (红) / unavailable (灰)
-  // 数据 shape 来自 literature_spot_check.SpotCheckResult.to_dict().
+  // 3 states: passed (green) / failed (red) / unavailable (grey)
+  // Data shape comes from literature_spot_check.SpotCheckResult.to_dict().
   if (toolName === "spot_check_literature_value") {
     if (result.spot_check_disabled) {
       return (
@@ -1915,9 +2111,9 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     const variables = result.variables as Record<string, string> | undefined;
     const variableTypes = result.variable_types as Record<string, string> | undefined;
     const tb = result.traceback as string | undefined;
-    // R6 post: stderr 作为一级字段 (即便空串也存在); stderr_note 在
-    // "stderr 为空但非零退出" 时提示用户 subprocess 崩在 Python 启动
-    // 阶段, 去 /api/admin/sandbox/health 看真实 Python error.
+    // R6 post: stderr is a top-level field (present even when empty); stderr_note is set
+    // when "stderr is empty but exit code is non-zero", indicating the subprocess crashed
+    // during Python startup — check /api/admin/sandbox/health for the real Python error.
     const stderr = result.stderr as string | undefined;
     const stderrText = stderr ?? "";
     const stderrDisplay = compactStderrWarnings(stderrText);
@@ -2004,8 +2200,9 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
           <pre className="code-output code-error">{tb.slice(-500)}</pre>
         )}
 
-        {/* stderr / warnings 成功时也要显示；warnings.warn 和 print(..., file=sys.stderr)
-            不代表工具失败, 但对用户调试很关键。 */}
+        {/* stderr / warnings should also be shown on success; warnings.warn and
+            print(..., file=sys.stderr) do not mean the tool failed, but they are
+            critical for user debugging. */}
         {showStderrPanel && (
           <div className={`code-stderr-panel${!success ? " failed" : ""}`}>
             <div className="code-stderr-label">
@@ -2991,14 +3188,15 @@ function deleteLocalChatSession(id: string, scope: string): void {
   writeLocalChatSessions(readLocalChatSessions(scope).filter((session) => session.id !== id), scope);
 }
 
-// W6 (PART W): "Validate assumptions first" 是 NextStepsPanel 新增的
-// 首项. B3/B4 回归里发现缺少一个"报告前主动验证每个数值 claim 的工具
-// 归属"的入口 — 点击后让 AI 逐条列出每个数值 claim 的 tool_result 来源,
-// 或明确说 "not measured this turn". 这是零幻觉门的配套 UX: 哪些数字
-// 没 tool 支撑, AI 自己先检查, 不等 validator 兜底 block.
-// Exported 以便 ChatPage.test.tsx 做回归.
-// PART Y Q3: HMR fast-refresh 对此文件失效是已知接受的代价 — 拆分常量到
-// 独立文件需要更新测试 import 路径, 收益小.
+// W6 (PART W): "Validate assumptions first" is the new first item in NextStepsPanel.
+// The B3/B4 regression surfaced a missing entry point for proactively verifying the
+// tool attribution of every numeric claim before writing up results. Clicking it asks the
+// AI to enumerate each claim's tool_result source, or explicitly state "not measured this
+// turn". This is the zero-hallucination gate's companion UX: the AI self-checks which
+// numbers lack tool backing instead of waiting for the validator to block them.
+// Exported so ChatPage.test.tsx can run regression tests against it.
+// PART Y Q3: HMR fast-refresh not working for this file is an accepted known trade-off —
+// splitting the constant to a separate file would require updating test import paths for minimal gain.
 // eslint-disable-next-line react-refresh/only-export-components
 export const NEXT_STEPS_PANEL_ACTIONS: Array<{ label: string; prompt: string }> = [
   {
@@ -3431,13 +3629,14 @@ export default function ChatPage() {
   }, [paperDraft, paperEditorJson, paperFormat, paperSessionId, paperTab, paperValidation?.overall_status, showToast]);
 
   useEffect(() => {
-    // Stage 3 Bug 5 修复: 原 mount effect 里跑 4-5 个 setMessages, 其中两个是
-    // async (refresh-resume + figure-rehydrate) fire-and-forget, 顺序由网络
-    // 决定, 偶尔消息闪烁/乱序. 重构为:
-    //   Phase 1 (sync): 决定 initialMessages, 一次 setMessages 设进去
-    //   Phase 2 (async): 一个 loadChatSession 同时承担 refresh-resume +
-    //                    figure-rehydrate 两件事, 最后一次 setMessages 合并
-    // 总 setMessages 调用 ≤ 2 次, 没有并发 fetch.
+    // Stage 3 Bug 5 fix: the original mount effect ran 4-5 setMessages calls, two of which
+    // were async (refresh-resume + figure-rehydrate) fire-and-forget whose ordering was
+    // determined by the network, occasionally causing message flicker / out-of-order renders.
+    // Refactored to:
+    //   Phase 1 (sync): determine initialMessages and call setMessages once
+    //   Phase 2 (async): a single loadChatSession handles both refresh-resume and
+    //                    figure-rehydrate, then merges with one final setMessages
+    // Total setMessages calls <= 2; no concurrent fetches.
     const draftKey = scopedChatStorageKey(CHAT_DRAFT_STORAGE_KEY, storageScope);
     const autosaveDraftKey = scopedChatStorageKey(CHAT_AUTOSAVE_DRAFT_STORAGE_KEY, storageScope);
     const currentSessionKey = scopedChatStorageKey(CURRENT_CHAT_SESSION_STORAGE_KEY, storageScope);
@@ -3531,7 +3730,7 @@ export default function ChatPage() {
                 (sm) => sm.role === "user" && sm.content === prevUser.content,
               );
               if (idx >= 0 && idx + 1 < srvMsgs.length && srvMsgs[idx + 1].role === "assistant") {
-                // Stage 3 Bug 4: validateActions 过滤脏数据
+                // Stage 3 Bug 4: validateActions filters out dirty entries
                 const validated = validateActions(srvMsgs[idx + 1].actions);
                 const adopted: DisplayMessage = {
                   id: last.id,
@@ -3546,7 +3745,7 @@ export default function ChatPage() {
           }
 
           // 2b. Figure-rehydrate: replace offloaded markers with server figures.
-          // Stage 3 Bug 3: 用尾对齐 array index 匹配, content 前 50 字符 sanity.
+          // Stage 3 Bug 3: Use tail-aligned array index matching with a 50-character content sanity check.
           if (needFigureRehydrate) {
             const offset = srvMsgs.length - initialMessages.length;
             nextMessages = nextMessages.map((m, localIdx) => {
@@ -3935,8 +4134,8 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    // 点击"新对话"会 setMessages([]), 空列表不滚动 — 避免新会话启动时
-    // 页面莫名跳到底部锚点.
+    // Clicking "New Chat" calls setMessages([]) — skip scroll for an empty list
+    // to prevent the page jumping to the bottom anchor when a new session starts.
     if (messages.length === 0) return;
     scrollToBottom();
   }, [messages, loading, scrollToBottom]);
@@ -4087,11 +4286,12 @@ export default function ChatPage() {
       logOperation("chat", `Search: ${text}`);
 
       // Build context from user's current workspace state.
-      // Stage 3 Bug 2 修复: 5 个 localStorage key 在 M3 (2026-05-18) 删除
-      // /search /adql /pipeline /workspace 4 个 page 后已经没人写, 留着读
-      // 出来的只可能是上个用户 (同一台电脑) 残留的 stale 数据, 是隐私泄漏源.
-      // 全部删除. 仍然活的 astro_workspace_files 走 readWorkspaceCache(scope)
-      // 显式带用户 scope, 不再裸 getItem.
+      // Stage 3 Bug 2 fix: 5 localStorage keys were removed in M3 (2026-05-18)
+      // after the /search /adql /pipeline /workspace pages were deleted. Nobody
+      // writes to them anymore, so anything still stored there can only be stale
+      // data left by a previous user on the same machine — a privacy leak.
+      // All deleted. The still-active astro_workspace_files goes through
+      // readWorkspaceCache(scope) with an explicit user scope instead of raw getItem.
       const wsContext: Record<string, unknown> = {};
       try {
         const workspaceFiles = readWorkspaceCache(storageScope);
@@ -4143,17 +4343,16 @@ export default function ChatPage() {
         }
       } else if (err instanceof Error) {
         errorDetail = err.message;
-        // R11-NEW-1: error_class 从 stream 里的 'error' 事件传上来 (client.ts 挂到 Error instance).
+        // R11-NEW-1: error_class is propagated from the 'error' SSE event in the stream (client.ts attaches it to the Error instance).
         errorClass = (err as Error & { error_class?: string }).error_class;
       }
       if (errorDetail.includes("Could not reach the backend server")) {
         errorDetail = "The request payload was likely rejected before the app server handled it. This usually happens when the previous tool results made the second-round chat request too large.";
         errorClass = errorClass || "payload_too_large";
       }
-      // R11-NEW-1: payload 太大时, 在错误气泡里加一条"开始新聊天"按钮
-      // (通过 markdown link 用一个保留的 sentinel, 再在 MarkdownText 里识别
-      // 或在 content 里直接写提示文字).  轻量做法: 错误消息尾部带一段
-      // 引导 + 按钮通过 DisplayMessage._action_hint 实现, 让 UI 渲染按钮.
+      // R11-NEW-1: When the payload is too large, add a "Start new chat" button to the
+      // error bubble. Lightweight approach: append guidance text to the error message tail
+      // and surface the button via DisplayMessage._action_hint, letting the UI render it.
       const hint = errorClass === "payload_too_large"
         ? "\n\n👉 点下方按钮开始新聊天 (会清空当前会话的历史):"
         : "";
@@ -4896,8 +5095,8 @@ export default function ChatPage() {
                           claim gate.  Keeps the validation signal visible. */}
                       <ToolTurnSummary actions={msg.actions} />
                       <MarkdownText content={msg.content} />
-                      {/* R11-NEW-1: payload_too_large 错误专属 CTA —
-                          一键新开聊天清空当前会话历史. */}
+                      {/* R11-NEW-1: CTA specific to payload_too_large errors —
+                          one click to start a fresh chat and clear the current session history. */}
                       {msg._action_hint === "new_chat" && (
                         <button
                           className="btn-primary btn-small"
