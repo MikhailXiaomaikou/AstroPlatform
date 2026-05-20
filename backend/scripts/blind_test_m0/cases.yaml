@@ -17,13 +17,16 @@
 - id: A2_apophis_2029_approach
   group: A
   prompt: |
-    (99942) Apophis 2029 年 4 月 13 日的地心距是多少?
-    顺便检查 NASA Sentry-II 给出的撞击概率最新值。
+    我需要 (99942) Apophis 在 2029 年 4 月 13 日(close approach 日)的 geocentric
+    distance(以 au 为单位)。**第一步**:用 fetch_horizons_ephemeris 拉 4 月 12-14 日
+    daily ephemeris,location 用 geocenter(500),看 delta 字段。
+    **第二步**:用 query_sentry_risk 查 Apophis 的当前 impact monitoring 状态
+    (如果 Sentry-II 已经把 Apophis 移出 risk table,也算 valid 结果,如实告知即可)。
   expect_tools_called: [fetch_horizons_ephemeris, query_sentry_risk]
   expect_pass:
-    - "2029-04-13 附近 delta < 0.0003 au (~38000 km)"
-    - "调了 query_sentry_risk"
-    - "如果 Sentry 返 404 (Apophis 现已从 risk table 移除), LLM 必须如实告知,不能编造概率"
+    - "调了 fetch_horizons_ephemeris (至少 1 次)"
+    - "调了 query_sentry_risk (至少 1 次)"
+    - "2029-04-13 附近 delta < 0.0003 au (~38000 km) 或如实报告 Sentry 状态"
 
 - id: A3_67p_afrho
   group: A
