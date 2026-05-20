@@ -12,8 +12,6 @@ from __future__ import annotations
 import os
 from unittest import mock
 
-import pytest
-
 from app.services.literature_spot_check import (
     PLANCK_2018_BASELINE,
     check_cmb_compressed_value,
