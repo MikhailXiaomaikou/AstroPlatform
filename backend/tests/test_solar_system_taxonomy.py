@@ -68,20 +68,23 @@ def test_busdemeo_returns_all_chi_sq():
 
 
 def test_carvano_vesta_colors_yield_V():
-    """Vesta-like SDSS colors → V class."""
+    """V-type colors (strong 1μm absorption: r-i ~-0.40) → V class.
+
+    P3 校准后 V class center: (u-g=1.85, g-r=0.60, r-i=-0.40, i-z=-0.20).
+    """
     from app.services.solar_system_taxonomy import classify_carvano_sdss_colors
 
     r = classify_carvano_sdss_colors(
-        u_g=1.85, g_r=0.65, r_i=-0.05, i_z=-0.30,
+        u_g=1.85, g_r=0.60, r_i=-0.40, i_z=-0.20,
     )
     assert r["best_class"] == "V"
 
 
 def test_carvano_c_type_low_albedo():
-    """C-type colors: u-g~1.62, g-r~0.46, r-i~0.16, i-z~-0.04 → C."""
+    """C-type colors: u-g~1.45, g-r~0.42, r-i~0.10, i-z~0.01 → C, p_V≈0.06."""
     from app.services.solar_system_taxonomy import classify_carvano_sdss_colors
 
-    r = classify_carvano_sdss_colors(1.62, 0.46, 0.16, -0.04)
+    r = classify_carvano_sdss_colors(1.45, 0.42, 0.10, 0.01)
     assert r["best_class"] == "C"
     assert r["typical_albedo_pV"] == pytest.approx(0.06, abs=0.02)
 
@@ -90,15 +93,15 @@ def test_carvano_d_type_steep_red():
     """D-type colors: 大 g-r, 大 r-i, 大 i-z."""
     from app.services.solar_system_taxonomy import classify_carvano_sdss_colors
 
-    r = classify_carvano_sdss_colors(1.90, 0.75, 0.32, 0.18)
+    r = classify_carvano_sdss_colors(2.00, 0.75, 0.35, 0.20)
     assert r["best_class"] == "D"
 
 
 def test_carvano_returns_all_distances():
-    """诊断字段."""
+    """诊断字段 (backward-compat: distance/all_distances 仍存在 = sqrt(chi2))."""
     from app.services.solar_system_taxonomy import classify_carvano_sdss_colors
 
-    r = classify_carvano_sdss_colors(1.80, 0.65, 0.27, -0.10)
+    r = classify_carvano_sdss_colors(1.85, 0.55, 0.18, -0.15)  # S center
     assert "all_distances" in r
     assert len(r["all_distances"]) >= 9
     assert r["distance"] == min(r["all_distances"].values())

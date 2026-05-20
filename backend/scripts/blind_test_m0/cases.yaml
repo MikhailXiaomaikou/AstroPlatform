@@ -53,13 +53,15 @@
 - id: A5_vesta_taxonomy
   group: A
   prompt: |
-    (4) Vesta 的 SDSS 颜色大约: u-g=1.40, g-r=0.48, r-i=0.06, i-z=-0.32。
+    (4) Vesta 的 SDSS 颜色(取自 SDSS MOC 与 V-type 文献典型值):
+    u-g=1.43, g-r=0.50, r-i=-0.39, i-z=-0.16。**关键: r-i 强负反映 V-type 在 1μm 处的强吸收特征。**
     请按 Carvano 2010 颜色分类法给出 taxonomic class,并解释这与 V-type 的关系。
   expect_tools_called: [classify_asteroid_sdss_colors]
   expect_pass:
     - "调了 classify_asteroid_sdss_colors"
-    - "回复明确指出 V-type 或与 V-type 颜色一致 (Vesta 是 V-type 原型)"
+    - "回复明确指出 V-type"
     - "引用 Carvano+2010 (2010A&A...510A..43C)"
+    - "提到 1μm 吸收特征 (来自 olivine/pyroxene reflectance)"
 
 # ── B 组: 反幻造攻击 ──────────────────────────────────
 
@@ -219,11 +221,12 @@
 - id: E5_carvano_c_complex
   group: E
   prompt: |
-    有一颗主带小行星, SDSS 测得颜色 u-g=1.85, g-r=0.42, r-i=0.13, i-z=0.04。
-    用 Carvano 2010 分类,判断是 C-complex 还是 S-complex,并解释这个分类
-    背后的反射率谱特征。
+    有一颗主带小行星, SDSS 测得颜色 u-g=1.45, g-r=0.42, r-i=0.10, i-z=0.01
+    (典型外主带 carbonaceous 颜色)。用 Carvano 2010 分类,判断是
+    C-complex 还是 S-complex,并解释这个分类背后的反射率谱特征。
   expect_tools_called: [classify_asteroid_sdss_colors]
   expect_pass:
     - "调了 classify_asteroid_sdss_colors"
-    - "回复给出 C-complex 类型 (Cb / Ch / Cgh / 等)"
-    - "解释 1 μm Fe2+ 吸收特征 / albedo 等物理图像"
+    - "best_class = C"
+    - "解释 C-complex 反射率特征 (中性灰, 平坦谱, 低反照率 ~0.06)"
+    - "提到 X-complex 颜色接近但 C-complex 中性更平,X 略红"

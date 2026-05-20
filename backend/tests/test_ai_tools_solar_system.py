@@ -224,10 +224,12 @@ def test_exec_classify_busdemeo_from_spectrum():
 
 
 def test_exec_classify_carvano_sdss():
+    """P3 (2026-05-20) 校准后 V class center r-i=-0.40; 旧测试用 r-i=-0.05
+    现在会分到 O,需要用 paper-accurate V colors."""
     from app.services.ai_tools_solar_system import _exec_classify_asteroid_sdss_colors
 
     result = asyncio.run(_exec_classify_asteroid_sdss_colors({
-        "u_g": 1.85, "g_r": 0.65, "r_i": -0.05, "i_z": -0.30,
+        "u_g": 1.85, "g_r": 0.60, "r_i": -0.40, "i_z": -0.20,
     }))
     assert result["success"] is True
     assert result["best_class"] == "V"
