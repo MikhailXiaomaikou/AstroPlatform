@@ -255,6 +255,34 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         rf"\bRA\s*[=:]\s*{_NUM}[,\s]+Dec\s*[=:]\s*{_NUM}",
         re.I,
     )),
+    # ── M0 Commit 5 (2026-05-18): solar_system 数值规范 ──
+    # 防止 LLM 在没 query MPC/Horizons/SBDB 的情况下凭空给出小天体轨道/物理量.
+    ("semi_major_axis_au", re.compile(
+        rf"\ba\s*[=≈~]\s*{_NUM}\s*(?:au|AU)\b", re.I,
+    )),
+    ("eccentricity", re.compile(
+        # e ∈ [0, 1): 限制 0, 0.xxx (不允许 ≥1 的值,避免误匹配 emcee/exoplanet ratio)
+        r"\b(?:e|eccentricity)\s*[=≈~]\s*(0(?:\.\d+)?)(?!\d)", re.I,
+    )),
+    ("orbital_inclination_deg", re.compile(
+        # `°` 是 non-word; 末尾 `\b` 只挂英文单位上, `°` 后不需 \b.
+        rf"\b(?:i|inclination)\s*[=≈~]\s*{_NUM}\s*(?:°|deg(?:rees?)?\b)", re.I,
+    )),
+    ("diameter_km", re.compile(
+        rf"\b(?:D|diameter)\s*[=≈~]\s*{_NUM}\s*km\b", re.I,
+    )),
+    ("albedo_pV", re.compile(
+        r"\b(?:p_?V|geometric\s+albedo|albedo)\s*[=≈~]\s*0?\.\d+\b", re.I,
+    )),
+    ("Afrho_cm", re.compile(
+        rf"\bAf\s*ρ?\s*[=≈~]\s*{_NUM}\s*cm\b", re.I,
+    )),
+    ("MOID_au", re.compile(
+        rf"\bMOID\s*[=≈~]\s*{_NUM}\s*(?:au|AU)\b", re.I,
+    )),
+    ("phase_angle_deg", re.compile(
+        rf"(?:α|phase\s+angle)\s*[=≈~]\s*{_NUM}\s*(?:°|deg(?:rees?)?\b)", re.I,
+    )),
 ]
 
 _NUMBER_WORD_DIGITS: dict[str, str] = {
@@ -727,8 +755,11 @@ def _build_valid_bibcode_pool(tool_results: Any) -> set[str]:
         for key, value in node.items():
             if not value:
                 continue
-            if key in {"bibcode", "article"} or key.endswith("_bibcode"):
+            if key in {"bibcode", "article", "reference", "source_reference"} or key.endswith("_bibcode"):
                 pool.update(_bibcodes_from_text(str(value)))
+            if key in {"citations", "references"} and isinstance(value, list):
+                for item in value:
+                    pool.update(_bibcodes_from_text(json.dumps(item, ensure_ascii=False, default=str)))
 
         provenance = node.get("provenance")
         if isinstance(provenance, dict):
@@ -796,7 +827,16 @@ def _build_author_year_support(tool_results: Any) -> set[tuple[str, str]]:
         year = str(node.get("year") or "").strip()[:4]
         authors = node.get("authors") or node.get("author")
         label = node.get("label")
+        reference = node.get("reference") or node.get("source_reference")
         if not year:
+            if isinstance(reference, str):
+                # Tool payloads often carry compact strings such as
+                # "Mainzer+ 2011 ... (2011ApJ...743..156M)" rather than a
+                # full citation object. Treat them as support for the
+                # corresponding author-year shorthand once the tool ran.
+                for ref_match in re.finditer(r"\b([A-Z][A-Za-z'`-]+)(?:\+| et al\.?)?\s+(\d{4})\b", reference):
+                    for key in _author_support_keys(ref_match.group(1)):
+                        support.add((key, ref_match.group(2)))
             continue
         if isinstance(authors, list) and authors:
             for author in authors:
@@ -1453,6 +1493,7 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
             "the same sentence. The unsupported phrases were:\n\n"
             + "\n".join(lines)
             + cosmology_note
+            + solar_system_note
             + "\n\nFor literature-derived numbers, cite the source directly in "
             "the sentence that contains the number, for example "
             "`(DESI Collaboration 2024; arXiv:2404.03002)`. If multiple papers "
@@ -1463,6 +1504,7 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
         "not present in this turn's tool provenance. The unsupported citations were:\n\n"
         + "\n".join(lines)
         + cosmology_note
+        + solar_system_note
         + "\n\nPlease re-run the relevant archive or literature query so the citation "
         "appears in tool_results before using it."
     )
@@ -1500,6 +1542,60 @@ def _cosmology_manifest_block_note(violations: list[CitationViolation]) -> str:
         "Call a cosmology provenance tool such as `compare_luminosity_distances` "
         "or run the relevant fit with an explicit `cosmology=` argument before "
         "quoting the preset bibcode."
+    )
+
+
+# ── M0 Commit 5 (2026-05-18): solar_system canonical bibcodes ──
+#
+# 14 个 small-body 领域 keystone references.  当 LLM 在没 query
+# 对应 tool 的情况下引用这些 bibcode, claim_validator 会标 invalid_bibcode
+# 然后通过 _solar_system_manifest_block_note 提示用户该 call 哪个工具。
+SOLAR_SYSTEM_CANONICAL_BIBCODES: dict[str, str] = {
+    "1989aste.conf..524B": "Bowell+ 1989 — H, G phase function (compute_hg_magnitude)",
+    "1996DPS....28.2504G": "Giorgini+ 1996 — JPL Horizons (fetch_horizons_ephemeris)",
+    "2003CeMDA..85..145K": "Knežević & Milani 2003 — proper elements",
+    "2012A&A...537A.128R": "Rein & Liu 2012 — REBOUND N-body integrator",
+    "2019JOSS....4.1426M": "Mommert+ 2019 — sbpy (small-body Python)",
+    "2009Icar..202..160D": "DeMeo+ 2009 — Bus-DeMeo taxonomy (classify_asteroid_busdemeo)",
+    "2010A&A...513A..46D": "Ďurech+ 2010 — DAMIT (query_damit_shape_model)",
+    "2010A&A...510A..43C": "Carvano+ 2010 — SDSS taxonomy (classify_asteroid_sdss_colors)",
+    "1984AJ.....89..579A": "A'Hearn+ 1984 — Afρ (compute_afrho)",
+    "2011ApJ...743..156M": "Mainzer+ 2011 — NEATM (fit_neatm_diameter_albedo)",
+    "1998Icar..131..291H": "Harris 1998 — NEATM original (fit_neatm_diameter_albedo)",
+    "2002Icar..158..329M": "Morbidelli+ 2002 — NEO collision (compute_neo_collision_probability)",
+    "2009M&PS...44.1853G": "Granvik+ 2009 — OpenOrb orbit determination",
+    "2019AJ....157...98G": "Ginsburg+ 2019 — astroquery (Horizons/MPC interfaces)",
+}
+
+
+def _solar_system_manifest_block_note(violations: list[CitationViolation]) -> str:
+    """Strict-mode hint: 引用了 solar_system canonical bibcode 但当前 turn 没 tool 返回。
+
+    Mirror cosmology pattern — 不把这些 bibcode 隐式加进 valid pool, 而是
+    告知 LLM 该调用对应工具 (compute_hg_magnitude / fetch_horizons_ephemeris /
+    classify_asteroid_busdemeo / ...) 让 manifest 进入 tool_results。
+    """
+    invalid = {
+        str(v.match_text).strip()
+        for v in violations
+        if v.kind == "invalid_bibcode"
+    }
+    if not invalid:
+        return ""
+    hits = sorted(set(invalid) & set(SOLAR_SYSTEM_CANONICAL_BIBCODES.keys()))
+    if not hits:
+        return ""
+    lines = [
+        f"  - {bibcode}: {SOLAR_SYSTEM_CANONICAL_BIBCODES[bibcode]}"
+        for bibcode in hits
+    ]
+    return (
+        "\n\nNote: one or more unsupported bibcode(s) are platform solar_system "
+        "canonical references:\n"
+        + "\n".join(lines)
+        + "\n  Strict citation mode requires the corresponding tool to run this turn. "
+        "Call the indicated tool (in parentheses) before quoting its bibcode, "
+        "or remove the bibcode from prose."
     )
 
 
