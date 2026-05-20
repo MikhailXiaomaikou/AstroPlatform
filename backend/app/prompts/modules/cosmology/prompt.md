@@ -111,6 +111,11 @@ row_idx, cell_provenance) → backend 用 ±1% 容差反查原 cell 文本 → p
   - `cache_key=...`          — 单 cache 拟合
   - `cache_keys=[...]`       — 多 survey UNION 拟合
 
+**入口选择默认规则 (2026-05-20)**: 用户提到具体 arXiv ID / DOI / 论文 ID 而你
+还没有这篇的 cache 时, **首选 `arxiv_id=...` 入口直接拟合**, 不要先调
+`extract_literature_tables` 再 `fit_line_lfr(cache_key=...)` 走两步. 旧的两步
+路径只在用户明确说 "先抽测量表给我看再决定拟合" 或需要做跨 paper UNION 时才用.
+
 
 
 ## Variable star workflow (RR Lyrae / Cepheids / EB)

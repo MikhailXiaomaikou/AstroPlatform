@@ -183,6 +183,10 @@ async def telemetry_tool_usage(
 
     counter: Counter[str] = Counter()
     last_used: dict[str, datetime] = {}
+    # 2026-05-20: 加 per-tool input keys breakdown. 让用户能看 fit_line_lfr
+    # 是不是真用 arxiv_id 入口 (跟 prompt.md 默认规则对齐), 还是 LLM 仍习惯
+    # cache_key 两步路径.
+    input_keys_per_tool: dict[str, Counter[str]] = {}
     for ed, ts in rows:
         if not isinstance(ed, dict):
             continue
@@ -191,6 +195,10 @@ async def telemetry_tool_usage(
         counter[tool_name] += 1
         if tool_name not in last_used or ts > last_used[tool_name]:
             last_used[tool_name] = ts
+        input_keys = ed.get("input_keys")
+        if isinstance(input_keys, list):
+            key_signature = "+".join(sorted(str(k) for k in input_keys)) or "(empty)"
+            input_keys_per_tool.setdefault(tool_name, Counter())[key_signature] += 1
 
     total_calls = sum(counter.values())
     low_usage_pct_threshold = 0.5  # 占比 < 0.5% 视为低使用, 候选砍
@@ -198,12 +206,22 @@ async def telemetry_tool_usage(
     items = []
     for name, cnt in counter.most_common(limit):
         pct = (cnt / total_calls * 100) if total_calls else 0.0
+        input_breakdown = []
+        per_tool = input_keys_per_tool.get(name)
+        if per_tool:
+            for sig, k_cnt in per_tool.most_common(5):
+                input_breakdown.append({
+                    "input_keys": sig,
+                    "count": k_cnt,
+                    "pct_of_tool": round((k_cnt / cnt * 100) if cnt else 0.0, 1),
+                })
         items.append({
             "tool_name": name,
             "count": cnt,
             "pct_of_total": round(pct, 3),
             "low_usage": pct <= low_usage_pct_threshold,
             "last_used_at": last_used[name].isoformat() if last_used.get(name) else None,
+            "input_keys_top5": input_breakdown,
         })
     low_usage_tools = [item["tool_name"] for item in items if item["low_usage"]]
 

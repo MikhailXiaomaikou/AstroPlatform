@@ -2201,6 +2201,27 @@ async def execute_tool(
         tool_name, tool_input, api_key, provider_api_keys,
         python_session_id, user_id, chat_session_id, progress_callback,
     )
+
+    # 2026-05-20: 给 user_events 写 ai.tool_called, 让 telemetry/tool_usage
+    # endpoint 有数据. 之前消费者 (admin_stats.py) 已经写好, 但缺生产者.
+    # 只记 input 字段 keys (不记 value), 防 BYOK api_key / 大 payload 入库.
+    try:
+        from app.services.event_collector import event_collector
+        input_keys = sorted(tool_input.keys()) if isinstance(tool_input, dict) else []
+        await event_collector.track(
+            event_type="ai.tool_called",
+            event_data={
+                "tool_name": tool_name,
+                "input_keys": input_keys,
+                "success": not (isinstance(result, dict) and result.get("success") is False),
+            },
+            user_id=user_id,
+            session_id=chat_session_id,
+        )
+    except Exception:
+        # Telemetry must never break the actual tool call.
+        pass
+
     # R1: pass the caller's tool_input so the reproducibility envelope can
     # hash the exact invocation parameters.
     return normalize_tool_result(tool_name, result, tool_input=tool_input)
