@@ -36,17 +36,19 @@
     - "Afrho 数量级 100-10000 cm (67P 活跃彗星典型值)"
     - "回复引用 1984AJ.....89..579A 或 A'Hearn+1984"
 
-- id: A4_ceres_neatm
+- id: A4_eros_neatm
   group: A
   prompt: |
-    (1) Ceres 在 r_h = 2.8 au, Delta = 2.0 au 处于 IRAS 12 micron 测得流量约 100 Jy,绝对星等 H = 3.34。
-    用 NEATM 模型拟合直径和几何反照率。已知 Ceres 真值 D ~ 940 km, p_V ~ 0.09。
+    (433) Eros 这颗近地小行星在 r_h = 1.13 au, Delta = 0.46 au 几何下,
+    IRAS 12 micron 测得流量约 15 Jy,绝对星等 H = 11.16。这是 NEA,
+    用默认 eta = 1.4 (Pravec & Harris 2007)。请用 NEATM 模型拟合
+    直径和几何反照率。Eros 真值参考 D ≈ 16.84 km, p_V ≈ 0.25。
   expect_tools_called: [fit_neatm_diameter_albedo]
   expect_pass:
     - "调了 fit_neatm_diameter_albedo"
-    - "D 在 800-1100 km 区间"
-    - "p_V 在 0.05-0.15 区间"
-    - "回复引用 Mainzer+2011 或 NEATM bibcode"
+    - "D 在 14-20 km 区间"
+    - "p_V 在 0.18-0.30 区间"
+    - "回复引用 Mainzer+2011 或 Harris 1998 NEATM bibcode"
 
 - id: A5_vesta_taxonomy
   group: A

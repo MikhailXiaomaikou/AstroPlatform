@@ -1,7 +1,7 @@
 """Minor Planet Center connector via astroquery.mpc.
 
-Reference: IAU Minor Planet Center — 官方 designation + osculating orbital
-elements 数据库 (https://minorplanetcenter.net/). 通过 astroquery.mpc 访问
+Reference: IAU Minor Planet Center — official designation + osculating orbital
+elements database (https://minorplanetcenter.net/). Accessed via astroquery.mpc
 (Ginsburg+ 2019 AJ 157, 98, bibcode 2019AJ....157...98G).
 M0 Commit 2 (2026-05-18): new connector, mirrors TwoMASSConnector shape.
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from functools import partial
 
 from astropy.table import Table
@@ -22,11 +23,56 @@ logger = logging.getLogger(__name__)
 
 MPC_ARCHIVE_VERSION = "mpc-2026"
 
-# 典型 MPC 轨道根数字段(astroquery.mpc 返回的 dict 字段名)
+# Provisional designation 里的双字母组(年内序号), 不算"asteroid name"
+# 见 IAU Minor Planet Names: https://minorplanetcenter.net/iau/info/Astrometry.html
+_PROVISIONAL_LETTERS = frozenset({
+    "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AJ", "AK", "AL", "AM", "AN",
+    "AO", "AP", "AQ", "AR", "AS", "AT", "AU", "AV", "AW", "AX", "AY", "AZ",
+    "BA", "BB", "BC", "BD", "BE", "BF", "BG", "BH", "BJ", "BK", "BL", "BM",
+    "TB", "TC", "TD",  # 列常见的, 不全列 — 兜底逻辑保留原 designation
+})
+
+
+def _normalize_mpc_designations(raw: str) -> list[str]:
+    """把入参展开成多个 designation 候选, 提升 astroquery.mpc 命中率.
+
+    例:
+      "(3200) Phaethon"  → ["3200", "Phaethon", "(3200) Phaethon"]
+      "Apophis"          → ["Apophis"]
+      "1983 TB"          → ["1983 TB"]  (provisional designation, 不拆)
+      "99942"            → ["99942"]
+    """
+    out: list[str] = []
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+
+    # provisional designation 形如 "1983 TB" / "2024 YR4" 不要拆
+    if re.match(r"^\d{4}\s+[A-Z]{1,2}\d*$", raw):
+        return [raw]
+
+    # 提取纯数字 IAU number (1-7 位)
+    m_num = re.search(r"\b(\d{1,7})\b", raw)
+    if m_num:
+        out.append(m_num.group(1))
+
+    # 提取纯名 (首字母大写的 alphabetic word, 长度 >= 3, 排除 provisional 双字母)
+    for m_name in re.finditer(r"\b([A-Z][a-zA-Z]{2,})\b", raw):
+        token = m_name.group(1)
+        if token.upper() not in _PROVISIONAL_LETTERS and token not in out:
+            out.append(token)
+
+    # 原样兜底 (e.g. "(3200) Phaethon" 整串作为最后一个候选)
+    if raw not in out:
+        out.append(raw)
+
+    return out
+
+# Typical MPC orbital element fields (dict key names returned by astroquery.mpc)
 _ORBIT_FIELDS = (
     "absolute_magnitude",       # H
     "phase_slope",              # G
-    "semimajor_axis",           # a (au)  — astroquery 字段名可能是 "a" 或 "semimajor_axis"
+    "semimajor_axis",           # a (au)  — astroquery field name may be "a" or "semimajor_axis"
     "a",
     "eccentricity",
     "e",
@@ -66,24 +112,34 @@ class MPCConnector(BaseConnector):
         return self._table_to_objects(table, designation=query)
 
     def _query_mpc(self, designation: str) -> Table | None:
-        """先按小行星查,失败再按彗星查;返回 astropy Table 或 None。"""
+        """Try MPC asteroid + comet 查询, 每个 target_type 还会试多个
+        designation 变体 (number / name / 原样), 提升对 '(3200) Phaethon'
+        这种带括号格式的命中率. 返回 astropy Table 或 None.
+        """
         from astroquery.mpc import MPC
 
+        candidates = _normalize_mpc_designations(designation)
         results = None
-        for target_type in ("asteroid", "comet"):
-            try:
-                raw = MPC.query_object(target_type=target_type, designation=designation)
-            except Exception as exc:
-                logger.debug("MPC %s query failed for %s: %s", target_type, designation, exc)
-                raw = None
-            if raw:
-                results = raw
+        for desig in candidates:
+            for target_type in ("asteroid", "comet"):
+                try:
+                    raw = MPC.query_object(target_type=target_type, designation=desig)
+                except Exception as exc:
+                    logger.debug(
+                        "MPC %s query failed for %s (variant of %r): %s",
+                        target_type, desig, designation, exc,
+                    )
+                    raw = None
+                if raw:
+                    results = raw
+                    break
+            if results:
                 break
 
         if not results:
             return None
         if isinstance(results, list):
-            # astroquery.mpc 返回 list[dict];转成 Table
+            # astroquery.mpc returns list[dict]; convert to Table
             return Table(rows=results) if results else None
         if isinstance(results, Table):
             return results
@@ -91,7 +147,7 @@ class MPCConnector(BaseConnector):
         try:
             return Table(results)
         except Exception as exc:
-            logger.warning("MPC results 无法转 Table: %s", exc)
+            logger.warning("MPC results could not be converted to Table: %s", exc)
             return None
 
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
@@ -115,7 +171,7 @@ class MPCConnector(BaseConnector):
             archive_version=MPC_ARCHIVE_VERSION,
         )
         for row in table:
-            # 名称: 优先 name,再 designation,再传入的 query
+            # Name priority: name column first, then designation, then the query argument
             name = designation
             for name_col in ("name", "designation", "number"):
                 if name_col in row.colnames:
@@ -131,7 +187,7 @@ class MPCConnector(BaseConnector):
             if provenance_dataset:
                 extra["_provenance_dataset"] = provenance_dataset
 
-            # 提取轨道根数
+            # Extract orbital elements
             for key in _ORBIT_FIELDS:
                 if key in row.colnames:
                     try:
@@ -146,7 +202,7 @@ class MPCConnector(BaseConnector):
                 "Minor Planet Center, IAU — official designation/orbit database"
             )
 
-            # MPC results 是轨道根数,没有 RA/Dec — 用 0.0/0.0 占位(下游工具消费 extra)
+            # MPC results contain orbital elements, not RA/Dec — use 0.0/0.0 as placeholders (downstream tools consume extra)
             magnitude = extra.get("absolute_magnitude")
             if not isinstance(magnitude, (int, float)):
                 magnitude = None
