@@ -3257,6 +3257,10 @@ async def _run_agent_loop(
         "crossmatch_catalogs", "query_gaia_cluster", "get_object_info",
         "get_object_dossier", "get_extinction", "search_literature",
         "extract_literature_tables", "query_high_velocity_stars",
+        # solar_system M0 (2026-05-20): 6 个小天体数据查询工具同样要被 G3.4 熔断
+        # 覆盖, 否则它们 hard-fail N 次都不会被 disable. C2 case 实测.
+        "query_mpc_orbit", "fetch_horizons_ephemeris", "query_sbdb_orbit",
+        "query_sbdb_close_approaches", "query_sentry_risk", "query_damit_shape_model",
     }
     MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS = 2
     # G3.4 + H0.7: tool → failure count this turn.  When ≥
@@ -3266,6 +3270,14 @@ async def _run_agent_loop(
     # H0.7: raised threshold from 2 to 3, and only count RETRYABLE
     # failures (connector errors, not timeouts/payload_too_large which
     # the AI might legitimately retry with smaller scope).
+    # 2026-05-20: 显式硬拒绝 error_class 集合 — 这些不算 retryable, LLM
+    # 用同参数重试只会再次被拒. C2 case 实测: range_too_large 被 LLM
+    # 误读为 "可重试", 12 次都没熔断.
+    _HARD_REJECT_ERROR_CLASSES = frozenset({
+        "range_too_large",    # 工具本地拒绝, e.g. 100 年 daily ephemeris
+        "missing_argument",   # 必需参数缺, LLM 不补全前重试无意义
+        "invalid_argument",   # 类型/范围错, 同上
+    })
     tool_failure_counts: dict[str, int] = {}
     # R22: row_count=0 / EMPTY are soft for retry disabling, but still mean
     # later Python cells have no real cache to analyze.  Track them separately
@@ -4172,14 +4184,20 @@ async def _run_agent_loop(
                 err_str = str(result.get("error") or "").lower()
                 err_class = str(result.get("error_class") or "").lower()
                 # "Retryable" / soft failures — user/AI can adjust parameters.
+                # 2026-05-20: 显式硬拒绝 error_class 短路 — 不论 error 字符串
+                # 长什么样, 这些 class 一律算 hard, 防 future error msg 含
+                # "too large" 等关键词时被错误归入 soft.
                 soft_failure = (
-                    "timeout" in err_str or "timed out" in err_str
-                    or "retry budget" in err_str
-                    or "payload_too_large" in err_class
-                    or "too large" in err_str
-                    or result.get("row_count") == 0  # empty result is not a connector failure
-                    or result.get("found") == 0
-                    or any(s == "EMPTY" for s in status_tokens)
+                    err_class not in _HARD_REJECT_ERROR_CLASSES
+                    and (
+                        "timeout" in err_str or "timed out" in err_str
+                        or "retry budget" in err_str
+                        or "payload_too_large" in err_class
+                        or "too large" in err_str
+                        or result.get("row_count") == 0  # empty result is not a connector failure
+                        or result.get("found") == 0
+                        or any(s == "EMPTY" for s in status_tokens)
+                    )
                 )
                 empty_failure = _is_failed_or_empty_data_fetch(result)
                 hard_failure = (
