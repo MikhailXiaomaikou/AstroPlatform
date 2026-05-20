@@ -13,6 +13,10 @@ bcrypt>=4.1.2,<5
 httpx>=0.27.0,<1
 astropy>=6.0.0,<8
 astroquery>=0.4.7,<1
+# Small-body planetary astronomy (M0 Commit 3, 2026-05-18, solar_system module).
+# Mommert+ 2019 JOSS 4, 1426 (bibcode 2019JOSS....4.1426M).
+# 提供 Afρ / H-G phase / NEATM 等社区验证算法,避免本仓库手写单位换算踩坑.
+sbpy>=0.5,<1
 numpy>=1.26.4,<3
 scipy>=1.12.0,<2
 python-multipart>=0.0.9,<1
@@ -34,6 +38,9 @@ scikit-learn>=1.4.0,<2
 joblib>=1.3.0,<2
 emcee>=3.1.0,<4
 corner>=2.2.0,<3
+# 替代 eval() 跑用户表达式 (condition pipeline 节点);
+# asteval 默认 AST 白名单, 比裸 eval 安全得多
+asteval>=0.9.31,<1
 cobaya>=3.5,<4
 # PART AI Phase 5 #2 Track 2: external_cobaya likelihood backend.
 # CAMB is the Boltzmann-code dependency cobaya pulls in for Planck/ACT/SPT
