@@ -407,14 +407,16 @@ def test_extracted_measurement_to_dict():
     assert d["cell_provenance"] == {"z": "5.0"}
 
 
-# ── tool integration: _exec_extract_paper_measurements_with_llm ──
+# ── helper integration: _extract_and_cache_paper_measurements ──
+# (2026-05-20 下沉) 原 _exec_extract_paper_measurements_with_llm 顶层 tool 已并入
+# fit_line_lfr, 这里测的是它的内部 helper 形态 — 同样的 LLM 抽取 + ±1% 反查 +
+# cache 写入语义, 但签名是 (arxiv_id, api_key, python_session_id, fields) 不再
+# 接受 inp dict, 返回值也不再带 __message_to_model__ (fit_line_lfr wrapper 负责).
 
 
 @pytest.mark.asyncio
-async def test_exec_tool_writes_passed_rows_to_session_cache(monkeypatch):
-    """Stage 6.3 升级: passed records 转成 fit_line_lfr 兼容 row schema +
-    写入 session-scoped latest_literature_tables cache."""
-    import asyncio as _asyncio  # noqa: F401
+async def test_helper_writes_passed_rows_to_session_cache(monkeypatch):
+    """passed records 转成 fit_line_lfr 兼容 row schema + 写 session-scoped cache."""
     from app.services import ai_tools
 
     fake_records = [
@@ -453,8 +455,8 @@ async def test_exec_tool_writes_passed_rows_to_session_cache(monkeypatch):
     )
     monkeypatch.setattr(ai_tools, "store_search_results", fake_store)
 
-    out = await ai_tools._exec_extract_paper_measurements_with_llm(
-        {"arxiv_id": "2002.00962"},
+    out = await ai_tools._extract_and_cache_paper_measurements(
+        "2002.00962",
         api_key="sk-ant-fake",
         python_session_id="sid_abc",
     )
@@ -476,11 +478,11 @@ async def test_exec_tool_writes_passed_rows_to_session_cache(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_exec_tool_returns_error_on_missing_api_key():
+async def test_helper_returns_error_on_missing_api_key():
     from app.services import ai_tools
 
-    out = await ai_tools._exec_extract_paper_measurements_with_llm(
-        {"arxiv_id": "2002.00962"},
+    out = await ai_tools._extract_and_cache_paper_measurements(
+        "2002.00962",
         api_key="",
         python_session_id="sid",
     )
@@ -489,11 +491,11 @@ async def test_exec_tool_returns_error_on_missing_api_key():
 
 
 @pytest.mark.asyncio
-async def test_exec_tool_returns_error_on_missing_arxiv_id():
+async def test_helper_returns_error_on_missing_arxiv_id():
     from app.services import ai_tools
 
-    out = await ai_tools._exec_extract_paper_measurements_with_llm(
-        {},
+    out = await ai_tools._extract_and_cache_paper_measurements(
+        "",
         api_key="sk-ant-fake",
         python_session_id="sid",
     )
@@ -502,8 +504,8 @@ async def test_exec_tool_returns_error_on_missing_arxiv_id():
 
 
 @pytest.mark.asyncio
-async def test_exec_tool_handles_zero_passed(monkeypatch):
-    """LLM 全编 → 0 passed, cache 不写, message_to_model 提示考虑 regex/VizieR."""
+async def test_helper_handles_zero_passed(monkeypatch):
+    """LLM 全编 → 0 passed, cache 不写, 返回 passed_count=0 + line_measurements=[]."""
     from app.services import ai_tools
 
     fake_records = [
@@ -526,8 +528,8 @@ async def test_exec_tool_handles_zero_passed(monkeypatch):
     )
     monkeypatch.setattr(ai_tools, "store_search_results", lambda k, v: stored.setdefault(k, v))
 
-    out = await ai_tools._exec_extract_paper_measurements_with_llm(
-        {"arxiv_id": "0000.0000"},
+    out = await ai_tools._extract_and_cache_paper_measurements(
+        "0000.0000",
         api_key="sk-ant-fake",
         python_session_id="sid",
     )
@@ -536,13 +538,14 @@ async def test_exec_tool_handles_zero_passed(monkeypatch):
     assert out["line_measurements"] == []
     # 0 passed 不写 cache
     assert stored == {}
-    # message_to_model 应该建议替代方案
-    assert "VizieR" in out["__message_to_model__"] or "regex" in out["__message_to_model__"]
+    # rejected_rows 仍 surface 给上层 fit_line_lfr / LLM
+    assert len(out["rejected_rows"]) == 1
+    assert out["rejected_rows"][0]["validation_status"] == "failed_no_cell"
 
 
 @pytest.mark.asyncio
-async def test_exec_tool_propagates_extraction_exception(monkeypatch):
-    """spike module 抛异常 (e.g. HTTP timeout) → tool 返 error_class."""
+async def test_helper_propagates_extraction_exception(monkeypatch):
+    """spike module 抛异常 (e.g. HTTP timeout) → helper 返 error_class."""
     from app.services import ai_tools
 
     def boom(arxiv_id, fields, api_key):
@@ -553,14 +556,68 @@ async def test_exec_tool_propagates_extraction_exception(monkeypatch):
         boom,
     )
 
-    out = await ai_tools._exec_extract_paper_measurements_with_llm(
-        {"arxiv_id": "2002.00962"},
+    out = await ai_tools._extract_and_cache_paper_measurements(
+        "2002.00962",
         api_key="sk-ant-fake",
         python_session_id="sid",
     )
     assert out["success"] is False
     assert out["error_class"] == "llm_extraction_failed"
     assert "network timeout" in out["error"]
+
+
+# ── fit_line_lfr integration: arxiv_id 早退路径 ──
+
+
+@pytest.mark.asyncio
+async def test_fit_line_lfr_arxiv_id_no_api_key_early_exit():
+    """fit_line_lfr 收到 arxiv_id 但 BYOK key 为空 → FAILED 早退."""
+    from app.services import ai_tools
+
+    out = await ai_tools._exec_fit_line_lfr(
+        {"arxiv_id": "2002.00962"},
+        python_session_id="sid",
+        api_key="",
+    )
+    assert out["success"] is False
+    assert out["__tool_status__"] == "FAILED"
+    assert out["error_class"] == "missing_api_key"
+    assert out["arxiv_id"] == "2002.00962"
+
+
+@pytest.mark.asyncio
+async def test_fit_line_lfr_arxiv_id_zero_passed_early_exit(monkeypatch):
+    """fit_line_lfr 收到 arxiv_id, LLM 抽出全部 fail → EMPTY 早退 + no_passed_measurements."""
+    from app.services import ai_tools
+
+    fake_records = [
+        ExtractedMeasurement(
+            source_name="Phantom",
+            fwhm_km_s=999.0,
+            log_luminosity=None,
+            z=None,
+            table_idx=0,
+            row_idx=99,
+            cell_provenance={},
+            validation_status="failed_mismatch",
+            validation_notes=["no cell match"],
+        ),
+    ]
+    monkeypatch.setattr(
+        "app.services.llm_paper_extractor.extract_with_llm_and_verify",
+        lambda arxiv_id, fields, api_key: fake_records,
+    )
+    monkeypatch.setattr(ai_tools, "store_search_results", lambda k, v: None)
+
+    out = await ai_tools._exec_fit_line_lfr(
+        {"arxiv_id": "2002.00962"},
+        python_session_id="sid",
+        api_key="sk-ant-fake",
+    )
+    assert out["success"] is False
+    assert out["__tool_status__"] == "EMPTY"
+    assert out["error_class"] == "no_passed_measurements"
+    assert "extraction_summary" in out
 
 
 # 让顶部 Any 可用 (tool integration tests above 用 dict[str, Any])

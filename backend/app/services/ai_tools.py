@@ -411,46 +411,6 @@ TOOLS = [
         },
     },
     {
-        # Stage 6.3 升级 (2026-05-20): LLM hybrid 抽测量数据 + ±1% 反查.
-        # 现有 `extract_literature_tables` 是 monolithic regex parser, 跨
-        # paper schema 立即掉链子. 本工具走 LLM 看 HTML 给数字 + backend
-        # 反查 cell 文字 ±1% 不一致就拒. spike (commit 299cd10) 已验证
-        # ALPINE 2002.00962 达 P=74/74, M=0, F=0.
-        "name": "extract_paper_measurements_with_llm",
-        "description": (
-            "LLM-based fallback for `extract_literature_tables` when the "
-            "deterministic regex parser returns 0 line_measurements (e.g. "
-            "non-standard column names across REBELS / Capak / Bothwell / "
-            "Hodge surveys). Sends the paper's filtered HTML tables to your "
-            "BYOK Anthropic LLM and asks it to extract measurements as "
-            "structured JSON; backend then reverse-verifies each numeric "
-            "value against the original table cell text (±1% tolerance) "
-            "before accepting. Any number that fails reverse-verification "
-            "is REJECTED and excluded from the cache — the tool cannot "
-            "launder fabricated measurements. Output is written to the "
-            "same session-scoped `latest_literature_tables:<sid>` cache as "
-            "extract_literature_tables, so fit_line_lfr can read it directly."
-        ),
-        "input_schema": {
-            "type": "object",
-            "required": ["arxiv_id"],
-            "properties": {
-                "arxiv_id": {
-                    "type": "string",
-                    "description": "arXiv ID, e.g. '2002.00962' or 'arXiv:2002.00962'.",
-                },
-                "fields": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Fields to extract. Default: "
-                        "['source_name', 'fwhm_km_s', 'log_luminosity', 'z']."
-                    ),
-                },
-            },
-        },
-    },
-    {
         "name": "get_last_search_results",
         "description": (
             "Retrieve the full list of the user's most recent search results "
@@ -744,14 +704,37 @@ TOOLS = [
         "name": "fit_line_lfr",
         "description": (
             "Fit a line-luminosity versus FWHM relation from cached, cited literature "
-            "measurement rows. Use this immediately after extract_literature_tables "
-            "returns usable line_measurements for tasks like [CII] log L-FWHM. "
+            "measurement rows. Three input modes (pick ONE): "
+            "(1) `arxiv_id` — let the tool LLM-extract measurements from that arXiv paper "
+            "with ±1% cell verification (replaces the deprecated extract_paper_measurements_with_llm "
+            "two-step flow; requires BYOK Anthropic key). "
+            "(2) `cache_key` — read a single cached measurement set from a prior extract_literature_tables call. "
+            "(3) `cache_keys` — UNION multiple surveys' caches before fitting. "
             "This tool consumes real row-level table provenance; do not replace it "
             "with run_python over hardcoded or synthetic literature samples."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
+                "arxiv_id": {
+                    "type": "string",
+                    "description": (
+                        "arXiv ID, e.g. '2002.00962' or 'arXiv:2002.00962'. When set, the tool "
+                        "first calls the LLM paper extractor (BYOK Anthropic) to read tables, "
+                        "verifies each numeric value against the original cell text (±1% "
+                        "tolerance), writes passed rows to the latest_literature_tables cache, "
+                        "then runs the fit. Mismatched / unverified numbers never enter cache, "
+                        "so the LLM cannot launder fabricated measurements through this path."
+                    ),
+                },
+                "extract_fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional override for the LLM extractor field list when arxiv_id is set. "
+                        "Default: ['source_name', 'fwhm_km_s', 'log_luminosity', 'z']."
+                    ),
+                },
                 "cache_key": {
                     "type": "string",
                     "description": "Single cache key from extract_literature_tables. Default: latest_literature_tables. Use `cache_keys` instead when fitting across multiple surveys.",
@@ -2291,13 +2274,6 @@ async def _execute_tool_inner(
             # Stage 6 P0c-C (2026-05-19): hard 屏障 — LLM 必须调它分类 paper,
             # 否则 claim_validator.unclassified_literature_violations 会 block reply.
             return await _exec_classify_literature_relevance(tool_input, python_session_id)
-        elif tool_name == "extract_paper_measurements_with_llm":
-            # Stage 6.3 升级 (2026-05-20): LLM hybrid 抽测量数据 + ±1% 反查.
-            # 不接 hard-gate, 因为 unverified 数字本身就不进 cache → 现有
-            # claim_validator.validate_claims 自动 reject AI 引用未存数字.
-            return await _exec_extract_paper_measurements_with_llm(
-                tool_input, api_key, python_session_id,
-            )
         elif tool_name == "extract_literature_tables":
             return await _exec_extract_literature_tables(
                 tool_input, python_session_id,
@@ -2308,7 +2284,9 @@ async def _execute_tool_inner(
         elif tool_name == "prepare_spectral_measurements":
             return _exec_prepare_spectral_measurements(tool_input, python_session_id)
         elif tool_name == "fit_line_lfr":
-            return _exec_fit_line_lfr(tool_input, python_session_id)
+            # Stage 6.3 (2026-05-20 下沉): fit_line_lfr 接受可选 arxiv_id, 内部
+            # 调 LLM extractor 抽测量 + ±1% 反查 + 写 cache, 再走原拟合.
+            return await _exec_fit_line_lfr(tool_input, python_session_id, api_key)
         elif tool_name == "astro_statistics_toolbox":
             return _exec_astro_statistics_toolbox(tool_input)
         elif tool_name == "demagnify_sample":
@@ -4135,30 +4113,29 @@ async def _exec_classify_literature_relevance(inp: dict, python_session_id: str 
     }
 
 
-async def _exec_extract_paper_measurements_with_llm(
-    inp: dict,
+async def _extract_and_cache_paper_measurements(
+    arxiv_id: str,
     api_key: str,
     python_session_id: str = "default",
+    fields: list[str] | None = None,
 ) -> dict:
-    """Stage 6.3 升级 (2026-05-20): LLM hybrid 抽测量数据 + ±1% 反查.
+    """Stage 6.3 (2026-05-20 下沉): fit_line_lfr 内部 helper — LLM 抽测量 + ±1% cell 反查 + 写 cache.
 
-    spike module `llm_paper_extractor.extract_with_llm_and_verify` 提供核心
-    逻辑 (fetch HTML / parse tables / score+filter / LLM call / cell ±1%
-    反查), 本 tool 是 async dispatch wrapper:
+    spike module `llm_paper_extractor.extract_with_llm_and_verify` 提供核心逻辑
+    (fetch HTML / parse tables / score+filter / LLM call / cell ±1% 反查), 本
+    函数是 async wrapper:
+      1. run_in_executor 跑 spike module (sync httpx + LLM 调用, 防阻塞 event loop)
+      2. passed records 转 fit_line_lfr 兼容 schema, 写 session-scoped
+         `latest_literature_tables:<sid>` cache + raw `latest_literature_tables`
+      3. failed_mismatch / failed_no_cell 不进 cache (claim_validator 自动 reject AI 引用)
 
-      1. 复用 spike module 跑 extract_with_llm_and_verify
-      2. 把 passed records 转成 fit_line_lfr 兼容的 schema, 写
-         session-scoped `latest_literature_tables:<sid>` cache (跟
-         extract_literature_tables 同 cache_key, 让 fit_line_lfr 自然读到)
-      3. failed_mismatch / failed_no_cell 不进 cache, 只 surface 给 LLM
-         作 warning. 这样下游 claim_validator 看不到 unverified 数字,
-         自动 reject AI 引用.
+    历史: 之前是顶层 tool `extract_paper_measurements_with_llm`, 2026-05-20 晚下沉为
+    fit_line_lfr 内部依赖, 用户传 arxiv_id 给 fit_line_lfr 直接拟合, 不再两步调度.
     """
-    arxiv_id = str(inp.get("arxiv_id") or "").strip()
     if not arxiv_id:
         return {
             "success": False,
-            "error": "extract_paper_measurements_with_llm requires arxiv_id",
+            "error": "arxiv_id is required",
             "error_class": "missing_argument",
             "argument": "arxiv_id",
         }
@@ -4166,15 +4143,12 @@ async def _exec_extract_paper_measurements_with_llm(
         return {
             "success": False,
             "error": (
-                "extract_paper_measurements_with_llm requires a Claude API key. "
+                "LLM-based paper extraction requires a Claude API key. "
                 "Configure your Anthropic key in /account (BYOK)."
             ),
             "error_class": "missing_api_key",
         }
-    fields_raw = inp.get("fields")
-    if isinstance(fields_raw, list) and fields_raw:
-        fields = [str(f) for f in fields_raw if f]
-    else:
+    if not fields:
         fields = ["source_name", "fwhm_km_s", "log_luminosity", "z"]
 
     try:
@@ -4196,12 +4170,11 @@ async def _exec_extract_paper_measurements_with_llm(
     failed_mismatch = [r for r in records if r.validation_status == "failed_mismatch"]
     failed_no_cell = [r for r in records if r.validation_status == "failed_no_cell"]
 
-    # 转成 fit_line_lfr 期望的 row schema (跟 extract_literature_tables 同源)
     cleaned_arxiv = arxiv_id.replace("arXiv:", "").replace("arxiv:", "").strip()
     bibcode = f"arXiv:{cleaned_arxiv}"
     line_measurements = []
     for r in passed:
-        row = {
+        line_measurements.append({
             "source_name": r.source_name,
             "fwhm_km_s": r.fwhm_km_s,
             "log_luminosity": r.log_luminosity,
@@ -4219,8 +4192,7 @@ async def _exec_extract_paper_measurements_with_llm(
             "fwhm_err_km_s": None,
             "log_luminosity_err": None,
             "source_cosmology": None,
-        }
-        line_measurements.append(row)
+        })
 
     cache_key = (
         _session_cache_key("latest_literature_tables", python_session_id)
@@ -4236,36 +4208,8 @@ async def _exec_extract_paper_measurements_with_llm(
     }
     if line_measurements:
         store_search_results(cache_key, cache_payload)
-        # 跟 _exec_extract_literature_tables 一致, 也广播到 raw key 让
-        # fit_line_lfr default cache_key=latest_literature_tables fallback work
         if cache_key != "latest_literature_tables":
             store_search_results("latest_literature_tables", cache_payload)
-
-    msg = (
-        f"LLM extraction + ±1% cell reverify: "
-        f"{len(passed)} passed (written to cache), "
-        f"{len(failed_mismatch)} failed_mismatch (REJECTED, do not cite), "
-        f"{len(failed_no_cell)} failed_no_cell (REJECTED, do not cite). "
-    )
-    if failed_mismatch or failed_no_cell:
-        msg += (
-            "REJECTED rows have validation_status != 'passed' and are NOT in "
-            "the line_measurements cache. You MUST NOT quote any number from "
-            "rejected rows — they did not pass the ±1% cell verification. "
-        )
-    if not passed:
-        msg += (
-            "No measurements passed verification. The paper may not contain "
-            "the requested fields in its HTML tables, or table structure is "
-            "atypical. Consider extract_literature_tables (regex parser), "
-            "VizieR catalog lookup, or asking the user to point at a specific "
-            "table number / companion paper."
-        )
-    else:
-        msg += (
-            f"Cache key for fit_line_lfr: {cache_key}. "
-            "Only the passed rows are citable downstream."
-        )
 
     return {
         "success": True,
@@ -4284,7 +4228,6 @@ async def _exec_extract_paper_measurements_with_llm(
             }
             for r in failed_mismatch + failed_no_cell
         ],
-        "__message_to_model__": msg,
     }
 
 
@@ -4943,8 +4886,72 @@ def _is_paper_lensed_by_default_safe_in_fit(bibcode: str | None) -> bool:
         return False
 
 
-def _exec_fit_line_lfr(inp: dict, python_session_id: str = "default") -> dict:
-    """Fit log L(line) as a function of log10(FWHM / 100 km/s)."""
+async def _exec_fit_line_lfr(
+    inp: dict,
+    python_session_id: str = "default",
+    api_key: str = "",
+) -> dict:
+    """Fit log L(line) as a function of log10(FWHM / 100 km/s).
+
+    Stage 6.3 (2026-05-20 下沉): 可选 ``arxiv_id`` 参数 — 传了就先用 LLM
+    抽测量 + ±1% cell 反查写 cache, 再走原拟合流程. extract_paper_measurements_with_llm
+    顶层 tool 已删除, 由此处统一入口.
+    """
+    arxiv_id_in = str(inp.get("arxiv_id") or "").strip()
+    extract_summary: dict | None = None
+    if arxiv_id_in:
+        extract_fields_raw = inp.get("extract_fields")
+        if isinstance(extract_fields_raw, list) and extract_fields_raw:
+            extract_fields = [str(f) for f in extract_fields_raw if f]
+        else:
+            extract_fields = None
+        extract_summary = await _extract_and_cache_paper_measurements(
+            arxiv_id_in,
+            api_key,
+            python_session_id,
+            fields=extract_fields,
+        )
+        if not extract_summary.get("success"):
+            return {
+                "success": False,
+                "tool": "fit_line_lfr",
+                "__tool_status__": "FAILED",
+                "__do_not_claim__": True,
+                "error": extract_summary.get("error", "LLM extraction failed"),
+                "error_class": extract_summary.get("error_class", "llm_extraction_failed"),
+                "arxiv_id": arxiv_id_in,
+                "extraction_summary": extract_summary,
+                "__message_to_model__": (
+                    f"fit_line_lfr cannot proceed: LLM extraction from arxiv:{arxiv_id_in} "
+                    f"failed ({extract_summary.get('error_class')}). "
+                    "If you already have a cached measurement, retry with cache_key=<key> and no arxiv_id."
+                ),
+            }
+        if not extract_summary.get("line_measurements"):
+            return {
+                "success": False,
+                "tool": "fit_line_lfr",
+                "__tool_status__": "EMPTY",
+                "__do_not_claim__": True,
+                "analysis_status": "empty",
+                "arxiv_id": arxiv_id_in,
+                "extraction_summary": extract_summary,
+                "error": (
+                    f"LLM抽到 {extract_summary.get('passed_count', 0)} passed, "
+                    f"{extract_summary.get('failed_mismatch_count', 0)} failed_mismatch, "
+                    f"{extract_summary.get('failed_no_cell_count', 0)} failed_no_cell. "
+                    "No row passed ±1% cell verification — cannot fit."
+                ),
+                "error_class": "no_passed_measurements",
+                "__message_to_model__": (
+                    f"No measurements from arxiv:{arxiv_id_in} passed ±1% cell verification. "
+                    "Consider extract_literature_tables (regex parser) on the same arxiv_id, "
+                    "or pick a different paper."
+                ),
+            }
+        if not inp.get("cache_key") and not inp.get("cache_keys"):
+            inp = {**inp, "cache_key": "latest_literature_tables"}
+
     # PART AF C2 — accept either a single cache_key OR a list of
     # cache_keys to union before fitting. Lists win when both are
     # passed (lets the AI strictly add a second survey without

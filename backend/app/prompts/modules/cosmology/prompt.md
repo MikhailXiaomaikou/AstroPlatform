@@ -94,6 +94,23 @@ fit_line_lfr(cache_keys=[...], cosmology="riess22_shoes",
 variant_label="Riess+22 cosmology variant")). That path recomputes
 log_luminosity per row from the new DL and reports dl_shift_summary.
 
+### fit_line_lfr 直接读 arXiv (2026-05-20 下沉)
+
+Stage 6.3 之后 fit_line_lfr 接受可选 `arxiv_id` 参数, 直接喂论文 ID 让 LLM
+抽测量并拟合, 不再需要先调独立的 extract_paper_measurements_with_llm:
+
+    fit_line_lfr(arxiv_id="2002.00962", line_id="[CII]")
+
+内部流程: ar5iv 拉 HTML → BeautifulSoup 解析表格 → BYOK LLM 抽 (value, table_idx,
+row_idx, cell_provenance) → backend 用 ±1% 容差反查原 cell 文本 → passed 进 cache
+→ fit. 失败的数字 (failed_mismatch / failed_no_cell) 不进 cache, 因此 AI 即使
+看到这些数字也无法引用. 仅当 user/AI 已经有 cache_key (extract_literature_tables
+跑过) 时, 才直接传 cache_key 跳过抽取步骤. 三种入口三选一:
+
+  - `arxiv_id=...`           — 单篇论文直拟合 (LLM 抽 + 反查)
+  - `cache_key=...`          — 单 cache 拟合
+  - `cache_keys=[...]`       — 多 survey UNION 拟合
+
 
 
 ## Variable star workflow (RR Lyrae / Cepheids / EB)
