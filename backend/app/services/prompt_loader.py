@@ -51,24 +51,32 @@ def _module_dir(name: str) -> Path:
 def _active_module_names(focus: str) -> list[str]:
     """Return active module names for a given ASTRO_RESEARCH_FOCUS.
 
-    Currently hardcoded:
+    Hardcoded(Karpathy 三相似才抽象 — 等第 3 个 active 模块再引入 ModuleRegistry):
       - ``cosmology`` → ``["cosmology"]``
-      - ``all`` (or any other value, including unknown/empty) → cosmology +
-        every dormant module (preserves pre-Action 6 behavior; "all" means
-        no focus gating, unknown values fall back to no-op).
-
-    M5+: when adding a second active module (e.g. ``high_z_galaxy``), add
-    a branch here. Do NOT introduce a generic ModuleRegistry until the
-    third active module — Karpathy's "three similars before abstraction".
+      - ``solar_system`` → ``["solar_system"]`` (M0 2026-05-18)
+      - ``all`` / unknown / empty → 所有模块(active + 历史 _dormant_)
     """
     if focus == "cosmology":
         return ["cosmology"]
+    if focus == "solar_system":
+        return ["solar_system"]
     # "all" / unknown / empty → load everything (no focus gating).
+    # 包含 active 模块(无 _dormant_ 前缀)和 dormant 模块(有 _dormant_ 前缀)。
     modules_dir = _PROMPTS_ROOT / "modules"
-    active = ["cosmology"]
+    seen: set[str] = set()
+    active: list[str] = []
     for sub in sorted(modules_dir.iterdir()):
-        if sub.is_dir() and sub.name.startswith("_dormant_"):
-            active.append(sub.name[len("_dormant_") :])
+        if not sub.is_dir():
+            continue
+        if sub.name.startswith("_dormant_"):
+            name = sub.name[len("_dormant_") :]
+        elif (sub / "manifest.yaml").exists():
+            name = sub.name
+        else:
+            continue
+        if name not in seen:
+            seen.add(name)
+            active.append(name)
     return active
 
 
@@ -91,9 +99,11 @@ def build_system_prompt(focus: str) -> str:
     text = base + "\n\n" + core + "\n\n" + "\n\n".join(module_texts)
 
     # Focus-specific appendix appended at the END (legacy L4 behavior:
-    # "the LLM should see this last").  Currently only cosmology has one.
-    if focus == "cosmology":
-        appendix_path = _PROMPTS_ROOT / "modules" / "cosmology" / "appendix.md"
+    # "the LLM should see this last"). Loaded for any active-module focus
+    # whose dir contains an appendix.md.  M0 2026-05-18: extended from
+    # cosmology-only to support solar_system.
+    if focus in {"cosmology", "solar_system"}:
+        appendix_path = _PROMPTS_ROOT / "modules" / focus / "appendix.md"
         if appendix_path.exists():
             text = text + "\n\n" + _read_text(appendix_path)
 

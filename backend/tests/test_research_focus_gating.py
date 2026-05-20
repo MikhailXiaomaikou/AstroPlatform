@@ -284,6 +284,53 @@ def test_focus_env_value_is_lowercased_and_stripped(
         assert out == fake_tools
 
 
+# ── focus=solar_system (M0 Commit 1, 2026-05-18) ───────────────────
+
+
+def test_focus_solar_system_filters_to_manifest_allowlist(monkeypatch) -> None:
+    """M0 Commit 1: solar_system manifest tools 是 [], 所以 solar_system focus 下
+    只有 core 工具 (run_python, run_adql, search_literature 等) 能通过过滤。
+    Cosmology 专用工具被丢弃。"""
+    chat = _reload_chat_with_focus(monkeypatch, "solar_system")
+
+    mixed = [
+        {"name": "fit_cosmology_mcmc"},          # drop (cosmology-specific)
+        {"name": "fit_isochrone"},               # drop (dormant_stellar)
+        {"name": "run_python"},                  # keep (core)
+        {"name": "search_literature"},           # keep (core)
+        {"name": "run_adql"},                    # keep (core)
+    ]
+    out = chat._filter_tools_by_research_focus(mixed)
+    names = {t["name"] for t in out}
+    assert "fit_cosmology_mcmc" not in names
+    assert "fit_isochrone" not in names
+    assert {"run_python", "search_literature", "run_adql"}.issubset(names)
+
+
+def test_focus_solar_system_preserves_tool_dict_intact(monkeypatch) -> None:
+    """Filter 不能 mutate 或 strip 字段."""
+    chat = _reload_chat_with_focus(monkeypatch, "solar_system")
+
+    rich_tool = {
+        "name": "run_python",
+        "description": "Python sandbox",
+        "input_schema": {"type": "object"},
+    }
+    out = chat._filter_tools_by_research_focus([rich_tool])
+    assert out == [rich_tool]
+
+
+def test_focus_solar_system_appends_solar_system_appendix(monkeypatch) -> None:
+    """M0 Commit 6: solar_system/appendix.md 已建. focus=solar_system 时
+    SYSTEM_PROMPT 末尾带 RESEARCH FOCUS: SOLAR-SYSTEM SCIENCE 标记,
+    不带 cosmology appendix."""
+    chat = _reload_chat_with_focus(monkeypatch, "solar_system")
+    assert "RESEARCH FOCUS: SOLAR-SYSTEM SCIENCE" in chat.SYSTEM_PROMPT
+    assert "RESEARCH FOCUS: OBSERVATIONAL COSMOLOGY" not in chat.SYSTEM_PROMPT
+    # appendix 必须提到怎么切回 all / cosmology focus
+    assert "ASTRO_RESEARCH_FOCUS" in chat.SYSTEM_PROMPT
+
+
 # ── Contract: cleanup ──────────────────────────────────────────────
 
 

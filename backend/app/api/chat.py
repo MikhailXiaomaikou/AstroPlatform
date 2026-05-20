@@ -27,14 +27,15 @@ from app.ai.model_profiles import (
 )
 from app.ai.orchestrator import orchestrator
 from app.auth import get_current_user, get_optional_user
+from app.api.auth import require_admin_any
 from app.rate_limit import limiter
 from app.models.database import get_db
 from app.models.schemas import User
+from app.services.prompt_loader import build_allowed_tools, build_system_prompt
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 SSE_PREAMBLE_PADDING_BYTES = 8192
 
 
@@ -51,21 +52,25 @@ SSE_PREAMBLE_PADDING_BYTES = 8192
 # allowlist + COSMOLOGY_FOCUS_APPENDIX appended at module init. All of that
 # lives in prompts/ now and is assembled by prompt_loader.
 
-from app.services.prompt_loader import build_allowed_tools, build_system_prompt
-
 _ASTRO_RESEARCH_FOCUS = os.getenv("ASTRO_RESEARCH_FOCUS", "cosmology").strip().lower()
+
+# Foci that trigger L1 hard tool gating.  Adding a new active module:
+# (1) 在此处加 focus 字面值, (2) prompt_loader._active_module_names 加分支,
+# (3) modules/<name>/manifest.yaml 写 tools 列表。 Karpathy 三相似才抽象 —
+# 等第 3 个 active 模块再换成通用 registry。
+_FOCUS_GATED_VALUES = frozenset({"cosmology", "solar_system"})
 
 
 def _filter_tools_by_research_focus(tools: list[dict]) -> list[dict]:
     """L1 hard tool gating per ASTRO_RESEARCH_FOCUS env.
 
-    Only ``cosmology`` triggers gating.  Any other value ("all", "",
-    "stellar", typos, …) is a no-op — preserving the original behavior
-    that only the literal ``cosmology`` opts into the filter.
+    Foci in ``_FOCUS_GATED_VALUES`` 触发 manifest-driven 工具白名单过滤。
+    其他值("all"、""、"stellar"、typo 等)无操作 — 只有 literal 的 active
+    模块名才进入过滤路径。
     """
-    if _ASTRO_RESEARCH_FOCUS != "cosmology":
+    if _ASTRO_RESEARCH_FOCUS not in _FOCUS_GATED_VALUES:
         return tools
-    allowed = build_allowed_tools("cosmology")
+    allowed = build_allowed_tools(_ASTRO_RESEARCH_FOCUS)
     return [t for t in tools if t.get("name") in allowed]
 
 
@@ -75,8 +80,8 @@ def _filter_tools_by_research_focus(tools: list[dict]) -> list[dict]:
 SYSTEM_PROMPT = build_system_prompt(_ASTRO_RESEARCH_FOCUS)
 
 # Backward-compat alias for tests that introspect the active allowlist
-# (test_research_focus_gating.py asserts ghost-tool absence).  Empty under
-# non-cosmology focus to reflect the no-op gating behavior.
+# (test_research_focus_gating.py asserts ghost-tool absence).  Only set
+# under cosmology focus to preserve the original test contract.
 if _ASTRO_RESEARCH_FOCUS == "cosmology":
     _COSMOLOGY_FOCUS_TOOL_ALLOWLIST = build_allowed_tools("cosmology")
 else:
@@ -217,8 +222,7 @@ def _provider_api_keys(context: dict | None, user: User | None) -> dict[str, str
             # Legacy fallback: the generic api_key field was historically used
             # for the primary hosted backend. Treat untyped keys as OpenAI-style.
             keys.setdefault("openai", context_key)
-    if ANTHROPIC_API_KEY and "anthropic" not in keys:
-        keys["anthropic"] = ANTHROPIC_API_KEY
+    # 不再 fallback 到平台 env ANTHROPIC_API_KEY:平台不替匿名访客付费 (BYOK)
     return keys
 
 
@@ -1633,6 +1637,16 @@ async def _execute_tool_calls(
         # MAST / lightkurve cold starts are often >45s on Render.  Keep the
         # default mode bounded, then stretch it explicitly in long mode below.
         "search_lightcurve": 90.0,
+        # ── M0 Commit 4 (2026-05-18): solar_system 工具 deadline 调整 ──
+        # Horizons 冷启动在 Render free tier 经常 >45s, 给 90s. MPC/SBDB/Sentry
+        # 单次 HTTP 调用 30s 限,加 retry/parse slack 给 60s. DAMIT 慢站 给 60s.
+        # 公式/分类工具 (HG/Afρ/NEATM/Öpik/Bus-DeMeo/Carvano) instant,默认 45s 够。
+        "fetch_horizons_ephemeris": 90.0,
+        "query_mpc_orbit": 60.0,
+        "query_sbdb_orbit": 60.0,
+        "query_sbdb_close_approaches": 60.0,
+        "query_sentry_risk": 60.0,
+        "query_damit_shape_model": 60.0,
     }
     _TOOL_DEADLINE_DEFAULT = 45.0
 
@@ -2332,7 +2346,7 @@ def _sanitize_tools_returned_nothing(reply: str) -> str:
     next_step = _user_safe_detail(next_step)
 
     parts = [
-        "I could not complete the requested measurement-table fit with the data steps that succeeded this turn."
+        "I could not complete the requested analysis with the data steps that succeeded this turn."
     ]
     if rationale:
         parts.append(rationale)
@@ -2341,7 +2355,7 @@ def _sanitize_tools_returned_nothing(reply: str) -> str:
     if next_step:
         parts.append(f"Suggested next step: {next_step}")
     parts.append(
-        "I am not reporting slope, intercept, intrinsic scatter, correlation, or p-value because no fit-ready cited measurement table was available."
+        "I am not reporting unsupported numerical conclusions because the required tool-backed data were not available."
     )
     return "\n\n".join(parts)
 
@@ -4499,7 +4513,6 @@ async def _run_agent_loop(
             validate_claims,
             build_regeneration_prompt,
             build_zero_data_qualitative_regeneration_prompt,
-            blocked_reply_text,
             blocked_reply_with_narrative,
             attach_draft_to_banner,
             zero_data_but_quantitative,
@@ -4804,6 +4817,11 @@ async def _run_agent_loop(
                 "you want to measure it, run the corresponding measurement "
                 "workflow explicitly."
             )
+            if _divider in clean_reply:
+                _banner_part, _narrative_part = clean_reply.split(_divider, 1)
+                clean_reply = _banner_part + _additional_note + _divider + _narrative_part
+            else:
+                clean_reply = clean_reply + _additional_note
             fabrication_stats["blocked"] = True
 
         elif _unsupported_cosmology_anchor_numeric_comparison(clean_reply, all_tool_results):
@@ -5158,7 +5176,6 @@ async def _run_agent_loop(
         try:
             from app.services.claim_validator import (
                 validate_claims,
-                blocked_reply_text,
                 blocked_reply_with_narrative,
             )
             fallback_validation = validate_claims(clean_reply, all_tool_results)
@@ -5319,7 +5336,6 @@ async def _run_orchestrated_chat(
     if merged_reply.strip():
         try:
             from app.services.claim_validator import (
-                blocked_reply_text,
                 blocked_reply_with_narrative,
                 attach_draft_to_banner,
                 blocked_citation_reply_text,
@@ -5422,10 +5438,9 @@ _LAST_PROMPT_DEBUG: dict[str, object] = {
 }
 
 
-@router.get("/_debug_last_prompt")
+@router.get("/_debug_last_prompt", dependencies=[Depends(require_admin_any)])
 async def debug_last_prompt(
     request: Request,
-    user: User | None = Depends(get_optional_user),
 ):
     """G7.3: return the last LLM prompt seen by the inference router.
 
@@ -5463,12 +5478,7 @@ async def ai_backend_status(
     authenticated user has stored.  Never returns the keys themselves.
     """
     configured: list[str] = []
-    if os.getenv("ANTHROPIC_API_KEY", ""):
-        configured.append("anthropic")
-    if os.getenv("OPENAI_API_KEY", ""):
-        configured.append("openai")
-    if os.getenv("DEEPSEEK_API_KEY", ""):
-        configured.append("deepseek")
+    # BYOK: 只看用户自己存的 key, 不读平台 env (env 已不参与 LLM 调用)
     if _env_truthy("LOCAL_MODEL_ENABLED") or _env_truthy("OPENAI_CLI_ENABLED"):
         configured.append("local")
 
@@ -5511,7 +5521,7 @@ async def ai_backend_status(
 async def chat_message(
     request: Request,
     req: ChatRequest,
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Send a message to the AI research agent.
@@ -5568,7 +5578,7 @@ async def chat_message(
 async def execute_action(
     action: dict,
     db: AsyncSession = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
 ):
     """Execute an action suggested by the AI assistant."""
     import asyncio

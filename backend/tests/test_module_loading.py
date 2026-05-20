@@ -166,3 +166,53 @@ def test_all_focus_includes_every_tool():
     allowed = build_allowed_tools("all")
     missing = all_tools - allowed
     assert not missing, f"focus=all dropped tools: {sorted(missing)}"
+
+
+# ── focus=solar_system (M0 Commit 1, 2026-05-18) ───────────────────
+
+
+def test_solar_system_prompt_loaded_when_focus_is_solar_system():
+    """focus=solar_system 加载 modules/solar_system/prompt.md 内容."""
+    from app.services.prompt_loader import build_system_prompt
+
+    sp = build_system_prompt("solar_system")
+    # Solar-system module prompt.md 的已知字符串 (来自 _dormant_solar_system seed):
+    assert "Solar system objects" in sp
+    # 跨模块基础设施 (core/) 仍然在
+    assert "ADQL aggregate-function semantics" in sp
+    assert "Python Code Execution" in sp
+
+
+def test_solar_system_focus_excludes_cosmology_workflow():
+    """focus=solar_system 下不该加载 cosmology 模块章节."""
+    from app.services.prompt_loader import build_system_prompt
+
+    sp = build_system_prompt("solar_system")
+    assert "COSMOLOGY PRESETS" not in sp
+    assert "Distance estimation hierarchy" not in sp
+    assert "Variable star workflow" not in sp
+
+
+def test_solar_system_allowed_tools_at_commit1_is_core_only():
+    """M0 Commit 1: manifest.yaml tools 是 [],solar_system focus 下只剩 core 工具."""
+    from app.services.prompt_loader import build_allowed_tools
+
+    tools = build_allowed_tools("solar_system")
+    # Core (来自 core/infrastructure.yaml) 必须在
+    assert "run_python" in tools
+    assert "search_literature" in tools
+    assert "run_adql" in tools
+    # Cosmology-specific 工具必须不在
+    assert "fit_cosmology_mcmc" not in tools
+    assert "run_cosmology_robustness_matrix" not in tools
+    assert "build_cosmology_likelihood" not in tools
+
+
+def test_all_focus_still_loads_solar_system_after_mv():
+    """mv _dormant_solar_system → solar_system 后, focus=all fallback 仍能
+    迭代到 solar_system 模块(active dir 也算)."""
+    from app.services.prompt_loader import build_system_prompt
+
+    sp = build_system_prompt("all")
+    assert "Solar system objects" in sp
+    assert "COSMOLOGY PRESETS" in sp  # cosmology 也在

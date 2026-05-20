@@ -1,0 +1,26 @@
+# Solar System Objects module manifest
+# 状态: active (M0 Commit 1 激活, 2026-05-18 — 从 _dormant_solar_system mv 而来).
+# 加载于 ASTRO_RESEARCH_FOCUS=solar_system.
+name: solar_system
+display: Solar System Objects (asteroids / comets / TNOs)
+status: active
+prompt_file: prompt.md
+tools:
+  # M0 Commit 4 (2026-05-18): 12 个 solar_system 专用工具(论文挖出 + 实现).
+  # 分类: 数据查询 (6) + 公式计算 (4) + 分类 (2). 每个工具的 references
+  # 在对应 schema description 和 services/solar_system_*.py docstring 里.
+  # — 数据查询 —
+  - query_mpc_orbit              # IAU MPC orbit DB
+  - fetch_horizons_ephemeris     # Giorgini+1996 (1996DPS....28.2504G)
+  - query_sbdb_orbit             # JPL SBDB 详细 orbit
+  - query_sbdb_close_approaches  # JPL CAD API
+  - query_sentry_risk            # JPL CNEOS Sentry-II (NEO 风险权威)
+  - query_damit_shape_model      # Ďurech+2010 (2010A&A...513A..46D)
+  # — 公式计算 —
+  - compute_hg_magnitude         # Bowell+1989 (1989aste.conf..524B)
+  - compute_afrho                # A'Hearn+1984 (1984AJ.....89..579A)
+  - fit_neatm_diameter_albedo    # Harris+1998 + Mainzer+2011
+  - compute_neo_collision_probability  # Öpik 1951 / Wetherill 1967 / Morbidelli+2002
+  # — 分类 —
+  - classify_asteroid_busdemeo   # DeMeo+2009 (2009Icar..202..160D)
+  - classify_asteroid_sdss_colors  # Carvano+2010 (2010A&A...510A..43C)
