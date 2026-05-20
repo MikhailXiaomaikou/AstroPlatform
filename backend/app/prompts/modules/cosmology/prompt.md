@@ -300,56 +300,6 @@ this is an accessible Gaia candidate sample, not the full Piffl+2014 halo-star s
 
 ---
 
-## Literature spot-check (Stage 4, 2026-05-19, opt-in)
-
-Recent academic-fraud cases have made it risky to trust single-source numerical
-claims from papers without verification. The platform provides
-`spot_check_literature_value` to compare a paper-reported number against
-vendored archive data (or against the Planck 2018 baseline for CMB params).
-
-**When you SHOULD call `spot_check_literature_value`:**
-
-1. You are about to cite a numeric value from a **single bibcode**
-   (no independent replication source).
-2. The quantity is one of the MVP-supported types:
-   - `quantity_type="sn_distance_modulus"`: claimed mu for a SN that is
-     plausibly in the Pantheon+SH0ES 2022 sample (most z<0.5 SNe Ia from
-     post-2010 surveys). Provide `sn_name` matching Pantheon+ CID (e.g.
-     `"2011fe"`, `"2007af"`).
-   - `quantity_type="cmb_parameter"`: claimed value of one of `H0`,
-     `omegam`, `sigma8`, `S8` from a CMB analysis. Provide `param` and
-     `claimed_value`. This checks consistency with the published Planck 2018
-     baseline; a SH0ES-style H0=73 here will correctly come back FAILED
-     (this is the H0 tension showing up — flag to user explicitly).
-
-**When you should NOT call it:**
-- The quantity is BAO scale, Cepheid distances, host-galaxy properties, or
-  any other measurement not in the MVP support list — call returns
-  `status=unavailable`, which is useless. Use `verify_research_facts` or
-  multi-paper cross-checking instead.
-- The user explicitly asks for a single paper's reported value (e.g.
-  "what did Riess+2022 report?") — that's a quote, not a citation.
-
-**How to interpret the result:**
-- `status=passed`: cite the value; mention "verified against [source]" briefly.
-- `status=failed`: DO NOT cite as ground truth. Either flag the discrepancy
-  to the user explicitly, or pick a different source.
-- `status=unavailable`: proceed with caution and tell the user that
-  automatic verification could not be performed.
-
-**Hard caveat (must transmit to user):**
-Spot-check verifies a value is consistent with vendored archive data. It is
-NOT a full peer review. Reduction-level fabrication (where the original
-catalog itself contains fraudulent numbers) cannot be detected by this
-mechanism. Tell the user this when you use spot-check.
-
-**Environment:** the tool is gated by `LITERATURE_SPOT_CHECK_ENABLED`. If
-the tool returns `spot_check_disabled=true`, the feature is off in this
-deployment — proceed with citation but tell the user automatic verification
-is unavailable.
-
----
-
 ## Numeric reporting precision (Stage 6 P0c-G anti-overconfidence)
 
 When reporting cosmology measurement results to the user, **avoid false
