@@ -8,8 +8,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-V2_AVAILABLE_CONNECTORS = frozenset({"vizier", "gaia", "simbad", "ned", "2mass", "alma"})
-AVAILABLE_ALTERNATIVES = ("vizier", "gaia", "simbad", "ned", "2mass", "alma")
+V2_AVAILABLE_CONNECTORS = frozenset(
+    {"vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc"}
+)
+# 用户面向 alternatives 列表(UNAVAILABLE banner 推荐). M0 Commit 2 加 jpl/mpc.
+AVAILABLE_ALTERNATIVES = (
+    "vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc",
+)
 
 
 class ConnectorUnavailableError(RuntimeError):

@@ -21,6 +21,8 @@ def _init():
         from app.connectors.vizier import VizierConnector
         from app.connectors.ned import NEDConnector
         from app.connectors.twomass import TwoMASSConnector
+        from app.connectors.jpl import JPLHorizonsConnector
+        from app.connectors.mpc import MPCConnector
 
         _connectors = {
             "gaia": GaiaConnector(),
@@ -29,6 +31,8 @@ def _init():
             "vizier": VizierConnector(),
             "ned": NEDConnector(),
             "2mass": TwoMASSConnector(),
+            "jpl": JPLHorizonsConnector(),
+            "mpc": MPCConnector(),
         }
 
 
@@ -36,7 +40,7 @@ CONNECTORS_KEYS = [
     "sdss", "sdss_spec", "gaia", "simbad", "vizier", "mast", "ned", "2mass",
     "chandra", "allwise", "alma", "eso", "irsa", "jwst", "lamost", "desi",
     "panstarrs", "xmm", "nvss", "first",
-    "jpl", "atnf_pulsar", "sparc", "frbstats",
+    "jpl", "mpc", "atnf_pulsar", "sparc", "frbstats",
 ]
 
 

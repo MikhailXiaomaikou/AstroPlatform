@@ -138,6 +138,110 @@
         "last_verified": "2026-04-24",
         "notes": "ALMA v2 entry covers Science Archive observation metadata via ObsCore/TAP. It does not provide derived line luminosities or FWHM measurements."
       }
+    },
+    "jpl": {
+      "match_patterns": [
+        "ssd.jpl.nasa.gov/horizons",
+        "jplhorizons",
+        "ssd-api.jpl.nasa.gov",
+        "Horizons system"
+      ],
+      "provenance": {
+        "service_key": "jpl",
+        "service_name": "JPL Horizons",
+        "article": "1996DPS....28.2504G",
+        "creator": "Giorgini et al.",
+        "publisher": "NASA Jet Propulsion Laboratory / Solar System Dynamics",
+        "publication_date": "1996-10-01",
+        "reference_url": "https://ssd.jpl.nasa.gov/horizons/",
+        "credits_page_url": "https://ssd.jpl.nasa.gov/about.html",
+        "acknowledgement_template": "This research used the JPL Horizons system (Giorgini et al. 1996, bibcode 1996DPS....28.2504G)."
+      },
+      "metadata": {
+        "last_verified": "2026-05-18",
+        "notes": "Solar-system ephemeris authority. M0 Commit 2 activation, solar_system module."
+      }
+    },
+    "mpc": {
+      "match_patterns": [
+        "minorplanetcenter.net",
+        "mpc.iau",
+        "Minor Planet Center"
+      ],
+      "provenance": {
+        "service_key": "mpc",
+        "service_name": "Minor Planet Center",
+        "creator": "IAU Minor Planet Center",
+        "publisher": "International Astronomical Union / Smithsonian Astrophysical Observatory",
+        "reference_url": "https://minorplanetcenter.net/",
+        "credits_page_url": "https://minorplanetcenter.net/iau/services/MPCConditions.html",
+        "acknowledgement_template": "This research used the IAU Minor Planet Center (MPC) for asteroid/comet designations and orbital elements."
+      },
+      "metadata": {
+        "last_verified": "2026-05-18",
+        "notes": "Official designation + osculating orbit authority. M0 Commit 2."
+      }
+    },
+    "sbdb": {
+      "match_patterns": [
+        "ssd-api.jpl.nasa.gov/sbdb.api",
+        "ssd-api.jpl.nasa.gov/cad.api",
+        "ssd.jpl.nasa.gov/sbdb",
+        "JPL Small-Body Database"
+      ],
+      "provenance": {
+        "service_key": "sbdb",
+        "service_name": "JPL Small-Body Database (SBDB)",
+        "creator": "NASA JPL Solar System Dynamics group",
+        "publisher": "NASA Jet Propulsion Laboratory",
+        "reference_url": "https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html",
+        "credits_page_url": "https://ssd.jpl.nasa.gov/about.html",
+        "acknowledgement_template": "This research used the JPL Small-Body Database (SBDB) and Close-Approach Data (CAD) APIs."
+      },
+      "metadata": {
+        "last_verified": "2026-05-18",
+        "notes": "SBDB + CAD HTTP API. Queried by solar_system ai_tools directly, not BaseConnector."
+      }
+    },
+    "sentry": {
+      "match_patterns": [
+        "ssd-api.jpl.nasa.gov/sentry.api",
+        "cneos.jpl.nasa.gov/sentry",
+        "Sentry-II"
+      ],
+      "provenance": {
+        "service_key": "sentry",
+        "service_name": "JPL CNEOS Sentry-II",
+        "creator": "JPL Solar System Dynamics group (Sentry-II, 2021)",
+        "publisher": "NASA JPL Center for Near-Earth Object Studies (CNEOS)",
+        "reference_url": "https://cneos.jpl.nasa.gov/sentry/",
+        "credits_page_url": "https://cneos.jpl.nasa.gov/sentry/faq.html",
+        "acknowledgement_template": "This research used the JPL CNEOS Sentry-II impact monitoring system (2021 onward)."
+      },
+      "metadata": {
+        "last_verified": "2026-05-18",
+        "notes": "NEO 100-year impact-risk authority, Yarkovsky-aware. Queried via HTTPS from ai_tool."
+      }
+    },
+    "damit": {
+      "match_patterns": [
+        "astro.troja.mff.cuni.cz/projects/damit",
+        "DAMIT"
+      ],
+      "provenance": {
+        "service_key": "damit",
+        "service_name": "DAMIT (Database of Asteroid Models from Inversion Techniques)",
+        "article": "2010A&A...513A..46D",
+        "creator": "Ďurech, Sidorin, Kaasalainen",
+        "publisher": "Charles University in Prague, Astronomical Institute",
+        "publication_date": "2010-04-01",
+        "reference_url": "https://astro.troja.mff.cuni.cz/projects/damit/",
+        "acknowledgement_template": "This research used the DAMIT database (Ďurech, Sidorin & Kaasalainen 2010, bibcode 2010A&A...513A..46D)."
+      },
+      "metadata": {
+        "last_verified": "2026-05-18",
+        "notes": "Asteroid 3D convex shape model repository. Queried via HTTPS from ai_tool."
+      }
     }
   }
 }
