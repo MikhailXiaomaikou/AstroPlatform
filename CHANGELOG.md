@@ -10,6 +10,28 @@ need entries unless they change user-visible behavior or research validity.
 
 ### Added
 
+- Added the **Exoplanet** research module (M0, 2026-05-20 to 2026-05-21) —
+  third active vertical after cosmology and solar_system. Reuses the 6-layer
+  template (Karpathy 三相似临界 — ModuleRegistry abstraction now eligible).
+  - Activated `backend/app/prompts/modules/exoplanet/` (manifest + 91-line prompt
+    + appendix) with `status: active`; selected via `ASTRO_RESEARCH_FOCUS=exoplanet`.
+  - Added 8 LLM-callable exoplanet tools in `ai_tools_exoplanet.py`:
+    `query_exoplanet_archive`, `query_confirmed_planets`, `fetch_tess_lightcurve`,
+    `fit_transit` (trapezoidal Nelder-Mead, fast; recommends batman/pytransit
+    downstream for limb-darkened publication fits), `compute_equilibrium_temperature`,
+    `compute_transit_depth`, `compute_planet_density`, `query_tess_target_list`.
+    Each tool carries inline literature references (Mandel & Agol 2002,
+    Seager & Mallén-Ornelas 2003, Akeson+ 2013 NASA Exoplanet Archive,
+    Ricker+ 2015 TESS, Stassun+ 2019 TIC v8).
+  - Added pure-function science kernels under `services/exoplanet_physical.py`
+    and `services/exoplanet_transit.py`.
+  - Promoted `nasa_exoplanet_archive` connector to provenance-v2 active with
+    pscomppars composite-parameters TAP wrapper via astroquery.ipac.nexsci.
+- Added 4 **generic chat-result Panel components** under
+  `frontend/src/components/viz/`: `TablePanel`, `PlotlyXYPanel`, `WarningCard`,
+  `BarChartPanel`. These replace per-tool dedicated panels — 20 solar_system +
+  exoplanet tools route to these four panels by output shape (Karpathy
+  三相似才抽象).
 - Added the **Solar System** research module (M0, 2026-05-18 to 2026-05-20):
   - Activated `backend/app/prompts/modules/solar_system/` (manifest + prompt + appendix) with `status: active`; selected via `ASTRO_RESEARCH_FOCUS=solar_system`.
   - Added 12 LLM-callable solar-system tools in `ai_tools_solar_system.py`:
@@ -84,6 +106,14 @@ need entries unless they change user-visible behavior or research validity.
 
 ### Fixed
 
+- **A2 Apophis blind-test case prompt rewrite (2026-05-21)**: explicit
+  two-step instructions for `fetch_horizons_ephemeris` (ephemeris geometry)
+  + `query_sentry_risk` (impact monitoring status). The previous wording
+  caused over-conservative honest abstention in round-2 (LLM declined to
+  call any tool); the new prompt makes the workflow unambiguous. Also
+  relaxes `expect_pass` to accept the case where Sentry-II has removed
+  Apophis from its risk table (factual reporting is valid, not "the
+  number must be > 0").
 - **Solar System M0 round-2 blind-test fixes (2026-05-20)** — fixes uncovered by
   a 20-case end-to-end blind test of the new module:
   - **P0 cross-module: agent-loop circuit breaker now covers hard-reject
