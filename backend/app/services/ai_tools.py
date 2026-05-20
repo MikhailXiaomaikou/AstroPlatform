@@ -411,6 +411,46 @@ TOOLS = [
         },
     },
     {
+        # Stage 6.3 升级 (2026-05-20): LLM hybrid 抽测量数据 + ±1% 反查.
+        # 现有 `extract_literature_tables` 是 monolithic regex parser, 跨
+        # paper schema 立即掉链子. 本工具走 LLM 看 HTML 给数字 + backend
+        # 反查 cell 文字 ±1% 不一致就拒. spike (commit 299cd10) 已验证
+        # ALPINE 2002.00962 达 P=74/74, M=0, F=0.
+        "name": "extract_paper_measurements_with_llm",
+        "description": (
+            "LLM-based fallback for `extract_literature_tables` when the "
+            "deterministic regex parser returns 0 line_measurements (e.g. "
+            "non-standard column names across REBELS / Capak / Bothwell / "
+            "Hodge surveys). Sends the paper's filtered HTML tables to your "
+            "BYOK Anthropic LLM and asks it to extract measurements as "
+            "structured JSON; backend then reverse-verifies each numeric "
+            "value against the original table cell text (±1% tolerance) "
+            "before accepting. Any number that fails reverse-verification "
+            "is REJECTED and excluded from the cache — the tool cannot "
+            "launder fabricated measurements. Output is written to the "
+            "same session-scoped `latest_literature_tables:<sid>` cache as "
+            "extract_literature_tables, so fit_line_lfr can read it directly."
+        ),
+        "input_schema": {
+            "type": "object",
+            "required": ["arxiv_id"],
+            "properties": {
+                "arxiv_id": {
+                    "type": "string",
+                    "description": "arXiv ID, e.g. '2002.00962' or 'arXiv:2002.00962'.",
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Fields to extract. Default: "
+                        "['source_name', 'fwhm_km_s', 'log_luminosity', 'z']."
+                    ),
+                },
+            },
+        },
+    },
+    {
         "name": "get_last_search_results",
         "description": (
             "Retrieve the full list of the user's most recent search results "
@@ -2251,6 +2291,13 @@ async def _execute_tool_inner(
             # Stage 6 P0c-C (2026-05-19): hard 屏障 — LLM 必须调它分类 paper,
             # 否则 claim_validator.unclassified_literature_violations 会 block reply.
             return await _exec_classify_literature_relevance(tool_input, python_session_id)
+        elif tool_name == "extract_paper_measurements_with_llm":
+            # Stage 6.3 升级 (2026-05-20): LLM hybrid 抽测量数据 + ±1% 反查.
+            # 不接 hard-gate, 因为 unverified 数字本身就不进 cache → 现有
+            # claim_validator.validate_claims 自动 reject AI 引用未存数字.
+            return await _exec_extract_paper_measurements_with_llm(
+                tool_input, api_key, python_session_id,
+            )
         elif tool_name == "extract_literature_tables":
             return await _exec_extract_literature_tables(
                 tool_input, python_session_id,
@@ -4084,6 +4131,159 @@ async def _exec_classify_literature_relevance(inp: dict, python_session_id: str 
             "off_topic": off_topic,
             "total": len(cleaned),
         },
+        "__message_to_model__": msg,
+    }
+
+
+async def _exec_extract_paper_measurements_with_llm(
+    inp: dict,
+    api_key: str,
+    python_session_id: str = "default",
+) -> dict:
+    """Stage 6.3 升级 (2026-05-20): LLM hybrid 抽测量数据 + ±1% 反查.
+
+    spike module `llm_paper_extractor.extract_with_llm_and_verify` 提供核心
+    逻辑 (fetch HTML / parse tables / score+filter / LLM call / cell ±1%
+    反查), 本 tool 是 async dispatch wrapper:
+
+      1. 复用 spike module 跑 extract_with_llm_and_verify
+      2. 把 passed records 转成 fit_line_lfr 兼容的 schema, 写
+         session-scoped `latest_literature_tables:<sid>` cache (跟
+         extract_literature_tables 同 cache_key, 让 fit_line_lfr 自然读到)
+      3. failed_mismatch / failed_no_cell 不进 cache, 只 surface 给 LLM
+         作 warning. 这样下游 claim_validator 看不到 unverified 数字,
+         自动 reject AI 引用.
+    """
+    arxiv_id = str(inp.get("arxiv_id") or "").strip()
+    if not arxiv_id:
+        return {
+            "success": False,
+            "error": "extract_paper_measurements_with_llm requires arxiv_id",
+            "error_class": "missing_argument",
+            "argument": "arxiv_id",
+        }
+    if not api_key:
+        return {
+            "success": False,
+            "error": (
+                "extract_paper_measurements_with_llm requires a Claude API key. "
+                "Configure your Anthropic key in /account (BYOK)."
+            ),
+            "error_class": "missing_api_key",
+        }
+    fields_raw = inp.get("fields")
+    if isinstance(fields_raw, list) and fields_raw:
+        fields = [str(f) for f in fields_raw if f]
+    else:
+        fields = ["source_name", "fwhm_km_s", "log_luminosity", "z"]
+
+    try:
+        from app.services.llm_paper_extractor import extract_with_llm_and_verify
+        loop = asyncio.get_running_loop()
+        records = await loop.run_in_executor(
+            None,
+            lambda: extract_with_llm_and_verify(arxiv_id, fields, api_key),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"LLM extraction failed: {exc}",
+            "error_class": "llm_extraction_failed",
+            "arxiv_id": arxiv_id,
+        }
+
+    passed = [r for r in records if r.validation_status == "passed"]
+    failed_mismatch = [r for r in records if r.validation_status == "failed_mismatch"]
+    failed_no_cell = [r for r in records if r.validation_status == "failed_no_cell"]
+
+    # 转成 fit_line_lfr 期望的 row schema (跟 extract_literature_tables 同源)
+    cleaned_arxiv = arxiv_id.replace("arXiv:", "").replace("arxiv:", "").strip()
+    bibcode = f"arXiv:{cleaned_arxiv}"
+    line_measurements = []
+    for r in passed:
+        row = {
+            "source_name": r.source_name,
+            "fwhm_km_s": r.fwhm_km_s,
+            "log_luminosity": r.log_luminosity,
+            "z": r.z,
+            "z_line": r.z,
+            "bibcode": bibcode,
+            "arxiv_id": cleaned_arxiv,
+            "source_url": f"https://arxiv.org/abs/{cleaned_arxiv}",
+            "extraction_method": "llm_with_cell_reverify",
+            "cell_provenance": r.cell_provenance,
+            "table_idx": r.table_idx,
+            "row_idx": r.row_idx,
+            "is_lensed": False,
+            "mu_lens": None,
+            "fwhm_err_km_s": None,
+            "log_luminosity_err": None,
+            "source_cosmology": None,
+        }
+        line_measurements.append(row)
+
+    cache_key = (
+        _session_cache_key("latest_literature_tables", python_session_id)
+        or "latest_literature_tables"
+    )
+    cache_payload = {
+        "arxiv_id": cleaned_arxiv,
+        "bibcode": bibcode,
+        "cache_key": cache_key,
+        "line_measurements": line_measurements,
+        "extraction_method": "llm_with_cell_reverify",
+        "tables": [],
+    }
+    if line_measurements:
+        store_search_results(cache_key, cache_payload)
+        # 跟 _exec_extract_literature_tables 一致, 也广播到 raw key 让
+        # fit_line_lfr default cache_key=latest_literature_tables fallback work
+        if cache_key != "latest_literature_tables":
+            store_search_results("latest_literature_tables", cache_payload)
+
+    msg = (
+        f"LLM extraction + ±1% cell reverify: "
+        f"{len(passed)} passed (written to cache), "
+        f"{len(failed_mismatch)} failed_mismatch (REJECTED, do not cite), "
+        f"{len(failed_no_cell)} failed_no_cell (REJECTED, do not cite). "
+    )
+    if failed_mismatch or failed_no_cell:
+        msg += (
+            "REJECTED rows have validation_status != 'passed' and are NOT in "
+            "the line_measurements cache. You MUST NOT quote any number from "
+            "rejected rows — they did not pass the ±1% cell verification. "
+        )
+    if not passed:
+        msg += (
+            "No measurements passed verification. The paper may not contain "
+            "the requested fields in its HTML tables, or table structure is "
+            "atypical. Consider extract_literature_tables (regex parser), "
+            "VizieR catalog lookup, or asking the user to point at a specific "
+            "table number / companion paper."
+        )
+    else:
+        msg += (
+            f"Cache key for fit_line_lfr: {cache_key}. "
+            "Only the passed rows are citable downstream."
+        )
+
+    return {
+        "success": True,
+        "arxiv_id": cleaned_arxiv,
+        "bibcode": bibcode,
+        "cache_key": cache_key,
+        "line_measurements": line_measurements,
+        "passed_count": len(passed),
+        "failed_mismatch_count": len(failed_mismatch),
+        "failed_no_cell_count": len(failed_no_cell),
+        "rejected_rows": [
+            {
+                "source_name": r.source_name,
+                "validation_status": r.validation_status,
+                "validation_notes": r.validation_notes,
+            }
+            for r in failed_mismatch + failed_no_cell
+        ],
         "__message_to_model__": msg,
     }
 

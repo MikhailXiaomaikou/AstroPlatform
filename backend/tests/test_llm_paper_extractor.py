@@ -405,3 +405,163 @@ def test_extracted_measurement_to_dict():
     assert d["source_name"] == "X"
     assert d["validation_status"] == "passed"
     assert d["cell_provenance"] == {"z": "5.0"}
+
+
+# ── tool integration: _exec_extract_paper_measurements_with_llm ──
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_writes_passed_rows_to_session_cache(monkeypatch):
+    """Stage 6.3 升级: passed records 转成 fit_line_lfr 兼容 row schema +
+    写入 session-scoped latest_literature_tables cache."""
+    import asyncio as _asyncio  # noqa: F401
+    from app.services import ai_tools
+
+    fake_records = [
+        ExtractedMeasurement(
+            source_name="DEIMOS_873756",
+            fwhm_km_s=526.0,
+            log_luminosity=9.56,
+            z=4.5457,
+            table_idx=25,
+            row_idx=2,
+            cell_provenance={"fwhm_km_s": "526±13", "z": "4.5457"},
+            validation_status="passed",
+            validation_notes=["all matched"],
+        ),
+        ExtractedMeasurement(
+            source_name="FabricatedSource",
+            fwhm_km_s=999.0,
+            log_luminosity=None,
+            z=None,
+            table_idx=25,
+            row_idx=99,
+            cell_provenance={},
+            validation_status="failed_mismatch",
+            validation_notes=["fwhm: no cell number within 1%"],
+        ),
+    ]
+
+    stored: dict[str, Any] = {}
+
+    def fake_store(key, value):
+        stored[key] = value
+
+    monkeypatch.setattr(
+        "app.services.llm_paper_extractor.extract_with_llm_and_verify",
+        lambda arxiv_id, fields, api_key: fake_records,
+    )
+    monkeypatch.setattr(ai_tools, "store_search_results", fake_store)
+
+    out = await ai_tools._exec_extract_paper_measurements_with_llm(
+        {"arxiv_id": "2002.00962"},
+        api_key="sk-ant-fake",
+        python_session_id="sid_abc",
+    )
+    assert out["success"] is True
+    assert out["passed_count"] == 1
+    assert out["failed_mismatch_count"] == 1
+    assert out["failed_no_cell_count"] == 0
+    # 只有 passed 进 cache
+    assert len(out["line_measurements"]) == 1
+    assert out["line_measurements"][0]["source_name"] == "DEIMOS_873756"
+    # session-scoped key 写入
+    assert "latest_literature_tables:sid_abc" in stored
+    cached = stored["latest_literature_tables:sid_abc"]
+    assert len(cached["line_measurements"]) == 1
+    # extraction_method 标记可追踪
+    assert cached["line_measurements"][0]["extraction_method"] == "llm_with_cell_reverify"
+    # rejected 仍 surface 在 result 给 LLM (warn) 但不进 cache
+    assert any(r["source_name"] == "FabricatedSource" for r in out["rejected_rows"])
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_returns_error_on_missing_api_key():
+    from app.services import ai_tools
+
+    out = await ai_tools._exec_extract_paper_measurements_with_llm(
+        {"arxiv_id": "2002.00962"},
+        api_key="",
+        python_session_id="sid",
+    )
+    assert out["success"] is False
+    assert out["error_class"] == "missing_api_key"
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_returns_error_on_missing_arxiv_id():
+    from app.services import ai_tools
+
+    out = await ai_tools._exec_extract_paper_measurements_with_llm(
+        {},
+        api_key="sk-ant-fake",
+        python_session_id="sid",
+    )
+    assert out["success"] is False
+    assert out["error_class"] == "missing_argument"
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_handles_zero_passed(monkeypatch):
+    """LLM 全编 → 0 passed, cache 不写, message_to_model 提示考虑 regex/VizieR."""
+    from app.services import ai_tools
+
+    fake_records = [
+        ExtractedMeasurement(
+            source_name="Phantom",
+            fwhm_km_s=999.0,
+            log_luminosity=None,
+            z=None,
+            table_idx=0,
+            row_idx=99,
+            cell_provenance={},
+            validation_status="failed_no_cell",
+            validation_notes=["out of range"],
+        ),
+    ]
+    stored: dict[str, Any] = {}
+    monkeypatch.setattr(
+        "app.services.llm_paper_extractor.extract_with_llm_and_verify",
+        lambda arxiv_id, fields, api_key: fake_records,
+    )
+    monkeypatch.setattr(ai_tools, "store_search_results", lambda k, v: stored.setdefault(k, v))
+
+    out = await ai_tools._exec_extract_paper_measurements_with_llm(
+        {"arxiv_id": "0000.0000"},
+        api_key="sk-ant-fake",
+        python_session_id="sid",
+    )
+    assert out["success"] is True
+    assert out["passed_count"] == 0
+    assert out["line_measurements"] == []
+    # 0 passed 不写 cache
+    assert stored == {}
+    # message_to_model 应该建议替代方案
+    assert "VizieR" in out["__message_to_model__"] or "regex" in out["__message_to_model__"]
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_propagates_extraction_exception(monkeypatch):
+    """spike module 抛异常 (e.g. HTTP timeout) → tool 返 error_class."""
+    from app.services import ai_tools
+
+    def boom(arxiv_id, fields, api_key):
+        raise RuntimeError("network timeout to ar5iv")
+
+    monkeypatch.setattr(
+        "app.services.llm_paper_extractor.extract_with_llm_and_verify",
+        boom,
+    )
+
+    out = await ai_tools._exec_extract_paper_measurements_with_llm(
+        {"arxiv_id": "2002.00962"},
+        api_key="sk-ant-fake",
+        python_session_id="sid",
+    )
+    assert out["success"] is False
+    assert out["error_class"] == "llm_extraction_failed"
+    assert "network timeout" in out["error"]
+
+
+# 让顶部 Any 可用 (tool integration tests above 用 dict[str, Any])
+from typing import Any  # noqa: E402
