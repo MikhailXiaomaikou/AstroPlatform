@@ -10,6 +10,30 @@ need entries unless they change user-visible behavior or research validity.
 
 ### Added
 
+- Added the **Solar System** research module (M0, 2026-05-18 to 2026-05-20):
+  - Activated `backend/app/prompts/modules/solar_system/` (manifest + prompt + appendix) with `status: active`; selected via `ASTRO_RESEARCH_FOCUS=solar_system`.
+  - Added 12 LLM-callable solar-system tools in `ai_tools_solar_system.py`:
+    `query_mpc_orbit`, `fetch_horizons_ephemeris`, `query_sbdb_orbit`,
+    `query_sbdb_close_approaches`, `query_sentry_risk`,
+    `query_damit_shape_model`, `compute_hg_magnitude`, `compute_afrho`,
+    `fit_neatm_diameter_albedo`, `compute_neo_collision_probability`,
+    `classify_asteroid_busdemeo`, `classify_asteroid_sdss_colors`. Each tool
+    carries inline literature references (Bowell+1989, A'Hearn+1984,
+    Harris 1998 + Mainzer+2011, Öpik 1951 / Wetherill 1967 / Morbidelli+2002,
+    DeMeo+2009, Carvano+2010, Ďurech+2010, Giorgini+1996).
+  - Added pure-function science kernels under
+    `services/solar_system_dynamics.py`, `solar_system_phot.py`,
+    `solar_system_taxonomy.py`, `solar_system_thermo.py`.
+  - Promoted JPL Horizons (`jpl`) and IAU Minor Planet Center (`mpc`)
+    connectors to provenance-v2 active and added their provenance entries.
+- Introduced **modular prompt + focus-gate architecture** (M1):
+  - New three-layer prompt tree under `backend/app/prompts/`:
+    `base.md` + `core/*.md` (cross-cutting rules) +
+    `modules/<name>/{manifest.yaml, prompt.md, appendix.md}`.
+    2 active modules (`cosmology`, `solar_system`) + 13 dormant modules.
+  - New `services/prompt_loader.py` assembles the SYSTEM_PROMPT and the
+    per-focus tool allowlist; `api/chat.py` `_filter_tools_by_research_focus`
+    enforces L1 hard tool gating before tools reach the LLM.
 - Added Research Mode v1 for observational cosmology: `plan_research_program`
   creates a structured research DAG, `run_research_matrix` executes runnable
   compressed-likelihood cells while preserving config-only gaps,
@@ -58,6 +82,41 @@ need entries unless they change user-visible behavior or research validity.
   relevant to the current cosmology prompt instead of always showing the full
   registry.
 
+### Fixed
+
+- **Solar System M0 round-2 blind-test fixes (2026-05-20)** — fixes uncovered by
+  a 20-case end-to-end blind test of the new module:
+  - **P0 cross-module: agent-loop circuit breaker now covers hard-reject
+    error_class.** `chat.py:_run_agent_loop` G3.4 mechanism extended:
+    `_DATA_FETCH_TOOLS` now includes the 6 solar-system data-fetch tools
+    (`query_mpc_orbit`, `fetch_horizons_ephemeris`, `query_sbdb_orbit`,
+    `query_sbdb_close_approaches`, `query_sentry_risk`,
+    `query_damit_shape_model`); previously they sat outside the disable gate
+    and could be retried indefinitely. Added `_HARD_REJECT_ERROR_CLASSES =
+    {"range_too_large", "missing_argument", "invalid_argument"}` short-circuit
+    so soft/hard classification no longer misclassifies local tool rejections
+    as soft via a `"too large"` substring match. This is a platform-wide
+    safety improvement, not just solar-system.
+  - **P1: A4 NEATM blind-test case now physically self-consistent.** Swapped
+    `(1) Ceres` (12 μm 100 Jy + r=2.8 / Δ=2.0 forward-modeled to D≈423 km, not
+    Ceres' real 940 km) for `(433) Eros` (12 μm 15 Jy + r=1.13 / Δ=0.46
+    forward-modeled to D=16.7 km / p_V=0.22, matching Eros' real
+    D≈16.84 km / p_V≈0.25).
+  - **P2: MPC connector designation handling.** Added
+    `_normalize_mpc_designations()` to expand input like `"(3200) Phaethon"`
+    into multiple candidates (`"3200"`, `"Phaethon"`, `"(3200) Phaethon"`);
+    `_query_mpc` now iterates variants × `target_type ∈ {asteroid, comet}`
+    instead of issuing a single literal query. Provisional designations like
+    `"1983 TB"` / `"2024 YR4"` are preserved intact.
+  - **P3: Carvano+ 2010 SDSS classifier calibration.** Replaced previously
+    inaccurate class centers (notably V class `r-i = -0.05`, which caused
+    Vesta to be misclassified as O) with paper-accurate values
+    (V class `r-i = -0.40`, reflecting the strong 1 μm absorption signature)
+    plus per-color std fields for each class. Switched the scorer from
+    Euclidean nearest-center to χ² (Mahalanobis-like, diagonal covariance),
+    keeping `distance` / `all_distances` as backward-compat fields.
+    Verified against Vesta / Bennu / Itokawa / Trojan prototypes.
+
 ### Changed
 
 - Research-style observational-cosmology prompts are now routed through a
@@ -98,6 +157,10 @@ need entries unless they change user-visible behavior or research validity.
   their public files directly.
 - Updated README and architecture documentation to reflect the expanded
   data-product coverage for DESI, Pantheon+, and Planck.
+- Removed 18 shell tool specs that had no dispatch path (M2) and 4 dead
+  frontend pages with their pipeline node components (M3), so the tool
+  catalog and page surface match what the agent loop and router actually
+  execute.
 
 ### Guardrails
 
