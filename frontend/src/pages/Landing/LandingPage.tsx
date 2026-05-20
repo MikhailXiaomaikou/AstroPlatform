@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useI18n } from "../../i18n";
+import { getBackendConfig } from "../../api/config";
 import CommentSection from "./CommentSection";
 
 /**
@@ -75,13 +77,25 @@ const TOC: TocEntry[] = [
 export default function LandingPage() {
   const navigate = useNavigate();
   const { t } = useI18n();
+  // M0 Commit 6 (2026-05-18): 根据 backend focus 切换 hero 文案. cosmology 是默认,
+  // solar_system 用 .solar_system 后缀键. 未知 focus / fetch 失败 → cosmology 默认.
+  const [backendFocus, setBackendFocus] = useState<string>("cosmology");
+  useEffect(() => {
+    getBackendConfig()
+      .then((cfg) => setBackendFocus(cfg.focus || "cosmology"))
+      .catch(() => {});
+  }, []);
+  const eyebrowKey =
+    backendFocus === "solar_system" ? "home.eyebrow.solar_system" : "home.eyebrow";
+  const titleKey =
+    backendFocus === "solar_system" ? "home.title.solar_system" : "home.title";
 
   return (
     <div className="journal-page journal-home">
       {/* Hero */}
       <section className="hero">
-        <div className="hero-eyebrow">{t("home.eyebrow")}</div>
-        <h1 className="hero-title">{t("home.title")}</h1>
+        <div className="hero-eyebrow">{t(eyebrowKey)}</div>
+        <h1 className="hero-title">{t(titleKey)}</h1>
         <div className="hero-subtitle">{t("home.subtitle")}</div>
         <p className="hero-lead">{t("home.lead")}</p>
         <div className="hero-cta">
