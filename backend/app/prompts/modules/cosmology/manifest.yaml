@@ -6,11 +6,11 @@ status: active
 prompt_file: prompt.md
 
 # Tools loaded for this module = core (via core/infrastructure.yaml)
-#                              + cosmology-specific (23)
-#                              + overlap (15)
-# Total: 20 + 23 + 15 = 58 visible tools.
+#                              + cosmology-specific (21)
+#                              + overlap (17, shared with N+1 modules)
+# Total: 20 + 21 + 17 = 58 visible tools.
 tools:
-  # ── cosmology-specific (23) ──
+  # ── cosmology-specific (21) ──
   - build_cosmology_likelihood
   - build_cosmology_robustness_matrix
   - build_evidence_graph
@@ -33,13 +33,13 @@ tools:
   - run_nested_sampler
   - run_research_matrix
   # spot_check_literature_value 已删除 (2026-05-20): cosmology 真实 H0/σ8/S8 张力会被 ±3σ 误报为论文造假, 误用 > 用处
-  - classify_literature_relevance  # Stage 6 P0c-C (2026-05-19): hard-gate 二筛升级独立工具
-  # extract_paper_measurements_with_llm 已下沉到 fit_line_lfr (2026-05-20): 现在 fit_line_lfr 接受 arxiv_id, 内部自动 LLM 抽测量 + ±1% 反查
-  - verify_research_facts
-  # ── overlap (15) — shared with future active modules ──
+  # extract_paper_measurements_with_llm 已下沉到 fit_line_lfr (2026-05-20): fit_line_lfr 接受 arxiv_id, 内部自动 LLM 抽测量 + ±1% 反查
+  # classify_literature_relevance / verify_research_facts 已挪到 overlap (2026-05-20): literature 防造假层 focus-agnostic, N+1 模块也用
+  # ── overlap (17) — shared with future active modules ──
   - analyze_cross_wavelength
   - analyze_spectrum
   - analyze_spectrum_pro
+  - classify_literature_relevance  # Stage 6 P0c-C: hard-gate 二筛, focus-agnostic 防造假
   - classify_transient
   - compute_galaxy_sfr
   - generate_proposal
@@ -49,6 +49,7 @@ tools:
   - query_transients
   - research_workflow
   - search_lightcurve
+  - verify_research_facts  # focus-agnostic 事实核验, N+1 模块也用
 datasets:
   # TBD M1 Phase 3 — pull from app.services.cosmology_likelihoods DATASET_REGISTRY.
   # Will include: desi_dr1_bao, planck2018_compressed, act_dr6, pantheon_plus,
