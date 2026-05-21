@@ -39,12 +39,23 @@ MODEL_PARAMETERS: dict[str, tuple[str, ...]] = {
 SYNC_SAMPLE_BUDGET = 80_000
 ESS_PUBLICATION_THRESHOLD = 400.0
 RHAT_PUBLICATION_THRESHOLD = 1.05
+# Three-tier publication_ready (2026-05-20): chains with min ESS in
+# [ESS_EXPLORATORY_THRESHOLD, ESS_PUBLICATION_THRESHOLD) and max R-hat in
+# (RHAT_PUBLICATION_THRESHOLD, RHAT_EXPLORATORY_THRESHOLD] are tagged
+# EXPLORATORY rather than blocked: the posterior may be discussed in chat
+# but cannot be cited as a published constraint.
+ESS_EXPLORATORY_THRESHOLD = 100.0
+RHAT_EXPLORATORY_THRESHOLD = 1.10
 
 _JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = threading.Lock()
 _JOB_TTL_SECONDS = 3600
 _MAX_JOBS = 64
-CLAIMABLE_INPUT_ORIGINS = frozenset({"cached_real"})
+# user_uploaded entries come from FITS upload / user_supplied data_source
+# tags with full audit log (hash + upload time + uploader). Treated as
+# claimable since the synthetic-fallback defences (subprocess sandbox +
+# synthetic_code_detector) already gate the upload path.
+CLAIMABLE_INPUT_ORIGINS = frozenset({"cached_real", "user_uploaded"})
 
 
 @dataclass(frozen=True)
@@ -248,7 +259,31 @@ def fit_cosmology_emcee(
     parameter_summary = diagnostics["parameters"]
     diagnostics_publication_ready = bool(diagnostics.get("publication_ready"))
     input_is_claimable = input_data_origin in CLAIMABLE_INPUT_ORIGINS
-    publication_ready = diagnostics_publication_ready and input_is_claimable
+
+    # Three-tier publication_ready (2026-05-20): publication / exploratory / blocked.
+    # ESS+R-hat extracted from parameter_summary["<param>"]["ess_bulk"/"rhat"];
+    # values are None when the ArviZ pipeline failed (diagnostics_unavailable).
+    ess_bulks = [p.get("ess_bulk") for p in parameter_summary.values()]
+    rhats = [p.get("rhat") for p in parameter_summary.values()]
+    valid_ess = [e for e in ess_bulks if isinstance(e, (int, float))]
+    valid_rhats = [r for r in rhats if isinstance(r, (int, float))]
+    min_ess = min(valid_ess) if valid_ess else None
+    max_rhat = max(valid_rhats) if valid_rhats else None
+    diagnostics_available = min_ess is not None and max_rhat is not None
+
+    if diagnostics_publication_ready and input_is_claimable:
+        chain_tier = "publication"
+    elif (
+        diagnostics_available
+        and min_ess >= ESS_EXPLORATORY_THRESHOLD
+        and max_rhat <= RHAT_EXPLORATORY_THRESHOLD
+        and input_is_claimable
+    ):
+        chain_tier = "exploratory"
+    else:
+        chain_tier = "blocked"
+
+    publication_ready = chain_tier == "publication"
 
     result: dict[str, Any] = {
         "success": True,
@@ -259,6 +294,7 @@ def fit_cosmology_emcee(
         "posterior_summary": parameter_summary,
         "chain_diagnostics": diagnostics,
         "publication_ready": publication_ready,
+        "chain_tier": chain_tier,
         "n_rows": len(dataset.rows),
         "n_walkers": n_walkers,
         "n_steps": n_steps,
@@ -277,7 +313,24 @@ def fit_cosmology_emcee(
     result["provenance"] = {
         "cosmology": _cosmology_provenance(result),
     }
-    if not publication_ready:
+    if chain_tier == "exploratory":
+        result["__tool_status__"] = "EXPLORATORY"
+        result["analysis_status"] = "EXPLORATORY"
+        warning = (
+            f"Chain min ESS={min_ess:.0f} (publication threshold "
+            f"{ESS_PUBLICATION_THRESHOLD:.0f}), max R-hat={max_rhat:.3f}. "
+            "Posterior median and 1-sigma range may be discussed in conversation "
+            "as exploratory, but MUST NOT be cited as a published constraint and "
+            "MUST NOT be added to the bibcode pool."
+        )
+        result["__exploratory_warning__"] = warning
+        result["__message_to_model__"] = (
+            warning
+            + " When reporting numbers, prefix with 'exploratory' and refuse "
+            "phrasings like 'we find H0 =' or 'our constraint is'."
+        )
+        result["warnings"] = [warning]
+    elif chain_tier == "blocked":
         result["__tool_status__"] = "PARTIAL"
         result["analysis_status"] = "PARTIAL"
         result["__do_not_claim__"] = True
@@ -288,8 +341,14 @@ def fit_cosmology_emcee(
                 "because the model could have supplied remembered or synthetic tables. "
                 "Re-run from a platform cache_key backed by a real data/literature tool."
             )
+        elif not diagnostics_available:
+            reason = "MCMC diagnostics unavailable (ArviZ pipeline failed); chain cannot be verified."
         else:
-            reason = "MCMC diagnostics did not meet ESS/R-hat publication thresholds."
+            reason = (
+                f"MCMC chain min ESS={min_ess:.0f}, max R-hat={max_rhat:.3f}; "
+                f"below exploratory floor (ESS>={ESS_EXPLORATORY_THRESHOLD:.0f}, "
+                f"R-hat<={RHAT_EXPLORATORY_THRESHOLD})."
+            )
         result["__message_to_model__"] = (
             reason
             + " Do not cite H0, Om0, w0, wa, sigma8, HDI, or posterior constraints "
