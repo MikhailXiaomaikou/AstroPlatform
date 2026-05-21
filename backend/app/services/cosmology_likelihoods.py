@@ -830,8 +830,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             approximation="Scalar Gaussian H0 prior; not an Ωm/S8 constraint.",
         ),
     ),
-    # ── PART AI follow-up: spec papers #12-#15 (除 SH0ES 之外的 4 个 H0 阶梯
-    # alternates + SPT-3G CMB) ──────────────────────────────────────────
+    # ── PART AI follow-up: spec papers #12-#15 (4 H0-ladder alternates besides
+    # SH0ES + SPT-3G CMB) ──────────────────────────────────────────────────
     "trgb_h0_freedman19": CosmologyDatasetEntry(
         key="trgb_h0_freedman19",
         display_name="TRGB H0 prior (Freedman+ 2019)",
@@ -1276,6 +1276,12 @@ RUNNER_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
     # the importance sampler proposal efficiency from collapsing; the data
     # constrains M_B to ~0.03 mag, so ±0.5 is already very generous.
     "M_B": (-19.7, -18.8),
+    # Dark-energy equation of state. Bounds chosen to keep numerical
+    # stability of (1+z)^(3(1+w0+wa)) over z ≤ 3 while admitting the
+    # phantom-crossing region that DESI DR1 hinted at.
+    "w": (-2.5, -0.2),
+    "w0": (-2.5, -0.2),
+    "wa": (-3.0, 2.0),
 }
 
 
@@ -1471,11 +1477,15 @@ def run_likelihood_chain(
         warnings.append("Posterior mean outside configured prior bounds for: " + ", ".join(prior_violations))
 
     publication_ready = not invalid_specs and not prior_violations
+    # Compressed-Gaussian analytic path is binary by construction: the
+    # posterior is closed-form so there is no "exploratory" intermediate.
+    chain_tier = "publication" if publication_ready else "blocked"
     result: dict[str, Any] = {
         "success": True,
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
         "analysis_status": "COMPRESSED_CHAIN_READY" if publication_ready else "PARTIAL",
         "publication_ready": publication_ready,
+        "chain_tier": chain_tier,
         "claim_scope": "compressed_likelihood_preliminary",
         "compressed_likelihood_preliminary": True,
         "model": model_key,
@@ -1664,15 +1674,17 @@ def _run_sampling_likelihood_chain(
     predictions, while still treating full desilike/Cobaya as the higher-fidelity
     second-stage likelihood.
     """
-    if model_key != "lcdm":
+    # Curvature + neutrino-mass extensions still require external CAMB; the
+    # phase-1 distance integral is hard-coded flat with massless neutrinos.
+    if model_key.startswith("ok_") or model_key.endswith("_mnu"):
         return _compressed_runner_unavailable(
             model_key=model_key,
             entries=entries,
             seed=seed,
             reason=(
-                "DESI DR1 executable phase-1 BAO runner currently supports "
-                "flat ΛCDM only. Extended dark-energy/curvature/neutrino "
-                "parameters require the external Cobaya/CosmoSIS likelihood."
+                "DESI DR1 phase-1 BAO runner is flat-geometry, massless-"
+                "neutrino only. Curvature (ok_*) and neutrino-mass (*_mnu) "
+                "extensions need the external Cobaya/CosmoSIS likelihood."
             ),
         )
 
@@ -1686,7 +1698,9 @@ def _run_sampling_likelihood_chain(
         if entry.key not in executable_keys
         and entry.compressed_likelihood is None
     ]
-    parameter_order = _sampling_parameter_order(bao_entries, compressed_entries, sn_entries)
+    parameter_order = _sampling_parameter_order(
+        bao_entries, compressed_entries, sn_entries, model_key=model_key
+    )
     if not parameter_order:
         return _compressed_runner_unavailable(
             model_key=model_key,
@@ -1700,7 +1714,15 @@ def _run_sampling_likelihood_chain(
     invalid_specs: list[str] = []
 
     try:
-        if bao_entries and not compressed_entries and not sn_entries:
+        # Fast analytic-grid BAO-only path is calibrated for flat ΛCDM in the
+        # natural (H0, omegam, rd) plane; wCDM / w0waCDM add extra dimensions
+        # so we fall through to the importance sampler instead.
+        if (
+            bao_entries
+            and not compressed_entries
+            and not sn_entries
+            and parameter_order == ["H0", "omegam", "rd"]
+        ):
             (
                 posterior_samples,
                 best_chi2,
@@ -1794,11 +1816,36 @@ def _run_sampling_likelihood_chain(
         )
 
     publication_ready = not invalid_specs and proposal_ess >= 400.0
+    # Importance-sampler three-tier (mirrors fit_cosmology_emcee, 2026-05-21):
+    #   publication: ESS ≥ 400 and no invalid specs
+    #   exploratory: 100 ≤ ESS < 400 — posterior discussable but not citeable
+    #   blocked:     ESS < 100 or invalid specs — do not claim numbers
+    if publication_ready:
+        chain_tier = "publication"
+    elif not invalid_specs and proposal_ess >= 100.0:
+        chain_tier = "exploratory"
+    else:
+        chain_tier = "blocked"
+    exploratory_warning = (
+        f"Importance sampler ESS={proposal_ess:.0f} below publication threshold 400. "
+        "Posterior median and 1-sigma range may be discussed as exploratory, but MUST "
+        "NOT be cited as a published constraint and MUST NOT be added to the bibcode pool."
+        if chain_tier == "exploratory" else None
+    )
     result: dict[str, Any] = {
         "success": True,
-        "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
-        "analysis_status": "COMPRESSED_CHAIN_READY" if publication_ready else "PARTIAL",
+        "__tool_status__": (
+            "COMPLETED" if chain_tier == "publication"
+            else "EXPLORATORY" if chain_tier == "exploratory"
+            else "PARTIAL"
+        ),
+        "analysis_status": (
+            "COMPRESSED_CHAIN_READY" if chain_tier == "publication"
+            else "EXPLORATORY" if chain_tier == "exploratory"
+            else "PARTIAL"
+        ),
         "publication_ready": publication_ready,
+        "chain_tier": chain_tier,
         "claim_scope": "compressed_likelihood_preliminary",
         "compressed_likelihood_preliminary": True,
         "model": model_key,
@@ -1856,7 +1903,12 @@ def _run_sampling_likelihood_chain(
             },
         },
     }
-    if not publication_ready:
+    if exploratory_warning is not None:
+        result["__exploratory_warning__"] = exploratory_warning
+        result["warnings"] = list(result.get("warnings") or []) + [exploratory_warning]
+    if chain_tier == "blocked":
+        # Exploratory chains stay quotable (with the warning above); only the
+        # blocked tier gets the hard do-not-claim flag.
         result["__do_not_claim__"] = True
     return result
 
@@ -1865,6 +1917,8 @@ def _sampling_parameter_order(
     bao_entries: list[CosmologyDatasetEntry],
     compressed_entries: list[CosmologyDatasetEntry],
     sn_entries: list[CosmologyDatasetEntry] | None = None,
+    *,
+    model_key: str = "lcdm",
 ) -> list[str]:
     order: list[str] = []
     if bao_entries:
@@ -1875,10 +1929,15 @@ def _sampling_parameter_order(
         for param in ("H0", "omegam", "M_B"):
             if param not in order:
                 order.append(param)
+    # Dark-energy parameters per model. SUPPORTED_MODELS[model_key] lists the
+    # canonical parameter set ("w" for wCDM, "w0"/"wa" for CPL).
+    for param in SUPPORTED_MODELS.get(model_key, ()):
+        if param in {"w", "w0", "wa"} and param not in order:
+            order.append(param)
     for param in _compressed_parameter_order(compressed_entries):
         if param not in order:
             order.append(param)
-    preferred = ["H0", "omegam", "rd", "sigma8", "S8", "M_B"]
+    preferred = ["H0", "omegam", "rd", "w", "w0", "wa", "sigma8", "S8", "M_B"]
     return [param for param in preferred if param in order] + [
         param for param in order if param not in preferred
     ]
@@ -2433,11 +2492,26 @@ def _desi_dr1_bao_predictions(samples: np.ndarray, parameter_order: list[str]) -
     h0 = samples[:, parameter_order.index("H0")]
     omegam = samples[:, parameter_order.index("omegam")]
     rd = samples[:, parameter_order.index("rd")]
-    predictions = np.empty((samples.shape[0], len(DESI_DR1_BAO_MEAN_VECTOR)), dtype=float)
+    # wCDM / w0waCDM extensions — read w/w0/wa per sample when present in
+    # parameter_order. "w" is the single-parameter wCDM equation of state; it
+    # maps to (w0=w, wa=0). When neither is in the parameter_order this is the
+    # flat-ΛCDM (-1, 0) limit and the predictions match the legacy path.
+    n_samples = samples.shape[0]
+    if "w0" in parameter_order:
+        w0 = samples[:, parameter_order.index("w0")]
+    elif "w" in parameter_order:
+        w0 = samples[:, parameter_order.index("w")]
+    else:
+        w0 = np.full(n_samples, -1.0, dtype=float)
+    if "wa" in parameter_order:
+        wa = samples[:, parameter_order.index("wa")]
+    else:
+        wa = np.zeros(n_samples, dtype=float)
+    predictions = np.empty((n_samples, len(DESI_DR1_BAO_MEAN_VECTOR)), dtype=float)
     distance_cache: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     for col, (z, _value, quantity) in enumerate(DESI_DR1_BAO_MEAN_VECTOR):
         if z not in distance_cache:
-            distance_cache[z] = _flat_lcdm_distances_at_z(z, h0, omegam)
+            distance_cache[z] = _flat_de_distances_at_z(z, h0, omegam, w0=w0, wa=wa)
         dm, dh, dv = distance_cache[z]
         if quantity in {"DM_over_rs", "DM_over_rd"}:
             predictions[:, col] = dm / rd
@@ -2565,20 +2639,57 @@ def _pantheon_plus_chi2_samples(
     return np.einsum("in,ij,jn->n", residual, cov_inv, residual)
 
 
+def _de_energy_density(a: np.ndarray, w0: np.ndarray, wa: np.ndarray) -> np.ndarray:
+    """Flat-DE ρ_DE(a) / ρ_DE,0 for the CPL w(a) = w0 + wa(1-a) parameterization.
+
+    Closed form: f(a) = a^(-3(1+w0+wa)) * exp(-3 wa (1-a)).
+    Reduces to 1 for ΛCDM (w0=-1, wa=0). Vectorized over both axes.
+    """
+    return a ** (-3.0 * (1.0 + w0 + wa)) * np.exp(-3.0 * wa * (1.0 - a))
+
+
+def _flat_de_distances_at_z(
+    z: float,
+    h0: np.ndarray,
+    omegam: np.ndarray,
+    *,
+    w0: np.ndarray | float = -1.0,
+    wa: np.ndarray | float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Comoving D_M, Hubble D_H = c/H(z), volume D_V at redshift ``z`` under
+    flat w0waCDM. ΛCDM is the (w0=-1, wa=0) limit.
+
+    All sample arrays (h0, omegam, w0, wa) must be 1D of equal length; scalar
+    w0/wa are broadcast. The Gauss-Legendre 64-point rule integrates 1/E(z')
+    over z' ∈ [0, z] to < 1e-12 over z ≤ 3 for any sane (w0, wa) box.
+    """
+    nodes, weights = np.polynomial.legendre.leggauss(64)
+    w0_arr = np.asarray(w0, dtype=float).reshape(-1) if np.ndim(w0) else np.full_like(omegam, float(w0))
+    wa_arr = np.asarray(wa, dtype=float).reshape(-1) if np.ndim(wa) else np.full_like(omegam, float(wa))
+    x = 0.5 * z * (nodes + 1.0)                                 # (64,)
+    one_plus_x = 1.0 + x[None, :]                                # (1, 64)
+    a_int = 1.0 / one_plus_x                                     # (1, 64) — scale factor
+    rho_de_grid = _de_energy_density(a_int, w0_arr[:, None], wa_arr[:, None])
+    ez_grid = np.sqrt(
+        omegam[:, None] * one_plus_x ** 3
+        + (1.0 - omegam[:, None]) * rho_de_grid
+    )
+    integral = 0.5 * z * np.sum(weights[None, :] / ez_grid, axis=1)
+    dm = (C_LIGHT_KM_S / h0) * integral
+    a_z = 1.0 / (1.0 + z)
+    ez = np.sqrt(omegam * (1.0 + z) ** 3 + (1.0 - omegam) * _de_energy_density(a_z, w0_arr, wa_arr))
+    dh = C_LIGHT_KM_S / (h0 * ez)
+    dv = np.cbrt(z * dm * dm * dh)
+    return dm, dh, dv
+
+
 def _flat_lcdm_distances_at_z(
     z: float,
     h0: np.ndarray,
     omegam: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    nodes, weights = np.polynomial.legendre.leggauss(64)
-    x = 0.5 * z * (nodes + 1.0)
-    ez_grid = np.sqrt(omegam[:, None] * (1.0 + x[None, :]) ** 3 + (1.0 - omegam[:, None]))
-    integral = 0.5 * z * np.sum(weights[None, :] / ez_grid, axis=1)
-    dm = (C_LIGHT_KM_S / h0) * integral
-    ez = np.sqrt(omegam * (1.0 + z) ** 3 + (1.0 - omegam))
-    dh = C_LIGHT_KM_S / (h0 * ez)
-    dv = np.cbrt(z * dm * dm * dh)
-    return dm, dh, dv
+    """ΛCDM-only convenience wrapper around :func:`_flat_de_distances_at_z`."""
+    return _flat_de_distances_at_z(z, h0, omegam, w0=-1.0, wa=0.0)
 
 
 def _compressed_chi2_samples(
@@ -2639,6 +2750,7 @@ def _compressed_runner_unavailable(
         "__tool_status__": "PARTIAL",
         "analysis_status": "NO_COMPRESSED_LIKELIHOOD",
         "publication_ready": False,
+        "chain_tier": "blocked",
         "__do_not_claim__": True,
         "model": model_key,
         "model_label": MODEL_LABELS.get(model_key, model_key),

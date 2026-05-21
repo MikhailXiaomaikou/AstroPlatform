@@ -158,11 +158,18 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
   const warnings = asArray<string>(result.warnings);
   const hasConfig = Boolean(result.config_hash || result.cobaya || result.cosmosis);
   const isMatrix = matrix.length > 0;
-  const title = isMatrix
-    ? "Cosmology Robustness Matrix"
-    : hasConfig
-      ? "Cosmology Likelihood Config"
-      : "Cosmology Dataset Registry";
+  const parse = asRecord(result.parse);
+  const product = asRecord(result.product);
+  const isDataProduct = Boolean(
+    result.dataset_key && (Object.keys(parse).length > 0 || Object.keys(product).length > 0)
+  );
+  const title = isDataProduct
+    ? "Cosmology Data Product"
+    : isMatrix
+      ? "Cosmology Robustness Matrix"
+      : hasConfig
+        ? "Cosmology Likelihood Config"
+        : "Cosmology Dataset Registry";
 
   return (
     <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
@@ -171,6 +178,8 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
         {result.model ? <span>{String(result.model)}</span> : null}
         {hasConfig ? <Badge status="external_likelihood">config only</Badge> : null}
         {result.analysis_status === "COMPRESSED_ROBUSTNESS_READY" ? <Badge status="ready">compressed results</Badge> : null}
+        {isDataProduct && result.hash_verified === true ? <Badge status="ready">hash verified</Badge> : null}
+        {isDataProduct && result.hash_verified === false ? <Badge status="external_likelihood">hash unpinned</Badge> : null}
         {result.dataset_count != null ? <span>{String(result.dataset_count)} datasets</span> : null}
         {result.matrix_size != null ? <span>{String(result.matrix_size)} runs</span> : null}
       </div>
@@ -194,7 +203,53 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
         <div key={warning} style={{ color: "#8a5b00", marginBottom: 4 }}>⚠ {warning}</div>
       ))}
 
-      {isMatrix ? (
+      {isDataProduct ? (
+        <div style={{ display: "grid", gap: 6 }}>
+          <div style={{ color: "var(--color-text-primary)" }}>
+            <strong>{String(result.dataset_display_name || result.dataset_key)}</strong>
+            {result.dataset_version ? <span style={{ color: "var(--color-text-tertiary)" }}> · {String(result.dataset_version)}</span> : null}
+          </div>
+          {Object.keys(product).length > 0 ? (
+            <div style={{ color: "var(--color-text-secondary)", fontSize: "0.74rem" }}>
+              {product.role ? <span>role: <code>{String(product.role)}</code> · </span> : null}
+              {product.product_type ? <span>type: <code>{String(product.product_type)}</code> · </span> : null}
+              {product.format ? <span>format: {String(product.format)}</span> : null}
+              {product.url ? (
+                <>
+                  {" · "}
+                  <a href={String(product.url)} target="_blank" rel="noreferrer">source</a>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          <div style={{ color: "var(--color-text-tertiary)", fontSize: "0.72rem" }}>
+            sha256 {shortHash(result.sha256)}
+            {result.hash_verified === true ? " · verified against registry" : ""}
+            {result.hash_verified === false && product.sha256 ? " · mismatch with registry sha256" : ""}
+          </div>
+          {parse.kind === "matrix" || parse.kind === "compressed_gaussian_likelihood" ? (() => {
+            const shape = asArray<number>(parse.shape ?? parse.covariance_shape);
+            return (
+              <div style={{ color: "var(--color-text-secondary)", fontSize: "0.74rem" }}>
+                shape {shape.length > 0 ? shape.join("×") : "—"}
+                {" · "}
+                symmetric={String(parse.symmetric ?? parse.covariance_symmetric ?? "—")}
+                {" · "}
+                positive diag={String(parse.positive_diagonal ?? "—")}
+                {parse.finite != null ? <> · finite={String(parse.finite)}</> : null}
+              </div>
+            );
+          })() : null}
+          {parse.kind === "table" ? (
+            <div style={{ color: "var(--color-text-secondary)", fontSize: "0.74rem" }}>
+              {parse.row_count != null ? `${String(parse.row_count)} rows` : ""}
+              {Array.isArray(parse.declared_columns) && (parse.declared_columns as string[]).length > 0
+                ? ` · columns: ${(parse.declared_columns as string[]).join(", ")}`
+                : ""}
+            </div>
+          ) : null}
+        </div>
+      ) : isMatrix ? (
         <div style={{ display: "grid", gap: 6 }}>
           {matrix.slice(0, 12).map((row, index) => (
             <div key={`${row.label || index}`} style={{ borderTop: "1px solid var(--color-border)", paddingTop: 5 }}>
