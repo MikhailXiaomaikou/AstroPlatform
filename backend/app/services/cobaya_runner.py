@@ -161,22 +161,41 @@ def dispatch_external_cobaya(
             message="dispatch_external_cobaya called without dataset entries.",
         )
 
-    pending_translations = [
-        entry.key for entry in entries
-        if not _cobaya_likelihood_translatable(entry.cobaya_likelihood)
-    ]
-    if pending_translations:
+    from app.services.cobaya_adapter_registry import is_translation_pending
+
+    pending_translations: list[str] = []
+    unknown_adapters: list[str] = []
+    for entry in entries:
+        if _cobaya_likelihood_translatable(entry.cobaya_likelihood):
+            continue
+        if is_translation_pending(entry.cobaya_likelihood):
+            pending_translations.append(entry.key)
+        else:
+            unknown_adapters.append(
+                f"{entry.key} (adapter={entry.cobaya_likelihood!r})"
+            )
+    if pending_translations or unknown_adapters:
+        parts = [
+            "External Cobaya backend reached, but the adapter-name to Cobaya "
+            "import-path resolver has not been filled in for one or more "
+            "selected datasets."
+        ]
+        if pending_translations:
+            parts.append(
+                "TODO in cobaya_adapter_registry: "
+                + ", ".join(pending_translations)
+            )
+        if unknown_adapters:
+            parts.append(
+                "Unknown adapter (not in cobaya_adapter_registry): "
+                + ", ".join(unknown_adapters)
+            )
         return _runner_failure(
             model_key=model_key,
             entries=entries,
             seed=seed,
             error_class=CobayaLikelihoodTranslationPending.error_class,
-            message=(
-                "External Cobaya backend reached, but adapter-name to Cobaya "
-                "likelihood-import resolver is not implemented yet (PART AI "
-                "Phase 5 #2 Track 2 step 3 owns this). Pending datasets: "
-                + ", ".join(pending_translations)
-            ),
+            message=" ".join(parts),
         )
 
     # NOTE: control reaches here only when step 3 has filled in the
@@ -327,26 +346,44 @@ def _model_theory_args_safe(model_key: str) -> dict[str, Any]:
 def _translate_likelihood_id(cobaya_likelihood: str) -> str:
     """Map a registry adapter name to a real Cobaya likelihood identifier.
 
-    step 2 returns the original string; step 3 owns the real resolver. The
-    early-exit guard in :func:`dispatch_external_cobaya` ensures we never
-    actually invoke cobaya with an untranslated name in production.
+    Step 3 (2026-05-20) wires this to ``cobaya_adapter_registry.resolve``.
+    When the resolver returns ``None`` (every adapter today, until each TODO
+    is filled in the registry), this falls back to the original adapter
+    string so the YAML builder can still produce a structurally valid
+    config. ``dispatch_external_cobaya`` separately gates whether the
+    config is ever handed to a real ``cobaya-run`` subprocess via
+    :func:`_cobaya_likelihood_translatable`, so the as-is string can never
+    reach Cobaya in production while step-3 entries remain unfilled.
     """
-    return cobaya_likelihood
+    from app.services.cobaya_adapter_registry import resolve
+
+    resolved = resolve(cobaya_likelihood)
+    return resolved if resolved is not None else cobaya_likelihood
 
 
 def _cobaya_likelihood_translatable(cobaya_likelihood: str | None) -> bool:
     """Return True iff step 3's resolver currently knows how to translate this id.
 
-    step 2 ships ``False`` for every registry adapter ("external:..."); step 3
-    flips on the real translation table. Centralising the gate here means
-    :func:`dispatch_external_cobaya` returns the same NOT_PUB_READY shape no
-    matter which dataset is selected.
+    Step 3 (2026-05-20) delegates to ``cobaya_adapter_registry.resolve``:
+    the resolver returns a real Cobaya import path when the adapter's TODO
+    has been filled in, and ``None`` otherwise. Every adapter is ``None``
+    today, so behaviour is byte-identical to the step-2 always-deny shipped
+    in ``02edf97`` until a specific dataset is unlocked.
+
+    Note: ``gaussian:H0=…,sigma=…`` adapters are intentionally treated as
+    NOT translatable here even though the registry returns them as-is.
+    Building a real cobaya gaussian-likelihood YAML block requires inline
+    parsing that has not been written yet; until it is, the runner must
+    stay on the platform's compressed-Gaussian fallback path.
     """
-    if not cobaya_likelihood:
+    from app.services.cobaya_adapter_registry import GAUSSIAN_PREFIX, resolve
+
+    resolved = resolve(cobaya_likelihood)
+    if resolved is None:
         return False
-    if cobaya_likelihood.startswith("external:"):
+    if resolved.startswith(GAUSSIAN_PREFIX):
         return False
-    return False  # step 2: never; step 3 will broaden this.
+    return True
 
 
 # ---------------------------------------------------------------------------
