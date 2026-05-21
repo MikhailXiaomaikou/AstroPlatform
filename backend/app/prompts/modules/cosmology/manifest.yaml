@@ -7,8 +7,8 @@ prompt_file: prompt.md
 
 # Tools loaded for this module = core (via core/infrastructure.yaml)
 #                              + cosmology-specific (21)
-#                              + overlap (17, shared with N+1 modules)
-# Total: 20 + 21 + 17 = 58 visible tools.
+#                              + overlap (14, shared with N+1 modules)
+# Total: 15 + 21 + 14 = 50 visible tools.
 tools:
   # ── cosmology-specific (21) ──
   - build_cosmology_likelihood
@@ -32,14 +32,17 @@ tools:
   - run_cosmology_robustness_matrix
   - run_nested_sampler
   - run_research_matrix
-  # spot_check_literature_value 已删除 (2026-05-20): cosmology 真实 H0/σ8/S8 张力会被 ±3σ 误报为论文造假, 误用 > 用处
-  # extract_paper_measurements_with_llm 已下沉到 fit_line_lfr (2026-05-20): fit_line_lfr 接受 arxiv_id, 内部自动 LLM 抽测量 + ±1% 反查
-  # classify_literature_relevance / verify_research_facts 已挪到 overlap (2026-05-20): literature 防造假层 focus-agnostic, N+1 模块也用
-  # ── overlap (17) — shared with future active modules ──
+  # spot_check_literature_value removed (2026-05-20): real cosmology H0/sigma8/S8 tensions
+  # were being flagged as paper fabrication at +/- 3sigma; false positives outweighed the value.
+  # extract_paper_measurements_with_llm folded into fit_line_lfr (2026-05-20): fit_line_lfr now
+  # accepts arxiv_id and internally runs LLM extraction + +/- 1% cell verification.
+  # classify_literature_relevance / verify_research_facts moved to overlap (2026-05-20):
+  # the literature anti-fabrication layer is focus-agnostic and will be reused by N+1 modules.
+  # -- overlap (14) -- shared with future active modules --
   - analyze_cross_wavelength
   - analyze_spectrum
   - analyze_spectrum_pro
-  - classify_literature_relevance  # Stage 6 P0c-C: hard-gate 二筛, focus-agnostic 防造假
+  - classify_literature_relevance  # Stage 6 P0c-C: hard-gate secondary filter, focus-agnostic anti-fabrication
   - classify_transient
   - compute_galaxy_sfr
   - generate_proposal
@@ -49,7 +52,7 @@ tools:
   - query_transients
   - research_workflow
   - search_lightcurve
-  - verify_research_facts  # focus-agnostic 事实核验, N+1 模块也用
+  - verify_research_facts  # focus-agnostic fact verification, reused by N+1 modules
 datasets:
   # TBD M1 Phase 3 — pull from app.services.cosmology_likelihoods DATASET_REGISTRY.
   # Will include: desi_dr1_bao, planck2018_compressed, act_dr6, pantheon_plus,

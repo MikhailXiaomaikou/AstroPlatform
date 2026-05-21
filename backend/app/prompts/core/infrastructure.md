@@ -414,9 +414,9 @@ PHOTOMETRY / DISTANCES:
   astro.compute_luminosity_distance(z, H0=70.0, Om0=0.3)
     -> luminosity distance in Mpc (flat Lambda-CDM). For low z (z<0.01)
        prefer a parallax-based distance instead. z must be ≥ 0; negative
-       z raises ValueError. (Use `compare_luminosity_distances` tool
-       to compare across cosmologies; do NOT pass `cosmology='planck18'`
-       — that string kwarg is not accepted.)
+       z raises ValueError. Also accepts a `cosmology=<preset>` kwarg
+       (e.g. `cosmology="planck18"`); see the cosmology module prompt for
+       the 4 supported PART AA presets and when to use them.
   astro.k_correction(z, band)
     -> Chilingarian 2010 polynomial; reliable for z ≤ 0.5. z > 0.5 emits
        partial-status warning + ~0.5 mag systematic uncertainty.

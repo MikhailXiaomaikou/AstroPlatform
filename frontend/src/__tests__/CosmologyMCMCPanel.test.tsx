@@ -39,7 +39,9 @@ describe("CosmologyMCMCPanel", () => {
 
     expect(screen.getByText("Cosmology MCMC")).toBeInTheDocument();
     expect(screen.getByText(/flat_w0wa_cdm/)).toBeInTheDocument();
-    expect(screen.getByText("not publication-ready")).toBeInTheDocument();
+    // chain_tier not emitted by the fixture and publication_ready=false →
+    // panel falls back to "blocked".
+    expect(screen.getByText("blocked — do not cite")).toBeInTheDocument();
     expect(screen.getByText("H0")).toBeInTheDocument();
     expect(screen.getByText("w0")).toBeInTheDocument();
     expect(screen.getByText("70.1234")).toBeInTheDocument();
@@ -93,8 +95,112 @@ describe("CosmologyMCMCPanel", () => {
       />,
     );
 
-    expect(screen.getByText("not publication-ready")).toBeInTheDocument();
+    expect(screen.getByText("blocked — do not cite")).toBeInTheDocument();
     expect(screen.getByText(/No selected dataset has a registered compressed Gaussian likelihood/)).toBeInTheDocument();
     expect(screen.queryByText(/ESS\/R-hat diagnostics pass/)).not.toBeInTheDocument();
+  });
+
+  it("renders exploratory tier with warning, not a blocked banner", () => {
+    render(
+      <CosmologyMCMCPanel
+        result={{
+          sampler: "emcee",
+          model: "flat_lcdm",
+          publication_ready: false,
+          chain_tier: "exploratory",
+          __tool_status__: "EXPLORATORY",
+          __exploratory_warning__:
+            "Chain min ESS=180 (publication threshold 400), max R-hat=1.07.",
+          parameters: {
+            H0: {
+              median: 71.5,
+              hdi_low_94: 67.0,
+              hdi_high_94: 76.0,
+              rhat: 1.07,
+              ess_bulk: 180,
+              status: "marginal",
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("exploratory")).toBeInTheDocument();
+    expect(screen.queryByText("blocked — do not cite")).not.toBeInTheDocument();
+    expect(screen.getByText(/min ESS=180/)).toBeInTheDocument();
+  });
+
+  it("renders explicit chain_tier=blocked with the do-not-cite banner", () => {
+    render(
+      <CosmologyMCMCPanel
+        result={{
+          sampler: "emcee",
+          model: "flat_lcdm",
+          publication_ready: false,
+          chain_tier: "blocked",
+          __do_not_claim__: true,
+          warnings: [
+            "Cosmology MCMC used inline/unverified rows. Inline rows are audit-only.",
+          ],
+          parameters: {
+            H0: { median: 70.0, hdi_low_94: 50, hdi_high_94: 90, rhat: 2.5, ess_bulk: 30, status: "not_converged" },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("blocked — do not cite")).toBeInTheDocument();
+    expect(screen.getByText(/inline\/unverified rows/)).toBeInTheDocument();
+  });
+
+  it("renders chain_tier=publication as publication-ready when explicit", () => {
+    render(
+      <CosmologyMCMCPanel
+        result={{
+          sampler: "emcee",
+          model: "flat_lcdm",
+          publication_ready: true,
+          chain_tier: "publication",
+          parameters: {
+            H0: { median: 67.4, hdi_low_94: 66.5, hdi_high_94: 68.3, rhat: 1.01, ess_bulk: 1200, status: "good" },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("publication-ready")).toBeInTheDocument();
+    expect(screen.queryByText("blocked — do not cite")).not.toBeInTheDocument();
+    expect(screen.queryByText("exploratory")).not.toBeInTheDocument();
+  });
+
+  it("renders pairwise tensions sorted by sigma with >=3sigma highlighted", () => {
+    render(
+      <CosmologyMCMCPanel
+        result={{
+          sampler: "compressed_gaussian_analytic",
+          model: "lcdm",
+          publication_ready: true,
+          chain_tier: "publication",
+          parameters: {
+            H0: { median: 67.4, hdi_low_94: 66.5, hdi_high_94: 68.3, rhat: 1, ess_bulk: 1200, status: "good" },
+          },
+          pairwise_tensions: [
+            { parameter: "omegam", dataset_a: "act_dr6_lensing", dataset_b: "kids1000_wl", delta: 0.02, sigma: 1.4, value_a: 0.31, value_b: 0.29 },
+            { parameter: "H0", dataset_a: "planck2018_compressed", dataset_b: "shoes_h0_riess22", delta: -5.7, sigma: 5.2, value_a: 67.4, value_b: 73.0 },
+            { parameter: "sigma8", dataset_a: "planck2018_compressed", dataset_b: "kids1000_wl", delta: 0.04, sigma: 2.6, value_a: 0.81, value_b: 0.77 },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Parameter tensions (pairwise)")).toBeInTheDocument();
+    // H0 5.2σ should appear first (sorted by sigma desc) and be flagged
+    const sigmaCells = screen.getAllByText(/\d+(\.\d+)?σ/);
+    expect(sigmaCells[0].textContent).toMatch(/5\.2σ/);
+    expect(sigmaCells[0].textContent).toContain("⚠");
+    // omegam 1.4σ should not be flagged
+    const lowCell = sigmaCells[sigmaCells.length - 1];
+    expect(lowCell.textContent).toMatch(/1\.4σ/);
+    expect(lowCell.textContent).not.toContain("⚠");
   });
 });
