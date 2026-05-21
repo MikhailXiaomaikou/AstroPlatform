@@ -1026,11 +1026,29 @@ TOOLS = [
                 "rows": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "Inline distance-modulus rows with z, mu, sigma_mu. Audit-only unless backed by cache_key.",
+                    "description": "Inline distance-modulus rows with z, mu, sigma_mu. Audit-only unless paired with manual_attestation or backed by cache_key.",
                 },
                 "cache_key": {
                     "type": "string",
                     "description": "Optional cache key such as latest_adql or latest_search containing rows.",
+                },
+                "manual_attestation": {
+                    "type": "object",
+                    "description": (
+                        "Declare the published source of inline rows so the fit becomes citeable. "
+                        "Require fields: source (free-text description, e.g. 'Riess+2022 Table 2') "
+                        "and at least one of bibcode, arxiv, doi. Optional: note. "
+                        "When provided, inline rows are upgraded from audit-only to citeable and the "
+                        "attestation is recorded in result.citations + provenance.manual_attestation."
+                    ),
+                    "properties": {
+                        "source": {"type": "string"},
+                        "bibcode": {"type": "string"},
+                        "arxiv": {"type": "string"},
+                        "doi": {"type": "string"},
+                        "note": {"type": "string"},
+                    },
+                    "required": ["source"],
                 },
                 "model": {
                     "type": "string",
@@ -2168,14 +2186,14 @@ TOOLS = [
 # Consolidated in ai_tools_solar_system.py and injected into TOOLS via extend
 # (avoids further bloating the 9k+ line ai_tools.py).
 # _exec_tool dispatch routes through a single elif to dispatch_solar_system.
-from app.services.ai_tools_solar_system import (
+from app.services.ai_tools_solar_system import (  # noqa: E402
     SOLAR_SYSTEM_TOOL_SCHEMAS as _SOLAR_SYSTEM_TOOL_SCHEMAS,
     SOLAR_SYSTEM_TOOL_NAMES as _SOLAR_SYSTEM_TOOL_NAMES,
 )
 TOOLS.extend(_SOLAR_SYSTEM_TOOL_SCHEMAS)
 
 # ── M0 2026-05-20: exoplanet 8 tools (3rd active module) ──
-from app.services.ai_tools_exoplanet import (
+from app.services.ai_tools_exoplanet import (  # noqa: E402
     EXOPLANET_TOOL_SCHEMAS as _EXOPLANET_TOOL_SCHEMAS,
     EXOPLANET_TOOL_NAMES as _EXOPLANET_TOOL_NAMES,
 )
@@ -8183,10 +8201,53 @@ async def _exec_estimate_photo_z(inp: dict) -> dict:
     return result
 
 
-def _cosmology_rows_from_input(inp: dict, python_session_id: str | None) -> tuple[list[dict[str, Any]], str, str | None]:
+def _validate_manual_attestation(raw: Any) -> dict[str, Any]:
+    """Normalize ``manual_attestation``: the user-supplied attestation that
+    inline distance-modulus rows came from a citeable source (paper, archive
+    landing page, etc.).
+
+    Required fields: ``source`` (free-text origin description) and at least
+    one of ``bibcode`` / ``arxiv`` / ``doi`` so claim_validator can map the
+    attestation back to a real reference and add it to the bibcode pool.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("manual_attestation must be an object")
+    source = str(raw.get("source") or "").strip()
+    bibcode = str(raw.get("bibcode") or "").strip()
+    arxiv = str(raw.get("arxiv") or "").strip()
+    doi = str(raw.get("doi") or "").strip()
+    note = str(raw.get("note") or "").strip()
+    if not source:
+        raise ValueError("manual_attestation requires a non-empty 'source' field")
+    if not (bibcode or arxiv or doi):
+        raise ValueError(
+            "manual_attestation requires at least one of 'bibcode', 'arxiv', 'doi' so the "
+            "attestation is checkable against the citation pool"
+        )
+    return {
+        "source": source,
+        "bibcode": bibcode or None,
+        "arxiv": arxiv or None,
+        "doi": doi or None,
+        "note": note or None,
+    }
+
+
+def _cosmology_rows_from_input(
+    inp: dict, python_session_id: str | None
+) -> tuple[list[dict[str, Any]], str, str | None, dict[str, Any] | None]:
     rows = inp.get("rows")
+    attestation_raw = inp.get("manual_attestation")
     if isinstance(rows, list) and rows:
-        return [dict(row) for row in rows if isinstance(row, dict)], "inline_unverified", None
+        normalized = [dict(row) for row in rows if isinstance(row, dict)]
+        if attestation_raw is not None:
+            attestation = _validate_manual_attestation(attestation_raw)
+            # Inline rows + attestation get upgraded to a citeable origin, but the
+            # source_cache_key encodes the attestation reference so audit logs can
+            # tell apart "real cache hit" from "user-attested inline upload".
+            source_id = attestation["bibcode"] or attestation["arxiv"] or attestation["doi"]
+            return normalized, "cached_real", f"manual_attestation:{source_id}", attestation
+        return normalized, "inline_unverified", None, None
 
     cache_key = str(inp.get("cache_key") or "").strip()
     if not cache_key:
@@ -8198,12 +8259,12 @@ def _cosmology_rows_from_input(inp: dict, python_session_id: str | None) -> tupl
     if payload is None:
         raise ValueError(f"No cached rows found for cache_key={cache_key!r}")
     if isinstance(payload, list):
-        return [dict(row) for row in payload if isinstance(row, dict)], "cached_real", cache_key
+        return [dict(row) for row in payload if isinstance(row, dict)], "cached_real", cache_key, None
     if isinstance(payload, dict):
         for key in ("rows", "data", "results"):
             value = payload.get(key)
             if isinstance(value, list):
-                return [dict(row) for row in value if isinstance(row, dict)], "cached_real", cache_key
+                return [dict(row) for row in value if isinstance(row, dict)], "cached_real", cache_key, None
             if isinstance(value, dict):
                 columns = list(value.keys())
                 lengths = [len(v) for v in value.values() if isinstance(v, list)]
@@ -8212,7 +8273,7 @@ def _cosmology_rows_from_input(inp: dict, python_session_id: str | None) -> tupl
                     return [
                         {column: value.get(column, [None] * n)[index] for column in columns}
                         for index in range(n)
-                    ], "cached_real", cache_key
+                    ], "cached_real", cache_key, None
     raise ValueError(f"Cached payload {cache_key!r} does not contain row objects")
 
 
@@ -8224,7 +8285,9 @@ async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> 
     )
 
     try:
-        rows, input_data_origin, source_cache_key = _cosmology_rows_from_input(inp, python_session_id)
+        rows, input_data_origin, source_cache_key, attestation = _cosmology_rows_from_input(
+            inp, python_session_id
+        )
         model = str(inp.get("model") or "flat_lcdm")
         n_walkers = int(inp.get("n_walkers") or 32)
         n_steps = int(inp.get("n_steps") or 800)
@@ -8241,6 +8304,7 @@ async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> 
             "random_seed": random_seed_int,
             "input_data_origin": input_data_origin,
             "source_cache_key": source_cache_key,
+            "manual_attestation": attestation,
         }
         if should_run_background(n_walkers, n_steps, bool(inp.get("background", False))):
             return submit_emcee_job(**kwargs)
@@ -8264,7 +8328,9 @@ async def _exec_run_cobaya_cosmology(inp: dict, python_session_id: str | None) -
     from app.services.cosmology_mcmc import run_cobaya_cosmology
 
     try:
-        rows, _input_data_origin, _source_cache_key = _cosmology_rows_from_input(inp, python_session_id)
+        rows, _input_data_origin, _source_cache_key, _attestation = _cosmology_rows_from_input(
+            inp, python_session_id
+        )
         return await asyncio.to_thread(
             run_cobaya_cosmology,
             rows,

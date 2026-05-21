@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import re
 
-import pytest
-
-
-# ── 数值正则覆盖 ─────────────────────────────────────────────────
+# ── numeric regex coverage ─────────────────────────────────────────────────
 
 
 def test_numeric_pattern_semi_major_axis_au():
@@ -26,7 +22,7 @@ def test_numeric_pattern_eccentricity():
     assert pattern.search("e = 0.8898")
     assert pattern.search("eccentricity = 0.191")
     assert pattern.search("e = 0")
-    # eccentricity must be < 1 — 1.5 不该匹配(避免误匹配如 emcee 等)
+    # eccentricity must be < 1 — 1.5 should not match (avoid false positives like emcee etc.)
     assert not pattern.search("e = 1.5")
 
 
@@ -84,7 +80,7 @@ def test_numeric_pattern_phase_angle():
 
 
 def test_solar_system_bibcodes_complete():
-    """14 个 keystone references 都在 dict 里, 每个值含工具名提示."""
+    """All 14 keystone references are in the dict, each value contains a tool-name hint."""
     from app.services.claim_validator import SOLAR_SYSTEM_CANONICAL_BIBCODES
 
     expected = {
@@ -95,14 +91,14 @@ def test_solar_system_bibcodes_complete():
         "2009M&PS...44.1853G", "2019AJ....157...98G",
     }
     assert set(SOLAR_SYSTEM_CANONICAL_BIBCODES.keys()) == expected
-    # 每个 hint 都非空 + 提及一个工具或 paper subject
+    # each hint is non-empty + mentions a tool or paper subject
     for bibcode, hint in SOLAR_SYSTEM_CANONICAL_BIBCODES.items():
         assert hint, f"{bibcode} has empty hint"
         assert "—" in hint or "-" in hint
 
 
 def test_solar_system_manifest_block_note_triggers_on_bowell():
-    """Bowell 1989 bibcode 未被 tool 返回, validator 引用 → block note 出现工具提示."""
+    """Bowell 1989 bibcode not returned by tool, validator cites it → block note shows tool hint."""
     from app.services.claim_validator import (
         CitationViolation, _solar_system_manifest_block_note,
     )
@@ -112,7 +108,7 @@ def test_solar_system_manifest_block_note_triggers_on_bowell():
     )
     note = _solar_system_manifest_block_note([v])
     assert "1989aste.conf..524B" in note
-    assert "compute_hg_magnitude" in note  # 提示该调哪个工具
+    assert "compute_hg_magnitude" in note  # hints which tool to call
 
 
 def test_solar_system_manifest_block_note_empty_when_no_match():
@@ -127,7 +123,7 @@ def test_solar_system_manifest_block_note_empty_when_no_match():
 
 
 def test_solar_system_note_appears_in_blocked_citation_text():
-    """端到端: blocked_citation_reply_text 输出包含 solar_system hint."""
+    """End-to-end: blocked_citation_reply_text output contains solar_system hint."""
     from app.services.claim_validator import (
         CitationViolation, blocked_citation_reply_text,
     )
@@ -142,17 +138,17 @@ def test_solar_system_note_appears_in_blocked_citation_text():
 
 
 def test_cosmology_note_still_works_after_solar_system_added():
-    """加 solar_system note 不能破坏 cosmology note 路径."""
+    """Adding the solar_system note must not break the cosmology note path."""
     from app.services.claim_validator import (
         CitationViolation, blocked_citation_reply_text,
     )
 
-    # 一个 cosmology preset bibcode
+    # a cosmology preset bibcode
     v = CitationViolation(
         kind="invalid_bibcode", match_text="2020A&A...641A...6P",  # Planck18
         line_number=1,
     )
     text = blocked_citation_reply_text([v])
     assert "2020A&A...641A...6P" in text
-    # cosmology hint 仍能出现
+    # cosmology hint should still appear
     assert "cosmology" in text.lower()

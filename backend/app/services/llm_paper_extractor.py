@@ -1,24 +1,29 @@
-"""Stage 6.3 spike (2026-05-20): LLM 抽论文表格 + ±1% 反查 prototype.
+"""Stage 6.3 spike (2026-05-20): LLM paper table extraction + ±1% back-verification prototype.
 
-设计哲学:
-  现有 `_normalize_line_measurements` (ai_tools.py) 是 monolithic regex
-  matcher, 一把钥匙开一把锁, 跨 paper schema 立即掉链子. 但纯让 LLM
-  读数字又跟平台防造假主线冲突 (LLM 可能编数字).
+Design philosophy:
+  The existing `_normalize_line_measurements` (ai_tools.py) is a monolithic regex
+  matcher — one key for one lock — and breaks immediately across different paper schemas.
+  But letting the LLM read numbers freely conflicts with the platform's anti-fabrication
+  principle (the LLM might invent numbers).
 
-  本 module 走 hybrid 路:
-    1. LLM 读 paper 给数字, 但要求附 (table_idx, row_idx, cell_provenance)
-    2. backend 拿这 3 个坐标回到原 HTML, 用 regex 在 cell 文字里找数字
-    3. LLM 给的数字跟 cell 找到的数字 ±1% 不一致 → 拒, 不存 cache
+  This module takes a hybrid approach:
+    1. The LLM reads the paper and provides numbers, but must attach
+       (table_idx, row_idx, cell_provenance).
+    2. The backend uses those 3 coordinates to locate the original HTML cell and
+       applies a regex to find numbers in the cell text.
+    3. If the LLM's number and the cell's number disagree by more than ±1%,
+       the result is rejected and not cached.
 
-  这样 LLM 自由发挥 schema 推断, backend 守 anti-fabrication 底线.
+  This lets the LLM handle schema inference freely while the backend enforces the
+  anti-fabrication floor.
 
-  独立 spike module, 不接 ai_tools dispatch / claim_validator / chat.py
-  pipeline. 跑通后再决定升级.
+  Standalone spike module — not wired into the ai_tools dispatch / claim_validator /
+  chat.py pipeline. Promotion decision deferred until the spike proves out.
 
-依赖:
-  - httpx (项目已用)
-  - beautifulsoup4 (项目已用)
-  - anthropic SDK (项目已用)
+Dependencies:
+  - httpx (already used by the project)
+  - beautifulsoup4 (already used by the project)
+  - anthropic SDK (already used by the project)
 """
 
 from __future__ import annotations
@@ -38,10 +43,11 @@ _AR5IV_URL_TEMPLATE = "https://ar5iv.org/abs/{arxiv_id}"
 _DEFAULT_MAX_HTML_EXCERPT_CHARS = 30000
 _NUMBER_RE = re.compile(r"[-+]?\d+\.?\d*(?:[eE][-+]?\d+)?")
 
-# Stage 6.3 spike v2 (2026-05-20): codex 复测发现 ALPINE 2002.00962 默认
-# excerpt 把 budget 浪费在 formula/metadata 表上, 真 measurement table
-# (table 25) 被截掉. 改造 build_html_excerpt 按 measurement-keyword
-# score 排序, 强相关表先送 LLM.
+# Stage 6.3 spike v2 (2026-05-20): codex re-testing found that for ALPINE
+# 2002.00962, the default excerpt wasted budget on formula/metadata tables and
+# the actual measurement table (table 25) was truncated. build_html_excerpt was
+# reworked to rank tables by measurement-keyword score so the most relevant
+# tables are sent to the LLM first.
 _MEASUREMENT_HEADER_STRONG = (
     "fwhm", "linewidth", "line width",
     "[cii]", "l[cii]", "l_cii", "lcii",
@@ -53,7 +59,7 @@ _MEASUREMENT_HEADER_MEDIUM = (
     "source", "name", "object", "galaxy", "id",
     "redshift", "z[cii]", "z_cii", "zcii", "z[",
 )
-# LaTeX equation markers — 表里大量出现表明是 formula table 不是 data table.
+# LaTeX equation markers — many occurrences indicate a formula table, not a data table.
 _LATEX_EQ_MARKERS = (
     "\\frac", "\\sum", "\\int", "\\partial",
     "\\mathrm", "\\Pi", "\\Sigma", "\\equiv",
@@ -63,7 +69,7 @@ _LATEX_EQ_MARKERS = (
 
 @dataclass
 class ExtractedMeasurement:
-    """LLM 抽出 + backend ±1% 反查后的一条 measurement."""
+    """One measurement extracted by the LLM and back-verified by the backend at ±1%."""
 
     source_name: str
     fwhm_km_s: float | None
@@ -82,9 +88,10 @@ class ExtractedMeasurement:
 def fetch_paper_html(arxiv_id: str, timeout: float = 30.0) -> str:
     """Fetch ar5iv-converted HTML for an arxiv paper.
 
-    ar5iv 是 LaTeX→HTML 转换服务, 比直接抓 LaTeX 源码可靠 (大部分 cosmology
-    论文都在). 失败时 caller 决定 fallback (e.g. arxiv.org HTML / LaTeX
-    源码), 本 spike 不做.
+    ar5iv is a LaTeX-to-HTML conversion service, more reliable than scraping
+    the raw LaTeX source (most cosmology papers are covered). On failure, the
+    caller decides the fallback (e.g. arxiv.org HTML / LaTeX source); this
+    spike does not implement a fallback.
     """
     cleaned = arxiv_id.strip().replace("arXiv:", "").replace("arxiv:", "")
     url = _AR5IV_URL_TEMPLATE.format(arxiv_id=cleaned)
@@ -96,7 +103,7 @@ def fetch_paper_html(arxiv_id: str, timeout: float = 30.0) -> str:
 def parse_html_tables(html: str) -> list[list[list[str]]]:
     """Return list of tables; each table is list of rows; each row is list of cell strings.
 
-    跟 ai_tools._parse_html_tables 同思路但本 module 自包含, 不依赖 arxiv.py.
+    Same approach as ai_tools._parse_html_tables but self-contained; does not depend on arxiv.py.
     """
     soup = BeautifulSoup(html, "html.parser")
     tables: list[list[list[str]]] = []
@@ -112,10 +119,11 @@ def parse_html_tables(html: str) -> list[list[list[str]]]:
 
 
 def score_table_relevance(table: list[list[str]]) -> int:
-    """Stage 6.3 spike v2: 给 table 算 measurement-table 相关度分数.
+    """Stage 6.3 spike v2: score a table for measurement-table relevance.
 
-    看第 1 行 (header) 是否含已知 measurement column 关键词. 多行 sample
-    表加 bonus. 0 分表示完全不像 measurement table.
+    Checks whether the first row (header) contains known measurement-column
+    keywords. Multi-row tables receive a bonus. A score of 0 means the table
+    does not resemble a measurement table at all.
     """
     if not table:
         return 0
@@ -135,11 +143,11 @@ def score_table_relevance(table: list[list[str]]) -> int:
 
 
 def is_low_value_table(table: list[list[str]]) -> bool:
-    """Stage 6.3 spike v2: 判 table 是否 formula / metadata / caption-only.
+    """Stage 6.3 spike v2: determine whether a table is formula / metadata / caption-only.
 
-    - 行数 < 2: 不是真 data table
-    - 第 1 行只 1 个 cell: caption / metadata
-    - 大量 LaTeX equation markers (\\frac / \\sum / etc.): formula table
+    - fewer than 2 rows: not a real data table
+    - first row has only 1 cell: caption or metadata
+    - many LaTeX equation markers (\\frac / \\sum / etc.): formula table
     """
     if not table or len(table) < 2:
         return True
@@ -159,17 +167,18 @@ def build_html_excerpt(
 ) -> str:
     """Format tables as plain text for LLM prompt, bounded by max_chars.
 
-    Stage 6.3 spike v2 (2026-05-20): 不再按 table 顺序截断. 改成:
-      1. 过滤 low_value (formula / metadata / caption-only) 表
-      2. 给剩下表打 measurement-relevance 分数
-      3. 按 score 降序送进 budget — 高分表优先, score=0 表跳过
+    Stage 6.3 spike v2 (2026-05-20): no longer truncates by table order. New approach:
+      1. Filter out low-value tables (formula / metadata / caption-only).
+      2. Score the remaining tables by measurement relevance.
+      3. Fill the budget in descending score order — highest-scoring tables first;
+         tables with score=0 are skipped.
 
-    保留原始 `table_idx` (不重编号), 因为 verify_record 要用 table_idx 反查
-    原 HTML cell, 必须跟 LLM 看到的 table_idx 一致.
+    The original `table_idx` is preserved (no renumbering) because verify_record
+    uses table_idx to look up the original HTML cell and must match what the LLM saw.
 
-    Codex 复测发现 ALPINE 2002.00962 表 25 才是真 measurement, 但默认实现
-    把 budget 在前 24 个 equation/metadata 表里耗光. v2 把 table 25 排到
-    最前送进去.
+    Codex re-testing found that for ALPINE 2002.00962, table 25 is the real
+    measurement table but the default implementation exhausted the budget on the
+    first 24 equation/metadata tables. v2 promotes table 25 to the front.
     """
     scored: list[tuple[int, int, list[list[str]]]] = []
     for idx, table in enumerate(tables):
@@ -214,9 +223,10 @@ def build_html_excerpt(
 def build_llm_prompt(html_excerpt: str, fields: list[str]) -> str:
     """Construct the extraction prompt with anti-fabrication framing.
 
-    Stage 6.3 spike v2 (2026-05-20): tables 在 excerpt 里已经按 measurement-
-    relevance 排过, 但 idx 是原 HTML idx (不连续). prompt 强调"用 dump 里
-    给的 Table N 标签的 N 作为 table_idx", 否则 verify_record 会反查错位.
+    Stage 6.3 spike v2 (2026-05-20): tables in the excerpt are already sorted by
+    measurement relevance, but their idx values are the original HTML indices
+    (non-contiguous). The prompt emphasises "use the N from the Table N label in
+    the dump as table_idx"; otherwise verify_record will look up the wrong cell.
     """
     fields_str = ", ".join(fields)
     return f"""You are extracting astronomical measurements from a paper's HTML tables.
@@ -285,7 +295,7 @@ def parse_llm_json(raw: str) -> list[dict[str, Any]]:
     cleaned = raw.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r"\s*```\s*$", "", cleaned, flags=re.MULTILINE)
-    # 找第一个 [ ... ] block
+    # Find the first [ ... ] block
     bracket_start = cleaned.find("[")
     bracket_end = cleaned.rfind("]")
     if bracket_start == -1 or bracket_end == -1 or bracket_end <= bracket_start:
@@ -333,10 +343,12 @@ def verify_record(
 ) -> ExtractedMeasurement:
     """Validate one LLM-extracted record against the parsed tables.
 
-    反查规则:
-      - (table_idx, row_idx) 必须在 parsed tables 范围内 (row_idx +1 跳 header)
-      - 每个 non-null 字段必须有 cell_provenance 入口
-      - 对应 cell_provenance 文字里必须 ±1% 找到 extracted value
+    Back-verification rules:
+      - (table_idx, row_idx) must be within the bounds of the parsed tables
+        (row_idx +1 skips the header row)
+      - every non-null field must have a cell_provenance entry
+      - the extracted value must be found within ±1% in the corresponding
+        cell_provenance text
     """
     source_name = str(record.get("source_name") or "?")
     fwhm = _safe_float(record.get("fwhm_km_s"))
@@ -363,12 +375,13 @@ def verify_record(
     if isinstance(provenance_raw, dict):
         provenance = {str(k): str(v) for k, v in provenance_raw.items()}
 
-    # Stage 6.3 spike v3 (2026-05-20): codex 复测发现 LLM 在 row_idx convention
-    # 上不稳定 — 大部分行用 "data 0-indexed 不含 header", 偶尔切换到 "dump
-    # Row N (含 header)". 死定 +1 让最后行越界.
-    # 修法: try 两个 candidate (+1 和 +0), 选 cell_provenance 文字命中更多
-    # 的那行作 truth. provenance 全没命中时 (or LLM 编了 provenance) 取
-    # +1 作为 default (兼容旧 convention).
+    # Stage 6.3 spike v3 (2026-05-20): codex re-testing found that the LLM is
+    # inconsistent about row_idx convention — most rows use "data 0-indexed
+    # excluding the header", but it occasionally switches to "dump Row N
+    # including the header". Hard-coding +1 causes out-of-bounds on the last row.
+    # Fix: try two candidates (+1 and +0) and pick whichever row has more
+    # cell_provenance text hits as the truth. When neither has any provenance
+    # hits (or the LLM fabricated provenance), fall back to +1 (backward compat).
     candidate_rows: list[tuple[int, list[str]]] = []
     for offset in (1, 0):
         target_idx = row_idx + offset
@@ -389,8 +402,7 @@ def verify_record(
                 f"{row_idx} and {row_idx + 1}) out of range"
             ],
         )
-    # 用 cell_provenance 文字 disambiguation
-    best_offset = candidate_rows[0][0]
+    # Disambiguate using cell_provenance text
     cells = candidate_rows[0][1]
     if len(candidate_rows) > 1 and provenance:
         best_match = -1
@@ -403,7 +415,6 @@ def verify_record(
             )
             if match_count > best_match:
                 best_match = match_count
-                best_offset = offset
                 cells = candidate
     row_text = " | ".join(cells)
 
@@ -458,8 +469,8 @@ def extract_with_llm_and_verify(
     """End-to-end: fetch paper → parse tables → LLM extract → ±1% verify.
 
     Returns list of ExtractedMeasurement; caller can filter by validation_status.
-    Empty list if HTML has no tables. 不抛异常 (除 LLM 调用 / HTML 抓取
-    本身 fail).
+    Returns an empty list if the HTML has no tables. Does not raise exceptions
+    (except for failures in the LLM call or HTML fetch itself).
     """
     html = fetch_paper_html(arxiv_id)
     tables = parse_html_tables(html)
