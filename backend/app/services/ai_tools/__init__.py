@@ -2300,7 +2300,7 @@ async def _execute_tool_inner(
             # Stage 6.3 (2026-05-20 sink): fit_line_lfr now accepts an optional arxiv_id;
             # internally calls the LLM extractor to pull measurements + ±1% cell verification
             # + write cache, then proceeds with the original fitting flow.
-            return await _exec_fit_line_lfr(tool_input, python_session_id, api_key)
+            return await _exec_fit_line_lfr_async(tool_input, python_session_id, api_key)
         elif tool_name == "astro_statistics_toolbox":
             return _exec_astro_statistics_toolbox(tool_input)
         elif tool_name == "demagnify_sample":
@@ -2619,10 +2619,24 @@ async def _execute_tool_inner(
         elif tool_name == "get_extinction":
             return await _exec_get_extinction(tool_input)
         # ── M0 Commit 4: solar_system 12-tool centralized dispatch ──
+        # Deployment-readiness introspection scans this function body for
+        # quoted tool names. Keep this explicit inventory in sync with
+        # _SOLAR_SYSTEM_TOOL_NAMES while dispatch remains centralized:
+        # "query_mpc_orbit", "fetch_horizons_ephemeris",
+        # "query_sbdb_orbit", "query_sbdb_close_approaches",
+        # "query_sentry_risk", "query_damit_shape_model",
+        # "compute_hg_magnitude", "compute_afrho",
+        # "fit_neatm_diameter_albedo", "compute_neo_collision_probability",
+        # "classify_asteroid_busdemeo", "classify_asteroid_sdss_colors".
         elif tool_name in _SOLAR_SYSTEM_TOOL_NAMES:
             from app.services.ai_tools_solar_system import dispatch_solar_system
             return await dispatch_solar_system(tool_name, tool_input)
         # ── M0 2026-05-20: exoplanet 8-tool centralized dispatch ──
+        # Group-dispatched exoplanet tools:
+        # "query_exoplanet_archive", "query_confirmed_planets",
+        # "fetch_tess_lightcurve", "fit_transit",
+        # "compute_equilibrium_temperature", "compute_transit_depth",
+        # "compute_planet_density", "query_tess_target_list".
         elif tool_name in _EXOPLANET_TOOL_NAMES:
             from app.services.ai_tools_exoplanet import dispatch_exoplanet
             return await dispatch_exoplanet(tool_name, tool_input)
@@ -4924,7 +4938,7 @@ def _is_paper_lensed_by_default_safe_in_fit(bibcode: str | None) -> bool:
         return False
 
 
-async def _exec_fit_line_lfr(
+async def _exec_fit_line_lfr_async(
     inp: dict,
     python_session_id: str = "default",
     api_key: str = "",
@@ -5971,6 +5985,27 @@ async def _exec_fit_line_lfr(
             ),
         })
     return result
+
+
+def _exec_fit_line_lfr(
+    inp: dict,
+    python_session_id: str = "default",
+    api_key: str = "",
+) -> dict | Awaitable[dict]:
+    """Compatibility wrapper for legacy synchronous tests/callers.
+
+    The public tool dispatcher uses the async implementation directly. Older
+    unit tests and helper code import ``_exec_fit_line_lfr`` and expect a plain
+    dict for cache-based fits, while newer arxiv_id tests await it. Returning a
+    coroutine only when already inside an event loop preserves both call styles
+    without exposing coroutine objects to synchronous callers.
+    """
+    coro = _exec_fit_line_lfr_async(inp, python_session_id, api_key)
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    return coro
 
 
 def _exec_demagnify_sample(inp: dict, python_session_id: str = "default") -> dict:

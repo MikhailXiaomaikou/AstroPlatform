@@ -14,8 +14,8 @@ def test_archive_source_mapping_matches_connector_gate() -> None:
 
     assert active_keys == set(V2_AVAILABLE_CONNECTORS)
     assert gated_keys == set(CONNECTORS_KEYS) - set(V2_AVAILABLE_CONNECTORS)
-    assert mapping["active_count"] == 6
-    assert mapping["gated_count"] == 18
+    assert mapping["active_count"] == 9
+    assert mapping["gated_count"] == 17
 
     alma = next(entry for entry in mapping["active"] if entry["key"] == "alma")
     assert "metadata only" in alma["measurement_scope"]
@@ -43,8 +43,8 @@ def test_source_mapping_summary_includes_cosmology_registry_progress() -> None:
 
     summary = source_mapping_summary()
 
-    assert summary["archive_active_count"] == 6
-    assert summary["archive_gated_count"] == 18
+    assert summary["archive_active_count"] == 9
+    assert summary["archive_gated_count"] == 17
     assert summary["literature_verified_seed_count"] == 1
     assert summary["literature_pending_seed_count"] >= 3
     assert summary["cosmology_dataset_count"] >= 8

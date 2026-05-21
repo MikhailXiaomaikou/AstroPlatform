@@ -98,6 +98,30 @@ ACTIVE_ARCHIVE_MAPPINGS: tuple[ArchiveSourceMapping, ...] = (
         measurement_scope="observation metadata only; no derived L[line] or FWHM",
         notes="No derived line luminosity or FWHM; those claims require literature measurement tables or a dedicated line-measurement source.",
     ),
+    ArchiveSourceMapping(
+        key="jpl",
+        display_name="JPL Horizons",
+        status="active",
+        provenance_layer="Horizons API + registry fallback",
+        measurement_scope="solar-system body ephemerides (geocentric/topocentric vectors and orbital elements)",
+        notes="Promoted to provenance-v2 active with the Solar System M0 module (2026-05-18). Backs the fetch_horizons_ephemeris tool; reference Giorgini et al. 1996 (1996DPS....28.2504G). Only surfaced when ASTRO_RESEARCH_FOCUS=solar_system.",
+    ),
+    ArchiveSourceMapping(
+        key="mpc",
+        display_name="IAU Minor Planet Center",
+        status="active",
+        provenance_layer="MPC orbit database + registry fallback",
+        measurement_scope="asteroid and comet orbital elements (osculating + designation metadata)",
+        notes="Promoted to provenance-v2 active with the Solar System M0 module (2026-05-18). Backs the query_mpc_orbit tool. Only surfaced when ASTRO_RESEARCH_FOCUS=solar_system.",
+    ),
+    ArchiveSourceMapping(
+        key="nasa_exoplanet_archive",
+        display_name="NASA Exoplanet Archive",
+        status="active",
+        provenance_layer="NExScI/IPAC archive tables + registry fallback",
+        measurement_scope="confirmed exoplanet, candidate, and TESS target metadata plus table-level archive citation",
+        notes="Promoted to provenance-v2 active with the Exoplanet M0 module (2026-05-20). Backs query_exoplanet_archive and query_confirmed_planets. Only surfaced when ASTRO_RESEARCH_FOCUS=exoplanet.",
+    ),
 )
 
 
@@ -116,7 +140,6 @@ GATED_ARCHIVE_SOURCES: tuple[str, ...] = (
     "xmm",
     "nvss",
     "first",
-    "jpl",
     "atnf_pulsar",
     "sparc",
     "frbstats",
@@ -244,7 +267,6 @@ def _display_name_for_gated(key: str) -> str:
         "xmm": "XMM-Newton",
         "nvss": "NVSS",
         "first": "FIRST",
-        "jpl": "JPL Horizons",
         "atnf_pulsar": "ATNF PSRCAT",
         "sparc": "SPARC",
         "frbstats": "FRBSTATS",
