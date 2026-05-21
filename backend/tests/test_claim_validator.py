@@ -152,6 +152,73 @@ def test_cosmology_claims_reject_config_only_likelihood_result():
     assert {claim.label for claim in r.uncited} >= {"cosmology_h0", "cosmology_s8"}
 
 
+def test_exploratory_mcmc_numbers_flow_into_numeric_universe():
+    """EXPLORATORY chain_tier (2026-05-20): numbers from the posterior should
+    flow into the numeric universe so chat-level discussion passes the +/-1%
+    check, even though publication_ready=False keeps the result out of the
+    bibcode / claimable-success pool."""
+    tool_results = [
+        {
+            "tool": "fit_cosmology_mcmc",
+            "result": {
+                "success": True,
+                "__tool_status__": "EXPLORATORY",
+                "analysis_status": "EXPLORATORY",
+                "chain_tier": "exploratory",
+                "publication_ready": False,
+                "__exploratory_warning__": "Chain min ESS=200 below publication threshold 400.",
+                "parameters": {
+                    "H0": {"median": 70.0, "ess_bulk": 200.0, "rhat": 1.07},
+                    "w0": {"median": -1.1, "ess_bulk": 200.0, "rhat": 1.07},
+                },
+            },
+        }
+    ]
+    r = validate_claims(
+        "An exploratory chain (ESS=200) suggests H0 around 70 km/s/Mpc and w0 around -1.1.",
+        tool_results,
+    )
+    assert r.ok
+
+
+def test_exploratory_mcmc_not_counted_as_claimable_success():
+    """EXPLORATORY MCMC result publication_ready=False -> excluded from the
+    claimable-success pool. It cannot be cited as a published constraint or
+    add bibcodes to the citation pool."""
+    from app.services.claim_validator import _payload_is_claimable_success
+
+    result = {
+        "success": True,
+        "__tool_status__": "EXPLORATORY",
+        "chain_tier": "exploratory",
+        "publication_ready": False,
+        "parameters": {"H0": {"median": 70.0}},
+    }
+    assert not _payload_is_claimable_success("fit_cosmology_mcmc", result)
+
+
+def test_exploratory_result_not_treated_as_empty_turn():
+    """EXPLORATORY status must not flip is_empty_turn to True. The posterior
+    is meaningful enough to discuss in chat; only PARTIAL+__do_not_claim__
+    and explicit EMPTY/FAILED/UNAVAILABLE qualify as empty."""
+    from app.services.claim_validator import is_empty_turn
+
+    tool_results = [
+        {
+            "tool": "fit_cosmology_mcmc",
+            "result": {
+                "success": True,
+                "__tool_status__": "EXPLORATORY",
+                "analysis_status": "EXPLORATORY",
+                "chain_tier": "exploratory",
+                "publication_ready": False,
+                "parameters": {"H0": {"median": 70.0}},
+            },
+        }
+    ]
+    assert is_empty_turn(tool_results) is False
+
+
 def test_cosmology_prior_bounds_do_not_support_posterior_claims():
     tool_results = [
         {

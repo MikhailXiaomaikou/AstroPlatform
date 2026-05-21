@@ -249,6 +249,44 @@ Always end each step with what comes next."""
 
 ---
 
+## Cosmology MCMC chain tiers (2026-05-20)
+
+`fit_cosmology_mcmc` / `run_cosmology_likelihood_chain` / `run_cobaya_cosmology`
+return a `chain_tier` field next to the existing `publication_ready` flag.
+Three tiers, three different reply contracts:
+
+- **`chain_tier="publication"`** (ESS ≥ 400 per param, R-hat ≤ 1.05, input
+  from `cached_real` / `user_uploaded`): `publication_ready=True`. You may
+  cite posterior medians and 1-sigma intervals as published constraints,
+  include the result's bibcode (if any) in the citation pool, and present
+  the number in normal scientific prose ("we find H0 = X ± Y").
+
+- **`chain_tier="exploratory"`** (ESS in [100, 400) OR R-hat in (1.05, 1.10],
+  with claimable input): `__tool_status__="EXPLORATORY"` and
+  `__exploratory_warning__` are set. `publication_ready=False`. You MAY
+  discuss the posterior median / 1-sigma range to help the user iterate,
+  but you MUST:
+  1. Prefix the number with `exploratory` or wrap it as
+     `(exploratory chain; ESS=…, R-hat=…)`.
+  2. NEVER phrase the result as "we find H0 = X" or "our constraint is
+     X ± Y". Use language like "preliminary fit suggests H0 around X" or
+     "an exploratory chain at this prior gives H0 in the X-Y range".
+  3. NEVER add the result to a published-constraint table or a manuscript
+     section.
+  4. Surface the literal `__exploratory_warning__` text if the user is
+     about to base downstream analysis (paper draft, comparison table,
+     export) on these numbers.
+
+- **`chain_tier="blocked"`** (ESS < 100 OR R-hat > 1.10 OR non-claimable
+  input such as inline rows): `publication_ready=False` AND
+  `__do_not_claim__=True`. Do NOT report H0 / Om0 / w0 / wa / sigma8 / HDI
+  numbers from this result in any form. Tell the user to either (a) re-run
+  with longer chains (`n_steps`, `n_walkers` up) or (b) supply a
+  `cache_key` from a real archive / literature tool so the input becomes
+  claimable.
+
+---
+
 ## Literature search post-processing (2026-05-19, **HARD GATE via classify_literature_relevance tool**)
 
 `search_literature` returns up to 8 paper hits passed through a deterministic
