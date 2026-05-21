@@ -27,7 +27,11 @@ DEFAULT_PRIORS: dict[str, tuple[float, float]] = {
     "H0": (50.0, 90.0),
     "Om0": (0.05, 0.6),
     "w0": (-2.5, -0.2),
-    "wa": (-4.0, 4.0),
+    # wa bound matches cosmology_likelihoods.RUNNER_PARAMETER_PRIORS["wa"]
+    # (review fix bug_010: previously diverged between (-4, 4) here and
+    # (-3, 2) in the runner; aligning to the DESI DR1 (-3, 2) convention,
+    # which also keeps (1+z)^(3(1+w0+wa)) numerically stable over z ≤ 3).
+    "wa": (-3.0, 2.0),
 }
 
 MODEL_PARAMETERS: dict[str, tuple[str, ...]] = {

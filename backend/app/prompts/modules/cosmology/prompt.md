@@ -105,8 +105,11 @@ This narration is what makes you a co-investigator instead of a tool
 dispatcher. The user can interrupt mid-chain if your reasoning is off —
 without narration they only see results and lose the chance to course-correct.
 
-**Language**: narrate in the user's language. If they wrote Chinese, narrate
-in Chinese (technical terms and bibcodes stay English).
+**Language**: narrate in **standard English** regardless of the user's input
+language. This matches the platform-wide English-only reply rule in `base.md`
+("PART X"), which is enforced by `claim_validator` as a hard-block on
+≥3 CJK characters. Technical terms, bibcodes, and equations were always
+English anyway; the narration follows the same rule.
 
 ---
 
