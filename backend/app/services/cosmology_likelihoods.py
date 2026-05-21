@@ -1903,13 +1903,33 @@ def _run_sampling_likelihood_chain(
             },
         },
     }
-    if exploratory_warning is not None:
+    # Per-tier rewrite of __message_to_model__ — keep the publication text
+    # only for the publication tier; for exploratory and blocked, replace
+    # with tier-specific guidance (mirrors fit_cosmology_emcee per-tier
+    # message handling; bug_013 review fix: otherwise the result dict's
+    # publication-tier instructions contradict the chain_tier badge).
+    if chain_tier == "exploratory" and exploratory_warning is not None:
         result["__exploratory_warning__"] = exploratory_warning
         result["warnings"] = list(result.get("warnings") or []) + [exploratory_warning]
-    if chain_tier == "blocked":
-        # Exploratory chains stay quotable (with the warning above); only the
-        # blocked tier gets the hard do-not-claim flag.
+        result["__message_to_model__"] = (
+            exploratory_warning
+            + " When reporting numbers, prefix with 'exploratory' and refuse "
+            "phrasings like 'we find H0 =' or 'our constraint is'."
+        )
+    elif chain_tier == "blocked":
         result["__do_not_claim__"] = True
+        blocked_reason = (
+            f"Importance sampler ESS={proposal_ess:.0f} below exploratory floor 100"
+            if not invalid_specs and proposal_ess < 100.0
+            else "Invalid compressed-likelihood specs: " + "; ".join(invalid_specs)
+            if invalid_specs
+            else "Chain did not reach a quotable posterior"
+        )
+        result["__message_to_model__"] = (
+            blocked_reason
+            + ". Do not cite H0, Om0, w0, wa, sigma8, S8, HDI, or posterior "
+            "constraints from this result."
+        )
     return result
 
 
@@ -2574,19 +2594,27 @@ PANTHEON_PLUS_M_B_REF = -19.253
 _GL64_NODES, _GL64_WEIGHTS = np.polynomial.legendre.leggauss(64)
 
 
-def _flat_lcdm_dm_grid_vectorized(
-    z: np.ndarray, h0: np.ndarray, omegam: np.ndarray
+def _flat_de_dm_grid_vectorized(
+    z: np.ndarray,
+    h0: np.ndarray,
+    omegam: np.ndarray,
+    w0: np.ndarray,
+    wa: np.ndarray,
 ) -> np.ndarray:
-    """Vectorized comoving distance D_M(z; H0, Ωm) over (z, sample) pairs.
+    """Vectorized comoving distance D_M(z; H0, Ωm, w0, wa) over (z, sample) pairs
+    under flat w0waCDM (CPL).  ΛCDM is the (w0=-1, wa=0) limit.
 
     z      : (n_sn,)        — redshifts to evaluate at
     h0     : (n_samples,)   — Hubble constant per posterior sample
     omegam : (n_samples,)   — Ωm per posterior sample
+    w0     : (n_samples,)   — dark-energy EOS at a=1 per sample
+    wa     : (n_samples,)   — dark-energy EOS slope per sample
     Returns: (n_sn, n_samples)  — D_M in Mpc
 
     Replaces the previous Python `for j, z_j in z` loop inside Pantheon+
-    chi² which dominated emcee runtime (1701 Python calls × 1000+ emcee
-    steps).  Computes one big NumPy einsum instead.
+    chi² with one big NumPy einsum, and adds DE-aware E(z) integrand so
+    wcdm/w0waCDM joint fits with SN are physically self-consistent
+    (bug fix from review #2: SN χ² used to silently override w to -1).
 
     Memory: O(n_samples · n_sn · 64) float64; ~30 MB for 32 walkers × 1701
     SN × 64 nodes.  Tractable.
@@ -2595,11 +2623,18 @@ def _flat_lcdm_dm_grid_vectorized(
     weights = _GL64_WEIGHTS
     # x[j, k] = 0.5 * z[j] * (nodes[k] + 1)  — quadrature variable
     x = 0.5 * z[:, None] * (nodes[None, :] + 1.0)            # (n_sn, 64)
-    one_plus_x_cubed = (1.0 + x) ** 3                        # (n_sn, 64)
-    # ez[i, j, k] = sqrt(Ωm[i] * (1+x[j,k])^3 + (1 - Ωm[i]))
+    one_plus_x = 1.0 + x                                     # (n_sn, 64)
+    one_plus_x_cubed = one_plus_x ** 3                       # (n_sn, 64)
+    # Scale factor a = 1/(1+x); ρ_DE(a)/ρ_DE,0 = a^(-3(1+w0+wa)) · exp(-3 wa (1-a))
+    a_int = 1.0 / one_plus_x                                 # (n_sn, 64)
+    rho_de = (
+        a_int[None, :, :] ** (-3.0 * (1.0 + w0[:, None, None] + wa[:, None, None]))
+        * np.exp(-3.0 * wa[:, None, None] * (1.0 - a_int[None, :, :]))
+    )                                                         # (n_samples, n_sn, 64)
+    # ez[i, j, k] = sqrt(Ωm[i] * (1+x[j,k])^3 + (1 - Ωm[i]) * ρ_DE)
     ez = np.sqrt(
         omegam[:, None, None] * one_plus_x_cubed[None, :, :]
-        + (1.0 - omegam[:, None, None])
+        + (1.0 - omegam[:, None, None]) * rho_de
     )                                                         # (n_samples, n_sn, 64)
     integral = 0.5 * z[None, :] * np.sum(weights[None, None, :] / ez, axis=2)
     # D_M = (c / H0) * integral
@@ -2607,12 +2642,25 @@ def _flat_lcdm_dm_grid_vectorized(
     return dm.T  # (n_sn, n_samples)
 
 
+def _flat_lcdm_dm_grid_vectorized(
+    z: np.ndarray, h0: np.ndarray, omegam: np.ndarray
+) -> np.ndarray:
+    """ΛCDM-only convenience wrapper around :func:`_flat_de_dm_grid_vectorized`.
+
+    Equivalent to (w0=-1, wa=0); kept as a thin shim for any caller that
+    has no DE parameters in its parameter_order.
+    """
+    w0 = np.full_like(h0, -1.0, dtype=float)
+    wa = np.zeros_like(h0, dtype=float)
+    return _flat_de_dm_grid_vectorized(z, h0, omegam, w0, wa)
+
+
 def _pantheon_plus_chi2_samples(
     samples: np.ndarray, parameter_order: list[str]
 ) -> np.ndarray:
-    """χ² contribution from Pantheon+SH0ES 1701 SNe Ia.
+    """χ² contribution from Pantheon+SH0ES 1701 SNe Ia under flat w0waCDM.
 
-    Model: μ_model(z) = 5·log10(D_L(z; H0, Ωm) [Mpc]) + 25 + (M_B - M_B_REF)
+    Model: μ_model(z) = 5·log10(D_L(z; H0, Ωm, w0, wa) [Mpc]) + 25 + (M_B - M_B_REF)
        where D_L = (1+z)·D_M, M_B_REF = -19.253 is the SH0ES baseline, and
        M_B is fit as a free nuisance.  At M_B = M_B_REF + 0 the model matches
        the SH0ES-calibrated distance modulus; offsets let the SN data
@@ -2620,17 +2668,34 @@ def _pantheon_plus_chi2_samples(
        with BAO/CMB.
     χ² = (μ_obs - μ_model)ᵀ · C⁻¹ · (μ_obs - μ_model)
 
-    parameter_order must contain "H0", "omegam", "M_B".
+    parameter_order must contain "H0", "omegam", "M_B".  Optionally also
+    "w"/"w0"/"wa": when present, those columns flow through the DE-aware
+    distance integrand so the joint posterior on the SN side is consistent
+    with the cosmological model (review fix bug_001: previously SN χ² was
+    hard-coded to ΛCDM regardless of model_key, silently biasing w/wa
+    posteriors toward -1/0 in DESI+SN joint fits).
     """
     data = _load_pantheon_plus_data()
     z = data["z_hd"]
     mu_obs = data["mu"]
     cov_inv = data["cov_inv"]
+    n_samples = samples.shape[0]
     h0 = samples[:, parameter_order.index("H0")]
     omegam = samples[:, parameter_order.index("omegam")]
     m_b = samples[:, parameter_order.index("M_B")]
-    # Vectorized D_M over (z, sample) — was a Python loop, now one einsum.
-    dm_grid = _flat_lcdm_dm_grid_vectorized(z, h0, omegam)   # (n_sn, n_samples)
+    # Read dark-energy params if present; default to ΛCDM (w0=-1, wa=0).
+    if "w0" in parameter_order:
+        w0 = samples[:, parameter_order.index("w0")]
+    elif "w" in parameter_order:
+        w0 = samples[:, parameter_order.index("w")]
+    else:
+        w0 = np.full(n_samples, -1.0, dtype=float)
+    if "wa" in parameter_order:
+        wa = samples[:, parameter_order.index("wa")]
+    else:
+        wa = np.zeros(n_samples, dtype=float)
+    # Vectorized D_M over (z, sample) under flat w0waCDM (CPL).
+    dm_grid = _flat_de_dm_grid_vectorized(z, h0, omegam, w0, wa)  # (n_sn, n_samples)
     dl_grid = (1.0 + z[:, None]) * dm_grid                   # (n_sn, n_samples), Mpc
     mu_model = (
         5.0 * np.log10(dl_grid) + 25.0 + (m_b[None, :] - PANTHEON_PLUS_M_B_REF)
