@@ -1,11 +1,9 @@
 """Unit tests for solar_system_thermo service (M0 Commit 3).
 
-物理验证: Harris 1998 diameter / NEATM (Mainzer+ 2011) subsolar T / 单波段 fit.
+Physics validation: Harris 1998 diameter / NEATM (Mainzer+ 2011) subsolar T / single-band fit.
 """
 
 from __future__ import annotations
-
-import math
 
 import pytest
 
@@ -18,25 +16,26 @@ def test_harris_diameter_ceres_matches_known():
     from app.services.solar_system_thermo import harris_diameter_km
 
     D = harris_diameter_km(H=3.34, p_V=0.090)
-    assert D == pytest.approx(940.0, abs=20.0), f"Ceres D = {D} km (期望 ~940)"
+    assert D == pytest.approx(940.0, abs=20.0), f"Ceres D = {D} km (expected ~940)"
 
 
 def test_harris_diameter_vesta_within_formula_precision():
-    """Vesta: H=3.20, p_V=0.42 → Harris formula 给 ~470 km;实际 D (Dawn) ≈ 525 km.
+    """Vesta: H=3.20, p_V=0.42 → Harris formula gives ~470 km; actual D (Dawn) ≈ 525 km.
 
-    Harris 1998 formula 本身就有 ±10-15% 系统精度(Vesta 非球形 + 投影几何效应),
-    所以容忍放宽到 ±80 km 覆盖 formula precision 范围。 实际 D 525 km 来自
-    Russell+ 2013 Dawn 直接测量,不是 Harris formula 反推。
+    The Harris 1998 formula itself has ±10-15% systematic precision (Vesta non-spherical +
+    projection geometry effects), so tolerance is relaxed to ±80 km to cover the formula
+    precision range. The actual D of 525 km comes from Russell+ 2013 Dawn direct measurement,
+    not back-calculated from the Harris formula.
     """
     from app.services.solar_system_thermo import harris_diameter_km
 
     D = harris_diameter_km(H=3.20, p_V=0.42)
-    # 公式精确值 ≈ 469 km,期望落在 [400, 600] km 区间
-    assert 400 <= D <= 600, f"Vesta Harris D = {D} km (公式期望 ~470, 真实 525)"
+    # formula exact value ≈ 469 km, expected to fall in [400, 600] km interval
+    assert 400 <= D <= 600, f"Vesta Harris D = {D} km (formula expects ~470, actual 525)"
 
 
 def test_harris_diameter_eros_matches_NEAR_within_formula_precision():
-    """433 Eros H=11.16 + p_V=0.25 → Harris formula D ≈ 16-17 km, NEAR 测量 ~16.8 km."""
+    """433 Eros H=11.16 + p_V=0.25 → Harris formula D ≈ 16-17 km, NEAR measurement ~16.8 km."""
     from app.services.solar_system_thermo import harris_diameter_km
 
     D = harris_diameter_km(H=11.16, p_V=0.25)
@@ -44,7 +43,7 @@ def test_harris_diameter_eros_matches_NEAR_within_formula_precision():
 
 
 def test_harris_albedo_round_trip():
-    """harris_albedo(H, D) 是 harris_diameter_km 的逆解."""
+    """harris_albedo(H, D) is the inverse of harris_diameter_km."""
     from app.services.solar_system_thermo import harris_albedo, harris_diameter_km
 
     H, pV = 14.6, 0.10
@@ -72,11 +71,11 @@ def test_phase_integral_bowell_at_typical_G():
 
 
 def test_neatm_subsolar_temp_neo_at_1au_typical_range():
-    """1 au, p_V=0.20, G=0.15, η=1.4: T_ss 应该在 ~360-410 K (NEA 典型)."""
+    """1 au, p_V=0.20, G=0.15, eta=1.4: T_ss should be in the ~360-410 K range (typical NEA)."""
     from app.services.solar_system_thermo import neatm_subsolar_temperature
 
     T = neatm_subsolar_temperature(p_V=0.20, G=0.15, r_au=1.0, eta=1.4)
-    assert 340 <= T <= 430, f"NEATM T_ss = {T} K (期望 ~360-410)"
+    assert 340 <= T <= 430, f"NEATM T_ss = {T} K (expected ~360-410)"
 
 
 def test_neatm_subsolar_temp_scales_with_r():
@@ -85,12 +84,12 @@ def test_neatm_subsolar_temp_scales_with_r():
 
     T_1au = neatm_subsolar_temperature(0.2, 0.15, 1.0, eta=1.4)
     T_4au = neatm_subsolar_temperature(0.2, 0.15, 4.0, eta=1.4)
-    # √(r) factor of 2 → T 减半
+    # sqrt(r) factor of 2 → T halves
     assert T_1au / T_4au == pytest.approx(2.0, rel=0.01)
 
 
 def test_neatm_subsolar_temp_higher_albedo_cooler():
-    """更高反照率 → 吸收少 → T_ss 低."""
+    """Higher albedo → less absorption → lower T_ss."""
     from app.services.solar_system_thermo import neatm_subsolar_temperature
 
     T_low_alb = neatm_subsolar_temperature(0.05, 0.15, 1.5, eta=1.4)
@@ -116,8 +115,8 @@ def test_planck_at_300K_10um_reasonable():
     from app.services.solar_system_thermo import planck_spectral_radiance
 
     B = planck_spectral_radiance(T=300.0, lambda_um=10.0)
-    # Wien's law max at λ=9.66 μm for 300 K, so 10 μm 接近 peak
-    assert 5e6 <= B <= 1e8, f"B_λ at 300 K, 10 μm = {B}"
+    # Wien's law max at lambda=9.66 micron for 300 K, so 10 micron is near peak
+    assert 5e6 <= B <= 1e8, f"B_lambda at 300 K, 10 micron = {B}"
 
 
 def test_planck_higher_T_higher_radiance():
@@ -139,7 +138,7 @@ def test_planck_invalid_input_raises():
 
 
 def test_neatm_fit_recovers_input_for_synthetic():
-    """正向预测 + 反向 fit:对同一 (H, D, p_V) 设置 should recover p_V."""
+    """Forward prediction + inverse fit: the same (H, D, p_V) setup should recover p_V."""
     from app.services.solar_system_thermo import (
         fit_diameter_albedo_neatm, harris_diameter_km,
         neatm_thermal_flux_density,
@@ -156,10 +155,10 @@ def test_neatm_fit_recovers_input_for_synthetic():
         H=H_true, observed_flux_jy=F_true, lambda_um=lam_um,
         r_au=r_au, delta_au=delta_au, G=G, eta=1.4,
     )
-    # 应该 recover p_V_true 和 D_true
+    # should recover p_V_true and D_true
     assert result["albedo_pV"] == pytest.approx(p_V_true, rel=0.05)
     assert result["diameter_km"] == pytest.approx(D_true, rel=0.05)
-    assert abs(result["residual_dex"]) < 0.05  # < 0.05 dex 残差
+    assert abs(result["residual_dex"]) < 0.05  # < 0.05 dex residual
 
 
 def test_neatm_fit_returns_diagnostics_dict():

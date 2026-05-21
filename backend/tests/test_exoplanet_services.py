@@ -6,8 +6,6 @@ Covers exoplanet_physical (T_eq, transit depth, density) + exoplanet_transit
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 

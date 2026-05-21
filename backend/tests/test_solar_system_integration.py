@@ -1,10 +1,10 @@
-"""Solar-system module M0 Commit 7 集成 smoke (盲测) — 端到端验证.
+"""Solar-system module M0 Commit 7 integration smoke (blind test) — end-to-end validation.
 
-目标:
-- 12 个工具都能通过 ai_tools.execute_tool() 主入口 dispatch
-- 金路径 chain (Phaethon: MPC orbit → Horizons ephemeris → HG mag) 串通
-- result_provenance.normalize_tool_result 正确分类 data_origin
-- claim_validator 对 solar_system bibcode 正确响应
+Goals:
+- All 12 tools can be dispatched via ai_tools.execute_tool() main entry point
+- Golden-path chain (Phaethon: MPC orbit → Horizons ephemeris → HG mag) runs end-to-end
+- result_provenance.normalize_tool_result correctly classifies data_origin
+- claim_validator responds correctly to solar_system bibcodes
 """
 
 from __future__ import annotations
@@ -12,25 +12,24 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-import pytest
 from astropy.table import Table
 
 
-# ── 12 个工具都能通过 ai_tools.execute_tool dispatch ─────────────
+# ── All 12 tools can dispatch via ai_tools.execute_tool ─────────────
 
 
 def test_all_twelve_tools_dispatch_via_execute_tool(monkeypatch):
-    """对每个工具发送最小合法 input, 验证 dispatch 不抛 unknown_tool."""
+    """Send minimal valid input to each tool and verify dispatch does not raise unknown_tool."""
     from app.services.ai_tools import execute_tool
 
-    # mock HTTP for SBDB/Sentry/DAMIT — 避免真实 outbound
+    # mock HTTP for SBDB/Sentry/DAMIT — avoid real outbound calls
     class FakeClient:
         def __init__(self, *a, **k): pass
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         async def get(self, url, params=None):
             req = httpx.Request("GET", url)
-            # 给一个合理 JSON 让 each tool 不至于 throw
+            # provide a reasonable JSON so each tool does not throw
             if "sentry" in url:
                 return httpx.Response(404, request=req)
             if "cad.api" in url:
@@ -50,7 +49,7 @@ def test_all_twelve_tools_dispatch_via_execute_tool(monkeypatch):
 
     minimal_inputs = {
         "query_mpc_orbit": {"designation": "Phaethon"},
-        "fetch_horizons_ephemeris": None,  # 见下 — Horizons 需 mock
+        "fetch_horizons_ephemeris": None,  # see below — Horizons needs a mock
         "query_sbdb_orbit": {"designation": "99942"},
         "query_sbdb_close_approaches": {"date_min": "2024-01-01", "date_max": "2025-01-01"},
         "query_sentry_risk": {"designation": "99942"},
@@ -80,7 +79,6 @@ def test_all_twelve_tools_dispatch_via_execute_tool(monkeypatch):
     # mock Horizons.ephemerides
     fake_eph = Table({"targetname": ["X"], "RA": [10.0], "DEC": [20.0]})
     import app.connectors.jpl as jpl_mod
-    import app.services.ai_tools_solar_system as ss_mod2
 
     class FakeHorizons:
         def __init__(self, **kw): pass
@@ -91,7 +89,7 @@ def test_all_twelve_tools_dispatch_via_execute_tool(monkeypatch):
         "target": "Phaethon", "start": "2026-01-01", "stop": "2026-01-02",
     }
     # mock astroquery.jplhorizons inside _exec_fetch_horizons_ephemeris
-    # 因为它在函数内部 import, 用 monkeypatch sys.modules
+    # because it is imported inside the function, use monkeypatch on sys.modules
     import sys
     fake_module = type(sys)("astroquery.jplhorizons")
     fake_module.Horizons = FakeHorizons  # type: ignore[attr-defined]
@@ -103,20 +101,20 @@ def test_all_twelve_tools_dispatch_via_execute_tool(monkeypatch):
     for tool_name in SOLAR_SYSTEM_TOOL_NAMES:
         inp = minimal_inputs[tool_name]
         result = asyncio.run(execute_tool(tool_name, inp, python_session_id=None))
-        # 应该是 dict, 且包含 success 字段 (或至少 __tool_status__)
+        # must be a dict containing a success field (or at least __tool_status__)
         assert isinstance(result, dict), f"{tool_name} returned non-dict"
-        # 不能 unknown_tool
+        # must not be unknown_tool
         if result.get("error_class") == "unknown_tool":
             fail_classes.append(tool_name)
-        # 不能 raise — 所有错误都包成 FAILED banner
+        # must not raise — all errors must be wrapped in a FAILED banner
     assert not fail_classes, f"dispatch fail: {fail_classes}"
 
 
-# ── 金路径: Phaethon ephemeris + HG ──────────────────────────────
+# ── Golden path: Phaethon ephemeris + HG ──────────────────────────────
 
 
 def test_phaethon_golden_path_chain(monkeypatch):
-    """模拟 LLM chain: MPC → Horizons → HG mag → 数值合理且 provenance 完整."""
+    """Simulates LLM chain: MPC → Horizons → HG mag → values are physically reasonable and provenance is complete."""
     from app.services.ai_tools import execute_tool
     from astropy.table import Table
 
@@ -193,17 +191,17 @@ def test_phaethon_golden_path_chain(monkeypatch):
     for V_pred, V_hor in zip(V_predicted, V_horizons):
         assert abs(V_pred - V_hor) < 1.5, f"V_pred={V_pred} vs V_hor={V_hor}"
 
-    # 验证 provenance 链:Horizons rows 有 jpl _provenance_dataset
+    # verify provenance chain: Horizons rows have jpl _provenance_dataset
     assert eph_result.get("_provenance_dataset", {}).get("service_key") == "jpl"
-    # MPC result 有 mpc _provenance_dataset
+    # MPC result has mpc _provenance_dataset
     assert mpc_result.get("_provenance_dataset", {}).get("service_key") == "mpc"
 
 
-# ── data_source enum 反幻造路径 ────────────────────────────────
+# ── data_source enum anti-fabrication path ────────────────────────────────
 
 
 def test_user_supplied_data_source_downgrades_data_origin():
-    """当 LLM 标 data_source='user_supplied' (没经过 archive), 输出 data_origin 应降级."""
+    """When the LLM marks data_source='user_supplied' (not from an archive), output data_origin should be downgraded."""
     from app.services.ai_tools import execute_tool
 
     result = asyncio.run(execute_tool(
@@ -216,14 +214,14 @@ def test_user_supplied_data_source_downgrades_data_origin():
         python_session_id=None,
     ))
     assert result["success"] is True
-    assert result["data_origin"] == "user_uploaded"  # 降级标记
+    assert result["data_origin"] == "user_uploaded"  # downgrade marker
 
 
 def test_failed_tool_returns_do_not_claim_banner():
-    """任何 _exec_* 抛异常 → FAILED + __do_not_claim__=True + 不 leak python exc."""
+    """Any _exec_* exception → FAILED + __do_not_claim__=True + no Python exc leak."""
     from app.services.ai_tools import execute_tool
 
-    # invalid α=200 (out of [0, 180]) — 应该 FAILED
+    # invalid α=200 (out of [0, 180]) — should be FAILED
     result = asyncio.run(execute_tool(
         "compute_hg_magnitude",
         {
@@ -238,11 +236,11 @@ def test_failed_tool_returns_do_not_claim_banner():
     assert "out of range" in result["error"].lower() or "200" in result["error"]
 
 
-# ── normalize_tool_result 分类正确 ────────────────────────────
+# ── normalize_tool_result classification is correct ────────────────────────────
 
 
 def test_normalize_classifies_data_tool_correctly():
-    """query_mpc_orbit 应该被分类为 _DATA_TOOLS, banner 不是 UNAVAILABLE."""
+    """query_mpc_orbit should be classified as a _DATA_TOOLS entry; banner must not be UNAVAILABLE."""
     from app.services.result_provenance import normalize_tool_result
 
     fake_result = {
@@ -252,12 +250,12 @@ def test_normalize_classifies_data_tool_correctly():
         "orbital_elements": {"a": 1.0},
     }
     normalised = normalize_tool_result("query_mpc_orbit", fake_result)
-    # 不该 silent downgrade 为 UNAVAILABLE
+    # must not silently downgrade to UNAVAILABLE
     assert normalised.get("__tool_status__") != "UNAVAILABLE"
 
 
 def test_normalize_classifies_compute_tool_correctly():
-    """compute_hg_magnitude 在 _COMPUTE_TOOLS, normalize 后 data_origin 不是 unavailable."""
+    """compute_hg_magnitude is in _COMPUTE_TOOLS; after normalize, data_origin must not be unavailable."""
     from app.services.result_provenance import normalize_tool_result
 
     fake_result = {

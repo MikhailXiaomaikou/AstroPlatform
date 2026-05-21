@@ -229,8 +229,8 @@ async def _resolve_search_coordinates(
         loop = asyncio.get_running_loop()
         coord = await loop.run_in_executor(None, partial(SkyCoord.from_name, query))
         return coord.ra.deg, coord.dec.deg
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("SkyCoord.from_name fallback for %s: %s", query, e)
 
     try:
         simbad = get_connector("simbad")
@@ -955,8 +955,8 @@ async def get_fits_header(
     finally:
         try:
             hdul.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("hdul.close failed in get_fits_header: %s", e)
 
     return FITSHeaderResponse(
         fits_path=fits_path,
@@ -1088,7 +1088,8 @@ async def get_fits_wcs(
                         wcs = w
                         img_shape = hdu.data.shape
                         break
-                except Exception:
+                except Exception as e:
+                    logger.debug("WCS parse skipped for HDU: %s", e)
                     continue
 
         if wcs is None or img_shape is None:
@@ -1131,7 +1132,8 @@ async def get_fits_wcs(
                         "text": f"{h_int}h{m_int:02d}m{s_flt:04.1f}s",
                         "x": mid[0], "y": mid[1], "type": "ra"
                     })
-            except Exception:
+            except Exception as e:
+                logger.debug("RA grid line projection failed: %s", e)
                 continue
 
         # Dec grid lines (horizontal in image)
@@ -1157,7 +1159,8 @@ async def get_fits_wcs(
                         "text": f"{sign}{abs(d_int)}\u00b0{m_int:02d}'{s_flt:04.1f}\"",
                         "x": mid[0], "y": mid[1], "type": "dec"
                     })
-            except Exception:
+            except Exception as e:
+                logger.debug("Dec grid line projection failed: %s", e)
                 continue
 
         return {
@@ -1447,10 +1450,10 @@ class AnalyzeRequest(BaseModel):
 async def analyze_fits_spectrum(
     request: Request,
     req: AnalyzeRequest,
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """AI-powered spectrum analysis: extract features + Claude interpretation."""
-    import os
     from app.services.spectrum_analyzer import (
         extract_spectrum_from_fits,
         analyze_spectrum,
@@ -1460,6 +1463,16 @@ async def analyze_fits_spectrum(
 
     if ".." in req.fits_path or req.fits_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid file path")
+
+    # IDOR protection: only allow the caller to analyze their own uploaded FITS files.
+    own_check = await db.execute(
+        select(DataFile).where(
+            DataFile.fits_path == req.fits_path,
+            DataFile.user_id == user.id,
+        )
+    )
+    if own_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="FITS file not found")
 
     # 1. Extract spectrum
     try:
@@ -1503,13 +1516,13 @@ async def analyze_fits_spectrum(
     }
 
     # 5. AI interpretation (optional, requires API key)
+    # BYOK: use only req.api_key or the user's stored key; do not fall back to the platform env key.
     api_key = req.api_key
     if not api_key:
         user_keys = (user.api_keys or {}) if user else {}
         api_key = (
             user_keys.get("anthropic")
             or (user.anthropic_api_key if user and user.anthropic_api_key else None)
-            or os.getenv("ANTHROPIC_API_KEY", "")
         )
 
     if api_key:

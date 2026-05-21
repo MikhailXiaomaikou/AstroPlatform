@@ -20,14 +20,16 @@ router = APIRouter(prefix="/api/export", tags=["export"])
 
 # ---------- Chat-export shared helpers (markdown / notebook / html) ----------
 
-# stdout 单 cell 截断阈值. 100+ 页报告的元凶是少数 run_python 把几千行
-# 数值或大表格 print 出来. 超过这条线就截尾, 留 head + tail 显示总行数.
+# Per-cell stdout truncation threshold. The culprit behind 100+ page reports
+# is a handful of run_python calls that print thousands of rows or large tables.
+# Anything beyond this limit is tail-truncated, keeping head + tail with a
+# total line count.
 _STDOUT_HEAD_LINES = 30
 _STDOUT_TAIL_LINES = 5
 
 
 def _truncate_stdout(stdout: str) -> str:
-    """长 stdout (千行级) 截到 head + tail, 中间用一行省略号代替."""
+    """Truncate long stdout (thousands of lines) to head + tail, with a single ellipsis line in between."""
     if not stdout:
         return ""
     lines = stdout.splitlines()
@@ -42,22 +44,23 @@ def _truncate_stdout(stdout: str) -> str:
 
 
 def _action_summary_one_liner(action: dict) -> str | None:
-    """非 run_python action 的"一行摘要", 替代之前的全 params dump.
+    """One-liner summary for non-run_python actions, replacing the previous full params dump.
 
-    返回 None 表示这条 action 不值得在 export 里出现 (例如 unknown / 系统层级
-    元数据). 过滤掉之后, 长会话的 export 体积可以压到 1/10."""
+    Returns None if the action is not worth showing in an export (e.g. unknown
+    or system-level metadata). Filtering these out can compress long-session
+    exports to 1/10 of their original size."""
     name = str(action.get("action") or "").strip()
     if not name or name in {"agent_text", "honest_abstention", "tool_progress"}:
         return None
 
     result = action.get("tool_result")
     if isinstance(result, dict):
-        # 优先用结果级摘要 (各工具自己写的 summary 字段最可靠)
+        # Prefer the result-level summary (the tool's own summary field is most reliable).
         summary = result.get("summary") or result.get("note")
         if isinstance(summary, str) and summary.strip():
             short = summary.strip().replace("\n", " ")
             return f"`{name}` — {short[:200]}"
-        # run_adql / search_objects 这种, 摘 row_count + columns
+        # For run_adql / search_objects style results, extract row_count + columns.
         if "row_count" in result:
             row_count = result.get("row_count")
             cols = result.get("columns")
@@ -71,7 +74,7 @@ def _action_summary_one_liner(action: dict) -> str | None:
             return tag
         if "results" in result and isinstance(result["results"], list):
             return f"`{name}` → {len(result['results'])} matches"
-        # 错误状态明示出来
+        # Surface error status explicitly.
         err = result.get("error")
         if isinstance(err, str) and err.strip():
             return f"`{name}` → ⚠ {err.strip()[:200]}"
@@ -82,8 +85,9 @@ def _action_summary_one_liner(action: dict) -> str | None:
 
 
 def _figures_already_present(actions: list[dict]) -> bool:
-    """如果传上来的 actions 里至少一个 run_python 已经带了 figures bytes,
-    就不用查 DB 了. 这是 figures-offload fallback 的快速短路."""
+    """Return True if at least one run_python action in the submitted list
+    already carries figure bytes, so we can skip the DB lookup.
+    This is a fast-path short-circuit for the figures-offload fallback."""
     for action in actions or []:
         if not isinstance(action, dict):
             continue
@@ -98,8 +102,9 @@ def _figures_already_present(actions: list[dict]) -> bool:
 
 
 def _actions_need_rehydrate(actions: list[dict]) -> bool:
-    """前端把 figures 从 localStorage prune 后, 会留下 __figures_offloaded__
-    或者 __offloaded__ 标记 (PART X). 检测到这种标记就说明需要从 DB 拉回."""
+    """Return True if the frontend has pruned figures from localStorage,
+    leaving behind a __figures_offloaded__ or __offloaded__ marker (PART X).
+    Detecting either marker means we need to pull the figures back from the DB."""
     for action in actions or []:
         if not isinstance(action, dict):
             continue
@@ -119,13 +124,15 @@ async def _rehydrate_messages_from_db(
     user: User | None,
     db: AsyncSession,
 ) -> list[dict]:
-    """如果 figures 在前端已被 offload (localStorage 4MB 软上限),
-    用 session_id + 登录态 user 从 chat_sessions DB 拉完整 messages 回来.
+    """If figures have been offloaded from the frontend (localStorage 4 MB
+    soft cap), use session_id + authenticated user to pull the full messages
+    back from the chat_sessions DB.
 
-    服务端 chat_sessions.messages JSON 字段不 prune, figures base64 还在那.
-    匹配规则: 按消息 index 对齐 + 双方 actions 数量一致 + action name 对得
-    上, 把 DB 的 tool_result.figures 复制到当前 actions 上 (其它字段保留前端
-    传上来的, 因为可能更新)."""
+    The server-side chat_sessions.messages JSON field is never pruned, so
+    figures base64 is still there. Matching rule: align by message index +
+    equal action counts on both sides + matching action names, then copy
+    DB tool_result.figures onto the current actions (all other fields are kept
+    from the frontend version since they may have been updated)."""
     if not session_id or user is None:
         return messages
     if not _actions_need_rehydrate(messages) and _figures_already_present(
@@ -165,7 +172,7 @@ async def _rehydrate_messages_from_db(
             continue
         db_actions = db_msg.get("actions") or []
         if len(db_actions) != len(front_actions):
-            # 错位时不强行匹配, 避免把别的图安到不相干的 cell 上
+            # If counts differ, do not force a match to avoid attaching the wrong figures to an unrelated cell.
             out.append(msg)
             continue
         rebuilt: list[dict] = []
@@ -188,7 +195,7 @@ async def _rehydrate_messages_from_db(
                 rebuilt.append(f_act)
                 continue
             new_result = dict(f_result or {})
-            # 只覆盖 figures 字段, 其它字段以前端版本为准
+            # Only overwrite the figures field; all other fields defer to the frontend version.
             new_result["figures"] = db_figures
             new_result.pop("__figures_offloaded__", None)
             new_result.pop("__offloaded__", None)
@@ -198,7 +205,7 @@ async def _rehydrate_messages_from_db(
 
 
 def _normalize_figure_to_data_uri(fig: str) -> str | None:
-    """统一 figures 字段的两种存法: 'data:image/png;base64,XXX' 或裸 base64."""
+    """Normalize the two ways figures are stored: 'data:image/png;base64,XXX' or bare base64."""
     if not isinstance(fig, str) or not fig:
         return None
     if fig.startswith("data:image"):
@@ -207,7 +214,7 @@ def _normalize_figure_to_data_uri(fig: str) -> str | None:
 
 
 def _normalize_figure_to_bare_base64(fig: str) -> str | None:
-    """Jupyter display_data 的 image/png 必须是裸 base64."""
+    """Jupyter display_data image/png must be bare base64 (no data-URI prefix)."""
     if not isinstance(fig, str) or not fig:
         return None
     if fig.startswith("data:image"):
@@ -720,8 +727,9 @@ class ChatMarkdownRequest(_BaseModel):
     """Export a chat session as a Markdown report."""
     messages: list[dict] = []
     title: str = "AI Research Chat"
-    # 可选 session_id: 如果提供 + 用户登录, figures 被 localStorage offload
-    # 时后端会按 session_id + user.id 从 DB 把 figures 拉回来再嵌入.
+    # Optional session_id: if provided and the user is logged in, figures that
+    # have been offloaded from localStorage will be pulled back from the DB
+    # (keyed by session_id + user.id) and embedded before export.
     session_id: str | None = None
 
 
@@ -733,12 +741,12 @@ async def export_chat_as_markdown(
 ):
     """Export an AI chat session as a downloadable Markdown report.
 
-    输出策略 (PART AI 重写, 解决"100+ 页 / 没图"):
-      - 不再把每个 action 都写成 ### Action 标题 + 全 params dump.
-      - run_python: 代码 + 内嵌图 + stdout (头 30 行 + 尾 5 行截断)
-      - 其他工具: 一行摘要 (如 "run_adql → 571 rows (ra, dec, plx ...)")
-      - 长 stdout 截尾, 防止单条 print 几千行炸文档.
-      - 如果前端 figures 已被 offload, 用 session_id 从 DB 拉回.
+    Output strategy (PART AI rewrite, addressing "100+ pages / no figures"):
+      - No longer renders every action as a ### Action heading + full params dump.
+      - run_python: code + embedded figures + stdout (first 30 + last 5 lines, truncated)
+      - Other tools: one-liner summary (e.g. "run_adql -> 571 rows (ra, dec, plx ...)")
+      - Long stdout is tail-truncated to prevent a single print from exploding the document.
+      - If the frontend has offloaded figures, use session_id to pull them back from the DB.
     """
     messages = await _rehydrate_messages_from_db(
         list(req.messages or []), req.session_id, user, db,
@@ -774,8 +782,8 @@ async def export_chat_as_markdown(
                 lines.append(content)
                 lines.append("")
 
-        # 一行摘要先列出本回合所有非 run_python 工具调用 — 用户能扫过去
-        # 知道做了哪些事, 不再被 100+ 行 dump 淹没.
+        # List all non-run_python tool calls for this turn as one-liners first —
+        # the user can skim and see what happened without wading through a 100+ line dump.
         non_python_summaries: list[str] = []
         python_actions: list[dict] = []
         for action in actions:
@@ -794,7 +802,7 @@ async def export_chat_as_markdown(
                 lines.append(f"- {s}")
             lines.append("")
 
-        # run_python 仍然展开 — 那是出图的源头.
+        # run_python is still expanded in full — it is the source of figures.
         for py_idx, action in enumerate(python_actions, start=1):
             tool_input = action.get("tool_input") if isinstance(action.get("tool_input"), dict) else {}
             params = action.get("params") if isinstance(action.get("params"), dict) else {}
@@ -1755,11 +1763,12 @@ async def export_chat_as_notebook(
                     or tool_input.get("code", "")
                 )
                 if code:
-                    # 把上次 run_python 的真实 stdout / figures / error 当成
-                    # Jupyter cell outputs 写出来. 这样 .ipynb 在 Jupyter /
-                    # JupyterLab / VS Code / GitHub / nbviewer / Colab 里直接
-                    # 显示图,不需要再重跑 cell (重跑也跑不出来,因为 astro.*
-                    # helper 在普通 Jupyter kernel 里没有).
+                    # Write the real stdout / figures / error from the last
+                    # run_python call as Jupyter cell outputs, so the .ipynb
+                    # displays figures immediately in Jupyter / JupyterLab /
+                    # VS Code / GitHub / nbviewer / Colab without re-running
+                    # the cell (re-running would also fail because astro.*
+                    # helpers are not available in a standard Jupyter kernel).
                     outputs: list[dict] = []
                     tool_result = action.get("tool_result")
                     if isinstance(tool_result, dict):
@@ -1775,7 +1784,7 @@ async def export_chat_as_notebook(
                             for fig in figures:
                                 if not isinstance(fig, str) or not fig:
                                     continue
-                                # 接受 "data:image/png;base64,XXX" 或裸 base64.
+                                # Accept either "data:image/png;base64,XXX" or bare base64.
                                 if fig.startswith("data:image"):
                                     _, _, b64 = fig.partition(",")
                                 else:
@@ -1822,14 +1831,14 @@ async def export_chat_as_notebook(
 # ---------- HTML self-contained chat export (PART AI) ----------
 
 class ChatHtmlRequest(_BaseModel):
-    """Self-contained HTML report. 双击在浏览器看 / Ctrl+P 打 PDF."""
+    """Self-contained HTML report. Open by double-clicking in a browser / print to PDF with Ctrl+P."""
     messages: list[dict] = []
     title: str = "AI Research Session"
     session_id: str | None = None
 
 
 def _html_escape(s: object) -> str:
-    """最小 HTML 转义, 防 user content 里的 <script> 落地. 不依赖 markupsafe."""
+    """Minimal HTML escaping to prevent <script> tags in user content from landing. No markupsafe dependency."""
     text = "" if s is None else str(s)
     return (
         text.replace("&", "&amp;")
@@ -1841,16 +1850,17 @@ def _html_escape(s: object) -> str:
 
 
 def _render_user_content_as_html(content: str) -> str:
-    """User / Assistant 文本: 保留段落 + 简单 markdown 加粗 / inline code,
-    其余按字面渲染. 不引入 markdown 库, 防止依赖膨胀."""
+    """Render user/assistant text as HTML: preserve paragraphs + simple markdown
+    bold / inline code; render everything else literally. No markdown library
+    dependency to avoid bloat."""
     if not content:
         return ""
     safe = _html_escape(content)
-    # 三种最常用: **加粗** / `inline code` / 段落 (双换行)
+    # Three most common patterns: **bold** / `inline code` / paragraphs (double newline)
     import re as _re
     safe = _re.sub(r"\*\*([^*\n]+)\*\*", r"<strong>\1</strong>", safe)
     safe = _re.sub(r"`([^`\n]+)`", r"<code>\1</code>", safe)
-    # 段落: 用空行分块
+    # Paragraphs: split on blank lines.
     blocks = [b.strip() for b in safe.split("\n\n") if b.strip()]
     return "".join(
         f"<p>{block.replace(chr(10), '<br>')}</p>" for block in blocks
@@ -1988,8 +1998,9 @@ async def export_chat_as_html(
 ):
     """Export the AI chat as a self-contained HTML file.
 
-    一个 .html, 双击在浏览器即开. 所有图 base64 内嵌. Ctrl+P 直接打 PDF.
-    适合分享 / 打印 / 归档比 .md 更友好的场景."""
+    A single .html file that opens by double-clicking in a browser. All figures
+    are embedded as base64. Ctrl+P prints directly to PDF. Better suited for
+    sharing / printing / archiving than .md."""
     messages = await _rehydrate_messages_from_db(
         list(req.messages or []), req.session_id, user, db,
     )
@@ -2010,7 +2021,7 @@ async def export_chat_as_html(
     parts.append(f"<h1>{title}</h1>")
     parts.append(f"<p style='color:var(--ink-muted)'>Generated {timestamp} · {len(messages)} turns</p>")
 
-    # Table of contents — 用 user 消息的前 60 字符当锚点
+    # Table of contents — use the first 60 characters of each user message as the anchor label.
     toc_entries: list[tuple[str, str]] = []
     for idx, msg in enumerate(messages):
         if isinstance(msg, dict) and msg.get("role") == "user":
@@ -2045,7 +2056,7 @@ async def export_chat_as_html(
         if content:
             parts.append(_render_user_content_as_html(content))
 
-        # 一行摘要列出非 run_python action
+        # One-liner summary of non-run_python actions.
         non_python = []
         python_actions = []
         for action in actions:
