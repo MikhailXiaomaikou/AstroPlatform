@@ -11,13 +11,14 @@ def test_only_v2_connectors_are_available():
     from app.connectors.availability import V2_AVAILABLE_CONNECTORS, is_available
     from app.connectors.registry import CONNECTORS_KEYS
 
-    # M0 Commit 2 (2026-05-18): jpl + mpc 加入 V2(solar_system 模块)
+    # M0 Commit 2/Exoplanet M0: jpl + mpc + NASA Exoplanet Archive are v2-active.
     assert V2_AVAILABLE_CONNECTORS == {
-        "vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc"
+        "vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc",
+        "nasa_exoplanet_archive",
     }
 
     gated = set(CONNECTORS_KEYS) - V2_AVAILABLE_CONNECTORS
-    # CONNECTORS_KEYS: 25 项(原 24 + mpc),V2: 8 项,gated: 17 项
+    # CONNECTORS_KEYS: 26 entries, V2: 9 entries, gated: 17 entries
     assert len(gated) == 17
     assert all(not is_available(source) for source in gated)
     assert all(is_available(source) for source in V2_AVAILABLE_CONNECTORS)
@@ -63,9 +64,10 @@ def test_active_connector_initialization_skips_gated_modules():
     connector = registry.get_connector("gaia")
 
     assert connector.source_name == "gaia"
-    # M0 Commit 2: jpl + mpc 实例同步注册
+    # M0 Commit 2 + Exoplanet M0: active instances registered synchronously.
     assert set(registry._connectors) == {
-        "gaia", "alma", "simbad", "vizier", "ned", "2mass", "jpl", "mpc"
+        "gaia", "alma", "simbad", "vizier", "ned", "2mass", "jpl", "mpc",
+        "nasa_exoplanet_archive",
     }
     assert "app.connectors.sdss" not in sys.modules
     assert "app.connectors.chandra" not in sys.modules
@@ -88,7 +90,8 @@ async def test_search_objects_returns_unavailable_banner_for_gated_source():
     assert "app.connectors.chandra" not in sys.modules
     assert result["__tool_status__"] == "UNAVAILABLE"
     assert result["__do_not_claim__"] is True
-    assert "VizieR, Gaia DR3, SIMBAD, NED, 2MASS, or ALMA" in result["__message_to_model__"]
+    assert "available provenance-v2 alternatives" in result["__message_to_model__"]
+    assert "nasa_exoplanet_archive" in result["available_alternatives"]
     assert result["results"] == []
     assert result["total"] == 0
     assert result["per_source"][0]["source"] == "chandra"
@@ -114,9 +117,10 @@ async def test_run_sdss_sql_is_gated_until_provenance_ready():
     assert result["__tool_status__"] == "UNAVAILABLE"
     assert result["__do_not_claim__"] is True
     assert result["unavailable_sources"] == ["sdss"]
-    # M0 Commit 2: jpl + mpc 加入 available_alternatives
+    # M0 Commit 2 + Exoplanet M0: jpl + mpc + NASA Exoplanet Archive are available.
     assert result["available_alternatives"] == [
-        "vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc"
+        "vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc",
+        "nasa_exoplanet_archive",
     ]
 
     counters = metrics.snapshot()["counters"]["connector_gated_total"]
@@ -127,8 +131,8 @@ async def test_run_sdss_sql_is_gated_until_provenance_ready():
 
 
 def test_solar_system_v2_connectors_register_under_get_connector():
-    """M0 Commit 2: jpl + mpc 走 BaseConnector 标准路径,
-    is_available 返 True, get_connector 返回正确 class 实例."""
+    """M0 Commit 2: jpl + mpc follow the BaseConnector standard path,
+    is_available returns True, get_connector returns the correct class instance."""
     from app.connectors import registry
 
     registry._connectors = None
@@ -141,8 +145,8 @@ def test_solar_system_v2_connectors_register_under_get_connector():
 
 
 def test_solar_system_connectors_have_fallback_registry_entries():
-    """fallback_registry.yaml 必须包含 jpl/mpc/sbdb/sentry/damit 5 个 entry,
-    否则 resolve_ivoa_dataorigin 返 None → _provenance_dataset silent drop."""
+    """fallback_registry.yaml must contain 5 entries for jpl/mpc/sbdb/sentry/damit,
+    otherwise resolve_ivoa_dataorigin returns None → _provenance_dataset silent drop."""
     from app.services.provenance_v2.registry_loader import dataset_from_registry
 
     for service_hint in ("jpl", "mpc", "sbdb", "sentry", "damit"):

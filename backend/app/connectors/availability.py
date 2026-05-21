@@ -64,11 +64,11 @@ def build_unavailable_response(
             f"Tool `{tool_name}` could not use connector(s) {label!r}: {message} "
             "You MUST NOT claim any numerical result from the unavailable connector(s). "
             "Tell the user the source is temporarily under maintenance and suggest "
-            "VizieR, Gaia DR3, SIMBAD, NED, 2MASS, or ALMA as available alternatives."
+            "one of the available provenance-v2 alternatives."
         ),
         "__suggested_next_step__": (
             "Retry with one or more available v2 sources: "
-            "vizier, gaia, simbad, ned, 2mass, or alma."
+            f"{', '.join(alternatives)}."
         ),
     }
     response = dict(banner)

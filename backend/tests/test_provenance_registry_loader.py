@@ -6,13 +6,16 @@ import logging
 import pytest
 
 
-def test_load_registry_has_six_services():
+def test_load_registry_has_current_services():
     from app.services.provenance_v2.registry_loader import load_registry
 
     registry = load_registry()
 
     assert registry["schema_version"] == 1
-    assert set(registry["services"]) == {"vizier", "gaia", "simbad", "ned", "2mass", "alma"}
+    assert set(registry["services"]) == {
+        "vizier", "gaia", "simbad", "ned", "2mass", "alma",
+        "jpl", "mpc", "sbdb", "sentry", "damit", "nasa_exoplanet_archive",
+    }
 
 
 def test_resolve_service_by_key_url_catalog_and_ivoid():

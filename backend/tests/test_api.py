@@ -1413,7 +1413,7 @@ class TestCollaborationAndMemoryEndpoints:
 
 
 class TestChatMultiAgentRouting:
-    async def test_chat_replays_prior_successful_python_actions(self, app_client):
+    async def test_chat_replays_prior_successful_python_actions(self, app_client, test_user):
         from app.services.code_executor import clear_session_vars
 
         clear_session_vars("chat-replay")
@@ -1424,6 +1424,7 @@ class TestChatMultiAgentRouting:
         with patch("app.api.chat._run_orchestrated_chat", new=fake_run_orchestrated_chat):
             resp = await app_client.post(
                 "/api/chat/message",
+                headers={"Authorization": f"Bearer {test_user[1]}"},
                 json={
                     "messages": [
                         {
@@ -1449,7 +1450,7 @@ class TestChatMultiAgentRouting:
         assert replay_check.success
         assert replay_check.stdout.strip() == "42"
 
-    async def test_chat_message_executes_all_classified_agents(self, app_client):
+    async def test_chat_message_executes_all_classified_agents(self, app_client, test_user):
         calls: list[str] = []
 
         async def fake_build_runtime(req, user, db):
@@ -1475,6 +1476,7 @@ class TestChatMultiAgentRouting:
         ):
             resp = await app_client.post(
                 "/api/chat/message",
+                headers={"Authorization": f"Bearer {test_user[1]}"},
                 json={"messages": [{"role": "user", "content": "Find data and analyze it"}]},
             )
 
