@@ -440,7 +440,7 @@ _COMPUTE_TOOLS = {
 }
 _REFERENCE_TOOLS = {
     "search_literature", "read_arxiv_paper", "extract_literature_tables", "research_workflow", "generate_proposal", "get_followup_recommendation",
-    "verify_research_facts",
+    "classify_literature_relevance", "verify_research_facts",
     # PART Y Batch 1 (audit follow-up): export_sample_table emits a
     # citable machine-readable table from a cached sample, no new analysis.
     "export_sample_table",
