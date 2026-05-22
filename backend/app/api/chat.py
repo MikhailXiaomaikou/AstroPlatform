@@ -2336,13 +2336,13 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     if isinstance(fact_check, dict):
         lines.extend(["", "Fact verification"])
         lines.append(
-            f"- Fact-check status: {fact_check.get('status', 'unknown')}; "
+            f"- Draft fact-check status: {fact_check.get('status', 'unknown')}; "
             f"{fact_check.get('verified_claim_count', 0)} verified, "
             f"{fact_check.get('unsupported_claim_count', 0)} unsupported/contradicted."
         )
         rewrites = fact_check.get("safe_rewrites")
         if isinstance(rewrites, list) and rewrites:
-            lines.append("- Unsafe draft claims were rewritten or should be replaced by the safe-rewrite guidance in the Fact Check card.")
+            lines.append("- The final summary omits unsafe draft claims; use safe-rewrite guidance in the Fact Check card for the original draft.")
 
     lines.extend(["", "What is not yet supported"])
     if gaps:

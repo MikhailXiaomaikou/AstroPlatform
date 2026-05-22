@@ -194,6 +194,147 @@ def test_fact_verifier_does_not_block_full_likelihood_limitations() -> None:
     assert not any(claim["status"] == "contradicted" for claim in report["claims"])
 
 
+def test_fact_verifier_skips_weak_lensing_scope_caveat() -> None:
+    from app.services.research_program import (
+        build_evidence_graph,
+        plan_research_program,
+        run_research_matrix,
+        verify_research_facts,
+    )
+
+    plan = plan_research_program(
+        question=(
+            "Check S8 consistency using KiDS DES HSC ACT Planck compressed "
+            "datasets and report only compressed-summary caveats."
+        )
+    )["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+    graph = build_evidence_graph(tool_results=[{"tool": "run_research_matrix", "result": matrix}])
+    report = verify_research_facts(
+        tool_results=[
+            {"tool": "run_research_matrix", "result": matrix},
+            {"tool": "build_evidence_graph", "result": graph},
+        ],
+        final_reply=(
+            "This is a compressed-summary robustness screen, not a full "
+            "weak-lensing likelihood analysis. I am not treating the matrix as "
+            "a publication-grade tension result."
+        ),
+    )
+
+    assert not any(
+        claim["status"] == "unsupported" and claim["kind"] == "numeric"
+        for claim in report["claims"]
+    )
+    assert not any(claim["status"] == "contradicted" for claim in report["claims"])
+
+
+def test_fact_verifier_does_not_treat_parameter_mentions_as_numbers() -> None:
+    from app.services.research_program import (
+        build_evidence_graph,
+        plan_research_program,
+        run_research_matrix,
+        verify_research_facts,
+    )
+
+    plan = plan_research_program(
+        question=(
+            "Check S8 consistency using weak-lensing and CMB compressed summaries, "
+            "but do not quote unsupported n-sigma claims."
+        )
+    )["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+    graph = build_evidence_graph(tool_results=[{"tool": "run_research_matrix", "result": matrix}])
+    report = verify_research_facts(
+        tool_results=[
+            {"tool": "run_research_matrix", "result": matrix},
+            {"tool": "build_evidence_graph", "result": graph},
+        ],
+        final_reply=(
+            "Pairwise S8 tension diagnostics were extracted from compressed summaries. "
+            "No survey-level n-sigma conclusion is claimed."
+        ),
+    )
+
+    assert not any(
+        claim["status"] == "unsupported" and claim["kind"] == "numeric"
+        for claim in report["claims"]
+    )
+
+
+def test_fact_verifier_skips_negative_full_likelihood_scope_statement() -> None:
+    from app.services.research_program import (
+        build_evidence_graph,
+        plan_research_program,
+        run_research_matrix,
+        verify_research_facts,
+    )
+
+    plan = plan_research_program(
+        question="Check weak-lensing S8 consistency with CMB compressed summaries."
+    )["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+    graph = build_evidence_graph(tool_results=[{"tool": "run_research_matrix", "result": matrix}])
+    report = verify_research_facts(
+        tool_results=[
+            {"tool": "run_research_matrix", "result": matrix},
+            {"tool": "build_evidence_graph", "result": graph},
+        ],
+        final_reply=(
+            "This turn supports only a compressed-likelihood preliminary check. "
+            "Full ACT/Planck/KiDS/DES/HSC shear likelihoods were not run here, "
+            "so this is not a publication-grade n-sigma claim."
+        ),
+    )
+
+    assert not any(claim["status"] == "contradicted" for claim in report["claims"])
+    assert not any(
+        claim["status"] == "unsupported" and claim["kind"] == "numeric"
+        for claim in report["claims"]
+    )
+
+
+def test_fact_verifier_blocks_unsupported_sigma_tension_claim() -> None:
+    from app.services.research_program import (
+        build_evidence_graph,
+        plan_research_program,
+        run_research_matrix,
+        verify_research_facts,
+    )
+
+    plan = plan_research_program(
+        question="Run a BAO and CMB robustness matrix without weak-lensing pairwise support."
+    )["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+    graph = build_evidence_graph(tool_results=[{"tool": "run_research_matrix", "result": matrix}])
+    report = verify_research_facts(
+        tool_results=[
+            {"tool": "run_research_matrix", "result": matrix},
+            {"tool": "build_evidence_graph", "result": graph},
+        ],
+        final_reply="The current tools establish a 2.8σ S8 tension.",
+    )
+
+    assert any(
+        claim["status"] == "unsupported" and claim["kind"] == "numeric"
+        for claim in report["claims"]
+    )
+
+
+def test_fact_verifier_blocks_unsupported_p_value_claim() -> None:
+    from app.services.research_program import verify_research_facts
+
+    report = verify_research_facts(
+        tool_results=[],
+        final_reply="The correlation is significant with p < 0.01.",
+    )
+
+    assert any(
+        claim["status"] == "unsupported" and claim["kind"] == "numeric"
+        for claim in report["claims"]
+    )
+
+
 def test_fact_verifier_blocks_numeric_value_contradicting_ready_chain() -> None:
     from app.services.research_program import verify_research_facts
 

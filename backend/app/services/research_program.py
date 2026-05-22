@@ -1212,15 +1212,27 @@ def _numeric_claim_tokens(text: str) -> list[str]:
         "sigma8": r"sigma8|σ8",
         "w0": r"\bw0\b|w_0",
         "wa": r"\bwa\b|w_a",
-        "tension": r"tension|σ tension|sigma tension|张力",
         "slope": r"slope|斜率|β",
         "scatter": r"scatter|intrinsic scatter|离散",
-        "p_value": r"p\s*[=<>]",
+        "p_value": r"\bp(?:[-\s]?value)?\s*[=<>]",
     }
     for name, pattern in patterns.items():
-        if re.search(pattern, text, re.I):
+        token_key = name.lower()
+        if re.search(pattern, text, re.I) and _numeric_value_for_token(text, token_key) is not None:
             tokens.append(name)
+    if _has_tension_significance_claim(text):
+        tokens.append("tension")
     return tokens
+
+
+def _has_tension_significance_claim(text: str) -> bool:
+    """Return True only for actual n-sigma/tension numbers, not scope caveats."""
+    if not re.search(r"(?:tension|张力|σ|sigma)", text, re.I):
+        return False
+    return bool(
+        re.search(r"\b\d+(?:\.\d+)?\s*(?:σ|sigma)\b", text, re.I)
+        or re.search(r"\b(?:n\s*[-=]\s*)?\d+(?:\.\d+)?\s*sigma\s+tension\b", text, re.I)
+    )
 
 
 def _fact_claims_from_reply(
@@ -1345,16 +1357,31 @@ def _line_is_gap_statement(line: str) -> bool:
             "not determined",
             "not yet supported",
             "not publication-ready",
+            "not publication-grade",
             "no publication-ready",
             "cannot claim",
             "requires external",
+            "were not run",
+            "was not run",
+            "not run here",
             "not a full external",
+            "not a full weak-lensing",
+            "not a full weak lensing",
+            "not a full shear",
+            "not making",
+            "not treating",
+            "not a publication-grade",
+            "not publication grade",
             "not full external",
             "should not be treated as full",
+            "only a compressed-likelihood",
+            "supports only a compressed-likelihood",
             "still outside",
             "outside the compressed preliminary layer",
             "config-only",
             "scope gap",
+            "exploratory only",
+            "not claimable",
         )
     )
 
@@ -1417,6 +1444,25 @@ def _collect_numeric_support_from_result(
             }
             for alias in _parameter_aliases(str(raw_name)):
                 support.setdefault(alias, []).append(record)
+    pairwise_tensions = result.get("pairwise_tensions")
+    if isinstance(pairwise_tensions, list):
+        for index, item in enumerate(pairwise_tensions):
+            if not isinstance(item, dict):
+                continue
+            sigma = _coerce_float(item.get("sigma"))
+            parameter = str(item.get("parameter") or "").strip()
+            if sigma is None or not parameter:
+                continue
+            record = {
+                "parameter": f"{parameter}_tension",
+                "median": sigma,
+                "hdi_94": None,
+                "evidence_id": f"{tool_id}:pairwise_tension:{index}",
+                "source": "pairwise_tensions",
+            }
+            support.setdefault("tension", []).append(record)
+            for alias in _parameter_aliases(f"{parameter}_tension"):
+                support.setdefault(alias, []).append(record)
     matrix = result.get("matrix")
     if isinstance(matrix, list):
         for cell_index, cell in enumerate(matrix):
@@ -1447,6 +1493,9 @@ def _parameter_aliases(name: str) -> set[str]:
         aliases.update({"w0", "w_0"})
     if key in {"wa", "w_a"}:
         aliases.update({"wa", "w_a"})
+    if key.endswith("_tension"):
+        aliases.add(key)
+        aliases.add("tension")
     return aliases
 
 
@@ -1461,7 +1510,18 @@ def _numeric_value_for_token(line: str, token: str) -> float | None:
         "wa": r"w\s*_?\s*a",
         "slope": r"slope|斜率|β",
         "scatter": r"scatter|intrinsic scatter|离散",
+        "tension": r"(?:tension|张力|σ|sigma)",
     }
+    if token == "tension":
+        match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:σ|sigma)\b", line, re.I)
+        return _coerce_float(match.group(1)) if match else None
+    if token == "p_value":
+        match = re.search(
+            r"\bp(?:[-\s]?value)?\s*(?:=|≈|~|<|>|≤|≥)\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)",
+            line,
+            re.I,
+        )
+        return _coerce_float(match.group(1)) if match else None
     pattern = token_patterns.get(token)
     if not pattern:
         return None
