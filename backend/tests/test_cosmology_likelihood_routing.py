@@ -43,6 +43,33 @@ def test_research_program_workflow_detects_research_intent() -> None:
     )
 
 
+def test_research_matrix_dataset_keys_satisfy_anchor_gate() -> None:
+    """BAO+CMB research cells should count as selecting the CMB anchor.
+
+    The chat-side anchor guard used to inspect only top-level datasets_used.
+    Research Matrix stores selected datasets on each cell, so a valid
+    BAO+CMB compressed result could be misread as an unsupported Planck/CMB
+    anchor and the final prose would be withheld.
+    """
+    from app.api.chat import (
+        _cosmology_dataset_keys_present,
+        _unsupported_cosmology_anchor_numeric_comparison,
+    )
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    plan = plan_research_program(
+        question="Research DESI BAO + Pantheon+ + Planck CMB LCDM consistency."
+    )["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+    tool_results = [{"tool": "run_research_matrix", "result": matrix}]
+
+    assert "planck2018_compressed" in _cosmology_dataset_keys_present(tool_results)
+    assert not _unsupported_cosmology_anchor_numeric_comparison(
+        "BAO + CMB gives H0 = 67.3 in the compressed preliminary matrix.",
+        tool_results,
+    )
+
+
 def test_cosmology_likelihood_workflow_ignores_plain_literature_requests() -> None:
     from app.api.chat import _is_cosmology_likelihood_workflow
 

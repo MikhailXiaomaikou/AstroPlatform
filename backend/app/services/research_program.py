@@ -54,6 +54,7 @@ def plan_research_program(
     dataset_status = [_dataset_plan_status(entry) for entry in dataset_entries]
     matrix = _proposed_experiment_matrix(datasets, models, text)
     blocking_gaps = _blocking_gaps(dataset_status, models)
+    blocking_gaps.extend(_question_specific_blocking_gaps(text, probes))
     executable_level = _overall_executable_level(dataset_status)
     plan_id = "research_plan_" + uuid.uuid4().hex
     plan = {
@@ -145,6 +146,27 @@ def run_research_matrix(
         model = str(cell.get("model") if isinstance(cell, dict) else model_list[0])
         label = str(cell.get("label") if isinstance(cell, dict) else "Research cell")
         try:
+            config = build_likelihood_config(
+                model=model,
+                dataset_keys=cell_datasets,
+                output_format="cobaya",
+            )
+            non_executable = _non_executable_dataset_keys(cell_datasets)
+            if non_executable:
+                cells.append({
+                    "label": label,
+                    "model": model,
+                    "dataset_keys": cell_datasets,
+                    "publication_ready": False,
+                    "runnable": False,
+                    "execution_level": "config_only",
+                    "config_hash": config.get("config_hash"),
+                    "non_executable_dataset_keys": non_executable,
+                    "warnings": [
+                        "This research cell was not numerically run because it includes config-only or external-only datasets.",
+                    ],
+                })
+                continue
             run = run_likelihood_chain(
                 model=model,
                 dataset_keys=cell_datasets,
@@ -165,11 +187,6 @@ def run_research_matrix(
                 execution_level = "executed_not_ready"
             else:
                 execution_level = "config_only"
-            config = build_likelihood_config(
-                model=model,
-                dataset_keys=cell_datasets,
-                output_format="cobaya",
-            )
             cells.append({
                 "label": label,
                 "model": model,
@@ -916,6 +933,8 @@ def _bibtex_from_citations(citations: list[dict[str, Any]]) -> str:
 def _required_probes(text: str) -> list[str]:
     prompt = text.lower()
     probes: list[str] = []
+    if _is_cmb_rotation_question(prompt):
+        probes.append("CMB_POLARIZATION_ROTATION")
     if any(tok in prompt for tok in ("bao", "baryon acoustic", "desi", "sdss", "boss", "eboss", "6df")):
         probes.append("BAO")
     if any(tok in prompt for tok in ("sn", "supernova", "pantheon", "des-sn", "union3")):
@@ -945,7 +964,7 @@ def _candidate_datasets(probes: list[str], text: str) -> list[str]:
             keys.extend(COSMOLOGY_PROBE_DATASETS["sn_comparison"])
         else:
             keys.extend(COSMOLOGY_PROBE_DATASETS["sn"])
-    if "CMB" in probes:
+    if "CMB" in probes and "CMB_POLARIZATION_ROTATION" not in probes:
         keys.extend(COSMOLOGY_PROBE_DATASETS["cmb"])
         if "act" in prompt:
             keys.extend(COSMOLOGY_PROBE_DATASETS["cmb_lensing"])
@@ -991,9 +1010,50 @@ def _hypotheses_from_question(text: str, probes: list[str], models: list[str]) -
         hypotheses.append("Compare late-universe H0 anchors against any selected early-universe or BAO-calibrated constraints.")
     if "WL" in probes or "s8" in prompt:
         hypotheses.append("Check whether weak-lensing S8 summaries shift relative to CMB compressed constraints.")
+    if "CMB_POLARIZATION_ROTATION" in probes:
+        hypotheses.append(
+            "Assess whether registered CMB-polarization EB/TB data products and angle-calibration priors are available before any rotation-angle inference."
+        )
     if "line_measurements" in probes:
         hypotheses.append("Compile cited measurement rows before fitting any line-luminosity relation.")
     return hypotheses or ["Determine which parts of the requested research question are executable with registered data products."]
+
+
+def _is_cmb_rotation_question(prompt: str) -> bool:
+    """Detect CMB-polarization rotation/birefringence requests.
+
+    Planck compressed distance priors are valid CMB *distance* summaries, but
+    they cannot support EB/TB parity-odd polarization rotation claims.  Keep
+    this detector intentionally narrow so ordinary BAO+CMB robustness prompts
+    still route to the compressed Planck likelihood.
+    """
+    has_rotation_intent = any(
+        tok in prompt
+        for tok in (
+            "birefringence",
+            "polarization rotation",
+            "polarisation rotation",
+            "rotation angle",
+            "偏振旋转",
+            "旋转角",
+            "宇称破缺",
+            "parity-violating",
+            "parity violating",
+        )
+    )
+    has_polarization_observable = any(
+        tok in prompt
+        for tok in (
+            "polarization",
+            "polarisation",
+            "eb",
+            "tb",
+            "cmb",
+            "偏振",
+            "奇宇称",
+        )
+    )
+    return has_rotation_intent and has_polarization_observable
 
 
 def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text: str) -> list[dict[str, Any]]:
@@ -1058,6 +1118,20 @@ def _claimable_params_for_entry(entry: dict[str, Any]) -> list[str]:
     return []
 
 
+def _non_executable_dataset_keys(dataset_keys: list[str]) -> list[str]:
+    """Datasets that must not be silently approximated in a matrix cell."""
+    blocked: list[str] = []
+    for key in dataset_keys:
+        try:
+            entry = get_cosmology_dataset(key).to_dict()
+        except Exception:
+            blocked.append(key)
+            continue
+        if _dataset_plan_status(entry).get("execution_level") == "config_only":
+            blocked.append(key)
+    return blocked
+
+
 def _blocking_gaps(dataset_status: list[dict[str, Any]], models: list[str]) -> list[str]:
     gaps: list[str] = []
     for entry in dataset_status:
@@ -1065,6 +1139,18 @@ def _blocking_gaps(dataset_status: list[dict[str, Any]], models: list[str]) -> l
             gaps.append(f"{entry.get('display_name') or entry.get('key')} requires external Cobaya/CosmoSIS or a future runner before posterior claims.")
     if any(model != "lcdm" for model in models):
         gaps.append("Extended models are planned/configurable, but phase-1 compressed execution is publication-ready for ΛCDM only.")
+    return gaps
+
+
+def _question_specific_blocking_gaps(text: str, probes: list[str]) -> list[str]:
+    prompt = text.lower()
+    gaps: list[str] = []
+    if "CMB_POLARIZATION_ROTATION" in probes or _is_cmb_rotation_question(prompt):
+        gaps.append(
+            "CMB polarization-rotation inference is not executable with Planck compressed distance priors. "
+            "A valid run requires EB/TB bandpowers or maps, their covariance, an instrument-angle calibration prior, "
+            "and a dedicated rotation-angle likelihood."
+        )
     return gaps
 
 

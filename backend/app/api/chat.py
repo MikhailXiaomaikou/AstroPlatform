@@ -2359,27 +2359,38 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
 
 def _cosmology_dataset_keys_present(tool_results: list[dict]) -> set[str]:
     keys: set[str] = set()
+
+    def collect_from(value: Any) -> None:
+        if isinstance(value, list):
+            for entry in value:
+                if isinstance(entry, dict) and entry.get("key"):
+                    keys.add(str(entry["key"]))
+                elif isinstance(entry, str):
+                    keys.add(entry)
+
     for item in tool_results or []:
         if not isinstance(item, dict):
             continue
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         if not isinstance(result, dict):
             continue
-        for field in ("datasets", "datasets_used", "datasets_not_run"):
-            values = result.get(field)
-            if not isinstance(values, list):
-                continue
-            for entry in values:
-                if isinstance(entry, dict) and entry.get("key"):
-                    keys.add(str(entry["key"]))
+        for field in ("datasets", "datasets_used", "datasets_not_run", "dataset_keys", "candidate_dataset_keys"):
+            collect_from(result.get(field))
+        matrix = result.get("matrix")
+        if isinstance(matrix, list):
+            for cell in matrix:
+                if isinstance(cell, dict):
+                    collect_from(cell.get("dataset_keys"))
+                    cell_result = cell.get("result")
+                    if isinstance(cell_result, dict):
+                        for field in ("datasets", "datasets_used", "datasets_not_run", "dataset_keys"):
+                            collect_from(cell_result.get(field))
         provenance = result.get("provenance")
         if isinstance(provenance, dict):
             likelihood = provenance.get("cosmology_likelihood")
             if isinstance(likelihood, dict):
                 for field in ("dataset_keys", "datasets_used", "datasets_not_run"):
-                    values = likelihood.get(field)
-                    if isinstance(values, list):
-                        keys.update(str(value) for value in values if value)
+                    collect_from(likelihood.get(field))
     return keys
 
 
