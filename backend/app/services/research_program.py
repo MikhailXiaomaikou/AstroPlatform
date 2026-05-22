@@ -151,6 +151,21 @@ def run_research_matrix(
                 dataset_keys=cell_datasets,
                 output_format="cobaya",
             )
+            if model != "lcdm":
+                cells.append({
+                    "label": label,
+                    "model": model,
+                    "dataset_keys": cell_datasets,
+                    "publication_ready": False,
+                    "runnable": False,
+                    "execution_level": "config_only",
+                    "config_hash": config.get("config_hash"),
+                    "requested_model_branch": bool(cell.get("requested_model_branch")),
+                    "warnings": [
+                        "Requested extended-model branch was not numerically run. Phase-1 research matrices only promote ΛCDM compressed baselines to claimable results.",
+                    ],
+                })
+                continue
             non_executable = _non_executable_dataset_keys(cell_datasets)
             if non_executable:
                 cells.append({
@@ -194,10 +209,18 @@ def run_research_matrix(
                 "publication_ready": cell_ready,
                 "runnable": cell_ready,
                 "execution_level": execution_level,
+                "baseline_only": bool(cell.get("baseline_only")),
                 "result_publication_ready": bool(run.get("publication_ready")),
                 "result": run,
                 "config_hash": config.get("config_hash"),
                 "warnings": [
+                    *(
+                        [
+                            "ΛCDM baseline only; this cell does not test the requested extended model."
+                        ]
+                        if cell.get("baseline_only")
+                        else []
+                    ),
                     *(run.get("warnings", []) if isinstance(run.get("warnings"), list) else []),
                     *([] if all_requested_datasets_used else [
                         "This research cell is not ready because at least one requested dataset was not numerically included.",
@@ -935,6 +958,8 @@ def _required_probes(text: str) -> list[str]:
     probes: list[str] = []
     if _is_cmb_rotation_question(prompt):
         probes.append("CMB_POLARIZATION_ROTATION")
+    if _is_primordial_feature_question(prompt):
+        probes.append("CMB_PRIMORDIAL_FEATURES")
     if any(tok in prompt for tok in ("bao", "baryon acoustic", "desi", "sdss", "boss", "eboss", "6df")):
         probes.append("BAO")
     if any(tok in prompt for tok in ("sn", "supernova", "pantheon", "des-sn", "union3")):
@@ -964,7 +989,11 @@ def _candidate_datasets(probes: list[str], text: str) -> list[str]:
             keys.extend(COSMOLOGY_PROBE_DATASETS["sn_comparison"])
         else:
             keys.extend(COSMOLOGY_PROBE_DATASETS["sn"])
-    if "CMB" in probes and "CMB_POLARIZATION_ROTATION" not in probes:
+    if (
+        "CMB" in probes
+        and "CMB_POLARIZATION_ROTATION" not in probes
+        and "CMB_PRIMORDIAL_FEATURES" not in probes
+    ):
         keys.extend(COSMOLOGY_PROBE_DATASETS["cmb"])
         if "act" in prompt:
             keys.extend(COSMOLOGY_PROBE_DATASETS["cmb_lensing"])
@@ -996,6 +1025,8 @@ def _models_from_question(text: str) -> list[str]:
         for model in ("lcdm", "wcdm", "w0wa_cdm"):
             if model not in models:
                 models.append(model)
+    if any(model != "lcdm" for model in models) and "lcdm" not in models:
+        models.insert(0, "lcdm")
     return _clean_models(models)
 
 
@@ -1056,11 +1087,61 @@ def _is_cmb_rotation_question(prompt: str) -> bool:
     return has_rotation_intent and has_polarization_observable
 
 
+def _is_primordial_feature_question(prompt: str) -> bool:
+    has_feature_intent = any(
+        tok in prompt
+        for tok in (
+            "primordial feature",
+            "primordial-feature",
+            "oscillatory feature",
+            "oscillatory primordial",
+            "feature template",
+            "look-elsewhere",
+            "look elsewhere",
+            "inflationary anomaly",
+            "inflationary feature",
+            "振荡",
+            "原初",
+        )
+    )
+    has_spectra_context = any(
+        tok in prompt
+        for tok in (
+            "cmb",
+            "temperature",
+            "polarization",
+            "polarisation",
+            "tt",
+            "te",
+            "ee",
+            "spectra",
+            "power spectrum",
+            "功率谱",
+        )
+    )
+    return has_feature_intent and has_spectra_context
+
+
+def _is_early_dark_energy_question(prompt: str) -> bool:
+    return any(tok in prompt for tok in ("early dark energy", " ede", "ede ", "axion-like early", "axion like early"))
+
+
+def _is_modified_gravity_question(prompt: str) -> bool:
+    return any(tok in prompt for tok in ("modified gravity", "gravity model", "growth model", "f(r)", "mu(k", "mg likelihood", "修正引力"))
+
+
+def _is_physical_dark_energy_history_question(prompt: str) -> bool:
+    return any(tok in prompt for tok in ("thawing", "emergent", "mirage", "physical dark-energy", "physical dark energy"))
+
+
 def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text: str) -> list[dict[str, Any]]:
     keys = _clean_dataset_keys(dataset_keys)
     if not keys:
         return []
-    first_model = _clean_models(models)[0]
+    model_list = _clean_models(models)
+    extended_models = [model for model in model_list if model != "lcdm"]
+    special_model_gap = _has_dedicated_model_gap(text.lower())
+    baseline_model = "lcdm" if extended_models or special_model_gap else model_list[0]
     combos: list[tuple[str, list[str]]] = [("All selected probes", keys)]
     bao = [key for key in keys if get_cosmology_dataset(key).probe == "bao"]
     sn = [key for key in keys if get_cosmology_dataset(key).probe == "sn"]
@@ -1087,8 +1168,30 @@ def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text
         if not cleaned or marker in seen:
             continue
         seen.add(marker)
-        matrix.append({"label": label, "dataset_keys": cleaned, "model": first_model})
+        cell_label = f"ΛCDM baseline — {label}" if extended_models or special_model_gap else label
+        matrix.append({
+            "label": cell_label,
+            "dataset_keys": cleaned,
+            "model": baseline_model,
+            "baseline_only": bool(extended_models or special_model_gap),
+        })
+    if extended_models:
+        for model in extended_models:
+            matrix.append({
+                "label": f"Requested {model} branch",
+                "dataset_keys": keys,
+                "model": model,
+                "requested_model_branch": True,
+            })
     return matrix
+
+
+def _has_dedicated_model_gap(prompt: str) -> bool:
+    return (
+        _is_early_dark_energy_question(prompt)
+        or _is_modified_gravity_question(prompt)
+        or _is_physical_dark_energy_history_question(prompt)
+    )
 
 
 def _dataset_plan_status(entry: dict[str, Any]) -> dict[str, Any]:
@@ -1150,6 +1253,27 @@ def _question_specific_blocking_gaps(text: str, probes: list[str]) -> list[str]:
             "CMB polarization-rotation inference is not executable with Planck compressed distance priors. "
             "A valid run requires EB/TB bandpowers or maps, their covariance, an instrument-angle calibration prior, "
             "and a dedicated rotation-angle likelihood."
+        )
+    if "CMB_PRIMORDIAL_FEATURES" in probes or _is_primordial_feature_question(prompt):
+        gaps.append(
+            "Primordial-feature inference is not executable with Planck compressed distance priors or ACT lensing summaries. "
+            "A valid run requires TT/TE/EE spectra, the spectra covariance, an explicit oscillatory-feature template, "
+            "a frequency/phase scan, and a look-elsewhere calibration."
+        )
+    if _is_early_dark_energy_question(prompt):
+        gaps.append(
+            "Early-dark-energy / axion-like EDE inference is not executable in phase-1 compressed runners. "
+            "It requires an EDE model implementation in a Boltzmann solver plus a controlled full CMB/BAO/SN likelihood."
+        )
+    if _is_modified_gravity_question(prompt):
+        gaps.append(
+            "Modified-gravity growth inference is not executable in the phase-1 compressed runners. "
+            "It requires a model-specific growth solver, growth-rate/shear likelihoods, and validated covariance products."
+        )
+    if _is_physical_dark_energy_history_question(prompt):
+        gaps.append(
+            "Thawing, emergent, or mirage dark-energy histories are not executable in phase-1 compressed runners. "
+            "They require dedicated parameterizations or scalar-field model runners before posterior claims."
         )
     return gaps
 
@@ -1353,6 +1477,8 @@ def _line_is_gap_statement(line: str) -> bool:
         phrase in line
         for phrase in (
             "cannot support",
+            "does not support",
+            "cannot use",
             "did not determine",
             "not determined",
             "not yet supported",
@@ -1361,13 +1487,25 @@ def _line_is_gap_statement(line: str) -> bool:
             "no publication-ready",
             "cannot claim",
             "requires external",
+            "requires future runner",
+            "requires a dedicated",
+            "requires dedicated",
+            "missing covariance",
+            "missing likelihood",
+            "missing runner",
             "were not run",
             "was not run",
+            "was not used",
+            "were not used",
             "not run here",
+            "no full",
             "not a full external",
             "not a full weak-lensing",
             "not a full weak lensing",
             "not a full shear",
+            "not a birefringence constraint",
+            "not a primordial-feature constraint",
+            "not a feature-template constraint",
             "not making",
             "not treating",
             "not a publication-grade",
