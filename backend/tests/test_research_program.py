@@ -72,6 +72,31 @@ def test_workflow2_bao_cmb_public_path_is_publication_ready() -> None:
     assert 67.0 <= chain["parameters"]["H0"]["median"] <= 68.0
 
 
+def test_cmb_polarization_rotation_does_not_use_distance_priors() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to test whether public CMB polarization data support a global "
+        "polarization rotation angle using EB/TB parity-odd correlations. "
+        "If the EB/TB bandpowers, covariance, instrument-angle prior, or "
+        "rotation likelihood are missing, list the gap."
+    )
+
+    planned = plan_research_program(question=prompt)
+    plan = planned["research_plan"]
+
+    assert "CMB_POLARIZATION_ROTATION" in plan["required_probes"]
+    assert "planck2018_compressed" not in plan["candidate_dataset_keys"]
+    assert plan["executable_level"] == "not_available"
+    assert any("EB/TB" in gap for gap in plan["blocking_gaps"])
+
+    matrix = run_research_matrix(research_plan=plan)
+
+    assert matrix["publication_ready"] is False
+    assert matrix["ready_cells"] == 0
+    assert matrix["matrix"] == []
+
+
 def test_evidence_graph_links_claims_to_publication_ready_runs() -> None:
     from app.services.research_program import build_evidence_graph, plan_research_program, run_research_matrix
 
