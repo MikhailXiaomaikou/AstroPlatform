@@ -97,6 +97,87 @@ def test_cmb_polarization_rotation_does_not_use_distance_priors() -> None:
     assert matrix["matrix"] == []
 
 
+def test_primordial_feature_request_does_not_use_compressed_distance_priors() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to test whether oscillatory primordial-feature templates improve "
+        "the fit to CMB temperature and polarization spectra. Identify the required "
+        "Planck/ACT spectra, covariance, look-elsewhere treatment and sampler, then "
+        "run only available controlled likelihoods and report missing pieces."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+
+    assert "CMB_PRIMORDIAL_FEATURES" in plan["required_probes"]
+    assert "planck2018_compressed" not in plan["candidate_dataset_keys"]
+    assert plan["executable_level"] == "not_available"
+    assert any("TT/TE/EE spectra" in gap for gap in plan["blocking_gaps"])
+
+    matrix = run_research_matrix(research_plan=plan)
+
+    assert matrix["publication_ready"] is False
+    assert matrix["ready_cells"] == 0
+    assert matrix["matrix"] == []
+
+
+def test_ede_request_records_missing_model_but_runs_lcdm_baseline() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to test whether an axion-like early-dark-energy model is favored "
+        "after adding DESI BAO and recent CMB-lensing information. Use registered "
+        "public BAO/CMB-lensing/CMB compressed data where available."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+
+    assert any("Early-dark-energy" in gap for gap in plan["blocking_gaps"])
+    assert any(cell.get("publication_ready") is True for cell in matrix["matrix"])
+    assert any(
+        cell.get("baseline_only") is True
+        and any("baseline only" in warning.lower() for warning in cell.get("warnings", []))
+        for cell in matrix["matrix"]
+    )
+
+
+def test_modified_gravity_request_records_dedicated_likelihood_gap() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to test whether a modified-gravity expansion/growth model could "
+        "reduce both H0 and S8 tensions using BAO, CMB, weak-lensing, growth-rate "
+        "and chronometer data."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+
+    assert any("Modified-gravity" in gap for gap in plan["blocking_gaps"])
+    assert any(cell.get("publication_ready") is True for cell in matrix["matrix"])
+    assert any(
+        cell.get("publication_ready") is False
+        for cell in matrix["matrix"]
+        if "kids1000_wl" in cell.get("dataset_keys", [])
+    )
+
+
+def test_physical_dark_energy_histories_route_to_scope_gap_not_python() -> None:
+    from app.services.research_program import plan_research_program
+
+    prompt = (
+        "I want to compare physically motivated dark-energy histories rather than "
+        "only constant Lambda: thawing-like, emergent and mirage-like behavior, "
+        "using BAO+CMB+SN distance data."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+
+    assert any("Thawing, emergent, or mirage" in gap for gap in plan["blocking_gaps"])
+    assert plan["proposed_experiment_matrix"]
+
+
 def test_evidence_graph_links_claims_to_publication_ready_runs() -> None:
     from app.services.research_program import build_evidence_graph, plan_research_program, run_research_matrix
 
@@ -287,6 +368,26 @@ def test_fact_verifier_skips_negative_full_likelihood_scope_statement() -> None:
         ),
     )
 
+    assert not any(claim["status"] == "contradicted" for claim in report["claims"])
+    assert not any(
+        claim["status"] == "unsupported" and claim["kind"] == "numeric"
+        for claim in report["claims"]
+    )
+
+
+def test_fact_verifier_does_not_block_spectra_likelihood_scope_gaps() -> None:
+    from app.services.research_program import verify_research_facts
+
+    report = verify_research_facts(
+        tool_results=[],
+        final_reply=(
+            "No full Planck/ACT spectral covariance matrix was used in this run. "
+            "This is not a primordial-feature constraint and requires a dedicated "
+            "feature-template likelihood plus look-elsewhere calibration."
+        ),
+    )
+
+    assert report["status"] in {"passed", "warning"}
     assert not any(claim["status"] == "contradicted" for claim in report["claims"])
     assert not any(
         claim["status"] == "unsupported" and claim["kind"] == "numeric"
