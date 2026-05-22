@@ -345,12 +345,54 @@ def test_cmb_birefringence_prompt_routes_to_research_plan_not_compressed_chain(m
     assert chat._cosmology_likelihood_run_calls_from_prompt(prompt) == []
 
 
+def test_cmb_polarization_rotation_variants_route_to_research_plan(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to evaluate CMB parity violation with TB/EB correlations and "
+        "instrument-angle marginalization. Run only executable likelihoods and "
+        "otherwise give a precise scope gap."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    assert chat._cosmology_dataset_keys_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_run_calls_from_prompt(prompt) == []
+
+
+def test_bmode_rotation_field_prompt_routes_to_research_plan(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to examine whether B-mode polarization data can support a "
+        "rotation-angle field on the sky. Identify required maps, bandpowers, "
+        "covariance, and calibration priors."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    assert chat._cosmology_dataset_keys_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_run_calls_from_prompt(prompt) == []
+
+
 def test_primordial_feature_prompt_routes_to_research_plan_not_compressed_chain(monkeypatch) -> None:
     chat = _reload_chat_with_focus(monkeypatch, "cosmology")
     prompt = (
         "I want to test whether oscillatory primordial-feature templates improve "
         "the fit to CMB temperature and polarization spectra. Identify required "
         "Planck/ACT spectra, covariance, look-elsewhere treatment and sampler."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    assert chat._cosmology_dataset_keys_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_run_calls_from_prompt(prompt) == []
+
+
+def test_primordial_spectra_variants_route_to_research_plan(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to run a feature-search workflow over CMB TT/TE/EE spectra and "
+        "compare Δχ² with a null model. Mark missing full likelihood and "
+        "trials-factor calibration."
     )
 
     assert chat._is_research_program_workflow(prompt) is True

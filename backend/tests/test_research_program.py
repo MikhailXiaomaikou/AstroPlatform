@@ -97,6 +97,48 @@ def test_cmb_polarization_rotation_does_not_use_distance_priors() -> None:
     assert matrix["matrix"] == []
 
 
+def test_cmb_polarization_rotation_hyphenated_prompt_does_not_use_distance_priors() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to compare isotropic and anisotropic CMB polarization-rotation "
+        "models using public Planck/ACT/SPT information. Do not use distance "
+        "priors as polarization evidence."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+
+    assert "CMB_POLARIZATION_ROTATION" in plan["required_probes"]
+    assert plan["candidate_dataset_keys"] == []
+    assert any("rotation-angle likelihood" in gap for gap in plan["blocking_gaps"])
+
+    matrix = run_research_matrix(research_plan=plan)
+
+    assert matrix["publication_ready"] is False
+    assert matrix["ready_cells"] == 0
+
+
+def test_bmode_rotation_field_prompts_record_scope_gap() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompts = [
+        "I want to examine whether B-mode polarization data can support a rotation-angle field on the sky. Identify required maps, bandpowers, covariance, and calibration priors.",
+        "I want to study anisotropic cosmic birefringence using spherical-harmonic rotation-field estimators. Use registered data products only and report missing estimator/likelihood support.",
+    ]
+
+    for prompt in prompts:
+        plan = plan_research_program(question=prompt)["research_plan"]
+
+        assert "CMB_POLARIZATION_ROTATION" in plan["required_probes"]
+        assert plan["candidate_dataset_keys"] == []
+        assert any("rotation-angle likelihood" in gap for gap in plan["blocking_gaps"])
+
+        matrix = run_research_matrix(research_plan=plan)
+
+        assert matrix["publication_ready"] is False
+        assert matrix["ready_cells"] == 0
+
+
 def test_primordial_feature_request_does_not_use_compressed_distance_priors() -> None:
     from app.services.research_program import plan_research_program, run_research_matrix
 
@@ -119,6 +161,28 @@ def test_primordial_feature_request_does_not_use_compressed_distance_priors() ->
     assert matrix["publication_ready"] is False
     assert matrix["ready_cells"] == 0
     assert matrix["matrix"] == []
+
+
+def test_primordial_feature_spectra_variants_do_not_use_distance_priors() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompts = [
+        "I want to compare sharp-feature and resonant-feature primordial power-spectrum models against CMB spectra.",
+        "I want to test oscillatory residuals in CMB temperature spectra with a frequency scan.",
+        "I want to run a feature-search workflow over CMB TT/TE/EE spectra and compare Δχ² with a null model.",
+    ]
+
+    for prompt in prompts:
+        plan = plan_research_program(question=prompt)["research_plan"]
+
+        assert "CMB_PRIMORDIAL_FEATURES" in plan["required_probes"]
+        assert "planck2018_compressed" not in plan["candidate_dataset_keys"]
+        assert any("look-elsewhere" in gap for gap in plan["blocking_gaps"])
+
+        matrix = run_research_matrix(research_plan=plan)
+
+        assert matrix["publication_ready"] is False
+        assert matrix["ready_cells"] == 0
 
 
 def test_ede_request_records_missing_model_but_runs_lcdm_baseline() -> None:
@@ -161,6 +225,22 @@ def test_modified_gravity_request_records_dedicated_likelihood_gap() -> None:
         for cell in matrix["matrix"]
         if "kids1000_wl" in cell.get("dataset_keys", [])
     )
+
+
+def test_modified_gravity_interpretation_records_dedicated_gap() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to check whether ACT lensing and galaxy shear prefer lower growth "
+        "than Planck under a modified-gravity interpretation. Run available "
+        "compressed summaries only."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+
+    assert any("Modified-gravity" in gap for gap in plan["blocking_gaps"])
+    assert any(cell.get("baseline_only") is True for cell in matrix["matrix"])
 
 
 def test_physical_dark_energy_histories_route_to_scope_gap_not_python() -> None:

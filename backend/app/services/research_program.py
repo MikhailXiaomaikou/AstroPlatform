@@ -1063,13 +1063,21 @@ def _is_cmb_rotation_question(prompt: str) -> bool:
         for tok in (
             "birefringence",
             "polarization rotation",
+            "polarization-rotation",
             "polarisation rotation",
+            "polarisation-rotation",
             "rotation angle",
+            "rotation-angle",
+            "rotation field",
+            "rotation-field",
             "偏振旋转",
             "旋转角",
             "宇称破缺",
+            "parity violation",
             "parity-violating",
             "parity violating",
+            "instrument-angle",
+            "instrument angle",
         )
     )
     has_polarization_observable = any(
@@ -1077,9 +1085,16 @@ def _is_cmb_rotation_question(prompt: str) -> bool:
         for tok in (
             "polarization",
             "polarisation",
+            "b-mode",
+            "b mode",
             "eb",
             "tb",
             "cmb",
+            "map",
+            "maps",
+            "bandpower",
+            "bandpowers",
+            "estimator",
             "偏振",
             "奇宇称",
         )
@@ -1093,12 +1108,20 @@ def _is_primordial_feature_question(prompt: str) -> bool:
         for tok in (
             "primordial feature",
             "primordial-feature",
+            "sharp-feature",
+            "resonant-feature",
             "oscillatory feature",
             "oscillatory primordial",
+            "primordial oscillation",
+            "oscillatory residual",
             "feature template",
+            "feature-search",
             "look-elsewhere",
             "look elsewhere",
+            "frequency scan",
+            "frequency/phase scan",
             "inflationary anomaly",
+            "inflationary anomalies",
             "inflationary feature",
             "振荡",
             "原初",
@@ -1115,7 +1138,10 @@ def _is_primordial_feature_question(prompt: str) -> bool:
             "te",
             "ee",
             "spectra",
+            "spectrum",
             "power spectrum",
+            "power-spectrum",
+            "bandpower",
             "功率谱",
         )
     )
@@ -1127,7 +1153,22 @@ def _is_early_dark_energy_question(prompt: str) -> bool:
 
 
 def _is_modified_gravity_question(prompt: str) -> bool:
-    return any(tok in prompt for tok in ("modified gravity", "gravity model", "growth model", "f(r)", "mu(k", "mg likelihood", "修正引力"))
+    return any(
+        tok in prompt
+        for tok in (
+            "modified gravity",
+            "modified-gravity",
+            "modified-gravity interpretation",
+            "gravity model",
+            "growth model",
+            "growth-rate",
+            "growth than planck",
+            "f(r)",
+            "mu(k",
+            "mg likelihood",
+            "修正引力",
+        )
+    )
 
 
 def _is_physical_dark_energy_history_question(prompt: str) -> bool:
