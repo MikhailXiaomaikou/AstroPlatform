@@ -43,7 +43,11 @@ def _get_fernet():
 
 
 class EncryptedJSONType(TypeDecorator):
-    """Stores JSON encrypted with Fernet. Falls back to plain JSON on read (migration compat)."""
+    """Stores JSON encrypted with Fernet.
+
+    Legacy plaintext rows are still readable for migration compatibility.
+    Any later write through this type re-encrypts the value with Fernet.
+    """
     impl = Text
     cache_ok = True
 
@@ -54,17 +58,21 @@ class EncryptedJSONType(TypeDecorator):
         return None
 
     def process_result_value(self, value, dialect):
-        if value is not None:
+        if value is None:
+            return None
+        try:
+            decrypted = _get_fernet().decrypt(value.encode("utf-8"))
+            return json.loads(decrypted)
+        except InvalidToken:
             try:
-                decrypted = _get_fernet().decrypt(value.encode("utf-8"))
-                return json.loads(decrypted)
-            except (InvalidToken, Exception):
-                # Fallback: old plaintext data (migration compat)
-                try:
-                    return json.loads(value)
-                except (json.JSONDecodeError, Exception):
-                    return None
-        return None
+                # Migration compatibility: old rows were stored as plaintext
+                # JSON. Keep them readable so BYOK settings do not disappear on
+                # deploy; settings updates will write them back encrypted.
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return None
+        except Exception:
+            return None
 
 
 class UUIDType(TypeDecorator):
@@ -310,6 +318,14 @@ class ChatSession(Base):
     # chain that produced the reply.  Nullable because legacy rows
     # predate the column.
     audit_log: Mapped[list | None] = mapped_column(JSONType(), nullable=True, default=None)
+    # P1.3.b (2026-05-22): agent-loop status surfaces here so a SSE drop
+    # can resume the in-flight loop instead of starting a new one. Values:
+    # 'idle' (no loop active), 'running' (an agent loop is producing this
+    # session right now), 'suspended' (loop ended early — restart via
+    # resume_from_session=True). ``current_run_id`` is the most recent run id
+    # so the frontend / api can look up workflow_checkpoint state.
+    agent_status: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
+    current_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -528,8 +544,8 @@ class TransientAlert(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
-# ── Trending 可见性开关 (admin 控制哪些 trending 数据对外公开) ──
-# 3 行, key in {'objects', 'sources', 'delta'}, value = is_public bool
+# ── Trending visibility toggle (admin controls which trending data is public) ──
+# 3 rows; key in {'objects', 'sources', 'delta'}, value = is_public bool
 class TrendingVisibility(Base):
     __tablename__ = "trending_visibility"
 
@@ -538,20 +554,21 @@ class TrendingVisibility(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
-# ── 公开评论区 (Landing 页) ──
-# 无需登录,访客填昵称+内容即可提交;管理员用 X-Admin-Secret 删除.
+# ── Public comment section (Landing page) ──
+# No login required; visitors submit with just a nickname and content; admins delete via X-Admin-Secret.
 class Comment(Base):
     __tablename__ = "comments"
 
     id: Mapped[uuid.UUID] = mapped_column(UUIDType(), primary_key=True, default=uuid.uuid4)
     author_name: Mapped[str] = mapped_column(String(40), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    # is_visible 默认 True,即发即显;管理员软删时置 False,列表接口过滤掉.
-    # server_default 用 sa_text("true") 同时兼容 PostgreSQL (TRUE/FALSE)
-    # 和 SQLite (接受 "true" 作 1).  先前用 "1" 在 PG 上会被解成字符串
-    # → 非法 boolean, 表都建不起来.
+    # is_visible defaults to True (visible immediately on post); admins set it
+    # to False for soft-delete (list endpoint filters these out).
+    # server_default uses sa_text("true") for compatibility with both PostgreSQL
+    # (TRUE/FALSE) and SQLite (which accepts "true" as 1). Using "1" on PG
+    # was interpreted as a string — an invalid boolean — and prevented table creation.
     is_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sa_text("true"))
-    # 记录 IP 便于反垃圾 / rate limit 调查,不公开返回给前端
+    # Record client IP for spam / rate-limit investigation; not exposed to the frontend
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

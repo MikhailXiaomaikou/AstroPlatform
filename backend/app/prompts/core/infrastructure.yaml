@@ -1,6 +1,5 @@
 # Core infrastructure tools — loaded permanently regardless of focus.
 # Descriptions in ai_tools.py MUST stay domain-neutral for these tools.
-# Total: 20 tools (M1 Phase 2, 2026-05-18)
 
 tools:
   - astro_statistics_toolbox
@@ -18,3 +17,7 @@ tools:
   - search_literature
   - search_objects
   - sensitivity_analysis
+  # Cross-cutting async-job polling (P1.2.d, 2026-05-22):
+  # Any focus may submit long tools via async_tool_runtime; this is the
+  # generic poll entry. Domain-neutral on purpose.
+  - get_async_job_status

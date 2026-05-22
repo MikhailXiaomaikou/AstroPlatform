@@ -1555,6 +1555,24 @@ def run_likelihood_chain(
     }
     if not publication_ready:
         result["__do_not_claim__"] = True
+        # bug_011 fix: per-tier rewrite of __message_to_model__ — the
+        # publication-tier text ("you may quote posterior/tension numbers")
+        # contradicts the chain_tier=blocked / __do_not_claim__ guardrail.
+        # Mirrors the per-tier message handling in _run_sampling_likelihood_chain.
+        if invalid_specs:
+            blocked_reason = "Invalid compressed-likelihood specs: " + "; ".join(invalid_specs)
+        elif prior_violations:
+            blocked_reason = (
+                "Posterior mean outside configured prior bounds for: "
+                + ", ".join(prior_violations)
+            )
+        else:
+            blocked_reason = "Compressed-Gaussian analytic chain blocked"
+        result["__message_to_model__"] = (
+            blocked_reason
+            + ". Do not cite H0, Om0, sigma8, S8, HDI, or posterior "
+            "constraints from this result."
+        )
     return result
 
 

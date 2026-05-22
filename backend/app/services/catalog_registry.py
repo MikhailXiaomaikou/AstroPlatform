@@ -601,7 +601,7 @@ SDSS_DR18_SCHEMA: dict[str, dict] = {
 
 
 SDSS_TSQL_IDIOMS: list[str] = [
-    # 常见正确写法, 加在 prompt 里供 AI 参考.
+    # Common correct query forms, included in the prompt for AI reference.
     "SELECT TOP 1000 objID, ra, dec, r FROM PhotoObjAll "
     "WHERE mode=1 AND clean=1 AND r BETWEEN 17 AND 21",
     "SELECT TOP 500 p.objID, p.ra, p.dec, p.r, s.z, s.class "

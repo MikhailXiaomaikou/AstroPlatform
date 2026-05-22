@@ -102,8 +102,8 @@ def with_retry(
                             kind=type(e).__name__,
                             retryable="true",
                         )
-                    except Exception:
-                        pass
+                    except Exception as metric_err:
+                        logger.debug("metric record_counter(connector_error_total) failed: %s", metric_err)
                     if attempt < max_retries:
                         delay = min(base_delay * (backoff_factor ** attempt), max_delay)
                         logger.warning(
@@ -132,8 +132,8 @@ def with_retry(
                         "circuit_breaker_open_total", 1.0,
                         connector=func.__qualname__.split(".")[0],
                     )
-                except Exception:
-                    pass
+                except Exception as metric_err:
+                    logger.debug("metric record_counter(circuit_breaker_open_total) failed: %s", metric_err)
 
             raise last_exception  # type: ignore[misc]
         return wrapper

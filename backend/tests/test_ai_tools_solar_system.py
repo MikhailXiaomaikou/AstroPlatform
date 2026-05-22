@@ -1,6 +1,6 @@
 """Unit tests for ai_tools_solar_system M0 Commit 4 — 12 ai_tools.
 
-mock HTTP + connector 验证 happy path + failure path + provenance attachment。
+mock HTTP + connector to verify happy path + failure path + provenance attachment.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def test_schemas_have_required_fields():
 
 
 def test_tools_extended_into_ai_tools_TOOLS_list():
-    """ai_tools.py 的 TOOLS list 必须含 12 个 solar_system 工具."""
+    """ai_tools.py TOOLS list must contain all 12 solar_system tools."""
     from app.services.ai_tools import TOOLS
 
     names = {t["name"] for t in TOOLS if isinstance(t, dict) and "name" in t}
@@ -47,8 +47,8 @@ def test_tools_extended_into_ai_tools_TOOLS_list():
 
 
 def test_result_provenance_classifies_all_solar_system_tools():
-    """result_provenance._DATA_TOOLS / _COMPUTE_TOOLS 必须包含 12 个新工具,
-    否则 normalize_tool_result 会 silent downgrade 它们的 data_origin."""
+    """result_provenance._DATA_TOOLS / _COMPUTE_TOOLS must contain all 12 new tools,
+    otherwise normalize_tool_result will silently downgrade their data_origin."""
     from app.services.result_provenance import (
         _DATA_TOOLS, _COMPUTE_TOOLS, ALL_KNOWN_TOOLS,
     )
@@ -68,8 +68,8 @@ def test_result_provenance_classifies_all_solar_system_tools():
 
 
 def test_tool_deadline_table_has_solar_system_entries():
-    """chat.py _TOOL_DEADLINE_TABLE 包含 fetch_horizons_ephemeris + MPC/SBDB 系列."""
-    # 通过 import chat 并触发 module 加载,然后看 source 中包含
+    """chat.py _TOOL_DEADLINE_TABLE contains fetch_horizons_ephemeris + MPC/SBDB series."""
+    # import chat to trigger module loading, then check that source contains expected entries
     import app.api.chat as chat_mod
     import inspect
     source = inspect.getsource(chat_mod)
@@ -111,7 +111,7 @@ def test_fetch_horizons_rejects_century_daily_request_without_network():
     assert "Do not split a multi-year daily ephemeris" in result["__message_to_model__"]
 
 
-# ── 公式/分类工具(纯算,无 HTTP) ──────────────────────────────────
+# ── formula/classification tools (pure computation, no HTTP) ──────────────────────────────────
 
 
 def test_exec_compute_hg_magnitude_happy_path():
@@ -147,7 +147,7 @@ def test_exec_compute_hg_magnitude_failure():
     from app.services.ai_tools_solar_system import _exec_compute_hg_magnitude
 
     result = asyncio.run(_exec_compute_hg_magnitude({
-        "H": 14.6, "phase_angles_deg": [200],  # 越界
+        "H": 14.6, "phase_angles_deg": [200],  # out of range
         "r_au": [1.0], "delta_au": [1.0],
     }))
     assert result["success"] is False
@@ -164,7 +164,7 @@ def test_exec_compute_afrho_happy_path():
     }))
     assert result["success"] is True
     assert result["Afrho_cm"] > 10
-    assert result["Afrho_0deg_cm"] > result["Afrho_cm"]  # phase 校正后变大
+    assert result["Afrho_0deg_cm"] > result["Afrho_cm"]  # phase correction increases value
 
 
 def test_exec_fit_neatm_returns_diameter_and_albedo():
@@ -197,7 +197,7 @@ def test_exec_compute_neo_collision_probability_apophis_like():
     }))
     assert result["success"] is True
     assert "opik_upper_bound_100yr" in result
-    # warning 必须明确告诉这不是真实 Sentry 数字
+    # warning must clearly state this is not a real Sentry number
     assert result["__message_to_model__"]
 
 
@@ -224,8 +224,8 @@ def test_exec_classify_busdemeo_from_spectrum():
 
 
 def test_exec_classify_carvano_sdss():
-    """P3 (2026-05-20) 校准后 V class center r-i=-0.40; 旧测试用 r-i=-0.05
-    现在会分到 O,需要用 paper-accurate V colors."""
+    """P3 (2026-05-20) After calibration, V class center r-i=-0.40; the old test using r-i=-0.05
+    would now classify as O, so paper-accurate V colors must be used."""
     from app.services.ai_tools_solar_system import _exec_classify_asteroid_sdss_colors
 
     result = asyncio.run(_exec_classify_asteroid_sdss_colors({
@@ -235,7 +235,7 @@ def test_exec_classify_carvano_sdss():
     assert result["best_class"] == "V"
 
 
-# ── 数据查询工具(mock HTTP) ─────────────────────────────────────
+# ── data-fetch tools (mock HTTP) ─────────────────────────────────────
 
 
 def test_exec_query_mpc_orbit_via_mocked_connector(monkeypatch):
@@ -299,7 +299,7 @@ def test_exec_query_sbdb_orbit_via_mocked_http(monkeypatch):
 
 
 def test_exec_query_sentry_risk_404_returns_empty(monkeypatch):
-    """Sentry 404 = NEO not on risk list — 应该返 EMPTY banner, 不是 FAILED."""
+    """Sentry 404 = NEO not on risk list — should return EMPTY banner, not FAILED."""
     from app.services import ai_tools_solar_system as mod
 
     class FakeClient:
@@ -367,7 +367,7 @@ def test_dispatch_unknown_tool_returns_failed():
 
 
 def test_dispatch_via_ai_tools_execute_tool():
-    """端到端: ai_tools.execute_tool('compute_hg_magnitude', ...) 走 dispatch."""
+    """End-to-end: ai_tools.execute_tool('compute_hg_magnitude', ...) routes through dispatch."""
     from app.services.ai_tools import execute_tool
 
     result = asyncio.run(execute_tool("compute_hg_magnitude", {

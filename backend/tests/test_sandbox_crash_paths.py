@@ -305,7 +305,7 @@ class TestExecRunPythonErrorFloor:
         assert "empty" in response["error"].lower()
 
     def test_synthetic_declared_crash_keeps_failed_status(self):
-        """R22: data_source=none 不应把 sandbox failure 覆盖成 SYNTHETIC。"""
+        """R22: data_source=none must not overwrite a sandbox failure as SYNTHETIC."""
         from app.services.ai_tools import _exec_run_python
 
         response = asyncio.run(_exec_run_python({
@@ -318,7 +318,7 @@ class TestExecRunPythonErrorFloor:
         assert response.get("analysis_status") == "failed"
 
     def test_timeout_reaches_timeout_error_class(self):
-        """F0.2 classifier — "timed out" message surfaces as error_class=timeout."""
+        """F0.2 classifier — a "timed out" message surfaces as error_class=timeout."""
         from app.services.ai_tools import _classify_sandbox_error
 
         assert _classify_sandbox_error("Code execution timed out after 90 seconds") == "timeout"
@@ -376,13 +376,14 @@ class TestEndToEndNoMessageBugIsGone:
         assert "error" in response and response["error"].strip() != ""
 
     def test_x5_session_counter_bumps_across_calls(self):
-        """X5 (PART X): _session_run_python_count 累积每次 run_python 调用
-        (成功+失败都计). B4/B5/B6 第 3+ 次 crash 数据收集的基础."""
+        """X5 (PART X): _session_run_python_count accumulates across every run_python call
+        (both successful and failed). This is the foundation for B4/B5/B6 crash-data
+        collection on the 3rd+ attempt."""
         from app.services.ai_tools import (
             _bump_run_python_attempt_idx,
             _session_run_python_count,
         )
-        # 用隔离 session id 避免跟其他 test 串扰
+        # Use an isolated session id to avoid interference with other tests
         sid = f"pytest-x5-counter-{id(self)}"
         _session_run_python_count.pop(sid, None)
 

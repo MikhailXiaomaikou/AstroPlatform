@@ -1,28 +1,30 @@
-"""S1 (PART S) 回归: subprocess sandbox 下 session state 跨 cell 持久.
+"""S1 (PART S) regression: session state persists across cells under the subprocess sandbox.
 
-Round 9 R9-NEW-3 观察到 AI 的变量 (`sdss_galaxies`, `Planck18`, `SkyCoord`,
-`v_total`) 在下一个 run_python cell 里 NameError. 原因: SANDBOX_BACKEND=subprocess
-每次 fresh fork, _session_vars 只对 in-process backend 生效. 修复方案:
-subprocess dispatch 前拼历史 code 作为 prefix, 一次 exec 重建 state.
+Round 9 R9-NEW-3 observed that AI variables (`sdss_galaxies`, `Planck18`, `SkyCoord`,
+`v_total`) raised NameError in the next run_python cell. Cause: SANDBOX_BACKEND=subprocess
+forks fresh each time; _session_vars only works for the in-process backend. Fix:
+prepend prior-cell code as a replay prefix before subprocess dispatch so state is rebuilt
+in a single exec.
 
-配套的 R9-NEW-1 detector regression: 前 cell 调过 get_adql_results, 后 cell
-直接用 rows 变量 — 当前 cell 没在 AST 里引用 helper 名, 被 contract validator 拒.
-修复: detector 也扫 session 历史中 helper 调用.
+Companion R9-NEW-1 detector regression: previous cell called get_adql_results, next cell
+uses the rows variable directly — the current cell does not reference the helper name in
+the AST, so the contract validator rejects it.
+Fix: detector also scans session history for helper calls.
 """
 
 import os
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    os.name != "posix", reason="subprocess sandbox 仅在 POSIX 系统测试"
+    os.name != "posix", reason="subprocess sandbox is only tested on POSIX systems"
 )
 
 
 @pytest.fixture(autouse=True)
 def _reset_session_state():
-    """每条测试开始前清 session 状态, 避免相互污染."""
+    """Clear session state before each test to avoid cross-test contamination."""
     from app.services import code_executor as ce
-    # 清掉可能残留的 test session
+    # clear any leftover test sessions
     for sid in list(ce._session_code_history.keys()):
         ce.clear_session_vars(sid)
     yield
@@ -31,16 +33,16 @@ def _reset_session_state():
 
 
 def test_subprocess_replay_prefix_persists_variables():
-    """核心: subprocess 下同一 session_id 跨 cell 应能访问前 cell 变量."""
+    """Core invariant: under subprocess, the same session_id must be able to access variables from the previous cell across cells."""
     from app.services.code_executor import execute_python
 
     session_id = "test_s1_persist"
 
-    # Cell 1: 定义变量
+    # Cell 1: define variables
     r1 = execute_python("x = 42\nmsg = 'hello'", session_id=session_id)
     assert r1.success, f"cell 1 failed: {r1.error} / {r1.stderr}"
 
-    # Cell 2: 使用前 cell 变量
+    # Cell 2: use variables from the previous cell
     r2 = execute_python("print(f'x={x}, msg={msg}')", session_id=session_id)
     assert r2.success, f"cell 2 should see prior vars, got: {r2.error} / {r2.stderr}"
     assert "x=42" in r2.stdout
@@ -48,27 +50,27 @@ def test_subprocess_replay_prefix_persists_variables():
 
 
 def test_failed_cell_not_added_to_history():
-    """失败的 cell 不该进 replay 历史, 否则后续 subprocess 每次 re-crash."""
+    """Failed cells must not be added to the replay history, otherwise subsequent subprocess runs will re-crash."""
     from app.services.code_executor import execute_python, get_session_code_history
 
     session_id = "test_s1_failed"
 
-    # Cell 1: 成功
+    # Cell 1: success
     execute_python("y = 100", session_id=session_id)
     history_after_ok = get_session_code_history(session_id)
     assert len(history_after_ok) >= 1
 
-    # Cell 2: 失败 (NameError)
+    # Cell 2: failure (NameError)
     bad = execute_python("undefined_var + 1", session_id=session_id)
     assert not bad.success
 
-    # 历史不应包含失败的 cell
+    # history must not contain the failed cell
     history_after_fail = get_session_code_history(session_id)
     assert not any("undefined_var" in block for block in history_after_fail)
 
 
 def test_failed_cell_records_completed_prefix_for_replay(monkeypatch):
-    """R14-NEW-2: 失败 cell 前半段已定义的变量要能被下一 cell 看到。"""
+    """R14-NEW-2: Variables defined in the completed prefix of a failed cell must be visible to the next cell."""
     from app.config import settings
     from app.services.code_executor import execute_python, get_session_code_history
 
@@ -86,7 +88,7 @@ def test_failed_cell_records_completed_prefix_for_replay(monkeypatch):
     assert "time_clean" in r1.variables
 
     history = get_session_code_history(session_id)
-    assert history, "失败前已完成的前缀应进入 replay history"
+    assert history, "the completed prefix before the failure should enter the replay history"
     assert "time_clean = [1, 2, 3]" in history[-1]
     assert "missing_name" not in history[-1]
 
@@ -96,7 +98,7 @@ def test_failed_cell_records_completed_prefix_for_replay(monkeypatch):
 
 
 def test_default_session_does_not_accumulate_history():
-    """session_id='default' 不启用持久化, 避免测试 / 匿名用户互相干扰."""
+    """session_id='default' does not enable persistence, to avoid interference between tests and anonymous users."""
     from app.services.code_executor import execute_python, get_session_code_history
 
     execute_python("z = 1", session_id="default")
@@ -105,7 +107,7 @@ def test_default_session_does_not_accumulate_history():
 
 
 def test_session_history_capped():
-    """MAX_SESSION_CODE_BLOCKS 上限, 老的被丢弃."""
+    """History is capped at MAX_SESSION_CODE_BLOCKS; oldest entries are discarded."""
     from app.services.code_executor import (
         MAX_SESSION_CODE_BLOCKS,
         append_session_code_block,
@@ -118,13 +120,13 @@ def test_session_history_capped():
 
     history = get_session_code_history(sid)
     assert len(history) == MAX_SESSION_CODE_BLOCKS
-    # 最老的 5 个 (v0..v4) 应被丢弃
+    # the oldest 5 (v0..v4) should be discarded
     assert "v0 =" not in "\n".join(history)
     assert f"v{MAX_SESSION_CODE_BLOCKS + 4} =" in "\n".join(history)
 
 
 def test_get_session_helper_calls_picks_up_function_names():
-    """R9-NEW-1 detector 放宽: session 历史里 call 过的 helper 名应能被识别."""
+    """R9-NEW-1 detector relaxation: helper names called in session history should be recognised."""
     from app.services.code_executor import (
         append_session_code_block,
         get_session_helper_calls,
@@ -142,7 +144,7 @@ def test_get_session_helper_calls_picks_up_function_names():
 
 
 def test_get_session_defined_names_reports_history_assignments():
-    """R22: NameError 提示应能告诉 AI 这个 session 已有哪些变量。"""
+    """R22: NameError hints should be able to tell the AI which variables already exist in this session."""
     from app.services.code_executor import (
         append_session_code_block,
         clear_session_vars,
@@ -158,7 +160,7 @@ def test_get_session_defined_names_reports_history_assignments():
 
 
 def test_clear_session_also_clears_code_history():
-    """clear_session_vars 要连带清 _session_code_history."""
+    """clear_session_vars must also clear _session_code_history."""
     from app.services.code_executor import (
         append_session_code_block,
         clear_session_vars,

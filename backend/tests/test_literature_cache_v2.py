@@ -1,12 +1,12 @@
-"""M1 验收: literature_tables cache schema v2 + 向后兼容.
+"""M1 acceptance: literature_tables cache schema v2 + backwards compatibility.
 
-M1 的三条核心契约:
-1. 新写入的 cache payload 必须带 schema_version=2 + 每条 line_measurement
-   至少包含 v2 要求的 5 个字段(允许值为 None).
-2. 从老 v1 payload(字段缺失)读出来的 rows 自动补齐 v2 字段,老 session
-   不会 KeyError.
-3. arxiv extractor 在表格里识别 μ 列时,能正确填 mu_lens + 推断
-   is_lensed.  没有 μ 列时所有新字段都是 None(不伪造).
+M1 three core contracts:
+1. Newly written cache payload must carry schema_version=2 + each line_measurement
+   must contain at least the 5 v2-required fields (None values allowed).
+2. Rows read from old v1 payload (missing fields) are automatically upgraded to v2 schema
+   so old sessions do not raise KeyError.
+3. arxiv extractor correctly populates mu_lens + infers is_lensed when a mu column
+   is found in the table. All new fields are None when no mu column is present (no fabrication).
 """
 
 from app.services.ai_tools import (
@@ -24,12 +24,12 @@ def test_schema_version_is_v2():
 
 
 def test_v1_row_upgraded_on_cache_write():
-    """老的 extract 结果(不带新字段)进 cache 时被自动升级."""
+    """Old extract results (without new fields) are automatically upgraded when written to cache."""
     v1_row = {
         "source_name": "SRC-1", "redshift": 5.5, "line_id": "[CII]",
         "log_luminosity": 9.1, "fwhm_km_s": 200.0,
-        # 注意:没有 fwhm_err_km_s / log_luminosity_err / mu_lens /
-        # is_lensed / source_cosmology — 这些是 v2 新增字段
+        # Note: no fwhm_err_km_s / log_luminosity_err / mu_lens /
+        # is_lensed / source_cosmology — these are v2 new fields
     }
     payload = _literature_table_cache_payload(
         {"line_measurements": [v1_row]},
@@ -43,7 +43,7 @@ def test_v1_row_upgraded_on_cache_write():
 
 
 def test_v2_row_preserved():
-    """已经是 v2 的 row 原样保留,不被覆盖."""
+    """Rows that are already v2 are preserved as-is and not overwritten."""
     v2_row = {
         "source_name": "SRC-2", "redshift": 6.0, "line_id": "[CII]",
         "log_luminosity": 9.5, "log_luminosity_err": 0.15,
@@ -64,10 +64,10 @@ def test_v2_row_preserved():
 
 
 def test_old_cache_read_path_auto_upgrades():
-    """M1 契约:_measurement_rows_from_cache_payload 读老 v1 cache 也给 v2 schema.
+    """M1 contract: _measurement_rows_from_cache_payload gives v2 schema even when reading old v1 cache.
 
-    模拟场景:用户 session 里有一个 schema_version=1 的 payload,fit_line_lfr
-    读它时不该 KeyError.
+    Simulated scenario: user session has a schema_version=1 payload; fit_line_lfr
+    should not raise KeyError when reading it.
     """
     old_v1_cache = {
         "schema_version": 1,
@@ -86,7 +86,7 @@ def test_old_cache_read_path_auto_upgrades():
 
 
 def test_bare_list_payload_also_upgraded():
-    """_measurement_rows_from_cache_payload 支持 list 输入(不是 dict)."""
+    """_measurement_rows_from_cache_payload supports list input (not just dict)."""
     rows = _measurement_rows_from_cache_payload([
         {"source_name": "X", "log_luminosity": 8.5, "fwhm_km_s": 140.0},
     ])
@@ -96,7 +96,7 @@ def test_bare_list_payload_also_upgraded():
 
 
 def test_normalize_measurement_to_v2_idempotent():
-    """多次跑 normalize 不会破坏已有的 v2 字段."""
+    """Running normalize multiple times does not corrupt existing v2 fields."""
     row = {"source_name": "C", "mu_lens": 5.0, "is_lensed": True}
     once = _normalize_measurement_to_v2(row)
     twice = _normalize_measurement_to_v2(once)
@@ -105,7 +105,7 @@ def test_normalize_measurement_to_v2_idempotent():
 
 
 def test_arxiv_extractor_picks_up_mu_column():
-    """M1 extractor 契约:表格里有 mu 列时 mu_lens 被填,is_lensed 推断正确."""
+    """M1 extractor contract: when table has a mu column, mu_lens is populated and is_lensed inferred correctly."""
     tables = [{
         "columns": ["Source", "z", "log L[CII]", "FWHM", "mu"],
         "rows": [
@@ -124,13 +124,13 @@ def test_arxiv_extractor_picks_up_mu_column():
     assert ms[1]["is_lensed"] is True
     assert ms[2]["mu_lens"] == 15.0
     assert ms[2]["is_lensed"] is True
-    # source_cosmology 是 paper-level,arxiv.py 层保持 None
+    # source_cosmology is paper-level; arxiv.py layer keeps it as None
     for m in ms:
         assert m["source_cosmology"] is None
 
 
 def test_arxiv_extractor_no_mu_column_leaves_fields_none():
-    """表格没有 μ 列时,mu_lens / is_lensed 都是 None(不伪造)."""
+    """When table has no mu column, mu_lens / is_lensed are both None (no fabrication)."""
     tables = [{
         "columns": ["Source", "z", "log L[CII]", "FWHM"],
         "rows": [["S1", "5.0", "9.0", "200"]],

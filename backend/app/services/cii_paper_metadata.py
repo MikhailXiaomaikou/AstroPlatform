@@ -1,20 +1,22 @@
 """PART AI #6 — paper-level lensing metadata for [CII] surveys.
 
-ar5iv 表格里很少能稳定提取 magnification (μ) 列, 但**整篇 paper 的
-sample 是不是 lensed 是公开常识**. 例如:
-  - Bothwell+2013 (SPT [CII]) — 整个 sample 100% strongly lensed
+The magnification (mu) column is rarely extractable reliably from ar5iv tables,
+but **whether a paper's entire sample is lensed is public knowledge**. For example:
+  - Bothwell+2013 (SPT [CII]) — entire sample 100% strongly lensed
   - Capak+2015 — z~6 starbursts, lensed
-  - ALPINE / REBELS — high-z field galaxies, **不是** lensed sample
-  - JADES / CEERS [CII] — field galaxies, 不是 lensed
+  - ALPINE / REBELS — high-z field galaxies, **not** a lensed sample
+  - JADES / CEERS [CII] — field galaxies, not lensed
 
-这个 dict 给每篇 [CII] paper 一个 paper-level lensing 标签 (按 bibcode
-查), `_normalize_line_measurements` 在不能从 table 提到 μ 列时按这个
-dict fallback 给 row.is_lensed. fit_line_lfr 看到 is_lensed=True 但
-mu_lens=None 的 row → 入 rejected, kind="lensed_no_mu_correction" —
-强制用户手抓 mu_map 才能进 fit.
+This dict assigns a paper-level lensing label to each [CII] paper (looked up by
+bibcode). When `_normalize_line_measurements` cannot extract a mu column from the
+table, it falls back to this dict to set row.is_lensed. When fit_line_lfr sees a
+row with is_lensed=True but mu_lens=None, the row is moved to rejected with
+kind="lensed_no_mu_correction" — forcing the user to retrieve the mu_map before
+the source can enter the fit.
 
-这是为了堵审稿人 "0 lensed sources detected" 那条硬伤 (#6) — 该数字
-原来是 ALPINE table 没 μ 列就直接当 0 报, 不是真科学结论.
+This closes the reviewer-visible bug "0 lensed sources detected" (#6) — that
+number was previously reported because the ALPINE table had no mu column and it
+was treated as 0, which is not a valid scientific conclusion.
 """
 
 from __future__ import annotations
@@ -26,14 +28,16 @@ LensingKind = Literal["all_sources_lensed", "no_lensing", "mixed"]
 
 # Bibcode → lensing classification.
 #
-# 数据来源原则:
-#   - "all_sources_lensed" 仅当 paper abstract / introduction 明确说
-#     "all members are gravitationally lensed" / "lensed by foreground
-#     cluster" / 用 SPT-SMG / cluster-lensed sample
-#   - "no_lensing" 仅当 paper 本身是 field survey 不专门挑 lensed
-#   - "mixed" 当 paper sample 部分 lensed (e.g. ALPINE 含个别已知
-#     lensed 源 - Capak2015 那一支). 这种 row.is_lensed 不能由 paper-level
-#     metadata fallback 决定, 必须从 table 抓
+# Data sourcing principles:
+#   - "all_sources_lensed" only when the paper abstract / introduction
+#     explicitly states "all members are gravitationally lensed" / "lensed by
+#     a foreground cluster" / uses an SPT-SMG / cluster-lensed sample
+#   - "no_lensing" only when the paper itself is a field survey and does not
+#     specifically select lensed sources
+#   - "mixed" when the paper sample is partially lensed (e.g. ALPINE contains
+#     some individually known lensed sources from the Capak+2015 sub-sample).
+#     In this case row.is_lensed cannot be decided by paper-level metadata
+#     fallback; it must be extracted from the table directly.
 PAPER_LENSING: dict[str, LensingKind] = {
     # ── ALPINE / REBELS / similar field surveys ────────────────────
     # Béthermin+2020 ALPINE — 124 sources, field-selected, no lensing

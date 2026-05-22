@@ -148,15 +148,15 @@ def test_hardblock_flag_tracks_environment(monkeypatch):
         _tool_with_dataset("2023A&A...674A...1G"),
     )
 
-    # PART Y Batch 1: 默认 (env 不设) → hardblock 开启
+    # PART Y Batch 1: default (env unset) → hardblock enabled
     monkeypatch.delenv("PROVENANCE_VALIDATOR_HARDBLOCK", raising=False)
     assert citation_violations_should_block(violations) is True
 
-    # 显式禁用 → warn-only
+    # explicitly disabled → warn-only
     monkeypatch.setenv("PROVENANCE_VALIDATOR_HARDBLOCK", "false")
     assert citation_violations_should_block(violations) is False
 
-    # 显式启用 → hardblock (保持向后兼容)
+    # explicitly enabled → hardblock (backward compatible)
     monkeypatch.setenv("PROVENANCE_VALIDATOR_HARDBLOCK", "true")
     assert citation_violations_should_block(violations) is True
 
@@ -826,8 +826,9 @@ def test_unseen_author_year_still_flags_after_literature_search():
 
 def test_bundle_5841_warmup_reply_must_be_blocked():
     """PART AI #1 lock-down: 04-24 warmup chat (.local/diagnostics/5841...)
-    生产时 reply 没被拦下来; 现在的 claim_validator 必须能完整抓住 3 类
-    fabrication 同时触发. 防止以后规则被弱化导致类似 reply 再通过."""
+    the reply was not blocked in production; the current claim_validator must be able
+    to catch all 3 fabrication categories firing simultaneously. Guards against future
+    rule weakening that would let a similar reply through."""
     from app.services.claim_validator import (
         provenance_citation_violations,
         unsupported_literature_narrative_violations,
@@ -839,24 +840,24 @@ def test_bundle_5841_warmup_reply_must_be_blocked():
         "and FWHM generally spans 100-600 km/s. Carniani et al. (2020) "
         "measured these trends."
     )
-    # 当时只调了 search_literature 一个工具且返回空 results
+    # at the time only search_literature was called and it returned empty results
     tool_results = [{
         "tool": "search_literature",
         "result": {"success": True, "results": []},
     }]
 
-    # 1. validate_claims 必须 fail (uncited 数字)
+    # 1. validate_claims must fail (uncited numbers)
     result = validate_claims(reply, tool_results)
     assert result.ok is False
     assert len(result.uncited) >= 1
 
-    # 2. provenance citation 必须含 suspicious_author_year (Carniani 没经
-    #    extract 直接被引)
+    # 2. provenance citation must contain suspicious_author_year (Carniani cited directly
+    #    without going through extract)
     cite_violations = provenance_citation_violations(reply, tool_results)
     assert any(v.kind == "suspicious_author_year" for v in cite_violations)
     assert any("Carniani" in v.match_text for v in cite_violations)
 
-    # 3. unsupported_literature_narrative 必须含整段文学陈述
+    # 3. unsupported_literature_narrative must contain the full literature narrative
     narrative_violations = unsupported_literature_narrative_violations(
         reply, tool_results,
     )
@@ -864,11 +865,11 @@ def test_bundle_5841_warmup_reply_must_be_blocked():
 
 
 def test_bundle_6202_partial_fit_with_uncited_pearson_must_be_flagged():
-    """PART AI #1 lock-down: 04-24 LFR run (.local/diagnostics/6202... 与
-    84ad...) 生产 reply 报数字, fit_line_lfr=PARTIAL, 但 reply 没说
-    exploratory. methodology validator 必须触发
-    line_relation_exploratory_label_missing; Pearson r=0.45 不在 universe
-    必须触发 validate_claims uncited."""
+    """PART AI #1 lock-down: 04-24 LFR run (.local/diagnostics/6202... and
+    84ad...) production reply reported numbers with fit_line_lfr=PARTIAL but reply
+    lacked the exploratory label. The methodology validator must trigger
+    line_relation_exploratory_label_missing; Pearson r=0.45 not in universe
+    must trigger validate_claims uncited."""
     from app.services.claim_validator import (
         methodology_consistency_violations,
         validate_claims,
@@ -894,27 +895,27 @@ def test_bundle_6202_partial_fit_with_uncited_pearson_must_be_flagged():
         },
     }]
 
-    # validate_claims: pearson r=0.45 不在 universe
+    # validate_claims: pearson r=0.45 not in universe
     result = validate_claims(reply, tool_results)
-    assert result.ok is False, "Pearson r=0.45 不在 universe, 必须 fail"
+    assert result.ok is False, "Pearson r=0.45 not in universe, must fail"
 
-    # methodology: PARTIAL fit 报数字但 reply 无 exploratory label →
+    # methodology: PARTIAL fit reports numbers but reply lacks exploratory label →
     # line_relation_exploratory_label_missing
     methodology_v = methodology_consistency_violations(reply, tool_results)
     assert any(
         v.kind == "line_relation_exploratory_label_missing"
         for v in methodology_v
     ), (
-        f"PARTIAL fit + 数字 + 无 exploratory label 必须 flag, "
+        f"PARTIAL fit + numbers + no exploratory label must be flagged, "
         f"got: {[v.kind for v in methodology_v]}"
     )
 
 
 def test_bundle_e8d9_fit_lfr_bypass_must_be_blocked():
     """PART AI #1 lock-down: 04-24 LFR run (.local/diagnostics/e8d9...)
-    只调 1 个 run_python 没调 fit_line_lfr, reply 报 LFR 数字 — Step 3
-    fit_line_lfr_bypass detector 必须抓. 这条 e2e 在 step 3 也覆盖,
-    放在这里让 4 个 bundle 完整 lock-down."""
+    only called run_python, not fit_line_lfr, yet the reply reported LFR numbers —
+    Step 3 fit_line_lfr_bypass detector must catch it. This e2e is also covered in
+    step 3; placed here so all 4 bundles are fully locked down."""
     from app.services.claim_validator import methodology_consistency_violations
 
     reply = (

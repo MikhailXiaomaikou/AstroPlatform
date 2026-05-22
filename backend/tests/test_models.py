@@ -8,6 +8,7 @@ from app.models.schemas import (
     DataFile,
     DataNote,
     DataTag,
+    EncryptedJSONType,
     JSONType,
     PipelineComment,
     PipelineRun,
@@ -169,3 +170,27 @@ class TestJSONType:
         serialized = td.process_bind_param(data, None)
         deserialized = td.process_result_value(serialized, None)
         assert deserialized == data
+
+
+class TestEncryptedJSONType:
+    """Test encrypted JSON compatibility paths."""
+
+    def test_round_trip_encrypts_and_decrypts(self):
+        td = EncryptedJSONType()
+        data = {"openai": "sk-test", "deepseek": "ds-test"}
+        serialized = td.process_bind_param(data, None)
+
+        assert isinstance(serialized, str)
+        assert serialized != json.dumps(data)
+        assert td.process_result_value(serialized, None) == data
+
+    def test_legacy_plaintext_json_still_reads(self):
+        td = EncryptedJSONType()
+        legacy = {"anthropic": "sk-legacy"}
+
+        assert td.process_result_value(json.dumps(legacy), None) == legacy
+
+    def test_invalid_ciphertext_returns_none(self):
+        td = EncryptedJSONType()
+
+        assert td.process_result_value("not-json-and-not-fernet", None) is None

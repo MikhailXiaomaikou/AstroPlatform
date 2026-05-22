@@ -1,67 +1,71 @@
-"""PART AI #2 — Line luminosity 单位转换 (L_solar ↔ L_prime).
+"""PART AI #2 -- Line luminosity unit conversion (L_solar <-> L_prime).
 
-CO LFR / Solomon 1992 / 大多数高 z 线光度论文使用的"亮温线光度" L'
-单位是 K km/s pc². ALPINE 等部分 [CII] 论文则报 L_line/L_sun (bolometric
-luminosity).  两套单位之间 intercept 整体平移,**取决于 line rest
-frequency 和 redshift** —— 不是单一常数.
+CO LFR / Solomon 1992 / most high-z line luminosity papers use the
+brightness-temperature line luminosity L' in units of K km/s pc². Some [CII]
+papers (e.g. ALPINE) report L_line/L_sun (bolometric luminosity). The
+conversion between the two is an overall intercept shift that **depends on the
+line rest frequency and redshift** -- it is not a single constant.
 
-公式 (Solomon 1992 / Carilli & Walter 2013):
+Formulae (Solomon 1992 / Carilli & Walter 2013):
 
-    L'_line [K km/s pc²]
-        = (c² / 2 k_B) · S·ΔV · D_L² / [(1+z) · ν_obs²]
-        ∝ S·ΔV · D_L² / ν_obs² · (1+z)⁻¹
+    L'_line [K km/s pc^2]
+        = (c^2 / 2 k_B) * S*dV * D_L^2 / [(1+z) * nu_obs^2]
+        ~ S*dV * D_L^2 / nu_obs^2 * (1+z)^-1
 
     L_line  [L_sun]
-        ∝ S·ΔV · D_L² · ν_obs
+        ~ S*dV * D_L^2 * nu_obs
 
-两者比值消去 D_L² 和 S·ΔV:
+Taking the ratio cancels D_L^2 and S*dV:
 
-    L_line / L'_line ∝ ν_obs³ · (1+z)
-    ν_obs = ν_rest / (1+z)
-    => L_line / L'_line ∝ (1+z)⁻² · ν_rest³
+    L_line / L'_line ~ nu_obs^3 * (1+z)
+    nu_obs = nu_rest / (1+z)
+    => L_line / L'_line ~ (1+z)^-2 * nu_rest^3
 
-取 log10 + 把 (Lsun erg/s, k_B, c) 等常数全部吸收进 C:
+Taking log10 and absorbing all constants (L_sun erg/s, k_B, c) into C:
 
     log10(L'_line) = log10(L_line/L_sun)
-                     - 3·log10(ν_rest_GHz)
-                     + 2·log10(1+z)
+                     - 3*log10(nu_rest_GHz)
+                     + 2*log10(1+z)
                      + C
 
-其中 C ≈ 5.604 dex, 对**所有线**一致 (单纯单位换算 erg/s↔Lsun + Solomon
-常数).  数值上对 [CII] (ν_rest=1900.5374 GHz) at z=5:
-    -3·log10(1900.5374) = -9.836
-    +2·log10(6.0)        = +1.556
+where C ~ 5.604 dex, consistent for **all lines** (purely a unit conversion
+erg/s <-> L_sun + the Solomon constant). Numerically for [CII]
+(nu_rest=1900.5374 GHz) at z=5:
+    -3*log10(1900.5374) = -9.836
+    +2*log10(6.0)        = +1.556
     +5.604               = +5.604
-    => L_prime - L_solar  ≈ -2.676 dex
+    => L_prime - L_solar  ~ -2.676 dex
 
-WAIT — 上面的+0.66 dex 估算对应 z=5, [CII] 是 **L_solar - L_prime ≈ -2.7 dex**?
-让我重新核对: Carilli & Walter 2013 Eq. 1+3 给出
-    L'/L_line[L_sun] = const · 1/(ν_obs · (1+z))
-                     = (1+z) / ν_rest
+WAIT -- is the +0.66 dex estimate above for z=5, [CII] actually
+**L_solar - L_prime ~ -2.7 dex**? Re-checking against Carilli & Walter 2013
+Eq. 1+3:
+    L'/L_line[L_sun] = const * 1/(nu_obs * (1+z))
+                     = (1+z) / nu_rest
 
-具体:
-    L'_line[K km/s pc²] = 3.25e7 · S·ΔV[Jy km/s] · D_L²[Mpc²] / [(1+z)·ν_obs²[GHz²]]
-    L_line[L_sun]       = 1.04e-3 · S·ΔV[Jy km/s] · ν_obs[GHz] · D_L²[Mpc²]
+Explicitly:
+    L'_line[K km/s pc^2] = 3.25e7 * S*dV[Jy km/s] * D_L^2[Mpc^2] / [(1+z)*nu_obs^2[GHz^2]]
+    L_line[L_sun]        = 1.04e-3 * S*dV[Jy km/s] * nu_obs[GHz] * D_L^2[Mpc^2]
 
-ratio:  L'/L = 3.25e7 / 1.04e-3 / [(1+z) · ν_obs³]
-            = 3.125e10 · 1 / [(1+z) · ν_obs³]
-            = 3.125e10 · (1+z)² / ν_rest³
+ratio:  L'/L = 3.25e7 / 1.04e-3 / [(1+z) * nu_obs^3]
+            = 3.125e10 * 1 / [(1+z) * nu_obs^3]
+            = 3.125e10 * (1+z)^2 / nu_rest^3
 
-log10: log10(L'/L) = 10.495 - 3·log10(ν_rest_GHz) + 2·log10(1+z)
+log10: log10(L'/L) = 10.495 - 3*log10(nu_rest_GHz) + 2*log10(1+z)
 
-[CII] νrest=1900.5374, z=5:
-    10.495 - 3·3.2787 + 2·0.7782
+[CII] nu_rest=1900.5374, z=5:
+    10.495 - 3*3.2787 + 2*0.7782
     = 10.495 - 9.836 + 1.556
     = +2.215 dex
 
-So **L'_prime - L_solar ≈ +2.2 dex** at z=5.
+So **L'_prime - L_solar ~ +2.2 dex** at z=5.
 
-Carilli&Walter 2013 Table 1 actually gives [CII] L'~L_solar ± a few dex
-— Bothwell SPT 报 log L'[CII] ~ 9.6, ALPINE 报 log L_CII/Lsun ~ 8.5.
-差异 ~1.1 dex, 加上 (1+z) 项约 1 dex, 总体 ~2 dex.  这跟上面公式一致.
+Carilli & Walter 2013 Table 1 gives [CII] L' ~ L_solar +/- a few dex:
+Bothwell SPT reports log L'[CII] ~ 9.6, ALPINE reports log L_CII/Lsun ~ 8.5.
+Difference ~1.1 dex; adding the (1+z) term (~1 dex) gives ~2 dex total,
+consistent with the formula above.
 
-用户给的 +0.66 dex 是**对的方向但具体数值偏小**.  实际 z=4-6 [CII]
-样本转换大概偏移 +2 to +2.4 dex.
+The +0.66 dex figure given elsewhere is **in the right direction but too small**.
+For real z=4-6 [CII] samples the conversion offset is approximately +2 to +2.4 dex.
 
 """
 
@@ -71,7 +75,7 @@ import math
 
 
 # Line rest frequencies in GHz.  Source: NIST / SPLATALOGUE.
-# 仅列实际会作 fit 的常用线; 缺的线由 caller 显式传 nu_rest_ghz 兜底.
+# Lists only the commonly fitted lines; missing lines should be supplied by the caller via nu_rest_ghz.
 LINE_REST_FREQ_GHZ: dict[str, float] = {
     "[CII]": 1900.5369,        # 158 μm fine-structure
     "[CII]158": 1900.5369,
@@ -94,9 +98,9 @@ LINE_REST_FREQ_GHZ: dict[str, float] = {
 }
 
 
-# 单位换算常数 (Carilli & Walter 2013 Eq. 1, Eq. 3 之比的对数项):
-#   L'_line / L_line[L_sun] = 3.125e10 · (1+z)² / ν_rest_GHz³
-#   log10(L'/L) = log10(3.125e10) - 3·log10(ν_rest_GHz) + 2·log10(1+z)
+# Unit conversion constant (log term from the ratio of Carilli & Walter 2013 Eq. 1 and Eq. 3):
+#   L'_line / L_line[L_sun] = 3.125e10 * (1+z)^2 / nu_rest_GHz^3
+#   log10(L'/L) = log10(3.125e10) - 3*log10(nu_rest_GHz) + 2*log10(1+z)
 _LOG_UNIT_CONSTANT = math.log10(3.125e10)  # ≈ 10.495
 
 

@@ -559,8 +559,8 @@ async function loadCommentsList() {
   const area = $('comments-area');
   area.innerHTML = '<div class="loading">加载评论...</div>';
   try {
-    // 评论的 GET 是公开的 (不需 secret), 但用 secret 也无妨
-    const r = await api(`/api/comments?limit=100`);
+    // 桌面 admin 调 /api/admin/comments (需 X-Admin-Secret, 在 null-origin 白名单内)
+    const r = await api(`/api/admin/comments?limit=100`);
     const cs = r.comments || [];
     if (cs.length === 0) {
       area.innerHTML = '<div class="loading">无评论</div>';
@@ -606,7 +606,7 @@ async function deleteComment(id, btn) {
   btn.disabled = true;
   btn.textContent = '删除中...';
   try {
-    await api(`/api/comments/${id}`, { method: 'DELETE' });
+    await api(`/api/admin/comments/${id}`, { method: 'DELETE' });
     btn.closest('li').remove();
     loadKpi();             // 顺手刷新 kpi 计数
     loadCommentsStats();   // 顺手刷新趋势

@@ -70,7 +70,7 @@ async def test_normal_mode_timeout_auto_escalates(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_explicit_slow_mode_no_escalate_needed(monkeypatch):
-    """mode='slow' 直接跑 300s, 不触发 escalate 逻辑."""
+    """mode='slow' runs directly at 300s and does not trigger escalate logic."""
     from app.services import ai_tools
 
     def fake_execute_python(code, context, session_id, timeout_s):
@@ -103,7 +103,7 @@ async def test_explicit_slow_mode_no_escalate_needed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_slow_mode_timeout_final_error(monkeypatch):
-    """mode='slow' 超时 → 直接报错, 不再 escalate (避免死循环)."""
+    """mode='slow' timeout → report error directly, no further escalate (avoids infinite loop)."""
     from app.services import ai_tools
 
     async def fake_wait_for(awaitable, timeout):

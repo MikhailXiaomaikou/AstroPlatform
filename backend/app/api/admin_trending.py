@@ -1,15 +1,17 @@
-"""科研趋势统计 + admin 公开开关 + 公开 endpoint.
+"""Research-trend stats + admin visibility toggle + public endpoint.
 
-3 个 admin 端点 + 1 个公开端点 + 1 个开关配置:
-- GET  /api/admin/trending/objects?period=7d      热门天体 (点击/查看过的)
-- GET  /api/admin/trending/sources?period=7d      热门数据源 (search.query.databases)
-- GET  /api/admin/trending/delta?period=7d        上周 vs 本周上升 Top N
-- GET  /api/admin/trending/visibility             当前公开开关状态
-- POST /api/admin/trending/visibility             修改开关 (body: {key, is_public})
-- GET  /api/trending/public                       无需 auth, 按开关返对应数据
+3 admin endpoints + 1 public endpoint + 1 toggle config:
+- GET  /api/admin/trending/objects?period=7d      trending objects (clicked/viewed)
+- GET  /api/admin/trending/sources?period=7d      trending data sources (search.query.databases)
+- GET  /api/admin/trending/delta?period=7d        top-N week-over-week risers
+- GET  /api/admin/trending/visibility             current public-toggle state
+- POST /api/admin/trending/visibility             update toggle (body: {key, is_public})
+- GET  /api/trending/public                       no auth required; returns data per toggle state
 
-内存 5 分钟缓存 (按 key+period 做 key) 防止每次 admin 打开都聚合几万行.
-delta 阈值: 本周 count ≥ 10 才上榜 (防低基数假上升).
+In-memory 5-minute cache (keyed by key+period) to avoid re-aggregating
+tens of thousands of rows every time admin opens the page.
+Delta threshold: current-week count >= 10 to appear (prevents false rises
+from a low baseline).
 """
 
 from __future__ import annotations
@@ -32,10 +34,10 @@ admin_router = APIRouter(prefix="/api/admin/trending", tags=["admin-trending"])
 public_router = APIRouter(prefix="/api/trending", tags=["trending"])
 
 
-# ── 缓存 ────────────────────────────────────────────────────────────
+# ── cache ────────────────────────────────────────────────────────────
 
 _CACHE: dict[str, tuple[float, Any]] = {}
-_CACHE_TTL_SECONDS = 300  # 5 分钟
+_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 def _cache_get(key: str) -> Any | None:
     item = _CACHE.get(key)
@@ -60,9 +62,9 @@ def _parse_period(period: str) -> timedelta:
     raise HTTPException(status_code=400, detail=f"bad period: {period}")
 
 
-# ── 数据提取 helpers ───────────────────────────────────────────────
+# ── data-extraction helpers ───────────────────────────────────────────────
 
-# 哪些 event_type 的 event_data 里带 object_name (用户确认过的"点击了/查看了")
+# event_types whose event_data carries object_name (user-confirmed "clicked/viewed")
 _OBJECT_NAME_EVENTS = {"search.result_click", "object.viewed"}
 
 
@@ -71,7 +73,7 @@ async def _fetch_object_counts(
     cutoff: datetime,
     end: datetime | None = None,
 ) -> Counter[str]:
-    """从 result_click / object.viewed 的 event_data.object_name 聚合."""
+    """Aggregate object_name from result_click / object.viewed event_data."""
     q = (
         select(UserEvent.event_data)
         .where(UserEvent.timestamp >= cutoff)
@@ -100,8 +102,8 @@ async def _fetch_source_counts(
     cutoff: datetime,
     end: datetime | None = None,
 ) -> Counter[str]:
-    """从 search.query 的 event_data.databases (list) 聚合. ai.tool_called
-    里 tool_name='run_adql' 的 event_data.service 额外累加."""
+    """Aggregate databases from search.query event_data.databases (list).
+    Also accumulates event_data.service for ai.tool_called events where tool_name='run_adql'."""
     q = select(UserEvent.event_type, UserEvent.event_data).where(UserEvent.timestamp >= cutoff)
     if end is not None:
         q = q.where(UserEvent.timestamp < end)
@@ -190,18 +192,18 @@ async def trending_sources(
     return result
 
 
-# ── 3. Admin trending delta (上周 vs 本周上升) ───────────────────
+# ── 3. Admin trending delta (prev-period vs this-period risers) ───────────────────
 
 @admin_router.get("/delta")
 async def trending_delta(
     period: str = Query("7d"),
     limit: int = Query(5, ge=1, le=30),
-    min_count: int = Query(10, ge=1, le=1000),  # 本期基数阈值
+    min_count: int = Query(10, ge=1, le=1000),  # minimum this-period count threshold
     dimension: str = Query("objects"),  # objects | sources
     db: AsyncSession = Depends(get_db),
     _admin: None = Depends(require_admin_any),
 ) -> dict[str, Any]:
-    """本 period 相对上 period 的 top N 上升."""
+    """Top-N risers comparing this period against the previous period."""
     if dimension not in ("objects", "sources"):
         raise HTTPException(status_code=400, detail="dimension must be 'objects' or 'sources'")
 
@@ -219,7 +221,7 @@ async def trending_delta(
     this_counts = await fetcher(db, this_start, end=now)
     prev_counts = await fetcher(db, prev_start, end=this_start)
 
-    # 计算 delta: (this - prev) / max(prev, 1), 但本期 ≥ min_count 才入榜
+    # Compute delta: (this - prev) / max(prev, 1), but only include entries with this_n >= min_count.
     rows = []
     for key, this_n in this_counts.items():
         if this_n < min_count:
@@ -232,11 +234,11 @@ async def trending_delta(
             "this_period": this_n,
             "prev_period": prev_n,
             "delta": raw_delta,
-            "pct_change": pct if pct != float("inf") else None,  # None 表新出现
+            "pct_change": pct if pct != float("inf") else None,  # None = newly appeared
             "is_new": prev_n == 0,
         })
 
-    # 排序: 新出现的(is_new) 在前(按 this_period 降序), 然后按 pct_change 降序
+    # Sort: newly appeared (is_new) first (descending by this_period), then by pct_change descending.
     rows.sort(
         key=lambda r: (0 if r["is_new"] else 1, -(r["pct_change"] or 0), -r["this_period"]),
     )
@@ -251,7 +253,7 @@ async def trending_delta(
     return result
 
 
-# ── 4. Visibility 开关 ────────────────────────────────────────────
+# ── 4. Visibility toggle ────────────────────────────────────────────
 
 class VisibilityRequest(BaseModel):
     key: str   # "objects" | "sources" | "delta"
@@ -262,7 +264,7 @@ _VALID_KEYS = {"objects", "sources", "delta"}
 
 
 async def _ensure_default_row(db: AsyncSession, key: str) -> TrendingVisibility:
-    """没 row 就插一条 is_public=False 默认."""
+    """Insert a default is_public=False row if none exists."""
     row = (await db.execute(
         select(TrendingVisibility).where(TrendingVisibility.key == key)
     )).scalar_one_or_none()
@@ -300,14 +302,14 @@ async def set_visibility(
     return {"key": req.key, "is_public": bool(req.is_public)}
 
 
-# ── 5. 公开 endpoint ──────────────────────────────────────────────
+# ── 5. public endpoint ──────────────────────────────────────────────
 
 @public_router.get("/public")
 async def public_trending(
     period: str = Query("7d"),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """按 admin 的开关决定哪些返回; 没开的部分留空.  无需 auth."""
+    """Return only the sections enabled by the admin toggle; disabled sections are omitted. No auth required."""
     visibility = {}
     for key in _VALID_KEYS:
         row = (await db.execute(
@@ -330,7 +332,7 @@ async def public_trending(
             {"source": n, "count": c} for n, c in srcs.most_common(20)
         ]
     if visibility.get("delta"):
-        # 对外只给对象维度 (数据源维度太技术, 公众不感兴趣), 过滤 ≥10 同步
+        # Expose only the objects dimension publicly (sources dimension is too technical for general audiences); apply the >=10 filter consistently.
         delta_t = _parse_period(period)
         now = datetime.now(timezone.utc)
         this_counts = await _fetch_object_counts(db, now - delta_t, end=now)

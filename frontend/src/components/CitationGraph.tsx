@@ -145,8 +145,8 @@ export default function CitationGraph({ bibcodes, depth = 1, height = 500 }: Pro
     };
   }, [bibcodes, depth, height]);
 
-  /* ---- Force simulation via rAF (Q2: ref-trampoline 避免 stale closure
-       + 静态 physics mutation 用 eslint-disable 标注设计意图) ---- */
+  /* ---- Force simulation via rAF (Q2: ref-trampoline avoids stale closure
+       + static physics mutation is annotated with eslint-disable to signal intent) ---- */
   const tickRef = useRef<() => void>(() => {});
   tickRef.current = () => {
     const ns = nodesRef.current;
@@ -164,10 +164,10 @@ export default function CitationGraph({ bibcodes, depth = 1, height = 500 }: Pro
     ns.forEach((n, i) => idx.set(n.id, i));
 
     // Force-directed physics simulation — nodes are mutated in place by
-    // design (vx/vy/x/y 是仿真状态, 下一帧要读最新值).  这是 physics
-    // sim 设计模式, 不是 React immutability 违反.  ESLint 的
-    // react-hooks/immutability 规则对 ref.current 里子对象的 mutation
-    // 一律 flag, 这里整块物理计算 disable.
+    // design (vx/vy/x/y are simulation state that must reflect the latest values
+    // on every frame). This is a physics sim pattern, not a React immutability
+    // violation. ESLint's react-hooks/immutability rule flags all mutations on
+    // sub-objects of ref.current, so the entire physics block is disabled.
     /* eslint-disable react-hooks/immutability */
     // Center gravity
     for (const n of ns) {
@@ -225,10 +225,10 @@ export default function CitationGraph({ bibcodes, depth = 1, height = 500 }: Pro
     /* eslint-enable react-hooks/immutability */
 
     setNodes([...ns]);
-    // Ref-trampoline: 通过 tickRef.current 自引用, 避免 useCallback 的
-    // stale closure 问题 (ESLint 报 "tick accessed before declared").
-    // tickRef 每次 render 都被重新赋最新闭包, RAF 回调访问
-    // tickRef.current 总是最新版.
+    // Ref-trampoline: tickRef.current self-references to avoid the useCallback
+    // stale closure problem (ESLint "tick accessed before declared").
+    // tickRef is reassigned to the latest closure on every render, so the RAF
+    // callback always reads the up-to-date version via tickRef.current.
     frameRef.current = requestAnimationFrame(() => tickRef.current());
   };
 

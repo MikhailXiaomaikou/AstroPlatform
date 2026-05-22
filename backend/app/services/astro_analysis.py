@@ -22,8 +22,9 @@ def cleanup_lightkurve_cache(
 ) -> dict:
     """Remove corrupted lightkurve FITS cache files.
 
-    只删除 astropy.io.fits 无法打开的 FITS / FITS.GZ 文件；正常缓存保留。
-    启动时限制扫描数量，避免 Render 冷启动被大缓存拖慢。
+    Removes only FITS / FITS.GZ files that astropy.io.fits cannot open;
+    healthy cache entries are preserved. Limits the scan count at startup
+    to avoid a large cache slowing down Render cold-starts.
     """
     roots: list[Path] = []
     if cache_root is not None:
@@ -245,9 +246,10 @@ def fit_isochrone(
     met_range=(-2.0, 0.5),
     dm_range=(0.0, 20.0),
     av_range=(0.0, 2.0),
-    # L2-c (audit 2026-04-20): age_grid 从 20 点加密到 40 点 (dex≈0.095→0.05),
-    # 符合 Bressan+ 2012 PARSEC 推荐的 Δlog(age) ≤ 0.05 精度要求.
-    # met_grid 从 5→9 也让 [M/H] 步长 0.3→0.15 dex, 拟合金属贫星团不再过粗.
+    # L2-c (audit 2026-04-20): age_grid densified from 20 to 40 points (dex ≈ 0.095→0.05),
+    # meeting the Bressan+ 2012 PARSEC recommendation of Δlog(age) ≤ 0.05.
+    # met_grid expanded from 5→9 points, reducing [M/H] step from 0.3→0.15 dex
+    # so metal-poor clusters are no longer over-coarsely sampled.
     n_grid_age=40,
     n_grid_met=9,
     n_walkers=32,
@@ -393,8 +395,9 @@ def fit_isochrone(
 
     age_grid = np.linspace(age_range[0], age_range[1], n_grid_age)
     met_grid = np.linspace(met_range[0], met_range[1], n_grid_met)
-    # L2-c: dm 和 av 从 3 点加到 7 点 — 3 点只覆盖 min/中/max, 错过最佳
-    # 距离模的概率很大.  7 点足够 Nelder-Mead 后期精修的温启动.
+    # L2-c: dm and av expanded from 3 to 7 grid points — 3 points only cover
+    # min/mid/max and have a high chance of missing the best-fit distance modulus.
+    # 7 points give Nelder-Mead a good warm start for later refinement.
     dm_grid = np.linspace(dm_range[0], dm_range[1], 7)
     av_grid = np.linspace(av_range[0], av_range[1], 7)
 
@@ -1325,7 +1328,7 @@ def k_correction(z, band="r", galaxy_type="elliptical"):
     }
     c = coeffs.get((band, galaxy_type), [0.0, 1.0, 0.5])
 
-    # L3 (audit 2026-04-20): z > 0.5 警告 + 结构化 metadata.
+    # L3 (audit 2026-04-20): z > 0.5 warning + structured metadata.
     max_z = float(z_arr.max()) if z_arr.size > 0 else 0.0
     if max_z > 0.5:
         msg = (
@@ -1355,7 +1358,7 @@ def k_correction(z, band="r", galaxy_type="elliptical"):
     return c[0] + c[1] * z_arr + c[2] * z_arr**2
 
 
-# L3: 模块级 status dict,最后一次 k_correction 调用后可查.
+# L3: module-level status dict, inspectable after the last k_correction call.
 LAST_KCORR_STATUS: dict = {}
 
 
@@ -2079,10 +2082,11 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
     else:
         fap_label = "unreliable"
 
-    # L2-b (audit 2026-04-20): n∈[20,50) 样本太小, Baluev 解析 FAP 偏乐观
-    # (VanderPlas & Ivezic 2015 明确警告).  auto 模式已经在 n<200 时改
-    # bootstrap (好), 但即便 bootstrap 在 n=20-50 也不稳 — 加明确
-    # fap_warning 字段 + reliable 门槛提到 n>=50.
+    # L2-b (audit 2026-04-20): for n in [20, 50) the sample is too small;
+    # the Baluev analytic FAP is over-optimistic (explicitly warned by
+    # VanderPlas & Ivezic 2015). auto mode already switches to bootstrap
+    # for n < 200 (good), but even bootstrap is unstable at n=20-50 —
+    # add an explicit fap_warning field and raise the reliable threshold to n >= 50.
     fap_warnings: list[str] = []
     if len(t) < 50:
         fap_warnings.append(
@@ -2102,7 +2106,7 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
         "fap_level": fap_label,
         "fap_method": method,
         "fap_warnings": fap_warnings,
-        # L2-b: reliable 阈值从 n>=20 抬到 n>=50 反映 VanderPlas 2015
+        # L2-b: reliable threshold raised from n>=20 to n>=50, reflecting VanderPlas 2015
         "reliable": bool(fap_at_best < 0.01 and len(t) >= 50),
         "n_datapoints": len(t),
         "spectral_resolution_per_day": spectral_resolution,
@@ -2116,9 +2120,9 @@ def lomb_scargle_period(time, mag, mag_err=None, min_period=0.1, max_period=100,
 
 
 class PhaseFoldResult:
-    """phase_fold(time, flux, period, t0) 的结果容器。
+    """Result container for phase_fold(time, flux, period, t0).
 
-    同时支持三种常见访问方式:
+    Supports three common access patterns:
     - phase, flux_folded = result
     - result.phase / result.flux_folded / result.flux
     - result["phase"] / result["flux_folded"] / result["flux"]
@@ -2178,21 +2182,22 @@ class PhaseFoldResult:
 
 
 def phase_fold(time, flux=None, period=None, t0=None, epoch=None):
-    """相位折叠时间序列。
+    """Phase-fold a time series.
 
     Args:
-        time: 观测时间数组。
-        flux: 可选的 flux / magnitude 数组。省略时保留旧接口
-            ``phase_fold(time, period, epoch=...)``, 只返回 phase 数组。
-        period: 折叠周期。旧调用可把它作为第二个位置参数传入。
-        t0: 新 light-curve helper API 使用的 transit/reference epoch。
-        epoch: 旧接口里的 reference epoch 别名。
+        time: Array of observation times.
+        flux: Optional flux / magnitude array. If omitted, the legacy interface
+            ``phase_fold(time, period, epoch=...)`` is used and only the phase
+            array is returned.
+        period: Folding period. Legacy callers may pass it as the second positional argument.
+        t0: Transit/reference epoch used by the new light-curve helper API.
+        epoch: Alias for the reference epoch used by the legacy interface.
 
     Returns:
-        旧调用: [0, 1) 范围内的 phase 数组。
-        带 flux 的新调用: PhaseFoldResult。可写成
-        ``phase, flux_folded = phase_fold(...)``，也可用
-        ``result.phase`` 或 ``result["phase"]`` 访问。
+        Legacy call: phase array in [0, 1).
+        New call with flux: PhaseFoldResult. Can be unpacked as
+        ``phase, flux_folded = phase_fold(...)`` or accessed via
+        ``result.phase`` or ``result["phase"]``.
     """
     t = np.asarray(time, dtype=float)
     legacy_array_only = period is None
@@ -3135,7 +3140,7 @@ def search_lightcurve(target, mission='kepler'):
     import lightkurve as lk
 
     def _jsonish_cell(value):
-        """把 astropy / numpy / MaskedArray cell 转成真实 JSON 值, 不走 str(list)。"""
+        """Convert an astropy / numpy / MaskedArray cell to a plain JSON-serialisable value (not str(list))."""
         raw = getattr(value, "value", value)
         if hasattr(raw, "filled"):
             try:
@@ -3340,16 +3345,16 @@ def search_lightcurve(target, mission='kepler'):
     return out
 
 
-# S2/R22: 若 sector=None 且 search 返回多个 segment, 默认只下最近 1 个。
-# 多 sector stitching 在 MAST 冷启动时常超过 300s, 而且 14+ 个 TESS
-# sector 会爆 2-3 GB 内存。需要长 baseline 时让调用方显式传
-# max_segments=3 或 sector=[...]。
+# S2/R22: When sector=None and the search returns multiple segments, only the
+# most recent 1 is downloaded by default. Stitching many TESS sectors can take
+# >300 s on a cold MAST start and 14+ sectors can exhaust 2-3 GB of memory.
+# For a long baseline, callers should pass max_segments=3 or sector=[...].
 DEFAULT_LIGHTCURVE_MAX_SEGMENTS = 1
 DEFAULT_LIGHTCURVE_MAX_POINTS = 30_000
 
 
 def _lightcurve_value_array(value):
-    """把 lightkurve / astropy quantity-like 对象转成 float ndarray。"""
+    """Convert a lightkurve / astropy quantity-like object to a plain float ndarray."""
     raw = getattr(value, "value", value)
     try:
         return np.asarray(raw, dtype=float)
@@ -3360,7 +3365,7 @@ def _lightcurve_value_array(value):
 
 
 def _downsample_lightcurve_arrays(time, flux, flux_err, max_points):
-    """返回给 run_python 前, 对超大光变曲线做 median binning。"""
+    """Apply median binning to oversized light curves before returning to run_python."""
     if max_points is None or max_points <= 0 or len(time) <= max_points:
         return time, flux, flux_err, None
 
@@ -3394,20 +3399,25 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
                                   max_points=DEFAULT_LIGHTCURVE_MAX_POINTS):
     """Download, stitch, and clean a light curve.
 
-    target: 名称 (HD / HIP / TIC / KIC / EPIC / 坐标字符串).
+    target: target name (HD / HIP / TIC / KIC / EPIC / coordinate string).
     mission: 'kepler' | 'tess' | 'k2'.
-    sector: TESS sector 编号 (int 或 list[int]). None 表示全部, 但默认会被
-            截到最近的 max_segments 个防 OOM. 显式传 sector=[41,42,43] 精确指定.
-    author: 'SPOC' | 'TESS-SPOC' | 'QLP' | 'Kepler' 等, 用来区分不同 pipeline
-            出的同一目标产品. None 取第一个可用的.
-    flatten: 做 outlier 剔除 + 去除长周期趋势. False 保留原始曲线.
-    max_segments: 默认 1 个 segment 上限, 防止 lightkurve 下所有 TESS sector
-                  超时或爆内存. 显式传 None 关闭截断.
-    max_points: 返回给 run_python 的最大点数. 超过后按时间顺序做确定性
-                median binning, 防止 phase-fold / plot 阶段 OOM.
+    sector: TESS sector number (int or list[int]). None means all available,
+            but defaults are capped to the most recent max_segments to prevent
+            OOM. Pass sector=[41,42,43] to specify exact sectors.
+    author: 'SPOC' | 'TESS-SPOC' | 'QLP' | 'Kepler' etc., to distinguish
+            products from different pipelines for the same target. None takes
+            the first available.
+    flatten: apply outlier rejection and long-period trend removal. False
+             returns the raw light curve.
+    max_segments: default cap of 1 segment, preventing lightkurve from
+                  downloading all TESS sectors and timing out or exhausting
+                  memory. Pass None to disable the cap.
+    max_points: maximum number of points returned to run_python. If exceeded,
+                deterministic median binning is applied in time order to prevent
+                OOM during phase-folding or plotting.
     """
     import lightkurve as lk
-    # R1.1: 只在非 None 时传参, 保持 lightkurve 默认行为
+    # R1.1: only pass kwargs when non-None, to preserve lightkurve default behavior
     kwargs = {"mission": mission}
     if sector is not None:
         kwargs["sector"] = sector
@@ -3417,11 +3427,11 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
     if len(search) == 0:
         raise ValueError(f"No {mission} light curves found for {target}")
 
-    # S2: 只在用户没显式指定 sector 时触发 max_segments 截断.
+    # S2: only apply the max_segments cap when the caller did not explicitly specify sectors.
     segments_warning = None
     original_n = len(search)
     if sector is None and max_segments is not None and original_n > max_segments:
-        # 保留最近的 max_segments 个 — lightkurve SearchResult 支持 slicing
+        # keep the most recent max_segments entries — lightkurve SearchResult supports slicing
         search = search[-max_segments:]
         segments_warning = (
             f"Found {original_n} matching {mission} light curves; "
@@ -3431,12 +3441,13 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
 
     lc_collection = search.download_all()
 
-    # R11-NEW-2 (PART V): TESS / Kepler 个别 segment 会把 quality 列存成
-    # str32 (e.g. HD 189733 sector 41, SPOC 不同 release 的混合), astropy
-    # vstack 默认严格 dtype 匹配, `lc_collection.stitch()` 直接抛
+    # R11-NEW-2 (PART V): Some TESS / Kepler segments store the quality column as
+    # str32 (e.g. HD 189733 sector 41 from mixed SPOC releases). Because astropy
+    # vstack enforces strict dtype matching, `lc_collection.stitch()` raises
     # TableMergeError: 'quality' columns have incompatible types
-    # [int32, int32, int32, int32, str32]. 统一把 quality 列 cast 到 int32;
-    # 无法转的 segment 直接丢这列 (下游 flatten / remove_outliers 不依赖 quality).
+    # [int32, int32, int32, int32, str32]. Cast quality to int32 uniformly;
+    # segments that cannot be cast have the column dropped (downstream
+    # flatten / remove_outliers does not depend on quality).
     import numpy as _np_lc
     homogenize_warning = None
     _cast_count = 0
@@ -3449,7 +3460,7 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
             col = _lc_single["quality"]
             kind = getattr(getattr(col, "dtype", None), "kind", None)
             if kind in ("i", "u", "b"):
-                continue  # 已经是整数 dtype
+                continue  # already an integer dtype
             try:
                 arr = _np_lc.asarray(col).astype("int32", casting="unsafe")
                 _lc_single["quality"] = arr
@@ -3471,8 +3482,8 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
     try:
         lc = lc_collection.stitch()
     except Exception as stitch_err:
-        # 兜底: 少数情况 stitch 仍失败 (e.g. time 列 dtype 不同).
-        # 退而求其次用第一个 segment, 不整体失败.
+        # Fallback: in rare cases stitch still fails (e.g. mismatched time column dtype).
+        # Use the first segment rather than failing entirely.
         stitch_msg = f"{type(stitch_err).__name__}: {stitch_err}"
         lc = lc_collection[0]
         if homogenize_warning:
@@ -3504,7 +3515,7 @@ def download_and_clean_lightcurve(target, mission='kepler', flatten=True,
     meta['points_returned'] = int(len(time_arr))
     meta['max_points'] = max_points
 
-    # R11-NEW-2: 合并 segment-cap 警告 + homogenize 警告
+    # R11-NEW-2: merge segment-cap warning + homogenize warning
     warnings = [w for w in (segments_warning, homogenize_warning, downsample_warning) if w]
     if warnings:
         meta['warning'] = " | ".join(warnings)
@@ -3820,7 +3831,7 @@ def bss_select(bp_rp, abs_mag, turnoff_bp_rp, turnoff_M_G,
 
 
 class _FunctionRegistry(dict):
-    """让 helper 清单既像 dict, 又能容错 `funcs[:10]` 这种 LLM 写法."""
+    """Helper registry that behaves like a dict but also tolerates LLM-style slice access such as `funcs[:10]`."""
 
     def __getitem__(self, key):
         if isinstance(key, slice):

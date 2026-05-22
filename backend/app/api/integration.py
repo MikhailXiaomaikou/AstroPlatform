@@ -145,8 +145,8 @@ class SAMPReceiver:
         if self._client and self._connected:
             try:
                 self._client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("SAMP client disconnect failed: %s", e)
             self._connected = False
         return {"status": "disconnected"}
 
@@ -540,10 +540,11 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool, progress_call
                 })
             return table
         except Exception as e:
-            # L17 + PART Y Batch 4 audit: 区分 4xx (permanent, 不换 mirror) vs
-            # 5xx / 网络错 (transient, 换 mirror).  404 = 表不存在 /
-            # 400 = SQL 语法错, 下一个 mirror 也会返回同样错, 浪费
-            # wall-clock.  只对 5xx / timeout / connection 错试下一个.
+            # L17 + PART Y Batch 4 audit: distinguish 4xx (permanent, do not try next
+            # mirror) from 5xx / network errors (transient, rotate to next mirror).
+            # 404 = table does not exist / 400 = SQL syntax error; the next mirror
+            # would return the same error and waste wall-clock time.
+            # Only retry on 5xx / timeout / connection errors.
             #
             # PART Y Batch 4: prefer the real status_code attribute from
             # httpx exceptions; fall back to keyword string matching only
@@ -556,8 +557,8 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool, progress_call
                 import httpx
                 if isinstance(e, httpx.HTTPStatusError):
                     status_code = e.response.status_code
-            except Exception:
-                pass
+            except Exception as inner:
+                logger.debug("httpx status_code probe failed: %s", inner)
 
             if status_code is not None:
                 is_permanent = (400 <= status_code < 500) and status_code not in (408, 429)
@@ -623,10 +624,10 @@ def _launch_on_mirrors(query: str, service: str, async_mode: bool, progress_call
 
     # All mirrors failed — re-raise the last error with a hint about
     # which URLs were tried so logs make the failure mode obvious.
-    # K3: 'Tried: {tried}' 之前用 f-string 插 list → repr, 出
-    # "Tried: ['url1', 'url2']" 带方括号 + 单引号, 看起来很脏.
-    # 改成普通逗号分隔. 错误消息是用户直接看到的文本, 格式干净比什么
-    # 防御都重要.
+    # K3: 'Tried: {tried}' previously inserted the list via f-string -> repr,
+    # producing "Tried: ['url1', 'url2']" with brackets and single-quotes, which
+    # looks messy. Changed to plain comma-separated. Error messages are read
+    # directly by users; clean formatting matters more than anything else here.
     msg = (
         f"All {service} TAP mirrors unavailable after {len(tried)} attempts. "
         f"Tried: {', '.join(tried)}. Last error: {last_err}"
@@ -844,11 +845,12 @@ async def execute_adql_query(
                 if hasattr(arr, "mask"):
                     mask = arr.mask
                 if hasattr(arr, "filled"):
-                    # L16 (audit 2026-04-20): float 列用 np.nan 填充 masked
-                    # 比 0 更语义干净 — 下面的 isnan 分支能捕获, 不依赖
-                    # mask 数组也能走到 None.  整数列 masked 仍然靠 mask[idx]
-                    # 追踪 (filled(0) 对整数 masked 是必要的, 因为
-                    # np.nan 不能赋给 int 数组).
+                    # L16 (audit 2026-04-20): fill masked float columns with np.nan
+                    # rather than 0 — semantically cleaner and the isnan branch below
+                    # can catch it without relying on the mask array to reach None.
+                    # Integer masked columns are still tracked via mask[idx]
+                    # (filled(0) is necessary for integer masked arrays because
+                    # np.nan cannot be assigned to an int array).
                     try:
                         is_float_dtype = np.issubdtype(arr.dtype, np.floating)
                     except Exception:

@@ -1,16 +1,18 @@
-"""N'-1: 后台数据统计 endpoints (供桌面 admin HTML 调).
+"""N'-1: Backend data-stats endpoints (called by the admin desktop HTML).
 
-设计跟现有 /api/admin/events/stats + /api/admin/inference/stats 互补:
-- /kpi:        汇总卡片 (event_total / unique_users / inference_calls /
+Design complements the existing /api/admin/events/stats + /api/admin/inference/stats:
+- /kpi:        Summary cards (event_total / unique_users / inference_calls /
               inference_cost / comments_visible)
-- /by-tool:   AI 工具使用排行 (从 user_events.event_type='ai.tool_called'
-              的 event_data.tool_name 聚合)  ← 这是"方向"维度的核心
-- /by-page:   按 page 字段聚合
-- /timeline:  时间桶 × event_type, 看趋势 (period<=3d 用 hour, 其他 day)
-- /comments:  评论增长 + 可见/隐藏统计
+- /by-tool:   AI tool usage ranking (aggregated from
+              user_events.event_type='ai.tool_called' event_data.tool_name)
+              <- the core "direction" dimension
+- /by-page:   Aggregated by page field
+- /timeline:  Time bucket x event_type, for trend analysis
+              (period<=3d uses hour buckets, otherwise day buckets)
+- /comments:  Comment growth + visible/hidden stats
 
-所有 endpoint 用 require_admin_any (X-Admin-Secret 优先, JWT+ADMIN_USERNAMES
-旁路), 跟桌面 HTML 工具共用一套 auth.
+All endpoints use require_admin_any (X-Admin-Secret preferred,
+JWT+ADMIN_USERNAMES bypass), sharing auth with the desktop HTML tools.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ router = APIRouter(prefix="/api/admin/stats", tags=["admin-stats"])
 
 
 def _parse_period(period: str) -> timedelta:
-    """支持 'Nd' / 'Nh' (e.g. '24h', '7d', '30d', '90d')."""
+    """Support 'Nd' / 'Nh' format (e.g. '24h', '7d', '30d', '90d')."""
     p = period.strip().lower()
     if p.endswith("d"):
         return timedelta(days=int(p[:-1]))
@@ -39,7 +41,7 @@ def _parse_period(period: str) -> timedelta:
     raise HTTPException(status_code=400, detail=f"unsupported period: {period}")
 
 
-# ── 1. KPI: 顶部汇总卡片 ─────────────────────────────────────────────
+# ── 1. KPI: top-level summary cards ─────────────────────────────────────────────
 
 @router.get("/kpi")
 async def kpi(
@@ -49,14 +51,14 @@ async def kpi(
 ) -> dict[str, Any]:
     cutoff = datetime.now(timezone.utc) - _parse_period(period)
 
-    # 事件总数
+    # total event count
     event_total = (
         await db.execute(
             select(func.count(UserEvent.id)).where(UserEvent.timestamp >= cutoff)
         )
     ).scalar_one() or 0
 
-    # 活跃用户 (这段时间至少 1 个 event 的不同 user_id)
+    # active users (distinct user_ids with at least 1 event in the period)
     unique_users = (
         await db.execute(
             select(func.count(func.distinct(UserEvent.user_id)))
@@ -64,7 +66,7 @@ async def kpi(
         )
     ).scalar_one() or 0
 
-    # AI 推理总数 + 总成本
+    # total AI inference calls + total cost
     inf_count = (
         await db.execute(
             select(func.count(InferenceLog.id)).where(InferenceLog.timestamp >= cutoff)
@@ -77,7 +79,7 @@ async def kpi(
         )
     ).scalar_one() or 0.0
 
-    # 评论 (可见 + 总, 不限 period 看历史; period 内增量另外算)
+    # comments (visible + total, unrestricted by period for historical view; period delta computed separately)
     comments_visible = (
         await db.execute(
             select(func.count(Comment.id)).where(Comment.is_visible == True)  # noqa: E712
@@ -105,7 +107,7 @@ async def kpi(
     }
 
 
-# ── 2. by-tool: AI 工具调用排行 (方向维度) ───────────────────────────
+# ── 2. by-tool: AI tool call ranking (direction dimension) ───────────────────────────
 
 @router.get("/by-tool")
 async def by_tool(
@@ -114,10 +116,11 @@ async def by_tool(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """从 ai.tool_called 事件的 event_data.tool_name 聚合.
+    """Aggregate from ai.tool_called events via event_data.tool_name.
 
-    用 Python 端 Counter 而不是 SQL json_extract — 跨方言简单, 几万行
-    user_events 在内存里聚合 < 100 ms.
+    Uses a Python-side Counter rather than SQL json_extract — simpler across
+    dialects; aggregating tens of thousands of user_events in memory takes
+    under 100 ms.
     """
     cutoff = datetime.now(timezone.utc) - _parse_period(period)
 
@@ -151,7 +154,7 @@ async def by_tool(
     return {"period": period, "items": items, "total_tools_seen": len(counter)}
 
 
-# ── 2b. telemetry/tool_usage: enriched dump for M2 第二轮砍工具决策 ────
+# ── 2b. telemetry/tool_usage: enriched dump for M2 second-round tool-pruning decisions ────
 
 
 @router.get("/telemetry/tool_usage")
@@ -161,16 +164,18 @@ async def telemetry_tool_usage(
     _admin: None = Depends(require_admin_any),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Stage 6 P0c-F (2026-05-19): tool 使用率 telemetry dump.
+    """Stage 6 P0c-F (2026-05-19): tool usage-rate telemetry dump.
 
-    跟 by-tool 同源 (user_events.ai.tool_called 聚合), 但额外加:
-      - 总调用数 (total_calls)
-      - 每工具占比 (pct_of_total)
-      - 低使用标记 (low_usage: pct < 0.5%) — 明天用户用这个决策 M2 第二轮
-        砍哪些工具
+    Same source as by-tool (user_events.ai.tool_called aggregation), but
+    adds:
+      - total call count (total_calls)
+      - per-tool share (pct_of_total)
+      - low-usage flag (low_usage: pct < 0.5%) — used to decide which tools
+        to prune in the M2 second round
 
-    Default period=7d, limit=100 — 一次性 dump 全部工具, 让用户能
-    `curl <prod>/api/admin/stats/telemetry/tool_usage | jq` 看 JSON 分布.
+    Default period=7d, limit=100 — one-shot dump of all tools so that
+    `curl <prod>/api/admin/stats/telemetry/tool_usage | jq` shows the full
+    JSON distribution.
     """
     cutoff = datetime.now(timezone.utc) - _parse_period(period)
     rows = (
@@ -183,9 +188,10 @@ async def telemetry_tool_usage(
 
     counter: Counter[str] = Counter()
     last_used: dict[str, datetime] = {}
-    # 2026-05-20: 加 per-tool input keys breakdown. 让用户能看 fit_line_lfr
-    # 是不是真用 arxiv_id 入口 (跟 prompt.md 默认规则对齐), 还是 LLM 仍习惯
-    # cache_key 两步路径.
+    # 2026-05-20: Add per-tool input-keys breakdown. Lets admins check whether
+    # fit_line_lfr is actually using the arxiv_id entry point (aligned with the
+    # prompt.md default rule) or whether the LLM still prefers the cache_key
+    # two-step path.
     input_keys_per_tool: dict[str, Counter[str]] = {}
     for ed, ts in rows:
         if not isinstance(ed, dict):
@@ -201,7 +207,7 @@ async def telemetry_tool_usage(
             input_keys_per_tool.setdefault(tool_name, Counter())[key_signature] += 1
 
     total_calls = sum(counter.values())
-    low_usage_pct_threshold = 0.5  # 占比 < 0.5% 视为低使用, 候选砍
+    low_usage_pct_threshold = 0.5  # share < 0.5% is considered low-usage, candidate for removal
 
     items = []
     for name, cnt in counter.most_common(limit):
@@ -236,7 +242,7 @@ async def telemetry_tool_usage(
     }
 
 
-# ── 3. by-page: 按页面访问量 ─────────────────────────────────────────
+# ── 3. by-page: page-level traffic breakdown ─────────────────────────────────────────
 
 @router.get("/by-page")
 async def by_page(
@@ -274,7 +280,7 @@ async def by_page(
     }
 
 
-# ── 4. timeline: 时间桶 × event_type ─────────────────────────────────
+# ── 4. timeline: time-bucket x event_type ─────────────────────────────────
 
 @router.get("/timeline")
 async def timeline(
@@ -283,7 +289,7 @@ async def timeline(
     bucket: str = Query("auto"),  # auto | hour | day
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """时间桶聚合, 返回 [{ts, counts: {event_type: n, ...}}]"""
+    """Aggregate into time buckets, returning [{ts, counts: {event_type: n, ...}}]."""
     delta = _parse_period(period)
     cutoff = datetime.now(timezone.utc) - delta
 
@@ -314,7 +320,7 @@ async def timeline(
         ],
         key=lambda x: x["ts"],
     )
-    # 找 top-N event_type 让前端渲染 (避免几十种类堆叠图眼花)
+    # Find top-N event types for the frontend to render (avoids a crowded stacked chart).
     overall = Counter()
     for tc in buckets.values():
         for et, cnt in tc.items():
@@ -329,7 +335,7 @@ async def timeline(
     }
 
 
-# ── 5. comments: 评论统计 + 趋势 ─────────────────────────────────────
+# ── 5. comments: comment stats + trends ─────────────────────────────────────
 
 @router.get("/comments")
 async def comments_stats(
@@ -350,7 +356,7 @@ async def comments_stats(
         )
     ).scalar_one() or 0
 
-    # 按日 count
+    # per-day count
     rows = (
         await db.execute(
             select(Comment.created_at, Comment.is_visible)

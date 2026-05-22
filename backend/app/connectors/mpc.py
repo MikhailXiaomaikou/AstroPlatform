@@ -23,46 +23,48 @@ logger = logging.getLogger(__name__)
 
 MPC_ARCHIVE_VERSION = "mpc-2026"
 
-# Provisional designation 里的双字母组(年内序号), 不算"asteroid name"
-# 见 IAU Minor Planet Names: https://minorplanetcenter.net/iau/info/Astrometry.html
+# Two-letter group inside a provisional designation (the half-month sequence)
+# does not count as an "asteroid name".
+# See IAU Minor Planet Names: https://minorplanetcenter.net/iau/info/Astrometry.html
 _PROVISIONAL_LETTERS = frozenset({
     "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AJ", "AK", "AL", "AM", "AN",
     "AO", "AP", "AQ", "AR", "AS", "AT", "AU", "AV", "AW", "AX", "AY", "AZ",
     "BA", "BB", "BC", "BD", "BE", "BF", "BG", "BH", "BJ", "BK", "BL", "BM",
-    "TB", "TC", "TD",  # 列常见的, 不全列 — 兜底逻辑保留原 designation
+    "TB", "TC", "TD",  # common ones only; the fallback path preserves the original designation
 })
 
 
 def _normalize_mpc_designations(raw: str) -> list[str]:
-    """把入参展开成多个 designation 候选, 提升 astroquery.mpc 命中率.
+    """Expand the input into multiple designation candidates to improve astroquery.mpc hit rate.
 
-    例:
-      "(3200) Phaethon"  → ["3200", "Phaethon", "(3200) Phaethon"]
-      "Apophis"          → ["Apophis"]
-      "1983 TB"          → ["1983 TB"]  (provisional designation, 不拆)
-      "99942"            → ["99942"]
+    Examples:
+      "(3200) Phaethon"  -> ["3200", "Phaethon", "(3200) Phaethon"]
+      "Apophis"          -> ["Apophis"]
+      "1983 TB"          -> ["1983 TB"]  (provisional designation, kept intact)
+      "99942"            -> ["99942"]
     """
     out: list[str] = []
     raw = (raw or "").strip()
     if not raw:
         return []
 
-    # provisional designation 形如 "1983 TB" / "2024 YR4" 不要拆
+    # Provisional designations like "1983 TB" / "2024 YR4" must not be split.
     if re.match(r"^\d{4}\s+[A-Z]{1,2}\d*$", raw):
         return [raw]
 
-    # 提取纯数字 IAU number (1-7 位)
+    # Extract a numeric IAU number (1-7 digits).
     m_num = re.search(r"\b(\d{1,7})\b", raw)
     if m_num:
         out.append(m_num.group(1))
 
-    # 提取纯名 (首字母大写的 alphabetic word, 长度 >= 3, 排除 provisional 双字母)
+    # Extract a plain name (capitalized alphabetic word, length >= 3,
+    # excluding two-letter provisional codes).
     for m_name in re.finditer(r"\b([A-Z][a-zA-Z]{2,})\b", raw):
         token = m_name.group(1)
         if token.upper() not in _PROVISIONAL_LETTERS and token not in out:
             out.append(token)
 
-    # 原样兜底 (e.g. "(3200) Phaethon" 整串作为最后一个候选)
+    # Verbatim fallback (e.g. "(3200) Phaethon" stays as the last candidate).
     if raw not in out:
         out.append(raw)
 
@@ -112,9 +114,10 @@ class MPCConnector(BaseConnector):
         return self._table_to_objects(table, designation=query)
 
     def _query_mpc(self, designation: str) -> Table | None:
-        """Try MPC asteroid + comet 查询, 每个 target_type 还会试多个
-        designation 变体 (number / name / 原样), 提升对 '(3200) Phaethon'
-        这种带括号格式的命中率. 返回 astropy Table 或 None.
+        """Try MPC asteroid + comet queries; for each target_type also try
+        multiple designation variants (number / name / verbatim) to improve
+        hit rate on parenthesized forms like '(3200) Phaethon'. Returns an
+        astropy Table or None.
         """
         from astroquery.mpc import MPC
 
@@ -195,8 +198,8 @@ class MPCConnector(BaseConnector):
                     except (ValueError, TypeError):
                         try:
                             extra[key] = str(row[key])
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("MPC extra field %s str() fallback failed: %s", key, e)
 
             extra["source_reference"] = (
                 "Minor Planet Center, IAU — official designation/orbit database"

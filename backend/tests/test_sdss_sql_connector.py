@@ -1,6 +1,6 @@
-"""J3 — SDSS SkyServer 直连 connector 单元测试.
+"""J3 — SDSS SkyServer direct-connection connector unit tests.
 
-不打真实网络, 全部用 httpx mock.
+No real network calls; all mocked with httpx.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from app.connectors.sdss_sql import execute_sdss_sql, _parse_skyserver_json
 # ---------- _parse_skyserver_json ----------
 
 def test_parse_skyserver_list_wrapper():
-    """SkyServer format=json 通常返回 [{"Rows": [...]}]."""
+    """SkyServer format=json typically returns [{"Rows": [...]}]."""
     payload = [
         {
             "Rows": [
@@ -30,7 +30,7 @@ def test_parse_skyserver_list_wrapper():
     result = _parse_skyserver_json(payload, query="SELECT TOP 2 ...", dr="18")
 
     assert result["row_count"] == 2
-    assert "objID" in result["columns"]  # 保留 SkyServer 原始大小写
+    assert "objID" in result["columns"]  # preserve original SkyServer casing
     assert "ra" in result["columns"]
     assert result["column_aliases"]["objid"] == "objID"
     assert result["data"]["objID"] == [1237645877629878395, 1237645877629878396]
@@ -40,7 +40,7 @@ def test_parse_skyserver_list_wrapper():
 
 
 def test_parse_skyserver_dict_wrapper():
-    """少数响应直接是 {"Rows": [...]} 不裹在 list 里."""
+    """Some responses are directly {"Rows": [...]} without the outer list wrapper."""
     payload = {"Rows": [{"z": 0.1, "class": "GALAXY"}]}
     result = _parse_skyserver_json(payload, query="...", dr="18")
     assert result["row_count"] == 1
@@ -49,7 +49,7 @@ def test_parse_skyserver_dict_wrapper():
 
 
 def test_parse_skyserver_empty_response():
-    """空结果 (0 行) 不应抛错."""
+    """Empty result (0 rows) must not raise."""
     result = _parse_skyserver_json([{"Rows": []}], query="...", dr="18")
     assert result["row_count"] == 0
     assert result["columns"] == []
@@ -57,8 +57,8 @@ def test_parse_skyserver_empty_response():
 
 
 def test_parse_skyserver_null_cells_converted_to_none():
-    """SkyServer 对 NULL 返回字符串 'NULL' (有时是空串); 必须转 None
-    以便下游 json.dumps 或 DataFrame 正确处理."""
+    """SkyServer returns the string 'NULL' (sometimes empty string) for NULL values;
+    these must be converted to None so downstream json.dumps or DataFrame handles them correctly."""
     payload = [{"Rows": [{"x": "NULL", "y": "", "z": 0.5}]}]
     result = _parse_skyserver_json(payload, query="...", dr="18")
     assert result["data"]["x"] == [None]
@@ -66,7 +66,7 @@ def test_parse_skyserver_null_cells_converted_to_none():
     assert result["data"]["z"] == [0.5]
 
 
-# ---------- execute_sdss_sql 边界 + 防御 ----------
+# ---------- execute_sdss_sql boundary + defensive checks ----------
 
 def test_execute_rejects_empty_query():
     with pytest.raises(ValueError, match="empty"):
@@ -79,8 +79,8 @@ def test_execute_rejects_bad_dr():
 
 
 def test_execute_rejects_dangerous_keywords():
-    """不允许 DROP / DELETE / INSERT / UPDATE / ALTER / CREATE — 即便
-    SkyServer 本身是只读账号, 我们也在客户端拒绝以免误用."""
+    """DROP / DELETE / INSERT / UPDATE / ALTER / CREATE are not allowed — even though
+    SkyServer is a read-only account, we reject these client-side to prevent accidental misuse."""
     for bad in ("DROP TABLE PhotoObjAll", "DELETE FROM SpecObj",
                 "INSERT INTO x VALUES (1)", "UPDATE x SET y=1",
                 "ALTER TABLE x ADD COLUMN y", "CREATE TABLE x (y int)"):
@@ -88,7 +88,7 @@ def test_execute_rejects_dangerous_keywords():
             asyncio.run(execute_sdss_sql(bad, dr="18"))
 
 
-# ---------- execute_sdss_sql 成功路径 ----------
+# ---------- execute_sdss_sql success paths ----------
 
 def _make_fake_httpx_response(status: int, json_data=None, text: str | None = None):
     resp = MagicMock(spec=httpx.Response)
@@ -124,14 +124,14 @@ def test_execute_success_returns_parsed_rows():
     assert result["row_count"] == 1
     assert result["data"]["objID"] == [123]
     assert result["column_aliases"]["objid"] == "objID"
-    # 确认是 GET + format=json + cmd=<query>
+    # confirm it is a GET request with format=json and cmd=<query>
     call_kwargs = fake_client.get.call_args
     assert call_kwargs.kwargs["params"]["format"] == "json"
     assert "SELECT" in call_kwargs.kwargs["params"]["cmd"]
 
 
 def test_execute_retries_transient_skyserver_failure():
-    """SkyServer 偶发连接/超时错误时, long-mode 调用方会给 3 次机会。"""
+    """On transient SkyServer connection/timeout errors, the long-mode caller retries up to 3 times."""
     fake_payload = [{"Rows": [{"objID": 123, "ra": 100.0}]}]
     fake_resp = _make_fake_httpx_response(200, json_data=fake_payload)
 
@@ -156,8 +156,8 @@ def test_execute_retries_transient_skyserver_failure():
 
 
 def test_execute_sql_syntax_error_surfaces_as_valueerror():
-    """SkyServer 对 SQL 错误返回 HTML/text 不是 JSON — 我们转成清晰的
-    ValueError 让调用方捕获后告诉 AI 改 query."""
+    """SkyServer returns HTML/text (not JSON) for SQL errors — we convert it to a clear
+    ValueError so callers can catch it and instruct the AI to fix the query."""
     fake_resp = _make_fake_httpx_response(
         200, json_data=None,
         text="<html>Syntax error near 'TOP'</html>",

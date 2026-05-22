@@ -3,7 +3,7 @@
  *
  * Used by solar_system / exoplanet tools that return a single dict of named
  * scalars (orbital elements, planet parameters, etc.). Replaces a dedicated
- * per-tool component (Karpathy 三相似才抽象 — 4 generic panels cover 20+ tools).
+ * per-tool component (Karpathy "abstract only at three similar instances" — 4 generic panels cover 20+ tools).
  *
  * M1 (2026-05-20).
  */

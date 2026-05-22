@@ -35,11 +35,12 @@ logger = logging.getLogger(__name__)
 
 
 # ── T1 (PART T): pickle RCE hardening ───────────────────────────────────
-# connector_cache 和 subprocess_backend 都 pickle.loads 外部来源数据
-# (Redis / SQLite / parent-process cache). 恶意 pickle 的 __reduce__ 能
-# RCE; 即使现在源头受信, 一次 Redis 凭据泄漏或 cache 文件写入就把整个
-# 服务转成 RCE 入口. RestrictedUnpickler 白名单只允许已知的 archive /
-# stdlib / 科学计算类型, 其他 raise UnpicklingError.
+# Both connector_cache and subprocess_backend call pickle.loads on data from
+# external sources (Redis / SQLite / parent-process cache). A malicious pickle's
+# __reduce__ can achieve RCE; even if the source is trusted today, a single
+# Redis credential leak or cache file write turns the entire service into an RCE
+# entry point. RestrictedUnpickler whitelists only known archive / stdlib /
+# scientific types; all others raise UnpicklingError.
 
 _ALLOWED_PICKLE_CLASSES: set[tuple[str, str]] = {
     # stdlib primitives + containers
@@ -83,7 +84,7 @@ _ALLOWED_PICKLE_CLASSES: set[tuple[str, str]] = {
     ("pandas.core.internals.managers", "_unpickle_block"),
     ("pandas.core.internals.blocks", "new_block"),
     ("pandas._libs.internals", "_unpickle_block"),
-    # astropy (connector 常返回的类型)
+    # astropy (types commonly returned by connectors)
     ("astropy.table.table", "Table"),
     ("astropy.table.table", "QTable"),
     ("astropy.table.column", "Column"),

@@ -86,6 +86,25 @@ _VALID_STATUS = {
     # Cobaya background job intermediate state (cosmology_mcmc.py)
     "QUEUED",
     "UNAVAILABLE",
+    # Async-tool runtime intermediate state (async_tool_runtime.py).
+    # Returned while a Celery job is mid-execution so the AI can tell
+    # "still running, poll again" from "completed but with caveat" (PARTIAL).
+    "RUNNING",
+    # Uppercase form emitted by cosmology runners. The module-level EXPLORATORY
+    # constant is lowercase ("exploratory"), but the actual emit sites use the
+    # uppercase literal — keep both so result_contract() doesn't downgrade them
+    # to "partial" and silently void the three-tier chain_tier semantic.
+    "EXPLORATORY",
+    # chain_diagnostics.py status
+    "CHAIN_DIAGNOSTICS_READY",
+    # paper_tool_mining / paper_tool_mining_loop intermediate + ready statuses.
+    # Without these the ResearchProgramPanel.startsWith("PAPER_TOOL_MINING")
+    # branches never match and the populated view falls through to the empty
+    # state card.
+    "PAPER_TOOL_MINING_PARTIAL",
+    "PAPER_TOOL_MINING_BATCH_READY",
+    "PAPER_TOOL_MINING_BATCH_PARTIAL",
+    "PAPER_TOOL_MINING_LOOP_ROUND_READY",
 }
 # Build-time tool version; populated by the Dockerfile via
 # `ARG TOOL_VERSION` / `ENV TOOL_VERSION=...`.  Falls back to "dev" when
@@ -460,6 +479,7 @@ _COMPUTE_TOOLS = {
     "x_ray_spectral_fit", "pulsar_derived_quantities",
     "analyze_cross_wavelength", "fit_cosmology_mcmc", "run_cobaya_cosmology",
     "get_cosmology_run_status",
+    "get_async_job_status",
     "load_cosmology_data_product",
     "build_cosmology_likelihood", "build_cosmology_robustness_matrix",
     "run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix",

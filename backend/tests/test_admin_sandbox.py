@@ -1,12 +1,13 @@
-"""Phase P: /api/admin/sandbox/health + /exec-test 诊断端点测试."""
+"""Phase P: /api/admin/sandbox/health + /exec-test diagnostic endpoint tests."""
 
 from __future__ import annotations
 
 
 async def test_sandbox_health_returns_ok_and_stderr_baseline(app_client, monkeypatch):
-    """/health 用 subprocess.Popen 跑 `print("ok")` — 应该成功, stdout
-    含 "ok", stderr 含 baseline 标识, exit_code=0.  这是整个 P0 诊断
-    能力的主测试: 证明绕开 multiprocessing 后能抓 stderr."""
+    """/health runs `print("ok")` via subprocess.Popen — should succeed, stdout
+    contains "ok", stderr contains the baseline marker, exit_code=0.  This is the
+    primary P0 diagnostic test: proves that stderr can be captured after bypassing
+    multiprocessing."""
     monkeypatch.setenv("ENV", "dev")
     from app.config import settings
     monkeypatch.setattr(settings, "admin_secret", "")
@@ -39,8 +40,9 @@ async def test_sandbox_health_requires_admin(app_client, monkeypatch):
 
 
 async def test_sandbox_exec_test_available(app_client, monkeypatch):
-    """/exec-test 用真实 SubprocessBackend; 本地 CI 环境多数能跑通,
-    但 production Render 上可能挂 — 重点是端点存在并返结构正确."""
+    """/exec-test uses the real SubprocessBackend; most local CI environments pass,
+    but it may hang on production Render — the key point is that the endpoint exists
+    and returns the correct structure."""
     monkeypatch.setenv("ENV", "dev")
     from app.config import settings
     monkeypatch.setattr(settings, "admin_secret", "")
@@ -48,6 +50,6 @@ async def test_sandbox_exec_test_available(app_client, monkeypatch):
     r = await app_client.get("/api/admin/sandbox/exec-test")
     assert r.status_code == 200
     body = r.json()
-    # ok 字段存在即可 — 值取决于 CI 是否能 spawn subprocess
+    # the ok field just needs to be present — its value depends on whether CI can spawn a subprocess
     assert "ok" in body
     assert "note" in body

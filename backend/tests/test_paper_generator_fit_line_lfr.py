@@ -1,11 +1,11 @@
-"""PART AI #5/#6 — paper_generator fit_line_lfr 渲染段.
+"""PART AI #5/#6 — paper_generator fit_line_lfr render section.
 
-锁住 4 个契约:
-1. 没跑 fit_line_lfr → helper 返 None, paper_json 不含 fit_line_lfr_diagnostics 字段.
-2. 跑了 fit (含 readiness/claimability/Bayesian/lensing 全字段) → 渲染段
-   含每个字段的关键值, 防 LaTeX 段悄悄漏掉某条诊断.
-3. PARTIAL fit → 渲染段必须含 'exploratory_only' / blocking_reasons 关键字.
-4. 跨 cosmology recompute → 渲染段含 cosmology_used / baseline / shift_summary.
+Locks 4 contracts:
+1. No fit_line_lfr run → helper returns None, paper_json does not contain fit_line_lfr_diagnostics key.
+2. Fit ran (with full readiness/claimability/Bayesian/lensing fields) → rendered section
+   contains key values for each field, preventing LaTeX section from silently omitting any diagnostic.
+3. PARTIAL fit → rendered section must contain 'exploratory_only' / blocking_reasons keywords.
+4. Cross-cosmology recompute → rendered section contains cosmology_used / baseline / shift_summary.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def _make_artifacts(tool_results: list[dict]) -> SessionArtifacts:
     )
 
 
-# ── 契约 1: 没 fit_line_lfr → 返 None + paper_json 不带字段 ─────────
+# ── Contract 1: no fit_line_lfr → returns None + paper_json omits the key ─────────
 
 
 def test_no_fit_line_lfr_returns_none() -> None:
@@ -54,18 +54,18 @@ def test_paper_json_omits_fit_lfr_key_when_no_fit() -> None:
 
 
 def test_failed_fit_line_lfr_returns_none() -> None:
-    """success=False fit 也算没跑成功 → 不渲染."""
+    """success=False fit also counts as not run successfully → nothing rendered."""
     artifacts = _make_artifacts([
         {"tool": "fit_line_lfr", "success": False, "error": "no rows"},
     ])
     assert build_fit_line_lfr_diagnostics_section(artifacts) is None
 
 
-# ── 契约 2: 完整 fit envelope 渲染所有关键字段 ──────────────────────
+# ── Contract 2: full fit envelope renders all critical fields ──────────────────────
 
 
 def _full_fit_envelope() -> dict:
-    """模拟 codex commit 6be015c 之后的完整 fit_line_lfr 返回结构."""
+    """Simulates the complete fit_line_lfr return structure after codex commit 6be015c."""
     return {
         "tool": "fit_line_lfr",
         "success": True,
@@ -149,7 +149,7 @@ def test_full_envelope_renders_all_critical_fields() -> None:
     section = build_fit_line_lfr_diagnostics_section(artifacts)
     assert section is not None
 
-    # 标题
+    # title
     assert "Fit Diagnostics: line luminosity-FWHM relation" in section
 
     # Sample composition
@@ -185,7 +185,7 @@ def test_full_envelope_renders_all_critical_fields() -> None:
     assert "confirmed_luminosity_units" in section
     assert "method_not_downgraded" in section
     assert "bayesian_sampler" in section
-    # 全过 5 gates 应该都打 ✓
+    # all 5 gates passed should each show ✓
     assert section.count("✓") >= 5
 
     # Claim scope
@@ -214,12 +214,12 @@ def test_paper_json_includes_fit_lfr_diagnostics_when_fit_succeeded() -> None:
     assert "Fit Diagnostics" in paper["fit_line_lfr_diagnostics"]
 
 
-# ── 契约 3: PARTIAL fit 渲染段必须含 exploratory_only + blocking_reasons ──
+# ── Contract 3: PARTIAL fit rendered section must contain exploratory_only + blocking_reasons ──
 
 
 def test_partial_fit_renders_exploratory_scope_and_blockers() -> None:
     """fit_line_lfr=PARTIAL → relation_claimability.claim_scope=exploratory_only,
-    blocking_reasons 非空; helper 必须把这些原文渲染."""
+    blocking_reasons non-empty; helper must render these verbatim."""
     envelope = _full_fit_envelope()
     envelope["publication_readiness"] = {
         "status": "exploratory_only",
@@ -246,17 +246,17 @@ def test_partial_fit_renders_exploratory_scope_and_blockers() -> None:
     assert "can_claim_relation: False" in section
     assert "incomplete_citations" in section
     assert "unconfirmed_luminosity_units" in section
-    # 失败 gate 必须打 ✗
+    # failed gates must show ✗
     assert section.count("✗") >= 2
 
 
-# ── 契约 4: 多 fit 时只取最新 ────────────────────────────────────────
+# ── Contract 4: when multiple fits exist, only the latest is used ────────────────────────────────────────
 
 
 def test_only_latest_fit_is_rendered() -> None:
-    """同 session 多次调 fit_line_lfr 时, helper 取最新一次成功结果."""
+    """When fit_line_lfr is called multiple times in the same session, helper uses the latest successful result."""
     older = _full_fit_envelope()
-    older["alpha"] = 7.123  # 旧 fit intercept (用 unique 值避开其它字段干扰)
+    older["alpha"] = 7.123  # old fit intercept (unique value to avoid interference with other fields)
     older["beta"] = 0.456
 
     newer = _full_fit_envelope()
@@ -266,9 +266,9 @@ def test_only_latest_fit_is_rendered() -> None:
     artifacts = _make_artifacts([older, newer])
     section = build_fit_line_lfr_diagnostics_section(artifacts)
     assert section is not None
-    # 新 fit 的 alpha/beta 必须出现
+    # new fit's alpha/beta must appear
     assert "9.876" in section
     assert "0.987" in section
-    # 旧 fit 的 alpha/beta 不应该出现 (helper 只渲染最新一次)
+    # old fit's alpha/beta must not appear (helper only renders the latest)
     assert "7.123" not in section
     assert "0.456" not in section

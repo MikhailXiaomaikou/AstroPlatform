@@ -58,7 +58,7 @@ vi.mock("../hooks/useTracking", () => ({
 }));
 
 // ── Mock workspace cache utilities ──
-// Stage 3 Bug 2: API 加了 scope 参数; buildPipelineDraft 已删 (M3 后无 caller).
+// Stage 3 Bug 2: API gained a scope param; buildPipelineDraft removed (no callers after M3).
 vi.mock("../utils/workspaceCache", () => ({
   findWorkspaceFile: () => undefined,
   readWorkspaceCache: () => [],

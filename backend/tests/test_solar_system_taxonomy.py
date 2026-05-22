@@ -1,6 +1,6 @@
 """Unit tests for solar_system_taxonomy service (M0 Commit 3).
 
-物理验证: Bus-DeMeo nearest-class chi-sq / Carvano+ 2010 SDSS color classifier.
+Physics validation: Bus-DeMeo nearest-class chi-sq / Carvano+ 2010 SDSS color classifier.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def test_busdemeo_V_class_for_strong_1um_band():
 
 
 def test_busdemeo_S_class_typical_main_belt():
-    """主带 S-type 平均: slope ~ 0.2, band1 ~ 0.15."""
+    """Typical main-belt S-type average: slope ~ 0.2, band1 ~ 0.15."""
     from app.services.solar_system_taxonomy import classify_bus_demeo_from_features
 
     r = classify_bus_demeo_from_features(
@@ -43,7 +43,7 @@ def test_busdemeo_S_class_typical_main_belt():
 
 
 def test_busdemeo_D_class_steep_red_spectrum():
-    """Jupiter Trojan-like D: 非常陡红的 visible slope."""
+    """Jupiter Trojan-like D: very steep red visible slope."""
     from app.services.solar_system_taxonomy import classify_bus_demeo_from_features
 
     r = classify_bus_demeo_from_features(
@@ -53,7 +53,7 @@ def test_busdemeo_D_class_steep_red_spectrum():
 
 
 def test_busdemeo_returns_all_chi_sq():
-    """结果应包含所有 12 主类(C, B, X, D, T, S, Q, V, A, R, K, L)的 chi_sq."""
+    """Result should contain chi_sq values for all 12 main classes (C, B, X, D, T, S, Q, V, A, R, K, L)."""
     from app.services.solar_system_taxonomy import (
         BUS_DEMEO_TYPE_CENTERS, classify_bus_demeo_from_features,
     )
@@ -68,9 +68,9 @@ def test_busdemeo_returns_all_chi_sq():
 
 
 def test_carvano_vesta_colors_yield_V():
-    """V-type colors (strong 1μm absorption: r-i ~-0.40) → V class.
+    """V-type colors (strong 1 micron absorption: r-i ~-0.40) → V class.
 
-    P3 校准后 V class center: (u-g=1.85, g-r=0.60, r-i=-0.40, i-z=-0.20).
+    After P3 calibration, V class center: (u-g=1.85, g-r=0.60, r-i=-0.40, i-z=-0.20).
     """
     from app.services.solar_system_taxonomy import classify_carvano_sdss_colors
 
@@ -90,7 +90,7 @@ def test_carvano_c_type_low_albedo():
 
 
 def test_carvano_d_type_steep_red():
-    """D-type colors: 大 g-r, 大 r-i, 大 i-z."""
+    """D-type colors: large g-r, large r-i, large i-z."""
     from app.services.solar_system_taxonomy import classify_carvano_sdss_colors
 
     r = classify_carvano_sdss_colors(2.00, 0.75, 0.35, 0.20)
@@ -98,7 +98,7 @@ def test_carvano_d_type_steep_red():
 
 
 def test_carvano_returns_all_distances():
-    """诊断字段 (backward-compat: distance/all_distances 仍存在 = sqrt(chi2))."""
+    """Diagnostic fields (backward-compat: distance/all_distances still present = sqrt(chi2))."""
     from app.services.solar_system_taxonomy import classify_carvano_sdss_colors
 
     r = classify_carvano_sdss_colors(1.85, 0.55, 0.18, -0.15)  # S center
@@ -111,7 +111,7 @@ def test_carvano_returns_all_distances():
 
 
 def test_spectrum_to_features_flat_spectrum_zero_slope():
-    """完全 flat 光谱 → slope=0, depth=0."""
+    """Completely flat spectrum → slope=0, depth=0."""
     from app.services.solar_system_taxonomy import spectrum_to_features
 
     wl = [0.45, 0.55, 0.65, 0.75, 0.85, 1.0, 1.1, 1.3, 1.5, 1.8, 2.0, 2.45]
@@ -123,7 +123,7 @@ def test_spectrum_to_features_flat_spectrum_zero_slope():
 
 
 def test_spectrum_to_features_red_sloped_no_band():
-    """红色 linear 光谱 → 正 slope, band1_depth ≈ 0."""
+    """Red linear spectrum → positive slope, band1_depth ≈ 0."""
     from app.services.solar_system_taxonomy import spectrum_to_features
 
     wl = [0.45, 0.55, 0.65, 0.75]
@@ -133,7 +133,7 @@ def test_spectrum_to_features_red_sloped_no_band():
 
 
 def test_spectrum_to_features_with_1um_absorption_band():
-    """V-type 强 1-μm band: continuum ~1, 1.0 μm 处 ~0.6 → depth~0.4."""
+    """V-type strong 1-micron band: continuum ~1, value at 1.0 micron ~0.6 → depth~0.4."""
     from app.services.solar_system_taxonomy import spectrum_to_features
 
     wl = [0.50, 0.70, 0.85, 1.00, 1.15, 1.30, 1.50]
@@ -147,8 +147,8 @@ def test_spectrum_to_features_with_1um_absorption_band():
 def test_spectrum_to_features_invalid_input_raises():
     from app.services.solar_system_taxonomy import spectrum_to_features
     with pytest.raises(ValueError):
-        spectrum_to_features([0.5, 0.6], [1.0])  # 长度不一致
+        spectrum_to_features([0.5, 0.6], [1.0])  # mismatched lengths
     with pytest.raises(ValueError):
-        spectrum_to_features([0.5], [1.0])  # 只 1 点
+        spectrum_to_features([0.5], [1.0])  # only 1 point
     with pytest.raises(ValueError):
-        spectrum_to_features([1.0, 1.5, 2.0], [1.0, 1.0, 1.0])  # 没 visible 区段
+        spectrum_to_features([1.0, 1.5, 2.0], [1.0, 1.0, 1.0])  # no visible-range segment

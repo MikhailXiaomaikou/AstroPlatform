@@ -36,8 +36,34 @@ logger = logging.getLogger(__name__)
 _ctx = mp.get_context("spawn")  # spawn for consistent behavior across platforms
 
 
+_SANDBOX_ENV_KEEP = frozenset({
+    # Process basics
+    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME",
+    # matplotlib / fonts
+    "MPLBACKEND", "MPLCONFIGDIR",
+    # BLAS / OpenMP — required for numerical library performance
+    "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+    # astropy / cobaya caches
+    "ASTROPY_CACHE_DIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+    "COBAYA_PACKAGES_PATH",
+})
+
+
 def _child_set_limits(memory_bytes: int, cpu_seconds: int) -> None:
-    """Apply rlimit caps inside the child process."""
+    """Apply rlimit caps inside the child process.
+
+    Security-critical: strip sensitive parent-process environment variables
+    before applying rlimits. AI code running inside the sandbox can access
+    os.environ through numpy/matplotlib/astropy modules already loaded in the
+    parent; ANTHROPIC_API_KEY / OPENAI_API_KEY / DATABASE_URL / JWT_SECRET /
+    FERNET_KEY / ADMIN_SECRET / ADS_API_KEY must never be readable by AI code.
+    The minimal set of retained variables is _SANDBOX_ENV_KEEP — all of them
+    are actually needed by numpy/matplotlib/astropy/cobaya at runtime.
+    """
+    for _k in list(os.environ.keys()):
+        if _k not in _SANDBOX_ENV_KEEP:
+            os.environ.pop(_k, None)
+
     try:
         resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
     except (ValueError, OSError):
@@ -47,9 +73,9 @@ def _child_set_limits(memory_bytes: int, cpu_seconds: int) -> None:
     except (ValueError, OSError):
         pass
     try:
-        # R7 SIGSEGV fix: 64 太严, numpy/OpenBLAS import 时 pthread_create
-        # 失败 → segfault. 256 给 BLAS worker threads + uvicorn 基础进程数
-        # 留出 headroom.
+        # R7 SIGSEGV fix: 64 was too tight — pthread_create failed during
+        # numpy/OpenBLAS import, causing a segfault. 256 leaves headroom for
+        # BLAS worker threads plus uvicorn base process count.
         resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
     except (ValueError, OSError, AttributeError):
         pass
@@ -184,7 +210,7 @@ def _scan_figure_non_english(fig) -> list[str]:
 
 
 def _install_savefig_capture(plt, stderr_buf: StringIO):
-    """捕获用户显式 savefig 后又 close 的图。"""
+    """Capture figures that the user explicitly saved with savefig and then closed."""
     try:
         from matplotlib.figure import Figure
     except Exception:
@@ -309,11 +335,12 @@ def _make_astro_module(accessors: dict) -> ModuleType | None:
 
 def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_context: dict | None = None) -> None:
     """Entry point for the sandbox subprocess."""
-    # R7 SIGSEGV fix: 必须在 import numpy 之前设, 让 OpenBLAS / MKL / OMP
-    # 只起 1 thread. 原因: RLIMIT_NPROC 加上默认 BLAS 起 N=cpu_count 个
-    # worker thread, pthread_create 在受限容器里失败 → numpy C 初始化
-    # 段错误 → child SIGSEGV (-11) 没来得及 send payload, 从 admin 看
-    # exit_code=1 (multiprocessing 翻译过的).
+    # R7 SIGSEGV fix: must be set before importing numpy so OpenBLAS / MKL /
+    # OMP only spawn 1 thread. Rationale: RLIMIT_NPROC combined with the
+    # default BLAS spawning N=cpu_count worker threads causes pthread_create
+    # to fail in a restricted container, triggering a numpy C-init segfault.
+    # The child SIGSEGVs (-11) before it can send the payload; the admin sees
+    # exit_code=1 (multiprocessing's translation of the signal).
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -421,8 +448,8 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
             result["stderr"] = traceback.format_exc()
             _child_breadcrumb(f"unhandled: {type(e).__name__}: {str(e)[:200]}")
 
-        # 捕获仍然打开的 figure；用户若 savefig 后 close，下面会从
-        # saved_figures 兜底补回。
+        # Capture figures that are still open; if the user called savefig
+        # then close, the saved_figures dict below provides a fallback.
         open_figure_ids: set[int] = set()
         for fig_num in plt.get_fignums():
             try:
@@ -648,10 +675,12 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
                 conn.close()
             except Exception:
                 pass
-            # R2: 如果 payload 记载失败 (exec 抛异常被 try/except 捕获), 主动
-            # 非零 exit 让父进程 proc.exitcode 真实反映失败. 否则 implicit
-            # return 会让 Unix exit_code=0 与 success=False 语义矛盾, 监控
-            # 无法按 exit_code 聚合.
+            # R2: if the payload send failed (exec raised and was caught by
+            # try/except), exit with a non-zero code so the parent's
+            # proc.exitcode accurately reflects the failure. Without this,
+            # an implicit return produces Unix exit_code=0 contradicting
+            # success=False, making it impossible to aggregate by exit_code
+            # in monitoring.
             if not result.get("success", True):
                 sys.exit(1)
 

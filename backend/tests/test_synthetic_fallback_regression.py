@@ -115,10 +115,9 @@ def test_missing_data_source_defaults_to_synthetic():
     """Legacy callers without data_source must still work, but get
     marked SYNTHETIC (backwards-compat default, G1.1).
 
-    R5 O3 note: 纯 literal print 是 'inert' verdict 被豁免 SYNTHETIC,
-    所以这里测试用**有 numpy 计算**的代码 (不是 inert, 没 real source
-    也没 legit random context → verdict=suspicious → 按 G1.1 默认成
-    SYNTHETIC).
+    R5 O3 note: pure literal print gets an 'inert' verdict and is exempt from SYNTHETIC,
+    so this test uses code **with numpy computation** (not inert, no real source
+    and no legit random context → verdict=suspicious → defaults to SYNTHETIC per G1.1).
     """
     code = "import numpy as np\nprint(np.arange(5).sum())"
     resp = asyncio.run(_exec_run_python({"code": code}))
@@ -186,7 +185,7 @@ def test_empty_turn_with_synthetic_bait_blocks_claim():
 
 
 def test_synthetic_summary_stats_do_not_support_claims():
-    """R14: mean/std 这种裸摘要统计也不能从 SYNTHETIC stdout 洗白。"""
+    """R14: bare summary statistics like mean/std cannot be laundered from SYNTHETIC stdout."""
     tool_results = [{
         "tool": "run_python",
         "result": {
@@ -206,7 +205,7 @@ def test_synthetic_summary_stats_do_not_support_claims():
 
 
 def test_synthetic_summary_stats_natural_language_do_not_support_claims():
-    """R15: reply-withheld 也要覆盖短数字的自然语言写法。"""
+    """R15: reply-withheld must also cover the natural-language form of small numbers."""
     tool_results = [{
         "tool": "run_python",
         "result": {
@@ -279,9 +278,9 @@ def test_w3_catalog_value_survives_synthetic_run_python():
 
 
 def test_x3_declared_synthetic_but_reads_adql_cache_is_caught():
-    """X3 (PART X): 代码含 get_adql_results() 但声明 data_source='none_not_
-    analyzing_real_data', 触发 incorrect_synthetic_declaration error.
-    修复 B6 P-3: AI 把 DBSCAN 真实数据 run_python 错标 SYNTHETIC."""
+    """X3 (PART X): code contains get_adql_results() but declares data_source='none_not_
+    analyzing_real_data', triggering the incorrect_synthetic_declaration error.
+    Fixes B6 P-3: AI mislabelled a real-data DBSCAN run_python call as SYNTHETIC."""
     import asyncio
     from app.services.ai_tools import _exec_run_python
 
@@ -301,8 +300,8 @@ def test_x3_declared_synthetic_but_reads_adql_cache_is_caught():
 
 
 def test_x3_declared_synthetic_true_pure_demo_still_passes_validation():
-    """X3: 真的纯 demo 代码 (不读任何 real cache helper) + 声明 synthetic
-    → X3 检测不拦 (仍可能被 G2 / INERT 等其它分支处理, 但不是 X3 这条)."""
+    """X3: truly pure demo code (reads no real cache helpers) + declared synthetic
+    → X3 check does not block it (may still be handled by G2 / INERT etc., but not this X3 path)."""
     from app.services.ai_tools import _exec_run_python
     import asyncio
 
@@ -311,8 +310,8 @@ def test_x3_declared_synthetic_true_pure_demo_still_passes_validation():
         "code": code,
         "data_source": "none_not_analyzing_real_data",
     }))
-    # 不应是 incorrect_synthetic_declaration — 即使是 SYNTHETIC 标, 至少
-    # error_class 不是 X3 的这个.
+    # must not be incorrect_synthetic_declaration — even if the SYNTHETIC label is attached,
+    # the error_class must not be the X3 one.
     assert result.get("error_class") != "incorrect_synthetic_declaration"
 
 

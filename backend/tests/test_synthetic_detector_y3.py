@@ -1,13 +1,13 @@
-"""PART Y Batch 3: synthetic_code_detector 加固 — 验证 6 个新覆盖盲区.
+"""PART Y Batch 3: synthetic_code_detector hardening — validates 6 new coverage blind spots.
 
-Audit (Agent 5A) 列出的可绕过 pattern:
-1. `from scipy.stats import norm; norm.rvs(size=100)` — scipy 不在白名单
-2. `import random; random.gauss(0, 1)` — stdlib random 不在白名单
-3. `np.array([0.5, 0.51, ..., many literals])` — 大字面量数组
-4. `np.zeros(100) + 0.01` — np.zeros / np.ones 当作 constant 数据列
-5. 单 `import emcee` 不真用 sampler + np.random — emcee 豁免太宽
+Audit (Agent 5A) listed bypassable patterns:
+1. `from scipy.stats import norm; norm.rvs(size=100)` — scipy not in whitelist
+2. `import random; random.gauss(0, 1)` — stdlib random not in whitelist
+3. `np.array([0.5, 0.51, ..., many literals])` — large literal array
+4. `np.zeros(100) + 0.01` — np.zeros / np.ones used as constant data column
+5. bare `import emcee` without actually using sampler + np.random — emcee exemption too broad
 
-Plus 一条向后兼容测试: 真用 EnsembleSampler 仍判 clean.
+Plus one backward-compatibility test: genuinely calling EnsembleSampler still judges clean.
 """
 
 from __future__ import annotations

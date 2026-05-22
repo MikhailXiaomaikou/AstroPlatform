@@ -53,28 +53,30 @@ def _is_galactic_stellar_type(
     return bool(spectral) and spectral[:2] in spectral_markers or spectral[:1] in spectral_markers
 
 
-# W2 (PART W): SIMBAD otype 中允许 rvz_redshift 按 cosmological z 解释
-# 的 allow-list. 其它 otype (恒星/星团/脉冲星/星云/MW SNR/行星/...) 的
-# rvz_redshift 实际是 radial_velocity/c 的内部编码, 不是宇宙学红移,
-# 展示会误导用户. 反向设计 (allow-list 河外) 比 legacy 的 deny-list
-# substring match 更可靠 — 后者对 otype_txt="Open (galactic) Cluster"
-# 因为子串匹配 "open cluster" ≠ "open (galactic) cluster" 失败, 导致
-# Pleiades 泄漏 z=2.01e-05.
-# 参考 http://simbad.u-strasbg.fr/simbad/sim-display?data=otypes 的
-# "Galaxy" / "AGN" / "Lensed" 三大类.
+# W2 (PART W): Allow-list of SIMBAD otypes for which rvz_redshift may be
+# interpreted as a cosmological redshift. For all other otypes (stars,
+# clusters, pulsars, nebulae, MW SNRs, planets, ...) rvz_redshift is
+# internally encoded as radial_velocity/c, not a cosmological redshift,
+# and displaying it as such misleads users. An allow-list (extragalactic
+# only) is more robust than the legacy deny-list substring match, which
+# failed for otype_txt="Open (galactic) Cluster" because the substring
+# "open cluster" != "open (galactic) cluster", causing Pleiades to leak
+# z=2.01e-05.
+# See http://simbad.u-strasbg.fr/simbad/sim-display?data=otypes for the
+# "Galaxy" / "AGN" / "Lensed" top-level categories.
 _EXTRAGALACTIC_OTYPES: frozenset[str] = frozenset({
-    # 星系一般类型
+    # General galaxy types
     "G", "GiC", "GiG", "GiP",
     "GrG", "CGG", "ClG", "PaG", "IG",
-    # 特殊星系
+    # Peculiar galaxies
     "SBG", "H2G", "EmG", "BCG", "LSB", "LINER",
-    # 历史遗留大写变体
+    # Legacy uppercase variants
     "GinCl", "GinGroup", "GinPair",
     # AGN
     "AGN", "AG?", "SyG", "Sy1", "Sy2", "rG",
     "LIN", "Bla", "BLL", "BLLac", "BlLac",
     "Q?", "QSO", "Q1", "Q2", "QuOQ",
-    # 宇宙学距离尺度事件
+    # Cosmological distance-scale events
     "grv", "Lev", "LeG", "LeQ", "GWE",
 })
 
@@ -400,10 +402,11 @@ class SIMBADConnector(BaseConnector):
         redshift = safe("rvz_redshift")
         radial_velocity = safe("rvz_radvel")
         redshift_note = None
-        # W2 (PART W): 用 otype allow-list 判是否保留 z. 非河外 (恒星/
-        # 星团/脉冲星/星云/...) 一律剥离, 改展示 radial_velocity. 原
-        # _is_galactic_stellar_type substring 匹配对 Pleiades otype_txt
-        # "Open (galactic) Cluster" 漏判 → z=2.01e-05 泄漏给用户.
+        # W2 (PART W): Use the otype allow-list to decide whether to keep z.
+        # Non-extragalactic otypes (stars, clusters, pulsars, nebulae, ...)
+        # always have z stripped; show radial_velocity instead. The legacy
+        # _is_galactic_stellar_type substring match failed for Pleiades
+        # otype_txt "Open (galactic) Cluster", leaking z=2.01e-05 to users.
         if redshift is not None and not _otype_is_extragalactic(object_type):
             redshift_note = (
                 f"SIMBAD rvz_redshift for otype='{object_type}' is "
@@ -592,9 +595,10 @@ class SIMBADConnector(BaseConnector):
 
             spectral_type = extra.get("sp_type") or extra.get("SP_TYPE")
             object_type_long = extra.get("otype_txt") or extra.get("OTYPE_TXT")
-            # W2 (PART W): 非河外 otype 剥离 z — 替代 legacy _is_galactic_stellar_type
-            # substring 匹配 (后者对 "Open (galactic) Cluster" 失败, Pleiades 泄漏).
-            # allow-list 更严格: 只明确的河外 otype 保留 z, 其它默认剥离.
+            # W2 (PART W): Strip z for non-extragalactic otypes — replaces the legacy
+            # _is_galactic_stellar_type substring match (which failed for "Open
+            # (galactic) Cluster", leaking Pleiades z). The allow-list is stricter:
+            # only explicitly extragalactic otypes retain z; everything else is stripped.
             if not _otype_is_extragalactic(obj_type):
                 if redshift is not None:
                     extra["redshift_note"] = (

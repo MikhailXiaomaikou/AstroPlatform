@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24  # 24 hours
+    jwt_expire_minutes: int = 60 * 4  # 4 hours; WebSocket puts JWT in the URL where proxy logs can capture it — shorter expiry limits the window after theft
     fernet_key: str = ""
     admin_secret: str = ""
 
@@ -112,8 +112,20 @@ class Settings(BaseSettings):
                     "Set ENV=dev to use the development fallback."
                 )
         if not self.fernet_key:
-            import secrets as _s
-            self.fernet_key = _s.token_urlsafe(32)
+            if _ENV == "dev":
+                import secrets as _s
+                self.fernet_key = _s.token_urlsafe(32)
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "FERNET_KEY not set — using random dev secret "
+                    "(stored API keys won't survive a restart)"
+                )
+            else:
+                raise ValueError(
+                    "FERNET_KEY environment variable must be set in production. "
+                    "Without a stable key, encrypted user API keys become unreadable "
+                    "after every restart. Set ENV=dev to use the development fallback."
+                )
 
     @property
     def redis_ssl(self) -> bool:

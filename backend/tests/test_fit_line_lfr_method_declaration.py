@@ -1,17 +1,17 @@
-"""M2 验收:fit_line_lfr 方法论声明 + cosmology mismatch warning.
+"""M2 acceptance: fit_line_lfr methodology declaration + cosmology mismatch warning.
 
-M2 的核心契约:
-1. fit_method / fit_method_requested / fit_method_downgrade_reason 三个
-   字段永远在返回 dict 里(即便只跑 OLS),不漏报.
-2. 显式请求 bayesian_xyerr + err 缺失 → __tool_status__=METHOD_DOWNGRADED
-   + reason 提到缺哪根轴.
-3. 显式请求 bayesian_xyerr + err 齐全 → 在 M2 仍然 downgrade,reason 提
-   "bayesian backend not yet wired"(M3 接通后这条测试会改).
-4. 样本里有 source_cosmology 跟当前 manifest 不一致 → warnings 里出现
-   cosmology_mismatch,cosmology_mismatch=True.
-5. 老 v1 cache(rows 不带 v2 字段)仍然能跑 OLS,不 KeyError.
-6. residual_rms_dex 字段存在;scatter_dex alias 仍在(向后兼容).
-7. provenance.method_provenance 节点带全三项声明字段.
+Core M2 contracts:
+1. fit_method / fit_method_requested / fit_method_downgrade_reason must always
+   be present in the returned dict (even when only OLS runs), never omitted.
+2. Explicit bayesian_xyerr request + missing err -> __tool_status__=METHOD_DOWNGRADED
+   + reason naming which axis is missing.
+3. Explicit bayesian_xyerr request + err fully populated -> still downgraded in M2,
+   reason says "bayesian backend not yet wired" (this test will change when M3 is wired).
+4. Sample contains source_cosmology inconsistent with current manifest -> warnings
+   include cosmology_mismatch, cosmology_mismatch=True.
+5. Old v1 cache (rows without v2 fields) can still run OLS without KeyError.
+6. residual_rms_dex field exists; scatter_dex alias is still present (backward compat).
+7. provenance.method_provenance node carries all three declaration fields.
 """
 
 from unittest.mock import patch
@@ -22,7 +22,7 @@ from app.services import result_provenance as _rp
 
 def _make_rows(n: int, *, with_err: bool = False, with_cosmo: str | None = None,
                with_mu: bool = False) -> list[dict]:
-    """造 n 条合成 line_measurements,可选带 err / 宇宙学 / μ 字段."""
+    """Create n synthetic line_measurements, optionally with err / cosmology / mu fields."""
     rows = []
     for i in range(n):
         row = {
@@ -35,7 +35,7 @@ def _make_rows(n: int, *, with_err: bool = False, with_cosmo: str | None = None,
             "citation": {"bibcode": f"2024Paper.X{i:02d}"},
             "bibcode": f"2024Paper.X{i:02d}",
             "arxiv_id": f"2404.{i:05d}",
-            # v2 字段默认 None
+            # v2 fields default to None
             "log_luminosity_err": None,
             "fwhm_err_km_s": None,
             "mu_lens": None,
@@ -55,14 +55,14 @@ def _make_rows(n: int, *, with_err: bool = False, with_cosmo: str | None = None,
 
 
 def _patch_cache(rows: list[dict]):
-    """在 fit_line_lfr 内部的 cache 解析点 patch 返回固定 rows."""
+    """Patch the cache resolution point inside fit_line_lfr to return fixed rows."""
     return patch(
         "app.services.ai_tools._resolve_literature_measurement_cache",
         return_value=(rows, "latest_literature_tables"),
     )
 
 
-# ── Test 1: METHOD_DOWNGRADED status 被加到 _VALID_STATUS ──────────────
+# ── Test 1: METHOD_DOWNGRADED status is added to _VALID_STATUS ──────────────
 
 def test_method_downgraded_is_valid_status():
     assert "method_downgraded" in _rp._VALID_STATUS
@@ -73,7 +73,7 @@ def test_fit_line_lfr_is_in_stochastic_tools():
     assert "fit_line_lfr" in _rp._STOCHASTIC_TOOLS
 
 
-# ── Test 2: fit_method 字段永远存在(即便默认 auto 路径) ───────────────
+# ── Test 2: fit_method field is always present (even on the default auto path) ───────────────
 
 def test_default_auto_returns_ols_with_method_fields():
     rows = _make_rows(6)
@@ -83,15 +83,15 @@ def test_default_auto_returns_ols_with_method_fields():
     assert out["fit_method"] == "ols"
     assert out["fit_method_requested"] == "auto"
     assert out["fit_method_downgrade_reason"] is None
-    # auto 路径不算降级
+    # auto path is not considered a downgrade
     assert out.get("__tool_status__") != "METHOD_DOWNGRADED"
-    # PART AI #2: model + fit_orientation 字符串现在含 luminosity_kind 单位
-    # 标签 (log L/L_sun 默认 vs log L_prime/(K km/s pc^2) 显式 opt-in).
+    # PART AI #2: model + fit_orientation strings now include luminosity_kind unit
+    # labels (log L/L_sun default vs log L_prime/(K km/s pc^2) explicit opt-in).
     assert out["model"] == "log10(L/L_sun) = alpha + beta * log10(FWHM_km_s / 100)"
     assert out["fit_orientation"]["dependent_variable"] == "log10(L/L_sun)"
     assert out["fit_orientation"]["independent_variable"] == "log10(FWHM_km_s / 100)"
     assert "L_solar" in out["fit_orientation"]["literature_comparison_note"]
-    # PART AI #2: 单位字段必填
+    # PART AI #2: unit fields are required
     assert out["luminosity_kind"] == "L_solar"
     assert out["intercept_unit"] == "log10(L/L_sun)"
     assert "log_L per log10(FWHM/100" in out["slope_unit"]
@@ -108,7 +108,7 @@ def test_explicit_ols_never_downgrades():
     assert out["fit_method_downgrade_reason"] is None
 
 
-# ── Test 3: bayesian_xyerr 请求 + err 缺失 → 降级 + reason 提到缺哪根轴 ──
+# ── Test 3: bayesian_xyerr requested + err missing -> downgrade + reason names the missing axis ──
 
 def test_bayesian_requested_but_errs_missing_triggers_downgrade():
     rows = _make_rows(6, with_err=False)
@@ -120,10 +120,10 @@ def test_bayesian_requested_but_errs_missing_triggers_downgrade():
     reason = out["fit_method_downgrade_reason"]
     assert reason is not None
     assert "fwhm_err_km_s" in reason and "log_luminosity_err" in reason
-    # 降级时 supports_measurement_claims 必须 False
+    # On downgrade, supports_measurement_claims must be False
     assert out["supports_measurement_claims"] is False
     assert out["__do_not_claim__"] is True
-    # error_axes 诊断字段
+    # error_axes diagnostic field
     assert out["error_axes_available"]["x_err_rows"] == 0
     assert out["error_axes_available"]["y_err_rows"] == 0
     assert out["error_axes_available"]["both_axes_available"] is False
@@ -178,15 +178,16 @@ def test_bayesian_requested_errs_available_runs_bayesian_in_m3(monkeypatch):
 
 
 def test_bayesian_linmix_path_attaches_kelly07_method_bibcode(monkeypatch):
-    """PART AH C6 — 当 bayesian_xyerr_linmix 跑通后,
-    provenance.datasets 必须带 Kelly 2007 (linmix 方法学引用) 的 bibcode
-    `2007ApJ...665.1489K`,这样 claim_validator 的 _build_valid_bibcode_pool
-    能自动认它,reply 里出现 "Kelly 2007" / "Kelly 07" 不再被当 author-year
-    fabrication 拦掉.
+    """PART AH C6 — After bayesian_xyerr_linmix runs successfully,
+    provenance.datasets must carry the bibcode `2007ApJ...665.1489K` for
+    Kelly 2007 (the linmix methodology citation), so that claim_validator's
+    _build_valid_bibcode_pool auto-recognizes it and replies citing "Kelly 2007"
+    / "Kelly 07" are no longer flagged as author-year fabrication.
 
-    M7 retest #2 reproducer:6 处 citation guard violation 都说
-    `Kelly 2007 (citation context)` 是无源 author-year — 但它实际上是
-    fit_line_lfr 工具内部 hardcoded 的 method paper,不是模型编造.
+    M7 retest #2 reproducer: 6 citation guard violations all say
+    `Kelly 2007 (citation context)` is an unsourced author-year — but it is
+    actually the method paper hardcoded inside the fit_line_lfr tool, not a
+    model fabrication.
     """
     rows = _make_rows(6, with_err=True)
 
@@ -365,7 +366,7 @@ def test_matching_cosmology_no_warning():
     assert not any(w.get("code") == "cosmology_mismatch" for w in warnings)
 
 
-# ── Test 5: backward compat with v1 rows(无 v2 字段) ─────────────────
+# ── Test 5: backward compatibility with v1 rows (no v2 fields) ─────────────────
 
 def test_v1_rows_still_fit_without_keyerror():
     """Rows that never went through v2 normalization must still fit OK."""
@@ -375,7 +376,7 @@ def test_v1_rows_still_fit_without_keyerror():
             "log_luminosity": 9.0 + 0.1 * i, "fwhm_km_s": 250.0 + 5.0 * i,
             "quality_flags": [], "citation": {"bibcode": f"2024X{i:02d}"},
             "bibcode": f"2024X{i:02d}",
-            # 关键:没有 v2 字段
+            # Key: no v2 fields present
         }
         for i in range(6)
     ]
@@ -383,10 +384,10 @@ def test_v1_rows_still_fit_without_keyerror():
         out = _exec_fit_line_lfr({})
     assert out["success"] is True
     assert out["fit_method"] == "ols"
-    # 没 err 字段 → error_axes 诊断显示 0/6
+    # No err fields -> error_axes diagnostic shows 0/6
     assert out["error_axes_available"]["x_err_rows"] == 0
     assert out["error_axes_available"]["y_err_rows"] == 0
-    # 没 mu_lens / is_lensed → 全部 unknown
+    # No mu_lens / is_lensed -> all unknown
     assert out["n_lensed"] == 0
     assert out["n_unlensed"] == 0
     assert out["n_lensed_unknown"] == 6
@@ -405,22 +406,23 @@ def test_residual_rms_dex_field_and_alias():
 
 # ── Test 7: lensing statistics counters ──────────────────────────────
 
+
 def test_lensing_counters_when_some_rows_are_lensed():
     rows = _make_rows(3, with_mu=False) + _make_rows(3, with_mu=True)
     # tweak source_names to keep them unique
     for i, r in enumerate(rows):
         r["source_name"] = f"S{i}"
-    # 前 3 条 is_lensed=None (未知),后 3 条 is_lensed=True
+    # First 3 rows have is_lensed=None (unknown), last 3 have is_lensed=True
     with _patch_cache(rows):
         out = _exec_fit_line_lfr({})
     assert out["n_lensed"] == 3
     assert out["n_lensed_unknown"] == 3
     assert out["n_unlensed"] == 0
-    # M2 里还没做 demagnify,所以 demagnified 必须是 0
+    # M2 does not yet demagnify, so demagnified must be 0
     assert out["lensed_sources_demagnified"] == 0
 
 
-# ── Test 8: method_provenance 节点完整 ───────────────────────────────
+# ── Test 8: method_provenance node is fully populated ───────────────────────────────
 
 def test_method_provenance_node_populated():
     """When err columns are missing, the downgrade path is taken and
@@ -554,11 +556,11 @@ def test_blocked_methodology_reply_text_separates_demag_from_method():
     assert "fit_method_requested=\"bayesian_xyerr\"" in text
 
 
-# ── PART AI #2: luminosity_kind 单位参数(L_solar / L_prime) ───────────
+# ── PART AI #2: luminosity_kind unit parameter (L_solar / L_prime) ───────────
 
 
 def test_default_luminosity_kind_is_l_solar_no_conversion():
-    """默认 luminosity_kind="L_solar" 时, log_luminosity 不动, 转换计数 0."""
+    """With the default luminosity_kind="L_solar", log_luminosity is unchanged and conversion count is 0."""
     rows = _make_rows(6)
     original_log_l = [r["log_luminosity"] for r in rows]
     with _patch_cache(rows):
@@ -567,13 +569,13 @@ def test_default_luminosity_kind_is_l_solar_no_conversion():
     assert out["intercept_unit"] == "log10(L/L_sun)"
     assert out["n_unit_converted"] == 0
     assert out["unit_conversion_failures"] == []
-    # row.log_luminosity 没被改
+    # row.log_luminosity must not have been mutated
     assert [r["log_luminosity"] for r in rows] == original_log_l
 
 
 def test_explicit_l_prime_converts_all_rows_and_relabels_units():
-    """显式传 luminosity_kind="L_prime" → 所有 ALPINE z=5 行被转换 +
-    alpha 单位变成 log L_prime, 数值跟原 L_solar 偏移 +2.2 dex 量级."""
+    """Explicitly passing luminosity_kind="L_prime" converts all ALPINE z=5 rows,
+    and the alpha unit becomes log L_prime, numerically offset from L_solar by ~+2.2 dex."""
     rows = _make_rows(6)  # z=5.0..5.5, [CII], log_L=9.0..9.25
     with _patch_cache(rows):
         out_solar = _exec_fit_line_lfr({"cache_key": "x"})
@@ -585,27 +587,29 @@ def test_explicit_l_prime_converts_all_rows_and_relabels_units():
     assert "K km/s pc^2" in out_prime["model"]
     assert out_prime["n_unit_converted"] == 6
     assert out_prime["unit_conversion_failures"] == []
-    # alpha 在 L_prime 下应该比 L_solar 大 ~+2 dex 量级 (z=5 [CII] 单点偏移
-    # 是 +2.215, 但 fit 在 z=5.0..5.5 整段做 OLS, 截距不严格等于单点平移)
+    # alpha under L_prime should be ~+2 dex larger than L_solar (z=5 [CII] single-point offset
+    # is +2.215, but the OLS fit across z=5.0..5.5 means the intercept is not a strict rigid shift)
     delta_alpha = out_prime["alpha"] - out_solar["alpha"]
     assert 1.9 < delta_alpha < 2.4, f"expected alpha shift ~+2.0 dex, got {delta_alpha:.3f}"
-    # beta (slope) 跨 L_solar/L_prime **会**变, 因为 2·log(1+z) 项是
-    # 逐 row z-dependent shift 不是 rigid translation. z=5.0..5.5 sample
-    # 不同 z 的 shift 不同, OLS fit 后斜率自然变. 这是物理特性, 不是 bug.
-    # 但符号应保持(LFR 仍是正相关), 数量级在 ~0-10 区间.
+    # beta (slope) WILL change across L_solar/L_prime, because the 2*log(1+z) term is
+    # a per-row z-dependent shift, not a rigid translation. For the z=5.0..5.5 sample,
+    # each row shifts by a different amount, so the OLS slope naturally changes. This is
+    # physical, not a bug. Sign must stay positive (LFR remains a positive correlation)
+    # and magnitude should be in the ~0-10 range.
     assert out_prime["beta"] > 0
     assert 0 < out_prime["beta"] < 10
     assert 0 < out_solar["beta"] < 10
 
 
 def test_l_prime_rejects_rows_missing_redshift():
-    """转换失败的 row 不能被静默 fit, 必须入 rejected + unit_conversion_failures.
+    """Rows that fail conversion must not be silently fit; they must be added to
+    rejected + unit_conversion_failures.
 
-    注: line_id 错误 (e.g. "BogusLine") 在更前置的 _line_matches_filter 阶段
-    就被 reject (reason="line_filter") 不进单位转换路径, 所以这里只测
-    redshift 缺失场景."""
+    Note: a bad line_id (e.g. "BogusLine") is rejected earlier at the _line_matches_filter
+    stage (reason="line_filter") and never reaches the unit conversion path, so only the
+    missing-redshift scenario is tested here."""
     rows = _make_rows(6)
-    # 把 row 2 + row 4 的 redshift 弄丢
+    # Strip redshift from rows 2 and 4
     rows[2]["redshift"] = None
     rows[4]["redshift"] = None
     with _patch_cache(rows):
@@ -614,16 +618,16 @@ def test_l_prime_rejects_rows_missing_redshift():
     assert out["n_used"] == 4  # 6 - 2 reject
     assert out["n_unit_converted"] == 4
     assert len(out["unit_conversion_failures"]) == 2
-    # 失败原因必须明示 redshift 缺失
+    # Failure reason must explicitly name the missing redshift
     failure_reasons = " ".join(f["reason"] for f in out["unit_conversion_failures"])
     assert "redshift" in failure_reasons.lower()
 
 
 def test_l_prime_all_rows_failing_returns_failed_status_not_panic():
-    """所有 row 转换都失败时不 numpy panic, 而是早退 FAILED 给清晰错误."""
+    """When all row conversions fail, must not numpy-panic; instead exit early with a FAILED status and clear error."""
     rows = _make_rows(6)
     for r in rows:
-        r["redshift"] = None  # 全部去 z
+        r["redshift"] = None  # strip all redshifts
     with _patch_cache(rows):
         out = _exec_fit_line_lfr({"cache_key": "x", "luminosity_kind": "L_prime"})
     assert out["success"] is False
@@ -635,7 +639,7 @@ def test_l_prime_all_rows_failing_returns_failed_status_not_panic():
 
 
 def test_invalid_luminosity_kind_falls_back_to_l_solar():
-    """无效字符串 (typo / 大小写不严) 默认回 L_solar, 不 raise."""
+    """An invalid string (typo / wrong case) must silently fall back to L_solar, not raise."""
     rows = _make_rows(6)
     with _patch_cache(rows):
         out = _exec_fit_line_lfr({"cache_key": "x", "luminosity_kind": "L_brightness"})

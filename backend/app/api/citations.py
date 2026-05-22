@@ -25,8 +25,8 @@ def _search_arxiv_sync(query: str) -> list[dict]:
         import urllib.parse
         import xml.etree.ElementTree as ET
 
-        # R6-NEW-1: arXiv 把 http 301 跳 https; httpx.get 默认不 follow.
-        # URL 直接 https + follow_redirects=True 双保险.
+        # R6-NEW-1: arXiv redirects http to https via 301; httpx.get does not follow by default.
+        # Use https directly + follow_redirects=True as a belt-and-suspenders approach.
         url = (
             "https://export.arxiv.org/api/query?"
             f"search_query=all:{urllib.parse.quote(query)}&max_results=8"
@@ -73,11 +73,12 @@ def _ads_get_with_retry(
     timeout: int = 15,
     max_retries: int = 2,
 ):
-    """Stage 6 P0c-E (2026-05-19): ADS 5xx / 网络异常 加 backoff retry.
+    """Stage 6 P0c-E (2026-05-19): ADS 5xx / network errors with backoff retry.
 
-    429 (quota exhausted) 不 retry — 立刻重试不会变好, caller 应直接 fallback.
-    5xx (transient server error) retry up to `max_retries` 次, exponential
-    backoff (0.5s → 1s → 2s).
+    429 (quota exhausted): do not retry — an immediate retry will not improve things;
+    caller should fall back directly.
+    5xx (transient server error): retry up to `max_retries` times with exponential
+    backoff (0.5 s -> 1 s -> 2 s).
 
     Returns:
         httpx.Response if a response was received (caller checks status_code).
@@ -138,7 +139,7 @@ def _search_ads_sync(object_name: str) -> list[dict]:
             # workshop papers into astrophysics queries (M4 1 leak,
             # M5 3 leaks — measurable regression).
             "fq": "database:astronomy",
-            # Stage 6 P0c-B (2026-05-19): 加 `property` 字段拿 RETRACTED tag.
+            # Stage 6 P0c-B (2026-05-19): add `property` field to retrieve the RETRACTED tag.
             "fl": "bibcode,title,author,year,doi,pub,abstract,property",
             "rows": 5,
         }
@@ -150,7 +151,7 @@ def _search_ads_sync(object_name: str) -> list[dict]:
             logger.warning("ADS request exhausted retries; using arXiv fallback")
         elif resp.status_code in (401, 429):
             # Key invalid / exhausted — log and fall through to arXiv.
-            # Stage 6 P0c-E: 429 不 retry, quota 立刻不会恢复.
+            # Stage 6 P0c-E: do not retry on 429 — quota does not recover immediately.
             logger.warning(
                 "ADS returned %d — key may be invalid/exhausted; using arXiv fallback",
                 resp.status_code,
@@ -262,12 +263,12 @@ def _search_literature_ads(query: str, max_results: int = 20) -> list[dict]:
         # search → arXiv fallback); without fq here the free-text path
         # also leaks non-astronomy hits.
         "fq": "database:astronomy",
-        # Stage 6 P0c-B (2026-05-19): 加 `property` 字段拿 RETRACTED tag.
+        # Stage 6 P0c-B (2026-05-19): add `property` field to retrieve the RETRACTED tag.
         "fl": "bibcode,title,author,year,doi,pub,abstract,property",
         "rows": min(max_results, 50),
         "sort": "score desc",
     }
-    # Stage 6 P0c-E (2026-05-19): 5xx retry, 429 不 retry (caller 返 []).
+    # Stage 6 P0c-E (2026-05-19): retry on 5xx; do not retry on 429 (caller returns []).
     resp = _ads_get_with_retry(
         "https://api.adsabs.harvard.edu/v1/search/query",
         params=params, headers=headers, timeout=15,

@@ -1,6 +1,7 @@
 """AI assistant backed by the inference router and multi-agent orchestrator."""
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -32,6 +33,7 @@ from app.rate_limit import limiter
 from app.models.database import get_db
 from app.models.schemas import User
 from app.services.prompt_loader import build_allowed_tools, build_system_prompt
+from app.services.agent_session_state import update_session_status as _update_chat_session_status
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -265,11 +267,16 @@ _DEFAULT_WORKFLOW_BUDGET = {
 }
 _LONG_WORKFLOW_BUDGET = {
     "mode": "long",
-    "agent_loop_seconds": 900.0,
-    "endpoint_timeout_seconds": 1020.0,
-    "summary_reserve_seconds": 90.0,
-    "soft_reminder_seconds": 180.0,
-    "max_iterations": 18,
+    # P1.4 (2026-05-22): long mode meaningfully wider now that long-running
+    # tools off-load to the async-tool runtime (P1.2) and SSE drops can
+    # resume from workflow_checkpoint (P1.3). 30 min wall-clock is enough
+    # to walk a 6-stage cosmology research flow with poll-and-continue
+    # iterations, without occupying real loop seconds for the slow tool.
+    "agent_loop_seconds": 1800.0,
+    "endpoint_timeout_seconds": 1920.0,
+    "summary_reserve_seconds": 120.0,
+    "soft_reminder_seconds": 240.0,
+    "max_iterations": 30,
     "tool_deadline_scale": 2.0,
 }
 
@@ -892,6 +899,17 @@ async def chat_message_stream(
             if debug_stream:
                 yield _debug_frame("python_history_replay_failed", error=str(_prime_err)[:300])
 
+        # P1.3.a (2026-05-22): publish "this session is running an agent loop"
+        # so the frontend (or a second tab) can tell apart 'idle' from
+        # 'mid-flight' before deciding whether to reconnect or start fresh.
+        # The status flip is best-effort — failure here must not block chat.
+        _agent_run_id = uuid.uuid4().hex[:16]
+        _run_failed = False
+        work_task: asyncio.Task | None = None
+        await _update_chat_session_status(
+            chat_session_id, status="running", current_run_id=_agent_run_id
+        )
+
         try:
             if len(agent_names) > 1:
                 yield f"data: {json.dumps({'type': 'status', 'message': f'Routing across {len(agent_names)} specialist agents...'})}\n\n"
@@ -961,6 +979,63 @@ async def chat_message_stream(
                                 "row_count", "columns", "meta",
                             }
                             slim = {k: src[k] for k in _KEEP if k in src}
+                            # Research-mode cards are intentionally user-visible:
+                            # plan/matrix/evidence previews must keep the fields
+                            # their frontend panels need, even when the complete
+                            # tool payload is too large for a live SSE frame.
+                            # The final consolidated event may arrive later with
+                            # the full result, but local CLI/browser streams should
+                            # still show useful numbers immediately.
+                            status = str(src.get("analysis_status") or "")
+                            if status == "RESEARCH_PLAN_READY" and isinstance(src.get("research_plan"), dict):
+                                slim["research_plan"] = src["research_plan"]
+                                for key in ("plan_id", "dataset_count", "matrix_size", "publication_ready"):
+                                    if key in src:
+                                        slim[key] = src[key]
+                            if status.startswith("RESEARCH_MATRIX") and isinstance(src.get("matrix"), list):
+                                compact_cells = []
+                                for cell in src.get("matrix", [])[:10]:
+                                    if not isinstance(cell, dict):
+                                        continue
+                                    result_obj = cell.get("result") if isinstance(cell.get("result"), dict) else {}
+                                    params = result_obj.get("parameters") if isinstance(result_obj, dict) and isinstance(result_obj.get("parameters"), dict) else {}
+                                    diagnostics = (
+                                        result_obj.get("chain_diagnostics")
+                                        if isinstance(result_obj, dict) and isinstance(result_obj.get("chain_diagnostics"), dict)
+                                        else {}
+                                    )
+                                    compact_cells.append({
+                                        "label": cell.get("label"),
+                                        "model": cell.get("model"),
+                                        "dataset_keys": cell.get("dataset_keys"),
+                                        "publication_ready": cell.get("publication_ready"),
+                                        "runnable": cell.get("runnable"),
+                                        "execution_level": cell.get("execution_level"),
+                                        "warnings": cell.get("warnings"),
+                                        "result": {
+                                            "publication_ready": result_obj.get("publication_ready") if isinstance(result_obj, dict) else None,
+                                            "parameters": {
+                                                name: params.get(name)
+                                                for name in ("H0", "omegam", "sigma8", "S8", "rd", "H0_rd")
+                                                if isinstance(params, dict) and name in params
+                                            },
+                                            "chain_diagnostics": diagnostics,
+                                            "datasets_not_run": result_obj.get("datasets_not_run") if isinstance(result_obj, dict) else None,
+                                        },
+                                    })
+                                slim["matrix"] = compact_cells
+                                for key in ("matrix_size", "ready_cells", "publication_ready", "claim_scope"):
+                                    if key in src:
+                                        slim[key] = src[key]
+                            if status == "EVIDENCE_GRAPH_READY" and isinstance(src.get("evidence_graph"), dict):
+                                graph = src["evidence_graph"]
+                                slim["evidence_graph"] = {
+                                    "claimable_parameters": graph.get("claimable_parameters"),
+                                    "supported_claims": graph.get("supported_claims"),
+                                    "unsupported_claims": graph.get("unsupported_claims"),
+                                }
+                                if "claimable_parameters" in src:
+                                    slim["claimable_parameters"] = src["claimable_parameters"]
                             # Large-volume fields: rows / data / figures / variables /
                             # stdout are replaced with a marker + first 2000-char preview.
                             for big_key in (
@@ -1057,14 +1132,33 @@ async def chat_message_stream(
             for action in response["actions"]:
                 yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result'), 'tool_call_id': action.get('_tool_call_id')}, default=str)}\n\n"
         except (TimeoutError, asyncio.TimeoutError):
+            _run_failed = True
             timeout_s = int(workflow_budget["endpoint_timeout_seconds"])
             yield f"data: {json.dumps({'type': 'error', 'message': f'AI workflow timed out after {timeout_s}s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
+        except asyncio.CancelledError:
+            _run_failed = True
+            if work_task is not None and not work_task.done():
+                work_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                    await asyncio.wait_for(work_task, timeout=2.0)
+            raise
         except InferenceError as e:
+            _run_failed = True
             msg = str(e) or e.__class__.__name__
             yield f"data: {json.dumps({'type': 'error', 'message': msg})}\n\n"
         except Exception as e:
+            _run_failed = True
             msg = str(e) or e.__class__.__name__
             yield f"data: {json.dumps({'type': 'error', 'message': msg})}\n\n"
+        finally:
+            # P1.3.a: flip session status back even if the SSE generator is
+            # cancelled by a browser close / network drop. Without this finally
+            # a cancelled stream leaves ChatSession.agent_status stuck at
+            # "running" forever, confusing resume/new-chat logic.
+            await _update_chat_session_status(
+                chat_session_id,
+                status="suspended" if _run_failed else "idle",
+            )
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
@@ -2137,6 +2231,7 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
 
     ready_cells: list[str] = []
     blocked_cells: list[str] = []
+    ready_cell_summaries: list[str] = []
     if isinstance(matrix, dict):
         for cell in matrix.get("matrix") or []:
             if not isinstance(cell, dict):
@@ -2144,6 +2239,25 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             label = str(cell.get("label") or "unnamed cell")
             if cell.get("publication_ready") is True:
                 ready_cells.append(label)
+                result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
+                params = result.get("parameters") if isinstance(result, dict) and isinstance(result.get("parameters"), dict) else {}
+                diagnostics = (
+                    result.get("chain_diagnostics")
+                    if isinstance(result, dict) and isinstance(result.get("chain_diagnostics"), dict)
+                    else {}
+                )
+                parts = [label]
+                h0 = params.get("H0") if isinstance(params, dict) and isinstance(params.get("H0"), dict) else None
+                if isinstance(h0, dict) and h0.get("median") is not None:
+                    parts.append(f"H0 median {_fmt_tool_number(h0.get('median'))}")
+                if isinstance(diagnostics, dict):
+                    ess = diagnostics.get("proposal_ess") or diagnostics.get("ess_bulk")
+                    rhat = diagnostics.get("rhat")
+                    if ess is not None:
+                        parts.append(f"ESS {_fmt_tool_number(ess)}")
+                    if rhat is not None:
+                        parts.append(f"Rhat {_fmt_tool_number(rhat)}")
+                ready_cell_summaries.append(" · ".join(parts))
             else:
                 blocked_cells.append(label)
 
@@ -2185,10 +2299,17 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
         )
 
     lines.extend(["", "Preliminary findings"])
-    if ready_cells:
+    if ready_cell_summaries:
         lines.append(
-            "- The ready cells can support compressed-likelihood preliminary interpretation; exact posterior numbers should be read from the Research Matrix / Chain cards."
+            "- Ready compressed-likelihood preliminary cells: "
+            + "; ".join(ready_cell_summaries[:5])
+            + ("." if len(ready_cell_summaries) <= 5 else f"; +{len(ready_cell_summaries) - 5} more.")
         )
+        lines.append(
+            "- These are compressed-likelihood preliminary numbers, not full external Cobaya/CosmoSIS likelihood results."
+        )
+    elif ready_cells:
+        lines.append("- The ready cells can support compressed-likelihood preliminary interpretation.")
     else:
         lines.append("- This turn supports dataset/method availability only, not posterior claims.")
 
@@ -2696,6 +2817,16 @@ def _research_plan_from_tool_results(tool_results: list[dict[str, Any]]) -> dict
         result = item.get("result")
         if isinstance(result, dict) and isinstance(result.get("research_plan"), dict):
             return result["research_plan"]
+    return None
+
+
+def _research_evidence_graph_from_tool_results(tool_results: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for item in reversed(tool_results):
+        if item.get("tool") != "build_evidence_graph":
+            continue
+        result = item.get("result")
+        if isinstance(result, dict) and isinstance(result.get("evidence_graph"), dict):
+            return result["evidence_graph"]
     return None
 
 
@@ -5165,6 +5296,33 @@ async def _run_agent_loop(
                     pass
         except Exception as exc:
             logger.warning("Research fact verification skipped: %s", exc)
+
+    if research_program_workflow and not any(
+        tr.get("tool") == "export_research_report"
+        for tr in all_tool_results
+    ):
+        try:
+            from app.services.research_program import export_research_report
+
+            report_input = {
+                "research_plan": _research_plan_from_tool_results(all_tool_results),
+                "evidence_graph": _research_evidence_graph_from_tool_results(all_tool_results),
+                "tool_results": all_tool_results,
+                "title": latest_user_text[:180] if latest_user_text else None,
+            }
+            report_result = export_research_report(**report_input)
+            all_tool_results.append({
+                "id": f"auto_research_report_{uuid.uuid4().hex}",
+                "tool": "export_research_report",
+                "input": {
+                    "research_plan": report_input["research_plan"],
+                    "evidence_graph": report_input["evidence_graph"],
+                    "title": report_input["title"],
+                },
+                "result": report_result,
+            })
+        except Exception as exc:
+            logger.warning("Research report export skipped: %s", exc)
 
     actions.extend(_tool_results_to_actions(all_tool_results))
 

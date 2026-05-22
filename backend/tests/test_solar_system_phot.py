@@ -1,6 +1,6 @@
 """Unit tests for solar_system_phot service (M0 Commit 3).
 
-物理验证: HG phase function (Bowell+ 1989) / Afρ (A'Hearn+ 1984) / light-time.
+Physics validation: HG phase function (Bowell+ 1989) / Afrho (A'Hearn+ 1984) / light-time.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ def test_hg_phase_function_unity_at_opposition():
 
 
 def test_hg_phase_function_decreases_with_phase_angle():
-    """Φ 单调递减 from 0° → 180°."""
+    """Phase function Phi decreases monotonically from 0° to 180°."""
     from app.services.solar_system_phot import hg_phase_function
 
     angles = [0, 10, 30, 60, 90, 120, 150]
@@ -33,7 +33,7 @@ def test_hg_phase_function_decreases_with_phase_angle():
 
 
 def test_hg_reduced_magnitude_at_opposition_equals_H():
-    """α=0° 时 H(α=0) = H."""
+    """At α=0°, reduced magnitude H(α=0) equals H."""
     from app.services.solar_system_phot import hg_reduced_magnitude
 
     assert hg_reduced_magnitude(H=14.6, G=0.15, alpha_deg=0.0) == pytest.approx(14.6, abs=1e-5)
@@ -72,7 +72,7 @@ def test_hg_apparent_magnitude_invalid_distance_raises():
 
 
 def test_hg_curve_vectorised_consistency():
-    """curve helper 等价于循环."""
+    """Vectorised curve helper is equivalent to a loop."""
     from app.services.solar_system_phot import (
         hg_apparent_magnitude, hg_apparent_magnitude_curve,
     )
@@ -114,9 +114,9 @@ def test_light_time_negative_raises():
 
 
 def test_afrho_67P_like_comet_in_typical_range():
-    """67P-like comet at perihelion: order-of-magnitude check ∈ [10, 10000] cm.
+    """67P-like comet at perihelion: order-of-magnitude check in [10, 10000] cm.
 
-    r=1.24 au, Δ=2.7 au, aperture=5", m_V_comet=12 (在合理 active 范围).
+    r=1.24 au, Delta=2.7 au, aperture=5", m_V_comet=12 (within a reasonable active range).
     """
     from app.services.solar_system_phot import afrho_cm
 
@@ -125,7 +125,7 @@ def test_afrho_67P_like_comet_in_typical_range():
 
 
 def test_afrho_brighter_comet_higher_value():
-    """Comet 越亮 → Afρ 越大 (单调)."""
+    """Brighter comet → larger Afrho (monotonic)."""
     from app.services.solar_system_phot import afrho_cm
 
     af_bright = afrho_cm(m_comet=10.0, r_au=1.0, delta_au=1.0, aperture_arcsec=5.0)
@@ -134,14 +134,14 @@ def test_afrho_brighter_comet_higher_value():
 
 
 def test_afrho_larger_aperture_smaller_value():
-    """ρ 单调反比关系."""
+    """Afrho is inversely proportional to aperture (monotonic)."""
     from app.services.solar_system_phot import afrho_cm
 
     af_small_ap = afrho_cm(12.0, 1.5, 1.0, aperture_arcsec=2.0)
     af_large_ap = afrho_cm(12.0, 1.5, 1.0, aperture_arcsec=10.0)
-    # Afρ ∝ 1/ρ → 大孔径 → 小 Afρ
+    # Afrho ∝ 1/ρ → larger aperture → smaller Afrho
     assert af_small_ap > af_large_ap
-    assert af_small_ap / af_large_ap == pytest.approx(5.0, rel=0.01)  # 比例 = 10/2 = 5
+    assert af_small_ap / af_large_ap == pytest.approx(5.0, rel=0.01)  # ratio = 10/2 = 5
 
 
 def test_afrho_invalid_input_raises():
@@ -155,7 +155,7 @@ def test_afrho_invalid_input_raises():
 
 
 def test_afrho_phase_corrected_at_zero_equals_input():
-    """α=0 时 phase factor=1, corrected 等于输入."""
+    """At α=0 the phase factor is 1, so corrected value equals the input."""
     from app.services.solar_system_phot import afrho_phase_corrected
 
     val = afrho_phase_corrected(500.0, alpha_deg=0.0)
@@ -163,7 +163,7 @@ def test_afrho_phase_corrected_at_zero_equals_input():
 
 
 def test_afrho_phase_corrected_increases_with_phase():
-    """非零 α 时 phase factor < 1 → corrected > input."""
+    """At non-zero α the phase factor < 1, so corrected value > input."""
     from app.services.solar_system_phot import afrho_phase_corrected
 
     val_0 = afrho_phase_corrected(500.0, alpha_deg=0.0)

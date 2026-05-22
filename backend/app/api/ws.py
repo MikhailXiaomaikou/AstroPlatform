@@ -328,8 +328,10 @@ async def collab_websocket(websocket: WebSocket, team_id: str):
                 "type": "presence",
                 "users": _team_presence[team_id],
             })
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort presence broadcast on disconnect; remaining peers
+            # will catch up on next event.
+            logger.debug("collab presence broadcast on disconnect failed: %s", e)
 
 
 async def _broadcast_collab(team_id: str, message: dict, exclude=None):

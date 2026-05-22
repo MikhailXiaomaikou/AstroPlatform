@@ -39,7 +39,7 @@ def test_priors_may_tighten_but_not_widen():
 
     priors = sanitize_priors("flat_w0wa_cdm", {"H0": [60, 80], "w0": [-1.5, -0.5]})
     assert priors["H0"] == (60.0, 80.0)
-    assert priors["wa"] == (-4.0, 4.0)
+    assert priors["wa"] == (-3.0, 2.0)
 
     with pytest.raises(CosmologyMCMCError, match="within"):
         sanitize_priors("flat_lcdm", {"H0": [40, 100]})
@@ -272,8 +272,10 @@ def test_background_status_roundtrip():
     )
     status = get_cosmology_job_status(queued["job_id"])
     assert status["job_id"] == queued["job_id"]
-    assert status["status"] in {"running", "completed", "failed"}
-    assert status["background_backend"] == "in_process_ephemeral"
+    # async_tool_runtime adds 'queued' (initial KV state, before Celery picks it up).
+    assert status["status"] in {"queued", "running", "completed", "failed"}
+    # The submit banner reports the real backend now (Celery via async_tool_runtime).
+    assert queued["background_backend"] == "celery"
 
 
 def test_cobaya_unavailable_is_structured_when_missing_or_disabled(monkeypatch):

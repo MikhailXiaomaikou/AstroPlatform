@@ -18,9 +18,10 @@ export interface WorkspaceExportRegistration {
   localOnly?: boolean;
 }
 
-// Stage 3 Bug 2 修复: 给 workspace 文件缓存加 scope, 防止多账号共用同一台
-// 电脑时, 上个用户的 FITS / export 列表泄漏到下个用户的 chat 上下文.
-// scope 由 caller 提供 (一般是 `user:<id>` 或 `anon`), 跟 chat history scope 一致.
+// Stage 3 Bug 2 fix: scope the workspace file cache so that when multiple accounts
+// share the same machine, the previous user's FITS / export list cannot leak into
+// the next user's chat context. The scope is provided by the caller (typically
+// `user:<id>` or `anon`) and matches the chat history scope.
 const WORKSPACE_CACHE_KEY_BASE = "astro_workspace_files";
 
 function workspaceCacheKey(scope: string): string {

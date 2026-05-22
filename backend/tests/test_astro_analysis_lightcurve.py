@@ -1,7 +1,7 @@
-"""R1.1 回归测试: download_and_clean_lightcurve 透传 sector / author.
+"""R1.1 regression test: download_and_clean_lightcurve passes through sector / author.
 
-背景: Round 8 报告 Paper 4 HD 189733b 卡死, 因为 helper 不接 sector kwarg.
-锁定后续不能再回退。
+Background: Round 8 report Paper 4 HD 189733b stalled because the helper did not
+accept the sector kwarg. This locks the fix against future regression.
 """
 
 from unittest.mock import MagicMock, patch
@@ -18,8 +18,8 @@ class _FakeCollection:
         return self._n
 
     def __iter__(self):
-        # R11-NEW-2: 新的 homogenize 循环要 iterate collection. 返回 stub
-        # segment 对象 (无 quality 列, 跳过 cast).
+        # R11-NEW-2: new homogenize loop needs to iterate the collection. Returns a stub
+        # segment object (no quality column, cast is skipped).
         class _Stub:
             columns = {"time": True}
             def __contains__(_self, key):
@@ -120,12 +120,12 @@ def test_sector_kwarg_forwarded_to_lightkurve():
 
     assert captured["mission"] == "tess"
     assert captured["sector"] == 41
-    assert "author" not in captured  # 不传 author 时不应出现在 kwargs
+    assert "author" not in captured  # author should not appear in kwargs when not passed
     assert result["meta"]["sector"] == 41
 
 
 def test_download_and_clean_lightcurve_returns_numeric_arrays():
-    """R18: run_python 里下游拟合通常期望 ndarray, 尤其 flux_err。"""
+    """R18: downstream fits inside run_python typically expect ndarray, especially flux_err."""
     from app.services import astro_analysis
 
     captured: dict = {}
@@ -141,7 +141,7 @@ def test_download_and_clean_lightcurve_returns_numeric_arrays():
 
 
 def test_phase_fold_result_exposes_flux_alias():
-    """R21: AI 常写 folded.flux；它应等价于 folded.flux_folded。"""
+    """R21: AI commonly writes folded.flux; it should be equivalent to folded.flux_folded."""
     from app.services import astro_analysis
 
     folded = astro_analysis.phase_fold([0.2, 0.1], [1.2, 1.1], period=1.0, t0=0.0)
@@ -152,7 +152,7 @@ def test_phase_fold_result_exposes_flux_alias():
 
 
 def test_search_lightcurve_serializes_list_cells_as_lists():
-    """R21: lightkurve/astropy list cells 不能被 str() 成 \"['...']\"。"""
+    """R21: lightkurve/astropy list cells must not be serialized by str() into \"['...']\"."""
     from app.services import astro_analysis
 
     class _Cell:
@@ -189,7 +189,7 @@ def test_search_lightcurve_serializes_list_cells_as_lists():
 
 
 def test_pro_fit_transit_returns_stable_schema_and_radius_ratio():
-    """R21: pro_fit_transit 要给 AI 稳定 schema, 并从 box depth 给出合理 Rp/Rs。"""
+    """R21: pro_fit_transit must expose a stable schema to the AI and derive a reasonable Rp/Rs from box depth."""
     from app.services import astro_analysis
 
     t = np.linspace(0, 10, 600)
@@ -219,7 +219,7 @@ def test_pro_fit_transit_returns_stable_schema_and_radius_ratio():
 
 
 def test_download_and_clean_lightcurve_downsamples_large_arrays():
-    """R18-NEW-4: 大 TESS 曲线返回前要降采样，避免后续绘图 OOM。"""
+    """R18-NEW-4: large TESS light curves must be downsampled before returning to avoid OOM in downstream plots."""
     from app.services import astro_analysis
 
     class _Quantity:
@@ -278,7 +278,7 @@ def test_download_and_clean_lightcurve_downsamples_large_arrays():
 
 
 def test_cleanup_lightkurve_cache_removes_only_corrupted_fits(tmp_path):
-    """R18: 坏 FITS 缓存会污染后续 lightkurve 下载；只删打不开的文件。"""
+    """R18: corrupted FITS cache can contaminate subsequent lightkurve downloads; only remove files that cannot be opened."""
     from astropy.io import fits
     from app.services import astro_analysis
 
@@ -311,7 +311,7 @@ def test_author_kwarg_forwarded_to_lightkurve():
 
 
 def test_default_call_does_not_pass_sector_or_author():
-    """老脚本兼容性: 不传 sector/author 时不应注入这两个 kwarg."""
+    """Legacy script compatibility: when sector/author are not passed, neither kwarg should be injected."""
     from app.services import astro_analysis
 
     captured: dict = {}
@@ -344,7 +344,7 @@ def test_empty_search_raises_informative_error():
 
 
 class _SearchSlice:
-    """SearchResult slicing 的 fake 实现, 支持 search[-3:]."""
+    """Fake implementation of SearchResult slicing, supports search[-3:]."""
 
     def __init__(self, n):
         self._n = n
@@ -354,7 +354,7 @@ class _SearchSlice:
 
     def __getitem__(self, key):
         if isinstance(key, slice):
-            # slice 后返回一个新的, 长度为 stop-start 的 SearchSlice
+            # after slicing, return a new SearchSlice of length stop-start
             start = key.start if key.start is not None else 0
             stop = key.stop if key.stop is not None else self._n
             if start < 0:
@@ -369,7 +369,7 @@ class _SearchSlice:
 
 
 def test_sector_none_caps_at_default_max_segments():
-    """sector=None + 14 个 TESS sector → 默认只下最近 1 个, meta 有 warning."""
+    """sector=None + 14 TESS sectors → defaults to downloading only the most recent 1, meta has warning."""
     from app.services import astro_analysis
 
     fake_lk = MagicMock()
@@ -380,7 +380,7 @@ def test_sector_none_caps_at_default_max_segments():
             "HD 189733", mission="tess"
         )
 
-    # 应当截到默认 1 个
+    # should be capped to the default of 1 segment
     assert result["meta"]["segments"] == 1
     assert result["meta"]["segments_requested"] == 14
     assert "warning" in result["meta"]
@@ -388,7 +388,7 @@ def test_sector_none_caps_at_default_max_segments():
 
 
 def test_explicit_sector_skips_cap():
-    """sector=[41, 54, 81] 显式传时不触发截断."""
+    """sector=[41, 54, 81] explicitly passed should not trigger the cap."""
     from app.services import astro_analysis
 
     fake_lk = MagicMock()
@@ -399,13 +399,13 @@ def test_explicit_sector_skips_cap():
             "HD 189733", mission="tess", sector=[41, 54, 81]
         )
 
-    # 没 warning 因为用户显式传了 sector
+    # no warning because user explicitly passed sector
     assert "warning" not in result["meta"]
     assert result["meta"]["sector"] == [41, 54, 81]
 
 
 def test_max_segments_none_disables_cap():
-    """max_segments=None 显式关闭截断."""
+    """max_segments=None explicitly disables the cap."""
     from app.services import astro_analysis
 
     fake_lk = MagicMock()
@@ -421,7 +421,7 @@ def test_max_segments_none_disables_cap():
 
 
 def test_segments_below_explicit_cap_no_warning():
-    """显式 max_segments=3 时, 只有 2 个 segment 不该触发截断提示."""
+    """With explicit max_segments=3, only 2 segments should not trigger a cap warning."""
     from app.services import astro_analysis
 
     fake_lk = MagicMock()
@@ -476,7 +476,7 @@ class _SegmentWithQuality:
 
 
 class _CollectionWithMixedQuality:
-    """download_all() 的返回值, 支持 iteration + stitch."""
+    """Return value of download_all(), supports iteration + stitch."""
 
     def __init__(self, segments):
         self._segs = segments
@@ -492,7 +492,7 @@ class _CollectionWithMixedQuality:
         return self._segs[i]
 
     def stitch(self):
-        # 检查所有 segment 的 quality dtype 是否一致
+        # check whether all segments have a consistent quality dtype
         dtypes = set()
         for s in self._segs:
             if "quality" in s:
@@ -524,7 +524,7 @@ class _SearchReturningMixed:
 
 
 def test_mixed_quality_dtype_homogenized_before_stitch():
-    """Round 11 真 bug: 混合 int32 + str32 quality 列应被强制统一成 int32."""
+    """Round 11 real bug: mixed int32 + str32 quality columns must be coerced to int32."""
     from app.services import astro_analysis
 
     segments = [
@@ -542,16 +542,16 @@ def test_mixed_quality_dtype_homogenized_before_stitch():
             "HD 189733", mission="tess", sector=41
         )
 
-    # stitch() 应当被调, 且成功 (因为 homogenize 把 str32 cast 成 int32)
+    # stitch() should be called and succeed (because homogenize casts str32 to int32)
     assert mixed.stitch_was_called, "stitch() should succeed after homogenization"
-    # meta 里应记录 cast 动作
+    # meta should record the cast action
     assert "warning" in result["meta"]
     warn = result["meta"]["warning"]
     assert "Homogenized quality" in warn or "cast" in warn.lower()
 
 
 def test_quality_column_already_int_skipped():
-    """quality 列全是 int 时不该有 homogenize warning."""
+    """When quality column is all int, there should be no homogenize warning."""
     from app.services import astro_analysis
 
     segments = [_SegmentWithQuality("int32") for _ in range(3)]
@@ -570,7 +570,7 @@ def test_quality_column_already_int_skipped():
 
 
 def test_stitch_fallback_to_first_segment():
-    """stitch() 在 homogenize 后仍然抛错 → 退到第一个 segment, 不整体失败."""
+    """If stitch() still raises after homogenization → fall back to the first segment, do not fail entirely."""
     from app.services import astro_analysis
 
     class _AlwaysFailColl:
@@ -589,7 +589,7 @@ def test_stitch_fallback_to_first_segment():
         def download_all(self): return self._mc
 
     coll = _AlwaysFailColl()
-    coll._segs = [_FakeLC()]  # 替换成可当 single-segment lc 的对象
+    coll._segs = [_FakeLC()]  # replace with an object usable as a single-segment lc
 
     fake_lk = MagicMock()
     fake_lk.search_lightcurve.return_value = _SearchFail(coll)
@@ -599,7 +599,7 @@ def test_stitch_fallback_to_first_segment():
             "HD 189733", mission="tess", sector=41
         )
 
-    # 应得到 time/flux (来自 segment[0]), 且 meta 里说明 stitch 失败
+    # should get time/flux (from segment[0]), and meta should indicate that stitch failed
     assert "time" in result
     assert "flux" in result
     assert "warning" in result["meta"]

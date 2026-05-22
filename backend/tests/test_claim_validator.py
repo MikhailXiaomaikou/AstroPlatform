@@ -531,13 +531,13 @@ def test_block_message_reports_empty_universe():
     assert "empty" in text.lower() or "0 distinct" in text.lower()
 
 
-# -------------------- L1 (audit 2026-04-20): 光谱 / X-ray / 射电单位 --------------------
+# -------------------- L1 (audit 2026-04-20): spectral / X-ray / radio units --------------------
 
 
 def test_wavelength_angstrom_caught():
-    """L1: 'Hα emission at 6563 Å' 之前完全不被抽取 (value_with_error 需
-    要 ± 符号, label_colon 只覆盖距离/红移等, 波长单位 Å 根本不在白名单).
-    审计后波长 claim 进 value_bare_unit."""
+    """L1: 'Hα emission at 6563 Å' was previously not extracted at all (value_with_error requires
+    a ± symbol, label_colon only covers distance/redshift etc., and wavelength unit Å was not
+    in the allowlist). After the audit, wavelength claims enter value_bare_unit."""
     tool_results = [{"result": {"foo": 1.0}}]
     r = validate_claims("The Hα emission line is at 6563 Å", tool_results)
     assert not r.ok
@@ -546,7 +546,7 @@ def test_wavelength_angstrom_caught():
 
 
 def test_xray_luminosity_erg_per_s_caught():
-    """L1: X 射线光度 'L_X = 1.5e44 erg/s' 必须被抽取."""
+    """L1: X-ray luminosity 'L_X = 1.5e44 erg/s' must be extracted."""
     tool_results = [{"result": {"bar": 2.0}}]
     r = validate_claims("AGN L_X = 1.5e44 erg/s reported", tool_results)
     assert not r.ok
@@ -555,7 +555,7 @@ def test_xray_luminosity_erg_per_s_caught():
 
 
 def test_radio_flux_mjy_caught():
-    """L1: 射电流量 '3.2 mJy' 必须被抽取."""
+    """L1: radio flux '3.2 mJy' must be extracted."""
     tool_results = [{"result": {"qux": 0.5}}]
     r = validate_claims("FIRST flux 3.2 mJy", tool_results)
     assert not r.ok
@@ -564,7 +564,7 @@ def test_radio_flux_mjy_caught():
 
 
 def test_xray_energy_kev_caught():
-    """L1: 能量 'E = 5.5 keV' 必须被抽取."""
+    """L1: energy 'E = 5.5 keV' must be extracted."""
     tool_results = [{"result": {"z": 0.1}}]
     r = validate_claims("Peak at 5.5 keV above continuum", tool_results)
     assert not r.ok
@@ -573,7 +573,7 @@ def test_xray_energy_kev_caught():
 
 
 def test_frequency_ghz_caught():
-    """L1: 射电频率 '1.4 GHz' 必须被抽取."""
+    """L1: radio frequency '1.4 GHz' must be extracted."""
     tool_results = [{"result": {"z": 0.1}}]
     r = validate_claims("Observation at 1.4 GHz", tool_results)
     assert not r.ok
@@ -582,7 +582,7 @@ def test_frequency_ghz_caught():
 
 
 def test_gpc_distance_caught():
-    """L1: 宇宙学距离 '3.2 Gpc' — 之前 distance_pc/kpc/mpc 有但 Gpc 漏."""
+    """L1: cosmological distance '3.2 Gpc' — distance_pc/kpc/mpc were covered before but Gpc was missing."""
     tool_results = [{"result": {"z": 0.1}}]
     r = validate_claims("The quasar is at distance 3.2 Gpc", tool_results)
     assert not r.ok
@@ -591,7 +591,7 @@ def test_gpc_distance_caught():
 
 
 def test_wavelength_with_error_caught():
-    """L1: 带误差的波长 '6563.1 ± 0.5 Å' 必须两个数都被抽取."""
+    """L1: wavelength with error '6563.1 ± 0.5 Å' — both numbers must be extracted."""
     tool_results = [{"result": {"z": 0.1}}]
     r = validate_claims("Line center: 6563.1 ± 0.5 Å", tool_results)
     assert not r.ok
@@ -601,33 +601,33 @@ def test_wavelength_with_error_caught():
 
 
 def test_existing_parallax_still_dedupped_not_duplicated():
-    """L1: 新加的 value_bare_unit 不应让 'parallax is 9.00 mas' 产出
-    两条 claim (同一 value).  span 重叠去重保证只有 1 条."""
+    """L1: the newly added value_bare_unit should not cause 'parallax is 9.00 mas' to produce
+    two claims for the same value. Span-overlap deduplication ensures only 1 claim."""
     tool_results = [{"result": {"parallax": 7.5}}]
     r = validate_claims("The Pleiades parallax is 9.00 mas", tool_results)
     assert not r.ok
-    # 同一 value (9.0) 不应多次计数
+    # the same value (9.0) should not be counted multiple times
     vals_at_9 = [c for c in r.uncited if abs(c.value - 9.0) < 1e-6]
     assert len(vals_at_9) == 1, f"9.00 mas 被重复抽取: {r.uncited}"
 
 
-# -------------------- L2 (audit 2026-04-20): 数字池元数据过滤 --------------------
+# -------------------- L2 (audit 2026-04-20): numeric pool metadata filtering --------------------
 
 
 def test_row_count_laundering_blocked_pleiades_776():
-    """L2: 复现 Pleiades 第一次审稿的 laundering.
-    工具返回 row_count=776, AI 声称 "776 member stars".
-    原 validator 把 row_count 当普通数字吃进池, 让 776 通过.
-    审计后 row_count 字段整体跳过 → 776 不进池 → claim 被拦."""
+    """L2: reproduces the laundering from the first Pleiades review.
+    Tool returned row_count=776, AI claimed "776 member stars".
+    The original validator ingested row_count as an ordinary number, letting 776 pass.
+    After the audit, the row_count field is skipped entirely → 776 not in pool → claim blocked."""
     tool_results = [{
         "tool": "run_adql",
         "result": {
-            # 没有任何真实的 776 数据行, 只有 row_count 这个元字段
+            # no actual 776 data rows, only the row_count metadata field
             "row_count": 776,
             "showing": 100,
             "columns": ["source_id", "ra", "dec", "parallax"],
             "data": {
-                "parallax": [7.3, 7.5, 7.4, 7.6, 7.35],  # 真实数据, 无 776
+                "parallax": [7.3, 7.5, 7.4, 7.6, 7.35],  # real data, no 776
             },
         },
     }]
@@ -639,27 +639,27 @@ def test_row_count_laundering_blocked_pleiades_776():
 
 
 def test_timestamp_not_laundered_as_data():
-    """L2: 工具返回 timestamp=1745136000 之类 UNIX epoch 大整数,
-    AI 不应该能引用它装作真实观测数据."""
+    """L2: tool returns a UNIX epoch large integer like timestamp=1745136000;
+    the AI must not be able to cite it as if it were real observational data."""
     tool_results = [{"result": {
         "timestamp_utc": 1745136000,
         "elapsed_seconds": 12.5,
         "data": {"parallax": [7.5]},
     }}]
-    # AI 瞎说距离 1745136000 pc — 应该被拦
+    # AI fabricates a distance of 1745136000 pc — should be blocked
     r = validate_claims("The distance is 1745136000 pc", tool_results)
     assert not r.ok, "timestamp 作为元数据不应 launder"
 
 
 def test_real_data_still_matches_after_metadata_filter():
-    """L2: 确认 filter 不是把所有数字都砍了.  真实数据字段 (parallax,
-    ra, distance, period 等) 照常进池."""
+    """L2: confirms the filter does not discard all numbers. Real data fields (parallax,
+    ra, distance, period, etc.) enter the pool as normal."""
     tool_results = [{"result": {
         "row_count": 1,
         "timestamp": 1745136000,
         "data": {"parallax": 7.353, "period": 5.366},
     }}]
-    # 引用真实数据 7.353 和 5.366 → 应该通过 (都在池里)
+    # citing real data 7.353 and 5.366 → should pass (both in pool)
     r = validate_claims("Parallax 7.353 mas and period 5.366 days.", tool_results)
     assert r.ok, (
         f"真实数据被误拦: uncited={[c.raw for c in r.uncited]}, "
@@ -668,8 +668,8 @@ def test_real_data_still_matches_after_metadata_filter():
 
 
 def test_nested_data_rows_still_get_harvested():
-    """L2: 数据行里的数字不能被 'row_count' 这种 key 误伤.  数字在
-    嵌套 dict/list 的 value 位置时, 按普通值处理."""
+    """L2: numbers inside data rows must not be incorrectly excluded by keys like 'row_count'.
+    Numbers in value positions within nested dict/list are treated as ordinary values."""
     tool_results = [{"result": {
         "row_count": 5,
         "rows": [
@@ -677,24 +677,24 @@ def test_nested_data_rows_still_get_harvested():
             {"pf": 5.366200, "pf_err": 0.000200},
         ],
     }}]
-    # 引用 5.366154 应该匹配 → 通过
+    # citing 5.366154 should match → pass
     r = validate_claims("Gaia period 5.366154 days", tool_results)
     assert r.ok, f"嵌套数据行里的数字被误拦: {r.uncited}"
 
 
-# -------------------- L24 (audit 2026-04-20): 科学计数法容差 --------------------
+# -------------------- L24 (audit 2026-04-20): scientific notation tolerance --------------------
 
 
 def test_scientific_notation_does_not_cross_orders_of_magnitude():
-    """L24: ±1% 相对容差已经能正确拒绝跨数量级的假匹配 (1.23e-24 vs
-    1.25e-23 差 10 倍).  这条测试锁定: 未来任何人改 _matches_any
-    不能把指数级错配当成"相近"."""
+    """L24: the ±1% relative tolerance correctly rejects cross-order-of-magnitude false matches
+    (1.23e-24 vs 1.25e-23 differ by 10x). This test locks: anyone who changes _matches_any
+    in the future must not treat an order-of-magnitude mismatch as "close"."""
     tool_results = [{"result": {"mass_kg": 1.23e-24}}]
-    # claim 里是正确数量级 → 应通过
+    # claim is the correct order of magnitude → should pass
     r1 = validate_claims("mass = 1.23e-24 kg", tool_results)
     assert r1.ok, "相同数量级内 1.23e-24 应匹配"
 
-    # claim 里差一个数量级 → 不该通过
+    # claim is off by one order of magnitude → should not pass
     r2 = validate_claims("mass = 1.23e-23 kg", tool_results)
     assert not r2.ok, (
         "1.23e-23 跟 tool 的 1.23e-24 差 10 倍, 不该匹配 (相对容差"
@@ -702,12 +702,12 @@ def test_scientific_notation_does_not_cross_orders_of_magnitude():
     )
 
 
-# ---- W1 (PART W): 文献先验 age/mass/distance 硬拦 ----
+# ---- W1 (PART W): literature prior age/mass/distance hard block ----
 
 
 def test_literature_prior_age_without_fit_isochrone_is_violation():
-    """W1: run_adql 返回一堆 Gaia 行, reply 说 "age ~100 Myr" 但本轮没跑
-    fit_isochrone / search_literature / get_object_dossier, 视为文献先验."""
+    """W1: run_adql returns many Gaia rows, reply says "age ~100 Myr" but this turn
+    did not run fit_isochrone / search_literature / get_object_dossier — treated as a literature prior."""
     from app.services.claim_validator import literature_prior_violations
     rows = [{"phot_g_mean_mag": 10.0 + i * 0.01} for i in range(100)]
     tool_results = [
@@ -721,7 +721,7 @@ def test_literature_prior_age_without_fit_isochrone_is_violation():
 
 
 def test_literature_prior_age_passes_when_fit_isochrone_ran():
-    """W1: 跑了 fit_isochrone 后 AI 可以引用 age 值."""
+    """W1: after running fit_isochrone the AI may cite the age value."""
     from app.services.claim_validator import literature_prior_violations
     tool_results = [
         {"tool": "fit_isochrone", "input": {}, "result": {"best_log_age": 8.0}},
@@ -730,7 +730,7 @@ def test_literature_prior_age_passes_when_fit_isochrone_ran():
 
 
 def test_reply_contains_cjk_detects_chinese_prose():
-    """X (PART X 方案 D): reply 中文 prose 触发 CJK guard hardblock."""
+    """X (PART X scheme D): Chinese prose in reply triggers the CJK guard hardblock."""
     from app.services.claim_validator import reply_contains_cjk
     assert reply_contains_cjk("符合昴星团约 100 Myr 的年龄")
     assert reply_contains_cjk("根据 Gaia DR3 ...")
@@ -738,7 +738,7 @@ def test_reply_contains_cjk_detects_chinese_prose():
 
 
 def test_reply_contains_cjk_english_passes():
-    """X: 纯英文 reply 不触发 CJK guard."""
+    """X: pure English reply does not trigger the CJK guard."""
     from app.services.claim_validator import reply_contains_cjk
     assert not reply_contains_cjk("The Pleiades age is approximately 100 Myr.")
     assert not reply_contains_cjk("")
@@ -746,8 +746,8 @@ def test_reply_contains_cjk_english_passes():
 
 
 def test_reply_contains_cjk_scientific_unicode_passes():
-    """X: 希腊字母 / Å / ° / ± / ≥ / ≈ 等科学 Unicode 在 DejaVu 字体支持
-    范围内, 不算 CJK, guard 放行."""
+    """X: Greek letters / Å / ° / ± / >= / ~ and similar scientific Unicode within DejaVu
+    font support are not CJK and are passed through by the guard."""
     from app.services.claim_validator import reply_contains_cjk
     assert not reply_contains_cjk(r"$\alpha$ Cen A, $T_{\rm eff}$ = 5800 K")
     assert not reply_contains_cjk("6563 Å H-alpha, ±0.3 mag, ≈5780 K, RA 180°")
@@ -755,8 +755,8 @@ def test_reply_contains_cjk_scientific_unicode_passes():
 
 
 def test_reply_contains_cjk_threshold_tolerates_single_char():
-    """X: 阈值 2 — 单个 CJK 字符 (例如引用专名) 不触发, 避免 false-positive.
-    但 >= 2 字符的 prose 引导词 (根据 / 符合 / 与 / 年龄) 必然命中."""
+    """X: threshold 2 — a single CJK character (e.g. a proper-noun citation) does not trigger,
+    avoiding false positives. But prose lead words of >= 2 CJK characters will always match."""
     from app.services.claim_validator import reply_contains_cjk
     assert not reply_contains_cjk("A 一 B")   # 1 CJK, below threshold
     assert reply_contains_cjk("根据")          # 2 CJK at threshold
@@ -765,7 +765,7 @@ def test_reply_contains_cjk_threshold_tolerates_single_char():
 
 
 def test_literature_prior_distance_passes_with_run_adql():
-    """W1: distance 有 run_adql (Gaia parallax) 支撑即可通过."""
+    """W1: distance supported by run_adql (Gaia parallax) is sufficient to pass."""
     from app.services.claim_validator import literature_prior_violations
     tool_results = [
         {"tool": "run_adql", "input": {}, "result": {"data": {"parallax": [7.35]}}},
@@ -774,7 +774,7 @@ def test_literature_prior_distance_passes_with_run_adql():
 
 
 def test_literature_prior_mass_with_only_search_objects_is_violation():
-    """W1: search_objects 不是 mass 的测量/引用工具, mass claim 违规."""
+    """W1: search_objects is not a measurement/citation tool for mass; a mass claim is a violation."""
     from app.services.claim_validator import literature_prior_violations
     tool_results = [
         {"tool": "search_objects", "input": {}, "result": {"results": []}},
@@ -784,7 +784,7 @@ def test_literature_prior_mass_with_only_search_objects_is_violation():
 
 
 def test_literature_prior_no_claim_labels_no_violations():
-    """W1: reply 不含 age/mass/distance, 自然无 W1 违规 (只做 label 过滤)."""
+    """W1: reply contains no age/mass/distance, so naturally no W1 violation (label filtering only)."""
     from app.services.claim_validator import literature_prior_violations
     tool_results = [{"tool": "run_adql", "input": {}, "result": {"data": {"x": [1]}}}]
     assert literature_prior_violations("The period is 5.366 days.", tool_results) == []
@@ -855,8 +855,8 @@ def test_blocked_reply_with_narrative_handles_overlapping_spans():
 
 
 def test_attach_draft_to_banner_with_literature_narrative_banner():
-    """Stage 6 P0a follow-up: literature_narrative banner + AI draft 拼装,
-    draft 全文保留 (banner 已经列了行号定位, 不做 redact)."""
+    """Stage 6 P0a follow-up: literature_narrative banner + AI draft assembly;
+    the full draft is preserved (banner already lists line numbers for locating, no redaction)."""
     from app.services.claim_validator import (
         CitationViolation,
         attach_draft_to_banner,
@@ -886,7 +886,7 @@ def test_attach_draft_to_banner_with_literature_narrative_banner():
 
 
 def test_attach_draft_to_banner_with_citation_banner():
-    """citation banner + AI draft 拼装, 保留 draft 全文."""
+    """citation banner + AI draft assembly, the full draft is preserved."""
     from app.services.claim_validator import (
         CitationViolation,
         attach_draft_to_banner,
@@ -910,7 +910,7 @@ def test_attach_draft_to_banner_with_citation_banner():
 
 
 def test_attach_draft_to_banner_falls_back_when_reply_empty():
-    """空 / 纯白 draft 退回到 banner-only."""
+    """Empty / blank draft falls back to banner-only."""
     from app.services.claim_validator import attach_draft_to_banner
 
     banner = "⚠ Reply withheld: some reason."
@@ -919,8 +919,8 @@ def test_attach_draft_to_banner_falls_back_when_reply_empty():
 
 
 def test_unclassified_literature_violations_blocks_uncited_search_paper():
-    """Stage 6 P0c-C (2026-05-19): cite 一个 search_literature 出的 paper 但
-    没调 classify_literature_relevance → violation."""
+    """Stage 6 P0c-C (2026-05-19): citing a paper returned by search_literature without
+    calling classify_literature_relevance → violation."""
     from app.services.claim_validator import unclassified_literature_violations
 
     tool_results = [
@@ -933,7 +933,7 @@ def test_unclassified_literature_violations_blocks_uncited_search_paper():
                 ],
             },
         },
-        # 没有 classify_literature_relevance
+        # no classify_literature_relevance
     ]
     reply = "Based on 2024A&A...678A.123S, the BAO measurement gives H0 = 67."
     violations = unclassified_literature_violations(reply, tool_results)
@@ -943,7 +943,7 @@ def test_unclassified_literature_violations_blocks_uncited_search_paper():
 
 
 def test_unclassified_literature_violations_passes_after_classify():
-    """调了 classify_literature_relevance 标 Direct, cite 它 → 不 violation."""
+    """classify_literature_relevance called and labeled Direct, then cited → no violation."""
     from app.services.claim_validator import unclassified_literature_violations
 
     tool_results = [
@@ -972,7 +972,7 @@ def test_unclassified_literature_violations_passes_after_classify():
 
 
 def test_unclassified_literature_violations_blocks_cited_off_topic_paper():
-    """classify 标了 Off-topic, 但 reply 还 cite → violation (kind=cited_off_topic_paper)."""
+    """classify labeled Off-topic, but reply still cites it → violation (kind=cited_off_topic_paper)."""
     from app.services.claim_validator import unclassified_literature_violations
 
     tool_results = [
@@ -1003,7 +1003,7 @@ def test_unclassified_literature_violations_blocks_cited_off_topic_paper():
 
 
 def test_blocked_unclassified_literature_reply_text_groups_unclassified_and_off_topic():
-    """banner text 含 2 个分组: unclassified 列表 + Off-topic 列表."""
+    """banner text contains 2 groups: unclassified list + Off-topic list."""
     from app.services.claim_validator import (
         CitationViolation,
         blocked_unclassified_literature_reply_text,

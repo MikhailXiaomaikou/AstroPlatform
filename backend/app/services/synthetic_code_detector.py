@@ -202,7 +202,7 @@ class _CodeVisitor(ast.NodeVisitor):
         return lowered in {"z", "redshift", "zsp", "z_spec", "specz"} or "redshift" in lowered
 
     def _is_constant_numeric_sequence(self, node: ast.AST) -> bool:
-        # [0.05] * n 或 np.full(n, 0.05) 这类“整列单值”的假样本。
+        # [0.05] * n or np.full(n, 0.05) — a “constant-column” fake sample.
         if isinstance(node, ast.BinOp):
             if isinstance(node.op, ast.Mult):
                 left = node.left
@@ -213,8 +213,8 @@ class _CodeVisitor(ast.NodeVisitor):
                     and isinstance(left.elts[0].value, (int, float))
                 ):
                     return True
-            # PART Y Batch 3: `np.zeros(N) + 0.5` / `np.ones(N) * 2.0` 这种
-            # 用 zeros/ones 当 constant 列再加偏移 — 仍是合成数据.
+            # PART Y Batch 3: `np.zeros(N) + 0.5` / `np.ones(N) * 2.0` —
+            # using zeros/ones as a constant column with an offset is still synthetic data.
             for child in (node.left, node.right):
                 if isinstance(child, ast.Call):
                     inner_chain = self._attribute_chain(child.func)
@@ -353,7 +353,7 @@ def _is_inert_stmt(node: ast.stmt) -> bool:
         and isinstance(value.func, ast.Name)
         and value.func.id == "print"
         and all(_is_inert_expr(arg) for arg in value.args)
-        and not value.keywords  # 拒绝 print(..., file=sys.stderr) 这种
+        and not value.keywords  # reject print(..., file=sys.stderr) forms
     ):
         return True
     return False
@@ -382,9 +382,11 @@ def analyze(code: str) -> DetectionResult:
         result.notes.append("code has SyntaxError; detector skipped")
         return result
 
-    # R5 O3: 纯 literal print / 字面量算术代码(diagnostic / smoke test)
-    # 早返 verdict='inert'.  即便 AI 声明 data_source='none...', 这种代
-    # 码也不算数据合成 — 让子进程环境自检不被 SYNTHETIC banner 刷红.
+    # R5 O3: code consisting only of literal print / arithmetic statements
+    # (diagnostic / smoke test) returns early with verdict='inert'. Even if
+    # the AI declares data_source='none...', this kind of code is not data
+    # synthesis — subprocess environment self-checks should not be flagged
+    # with a SYNTHETIC banner.
     if _is_inert_code(tree):
         result.verdict = "inert"
         result.notes.append("code contains only literal output (inert/diagnostic)")
@@ -454,32 +456,35 @@ def analyze(code: str) -> DetectionResult:
     if hard_signals == 0:
         result.verdict = "clean"
     elif result.reads_real_data:
-        # 读了真实数据时, np.linspace + "synthetic/model" 注释常用于画
-        # 对照模型曲线, 不应仅凭关键词把真实分析降级。真正危险的是
-        # random/fake 生成混入真实声明, 或把 catalog summary 拼成
-        # schematic phase curve 后冒充真实折叠光变。
+        # When real data is read, np.linspace + "synthetic/model" comments often
+        # appear for plotting a comparison model curve and should not downgrade
+        # a genuine analysis on keywords alone. The real danger is random/fake
+        # generation mixed into real claims, or a catalog summary assembled into
+        # a schematic phase curve that masquerades as a real folded light curve.
         if result.has_schematic_phase_curve:
             result.verdict = "suspicious"
         elif result.has_np_random and not result.actual_mcmc_usage:
             result.verdict = "suspicious" if hard_signals >= 2 else "clean"
         elif result.has_large_literal_array:
-            # 真实 reader + 大字面量数组共存罕见: 通常是 reader 拿到 catalog,
-            # 字面量数组是 fabricated 比对; 标 suspicious.
+            # A real reader alongside a large literal array is rare: typically
+            # the reader fetches a catalog while the literal array is a fabricated
+            # comparison; mark as suspicious.
             result.verdict = "suspicious"
         else:
             result.verdict = "clean"
     elif result.actual_mcmc_usage:
-        # PART Y Batch 3: 真正调用了 MCMC sampler / bootstrap (不只是 import).
-        # 容许 1 个 hard signal (那个 signal 通常就是 np.random); 多个仍判 suspicious.
+        # PART Y Batch 3: an MCMC sampler / bootstrap was actually invoked (not
+        # just imported). Tolerate 1 hard signal (usually np.random itself);
+        # multiple signals still result in suspicious.
         result.verdict = "clean" if hard_signals <= 1 else "suspicious"
     else:
-        # PART Y Batch 3: 单 `import emcee` / `import arviz` 不再豁免.
-        # 现在落到 else 分支跟"完全无 legit context"同样处理.
+        # PART Y Batch 3: a bare `import emcee` / `import arviz` is no longer
+        # exempt. Falls through to the else branch the same as having no legit context at all.
         if result.has_constant_redshift_sequence:
             result.verdict = "synthetic"
             return result
         if result.has_large_literal_array and result.has_np_random:
-            # 大字面量 + 随机生成 + 没真实数据 = 直接合成
+            # large literal array + random generation + no real data = synthetic
             result.verdict = "synthetic"
             return result
         # Random without any real-data anchor ⇒ synthetic

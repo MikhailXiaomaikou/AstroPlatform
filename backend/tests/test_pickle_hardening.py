@@ -1,8 +1,8 @@
-"""T1 (PART T): connector_cache.loads_safe 防 pickle RCE.
+"""T1 (PART T): connector_cache.loads_safe guards against pickle RCE.
 
-攻击面: Redis / SQLite cache 或 subprocess args 被污染的 pickle bytes
-自带恶意 __reduce__ → pickle.loads 时 RCE. RestrictedUnpickler 用白名单
-find_class 拦住所有非数据类 (subprocess.Popen, os.system, eval, builtins.exec).
+Attack surface: Redis / SQLite cache or subprocess args with poisoned pickle bytes
+carrying malicious __reduce__ → RCE on pickle.loads. RestrictedUnpickler uses a whitelist
+find_class to block all non-data classes (subprocess.Popen, os.system, eval, builtins.exec).
 """
 
 import pickle
@@ -42,7 +42,7 @@ def test_allowed_astro_object():
 
 
 def test_malicious_reduce_os_system_blocked():
-    """__reduce__ 里指向 os.system — 白名单外, 应 raise."""
+    """__reduce__ points to os.system — outside whitelist, should raise."""
     from app.services.connector_cache import loads_safe
 
     class Evil:
@@ -56,7 +56,7 @@ def test_malicious_reduce_os_system_blocked():
 
 
 def test_malicious_reduce_subprocess_blocked():
-    """subprocess.Popen 也不在白名单."""
+    """subprocess.Popen is also not on the whitelist."""
     from app.services.connector_cache import loads_safe
 
     class Evil:
@@ -70,7 +70,7 @@ def test_malicious_reduce_subprocess_blocked():
 
 
 def test_malicious_reduce_eval_blocked():
-    """eval/exec 也不在白名单."""
+    """eval/exec is also not on the whitelist."""
     from app.services.connector_cache import loads_safe
 
     class Evil:
@@ -83,10 +83,10 @@ def test_malicious_reduce_eval_blocked():
 
 
 def test_arbitrary_user_class_blocked():
-    """非白名单的 stdlib/外部类型也应被拒."""
+    """Non-whitelisted stdlib/external types should also be rejected."""
     from app.services.connector_cache import loads_safe
 
-    # argparse.Namespace 是个真 class, 可以 pickle 但**不**在白名单
+    # argparse.Namespace is a real class, picklable but NOT on the whitelist
     import argparse
     ns = argparse.Namespace(x=1, y=2)
     raw = pickle.dumps(ns)
@@ -95,7 +95,7 @@ def test_arbitrary_user_class_blocked():
 
 
 def test_numpy_ndarray_roundtrip():
-    """connector 返回 ndarray 时应能 roundtrip."""
+    """When a connector returns ndarray, it should roundtrip successfully."""
     np = pytest.importorskip("numpy")
     from app.services.connector_cache import loads_safe
 
@@ -116,7 +116,7 @@ def test_pandas_dataframe_roundtrip():
 
 
 def test_cache_roundtrip_via_sqlite_backend(tmp_path):
-    """端到端: SQLite cache 存进去, 读出来, 走 loads_safe."""
+    """End-to-end: write to SQLite cache, read it back through loads_safe."""
     from app.services.connector_cache import SQLiteBackend
     from app.connectors.base import AstroObject
 
@@ -133,7 +133,7 @@ def test_cache_roundtrip_via_sqlite_backend(tmp_path):
 
 
 def test_cache_rejects_malicious_entry(tmp_path):
-    """手动往 SQLite 插恶意 pickle bytes, 读取时应安全拒绝."""
+    """Manually insert malicious pickle bytes into SQLite; read should safely reject."""
     import sqlite3
     import time
     from app.services.connector_cache import SQLiteBackend
@@ -154,15 +154,15 @@ def test_cache_rejects_malicious_entry(tmp_path):
 
     # loads_safe inside .get() should raise → caught → returns None, not RCE
     result = backend.get("evil_key")
-    assert result is None  # 安全拒绝, 不执行 os.system
+    assert result is None  # safely rejected, os.system not executed
 
 
 def test_collect_subprocess_cache_context_skips_unsafe():
-    """_collect_subprocess_cache_context 对恶意 cache 值应跳过, 不泄给 subprocess.
+    """_collect_subprocess_cache_context should skip malicious cache values instead of leaking them to subprocess.
 
-    _search_result_cache 的 entry 是 (value, timestamp) tuple. 我们直接
-    插入 tuple 格式绕过 store_search_results 的 helper, 模拟 Redis 污染
-    场景下 cache 里存在恶意对象的情形.
+    _search_result_cache entries are (value, timestamp) tuples. We insert directly
+    in tuple format, bypassing store_search_results helper, to simulate a Redis-poisoned
+    cache containing malicious objects.
     """
     import time
     from app.services import ai_tools, code_executor
@@ -174,13 +174,13 @@ def test_collect_subprocess_cache_context_skips_unsafe():
 
     original_cache = dict(getattr(ai_tools, "_search_result_cache", {}))
     try:
-        # 直接污染 cache: (value, timestamp) 格式
+        # directly poison the cache: (value, timestamp) format
         ai_tools._search_result_cache["evil:default"] = (Evil(), time.time())
         ai_tools._search_result_cache["good:default"] = (
             [{"name": "M31", "ra": 10.68, "dec": 41.26}], time.time()
         )
         ctx = code_executor._collect_subprocess_cache_context("default")
-        # 恶意 entry 应被跳过, 正常的 list[dict] 应保留
+        # malicious entry should be skipped; well-formed list[dict] should be preserved
         assert "evil:default" not in ctx
         assert "good:default" in ctx
     finally:

@@ -18,5 +18,15 @@ DATA_AGENT = SpecialistAgent(
         "get_last_search_results",
         "query_transients",
         "get_object_dossier",
+        # Solar-system data retrieval tools. These are still hidden when
+        # ASTRO_RESEARCH_FOCUS is not solar_system because chat.py applies the
+        # focus manifest as the outer tool gate. Keeping them here lets the
+        # data agent expose the right tools when the solar module is active.
+        "query_mpc_orbit",
+        "fetch_horizons_ephemeris",
+        "query_sbdb_orbit",
+        "query_sbdb_close_approaches",
+        "query_sentry_risk",
+        "query_damit_shape_model",
     ],
 )

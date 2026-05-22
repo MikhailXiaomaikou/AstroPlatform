@@ -21,8 +21,8 @@ export default function ObjectDetailPanel({ objectName, ra, dec, isOpen, onClose
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    // Q3: panel 打开时重置 loading/error/data/tab 然后发 async fetch.
-    // 经典 "props change → reset state → kick off request" 场景.
+    // Q3: When the panel opens, reset loading/error/data/tab and kick off an async fetch.
+    // Classic "props change -> reset state -> kick off request" pattern.
     if (!isOpen || !objectName) return;
     setLoading(true);
     setError(null);

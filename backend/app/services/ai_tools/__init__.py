@@ -1110,6 +1110,31 @@ TOOLS = [
         },
     },
     {
+        "name": "get_async_job_status",
+        "description": (
+            "Generic poll endpoint for any background tool job submitted via "
+            "the async-tool runtime (transit_search_bls, long fit_transit, "
+            "run_cosmology_likelihood_chain, run_paper_tool_mining_loop, etc.). "
+            "Returns PARTIAL while the job is queued/running and the unwrapped "
+            "underlying result once the job is completed. Use this instead of "
+            "get_cosmology_run_status for any tool that returned a job_id with "
+            "__tool_status__=PARTIAL and analysis_status in {QUEUED, RUNNING}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": (
+                        "Job ID returned by an async-capable tool. "
+                        "Examples: 'fit_cosmology_mcmc-abc123', 'transit_search_bls-def456'."
+                    ),
+                },
+            },
+            "required": ["job_id"],
+        },
+    },
+    {
         "name": "list_cosmology_datasets",
         "description": (
             "List the curated observational-cosmology dataset registry. Entries "
@@ -2337,6 +2362,8 @@ async def _execute_tool_inner(
             return await _exec_run_cobaya_cosmology(tool_input, python_session_id)
         elif tool_name == "get_cosmology_run_status":
             return _exec_get_cosmology_run_status(tool_input)
+        elif tool_name == "get_async_job_status":
+            return _exec_get_async_job_status(tool_input)
         elif tool_name == "list_cosmology_datasets":
             return _exec_list_cosmology_datasets(tool_input)
         elif tool_name == "load_cosmology_data_product":
@@ -2452,10 +2479,26 @@ async def _execute_tool_inner(
                 tool_input.get("flux_err"), tool_input.get("nsigma", 3.0),
             )
         elif tool_name == "transit_search_bls":
+            # Long-running: full-sector BLS sweeps over 0.5–20 day periods on
+            # a 50k-cadence light curve routinely run 60-300s. The 45s default
+            # tool deadline kills them mid-sweep, so for large inputs we
+            # off-load to the Celery worker via the async-tool runtime.
+            # in_async_worker() suppresses re-submission when we're already
+            # inside the worker draining its own queue.
+            from app.services.async_tool_runtime import in_async_worker, submit_async_job
+
+            _time_len = len(tool_input.get("time") or [])
+            _period_min = float(tool_input.get("period_min", 0.5))
+            _period_max = float(tool_input.get("period_max", 20.0))
+            _async_threshold = _time_len >= 50_000 or (_period_max - _period_min) > 50
+            _force_background = bool(tool_input.get("background", False))
+            if not in_async_worker() and (_async_threshold or _force_background):
+                return submit_async_job("transit_search_bls", tool_input)
+
             from app.services.time_domain_pro import transit_search_bls as _bls
             return _bls(
                 tool_input["time"], tool_input["flux"],
-                period_range=(tool_input.get("period_min", 0.5), tool_input.get("period_max", 20.0)),
+                period_range=(_period_min, _period_max),
             )
         # ── Team/Workspace Tools ──
         elif tool_name == "share_with_team":
@@ -8313,6 +8356,7 @@ def _cosmology_rows_from_input(
 
 
 async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> dict:
+    from app.services.async_tool_runtime import in_async_worker
     from app.services.cosmology_mcmc import (
         fit_cosmology_emcee,
         should_run_background,
@@ -8341,6 +8385,12 @@ async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> 
             "source_cache_key": source_cache_key,
             "manual_attestation": attestation,
         }
+        # When the agent loop is running inside the Celery worker (because
+        # a previous submit_async_job re-entered this code path), force the
+        # synchronous emcee chain. Otherwise we'd submit a new Celery task
+        # from inside a Celery task and deadlock on the worker queue.
+        if in_async_worker():
+            return await asyncio.to_thread(fit_cosmology_emcee, **kwargs)
         if should_run_background(n_walkers, n_steps, bool(inp.get("background", False))):
             return submit_emcee_job(**kwargs)
         return await asyncio.to_thread(fit_cosmology_emcee, **kwargs)
@@ -8402,6 +8452,22 @@ def _exec_get_cosmology_run_status(inp: dict) -> dict:
             "error_class": "missing_job_id",
         }
     return get_cosmology_job_status(job_id)
+
+
+def _exec_get_async_job_status(inp: dict) -> dict:
+    """Poll a job submitted via async_tool_runtime.submit_async_job."""
+    from app.services import async_tool_runtime as atr
+
+    job_id = str(inp.get("job_id") or "").strip()
+    if not job_id:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": "job_id is required",
+            "error_class": "missing_job_id",
+        }
+    return atr.format_status_for_tool(atr.get_async_job(job_id), requested_job_id=job_id)
 
 
 def _exec_list_cosmology_datasets(inp: dict) -> dict:

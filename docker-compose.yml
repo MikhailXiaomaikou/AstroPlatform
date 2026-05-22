@@ -8,7 +8,8 @@ services:
       POSTGRES_PASSWORD: astro
       POSTGRES_DB: astro
     ports:
-      - "5432:5432"
+      # 只绑回环, 防止意外把 compose 跑到云 VPS 上时数据库裸奔 + 弱默认密码
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -25,7 +26,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -44,8 +45,8 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - miniodata:/data
     healthcheck:

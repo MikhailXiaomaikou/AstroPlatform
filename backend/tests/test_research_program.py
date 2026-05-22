@@ -139,6 +139,36 @@ def test_fact_verifier_accepts_publication_ready_matrix_claim_scope() -> None:
     assert any(claim["status"] == "verified" for claim in report["claims"])
 
 
+def test_fact_verifier_does_not_block_full_likelihood_limitations() -> None:
+    from app.services.research_program import (
+        build_evidence_graph,
+        plan_research_program,
+        run_research_matrix,
+        verify_research_facts,
+    )
+
+    plan = plan_research_program(
+        question="Run DESI BAO and Planck compressed preliminary constraints."
+    )["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+    graph = build_evidence_graph(tool_results=[{"tool": "run_research_matrix", "result": matrix}])
+    report = verify_research_facts(
+        tool_results=[
+            {"tool": "run_research_matrix", "result": matrix},
+            {"tool": "build_evidence_graph", "result": graph},
+        ],
+        final_reply=(
+            "These are compressed-likelihood preliminary numbers, not a full "
+            "external Cobaya/CosmoSIS likelihood result. Full external "
+            "Cobaya/CosmoSIS reproduction is still outside the compressed "
+            "preliminary layer."
+        ),
+    )
+
+    assert report["status"] in {"passed", "warning"}
+    assert not any(claim["status"] == "contradicted" for claim in report["claims"])
+
+
 def test_fact_verifier_blocks_numeric_value_contradicting_ready_chain() -> None:
     from app.services.research_program import verify_research_facts
 
@@ -474,8 +504,11 @@ def test_export_research_report_includes_bibtex_and_manifest() -> None:
     assert result["datasets"][0]["key"] == "planck2018_compressed"
     assert result["reproducibility_manifest"][0]["run_id"] == "run-1"
     assert result["report_package"]["files"][0]["path"] == "research_report.md"
+    assert any(file["path"] == "paper_draft.md" for file in result["report_package"]["files"])
     assert any(file["path"] == "fact_check_report.json" for file in result["report_package"]["files"])
     assert "## Fact Verification" in result["markdown"]
+    assert "## 4. Results" in result["paper_draft_markdown"]
+    assert "Planck 2018 compressed" in result["paper_draft_markdown"]
 
 
 def test_tool_gap_matrix_knows_research_export_package_is_available() -> None:

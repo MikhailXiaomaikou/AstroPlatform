@@ -4,7 +4,7 @@ References:
 - Giorgini+ 1996 BAAS 28, 1158 (Horizons system, bibcode 1996DPS....28.2504G)
 - Ginsburg+ 2019 AJ 157, 98 (astroquery, bibcode 2019AJ....157...98G)
 
-Provides ephemerides + 基本物理量 for planets, asteroids, comets, spacecraft.
+Provides ephemerides + basic physical quantities for planets, asteroids, comets, spacecraft.
 M0 Commit 2 (2026-05-18): polished from placeholder to provenance-v2 compliant
 connector, mirroring TwoMASSConnector shape.
 """
@@ -28,7 +28,7 @@ HORIZONS_ARCHIVE_VERSION = "horizons-2026"
 
 
 class JPLHorizonsConnector(BaseConnector):
-    """Query JPL Horizons for solar system body ephemerides + 物理量."""
+    """Query JPL Horizons for solar system body ephemerides + physical quantities."""
 
     source_name = "jpl"
 
@@ -37,7 +37,7 @@ class JPLHorizonsConnector(BaseConnector):
         self, query: str, ra: float | None = None, dec: float | None = None,
         radius: float = 0.1,
     ) -> list[AstroObject]:
-        """按 designation/name 查询单点星历(now → now+1d),返回 AstroObject 列表."""
+        """Query a single-epoch ephemeris by designation/name (now to now+1d) and return a list of AstroObjects."""
         if not query:
             return []
         loop = asyncio.get_running_loop()
@@ -50,7 +50,7 @@ class JPLHorizonsConnector(BaseConnector):
         return self._table_to_objects(table, designation=query)
 
     def _fetch_now_ephemeris(self, designation: str) -> Table | None:
-        """单点 ephemeris (UTC now)。"""
+        """Fetch a single-epoch ephemeris at UTC now."""
         from astroquery.jplhorizons import Horizons
 
         now_dt = datetime.now(timezone.utc)

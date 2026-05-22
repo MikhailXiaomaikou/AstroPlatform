@@ -1,3 +1,19 @@
+# ── pip freeze snapshot (not consumed by deployment) ─────────────────────
+# This file is a manually-regenerated `pip freeze` snapshot, kept on disk
+# for dependency-drift diagnostics ONLY.
+#
+# NOT installed by:
+#   - backend/Dockerfile  (installs requirements.txt)
+#   - render.yaml         (installs requirements.txt)
+#
+# Use when you need to compare your local environment against a known-good
+# snapshot, or when reporting "works on my machine" bugs.
+#
+# Regenerate after a clean install:
+#     pip install -r requirements.txt
+#     pip freeze > requirements.lock
+# ─────────────────────────────────────────────────────────────────────────
+
 ads==0.12.7
 aiobotocore==3.4.0
 aiohappyeyeballs==2.6.1
@@ -23,6 +39,7 @@ asdf-astropy==0.11.0
 asdf_coordinates_schemas==0.5.1
 asdf_standard==1.5.0
 asdf_transform_schemas==0.6.0
+asteval==0.9.33
 asdf_wcs_schemas==0.5.0
 astropy==7.2.0
 astropy-iers-data==0.2026.3.9.0.47.45

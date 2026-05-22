@@ -1,11 +1,11 @@
-"""M6 验收: claim_validator.methodology_consistency_violations.
+"""M6 acceptance: claim_validator.methodology_consistency_violations.
 
-核心契约:
-1. AI reply 含 'Bayesian' 类承诺但 fit_line_lfr 实际跑 OLS → method_mismatch
-2. AI reply 含 'demagnified N sources' 但工具实际数 < N → demagnify_count_mismatch
-3. AI 没有承诺时,不论 fit_method 如何,都不报 violation(避免误报)
-4. AI 承诺 Bayesian + fit_method 实际是 'bayesian_xyerr_linmix' → 不报 violation
-5. SYSTEM_PROMPT 已经被加段(line-relation methodology)— 简单存在性检查
+Core contracts:
+1. AI reply contains 'Bayesian'-type promise but fit_line_lfr actually ran OLS → method_mismatch
+2. AI reply contains 'demagnified N sources' but actual tool count < N → demagnify_count_mismatch
+3. When AI makes no promise, no violation is reported regardless of fit_method (avoids false positives)
+4. AI promises Bayesian + fit_method is actually 'bayesian_xyerr_linmix' → no violation
+5. SYSTEM_PROMPT has the line-relation methodology segment added — simple existence check
 """
 
 from app.services.claim_validator import methodology_consistency_violations
@@ -308,9 +308,9 @@ def test_chat_module_imports_methodology_helper():
 
 
 def test_lfr_bypass_with_no_fit_tool_called_triggers_violation():
-    """Bundle e8d9 reproducer: reply 报 LFR slope/intercept/scatter 但本轮
-    没调 fit_line_lfr → 触发 fit_line_lfr_bypass violation.
-    防 LLM 在 run_python 里自己 fit 然后 prose 报数字这种绕过 PARTIAL gate."""
+    """Bundle e8d9 reproducer: reply reports LFR slope/intercept/scatter but
+    fit_line_lfr was not called this turn → triggers fit_line_lfr_bypass violation.
+    Guards against LLM fitting in run_python and reporting numbers in prose to bypass PARTIAL gate."""
     from app.services.claim_validator import methodology_consistency_violations
 
     reply = (
@@ -327,8 +327,8 @@ def test_lfr_bypass_with_no_fit_tool_called_triggers_violation():
 
 
 def test_lfr_bypass_with_fit_tool_called_does_NOT_trigger():
-    """只要本轮真调过 fit_line_lfr (即便 PARTIAL), bypass detector 不再
-    触发, 留给 line_relation_exploratory_label_missing 之类更精确检查."""
+    """As long as fit_line_lfr was genuinely called this turn (even PARTIAL), bypass detector
+    does not trigger — left to more precise checks like line_relation_exploratory_label_missing."""
     from app.services.claim_validator import methodology_consistency_violations
 
     reply = "L_prime[CII] LFR fit: slope = 0.79."
@@ -338,9 +338,9 @@ def test_lfr_bypass_with_fit_tool_called_does_NOT_trigger():
 
 
 def test_lfr_bypass_with_unrelated_slope_keyword_does_NOT_trigger():
-    """isochrone slope / photometry alpha 等其它工作流也用 'slope' 词,
-    bypass detector 只在 LFR-context (L'[CII] / LFR / luminosity-FWHM 等)
-    出现时才触发. 防误伤."""
+    """Isochrone slope / photometry alpha and other workflows also use the word 'slope';
+    bypass detector only triggers when LFR-context (L'[CII] / LFR / luminosity-FWHM etc.)
+    is present. Prevents false positives."""
     from app.services.claim_validator import methodology_consistency_violations
 
     reply = (
@@ -355,14 +355,14 @@ def test_lfr_bypass_with_unrelated_slope_keyword_does_NOT_trigger():
 
 
 def test_lfr_bypass_alternate_lfr_keywords_also_trigger():
-    """_LFR_CONTEXT_RE 应匹配多种 LFR 措辞: Solomon 1992 / brightness
-    temperature / Carilli & Walter / luminosity-FWHM 等."""
+    """_LFR_CONTEXT_RE should match multiple LFR phrasings: Solomon 1992 / brightness
+    temperature / Carilli & Walter / luminosity-FWHM etc."""
     from app.services.claim_validator import methodology_consistency_violations
 
     for ctx_phrase in [
         "Following Solomon 1992 brightness temperature convention, the slope is 0.8.",
         "The Carilli & Walter 2013 reference relation predicts intercept = 9.5.",
-        # 注: _LINE_RELATION_QUANT_RE 要求 "intrinsic scatter" 而非裸 "scatter"
+        # Note: _LINE_RELATION_QUANT_RE requires "intrinsic scatter" not bare "scatter"
         "Our L-FWHM relation fit yields intrinsic scatter = 0.32 dex.",
     ]:
         violations = methodology_consistency_violations(ctx_phrase, [])

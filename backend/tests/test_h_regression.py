@@ -252,10 +252,10 @@ def test_ast_linter_accepts_get_cached_results_any_source():
 
 
 def test_ast_linter_accepts_platform_real_data_reader_for_latest_search():
-    """R15: download_and_clean_lightcurve 本身是真实 MAST 读取器。
+    """R15: download_and_clean_lightcurve is a real MAST reader.
 
-    AI 有时把这种代码声明成 latest_search（因为上一 action 是
-    search_lightcurve），合同层不能因此误报为“没读真实数据”。
+    AI sometimes declares this code as latest_search (because the previous action was
+    search_lightcurve); the contract layer must not falsely report "no real data read".
     """
     from app.services.ai_tools import _PLATFORM_REAL_DATA_READER_TOKENS
 
@@ -653,40 +653,40 @@ def test_search_lightcurve_picks_kic_for_kepler_mission():
     assert "KIC" in (result.get("target_resolved_via") or "").upper()
 
 
-# ---------- K1.A: SYSTEM_PROMPT 必须含 data_source 硬规则 ----------
+# ---------- K1.A: SYSTEM_PROMPT must contain the data_source hard rule ----------
 
 def test_system_prompt_contains_data_source_hard_rule():
-    """K1.A: 三次回归审稿人定位到 SYNTHETIC 误报其实是 AI 自己把
-    data_source 填成了 none_not_analyzing_real_data (被 'literature
-    comparison' 字样触发).  prompt 必须明确告诉 AI: 用了前一步 real
-    source 的输出就声明 latest_adql, literature 对比不是 synthetic.
-    少任何一条 keyword 就意味着硬规则被改弱/去掉."""
+    """K1.A: Three regression reviewers traced the SYNTHETIC false positive to the AI setting
+    data_source to none_not_analyzing_real_data (triggered by "literature comparison" text).
+    The prompt must explicitly tell the AI: if the previous step's real-source output was used,
+    declare latest_adql; a literature comparison is not synthetic.
+    Removing any keyword means the hard rule has been weakened or deleted."""
     from app.api.chat import SYSTEM_PROMPT
 
     # Rule section must be present
-    assert "K1.A" in SYSTEM_PROMPT, "K1.A 硬规则段已经丢失/被合并覆盖"
+    assert "K1.A" in SYSTEM_PROMPT, "K1.A hard-rule section has been lost or merged away"
 
-    # 关键 keyword: 硬规则必须明确列出正/反两种常见情形
+    # Required keywords: the hard rule must explicitly list both correct and incorrect cases
     required_keywords = [
-        "literature",              # 反例涉及 literature 字样
-        "'latest_adql'",           # 正确声明例
-        "'none_not_analyzing_real_data'",  # 错误声明例
-        "rows",                    # Rule 1 里提到的变量名
-        "np.random",               # Rule 3 里的合法 synthetic 触发条件
-        "np.linspace",             # Rule 3 的另一条
-        "bootstrap",               # Rule 2 里明确不算 synthetic
-        "available_functions",     # 纯 helper introspection 不应伪装成 latest_lightcurve
+        "literature",              # counter-example involves "literature" text
+        "'latest_adql'",           # correct declaration example
+        "'none_not_analyzing_real_data'",  # incorrect declaration example
+        "rows",                    # variable name mentioned in Rule 1
+        "np.random",               # legitimate synthetic trigger condition in Rule 3
+        "np.linspace",             # another condition in Rule 3
+        "bootstrap",               # explicitly not synthetic per Rule 2
+        "available_functions",     # pure helper introspection must not impersonate latest_lightcurve
         "helper introspection",
-        # 反例代码必须在 prompt 里作为 few-shot
+        # Counter-example code must appear in the prompt as a few-shot example
         "WRONG",
         "CORRECT",
     ]
     missing = [kw for kw in required_keywords if kw not in SYSTEM_PROMPT]
-    assert not missing, f"K1.A prompt 缺 keyword: {missing}"
+    assert not missing, f"K1.A prompt is missing keywords: {missing}"
 
 
 def test_run_python_tool_description_mentions_helper_introspection_data_source():
-    """R4 follow-up: available_functions() 只查 helper API, 不应声明 latest_lightcurve."""
+    """R4 follow-up: available_functions() only inspects the helper API and must not declare latest_lightcurve."""
     from app.services.ai_tools import TOOLS
 
     run_python = next(t for t in TOOLS if t.get("name") == "run_python")
@@ -704,34 +704,34 @@ def test_run_python_tool_description_mentions_helper_introspection_data_source()
 # ---------- K2: search_lightcurve missing target 错误消息 ----------
 
 def test_search_lightcurve_missing_target_returns_actionable_error():
-    """K2: AI 第一次调用若漏传 target, 后端必须返回带 error_class +
-    示例的清晰错误 (而不是空洞的 'target is required'), 这样 AI 在同
-    一轮的下一次 tool call 里就能补对."""
+    """K2: When the AI's first call omits target, the backend must return a clear error
+    with error_class + concrete examples (not just 'target is required'), so the AI can
+    supply the correct value in the next tool call within the same turn."""
     from app.services.ai_tools import _exec_search_lightcurve
 
-    # target 整个缺
+    # target completely absent
     result = asyncio.run(_exec_search_lightcurve({}))
     assert result.get("error_class") == "missing_argument"
     assert result.get("argument") == "target"
     err = str(result.get("error") or "")
-    # 错误消息里必须带至少一个具体示例, 否则没治本
+    # Error message must contain at least one concrete example, otherwise the root cause isn't fixed
     assert any(ex in err for ex in ("HD 189733", "Kepler-10", "TIC", "delta Cep"))
 
-    # 空字符串 / 纯空格也走同一路径
+    # Empty string / pure whitespace also takes the same path
     result = asyncio.run(_exec_search_lightcurve({"target": "   "}))
     assert result.get("error_class") == "missing_argument"
 
-    # mission 非法值 → 单独的 invalid_argument 错误
+    # Invalid mission value -> separate invalid_argument error
     result = asyncio.run(_exec_search_lightcurve({"target": "HD 189733", "mission": "hubble"}))
     assert result.get("error_class") == "invalid_argument"
     assert result.get("argument") == "mission"
 
 
-# ---------- K3: _launch_on_mirrors 错误消息不再用 list repr ----------
+# ---------- K3: _launch_on_mirrors error message no longer uses list repr ----------
 
 def test_launch_on_mirrors_error_message_comma_separated():
-    """K3: 所有 mirror 都失败时, 错误消息应是逗号分隔的 URL 列表,
-    不带 Python list 的方括号和单引号 ('脏' 字符)."""
+    """K3: When all mirrors fail, the error message should be a comma-separated URL list,
+    without Python list brackets or single-quote delimiters (dirty characters)."""
     from app.api import integration as integ
 
     urls_tried: list[str] = []
@@ -754,38 +754,39 @@ def test_launch_on_mirrors_error_message_comma_separated():
             )
 
     err_str = str(excinfo.value)
-    # 消息里必须有 "Tried: " 前缀, 且后面跟的不是 Python list repr
+    # Message must start with "Tried: " prefix, followed by something that is NOT a Python list repr
     assert "Tried: " in err_str
-    # 不能有方括号(Python list repr 会带方括号)
-    assert "Tried: [" not in err_str, f"仍是 list repr: {err_str}"
-    # 不能用单引号包住单个 URL
-    assert "Tried: '" not in err_str, f"仍带单引号: {err_str}"
-    # 至少含前两个 mirror (逗号分隔格式)
+    # No square brackets (Python list repr would include them)
+    assert "Tried: [" not in err_str, f"still list repr: {err_str}"
+    # No single-quote wrapping around individual URLs
+    assert "Tried: '" not in err_str, f"still has single-quote prefix: {err_str}"
+    # Must contain at least the first two mirrors (comma-separated format)
     primary = integ.ADQL_SERVICE_MIRRORS["vizier"][0]
     fallback = integ.ADQL_SERVICE_MIRRORS["vizier"][1]
     assert primary in err_str and fallback in err_str
-    # 逗号分隔
+    # Comma-separated
     assert f"{primary}, {fallback}" in err_str or f"{primary},{fallback}" in err_str
 
 
 # ---------- J2: run_adql per-tool deadline = 300 s ----------
 
 def test_run_adql_deadline_is_300s():
-    """J2: integration.py 的 async TAP 有 300 s budget, 但 chat.py 的
-    _TOOL_DEADLINE_TABLE 之前没给 run_adql 单独列 → 默认 45 s 先砍掉.
-    必须把 run_adql 加到表里且值 ≥ 300, 否则 async 路径没机会跑完.
+    """J2: integration.py's async TAP has a 300 s budget, but chat.py's
+    _TOOL_DEADLINE_TABLE previously had no entry for run_adql, so the default 45 s cut it off.
+    run_adql must be added to the table with a value >= 300, otherwise the async path never
+    completes.
 
-    用 inspect.getsource 直接看表的字面, 不跑 agent loop 避开副作用."""
+    Uses inspect.getsource to read the table literal directly, without running the agent loop."""
     import inspect
     from app.api import chat as chat_module
 
     src = inspect.getsource(chat_module._execute_tool_calls)
-    # 表字面必须带 "run_adql" 且值 >= 300
-    assert '"run_adql":' in src, "run_adql 未在 _TOOL_DEADLINE_TABLE 里"
-    # 提取 run_adql 对应的值 (简单正则, 足够)
+    # Table literal must contain "run_adql" with a value >= 300
+    assert '"run_adql":' in src, "run_adql is not listed in _TOOL_DEADLINE_TABLE"
+    # Extract the value for run_adql (simple regex, sufficient)
     import re
     m = re.search(r'"run_adql":\s*([\d.]+)', src)
-    assert m, "run_adql 的 deadline 值无法 parse"
+    assert m, "run_adql deadline value could not be parsed"
     deadline = float(m.group(1))
     assert deadline >= 300.0, (
         f"run_adql deadline={deadline}s < 300s, "
@@ -794,10 +795,11 @@ def test_run_adql_deadline_is_300s():
 
 
 def test_execute_tool_calls_preserves_summary_budget_near_deadline():
-    """R5: 接近 360s agent-loop deadline 时, 不应再启动长工具调用.
+    """R5: When within 360 s of the agent-loop deadline, no more long tool calls should be launched.
 
-    否则一个新的 run_adql / run_python 会吃掉最后 60s, 外层 420s 墙
-    直接杀掉整轮, 用户只看到 workflow timeout 而不是已有结果总结.
+    Otherwise a new run_adql / run_python would consume the remaining 60 s, and the outer 420 s
+    wall would kill the entire turn, leaving the user with a workflow timeout instead of a summary
+    of results collected so far.
     """
     import time
     from app.api.chat import _execute_tool_calls
@@ -817,10 +819,10 @@ def test_execute_tool_calls_preserves_summary_budget_near_deadline():
 
 
 def test_agent_deadline_returns_frontend_action_shape():
-    """R5: deadline 早退时也必须返回前端 action shape.
+    """R5: Early-exit on deadline must also return the frontend action shape.
 
-    旧代码把内部 all_tool_results 原样塞进 actions, 字段是
-    tool/input/result, SSE final 阶段再读 action/tool_result 会全是 None.
+    Old code stuffed raw all_tool_results into actions with fields tool/input/result;
+    the SSE final stage reading action/tool_result would then always get None.
     """
     from app.api.chat import _tool_results_to_actions
 
@@ -1224,17 +1226,17 @@ def test_partial_fit_line_lfr_is_not_publication_ready():
     assert _line_fit_partial_from_result(result) is True
 
 
-# ---------- J3: SDSS SkyServer 直连工具 run_sdss_sql ----------
+# ---------- J3: SDSS SkyServer direct-access tool run_sdss_sql ----------
 
 def test_run_sdss_sql_tool_registered():
-    """J3: 新工具必须出现在 TOOLS 列表里, 而且 schema 合法."""
+    """J3: The new tool must appear in the TOOLS list with a valid schema."""
     from app.services.ai_tools import TOOLS
 
     names = [t.get("name") for t in TOOLS]
-    assert "run_sdss_sql" in names, "run_sdss_sql 工具没注册进 TOOLS"
+    assert "run_sdss_sql" in names, "run_sdss_sql tool is not registered in TOOLS"
 
     entry = next(t for t in TOOLS if t.get("name") == "run_sdss_sql")
-    assert "T-SQL" in entry["description"], "description 必须强调 T-SQL 语法"
+    assert "T-SQL" in entry["description"], "description must emphasize T-SQL syntax"
     assert "SkyServer" in entry["description"]
     props = entry["input_schema"]["properties"]
     assert "query" in props and "dr" in props
@@ -1242,21 +1244,21 @@ def test_run_sdss_sql_tool_registered():
 
 
 def test_r17_critical_data_tools_visible_to_data_agent():
-    """R17: TOOLS 里有工具还不够, runtime schema 会被 agent.tool_names 裁剪。
+    """R17: Having a tool in TOOLS is not enough; the runtime schema is filtered by agent.tool_names.
 
-    SDSS LF 和 MW v_esc 两条线都默认走 data_agent；这些工具必须在
-    data_agent 的 tool_names 里, 否则 LLM 实际 function schema 看不到。
+    Both the SDSS LF and MW v_esc workflows default to data_agent; these tools must be in
+    data_agent's tool_names, otherwise the LLM never sees their function schema.
     """
     from app.ai.agents.data_agent import DATA_AGENT
 
     exposed = set(DATA_AGENT.tool_names)
     required = {"run_sdss_sql", "query_high_velocity_stars", "search_lightcurve"}
     missing = required - exposed
-    assert not missing, f"data_agent 未暴露 R17 关键工具: {missing}"
+    assert not missing, f"data_agent has not exposed R17 critical tools: {missing}"
 
 
 def test_tool_inventory_prompt_gets_full_tool_schema():
-    """R17: 用户直接问工具清单时, 不应被 data_agent 的子集误导。"""
+    """R17: When users directly ask for the tool inventory, they must not be misled by data_agent's subset."""
     from app.api.chat import _filter_tools, _is_tool_inventory_request
     from app.services.ai_tools import TOOLS
 
@@ -1268,35 +1270,35 @@ def test_tool_inventory_prompt_gets_full_tool_schema():
 
 
 def test_latest_sdss_sql_is_valid_data_source():
-    """J3: run_python 调用要能声明 data_source='latest_sdss_sql'
-    (SDSS cache 的新 source), 否则 Phase G 会拒绝合法 SDSS 分析代码."""
+    """J3: run_python calls must be able to declare data_source='latest_sdss_sql'
+    (the new SDSS cache source); otherwise Phase G will reject legitimate SDSS analysis code."""
     from app.services.ai_tools import _VALID_DATA_SOURCES, _REAL_DATA_SOURCE_PATTERNS
 
     assert "latest_sdss_sql" in _VALID_DATA_SOURCES
     assert "latest_sdss_sql" in _REAL_DATA_SOURCE_PATTERNS
-    # 匹配 pattern 里至少要含一个能让 run_python 代码常用的 token
+    # The matching pattern must include at least one token commonly used in run_python code
     patterns = _REAL_DATA_SOURCE_PATTERNS["latest_sdss_sql"]
     assert "get_cached_results" in patterns or "latest_sdss_sql" in patterns
 
 
 def test_system_prompt_has_sdss_skyserver_fallback_rule():
-    """J3: SYSTEM_PROMPT 必须明确告诉 AI 什么时候切 run_sdss_sql:
-    VizieR 挂了 OR 需要 SDSS-only 表 (Photoz / GalSpec*).  少任何
-    keyword 就意味着 prompt 被改弱, AI 又会 stuck 在 VizieR."""
+    """J3: SYSTEM_PROMPT must explicitly tell the AI when to switch to run_sdss_sql:
+    when VizieR is down OR when SDSS-only tables (Photoz / GalSpec*) are needed.
+    Any missing keyword means the prompt has been weakened and the AI will get stuck on VizieR."""
     from app.api.chat import SYSTEM_PROMPT
 
     required = [
-        "run_sdss_sql",           # 工具名
-        "T-SQL",                  # 强调方言
-        "dbo.fGetNearbyObjEq",    # 正确的锥搜函数
-        "PhotoObjAll",            # 主表
-        "SpecObjAll",             # 光谱表
-        "GalSpecExtra",           # SDSS-only 表示例
+        "run_sdss_sql",           # tool name
+        "T-SQL",                  # emphasize dialect
+        "dbo.fGetNearbyObjEq",    # correct cone search function
+        "PhotoObjAll",            # primary table
+        "SpecObjAll",             # spectroscopy table
+        "GalSpecExtra",           # SDSS-only table example
     ]
     missing = [kw for kw in required if kw not in SYSTEM_PROMPT]
-    assert not missing, f"SYSTEM_PROMPT 缺 SDSS SkyServer keyword: {missing}"
-    # 必备过滤条件: mode + clean, 写法可能带前缀 (p.mode=1) 也可能不带,
-    # 都接受, 只要两者都在 prompt 里.
+    assert not missing, f"SYSTEM_PROMPT is missing SDSS SkyServer keyword: {missing}"
+    # Required filter conditions: mode + clean; may appear with a table prefix (p.mode=1) or not;
+    # both forms are accepted, as long as both appear somewhere in the prompt.
     assert "mode=1" in SYSTEM_PROMPT.replace(" ", "") or "mode = 1" in SYSTEM_PROMPT
     assert "clean=1" in SYSTEM_PROMPT.replace(" ", "") or "clean = 1" in SYSTEM_PROMPT
     assert "luminosity function" in SYSTEM_PROMPT.lower()
@@ -1525,16 +1527,16 @@ def test_high_velocity_star_tool_computes_vtan_in_python():
 
 
 def test_x4_exec_adql_flags_radius_reduction():
-    """X4 (PART X): _exec_adql 在 radius × 0.5 auto-retry 成功时返回
+    """X4 (PART X): When _exec_adql succeeds on a radius × 0.5 auto-retry, it must return
     `radius_auto_reduced=True` + original_radius_deg + final_radius_deg,
-    让前端 AutoToolResult 渲染醒目 banner. 修复 B6 Pleiades 半径腰斩
-    无警告问题."""
+    so the frontend AutoToolResult renders a prominent banner. Fixes the B6 Pleiades
+    radius-halving-without-warning bug."""
     from app.services.ai_tools import _exec_adql
 
     call_count = {"n": 0}
 
     async def fake_execute_adql_query(req, *args, **kwargs):
-        """第一次 raise timeout, 第二次成功."""
+        """First call raises timeout, second call succeeds."""
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise RuntimeError("TAP timeout after 60s")
@@ -1554,7 +1556,7 @@ def test_x4_exec_adql_flags_radius_reduction():
             "query": query_with_circle,
         }))
 
-    # 半径应从 0.75 → 0.375 (× 0.5)
+    # Radius should go from 0.75 -> 0.375 (x 0.5)
     assert result.get("radius_auto_reduced") is True
     assert abs(result.get("original_radius_deg") - 0.75) < 1e-9
     assert abs(result.get("final_radius_deg") - 0.375) < 1e-9
@@ -1562,10 +1564,10 @@ def test_x4_exec_adql_flags_radius_reduction():
 
 
 def test_w5_exec_adql_result_carries_query_and_service():
-    """W5 (PART W): _exec_adql 返回值必须含 `query` 和 `service` 字段,
-    这样前端 AutoToolResult run_adql 分支可以渲染执行过的 SQL
-    (ChatPage.tsx "Show ADQL query" 折叠块).
-    修复 B4 Pleiades 回归: 598 行 Gaia ADQL auto-executed 后用户看不到 SQL.
+    """W5 (PART W): _exec_adql return value must include `query` and `service` fields,
+    so the frontend AutoToolResult run_adql branch can render the executed SQL
+    (ChatPage.tsx "Show ADQL query" collapsible block).
+    Fixes the B4 Pleiades regression: user could not see the SQL after 598-row Gaia ADQL auto-executed.
     """
     from app.services.ai_tools import _exec_adql
 
@@ -1582,7 +1584,7 @@ def test_w5_exec_adql_result_carries_query_and_service():
             "query": "SELECT TOP 1 source_id FROM gaiadr3.gaia_source",
         }))
 
-    # 两个新字段必须到位, 让前端能展示
+    # Both new fields must be present for the frontend to render them
     assert "query" in result, "_exec_adql result missing 'query' field (W5)"
     assert result["query"].strip().startswith("SELECT TOP 1 source_id")
     assert result["service"] == "gaia"
@@ -1629,10 +1631,10 @@ def test_stream_debug_endpoint_is_dev_fixture():
     assert "ALLOW_STREAM_DEBUG_ENDPOINT" in src
 
 
-# ---------- L3: K-correction z>0.5 降级 warning ----------
+# ---------- L3: K-correction z>0.5 downgrade warning ----------
 
 def test_k_correction_z_low_no_warning():
-    """L3: z < 0.5 时函数正常返回, 不触发 warning, 状态标 ok."""
+    """L3: When z < 0.5, function returns normally, no warning triggered, status marked ok."""
     import warnings
     from app.services import astro_analysis
 
@@ -1640,18 +1642,18 @@ def test_k_correction_z_low_no_warning():
         warnings.simplefilter("always")
         kc = astro_analysis.k_correction(0.3, band="r", galaxy_type="elliptical")
 
-    # 不应触发任何 RuntimeWarning (可能有其他 astropy 警告, 过滤)
+    # should not trigger any RuntimeWarning (other astropy warnings possible, filtered)
     kcorr_warnings = [x for x in w if "K-correction" in str(x.message)]
-    assert len(kcorr_warnings) == 0, f"z=0.3 不该触发 K-corr warning: {kcorr_warnings}"
+    assert len(kcorr_warnings) == 0, f"z=0.3 should not trigger K-corr warning: {kcorr_warnings}"
     assert astro_analysis.LAST_KCORR_STATUS.get("analysis_status") == "ok"
-    # 数学值仍正常
+    # mathematical value still correct
     assert abs(kc - (0.0 + 1.0 * 0.3 + 0.5 * 0.09)) < 1e-9
 
 
 def test_k_correction_z_high_emits_warning():
-    """L3: z > 0.5 时必须 emit RuntimeWarning + 把 LAST_KCORR_STATUS 标
-    成 partial 含 uncertainty 信息, 这样 run_python 里 AI 能从 stderr
-    看到并 propagate 到最终回复."""
+    """L3: When z > 0.5, must emit RuntimeWarning + mark LAST_KCORR_STATUS as
+    partial with uncertainty info, so AI can read from stderr inside run_python
+    and propagate to the final reply."""
     import warnings
     from app.services import astro_analysis
 
@@ -1659,17 +1661,17 @@ def test_k_correction_z_high_emits_warning():
         warnings.simplefilter("always")
         kc = astro_analysis.k_correction(1.2, band="r", galaxy_type="elliptical")
 
-    # 数值本身仍计算 (不拒跑, 只警告)
+    # value itself is still computed (not refused, just warned)
     assert kc is not None
 
-    # 必须有 K-correction 相关的 RuntimeWarning
+    # must have a K-correction-related RuntimeWarning
     kcorr_warnings = [x for x in w if "K-correction" in str(x.message)]
-    assert len(kcorr_warnings) >= 1, "z=1.2 必须触发 K-corr 外推警告"
+    assert len(kcorr_warnings) >= 1, "z=1.2 must trigger K-corr extrapolation warning"
     msg = str(kcorr_warnings[0].message)
     assert "z_max=1.200" in msg or "z_max=1.2" in msg
     assert "extrapolation" in msg.lower() or "calibration" in msg.lower()
 
-    # LAST_KCORR_STATUS 必须带结构化信息
+    # LAST_KCORR_STATUS must carry structured information
     status = astro_analysis.LAST_KCORR_STATUS
     assert status.get("analysis_status") == "partial"
     assert status.get("estimated_extra_uncertainty_mag") == 0.5
@@ -1678,7 +1680,7 @@ def test_k_correction_z_high_emits_warning():
 
 
 def test_k_correction_array_input_picks_max_z():
-    """L3: 输入是数组 [0.1, 0.3, 0.8] 时, warning 应基于 max(z) 触发."""
+    """L3: When input is array [0.1, 0.3, 0.8], warning should be triggered based on max(z)."""
     import numpy as np
     import warnings
     from app.services import astro_analysis
@@ -1688,88 +1690,88 @@ def test_k_correction_array_input_picks_max_z():
         _ = astro_analysis.k_correction(np.array([0.1, 0.3, 0.8]), band="g")
 
     kcorr_warnings = [x for x in w if "K-correction" in str(x.message)]
-    assert len(kcorr_warnings) == 1, "数组含 z=0.8 > 0.5 必须触发一次警告"
+    assert len(kcorr_warnings) == 1, "Array containing z=0.8 > 0.5 must trigger exactly one warning"
     assert astro_analysis.LAST_KCORR_STATUS["max_z"] == 0.8
 
 
 # ---------- L4: MCMC walker 初始化强化 ----------
 
 def test_bayesian_fit_walker_init_has_strengthened_retry_logic():
-    """L4: BayesianFit walker 初始化之前只重试 1 次且阈值 50%, walker
-    卡在 -inf 区会跑出垃圾链而 ESS/Rhat 虚假通过 (Gelman & Shirley 2011).
-    本测试用 inspect 直接检查源码含:
-      - MIN_FINITE_RATIO = 0.80 (阈值提到 80%)
-      - MAX_INIT_RETRIES = 3 (重试 3 次)
-      - InsufficientPriorSupport (失败时抛的具体标识)
-    以便未来有人改弱/取消时 CI 立刻红."""
+    """L4: BayesianFit walker initialization previously only retried once with a 50% threshold,
+    causing walkers stuck in -inf regions to produce garbage chains with falsely passing ESS/Rhat
+    (Gelman & Shirley 2011). This test uses inspect to directly check the source contains:
+      - MIN_FINITE_RATIO = 0.80 (threshold raised to 80%)
+      - MAX_INIT_RETRIES = 3 (retry 3 times)
+      - InsufficientPriorSupport (specific identifier raised on failure)
+    so CI turns red immediately if someone weakens or removes these in the future."""
     import inspect
     from app.pipeline.nodes import bayesian_fit as bf_mod
 
     src = inspect.getsource(bf_mod.bayesian_fit)
-    # 硬阈值与重试次数
-    assert "MIN_FINITE_RATIO" in src, "L4 硬阈值常量名丢失"
-    assert "0.80" in src or "0.8" in src, "L4 阈值 0.80 已被改弱"
-    assert "MAX_INIT_RETRIES" in src, "L4 重试次数常量名丢失"
-    assert "3" in src, "L4 重试次数 3 已被改弱"
-    # 必须抛出带清晰标识的错误
+    # hard threshold and retry count
+    assert "MIN_FINITE_RATIO" in src, "L4 hard threshold constant name lost"
+    assert "0.80" in src or "0.8" in src, "L4 threshold 0.80 has been weakened"
+    assert "MAX_INIT_RETRIES" in src, "L4 retry count constant name lost"
+    assert "3" in src, "L4 retry count 3 has been weakened"
+    # must raise an error with a clear identifier
     assert "InsufficientPriorSupport" in src, (
-        "L4 失败路径必须抛 InsufficientPriorSupport, 以便上游能识别这类"
-        "错误而不是当普通 ValueError 吞掉"
+        "L4 failure path must raise InsufficientPriorSupport so upstream can identify "
+        "this error type rather than swallowing it as a plain ValueError"
     )
-    # 必须引用文献让后人知道为什么 80% 不是随便写的
+    # must cite the reference so future maintainers understand why 80% is not arbitrary
     assert "Gelman" in src or "garbage chains" in src, (
-        "L4 的阈值 80% 基于 Gelman & Shirley 2011, 理由必须在 comment 里"
+        "L4 threshold of 80% is based on Gelman & Shirley 2011; reason must be in a comment"
     )
 
 
 # ---------- L2-a: Gaia parallax SNR 门控 ----------
 
 def test_gaia_low_snr_parallax_flagged_partial():
-    """L2-a: 当 parallax_error / parallax < 5 时 1/plx 点估计高度偏斜,
-    应标 distance_requires_posterior=True + analysis_status=partial,
-    引导用户用 Bailer-Jones 后验.  反之 SNR >= 5 直接给 distance_pc.
+    """L2-a: When parallax_error / parallax < 5, the 1/plx point estimate is highly biased;
+    should flag distance_requires_posterior=True + analysis_status=partial to guide users
+    toward Bailer-Jones posterior. Conversely, SNR >= 5 gives distance_pc directly.
 
-    用 inspect 断言 gaia.py 源码含新 SNR 门控逻辑, 未来有人去掉
-    `parallax_snr` / `distance_requires_posterior` 字段就会红."""
+    Uses inspect to assert gaia.py source contains the new SNR gate logic; removing
+    `parallax_snr` / `distance_requires_posterior` fields in the future will turn CI red."""
     import inspect
     from app.connectors import gaia as gaia_mod
 
     src = inspect.getsource(gaia_mod.GaiaConnector)
-    assert "parallax_snr" in src, "Gaia SNR 字段丢失"
+    assert "parallax_snr" in src, "Gaia SNR field lost"
     assert "distance_requires_posterior" in src, (
-        "低 SNR 时引导用户用后验的标记丢失, AI 无法知道 1/plx 不可信"
+        "Low-SNR posterior flag lost; AI cannot know 1/plx is unreliable"
     )
-    # 必须有 SNR < 5 的判断
+    # must have SNR < 5 check
     assert "< 5" in src or "snr < 5" in src.lower(), (
-        "L2-a 的 SNR=5 阈值 (1/plx bias 分界) 被修改/去掉"
+        "L2-a SNR=5 threshold (1/plx bias boundary) has been modified or removed"
     )
-    # 必须引用 Bailer-Jones
+    # must cite Bailer-Jones
     assert "Bailer-Jones" in src
 
 
 # ---------- L2-b: LS FAP n<50 warning + BLS > + transit bounds ----------
 
 def test_lomb_scargle_small_n_emits_fap_warning():
-    """L2-b: n∈[20,50) 时 LS FAP 不可信 (VanderPlas & Ivezic 2015).
-    result 里必须有非空 fap_warnings 字段 + reliable=False."""
+    """L2-b: When n∈[20,50), LS FAP is unreliable (VanderPlas & Ivezic 2015).
+    Result must have a non-empty fap_warnings field + reliable=False."""
     import numpy as np
     from app.services.astro_analysis import lomb_scargle_period
 
-    # 构造 25 个点的正弦信号 + 噪声
+    # construct a 25-point sine signal + noise
     rng = np.random.default_rng(42)
     t = np.sort(rng.uniform(0, 30, 25))
     mag = 15.0 + 0.1 * np.sin(2 * np.pi * t / 3.5) + rng.normal(0, 0.02, 25)
 
     r = lomb_scargle_period(t, mag, random_seed=42)
     assert "fap_warnings" in r
-    assert len(r["fap_warnings"]) >= 1, "n=25 必须有 LS 小样本警告"
+    assert len(r["fap_warnings"]) >= 1, "n=25 must have LS small-sample warning"
     assert "VanderPlas" in r["fap_warnings"][0] or "50" in r["fap_warnings"][0]
-    # reliable 阈值抬到 50, 小样本必 False
-    assert r["reliable"] is False, "n=25 < 50, reliable 必须 False"
+    # reliable threshold raised to 50; small samples must be False
+    assert r["reliable"] is False, "n=25 < 50, reliable must be False"
 
 
 def test_lomb_scargle_large_n_no_warning():
-    """L2-b: n >= 50 时 fap_warnings 为空 (标志正常样本)."""
+    """L2-b: When n >= 50, fap_warnings is empty (signifying a normal sample)."""
     import numpy as np
     from app.services.astro_analysis import lomb_scargle_period
 
@@ -1779,100 +1781,100 @@ def test_lomb_scargle_large_n_no_warning():
 
     r = lomb_scargle_period(t, mag, random_seed=123)
     assert r.get("fap_warnings", []) == [], (
-        f"n=120 不该有小样本警告: {r['fap_warnings']}"
+        f"n=120 should not have small-sample warnings: {r['fap_warnings']}"
     )
 
 
 def test_bls_bootstrap_uses_strict_greater_than():
-    """L2-b: BLS bootstrap FAP 用严格 > 不是 >= (Kipping 2011).
-    inspect 源码确认等号已改."""
+    """L2-b: BLS bootstrap FAP uses strict > not >= (Kipping 2011).
+    Inspects source to confirm the equality sign has been changed."""
     import inspect
     from app.services import time_domain_pro as tdp
 
     src = inspect.getsource(tdp)
-    # null_max > power[best_idx] 必须存在 (no >=)
+    # null_max > power[best_idx] must exist (no >=)
     assert "null_max > power[best_idx]" in src, (
-        "L2-b: BLS bootstrap FAP 必须用严格 > (Kipping 2011 定义)"
+        "L2-b: BLS bootstrap FAP must use strict > (Kipping 2011 definition)"
     )
     assert "null_max >= power[best_idx]" not in src, (
-        "L2-b: null_max >= 会过估显著性 0.5-2%, 必须改严格 >"
+        "L2-b: null_max >= overestimates significance by 0.5-2%; must use strict >"
     )
 
 
 def test_transit_fit_chi2_rejects_unphysical_params():
-    """L2-b: transit fit chi2 对 rp<=0 / rp>=1 / a<2.5 / inc 范围外
-    应返回 1e20 penalty, 让 minimizer 远离.  inspect 断言."""
+    """L2-b: transit fit chi2 should return 1e20 penalty for rp<=0 / rp>=1 / a<2.5 / inc out-of-range,
+    keeping the minimizer away. Asserted via inspect."""
     import inspect
     from app.services import time_domain_pro as tdp
 
     src = inspect.getsource(tdp.fit_transit_batman) if hasattr(tdp, "fit_transit_batman") else inspect.getsource(tdp)
-    # 核心 guard 关键词
-    assert "1e20" in src, "L2-b: transit chi2 penalty 常量丢失"
+    # core guard keywords
+    assert "1e20" in src, "L2-b: transit chi2 penalty constant lost"
     assert "rp >= 1.0" in src or "rp >= 1" in src, (
-        "L2-b: transit depth 上界 (rp<1) 保护丢失"
+        "L2-b: transit depth upper bound (rp<1) guard lost"
     )
     assert "a < 2.5" in src, (
-        "L2-b: Mandel & Agol 2002 的 a/R* >= 2.5 保护丢失"
+        "L2-b: Mandel & Agol 2002 a/R* >= 2.5 guard lost"
     )
 
 
 # ---------- L2-c: Isochrone grid 加密 + photo_z z_max 参数化 ----------
 
 def test_isochrone_grid_defaults_denser():
-    """L2-c: fit_isochrone 的默认 n_grid_age 从 20 抬到 40 (Δlog(age)
-    从 0.095 → 0.05, Bressan+ 2012 精密拟合推荐); n_grid_met 从 5 到 9
-    (Δ[M/H] 0.3→0.15 dex); dm/av 子网格从 3 点到 7 点.  用 inspect 检查
-    以防未来回退."""
+    """L2-c: fit_isochrone default n_grid_age raised from 20 to 40 (Δlog(age)
+    from 0.095 → 0.05, recommended by Bressan+ 2012 for precise fitting);
+    n_grid_met from 5 to 9 (Δ[M/H] 0.3→0.15 dex); dm/av sub-grids from 3 to 7 points.
+    Checked via inspect to catch future regressions."""
     import inspect
     from app.services import astro_analysis
 
     src = inspect.getsource(astro_analysis.fit_isochrone)
-    # 默认参数
-    assert "n_grid_age=40" in src, "L2-c: age grid 40 点阈值已被改回"
-    assert "n_grid_met=9" in src, "L2-c: met grid 9 点已被改回"
-    # dm/av 子网格
+    # default parameters
+    assert "n_grid_age=40" in src, "L2-c: age grid 40-point threshold reverted"
+    assert "n_grid_met=9" in src, "L2-c: met grid 9-point threshold reverted"
+    # dm/av sub-grids
     assert "dm_range[1], 7" in src or "dm_range[1],7" in src, (
-        "L2-c: dm 子网格 7 点被改回 3"
+        "L2-c: dm sub-grid 7 points reverted to 3"
     )
     assert "av_range[1], 7" in src or "av_range[1],7" in src, (
-        "L2-c: av 子网格 7 点被改回 3"
+        "L2-c: av sub-grid 7 points reverted to 3"
     )
-    # 引用 Bressan+ 2012
-    assert "Bressan" in src, "L2-c: 应在注释里引用 Bressan+ 2012 说明阈值"
+    # cite Bressan+ 2012
+    assert "Bressan" in src, "L2-c: Bressan+ 2012 should be cited in a comment to explain the thresholds"
 
 
 def test_photo_z_template_z_max_parameter():
-    """L2-c: estimate_photo_z_template 接受 z_max 参数, default 2.0.
-    z_max=5.0 时 z_grid 延伸到 5, at_z_max_boundary 反映边界."""
+    """L2-c: estimate_photo_z_template accepts z_max parameter, default 2.0.
+    When z_max=5.0, z_grid extends to 5, and at_z_max_boundary reflects the boundary."""
     from app.services.photo_z import estimate_photo_z_template
 
     mags = {"u": 22.5, "g": 22.0, "r": 21.5, "i": 21.0, "z": 20.5}
     errs = {"u": 0.1, "g": 0.1, "r": 0.1, "i": 0.1, "z": 0.1}
 
-    # z_max=5.0 → grid 跨度到 5
+    # z_max=5.0 → grid extends to 5
     r = estimate_photo_z_template(mags, errs, z_max=5.0)
     assert r["z_max_used"] == 5.0
-    assert max(r["z_grid"]) >= 4.9, f"z_grid 未延伸到 z_max=5: max={max(r['z_grid'])}"
+    assert max(r["z_grid"]) >= 4.9, f"z_grid did not extend to z_max=5: max={max(r['z_grid'])}"
 
-    # default 2.0 保持向后兼容
+    # default 2.0 preserved for backwards compatibility
     r2 = estimate_photo_z_template(mags, errs)
     assert r2["z_max_used"] == 2.0
     assert max(r2["z_grid"]) <= 2.01
 
 
 def test_photo_z_boundary_warning_when_zphot_at_edge():
-    """L2-c: 当 best z_phot 接近 z_max 上界 (差 < 0.05) 时 result
-    带 at_z_max_boundary=True + note 里有 WARNING, 提示用户增大."""
+    """L2-c: When best z_phot is close to the z_max upper bound (difference < 0.05),
+    result should carry at_z_max_boundary=True + a WARNING in note, prompting user to increase it."""
     from app.services.photo_z import estimate_photo_z_template
 
-    # 构造红色大目标让 z_phot 落在 z_max 附近.
-    # z_max=0.3 (很小) → 真实高 z galaxy 色彩必到边界.
+    # construct a red bright target to force z_phot near z_max boundary.
+    # z_max=0.3 (very small) → real high-z galaxy colors must hit the boundary.
     mags = {"u": 24.0, "g": 23.0, "r": 22.0, "i": 21.0, "z": 20.5}
     errs = {"u": 0.1, "g": 0.1, "r": 0.1, "i": 0.1, "z": 0.1}
 
     r = estimate_photo_z_template(mags, errs, z_max=0.3)
     assert r.get("at_z_max_boundary") is True, (
-        f"z_max=0.3 + 红目标必然撞边界, 但 at_z_max_boundary={r.get('at_z_max_boundary')}"
+        f"z_max=0.3 + red target must hit boundary, but at_z_max_boundary={r.get('at_z_max_boundary')}"
     )
     assert "WARNING" in r["note"] or "boundary" in r["note"].lower()
 
@@ -1880,12 +1882,12 @@ def test_photo_z_boundary_warning_when_zphot_at_edge():
 # ---------- L2-d: EW 双窗口 + gaia masked + SDSS cone ----------
 
 def test_ew_accepts_two_separate_continuum_windows():
-    """L2-d: equivalent_width 新支持 continuum_left / continuum_right
-    两段参数 (Gray 2005 恒星分光惯例), 不吃线翼."""
+    """L2-d: equivalent_width now supports continuum_left / continuum_right
+    two-window parameters (Gray 2005 stellar spectroscopy convention), avoiding line wings."""
     import numpy as np
     from app.pipeline.nodes.equivalent_width import equivalent_width
 
-    # 构造一条简单的吸收线
+    # construct a simple absorption line
     wave = np.linspace(6500, 6625, 500)
     flux = np.ones_like(wave) * 1.0
     line_mask = (wave >= 6558) & (wave <= 6568)
@@ -1899,17 +1901,16 @@ def test_ew_accepts_two_separate_continuum_windows():
             "continuum_left": [6510.0, 6550.0],
             "continuum_right": [6580.0, 6620.0],
             "continuum_method": "polynomial",
-            "poly_order": 3,  # 即便用户传 3, L2-d 在双窗口模式强制降到 2
+            "poly_order": 3,  # even if user passes 3, L2-d forces it down to 2 in two-window mode
         },
     )
     ew = result["equivalent_window_result"] if "equivalent_window_result" in result else result.get("equivalent_width_result")
     assert ew is not None
-    assert ew["ew_value"] > 0, "吸收线 EW 应为正值"
+    assert ew["ew_value"] > 0, "Absorption line EW should be positive"
 
 
 def test_ew_rejects_overlapping_two_windows():
-    """L2-d: 两段连续谱窗口与 line_window 重叠时必须 raise, 避免选到
-    线翼."""
+    """L2-d: When two continuum windows overlap with line_window, must raise, to avoid selecting line wings."""
     import numpy as np
     import pytest
     from app.pipeline.nodes.equivalent_width import equivalent_width
@@ -1923,188 +1924,187 @@ def test_ew_rejects_overlapping_two_windows():
             {
                 "line_center": 6563.0,
                 "line_window": [6555.0, 6571.0],
-                "continuum_left": [6540.0, 6560.0],  # 右边界 6560 < 6555? no, 6560 > 6555 命中 line
+                "continuum_left": [6540.0, 6560.0],  # right edge 6560 > 6555 hits line window
                 "continuum_right": [6580.0, 6620.0],
             },
         )
 
 
 def test_gaia_isfinite_replaces_v_equals_v():
-    """L2-d: gaia.py 所有 masked / NaN 检查必须用 np.isfinite, 不能再有
-    `v == v` 这种 astropy >= 4.1 会 DeprecationWarning 的写法."""
+    """L2-d: All masked/NaN checks in gaia.py must use np.isfinite; must not retain
+    `v == v` style which triggers DeprecationWarning in astropy >= 4.1."""
     import inspect
     from app.connectors import gaia as gaia_mod
 
     src = inspect.getsource(gaia_mod)
-    # 不能再出现 v == v 这种 NaN 检查
+    # must not contain v == v NaN check anymore
     assert "if v == v" not in src, (
-        "L2-d: `if v == v` 对 astropy masked scalar 会触发 "
-        "DeprecationWarning, 必须换 np.isfinite(v)"
+        "L2-d: `if v == v` triggers DeprecationWarning for astropy masked scalars; "
+        "must be replaced with np.isfinite(v)"
     )
-    # 必须见到 np.isfinite (至少 1 次) 表明换法到位
-    assert "np.isfinite" in src, "L2-d: 必须引入 np.isfinite 替代 v==v"
+    # must see np.isfinite (at least once) confirming the replacement is in place
+    assert "np.isfinite" in src, "L2-d: must introduce np.isfinite to replace v==v"
 
 
 def test_sdss_spec_uses_cone_not_box():
-    """L2-d: SDSSSpecOnlyConnector.search 不能再用 `ra BETWEEN` 方盒搜
-    (极区拉伸严重), 必须切 dbo.fGetNearbyObjEq 的锥搜."""
+    """L2-d: SDSSSpecOnlyConnector.search must not use `ra BETWEEN` box search
+    (severe distortion near poles); must switch to dbo.fGetNearbyObjEq cone search."""
     import inspect
     from app.connectors import sdss as sdss_mod
 
     src = inspect.getsource(sdss_mod.SDSSSpecOnlyConnector)
     assert "dbo.fGetNearbyObjEq" in src, (
-        "L2-d: SDSS spec 连接器必须用 dbo.fGetNearbyObjEq 做锥搜, "
-        "不能再用 RA BETWEEN (极区严重偏差)"
+        "L2-d: SDSS spec connector must use dbo.fGetNearbyObjEq for cone search; "
+        "must not use RA BETWEEN (severe polar distortion)"
     )
-    # 验证老的 BETWEEN 方盒写法已撤
-    # (注: BETWEEN 关键字在 SQL 里可能还用于其他目的, 检查特定 WHERE s.ra BETWEEN 子句)
+    # verify old BETWEEN box-search syntax has been removed
+    # (Note: BETWEEN keyword may still appear in SQL for other purposes; checking specific WHERE s.ra BETWEEN clause)
     assert "s.ra BETWEEN" not in src, (
-        "L2-d: 老的 s.ra BETWEEN 方盒搜索必须去掉"
+        "L2-d: old s.ra BETWEEN box search must be removed"
     )
 
 
-# ---------- L3-b: 测试补强 — fabrication counter e2e + 熔断下线 e2e ----------
+# ---------- L3-b: test reinforcement — fabrication counter e2e + circuit-breaker e2e ----------
 
 def test_fabrication_blocked_counter_increments_on_uncited_claim():
-    """L3-b: 端到端验证 fabrication_blocked_total counter 在 zero-data
-    但含定量 claim 的轮上真的 +1.  之前没有任何测试检查 counter 实际
-    是否发火, 万一静默回退无人知.
+    """L3-b: End-to-end verify fabrication_blocked_total counter actually increments by +1
+    on turns with zero data but quantitative claims. Previously no test checked whether
+    the counter actually fires; a silent regression would go unnoticed.
     """
     from app.observability.metrics import get_registry
     from app.services.claim_validator import zero_data_but_quantitative
 
     registry = get_registry()
-    # 清零 counter 命名空间
+    # reset counter namespace
     registry.reset()
 
-    # 构造典型 0-data 但 AI 编数的场景
+    # construct typical 0-data but AI-fabricated-numbers scenario
     tool_results = [{
         "tool": "run_adql",
         "result": {"row_count": 0, "data": {}, "columns": []},
     }]
     reply = "The Pleiades parallax is 7.35 mas, distance 136 pc."
 
-    # zero_data_but_quantitative 应该返回 claims (非空 = 检测到)
+    # zero_data_but_quantitative should return claims (non-empty = detected)
     offending = zero_data_but_quantitative(reply, tool_results)
-    assert len(offending) >= 1, "zero_data_but_quantitative 必须能识别这种模式"
+    assert len(offending) >= 1, "zero_data_but_quantitative must be able to identify this pattern"
 
-    # 模拟 chat.py 里 fabrication counter 发火 (真实调 record_counter)
+    # simulate fabrication counter firing in chat.py (real call to record_counter)
     from app.observability.metrics import record_counter
     record_counter("fabrication_blocked_total", 1.0, reason="zero_data_quantitative")
 
     snap = registry.snapshot()
     assert "fabrication_blocked_total" in snap["counters"], (
-        "fabrication_blocked_total counter 未出现在注册表里"
+        "fabrication_blocked_total counter not found in registry"
     )
     total = sum(snap["counters"]["fabrication_blocked_total"].values())
     assert total >= 1.0
 
 
 def test_disable_after_failures_removes_tool_from_visible_list():
-    """L3-b: 静态断言 _run_agent_loop 的 tool_failure_counts +
-    DISABLE_AFTER_FAILURES 逻辑把失败工具**从 tools 参数里移除**而
-    不只是在 prompt 里说禁用.  物理下线比文字约束强."""
+    """L3-b: Statically asserts that _run_agent_loop's tool_failure_counts +
+    DISABLE_AFTER_FAILURES logic removes failed tools **from the tools parameter**
+    rather than merely mentioning disabling in the prompt. Physical removal is stronger than text constraint."""
     import inspect
     from app.api import chat as chat_mod
 
     src = inspect.getsource(chat_mod._run_agent_loop)
-    # 必须出现 tool_failure_counts dict
+    # must have tool_failure_counts dict
     assert "tool_failure_counts" in src, (
-        "G3.4 工具失败计数追踪逻辑丢失"
+        "G3.4 tool failure count tracking logic lost"
     )
-    # 必须有 DISABLE_AFTER_FAILURES 阈值常量
+    # must have DISABLE_AFTER_FAILURES threshold constant
     assert "DISABLE_AFTER_FAILURES" in src, (
-        "G3.4 硬下线阈值丢失"
+        "G3.4 hard disable threshold lost"
     )
-    # 必须有 visible_tools 过滤 (证明是物理下线不是文字约束)
+    # must have visible_tools filtering (proves physical removal not text constraint)
     assert "visible_tools" in src, (
-        "G3.4 的 visible_tools 过滤丢失 — 工具下线必须是物理移除, "
-        "不能只在 prompt 里说"
+        "G3.4 visible_tools filtering lost — tool disabling must be physical removal, "
+        "not just mentioned in the prompt"
     )
 
 
 def test_honest_abstention_counter_label_schema():
-    """L3-b: 验证 honest_abstention_total 有 label schema (reason=
-    empty|failed|mixed), 未来监控能按原因切分."""
+    """L3-b: Verify honest_abstention_total has label schema (reason=
+    empty|failed|mixed) so future monitoring can slice by reason."""
     from app.observability.metrics import record_counter, get_registry
 
     registry = get_registry()
     registry.reset()
 
-    # 3 种 reason 都发一次
+    # emit each of the 3 reason types once
     record_counter("honest_abstention_total", 1.0, reason="empty", agent="default")
     record_counter("honest_abstention_total", 1.0, reason="failed", agent="default")
     record_counter("honest_abstention_total", 1.0, reason="mixed", agent="default")
 
     snap = registry.snapshot()
     counters_by_label = snap["counters"]["honest_abstention_total"]
-    # 3 个不同 label 组合 → 3 个 key
+    # 3 different label combinations → 3 keys
     assert len(counters_by_label) == 3
-    # 每个组合至少 1 次
+    # each combination at least once
     assert all(v >= 1.0 for v in counters_by_label.values())
 
 
-# ── R5 PART O: subprocess 诊断暴露 ────────────────────────────────────
+# ── R5 PART O: subprocess diagnostic exposure ────────────────────────────────────
 
 def test_run_python_exposes_stderr_even_when_success_true():
-    """R5 O1: stderr 即便 success=True 也要传给 AI / 前端.
-    原来 `if result.stderr and not result.success` 让 subprocess crash
-    时 payload.success=True (child init 默认值) 的情况下 stderr 被吞,
-    诊断信息丢失.  现在条件改成 `if result.stderr:` 总传."""
+    """R5 O1: stderr must be passed to AI / frontend even when success=True.
+    The old `if result.stderr and not result.success` caused stderr to be swallowed
+    when subprocess crashed with payload.success=True (child init default), losing
+    diagnostic info. Condition now changed to `if result.stderr:` to always pass it."""
     import inspect
     from app.services import ai_tools
 
     src = inspect.getsource(ai_tools._exec_run_python)
-    # 原 buggy 形式必须消失
+    # original buggy form must be gone
     assert "result.stderr and not result.success" not in src, (
-        "R5 O1: stderr 过滤条件还在, success=True 时 stderr 仍会被丢"
+        "R5 O1: stderr filter condition still present; stderr will still be dropped when success=True"
     )
-    # 新形式必须存在 (if result.stderr: 或类似无条件传)
+    # new form must exist (if result.stderr: or similar unconditional pass)
     assert 'if result.stderr:' in src, (
-        "R5 O1: stderr 必须无条件传 response['traceback']"
+        "R5 O1: stderr must be unconditionally passed to response['traceback']"
     )
 
 
 def test_run_python_exit_code_nonzero_degrades_success():
-    """R5 O2: response 构造后, 若 exit_code != 0 则 success 降级 False.
-    原来 success 只来自 payload, exit_code 来自 proc.exitcode, 可以
-    矛盾 (success=True + exit_code=1)."""
+    """R5 O2: After response is built, if exit_code != 0 then success is downgraded to False.
+    Previously success came only from the payload while exit_code came from proc.exitcode,
+    which could be contradictory (success=True + exit_code=1)."""
     import inspect
     from app.services import ai_tools
 
     src = inspect.getsource(ai_tools._exec_run_python)
-    # 检查关键行:
+    # check key lines:
     assert "sandbox_nonzero_exit" in src, (
-        "R5 O2: exit_code 降级逻辑 (error_class='sandbox_nonzero_exit') 丢失"
+        "R5 O2: exit_code downgrade logic (error_class='sandbox_nonzero_exit') lost"
     )
-    # 降级逻辑必须基于 exit_code 检查
+    # downgrade logic must be based on exit_code check
     assert 'response["exit_code"]' in src or 'response.get("exit_code")' in src
 
 
 def test_inert_code_exempted_from_synthetic_banner():
-    """R5 O3: 当 AI 声明 data_source='none...', 但 detector 判 inert
-    (纯 literal print), ai_tools 层应把 is_synthetic_declared 翻回 False,
-    避免 smoke test 被打 SYNTHETIC."""
+    """R5 O3: When AI declares data_source='none...', but detector judges inert
+    (pure literal print), ai_tools layer should flip is_synthetic_declared back to False
+    to avoid smoke tests being marked SYNTHETIC."""
     import inspect
     from app.services import ai_tools
 
     src = inspect.getsource(ai_tools._exec_run_python)
-    # 必须有 inert verdict 的 elif 分支
+    # must have an elif branch for inert verdict
     assert 'detection.verdict == "inert"' in src, (
-        "R5 O3: inert verdict 分支丢失, smoke test 仍会被标 SYNTHETIC"
+        "R5 O3: inert verdict branch lost; smoke tests will still be marked SYNTHETIC"
     )
-    # 必须翻转 is_synthetic_declared
+    # must flip is_synthetic_declared
     assert 'is_synthetic_declared = False' in src, (
-        "R5 O3: inert 分支必须把 is_synthetic_declared 设回 False"
+        "R5 O3: inert branch must set is_synthetic_declared back to False"
     )
 
 
 def test_run_python_after_failed_fetch_is_empty_not_synthetic():
-    """R21: 真实数据抓取失败后的 Python fallback 不应展示为 SYNTHETIC。
+    """R21: Python fallback after real data fetch failure should not display as SYNTHETIC.
 
-    这种路径本质是“没有可引用真实数据”，UI 应显示 ∅ Empty, 并让 AI
-    走 <tools_returned_nothing/>；不要把 fallback stdout 当成 synthetic
-    demo 暴露给用户。
+    This path is fundamentally "no real data to cite"; UI should show ∅ Empty and let AI
+    use <tools_returned_nothing/>; do not expose fallback stdout to users as a synthetic demo.
     """
     import inspect
     from app.api import chat
@@ -2119,7 +2119,7 @@ def test_run_python_after_failed_fetch_is_empty_not_synthetic():
 
 
 def test_orchestrator_validates_merged_reply_claims():
-    """R21: 多 agent 合并后的最终回复也要过同一 turn 的 claim gate。"""
+    """R21: Final merged reply after multi-agent merge must also pass the same turn's claim gate."""
     import inspect
     from app.api import chat
 
@@ -2132,8 +2132,8 @@ def test_orchestrator_validates_merged_reply_claims():
 # ── Phase P: arXiv 301 redirect + Unknown tool polish ────────────────
 
 async def test_unknown_tool_returns_available_list():
-    """R6-NEW-2: 调不存在工具应返 error_class + available_tools list,
-    不能留空 error_class 或只给 'Unknown tool: X' 一行."""
+    """R6-NEW-2: Calling a non-existent tool should return error_class + available_tools list;
+    must not leave error_class empty or return only 'Unknown tool: X'."""
     from app.services.ai_tools import execute_tool
 
     result = await execute_tool("fit_transit_that_does_not_exist", {})
@@ -2141,36 +2141,36 @@ async def test_unknown_tool_returns_available_list():
     assert "available_tools" in result
     assert isinstance(result["available_tools"], list)
     assert len(result["available_tools"]) > 0
-    # 错误消息里带 "Available" 和工具列表
+    # error message must contain "Available" and a tool list
     err = str(result.get("error", ""))
     assert "Available" in err or "available" in err
-    # 至少真的列了几个已知工具
+    # at least a few known tools actually listed
     known = set(result["available_tools"])
     assert "run_adql" in known or "search_objects" in known
 
 
 def test_arxiv_read_paper_uses_https_and_follow_redirects():
-    """R6-NEW-1: _exec_read_paper 必须用 https + follow_redirects 避免
-    arXiv 301 fail."""
+    """R6-NEW-1: _exec_read_paper must use https + follow_redirects to avoid
+    arXiv 301 failure."""
     import inspect
     from app.services import ai_tools
 
     src = inspect.getsource(ai_tools._exec_read_paper)
     assert "https://export.arxiv.org" in src, (
-        "arXiv URL 必须 https (301 from http)"
+        "arXiv URL must be https (301 from http)"
     )
     assert "follow_redirects=True" in src, (
-        "httpx.AsyncClient 必须 follow_redirects 以防未来又有重定向"
+        "httpx.AsyncClient must use follow_redirects in case of future redirects"
     )
 
 
 def test_arxiv_search_uses_https_and_follow_redirects():
-    """R6-NEW-1: citations._search_arxiv_sync 同样要处理 301."""
+    """R6-NEW-1: citations._search_arxiv_sync must also handle 301 redirects."""
     import inspect
     from app.api import citations
 
     src = inspect.getsource(citations)
-    # https URL 必须在
+    # https URL must be present
     assert "https://export.arxiv.org/api/query" in src
-    # follow_redirects 必须在 httpx.get 调用里
+    # follow_redirects must be in the httpx.get call
     assert "follow_redirects=True" in src

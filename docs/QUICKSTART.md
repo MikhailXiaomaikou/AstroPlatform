@@ -6,7 +6,7 @@ Welcome to Standard Astro, an AI-native astronomy research platform. This guide 
 
 1. Open **Data Browser** from the navigation bar
 2. Type an object name in the search box: `M31`, `NGC 1068`, `Sirius`, or `Crab Nebula`
-3. Select which active databases to query. During the provenance-v2 rollout the active sources are SIMBAD, Gaia DR3, VizieR, NED, 2MASS, and ALMA Science Archive observation metadata; other source chips are shown as under maintenance until their `archive_version` provenance is upgraded.
+3. Select which active databases to query. During the provenance-v2 rollout the active sources are SIMBAD, Gaia DR3, VizieR, NED, 2MASS, ALMA Science Archive observation metadata, JPL Horizons, the IAU Minor Planet Center, and the NASA Exoplanet Archive; other source chips are shown as under maintenance until their `archive_version` provenance is upgraded. JPL Horizons and MPC are surfaced when `ASTRO_RESEARCH_FOCUS=solar_system`; the NASA Exoplanet Archive is surfaced when `ASTRO_RESEARCH_FOCUS=exoplanet`.
 4. Click **Search**
 5. Results appear in a merged table with coordinates, magnitudes, redshifts, and object types
 
@@ -30,8 +30,10 @@ Welcome to Standard Astro, an AI-native astronomy research platform. This guide 
 | "Find recent papers about Type Ia supernovae" | Searches NASA ADS, returns abstracts and citations |
 | "Estimate the photo-z for this galaxy: g=22.1, r=21.5, i=20.8" | Runs 30-template SED fitting with dust and IGM |
 | "What transients were discovered this week?" | Queries TNS/ZTF for recent alerts |
+| "Fit a trapezoidal transit to TESS data for TOI-700 d" | Pulls the light curve via `fetch_tess_lightcurve` and runs `fit_transit` |
+| "What's the equilibrium temperature of HD 189733 b?" | Looks the planet/host up in `pscomppars` and runs `compute_equilibrium_temperature` |
 
-The AI has access to **70 tools** covering search, spectroscopy, photometry, time-domain analysis, image processing, statistics, literature, cosmology likelihood building, and more. It automatically selects the right tool based on your request.
+The AI has access to a tool catalog of **91 tools** covering search, spectroscopy, photometry, time-domain analysis, image processing, statistics, literature, observational cosmology likelihood building, solar-system small-body workflows, and exoplanet transit / RV workflows. The active research module (`ASTRO_RESEARCH_FOCUS`) narrows the per-turn surface — currently 35 tools under cosmology focus, 12 tools under solar-system focus, and 9 tools under exoplanet focus, as declared in each `backend/app/prompts/modules/<focus>/manifest.yaml`. The AI selects the right tool from the visible set based on your request.
 
 When a tool result includes provenance, the chat card shows a **Data Sources** panel with `archive_version`, bibcodes, and source authority. The **Copy Acknowledgement** button assembles acknowledgement text from the conversation's provenance. If the AI tries a gated source such as SDSS or Chandra, the card appears as **Maintenance** rather than a generic error and suggests the active alternatives.
 
