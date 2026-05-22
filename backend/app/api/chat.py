@@ -2784,7 +2784,7 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "observational cosmology", "cosmology probes",
     )
     model_tokens = (
-        "dark energy", "暗能量", "lcdm", "λcdm", "wcdm", "w0wa",
+        "dark energy", "dark-energy", "暗能量", "lcdm", "λcdm", "wcdm", "w0wa",
         "cpl", "omega_m", "ωm", "Ωm", "h0", "h₀", "posterior", "后验",
         "likelihood", "协方差", "covariance", "robustness",
         "pull", "outlier", "residual", "bin-level", "分红移",
@@ -2810,9 +2810,11 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
 
 def _is_research_program_workflow(text: str) -> bool:
     prompt = str(text or "").lower()
+    if _cosmology_requires_dedicated_spectra_likelihood(prompt) or _cosmology_has_dedicated_model_gap(prompt):
+        return True
     research_tokens = (
         "research", "study", "analysis", "analyze", "assess", "evaluate",
-        "compare", "test", "blind", "workflow", "robustness", "matrix",
+        "compare", "test", "constrain", "identify", "blind", "workflow", "robustness", "matrix",
         "研究", "分析", "评估", "比较", "检验", "盲测", "稳健",
         "张力", "新结论", "发现",
     )
@@ -2976,6 +2978,8 @@ def _cosmology_prompt_mentions_weak_lensing(text: str) -> bool:
 
 def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     prompt = str(text or "").lower()
+    if _cosmology_requires_dedicated_spectra_likelihood(prompt):
+        return []
     forbidden = _cosmology_forbidden_probe_families(prompt)
     keys: list[str] = []
     h0_anchor_context = any(tok in prompt for tok in (
@@ -3126,7 +3130,7 @@ def _cosmology_models_from_prompt(text: str) -> list[str]:
         or _should_build_cosmology_robustness_matrix(text)
     ):
         if any(tok in prompt for tok in (
-            "dark energy", "暗能量", "wcdm", "w0wa", "cpl",
+            "dark energy", "dark-energy", "暗能量", "wcdm", "w0wa", "cpl",
             "模型比较", "model comparison", "compare model",
         )):
             models = ["lcdm", "wcdm", "w0wa_cdm"]
@@ -3152,6 +3156,8 @@ def _should_build_cosmology_robustness_matrix(text: str) -> bool:
 
 
 def _cosmology_likelihood_build_calls_from_prompt(text: str) -> list[dict[str, Any]]:
+    if _cosmology_requires_dedicated_spectra_likelihood(text):
+        return []
     dataset_keys = _cosmology_dataset_keys_from_prompt(text)
     models = _cosmology_models_from_prompt(text)
     if not dataset_keys or not models:
@@ -3188,6 +3194,8 @@ def _cosmology_likelihood_build_calls_from_prompt(text: str) -> list[dict[str, A
 
 
 def _cosmology_likelihood_run_calls_from_prompt(text: str) -> list[dict[str, Any]]:
+    if _cosmology_requires_dedicated_spectra_likelihood(text):
+        return []
     dataset_keys = _cosmology_dataset_keys_from_prompt(text)
     models = _cosmology_models_from_prompt(text)
     if not dataset_keys or not models:
@@ -3234,6 +3242,84 @@ def _cosmology_likelihood_executable_only_prompt(text: str) -> bool:
         ("registry" in prompt or "registered" in prompt)
         and any(tok in prompt for tok in ("executable chain", "executable chains", "可执行"))
         and ("observational-cosmology" in prompt or "observational cosmology" in prompt or "probes" in prompt)
+    )
+
+
+def _cosmology_requires_dedicated_spectra_likelihood(text: str) -> bool:
+    """Prompts whose observable class is spectra/parity/template level.
+
+    Planck/ACT compressed distance or lensing summaries are useful background
+    cosmology products, but they are the wrong evidence class for EB/TB
+    birefringence or oscillatory primordial-feature searches.
+    """
+    prompt = str(text or "").lower()
+    has_birefringence = any(
+        tok in prompt
+        for tok in (
+            "birefringence",
+            "polarization rotation",
+            "polarisation rotation",
+            "rotation angle",
+            "eb/tb",
+            "eb tb",
+            "instrument-angle",
+            "instrument angle",
+            "偏振旋转",
+            "旋转角",
+        )
+    )
+    has_feature_template = any(
+        tok in prompt
+        for tok in (
+            "primordial feature",
+            "primordial-feature",
+            "oscillatory feature",
+            "oscillatory primordial",
+            "feature template",
+            "look-elsewhere",
+            "look elsewhere",
+            "inflationary feature",
+            "原初",
+            "振荡",
+        )
+    )
+    has_cmb_spectra_context = any(
+        tok in prompt
+        for tok in (
+            "cmb",
+            "planck",
+            "act",
+            "spt",
+            "temperature",
+            "polarization",
+            "polarisation",
+            "b-mode",
+            "tt",
+            "te",
+            "ee",
+            "eb",
+            "tb",
+            "spectra",
+            "power spectrum",
+        )
+    )
+    return has_cmb_spectra_context and (has_birefringence or has_feature_template)
+
+
+def _cosmology_has_dedicated_model_gap(text: str) -> bool:
+    prompt = str(text or "").lower()
+    return any(
+        tok in prompt
+        for tok in (
+            "early dark energy",
+            "axion-like early",
+            "axion like early",
+            "modified gravity",
+            "growth model",
+            "thawing",
+            "emergent",
+            "mirage",
+        )
     )
 
 
