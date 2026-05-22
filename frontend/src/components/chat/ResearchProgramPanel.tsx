@@ -517,28 +517,59 @@ function ToolImplementationQueueView({ result }: { result: Record<string, unknow
 }
 
 export default function ResearchProgramPanel({ result }: { result: Record<string, unknown> }) {
-  const plan = (result.research_plan || {}) as ResearchPlan;
-  const status = String(result.analysis_status || "");
+  const normalized = (
+    result.result && typeof result.result === "object" && !Array.isArray(result.result)
+      ? (result.result as Record<string, unknown>)
+      : result
+  );
+  const plan = (normalized.research_plan || {}) as ResearchPlan;
+  const status = String(normalized.analysis_status || "");
+  // Defensive: if result_provenance's status whitelist rewrites a domain-
+  // specific status into a generic one (e.g. PARTIAL / COMPLETED / EMPTY),
+  // fall back to payload presence so the panel still renders. Generic
+  // statuses are not informative enough to pick a subview by themselves.
+  const isGenericStatus = !status
+    || status === "PARTIAL"
+    || status === "COMPLETED"
+    || status === "EMPTY";
+  const hasPlan = status === "RESEARCH_PLAN_READY"
+    || (isGenericStatus && Boolean(normalized.research_plan) && !Array.isArray(normalized.matrix));
+  const hasMatrix = status.startsWith("RESEARCH_MATRIX")
+    || (isGenericStatus && Array.isArray(normalized.matrix));
+  const hasEvidence = status === "EVIDENCE_GRAPH_READY"
+    || (isGenericStatus && Boolean(normalized.evidence_graph));
+  const hasFactCheck = status === "FACT_CHECK_READY"
+    || (isGenericStatus && Boolean(normalized.fact_check_report));
   return (
     <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
-      {status === "RESEARCH_PLAN_READY" ? <PlanView plan={plan} /> : null}
-      {status.startsWith("RESEARCH_MATRIX") ? <MatrixView result={result} /> : null}
-      {status === "EVIDENCE_GRAPH_READY" ? <EvidenceView result={result} /> : null}
-      {status === "FACT_CHECK_READY" ? <FactCheckView result={result} /> : null}
-      {status.startsWith("PAPER_MINING_CANDIDATE_POOL") ? <PaperCandidatePoolView result={result} /> : null}
-      {status.startsWith("PAPER_TOOL_MINING_LOOP") ? <PaperToolMiningLoopView result={result} /> : null}
+      {hasPlan ? <PlanView plan={plan} /> : null}
+      {hasMatrix ? <MatrixView result={normalized} /> : null}
+      {hasEvidence ? <EvidenceView result={normalized} /> : null}
+      {hasFactCheck ? <FactCheckView result={normalized} /> : null}
+      {status.startsWith("PAPER_MINING_CANDIDATE_POOL") ? <PaperCandidatePoolView result={normalized} /> : null}
+      {status.startsWith("PAPER_TOOL_MINING_LOOP") ? <PaperToolMiningLoopView result={normalized} /> : null}
       {status.startsWith("PAPER_TOOL_MINING") && !status.startsWith("PAPER_TOOL_MINING_LOOP") ? (
-        <PaperToolMiningView result={result} />
+        <PaperToolMiningView result={normalized} />
       ) : null}
-      {status === "TOOL_ONTOLOGY_READY" ? <ToolOntologyView result={result} /> : null}
-      {status === "TOOL_GAP_MATRIX_READY" ? <ToolGapMatrixView result={result} /> : null}
-      {status === "TOOL_IMPLEMENTATION_QUEUE_READY" ? <ToolImplementationQueueView result={result} /> : null}
+      {status === "TOOL_ONTOLOGY_READY" ? <ToolOntologyView result={normalized} /> : null}
+      {status === "TOOL_GAP_MATRIX_READY" ? <ToolGapMatrixView result={normalized} /> : null}
+      {status === "TOOL_IMPLEMENTATION_QUEUE_READY" ? <ToolImplementationQueueView result={normalized} /> : null}
       {status === "RESEARCH_REPORT_READY" ? (
         <div>
           <strong style={{ color: "var(--color-text-primary)" }}>Research Report Draft</strong>
           <pre style={{ whiteSpace: "pre-wrap", margin: "6px 0 0", fontSize: "0.72rem" }}>
-            {String(result.markdown || "")}
+            {String(normalized.markdown || "")}
           </pre>
+          {normalized.paper_draft_markdown ? (
+            <>
+              <strong style={{ color: "var(--color-text-primary)", display: "block", marginTop: 10 }}>
+                Paper Draft
+              </strong>
+              <pre style={{ whiteSpace: "pre-wrap", margin: "6px 0 0", fontSize: "0.72rem" }}>
+                {String(normalized.paper_draft_markdown || "")}
+              </pre>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>
