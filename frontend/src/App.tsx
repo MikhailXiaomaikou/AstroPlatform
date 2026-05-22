@@ -65,12 +65,20 @@ function useTheme() {
   // Journal edition: default to light. We use a new key (astro_theme_v2) so
   // any prior "dark" value from the Apple-style design is ignored on first
   // load — users who actively prefer dark can toggle it again.
+  //
+  // Initial value MUST match the pre-React bootstrap script in index.html
+  // that sets data-theme on <html> synchronously before mount. Without that
+  // script there's a white flash on dark-mode first paint while React reads
+  // localStorage on mount.
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("astro_theme_v2");
     return saved === "dark" ? "dark" : "light";
   });
 
   useEffect(() => {
+    // data-theme is already set by the bootstrap script for the initial
+    // mount; this effect only updates on toggle. Still safe to call on
+    // first render since it's idempotent.
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("astro_theme_v2", theme);
     // Clear the legacy key so it can't override again if it was "dark".
@@ -380,6 +388,11 @@ function App() {
                 <Route path="/alerts" element={<Navigate to="/observations" replace />} />
                 <Route path="/anomalies" element={<Navigate to="/observations" replace />} />
                 <Route path="/auth" element={<AuthPage />} />
+                {/* Catch-all: any unknown path (deep links to deleted M3
+                    pages, typos, copy-pasted broken URLs) lands on the
+                    Landing page instead of rendering a blank <Routes> with
+                    no match. */}
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Suspense>
           </ErrorBoundary>

@@ -92,11 +92,22 @@ describe("CommandPalette", () => {
     const allOptions = screen.getAllByRole("option");
     const initialCount = allOptions.length;
 
-    // Type a query that matches only a subset (keyword for pipeline)
-    fireEvent.change(input, { target: { value: "cmd.pipeline_studio" } });
+    // Type a query that matches only a subset (cmd.ai_assistant — Chat
+    // is one of the surviving primary routes after the M3 deletion).
+    fireEvent.change(input, { target: { value: "cmd.ai_assistant" } });
     const filteredOptions = screen.getAllByRole("option");
     expect(filteredOptions.length).toBeLessThan(initialCount);
     expect(filteredOptions.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // ── NAV_ROUTES integrity: no command should navigate to a deleted route ──
+
+  it("does not list commands targeting deleted M3 routes", async () => {
+    const { NAV_ROUTES } = await import("../routes");
+    const deletedPaths = ["/search", "/pipeline", "/adql", "/workspace"];
+    for (const dead of deletedPaths) {
+      expect(NAV_ROUTES.find((r) => r.path === dead)).toBeUndefined();
+    }
   });
 
   // ── Close on Escape ──

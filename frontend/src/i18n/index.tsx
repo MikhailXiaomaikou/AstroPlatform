@@ -150,6 +150,8 @@ const translations: Record<string, Record<Lang, string>> = {
   "cmd.team":            { en: "Team",                  zh: "团队",               fr: "Équipe",                  es: "Equipo" },
   "cmd.alerts":          { en: "Transient Alerts",      zh: "瞬变警报",            fr: "Alertes transitoires",    es: "Alertas transitorias" },
   "cmd.anomalies":       { en: "Anomaly Explorer",     zh: "异常探测器",           fr: "Explorateur d'anomalies", es: "Explorador de anomalías" },
+  "cmd.observations":    { en: "Observations",          zh: "观测",                fr: "Observations",            es: "Observaciones" },
+  "cmd.papers":          { en: "Papers",                zh: "论文",                fr: "Articles",                es: "Artículos" },
   "cmd.settings":        { en: "Settings",             zh: "设置",               fr: "Paramètres",              es: "Ajustes" },
   "cmd.account":         { en: "Account",              zh: "账户",               fr: "Compte",                  es: "Cuenta" },
   "cmd.help":            { en: "Help & Docs",          zh: "帮助与文档",           fr: "Aide & Documentation",    es: "Ayuda y Documentación" },
@@ -173,6 +175,10 @@ const translations: Record<string, Record<Lang, string>> = {
   "onboard.pipeline_desc":    { en: "Build data processing workflows by dragging nodes. Denoise, fit spectra, cross-match catalogs, and more — all connected in a visual DAG.", zh: "通过拖拽节点构建数据处理工作流。降噪、光谱拟合、交叉匹配等——全部以可视化 DAG 连接。", fr: "Construisez des workflows de traitement de données en glissant-déposant des nœuds. Dénoisez, ajustez des spectres, croisez des catalogues.", es: "Construya flujos de trabajo de procesamiento de datos arrastrando nodos. Elimine ruido, ajuste espectros, cruce catálogos." },
   "onboard.adql_title":       { en: "Direct Database Access", zh: "直接数据库访问", fr: "Accès direct aux bases de données", es: "Acceso directo a bases de datos" },
   "onboard.adql_desc":        { en: "Write ADQL queries against Gaia, SIMBAD, VizieR, and CADC TAP services with syntax highlighting and template queries.", zh: "使用语法高亮和模板查询，直接对 Gaia、SIMBAD、VizieR 和 CADC TAP 服务编写 ADQL 查询。", fr: "Écrivez des requêtes ADQL sur les services Gaia, SIMBAD, VizieR et CADC TAP avec coloration syntaxique.", es: "Escriba consultas ADQL en los servicios Gaia, SIMBAD, VizieR y CADC TAP con resaltado de sintaxis." },
+  "onboard.papers_title":     { en: "Papers & Drafts",        zh: "论文与草稿",                                              fr: "Articles & Brouillons",                                       es: "Artículos y Borradores" },
+  "onboard.papers_desc":      { en: "Draft LaTeX papers from your sessions, share read-only links, and keep your provenance trail intact.", zh: "从你的对话生成 LaTeX 论文草稿，分享只读链接，全程保留来源溯源。", fr: "Rédigez des articles LaTeX à partir de vos sessions, partagez des liens en lecture seule et conservez la traçabilité.", es: "Redacte artículos LaTeX desde sus sesiones, comparta enlaces de solo lectura y conserve la trazabilidad." },
+  "onboard.account_title":    { en: "Set Up Your Account",    zh: "设置账户",                                                fr: "Configurer votre compte",                                     es: "Configura tu cuenta" },
+  "onboard.account_desc":     { en: "Add your Anthropic / OpenAI / DeepSeek API keys here so the AI assistant can answer. Keys stay in your browser by default.", zh: "在这里添加 Anthropic / OpenAI / DeepSeek 的 API key，AI 助手才能回答。Key 默认仅保存在你的浏览器里。", fr: "Ajoutez vos clés API Anthropic / OpenAI / DeepSeek ici pour que l'assistant IA puisse répondre. Les clés restent dans votre navigateur par défaut.", es: "Agregue sus claves API de Anthropic / OpenAI / DeepSeek aquí para que el asistente de IA pueda responder. Las claves permanecen en su navegador por defecto." },
 
   // Column management
   "col.toggle":       { en: "Columns",         zh: "列管理",        fr: "Colonnes",          es: "Columnas" },
@@ -393,7 +399,7 @@ const translations: Record<string, Record<Lang, string>> = {
   // ── Journal edition: Home page ─────────────────────────────────────────
   "home.eyebrow":  { en: "Observational cosmology focus · open platform · peer-review ready", zh: "观测宇宙学专向 · 开放平台 · 默认符合同行评审标准", fr: "Axé cosmologie observationnelle · plateforme ouverte · prête pour l'évaluation par les pairs", es: "Enfoque en cosmología observacional · plataforma abierta · lista para revisión por pares" },
   "home.title":    { en: "An AI co-author for observational cosmology.", zh: "面向观测宇宙学的 AI 科研助手。", fr: "Un co-auteur IA pour la cosmologie observationnelle.", es: "Un co-autor IA para la cosmología observacional." },
-  // M0 Commit 6 (2026-05-18): solar_system focus 对应的 home eyebrow / title.
+  // M0 Commit 6 (2026-05-18): home eyebrow / title variants for the solar_system focus.
   "home.eyebrow.solar_system": { en: "Small-body solar-system focus · asteroids + comets · peer-review ready", zh: "太阳系小天体专向 · 小行星与彗星 · 默认符合同行评审标准", fr: "Axé petits corps du système solaire · astéroïdes + comètes · prête pour l'évaluation par les pairs", es: "Enfoque en cuerpos menores del sistema solar · asteroides + cometas · lista para revisión por pares" },
   "home.title.solar_system":   { en: "An AI co-author for asteroid + comet science.", zh: "面向小行星与彗星科学的 AI 科研助手。", fr: "Un co-auteur IA pour la science des astéroïdes et des comètes.", es: "Un co-autor IA para la ciencia de asteroides y cometas." },
   "home.subtitle": { en: "A research environment that refuses to fabricate.", zh: "拒绝编造的研究环境。", fr: "Un environnement de recherche qui refuse de fabriquer.", es: "Un entorno de investigación que se niega a fabricar." },
@@ -434,7 +440,7 @@ const translations: Record<string, Record<Lang, string>> = {
   "footer.col.community": { en: "Community",  zh: "社群",  fr: "Communauté",  es: "Comunidad" },
   "footer.link.docs":     { en: "Docs",       zh: "文档",  fr: "Docs",        es: "Docs" },
 
-  // Comments section (公开评论区, Landing 底部)
+  // Comments section (public comment area, bottom of the Landing page)
   "comments.title":              { en: "Guest Comments",                                               zh: "访客留言",                                                  fr: "Commentaires des visiteurs",                                              es: "Comentarios de visitantes" },
   "comments.intro":              { en: "Leave a one-liner — usage feedback, suggestions, or bug reports. No login required; just pick a nickname. Comments may be removed by moderators.", zh: "欢迎任何访客留下一句话 — 使用体验、建议、bug 反馈都行。无需登录,填昵称即可。内容经管理员审核后可能被移除。", fr: "Laissez un mot — retour d'usage, suggestions ou bugs. Pas de compte requis ; choisissez un pseudo. Les commentaires peuvent être supprimés par les modérateurs.", es: "Deje un comentario — opiniones, sugerencias o reportes de errores. Sin registro; elija un apodo. Los comentarios pueden ser eliminados por moderadores." },
   "comments.form.name_label":    { en: "Nickname",      zh: "昵称",         fr: "Pseudo",          es: "Apodo" },

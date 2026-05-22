@@ -5,6 +5,23 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Standard Astro — Astronomy Research</title>
+    <!-- Pre-React theme bootstrap. Reads astro_theme_v2 from localStorage and
+         sets data-theme on <html> BEFORE React mounts, so users who toggled
+         dark mode don't see a white flash on page load. The key + values
+         must stay in sync with App.tsx useTheme(). -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("astro_theme_v2");
+          document.documentElement.setAttribute(
+            "data-theme",
+            saved === "dark" ? "dark" : "light"
+          );
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500;1,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet">
