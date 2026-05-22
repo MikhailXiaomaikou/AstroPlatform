@@ -331,6 +331,46 @@ def test_focus_solar_system_appends_solar_system_appendix(monkeypatch) -> None:
     assert "ASTRO_RESEARCH_FOCUS" in chat.SYSTEM_PROMPT
 
 
+def test_cmb_birefringence_prompt_routes_to_research_plan_not_compressed_chain(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to constrain possible anisotropic cosmic birefringence from CMB "
+        "B-mode polarization. Identify required EB/TB spectra, instrument-angle "
+        "priors and covariance, then run only available likelihoods."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    assert chat._cosmology_dataset_keys_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_run_calls_from_prompt(prompt) == []
+
+
+def test_primordial_feature_prompt_routes_to_research_plan_not_compressed_chain(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to test whether oscillatory primordial-feature templates improve "
+        "the fit to CMB temperature and polarization spectra. Identify required "
+        "Planck/ACT spectra, covariance, look-elsewhere treatment and sampler."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    assert chat._cosmology_dataset_keys_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt) == []
+    assert chat._cosmology_likelihood_run_calls_from_prompt(prompt) == []
+
+
+def test_dedicated_model_gap_prompt_still_uses_research_mode(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to compare thawing, emergent and mirage dark-energy histories "
+        "using BAO+CMB+SN distance data."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    assert "desi_dr1_bao" in chat._cosmology_dataset_keys_from_prompt(prompt)
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt)
+
+
 # ── Contract: cleanup ──────────────────────────────────────────────
 
 
