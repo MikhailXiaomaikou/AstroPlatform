@@ -1,13 +1,14 @@
-"""M3 验收: kelly07_linmix_fit 在已知 ground truth 的合成数据上的恢复精度.
+"""M3 acceptance: kelly07_linmix_fit recovery accuracy on synthetic data with known ground truth.
 
-这是 fit_line_lfr Bayesian 路径的"是否真的对"的硬测试.我们造一个
-N=80 的合成 LFR 样本,(alpha, beta, σ_int) 已知,加两轴高斯噪声,跑
-linmix,看 94% HDI 是否覆盖真值 + ESS 是否过出版门槛.
+This is the hard test for whether the fit_line_lfr Bayesian path is actually correct.
+We construct a synthetic LFR sample of N=80 with known (alpha, beta, sigma_int),
+add two-axis Gaussian noise, run linmix, and check whether the 94% HDI covers the
+true values and ESS passes the publication threshold.
 
-测试故意用比较短的 chain (miniter=2000, maxiter=8000) 让 CI 时间在
-1 分钟内;真实场景里 fit_line_lfr 默认用 miniter=4000 / maxiter=20000.
-小 N + 短链 + 大方差是"最严苛但仍 reasonable" 的设置;如果这都过不
-了说明数学/接口出了问题.
+The test intentionally uses a short chain (miniter=2000, maxiter=8000) to keep CI
+time under 1 minute; in real usage fit_line_lfr defaults to miniter=4000 / maxiter=20000.
+Small N + short chain + large variance is the "harshest yet still reasonable" setting;
+if this fails, the math or interface has a problem.
 """
 
 import numpy as np

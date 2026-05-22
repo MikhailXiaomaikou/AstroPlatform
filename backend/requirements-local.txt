@@ -1,3 +1,21 @@
+# ── DEPRECATED minimal dev-only list ──────────────────────────────────────
+# This file is NOT the source of truth. See requirements.txt.
+#
+# Status: historical artefact. Several packages listed here (passlib, stripe)
+# are not in requirements.txt and may not be used by current code. Several
+# production dependencies (sbpy, cobaya, camb, lightkurve, photutils, dynesty,
+# arviz, ultranest, pyvo, batman-package, celerite2, reproject, pandas,
+# scikit-learn, plotly, reportlab, beautifulsoup4, dust_extinction, sep,
+# specutils, emcee, corner, asteval, dask, seaborn, pytest, …) are MISSING
+# from this file.
+#
+# Do not use for new dev work. Run instead:
+#     pip install -r requirements.txt
+#
+# Kept on disk only in case an old IDE config / script still references this
+# filename. Safe to delete in a future cleanup pass.
+# ─────────────────────────────────────────────────────────────────────────
+
 fastapi
 uvicorn[standard]
 pydantic

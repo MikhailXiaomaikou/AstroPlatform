@@ -198,8 +198,9 @@ class NEDConnector(BaseConnector):
 
         ra = 0.0
         dec = 0.0
-        # L19 (audit 2026-04-20): log 实际命中的列名方便未来 NED API 改
-        # schema 时定位问题 (列名 fallback 顺序硬编码, 没 schema 版本 pin).
+        # L19 (audit 2026-04-20): log the actual column name hit to aid debugging
+        # when a future NED API schema change causes issues (fallback order is
+        # hard-coded, no schema version pin).
         ra_source_col = None
         for ra_key in ("RA", "ra", "RA(deg)"):
             if ra_key in preferred:

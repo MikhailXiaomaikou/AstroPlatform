@@ -1,8 +1,8 @@
 """Stage 6.3 spike unit tests (2026-05-20).
 
-不 mock 真 LLM call (会要 API key), 只测 module 内部:
-  - parse_llm_json: 解析 LLM 输出的 JSON array
-  - verify_value_against_text: ±1% 反查逻辑
+Does not mock real LLM calls (would require an API key); only tests module internals:
+  - parse_llm_json: parse LLM JSON array output
+  - verify_value_against_text: ±1% reverse-verification logic
   - verify_record: LLM record + parsed tables → ExtractedMeasurement
   - parse_html_tables: HTML → list of tables
 """
@@ -53,7 +53,7 @@ def test_verify_no_numbers_in_cell():
 
 
 def test_verify_picks_closest_when_multiple_numbers():
-    # cell 含 "235.4 ± 12.1" — 235.0 应匹配 235.4
+    # cell contains "235.4 ± 12.1" — 235.0 should match 235.4
     ok, note = verify_value_against_text(235.0, "235.4 ± 12.1")
     assert ok
 
@@ -74,7 +74,7 @@ def test_parse_llm_json_with_markdown_fence():
 
 
 def test_parse_llm_json_with_prose_around():
-    # LLM 偶尔会在 array 前后加废话, 我们提第一个 [...]
+    # LLM occasionally adds prose before/after the array; we extract the first [...]
     raw = "Sure, here you go:\n[{\"x\": 2}]\nHope this helps."
     out = parse_llm_json(raw)
     assert out == [{"x": 2}]
@@ -117,15 +117,15 @@ def test_parse_html_tables_empty_html():
 
 
 def test_build_html_excerpt_marks_tables():
-    """measurement-like 表会被保留 (score > 0)."""
+    """Measurement-like tables are kept (score > 0)."""
     tables = [
         [["source", "z", "FWHM"], ["A", "1", "100"], ["B", "2", "200"]],
-        [["x", "y"], ["1", "2"]],  # 没 measurement keyword, score=0 跳
+        [["x", "y"], ["1", "2"]],  # no measurement keyword, score=0, skipped
     ]
     excerpt = build_html_excerpt(tables)
     assert "Table 0" in excerpt
     assert "A | 1 | 100" in excerpt
-    # Table 1 score=0 没 measurement keyword → 跳过
+    # Table 1 score=0, no measurement keyword → skipped
     assert "Table 1" not in excerpt
 
 
@@ -133,7 +133,7 @@ def test_build_html_excerpt_marks_tables():
 
 
 def test_score_table_relevance_high_for_measurement_header():
-    """ALPINE 类 header 应该高分."""
+    """ALPINE-style headers should score high."""
     from app.services.llm_paper_extractor import score_table_relevance
 
     table = [
@@ -141,7 +141,7 @@ def test_score_table_relevance_high_for_measurement_header():
         ["DEIMOS_873756", "...", "...", "4.5457", "...", "526", "9.56"],
     ]
     score = score_table_relevance(table)
-    assert score >= 10  # 多个 strong keyword 命中
+    assert score >= 10  # multiple strong keyword hits
 
 
 def test_score_table_relevance_zero_for_random_header():
@@ -165,14 +165,14 @@ def test_is_low_value_table_filters_single_row():
 
 
 def test_is_low_value_table_filters_caption_only():
-    """第 1 行只 1 cell → caption / metadata."""
+    """First row has only 1 cell → caption / metadata."""
     from app.services.llm_paper_extractor import is_low_value_table
     table = [["Table caption text here"], ["data row 1"], ["data row 2"]]
     assert is_low_value_table(table)
 
 
 def test_is_low_value_table_filters_equation_table():
-    """大量 LaTeX equation markers → formula table."""
+    """Many LaTeX equation markers → formula table."""
     from app.services.llm_paper_extractor import is_low_value_table
     table = [
         ["formula", "result"],
@@ -196,11 +196,11 @@ def test_is_low_value_table_passes_real_data_table():
 
 
 def test_build_html_excerpt_prefers_high_score_table():
-    """ALPINE 复现: 真 measurement 表在后面, 但 build_excerpt 应该把它
-    排到最前送给 LLM, 而不是按 idx 顺序送 budget."""
+    """ALPINE reproduction: real measurement table appears last, but build_excerpt should
+    move it to the front for the LLM, not use index order."""
     from app.services.llm_paper_extractor import build_html_excerpt
 
-    # 24 个 equation/metadata 表 + 第 25 个真 measurement 表
+    # 24 equation/metadata tables + 1 real measurement table at position 25
     formula_tables = [
         [["formula"], ["\\frac{a}{b}=1"], ["\\sum_i x_i"]]
         for _ in range(24)
@@ -213,16 +213,16 @@ def test_build_html_excerpt_prefers_high_score_table():
     tables = formula_tables + [real_table]
     excerpt = build_html_excerpt(tables, max_chars=2000)
 
-    # 真表 idx 是 24 (0-indexed). excerpt 应该含 Table 24
+    # real table idx is 24 (0-indexed); excerpt should contain Table 24
     assert "Table 24" in excerpt
     assert "GalA" in excerpt
-    # formula 表应该全被 filter 掉
+    # formula tables should all be filtered out
     assert "Table 0" not in excerpt
     assert "Table 23" not in excerpt
 
 
 def test_build_html_excerpt_returns_no_tables_message_when_all_filtered():
-    """全是 low-value 表 → 不返 raw garbage, 返友好提示."""
+    """All low-value tables → do not return raw garbage; return a friendly message instead."""
     from app.services.llm_paper_extractor import build_html_excerpt
     tables = [
         [["caption"]],
@@ -258,7 +258,7 @@ def test_verify_record_passes_when_numbers_match(sample_tables):
         "log_luminosity": 9.84,
         "z": 4.055,
         "table_idx": 0,
-        "row_idx": 0,  # LLM 视角, 不含 header → 实际 HTML row 1
+        "row_idx": 0,  # LLM perspective, header excluded → actual HTML row 1
         "cell_provenance": {
             "fwhm_km_s": "235.4 ± 12.1",
             "log_luminosity": "9.84 ± 0.05",
@@ -272,16 +272,16 @@ def test_verify_record_passes_when_numbers_match(sample_tables):
 
 
 def test_verify_record_fails_when_fabricated_value(sample_tables):
-    """LLM 编了一个 FWHM=999 但 cell 里实际是 235.4 → fail."""
+    """LLM fabricated FWHM=999 but cell actually contains 235.4 → fail."""
     record = {
         "source_name": "GN20",
-        "fwhm_km_s": 999.0,  # 编的
+        "fwhm_km_s": 999.0,  # fabricated
         "log_luminosity": 9.84,
         "z": 4.055,
         "table_idx": 0,
         "row_idx": 0,
         "cell_provenance": {
-            "fwhm_km_s": "235.4 ± 12.1",  # provenance 没编, 但数字跟它对不上
+            "fwhm_km_s": "235.4 ± 12.1",  # provenance not fabricated, but number doesn't match
             "log_luminosity": "9.84 ± 0.05",
             "z": "4.055",
         },
@@ -298,7 +298,7 @@ def test_verify_record_fails_when_row_out_of_range(sample_tables):
         "log_luminosity": None,
         "z": None,
         "table_idx": 0,
-        "row_idx": 99,  # 不存在
+        "row_idx": 99,  # does not exist
         "cell_provenance": {},
     }
     result = verify_record(record, sample_tables)
@@ -306,18 +306,18 @@ def test_verify_record_fails_when_row_out_of_range(sample_tables):
 
 
 def test_verify_record_falls_back_when_llm_uses_dump_row_n_convention(sample_tables):
-    """Stage 6.3 spike v3 (2026-05-20): codex 报 ALPINE row=76 越界 — LLM
-    在 last row 切换到 dump Row N convention (含 header). verify_record
-    应该 fallback to row_idx 直接当 HTML idx (without +1)."""
-    # sample_tables[0] 3 行: header + 2 数据. LLM 给 row=2 用 dump convention
-    # (Row 2 in dump = HZ7 第 2 数据行). +1 = 3 越界, fallback 2 = HZ7.
+    """Stage 6.3 spike v3 (2026-05-20): codex reported ALPINE row=76 out-of-range — LLM
+    switches to dump Row N convention (includes header) at the last row. verify_record
+    should fallback to using row_idx directly as HTML idx (without +1)."""
+    # sample_tables[0] has 3 rows: header + 2 data. LLM gives row=2 using dump convention
+    # (Row 2 in dump = HZ7, the 2nd data row). +1 = 3 out-of-range, fallback 2 = HZ7.
     record = {
         "source_name": "HZ7",
         "fwhm_km_s": 110.0,
         "log_luminosity": 8.95,
         "z": 5.255,
         "table_idx": 0,
-        "row_idx": 2,  # dump Row N convention (含 header)
+        "row_idx": 2,  # dump Row N convention (includes header)
         "cell_provenance": {
             "fwhm_km_s": "110.2 ± 8.3",
             "log_luminosity": "8.95 ± 0.07",
@@ -330,34 +330,34 @@ def test_verify_record_falls_back_when_llm_uses_dump_row_n_convention(sample_tab
 
 
 def test_verify_record_picks_higher_provenance_match_when_two_candidates_valid(sample_tables):
-    """两个 candidate (row_idx+1 和 +0) 都 valid 时, 用 cell_provenance
-    匹配更多的那行作 truth (排除 ambiguity)."""
+    """When both candidates (row_idx+1 and +0) are valid, use the row where cell_provenance
+    matches more fields as the truth (eliminates ambiguity)."""
     # sample_tables[0]: [header, GN20, HZ7]
-    # LLM 给 row_idx=0 with HZ7 provenance:
-    #   +1 → row 1 = GN20 (provenance 不匹配)
-    #   +0 → row 0 = header (provenance 不匹配 — header 无数据)
-    # 但 LLM 输出 HZ7 数字 + HZ7 provenance, 应该选 +1 还是 +0?
-    # 实际两个都 fail provenance 检查 → fallback to first (+1 = GN20).
-    # 然后 verify_value 阶段会 fail (GN20 FWHM ≠ HZ7 FWHM).
+    # LLM gives row_idx=0 with HZ7 provenance:
+    #   +1 → row 1 = GN20 (provenance mismatch)
+    #   +0 → row 0 = header (provenance mismatch — header has no data)
+    # But LLM output HZ7 numbers + HZ7 provenance; should we choose +1 or +0?
+    # Both actually fail provenance check → fallback to first (+1 = GN20).
+    # Then verify_value stage will fail (GN20 FWHM ≠ HZ7 FWHM).
     record = {
         "source_name": "HZ7",
         "fwhm_km_s": 110.0,
         "log_luminosity": 8.95,
         "z": 5.255,
         "table_idx": 0,
-        "row_idx": 0,  # 错误 row_idx
+        "row_idx": 0,  # wrong row_idx
         "cell_provenance": {
             "fwhm_km_s": "110.2 ± 8.3",
             "log_luminosity": "8.95 ± 0.07",
         },
     }
     result = verify_record(record, sample_tables)
-    # +1 落在 row 1 = GN20 (fwhm=235.4). LLM 给 110 → fail
+    # +1 lands on row 1 = GN20 (fwhm=235.4). LLM gave 110 → fail
     assert result.validation_status == "failed_mismatch"
 
 
 def test_verify_record_null_fields_pass_through(sample_tables):
-    """LLM 标 null 是 honest behavior, 不该 fail."""
+    """LLM marking null is honest behavior and should not fail."""
     record = {
         "source_name": "GN20",
         "fwhm_km_s": None,
@@ -375,7 +375,7 @@ def test_verify_record_null_fields_pass_through(sample_tables):
 
 
 def test_verify_record_uses_row_text_when_provenance_missing(sample_tables):
-    """LLM 没给 cell_provenance, 我们退回到整行文本反查."""
+    """When LLM provides no cell_provenance, fall back to full-row text reverse-verification."""
     record = {
         "source_name": "HZ7",
         "fwhm_km_s": 110.0,  # within 1% of 110.2 anywhere in row
@@ -408,15 +408,16 @@ def test_extracted_measurement_to_dict():
 
 
 # ── helper integration: _extract_and_cache_paper_measurements ──
-# (2026-05-20 下沉) 原 _exec_extract_paper_measurements_with_llm 顶层 tool 已并入
-# fit_line_lfr, 这里测的是它的内部 helper 形态 — 同样的 LLM 抽取 + ±1% 反查 +
-# cache 写入语义, 但签名是 (arxiv_id, api_key, python_session_id, fields) 不再
-# 接受 inp dict, 返回值也不再带 __message_to_model__ (fit_line_lfr wrapper 负责).
+# (2026-05-20 moved down) The original _exec_extract_paper_measurements_with_llm top-level tool
+# has been merged into fit_line_lfr; this tests the internal helper form — same LLM extraction
+# + ±1% reverse-verification + cache write semantics, but the signature is
+# (arxiv_id, api_key, python_session_id, fields), no longer accepts an inp dict,
+# and return value no longer carries __message_to_model__ (fit_line_lfr wrapper handles that).
 
 
 @pytest.mark.asyncio
 async def test_helper_writes_passed_rows_to_session_cache(monkeypatch):
-    """passed records 转成 fit_line_lfr 兼容 row schema + 写 session-scoped cache."""
+    """Passed records converted to fit_line_lfr-compatible row schema + written to session-scoped cache."""
     from app.services import ai_tools
 
     fake_records = [
@@ -464,10 +465,10 @@ async def test_helper_writes_passed_rows_to_session_cache(monkeypatch):
     assert out["passed_count"] == 1
     assert out["failed_mismatch_count"] == 1
     assert out["failed_no_cell_count"] == 0
-    # 只有 passed 进 cache
+    # only passed rows go into the cache
     assert len(out["line_measurements"]) == 1
     assert out["line_measurements"][0]["source_name"] == "DEIMOS_873756"
-    # session-scoped key 写入
+    # session-scoped key written
     assert "latest_literature_tables:sid_abc" in stored
     cached = stored["latest_literature_tables:sid_abc"]
     assert len(cached["line_measurements"]) == 1

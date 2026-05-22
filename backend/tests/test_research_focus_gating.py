@@ -124,12 +124,12 @@ def test_focus_cosmology_keeps_core_cosmology_tools(monkeypatch) -> None:
         {"name": "build_evidence_graph"},
         {"name": "verify_research_facts"},
         {"name": "export_research_report"},
-        # NOTE: 7 个 paper_tool_mining 工具 (mine_paper_tools / build_tool_gap_matrix /
+        # NOTE: 7 paper_tool_mining tools (mine_paper_tools / build_tool_gap_matrix /
         # rank_tool_implementation_queue / build_tool_ontology /
         # build_paper_mining_candidate_pool / run_paper_tool_mining_batch /
-        # run_paper_tool_mining_loop) 已归 _dormant_paper_tool_mining 模块
-        # (M1 Phase 2, 2026-05-18 用户拍板). cosmology focus 下不暴露 — 平台
-        # 元工具, 暴露会增加 W2 式翻车风险.
+        # run_paper_tool_mining_loop) have been moved to _dormant_paper_tool_mining module
+        # (M1 Phase 2, 2026-05-18 user decision). Not exposed under cosmology focus —
+        # these are platform meta-tools; exposing them increases W2-style derailment risk.
         {"name": "run_python"},
         {"name": "search_literature"},
     ]
@@ -277,10 +277,10 @@ def test_focus_env_value_is_lowercased_and_stripped(
     fake_tools = [{"name": "fit_isochrone"}, {"name": "fit_cosmology_mcmc"}]
     out = chat._filter_tools_by_research_focus(fake_tools)
     if expected_filtered:
-        # focus active → fit_isochrone dropped
+        # focus active → fit_isochrone is dropped
         assert out == [{"name": "fit_cosmology_mcmc"}]
     else:
-        # focus inactive → both survive
+        # focus inactive → both tools survive
         assert out == fake_tools
 
 
@@ -288,9 +288,9 @@ def test_focus_env_value_is_lowercased_and_stripped(
 
 
 def test_focus_solar_system_filters_to_manifest_allowlist(monkeypatch) -> None:
-    """M0 Commit 1: solar_system manifest tools 是 [], 所以 solar_system focus 下
-    只有 core 工具 (run_python, run_adql, search_literature 等) 能通过过滤。
-    Cosmology 专用工具被丢弃。"""
+    """M0 Commit 1: solar_system manifest tools is [], so under solar_system focus
+    only core tools (run_python, run_adql, search_literature, etc.) pass the filter.
+    Cosmology-specific tools are dropped."""
     chat = _reload_chat_with_focus(monkeypatch, "solar_system")
 
     mixed = [
@@ -308,7 +308,7 @@ def test_focus_solar_system_filters_to_manifest_allowlist(monkeypatch) -> None:
 
 
 def test_focus_solar_system_preserves_tool_dict_intact(monkeypatch) -> None:
-    """Filter 不能 mutate 或 strip 字段."""
+    """Filter must not mutate or strip fields."""
     chat = _reload_chat_with_focus(monkeypatch, "solar_system")
 
     rich_tool = {
@@ -321,13 +321,13 @@ def test_focus_solar_system_preserves_tool_dict_intact(monkeypatch) -> None:
 
 
 def test_focus_solar_system_appends_solar_system_appendix(monkeypatch) -> None:
-    """M0 Commit 6: solar_system/appendix.md 已建. focus=solar_system 时
-    SYSTEM_PROMPT 末尾带 RESEARCH FOCUS: SOLAR-SYSTEM SCIENCE 标记,
-    不带 cosmology appendix."""
+    """M0 Commit 6: solar_system/appendix.md is in place. When focus=solar_system,
+    SYSTEM_PROMPT ends with the RESEARCH FOCUS: SOLAR-SYSTEM SCIENCE marker
+    and does not include the cosmology appendix."""
     chat = _reload_chat_with_focus(monkeypatch, "solar_system")
     assert "RESEARCH FOCUS: SOLAR-SYSTEM SCIENCE" in chat.SYSTEM_PROMPT
     assert "RESEARCH FOCUS: OBSERVATIONAL COSMOLOGY" not in chat.SYSTEM_PROMPT
-    # appendix 必须提到怎么切回 all / cosmology focus
+    # appendix must mention how to switch back to all / cosmology focus
     assert "ASTRO_RESEARCH_FOCUS" in chat.SYSTEM_PROMPT
 
 

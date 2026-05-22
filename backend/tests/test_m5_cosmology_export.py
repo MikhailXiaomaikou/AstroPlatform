@@ -1,4 +1,4 @@
-"""M5 验收: 1) compare_luminosity_distances 工具 2) export_sample_table 工具."""
+"""M5 acceptance: 1) compare_luminosity_distances tool 2) export_sample_table tool."""
 
 from unittest.mock import patch
 

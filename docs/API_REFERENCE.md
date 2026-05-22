@@ -47,7 +47,7 @@ Obtain a token via:
 | POST | `/api/integration/adql/query` | Execute ADQL on TAP services |
 | POST | `/api/integration/votable/upload` | Upload + convert VOTable to FITS |
 
-The source registry currently exposes 24 connector keys. The active provenance-v2 sources are `vizier`, `gaia`, `simbad`, `ned`, `2mass`, and `alma`; the other 18 keys return an `UNAVAILABLE` maintenance payload instead of executing legacy connector code. ALMA is active for Science Archive observation metadata only, not derived line luminosity or FWHM measurements. Direct SDSS SQL (`run_sdss_sql`) is gated the same way until it emits independent `archive_version` provenance.
+The source registry currently exposes 26 connector keys. The active provenance-v2 sources are `vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`, `jpl`, `mpc`, and `nasa_exoplanet_archive`; the other 17 keys return an `UNAVAILABLE` maintenance payload instead of executing legacy connector code. ALMA is active for Science Archive observation metadata only, not derived line luminosity or FWHM measurements. Direct SDSS SQL (`run_sdss_sql`) is gated the same way until it emits independent `archive_version` provenance. JPL Horizons (`jpl`) and IAU Minor Planet Center (`mpc`) were promoted to active alongside the Solar System M0 module and back the `fetch_horizons_ephemeris` and `query_mpc_orbit` tools; they are only surfaced when `ASTRO_RESEARCH_FOCUS=solar_system`. NASA Exoplanet Archive (`nasa_exoplanet_archive`) was promoted to active alongside the Exoplanet M0 module and wraps the `pscomppars` composite-parameters table plus the Confirmed Planets table via `astroquery.ipac.nexsci`; it is only surfaced when `ASTRO_RESEARCH_FOCUS=exoplanet`.
 
 ### AI Assistant
 

@@ -165,7 +165,7 @@ def test_paper1_spt_rows_rejected_for_missing_mu_lens(mixed_paper1_sample):
 
 
 def test_paper1_lensing_summary_5_buckets(mixed_paper1_sample):
-    """result.lensing_summary 5 字段 — 3 进 fit / 1 reject 给清晰
+    """result.lensing_summary has 5 fields — 3 enter fit / 1 reject for clear
     user-actionable bucket counts."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
@@ -179,9 +179,9 @@ def test_paper1_lensing_summary_5_buckets(mixed_paper1_sample):
     assert summary["n_unlensed_in_fit"] == 10
     assert summary["n_lensed_demagnified_in_fit"] == 0
     assert summary["n_lensed_skipped_no_mu"] == 4
-    # papers_default_lensed 必须含 SPT bibcode (paper-level fallback 命中)
+    # papers_default_lensed must contain the SPT bibcode (paper-level fallback triggered)
     assert "2013ApJ...779...67B" in summary["papers_default_lensed"]
-    # ALPINE 不在 (它是 no_lensing)
+    # ALPINE is absent (it is no_lensing)
     assert "2020A&A...643A...2B" not in summary["papers_default_lensed"]
 
 
@@ -189,8 +189,9 @@ def test_paper1_lensing_summary_5_buckets(mixed_paper1_sample):
 
 
 def test_paper1_l_prime_unit_label_in_envelope(mixed_paper1_sample):
-    """luminosity_kind="L_prime" → intercept_unit/slope_unit 字符串
-    必须明示亮温单位, 防 prose 引用 alpha 时 silent inconsistency."""
+    """luminosity_kind="L_prime" → intercept_unit/slope_unit strings
+    must explicitly state the brightness-temperature unit to prevent silent
+    inconsistency when prose cites alpha."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
     with _patch_cache(mixed_paper1_sample):
@@ -202,9 +203,9 @@ def test_paper1_l_prime_unit_label_in_envelope(mixed_paper1_sample):
     assert out["luminosity_kind"] == "L_prime"
     assert out["intercept_unit"] == "log10(L_prime/(K km/s pc^2))"
     assert "log_L per log10(FWHM/100" in out["slope_unit"]
-    # 注: 单位转换在 lensing-reject 之前进行 — 14 行 (10 ALPINE + 4 SPT)
-    # 全部尝试转换, 然后 lensing gate 把 4 个 SPT 行从 fit 排出. 所以
-    # n_unit_converted=14, n_used=10.
+    # Note: unit conversion happens before lensing-reject — 14 rows (10 ALPINE + 4 SPT)
+    # all attempt conversion, then the lensing gate removes the 4 SPT rows from fit.
+    # Therefore n_unit_converted=14, n_used=10.
     assert out["n_unit_converted"] == 14
     assert out["n_used"] == 10
     assert out["unit_conversion_failures"] == []
@@ -213,9 +214,9 @@ def test_paper1_l_prime_unit_label_in_envelope(mixed_paper1_sample):
 
 
 def test_paper1_l_prime_alpha_shift_above_2_dex(mixed_paper1_sample):
-    """ALPINE z=4.4-5.8 sample: L_prime fit alpha 应该比 L_solar fit
-    大约 +2 dex (single-source +2.215 dex at z=5, OLS 截距 spread
-    1.9-2.3 dex 范围)."""
+    """ALPINE z=4.4-5.8 sample: L_prime fit alpha should exceed L_solar fit
+    by approximately +2 dex (single-source +2.215 dex at z=5, OLS intercept spread
+    1.9-2.3 dex range)."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
     with _patch_cache(mixed_paper1_sample):
@@ -226,12 +227,12 @@ def test_paper1_l_prime_alpha_shift_above_2_dex(mixed_paper1_sample):
         })
 
     delta_alpha = out_prime["alpha"] - out_solar["alpha"]
-    # 注: ALPINE z=4.4-5.8 sample 平均 (1+z)² 项不严格等于 z=5 单点 +2.215;
-    # OLS 截距 spread 1.7-2.3 dex 都是正常 — 关键是符号 + 量级.
+    # Note: ALPINE z=4.4-5.8 sample mean (1+z)^2 term is not exactly the z=5 single-point +2.215;
+    # OLS intercept spread 1.7-2.3 dex is normal — what matters is sign + order of magnitude.
     assert 1.7 < delta_alpha < 2.4, (
         f"expected +1.7~2.4 dex shift, got {delta_alpha:.3f}"
     )
-    # beta 也会变 (单位转换不是 rigid translation), 但符号保持正
+    # beta also changes (unit conversion is not a rigid translation), but the sign stays positive
     assert out_prime["beta"] > 0
     assert out_solar["beta"] > 0
 
@@ -240,8 +241,8 @@ def test_paper1_l_prime_alpha_shift_above_2_dex(mixed_paper1_sample):
 
 
 def test_paper1_cosmology_recompute_with_riess22(mixed_paper1_sample):
-    """传 cosmology="riess22_shoes" → result.cosmology_recomputed=True
-    + dl_shift_summary 含非零 shift."""
+    """Passing cosmology="riess22_shoes" → result.cosmology_recomputed=True
+    + dl_shift_summary contains a non-zero shift."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
     with _patch_cache(mixed_paper1_sample):
@@ -252,8 +253,8 @@ def test_paper1_cosmology_recompute_with_riess22(mixed_paper1_sample):
         })
 
     assert out["cosmology_recomputed"] is True
-    # 注: result.cosmology_used 是 string (name); 完整 manifest 在
-    # result.cosmology_manifest dict 里
+    # Note: result.cosmology_used is a string (name); the full manifest is in
+    # result.cosmology_manifest dict
     assert out["cosmology_used"] == "riess22_shoes"
     manifest = out["cosmology_manifest"]
     assert isinstance(manifest, dict)
@@ -270,9 +271,9 @@ def test_paper1_cosmology_recompute_with_riess22(mixed_paper1_sample):
 
 
 def test_paper1_readiness_checks_5_gates(mixed_paper1_sample):
-    """result 必须含 readiness_checks dict + 5 个 gate (minimum_rows /
+    """result must contain readiness_checks dict + 5 gates (minimum_rows /
     citations / confirmed_luminosity_units / method_not_downgraded /
-    bayesian_sampler 当 bayesian path 触发时)."""
+    bayesian_sampler when bayesian path is triggered)."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
     with _patch_cache(mixed_paper1_sample):
@@ -291,7 +292,7 @@ def test_paper1_readiness_checks_5_gates(mixed_paper1_sample):
 
 
 def test_paper1_relation_claimability_present(mixed_paper1_sample):
-    """relation_claimability dict 必须含 can_claim_relation +
+    """relation_claimability dict must contain can_claim_relation +
     claim_scope + blocking_reasons."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
@@ -318,8 +319,8 @@ def test_paper1_relation_claimability_present(mixed_paper1_sample):
 def test_paper1_bayesian_summary_with_kelly07_reference(
     mixed_paper1_sample, monkeypatch,
 ):
-    """fit_method_requested="bayesian_xyerr" + err 齐 → bayesian_summary
-    含 Kelly 2007 reference + linmix package + per-param ess/rhat/hdi.
+    """fit_method_requested="bayesian_xyerr" + all errors provided → bayesian_summary
+    contains Kelly 2007 reference + linmix package + per-param ess/rhat/hdi.
 
     Sampler is mocked so test runs in ms, not minutes."""
     fake_bayes = {
@@ -367,7 +368,7 @@ def test_paper1_bayesian_summary_with_kelly07_reference(
     bayes = out["bayesian_summary"]
     assert "Kelly 2007" in bayes["reference"]
     assert "linmix" in bayes["package"]
-    # Per-param ess + rhat 必须暴露
+    # Per-param ess + rhat must be exposed
     for pname in ("alpha", "beta", "sigma_int"):
         p = bayes["parameters"][pname]
         assert p["ess"] >= 400
@@ -380,8 +381,8 @@ def test_paper1_bayesian_summary_with_kelly07_reference(
 def test_paper1_paper_generator_renders_full_diagnostics_section(
     mixed_paper1_sample, monkeypatch,
 ):
-    """build_fit_line_lfr_diagnostics_section 必须从 fit_line_lfr 的
-    result envelope 抽出 ALL PART AI fields 渲染成 markdown section."""
+    """build_fit_line_lfr_diagnostics_section must extract ALL PART AI fields
+    from the fit_line_lfr result envelope and render them as a markdown section."""
     fake_bayes = {
         "method": "bayesian_xyerr_linmix",
         "alpha_median": 10.6, "alpha_hdi_94": [10.4, 10.8],
@@ -507,7 +508,7 @@ def test_paper1_e2e_full_part_ai_invariants_in_one_call(mixed_paper1_sample, mon
     assert out["intercept_unit"] == "log10(L_prime/(K km/s pc^2))"
 
     # PART AI #4 — readiness + claimability dicts present
-    # publication_readiness.checks 是 5-gate dict (minimum_rows / citations
+    # publication_readiness.checks is a 5-gate dict (minimum_rows / citations
     # / confirmed_luminosity_units / method_not_downgraded / bayesian_sampler)
     assert "checks" in out["publication_readiness"]
     assert isinstance(out["publication_readiness"]["checks"], dict)

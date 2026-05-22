@@ -51,10 +51,15 @@ RHAT_PUBLICATION_THRESHOLD = 1.05
 ESS_EXPLORATORY_THRESHOLD = 100.0
 RHAT_EXPLORATORY_THRESHOLD = 1.10
 
-_JOBS: dict[str, dict[str, Any]] = {}
+from app.services._kv_store import JsonKvStore
+
+# Async cosmology MCMC jobs are stored in the shared KV (Redis-first, SQLite
+# fallback) so the web process and Celery worker can both read job status.
+# Backend TTL replaces the old hand-maintained _cleanup_jobs_locked sweep.
+_JOBS_STORE = JsonKvStore("async_job")
 _JOBS_LOCK = threading.Lock()
 _JOB_TTL_SECONDS = 3600
-_MAX_JOBS = 64
+_MAX_JOBS = 64  # soft cap, enforced on submit (best-effort scan)
 # user_uploaded entries come from FITS upload / user_supplied data_source
 # tags with full audit log (hash + upload time + uploader). Treated as
 # claimable since the synthetic-fallback defences (subprocess sandbox +
@@ -416,63 +421,50 @@ def should_run_background(n_walkers: int, n_steps: int, force_background: bool =
 
 
 def submit_emcee_job(**kwargs: Any) -> dict[str, Any]:
-    job_id = f"cosmo-{uuid.uuid4().hex[:12]}"
-    with _JOBS_LOCK:
-        _cleanup_jobs_locked()
-        _JOBS[job_id] = {
-            "job_id": job_id,
-            "status": "running",
-            "created_at": time.time(),
-            "sampler": "emcee",
-            "model": kwargs.get("model", "flat_lcdm"),
-            "background_backend": "in_process_ephemeral",
-            "warning": (
-                "Background cosmology jobs are ephemeral in this deployment and "
-                "may be lost on process restart; use only for short follow-up polling."
-            ),
-        }
+    """Hand a large emcee chain off to the Celery worker.
 
-    def _target() -> None:
-        try:
-            result = fit_cosmology_emcee(**kwargs)
-            update = {"status": "completed", "result": result, "completed_at": time.time()}
-        except Exception as exc:
-            logger.exception("cosmology MCMC background job failed")
-            update = {
-                "status": "failed",
-                "error": str(exc),
-                "error_class": exc.__class__.__name__,
-                "completed_at": time.time(),
-            }
-        with _JOBS_LOCK:
-            _JOBS[job_id].update(update)
+    Previously this started a ``threading.Thread`` inside the web process
+    with state in a module-level dict (P1.1.b moved that dict to the
+    shared KV). P1.2.e delegates to the generic async-tool runtime so
+    that (a) the chain actually runs in the Celery worker process and
+    (b) the same submit/poll/cancel/dedup wiring is shared with other
+    long-running tools.
 
-    thread = threading.Thread(target=_target, name=f"cosmology-mcmc-{job_id}", daemon=True)
-    thread.start()
-    return {
-        "success": True,
-        "__tool_status__": "PARTIAL",
-        "analysis_status": "QUEUED",
-        "data_origin": "unavailable",
-        "job_id": job_id,
-        "status": "running",
-        "sampler": "emcee",
-        "model": kwargs.get("model", "flat_lcdm"),
-        "background_backend": "in_process_ephemeral",
-        "__do_not_claim__": True,
-        "message": (
-            "Cosmology MCMC job started in an in-process ephemeral background worker; "
-            "poll get_cosmology_run_status. Do not quote posterior values until a "
-            "completed result returns publication_ready=true."
-        ),
-    }
+    Backward compat: the returned banner keeps the historical fields the
+    agent loop and prior tests rely on (``sampler``, ``model``,
+    ``status``, and the cosmology-flavoured warning text). The
+    ``background_backend`` string now correctly reports ``"celery"``.
+    """
+    from app.services.async_tool_runtime import submit_async_job
+
+    banner = submit_async_job("fit_cosmology_mcmc", dict(kwargs))
+    # Augment the generic banner with the cosmology-specific fields the
+    # agent's prompt expects to see.
+    banner["sampler"] = "emcee"
+    banner["model"] = kwargs.get("model", "flat_lcdm")
+    banner.setdefault("warning", (
+        "Background cosmology jobs are dispatched to the shared Celery worker. "
+        "Status is stored in the cross-process KV so polling works after web "
+        "process restarts; the actual run survives as long as the Celery "
+        "worker stays up. Use only for short follow-up polling."
+    ))
+    return banner
 
 
 def get_cosmology_job_status(job_id: str) -> dict[str, Any]:
-    with _JOBS_LOCK:
-        _cleanup_jobs_locked()
-        job = dict(_JOBS.get(str(job_id), {}))
-    if not job:
+    """Poll a job submitted via ``submit_emcee_job`` (or the generic runtime).
+
+    Backward-compat shim: shapes the response so the legacy
+    ``get_cosmology_run_status`` tool keeps returning what the agent
+    prompt was trained on.
+    """
+    from app.services.async_tool_runtime import (
+        format_status_for_tool,
+        get_async_job,
+    )
+
+    job = get_async_job(str(job_id))
+    if job is None:
         return {
             "success": False,
             "__tool_status__": "FAILED",
@@ -480,7 +472,7 @@ def get_cosmology_job_status(job_id: str) -> dict[str, Any]:
             "error": f"Unknown cosmology job_id: {job_id}",
             "error_class": "not_found",
         }
-    return job
+    return format_status_for_tool(job, requested_job_id=job_id)
 
 
 def run_cobaya_cosmology(
@@ -697,21 +689,37 @@ def _cosmology_provenance(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _cleanup_jobs_locked() -> None:
-    now = time.time()
-    expired = [
-        job_id
-        for job_id, job in _JOBS.items()
-        if now - float(job.get("created_at") or now) > _JOB_TTL_SECONDS
-    ]
-    for job_id in expired:
-        _JOBS.pop(job_id, None)
-    if len(_JOBS) <= _MAX_JOBS:
+def _enforce_job_cap_locked() -> None:
+    """Best-effort soft cap on concurrent stored jobs.
+
+    Backend TTL handles the time dimension automatically (1 h); this helper
+    only fires when a single worker has accumulated more than ``_MAX_JOBS``
+    *non-expired* job records since the last sweep. It scans the namespace,
+    drops the oldest entries down to the cap, and is best-effort: a race
+    with another worker may leave the namespace slightly over-cap, which is
+    acceptable.
+    """
+    try:
+        keys = _JOBS_STORE.scan_keys()
+    except Exception:
         return
-    for job_id, _ in sorted(_JOBS.items(), key=lambda item: float(item[1].get("created_at") or 0)):
-        if len(_JOBS) <= _MAX_JOBS:
-            break
-        _JOBS.pop(job_id, None)
+    if len(keys) <= _MAX_JOBS:
+        return
+    jobs_with_age: list[tuple[str, float]] = []
+    for k in keys:
+        entry = _JOBS_STORE.get(k)
+        if isinstance(entry, dict):
+            jobs_with_age.append((k, float(entry.get("created_at") or 0)))
+    jobs_with_age.sort(key=lambda item: item[1])  # oldest first
+    over = len(jobs_with_age) - _MAX_JOBS
+    for job_id, _created in jobs_with_age[:over]:
+        _JOBS_STORE.delete(job_id)
+
+
+# Kept as a no-op alias so any external callers that historically imported
+# ``_cleanup_jobs_locked`` don't break; not exercised in any current code path.
+def _cleanup_jobs_locked() -> None:  # pragma: no cover — legacy shim
+    _enforce_job_cap_locked()
 
 
 def package_versions(distributions: list[str]) -> dict[str, str]:

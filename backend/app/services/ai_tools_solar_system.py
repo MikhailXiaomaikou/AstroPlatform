@@ -1,29 +1,29 @@
 """Solar-system module ai_tool implementations (M0 Commit 4, 2026-05-18).
 
-12 个 LLM-callable tools 覆盖 asteroid + comet 主流工作流:
-    数据查询 (走 connector / HTTP API):
+12 LLM-callable tools covering the main asteroid + comet workflows:
+    Data queries (via connector / HTTP API):
         - query_mpc_orbit
         - fetch_horizons_ephemeris
         - query_sbdb_orbit
         - query_sbdb_close_approaches
         - query_sentry_risk
         - query_damit_shape_model
-    公式计算 (纯算, data_origin = cached_real):
+    Formula calculations (pure computation, data_origin = cached_real):
         - compute_hg_magnitude
         - compute_afrho
         - fit_neatm_diameter_albedo
         - compute_neo_collision_probability
-    分类 (纯算):
+    Classification (pure computation):
         - classify_asteroid_busdemeo
         - classify_asteroid_sdss_colors
 
-设计原则 (镜像 cosmology ai_tool 错误路径 contract):
-- 失败时返 {"success": False, "__tool_status__": "FAILED",
+Design principles (mirrors the cosmology ai_tool error-path contract):
+- On failure, returns {"success": False, "__tool_status__": "FAILED",
     "__do_not_claim__": True, "error": ..., "error_class": ...,
     "__message_to_model__": ...}
-- 成功时返结构化 dict + provenance dataset
+- On success, returns a structured dict + provenance dataset
 
-References cited inline by tool; consolidated list in solar_system/prompt.md。
+References cited inline by tool; consolidated list in solar_system/prompt.md.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from app.services.provenance_v2.registry_loader import dataset_from_registry
 logger = logging.getLogger(__name__)
 
 
-# ── 公共错误辅助 ──────────────────────────────────────────────────
+# ── Common error helpers ──────────────────────────────────────────
 
 
 def _failed(
@@ -63,7 +63,7 @@ def _failed(
 
 
 def _provenance_for(service_key: str, archive_version: str | None = None) -> dict | None:
-    """返回该 service 的 provenance dataset(从 fallback_registry)。"""
+    """Return the provenance dataset for a given service (from the fallback_registry)."""
     return dataset_from_registry(
         service_key, source_authority="datacenter_ivoa_compliant",
         archive_version=archive_version or f"{service_key}-2026", supplements={},
@@ -144,11 +144,11 @@ def _step_is_daily_or_finer(step: str) -> bool:
     return unit == "d" and value <= 1.0
 
 
-# ── 工具 schemas ──────────────────────────────────────────────────
+# ── Tool schemas ──────────────────────────────────────────────────
 
 
 SOLAR_SYSTEM_TOOL_SCHEMAS: list[dict] = [
-    # ─ 数据查询 (6) ─
+    # ─ Data queries (6) ─
     {
         "name": "query_mpc_orbit",
         "description": (
@@ -276,7 +276,7 @@ SOLAR_SYSTEM_TOOL_SCHEMAS: list[dict] = [
             "required": ["designation"],
         },
     },
-    # ─ 公式计算 (4) ─
+    # ─ Formula calculations (4) ─
     {
         "name": "compute_hg_magnitude",
         "description": (
@@ -386,7 +386,7 @@ SOLAR_SYSTEM_TOOL_SCHEMAS: list[dict] = [
             "required": ["moid_au", "a_au", "e", "i_deg"],
         },
     },
-    # ─ 分类 (2) ─
+    # ─ Classification (2) ─
     {
         "name": "classify_asteroid_busdemeo",
         "description": (
@@ -433,7 +433,7 @@ SOLAR_SYSTEM_TOOL_SCHEMAS: list[dict] = [
 SOLAR_SYSTEM_TOOL_NAMES = frozenset(t["name"] for t in SOLAR_SYSTEM_TOOL_SCHEMAS)
 
 
-# ── 数据查询 _exec_* ──────────────────────────────────────────────
+# ── Data query _exec_* handlers ──────────────────────────────────
 
 
 async def _exec_query_mpc_orbit(inp: dict) -> dict:
@@ -718,7 +718,7 @@ async def _exec_query_damit_shape_model(inp: dict) -> dict:
     designation = str(inp.get("designation") or "").strip()
     if not designation:
         return _failed("missing designation", "missing_argument")
-    # DAMIT 公开 HTTP API: https://astro.troja.mff.cuni.cz/projects/damit/asteroids/list/asteroid_name/<name>
+    # DAMIT public HTTP API: https://astro.troja.mff.cuni.cz/projects/damit/asteroids/list/asteroid_name/<name>
     url = "https://astro.troja.mff.cuni.cz/projects/damit/asteroids/exportAll/json"
     params = {"name": designation}
     try:
@@ -760,7 +760,7 @@ async def _exec_query_damit_shape_model(inp: dict) -> dict:
     }
 
 
-# ── 公式计算 _exec_* ──────────────────────────────────────────────
+# ── Formula calculation _exec_* handlers ─────────────────────────
 
 
 def _data_origin_from_source(data_source: str | None) -> str:
@@ -882,7 +882,7 @@ async def _exec_compute_neo_collision_probability(inp: dict) -> dict:
         result["data_origin"] = _data_origin_from_source(data_source)
         result["analysis_status"] = "COMPLETED"
         result["success"] = True
-        # warning 已经在 result 里, surface 到 __message_to_model__
+        # warning is already in result; surface it to __message_to_model__
         result["__message_to_model__"] = result["warning"]
         return _attach_citations(result, [
             _citation("Morbidelli et al.", 2002, "2002Icar..158..329M", authors=["Morbidelli"]),
@@ -892,7 +892,7 @@ async def _exec_compute_neo_collision_probability(inp: dict) -> dict:
         return _failed(str(exc), exc.__class__.__name__)
 
 
-# ── 分类 _exec_* ──────────────────────────────────────────────────
+# ── Classification _exec_* handlers ──────────────────────────────
 
 
 async def _exec_classify_asteroid_busdemeo(inp: dict) -> dict:
@@ -970,7 +970,7 @@ _DISPATCH = {
 
 
 async def dispatch_solar_system(tool_name: str, tool_input: dict) -> dict:
-    """ai_tools.py 的统一入口: 把 12 个 solar_system 工具的 dispatch 集中到此处。"""
+    """Unified entry point for ai_tools.py: centralises dispatch for all 12 solar_system tools."""
     handler = _DISPATCH.get(tool_name)
     if handler is None:
         return _failed(

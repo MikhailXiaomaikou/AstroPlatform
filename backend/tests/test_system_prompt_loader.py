@@ -58,13 +58,13 @@ def test_assemble_system_prompt_loads_files_in_lexicographic_order(
     files = prompts_mod.list_section_files()
 
     assert files == ["01_first.md", "05_second.md", "10_third.md"]
-    # 必须按文件名排序拼接
+    # must be concatenated in filename sort order
     assert composed.find("Body A.") < composed.find("Body B.")
     assert composed.find("Body B.") < composed.find("Body C.")
 
 
 def test_assemble_system_prompt_skips_underscore_prefixed() -> None:
-    """生产用的 sections/ 目录里 _README.md 是注释, 不该进 prompt."""
+    """In the production sections/ directory, _README.md is a comment file and must not be included in the prompt."""
     from app.api import prompts as prompts_mod
 
     files = prompts_mod.list_section_files()
@@ -78,9 +78,9 @@ def test_assemble_system_prompt_skips_underscore_prefixed() -> None:
 
 
 def test_archive_manifest_placeholder_substitution(tmp_path, monkeypatch) -> None:
-    """`__ARCHIVE_MANIFEST__` 字面量必须被 archive_manifest 参数替换 —
-    跟 chat.py 现有的 SYSTEM_PROMPT.replace("__ARCHIVE_MANIFEST__", ...)
-    行为一致."""
+    """The `__ARCHIVE_MANIFEST__` literal must be replaced by the archive_manifest parameter —
+    consistent with chat.py's existing SYSTEM_PROMPT.replace("__ARCHIVE_MANIFEST__", ...)
+    behaviour."""
     from app.api import prompts as prompts_mod
 
     fake_sections = tmp_path / "sections"
@@ -98,8 +98,8 @@ def test_archive_manifest_placeholder_substitution(tmp_path, monkeypatch) -> Non
 
 
 def test_archive_manifest_none_leaves_placeholder(tmp_path, monkeypatch) -> None:
-    """当 archive_manifest=None 时 (默认), placeholder 应保留, 让 caller
-    决定是否替换. 用于测试 / 检查未替换的拼接结果."""
+    """When archive_manifest=None (default), the placeholder should be preserved so the
+    caller decides whether to substitute. Used for testing / inspecting un-substituted assembled results."""
     from app.api import prompts as prompts_mod
 
     fake_sections = tmp_path / "sections"
@@ -111,12 +111,12 @@ def test_archive_manifest_none_leaves_placeholder(tmp_path, monkeypatch) -> None
     assert "__ARCHIVE_MANIFEST__" in composed
 
 
-# ── Contract 4: 公共 API surface ─────────────────────────────────────
+# ── Contract 4: public API surface ─────────────────────────────────────
 
 
 def test_module_public_surface() -> None:
-    """__all__ 必须 export 这两个 helper, 否则下游 type checker 会报
-    'undefined attribute'."""
+    """__all__ must export these two helpers; otherwise downstream type checkers
+    will report 'undefined attribute'."""
     from app.api import prompts as prompts_mod
 
     assert "assemble_system_prompt" in prompts_mod.__all__
@@ -127,13 +127,13 @@ def test_module_public_surface() -> None:
 
 
 def test_production_sections_dir_exists_and_loader_runs() -> None:
-    """生产 sections/ 目录必须存在 (即使现在还空), 让 loader 可以加载.
-    随着 Phase 2 后续 commit 逐步把 chat.py SYSTEM_PROMPT 切到这里,
-    这个目录会逐步填充."""
+    """The production sections/ directory must exist (even if currently empty) so the loader can load.
+    As Phase 2 subsequent commits progressively migrate chat.py SYSTEM_PROMPT sections here,
+    this directory will be gradually populated."""
     from app.api import prompts as prompts_mod
 
     assert prompts_mod._SECTIONS_DIR.is_dir()
-    # loader 能跑不 raise
+    # loader must run without raising
     composed = prompts_mod.assemble_system_prompt()
     assert isinstance(composed, str)
     files = prompts_mod.list_section_files()
@@ -141,12 +141,12 @@ def test_production_sections_dir_exists_and_loader_runs() -> None:
 
 
 def test_chat_module_can_use_loader_without_breaking_existing_keywords() -> None:
-    """关键不变量: 即使 loader 已就绪, chat.py 的 SYSTEM_PROMPT 字符串
-    必须保持原样, 现有所有 keyword-asserting test 全过. Phase 2 这一
-    commit 不切流量, 仅落骨架."""
+    """Key invariant: even with the loader in place, chat.py's SYSTEM_PROMPT string
+    must remain unchanged so all existing keyword-asserting tests pass.
+    This Phase 2 commit does not switch traffic; it only lands the skeleton."""
     from app.api.chat import SYSTEM_PROMPT
 
-    # 旧测试断言的关键词必须全部还在
+    # all keywords asserted by old tests must still be present
     must_present = [
         "ZERO-FABRICATION CONTRACT",
         "STRUCTURED ABSTENTION",

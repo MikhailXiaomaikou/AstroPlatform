@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// Q3: 第三方 Plotly 类型 shim. 官方 @types/react-plotly.js 庞大 + 经常
-// 跟 react-plotly.js 小版本不同步. 本 d.ts 只暴露 app 真正用到的 5 个
-// 字段, 不强求 Plotly 完整类型保真, any 是合理 trade-off.
+// Q3: Third-party Plotly type shim. The official @types/react-plotly.js is large and
+// often out of sync with minor versions of react-plotly.js. This d.ts only exposes
+// the 5 fields the app actually uses; full Plotly type fidelity is not required, so any is an acceptable trade-off.
 declare module "react-plotly.js" {
   import { Component } from "react";
   interface PlotParams {

@@ -1,15 +1,15 @@
 """PART AI #6 — paper-level lensing metadata + integration with
 fit_line_lfr lensing coverage check.
 
-锁住 4 个契约:
-1. PAPER_LENSING dict 至少含 SPT-SMG (Bothwell+2013) / Capak+2015 /
-   ALPINE / REBELS 的正确分类.
-2. lensing_kind_for_bibcode / is_paper_lensed_by_default helper 可用.
-3. _normalize_line_measurements 在 ar5iv 表无 μ 列时, 按 bibcode 自动
-   fill is_lensed=True (Bothwell SPT 那种 paper).
-4. _exec_fit_line_lfr 看到 is_lensed=True 但 mu_lens=None 的 row →
+Locks down 4 contracts:
+1. PAPER_LENSING dict contains at least SPT-SMG (Bothwell+2013) / Capak+2015 /
+   ALPINE / REBELS with correct classifications.
+2. lensing_kind_for_bibcode / is_paper_lensed_by_default helpers are usable.
+3. _normalize_line_measurements automatically fills is_lensed=True by bibcode when
+   the ar5iv table has no mu column (as in Bothwell SPT-type papers).
+4. _exec_fit_line_lfr seeing a row with is_lensed=True but mu_lens=None →
    rejected (kind="lensed_no_mu_correction"), result.lensing_summary
-   暴露完整 5-bucket 计数.
+   exposes the full 5-bucket counts.
 """
 
 from __future__ import annotations
@@ -17,27 +17,27 @@ from __future__ import annotations
 from unittest.mock import patch
 
 
-# ── 契约 1: PAPER_LENSING dict 内容 ─────────────────────────────────────
+# ── Contract 1: PAPER_LENSING dict contents ─────────────────────────────────────
 
 
 def test_paper_lensing_registry_has_required_papers() -> None:
-    """SPT-SMG / Capak+2015 / ALPINE / REBELS 必须在表里且分类正确.
-    防止哪天有人误删某条目导致 fit_line_lfr lensing fallback 失效."""
+    """SPT-SMG / Capak+2015 / ALPINE / REBELS must be in the table with correct classifications.
+    Guards against accidental deletion of an entry that would break the fit_line_lfr lensing fallback."""
     from app.services.cii_paper_metadata import PAPER_LENSING
 
-    # cluster-lensed sample 必须 all_sources_lensed
+    # cluster-lensed sample must be all_sources_lensed
     assert PAPER_LENSING.get("2013ApJ...779...67B") == "all_sources_lensed"
     assert PAPER_LENSING.get("2015Natur.522..455C") == "all_sources_lensed"
     assert PAPER_LENSING.get("2017ApJ...836L...2B") == "all_sources_lensed"
 
-    # ALPINE / REBELS 是 field survey, 不是 lensed sample
+    # ALPINE / REBELS are field surveys, not lensed samples
     assert PAPER_LENSING.get("2020A&A...643A...2B") == "no_lensing"
     assert PAPER_LENSING.get("2022MNRAS.515.5610S") == "no_lensing"
 
 
 def test_paper_lensing_values_are_valid_kinds() -> None:
-    """PAPER_LENSING value 必须是 LensingKind enum 之一, 不能写成自由
-    字符串造成 fit_line_lfr 类型错误."""
+    """PAPER_LENSING values must be one of the LensingKind enum values; free-form strings
+    would cause type errors in fit_line_lfr."""
     from app.services.cii_paper_metadata import PAPER_LENSING
 
     valid_kinds = {"all_sources_lensed", "no_lensing", "mixed"}
@@ -47,7 +47,7 @@ def test_paper_lensing_values_are_valid_kinds() -> None:
         )
 
 
-# ── 契约 2: helper 函数 ────────────────────────────────────────────────
+# ── Contract 2: helper functions ────────────────────────────────────────────────
 
 
 def test_lensing_kind_for_bibcode_known_paper() -> None:
@@ -57,7 +57,7 @@ def test_lensing_kind_for_bibcode_known_paper() -> None:
 
 
 def test_lensing_kind_for_bibcode_unknown_paper_returns_none() -> None:
-    """未注册 bibcode 必须返回 None — 不要假设 unknown=lensed."""
+    """Unregistered bibcode must return None — do not assume unknown=lensed."""
     from app.services.cii_paper_metadata import lensing_kind_for_bibcode
 
     assert lensing_kind_for_bibcode("9999XXX...000..000Z") is None
@@ -66,8 +66,8 @@ def test_lensing_kind_for_bibcode_unknown_paper_returns_none() -> None:
 
 
 def test_is_paper_lensed_by_default() -> None:
-    """is_paper_lensed_by_default 只对 all_sources_lensed 返 True;
-    no_lensing / mixed / unknown 都返 False."""
+    """is_paper_lensed_by_default returns True only for all_sources_lensed;
+    no_lensing / mixed / unknown all return False."""
     from app.services.cii_paper_metadata import is_paper_lensed_by_default
 
     assert is_paper_lensed_by_default("2013ApJ...779...67B") is True   # SPT
@@ -77,15 +77,15 @@ def test_is_paper_lensed_by_default() -> None:
     assert is_paper_lensed_by_default(None) is False
 
 
-# ── 契约 3: arxiv.py _normalize_line_measurements 用 fallback ────────
+# ── Contract 3: arxiv.py _normalize_line_measurements uses fallback ────────
 
 
 def test_arxiv_normalize_uses_paper_lensing_fallback_for_spt_smg() -> None:
-    """ar5iv 表无 μ 列 + paper 是 SPT-SMG (Bothwell+2013) → row.is_lensed=True
-    被 paper-level metadata fallback 设上, 即便 table 没说."""
+    """ar5iv table has no mu column + paper is SPT-SMG (Bothwell+2013) → row.is_lensed=True
+    set by paper-level metadata fallback, even though the table does not say so."""
     from app.api.arxiv import _normalize_line_measurements
 
-    # 模拟一个 SPT-SMG paper 的 table, **没有 μ 列**
+    # simulate a SPT-SMG paper's table with **no mu column**
     fake_tables = [{
         "table_id": "tbl_a1",
         "label": "Table A1",
@@ -105,18 +105,18 @@ def test_arxiv_normalize_uses_paper_lensing_fallback_for_spt_smg() -> None:
     }]
     measurements = _normalize_line_measurements(fake_tables)
 
-    # 至少抓到一条 (header 标 cii lsun 应该被 normalizer 识别成 [CII])
+    # at least one row captured (header labeled cii lsun should be recognized as [CII] by normalizer)
     if measurements:
         m = measurements[0]
-        # paper-level fallback 必须把 is_lensed 设 True
+        # paper-level fallback must set is_lensed to True
         assert m.get("is_lensed") is True
-        # 但 mu_lens 仍是 None (table 没 μ)
+        # but mu_lens is still None (table has no mu)
         assert m.get("mu_lens") is None
 
 
 def test_arxiv_normalize_does_NOT_fallback_for_field_survey() -> None:
-    """ALPINE / REBELS field survey paper 即使 table 没 μ 列, is_lensed
-    也不能被 paper-level fallback 设 True (这些 paper 是 no_lensing)."""
+    """ALPINE / REBELS field survey papers must not have is_lensed set to True by paper-level
+    fallback, even when the table has no mu column (these papers are no_lensing)."""
     from app.api.arxiv import _normalize_line_measurements
 
     fake_tables = [{
@@ -139,18 +139,18 @@ def test_arxiv_normalize_does_NOT_fallback_for_field_survey() -> None:
     measurements = _normalize_line_measurements(fake_tables)
     if measurements:
         m = measurements[0]
-        # ALPINE 不能被 fallback 标 lensed
+        # ALPINE must not be marked lensed by fallback
         assert m.get("is_lensed") is not True
 
 
-# ── 契约 4: fit_line_lfr lensing coverage + lensing_summary 字段 ─────
+# ── Contract 4: fit_line_lfr lensing coverage + lensing_summary fields ─────
 
 
 def _make_rows_with_lensed_subset() -> list[dict]:
-    """混合样本: 5 行 ALPINE 不 lensed + 3 行 SPT lensed (mu_lens=None)
-    + 2 行 SPT 已 demagnify (_demagnified=True, mu_lens=2.5)."""
+    """Mixed sample: 5 ALPINE rows not lensed + 3 SPT lensed (mu_lens=None)
+    + 2 SPT already demagnified (_demagnified=True, mu_lens=2.5)."""
     rows = []
-    # 5 行 ALPINE
+    # 5 ALPINE rows
     for i in range(5):
         rows.append({
             "source_name": f"ALPINE-{i}",
@@ -168,7 +168,7 @@ def _make_rows_with_lensed_subset() -> list[dict]:
             "is_lensed": False,
             "source_cosmology": None,
         })
-    # 3 行 SPT lensed without mu
+    # 3 SPT rows lensed without mu
     for i in range(3):
         rows.append({
             "source_name": f"SPT-LENSED-NOMU-{i}",
@@ -182,11 +182,11 @@ def _make_rows_with_lensed_subset() -> list[dict]:
             "arxiv_id": "1304.4256",
             "log_luminosity_err": None,
             "fwhm_err_km_s": None,
-            "mu_lens": None,        # 关键: 没 mu
-            "is_lensed": True,      # 关键: paper-level fallback 设 True
+            "mu_lens": None,        # key: no mu
+            "is_lensed": True,      # key: set True by paper-level fallback
             "source_cosmology": None,
         })
-    # 2 行 SPT 已 demagnify
+    # 2 SPT rows already demagnified
     for i in range(2):
         rows.append({
             "source_name": f"SPT-DEMAG-{i}",
@@ -216,22 +216,22 @@ def _patch_cache(rows: list[dict]):
 
 
 def test_fit_line_lfr_skips_lensed_no_mu_rows_with_clear_reason() -> None:
-    """is_lensed=True + mu_lens=None + not _demagnified → 入 rejected
-    with reason='lensed_no_mu_correction', 不进 fit."""
+    """is_lensed=True + mu_lens=None + not _demagnified → entered into rejected
+    with reason='lensed_no_mu_correction', excluded from fit."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
     rows = _make_rows_with_lensed_subset()
     with _patch_cache(rows):
         out = _exec_fit_line_lfr({"cache_key": "x"})
 
-    # 5 ALPINE + 2 SPT-DEMAG = 7 进 fit; 3 SPT-LENSED-NOMU 入 rejected
+    # 5 ALPINE + 2 SPT-DEMAG = 7 enter fit; 3 SPT-LENSED-NOMU enter rejected
     assert out["n_used"] == 7
     rejected_lensed = [
         r for r in out["rejected_summary"]
         if r.get("reason") == "lensed_no_mu_correction"
     ]
     assert len(rejected_lensed) == 3
-    # 每条 rejected 必须含具体源名 + bibcode + 行动建议
+    # each rejected row must contain source name + bibcode + action suggestion
     for r in rejected_lensed:
         assert "SPT-LENSED-NOMU" in str(r.get("source_name") or "")
         assert r.get("bibcode") == "2013ApJ...779...67B"
@@ -239,7 +239,7 @@ def test_fit_line_lfr_skips_lensed_no_mu_rows_with_clear_reason() -> None:
 
 
 def test_fit_line_lfr_lensing_summary_5_bucket_counts() -> None:
-    """result.lensing_summary 必须含 5 个 bucket: in_fit unlensed /
+    """result.lensing_summary must contain 5 buckets: in_fit unlensed /
     in_fit demagnified / skipped_no_mu / unknown / papers_default_lensed."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
@@ -251,15 +251,15 @@ def test_fit_line_lfr_lensing_summary_5_bucket_counts() -> None:
     assert summary["n_unlensed_in_fit"] == 5
     assert summary["n_lensed_demagnified_in_fit"] == 2
     assert summary["n_lensed_skipped_no_mu"] == 3
-    # papers_default_lensed 必须含 SPT bibcode (paper-level metadata 命中)
+    # papers_default_lensed must contain the SPT bibcode (paper-level metadata hit)
     assert "2013ApJ...779...67B" in summary["papers_default_lensed"]
-    # ALPINE 不在 papers_default_lensed (它是 no_lensing)
+    # ALPINE not in papers_default_lensed (it is no_lensing)
     assert "2020A&A...643A...2B" not in summary["papers_default_lensed"]
 
 
 def test_fit_line_lfr_all_lensed_no_mu_returns_failed_status() -> None:
-    """所有 row 都 lensed 但都缺 mu → 早退 FAILED + 明确错误消息指向
-    demagnify_sample, 不 fit 空 array."""
+    """All rows are lensed but all lack mu → early exit with FAILED + clear error message
+    pointing to demagnify_sample, does not fit an empty array."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
     rows = []
@@ -290,8 +290,8 @@ def test_fit_line_lfr_all_lensed_no_mu_returns_failed_status() -> None:
 
 
 def test_fit_line_lfr_no_lensed_rows_lensing_summary_zeros() -> None:
-    """纯 ALPINE field sample → lensing_summary 三个 'in_fit lensed'
-    bucket 都是 0, papers_default_lensed 是空."""
+    """Pure ALPINE field sample → lensing_summary three 'in_fit lensed'
+    buckets are all 0, papers_default_lensed is empty."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
     rows = []

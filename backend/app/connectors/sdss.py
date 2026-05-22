@@ -79,11 +79,13 @@ class SDSSConnector(BaseConnector):
         if ra is None or dec is None:
             ra, dec = await self._resolve_name(query)
 
-        # L18 (audit 2026-04-20): radius clamp 不再静默.  之前 min(max(r,
-        # 0.001), 0.05) 把用户要求的 1° 默默压成 0.05° (3 arcmin), 用户
-        # 看到结果只有少数目标但不知道被 clamp 了, 样本偏差却无提示.
-        # 改成: clamp 发生时 logger.warning, 稍后在返回对象的 extra 里
-        # 记录 radius_clamped=True 让调用方/UI 能 propagate.
+        # L18 (audit 2026-04-20): radius clamping is no longer silent. Previously
+        # min(max(r, 0.001), 0.05) silently compressed a user-requested 1° down to
+        # 0.05° (3 arcmin); users saw few results without knowing they had been
+        # clamped, introducing a sample bias with no warning.
+        # Now: emit logger.warning when clamping occurs, and record
+        # radius_clamped=True in the returned objects' extra so callers/UI can
+        # propagate the information.
         requested_radius = float(radius)
         effective_radius = min(max(requested_radius, 0.001), 0.05)
         self._last_radius_clamp: dict | None = None
@@ -378,12 +380,14 @@ class SDSSSpecOnlyConnector(SDSSConnector):
             ra, dec = await self._resolve_name(query)
 
         effective_radius = min(max(radius, 0.001), 0.1)  # slightly wider
-        # L2-d (audit 2026-04-20): 真正的锥搜.  之前用 "ra BETWEEN ra-r AND
-        # ra+r AND dec BETWEEN dec-r AND dec+r" 是方盒子, 在极区 (|dec|
-        # 大) 纬向拉伸 — |dec|=89° / r=0.1° 时 RA 方向实际覆盖 ≈ 5.7°,
-        # 其他区域按方盒收, 样本不一致.  切 dbo.fGetNearbyObjEq 保持跟
-        # PhotoObj 路径一致的锥搜 (radius 单位 arcmin).  SpecObj 的 ra/dec
-        # 就是真实天区坐标 (ICRS), 跟 fGetNearbyObjEq 的锥搜完全相容.
+        # L2-d (audit 2026-04-20): true cone search. The previous "ra BETWEEN
+        # ra-r AND ra+r AND dec BETWEEN dec-r AND dec+r" was a rectangular box
+        # that stretches in RA near the poles — at |dec|=89° / r=0.1°, the RA
+        # coverage is ~5.7°, while at other latitudes it collapses to a box,
+        # producing inconsistent samples. Switching to dbo.fGetNearbyObjEq keeps
+        # the search consistent with the PhotoObj path (radius in arcmin). SpecObj
+        # ra/dec are true sky coordinates (ICRS), fully compatible with
+        # fGetNearbyObjEq cone search.
         radius_arcmin = effective_radius * 60
         sql = f"""SELECT TOP 200
             s.bestobjid AS objid, s.ra, s.dec, s.z AS spec_z,

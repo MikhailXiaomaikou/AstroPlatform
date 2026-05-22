@@ -10,6 +10,8 @@ import io
 import logging
 from typing import TYPE_CHECKING
 
+import httpx
+
 from app.connectors.base import AstroObject, BaseConnector, FITSFile
 from app.connectors.retry import with_retry
 
@@ -129,9 +131,12 @@ class LAMOSTConnector(BaseConnector):
 
     @staticmethod
     def _query_cone(ra: float, dec: float, radius: float) -> list[dict]:
-        """Synchronous cone search against the LAMOST DR9 API."""
-        import requests
+        """Synchronous cone search against the LAMOST DR9 API.
 
+        Runs inside ``run_in_executor`` (see ``search`` above), so the sync
+        httpx.Client API is appropriate. Uses httpx (not requests) for HTTP
+        client consistency across the backend.
+        """
         # LAMOST API expects radius in arcminutes
         radius_arcmin = radius * 60.0
         url = f"{LAMOST_API_BASE}/cone"
@@ -141,7 +146,8 @@ class LAMOSTConnector(BaseConnector):
             "sr": radius_arcmin,
             "limit": 50,
         }
-        resp = requests.get(url, params=params, timeout=30)
+        with httpx.Client(timeout=30) as client:
+            resp = client.get(url, params=params)
         resp.raise_for_status()
         data = resp.json()
 

@@ -1,4 +1,4 @@
-"""Lightweight in-memory checkpoint store for multi-step AI workflows.
+"""Cross-process checkpoint store for multi-step AI workflows.
 
 A tool call chain may span 5-10 steps (query → filter → fit → crossmatch
 → plot). Before this module existed, a mid-chain failure forced the AI
@@ -7,18 +7,23 @@ already in the session cache. WorkflowCheckpoint records (step_idx,
 tool_name, inputs_hash, status, cache_refs) so the AI can explicitly
 resume from the last good step.
 
-Storage is process-local dict keyed by session_id. Entries expire
-after TTL (default 2 hours) to prevent unbounded growth. Intentionally
-not backed by the database — checkpoints are ephemeral session state,
-not persistent research artifacts.
+Storage is the shared JsonKvStore (Redis-first, SQLite fallback), so
+checkpoints survive process restart and are visible across multi-worker
+deployments. TTL is 2 h, enforced by the backend.
+
+Public API (record_step / get_checkpoint / get_last_successful_step /
+summarize / clear_session / reset) is unchanged from the previous
+in-memory implementation; callers do not need to migrate.
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from threading import RLock
 from typing import Any
+
+from app.services._kv_store import JsonKvStore
 
 TTL_SECONDS = 2 * 3600
 MAX_STEPS_PER_SESSION = 32
@@ -44,15 +49,34 @@ class WorkflowCheckpoint:
     updated_at: float = field(default_factory=time.time)
 
 
-_store: dict[str, WorkflowCheckpoint] = {}
+_store = JsonKvStore("wf_ckpt")
+# Process-local lock guards the read-modify-write window within a single
+# worker. Cross-worker concurrency on the same session is accepted to drop
+# at most a step or two; chat sessions are pinned to one worker in practice
+# (one user, one SSE stream, one agent loop).
 _lock = RLock()
 
 
-def _sweep_expired(now: float | None = None) -> None:
-    now = now if now is not None else time.time()
-    stale = [sid for sid, cp in _store.items() if now - cp.updated_at > TTL_SECONDS]
-    for sid in stale:
-        _store.pop(sid, None)
+def _deserialize(data: dict | None) -> WorkflowCheckpoint | None:
+    if not isinstance(data, dict):
+        return None
+    try:
+        steps = [CheckpointStep(**s) for s in data.get("steps", [])]
+        return WorkflowCheckpoint(
+            session_id=data["session_id"],
+            steps=steps,
+            updated_at=float(data.get("updated_at", time.time())),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _serialize(cp: WorkflowCheckpoint) -> dict:
+    return asdict(cp)
+
+
+def _persist(cp: WorkflowCheckpoint) -> None:
+    _store.set(cp.session_id, _serialize(cp), TTL_SECONDS)
 
 
 def record_step(
@@ -67,11 +91,9 @@ def record_step(
 ) -> CheckpointStep:
     """Append a step to the session's checkpoint chain."""
     with _lock:
-        _sweep_expired()
-        cp = _store.get(session_id)
+        cp = _deserialize(_store.get(session_id))
         if cp is None:
             cp = WorkflowCheckpoint(session_id=session_id)
-            _store[session_id] = cp
         step = CheckpointStep(
             step_idx=len(cp.steps),
             tool_name=tool_name,
@@ -83,19 +105,17 @@ def record_step(
             summary=summary,
         )
         cp.steps.append(step)
-        # Bound memory per session
         if len(cp.steps) > MAX_STEPS_PER_SESSION:
             cp.steps = cp.steps[-MAX_STEPS_PER_SESSION:]
             for i, s in enumerate(cp.steps):
                 s.step_idx = i
         cp.updated_at = time.time()
+        _persist(cp)
         return step
 
 
 def get_checkpoint(session_id: str) -> WorkflowCheckpoint | None:
-    with _lock:
-        _sweep_expired()
-        return _store.get(session_id)
+    return _deserialize(_store.get(session_id))
 
 
 def get_last_successful_step(session_id: str) -> CheckpointStep | None:
@@ -113,6 +133,9 @@ def summarize(session_id: str) -> dict[str, Any]:
     cp = get_checkpoint(session_id)
     if cp is None or not cp.steps:
         return {"session_id": session_id, "has_checkpoint": False, "steps": []}
+    last_successful = next(
+        (s for s in reversed(cp.steps) if s.status == "completed"), None
+    )
     return {
         "session_id": session_id,
         "has_checkpoint": True,
@@ -131,19 +154,17 @@ def summarize(session_id: str) -> dict[str, Any]:
             for s in cp.steps
         ],
         "last_successful_step_idx": (
-            get_last_successful_step(session_id).step_idx
-            if get_last_successful_step(session_id) is not None
-            else None
+            last_successful.step_idx if last_successful is not None else None
         ),
     }
 
 
 def clear_session(session_id: str) -> None:
     with _lock:
-        _store.pop(session_id, None)
+        _store.delete(session_id)
 
 
 def reset() -> None:
-    """Test helper."""
+    """Test helper — clears every checkpoint in the ``wf_ckpt`` namespace."""
     with _lock:
-        _store.clear()
+        _store.clear_namespace()

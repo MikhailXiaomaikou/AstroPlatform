@@ -1,6 +1,6 @@
 # Standard Astro Architecture
 
-**Current as of Provenance v2 + the Journal Edition UI overhaul + literature-table / cosmology workflow hardening.** Reflects the actual checked-in code, not an aspirational roadmap. Update when modules, flows, or deployment assumptions materially change.
+**Current as of Provenance v2 + the Journal Edition UI overhaul + literature-table / cosmology workflow hardening + the modular focus-gate rollout (M1/M2), the Solar System M0 module, and the Exoplanet M0 module.** Reflects the actual checked-in code, not an aspirational roadmap. Update when modules, flows, or deployment assumptions materially change.
 
 ## 1. System Shape
 
@@ -8,13 +8,13 @@ Standard Astro is a full-stack astronomy research platform with four runtime lay
 
 1. **Frontend SPA** — React 19 + TypeScript (strict) served by Vite. Pages: Data Browser, AI Chat (assistant), Pipeline Studio, ADQL, Workspace, Papers, Observations, Team, Account, Billing, Settings, Research History, Alert Dashboard, Anomaly Explorer, Landing, Help, Auth, Shared Session.
 
-2. **FastAPI backend** — Single process, 33 domain routers (`scripts/stats.sh` for live count). SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
+2. **FastAPI backend** — Single process, 32 domain routers (`scripts/stats.sh` for live count). SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
 
 3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem or S3 for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines.
 
-4. **External services** — 24 astronomy connector keys, with 6 provenance-v2 active sources (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`) and 18 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local). ALMA is active for Science Archive observation metadata, not derived line luminosity/FWHM measurements.
+4. **External services** — 26 astronomy connector keys, with 9 provenance-v2 active sources (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`, `jpl`, `mpc`, `nasa_exoplanet_archive`) and 17 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local). ALMA is active for Science Archive observation metadata, not derived line luminosity/FWHM measurements. JPL Horizons + IAU MPC came online with the Solar System M0 module (`ASTRO_RESEARCH_FOCUS=solar_system`); NASA Exoplanet Archive (`pscomppars` composite parameters via `astroquery.ipac.nexsci`) came online with the Exoplanet M0 module (`ASTRO_RESEARCH_FOCUS=exoplanet`).
 
-Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **87-tool catalog** (§3; live count via `scripts/stats.sh`).
+Users move between search → chat → pipeline → workspace → export → paper without losing context. The chat assistant bridges every module through its **91-tool catalog** (§3; live count via `scripts/stats.sh`). The effective per-turn tool surface is narrower than 91 because the focus gate filters tools by the active module: cosmology focus exposes 35 tools, solar-system focus exposes 12, and exoplanet focus exposes 9.
 
 ### Runtime topology
 
@@ -34,7 +34,7 @@ FastAPI web process
 Background / external services
   ├─ Celery worker + beat for heavy pipeline nodes
   ├─ Redis or SQLite connector cache + singleflight
-  ├─ Archive services: Gaia, VizieR, SIMBAD, NED, 2MASS, ALMA metadata
+  ├─ Archive services: Gaia, VizieR, SIMBAD, NED, 2MASS, ALMA metadata, JPL Horizons, IAU MPC, NASA Exoplanet Archive
   ├─ Literature services: ADS, arXiv, ar5iv, LaTeX source extraction
   └─ Model providers: Claude, OpenAI, DeepSeek, local OpenAI-compatible, local CLI
 ```
@@ -113,6 +113,70 @@ numeric validation, citation validation, rate limits, and UI status chips.
 6. Alpha-testing outputs must include the research plan, executed matrix,
    runnable/not-runnable cells, evidence graph, fact-check report, and local
    diagnostic bundle for blind-test review.
+
+**Solar System module workflow (M0, `ASTRO_RESEARCH_FOCUS=solar_system`)**
+
+1. The focus gate filters the LLM tool list down to the solar-system whitelist
+   declared in `backend/app/prompts/modules/solar_system/manifest.yaml`
+   (currently 12 tools). The SYSTEM_PROMPT is rebuilt from `base.md` + `core/`
+   + `modules/solar_system/prompt.md` so non-focus domain idioms are not
+   present.
+2. Data-query tools — `query_mpc_orbit`, `fetch_horizons_ephemeris`,
+   `query_sbdb_orbit`, `query_sbdb_close_approaches`, `query_sentry_risk`,
+   `query_damit_shape_model` — go through the JPL Horizons / IAU MPC / JPL
+   SBDB / CNEOS Sentry-II / DAMIT HTTP endpoints with provenance-v2 dataset
+   entries.
+3. Formula tools operate on cached data only (`data_origin=cached_real`):
+   `compute_hg_magnitude` (Bowell+1989 H–G phase function),
+   `compute_afrho` (A'Hearn+1984 dust-production proxy),
+   `fit_neatm_diameter_albedo` (Harris 1998 / Mainzer+2011 NEATM thermal model),
+   `compute_neo_collision_probability` (Öpik 1951 / Wetherill 1967 /
+   Morbidelli+2002 scaling).
+4. Classification tools: `classify_asteroid_busdemeo` (DeMeo+2009 reflectance
+   taxonomy) and `classify_asteroid_sdss_colors` (Carvano+2010 griz colour
+   taxonomy).
+5. Numeric and provenance guards remain identical to cosmology: every result
+   carries an `__tool_status__` / `data_origin` / `provenance.datasets`
+   envelope, the claim validator checks numeric claims against tool outputs
+   at ±1 %, and EMPTY/FAILED returns trigger the structured-abstention path
+   instead of fabricated narrative.
+
+**Exoplanet module workflow (M0, `ASTRO_RESEARCH_FOCUS=exoplanet`)**
+
+1. The focus gate filters the LLM tool list down to the exoplanet whitelist
+   declared in `backend/app/prompts/modules/exoplanet/manifest.yaml`
+   (currently 9 tools: 8 new exoplanet tools + `fit_rv_orbit` carried over
+   from the dormant exoplanet manifest). The SYSTEM_PROMPT is rebuilt from
+   `base.md` + `core/` + `modules/exoplanet/prompt.md` so non-focus domain
+   idioms (cosmology likelihoods, solar-system taxonomy, etc.) are not
+   present.
+2. Data-query tools — `query_exoplanet_archive`, `query_confirmed_planets`,
+   `query_tess_target_list`, `fetch_tess_lightcurve` — go through the NASA
+   Exoplanet Archive `pscomppars` / Confirmed Planets TAP endpoints
+   (via `astroquery.ipac.nexsci`, Akeson+2013) and TIC v8 (Stassun+2019) /
+   MAST TESS light-curve products (Ricker+2015, via `lightkurve`), with
+   provenance-v2 dataset entries on each return.
+3. Fitting + formula tools operate on cached light-curve or stellar-parameter
+   payloads (`data_origin=cached_real` when the upstream tool returned real
+   archive data):
+   - `fit_transit` runs a fast trapezoidal Nelder-Mead transit fit
+     (Seager & Mallén-Ornelas 2003 geometry, Mandel & Agol 2002 depth
+     contract), and explicitly recommends `batman` / `pytransit` downstream
+     for limb-darkened publication-grade fits.
+   - `compute_transit_depth`, `compute_equilibrium_temperature`,
+     `compute_planet_density` are closed-form helpers with inline citations
+     to Seager & Mallén-Ornelas 2003 and standard stellar-physics
+     definitions.
+   - `fit_rv_orbit` (carried over from `_dormant_exoplanet`) is the
+     Keplerian radial-velocity fitter, available under exoplanet focus only.
+4. Numeric and provenance guards remain identical to cosmology / solar
+   system: every result carries an `__tool_status__` / `data_origin` /
+   `provenance.datasets` envelope, the claim validator checks numeric
+   claims against tool outputs at ±1 %, and EMPTY/FAILED returns trigger
+   the structured-abstention path. The exoplanet prompt explicitly forbids
+   citing `pscomppars` parameters when the query returned 0 rows, and
+   forbids reporting depth/duration without a corresponding fit result in
+   the same turn.
 
 **Paper-to-tool mining workflow**
 
@@ -215,7 +279,17 @@ Strict build (`tsc -b && vite build`) is non-negotiable: `strict`, `noUnusedLoca
 
 Entrypoint: [`backend/app/main.py`](./backend/app/main.py). FastAPI app factory + middleware stack (CORS, rate limit, event tracking, observability); migrates any missing columns at startup via `_migrate_add_columns` (SQLite/PG safe).
 
-### API domains (33 routers — live count via `scripts/stats.sh`)
+### Modular focus gating (M1/M2, 2026-05-18)
+
+Standard Astro now ships as a small set of focused research modules instead of one monolithic prompt + tool catalog.
+
+- **`backend/app/prompts/`** has a three-layer structure: `base.md` (always loaded) + `core/*.md` (cross-cutting rules — provenance, citation hierarchy, ZERO-FABRICATION CONTRACT, STRUCTURED ABSTENTION, ADQL semantics) + `modules/<name>/{manifest.yaml, prompt.md, appendix.md}`. Manifests declare `status: active|dormant` and the per-module tool allowlist.
+- **`backend/app/services/prompt_loader.py`** assembles the runtime `SYSTEM_PROMPT` and the tool allowlist per the `ASTRO_RESEARCH_FOCUS` env var (default `cosmology`). `build_system_prompt(focus)` returns base + core + the active module's prompt; `build_allowed_tools(focus)` returns the manifest tool set.
+- **Active modules** (3): `cosmology` (legacy first module, full BAO/SN/CMB/lensing workflow), `solar_system` (M0, asteroids/comets/NEOs/TNOs), and `exoplanet` (M0, transit/RV/equilibrium-temperature workflow). **Dormant modules** (12): `_dormant_agn`, `_dormant_galaxy_morphology`, `_dormant_high_z_galaxy`, `_dormant_image_reduction`, `_dormant_paper_export`, `_dormant_paper_tool_mining`, `_dormant_pipeline_dag`, `_dormant_pulsar_timing`, `_dormant_radio`, `_dormant_stellar`, `_dormant_team_workspace`, `_dormant_xray_spectroscopy`. Dormant code paths remain in the tree under their `_dormant_*` directories; promoting one requires moving it out, flipping `status: active`, and listing its tools in the manifest. `_dormant_exoplanet` was promoted to `exoplanet` on 2026-05-21 — the original `fit_rv_orbit` tool from that manifest was carried over into the new active manifest.
+- **L1 hard tool gating** lives in `api/chat.py` `_filter_tools_by_research_focus`: foci in `_FOCUS_GATED_VALUES = {"cosmology", "solar_system", "exoplanet"}` filter the tool list before it reaches the LLM. Other env values are no-ops. Karpathy's three-similar threshold is now reached (cosmology + solar_system + exoplanet all use the same template), so the next vertical promotion is a candidate for extracting a `ModuleRegistry` instead of hardcoding a fourth literal.
+- 18 shell `TOOLS` specs without a dispatch path (M2) and 4 dead frontend pages (M3) have been removed, so the catalog now matches what the agent loop will actually execute.
+
+### API domains (32 routers — live count via `scripts/stats.sh`)
 
 | Router | Role |
 |---|---|
@@ -249,20 +323,32 @@ Entrypoint: [`backend/app/main.py`](./backend/app/main.py). FastAPI app factory 
 - [`app/ai/model_profiles.py`](./backend/app/ai/model_profiles.py) — Manual provider/model registry. Current profiles: Claude default, OpenAI GPT-5.5 alias (falls back to `gpt-5.4` unless `OPENAI_GPT55_MODEL` is set), OpenAI GPT-5.4, DeepSeek V4 Pro, DeepSeek V4 Flash, local OpenAI-compatible backends, and the local-only OpenAI CLI profile.
 - [`app/ai/inference_router.py`](./backend/app/ai/inference_router.py) — Calls the user-selected model profile, logs cost/latency/model/fallback metadata, and falls back across backends only after the selected backend fails. The local OpenAI CLI path is enabled only with `OPENAI_CLI_ENABLED=1`; it runs the CLI in ephemeral read-only mode and still returns JSON tool calls to the Standard Astro backend, so network/archive searches, ADQL/database queries, Python analysis, plotting, and provenance checks remain server-side. Raises `InferenceError("No configured AI backends are available…")` on no-key paths (now surfaced pre-send by F4.2).
 - `app/ai/agents/*` — Specialist prompt fragments (data, analysis, literature, observation, visualization, spectrum).
-- [`app/services/ai_tools.py`](./backend/app/services/ai_tools.py) — **87-tool catalog + executor dispatcher**. Each tool has a literature-cited description and JSON-schema input.
-- [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), ~108 KB / ~27 k-token `SYSTEM_PROMPT` (59 sections — live counts via `scripts/stats.sh`), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser, and deterministic literature-table / `fit_line_lfr` follow-up for line-relation prompts when the model has found papers or fit-ready measurement caches but skipped the required tool.
+- [`app/services/ai_tools/`](./backend/app/services/ai_tools) — **91-tool catalog + executor dispatcher**, organised as a package (`__init__.py` re-exports the public `TOOLS` list, `execute_tool`, and helper imports so call sites are unchanged). Each tool has a literature-cited description and JSON-schema input. Per-turn the focus gate (`_filter_tools_by_research_focus` in `api/chat.py`) narrows this to the active module's manifest allowlist: 35 tools under cosmology focus, 12 tools under solar-system focus, 9 tools under exoplanet focus.
+- [`app/services/ai_tools_solar_system.py`](./backend/app/services/ai_tools_solar_system.py) — 12 solar-system tool implementations (data query / formula / classification), each carrying inline literature references. Imported by `ai_tools/__init__.py`.
+- [`app/services/ai_tools_exoplanet.py`](./backend/app/services/ai_tools_exoplanet.py) — 8 exoplanet tool implementations (`query_exoplanet_archive`, `query_confirmed_planets`, `fetch_tess_lightcurve`, `fit_transit`, `compute_equilibrium_temperature`, `compute_transit_depth`, `compute_planet_density`, `query_tess_target_list`), each with inline citations to Akeson+2013 / Ricker+2015 / Stassun+2019 / Mandel & Agol 2002 / Seager & Mallén-Ornelas 2003. The exoplanet manifest additionally carries `fit_rv_orbit`, defined in `ai_tools/` itself, for Keplerian RV fitting.
+- [`app/services/solar_system_dynamics.py`](./backend/app/services/solar_system_dynamics.py), [`solar_system_phot.py`](./backend/app/services/solar_system_phot.py), [`solar_system_taxonomy.py`](./backend/app/services/solar_system_taxonomy.py), [`solar_system_thermo.py`](./backend/app/services/solar_system_thermo.py) — pure-function science kernels (orbital dynamics, H–G + Afρ photometry, Bus-DeMeo / Carvano taxonomy, NEATM thermal model) shared by the solar-system tools.
+- [`app/services/exoplanet_physical.py`](./backend/app/services/exoplanet_physical.py), [`exoplanet_transit.py`](./backend/app/services/exoplanet_transit.py) — pure-function science kernels for exoplanet equilibrium-temperature / density / transit-geometry computations and the trapezoidal Nelder-Mead transit fitter.
+- [`app/services/prompt_loader.py`](./backend/app/services/prompt_loader.py) — Three-layer SYSTEM_PROMPT assembler (`base.md` + `core/*.md` + `modules/<focus>/prompt.md`) plus per-focus tool allowlist builder; cached via `lru_cache`.
+- [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), focus-aware `SYSTEM_PROMPT` built via `prompt_loader.build_system_prompt(_ASTRO_RESEARCH_FOCUS)` (cosmology focus: ~92 KB / ~23 k tokens / 55 sections; solar-system focus: ~86 KB / ~21 k tokens / 59 sections; exoplanet focus assembles a comparable 80-90 KB envelope — run `scripts/stats.sh` for the live numbers per focus), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser, and deterministic literature-table / `fit_line_lfr` follow-up for line-relation prompts when the model has found papers or fit-ready measurement caches but skipped the required tool.
 
-#### Tool catalogue (87 — live count via `scripts/stats.sh`)
+#### Tool catalogue (91 — live count via `scripts/stats.sh`)
 
 Domain-specific additions include:
 - **`query_gaia_cluster`** — Composes Gaia DR3 member-selection ADQL from structured params (center name → Sesame/SIMBAD resolve → parallax + PM + RUWE + G-mag cuts). Keeps SQL out of the LLM's hot path so F2.1 EMPTY banners fire cleanly on 0-row returns.
 - **`get_extinction`** — A_V / E(B-V) at a sky position. Primary path SFD98 via `dustmaps.sfd`; exp-disk analytic fallback when `dustmaps` unavailable. Band-specific A_band via Cardelli+ 1989 ratios.
 
-The catalogue is organized through `result_provenance.py` `_DATA_TOOLS` / `_COMPUTE_TOOLS` / `_REFERENCE_TOOLS`:
+The catalogue is organized through `result_provenance.py` `_DATA_TOOLS` / `_COMPUTE_TOOLS` / `_REFERENCE_TOOLS`. Live names are sourced from `ai_tools.TOOLS`; what follows is a grouped snapshot rather than a hand-maintained checklist.
 
-- **Data tools (18)**: `search_objects`, `run_adql`, `query_high_velocity_stars`, `run_sdss_sql` (maintenance-gated as SDSS), `get_object_info`, `get_object_dossier`, `query_transients`, `search_lightcurve`, `crossmatch_catalogs`, `batch_object_search`, `describe_tap_table`, `query_vo_service`, `get_last_search_results`, `read_fits_header`, `get_provenance`, `query_gaia_cluster`, `get_extinction`, `load_cosmology_data_product`.
-- **Compute tools (48)**: `run_python`, `generate_pipeline`, `run_pipeline`, `validate_analysis`, `generate_paper_draft`, `fit_isochrone`, `estimate_photo_z`, `estimate_photo_z_pro`, `analyze_spectrum`, `analyze_spectrum_pro`, `sensitivity_analysis`, `compare_luminosity_distances`, `demagnify_sample`, `prepare_spectral_measurements`, `fit_line_lfr`, `astro_statistics_toolbox`, `fit_cosmology_mcmc`, `run_cobaya_cosmology`, `get_cosmology_run_status`, `build_cosmology_likelihood`, `build_cosmology_robustness_matrix`, `run_cosmology_likelihood_chain`, `run_cosmology_robustness_matrix`, `run_nested_sampler`, `evaluate_chain_diagnostics`, `run_research_matrix`, `fit_transit_model`, `gp_detrend_lightcurve`, `detect_stellar_flares`, `transit_search_bls`, `reduce_ccd_image`, `solve_astrometry`, `extract_photometry`, `extract_sources`, `classify_transient`, `classify_transient_spectrum`, `compute_galaxy_sfr`, `fit_rv_orbit`, `fit_sersic_morphology`, `x_ray_spectral_fit`, `pulsar_derived_quantities`, `analyze_cross_wavelength`, `radio_analysis`, `process_image`, `share_with_team`, `invite_team_member`, `export_results`, `workspace_export`.
-- **Reference tools (21)**: `search_literature`, `read_arxiv_paper`, `extract_literature_tables`, `export_sample_table`, `list_cosmology_datasets`, `plan_research_program`, `build_evidence_graph`, `verify_research_facts`, `export_research_report`, `build_paper_mining_candidate_pool`, `mine_paper_tools`, `run_paper_tool_mining_batch`, `run_paper_tool_mining_loop`, `build_tool_ontology`, `build_tool_gap_matrix`, `rank_tool_implementation_queue`, `literature_review`, `research_workflow`, `generate_proposal`, `get_followup_recommendation`, `full_research_report`.
+Highlights by group:
+
+- **Archive / data query** — `search_objects`, `run_adql`, `get_object_info`, `get_object_dossier`, `query_transients`, `search_lightcurve`, `crossmatch_catalogs`, `batch_object_search`, `describe_tap_table`, `query_vo_service`, `get_last_search_results`, `read_fits_header`, `get_provenance`, `query_gaia_cluster`, `get_extinction`, `load_cosmology_data_product`. `run_sdss_sql` and `query_high_velocity_stars` remain registered but route through the maintenance-gated SDSS path.
+- **Solar System (M0)** — `query_mpc_orbit`, `fetch_horizons_ephemeris`, `query_sbdb_orbit`, `query_sbdb_close_approaches`, `query_sentry_risk`, `query_damit_shape_model`, `compute_hg_magnitude`, `compute_afrho`, `fit_neatm_diameter_albedo`, `compute_neo_collision_probability`, `classify_asteroid_busdemeo`, `classify_asteroid_sdss_colors` — 12 tools, gated to `ASTRO_RESEARCH_FOCUS=solar_system`.
+- **Exoplanet (M0)** — `query_exoplanet_archive`, `query_confirmed_planets`, `fetch_tess_lightcurve`, `fit_transit`, `compute_equilibrium_temperature`, `compute_transit_depth`, `compute_planet_density`, `query_tess_target_list`, plus `fit_rv_orbit` carried over from the original `_dormant_exoplanet` manifest — 9 tools, gated to `ASTRO_RESEARCH_FOCUS=exoplanet`.
+- **Cosmology** — `list_cosmology_datasets`, `build_cosmology_likelihood`, `build_cosmology_robustness_matrix`, `run_cosmology_likelihood_chain`, `run_cosmology_robustness_matrix`, `fit_cosmology_mcmc`, `run_cobaya_cosmology`, `get_cosmology_run_status`, `run_nested_sampler`, `evaluate_chain_diagnostics`, `compare_luminosity_distances`, `sensitivity_analysis`.
+- **Spectral measurement + line relations** — `prepare_spectral_measurements`, `extract_literature_tables`, `fit_line_lfr`, `export_sample_table`, `demagnify_sample`, `analyze_spectrum`, `analyze_spectrum_pro`.
+- **Generic compute + sandbox** — `run_python`, `astro_statistics_toolbox`, `validate_analysis`, `fit_isochrone`, `estimate_photo_z` / `estimate_photo_z_pro`, time-domain tools (`fit_transit_model`, `gp_detrend_lightcurve`, `detect_stellar_flares`, `transit_search_bls`), image-reduction tools (`reduce_ccd_image`, `solve_astrometry`, `extract_photometry`, `extract_sources`, `process_image`), transient + galaxy + RV + morphology + X-ray + pulsar + radio tools.
+- **Pipeline / workspace / export** — `generate_pipeline`, `run_pipeline`, `generate_paper_draft`, `share_with_team`, `invite_team_member`, `export_results`, `workspace_export`.
+- **Research / mining / literature** — `search_literature`, `read_arxiv_paper`, `plan_research_program`, `build_evidence_graph`, `verify_research_facts`, `export_research_report`, `run_research_matrix`, `build_paper_mining_candidate_pool`, `mine_paper_tools`, `run_paper_tool_mining_batch`, `run_paper_tool_mining_loop`, `build_tool_ontology`, `build_tool_gap_matrix`, `rank_tool_implementation_queue`, `literature_review`, `research_workflow`, `generate_proposal`, `get_followup_recommendation`, `full_research_report`.
 
 `result_provenance.ALL_KNOWN_TOOLS` is asserted to equal `{t["name"] for t in TOOLS}` in `tests/test_result_provenance.py`; adding a tool without classifying it breaks CI.
 
@@ -368,7 +454,7 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 
 ### Data access layer
 
-- `app/connectors/*` — **24 connector keys**. The active provenance-v2 keys are `vizier`, `gaia`, `simbad`, `ned`, `2mass`, and `alma`. The other 18 keys (`sdss`, `sdss_spec`, `mast`, `chandra`, `allwise`, `eso`, `irsa`, `jwst`, `lamost`, `desi`, `panstarrs`, `xmm`, `nvss`, `first`, `jpl`, `atnf_pulsar`, `sparc`, `frbstats`) return an `UNAVAILABLE` maintenance banner before connector import. ALMA is active for Science Archive observation metadata only, not derived line luminosity or FWHM measurements.
+- `app/connectors/*` — **26 connector keys**. The active provenance-v2 keys are `vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`, `jpl`, `mpc`, and `nasa_exoplanet_archive`. The other 17 keys (`sdss`, `sdss_spec`, `mast`, `chandra`, `allwise`, `eso`, `irsa`, `jwst`, `lamost`, `desi`, `panstarrs`, `xmm`, `nvss`, `first`, `atnf_pulsar`, `sparc`, `frbstats`) return an `UNAVAILABLE` maintenance banner before connector import. ALMA is active for Science Archive observation metadata only, not derived line luminosity or FWHM measurements. JPL Horizons and IAU MPC were promoted to v2 alongside the Solar System M0 module (Commit C2) and back the `fetch_horizons_ephemeris` / `query_mpc_orbit` tools. NASA Exoplanet Archive was promoted to v2 alongside the Exoplanet M0 module and wraps the `pscomppars` composite-parameters table plus the Confirmed Planets table via `astroquery.ipac.nexsci`.
 - [`app/connectors/registry.py`](./backend/app/connectors/registry.py) — Lazy registry plus availability gate.
 - [`app/connectors/availability.py`](./backend/app/connectors/availability.py) — `V2_AVAILABLE_CONNECTORS`, maintenance response builder, and `connector_gated_total{connector_name}` metric hook.
 - [`app/services/source_mapping.py`](./backend/app/services/source_mapping.py) — machine-readable mapping status for active archive connectors, gated connectors, verified literature-table seeds, and cosmology registry progress. Human-facing status lives in [`docs/SOURCE_MAPPING.md`](./docs/SOURCE_MAPPING.md).
@@ -467,7 +553,7 @@ SQLite (dev) portability via custom `UUIDType` + `JSONType`. Alembic-managed mig
 ### AI chat
 
 1. SSE POST `/api/chat/message/stream` with messages + context (`python_session_id`, `current_session_id`, last search / ADQL result set / uploaded FITS, etc.).
-2. Runtime = `SYSTEM_PROMPT` (57 KB, 46 sections) + specialist-agent fragments + filtered tool list.
+2. Runtime = focus-aware `SYSTEM_PROMPT` (cosmology focus: ~92 KB / 55 sections; solar-system focus: ~86 KB / 59 sections; exoplanet focus: comparable envelope built from `modules/exoplanet/prompt.md` + appendix) + specialist-agent fragments + filtered tool list (focus gate narrows the 91-tool catalog to the active module's manifest).
 3. `inference_router.route(...)` receives the validated manual `model_profile` from chat context, then enters the tool loop (max 12 iterations). Per-tool deadlines: `fit_isochrone` 180 s, `fit_transit_model`/`transit_search_bls` 120 s, `estimate_photo_z_pro` 90 s, rest 45 s. Agent-loop outer 360 s; connection heartbeats every 12 s to defeat proxy idle-kill.
 4. Tool returns flow through `normalize_tool_result` → `__tool_status__` banner + reproducibility envelope + nested provenance + sanity warnings.
 5. Final reply goes through:
@@ -490,17 +576,37 @@ Session share tokens → read / comment / fork URLs. Snapshots serialise current
 
 ## 6. AI knowledge base (`SYSTEM_PROMPT`)
 
-~57 KB / ~14 k tokens / **46 sections**. Highlights (top-of-prompt first):
+Focus-aware. Cosmology focus assembles to **~92 KB / ~23 k tokens / 55 sections**; solar-system focus assembles to **~86 KB / ~21 k tokens / 59 sections**; exoplanet focus assembles a comparable envelope from the 91-line `modules/exoplanet/prompt.md` plus appendix. The prompt is built per request from `backend/app/prompts/` by `services/prompt_loader.build_system_prompt(focus)`:
+
+```
+prompts/
+  base.md                          # always loaded — voice, response format, top-of-prompt invariants
+  core/*.md                        # cross-cutting rules: provenance hierarchy, ZERO-FABRICATION CONTRACT,
+                                   # STRUCTURED ABSTENTION, ADQL aggregate semantics, claim validator interface, …
+  modules/cosmology/prompt.md      # cosmology-focus workflow + literature-table + line-relation rules
+  modules/cosmology/appendix.md
+  modules/solar_system/prompt.md   # asteroid/comet/NEO workflow, JPL Horizons + MPC + SBDB + Sentry-II usage,
+                                   # Bowell H–G / NEATM / Bus-DeMeo / Carvano idioms, abstention contract
+  modules/solar_system/appendix.md
+  modules/exoplanet/prompt.md      # transit + RV workflow, NASA Exoplanet Archive + TESS / TIC v8 data-source tree,
+                                   # Mandel & Agol / Seager-Mallén-Ornelas transit idioms, fit-vs-formula separation
+  modules/exoplanet/appendix.md
+  modules/_dormant_*/              # 12 dormant modules, not loaded under any active focus
+```
+
+Cross-cutting invariants present under every focus:
 
 1. **DATA RELEASE PINS** — Gaia DR3, SDSS DR18, 2MASS PSC, etc. Never mix releases silently.
 2. **Data provenance reporting** — field-level bibcodes first, table-level dataset article second, registry fallback last; no invented bibcodes or memorized author-year substitutes.
-3. **ZERO-FABRICATION CONTRACT** — ±1 % tool-cited rule, now extended to cardinalities ("N stars").
+3. **ZERO-FABRICATION CONTRACT** — ±1 % tool-cited rule, extended to cardinalities ("N stars" / "N close approaches").
 4. **STRUCTURED ABSTENTION** — when all tools this turn are EMPTY/FAILED/UNAVAILABLE, the entire reply must be a single `<tools_returned_nothing.../>` tag; the system renders a card. Inventing prose is penalised.
-5. **Literature-table / line-relation workflow** — `search_literature` is context only; measurement statistics require `extract_literature_tables` / cited line measurements / `fit_line_lfr`.
-6. **Cosmology workflow** — distance/modulus/fitting claims must use a declared cosmology preset or typed tool output; prompt wording like Riess+2011/Suzuki+2012 maps to `FlatLambdaCDM_H73p8_Om0p295`.
-7. **ADQL aggregate-function semantics (F7.1)** — STDDEV/VAR are population, not sample; σ/√N for SEM.
-8. **Cluster / association idioms (F7.2)** — prefer `query_gaia_cluster` + `get_extinction` over hand-written SQL; on EMPTY emit abstention instead of inventing member counts.
-9-46. Domain workflows: database decision tree, Gaia column completeness + specialised tables, GSP-Phot quality flags, extinction routing (SFD for low-E(B-V)), open / globular cluster, variable star (RR Lyrae / Cepheid / EB), distance hierarchy, spectroscopic catalog choice, dust maps (SFD / Bayestar / Green / Marshall), X-ray spectral fitting (Sherpa, HI4PI, Wilms abundances), SFR estimators (K&E 2012), RV orbit fitting, rotation curves (SPARC + galpy), stellar atmospheres (ATLAS9/MARCS/PHOENIX), galaxy morphology (Sérsic / galfit / statmorph), IMF, cluster virial scaling, pulsars (YMW16 DM, Lorimer & Kramer), WD cooling (Bédard+2020), brown dwarfs (Kirkpatrick 2005), IFU kinematics (Voronoi + pPXF), AGN SED decomposition (CIGALE, Vestergaard-Peterson BH mass), Galactic streams (GD-1, Sgr, Gaia-Enceladus), solar system (JPL Horizons), specialised-domain references (FRB, GW, lensing, BAO, CMB, N-body, microlensing, chemical evolution, adaptive optics, VLBI), data-integrity rules (no simulated data), pipeline DAG generation, action JSON format, SIMBAD basic-table columns.
+5. **ADQL aggregate-function semantics** — STDDEV/VAR are population, not sample; σ/√N for SEM.
+
+Focus-specific top-of-prompt sections:
+
+- **Cosmology focus** — literature-table / line-relation workflow (`search_literature` is context only; measurement statistics require `extract_literature_tables` / `fit_line_lfr`); cosmology workflow (distance/modulus claims must use a declared cosmology preset or typed tool output; Riess+2011/Suzuki+2012 wording maps to `FlatLambdaCDM_H73p8_Om0p295`); cluster / association idioms (prefer `query_gaia_cluster` + `get_extinction` over hand-written SQL); plus domain workflows for variable stars, distance hierarchy, dust maps, X-ray spectral fitting, SFR estimators, RV orbits, rotation curves, stellar atmospheres, galaxy morphology, IMF, pulsars, WD cooling, brown dwarfs, IFU kinematics, AGN SED decomposition, Galactic streams, specialised-domain references (FRB, GW, lensing, BAO, CMB, N-body, microlensing, chemical evolution, AO, VLBI), data-integrity rules, pipeline DAG generation, action JSON format, SIMBAD basic-table columns.
+- **Solar-system focus** — JPL Horizons / IAU MPC / JPL SBDB / CNEOS Sentry-II / DAMIT data-source decision tree, H–G phase-function reduction (Bowell+1989), Afρ dust-production proxy (A'Hearn+1984), NEATM thermal model (Harris 1998 / Mainzer+2011), Öpik impact-probability scaling (Öpik 1951 / Wetherill 1967 / Morbidelli+2002), Bus-DeMeo reflectance taxonomy (DeMeo+2009) and Carvano SDSS-colour taxonomy (Carvano+2010), close-approach + Sentry-II risk interpretation, and the same abstention contract on empty/failed returns.
+- **Exoplanet focus** — NASA Exoplanet Archive `pscomppars` + Confirmed Planets decision tree (Akeson+2013), TESS / TIC v8 light-curve and stellar-parameter retrieval (Ricker+2015, Stassun+2019), trapezoidal Nelder-Mead transit fitting with explicit batman/pytransit hand-off for limb-darkened publication-grade fits (Mandel & Agol 2002), Seager & Mallén-Ornelas 2003 transit-geometry contract for closed-form depth / duration / inclination relations, equilibrium-temperature + planet-density formulas, fit-vs-formula separation (raw `pscomppars` values are catalogue facts, not turn-derived measurements; depth/duration claims require a same-turn `fit_transit` return), and the same abstention contract on empty/failed returns.
 
 Every formula/constant is cited to author + year + journal + page. A prior audit removed LLM-hallucinated values (e.g. corrected Gaia `A_G/A_V=0.789` per Wang & Chen 2019; rewrote `wd_cooling_age` as 13-point Bédard+2020 interpolation).
 
@@ -508,10 +614,12 @@ Every formula/constant is cited to author + year + journal + page. A prior audit
 
 ### Astronomy archives
 
-- **Active provenance-v2 sources**: VizieR, Gaia DR3, SIMBAD, NED, 2MASS, ALMA Science Archive observation metadata.
-- **Maintenance-gated connector keys**: SDSS, SDSS spectra, MAST, Chandra, AllWISE, ESO, IRSA, JWST, LAMOST, DESI, Pan-STARRS, XMM-Newton, NVSS, FIRST, JPL Horizons, ATNF PSRCAT, SPARC, FRBSTATS.
+- **Active provenance-v2 sources**: VizieR, Gaia DR3, SIMBAD, NED, 2MASS, ALMA Science Archive observation metadata, JPL Horizons (ephemerides), IAU Minor Planet Center (orbits), NASA Exoplanet Archive (`pscomppars` composite parameters + Confirmed Planets table).
+- **Maintenance-gated connector keys**: SDSS, SDSS spectra, MAST, Chandra, AllWISE, ESO, IRSA, JWST, LAMOST, DESI, Pan-STARRS, XMM-Newton, NVSS, FIRST, ATNF PSRCAT, SPARC, FRBSTATS.
 - Gated sources return `UNAVAILABLE` / Maintenance rather than FAILED/EMPTY and do not execute legacy query code.
 - ALMA is not a line-measurement source in v2. Derived `[CII]` luminosity, line flux, and FWHM values must come from cited literature tables or future dedicated measurement tools.
+- JPL Horizons + MPC are available only under the solar-system focus and back the `fetch_horizons_ephemeris` / `query_mpc_orbit` tools, plus the JPL SBDB / Sentry-II / DAMIT HTTP endpoints used by the rest of the solar-system tool group.
+- NASA Exoplanet Archive is available only under the exoplanet focus and backs the `query_exoplanet_archive` and `query_confirmed_planets` tools via `astroquery.ipac.nexsci`. TESS light curves and TIC v8 stellar parameters are reached through MAST (via `lightkurve`) and are still surfaced under the exoplanet manifest even while the generic `mast` connector key remains gated.
 
 ### Other
 
@@ -552,7 +660,9 @@ Push to `main` → Render auto-deploy. Render free tier sleeps after 15 min idle
 - Orchestrator still runs one tool-loop per turn; multi-agent execution is prepared but not yet the production path.
 - Opt-in research memory uses hashed embeddings, not a vector DB.
 - ADQL cache stores full result sets; the AI sees 100 rows; Python gets the rest via the cache key.
-- System prompt is ~14 k tokens. Further growth will require a jump-to section index.
+- System prompt is ~21–23 k tokens (focus-dependent). Further per-module growth will require a jump-to section index.
+- Only 3 of 15 prompt modules are active; promoting a dormant module requires moving it out of `_dormant_*`, populating its manifest tools list, and adding the focus literal to `_FOCUS_GATED_VALUES` in `api/chat.py`. Karpathy's three-similar threshold has been reached, so the next promotion is a candidate for extracting a `ModuleRegistry` abstraction instead of hardcoding a fourth literal.
+- `backend/app/services/source_mapping.py` is hand-maintained alongside `connectors/availability.py`. Both are now synchronized on the same 9 active / 17 gated keys; the consistency is enforced by `backend/tests/test_source_mapping.py`, which asserts `set(ACTIVE_ARCHIVE_MAPPINGS keys) == V2_AVAILABLE_CONNECTORS` and that the gated set equals `CONNECTORS_KEYS - V2_AVAILABLE_CONNECTORS`. When promoting a new connector to v2 you must edit both files in the same change.
 - API keys live in browser `localStorage` in beta mode; F4 gates the Send button but a full per-user session-storage migration is still backlog (PART C M9).
 
 ## 10. Testing

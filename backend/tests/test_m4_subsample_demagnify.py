@@ -1,4 +1,4 @@
-"""M4 验收: 1) subsample 显著性检验 2) demagnify_sample 工具."""
+"""M4 acceptance: 1) subsample significance test 2) demagnify_sample tool."""
 
 import math
 from unittest.mock import patch

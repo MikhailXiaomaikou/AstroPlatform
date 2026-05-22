@@ -407,7 +407,7 @@ def export_research_report(
     tool_results: list[dict[str, Any]] | None = None,
     title: str | None = None,
 ) -> dict[str, Any]:
-    """Generate a lightweight auditable research report package."""
+    """Generate an auditable research report package and paper draft."""
     plan = research_plan or {}
     graph = evidence_graph or {}
     tool_results = tool_results or []
@@ -416,6 +416,9 @@ def export_research_report(
     citations = _report_citations(tool_results)
     manifest = _report_reproducibility_manifest(tool_results)
     fact_report = _latest_fact_check_report(tool_results)
+    ready_findings = _report_ready_findings(tool_results)
+    blocked_cells = _report_blocked_cells(tool_results)
+    matrix_rows = _report_matrix_rows(tool_results)
     lines = [
         f"# {report_title}",
         "",
@@ -434,10 +437,37 @@ def export_research_report(
         status = result.get("analysis_status") or result.get("__tool_status__")
         ready = result.get("publication_ready")
         lines.append(f"- {item.get('tool') or item.get('name')}: {status}; publication_ready={ready}")
+    if matrix_rows:
+        lines.extend(["", "## Robustness Matrix Details"])
+        lines.append("| Cell | Model | Datasets | Status | Key outputs | Diagnostics |")
+        lines.append("|---|---|---|---|---|---|")
+        for row in matrix_rows:
+            lines.append(
+                "| {label} | {model} | {datasets} | {status} | {outputs} | {diagnostics} |".format(
+                    label=row["label"],
+                    model=row["model"],
+                    datasets=row["datasets"],
+                    status=row["status"],
+                    outputs=row["outputs"],
+                    diagnostics=row["diagnostics"],
+                )
+            )
+    lines.extend(["", "## Preliminary Findings"])
+    if ready_findings:
+        for finding in ready_findings:
+            lines.append(f"- {finding}")
+        lines.append("- All numerical findings above are compressed-likelihood preliminary unless a full external likelihood is explicitly listed.")
+    else:
+        lines.append("- No publication-ready or compressed-preliminary numerical result was present in the supplied tool results.")
+    if blocked_cells:
+        lines.extend(["", "## Runnable Gaps"])
+        for cell in blocked_cells:
+            lines.append(f"- {cell}")
     lines.extend(["", "## Datasets and Citations"])
     if datasets:
         for dataset in datasets:
-            lines.append(f"- {dataset.get('key')}: {dataset.get('display_name')} ({dataset.get('version')})")
+            source = f" — {dataset.get('source_url')}" if dataset.get("source_url") else ""
+            lines.append(f"- {dataset.get('key')}: {dataset.get('display_name')} ({dataset.get('version')}){source}")
     else:
         lines.append("- No dataset metadata was present in the supplied tool results.")
     if citations:
@@ -462,15 +492,42 @@ def export_research_report(
         f"- Status: {fact_report.get('status', 'not_run') if fact_report else 'not_run'}",
         f"- Verified claims: {fact_report.get('verified_claim_count', 0) if fact_report else 0}",
         f"- Unsupported/contradicted claims: {fact_report.get('unsupported_claim_count', 0) if fact_report else 0}",
-        "",
-        "## Reproducibility Manifest",
-        f"- Tool runs recorded: {len(manifest)}",
-        "",
-        "## Limitations",
     ])
+    if isinstance(fact_report, dict) and isinstance(fact_report.get("claims"), list):
+        for claim in fact_report["claims"][:8]:
+            if not isinstance(claim, dict):
+                continue
+            lines.append(
+                f"- {claim.get('status')}: {claim.get('text')} "
+                f"(support={claim.get('support_level')})"
+            )
+    lines.extend(["", "## Reproducibility Manifest", f"- Tool runs recorded: {len(manifest)}"])
+    for entry in manifest:
+        lines.append(
+            "- {tool}: status={status}; ready={ready}; run_id={run_id}; seed={seed}; version={version}".format(
+                tool=entry.get("tool"),
+                status=entry.get("analysis_status"),
+                ready=entry.get("publication_ready"),
+                run_id=entry.get("run_id") or "not recorded",
+                seed=entry.get("random_seed") or "not recorded",
+                version=entry.get("tool_version") or "not recorded",
+            )
+        )
+    lines.extend(["", "## Limitations"])
     for gap in plan.get("blocking_gaps", []) if isinstance(plan.get("blocking_gaps"), list) else []:
         lines.append(f"- {gap}")
     markdown = "\n".join(lines).strip() + "\n"
+    paper_draft = _paper_draft_from_report_parts(
+        title=str(report_title),
+        plan=plan,
+        datasets=datasets,
+        citations=citations,
+        ready_findings=ready_findings,
+        blocked_cells=blocked_cells,
+        matrix_rows=matrix_rows,
+        fact_report=fact_report,
+        manifest=manifest,
+    )
     return {
         "success": True,
         "__tool_status__": "COMPLETED",
@@ -478,6 +535,7 @@ def export_research_report(
         "publication_ready": False,
         "format": "markdown",
         "markdown": markdown,
+        "paper_draft_markdown": paper_draft,
         "bibtex": _bibtex_from_citations(citations),
         "datasets": datasets,
         "citations": citations,
@@ -485,6 +543,7 @@ def export_research_report(
         "report_package": {
             "files": [
                 {"path": "research_report.md", "content_type": "text/markdown", "bytes": len(markdown.encode("utf-8"))},
+                {"path": "paper_draft.md", "content_type": "text/markdown", "bytes": len(paper_draft.encode("utf-8"))},
                 {"path": "references.bib", "content_type": "text/x-bibtex"},
                 {"path": "reproducibility_manifest.json", "content_type": "application/json"},
                 {"path": "fact_check_report.json", "content_type": "application/json"},
@@ -494,6 +553,234 @@ def export_research_report(
         "word_count": len(markdown.split()),
         "__message_to_model__": "This is a report draft. It does not create new scientific evidence.",
     }
+
+
+def _report_ready_findings(tool_results: list[dict[str, Any]]) -> list[str]:
+    findings: list[str] = []
+    for item in tool_results:
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict):
+            continue
+        if isinstance(result.get("matrix"), list):
+            for cell in result["matrix"]:
+                if not isinstance(cell, dict) or cell.get("publication_ready") is not True:
+                    continue
+                cell_result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
+                params = cell_result.get("parameters") if isinstance(cell_result.get("parameters"), dict) else {}
+                diagnostics = (
+                    cell_result.get("chain_diagnostics")
+                    if isinstance(cell_result.get("chain_diagnostics"), dict)
+                    else {}
+                )
+                bits = [
+                    str(cell.get("label") or "Unnamed cell"),
+                    f"model={cell.get('model') or 'unknown'}",
+                    "datasets=" + ", ".join(str(k) for k in cell.get("dataset_keys", []) if k),
+                ]
+                param_bits: list[str] = []
+                for name in ("H0", "omegam", "Omega_m", "S8", "sigma8", "w0", "wa"):
+                    value = params.get(name)
+                    if isinstance(value, dict) and value.get("median") is not None:
+                        param_bits.append(f"{name}={_format_report_number(value.get('median'))}")
+                if param_bits:
+                    bits.append("parameters: " + ", ".join(param_bits))
+                diag_bits: list[str] = []
+                for key in ("proposal_ess", "ess_bulk", "rhat", "acceptance_fraction"):
+                    if diagnostics.get(key) is not None:
+                        diag_bits.append(f"{key}={_format_report_number(diagnostics.get(key))}")
+                if diag_bits:
+                    bits.append("diagnostics: " + ", ".join(diag_bits))
+                findings.append("; ".join(bits))
+        elif result.get("publication_ready") is True:
+            params = result.get("parameters") if isinstance(result.get("parameters"), dict) else {}
+            param_bits = []
+            for name, value in params.items():
+                if isinstance(value, dict) and value.get("median") is not None:
+                    param_bits.append(f"{name}={_format_report_number(value.get('median'))}")
+            if param_bits:
+                findings.append(
+                    f"{item.get('tool') or item.get('name') or 'tool result'}; "
+                    + ", ".join(param_bits)
+                )
+    return findings
+
+
+def _report_matrix_rows(tool_results: list[dict[str, Any]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for item in tool_results:
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict) or not isinstance(result.get("matrix"), list):
+            continue
+        for cell in result["matrix"]:
+            if not isinstance(cell, dict):
+                continue
+            is_ready = cell.get("publication_ready") is True
+            cell_result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
+            params = cell_result.get("parameters") if isinstance(cell_result.get("parameters"), dict) else {}
+            diagnostics = (
+                cell_result.get("chain_diagnostics")
+                if isinstance(cell_result.get("chain_diagnostics"), dict)
+                else {}
+            )
+            outputs: list[str] = []
+            if is_ready:
+                for name in ("H0", "omegam", "S8", "sigma8", "rd", "H0_rd", "w0", "wa"):
+                    value = params.get(name)
+                    if isinstance(value, dict) and value.get("median") is not None:
+                        std = value.get("std")
+                        if std is not None:
+                            outputs.append(f"{name}={_format_report_number(value.get('median'))} +/- {_format_report_number(std)}")
+                        else:
+                            outputs.append(f"{name}={_format_report_number(value.get('median'))}")
+            if not is_ready or (not outputs and cell.get("warnings")):
+                outputs.append("not claimable")
+            diag_bits: list[str] = []
+            for key in ("proposal_ess", "ess_bulk", "rhat", "acceptance_fraction"):
+                if diagnostics.get(key) is not None:
+                    diag_bits.append(f"{key}={_format_report_number(diagnostics.get(key))}")
+            rows.append({
+                "label": _md_table_cell(str(cell.get("label") or "Unnamed cell")),
+                "model": _md_table_cell(str(cell.get("model") or "unknown")),
+                "datasets": _md_table_cell(", ".join(str(k) for k in cell.get("dataset_keys", []) if k) or "none"),
+                "status": _md_table_cell(
+                    "ready" if cell.get("publication_ready") is True else str(cell.get("execution_level") or "not ready")
+                ),
+                "outputs": _md_table_cell("; ".join(outputs) if outputs else "no numerical output"),
+                "diagnostics": _md_table_cell("; ".join(diag_bits) if diag_bits else "not available"),
+            })
+    return rows
+
+
+def _md_table_cell(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def _report_blocked_cells(tool_results: list[dict[str, Any]]) -> list[str]:
+    blocked: list[str] = []
+    for item in tool_results:
+        result = item.get("result") if isinstance(item.get("result"), dict) else item
+        if not isinstance(result, dict) or not isinstance(result.get("matrix"), list):
+            continue
+        for cell in result["matrix"]:
+            if not isinstance(cell, dict) or cell.get("publication_ready") is True:
+                continue
+            label = str(cell.get("label") or "Unnamed cell")
+            level = str(cell.get("execution_level") or "unknown")
+            warnings = cell.get("warnings") if isinstance(cell.get("warnings"), list) else []
+            reason = "; ".join(str(w) for w in warnings[:2]) if warnings else "not publication-ready"
+            blocked.append(f"{label}: {level}; {reason}")
+    return blocked
+
+
+def _format_report_number(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(number) >= 100:
+        return f"{number:.3g}"
+    if abs(number) >= 1:
+        return f"{number:.3f}".rstrip("0").rstrip(".")
+    return f"{number:.4g}"
+
+
+def _paper_draft_from_report_parts(
+    *,
+    title: str,
+    plan: dict[str, Any],
+    datasets: list[dict[str, Any]],
+    citations: list[dict[str, Any]],
+    ready_findings: list[str],
+    blocked_cells: list[str],
+    matrix_rows: list[dict[str, str]],
+    fact_report: dict[str, Any],
+    manifest: list[dict[str, Any]],
+) -> str:
+    """Create a conservative paper draft from verified report ingredients."""
+    dataset_text = (
+        "\n".join(
+            "- "
+            + f"{dataset.get('display_name') or dataset.get('key')} "
+            + f"({dataset.get('version') or 'version not recorded'}). "
+            + (f"Source: {dataset.get('source_url')}." if dataset.get("source_url") else "")
+            for dataset in datasets
+        )
+        if datasets
+        else "- No dataset metadata was available in this draft package."
+    )
+    finding_text = (
+        "\n".join(f"- {finding}" for finding in ready_findings)
+        if ready_findings
+        else "- No numerical result is currently supported by a publication-ready or compressed-preliminary tool run."
+    )
+    matrix_text = (
+        "\n".join(
+            "- {label}: {status}; {outputs}; {diagnostics}".format(**row)
+            for row in matrix_rows
+        )
+        if matrix_rows
+        else "- No research matrix cells were recorded in this draft package."
+    )
+    limitation_text = "\n".join(f"- {gap}" for gap in plan.get("blocking_gaps", []) if isinstance(gap, str))
+    if blocked_cells:
+        limitation_text += ("\n" if limitation_text else "") + "\n".join(f"- {cell}" for cell in blocked_cells)
+    if not limitation_text:
+        limitation_text = "- No blocking gap was recorded by the research planner."
+    reference_text = (
+        "\n".join(
+            f"- {citation.get('label') or citation.get('title') or citation.get('arxiv') or citation.get('doi')}"
+            for citation in citations
+        )
+        if citations
+        else "- No bibliography entries were extracted from the supplied tool results."
+    )
+    fact_status = str(fact_report.get("status") or "not_run") if isinstance(fact_report, dict) else "not_run"
+    return "\n".join([
+        f"# Paper Draft: {title}",
+        "",
+        "## Abstract",
+        (
+            "We present an auditable Standard Astro research-mode analysis of the "
+            "registered cosmology data combinations selected by the research plan. "
+            "The draft reports only current-turn tool-supported claims, marks "
+            "config-only or unavailable likelihood branches as limitations, and "
+            f"records fact verification status as {fact_status}. Results labelled "
+            "compressed-likelihood preliminary should not be treated as full "
+            "external likelihood reproductions."
+        ),
+        "",
+        "## 1. Introduction",
+        str(plan.get("research_question") or "The research question was not recorded."),
+        "",
+        "## 2. Data",
+        dataset_text,
+        "",
+        "## 3. Methods",
+        (
+            "The analysis follows the generated ResearchPlan. Each requested "
+            "dataset combination is classified as runnable, config-only, or not "
+            "available. Runnable compressed Gaussian likelihood cells are executed "
+            "with recorded random seeds and diagnostics; config-only datasets are "
+            "listed as scope gaps and are not used to support posterior, tension, "
+            "or model-selection claims."
+        ),
+        "",
+        "### Experiment Matrix",
+        matrix_text,
+        "",
+        "## 4. Results",
+        finding_text,
+        "",
+        "## 5. Robustness and Scope",
+        limitation_text,
+        "",
+        "## 6. Reproducibility",
+        f"This draft records {len(manifest)} tool-run manifest entries. Use the accompanying reproducibility manifest before citing any numerical result.",
+        "",
+        "## References",
+        reference_text,
+        "",
+    ]).strip() + "\n"
 
 
 def _latest_fact_check_report(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -510,13 +797,35 @@ def _latest_fact_check_report(tool_results: list[dict[str, Any]]) -> dict[str, A
     return {}
 
 
-def _report_datasets(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[str] = set()
-    datasets: list[dict[str, Any]] = []
+def _iter_report_result_items(tool_results: list[dict[str, Any]]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Return top-level tool results plus nested research-matrix cell results."""
+    items: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for item in tool_results:
+        if not isinstance(item, dict):
+            continue
         result = item.get("result") if isinstance(item.get("result"), dict) else item
         if not isinstance(result, dict):
             continue
+        items.append((item, result))
+        if isinstance(result.get("matrix"), list):
+            for idx, cell in enumerate(result["matrix"]):
+                if not isinstance(cell, dict) or not isinstance(cell.get("result"), dict):
+                    continue
+                cell_item = {
+                    "tool": f"{item.get('tool') or item.get('name') or 'run_research_matrix'}:{cell.get('label') or idx}",
+                    "input": {
+                        "dataset_keys": cell.get("dataset_keys"),
+                        "model": cell.get("model"),
+                    },
+                }
+                items.append((cell_item, cell["result"]))
+    return items
+
+
+def _report_datasets(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    datasets: list[dict[str, Any]] = []
+    for _, result in _iter_report_result_items(tool_results):
         for key in ("datasets_used", "datasets_not_run"):
             for dataset in result.get(key, []) if isinstance(result.get(key), list) else []:
                 if not isinstance(dataset, dict):
@@ -530,6 +839,7 @@ def _report_datasets(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]
                     "display_name": dataset.get("display_name") or dataset_key,
                     "version": dataset.get("version") or "",
                     "source_url": dataset.get("source_url") or "",
+                    "citations": dataset.get("citations", []),
                 })
         provenance = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
         for dataset in provenance.get("datasets", []) if isinstance(provenance.get("datasets"), list) else []:
@@ -550,10 +860,7 @@ def _report_datasets(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]
 def _report_citations(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     citations: list[dict[str, Any]] = []
-    for item in tool_results:
-        result = item.get("result") if isinstance(item.get("result"), dict) else item
-        if not isinstance(result, dict):
-            continue
+    for _, result in _iter_report_result_items(tool_results):
         for citation in result.get("citations", []) if isinstance(result.get("citations"), list) else []:
             if isinstance(citation, dict):
                 key = str(citation.get("bibcode") or citation.get("arxiv") or citation.get("doi") or citation.get("label") or "")
@@ -574,17 +881,14 @@ def _report_citations(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _report_reproducibility_manifest(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     manifest: list[dict[str, Any]] = []
-    for item in tool_results:
-        result = item.get("result") if isinstance(item.get("result"), dict) else item
-        if not isinstance(result, dict):
-            continue
+    for item, result in _iter_report_result_items(tool_results):
         envelope = result.get("reproducibility") if isinstance(result.get("reproducibility"), dict) else {}
         manifest.append({
             "tool": item.get("tool") or item.get("name") or result.get("tool") or "unknown",
             "analysis_status": result.get("analysis_status") or result.get("__tool_status__"),
             "publication_ready": bool(result.get("publication_ready")),
             "run_id": envelope.get("run_id"),
-            "query_hash": envelope.get("query_hash"),
+            "query_hash": envelope.get("query_hash") or result.get("runner_hash") or result.get("config_hash"),
             "random_seed": envelope.get("random_seed") or result.get("random_seed"),
             "tool_version": envelope.get("tool_version"),
         })
@@ -958,6 +1262,11 @@ def _line_is_gap_statement(line: str) -> bool:
             "no publication-ready",
             "cannot claim",
             "requires external",
+            "not a full external",
+            "not full external",
+            "should not be treated as full",
+            "still outside",
+            "outside the compressed preliminary layer",
             "config-only",
             "scope gap",
         )

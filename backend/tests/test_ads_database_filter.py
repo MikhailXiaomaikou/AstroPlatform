@@ -75,13 +75,13 @@ def test_search_literature_sync_uses_astronomy_database_fq(monkeypatch) -> None:
 
 
 def test_exec_literature_surfaces_retracted_flag_from_ads_property(monkeypatch) -> None:
-    """Stage 6 P0c-B (2026-05-19): ADS doc 的 property=['RETRACTED'] 应该映射
-    到 result paper 的 retracted=True, 透传给前端 chip + LLM message_to_model."""
+    """Stage 6 P0c-B (2026-05-19): ADS doc property=['RETRACTED'] should map
+    to result paper retracted=True, passed through to the frontend chip + LLM message_to_model."""
     import asyncio
     from app.api import citations
     from app.services.ai_tools import _exec_literature
 
-    # 模拟 ADS 返回 2 篇, 第 1 篇 RETRACTED
+    # simulate ADS returning 2 papers, the 1st is RETRACTED
     fake_hits = [
         {
             "bibcode": "2020arXiv2007.10785S",
@@ -91,7 +91,7 @@ def test_exec_literature_surfaces_retracted_flag_from_ads_property(monkeypatch) 
             "doi": None,
             "abstract": "Galactic extinction map.",
             "source": "ads",
-            "retracted": True,  # 模拟 mapper 输出 (property=['RETRACTED'] → True)
+            "retracted": True,  # simulated mapper output (property=['RETRACTED'] → True)
         },
         {
             "bibcode": "2024arXiv2404.03002D",
@@ -117,14 +117,14 @@ def test_exec_literature_surfaces_retracted_flag_from_ads_property(monkeypatch) 
     assert retracted_paper["retracted"] is True
     assert good_paper["retracted"] is False
     assert out["retracted_count"] == 1
-    # message_to_model 应警告 LLM 严禁引用 retracted
+    # message_to_model should warn the LLM that citing retracted papers is strictly forbidden
     assert "RETRACTED" in out["__message_to_model__"]
     assert "MUST NOT cite" in out["__message_to_model__"]
 
 
 def test_search_ads_query_includes_property_field() -> None:
     """Stage 6 P0c-B (2026-05-19): _search_ads_sync + _search_literature_ads
-    的 ADS query 必须含 `fl=...,property` 才能拿 RETRACTED tag."""
+    ADS queries must include `fl=...,property` to retrieve the RETRACTED tag."""
     import inspect
     from app.api import citations
 
@@ -135,7 +135,7 @@ def test_search_ads_query_includes_property_field() -> None:
 
 
 def test_ads_get_with_retry_retries_5xx_then_succeeds(monkeypatch) -> None:
-    """Stage 6 P0c-E (2026-05-19): 5xx → backoff retry → 第 2 次 200 应返回成功."""
+    """Stage 6 P0c-E (2026-05-19): 5xx → backoff retry → 2nd attempt returns 200 successfully."""
     from app.api import citations
 
     call_log: list[int] = []
@@ -156,7 +156,7 @@ def test_ads_get_with_retry_retries_5xx_then_succeeds(monkeypatch) -> None:
             return _FakeResp(503, {})
         return _FakeResp(200, {"response": {"docs": [{"bibcode": "test_bib"}]}})
 
-    # 让 time.sleep 不真睡 (test 快)
+    # patch time.sleep to avoid real delays (keep test fast)
     import time as _time
     monkeypatch.setattr(_time, "sleep", lambda _s: None)
     monkeypatch.setattr(citations.httpx, "get", fake_get)
@@ -166,11 +166,11 @@ def test_ads_get_with_retry_retries_5xx_then_succeeds(monkeypatch) -> None:
     )
     assert resp is not None
     assert resp.status_code == 200
-    assert len(call_log) == 2  # 第 1 次 503, 第 2 次 200
+    assert len(call_log) == 2  # 1st attempt 503, 2nd attempt 200
 
 
 def test_ads_get_with_retry_does_not_retry_429(monkeypatch) -> None:
-    """Stage 6 P0c-E: 429 quota exhausted 不 retry, 直接返回 response 让 caller 处理."""
+    """Stage 6 P0c-E: 429 quota exhausted — no retry, return the response directly for the caller to handle."""
     from app.api import citations
 
     call_log: list[int] = []
@@ -193,6 +193,6 @@ def test_ads_get_with_retry_does_not_retry_429(monkeypatch) -> None:
     )
     assert resp is not None
     assert resp.status_code == 429
-    assert len(call_log) == 1  # 没 retry, 只调 1 次
+    assert len(call_log) == 1  # no retry, only 1 call
 
 

@@ -159,11 +159,11 @@ class GaiaConnector(BaseConnector):
             dec = float(row["dec"]) if "dec" in row.colnames else 0.0
             source_id = str(row.get("source_id", row.get("SOURCE_ID", "")))
 
-            # L2-d (audit 2026-04-20): 用 np.isfinite(v) 取代 `v == v`.
-            # `v == v` 对真 float NaN 确实返回 False (IEEE754), 但对 astropy
-            # masked scalar 会触发 DeprecationWarning (astropy >= 4.1) 且
-            # 未来版本可能改语义.  np.isfinite 对 NaN / +/-Inf 都返回
-            # False, 语义明确.
+            # L2-d (audit 2026-04-20): use np.isfinite(v) instead of `v == v`.
+            # `v == v` does return False for a true float NaN (IEEE 754), but
+            # for an astropy masked scalar it triggers a DeprecationWarning
+            # (astropy >= 4.1) and future versions may change the semantics.
+            # np.isfinite returns False for NaN and +/-Inf, with unambiguous semantics.
             mag = None
             for col in ("phot_g_mean_mag", "PHOT_G_MEAN_MAG"):
                 if col in row.colnames:
@@ -213,11 +213,12 @@ class GaiaConnector(BaseConnector):
                 # Bailer-Jones caveat (negative or tiny plx → prior
                 # needed, not simple inversion).
                 #
-                # L2-a (audit 2026-04-20): SNR 门控.  当 parallax/parallax_error
-                # < 5 时, 1/plx 点估计高度偏斜 (mode ≠ 1/plx_mode), 不能当
-                # 真距离.  标 partial + 引导用户用 Bayesian 后验.
+                # L2-a (audit 2026-04-20): SNR gate. When parallax/parallax_error
+                # < 5, the 1/plx point estimate is highly biased (mode != 1/plx_mode)
+                # and cannot be treated as a true distance. Flag as partial and
+                # guide the user to use a Bayesian posterior.
                 if parallax > 0:
-                    # 尝试从 row 里读 parallax_error 算 SNR
+                    # Try to read parallax_error from row to compute SNR
                     plx_err = None
                     for err_col in ("parallax_error", "PARALLAX_ERROR"):
                         if err_col in row.colnames:

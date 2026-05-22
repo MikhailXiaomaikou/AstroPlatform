@@ -440,7 +440,7 @@ async def test_ai_tool_wrappers_expose_registry_and_config_guardrails():
 
 def test_trgb_freedman19_h0_prior_registered() -> None:
     """spec paper #15: TRGB Freedman+ 2019 H0 = 69.8 ± 1.9 km/s/Mpc.
-    Distance-ladder anchor 之间 SH0ES (Cepheid) 和 Planck (CMB inverse)."""
+    Distance-ladder anchor between SH0ES (Cepheid) and Planck (CMB inverse)."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     entry = get_cosmology_dataset("trgb_h0_freedman19")
@@ -457,7 +457,7 @@ def test_trgb_freedman19_h0_prior_registered() -> None:
 
 def test_h0licow_h0_prior_registered_with_symmetric_sigma() -> None:
     """spec paper #13: H0LiCOW XIII Wong+ 2020 H0 = 73.3 +1.7/-1.8.
-    我们用 1.75 的对称 Gaussian 近似."""
+    We use a symmetric Gaussian approximation with σ = 1.75."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     entry = get_cosmology_dataset("h0licow_h0")
@@ -466,13 +466,13 @@ def test_h0licow_h0_prior_registered_with_symmetric_sigma() -> None:
     assert cl.covariance == ((1.75 ** 2,),)
     arxivs = [c.arxiv for c in entry.citations if c.arxiv]
     assert "1907.04869" in arxivs
-    # 必须明确说 sigma 是对称化近似 (避免审稿人误以为是真实 1D Gaussian)
+    # The approximation field must explicitly state sigma is symmetrized (to avoid reviewers assuming a true 1D Gaussian)
     assert "symmetr" in cl.approximation.lower()
 
 
 def test_megamaser_pesce20_h0_prior_registered() -> None:
-    """spec paper #14: Pesce+ 2020 megamaser H0 = 73.9 ± 3.0 — 几何
-    anchor, 完全独立于 Cepheid/TRGB/SN Ia 阶梯."""
+    """spec paper #14: Pesce+ 2020 megamaser H0 = 73.9 ± 3.0 — geometric
+    anchor, fully independent of the Cepheid/TRGB/SN Ia distance ladder."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     entry = get_cosmology_dataset("megamaser_h0_pesce20")
@@ -481,14 +481,14 @@ def test_megamaser_pesce20_h0_prior_registered() -> None:
     assert cl.covariance == ((3.0 ** 2,),)
     arxivs = [c.arxiv for c in entry.citations if c.arxiv]
     assert "2001.09213" in arxivs
-    # notes 或 approximation 必须显式说"几何 anchor / 独立于阶梯"
+    # notes or approximation must explicitly state "geometric anchor / independent of distance ladder"
     note_blob = (entry.notes or "").lower() + (cl.approximation or "").lower()
     assert "geometric" in note_blob or "anchor" in note_blob
 
 
 def test_spt3g_cmb_external_likelihood_registered() -> None:
     """spec paper #12: SPT-3G Balkenhol+ 2023 TT/TE/EE damping-tail.
-    External Cobaya likelihood (不能压缩成几维 Gaussian, 全 power
+    External Cobaya likelihood (cannot be compressed into a low-dimensional Gaussian; full power
     spectrum data product)."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
@@ -496,18 +496,18 @@ def test_spt3g_cmb_external_likelihood_registered() -> None:
     assert entry.probe == "cmb"
     assert entry.execution_mode == "external_cobaya"
     assert entry.likelihood_family == "cmb_powerspectrum"
-    # 必须含完整 TT/TE/EE 三 observable
+    # Must include the full TT/TE/EE triple observable
     assert set(entry.observables) >= {"TT", "TE", "EE"}
     arxivs = [c.arxiv for c in entry.citations if c.arxiv]
     assert "2212.05642" in arxivs
-    # 必须含至少几个标准 nuisance (kappa / dust)
+    # Must include at least a few standard nuisance parameters (kappa / dust)
     assert "kappa" in entry.nuisance_parameters
 
 
 def test_all_4_h0_anchors_share_observable_and_models() -> None:
-    """全 4 个 H0 anchor (TRGB / SH0ES / H0LiCOW / Megamaser) 必须
-    expose H0 作为唯一 observable, applicable_models 必须含
-    lcdm/wcdm/w0wa_cdm (H0 prior 跟具体模型无关)."""
+    """All 4 H0 anchors (TRGB / SH0ES / H0LiCOW / Megamaser) must
+    expose H0 as the sole observable, and applicable_models must include
+    lcdm/wcdm/w0wa_cdm (H0 prior is model-independent)."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     h0_anchors = [
@@ -525,8 +525,8 @@ def test_all_4_h0_anchors_share_observable_and_models() -> None:
 
 
 def test_h0_anchor_means_span_known_tension_range() -> None:
-    """4 个 H0 anchor mean 值合起来必须横跨 'H0 tension 区间' 69-74,
-    才能让 cosmology_mcmc 用作互相对照."""
+    """The 4 H0 anchor mean values together must span the 'H0 tension interval' 69-74,
+    so cosmology_mcmc can use them as cross-checks against each other."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     means = []
@@ -534,9 +534,9 @@ def test_h0_anchor_means_span_known_tension_range() -> None:
                 "h0licow_h0", "megamaser_h0_pesce20"):
         entry = get_cosmology_dataset(key)
         means.append(entry.compressed_likelihood.mean[0])
-    assert min(means) <= 70.0   # TRGB 端
-    assert max(means) >= 73.0   # SH0ES / H0LiCOW / Megamaser 端
-    # 横跨 ~3-4 km/s/Mpc, 即真实张力区间
+    assert min(means) <= 70.0   # TRGB end
+    assert max(means) >= 73.0   # SH0ES / H0LiCOW / Megamaser end
+    # Span of ~3-4 km/s/Mpc, i.e., the real tension interval
     assert max(means) - min(means) >= 3.0
 
 
@@ -556,18 +556,18 @@ def test_spt_cluster_bocquet19_registered_with_sigma8_sz_constraint() -> None:
     assert entry.likelihood_family == "cluster_count"
     cl = entry.compressed_likelihood
     assert cl is not None
-    # 注: 参数名小写 (matches RUNNER_PARAMETER_PRIORS convention).
-    # 公开 Bocquet+19 paper 用大写 Ω_m, 平台内部 schema 用 omegam.
+    # Note: parameter names are lowercase (matches RUNNER_PARAMETER_PRIORS convention).
+    # The published Bocquet+19 paper uses uppercase Ω_m; the platform internal schema uses omegam.
     assert cl.parameters == ("sigma8", "omegam")
-    # σ8 = 0.766 (Bocquet+19 baseline)
+    # sigma8 = 0.766 (Bocquet+19 baseline)
     assert abs(cl.mean[0] - 0.766) < 1e-6
-    # Ωm = 0.300 (Bocquet+19 fiducial)
+    # Omegam = 0.300 (Bocquet+19 fiducial)
     assert abs(cl.mean[1] - 0.300) < 1e-6
     # Diagonal σ correctly recovered: σ_σ8 = 0.025, σ_Ωm = 0.05
     import math
     assert math.isclose(math.sqrt(cl.covariance[0][0]), 0.025, abs_tol=1e-6)
     assert math.isclose(math.sqrt(cl.covariance[1][1]), 0.050, abs_tol=1e-6)
-    # ρ = -0.6 SZ degeneracy slope direction
+    # rho = -0.6 SZ degeneracy slope direction
     rho = cl.covariance[0][1] / (
         math.sqrt(cl.covariance[0][0]) * math.sqrt(cl.covariance[1][1])
     )
@@ -578,24 +578,24 @@ def test_spt_cluster_bocquet19_registered_with_sigma8_sz_constraint() -> None:
 
 
 def test_spt_cluster_does_not_share_observables_with_weak_lensing() -> None:
-    """SPT cluster 必须**独立**于 weak lensing — observables 不能含
-    xi_plus / xi_minus / S8 (那是 cosmic shear 字段). 这是它作为
-    sigma8 张力 independent anchor 的关键."""
+    """SPT cluster must be **independent** of weak lensing — observables must not include
+    xi_plus / xi_minus / S8 (those are cosmic shear fields). This is the key to its role
+    as an independent sigma8 tension anchor."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     entry = get_cosmology_dataset("spt_cluster_bocquet19")
     assert "xi_plus" not in entry.observables
     assert "xi_minus" not in entry.observables
-    # σ8 共享是 OK 的 (κappa-shear 也输出 σ8); Ωm 同理 (lowercase per
+    # sigma8 sharing is OK (kappa-shear also outputs sigma8); omegam likewise (lowercase per
     # RUNNER_PARAMETER_PRIORS convention)
     assert "sigma8" in entry.observables
     assert "omegam" in entry.observables
 
 
 def test_spt_cluster_chain_runner_combines_with_weak_lensing() -> None:
-    """SPT cluster + KiDS-1000 + DES Y3 + HSC Y1 联合 chain 必须可跑
-    (σ8 张力 cross-check 主流程). 5 个 dataset 都是 compressed_gaussian
-    路径, runner 应该接受."""
+    """SPT cluster + KiDS-1000 + DES Y3 + HSC Y1 joint chain must be runnable
+    (main sigma8 tension cross-check workflow). All 5 datasets are on the compressed_gaussian
+    path; the runner should accept them."""
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     result = run_likelihood_chain(
@@ -612,17 +612,17 @@ def test_spt_cluster_chain_runner_combines_with_weak_lensing() -> None:
     )
     assert result["success"] is True
     assert result["publication_ready"] is True
-    # σ8 必须在 fit parameters 中
+    # sigma8 must be in the fit parameters
     assert "sigma8" in result["parameters"]
     assert "S8" in result["parameters"]
-    # 5 个 dataset 必须全部进 fit
+    # All 5 datasets must participate in the fit
     assert len(result["datasets_used"]) == 5
     used_keys = {entry["key"] for entry in result["datasets_used"]}
     assert "spt_cluster_bocquet19" in used_keys
 
 
 def test_spt_cluster_alone_chain_returns_2d_constraint() -> None:
-    """单独跑 SPT cluster 必须返回 σ8/Ωm 两参数后验, 不是空."""
+    """Running SPT cluster alone must return a sigma8/Omegam two-parameter posterior, not empty."""
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     result = run_likelihood_chain(
@@ -634,7 +634,7 @@ def test_spt_cluster_alone_chain_returns_2d_constraint() -> None:
     assert result["success"] is True
     assert "sigma8" in result["parameters"]
     assert "omegam" in result["parameters"]
-    # σ8 中位数应该 ≈ 0.766 (compressed Gaussian center)
+    # sigma8 median should be approximately 0.766 (compressed Gaussian center)
     sigma8_param = result["parameters"]["sigma8"]
     assert abs(sigma8_param["median"] - 0.766) < 0.05
 
@@ -685,34 +685,34 @@ def test_eboss_dr16_rsd_citations_cover_all_7_z_bins() -> None:
 
 
 def test_eboss_dr16_rsd_complements_sdss_6df_bao_independently() -> None:
-    """sdss_6df_bao 跟 eboss_dr16_rsd 应该是**独立 dataset entries** —
-    用户能选 BAO-only / RSD-only / BAO+RSD joint, 不让 RSD 跟 BAO 在
-    一个 entry 里被强制绑定."""
+    """sdss_6df_bao and eboss_dr16_rsd should be **independent dataset entries** —
+    users can choose BAO-only / RSD-only / BAO+RSD joint, without forcing RSD and BAO
+    to be bound together in a single entry."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     bao = get_cosmology_dataset("sdss_6df_bao")
     rsd = get_cosmology_dataset("eboss_dr16_rsd")
 
-    # 不同 probe
+    # Different probes
     assert bao.probe == "bao"
     assert rsd.probe == "rsd"
-    # 不同 likelihood family
+    # Different likelihood families
     assert bao.likelihood_family == "gaussian_bao"
     assert rsd.likelihood_family == "gaussian_rsd"
-    # 不同 observables (BAO 是 distance ratios, RSD 是 f·σ8)
+    # Different observables (BAO uses distance ratios, RSD uses f·sigma8)
     assert "f_sigma8" not in bao.observables
     assert "DM_over_rd" not in rsd.observables
 
 
 def test_eboss_dr16_rsd_nuisance_parameters_cover_per_subsample_systematics() -> None:
-    """RSD analysis 每个 sub-sample 都有独立 systematic correction
-    (modeling error in non-linear matter power spectrum). 5 个 eBOSS
-    + BOSS sub-sample 都需要 nuisance:"""
+    """Each RSD analysis sub-sample has an independent systematic correction
+    (modeling error in the non-linear matter power spectrum). All 5 eBOSS
+    + BOSS sub-samples require nuisance parameters:"""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     entry = get_cosmology_dataset("eboss_dr16_rsd")
     nuisance = set(entry.nuisance_parameters)
-    # 至少含 LOWZ / CMASS / LRG / ELG / QSO 5 个 sub-sample systematics
+    # Must include at least 5 sub-sample systematics: LOWZ / CMASS / LRG / ELG / QSO
     assert any("LOWZ" in n for n in nuisance)
     assert any("CMASS" in n for n in nuisance)
     assert any("LRG" in n for n in nuisance)

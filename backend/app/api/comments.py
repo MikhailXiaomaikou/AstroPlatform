@@ -1,6 +1,7 @@
-"""公开评论区 (Landing 页下方).
+"""Public comments section (below the landing page).
 
-无需登录, 任何访客填昵称 + 内容就能提交; 管理员用 X-Admin-Secret 删除.
+No login required — any visitor can submit with a display name and content;
+admins use X-Admin-Secret to delete.
 """
 
 from __future__ import annotations
@@ -23,8 +24,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/comments", tags=["comments"])
 
+# The admin desktop HTML runs via file:// (Origin: null) and accesses the API
+# through the _NULL_ORIGIN_ALLOWED_PREFIXES whitelist. The /api/comments public
+# endpoint has been removed from that whitelist — public endpoints only accept
+# requests with a real Origin. Admin "list all / delete" routes use the
+# /api/admin/comments router below (/api/admin/ remains in the
+# _NULL_ORIGIN_ALLOWED_PREFIXES whitelist in main.py).
+admin_router = APIRouter(prefix="/api/admin/comments", tags=["admin-comments"])
 
-# 内容边界 (保持跟前端一致, 如果前端也改, 这里也改)
+
+# Content length limits (keep in sync with the frontend; update both if either changes).
 _NAME_MIN = 1
 _NAME_MAX = 40
 _CONTENT_MIN = 2
@@ -66,7 +75,7 @@ class CommentListResponse(BaseModel):
     has_more: bool
 
 
-# ── 公开读 ──
+# ── public read ──
 
 @router.get("", response_model=CommentListResponse)
 async def list_comments(
@@ -74,8 +83,8 @@ async def list_comments(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> CommentListResponse:
-    """返回可见评论, 按创建时间倒序.  不做 auth."""
-    # 总数 (只算可见的)
+    """Return visible comments in reverse chronological order. No auth required."""
+    # total count (visible only)
     from sqlalchemy import func as sa_func
     count_stmt = select(sa_func.count(Comment.id)).where(Comment.is_visible == True)  # noqa: E712
     total = (await db.execute(count_stmt)).scalar_one()
@@ -95,7 +104,7 @@ async def list_comments(
     )
 
 
-# ── 公开写 + rate limit ──
+# ── public write + rate limit ──
 
 @router.post("", response_model=CommentPublicView, status_code=201)
 @limiter.limit("3/minute")
@@ -104,11 +113,12 @@ async def create_comment(
     req: CommentCreateRequest,
     db: AsyncSession = Depends(get_db),
 ) -> CommentPublicView:
-    """任何访客都能发评论.  rate limit 按 IP 限 3/minute 防垃圾.
+    """Any visitor can post a comment. Rate-limited to 3/minute per IP to
+    prevent spam.
 
-    Pydantic 已经做了长度校验, 这里只追加:
-    - trim 后长度二次校验 (防御)
-    - 记录 IP 到 client_ip (仅服务端留档, 不返回)
+    Pydantic already enforces length; here we additionally:
+    - Re-validate length after trimming (defensive)
+    - Record the IP in client_ip (server-side log only, never returned)
     """
     name = req.author_name.strip()
     content = req.content.strip()
@@ -117,8 +127,8 @@ async def create_comment(
     if not (_CONTENT_MIN <= len(content) <= _CONTENT_MAX):
         raise HTTPException(status_code=400, detail="content length out of range")
 
-    # 记 IP (request.client.host 在 Render 后面的 proxy 可能是 proxy IP;
-    # 首选 X-Forwarded-For 里的第一条)
+    # Record the IP (request.client.host may be the proxy IP behind Render;
+    # prefer the first entry in X-Forwarded-For).
     client_ip = get_client_ip(request)
 
     comment = Comment(
@@ -138,7 +148,7 @@ async def create_comment(
     return CommentPublicView.from_orm(comment)
 
 
-# ── 管理员软删除 ──
+# ── admin soft-delete ──
 
 @router.delete("/{comment_id}", status_code=204)
 async def delete_comment(
@@ -146,7 +156,7 @@ async def delete_comment(
     comment_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """管理员软删除 — 置 is_visible=False, 行不动, 便于审计.  需 X-Admin-Secret."""
+    """Admin soft-delete — sets is_visible=False; the row is kept for audit purposes. Requires X-Admin-Secret."""
     await _require_admin(request)
 
     try:
@@ -161,4 +171,55 @@ async def delete_comment(
     comment.is_visible = False
     await db.commit()
     logger.info("comment soft-deleted: id=%s", comment_id)
+    return None
+
+
+# ── admin: list all comments (including hidden) ──
+
+@admin_router.get("", response_model=CommentListResponse)
+async def admin_list_comments(
+    request: Request,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> CommentListResponse:
+    """Admin: list all comments (including hidden ones), authenticated via X-Admin-Secret."""
+    await _require_admin(request)
+    from sqlalchemy import func as sa_func
+    total = (await db.execute(select(sa_func.count(Comment.id)))).scalar_one()
+    stmt = (
+        select(Comment)
+        .order_by(desc(Comment.created_at))
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return CommentListResponse(
+        comments=[CommentPublicView.from_orm(c) for c in rows],
+        total=int(total),
+        has_more=(offset + len(rows)) < int(total),
+    )
+
+
+# ── admin: delete comment ──
+
+@admin_router.delete("/{comment_id}", status_code=204)
+async def admin_delete_comment(
+    request: Request,
+    comment_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin soft-delete — equivalent to DELETE /api/comments/{id}, differing only in URL prefix."""
+    await _require_admin(request)
+    try:
+        uuid_obj = uuid.UUID(comment_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid comment id (not a UUID)")
+    stmt = select(Comment).where(Comment.id == uuid_obj)
+    comment = (await db.execute(stmt)).scalar_one_or_none()
+    if comment is None:
+        raise HTTPException(status_code=404, detail="comment not found")
+    comment.is_visible = False
+    await db.commit()
+    logger.info("admin comment soft-deleted: id=%s", comment_id)
     return None

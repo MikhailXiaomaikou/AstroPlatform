@@ -402,34 +402,35 @@ async def require_admin_any(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """N'-1: 双 auth 的 admin 检查 (FastAPI dependency 形式).
+    """N'-1: Dual-auth admin check (FastAPI dependency form).
 
-    - 优先看 X-Admin-Secret header (桌面工具场景), 匹配 settings.admin_secret 则放行
-    - 否则看 JWT + 用户 username 是否在 ADMIN_USERNAMES env var 里, 或
-      subscription_tier in {admin, institution}
-    - 都不行 → 403
+    - Check X-Admin-Secret header first (desktop tool scenario); pass if it
+      matches settings.admin_secret.
+    - Otherwise check JWT + whether the user's username is in the
+      ADMIN_USERNAMES env var, or subscription_tier in {admin, institution}.
+    - Neither passes → 403.
 
-    用 FastAPI Depends(get_db) 拿 session, conftest 测试时的 dep override
-    才能生效.  events.py / inference.py / admin_stats.py 都用
-    `Depends(require_admin_any)` 调.
+    Uses FastAPI Depends(get_db) to obtain the session so that conftest
+    dependency overrides work in tests.  events.py / inference.py /
+    admin_stats.py all call `Depends(require_admin_any)`.
     """
-    # ── 路径 1: X-Admin-Secret
+    # ── path 1: X-Admin-Secret
     if settings.admin_secret:
         provided = request.headers.get("X-Admin-Secret", "")
-        # T4 (PART T): timing-safe compare (同 _require_admin)
+        # T4 (PART T): timing-safe compare (same as in _require_admin)
         import hmac as _hmac
         if provided and _hmac.compare_digest(
             provided.encode("utf-8"),
             settings.admin_secret.encode("utf-8"),
         ):
             return None
-    # dev bypass: ENV=dev 且 admin_secret 空, 允许通过
+    # dev bypass: ENV=dev with empty admin_secret allows through
     import os as _os_local
     _env = _os_local.getenv("ENV", "").strip().lower()
     if not settings.admin_secret and _env == "dev":
         return None
 
-    # ── 路径 2: JWT + ADMIN_USERNAMES 或 subscription_tier
+    # ── path 2: JWT + ADMIN_USERNAMES or subscription_tier
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
@@ -438,7 +439,7 @@ async def require_admin_any(
             from app.models.schemas import User
             from sqlalchemy import select
 
-            user_id = decode_token(token)  # 返回 uuid.UUID 或 raise
+            user_id = decode_token(token)  # returns uuid.UUID or raises
             user = (
                 await db.execute(select(User).where(User.id == user_id))
             ).scalar_one_or_none()
@@ -451,8 +452,11 @@ async def require_admin_any(
                 }
                 if user.username in admin_usernames or user.subscription_tier in {"admin", "institution"}:
                     return None
-        except Exception:
-            pass
+        except Exception as e:
+            # Bearer-token admin check is best-effort fallback to the
+            # X-Admin-Secret header. Any failure (bad token, db error)
+            # falls through to the 403 below — do not raise here.
+            logger.debug("admin bearer-token fallback failed: %s", e)
 
     raise HTTPException(
         status_code=403,

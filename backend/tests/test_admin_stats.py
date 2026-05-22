@@ -1,4 +1,4 @@
-"""N'-1: /api/admin/stats/* + 双 auth + CORS null 测试."""
+"""N'-1: /api/admin/stats/* + dual auth + CORS null tests."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 
-# ── 1. CORS null origin 允许 (桌面 HTML 双击打开浏览器发 Origin: null) ──
+# ── 1. CORS null origin allowed (desktop HTML double-clicked opens browser sending Origin: null) ──
 
 def test_cors_origins_includes_null():
     from app.cors import get_cors_origins
@@ -17,24 +17,24 @@ def test_cors_origins_includes_null():
     )
 
 
-# ── 2. require_admin_any 双路径 ──────────────────────────────────────
+# ── 2. require_admin_any dual paths ──────────────────────────────────────
 
 async def test_admin_stats_kpi_with_admin_secret(app_client, monkeypatch):
     monkeypatch.setenv("ENV", "production")
     from app.config import settings
     monkeypatch.setattr(settings, "admin_secret", "test-secret-z")
 
-    # 没 header → 403
+    # no header → 403
     r = await app_client.get("/api/admin/stats/kpi")
     assert r.status_code == 403
 
-    # 错 header → 403
+    # wrong header → 403
     r = await app_client.get(
         "/api/admin/stats/kpi", headers={"X-Admin-Secret": "wrong"}
     )
     assert r.status_code == 403
 
-    # 正确 header → 200
+    # correct header → 200
     r = await app_client.get(
         "/api/admin/stats/kpi", headers={"X-Admin-Secret": "test-secret-z"}
     )
@@ -46,7 +46,7 @@ async def test_admin_stats_kpi_with_admin_secret(app_client, monkeypatch):
 
 
 async def test_admin_stats_dev_bypass(app_client, monkeypatch):
-    """ENV=dev + admin_secret 空 → 旁路放行 (开发体验)"""
+    """ENV=dev + empty admin_secret → bypass allowed (developer experience)"""
     monkeypatch.setenv("ENV", "dev")
     from app.config import settings
     monkeypatch.setattr(settings, "admin_secret", "")
@@ -54,7 +54,7 @@ async def test_admin_stats_dev_bypass(app_client, monkeypatch):
     assert r.status_code == 200
 
 
-# ── 3. by-tool 真的从 event_data.tool_name 聚合 ──────────────────────
+# ── 3. by-tool actually aggregates from event_data.tool_name ──────────────────────
 
 async def test_admin_stats_by_tool_counts_correctly(app_client, monkeypatch, db_session):
     monkeypatch.setenv("ENV", "dev")
@@ -62,7 +62,7 @@ async def test_admin_stats_by_tool_counts_correctly(app_client, monkeypatch, db_
     monkeypatch.setattr(settings, "admin_secret", "")
     from app.models.schemas import UserEvent
 
-    # 注 3 条 ai.tool_called: query_gaia_cluster x2, run_adql x1
+    # 3 ai.tool_called events: query_gaia_cluster x2, run_adql x1
     now = datetime.now(timezone.utc)
     for tool in ("query_gaia_cluster", "query_gaia_cluster", "run_adql"):
         db_session.add(UserEvent(
@@ -71,7 +71,7 @@ async def test_admin_stats_by_tool_counts_correctly(app_client, monkeypatch, db_
             event_data={"tool_name": tool, "agent_name": "research"},
             timestamp=now - timedelta(hours=1),
         ))
-    # 一条非 ai.tool_called → 不该被算
+    # one non-ai.tool_called event → should not be counted
     db_session.add(UserEvent(
         id=uuid.uuid4(),
         event_type="ai.message_sent",
@@ -90,15 +90,15 @@ async def test_admin_stats_by_tool_counts_correctly(app_client, monkeypatch, db_
 
 
 async def test_admin_stats_telemetry_tool_usage_dump(app_client, monkeypatch, db_session):
-    """Stage 6 P0c-F (2026-05-19): telemetry/tool_usage 返回 enriched 分布,
-    含 pct_of_total + low_usage 标记 + low_usage_tools 汇总 (供决策砍工具)."""
+    """Stage 6 P0c-F (2026-05-19): telemetry/tool_usage returns an enriched distribution,
+    including pct_of_total + low_usage flag + low_usage_tools summary (for deciding which tools to cut)."""
     monkeypatch.setenv("ENV", "dev")
     from app.config import settings
     monkeypatch.setattr(settings, "admin_secret", "")
     from app.models.schemas import UserEvent
 
     now = datetime.now(timezone.utc)
-    # 200 次 popular_tool + 1 次 rare_tool → rare 占 0.5%, 低使用
+    # 200 popular_tool + 1 rare_tool → rare is 0.5%, low usage
     for _ in range(200):
         db_session.add(UserEvent(
             id=uuid.uuid4(),
@@ -127,7 +127,7 @@ async def test_admin_stats_telemetry_tool_usage_dump(app_client, monkeypatch, db
     assert "popular_tool" not in body["low_usage_tools"]
 
 
-# ── 4. by-page 聚合 ─────────────────────────────────────────────────
+# ── 4. by-page aggregation ─────────────────────────────────────────────────
 
 async def test_admin_stats_by_page(app_client, monkeypatch, db_session):
     monkeypatch.setenv("ENV", "dev")
@@ -148,13 +148,13 @@ async def test_admin_stats_by_page(app_client, monkeypatch, db_session):
     r = await app_client.get("/api/admin/stats/by-page?period=7d")
     assert r.status_code == 200
     pages = {it["page"]: it["count"] for it in r.json()["items"]}
-    # None page 不该在结果里
+    # None page should not appear in the results
     assert None not in pages
     assert pages.get("/chat") == 2
     assert pages.get("/admin") == 1
 
 
-# ── 5. timeline 时间桶 ─────────────────────────────────────────────
+# ── 5. timeline time buckets ─────────────────────────────────────────────
 
 async def test_admin_stats_timeline_buckets_by_day(app_client, monkeypatch, db_session):
     monkeypatch.setenv("ENV", "dev")
@@ -177,7 +177,7 @@ async def test_admin_stats_timeline_buckets_by_day(app_client, monkeypatch, db_s
     body = r.json()
     assert body["bucket"] == "day"
     assert len(body["series"]) >= 1
-    # 至少含 search.query / ai.message_sent 两个 type
+    # must contain at least search.query / ai.message_sent two types
     all_types = set()
     for entry in body["series"]:
         all_types.update(entry["counts"].keys())
@@ -205,7 +205,7 @@ async def test_admin_stats_comments(app_client, monkeypatch, db_session):
     from app.config import settings
     monkeypatch.setattr(settings, "admin_secret", "")
 
-    # 创建 2 visible + 1 hidden
+    # create 2 visible + 1 hidden
     await app_client.post("/api/comments", json={
         "author_name": "x", "content": "visible comment 1 long enough",
     })
@@ -216,7 +216,7 @@ async def test_admin_stats_comments(app_client, monkeypatch, db_session):
         "author_name": "z", "content": "to be hidden long enough",
     })
     cid_to_hide = r3.json()["id"]
-    # 软删一条
+    # soft-delete one comment
     await app_client.delete(f"/api/comments/{cid_to_hide}")
 
     r = await app_client.get("/api/admin/stats/comments?period=30d")
@@ -227,7 +227,7 @@ async def test_admin_stats_comments(app_client, monkeypatch, db_session):
     assert isinstance(body["per_day"], list)
 
 
-# ── 7. 现有 /api/admin/events/stats 仍接受 X-Admin-Secret (改 require_admin_any) ──
+# ── 7. existing /api/admin/events/stats still accepts X-Admin-Secret (updated to require_admin_any) ──
 
 async def test_existing_events_stats_accepts_admin_secret(app_client, monkeypatch):
     monkeypatch.setenv("ENV", "production")

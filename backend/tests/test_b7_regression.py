@@ -36,7 +36,7 @@ def test_b7_warning_mode_logs_and_counts_suspicious_author_year(caplog, monkeypa
     from app.observability.metrics import get_registry
     from app.services.claim_validator import citation_violations_should_block, provenance_citation_violations
 
-    # PART Y Batch 1: hardblock 现在默认开启, 显式 PROVENANCE_VALIDATOR_HARDBLOCK=false 才进 warn-only
+    # PART Y Batch 1: hardblock is now on by default; set PROVENANCE_VALIDATOR_HARDBLOCK=false explicitly to enter warn-only mode
     monkeypatch.setenv("PROVENANCE_VALIDATOR_HARDBLOCK", "false")
     get_registry().reset()
 

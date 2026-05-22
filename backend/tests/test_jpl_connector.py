@@ -11,7 +11,7 @@ from astropy.table import Table
 
 
 def test_jpl_search_returns_astroobject_with_physical_fields(monkeypatch):
-    """search() 把 ephemerides Table 转成 AstroObject + extra 含物理量。"""
+    """search() converts ephemerides Table to AstroObject with extra physical fields."""
     from app.connectors.jpl import JPLHorizonsConnector
 
     fake_eph = Table({
@@ -46,7 +46,7 @@ def test_jpl_search_returns_astroobject_with_physical_fields(monkeypatch):
 
 
 def test_jpl_provenance_dataset_attached_with_correct_fields(monkeypatch):
-    """provenance-v2 contract: _provenance_dataset 必须含 jpl 关键字段."""
+    """provenance-v2 contract: _provenance_dataset must contain jpl key fields."""
     from app.connectors.jpl import JPLHorizonsConnector
 
     fake_eph = Table({
@@ -85,7 +85,7 @@ def test_jpl_empty_query_short_circuits():
 
 
 def test_jpl_missing_columns_uses_safe_defaults(monkeypatch):
-    """缺少 V/r/delta 等列时不报错,extra 不带这些字段。"""
+    """Missing V/r/delta columns should not raise errors; extra should omit those fields."""
     from app.connectors.jpl import JPLHorizonsConnector
 
     fake_eph = Table({
@@ -117,7 +117,7 @@ def test_jpl_fetch_raises_not_implemented():
 
 
 def test_jpl_nan_inf_in_columns_falls_back_to_none(monkeypatch):
-    """NaN/Inf 数据走 _safe_float 路径返 None,不破坏 AstroObject."""
+    """NaN/Inf data goes through _safe_float path and returns None without corrupting AstroObject."""
     from app.connectors.jpl import JPLHorizonsConnector
     import math
 
@@ -135,4 +135,4 @@ def test_jpl_nan_inf_in_columns_falls_back_to_none(monkeypatch):
 
     assert obj.magnitude is None  # V=NaN → None
     assert "heliocentric_distance_au" not in obj.extra  # r=Inf → None
-    assert obj.extra["geocentric_distance_au"] == 1.0  # delta=1.0 保留
+    assert obj.extra["geocentric_distance_au"] == 1.0  # delta=1.0 preserved

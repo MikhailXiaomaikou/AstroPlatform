@@ -1,15 +1,16 @@
-"""G3.4 + 2026-05-20: 工具熔断对硬拒绝 error_class 的覆盖.
+"""G3.4 + 2026-05-20: Circuit-breaker coverage for hard-reject error_class.
 
-Solar-system M0 盲测 C2 case (Phaethon 100 年 daily ephemeris) 显示:
-fetch_horizons_ephemeris 收到本地 range_too_large 拒绝后, LLM 重试 12 次都没
-熔断, 浪费 12 次 LLM 调用. 根因两层:
+Solar-system M0 blind test C2 case (Phaethon 100-year daily ephemeris) showed:
+after fetch_horizons_ephemeris received a local range_too_large rejection, the LLM
+retried 12 times without triggering the circuit breaker, wasting 12 LLM calls.
+Root cause has two layers:
 
-1. fetch_horizons_ephemeris (以及 5 个其他 solar_system 数据查询工具) 不在
-   `_DATA_FETCH_TOOLS` 集合里, 整段 hard_failure 计数逻辑被外层 if 跳过.
-2. soft_failure 判定缺 `err_class in _HARD_REJECT_ERROR_CLASSES` 短路, 未来
-   error msg 含 "too large" 等关键词会被错误归入 soft.
+1. fetch_horizons_ephemeris (and 5 other solar_system data-fetch tools) were not in
+   `_DATA_FETCH_TOOLS`, so the entire hard_failure counting logic was skipped by the outer if.
+2. The soft_failure check was missing the `err_class in _HARD_REJECT_ERROR_CLASSES` short-circuit;
+   future error messages containing keywords like "too large" would be wrongly classified as soft.
 
-本文件用源码断言保护这两处修复, 防止以后被误删.
+This file uses source-code assertions to guard both fixes against future deletion.
 """
 from __future__ import annotations
 
@@ -17,8 +18,8 @@ import inspect
 
 
 def test_solar_system_data_tools_in_data_fetch_set():
-    """6 个 solar_system 数据查询工具必须在 _DATA_FETCH_TOOLS, 否则 G3.4
-    熔断对它们完全无效."""
+    """All 6 solar_system data-fetch tools must be in _DATA_FETCH_TOOLS, otherwise
+    the G3.4 circuit breaker has no effect on them."""
     from app.api import chat as chat_mod
 
     src = inspect.getsource(chat_mod._run_agent_loop)
@@ -37,10 +38,11 @@ def test_solar_system_data_tools_in_data_fetch_set():
 
 
 def test_hard_reject_error_classes_defined():
-    """_HARD_REJECT_ERROR_CLASSES frozenset 必须存在并含核心 3 个 class.
+    """_HARD_REJECT_ERROR_CLASSES frozenset must exist and contain the 3 core classes.
 
-    这些 class 表示"工具本地硬拒绝", LLM 用同参数重试只会再次被拒, 应
-    走 hard_failure 计数路径而不是 soft.
+    These classes represent local hard rejections from a tool; retrying with the same
+    parameters will always be rejected again, so they should follow the hard_failure
+    counting path rather than soft.
     """
     from app.api import chat as chat_mod
 
@@ -55,8 +57,9 @@ def test_hard_reject_error_classes_defined():
 
 
 def test_soft_failure_short_circuits_on_hard_reject_class():
-    """soft_failure 判定必须以 `err_class not in _HARD_REJECT_ERROR_CLASSES`
-    短路开头, 否则 error message 含 "too large" 等关键词时仍会被错误归 soft."""
+    """soft_failure check must begin with `err_class not in _HARD_REJECT_ERROR_CLASSES`
+    short-circuit; otherwise error messages containing keywords like "too large" would
+    still be incorrectly classified as soft."""
     from app.api import chat as chat_mod
 
     src = inspect.getsource(chat_mod._run_agent_loop)

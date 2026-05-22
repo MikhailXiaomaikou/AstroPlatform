@@ -21,8 +21,8 @@ from __future__ import annotations
 
 
 def test_alcock_paczynski_runs_without_external_config() -> None:
-    """AP test 必须能裸跑, 不需要 dataset_keys 参数 (DESI DR1 是
-    hardcoded in cosmology_likelihoods.DESI_DR1_BAO_MEAN_VECTOR)."""
+    """AP test must run without any external config; the dataset_keys parameter is not needed
+    (DESI DR1 is hardcoded in cosmology_likelihoods.DESI_DR1_BAO_MEAN_VECTOR)."""
     from app.services.cosmology_likelihoods import run_alcock_paczynski_test
 
     result = run_alcock_paczynski_test()
@@ -32,8 +32,8 @@ def test_alcock_paczynski_runs_without_external_config() -> None:
 
 
 def test_alcock_paczynski_omega_m_consistent_with_desi_dr1() -> None:
-    """DESI DR1 公开 Ωm = 0.295 ± 0.015 (BAO 全 likelihood). AP-only
-    Ωm 应在该区间附近 ~1σ — 相同物理但用不同 information channel."""
+    """DESI DR1 published Ωm = 0.295 ± 0.015 (BAO full likelihood). AP-only
+    Ωm should be consistent within ~1σ — same physics but a different information channel."""
     from app.services.cosmology_likelihoods import run_alcock_paczynski_test
 
     result = run_alcock_paczynski_test()
@@ -76,8 +76,8 @@ def test_alcock_paczynski_chi2_per_dof_is_reasonable() -> None:
 
 
 def test_alcock_paczynski_provenance_complete() -> None:
-    """result.provenance.alcock_paczynski 必须含完整审计字段, 让 paper
-    draft 能引 + claim_validator 能 cross-check."""
+    """result.provenance.alcock_paczynski must contain complete audit fields so that
+    a paper draft can cite them and claim_validator can cross-check."""
     from app.services.cosmology_likelihoods import run_alcock_paczynski_test
 
     result = run_alcock_paczynski_test()
@@ -90,7 +90,7 @@ def test_alcock_paczynski_provenance_complete() -> None:
 
 
 def test_alcock_paczynski_citations_include_alcock_paczynski_1979_and_desi_dr1() -> None:
-    """AP test 引用必须含两篇关键 paper: Alcock & Paczynski 1979 (the
+    """AP test citations must include two key papers: Alcock & Paczynski 1979 (the
     method) + DESI DR1 BAO 2024 (the data)."""
     from app.services.cosmology_likelihoods import run_alcock_paczynski_test
 
@@ -104,16 +104,16 @@ def test_alcock_paczynski_citations_include_alcock_paczynski_1979_and_desi_dr1()
 
 
 def test_alcock_paczynski_h0_independence() -> None:
-    """关键不变量: AP test 用 DM/DH 比值, H0 和 rd 必须 cancel.
-    无论传 H0=70 / 73.04 / 67.36, 输出 Ωm 应该 100% 相同
-    (DM/DH = (∫dz'/E)/(1/E(z)) 跟 H0 完全无关).
+    """Key invariant: AP test uses DM/DH ratios, H0 and rd must cancel.
+    Regardless of H0=70 / 73.04 / 67.36, the output Ωm must be 100% identical
+    (DM/DH = (integral dz'/E)/(1/E(z)) is completely independent of H0).
 
-    实现细节: run_alcock_paczynski_test 内部 H0 用固定 70 dummy
-    占位, 但 DM/DH 比值不依赖 H0. 这个测试是 sanity check —
-    如果有人未来误改为 H0-dependent path, 这里立刻 fail."""
+    Implementation note: run_alcock_paczynski_test internally uses a fixed dummy H0=70
+    as a placeholder, but the DM/DH ratio does not depend on H0. This test is a sanity
+    check — if anyone later mistakenly changes to an H0-dependent path, this will fail immediately."""
     from app.services.cosmology_likelihoods import run_alcock_paczynski_test
 
-    # 当前 API 不暴露 H0 参数 (因为不该有), 调两次 deterministic 必相同
+    # the current API does not expose an H0 parameter (as it should not); two deterministic calls must be identical
     r1 = run_alcock_paczynski_test()
     r2 = run_alcock_paczynski_test()
     assert r1["omega_m_best"] == r2["omega_m_best"]
@@ -122,7 +122,7 @@ def test_alcock_paczynski_h0_independence() -> None:
 
 def test_alcock_paczynski_ratios_match_desi_dr1_data() -> None:
     """spot check: DESI DR1 (DM/rs at z=2.33) / (DH/rs at z=2.33) =
-    39.708 / 8.523 ≈ 4.659. 这是 AP test 输入的 raw ratio."""
+    39.708 / 8.523 ≈ 4.659. This is the raw ratio fed into the AP test."""
     from app.services.cosmology_likelihoods import run_alcock_paczynski_test
 
     result = run_alcock_paczynski_test()

@@ -402,7 +402,7 @@ def build_fit_line_lfr_diagnostics_section(
     ]
     if not fit_results:
         return None
-    fit = fit_results[-1]  # 用本 session 最新一次成功 fit
+    fit = fit_results[-1]  # use the most recent successful fit in this session
 
     lines: list[str] = []
     lines.append("## Fit Diagnostics: line luminosity-FWHM relation")
@@ -604,9 +604,10 @@ def _build_default_paper_json(artifacts: SessionArtifacts, journal_format: str) 
     methods_citations = artifacts.bibcodes[2:3]
     results_text = artifacts.assistant_text[-1] if artifacts.assistant_text else "The session produced a set of exploratory findings that should be reviewed and refined before submission."
 
-    # PART AI #5/#6: 当本 session 含 fit_line_lfr 成功结果时, 自动插入
-    # 一段 readiness/claimability/Bayesian/lensing 完整诊断 — 让 paper
-    # draft 能复现审稿人想看的 publication_readiness 证据链.
+    # PART AI #5/#6: when this session contains a successful fit_line_lfr result,
+    # automatically insert a full readiness/claimability/Bayesian/lensing
+    # diagnostics section so the paper draft can reproduce the publication_readiness
+    # evidence chain that reviewers expect.
     fit_lfr_section = build_fit_line_lfr_diagnostics_section(artifacts)
 
     return {

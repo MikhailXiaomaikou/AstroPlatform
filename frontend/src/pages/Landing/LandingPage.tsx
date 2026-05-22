@@ -77,8 +77,8 @@ const TOC: TocEntry[] = [
 export default function LandingPage() {
   const navigate = useNavigate();
   const { t } = useI18n();
-  // M0 Commit 6 (2026-05-18): 根据 backend focus 切换 hero 文案. cosmology 是默认,
-  // solar_system 用 .solar_system 后缀键. 未知 focus / fetch 失败 → cosmology 默认.
+  // M0 Commit 6 (2026-05-18): Switch the hero copy based on backend focus. cosmology is the default;
+  // solar_system uses the .solar_system suffix keys. Unknown focus / fetch failure -> cosmology default.
   const [backendFocus, setBackendFocus] = useState<string>("cosmology");
   useEffect(() => {
     getBackendConfig()
@@ -155,7 +155,7 @@ export default function LandingPage() {
         </ol>
       </div>
 
-      {/* 公开评论区 — 向全网开放, 无需登录 */}
+      {/* Public comment section — open to all visitors, no login required */}
       <CommentSection />
     </div>
   );

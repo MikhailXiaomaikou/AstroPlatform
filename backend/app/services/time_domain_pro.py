@@ -160,11 +160,11 @@ def fit_transit(time: list, flux: list, flux_err: list | None = None,
     if inc <= 0 or inc > 90:
         inc = 89.0
     t0 = _finite_float(t0, float(t[np.nanargmin(f)]))
-    # 绝对 BJD 时间配 t0=0 基本不可用；自动用最低 flux 附近做初值。
+    # Absolute BJD times combined with t0=0 are essentially unusable; use the flux minimum as the initial guess.
     if abs(t0) < 1e-12 and float(np.nanmin(np.abs(t))) > period:
         t0 = float(t[np.nanargmin(f)])
 
-    # 大曲线只抽样拟合参数，最后仍在全量点上生成 model/residual。
+    # For large light curves, subsample for parameter fitting but generate model/residuals on all points.
     fit_idx = np.arange(len(t))
     if len(fit_idx) > 8000:
         fit_idx = np.linspace(0, len(t) - 1, 8000, dtype=int)
@@ -440,9 +440,11 @@ def transit_search_bls(time: list, flux: list,
         bls_null = BoxLeastSquares(t * u.day, shuffled)
         res_null = bls_null.power(periods * u.day, durations * u.day)
         null_max[i] = float(np.max(res_null.power))
-    # L2-b (audit 2026-04-20): 严格 > 而非 >=.  Kipping 2011 标准 bootstrap
-    # FAP 定义是 "null max 严格超过观测 max 的比例"; 用 >= 会把 null 恰等
-    # 于观测峰值的 case 也计进去, 过估显著性 0.5-2%.
+    # L2-b (audit 2026-04-20): strict > not >=. The Kipping 2011 standard
+    # bootstrap FAP is defined as the fraction of null trials where the null
+    # max **strictly exceeds** the observed max; using >= would count cases
+    # where the null exactly equals the peak, over-estimating significance by
+    # 0.5-2%.
     fap_bootstrap = float(np.mean(null_max > power[best_idx]))
 
     if fap_bootstrap < 0.01:

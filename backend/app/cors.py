@@ -17,13 +17,13 @@ def get_cors_origins() -> list[str]:
     if raw.strip():
         origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
 
-    # N'-1: 桌面 admin HTML 双击打开时浏览器发 `Origin: null`.  无条件允许
-    # "null" — 实际 admin 端点都有 X-Admin-Secret 门槛, CORS 只是放行
-    # 不等于鉴权.
+    # N'-1: when desktop admin HTML is opened directly the browser sends
+    # `Origin: null`. Always allow "null" — admin endpoints are still gated
+    # by the X-Admin-Secret header, CORS is not the auth layer.
     if "null" not in origins:
         origins.append("null")
 
-    # In production, only use explicitly configured origins (+ null 给桌面工具)
+    # In production, only use explicitly configured origins (plus null for desktop tools)
     if env == "production":
         return origins
 

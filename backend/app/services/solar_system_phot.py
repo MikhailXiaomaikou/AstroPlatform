@@ -38,14 +38,14 @@ _ARCSEC_PER_RAD = 206264.80624709636
 
 
 def hg_phase_function(alpha_deg: float, G: float = DEFAULT_G_SLOPE) -> float:
-    """HG 相函数 Φ(α) = (1-G) Φ₁(α) + G Φ₂(α),  α ∈ [0°, 180°]。
+    """HG phase function Φ(α) = (1-G) Φ₁(α) + G Φ₂(α),  α ∈ [0°, 180°].
 
     Bowell+ 1989 approximation:
         Φ₁ = exp[-3.33 tan(α/2)^0.63]
         Φ₂ = exp[-1.87 tan(α/2)^1.22]
         Φ  = (1-G) Φ₁ + G Φ₂
 
-    α=0° 时 Φ=1(opposition full phase)。
+    At α=0°, Φ=1 (opposition, full phase).
     """
     if not (0.0 <= alpha_deg <= 180.0):
         raise ValueError(f"alpha_deg out of range [0, 180]: {alpha_deg}")
@@ -63,9 +63,9 @@ def hg_phase_function(alpha_deg: float, G: float = DEFAULT_G_SLOPE) -> float:
 
 
 def hg_reduced_magnitude(H: float, G: float, alpha_deg: float) -> float:
-    """Reduced magnitude H(α) = H - 2.5 log₁₀ Φ(α)。
+    """Reduced magnitude H(α) = H - 2.5 log₁₀ Φ(α).
 
-    "Reduced" 意指 r=Δ=1 au — 不含距离衰减项。 α=0° 时 = H。
+    "Reduced" means r=Δ=1 au — the distance-falloff term is excluded. Equals H at α=0°.
     """
     if not (0.0 <= alpha_deg <= 180.0):
         raise ValueError(f"alpha_deg out of range [0, 180]: {alpha_deg}")
@@ -76,9 +76,9 @@ def hg_reduced_magnitude(H: float, G: float, alpha_deg: float) -> float:
 def hg_apparent_magnitude(
     H: float, G: float, alpha_deg: float, r_au: float, delta_au: float,
 ) -> float:
-    """V(α, r, Δ) = H(α) + 5 log₁₀(r Δ)。
+    """V(α, r, Δ) = H(α) + 5 log₁₀(r Δ).
 
-    Bowell+ 1989 双参数测光相函数,r/Δ 单位 au。
+    Bowell+ 1989 two-parameter photometric phase function; r/Δ in au.
     """
     if r_au <= 0 or delta_au <= 0:
         raise ValueError(f"r_au and delta_au must be positive: {r_au}, {delta_au}")
@@ -90,9 +90,9 @@ def hg_apparent_magnitude_curve(
     H: float, G: float, alpha_angles_deg: Sequence[float],
     r_au_arr: Sequence[float], delta_au_arr: Sequence[float],
 ) -> list[float]:
-    """对一组 (α, r, Δ) 计算 V — vectorised 帮手."""
+    """Compute V for an array of (α, r, Δ) triples — vectorised helper."""
     if not (len(alpha_angles_deg) == len(r_au_arr) == len(delta_au_arr)):
-        raise ValueError("三个序列长度必须一致")
+        raise ValueError("All three sequences must have the same length")
     return [
         hg_apparent_magnitude(H, G, a, r, d)
         for a, r, d in zip(alpha_angles_deg, r_au_arr, delta_au_arr)
@@ -103,14 +103,14 @@ def hg_apparent_magnitude_curve(
 
 
 def light_time_minutes(delta_au: float) -> float:
-    """光行时 (min) = Δ (au) × 8.31675 min/au。"""
+    """Light travel time (min) = Δ (au) × 8.31675 min/au."""
     if delta_au < 0:
         raise ValueError(f"delta_au must be non-negative: {delta_au}")
     return delta_au * _LIGHT_TIME_MIN_PER_AU
 
 
 def light_time_seconds(delta_au: float) -> float:
-    """光行时 (s) = Δ (au) × 499.005 s/au。"""
+    """Light travel time (s) = Δ (au) × 499.005 s/au."""
     return light_time_minutes(delta_au) * 60.0
 
 
@@ -125,17 +125,17 @@ def afrho_cm(
 
     Afρ = 4 × Δ_au² × r_au² × (1 au [cm])² / ρ_cm × 10^(0.4 (m_sun - m_comet))
 
-    其中 ρ_cm 是 aperture 在彗星处的投影半径 (cm):
+    where ρ_cm is the projected aperture radius at the comet (cm):
         ρ_cm = (aperture_arcsec / 206264.806) × Δ_au × (1 au [cm])
 
-    参数:
-        m_comet — 彗星 aperture 内 V 视星等
-        r_au — 日心距 (au)
-        delta_au — 地心距 (au)
-        aperture_arcsec — aperture 角半径 (arcsec)
-        m_sun — 1 au 处太阳 V 视星等 (default -26.74, Willmer 2018)
+    Args:
+        m_comet -- comet apparent V magnitude within the aperture
+        r_au -- heliocentric distance (au)
+        delta_au -- geocentric distance (au)
+        aperture_arcsec -- aperture angular radius (arcsec)
+        m_sun -- apparent V magnitude of the Sun at 1 au (default -26.74, Willmer 2018)
 
-    返回 Afρ 单位 cm。 典型短期彗星 perihelion 附近 ~10-10000 cm。
+    Returns Afρ in cm. Typical short-period comets near perihelion: ~10-10000 cm.
     """
     if r_au <= 0 or delta_au <= 0 or aperture_arcsec <= 0:
         raise ValueError(
@@ -150,7 +150,7 @@ def afrho_cm(
 def afrho_phase_corrected(
     afrho_cm_value: float, alpha_deg: float,
 ) -> float:
-    """Halley-Marcus 相函数校正 (Schleicher 2010) — A(α)fρ → A(0°)fρ。
+    """Halley-Marcus phase function correction (Schleicher 2010) — A(α)fρ → A(0°)fρ.
 
     Returns Afρ at 0° phase, the standard reference angle. Uses the
     Prefer sbpy's Halley-Marcus implementation when installed. If sbpy is

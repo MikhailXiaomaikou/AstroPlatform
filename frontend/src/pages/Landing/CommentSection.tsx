@@ -1,12 +1,12 @@
 /**
- * Landing 页下方公开评论区.
+ * Public comment section below the Landing page.
  *
- * 任何访客填昵称 + 内容即可提交, 无需登录.  管理员在 localStorage 设
- * 键 `astro_admin_secret` 后能看到每条评论右侧的"删除"按钮 (软删除,
- * 后端置 is_visible=False).
+ * Any visitor can submit by providing a nickname and content — no login required.
+ * Admins who set `astro_admin_secret` in localStorage will see a Delete button
+ * next to each comment (soft delete; the backend sets is_visible=False).
  *
- * i18n: 所有用户可见字符串走 t() 函数, 支持 en/zh/fr/es (key 前缀
- * comments.*).
+ * i18n: all user-visible strings go through t(), supporting en/zh/fr/es
+ * (key prefix: comments.*).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CommentPublicView } from "../../api/client";
@@ -17,7 +17,7 @@ import {
 } from "../../api/client";
 import { useI18n } from "../../i18n";
 
-// 跟后端 _NAME_MAX / _CONTENT_MAX 对齐
+// Keep in sync with the backend's _NAME_MAX / _CONTENT_MAX
 const NAME_MAX = 40;
 const CONTENT_MAX = 500;
 const PAGE_SIZE = 20;
@@ -29,9 +29,9 @@ function fill(template: string, values: Record<string, string | number>): string
 }
 
 export default function CommentSection() {
-  const { t, lang } = useI18n();  // lang 在 deps 里让切语言时触发重排 format
+  const { t, lang } = useI18n();  // lang in deps so switching language triggers re-format
 
-  // 用 lang 作 useMemo dep: 切换语言时 formatRelative 输出跟着换.
+  // Use lang as a useMemo dep so formatRelative output updates when the language is switched.
   const formatRelative = useMemo(
     () => (iso: string): string => {
       if (!iso) return "";
@@ -58,14 +58,14 @@ export default function CommentSection() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 提交表单 state
+  // Form submission state
   const [name, setName] = useState("");
   const [content, setContent] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [justPostedId, setJustPostedId] = useState<string | null>(null);
 
-  // admin 判断: localStorage 里存了 admin secret 就算 admin
+  // Admin check: the user is treated as admin when an admin secret is present in localStorage
   const [adminSecret, setAdminSecret] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     const v = window.localStorage.getItem("astro_admin_secret");
@@ -180,7 +180,7 @@ export default function CommentSection() {
       <h2 className="section-head alt">{t("comments.title")}</h2>
       <p className="comment-section-intro">{t("comments.intro")}</p>
 
-      {/* ── 提交表单 ── */}
+      {/* ── Submission form ── */}
       <form className="comment-form" onSubmit={handleSubmit}>
         <div className="comment-form-row">
           <label>
@@ -230,7 +230,7 @@ export default function CommentSection() {
         </div>
       </form>
 
-      {/* ── 评论列表 ── */}
+      {/* ── Comment list ── */}
       <div className="comment-list-header">
         <span className="comment-list-count">
           {fill(t("comments.count"), { n: total })}

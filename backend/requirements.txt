@@ -1,3 +1,29 @@
+# ── astro-platform backend requirements (source of truth) ───────────────────
+# This file is the ONLY requirements file consumed by production.
+#   Dockerfile (line 37):     pip install --no-cache-dir -r requirements.txt
+#   render.yaml:              same
+#
+# Versions are pinned with permissive ranges (>=X,<Y) so security patches land
+# automatically while major-version breaking changes do NOT.
+#
+# Sibling files:
+#   requirements-local.txt  — historical minimal dev-only list (NOT in sync
+#                             with this file). Kept for backward compatibility
+#                             with any old IDE / scripts that reference it,
+#                             but new dev work should `pip install -r
+#                             requirements.txt`. Safe to ignore.
+#   requirements.lock       — snapshot from a past `pip freeze`, exact `==`
+#                             pins including transitive deps. Useful when
+#                             diagnosing dependency drift between local and
+#                             production. NOT consumed by Dockerfile or
+#                             Render. Regenerate manually if needed:
+#                                pip freeze > requirements.lock
+#
+# Adding a dependency: add the line below with a `>=major.minor,<next-major`
+# pin. Add a `# WHY:` comment if the package is non-obvious or replaces a
+# stdlib alternative.
+# ────────────────────────────────────────────────────────────────────────────
+
 fastapi>=0.109.2,<1
 uvicorn[standard]>=0.27.1,<1
 sqlalchemy>=2.0.27,<3

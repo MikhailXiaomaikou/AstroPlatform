@@ -10,11 +10,12 @@ Fits broadband photometry against a library of 7 simplified SED templates
 uncertainties, and the full P(z).  Uses only numpy/scipy — no external SED
 libraries required.
 
-L5 (audit 2026-04-20): runtime gate 防止演示实现被当成 publication 工具.
-默认 DEMO_MODE = True; estimate_photo_z 的公共入口若没有 allow_demo=True
-显式覆盖, 直接返回 error_class=demo_mode_blocked, 引导调用方用
-estimate_photo_z_pro (enhanced_template: 30+ 模板, 有粉尘, 支持发射线,
-IGM, Bayesian priors) 做真研究.
+L5 (audit 2026-04-20): runtime gate to prevent the demo implementation from
+being used as a publication-quality tool. Defaults to DEMO_MODE = True; the
+public entry point estimate_photo_z returns error_class=demo_mode_blocked
+unless allow_demo=True is passed explicitly, directing callers to use
+estimate_photo_z_pro (enhanced_template: 30+ templates, dust, emission lines,
+IGM, Bayesian priors) for real research.
 """
 
 import numpy as np
@@ -204,10 +205,11 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict, z_max: float =
     mag_errors : dict
         1-sigma magnitude uncertainties, same keys as *magnitudes*.
     z_max : float, default 2.0
-        L2-c (audit 2026-04-20): 搜索红移上界.  之前硬编码 2.0 对
-        LSST/Euclid/Roman 高红移样本不够 (QSO/starburst 常 z>3).  当
-        best z_phot ≥ z_max - 0.05 时返回 `at_z_max_boundary=True`
-        警告用户需增大.
+        L2-c (audit 2026-04-20): upper redshift search boundary. The previous
+        hard-coded 2.0 is insufficient for LSST/Euclid/Roman high-z samples
+        (QSO/starburst sources commonly reach z>3). Returns
+        `at_z_max_boundary=True` when best z_phot >= z_max - 0.05 to warn
+        the user to increase z_max.
 
     Returns
     -------
@@ -218,7 +220,7 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict, z_max: float =
         z_grid       : redshift grid           (list)
         best_template: name of the best-fit SED template
         chi2_min     : minimum chi2 value
-        at_z_max_boundary : True when best z 紧贴 z_max 上界, 用户应增大
+        at_z_max_boundary : True when the best z is right at the z_max upper bound; user should increase z_max
     """
     # --- parse observed data, skipping missing bands ---
     bands_used = []
@@ -253,9 +255,9 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict, z_max: float =
     wave_rest, template_fluxes = _build_templates(n_wave=80)
 
     # --- redshift grid ---
-    # L2-c: z_max 从硬编码 2.0 改参数, default 保持 2.0 兼容老 caller.
-    # n_z 保持 401 → 步长 0.005 在 [0, 2]; 若 z_max=5, n_z=401 → 0.0125
-    # (仍足够 photo-z bias ~0.05 级别的精度).
+    # L2-c: z_max changed from hard-coded 2.0 to a parameter; default kept at
+    # 2.0 for backward compatibility. n_z stays at 401 → step 0.005 for [0, 2];
+    # at z_max=5, n_z=401 → step 0.0125 (still adequate for photo-z bias ~0.05).
     z_grid = np.linspace(0.0, float(z_max), 401)
 
     # --- chi2 cube:  (n_z, n_templates) ---
@@ -316,8 +318,8 @@ def estimate_photo_z_template(magnitudes: dict, mag_errors: dict, z_max: float =
     else:
         z_err = z_grid[1] - z_grid[0]  # single grid step
 
-    # L2-c: 边界警告.  best z_phot 在 z_max 前 0.05 之内 → 用户可能需要
-    # 把 z_max 开大.  返回 at_z_max_boundary flag.
+    # L2-c: boundary warning. If best z_phot is within 0.05 of z_max, the user
+    # may need to increase z_max. Return the at_z_max_boundary flag.
     at_boundary = bool(z_phot >= (float(z_max) - 0.05))
 
     return {
@@ -544,7 +546,7 @@ def estimate_photo_z(
     if mag_errors is None:
         mag_errors = {}
 
-    # L2-c: 透传 z_max (default 2.0 保持向后兼容)
+    # L2-c: pass through z_max (default 2.0 for backward compatibility)
     z_max = float(kwargs.get("z_max", 2.0))
 
     if method == "template":

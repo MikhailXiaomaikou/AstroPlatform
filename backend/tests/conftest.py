@@ -30,6 +30,40 @@ def stable_code_executor_memory(monkeypatch):
     monkeypatch.setattr(code_executor, "_get_memory_usage_bytes", lambda: 64 * 1024 * 1024)
 
 
+@pytest.fixture(autouse=True)
+def isolated_kv_store():
+    """Force the shared KV store onto an in-memory backend for every test.
+
+    Without this, ``workflow_checkpoint`` / ``cosmology_mcmc`` / the upcoming
+    ``async_tool_runtime`` would try to reach Redis at ``localhost:6379`` (2 s
+    connect timeout × hundreds of tests) and otherwise write a real
+    ``data/kv_store.db`` SQLite file. Tests want full read/write semantics
+    without either external dependency.
+    """
+    from app.services import _kv_store
+
+    _kv_store.use_memory_backend_for_testing()
+    yield
+    _kv_store.reset_backend()
+
+
+@pytest.fixture(autouse=True)
+def isolated_async_dispatcher():
+    """Default-mock the Celery dispatcher so tests don't reach a real broker.
+
+    Tests that explicitly want to exercise the dispatcher (e.g.
+    ``test_async_tool_runtime``) install their own with
+    ``atr.set_dispatcher``; this fixture resets afterwards. Submissions
+    from unrelated tests therefore see the queued banner without trying
+    to enqueue against Redis.
+    """
+    from app.services import async_tool_runtime as atr
+
+    atr.set_dispatcher(lambda *args, **kwargs: None)
+    yield
+    atr.reset_dispatcher()
+
+
 # ── In-memory SQLite engine (per-test-session) ──
 
 TEST_DB_URL = "sqlite+aiosqlite://"

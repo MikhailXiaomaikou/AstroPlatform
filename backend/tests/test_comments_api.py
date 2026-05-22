@@ -1,11 +1,11 @@
-"""公开评论区 API 测试.
+"""Public comments API tests.
 
-覆盖:
-- POST /api/comments: 合法 / 缺字段 / 超长 / 空白
-- GET /api/comments: 倒序 / 分页 / has_more / 软删除后不返回
-- DELETE /api/comments/{id}: 无 secret 拒绝 / 非 UUID 拒绝 / 正常删除
+Coverage:
+- POST /api/comments: valid / missing fields / too long / blank
+- GET /api/comments: reverse order / pagination / has_more / soft-deleted not returned
+- DELETE /api/comments/{id}: no secret rejected / non-UUID rejected / normal delete
 
-走项目现有 conftest.app_client fixture 以复用 in-memory SQLite + dep override.
+Uses the project's existing conftest.app_client fixture to reuse in-memory SQLite + dep override.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from app.rate_limit import get_rate_limit_key
 
 
 async def test_post_and_get_comment_roundtrip(app_client):
-    """基本 happy path: POST → 立即能在 GET 里看到."""
+    """Basic happy path: POST → immediately visible in GET."""
     r = await app_client.post("/api/comments", json={
         "author_name": "Alice",
         "content": "Great platform, very useful for research!",
@@ -61,7 +61,7 @@ async def test_post_rejects_blank_after_trim(app_client):
 
 
 async def test_delete_without_admin_secret_rejected(app_client, monkeypatch):
-    # 模拟生产环境 (ENV=production + ADMIN_SECRET 空 → fail closed)
+    # simulate production environment (ENV=production + empty ADMIN_SECRET → fail closed)
     monkeypatch.setenv("ENV", "production")
     from app.config import settings
     monkeypatch.setattr(settings, "admin_secret", "")
@@ -73,13 +73,13 @@ async def test_delete_without_admin_secret_rejected(app_client, monkeypatch):
     assert r.status_code == 201
     cid = r.json()["id"]
 
-    # 未带 X-Admin-Secret → 403
+    # no X-Admin-Secret → 403
     r2 = await app_client.delete(f"/api/comments/{cid}")
     assert r2.status_code == 403
 
 
 async def test_delete_invalid_uuid_rejected(app_client, monkeypatch):
-    # _require_admin 的 H11 fail-closed: 必须 ENV=dev 才 bypass.
+    # _require_admin fail-closed: ENV=dev is required to bypass the check.
     monkeypatch.setenv("ENV", "dev")
     r = await app_client.delete("/api/comments/not-a-uuid")
     assert r.status_code == 400
@@ -103,7 +103,7 @@ async def test_delete_then_comment_disappears_from_list(app_client, monkeypatch)
 
 
 async def test_delete_with_matching_admin_secret(app_client, monkeypatch):
-    # 生产-like: ENV=production + admin_secret 设 + 带正确 header
+    # Production-like: ENV=production + admin_secret set + correct header provided
     monkeypatch.setenv("ENV", "production")
     from app.config import settings
     monkeypatch.setattr(settings, "admin_secret", "test-secret-xyz")
@@ -115,13 +115,13 @@ async def test_delete_with_matching_admin_secret(app_client, monkeypatch):
     assert r.status_code == 201
     cid = r.json()["id"]
 
-    # 错 header → 403
+    # wrong header → 403
     r_bad = await app_client.delete(
         f"/api/comments/{cid}", headers={"X-Admin-Secret": "wrong"}
     )
     assert r_bad.status_code == 403
 
-    # 正确 header → 204
+    # correct header → 204
     r_ok = await app_client.delete(
         f"/api/comments/{cid}", headers={"X-Admin-Secret": "test-secret-xyz"}
     )

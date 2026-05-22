@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from astropy.table import Table
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,8 +63,8 @@ class AstroObject:
                     "astro_object_invalid_total", float(len(warnings)),
                     source=str(self.source)[:32],
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("metric record_counter(astro_object_invalid_total) failed: %s", e)
 
 
 @dataclass

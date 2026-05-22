@@ -1,14 +1,14 @@
-"""R1.2 回归测试: SYSTEM_PROMPT 必须包含常用 astro.* helper 签名清单.
+"""R1.2 regression test: SYSTEM_PROMPT must include the signature list for common astro.* helpers.
 
-防止后续 prompt 重构时把 PART R 加的那段签名清单误删掉, 导致 AI 又回到
-"猜 kwarg" 模式.
+Prevents subsequent prompt refactors from accidentally deleting the PART R signature list,
+which would cause the AI to revert to "guessing kwargs" mode.
 """
 
 
 def test_system_prompt_lists_download_and_clean_lightcurve_signature():
     from app.api.chat import SYSTEM_PROMPT
 
-    # download_and_clean_lightcurve 签名必须带 sector/author kwarg
+    # download_and_clean_lightcurve signature must include sector/author kwargs
     assert "download_and_clean_lightcurve" in SYSTEM_PROMPT
     assert "sector=None" in SYSTEM_PROMPT
     assert "author=None" in SYSTEM_PROMPT
@@ -17,12 +17,12 @@ def test_system_prompt_lists_download_and_clean_lightcurve_signature():
 def test_system_prompt_points_to_available_functions_for_full_list():
     from app.api.chat import SYSTEM_PROMPT
 
-    # 必须告诉 AI 可以 call astro.available_functions() 查全部 helper
+    # must tell AI it can call astro.available_functions() to see all helpers
     assert "available_functions" in SYSTEM_PROMPT
 
 
 def test_system_prompt_lists_at_least_twelve_astro_helpers():
-    """第二档: 至少 12 个 astro.* helper 出现在 prompt 里."""
+    """Second tier: at least 12 astro.* helpers must appear in the prompt."""
     from app.api.chat import SYSTEM_PROMPT
 
     expected_helpers = [
@@ -48,7 +48,7 @@ def test_system_prompt_lists_at_least_twelve_astro_helpers():
 
 
 def test_system_prompt_warns_against_guessing_kwargs():
-    """防 AI 再猜 sector= / quarter= 这类 kwarg 而不检查签名."""
+    """Prevent AI from guessing kwargs like sector= / quarter= instead of checking the signature."""
     from app.api.chat import SYSTEM_PROMPT
 
     assert "Never invent kwargs" in SYSTEM_PROMPT or "do not guess" in SYSTEM_PROMPT.lower()
@@ -66,7 +66,7 @@ def test_system_prompt_has_model_independent_cosmology_guardrails():
 
 
 def test_system_prompt_routes_transit_fits_to_pro_helper():
-    """R20: HD 189733b / Mandel-Agol 场景优先走平台 transit fit helper."""
+    """R20: HD 189733b / Mandel-Agol scenarios must prefer the platform transit fit helper."""
     from app.api.chat import SYSTEM_PROMPT
 
     assert "astro.pro_fit_transit" in SYSTEM_PROMPT
@@ -75,7 +75,7 @@ def test_system_prompt_routes_transit_fits_to_pro_helper():
 
 
 def test_system_prompt_preserves_requested_separate_cells():
-    """R20: 用户明确要求 separate cells 时不能合并成一个 run_python."""
+    """R20: when the user explicitly requests separate cells, they must not be merged into a single run_python."""
     from app.api.chat import SYSTEM_PROMPT
 
     assert "separate cells" in SYSTEM_PROMPT
@@ -83,8 +83,8 @@ def test_system_prompt_preserves_requested_separate_cells():
 
 
 def test_system_prompt_gcvs_fallback_has_correct_columns():
-    """W4 (PART W): GCVS 段必须给出真实 CDS 列名 (非 Vmax / Vmin / Name /
-    Type). B3 回归里 AI 猜这些列名导致 4 iterations 浪费."""
+    """W4 (PART W): the GCVS section must provide real CDS column names (not Vmax / Vmin / Name /
+    Type). In the B3 regression, the AI guessing these names wasted 4 iterations."""
     from app.api.chat import SYSTEM_PROMPT
 
     assert "B/gcvs/gcvs_cat" in SYSTEM_PROMPT
@@ -111,30 +111,31 @@ def test_gcvs_registry_has_real_column_names():
 
 
 def test_system_prompt_has_clustering_failure_checks():
-    """X2 (PART X): SYSTEM_PROMPT 教 AI 识别 DBSCAN/HDBSCAN silent-failure
-    信号 (n_clusters=0 / all-outlier / matching-count). B6 Pleiades 回归里
-    AI 把 outliers 当成员导致错误 CMD 分析. 规则存在即可, 不测具体行为."""
+    """X2 (PART X): SYSTEM_PROMPT teaches the AI to recognise DBSCAN/HDBSCAN silent-failure
+    signals (n_clusters=0 / all-outlier / matching-count). In the B6 Pleiades regression,
+    the AI treated outliers as members and produced an incorrect CMD analysis.
+    Rule presence is sufficient; specific behaviour is not tested here."""
     from app.api.chat import SYSTEM_PROMPT
 
     assert "Clustering algorithm failure" in SYSTEM_PROMPT
     assert "n_clusters" in SYSTEM_PROMPT
-    # 三条关键检查
+    # three key checks
     assert "90%+" in SYSTEM_PROMPT or "90% are outliers" in SYSTEM_PROMPT
-    # B6 反例被显式写入 prompt
+    # the B6 counter-example is explicitly written into the prompt
     assert "DBSCAN found 0 clusters" in SYSTEM_PROMPT or "0 clusters" in SYSTEM_PROMPT
 
 
 def test_system_prompt_mandates_english_only_reply():
-    """X (PART X 方案 D): SYSTEM_PROMPT 明确要求 final reply 必须英文,
-    删除了旧的 'Always respond in the same language' 冲突规则."""
+    """X (PART X option D): SYSTEM_PROMPT explicitly requires final replies to be in English,
+    and removes the old conflicting 'Always respond in the same language' rule."""
     from app.api.chat import SYSTEM_PROMPT
 
-    # 必须含新 English-only 段
+    # must contain the new English-only section
     assert "English-only reply rule" in SYSTEM_PROMPT
     assert "MUST be in standard English" in SYSTEM_PROMPT
-    # 旧冲突规则必须删
+    # old conflicting rule must be removed
     assert "Always respond in the same language" not in SYSTEM_PROMPT
-    # 允许范围说明
+    # allowed-scope explanation
     assert "Greek" in SYSTEM_PROMPT or "α" in SYSTEM_PROMPT
     assert "Å" in SYSTEM_PROMPT
 
@@ -144,22 +145,22 @@ def test_vizier_common_mistakes_covers_gcvs_traps():
     wrong GCVS column name."""
     from app.services.catalog_registry import suggest_for_missing_column
 
-    # Name → GCVS / VarName
+    # Name → GCVS / VarName suggestion
     hint_name = suggest_for_missing_column("Name")
     assert hint_name is not None
     assert "GCVS" in hint_name
 
-    # Vmax → magMax
+    # Vmax → magMax suggestion
     hint_vmax = suggest_for_missing_column("Vmax")
     assert hint_vmax is not None
     assert "magMax" in hint_vmax
 
-    # Vmin → min1 / min2
+    # Vmin → min1 / min2 suggestion
     hint_vmin = suggest_for_missing_column("Vmin")
     assert hint_vmin is not None
     assert "min1" in hint_vmin
 
-    # Type → VarType
+    # Type → VarType suggestion
     hint_type = suggest_for_missing_column("Type")
     assert hint_type is not None
     assert "VarType" in hint_type

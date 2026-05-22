@@ -136,15 +136,17 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
                     return -np.inf
                 return lp + log_likelihood(theta)
 
-            # M22 + L4 (audit 2026-04-20): walker 初始化强化.
-            # emcee 会悄悄产出垃圾链 — 若大部分 walker 起始在 -inf
-            # 区域 (违反 prior), chain 永远 explore 不到真的 posterior,
-            # 但 ESS / R̂ 诊断会"虚假通过" (Gelman & Shirley 2011).
-            # 原策略只重试 1 次且阈值 50% 过松, 改成:
-            #   - 3 次重试机会
-            #   - 阈值抬到 80% finite (低于此继续不可信)
-            #   - 终极失败抛 InsufficientPriorSupport, 调用方要么换
-            #     prior 要么告诉用户数据不适合这个模型, 不跑垃圾 MCMC.
+            # M22 + L4 (audit 2026-04-20): hardened walker initialisation.
+            # emcee can silently produce garbage chains -- if most walkers start
+            # in the -inf region (prior violation) the chain never explores the
+            # true posterior, yet ESS / R-hat diagnostics give a "false pass"
+            # (Gelman & Shirley 2011). The old strategy retried only once with a
+            # loose 50% threshold. Changed to:
+            #   - 3 retry attempts
+            #   - threshold raised to 80% finite (below this the run is unreliable)
+            #   - on ultimate failure raise InsufficientPriorSupport; callers should
+            #     tighten the prior or tell the user the data does not fit the model,
+            #     rather than running a garbage MCMC.
             def _initial_finite_ratio(p):
                 logs = np.asarray([log_prob(row) for row in p])
                 finite = np.isfinite(logs)

@@ -1,19 +1,21 @@
-"""Phase P: Sandbox 诊断端点 — 绕开 multiprocessing pipe 直接抓 Python
-解释器崩溃的 stderr.
+"""Phase P: Sandbox diagnostic endpoints — bypass the multiprocessing pipe
+to capture Python interpreter crashes directly from stderr.
 
-Round 6 确认: SandboxResult.stderr 总是空, 因为子进程在 Python 启动 /
-module import 阶段就挂了, child 的 `_child_main` 根本没跑到; multiprocessing
-child 的 stderr 默认继承 parent uvicorn 的 fd=2 → 进 Render 容器日志,
-client 层拿不到.
+Round 6 confirmed: SandboxResult.stderr is always empty because the child
+process crashes during Python startup / module import before `_child_main`
+ever runs; the multiprocessing child inherits the parent uvicorn fd=2 →
+goes into Render container logs, unreachable from the client layer.
 
-`subprocess.Popen` 不一样: `stderr=PIPE` 在 fork/exec 层 fd 级别捕获,
-无论 Python 本身还没初始化完还是 import 阶段崩都能抓到.  这个端点就是
-拿来诊断 R5-OPEN-A 的 — 点一次按钮看 stderr, 立刻知道是 ModuleNotFound /
-libstdc++ mismatch / 权限问题还是别的.
+`subprocess.Popen` is different: `stderr=PIPE` captures at the fork/exec fd
+level, catching crashes whether Python hasn't finished initializing or an
+import fails mid-way. This endpoint exists to diagnose R5-OPEN-A — click
+once, read stderr, and immediately know if it's ModuleNotFound / libstdc++
+mismatch / permission issue or something else.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -25,15 +27,17 @@ from fastapi import APIRouter, Depends
 from app.api.auth import require_admin_any
 
 router = APIRouter(prefix="/api/admin/sandbox", tags=["admin-sandbox"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
 async def sandbox_health(
     _admin: None = Depends(require_admin_any),
 ) -> dict[str, Any]:
-    """用 subprocess.Popen (不是 multiprocessing) 跑最简 Python 程序,
-    抓 fd=2 stderr 全部内容.  成功 → ok=True + stdout "ok\\n";
-    失败 → ok=False + stderr 里有真实 Python 错误信息.
+    """Run the simplest possible Python program via subprocess.Popen (not
+    multiprocessing) and capture the full fd=2 stderr output.
+    Success → ok=True + stdout "ok\\n"; failure → ok=False + real Python
+    error info in stderr.
     """
     code = (
         "import sys\n"
@@ -92,15 +96,15 @@ async def sandbox_health(
 async def sandbox_repro_imports(
     _admin: None = Depends(require_admin_any),
 ) -> dict[str, Any]:
-    """Popen 跑一个 child-equivalent Python: 尝试 import
+    """Use Popen to run a child-equivalent Python that attempts to import
     app.services.sandbox.subprocess_backend + app.main.
 
-    multiprocessing spawn 的 child 启动时会 re-import 主 program + target
-    module.  如果哪个 module 的 top-level code 崩 (environment variable
-    缺失 / DB 连接初始化 / import cycle), child 在 `_child_main` 执行
-    **之前** 就 Python-exit(1), 它的 stderr 去 parent 的 fd=2.  这个
-    endpoint 用 Popen 复现同样的 import 链路 + stderr=PIPE 捕获, 能定
-    位 R5-OPEN-A 的具体 crash 位置.
+    When a multiprocessing spawn child starts, it re-imports the main program
+    and target module. If any module's top-level code crashes (missing env
+    variable / DB connection init / import cycle), the child Python-exit(1)s
+    **before** `_child_main` ever runs and its stderr goes to the parent's fd=2.
+    This endpoint uses Popen to reproduce the same import chain with
+    stderr=PIPE captured, pinpointing the exact crash location for R5-OPEN-A.
     """
     probe = (
         "import sys\n"
@@ -132,7 +136,7 @@ async def sandbox_repro_imports(
         "    sys.exit(12)\n"
     )
     t0 = time.time()
-    # 重要: cwd 必须是 backend/ 以便 import app.*
+    # Important: cwd must be backend/ so that `import app.*` resolves correctly.
     import pathlib as _pl
     backend_dir = _pl.Path(__file__).resolve().parent.parent.parent
     try:
@@ -140,7 +144,7 @@ async def sandbox_repro_imports(
             [sys.executable, "-c", probe],
             capture_output=True, text=True, timeout=30,
             cwd=str(backend_dir),
-            env={**os.environ},  # 继承当前环境
+            env={**os.environ},  # inherit the current environment
         )
         return {
             "ok": proc.returncode == 0,
@@ -173,12 +177,13 @@ async def sandbox_repro_imports(
 
 
 def _mp_staged_probe(conn, memory_bytes: int = 1024 * 1024 * 1024, cpu_seconds: int = 15) -> None:
-    """按 _child_main 的实际顺序分步执行, 每步成功 send checkpoint.
-    父进程循环 recv 拿到每步结果, 第一个 FAIL 就是 smoking gun.
-    必须 module-level 才能被 spawn pickle.
+    """Execute steps in the same order as _child_main, sending a checkpoint
+    after each success. The parent loop recvs each step result; the first
+    FAIL is the smoking gun. Must be a module-level function to be picklable
+    by spawn.
 
-    R7 fix 已同步: 设 BLAS 单 threads + RLIMIT_NPROC 256, 让 probe
-    反映 production 修好后的行为.
+    R7 fix synced: set BLAS to single thread + RLIMIT_NPROC 256, so the
+    probe reflects behavior after the production fix.
     """
     import os as _os0
     _os0.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -192,6 +197,9 @@ def _mp_staged_probe(conn, memory_bytes: int = 1024 * 1024 * 1024, cpu_seconds: 
         try:
             conn.send({"step": step, "name": name, "ok": ok, "err": err, "tb": tb[-2000:]})
         except Exception:
+            # Inside multiprocessing spawn child — parent logger handlers not
+            # inherited, so log calls here would no-op. Pipe write failure is
+            # itself the signal; parent observes EOF / no checkpoint arriving.
             pass
 
     def _run(step: int, name: str, fn):
@@ -254,6 +262,8 @@ def _mp_staged_probe(conn, memory_bytes: int = 1024 * 1024 * 1024, cpu_seconds: 
         try:
             conn.close()
         except Exception:
+            # Same multiprocessing-child reason as _send above; parent observes
+            # EOF on its end of the pipe regardless.
             pass
 
 
@@ -262,11 +272,12 @@ async def sandbox_probe_steps(
     memory_mb: int = 1024,
     _admin: None = Depends(require_admin_any),
 ) -> dict[str, Any]:
-    """分步在 multiprocessing spawn child 里执行 _child_main 前 11 步.
-    第一个失败的 step 就是 smoking gun.
+    """Execute the first 11 steps of _child_main inside a multiprocessing
+    spawn child, one at a time. The first step that fails is the smoking gun.
 
     Query params:
-      memory_mb=1024 (默认 1GB, 可试更大比如 4096 看 RLIMIT_AS 是不是太小)
+      memory_mb=1024 (default 1 GB; try larger values like 4096 to check
+      whether RLIMIT_AS is too small)
     """
     import multiprocessing as mp
     ctx = mp.get_context("spawn")
@@ -285,7 +296,7 @@ async def sandbox_probe_steps(
 
     checkpoints: list[dict] = []
     try:
-        # 循环 recv 直到 child 关闭 pipe 或超时
+        # Loop recv until the child closes the pipe or we hit the deadline.
         deadline = time.time() + 60
         while time.time() < deadline:
             if parent_conn.poll(timeout=2):
@@ -302,15 +313,15 @@ async def sandbox_probe_steps(
     finally:
         try:
             proc.join(timeout=3)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("sandbox probe proc.join failed: %s", e)
         if proc.is_alive():
             proc.kill()
             proc.join(timeout=2)
         try:
             parent_conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("sandbox probe parent_conn.close failed: %s", e)
 
     exit_code = proc.exitcode if hasattr(proc, "exitcode") else None
     duration_ms = int((time.time() - t0) * 1000)
@@ -356,16 +367,18 @@ def _mp_simple_probe(conn, probe_id: str) -> None:
 async def sandbox_repro_multiprocessing(
     _admin: None = Depends(require_admin_any),
 ) -> dict[str, Any]:
-    """启动一个**最简** multiprocessing spawn child, 不 rlimit / 不
-    setsid / 不 heavy import, 只是 conn.send({'ok': True}).
+    """Launch the simplest possible multiprocessing spawn child — no rlimit,
+    no setsid, no heavy imports; just conn.send({'ok': True}).
 
-    对比 /exec-test (走生产 SubprocessBackend, 含 rlimit + setsid +
-    import matplotlib + numpy + signals):
-    - 本端点成 + /exec-test 挂 → 问题在 _child_main 内部一步
-      (RLIMIT_AS / setsid / matplotlib.use("Agg") / numpy init / ...)
-    - 本端点也挂 → multiprocessing spawn 机制本身在 Render 容器上不能
-      用 (pipe fd 不足 / clone() syscall block / unpickle bootstrap
-      fail), 必须 refactor 成 subprocess.Popen
+    Compare with /exec-test (which goes through the production
+    SubprocessBackend including rlimit + setsid + matplotlib + numpy +
+    signal handlers):
+    - This endpoint passes + /exec-test hangs → the problem is inside
+      _child_main (RLIMIT_AS / setsid / matplotlib.use("Agg") / numpy
+      init / ...)
+    - This endpoint also hangs → multiprocessing spawn itself does not work
+      in the Render container (insufficient pipe fds / clone() syscall blocked
+      / unpickle bootstrap failure); must refactor to subprocess.Popen
     """
     import multiprocessing as mp
     ctx = mp.get_context("spawn")
@@ -399,15 +412,15 @@ async def sandbox_repro_multiprocessing(
     finally:
         try:
             proc.join(timeout=3)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("sandbox probe proc.join failed: %s", e)
         if proc.is_alive():
             proc.kill()
             proc.join(timeout=2)
         try:
             parent_conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("sandbox probe parent_conn.close failed: %s", e)
 
     exit_code = proc.exitcode if hasattr(proc, "exitcode") else None
     duration_ms = int((time.time() - t0) * 1000)
@@ -434,21 +447,22 @@ async def sandbox_repro_multiprocessing(
 async def sandbox_exec_test(
     _admin: None = Depends(require_admin_any),
 ) -> dict[str, Any]:
-    """走真实 SubprocessBackend.execute() 跑 `print("hello")`, 对比上面
-    /health 端点 (Popen direct).
+    """Run `print("hello")` through the real SubprocessBackend.execute(),
+    as a comparison against the /health endpoint (direct Popen).
 
-    如果 /health 成功但这个 /exec-test 失败 → multiprocessing pipe /
-    _child_main setup 层面的问题.
-    如果两个都失败但 /health 的 stderr 有内容 → Python 环境 /
-    依赖 / 权限问题, 按 stderr 指示修.
+    If /health passes but /exec-test fails → the problem is in the
+    multiprocessing pipe / _child_main setup layer.
+    If both fail and /health's stderr contains content → Python environment /
+    dependency / permission issue; fix according to stderr.
     """
     from app.services.sandbox.subprocess_backend import SubprocessBackend
     from app.config import settings
     try:
         backend = SubprocessBackend()
         t0 = time.time()
-        # 真实生产 run_python 默认 1 GB。这里至少给 512 MB，避免诊断端点
-        # 因 256 MB 硬编码误报 numpy/matplotlib 初始化崩溃。
+        # Production run_python defaults to 1 GB. Give at least 512 MB here
+        # to avoid false-positive numpy/matplotlib init crashes in the diagnostic endpoint
+        # caused by a hardcoded 256 MB limit.
         memory_bytes = max(settings.sandbox_memory_bytes, 512 * 1024 * 1024)
         result = backend.execute(
             'print("hello from sandbox exec-test")',

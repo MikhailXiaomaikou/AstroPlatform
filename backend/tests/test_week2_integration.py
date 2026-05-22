@@ -22,9 +22,9 @@ class TestPhotoZPipeline:
     def test_hybrid_returns_both(self):
         """Hybrid method returns both template and ML estimates.
 
-        L5 (audit 2026-04-20): 测试明确 opt-in 到 demo 模式, 因为就是
-        在验证 7 模板 demo 的行为正确 — 用户生产使用必须走
-        method='enhanced_template'.
+        L5 (audit 2026-04-20): test explicitly opts in to demo mode, because the purpose
+        is to verify that the 7-template demo behaves correctly — production use must go
+        through method='enhanced_template'.
         """
         from app.services.photo_z import estimate_photo_z
 

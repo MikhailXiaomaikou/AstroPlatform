@@ -22,7 +22,7 @@ from app.services.sandbox import subprocess_backend as sb  # noqa: E402
 
 
 SMALL_TIMEOUT = 5  # seconds — keep the suite fast
-SMALL_MEMORY = 512 * 1024 * 1024  # 512 MB，覆盖率注入下启动 matplotlib/numpy 需要更高预算
+SMALL_MEMORY = 512 * 1024 * 1024  # 512 MB — coverage injection raises the budget needed to start matplotlib/numpy
 
 
 def _run(code: str, *, timeout: int = SMALL_TIMEOUT, memory: int = SMALL_MEMORY):

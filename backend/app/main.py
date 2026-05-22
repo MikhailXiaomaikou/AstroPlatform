@@ -8,14 +8,14 @@ if _os.getenv("ENV") == "production":
     from app.logging_config import setup_logging
     setup_logging(json_format=True, level="INFO")
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api.alerts import router as alerts_router
 from app.api.anomalies import router as anomalies_router
-from app.api.auth import router as auth_router
+from app.api.auth import router as auth_router, require_admin_any
 from app.api.chat import router as chat_router
 from app.api.config import router as config_router
 from app.api.data import router as data_router
@@ -38,7 +38,7 @@ from app.api.team import router as team_router
 from app.api.visualization import router as viz_router
 from app.api.citation_graph import router as citation_graph_router
 from app.api.citations import router as citations_router
-from app.api.comments import router as comments_router
+from app.api.comments import router as comments_router, admin_router as admin_comments_router
 from app.api.admin_stats import router as admin_stats_router
 from app.api.admin_trending import admin_router as admin_trending_router, public_router as trending_public_router
 from app.api.admin_sandbox import router as admin_sandbox_router
@@ -92,10 +92,11 @@ def _migrate_add_columns(connection):
                         username_column_present = True
                     existing.add(col_name)
                 except Exception as e:
-                    # Column may have been added by a concurrent worker
+                    # Column may have been added by a concurrent worker; surface
+                    # at warning level so true SQL/schema errors are still visible.
                     if col_name == "username":
                         username_column_present = True
-                    logger.debug("Migration users.%s skipped: %s", col_name, e)
+                    logger.warning("Migration users.%s skipped: %s", col_name, e)
         if username_column_present:
             try:
                 rows = connection.execute(
@@ -126,7 +127,7 @@ def _migrate_add_columns(connection):
                         )
                 existing.add("username")
             except Exception as e:
-                logger.debug("Username backfill skipped: %s", e)
+                logger.warning("Username backfill skipped: %s", e, exc_info=True)
         # Add unique index on google_id if not already present
         existing_indexes = {idx["name"] for idx in inspector.get_indexes("users")}
         if "ix_users_username" not in existing_indexes:
@@ -135,16 +136,16 @@ def _migrate_add_columns(connection):
                     "CREATE UNIQUE INDEX ix_users_username ON users (username)"
                 ))
                 logger.info("Created unique index ix_users_username")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.info("Index ix_users_username not created (likely exists): %s", e)
         if "ix_users_google_id" not in existing_indexes:
             try:
                 connection.execute(sqlalchemy.text(
                     "CREATE UNIQUE INDEX ix_users_google_id ON users (google_id)"
                 ))
                 logger.info("Created unique index ix_users_google_id")
-            except Exception:
-                pass  # Index may already exist under a different name
+            except Exception as e:
+                logger.info("Index ix_users_google_id not created (likely exists): %s", e)
 
     # --- RunResult reproducibility metadata columns ---
     if "run_results" in inspector.get_table_names():
@@ -161,8 +162,8 @@ def _migrate_add_columns(connection):
                         f"ALTER TABLE run_results ADD COLUMN {col_name} {col_type}"
                     ))
                     logger.info("Added column run_results.%s", col_name)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Migration run_results.%s skipped: %s", col_name, e)
 
     # --- PipelineRun environment snapshot column ---
     if "pipeline_runs" in inspector.get_table_names():
@@ -171,8 +172,8 @@ def _migrate_add_columns(connection):
             try:
                 connection.execute(sqlalchemy.text("ALTER TABLE pipeline_runs ADD COLUMN environment TEXT"))
                 logger.info("Added column pipeline_runs.environment")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Migration pipeline_runs.environment skipped: %s", e)
 
     # --- ChatSession audit_log column (R7 thinking-stream audit) ---
     if "chat_sessions" in inspector.get_table_names():
@@ -183,8 +184,19 @@ def _migrate_add_columns(connection):
                     "ALTER TABLE chat_sessions ADD COLUMN audit_log TEXT"
                 ))
                 logger.info("Added column chat_sessions.audit_log")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Migration chat_sessions.audit_log skipped: %s", e)
+        # P1.3.b (2026-05-22): agent_status + current_run_id support
+        # SSE-drop resumption of an in-flight agent loop.
+        for col_name, col_type in (("agent_status", "VARCHAR(32)"), ("current_run_id", "VARCHAR(64)")):
+            if col_name not in existing_cs:
+                try:
+                    connection.execute(sqlalchemy.text(
+                        f"ALTER TABLE chat_sessions ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info("Added column chat_sessions.%s", col_name)
+                except Exception as e:
+                    logger.warning("Migration chat_sessions.%s skipped: %s", col_name, e)
 
     # --- InferenceLog manual model selection metadata ---
     if "inference_logs" in inspector.get_table_names():
@@ -196,8 +208,8 @@ def _migrate_add_columns(connection):
                         f"ALTER TABLE inference_logs ADD COLUMN {col_name} VARCHAR(255)"
                     ))
                     logger.info("Added column inference_logs.%s", col_name)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Migration inference_logs.%s skipped: %s", col_name, e)
 
     # --- PaperDraft explicit publication controls ---
     if "paper_drafts" in inspector.get_table_names():
@@ -214,8 +226,8 @@ def _migrate_add_columns(connection):
                         f"ALTER TABLE paper_drafts ADD COLUMN {col_name} {col_type}"
                     ))
                     logger.info("Added column paper_drafts.%s", col_name)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Migration paper_drafts.%s skipped: %s", col_name, e)
         try:
             connection.execute(sqlalchemy.text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_paper_drafts_public_token ON paper_drafts (public_token)"
@@ -223,8 +235,8 @@ def _migrate_add_columns(connection):
             connection.execute(sqlalchemy.text(
                 "CREATE INDEX IF NOT EXISTS ix_paper_drafts_is_public ON paper_drafts (is_public)"
             ))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("paper_drafts index creation skipped: %s", e)
 
     # --- PipelineComment parent_comment_id column ---
     if "pipeline_comments" in inspector.get_table_names():
@@ -235,8 +247,8 @@ def _migrate_add_columns(connection):
                     "ALTER TABLE pipeline_comments ADD COLUMN parent_comment_id VARCHAR(36)"
                 ))
                 logger.info("Added column pipeline_comments.parent_comment_id")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Migration pipeline_comments.parent_comment_id skipped: %s", e)
 
     # --- Performance indexes for data_files and pipeline_runs ---
     perf_indexes = [
@@ -254,8 +266,8 @@ def _migrate_add_columns(connection):
                 connection.execute(sqlalchemy.text(
                     f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {cols}"
                 ))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Index %s on %s skipped: %s", idx_name, table, e)
 
 
 def _enforce_provenance_registry_freshness(*, warn_days: int = 180) -> None:
@@ -290,10 +302,11 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Skipping create_all in production; use `alembic upgrade head`")
 
-    # 专项小 migration: 新 `comments` 表.  Production 走 Alembic 的规矩
-    # 下我们仍需要在表不存在时 create 一次(未来追加新表都走这个路径,
-    # 避免每次发布都先写 Alembic).  只对 Comment.__table__ 一张表做
-    # CREATE TABLE IF NOT EXISTS, 不碰其他表.
+    # Targeted micro-migration: new `comments` table. Under the production Alembic
+    # convention we still need to CREATE once when the table is absent (future new
+    # tables will follow this same path, avoiding a new Alembic migration every
+    # time we add a table). Only runs CREATE TABLE IF NOT EXISTS on Comment.__table__;
+    # all other tables are left untouched.
     try:
         from app.models.schemas import Comment, TrendingVisibility
         async with engine.begin() as conn:
@@ -303,9 +316,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Failed to ensure new tables (%s); evaluate Alembic migration", e)
 
-    # R18: lightkurve/MAST 偶尔会留下半截 FITS 缓存，后续下载同一目标
-    # 时会被坏文件反复污染。启动时做一次有限扫描，只删除 astropy 无法
-    # 打开的缓存 FITS，正常缓存保留。
+    # R18: lightkurve/MAST occasionally leaves behind partial FITS cache files;
+    # subsequent downloads of the same target keep hitting the corrupted file.
+    # On startup, do one limited scan and delete only the FITS files that astropy
+    # cannot open; valid cached files are kept.
     try:
         from app.services.astro_analysis import cleanup_lightkurve_cache
         cache_cleanup = cleanup_lightkurve_cache(max_files=500)
@@ -465,8 +479,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
         "Authorization", "Content-Type", "X-Page-Name", "X-Tracking-Session",
-        # N'-1 hotfix: 桌面 admin HTML 发 X-Admin-Secret header, 必须在
-        # preflight 白名单里, 否则浏览器 CORS block ("Disallowed CORS headers" 400).
+        # N'-1 hotfix: the admin desktop HTML sends an X-Admin-Secret header,
+        # which must be in the preflight whitelist or the browser will CORS-block
+        # it ("Disallowed CORS headers" 400).
         "X-Admin-Secret",
     ],
 )
@@ -493,14 +508,14 @@ _LARGE_BODY_PREFIXES = (
 )
 
 
-# T5 (PART T): `null` origin (file:// / data: URL) 只允许 admin 和公开
-# comments 两个前缀. 防止用户被诱导打开恶意 file:// HTML 后, 该 HTML
-# 跨源调其他敏感 API (/api/chat, /api/adql 等). 桌面 admin HTML 仍可用.
+# T5 (PART T): null origin (file:// / data: URLs) is restricted to the admin
+# and public comments prefixes only. This prevents a malicious file:// HTML
+# from cross-origin calling sensitive APIs (/api/chat, /api/adql, etc.) if
+# a user is tricked into opening it. The admin desktop HTML still works.
 _NULL_ORIGIN_ALLOWED_PREFIXES = (
-    "/api/admin/",
-    "/api/comments",
+    "/api/admin/",     # admin desktop HTML (file://) calling admin APIs (including admin_comments)
     "/admin",          # static HTML route
-    "/metrics",        # prometheus scrape from anywhere OK
+    "/metrics",        # prometheus scrape from anywhere is fine
     "/health",
 )
 
@@ -549,6 +564,18 @@ async def security_headers(request, call_next):
     response.headers["Permissions-Policy"] = (
         "camera=(), microphone=(), geolocation=()"
     )
+    # CSP: an extra XSS safety net to stop malicious scripts from reading
+    # api_key out of localStorage. unsafe-inline + unsafe-eval are required
+    # by plotly + the Vite dev runtime; can be tightened to strict-dynamic +
+    # nonce in the future.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob: https:; "
+        "connect-src 'self' https: wss:; "
+        "frame-ancestors 'none';"
+    )
     return response
 
 
@@ -560,6 +587,7 @@ app.include_router(auth_router)
 app.include_router(citation_graph_router)
 app.include_router(citations_router)
 app.include_router(comments_router)
+app.include_router(admin_comments_router)
 app.include_router(config_router)
 app.include_router(admin_stats_router)
 app.include_router(admin_trending_router)
@@ -568,17 +596,18 @@ app.include_router(admin_sandbox_router)
 app.include_router(admin_literature_router)
 
 
-# ── 桌面 admin HTML 托管 ─────────────────────────────────────────────
-# 把原本用户 "cp 到桌面双击" 的 astro_admin.html 搬到 backend 下,
-# 用户现在 bookmark `{BACKEND}/admin` 一次, 每次打开就是最新.
-# HTML 里默认 backend URL 用 window.location.origin 自动匹配.
+# ── admin HTML hosting ─────────────────────────────────────────────
+# The astro_admin.html that users previously copied to their desktop and
+# double-clicked is now served from the backend. Users bookmark
+# `{BACKEND}/admin` once and always get the latest version on every open.
+# The HTML defaults the backend URL to window.location.origin automatically.
 @app.get("/admin", include_in_schema=False)
 @app.get("/admin.html", include_in_schema=False)
 async def admin_dashboard_html():
     """Serve the desktop admin dashboard HTML from backend/app/static/.
 
-    Cache-Control: no-store — admin 页不能被浏览器缓存, 否则 push 新版
-    用户硬刷新也看不到.
+    Cache-Control: no-store — the admin page must not be browser-cached;
+    otherwise a hard refresh would still show an old version after a push.
     """
     from fastapi.responses import FileResponse
     import pathlib as _pl
@@ -627,9 +656,9 @@ async def metrics():
     return PlainTextResponse(render_prometheus(), media_type="text/plain; version=0.0.4")
 
 
-@app.get("/health/stats")
+@app.get("/health/stats", dependencies=[Depends(require_admin_any)])
 async def health_stats():
-    """API usage statistics and recent errors."""
+    """API usage statistics and recent errors (admin only — recent_errors includes stack traces)."""
     uptime = _time.time() - _api_stats["start_time"]
     top_endpoints = sorted(
         _api_stats["endpoint_counts"].items(), key=lambda x: x[1], reverse=True

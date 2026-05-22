@@ -13,18 +13,20 @@ def equivalent_width(input_data: dict, params: dict) -> dict:
             continuum estimation (default: line_center +/- 50 A, excluding line).
             Legacy single-window form; mixes in line wings if user's window
             is too narrow.
-        continuum_left: list[float, float] — L2-d (audit 2026-04-20): 显式
-            左侧连续谱窗口 [lo, hi].  与 continuum_right 一起使用时取代
-            continuum_window, **不包含** line_window, 符合 Gray 2005 恒星
-            分光惯例 (两段独立连续谱 + polynomial degree ≤ 2).
-        continuum_right: list[float, float] — 显式右侧连续谱窗口.
+        continuum_left: list[float, float] — L2-d (audit 2026-04-20): explicit
+            left-side continuum window [lo, hi]. When used together with
+            continuum_right, supersedes continuum_window and **does not overlap**
+            line_window, following the Gray 2005 stellar spectroscopy convention
+            (two independent continuum bands + polynomial degree <= 2).
+        continuum_right: list[float, float] — explicit right-side continuum window.
         line_window: list[float, float] — [lo, hi] wavelength range for
             the line integration (default: line_center +/- 10 A)
         flux_key: str — key for flux array (default "flux")
         wavelength_key: str — key for wavelength array (default "wavelength")
         continuum_method: str — "linear" (default), "median", "polynomial", "spline"
         poly_order: int — polynomial order for "polynomial" method (default 3;
-            但 L2-d: 若传 continuum_left/right 则强制改 ≤2 避免越线翼)
+            L2-d: forced to <=2 when continuum_left/right are provided, to avoid
+            fitting into the line wings)
     """
     flux_key = params.get("flux_key", "flux")
     wave_key = params.get("wavelength_key", "wavelength")
@@ -48,9 +50,10 @@ def equivalent_width(input_data: dict, params: dict) -> dict:
     line_window = params.get("line_window", [line_center - 10.0, line_center + 10.0])
     line_lo, line_hi = float(line_window[0]), float(line_window[1])
 
-    # L2-d: 显式两段连续谱窗口优先于 legacy continuum_window.  Gray 2005
-    # 推荐双侧多项式拟合 (左+右两段分别选 ~10-20 Å), 不越线翼, polynomial
-    # degree ≤ 2.
+    # L2-d: explicit two-window continuum takes priority over the legacy
+    # continuum_window. Gray 2005 recommends bilateral polynomial fitting
+    # (select ~10-20 A on each side independently), not crossing into line
+    # wings, with polynomial degree <= 2.
     continuum_left = params.get("continuum_left")
     continuum_right = params.get("continuum_right")
     using_two_window = continuum_left is not None and continuum_right is not None
@@ -58,7 +61,7 @@ def equivalent_width(input_data: dict, params: dict) -> dict:
     if using_two_window:
         left_lo, left_hi = float(continuum_left[0]), float(continuum_left[1])
         right_lo, right_hi = float(continuum_right[0]), float(continuum_right[1])
-        # 验证两段不与 line_window 重叠
+        # Verify that neither continuum window overlaps the line_window
         if left_hi > line_lo:
             raise ValueError(
                 f"EquivalentWidth: continuum_left upper bound ({left_hi}) "
@@ -74,13 +77,14 @@ def equivalent_width(input_data: dict, params: dict) -> dict:
             | ((wavelength >= right_lo) & (wavelength <= right_hi))
         )
         cont_lo, cont_hi = left_lo, right_hi  # for bookkeeping in return
-        # 两段模式下 polynomial degree 强制 ≤ 2 (Gray 2005)
+        # In two-window mode force polynomial degree <= 2 (Gray 2005)
         if continuum_method == "polynomial":
             poly_order = min(poly_order, 2)
     else:
-        # Legacy 单窗口形式 (向后兼容) — 仍然在 continuum_window 内排除
-        # line_window.  默认 continuum_window 是 line_center ± 50 Å, 这
-        # 等价于左右各 40 Å 的带减去中间 20 Å, 行为上跟两段已经是分离的.
+        # Legacy single-window form (backwards compatible) -- still excludes
+        # line_window from within continuum_window. The default continuum_window
+        # of line_center +/- 50 A is equivalent to two 40 A bands on either side
+        # minus the central 20 A, so its behaviour is already effectively split.
         continuum_window = params.get(
             "continuum_window", [line_center - 50.0, line_center + 50.0]
         )
