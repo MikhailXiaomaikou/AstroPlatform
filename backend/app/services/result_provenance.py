@@ -46,7 +46,47 @@ METHOD_DOWNGRADED = "method_downgraded"
 # treat it as a soft warning rather than a hard block.
 EXPLORATORY = "exploratory"
 _VALID_ORIGINS = {REAL_ARCHIVE, CACHED_REAL, USER_UPLOADED, SYNTHETIC, UNAVAILABLE}
-_VALID_STATUS = {COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED, EMPTY, METHOD_DOWNGRADED, EXPLORATORY}
+
+# Generic lifecycle statuses + domain-specific statuses that downstream
+# panels / claim_validator branch on. The set is read by ``result_contract``
+# in `attach_provenance` — any tool-emitted status NOT in this set silently
+# gets rewritten to PARTIAL, which makes the frontend panel render an empty
+# card with only a "data warning" chip. So whenever a tool's contract uses
+# a non-generic status string, it MUST be listed here.
+_VALID_STATUS = {
+    COMPLETED, PARTIAL, SIMULATED_DEMO, FAILED, EMPTY, METHOD_DOWNGRADED,
+    EXPLORATORY,
+    # research_program workflow statuses (research_program.py)
+    "RESEARCH_PLAN_READY",
+    "RESEARCH_MATRIX_READY",
+    "RESEARCH_MATRIX_PARTIAL",
+    "EVIDENCE_GRAPH_READY",
+    "FACT_CHECK_READY",
+    "RESEARCH_REPORT_READY",
+    # paper-tool-mining workflow statuses (research_program.py)
+    "PAPER_TOOL_MINING_READY",
+    "PAPER_TOOL_MINING_LOOP_EMPTY",
+    "PAPER_MINING_CANDIDATE_POOL_READY",
+    "PAPER_MINING_CANDIDATE_POOL_EMPTY",
+    "TOOL_ONTOLOGY_READY",
+    "TOOL_GAP_MATRIX_READY",
+    "TOOL_IMPLEMENTATION_QUEUE_READY",
+    # cosmology likelihood runner statuses (cosmology_likelihoods.py)
+    "COMPRESSED_CHAIN_READY",
+    "COMPRESSED_ROBUSTNESS_READY",
+    "NO_COMPRESSED_LIKELIHOOD",
+    "CONFIG_READY",
+    # data product loader statuses (cosmology_data_products.py)
+    "COSMOLOGY_DATA_PRODUCT_READY",
+    "COSMOLOGY_DATA_PRODUCT_PARTIAL",
+    "COSMOLOGY_DATA_PRODUCT_UNAVAILABLE",
+    "COSMOLOGY_COMPRESSED_DATA_PRODUCT_READY",
+    # Alcock-Paczynski geometric test
+    "ALCOCK_PACZYNSKI_READY",
+    # Cobaya background job intermediate state (cosmology_mcmc.py)
+    "QUEUED",
+    "UNAVAILABLE",
+}
 # Build-time tool version; populated by the Dockerfile via
 # `ARG TOOL_VERSION` / `ENV TOOL_VERSION=...`.  Falls back to "dev" when
 # running uvicorn locally.  Accessed lazily so tests can monkeypatch.
