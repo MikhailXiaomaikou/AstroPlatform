@@ -54,6 +54,7 @@ import AckButton from "../../components/chat/AckButton";
 import CosmologyMCMCPanel from "../../components/chat/CosmologyMCMCPanel";
 import CosmologyLikelihoodPanel from "../../components/chat/CosmologyLikelihoodPanel";
 import ResearchProgramPanel from "../../components/chat/ResearchProgramPanel";
+import DefaultToolResultPanel from "../../components/chat/DefaultToolResultPanel";
 import DataSourcesPanel from "../../components/chat/DataSourcesPanel";
 import TablePanel from "../../components/viz/TablePanel";
 import type { TableField } from "../../components/viz/TablePanel";
@@ -63,6 +64,7 @@ import BarChartPanel from "../../components/viz/BarChartPanel";
 import ErrorBoundary from "../../components/ErrorBoundary";
 import { useI18n } from "../../i18n";
 import { useAuth } from "../../context/AuthContext";
+import { useNavigate } from "react-router-dom";
 import { useTracking } from "../../hooks/useTracking";
 import { useConversationProvenance, type ConversationProvenance } from "../../hooks/useConversationProvenance";
 import { readWorkspaceCache, registerWorkspaceExport } from "../../utils/workspaceCache";
@@ -1834,6 +1836,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     || toolName === "build_cosmology_likelihood"
     || toolName === "build_cosmology_robustness_matrix"
     || toolName === "run_cosmology_robustness_matrix"
+    || toolName === "load_cosmology_data_product"
   ) {
     return <CosmologyLikelihoodPanel result={result} />;
   }
@@ -1997,82 +2000,6 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
       highlight_label={result.best_class as string}
       title={`Carvano 2010 SDSS classification (${result.classification_system || ""})`}
       value_label="χ²" />;
-  }
-
-  // Stage 4 (2026-05-19): literature spot-check banner.
-  // 3 states: passed (green) / failed (red) / unavailable (grey)
-  // Data shape comes from literature_spot_check.SpotCheckResult.to_dict().
-  if (toolName === "spot_check_literature_value") {
-    if (result.spot_check_disabled) {
-      return (
-        <div style={{ fontSize: "0.78rem", color: "#6b6b6b", fontStyle: "italic" }}>
-          ℹ Literature spot-check is disabled in this deployment
-          (LITERATURE_SPOT_CHECK_ENABLED=false).
-        </div>
-      );
-    }
-    const status = String(result.status || "unavailable");
-    const passed = status === "passed";
-    const failed = status === "failed";
-    const bg = passed
-      ? "rgba(46,106,78,.10)"
-      : failed
-        ? "rgba(239,68,68,.10)"
-        : "rgba(107,107,107,.10)";
-    const border = passed ? "#2e6a4e" : failed ? "#ef4444" : "#9b9b9b";
-    const fgColor = passed ? "#166534" : failed ? "#7f1d1d" : "#4b4b4b";
-    const icon = passed ? "✓" : failed ? "⚠" : "ℹ";
-    const label = passed
-      ? "VERIFIED"
-      : failed
-        ? "FAILED VERIFICATION"
-        : "VERIFICATION UNAVAILABLE";
-    const fmtNum = (v: unknown): string =>
-      v == null || typeof v !== "number" ? "—" : v.toFixed(4);
-    const fmtSigma = (v: unknown): string =>
-      v == null || typeof v !== "number" ? "—" : `${v.toFixed(2)}σ`;
-    return (
-      <div
-        style={{
-          fontSize: "0.78rem",
-          color: fgColor,
-          background: bg,
-          border: `1px solid ${border}`,
-          borderRadius: 4,
-          padding: "8px 12px",
-          marginTop: 4,
-        }}
-      >
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>
-          {icon} Literature spot-check: {label}
-        </div>
-        <div>
-          Target: <code>{String(result.target || "")}</code> (
-          {String(result.quantity_type || "")})
-        </div>
-        <div>
-          Paper value: <strong>{fmtNum(result.paper_value)}</strong>
-          &nbsp;|&nbsp; Our value: <strong>{fmtNum(result.our_value)}</strong>
-          &nbsp;|&nbsp; Distance: <strong>{fmtSigma(result.sigma_distance)}</strong>
-          {result.margin_sigma != null && typeof result.margin_sigma === "number"
-            ? ` (threshold ${result.margin_sigma.toFixed(1)}σ)`
-            : ""}
-        </div>
-        <div style={{ marginTop: 4, opacity: 0.85 }}>
-          {String(result.reason || "")}
-        </div>
-        <div
-          style={{
-            marginTop: 4,
-            fontSize: "0.72rem",
-            opacity: 0.7,
-            fontStyle: "italic",
-          }}
-        >
-          {String(result.disclaimer || "")}
-        </div>
-      </div>
-    );
   }
 
   // Pipeline
@@ -2538,12 +2465,12 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     );
   }
 
-  // Default: compact JSON
-  return (
-    <pre style={{ fontSize: "0.7rem", maxHeight: 100, overflow: "auto", color: "var(--color-text-tertiary)" }}>
-      {JSON.stringify(result, null, 1).slice(0, 500)}
-    </pre>
-  );
+  // Default fallback: tool name not matched by any specialised panel above.
+  // Replaces an old 500-char JSON pre dump with a structured card that
+  // shows toolName, status chip, message, warnings, and a collapsible
+  // raw payload. Keeps unknown / new tools from rendering as a wall of
+  // unstructured text. See components/chat/DefaultToolResultPanel.tsx.
+  return <DefaultToolResultPanel toolName={toolName} result={result} />;
 }
 
 function ActionResult({ result }: { result: Record<string, unknown> }) {
@@ -3231,6 +3158,7 @@ function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
 
 export default function ChatPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   // PART Y Q3: depend on user?.id, not the user object — chatStorageScope
   // is a function of identity, not of the wrapping object's reference.
   // Re-computing on every user-object reference change would invalidate
@@ -4902,23 +4830,26 @@ export default function ChatPage() {
           >
             <div>
               <strong>AI backend not configured.</strong> Add an API key
-              below (stays in this browser) or configure one server-side
-              before sending messages.
+              below (stays in this browser by default) or configure one
+              server-side before sending messages. Anthropic, OpenAI, and
+              DeepSeek are all supported.
             </div>
-            <a
-              href="/account"
+            <button
+              type="button"
+              onClick={() => navigate("/account")}
               style={{
                 padding: "0.35rem 0.8rem",
                 background: "var(--color-red)",
                 color: "white",
+                border: "none",
                 borderRadius: 4,
-                textDecoration: "none",
                 fontSize: "0.82rem",
                 whiteSpace: "nowrap",
+                cursor: "pointer",
               }}
             >
-              Open Settings →
-            </a>
+              Open Account → API keys
+            </button>
           </div>
         )}
         {/* When the server has a backend but the browser does not, Send

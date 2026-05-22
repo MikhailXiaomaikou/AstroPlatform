@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useI18n } from "../i18n";
+import { NAV_ROUTES } from "../routes";
 
 interface Command {
   id: string;
@@ -18,22 +19,33 @@ export default function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
-  const commands = useMemo<Command[]>(() => [
-    // Navigation
-    { id: "nav-search", labelKey: "cmd.search_objects", categoryKey: "cmd.cat_nav", action: () => navigate("/search"), keywords: "data browser find" },
-    { id: "nav-chat", labelKey: "cmd.ai_assistant", categoryKey: "cmd.cat_nav", action: () => navigate("/chat"), keywords: "ask question" },
-    { id: "nav-pipeline", labelKey: "cmd.pipeline_studio", categoryKey: "cmd.cat_nav", action: () => navigate("/pipeline"), keywords: "workflow dag" },
-    { id: "nav-adql", labelKey: "cmd.adql_query", categoryKey: "cmd.cat_nav", action: () => navigate("/adql"), keywords: "sql tap" },
-    { id: "nav-workspace", labelKey: "cmd.workspace", categoryKey: "cmd.cat_nav", action: () => navigate("/workspace"), keywords: "files saved" },
-    { id: "nav-team", labelKey: "cmd.team", categoryKey: "cmd.cat_nav", action: () => navigate("/team"), keywords: "collaborate share" },
-    { id: "nav-alerts", labelKey: "cmd.alerts", categoryKey: "cmd.cat_nav", action: () => navigate("/observations"), keywords: "transient supernova" },
-    { id: "nav-anomalies", labelKey: "cmd.anomalies", categoryKey: "cmd.cat_nav", action: () => navigate("/observations"), keywords: "outlier detection" },
-    { id: "nav-account", labelKey: "cmd.account", categoryKey: "cmd.cat_nav", action: () => navigate("/account"), keywords: "config preferences settings research profile api keys" },
-    { id: "nav-help", labelKey: "cmd.help", categoryKey: "cmd.cat_nav", action: () => navigate("/help"), keywords: "documentation guide" },
-    // Actions
-    { id: "act-new-chat", labelKey: "cmd.new_chat", categoryKey: "cmd.cat_action", action: () => { localStorage.setItem("astro_chat_new_session", "1"); navigate("/chat"); }, keywords: "create conversation" },
-    { id: "act-new-pipeline", labelKey: "cmd.new_pipeline", categoryKey: "cmd.cat_action", action: () => navigate("/pipeline"), keywords: "create workflow" },
-  ], [navigate]);
+  const commands = useMemo<Command[]>(() => {
+    // Navigation entries come from the single source of truth (frontend/src/routes.ts).
+    // History: prior to that constant, this array contained 5 routes that no
+    // longer exist (/search, /pipeline, /adql, /workspace, /anomalies) — Cmd+K
+    // navigated users to 404s.
+    const navCommands: Command[] = NAV_ROUTES.map((route) => ({
+      id: route.id,
+      labelKey: route.labelKey,
+      categoryKey: route.categoryKey,
+      action: () => navigate(route.path),
+      keywords: route.keywords,
+    }));
+    // Actions — kept inline because they have side effects beyond navigation.
+    const actionCommands: Command[] = [
+      {
+        id: "act-new-chat",
+        labelKey: "cmd.new_chat",
+        categoryKey: "cmd.cat_action",
+        action: () => {
+          localStorage.setItem("astro_chat_new_session", "1");
+          navigate("/chat");
+        },
+        keywords: "create conversation",
+      },
+    ];
+    return [...navCommands, ...actionCommands];
+  }, [navigate]);
 
   // Filter commands by substring match on translated label, keywords, and category
   const filtered = useMemo(() => {

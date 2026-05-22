@@ -1,3 +1,5 @@
+import PanelEmptyState from "./PanelEmptyState";
+
 type Citation = {
   label?: string;
   year?: number;
@@ -292,7 +294,20 @@ export default function CosmologyLikelihoodPanel({ result }: { result: Record<st
         </div>
       ) : datasets.length > 0 ? (
         <DatasetList datasets={datasets} />
-      ) : null}
+      ) : (
+        // Final fallback: no data product, no matrix, no datasets — show a
+        // status-aware empty state instead of a chrome-only card.
+        <PanelEmptyState
+          status={String(result.__tool_status__ || result.analysis_status || "UNKNOWN")}
+          message={
+            typeof result.__message_to_model__ === "string"
+              ? result.__message_to_model__
+              : typeof result.error === "string"
+                ? result.error
+                : undefined
+          }
+        />
+      )}
     </div>
   );
 }

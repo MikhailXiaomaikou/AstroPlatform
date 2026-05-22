@@ -1,3 +1,5 @@
+import PanelEmptyState from "./PanelEmptyState";
+
 type ResearchPlan = {
   research_question?: string;
   hypotheses?: string[];
@@ -540,21 +542,33 @@ export default function ResearchProgramPanel({ result }: { result: Record<string
     || (isGenericStatus && Boolean(normalized.evidence_graph));
   const hasFactCheck = status === "FACT_CHECK_READY"
     || (isGenericStatus && Boolean(normalized.fact_check_report));
+  const hasPaperMiningCandidate = status.startsWith("PAPER_MINING_CANDIDATE_POOL");
+  const hasPaperMiningLoop = status.startsWith("PAPER_TOOL_MINING_LOOP");
+  const hasPaperMining = status.startsWith("PAPER_TOOL_MINING") && !hasPaperMiningLoop;
+  const hasToolOntology = status === "TOOL_ONTOLOGY_READY";
+  const hasToolGap = status === "TOOL_GAP_MATRIX_READY";
+  const hasToolQueue = status === "TOOL_IMPLEMENTATION_QUEUE_READY";
+  const hasReport = status === "RESEARCH_REPORT_READY";
+  // Final fallback: if NO subview matched, show PanelEmptyState with a
+  // status-aware message instead of leaving the card body blank.
+  const hasAnySubview =
+    hasPlan || hasMatrix || hasEvidence || hasFactCheck
+    || hasPaperMiningCandidate || hasPaperMiningLoop || hasPaperMining
+    || hasToolOntology || hasToolGap || hasToolQueue || hasReport;
+
   return (
     <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
       {hasPlan ? <PlanView plan={plan} /> : null}
       {hasMatrix ? <MatrixView result={normalized} /> : null}
       {hasEvidence ? <EvidenceView result={normalized} /> : null}
       {hasFactCheck ? <FactCheckView result={normalized} /> : null}
-      {status.startsWith("PAPER_MINING_CANDIDATE_POOL") ? <PaperCandidatePoolView result={normalized} /> : null}
-      {status.startsWith("PAPER_TOOL_MINING_LOOP") ? <PaperToolMiningLoopView result={normalized} /> : null}
-      {status.startsWith("PAPER_TOOL_MINING") && !status.startsWith("PAPER_TOOL_MINING_LOOP") ? (
-        <PaperToolMiningView result={normalized} />
-      ) : null}
-      {status === "TOOL_ONTOLOGY_READY" ? <ToolOntologyView result={normalized} /> : null}
-      {status === "TOOL_GAP_MATRIX_READY" ? <ToolGapMatrixView result={normalized} /> : null}
-      {status === "TOOL_IMPLEMENTATION_QUEUE_READY" ? <ToolImplementationQueueView result={normalized} /> : null}
-      {status === "RESEARCH_REPORT_READY" ? (
+      {hasPaperMiningCandidate ? <PaperCandidatePoolView result={normalized} /> : null}
+      {hasPaperMiningLoop ? <PaperToolMiningLoopView result={normalized} /> : null}
+      {hasPaperMining ? <PaperToolMiningView result={normalized} /> : null}
+      {hasToolOntology ? <ToolOntologyView result={normalized} /> : null}
+      {hasToolGap ? <ToolGapMatrixView result={normalized} /> : null}
+      {hasToolQueue ? <ToolImplementationQueueView result={normalized} /> : null}
+      {hasReport ? (
         <div>
           <strong style={{ color: "var(--color-text-primary)" }}>Research Report Draft</strong>
           <pre style={{ whiteSpace: "pre-wrap", margin: "6px 0 0", fontSize: "0.72rem" }}>
@@ -571,6 +585,18 @@ export default function ResearchProgramPanel({ result }: { result: Record<string
             </>
           ) : null}
         </div>
+      ) : null}
+      {!hasAnySubview ? (
+        <PanelEmptyState
+          status={status || "UNKNOWN"}
+          message={
+            typeof normalized.__message_to_model__ === "string"
+              ? normalized.__message_to_model__
+              : typeof normalized.error === "string"
+                ? normalized.error
+                : undefined
+          }
+        />
       ) : null}
     </div>
   );
