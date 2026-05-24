@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
+    # Server-funded DeepSeek fallback for public/anonymous chat.  The key is
+    # read only server-side; never expose it to the browser or commit it.
+    platform_deepseek_api_key: str = ""
+    deepseek_api_key: str = ""
+    shared_deepseek_api_key_enabled: bool = True
+
     # Docker image digest for reproducibility
     docker_image_digest: str = ""
 

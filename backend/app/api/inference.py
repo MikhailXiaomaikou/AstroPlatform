@@ -22,6 +22,34 @@ class InferenceConfigUpdate(BaseModel):
     routing: dict[str, str]
 
 
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _shared_deepseek_available() -> bool:
+    flag = os.getenv("SHARED_DEEPSEEK_API_KEY_ENABLED")
+    try:
+        from app.config import settings
+
+        settings_enabled = bool(getattr(settings, "shared_deepseek_api_key_enabled", True))
+        settings_key = (
+            str(getattr(settings, "platform_deepseek_api_key", "") or "").strip()
+            or str(getattr(settings, "deepseek_api_key", "") or "").strip()
+        )
+    except Exception:
+        settings_enabled = True
+        settings_key = ""
+    if flag is not None and flag.strip().lower() in {"0", "false", "no", "off"}:
+        return False
+    if flag is None and not settings_enabled:
+        return False
+    return bool(
+        os.getenv("PLATFORM_DEEPSEEK_API_KEY", "").strip()
+        or os.getenv("DEEPSEEK_API_KEY", "").strip()
+        or settings_key
+    )
+
+
 def _require_admin(user: User) -> None:
     admin_usernames = {name.strip() for name in os.getenv("ADMIN_USERNAMES", "").split(",") if name.strip()}
     if user.username in admin_usernames or user.subscription_tier in {"admin", "institution"}:
@@ -148,12 +176,12 @@ async def inference_health(_: None = Depends(require_admin_any)):
         if name == "openai" and not os.getenv("OPENAI_API_KEY", ""):
             configured = False
             message = "OPENAI_API_KEY missing"
-        if name == "deepseek" and not os.getenv("DEEPSEEK_API_KEY", ""):
+        if name == "deepseek" and not _shared_deepseek_available():
             configured = False
-            message = "DEEPSEEK_API_KEY missing"
-        if name == "local" and not os.getenv("LOCAL_MODEL_ENABLED", ""):
+            message = "DEEPSEEK_API_KEY or PLATFORM_DEEPSEEK_API_KEY missing"
+        if name == "local" and not (_env_truthy("LOCAL_MODEL_ENABLED") or _env_truthy("OPENAI_CLI_ENABLED")):
             configured = False
-            message = "LOCAL_MODEL_ENABLED not set"
+            message = "LOCAL_MODEL_ENABLED or OPENAI_CLI_ENABLED not set"
         health.append({
             "backend": name,
             "model": backend.model_name(),

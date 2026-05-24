@@ -2129,6 +2129,30 @@ def test_orchestrator_validates_merged_reply_claims():
     assert "merged_orchestrator" in src
 
 
+def test_orchestrator_synthesizes_tool_grounded_summary_for_empty_merge():
+    """R22: Multi-agent research runs must not leave a blank final AI bubble."""
+    import inspect
+    from app.api import chat
+
+    src = inspect.getsource(chat._run_orchestrated_chat)
+    assert "if not merged_reply.strip()" in src
+    assert "_research_tool_grounded_summary(merged_tool_results)" in src
+    assert "Empty merged AI reply detected" in src
+
+
+def test_orchestrator_runs_fact_check_and_report_for_merged_research_reply():
+    """R23: Multi-agent research mode must keep Fact Check / Report cards."""
+    import inspect
+    from app.api import chat
+
+    src = inspect.getsource(chat._run_orchestrated_chat)
+    assert "merged_research_workflow = _is_research_program_workflow" in src
+    assert "Merged research fact verification skipped" in src
+    assert "Merged research report export skipped" in src
+    assert '\"tool\": \"verify_research_facts\"' in src
+    assert '\"tool\": \"export_research_report\"' in src
+
+
 # ── Phase P: arXiv 301 redirect + Unknown tool polish ────────────────
 
 async def test_unknown_tool_returns_available_list():
