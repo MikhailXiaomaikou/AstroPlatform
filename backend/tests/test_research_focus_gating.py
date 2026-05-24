@@ -413,6 +413,73 @@ def test_dedicated_model_gap_prompt_still_uses_research_mode(monkeypatch) -> Non
     assert chat._cosmology_likelihood_build_calls_from_prompt(prompt)
 
 
+def test_transient_early_energy_prompt_not_routed_to_transient_tools(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to test a transient early-energy component before recombination "
+        "using public compressed cosmology data. Report only supported baseline constraints."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    assert "planck2018_compressed" in chat._cosmology_dataset_keys_from_prompt(prompt)
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt)
+
+
+def test_ede_vs_lcdm_abbreviation_stays_in_research_mode(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to run an exploratory EDE-vs-LambdaCDM data-combination screen. "
+        "Keep all EDE claims scope-limited unless the dedicated likelihood executes."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    assert chat._cosmology_dataset_keys_from_prompt(prompt)
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt)
+
+
+def test_growth_index_gamma_prompt_stays_in_research_mode(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to evaluate whether growth-index gamma differs from GR using "
+        "registered weak-lensing and background data. Mark missing growth likelihoods."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    assert chat._cosmology_dataset_keys_from_prompt(prompt)
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt)
+
+
+def test_bao_cmb_weak_lensing_s8_summary_prompt_stays_in_research_mode(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to test whether BAO+CMB and weak-lensing summaries give consistent "
+        "S8 under LambdaCDM compressed approximations. Report pairwise tension only "
+        "if supported."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    keys = chat._cosmology_dataset_keys_from_prompt(prompt)
+    assert "desi_dr1_bao" in keys
+    assert "planck2018_compressed" in keys
+    assert {"kids1000_wl", "des_y3_3x2pt", "hsc_y1_cosmic_shear"}.issubset(keys)
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt)
+
+
+def test_chronometer_expansion_history_prompt_stays_in_research_mode(monkeypatch) -> None:
+    chat = _reload_chat_with_focus(monkeypatch, "cosmology")
+    prompt = (
+        "I want to inspect whether cosmic chronometer H(z) data can change BAO+CMB "
+        "expansion-history conclusions. Mark chronometer runner availability."
+    )
+
+    assert chat._is_research_program_workflow(prompt) is True
+    keys = chat._cosmology_dataset_keys_from_prompt(prompt)
+    assert "desi_dr1_bao" in keys
+    assert "planck2018_compressed" in keys
+    assert "cosmic_chronometers" in keys
+    assert chat._cosmology_likelihood_build_calls_from_prompt(prompt)
+
+
 # ── Contract: cleanup ──────────────────────────────────────────────
 
 

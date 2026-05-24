@@ -3190,7 +3190,11 @@ export default function ChatPage() {
         setSelectedModelStatus(status.selected_model_status || null);
       } catch {
         if (cancelled) return;
-        setServerBackendReady(null); // unknown — don't block
+        // Unknown should not hard-lock the chat UI.  The send request will
+        // surface a real backend error if nothing is configured, but local
+        // browser/CORS/proxy hiccups should not force the API-key prompt when
+        // a server-side backend may already be available.
+        setServerBackendReady(true);
       }
     })();
     return () => { cancelled = true; };

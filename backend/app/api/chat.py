@@ -204,6 +204,45 @@ def _safe_context(context: dict | None) -> dict:
     return {key: value for key, value in context.items() if key not in {"api_key", "api_keys", "api_provider"}}
 
 
+def _env_flag_enabled(name: str, *, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _server_deepseek_api_key() -> str:
+    """Server-funded DeepSeek key for public/anonymous chat.
+
+    Anthropic/OpenAI remain BYOK.  DeepSeek is intentionally the only hosted
+    shared provider because it is the low-cost public fallback we can rate-limit
+    centrally without exposing the secret to the browser.
+    """
+
+    env_flag = os.getenv("SHARED_DEEPSEEK_API_KEY_ENABLED")
+    try:
+        from app.config import settings
+
+        settings_enabled = bool(getattr(settings, "shared_deepseek_api_key_enabled", True))
+        settings_key = (
+            str(getattr(settings, "platform_deepseek_api_key", "") or "").strip()
+            or str(getattr(settings, "deepseek_api_key", "") or "").strip()
+        )
+    except Exception:
+        settings_enabled = True
+        settings_key = ""
+    if env_flag is not None:
+        if not _env_flag_enabled("SHARED_DEEPSEEK_API_KEY_ENABLED", default=True):
+            return ""
+    elif not settings_enabled:
+        return ""
+    return (
+        os.getenv("PLATFORM_DEEPSEEK_API_KEY", "").strip()
+        or os.getenv("DEEPSEEK_API_KEY", "").strip()
+        or settings_key
+    )
+
+
 def _provider_api_keys(context: dict | None, user: User | None) -> dict[str, str]:
     keys: dict[str, str] = {}
     if user and isinstance(user.api_keys, dict):
@@ -225,7 +264,11 @@ def _provider_api_keys(context: dict | None, user: User | None) -> dict[str, str
             # Legacy fallback: the generic api_key field was historically used
             # for the primary hosted backend. Treat untyped keys as OpenAI-style.
             keys.setdefault("openai", context_key)
-    # No longer falls back to the platform env ANTHROPIC_API_KEY: the platform does not pay for anonymous visitors (BYOK).
+    if "deepseek" not in keys:
+        server_key = _server_deepseek_api_key()
+        if server_key:
+            keys["deepseek"] = server_key
+    # Anthropic/OpenAI never fall back to platform env keys: they remain BYOK.
     return keys
 
 
@@ -2792,6 +2835,8 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "cross-check", "cross check", "workflow",
         "constraint", "constraints", "compressed product",
         "compressed products", "chain", "chains",
+        "expansion-history", "expansion history", "h(z)",
+        "chronometer", "chronometers",
     )
     planning_tokens = (
         "available", "可用", "dataset", "数据集", "prior", "引用",
@@ -2799,7 +2844,10 @@ def _is_cosmology_likelihood_workflow(text: str) -> bool:
         "chain", "配置", "cobaya", "cosmosis", "workflow",
         "posterior", "run", "executable", "product", "products",
         "config-only", "config only", "research", "study", "analysis",
-        "robustness", "matrix", "研究", "分析", "稳健",
+        "robustness", "matrix", "test", "consistent", "supported",
+        "summary", "summaries", "pairwise", "approximation",
+        "approximations", "conclusion", "conclusions", "availability",
+        "available", "研究", "分析", "稳健",
     )
     return (
         any(tok in prompt for tok in dataset_tokens)
@@ -2814,7 +2862,8 @@ def _is_research_program_workflow(text: str) -> bool:
         return True
     research_tokens = (
         "research", "study", "analysis", "analyze", "assess", "evaluate",
-        "compare", "test", "constrain", "identify", "blind", "workflow", "robustness", "matrix",
+        "compare", "test", "inspect", "examine", "constrain", "identify",
+        "blind", "workflow", "robustness", "matrix",
         "研究", "分析", "评估", "比较", "检验", "盲测", "稳健",
         "张力", "新结论", "发现",
     )
@@ -3019,6 +3068,12 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     if any(tok in prompt for tok in ("cmb", "planck")):
         keys.append("planck2018_compressed")
     if (
+        not keys
+        and _cosmology_has_dedicated_model_gap(prompt)
+        and any(tok in prompt for tok in ("compressed cosmology", "public compressed", "cosmology data", "data-combination", "data combination"))
+    ):
+        keys.append("planck2018_compressed")
+    if (
         _cosmology_prompt_mentions_act(prompt)
         or "cmb lensing" in prompt
         or "cmb-lensing" in prompt
@@ -3128,6 +3183,7 @@ def _cosmology_models_from_prompt(text: str) -> list[str]:
     if not models and (
         _is_cosmology_likelihood_workflow(text)
         or _should_build_cosmology_robustness_matrix(text)
+        or _cosmology_has_dedicated_model_gap(text)
     ):
         if any(tok in prompt for tok in (
             "dark energy", "dark-energy", "暗能量", "wcdm", "w0wa", "cpl",
@@ -3339,13 +3395,30 @@ def _cosmology_has_dedicated_model_gap(text: str) -> bool:
         tok in prompt
         for tok in (
             "early dark energy",
+            "early-dark-energy",
+            "early energy",
+            "early-energy",
+            "transient early-energy",
+            "transient early energy",
+            "pre-recombination",
+            "before recombination",
+            " ede",
+            "ede ",
+            "ede-vs",
+            "ede vs",
+            "ede claim",
+            "ede model",
             "axion-like early",
             "axion like early",
             "modified gravity",
             "modified-gravity",
             "growth model",
             "growth-rate",
+            "growth-index",
+            "growth index",
+            "growth likelihood",
             "growth than planck",
+            "differs from gr",
             "thawing",
             "emergent",
             "mirage",
@@ -5658,6 +5731,33 @@ async def _run_orchestrated_chat(
         merged_actions.extend(result["actions"])
         merged_tool_results.extend(result.get("tool_results", []))
     merged_reply = await orchestrator.merge_responses(agent_results)
+    if not merged_reply.strip():
+        merged_reply = (
+            _research_tool_grounded_summary(merged_tool_results)
+            or _line_lfr_tool_grounded_summary(merged_tool_results)
+            or _statistics_tool_grounded_summary(merged_tool_results)
+            or _cosmology_tool_grounded_summary(merged_tool_results)
+            or ""
+        )
+        if not merged_reply.strip() and merged_tool_results:
+            tool_names = ", ".join({
+                str(tr.get("tool") or tr.get("name") or "unknown")
+                for tr in merged_tool_results
+                if isinstance(tr, dict)
+            })
+            merged_reply = (
+                f"I ran the following tools: {tool_names}. "
+                "The results are shown below. The specialist agents did not "
+                "return a merged written summary, so treat the tool cards as "
+                "the source of truth and rerun if you need prose explanation."
+            )
+        if merged_reply.strip():
+            logger.warning(
+                "Empty merged AI reply detected; synthesised tool-grounded fallback. "
+                "tool_results=%d agents=%d",
+                len(merged_tool_results),
+                len(agent_results),
+            )
     if merged_reply.strip():
         try:
             from app.services.claim_validator import (
@@ -5739,6 +5839,72 @@ async def _run_orchestrated_chat(
                 merged_reply = blocked_reply_with_narrative(validation, merged_reply)
         except Exception as exc:
             logger.warning("Merged-reply claim validation failed open: %s", exc)
+
+    latest_research_user_text = ""
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            latest_research_user_text = str(message.get("content") or "")
+            break
+    merged_research_workflow = _is_research_program_workflow(latest_research_user_text)
+    if merged_research_workflow and merged_reply.strip():
+        try:
+            from app.services.research_program import verify_research_facts
+
+            fact_input = {
+                "tool_results": _compact_tool_results_for_evidence(merged_tool_results),
+                "final_reply": merged_reply,
+            }
+            fact_result = verify_research_facts(**fact_input)
+            fact_tool_result = {
+                "id": f"auto_fact_check_{uuid.uuid4().hex}",
+                "tool": "verify_research_facts",
+                "input": fact_input,
+                "result": fact_result,
+            }
+            merged_tool_results.append(fact_tool_result)
+            merged_actions.extend(_tool_results_to_actions([fact_tool_result]))
+            if fact_result.get("status") == "blocked":
+                safe_summary = _research_tool_grounded_summary(merged_tool_results)
+                if safe_summary:
+                    merged_reply = safe_summary
+                else:
+                    merged_reply = (
+                        "The research run completed, but fact verification found "
+                        "a contradicted claim in the merged draft. Please review "
+                        "the Fact Check card and rerun the missing evidence path "
+                        "before using the result."
+                    )
+        except Exception as exc:
+            logger.warning("Merged research fact verification skipped: %s", exc)
+
+    if merged_research_workflow and not any(
+        tr.get("tool") == "export_research_report"
+        for tr in merged_tool_results
+    ):
+        try:
+            from app.services.research_program import export_research_report
+
+            report_input = {
+                "research_plan": _research_plan_from_tool_results(merged_tool_results),
+                "evidence_graph": _research_evidence_graph_from_tool_results(merged_tool_results),
+                "tool_results": merged_tool_results,
+                "title": latest_research_user_text[:180] if latest_research_user_text else None,
+            }
+            report_result = export_research_report(**report_input)
+            report_tool_result = {
+                "id": f"auto_research_report_{uuid.uuid4().hex}",
+                "tool": "export_research_report",
+                "input": {
+                    "research_plan": report_input["research_plan"],
+                    "evidence_graph": report_input["evidence_graph"],
+                    "title": report_input["title"],
+                },
+                "result": report_result,
+            }
+            merged_tool_results.append(report_tool_result)
+            merged_actions.extend(_tool_results_to_actions([report_tool_result]))
+        except Exception as exc:
+            logger.warning("Merged research report export skipped: %s", exc)
     return {
         "reply": merged_reply,
         "actions": merged_actions,
@@ -5803,9 +5969,12 @@ async def ai_backend_status(
     authenticated user has stored.  Never returns the keys themselves.
     """
     configured: list[str] = []
-    # BYOK: check only the user's own stored keys; do not read the platform env (env is no longer used for LLM calls).
+    # Server-side shared DeepSeek may be enabled for public chat. Other hosted
+    # providers remain BYOK.
     if _env_truthy("LOCAL_MODEL_ENABLED") or _env_truthy("OPENAI_CLI_ENABLED"):
         configured.append("local")
+    if _server_deepseek_api_key():
+        configured.append("deepseek")
 
     # Also check user's stored keys if authenticated.
     if user is not None:

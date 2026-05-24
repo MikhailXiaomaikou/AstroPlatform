@@ -118,6 +118,54 @@ def test_cmb_polarization_rotation_hyphenated_prompt_does_not_use_distance_prior
     assert matrix["ready_cells"] == 0
 
 
+def test_cmb_rotation_prompt_with_late_time_dataset_names_does_not_run_bao_matrix() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to test whether CMB polarization data support isotropic or "
+        "anisotropic polarization rotation. Use Planck, ACT, DESI, Pantheon+, "
+        "SH0ES only where registered, identify EB/TB spectra, angle-calibration "
+        "priors and covariance, and report no rotation-angle numbers unless the "
+        "likelihood is executable."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+
+    assert plan["required_probes"] == ["CMB_POLARIZATION_ROTATION"]
+    assert plan["candidate_dataset_keys"] == []
+    assert any("rotation-angle likelihood" in gap for gap in plan["blocking_gaps"])
+
+    matrix = run_research_matrix(research_plan=plan)
+
+    assert matrix["publication_ready"] is False
+    assert matrix["ready_cells"] == 0
+    assert matrix["matrix"] == []
+
+
+def test_cmb_rotation_matrix_execution_rejects_forced_late_time_dataset_keys() -> None:
+    from app.services.research_program import run_research_matrix
+
+    prompt = (
+        "I want to test whether CMB polarization data support isotropic or "
+        "anisotropic polarization rotation. Use Planck, ACT, DESI, Pantheon+, "
+        "SH0ES only where registered, identify EB/TB spectra, angle-calibration "
+        "priors and covariance, and report no rotation-angle numbers unless the "
+        "likelihood is executable."
+    )
+
+    matrix = run_research_matrix(
+        question=prompt,
+        dataset_keys=["desi_dr1_bao", "pantheon_plus", "shoes_h0_riess22"],
+        n_samples=512,
+    )
+
+    assert matrix["publication_ready"] is False
+    assert matrix["ready_cells"] == 0
+    assert matrix["matrix"] == []
+    assert "wrong routing" in matrix["failure_categories"]
+    assert any("not valid substitutes" in warning for warning in matrix["warnings"])
+
+
 def test_bmode_rotation_field_prompts_record_scope_gap() -> None:
     from app.services.research_program import plan_research_program, run_research_matrix
 
@@ -206,6 +254,23 @@ def test_ede_request_records_missing_model_but_runs_lcdm_baseline() -> None:
     )
 
 
+def test_transient_early_energy_wording_stays_in_cosmology_research_mode() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to test a transient early-energy component before recombination "
+        "using public compressed cosmology data. Report only supported baseline constraints."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+
+    assert any("Early-dark-energy" in gap for gap in plan["blocking_gaps"])
+    assert "CMB" in plan["required_probes"]
+    assert matrix["matrix"]
+    assert all(cell.get("baseline_only") is True for cell in matrix["matrix"] if cell.get("publication_ready"))
+
+
 def test_modified_gravity_request_records_dedicated_likelihood_gap() -> None:
     from app.services.research_program import plan_research_program, run_research_matrix
 
@@ -241,6 +306,21 @@ def test_modified_gravity_interpretation_records_dedicated_gap() -> None:
 
     assert any("Modified-gravity" in gap for gap in plan["blocking_gaps"])
     assert any(cell.get("baseline_only") is True for cell in matrix["matrix"])
+
+
+def test_growth_index_gamma_request_records_dedicated_gap() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to evaluate whether growth-index gamma differs from GR using "
+        "registered weak-lensing and background data. Mark missing growth likelihoods."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+
+    assert any("Modified-gravity" in gap for gap in plan["blocking_gaps"])
+    assert matrix["matrix"]
 
 
 def test_physical_dark_energy_histories_route_to_scope_gap_not_python() -> None:

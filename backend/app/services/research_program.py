@@ -131,6 +131,35 @@ def run_research_matrix(
         plan = dict(research_plan)
     else:
         plan = plan_research_program(question=str(question or ""))["research_plan"]
+    plan_question = str(question or plan.get("research_question") or "")
+    if _is_primary_cmb_rotation_question(plan_question.lower()):
+        gap = (
+            "CMB polarization-rotation inference is not executable with Planck compressed distance priors. "
+            "A valid run requires EB/TB bandpowers or maps, their covariance, an instrument-angle prior, "
+            "and a dedicated rotation-angle likelihood. Late-time BAO/SN/H0 compressed runners are not "
+            "valid substitutes for this rotation-angle workflow."
+        )
+        existing_gaps = plan.get("blocking_gaps")
+        if isinstance(existing_gaps, list) and gap not in existing_gaps:
+            plan["blocking_gaps"] = [*existing_gaps, gap]
+        return {
+            "success": True,
+            "__tool_status__": "PARTIAL",
+            "analysis_status": "RESEARCH_MATRIX_PARTIAL",
+            "publication_ready": False,
+            "claim_scope": "research_matrix_scope_gap",
+            "research_plan": plan,
+            "matrix": [],
+            "matrix_size": 0,
+            "ready_cells": 0,
+            "warnings": [gap],
+            "failure_categories": ["runner missing", "wrong routing"],
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "Do not report BAO/SN/H0 posterior numbers for this CMB polarization-rotation request. "
+                "State the missing EB/TB/covariance/calibration-prior/rotation-likelihood gap."
+            ),
+        }
     datasets = _clean_dataset_keys(dataset_keys or plan.get("candidate_dataset_keys") or [])
     model_list = _clean_models(models or plan.get("model_families") or ["lcdm"])
     matrix = plan.get("proposed_experiment_matrix")
@@ -958,6 +987,8 @@ def _required_probes(text: str) -> list[str]:
     probes: list[str] = []
     if _is_cmb_rotation_question(prompt):
         probes.append("CMB_POLARIZATION_ROTATION")
+        if _is_primary_cmb_rotation_question(prompt):
+            return probes
     if _is_primordial_feature_question(prompt):
         probes.append("CMB_PRIMORDIAL_FEATURES")
     if any(tok in prompt for tok in ("bao", "baryon acoustic", "desi", "sdss", "boss", "eboss", "6df")):
@@ -966,13 +997,21 @@ def _required_probes(text: str) -> list[str]:
         probes.append("SN")
     if any(tok in prompt for tok in ("cmb", "planck", "act", "spt")):
         probes.append("CMB")
-    if any(tok in prompt for tok in ("weak lensing", "cosmic shear", "kids", "des y3", "hsc", "s8", "sigma8")):
+    if any(tok in prompt for tok in ("weak lensing", "weak-lensing", "cosmic shear", "kids", "des y3", "hsc", "s8", "sigma8")):
         probes.append("WL")
     if any(tok in prompt for tok in ("h0", "h₀", "sh0es", "trgb", "h0licow", "megamaser")):
         probes.append("H0")
     if "chronometer" in prompt or "h(z)" in prompt:
         probes.append("HZ")
-    if any(tok in prompt for tok in ("[cii]", "fwhm", "line", "lfr", "线宽")):
+    if _is_early_dark_energy_question(prompt) and not any(probe in probes for probe in ("BAO", "SN", "CMB", "WL", "H0", "HZ")):
+        probes.append("CMB")
+    if (
+        "[cii]" in prompt
+        or "fwhm" in prompt
+        or "lfr" in prompt
+        or "线宽" in prompt
+        or re.search(r"\bline(?:width|[-\s]width|[-\s]luminosity|[-\s]relation|[-\s]measurement|[-\s]flux|[-\s]property|[-\s]properties)?\b", prompt)
+    ):
         probes.append("line_measurements")
     if not probes and any(tok in prompt for tok in ("cosmology", "宇宙学", "dark energy", "暗能量")):
         probes = ["BAO", "SN", "CMB"]
@@ -1102,6 +1141,54 @@ def _is_cmb_rotation_question(prompt: str) -> bool:
     return has_rotation_intent and has_polarization_observable
 
 
+def _is_primary_cmb_rotation_question(prompt: str) -> bool:
+    """Return True when polarization rotation is the actual requested result.
+
+    Blind-test prompts often mention DESI/Pantheon+/SH0ES as datasets present
+    in a paper, but ask specifically for EB/TB spectra, calibration priors, and
+    rotation-angle support.  In that situation BAO/SN/H0 compressed runners are
+    the wrong object: they can constrain distances, not CMB polarization
+    rotation.  Only keep late-time probes when the user explicitly asks for an
+    expansion/H0/dark-energy posterior in addition to the rotation workflow.
+    """
+    if not _is_cmb_rotation_question(prompt):
+        return False
+    rotation_workflow_terms = (
+        "eb/tb",
+        "tb/eb",
+        "eb and tb",
+        "tb and eb",
+        "parity-odd",
+        "parity odd",
+        "angle-calibration",
+        "angle calibration",
+        "instrument-angle",
+        "instrument angle",
+        "rotation likelihood",
+        "rotation-angle likelihood",
+        "rotation angle likelihood",
+    )
+    explicit_late_time_objective = (
+        "late-time expansion",
+        "late time expansion",
+        "expansion history",
+        "h0 tension",
+        "h₀ tension",
+        "infer h0",
+        "infer h₀",
+        "h0 posterior",
+        "h₀ posterior",
+        "dark-energy posterior",
+        "dark energy posterior",
+        "distance posterior",
+        "bao+sn+cmb",
+        "bao + sn + cmb",
+    )
+    return any(term in prompt for term in rotation_workflow_terms) and not any(
+        term in prompt for term in explicit_late_time_objective
+    )
+
+
 def _is_primordial_feature_question(prompt: str) -> bool:
     has_feature_intent = any(
         tok in prompt
@@ -1149,7 +1236,23 @@ def _is_primordial_feature_question(prompt: str) -> bool:
 
 
 def _is_early_dark_energy_question(prompt: str) -> bool:
-    return any(tok in prompt for tok in ("early dark energy", " ede", "ede ", "axion-like early", "axion like early"))
+    return any(
+        tok in prompt
+        for tok in (
+            "early dark energy",
+            "early-dark-energy",
+            "early energy",
+            "early-energy",
+            "transient early-energy",
+            "transient early energy",
+            "pre-recombination",
+            "before recombination",
+            " ede",
+            "ede ",
+            "axion-like early",
+            "axion like early",
+        )
+    )
 
 
 def _is_modified_gravity_question(prompt: str) -> bool:
@@ -1162,7 +1265,11 @@ def _is_modified_gravity_question(prompt: str) -> bool:
             "gravity model",
             "growth model",
             "growth-rate",
+            "growth-index",
+            "growth index",
+            "growth likelihood",
             "growth than planck",
+            "differs from gr",
             "f(r)",
             "mu(k",
             "mg likelihood",

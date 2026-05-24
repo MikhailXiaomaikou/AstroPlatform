@@ -144,11 +144,23 @@ async def health_deep():
 
     # At least one AI provider key configured.  Scanning env so we
     # don't inadvertently read a user's localStorage-sent key.
+    try:
+        from app.config import settings
+
+        settings_deepseek_key = (
+            str(getattr(settings, "platform_deepseek_api_key", "") or "").strip()
+            or str(getattr(settings, "deepseek_api_key", "") or "").strip()
+        )
+    except Exception:
+        settings_deepseek_key = ""
     provider_keys = [
         os.getenv("ANTHROPIC_API_KEY"),
         os.getenv("OPENAI_API_KEY"),
+        os.getenv("PLATFORM_DEEPSEEK_API_KEY"),
         os.getenv("DEEPSEEK_API_KEY"),
+        settings_deepseek_key,
         os.getenv("LOCAL_MODEL_API_KEY"),
+        os.getenv("OPENAI_CLI_ENABLED"),
     ]
     if any(k for k in provider_keys):
         result["components"]["ai_backend"] = "ok"

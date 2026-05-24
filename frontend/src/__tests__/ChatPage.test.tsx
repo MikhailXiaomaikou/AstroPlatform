@@ -250,6 +250,18 @@ describe("ChatPage", () => {
     expect(screen.getByText(/How can I help with your research/)).toBeInTheDocument();
   });
 
+  it("does not hard-lock chat when backend status probing fails", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({});
+    vi.mocked(getAIBackendStatus).mockRejectedValueOnce(new Error("status unavailable"));
+
+    renderChatPage();
+
+    await waitFor(() => {
+      expect(screen.queryByText("Configure API Key")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText(/How can I help with your research/)).toBeInTheDocument();
+  });
+
   // ── New chat / Import buttons ──
 
   it("shows new chat button", () => {
