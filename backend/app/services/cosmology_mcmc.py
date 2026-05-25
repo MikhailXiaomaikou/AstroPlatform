@@ -15,11 +15,12 @@ import logging
 import math
 import threading
 import time
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+
+from app.services._kv_store import JsonKvStore
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,6 @@ RHAT_PUBLICATION_THRESHOLD = 1.05
 # but cannot be cited as a published constraint.
 ESS_EXPLORATORY_THRESHOLD = 100.0
 RHAT_EXPLORATORY_THRESHOLD = 1.10
-
-from app.services._kv_store import JsonKvStore
 
 # Async cosmology MCMC jobs are stored in the shared KV (Redis-first, SQLite
 # fallback) so the web process and Celery worker can both read job status.

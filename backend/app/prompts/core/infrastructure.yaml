@@ -8,11 +8,13 @@ tools:
   - extract_literature_tables
   - get_extinction
   - get_last_search_results
+  - list_user_tools
   - get_object_dossier
   - get_object_info
   - read_arxiv_paper
   - run_adql
   - run_python
+  - run_user_tool
   - run_sdss_sql
   - search_literature
   - search_objects

@@ -481,6 +481,7 @@ _COMPUTE_TOOLS = {
     "analyze_cross_wavelength", "fit_cosmology_mcmc", "run_cobaya_cosmology",
     "get_cosmology_run_status",
     "get_async_job_status",
+    "run_user_tool",
     "load_cosmology_data_product",
     "build_cosmology_likelihood", "build_cosmology_robustness_matrix",
     "run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix",
@@ -502,6 +503,7 @@ _COMPUTE_TOOLS = {
 }
 _REFERENCE_TOOLS = {
     "search_literature", "read_arxiv_paper", "extract_literature_tables", "research_workflow", "generate_proposal", "get_followup_recommendation",
+    "list_user_tools",
     "classify_literature_relevance", "verify_research_facts",
     # PART Y Batch 1 (audit follow-up): export_sample_table emits a
     # citable machine-readable table from a cached sample, no new analysis.
