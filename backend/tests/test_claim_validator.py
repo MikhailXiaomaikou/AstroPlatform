@@ -10,10 +10,12 @@ from __future__ import annotations
 import pytest
 
 from app.services.claim_validator import (
+    _strip_thousands_separators,
     blocked_reply_text,
     build_regeneration_prompt,
     build_zero_data_qualitative_regeneration_prompt,
     extract_claims,
+    literature_prior_violations,
     validate_claims,
 )
 
@@ -1022,3 +1024,52 @@ def test_blocked_unclassified_literature_reply_text_groups_unclassified_and_off_
     assert "2023B" in text
     assert "(line 3)" in text
     assert "(line 5)" in text
+
+
+# -------------------- PART AD: thousands separator (B3) --------------------
+
+
+def test_extract_thousands_separator_in_value():
+    # 5,800 must be read as 5800, not split into 5 and 800.
+    claims = extract_claims("The star has T_eff = 5,800 K.")
+    assert any(c.label == "teff_k" and c.value == pytest.approx(5800) for c in claims)
+
+
+def test_thousands_normalization_leaves_list_separators_untouched():
+    # comma+space (coordinate / list separators) must NOT be merged...
+    assert _strip_thousands_separators("ra, dec = 12, 345") == "ra, dec = 12, 345"
+    # ...but a genuine thousands grouping is normalized, including 1,234,567.
+    assert _strip_thousands_separators("count 1,234,567 rows") == "count 1234567 rows"
+
+
+# -------------------- PART AD: exoplanet whitelist (B1) --------------------
+
+
+def test_exoplanet_archive_satisfies_age_literature_prior():
+    reply = "The host star age is 4.5 Gyr."
+    # The claim must be extracted as age_gyr...
+    assert any(c.label == "age_gyr" for c in extract_claims(reply))
+    # ...and a successful exoplanet-archive query now satisfies the prior gate
+    # (previously this real result was flagged as an unsupported textbook prior).
+    tool_results = [
+        {"tool": "query_exoplanet_archive", "result": {"success": True, "st_age": 4.5}},
+    ]
+    violations = literature_prior_violations(reply, tool_results)
+    assert all(v.label != "age_gyr" for v in violations)
+
+
+# -------------------- PART AD: partial-failure fabrication (B2) --------------------
+
+
+def test_partial_failure_fabricated_number_still_blocked():
+    # search_literature failed (0 hits) but run_adql succeeded. A number the
+    # failed tool would have provided is not in the universe → still blocked,
+    # without a blanket "any failure blocks the turn" rule that would also
+    # reject the legitimate run_adql-backed parts.
+    tool_results = [
+        {"tool": "search_literature",
+         "result": {"success": False, "__tool_status__": "EMPTY", "row_count": 0}},
+        {"tool": "run_adql", "result": {"parallax": 7.50}},
+    ]
+    r = validate_claims("Based on the literature, the redshift is z = 2.45.", tool_results)
+    assert not r.ok

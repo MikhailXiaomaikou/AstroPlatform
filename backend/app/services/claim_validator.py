@@ -514,6 +514,18 @@ def _strip_markdown_code(text: str) -> str:
     return text
 
 
+def _strip_thousands_separators(text: str) -> str:
+    """Normalize thousands separators (1,234 -> 1234) so the numeric matcher
+    captures the whole value instead of splitting on the comma. Only a comma
+    between a digit and exactly three trailing digits is removed, so list
+    separators like "ra, dec" or "1, 2, 3" stay untouched."""
+    prev = None
+    while prev != text:
+        prev = text
+        text = re.sub(r"(\d),(\d{3})(?=\D|$)", r"\1\2", text)
+    return text
+
+
 def extract_claims(text: str) -> list[Claim]:
     """Scan a reply for astronomical numeric claims.
 
@@ -529,6 +541,7 @@ def extract_claims(text: str) -> list[Claim]:
     spectral-unit claims while preventing double-counting.
     """
     text = _strip_markdown_code(text)
+    text = _strip_thousands_separators(text)
     claims: list[Claim] = []
     seen: set[tuple[int, int, float]] = set()
     for label, pattern in _PATTERNS:
@@ -1866,6 +1879,31 @@ _CITABLE_ANALYSIS_TOOLS: frozenset[str] = frozenset({
     "run_cobaya_cosmology",
     "run_python",
     "search_line_measurements",
+    # PART AD: exoplanet module — real archive queries + transit/RV fits +
+    # physical-quantity computations; their numbers are tool-backed.
+    "query_exoplanet_archive",
+    "query_confirmed_planets",
+    "fetch_tess_lightcurve",
+    "fit_transit",
+    "fit_rv_orbit",
+    "compute_equilibrium_temperature",
+    "compute_transit_depth",
+    "compute_planet_density",
+    "query_tess_target_list",
+    # PART AD: solar-system module — MPC/Horizons/SBDB/Sentry/DAMIT queries +
+    # H-G/Afrho/NEATM/Opik computations + taxonomy classification.
+    "query_mpc_orbit",
+    "fetch_horizons_ephemeris",
+    "query_sbdb_orbit",
+    "query_sbdb_close_approaches",
+    "query_sentry_risk",
+    "query_damit_shape_model",
+    "compute_hg_magnitude",
+    "compute_afrho",
+    "fit_neatm_diameter_albedo",
+    "compute_neo_collision_probability",
+    "classify_asteroid_busdemeo",
+    "classify_asteroid_sdss_colors",
 })
 
 
@@ -2510,18 +2548,29 @@ def dump_tool_universe(tool_results: Any, limit: int = 50) -> str:
 _LITERATURE_PRIOR_LABELS_REQUIRE_TOOL: dict[str, tuple[str, ...]] = {
     # age: must be measured (fit_isochrone), cited (search_literature),
     # or fetched from a dossier (get_object_dossier).
-    "age_myr": ("fit_isochrone", "search_literature", "get_object_dossier"),
-    "age_gyr": ("fit_isochrone", "search_literature", "get_object_dossier"),
+    # PART AD: exoplanet archive returns real host-star age / mass and system
+    # distance (st_age / st_mass / sy_dist), so those queries can support these.
+    "age_myr": (
+        "fit_isochrone", "search_literature", "get_object_dossier",
+        "query_exoplanet_archive", "query_confirmed_planets",
+    ),
+    "age_gyr": (
+        "fit_isochrone", "search_literature", "get_object_dossier",
+        "query_exoplanet_archive", "query_confirmed_planets",
+    ),
     # mass: in addition to fitting / literature / dossier, may also come
-    # from a Gaia / SDSS mass column (run_adql).
+    # from a Gaia / SDSS mass column (run_adql) or the exoplanet archive.
     "mass_solar": (
         "fit_isochrone", "search_literature", "get_object_dossier", "run_adql",
+        "query_exoplanet_archive", "query_confirmed_planets",
     ),
     # distance: Gaia parallax (run_adql / get_object_info), extinction helper
-    # (get_extinction returns a distance), dossier, or literature citation.
+    # (get_extinction returns a distance), dossier, literature, or exoplanet
+    # system distance.
     "distance_pc": (
         "run_adql", "search_literature", "get_object_dossier",
         "get_object_info", "get_extinction",
+        "query_exoplanet_archive", "query_confirmed_planets",
     ),
     "distance_kpc": (
         "search_literature", "get_object_dossier", "get_object_info",
