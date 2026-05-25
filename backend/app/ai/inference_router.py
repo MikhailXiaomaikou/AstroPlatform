@@ -154,15 +154,24 @@ class ClaudeBackend(LLMBackend):
             raise InferenceError("Anthropic API key is not configured")
 
         client = anthropic.Anthropic(api_key=key)
-        response = await asyncio.to_thread(
-            client.messages.create,
-            model=(model_profile.resolved_model_id if model_profile and model_profile.provider == "anthropic" else self._model),
-            system=system or "",
-            messages=messages,
-            tools=tools or [],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        system_param: str | list = system or ""
+        if system:
+            system_param = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ]
+        anthropic_kwargs: dict = {
+            "model": (model_profile.resolved_model_id if model_profile and model_profile.provider == "anthropic" else self._model),
+            "system": system_param,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if tools:
+            cached_tools = [dict(t) for t in tools]
+            cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
+            anthropic_kwargs["tools"] = cached_tools
+            anthropic_kwargs["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
+        response = await asyncio.to_thread(client.messages.create, **anthropic_kwargs)
         text_blocks: list[str] = []
         tool_calls: list[dict] = []
         for block in response.content:
@@ -170,9 +179,12 @@ class ClaudeBackend(LLMBackend):
                 text_blocks.append(block.text)
             elif block.type == "tool_use":
                 tool_calls.append({"id": block.id, "name": block.name, "input": block.input})
+        usage_obj = getattr(response, "usage", None)
         usage = {
-            "input_tokens": getattr(getattr(response, "usage", None), "input_tokens", 0) or 0,
-            "output_tokens": getattr(getattr(response, "usage", None), "output_tokens", 0) or 0,
+            "input_tokens": getattr(usage_obj, "input_tokens", 0) or 0,
+            "output_tokens": getattr(usage_obj, "output_tokens", 0) or 0,
+            "cache_creation_input_tokens": getattr(usage_obj, "cache_creation_input_tokens", 0) or 0,
+            "cache_read_input_tokens": getattr(usage_obj, "cache_read_input_tokens", 0) or 0,
         }
         return {
             "content": "\n\n".join(text_blocks),
@@ -382,6 +394,10 @@ class OpenAICompatibleBackend(LLMBackend):
         if tools:
             payload["tools"] = self._tool_specs(tools)
             payload["tool_choice"] = "auto"
+            # Disable in-turn parallel tool calls so the per-turn failure
+            # circuit breaker can actually react before a model fans out many
+            # duplicate calls.
+            payload["parallel_tool_calls"] = False
 
         timeout = request_timeout or 120.0
         try:
