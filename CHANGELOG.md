@@ -8,7 +8,36 @@ need entries unless they change user-visible behavior or research validity.
 
 ## Unreleased
 
+### Fixed
+
+- **Zero-fabrication hardening (anti-synthetic).** Closed several run_python
+  fabrication-guard bypasses surfaced by blind testing:
+  - `synthetic_code_detector` now catches `torch`/`jax`/`tensorflow` RNGs,
+    `getattr(np, "random")` dynamic access, and `pd.date_range` fabricated
+    time axes (previously only `np.random`/`scipy`/stdlib-`random` +
+    `np.linspace`/`np.arange`).
+  - The G3.2 real-cache exemption is AST-verified now, so a reader name in a
+    comment or string literal can no longer spoof it.
+  - `cached:<key>` is rejected when the key is not live in the result cache.
+  - Added a `user_file:<path>` data_source so a genuine `pd.read_csv` /
+    `pd.read_parquet` / `load_csv` of the user's own data is auto-classified
+    as real instead of being mislabelled synthetic.
+- **Claim-validator false negatives/positives.** Whitelisted exoplanet +
+  solar_system tools in `_CITABLE_ANALYSIS_TOOLS` and the age/mass/distance
+  literature-prior gate (their real results are no longer flagged as
+  unsupported); `extract_claims` now strips thousands separators
+  (`1,234` → `1234`) instead of splitting on the comma.
+- **Mid-sentence truncation detection** now flags a reply ending on `=`.
+- **Robustness matrix** cells carry an explicit `status`
+  (`runnable`/`missing_likelihood`/`config_only`/`blocked`/`failed`) so an
+  empty cell is distinguishable from a negative scientific result.
+- **`/health/deep`** reports deploy version (`commit`/`branch`/`service`).
+
 ### Added
+
+- PR template (`.github/PULL_REQUEST_TEMPLATE.md`) mapping a fix to a blind-test
+  failure category + regression test + anti-hardcoding checklist; hidden-paper
+  record template (`docs/HIDDEN_PAPER_RECORD_TEMPLATE.md`), kept out of prompt context.
 
 - Added the **Exoplanet** research module (M0, 2026-05-20 to 2026-05-21) —
   third active vertical after cosmology and solar_system. Reuses the 6-layer
