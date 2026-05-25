@@ -132,9 +132,14 @@ vi.mock("../api/client", () => ({
   validatePaperSession: vi.fn(),
 }));
 
+vi.mock("../api/userTools", () => ({
+  listUserTools: vi.fn(() => Promise.resolve([])),
+}));
+
 // ── Import component under test (after mocks) ──
 import ChatPage from "../pages/Chat/ChatPage";
 import { getAIBackendStatus, getStoredApiKeys, sendChatMessage } from "../api/client";
+import { listUserTools } from "../api/userTools";
 
 /* ── Helper to render with providers ── */
 
@@ -949,6 +954,102 @@ describe("ChatPage", () => {
     expect(screen.getByText(/Available alternatives: vizier, gaia, simbad, ned, 2mass, alma/)).toBeInTheDocument();
     expect(screen.queryByText("❌ Failed")).not.toBeInTheDocument();
     expect(screen.queryByText(/Error: Connector/)).not.toBeInTheDocument();
+  });
+
+  it("shows attempted tool process before an honest abstention card", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockImplementationOnce(async (
+      _history,
+      _context,
+      onThinking,
+    ) => {
+      onThinking?.({
+        type: "honest_abstention",
+        payload: {
+          reason: "mixed",
+          failed_tools: "fit_line_lfr",
+          empty_tools: "extract_literature_tables",
+          rationale: "The tools did not return citeable measurements.",
+          suggested_next_step: "Try a paper with machine-readable tables.",
+        },
+      });
+      return {
+        reply: "No unsupported numerical claims were made.",
+        actions: [
+          {
+            action: "extract_literature_tables",
+            tool_result: {
+              __tool_status__: "EMPTY",
+              row_count: 0,
+              error: "No usable tables found",
+            },
+            _auto_executed: true,
+          },
+          {
+            action: "fit_line_lfr",
+            tool_result: {
+              __tool_status__: "FAILED",
+              error: "No cached line measurements found",
+            },
+            _auto_executed: true,
+          },
+        ],
+      };
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "run unsupported paper analysis" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText(/Process before honest failure/);
+    expect(screen.getByText(/2 tool attempts are shown below/)).toBeInTheDocument();
+    expect(screen.getByText(/2 no-data/)).toBeInTheDocument();
+    expect(screen.getByText(/Honest reply/)).toBeInTheDocument();
+    expect(screen.getAllByText("extract_literature_tables").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("fit_line_lfr").length).toBeGreaterThan(0);
+  });
+
+  it("shows signed-in user tools in the chat sidebar and prepares a run prompt", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    authState.user = {
+      id: "user-tools-owner",
+      username: "tool-user",
+      email: "tool-user@example.com",
+      subscription_tier: "solo",
+      stripe_customer_id: null,
+      display_name: "Tool User",
+      avatar_url: null,
+      google_linked: false,
+    };
+    vi.mocked(listUserTools).mockResolvedValueOnce([
+      {
+        tool_id: "quick_simbad_lookup",
+        display_name: "Quick SIMBAD lookup",
+        description: "Search a target in SIMBAD using a saved tool macro.",
+        input_schema: {
+          type: "object",
+          properties: { target: { type: "string" } },
+          required: ["target"],
+          additionalProperties: false,
+        },
+        steps: [{
+          tool_name: "search_objects",
+          input: { query: "{{target}}", sources: ["simbad"] },
+        }],
+      },
+    ]);
+
+    renderChatPage();
+
+    const toolButton = await screen.findByRole("button", { name: /Quick SIMBAD lookup/i });
+    fireEvent.click(toolButton);
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    expect(textarea.value).toContain("Run my saved user tool `quick_simbad_lookup`");
+    expect(textarea.value).toContain('"target": ""');
   });
 });
 

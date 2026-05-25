@@ -220,6 +220,36 @@ TOOLS = [
         },
     },
     {
+        "name": "list_user_tools",
+        "description": (
+            "List tool macros created by the current user. These are safe wrappers "
+            "around existing Standard Astro tools; use this before run_user_tool "
+            "when the user asks for their saved custom tools."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "run_user_tool",
+        "description": (
+            "Run one user-created tool macro by tool_id with JSON arguments. "
+            "A user tool cannot execute arbitrary backend code; it expands into "
+            "existing audited platform tools and returns every nested tool result."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tool_id": {"type": "string", "description": "Saved user tool id, e.g. 'quick_gaia_lookup'"},
+                "arguments": {"type": "object", "description": "Arguments matching the saved user tool input_schema"},
+            },
+            "required": ["tool_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "query_high_velocity_stars",
         "description": (
             "Fetch a focused Gaia DR3 high-tangential-velocity candidate sample for "
@@ -2335,6 +2365,31 @@ async def _execute_tool_inner(
             return await _exec_run_sdss_sql(tool_input, python_session_id)
         elif tool_name == "get_object_info":
             return await _exec_object_info(tool_input)
+        elif tool_name == "list_user_tools":
+            from app.services.user_tools import list_user_tools, owner_scope
+
+            scope = owner_scope(user_id, chat_session_id)
+            return {
+                "success": True,
+                "__tool_status__": "COMPLETED",
+                "tools": list_user_tools(scope),
+                "__message_to_model__": (
+                    "These are user-created tool macros. Use run_user_tool with "
+                    "a listed tool_id if the user's request matches one."
+                ),
+            }
+        elif tool_name == "run_user_tool":
+            from app.services.user_tools import execute_user_tool, owner_scope
+
+            scope = owner_scope(user_id, chat_session_id)
+            return await execute_user_tool(
+                scope=scope,
+                tool_id=str(tool_input.get("tool_id") or ""),
+                arguments=tool_input.get("arguments") if isinstance(tool_input.get("arguments"), dict) else {},
+                user_id=user_id,
+                chat_session_id=chat_session_id,
+                python_session_id=python_session_id,
+            )
         elif tool_name == "analyze_spectrum":
             return await _exec_analyze(tool_input, api_key, provider_api_keys)
         elif tool_name == "generate_pipeline":

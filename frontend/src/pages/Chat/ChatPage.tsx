@@ -68,6 +68,7 @@ import { useNavigate } from "react-router-dom";
 import { useTracking } from "../../hooks/useTracking";
 import { useConversationProvenance, type ConversationProvenance } from "../../hooks/useConversationProvenance";
 import { readWorkspaceCache, registerWorkspaceExport } from "../../utils/workspaceCache";
+import { listUserTools, type UserToolDefinition } from "../../api/userTools";
 const PlotBuilder = lazy(() => import("../../components/viz/PlotBuilder"));
 
 /* Fullscreen image/plot modal */
@@ -315,7 +316,7 @@ function summarizeTurnActions(actions: ChatAction[] | undefined) {
     const result = getActionToolResult(action);
     if (!result) return false;
     const status = String(result.__tool_status__ || result.analysis_status || "").toUpperCase();
-    return status !== "PARTIAL" && (
+    return status !== "PARTIAL" && status !== "EMPTY" && (
       status === "FAILED"
       || result.success === false
       || (typeof result.error === "string" && result.error.trim() !== "")
@@ -3159,6 +3160,29 @@ function NextStepsPanel({ onSend }: { onSend: (msg: string) => void }) {
   );
 }
 
+function defaultValueForJsonSchema(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return "";
+  const record = schema as Record<string, unknown>;
+  const type = String(record.type || "string");
+  if (type === "number" || type === "integer") return 0;
+  if (type === "boolean") return false;
+  if (type === "array") return [];
+  if (type === "object") return {};
+  return "";
+}
+
+function exampleArgsForUserTool(tool: UserToolDefinition): Record<string, unknown> {
+  const schema = tool.input_schema || {};
+  const props = schema.properties;
+  if (!props || typeof props !== "object" || Array.isArray(props)) return {};
+  return Object.fromEntries(
+    Object.entries(props as Record<string, unknown>).map(([key, value]) => [
+      key,
+      defaultValueForJsonSchema(value),
+    ]),
+  );
+}
+
 export default function ChatPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -3253,6 +3277,9 @@ export default function ChatPage() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
   const [currentSessionTitle, setCurrentSessionTitle] = useState<string>("");
+  const [userTools, setUserTools] = useState<UserToolDefinition[]>([]);
+  const [userToolsLoading, setUserToolsLoading] = useState(false);
+  const [userToolsError, setUserToolsError] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem("astro_chat_sidebar_collapsed") === "1";
   });
@@ -3283,11 +3310,43 @@ export default function ChatPage() {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
 
+  const refreshUserTools = useCallback(async () => {
+    if (!user) {
+      setUserTools([]);
+      setUserToolsError(null);
+      setUserToolsLoading(false);
+      return;
+    }
+    setUserToolsLoading(true);
+    setUserToolsError(null);
+    try {
+      setUserTools(await listUserTools());
+    } catch (err) {
+      setUserTools([]);
+      setUserToolsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUserToolsLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    void refreshUserTools();
+  }, [refreshUserTools]);
+
   const showToast = useCallback((message: string, tone: ToastState["tone"] = "success") => {
     setToast({ message, tone });
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToast(null), 4000);
   }, []);
+
+  const handleUseUserTool = useCallback((tool: UserToolDefinition) => {
+    const args = exampleArgsForUserTool(tool);
+    setInput(
+      `Run my saved user tool \`${tool.tool_id}\` with arguments:\n\n${JSON.stringify(args, null, 2)}`,
+    );
+    showToast(`Prepared ${tool.display_name || tool.tool_id} in the composer.`, "info");
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }, [showToast]);
 
   const rememberExportInWorkspace = useCallback(async (
     blob: Blob,
@@ -4471,6 +4530,57 @@ export default function ChatPage() {
                 <p className="chat-sidebar-empty">No chats match your search.</p>
               )}
             </div>
+            <div className="chat-sidebar-tools" aria-label="User tools">
+              <div className="chat-sidebar-tools-header">
+                <span>User Tools</span>
+                <div className="chat-sidebar-tools-actions">
+                  <button
+                    type="button"
+                    className="chat-sidebar-tools-link"
+                    onClick={() => { void refreshUserTools(); }}
+                    disabled={!user || userToolsLoading}
+                    title="Refresh user tools"
+                  >
+                    Refresh
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-sidebar-tools-link"
+                    onClick={() => navigate("/account?tab=tools")}
+                  >
+                    Manage
+                  </button>
+                </div>
+              </div>
+              {!user ? (
+                <p className="chat-sidebar-empty">Sign in to create reusable tools.</p>
+              ) : userToolsLoading ? (
+                <p className="chat-sidebar-empty">Loading tools...</p>
+              ) : userToolsError ? (
+                <p className="chat-sidebar-empty">{userToolsError}</p>
+              ) : userTools.length === 0 ? (
+                <p className="chat-sidebar-empty">No user tools yet.</p>
+              ) : (
+                <div className="chat-sidebar-tools-list">
+                  {userTools.map((tool) => (
+                    <button
+                      type="button"
+                      key={tool.tool_id}
+                      className="chat-sidebar-tool-item"
+                      onClick={() => handleUseUserTool(tool)}
+                      title={tool.description}
+                    >
+                      <span className="chat-sidebar-item-title">
+                        {tool.display_name || tool.tool_id}
+                      </span>
+                      <span className="chat-sidebar-item-meta">
+                        {tool.tool_id} · {tool.steps?.length || 0} step{tool.steps?.length === 1 ? "" : "s"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </>
         )}
       </aside>
@@ -5022,10 +5132,35 @@ export default function ChatPage() {
                   </div>
                 ) : msg.role === "assistant" ? (
                   msg._abstention ? (
-                    <HonestAbstentionCard
-                      abstention={msg._abstention}
-                      onRetry={(suggestion) => { setInput(suggestion); }}
-                    />
+                    <>
+                      {/* Honest abstention is useful only if the user can
+                          see what was attempted first. The backend already
+                          preserves auto-executed tool results in actions;
+                          keep the same turn summary visible here instead
+                          of showing a context-free failure card. */}
+                      <ToolTurnSummary actions={msg.actions} />
+                      {msg.actions && msg.actions.length > 0 && (
+                        <div
+                          className="chat-abstention-process-note"
+                          style={{
+                            margin: "0.45rem 0",
+                            padding: "0.55rem 0.7rem",
+                            border: "1px solid #f4d7a1",
+                            borderRadius: 6,
+                            background: "#fff8ea",
+                            color: "#6b4b12",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          <strong>Process before honest failure:</strong>{" "}
+                          {msg.actions.length} tool attempt{msg.actions.length === 1 ? "" : "s"} are shown below.
+                        </div>
+                      )}
+                      <HonestAbstentionCard
+                        abstention={msg._abstention}
+                        onRetry={(suggestion) => { setInput(suggestion); }}
+                      />
+                    </>
                   ) : (
                     <>
                       {/* F3.3: ⚠ preamble when any auto-executed tool failed
