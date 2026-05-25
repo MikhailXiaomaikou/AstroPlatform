@@ -96,6 +96,7 @@ class _CodeVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.np_random_calls: list[str] = []  # np.random.normal etc.
         self.linspace_calls: list[str] = []   # np.linspace / np.arange
+        self.time_axis_builder_calls: list[str] = []  # pd.date_range etc.
         self.real_data_reader_calls: list[str] = []
         self.time_series_reader_calls: list[str] = []
         self.legit_random_refs: list[str] = []
@@ -116,6 +117,34 @@ class _CodeVisitor(ast.NodeVisitor):
         if isinstance(cur, ast.Name):
             parts.append(cur.id)
         return ".".join(reversed(parts))
+
+    def _getattr_targets_rng(self, node: ast.Call) -> bool:
+        """True when getattr(base, name) resolves to a random-number API."""
+        if len(node.args) < 2:
+            return False
+        base = self._attribute_chain(node.args[0])
+        if not base and isinstance(node.args[0], ast.Name):
+            base = node.args[0].id
+        name_arg = node.args[1]
+        name_val = (
+            name_arg.value
+            if isinstance(name_arg, ast.Constant) and isinstance(name_arg.value, str)
+            else ""
+        )
+        rng_bases = {
+            "np", "numpy", "np.random", "numpy.random", "random",
+            "torch", "jax", "jax.random", "tf", "tensorflow", "scipy.stats",
+        }
+        rng_names = {
+            "random", "randn", "rand", "normal", "uniform", "gauss",
+            "choice", "poisson", "randint", "standard_normal", "rvs",
+            "normalvariate", "multivariate_normal", "lognormal",
+        }
+        if base in {"np.random", "numpy.random", "jax.random"}:
+            return True
+        if base in rng_bases and (name_val in rng_names or "random" in name_val):
+            return True
+        return False
 
     def visit_Call(self, node: ast.Call) -> None:
         chain = self._attribute_chain(node.func)
@@ -142,10 +171,29 @@ class _CodeVisitor(ast.NodeVisitor):
                 "gammavariate",
             }:
                 self.np_random_calls.append(chain)
+        # PART AD: GPU / array-framework RNGs — torch / jax / tensorflow ship
+        # their own generators that the np.random / scipy / stdlib matchers miss.
+        if (
+            (chain.startswith("torch.") and chain.rsplit(".", 1)[-1] in {
+                "rand", "randn", "randint", "randperm", "normal", "bernoulli",
+                "multinomial", "poisson", "rand_like", "randn_like",
+            })
+            or "jax.random" in chain
+            or "tf.random" in chain
+            or "tensorflow.random" in chain
+        ):
+            self.np_random_calls.append(chain)
+        # PART AD: dynamic getattr access used to dodge the static matcher,
+        # e.g. getattr(np, "random")(...) / getattr(np.random, "normal").
+        if chain == "getattr" and self._getattr_targets_rng(node):
+            self.np_random_calls.append("getattr<rng>")
         # np.linspace / np.arange — only flagged if used to build a "time"
         # axis (detected by surrounding usage, checked in run()).
         if chain in {"np.linspace", "numpy.linspace", "np.arange", "numpy.arange"}:
             self.linspace_calls.append(chain)
+        # PART AD: pandas date_range is almost always a fabricated time axis.
+        if chain in {"pd.date_range", "pandas.date_range"}:
+            self.time_axis_builder_calls.append(chain)
         # Real-data readers
         for reader in _REAL_DATA_READERS:
             if reader in chain:
@@ -418,6 +466,11 @@ def analyze(code: str) -> DetectionResult:
             ):
                 result.has_time_linspace = True
                 break
+
+    # PART AD: pandas date_range is a time-axis builder on its own — no
+    # variable-name heuristic needed (date_range exists to make time series).
+    if visitor.time_axis_builder_calls:
+        result.has_time_linspace = True
 
     # Keyword / phrase scan across comments and string literals
     for pat in _SUSPICIOUS_KEYWORDS:

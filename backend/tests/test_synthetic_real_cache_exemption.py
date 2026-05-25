@@ -47,6 +47,14 @@ import pytest
         # Edge — passes through helper signature.
         ("def helper():\n    return get_cached_results('x')", True,
          "helper definition that calls cache"),
+        # PART AD: comment / string spoofing must NOT grant exemption — the
+        # old substring scan returned True for these (the hole we closed).
+        ("# rows = get_cached_results('latest_literature_tables')\n"
+         "import numpy as np\nx = np.random.normal(0, 1, 100)",
+         False, "reader only in a comment"),
+        ('note = "get_adql_results()"\n'
+         "import numpy as np\ny = np.random.normal(0, 1, 50)",
+         False, "reader only in a string literal"),
     ],
 )
 def test_run_python_code_reads_real_cache(code: str, expected: bool, label: str) -> None:

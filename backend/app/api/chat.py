@@ -1287,33 +1287,71 @@ _ATTR_RE = __import__("re").compile(
 # actually read real cached data, so we won't paint the result red".
 #
 # Keep this in sync with the data_source contract validator's
-# `_REAL_DATA_READERS` set in synthetic_code_detector.py — both are
-# the same physical concept (the code is genuinely reading real data).
-_RUN_PYTHON_REAL_CACHE_READER_TOKENS = (
-    "get_cached_results(", "get_search_results(",
-    "get_adql_results(", "get_adql_result_sets(",
-    "get_latest_adql_result(", "load_fits(",
-    "search_lightcurve(", "lightkurve.",
-    "Table.read(", "fits.open(",
-    "pd.read_csv(", "pd.read_parquet(",
-    "latest_literature_tables", "latest_adql",
-    "latest_search", "latest_lightcurve",
-    "astroquery",
-)
+# Mirrors the `_REAL_DATA_READERS` concept in synthetic_code_detector.py —
+# both mean "the code is genuinely reading real data".
+# PART AD: these names must appear as ACTUAL AST calls / imports, not as
+# substrings. The old `token in code` scan could be spoofed by writing
+# `get_cached_results(` inside a comment or string literal to dodge G3.2.
+_REAL_CACHE_READER_CALL_NAMES = frozenset({
+    "get_cached_results", "get_search_results", "get_adql_results",
+    "get_adql_result_sets", "get_latest_adql_result",
+    "load_fits", "load_votable", "load_csv",
+    "search_lightcurve", "download_and_clean_lightcurve", "transit_search",
+    "read_csv", "read_parquet",
+})
+_REAL_CACHE_READER_CALL_CHAINS = frozenset({
+    "Table.read", "fits.open", "astropy.io.fits.open",
+})
+_REAL_CACHE_READER_MODULES = frozenset({"lightkurve", "astroquery"})
 
 
 def _run_python_code_reads_real_cache(code: str) -> bool:
-    """PART AC C3: True when run_python code clearly reads real data.
+    """PART AD (hardened PART AC C3): True when run_python code REALLY reads
+    real data via an actual call / import.
 
-    Used as the reverse-direction exemption for the G3.2 SYNTHETIC
-    tainter. When the code body explicitly references a platform real-
-    data reader (get_cached_results, latest_literature_tables,
-    lightkurve, etc.), we trust that signal even when the input's
-    `data_source` field wasn't declared as a real source.
+    Reverse-direction exemption for the G3.2 SYNTHETIC tainter. The old
+    implementation used a substring scan, so `get_cached_results(` in a
+    comment or string literal would spoof the exemption. We now parse the
+    AST and require the reader to be a genuine Call / Import node.
     """
     if not isinstance(code, str) or not code:
         return False
-    return any(token in code for token in _RUN_PYTHON_REAL_CACHE_READER_TOKENS)
+    import ast
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+
+    def _chain(node: ast.AST) -> str:
+        parts: list[str] = []
+        cur = node
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            parts.append(cur.id)
+        return ".".join(reversed(parts))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            chain = _chain(node.func)
+            if not chain:
+                continue
+            if chain.rsplit(".", 1)[-1] in _REAL_CACHE_READER_CALL_NAMES:
+                return True
+            if chain in _REAL_CACHE_READER_CALL_CHAINS:
+                return True
+            if chain.split(".", 1)[0] in _REAL_CACHE_READER_MODULES and "." in chain:
+                return True
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".", 1)[0] in _REAL_CACHE_READER_MODULES:
+                    return True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.module.split(".", 1)[0] in _REAL_CACHE_READER_MODULES:
+                return True
+    return False
 
 
 _TRUNCATED_TRAILING_PUNCT = {":", ",", "—", "–", "(", "[", "{"}

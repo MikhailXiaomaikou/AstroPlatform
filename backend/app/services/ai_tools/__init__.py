@@ -562,6 +562,8 @@ TOOLS = [
                         "'latest_lightcurve' / 'cached:<key>' (other cached real data), "
                         "'latest_high_velocity_stars' (uses the focused Gaia high-velocity cache), "
                         "'fits:<path>' (loads a specific FITS file via load_fits), "
+                        "'user_file:<path>' (your own uploaded data file read via "
+                        "pd.read_csv / pd.read_parquet / load_csv — real data, not synthetic), "
                         "'none_not_analyzing_real_data' (not analyzing observational data: "
                         "synthetic/pedagogical/Monte-Carlo data, or helper introspection such as "
                         "available_functions(); output will be marked SYNTHETIC/not citable for "
@@ -7086,6 +7088,12 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                 auto_source = "latest_adql"  # the most common cached source
             elif any(t in names_seen for t in ("load_fits", "fits")):
                 auto_source = "fits:<autodetected>"
+            # PART AD: user-supplied local data files (CSV / parquet) are real
+            # data too. Without this the AI cannot declare a source for its own
+            # uploaded data, so the run defaults to synthetic and the X3 reverse
+            # check then rejects it for actually reading real data.
+            elif any(t in names_seen for t in ("read_csv", "read_parquet", "load_csv")):
+                auto_source = "user_file:<autodetected>"
         except Exception:
             pass
 
@@ -7103,6 +7111,31 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             data_source = "none_not_analyzing_real_data"
 
     is_synthetic_declared = data_source == "none_not_analyzing_real_data"
+
+    # PART AD: cached:<key> declares an inline cache handle. The old code
+    # trusted it blindly ("free-form, no static check"), so a non-existent
+    # key let the run proceed and the code could silently fall back to
+    # fabrication. Validate the key resolves to live cached data first.
+    if data_source.startswith("cached:"):
+        cache_key = data_source[len("cached:"):].strip()
+        if not cache_key or get_cached_results(cache_key) is None:
+            now = time.time()
+            available = sorted(
+                k for k, (_, ts) in _search_result_cache.items()
+                if now - ts <= _CACHE_TTL_SECONDS
+            )
+            return {
+                "success": False,
+                "error": (
+                    f"data_source='cached:{cache_key}' but no live cached "
+                    f"results exist under key '{cache_key}'. Available cache "
+                    f"keys: {available or 'none'}. Fetch the data first "
+                    f"(run_adql / search_objects / search_lightcurve / "
+                    f"extract_literature_tables), then reference the correct "
+                    f"cached:<key>."
+                ),
+                "error_class": "cached_key_not_found",
+            }
 
     # X3 (PART X): reverse-direction data_source check.  If AI declared
     # synthetic but the code actually reads real archive/cache helpers,
@@ -7150,7 +7183,9 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                     "get_latest_adql_result / load_fits) but data_source "
                     "was declared 'none_not_analyzing_real_data'. Change "
                     "data_source to 'latest_adql' / 'latest_search' / "
-                    "'latest_lightcurve' / 'cached:<key>' / 'fits:<path>' "
+                    "'latest_lightcurve' / 'cached:<key>' / 'fits:<path>' / "
+                    "'user_file:<path>' (your own CSV / parquet via pd.read_csv "
+                    "/ pd.read_parquet / load_csv) "
                     "to match what the code actually reads. The SYNTHETIC "
                     "tag is reserved for code that genuinely does NOT "
                     "read any real data."
@@ -7235,7 +7270,10 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
                     f"data_source='{data_source}' declared but the code does not "
                     f"call any of {sorted(tokens_to_match)} (checked via AST walk "
                     f"including aliases + imports). {observed_ast} Either (a) update "
-                    f"your code to actually read that cache, or (b) declare "
+                    f"your code to actually read that cache, (b) declare "
+                    f"data_source='user_file:<path>' if you are reading your own "
+                    f"uploaded CSV / parquet via pd.read_csv / pd.read_parquet / "
+                    f"load_csv, or (c) declare "
                     f"data_source='none_not_analyzing_real_data' if you are "
                     f"intentionally generating synthetic data (which will be "
                     f"marked SYNTHETIC and forbidden from citation)."
