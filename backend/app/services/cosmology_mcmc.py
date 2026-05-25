@@ -13,14 +13,11 @@ import importlib.metadata
 import json
 import logging
 import math
-import threading
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-
-from app.services._kv_store import JsonKvStore
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +40,12 @@ MODEL_PARAMETERS: dict[str, tuple[str, ...]] = {
 
 SYNC_SAMPLE_BUDGET = 80_000
 ESS_PUBLICATION_THRESHOLD = 400.0
-RHAT_PUBLICATION_THRESHOLD = 1.05
+# Publication ("good") R-hat ceiling — the modern Vehtari+2021 standard.
+# A parameter is publication-grade only at R-hat < 1.01; this value is what
+# chain_diagnostics.thresholds.rhat_max reports.
+RHAT_PUBLICATION_THRESHOLD = 1.01
+# Marginal R-hat band: 1.01 ≤ R-hat < 1.05 is "marginal" (not publication).
+RHAT_MARGINAL_THRESHOLD = 1.05
 # Three-tier publication_ready (2026-05-20): chains with min ESS in
 # [ESS_EXPLORATORY_THRESHOLD, ESS_PUBLICATION_THRESHOLD) and max R-hat in
 # (RHAT_PUBLICATION_THRESHOLD, RHAT_EXPLORATORY_THRESHOLD] are tagged
@@ -52,13 +54,6 @@ RHAT_PUBLICATION_THRESHOLD = 1.05
 ESS_EXPLORATORY_THRESHOLD = 100.0
 RHAT_EXPLORATORY_THRESHOLD = 1.10
 
-# Async cosmology MCMC jobs are stored in the shared KV (Redis-first, SQLite
-# fallback) so the web process and Celery worker can both read job status.
-# Backend TTL replaces the old hand-maintained _cleanup_jobs_locked sweep.
-_JOBS_STORE = JsonKvStore("async_job")
-_JOBS_LOCK = threading.Lock()
-_JOB_TTL_SECONDS = 3600
-_MAX_JOBS = 64  # soft cap, enforced on submit (best-effort scan)
 # user_uploaded entries come from FITS upload / user_supplied data_source
 # tags with full audit log (hash + upload time + uploader). Treated as
 # claimable since the synthetic-fallback defences (subprocess sandbox +
@@ -648,9 +643,9 @@ def _safe_float(value: Any) -> float:
 def _diagnostic_status(rhat: float, ess_bulk: float) -> str:
     if not (math.isfinite(rhat) and math.isfinite(ess_bulk)):
         return "not_converged"
-    if rhat < 1.01 and ess_bulk >= ESS_PUBLICATION_THRESHOLD:
+    if rhat < RHAT_PUBLICATION_THRESHOLD and ess_bulk >= ESS_PUBLICATION_THRESHOLD:
         return "good"
-    if rhat < RHAT_PUBLICATION_THRESHOLD and ess_bulk >= ESS_PUBLICATION_THRESHOLD / 2.0:
+    if rhat < RHAT_MARGINAL_THRESHOLD and ess_bulk >= ESS_PUBLICATION_THRESHOLD / 2.0:
         return "marginal"
     return "not_converged"
 
@@ -686,39 +681,6 @@ def _cosmology_provenance(result: dict[str, Any]) -> dict[str, Any]:
         "chain_diagnostics": result.get("chain_diagnostics"),
         "publication_ready": result.get("publication_ready"),
     }
-
-
-def _enforce_job_cap_locked() -> None:
-    """Best-effort soft cap on concurrent stored jobs.
-
-    Backend TTL handles the time dimension automatically (1 h); this helper
-    only fires when a single worker has accumulated more than ``_MAX_JOBS``
-    *non-expired* job records since the last sweep. It scans the namespace,
-    drops the oldest entries down to the cap, and is best-effort: a race
-    with another worker may leave the namespace slightly over-cap, which is
-    acceptable.
-    """
-    try:
-        keys = _JOBS_STORE.scan_keys()
-    except Exception:
-        return
-    if len(keys) <= _MAX_JOBS:
-        return
-    jobs_with_age: list[tuple[str, float]] = []
-    for k in keys:
-        entry = _JOBS_STORE.get(k)
-        if isinstance(entry, dict):
-            jobs_with_age.append((k, float(entry.get("created_at") or 0)))
-    jobs_with_age.sort(key=lambda item: item[1])  # oldest first
-    over = len(jobs_with_age) - _MAX_JOBS
-    for job_id, _created in jobs_with_age[:over]:
-        _JOBS_STORE.delete(job_id)
-
-
-# Kept as a no-op alias so any external callers that historically imported
-# ``_cleanup_jobs_locked`` don't break; not exercised in any current code path.
-def _cleanup_jobs_locked() -> None:  # pragma: no cover — legacy shim
-    _enforce_job_cap_locked()
 
 
 def package_versions(distributions: list[str]) -> dict[str, str]:
