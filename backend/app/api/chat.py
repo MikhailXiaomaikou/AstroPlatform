@@ -2153,7 +2153,11 @@ def _cosmology_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             registry = result
         elif tool in {"build_cosmology_likelihood", "build_cosmology_robustness_matrix"}:
             config = result
-        elif tool in {"run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix"}:
+        elif tool in {
+            "run_cosmology_likelihood_chain",
+            "run_cosmology_robustness_matrix",
+            "run_cmb_rotation_likelihood",
+        }:
             chain = result
 
     if not any((registry, config, chain)):
@@ -2202,7 +2206,7 @@ def _cosmology_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             params = chain.get("parameters")
             param_parts: list[str] = []
             if isinstance(params, dict):
-                for name in ("H0", "omegam", "sigma8", "S8"):
+                for name in ("H0", "omegam", "sigma8", "S8", "beta_deg"):
                     item = params.get(name)
                     if not isinstance(item, dict):
                         continue

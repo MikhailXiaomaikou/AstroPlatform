@@ -9,6 +9,12 @@ import uuid
 from typing import Any
 
 from app.common.regex import ARXIV_ID_RE, BIBCODE_RE, DOI_RE
+from app.services.cmb_rotation_likelihoods import (
+    cmb_rotation_dataset_exists,
+    default_cmb_rotation_dataset_keys,
+    get_cmb_rotation_dataset,
+    run_cmb_rotation_likelihood,
+)
 from app.services.cosmology_likelihoods import (
     build_likelihood_config,
     get_cosmology_dataset,
@@ -47,9 +53,9 @@ def plan_research_program(
     models = _models_from_question(text)
     hypotheses = _hypotheses_from_question(text, probes, models)
     dataset_entries = [
-        get_cosmology_dataset(key).to_dict()
+        entry
         for key in datasets
-        if _dataset_exists(key)
+        if (entry := _dataset_entry_for_plan(key)) is not None
     ]
     dataset_status = [_dataset_plan_status(entry) for entry in dataset_entries]
     matrix = _proposed_experiment_matrix(datasets, models, text)
@@ -133,6 +139,17 @@ def run_research_matrix(
         plan = plan_research_program(question=str(question or ""))["research_plan"]
     plan_question = str(question or plan.get("research_question") or "")
     if _is_primary_cmb_rotation_question(plan_question.lower()):
+        rotation_keys = [
+            key
+            for key in _clean_dataset_keys(dataset_keys or plan.get("candidate_dataset_keys") or [])
+            if cmb_rotation_dataset_exists(key)
+        ] or default_cmb_rotation_dataset_keys()
+        run = run_cmb_rotation_likelihood(
+            dataset_keys=rotation_keys,
+            model="isotropic_beta",
+            random_seed=random_seed,
+            n_samples=n_samples,
+        )
         gap = (
             "CMB polarization-rotation inference is not executable with Planck compressed distance priors. "
             "A valid run requires EB/TB bandpowers or maps, their covariance, an instrument-angle prior, "
@@ -142,22 +159,41 @@ def run_research_matrix(
         existing_gaps = plan.get("blocking_gaps")
         if isinstance(existing_gaps, list) and gap not in existing_gaps:
             plan["blocking_gaps"] = [*existing_gaps, gap]
+        run_warnings = run.get("warnings", []) if isinstance(run.get("warnings"), list) else []
+        if run.get("publication_ready") is not True and gap not in run_warnings:
+            run_warnings = [*run_warnings, gap]
         return {
             "success": True,
             "__tool_status__": "PARTIAL",
             "analysis_status": "RESEARCH_MATRIX_PARTIAL",
-            "publication_ready": False,
-            "claim_scope": "research_matrix_scope_gap",
+            "publication_ready": bool(run.get("publication_ready")),
+            "claim_scope": "cmb_rotation_compressed_preliminary"
+            if run.get("publication_ready") is True
+            else "research_matrix_scope_gap",
             "research_plan": plan,
-            "matrix": [],
-            "matrix_size": 0,
-            "ready_cells": 0,
-            "warnings": [gap],
-            "failure_categories": ["runner missing", "wrong routing"],
-            "__do_not_claim__": True,
+            "matrix": [{
+                "label": "CMB rotation — isotropic beta",
+                "model": "isotropic_beta",
+                "dataset_keys": rotation_keys,
+                "publication_ready": bool(run.get("publication_ready")),
+                "runnable": bool(run.get("publication_ready")),
+                "execution_level": "compressed_preliminary"
+                if run.get("publication_ready") is True
+                else "config_only",
+                "result": run,
+                "warnings": run.get("warnings", []),
+            }],
+            "matrix_size": 1,
+            "ready_cells": 1 if run.get("publication_ready") is True else 0,
+            "warnings": run_warnings or [gap],
+            "failure_categories": []
+            if run.get("publication_ready") is True
+            else ["runner missing", "wrong routing"],
+            "__do_not_claim__": True if run.get("publication_ready") is not True else False,
             "__message_to_model__": (
-                "Do not report BAO/SN/H0 posterior numbers for this CMB polarization-rotation request. "
-                "State the missing EB/TB/covariance/calibration-prior/rotation-likelihood gap."
+                "Summarize only the CMB rotation result. Do not report BAO/SN/H0 posterior numbers "
+                "for this CMB polarization-rotation request. If publication_ready=false, state the "
+                "missing EB/TB/covariance/calibration-prior/rotation-likelihood gap."
             ),
         }
     datasets = _clean_dataset_keys(dataset_keys or plan.get("candidate_dataset_keys") or [])
@@ -175,6 +211,27 @@ def run_research_matrix(
         model = str(cell.get("model") if isinstance(cell, dict) else model_list[0])
         label = str(cell.get("label") if isinstance(cell, dict) else "Research cell")
         try:
+            rotation_keys = [key for key in cell_datasets if cmb_rotation_dataset_exists(key)]
+            if rotation_keys:
+                run = run_cmb_rotation_likelihood(
+                    dataset_keys=rotation_keys,
+                    model="isotropic_beta",
+                    random_seed=base_seed + index,
+                    n_samples=n_samples,
+                )
+                cells.append({
+                    "label": label,
+                    "model": "isotropic_beta",
+                    "dataset_keys": rotation_keys,
+                    "publication_ready": bool(run.get("publication_ready")),
+                    "runnable": bool(run.get("publication_ready")),
+                    "execution_level": "compressed_preliminary"
+                    if run.get("publication_ready") is True
+                    else "config_only",
+                    "result": run,
+                    "warnings": run.get("warnings", []) if isinstance(run.get("warnings"), list) else [],
+                })
+                continue
             config = build_likelihood_config(
                 model=model,
                 dataset_keys=cell_datasets,
@@ -438,7 +495,10 @@ def verify_research_facts(
         })
 
     checked_sources = _checked_sources_from_payload(payload_text, dataset_index)
-    blocked = any(claim.get("status") == "contradicted" for claim in claims)
+    blocked = any(claim.get("status") == "contradicted" for claim in claims) or any(
+        claim.get("status") == "unsupported" and claim.get("kind") == "numeric"
+        for claim in claims
+    )
     warning = any(claim.get("status") in {"unsupported", "partial"} for claim in claims)
     status = "blocked" if blocked else "warning" if warning else "passed"
     unsupported = [c for c in claims if c.get("status") in {"unsupported", "contradicted"}]
@@ -459,6 +519,8 @@ def verify_research_facts(
         "status": status,
         "claims": claims,
         "checked_sources": checked_sources,
+        "unsupported_claim_count": len(unsupported),
+        "verified_claim_count": sum(1 for c in claims if c.get("status") == "verified"),
         "warnings": [
             "Fact verification checks claims against current-turn evidence; it does not create new evidence.",
         ],
@@ -1021,6 +1083,8 @@ def _required_probes(text: str) -> list[str]:
 def _candidate_datasets(probes: list[str], text: str) -> list[str]:
     prompt = text.lower()
     keys: list[str] = []
+    if "CMB_POLARIZATION_ROTATION" in probes:
+        keys.extend(default_cmb_rotation_dataset_keys())
     if "BAO" in probes:
         keys.extend(COSMOLOGY_PROBE_DATASETS["pre_desi_bao"] if "pre-desi" in prompt or "pre desi" in prompt else COSMOLOGY_PROBE_DATASETS["bao"])
     if "SN" in probes:
@@ -1030,8 +1094,8 @@ def _candidate_datasets(probes: list[str], text: str) -> list[str]:
             keys.extend(COSMOLOGY_PROBE_DATASETS["sn"])
     if (
         "CMB" in probes
-        and "CMB_POLARIZATION_ROTATION" not in probes
         and "CMB_PRIMORDIAL_FEATURES" not in probes
+        and not _is_primary_cmb_rotation_question(prompt)
     ):
         keys.extend(COSMOLOGY_PROBE_DATASETS["cmb"])
         if "act" in prompt:
@@ -1048,6 +1112,8 @@ def _candidate_datasets(probes: list[str], text: str) -> list[str]:
 def _models_from_question(text: str) -> list[str]:
     prompt = text.lower()
     models: list[str] = []
+    if _is_primary_cmb_rotation_question(prompt):
+        return ["isotropic_beta"]
     if "lcdm" in prompt or "λcdm" in prompt:
         models.append("lcdm")
     if "wcdm" in prompt:
@@ -1154,16 +1220,24 @@ def _is_primary_cmb_rotation_question(prompt: str) -> bool:
     if not _is_cmb_rotation_question(prompt):
         return False
     rotation_workflow_terms = (
+        "birefringence",
+        "polarization rotation",
+        "polarization-rotation",
+        "polarisation rotation",
+        "polarisation-rotation",
         "eb/tb",
         "tb/eb",
         "eb and tb",
         "tb and eb",
+        "anisotropic",
+        "isotropic",
         "parity-odd",
         "parity odd",
         "angle-calibration",
         "angle calibration",
         "instrument-angle",
         "instrument angle",
+        "distance priors as polarization evidence",
         "rotation likelihood",
         "rotation-angle likelihood",
         "rotation angle likelihood",
@@ -1174,12 +1248,18 @@ def _is_primary_cmb_rotation_question(prompt: str) -> bool:
         "expansion history",
         "h0 tension",
         "h₀ tension",
+        "compare h0",
+        "compare h₀",
         "infer h0",
         "infer h₀",
         "h0 posterior",
         "h₀ posterior",
+        "h0 and dark energy",
+        "h₀ and dark energy",
         "dark-energy posterior",
         "dark energy posterior",
+        "dark-energy constraints",
+        "dark energy constraints",
         "distance posterior",
         "bao+sn+cmb",
         "bao + sn + cmb",
@@ -1286,16 +1366,28 @@ def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text
     keys = _clean_dataset_keys(dataset_keys)
     if not keys:
         return []
-    model_list = _clean_models(models)
+    prompt = text.lower()
+    rotation_keys = [key for key in keys if cmb_rotation_dataset_exists(key)]
+    non_rotation_keys = [key for key in keys if not cmb_rotation_dataset_exists(key)]
+    if _is_cmb_rotation_question(prompt) and not rotation_keys:
+        rotation_keys = default_cmb_rotation_dataset_keys()
+    if _is_primary_cmb_rotation_question(prompt) or (rotation_keys and not non_rotation_keys):
+        return [{
+            "label": "CMB rotation — isotropic beta",
+            "dataset_keys": rotation_keys,
+            "model": "isotropic_beta",
+        }]
+    matrix_keys = non_rotation_keys if rotation_keys else keys
+    model_list = [model for model in _clean_models(models) if model != "isotropic_beta"] or ["lcdm"]
     extended_models = [model for model in model_list if model != "lcdm"]
-    special_model_gap = _has_dedicated_model_gap(text.lower())
+    special_model_gap = _has_dedicated_model_gap(prompt)
     baseline_model = "lcdm" if extended_models or special_model_gap else model_list[0]
-    combos: list[tuple[str, list[str]]] = [("All selected probes", keys)]
-    bao = [key for key in keys if get_cosmology_dataset(key).probe == "bao"]
-    sn = [key for key in keys if get_cosmology_dataset(key).probe == "sn"]
-    cmb = [key for key in keys if get_cosmology_dataset(key).probe in {"cmb_compressed", "cmb_lensing"}]
-    wl = [key for key in keys if get_cosmology_dataset(key).probe == "weak_lensing"]
-    h0 = [key for key in keys if get_cosmology_dataset(key).probe == "h0_prior"]
+    combos: list[tuple[str, list[str]]] = [("All selected probes", matrix_keys)]
+    bao = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "bao"]
+    sn = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "sn"]
+    cmb = [key for key in matrix_keys if get_cosmology_dataset(key).probe in {"cmb_compressed", "cmb_lensing"}]
+    wl = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "weak_lensing"]
+    h0 = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "h0_prior"]
     if bao:
         combos.append(("BAO only", bao[:1]))
         if sn:
@@ -1325,12 +1417,18 @@ def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text
         })
     if extended_models:
         for model in extended_models:
-            matrix.append({
-                "label": f"Requested {model} branch",
-                "dataset_keys": keys,
-                "model": model,
-                "requested_model_branch": True,
-            })
+                matrix.append({
+                    "label": f"Requested {model} branch",
+                    "dataset_keys": matrix_keys,
+                    "model": model,
+                    "requested_model_branch": True,
+                })
+    if rotation_keys:
+        matrix.append({
+            "label": "CMB rotation — isotropic beta",
+            "dataset_keys": rotation_keys,
+            "model": "isotropic_beta",
+        })
     return matrix
 
 
@@ -1361,6 +1459,8 @@ def _dataset_plan_status(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def _claimable_params_for_entry(entry: dict[str, Any]) -> list[str]:
+    if isinstance(entry.get("claimable_parameters"), list):
+        return [str(param) for param in entry.get("claimable_parameters") or []]
     spec = entry.get("compressed_likelihood")
     if isinstance(spec, dict):
         return list(spec.get("parameters") or [])
@@ -1373,6 +1473,10 @@ def _non_executable_dataset_keys(dataset_keys: list[str]) -> list[str]:
     """Datasets that must not be silently approximated in a matrix cell."""
     blocked: list[str] = []
     for key in dataset_keys:
+        if cmb_rotation_dataset_exists(key):
+            if not get_cmb_rotation_dataset(key).is_executable:
+                blocked.append(key)
+            continue
         try:
             entry = get_cosmology_dataset(key).to_dict()
         except Exception:
@@ -1484,7 +1588,9 @@ def _numeric_claim_tokens(text: str) -> list[str]:
         "sigma8": r"sigma8|σ8",
         "w0": r"\bw0\b|w_0",
         "wa": r"\bwa\b|w_a",
-        "slope": r"slope|斜率|β",
+        "beta_deg": r"\b(?:beta|β|alpha|α)(?:_?deg)?\b",
+        "A_CB": r"\bA[_\s-]?CB\b",
+        "slope": r"slope|斜率",
         "scatter": r"scatter|intrinsic scatter|离散",
         "p_value": r"\bp(?:[-\s]?value)?\s*[=<>]",
     }
@@ -1677,6 +1783,8 @@ def _token_supported_by_alias(token: str, claimable: set[str]) -> bool:
         "omegam": {"omegam", "omega_m", "om0", "Ωm".lower()},
         "omega_m": {"omegam", "omega_m", "om0", "Ωm".lower()},
         "h0": {"h0", "H0".lower()},
+        "beta_deg": {"beta_deg", "beta", "β", "alpha", "α"},
+        "a_cb": {"a_cb", "acb"},
         "tension": {"tension", "s8_tension", "h0_tension", "omegam_tension"},
         "p_value": {"p_value", "pearson_p", "spearman_p"},
     }
@@ -1779,6 +1887,10 @@ def _parameter_aliases(name: str) -> set[str]:
         aliases.update({"w0", "w_0"})
     if key in {"wa", "w_a"}:
         aliases.update({"wa", "w_a"})
+    if key in {"beta_deg", "beta", "β", "alpha", "α"}:
+        aliases.update({"beta_deg", "beta", "β", "alpha", "α"})
+    if key in {"a_cb", "acb"}:
+        aliases.update({"a_cb", "acb"})
     if key.endswith("_tension"):
         aliases.add(key)
         aliases.add("tension")
@@ -1794,7 +1906,9 @@ def _numeric_value_for_token(line: str, token: str) -> float | None:
         "sigma8": r"sigma\s*_?\s*8|σ\s*_?\s*8",
         "w0": r"w\s*_?\s*0",
         "wa": r"w\s*_?\s*a",
-        "slope": r"slope|斜率|β",
+        "beta_deg": r"beta(?:_?deg)?|β|alpha(?:_?deg)?|α",
+        "a_cb": r"A\s*[_-]?\s*CB",
+        "slope": r"slope|斜率",
         "scatter": r"scatter|intrinsic scatter|离散",
         "tension": r"(?:tension|张力|σ|sigma)",
     }
@@ -1941,11 +2055,22 @@ def _dedupe_fact_claims(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _dataset_exists(key: str) -> bool:
+    if cmb_rotation_dataset_exists(key):
+        return True
     try:
         get_cosmology_dataset(key)
         return True
     except Exception:
         return False
+
+
+def _dataset_entry_for_plan(key: str) -> dict[str, Any] | None:
+    if cmb_rotation_dataset_exists(key):
+        return get_cmb_rotation_dataset(key).to_dict()
+    try:
+        return get_cosmology_dataset(key).to_dict()
+    except Exception:
+        return None
 
 
 def _clean_dataset_keys(keys: list[Any]) -> list[str]:
@@ -1958,7 +2083,7 @@ def _clean_dataset_keys(keys: list[Any]) -> list[str]:
 
 
 def _clean_models(models: list[Any]) -> list[str]:
-    allowed = {"lcdm", "wcdm", "w0wa_cdm", "ok_lcdm", "ok_wcdm", "ok_w0wa_cdm", "lcdm_mnu", "w0wa_cdm_mnu"}
+    allowed = {"lcdm", "wcdm", "w0wa_cdm", "ok_lcdm", "ok_wcdm", "ok_w0wa_cdm", "lcdm_mnu", "w0wa_cdm_mnu", "isotropic_beta"}
     result: list[str] = []
     for model in models:
         text = str(model or "").strip()

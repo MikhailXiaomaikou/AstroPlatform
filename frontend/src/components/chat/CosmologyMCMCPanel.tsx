@@ -71,11 +71,12 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
   const parameterNames = Object.keys(params);
   const usedCount = Array.isArray(result.datasets_used) ? result.datasets_used.length : undefined;
   const notRunCount = Array.isArray(result.datasets_not_run) ? result.datasets_not_run.length : undefined;
-  const compressed = result.compressed_likelihood_preliminary === true;
+  const compressed = result.compressed_likelihood_preliminary === true || result.compressed_rotation_preliminary === true;
   const warnings = Array.isArray(result.warnings) ? result.warnings.filter((item): item is string => typeof item === "string") : [];
   const exploratoryWarning = typeof result.__exploratory_warning__ === "string" ? result.__exploratory_warning__ : "";
   const blockedReason = warnings[0] || String(result.__message_to_model__ || "");
   const unavailableReason = blockedReason;
+  const panelTitle = result.model === "isotropic_beta" ? "CMB Rotation" : "Cosmology MCMC";
   const tensionsRaw = Array.isArray(result.pairwise_tensions) ? (result.pairwise_tensions as Tension[]) : [];
   const tensions = tensionsRaw
     .filter((t) => typeof t.sigma === "number" && Number.isFinite(t.sigma))
@@ -85,7 +86,7 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
   return (
     <div style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-        <strong style={{ color: "var(--color-text-primary)" }}>Cosmology MCMC</strong>
+        <strong style={{ color: "var(--color-text-primary)" }}>{panelTitle}</strong>
         <span>{String(result.model || "model?")} · {String(result.sampler || "sampler?")}</span>
         {compressed && <span style={{ fontSize: "0.72rem" }}>compressed likelihood</span>}
         <span

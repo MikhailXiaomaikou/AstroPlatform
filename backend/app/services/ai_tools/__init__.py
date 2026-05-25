@@ -1267,6 +1267,37 @@ TOOLS = [
         },
     },
     {
+        "name": "run_cmb_rotation_likelihood",
+        "description": (
+            "Run a controlled CMB polarization-rotation likelihood for registered "
+            "EB/TB data products. Version 1 supports isotropic beta only. Results "
+            "are citeable only when publication_ready=true and must be described "
+            "as compressed-rotation preliminary, not a full Planck/ACT/BICEP likelihood."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dataset_keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Registered CMB rotation dataset keys.",
+                },
+                "model": {
+                    "type": "string",
+                    "enum": ["isotropic_beta"],
+                    "description": "CMB rotation model. Version 1 supports isotropic_beta only.",
+                },
+                "priors": {
+                    "type": "object",
+                    "description": "Optional bounded prior, e.g. {\"beta_deg\": [-5, 5]}.",
+                },
+                "random_seed": {"type": "integer", "description": "Deterministic sample seed."},
+                "n_samples": {"type": "integer", "description": "Posterior sample count for display summaries."},
+            },
+            "required": ["dataset_keys", "model"],
+        },
+    },
+    {
         "name": "run_nested_sampler",
         "description": (
             "Run a controlled dynesty nested sampler on typed Gaussian likelihood "
@@ -2372,6 +2403,8 @@ async def _execute_tool_inner(
             return _exec_build_cosmology_likelihood(tool_input)
         elif tool_name == "run_cosmology_likelihood_chain":
             return _exec_run_cosmology_likelihood_chain(tool_input)
+        elif tool_name == "run_cmb_rotation_likelihood":
+            return _exec_run_cmb_rotation_likelihood(tool_input)
         elif tool_name == "run_nested_sampler":
             return _exec_run_nested_sampler(tool_input)
         elif tool_name == "evaluate_chain_diagnostics":
@@ -8552,6 +8585,36 @@ def _exec_run_cosmology_likelihood_chain(inp: dict) -> dict:
             "__message_to_model__": (
                 "Compressed cosmology likelihood execution failed. Do not quote "
                 "posterior constraints, S8/H0/Omega_m tensions, AIC/BIC, or significance."
+            ),
+        }
+
+
+def _exec_run_cmb_rotation_likelihood(inp: dict) -> dict:
+    from app.services.cmb_rotation_likelihoods import run_cmb_rotation_likelihood
+
+    try:
+        dataset_keys = inp.get("dataset_keys") or []
+        if not isinstance(dataset_keys, list):
+            raise ValueError("dataset_keys must be a list")
+        return run_cmb_rotation_likelihood(
+            dataset_keys=[str(key) for key in dataset_keys],
+            model=str(inp.get("model") or "isotropic_beta"),
+            priors=inp.get("priors") if isinstance(inp.get("priors"), dict) else None,
+            random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
+            n_samples=int(inp.get("n_samples") or 4000),
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "publication_ready": False,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "CMB rotation likelihood execution failed. Do not quote beta_deg, "
+                "alpha_deg, A_CB, EB/TB parity-odd significance, or detection claims."
             ),
         }
 
