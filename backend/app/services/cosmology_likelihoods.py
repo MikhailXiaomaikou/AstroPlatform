@@ -2679,7 +2679,7 @@ def _pantheon_plus_chi2_samples(
     """χ² contribution from Pantheon+SH0ES 1701 SNe Ia under flat w0waCDM.
 
     Model: μ_model(z) = 5·log10(D_L(z; H0, Ωm, w0, wa) [Mpc]) + 25 + (M_B - M_B_REF)
-       where D_L = (1+z)·D_M, M_B_REF = -19.253 is the SH0ES baseline, and
+       where D_L = (1+z_hel)·D_M(z_hd), M_B_REF = -19.253 is the SH0ES baseline, and
        M_B is fit as a free nuisance.  At M_B = M_B_REF + 0 the model matches
        the SH0ES-calibrated distance modulus; offsets let the SN data
        constrain (H0, M_B) jointly, breaking the H0 degeneracy when combined
@@ -2694,7 +2694,8 @@ def _pantheon_plus_chi2_samples(
     posteriors toward -1/0 in DESI+SN joint fits).
     """
     data = _load_pantheon_plus_data()
-    z = data["z_hd"]
+    z_hd = data["z_hd"]    # cosmological redshift — drives the comoving-distance integral
+    z_hel = data["z_hel"]  # heliocentric redshift — the (1+z) luminosity-distance factor
     mu_obs = data["mu"]
     cov_inv = data["cov_inv"]
     n_samples = samples.shape[0]
@@ -2712,9 +2713,11 @@ def _pantheon_plus_chi2_samples(
         wa = samples[:, parameter_order.index("wa")]
     else:
         wa = np.zeros(n_samples, dtype=float)
-    # Vectorized D_M over (z, sample) under flat w0waCDM (CPL).
-    dm_grid = _flat_de_dm_grid_vectorized(z, h0, omegam, w0, wa)  # (n_sn, n_samples)
-    dl_grid = (1.0 + z[:, None]) * dm_grid                   # (n_sn, n_samples), Mpc
+    # Vectorized D_M over (z_hd, sample) under flat w0waCDM (CPL); the
+    # luminosity-distance (1+z) factor uses z_hel per the Pantheon+ convention
+    # D_L = (1 + z_hel) · D_M(z_hd).
+    dm_grid = _flat_de_dm_grid_vectorized(z_hd, h0, omegam, w0, wa)  # (n_sn, n_samples)
+    dl_grid = (1.0 + z_hel[:, None]) * dm_grid               # (n_sn, n_samples), Mpc
     mu_model = (
         5.0 * np.log10(dl_grid) + 25.0 + (m_b[None, :] - PANTHEON_PLUS_M_B_REF)
     )
