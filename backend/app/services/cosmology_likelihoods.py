@@ -1622,11 +1622,25 @@ def run_robustness_matrix(
                 random_seed=base_seed + index,
                 n_samples=n_samples,
             )
+            # PART AD: explicit per-cell status so the UI can tell an empty
+            # cell (config-only / missing likelihood) apart from a negative
+            # scientific result. `runnable` is kept for back-compat.
+            if run.get("publication_ready"):
+                cell_status = "runnable"
+            else:
+                _as = str(run.get("analysis_status") or "").upper()
+                if "NO_COMPRESSED" in _as or "MISSING" in _as:
+                    cell_status = "missing_likelihood"
+                elif run.get("execution_status") == "not_run" or "CONFIG" in _as:
+                    cell_status = "config_only"
+                else:
+                    cell_status = "blocked"
             matrix.append({
                 "label": label,
                 "dataset_keys": keys,
                 "runnable": bool(run.get("publication_ready")),
                 "publication_ready": bool(run.get("publication_ready")),
+                "status": cell_status,
                 "result": run,
                 "warnings": run.get("warnings", []),
             })
@@ -1636,6 +1650,7 @@ def run_robustness_matrix(
                 "dataset_keys": keys,
                 "runnable": False,
                 "publication_ready": False,
+                "status": "failed",
                 "error": str(exc),
                 "error_class": exc.__class__.__name__,
             })

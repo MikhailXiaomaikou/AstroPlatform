@@ -110,6 +110,14 @@ async def health_deep():
     """
     import os
     result: dict[str, object] = {"ok": True, "components": {}}
+    # G1 (PART AD): deploy version transparency. Render injects these git env
+    # vars automatically; they read "unknown" locally. Lets a dashboard or a
+    # deploy check reconcile which commit is actually serving traffic.
+    result["version"] = {
+        "commit": os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "unknown",
+        "branch": os.getenv("RENDER_GIT_BRANCH") or os.getenv("GIT_BRANCH") or "unknown",
+        "service": os.getenv("RENDER_SERVICE_NAME") or "unknown",
+    }
 
     # DB
     try:
