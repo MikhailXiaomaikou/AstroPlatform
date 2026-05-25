@@ -1354,7 +1354,9 @@ def _run_python_code_reads_real_cache(code: str) -> bool:
     return False
 
 
-_TRUNCATED_TRAILING_PUNCT = {":", ",", "—", "–", "(", "[", "{"}
+# `=` catches an unfinished equation / assignment ("H0 =" with no value);
+# a finished equation never ends on the operator itself.
+_TRUNCATED_TRAILING_PUNCT = {":", ",", "—", "–", "(", "[", "{", "="}
 # `-` (ASCII hyphen) is intentionally NOT in this set — many sentences
 # legitimately end with it (e.g. "M-class star") — and we don't want
 # false-positive truncations on those. Em-dash and en-dash are kept
