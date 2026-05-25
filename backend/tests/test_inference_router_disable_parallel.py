@@ -56,7 +56,8 @@ async def test_anthropic_payload_disables_parallel_tool_use(monkeypatch):
     )
 
     assert result["content"] == "ok"
-    assert captured["tools"] == [_tool_spec()]
+    expected_tool = {**_tool_spec(), "cache_control": {"type": "ephemeral"}}
+    assert captured["tools"] == [expected_tool]
     assert captured["tool_choice"] == {
         "type": "auto",
         "disable_parallel_tool_use": True,
