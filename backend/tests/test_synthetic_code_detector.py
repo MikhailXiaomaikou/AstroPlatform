@@ -292,3 +292,102 @@ def test_still_catches_np_random_after_inert_check():
     code = 'import numpy as np\nx = np.random.normal(0, 1, 100)'
     r = analyze(code)
     assert r.verdict in ("synthetic", "suspicious")
+
+
+# ── PART AD: RNG-evasion + date_range time axis ──────────────────────
+
+
+def test_torch_randn_without_real_data_is_flagged():
+    """PART AD: torch RNG must be caught like np.random (was an evasion gap)."""
+    code = """
+import torch
+# fabricate a mock spectrum based on known parameters
+flux = torch.randn(1000) * 0.05 + 1.0
+print(float(flux.mean()))
+"""
+    r = analyze(code)
+    assert r.has_np_random is True
+    assert r.verdict in ("synthetic", "suspicious")
+
+
+def test_getattr_dynamic_rng_is_flagged():
+    """PART AD: getattr(np, 'random') dynamic dodge must be caught."""
+    code = """
+import numpy as np
+# generate fake data based on known parameters
+rng = getattr(np, "random")
+x = rng.normal(0, 1, 500)
+print(x.mean())
+"""
+    r = analyze(code)
+    assert r.has_np_random is True
+    assert r.verdict in ("synthetic", "suspicious")
+
+
+def test_pd_date_range_time_axis_is_flagged():
+    """PART AD: pandas date_range building a fabricated time axis was missed
+    entirely by the linspace/arange-only detector."""
+    code = """
+import numpy as np
+import pandas as pd
+# simulate a realistic light curve based on known parameters
+t = pd.date_range("2020-01-01", periods=5000, freq="min")
+flux = np.random.normal(1.0, 0.01, len(t))
+print(len(t))
+"""
+    r = analyze(code)
+    assert r.has_time_linspace is True
+    assert r.has_np_random is True
+    assert r.verdict == "synthetic"
+
+
+def test_torch_rng_with_real_data_not_hard_synthetic():
+    """PART AD: torch RNG alongside a real reader must not be hard-synthetic
+    (avoid误伤 a genuine bootstrap on real data)."""
+    code = """
+import torch
+data = get_adql_results()
+idx = torch.randint(0, len(data), (len(data),))
+vals = [data[int(i)]['parallax'] for i in idx]
+print(sum(vals) / len(vals))
+"""
+    r = analyze(code)
+    assert r.reads_real_data is True
+    assert r.verdict in ("clean", "suspicious")
+
+
+def test_real_csv_with_emcee_fit_is_clean():
+    """PART AD / 改动5: a user CSV read via pd.read_csv + a genuine emcee fit
+    is the real-fit-mislabelled-as-synthetic case — must stay clean."""
+    code = """
+import pandas as pd
+import numpy as np
+import emcee
+df = pd.read_csv("my_measurements.csv")
+y = df["flux"].to_numpy()
+def log_prob(theta):
+    return -0.5 * np.sum((y - theta[0]) ** 2)
+sampler = emcee.EnsembleSampler(16, 1, log_prob)
+sampler.run_mcmc(np.random.randn(16, 1), 500)
+print(sampler.get_chain().mean())
+"""
+    r = analyze(code)
+    assert r.reads_real_data is True
+    assert r.actual_mcmc_usage is True
+    assert r.verdict == "clean"
+
+
+def test_real_csv_then_np_random_fabrication_is_flagged():
+    """PART AD / 改动5: reading a real CSV does NOT license fabricating extra
+    rows with np.random — keyword + random + no sampler must be flagged."""
+    code = """
+import pandas as pd
+import numpy as np
+df = pd.read_csv("my_measurements.csv")
+# generate synthetic data based on known parameters to fill the gaps
+extra = np.random.normal(1.0, 0.1, 5000)
+print(extra.mean())
+"""
+    r = analyze(code)
+    assert r.reads_real_data is True
+    assert r.verdict in ("suspicious", "synthetic")
