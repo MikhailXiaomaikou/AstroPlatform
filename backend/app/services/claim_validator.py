@@ -107,6 +107,14 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         rf"\b(?:S_?8)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
         re.I,
     )),
+    ("cmb_rotation_beta", re.compile(
+        rf"\b(?:beta(?:_?deg)?|β|alpha(?:_?deg)?|α)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\s*(?:deg|degree|degrees|°)?\b",
+        re.I,
+    )),
+    ("cmb_rotation_acb", re.compile(
+        rf"\b(?:A[_\s-]?CB|A_\{{CB\}})[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
+        re.I,
+    )),
     ("significance_sigma", re.compile(
         rf"\b{_NUM}\s*(?:σ|sigma)\b",
         re.I,
@@ -1428,7 +1436,11 @@ def _cosmology_publication_ready_available(tool_results: Any) -> bool:
     """Whether a cosmology posterior tool produced citeable current-turn results."""
     for entry in tool_results if isinstance(tool_results, list) else [tool_results]:
         tool_name, result = _entry_tool_and_result(entry)
-        if tool_name not in {"run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix"}:
+        if tool_name not in {
+            "run_cosmology_likelihood_chain",
+            "run_cosmology_robustness_matrix",
+            "run_cmb_rotation_likelihood",
+        }:
             continue
         if _payload_is_claimable_success(tool_name, result):
             return True
@@ -1792,6 +1804,7 @@ def _payload_is_claimable_success(tool_name: str | None, result: dict[str, Any] 
         "run_cobaya_cosmology",
         "run_cosmology_likelihood_chain",
         "run_cosmology_robustness_matrix",
+        "run_cmb_rotation_likelihood",
     }:
         # publication_ready is True only for chain_tier="publication".
         # chain_tier="exploratory" (2026-05-20) returns publication_ready=False
@@ -1848,6 +1861,7 @@ _CITABLE_ANALYSIS_TOOLS: frozenset[str] = frozenset({
     "query_gaia_cluster",
     "run_cosmology_likelihood_chain",
     "run_cosmology_robustness_matrix",
+    "run_cmb_rotation_likelihood",
     "run_adql",
     "run_cobaya_cosmology",
     "run_python",

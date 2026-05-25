@@ -75,10 +75,42 @@ describe("CosmologyMCMCPanel", () => {
       />,
     );
 
+    expect(screen.getByText("Cosmology MCMC")).toBeInTheDocument();
     expect(screen.getByText("publication-ready")).toBeInTheDocument();
     expect(screen.getByText("compressed likelihood")).toBeInTheDocument();
     expect(screen.getByText(/Preliminary compressed-Gaussian result/)).toBeInTheDocument();
     expect(screen.getByText(/1 selected dataset/)).toBeInTheDocument();
+  });
+
+  it("renders CMB rotation beta posterior as a publication-ready compressed result", () => {
+    render(
+      <CosmologyMCMCPanel
+        result={{
+          sampler: "compressed_beta_gaussian",
+          model: "isotropic_beta",
+          publication_ready: true,
+          chain_tier: "publication",
+          compressed_rotation_preliminary: true,
+          datasets_used: [{ key: "unit_test_cmb_rotation" }],
+          chain_diagnostics: { overall_status: "analytic_gaussian" },
+          parameters: {
+            beta_deg: {
+              median: 0.35,
+              hdi_low_94: 0.16,
+              hdi_high_94: 0.54,
+              rhat: 1,
+              ess_bulk: 1024,
+              status: "analytic_gaussian",
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("CMB Rotation")).toBeInTheDocument();
+    expect(screen.getByText("publication-ready")).toBeInTheDocument();
+    expect(screen.getByText("beta_deg")).toBeInTheDocument();
+    expect(screen.getByText("0.35")).toBeInTheDocument();
   });
 
   it("shows no-executable-likelihood reason instead of convergence warning when no parameters exist", () => {

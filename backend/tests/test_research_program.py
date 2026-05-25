@@ -87,14 +87,16 @@ def test_cmb_polarization_rotation_does_not_use_distance_priors() -> None:
 
     assert "CMB_POLARIZATION_ROTATION" in plan["required_probes"]
     assert "planck2018_compressed" not in plan["candidate_dataset_keys"]
-    assert plan["executable_level"] == "not_available"
+    assert "planck_pr4_ebtb_rotation" in plan["candidate_dataset_keys"]
+    assert plan["executable_level"] == "config_only"
     assert any("EB/TB" in gap for gap in plan["blocking_gaps"])
 
     matrix = run_research_matrix(research_plan=plan)
 
     assert matrix["publication_ready"] is False
     assert matrix["ready_cells"] == 0
-    assert matrix["matrix"] == []
+    assert matrix["matrix"][0]["model"] == "isotropic_beta"
+    assert matrix["matrix"][0]["publication_ready"] is False
 
 
 def test_cmb_polarization_rotation_hyphenated_prompt_does_not_use_distance_priors() -> None:
@@ -109,13 +111,14 @@ def test_cmb_polarization_rotation_hyphenated_prompt_does_not_use_distance_prior
     plan = plan_research_program(question=prompt)["research_plan"]
 
     assert "CMB_POLARIZATION_ROTATION" in plan["required_probes"]
-    assert plan["candidate_dataset_keys"] == []
+    assert "act_dr6_ebtb_rotation" in plan["candidate_dataset_keys"]
     assert any("rotation-angle likelihood" in gap for gap in plan["blocking_gaps"])
 
     matrix = run_research_matrix(research_plan=plan)
 
     assert matrix["publication_ready"] is False
     assert matrix["ready_cells"] == 0
+    assert matrix["matrix"][0]["model"] == "isotropic_beta"
 
 
 def test_cmb_rotation_prompt_with_late_time_dataset_names_does_not_run_bao_matrix() -> None:
@@ -132,14 +135,44 @@ def test_cmb_rotation_prompt_with_late_time_dataset_names_does_not_run_bao_matri
     plan = plan_research_program(question=prompt)["research_plan"]
 
     assert plan["required_probes"] == ["CMB_POLARIZATION_ROTATION"]
-    assert plan["candidate_dataset_keys"] == []
+    assert "planck_pr4_ebtb_rotation" in plan["candidate_dataset_keys"]
     assert any("rotation-angle likelihood" in gap for gap in plan["blocking_gaps"])
 
     matrix = run_research_matrix(research_plan=plan)
 
     assert matrix["publication_ready"] is False
     assert matrix["ready_cells"] == 0
-    assert matrix["matrix"] == []
+    assert matrix["matrix"][0]["model"] == "isotropic_beta"
+
+
+def test_mixed_cmb_rotation_and_late_time_cosmology_preserves_both_workflows() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to test CMB polarization rotation and also compare H0 and dark "
+        "energy constraints with BAO, SN, CMB, and SH0ES."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+
+    assert "CMB_POLARIZATION_ROTATION" in plan["required_probes"]
+    assert "BAO" in plan["required_probes"]
+    assert "SN" in plan["required_probes"]
+    assert "H0" in plan["required_probes"]
+    assert "planck_pr4_ebtb_rotation" in plan["candidate_dataset_keys"]
+    assert "planck2018_compressed" in plan["candidate_dataset_keys"]
+    assert "lcdm" in plan["model_families"]
+    assert "isotropic_beta" not in plan["model_families"]
+
+    labels = [cell["label"] for cell in plan["proposed_experiment_matrix"]]
+    assert any("BAO + SN + CMB" in label for label in labels)
+    assert any("CMB rotation" in label for label in labels)
+
+    matrix = run_research_matrix(research_plan=plan, n_samples=512)
+
+    assert matrix["matrix_size"] > 1
+    assert any(cell["model"] == "lcdm" for cell in matrix["matrix"])
+    assert any(cell["model"] == "isotropic_beta" for cell in matrix["matrix"])
 
 
 def test_cmb_rotation_matrix_execution_rejects_forced_late_time_dataset_keys() -> None:
@@ -161,9 +194,81 @@ def test_cmb_rotation_matrix_execution_rejects_forced_late_time_dataset_keys() -
 
     assert matrix["publication_ready"] is False
     assert matrix["ready_cells"] == 0
-    assert matrix["matrix"] == []
+    assert matrix["matrix"][0]["dataset_keys"]
     assert "wrong routing" in matrix["failure_categories"]
     assert any("not valid substitutes" in warning for warning in matrix["warnings"])
+
+
+def test_cmb_rotation_runner_supports_publication_ready_fixture(monkeypatch) -> None:
+    from app.services import cmb_rotation_likelihoods as cr
+    from app.services.research_program import run_research_matrix, verify_research_facts
+
+    fixture = cr.CMBRotationDatasetEntry(
+        key="unit_test_cmb_rotation",
+        display_name="Unit-test EB/TB rotation likelihood",
+        version="test fixture",
+        observables=("EB", "TB", "beta_deg"),
+        source_url="https://example.invalid/cmb-rotation-fixture",
+        citations=(cr.CMBRotationCitation(label="Unit Test Rotation Fixture", year=2026),),
+        covariance_provided=True,
+        calibration_prior={"type": "gaussian", "sigma_deg": 0.05},
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=cr.CMBRotationCompressedSpec(
+            parameter="beta_deg",
+            mean=0.35,
+            sigma=0.10,
+            source_locator="unit test compressed EB/TB beta likelihood",
+            approximation="one-dimensional Gaussian beta posterior",
+        ),
+    )
+    monkeypatch.setitem(cr.CMB_ROTATION_DATASETS, fixture.key, fixture)
+
+    result = cr.run_cmb_rotation_likelihood(
+        dataset_keys=[fixture.key],
+        model="isotropic_beta",
+        random_seed=7,
+        n_samples=1024,
+    )
+
+    assert result["publication_ready"] is True
+    assert result["analysis_status"] == "CMB_ROTATION_CHAIN_READY"
+    assert abs(result["parameters"]["beta_deg"]["median"] - 0.35) < 0.02
+
+    matrix = run_research_matrix(
+        question=(
+            "I want to test CMB polarization rotation with EB/TB correlations "
+            "and an instrument-angle prior."
+        ),
+        dataset_keys=[fixture.key],
+        n_samples=1024,
+    )
+
+    assert matrix["publication_ready"] is True
+    assert matrix["ready_cells"] == 1
+    assert matrix["matrix"][0]["result"]["parameters"]["beta_deg"]["median"]
+
+    fact = verify_research_facts(
+        tool_results=[{"tool": "run_cmb_rotation_likelihood", "result": result}],
+        final_reply="Compressed-likelihood preliminary: beta_deg = 0.35 deg.",
+    )
+
+    assert fact["status"] == "passed"
+    assert fact["unsupported_claim_count"] == 0
+
+
+def test_cmb_rotation_fact_check_blocks_beta_without_runner() -> None:
+    from app.services.research_program import verify_research_facts
+
+    fact = verify_research_facts(
+        tool_results=[],
+        final_reply="The CMB polarization rotation angle beta_deg = 0.35 deg.",
+    )
+
+    assert fact["status"] == "blocked"
+    assert any(
+        claim["status"] == "unsupported" and claim["kind"] == "numeric"
+        for claim in fact["claims"]
+    )
 
 
 def test_bmode_rotation_field_prompts_record_scope_gap() -> None:
@@ -178,7 +283,7 @@ def test_bmode_rotation_field_prompts_record_scope_gap() -> None:
         plan = plan_research_program(question=prompt)["research_plan"]
 
         assert "CMB_POLARIZATION_ROTATION" in plan["required_probes"]
-        assert plan["candidate_dataset_keys"] == []
+        assert plan["candidate_dataset_keys"]
         assert any("rotation-angle likelihood" in gap for gap in plan["blocking_gaps"])
 
         matrix = run_research_matrix(research_plan=plan)

@@ -564,6 +564,7 @@ function ActionCardInner({
     build_cosmology_likelihood: "Likelihood Builder",
     build_cosmology_robustness_matrix: "Robustness Matrix",
     run_cosmology_likelihood_chain: "Cosmology Chain",
+    run_cmb_rotation_likelihood: "CMB Rotation",
     run_cosmology_robustness_matrix: "Robustness Run",
     run_nested_sampler: "Nested Sampler",
     evaluate_chain_diagnostics: "Chain Diagnostics",
@@ -631,6 +632,7 @@ function ActionCardInner({
     build_cosmology_likelihood: "🧩",
     build_cosmology_robustness_matrix: "▦",
     run_cosmology_likelihood_chain: "📉",
+    run_cmb_rotation_likelihood: "🌀",
     run_cosmology_robustness_matrix: "▦",
     run_nested_sampler: "📉",
     evaluate_chain_diagnostics: "📋",
@@ -1822,6 +1824,7 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     || toolName === "run_cobaya_cosmology"
     || toolName === "get_cosmology_run_status"
     || toolName === "run_cosmology_likelihood_chain"
+    || toolName === "run_cmb_rotation_likelihood"
     || toolName === "run_nested_sampler"
     || toolName === "evaluate_chain_diagnostics"
   ) {
