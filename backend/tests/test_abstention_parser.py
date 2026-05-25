@@ -11,6 +11,7 @@ from app.api.chat import (
     _parse_abstention_tag,
     _classify_abstention_reason,
     _render_abstention_card,
+    _reply_looks_truncated,
     _sanitize_tools_returned_nothing,
 )
 
@@ -200,3 +201,13 @@ def test_rendered_card_without_rationale_includes_default_prose():
     }
     card = _render_abstention_card(attrs, "no_tools")
     assert "No numerical claims" in card
+
+
+# ---------- Truncation shape (C3) ----------
+
+
+def test_truncation_detects_trailing_equals():
+    # "H0 =" with no value is an unfinished equation → truncated.
+    assert _reply_looks_truncated("The best-fit value is H0 =") is True
+    # a finished equation must not trip.
+    assert _reply_looks_truncated("The best-fit value is H0 = 70 km/s/Mpc.") is False
