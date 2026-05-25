@@ -35,6 +35,7 @@ from app.api.settings import router as settings_router
 from app.api.scheduler import router as scheduler_router
 from app.api.sessions import router as sessions_router, shared_router as shared_sessions_router
 from app.api.team import router as team_router
+from app.api.user_tools import router as user_tools_router
 from app.api.visualization import router as viz_router
 from app.api.citation_graph import router as citation_graph_router
 from app.api.citations import router as citations_router
@@ -637,6 +638,7 @@ app.include_router(sessions_router)
 app.include_router(settings_router)
 app.include_router(shared_sessions_router)
 app.include_router(team_router)
+app.include_router(user_tools_router)
 app.include_router(viz_router)
 app.include_router(workspace_router)
 app.include_router(provenance_router)

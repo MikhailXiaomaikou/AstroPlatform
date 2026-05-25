@@ -1,9 +1,13 @@
 import { useState } from "react";
 import SettingsPage from "../Settings/SettingsPage";
 import ResearchHistoryPage from "../ResearchHistory/ResearchHistoryPage";
+import UserToolsPage from "../UserTools/UserToolsPage";
 
 export default function AccountPage() {
-  const [tab, setTab] = useState<"settings" | "research">("settings");
+  const [tab, setTab] = useState<"settings" | "research" | "tools">(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    return requested === "tools" || requested === "research" ? requested : "settings";
+  });
 
   return (
     <div className="account-page">
@@ -21,8 +25,18 @@ export default function AccountPage() {
         >
           Research Profile
         </button>
+        <button
+          className={`page-tab${tab === "tools" ? " active" : ""}`}
+          onClick={() => setTab("tools")}
+        >
+          User Tools
+        </button>
       </div>
-      {tab === "settings" ? <SettingsPage /> : <ResearchHistoryPage />}
+      {tab === "settings"
+        ? <SettingsPage />
+        : tab === "tools"
+          ? <UserToolsPage />
+          : <ResearchHistoryPage />}
     </div>
   );
 }
