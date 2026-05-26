@@ -1,13 +1,23 @@
 # Standard Astro
 
-> **Currently shipping three active research modules: observational cosmology,
-> solar-system objects, and exoplanets.** The runtime focus is selected per
-> process via `ASTRO_RESEARCH_FOCUS` (defaults to `cosmology`; set to
-> `solar_system` for the asteroid / comet / NEO workflow or `exoplanet` for
-> the transit / RV / equilibrium-temperature workflow). All other domain
-> modules (stellar, AGN, X-ray, pulsars, galaxy morphology, image reduction,
-> etc.) live under `backend/app/prompts/modules/_dormant_*` with their tools
-> hidden from the LLM until they are promoted.
+> **Validated and usable today: observational cosmology and solar-system objects.**
+> These two modules have been through blind-test validation (cosmology across
+> 50+ paper-derived cases, solar-system across a 20-case round) and are what the
+> platform actually stands behind.
+>
+> **Experimental: exoplanets.** The exoplanet module (transit / RV /
+> equilibrium-temperature workflow) is wired up and selectable via
+> `ASTRO_RESEARCH_FOCUS=exoplanet`, but has **not** been through blind-test
+> validation yet — treat its outputs as experimental.
+>
+> **Planned, not yet started:** every other domain module (stellar, AGN, X-ray,
+> pulsars, galaxy morphology, image reduction, etc.) lives under
+> `backend/app/prompts/modules/_dormant_*` with its tools hidden from the LLM
+> until it is promoted.
+>
+> Runtime focus is selected per process via `ASTRO_RESEARCH_FOCUS` (defaults to
+> `cosmology`; `solar_system` for the asteroid / comet / NEO workflow,
+> `exoplanet` for the experimental transit / RV workflow).
 
 AI-native astronomy research platform for archive discovery, analysis,
 statistical inference, provenance tracking, collaboration, and paper export.
@@ -28,7 +38,7 @@ default. A draft becomes publicly readable only after the owner explicitly uses
 | Provenance | Tool results carry citation, archive version, field bibcodes, query hashes, run IDs, and acknowledgement metadata. |
 | Cosmology | Dataset registry, registered data-product loader, research planner, likelihood config builder, compressed posterior runner, controlled nested sampler, explicit chain diagnostics, evidence graph, and robustness matrix. |
 | Solar System | Asteroid / comet / NEO workflow: MPC + JPL Horizons + JPL SBDB + Sentry-II + DAMIT shape-model lookups, H–G magnitude reduction, Afρ dust production, NEATM thermal diameter/albedo fits, Öpik-style NEO impact-probability scaling, and Bus-DeMeo / SDSS-colour taxonomic classification. **M0 limits**: deterministic single-value workflow (no research matrix / evidence graph), single-band NEATM, 11-class Bus-DeMeo, MPC→SBDB/Horizons fallback. |
-| Exoplanet | Transit + RV workflow: NASA Exoplanet Archive (`pscomppars`) + Confirmed Planets queries, TIC v8 target lookups, TESS light-curve retrieval, trapezoidal transit fitting (with batman/pytransit recommended for limb-darkened publication fits), Mandel & Agol-style transit-depth + Seager & Mallén-Ornelas geometry helpers, equilibrium-temperature and planet-density computations, and the legacy `fit_rv_orbit` Keplerian RV fitter. |
+| Exoplanet *(experimental — not yet blind-test validated)* | Transit + RV workflow: NASA Exoplanet Archive (`pscomppars`) + Confirmed Planets queries, TIC v8 target lookups, TESS light-curve retrieval, trapezoidal transit fitting (with batman/pytransit recommended for limb-darkened publication fits), Mandel & Agol-style transit-depth + Seager & Mallén-Ornelas geometry helpers, equilibrium-temperature and planet-density computations, and the legacy `fit_rv_orbit` Keplerian RV fitter. |
 | Modular focus gate | Three active prompt modules (`cosmology`, `solar_system`, `exoplanet`) plus 12 dormant modules. `prompt_loader` assembles a focus-aware SYSTEM_PROMPT (base + core + active module) and a per-focus tool allowlist, so non-focus tools are physically invisible to the LLM. |
 | Research infrastructure | Build paper candidate pools, mine papers for ToolSpecs, run 20-paper local mining rounds, build a tool ontology, identify platform gaps, and rank implementation queues before adding new runners. |
 | Spectral measurements | Literature-table rows can be validated as fit-ready spectral measurements before line-relation fitting. |

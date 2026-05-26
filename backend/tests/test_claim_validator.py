@@ -1073,3 +1073,94 @@ def test_partial_failure_fabricated_number_still_blocked():
     ]
     r = validate_claims("Based on the literature, the redshift is z = 2.45.", tool_results)
     assert not r.ok
+
+
+# -------------------- P0-b: power-of-ten scientific notation --------------------
+
+
+def test_normalize_sci_notation_basic_forms():
+    from app.services.claim_validator import _normalize_sci_notation
+    assert _normalize_sci_notation("3.5 × 10^8") == "3.5e8"
+    assert _normalize_sci_notation("3.5 x 10^8") == "3.5e8"
+    assert _normalize_sci_notation("3.5·10**8") == "3.5e8"
+    assert _normalize_sci_notation("1.2 × 10^-3") == "1.2e-3"
+    # superscript exponent forms
+    assert _normalize_sci_notation("3.5 × 10⁸") == "3.5e8"
+    assert _normalize_sci_notation("1.2 × 10⁻³") == "1.2e-3"
+    # bare power of ten → implicit mantissa 1
+    assert _normalize_sci_notation("about 10^8 M_sun") == "about 1e8 M_sun"
+
+
+def test_normalize_sci_notation_leaves_prose_untouched():
+    from app.services.claim_validator import _normalize_sci_notation
+    # "x" not preceded by a number is not a product sign
+    assert _normalize_sci_notation("box 10 stars") == "box 10 stars"
+    # "2 x 10 stars" has no ^/** exponent marker after 10 → not sci-notation
+    assert _normalize_sci_notation("2 x 10 stars") == "2 x 10 stars"
+    # plain e-notation is already understood by _NUM, left as-is
+    assert _normalize_sci_notation("1.2e-3 mas") == "1.2e-3 mas"
+
+
+def test_extract_power_of_ten_mass_keeps_full_value():
+    # Regression for the "mass_solar parsed 3.5 × 10^8 as 8.0" bug.
+    claims = extract_claims("The galaxy mass is 3.5 × 10^8 M_sun.")
+    vals = [c.value for c in claims if c.label == "mass_solar"]
+    assert any(v == pytest.approx(3.5e8) for v in vals), vals
+    assert 8.0 not in vals  # the old broken extraction must be gone
+
+
+def test_extract_power_of_ten_xray_luminosity():
+    claims = extract_claims("AGN L_X = 1.5 × 10^44 erg/s reported.")
+    assert any(c.value == pytest.approx(1.5e44) for c in claims)
+
+
+def test_power_of_ten_fabrication_is_flagged():
+    # universe has 4.2e8; reply claims 3.5 × 10^8 (wrong) → must be flagged
+    # now that the full value (not the bare exponent 8) is extracted.
+    tool_results = [{"result": {"mass": 4.2e8}}]
+    r = validate_claims("The mass is 3.5 × 10^8 M_sun.", tool_results)
+    assert not r.ok
+
+
+def test_power_of_ten_correct_value_passes():
+    tool_results = [{"result": {"mass": 3.5e8}}]
+    r = validate_claims("The mass is 3.5 × 10^8 M_sun.", tool_results)
+    assert r.ok
+
+
+# -------------------- P0-a: free-text fields don't pollute the universe ------
+
+
+def test_freetext_banner_numbers_excluded_from_universe():
+    from app.services.claim_validator import _iter_numeric_values
+    payload = {
+        "__message_to_model__": "Try a narrower TOP 5000 query within 365 days.",
+        "__suggested_next_step__": "Re-run with radius 0.5 deg.",
+        "result": {"parallax": 7.353},
+    }
+    universe = set(_iter_numeric_values(payload))
+    assert 7.353 in universe        # real data value still harvested
+    assert 5000 not in universe     # banner prose numbers excluded
+    assert 365 not in universe
+    assert 0.5 not in universe
+
+
+def test_fabrication_cannot_launder_via_banner_text():
+    # A failed tool's banner mentions "5000"; the reply must not be able to
+    # cite 5000 as a result just because it appears in injected prose.
+    tool_results = [
+        {"tool": "run_adql",
+         "result": {"__tool_status__": "EMPTY", "row_count": 0,
+                    "__message_to_model__": "0 rows; try TOP 5000."}},
+    ]
+    r = validate_claims("We found 5000 member stars.", tool_results)
+    assert not r.ok
+
+
+def test_data_rows_still_populate_universe():
+    # Regression guard: P0-a must NOT strip real numeric data values that
+    # happen to sit in nested rows.
+    from app.services.claim_validator import _iter_numeric_values
+    payload = {"result": {"rows": [{"mag": 12.3}, {"mag": 13.1}]}}
+    universe = set(_iter_numeric_values(payload))
+    assert 12.3 in universe and 13.1 in universe

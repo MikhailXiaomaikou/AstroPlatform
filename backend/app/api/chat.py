@@ -4241,15 +4241,42 @@ async def _run_agent_loop(
                 })
                 soft_deadline_reminded = True
 
-        response = await _llm_messages_create(
-            system=system_this_call,
-            messages=working_messages,
-            tools=visible_tools,
-            provider_api_keys=provider_api_keys,
-            agent_name=agent_name,
-            preferred_backend=preferred_backend,
-            model_profile=model_profile,
-        )
+        try:
+            response = await _llm_messages_create(
+                system=system_this_call,
+                messages=working_messages,
+                tools=visible_tools,
+                provider_api_keys=provider_api_keys,
+                agent_name=agent_name,
+                preferred_backend=preferred_backend,
+                model_profile=model_profile,
+            )
+        except InferenceError as exc:
+            # P0 (2026-05-26): tools may have completed successfully but the
+            # final LLM synthesis call failed (all configured backends down).
+            # Do not return an empty answer — emit a deterministic
+            # tool-grounded summary built from the results already gathered.
+            _synthesis_fallback = (
+                _research_tool_grounded_summary(all_tool_results)
+                or _line_lfr_tool_grounded_summary(all_tool_results)
+                or _statistics_tool_grounded_summary(all_tool_results)
+                or _cosmology_tool_grounded_summary(all_tool_results)
+                or ""
+            )
+            if not _synthesis_fallback.strip():
+                raise
+            logger.warning(
+                "Agent loop: synthesis backend failed (%s); emitting "
+                "tool-grounded fallback. tool_results=%d",
+                exc, len(all_tool_results),
+            )
+            text_parts.append(
+                "The research tools completed, but the model's final language "
+                "synthesis failed (all configured AI backends were "
+                "unavailable). Below is the tool-grounded summary of what ran; "
+                "no unsupported conclusion is made.\n\n" + _synthesis_fallback
+            )
+            break
 
         text = str(response.get("content", "") or "")
         tool_calls_in_turn: list[dict] = list(response.get("tool_calls") or [])

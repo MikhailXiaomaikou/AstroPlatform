@@ -527,6 +527,45 @@ def _strip_thousands_separators(text: str) -> str:
     return text
 
 
+# P0-b (2026-05-26): the model and astronomers routinely write large / small
+# magnitudes as "A × 10^B" / "A x 10^B" / "A·10**B" / "A × 10⁸" (superscript)
+# rather than the "AeB" form `_NUM` understands.  Without this, a claim like
+# "3.5 × 10^8 M_sun" is parsed by the mass_solar pattern as the bare exponent
+# digit (8), so the real value 3.5e8 escapes the numeric gate entirely.  The
+# module docstring already promised "1.2 × 10^-3" support; this implements it.
+# We rewrite the power-of-ten form into equivalent e-notation so every
+# existing pattern keeps working unchanged.  Pure e-notation (1.2e-3) is
+# already handled by `_NUM` and is left untouched.
+_SUPERSCRIPT_DIGITS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
+_SCI_SUPERSCRIPT = re.compile(r"10\s*([⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+)")
+# mantissa × 10^exp → mantissa e exp.  Product sign: × / x / X / · / ∙ / ⋅ / *.
+# Exponent introduced by ^ or **.  The mantissa must be a number, so prose
+# like "box 10^3" (x not preceded by a digit) never matches.
+_SCI_MANTISSA_POWER = re.compile(
+    r"([-+]?\d+(?:\.\d+)?)\s*[×✕⨯xX·∙⋅*]\s*10\s*(?:\^|\*\*)\s*([-+]?\d+)"
+)
+# bare 10^exp with an implicit mantissa of 1 ("~10^8 M_sun")
+_SCI_BARE_POWER = re.compile(r"(?<![\d.eE])10\s*(?:\^|\*\*)\s*([-+]?\d+)")
+
+
+def _normalize_sci_notation(text: str) -> str:
+    """Rewrite power-of-ten notation into e-notation that ``_NUM`` understands.
+
+    ``3.5 × 10^8`` / ``3.5 x 10^8`` / ``3.5·10**8`` / ``3.5 × 10⁸`` all become
+    ``3.5e8``; a bare ``10^8`` / ``10⁸`` becomes ``1e8``.  Pure ``e``-notation
+    (``1.2e-3``) is already understood by ``_NUM`` and is left untouched.
+    """
+    # 1) superscript exponent → caret form: "10⁻³" → "10^-3"
+    text = _SCI_SUPERSCRIPT.sub(
+        lambda m: "10^" + m.group(1).translate(_SUPERSCRIPT_DIGITS), text
+    )
+    # 2) mantissa × 10^exp → mantissa e exp
+    text = _SCI_MANTISSA_POWER.sub(r"\1e\2", text)
+    # 3) leftover bare 10^exp → 1e exp
+    text = _SCI_BARE_POWER.sub(r"1e\1", text)
+    return text
+
+
 def extract_claims(text: str) -> list[Claim]:
     """Scan a reply for astronomical numeric claims.
 
@@ -543,6 +582,7 @@ def extract_claims(text: str) -> list[Claim]:
     """
     text = _strip_markdown_code(text)
     text = _strip_thousands_separators(text)
+    text = _normalize_sci_notation(text)
     claims: list[Claim] = []
     seen: set[tuple[int, int, float]] = set()
     for label, pattern in _PATTERNS:
@@ -665,6 +705,30 @@ _METADATA_KEYS_BLACKLIST: frozenset[str] = frozenset({
 })
 
 
+# P0-a (2026-05-26): free-text / diagnostic fields carry prose numbers (years,
+# version strings, banner text, suggested next steps) that are NOT
+# observational values.  Harvesting digits from them inflates the numeric
+# universe, and a large universe lets a fabricated claim accidentally match
+# some unrelated number within the ±1 % tolerance.  Root offenders are the
+# result_provenance banner fields (`__message_to_model__`,
+# `__suggested_next_step__`, `__partial_output__`) injected on every
+# EMPTY/FAILED tool, plus generic prose keys.  We skip digit extraction from
+# the STRING value of these keys only — numeric values and nested data
+# structures under them (rare) are still walked, so real data rows that happen
+# to live under, say, `details` are not lost.
+_FREETEXT_KEYS: frozenset[str] = frozenset({
+    # result_provenance banner fields
+    "__message_to_model__", "__suggested_next_step__", "__partial_output__",
+    "__do_not_claim__",
+    # generic prose / diagnostic fields
+    "message", "msg", "note", "notes", "error", "error_message",
+    "detail", "details", "rationale", "explanation", "reason",
+    "suggestion", "suggestions", "description", "summary", "text",
+    "markdown", "banner", "warning", "warnings", "hint", "hints",
+    "comment", "comments", "title", "label", "caption", "guidance",
+})
+
+
 def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Iterable[float]:
     """Yield every finite numeric scalar from claimable tool payloads.
 
@@ -687,14 +751,22 @@ def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Ite
             key_str = str(key).lower() if not isinstance(key, str) else key.lower()
             if key_str in _METADATA_KEYS_BLACKLIST:
                 continue
+            # P0-a: don't harvest prose digits from free-text field strings
+            # (banner text, error messages, suggestions).  Nested structures
+            # and numeric values under these keys are still walked.
+            if key_str in _FREETEXT_KEYS and isinstance(val, str):
+                continue
             yield from _iter_numeric_values(val)
     elif isinstance(payload, list):
         for val in payload:
             yield from _iter_numeric_values(val)
     elif isinstance(payload, str):
         # A tool may serialise numbers inside a string (common for CSV /
-        # preview rows).  Extract float-looking tokens cheaply.
-        for token in re.findall(r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?", payload):
+        # preview rows).  Extract float-looking tokens cheaply.  P0-b: also
+        # normalise "A × 10^B" power-of-ten forms so a cached "3.5 × 10^8"
+        # data value lands in the universe in the same shape extract_claims sees.
+        normalized = _normalize_sci_notation(payload)
+        for token in re.findall(r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?", normalized):
             try:
                 v = float(token)
             except ValueError:

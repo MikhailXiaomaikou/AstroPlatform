@@ -335,9 +335,11 @@ async def get_or_compute(
                 try:
                     result = await compute()
                     backend.set(key, result, ttl)
-                    fut.set_result(result)
+                    if not fut.done():
+                        fut.set_result(result)
                 except Exception as exc:
-                    fut.set_exception(exc)
+                    if not fut.done():
+                        fut.set_exception(exc)
                 finally:
                     _inflight.pop(key, None)
 
