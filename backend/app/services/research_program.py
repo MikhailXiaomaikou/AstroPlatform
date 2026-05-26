@@ -547,6 +547,9 @@ def export_research_report(
     citations = _report_citations(tool_results)
     manifest = _report_reproducibility_manifest(tool_results)
     fact_report = _latest_fact_check_report(tool_results)
+    fact_blocked = (
+        isinstance(fact_report, dict) and str(fact_report.get("status") or "") == "blocked"
+    )
     ready_findings = _report_ready_findings(tool_results)
     blocked_cells = _report_blocked_cells(tool_results)
     matrix_rows = _report_matrix_rows(tool_results)
@@ -570,6 +573,9 @@ def export_research_report(
         lines.append(f"- {item.get('tool') or item.get('name')}: {status}; publication_ready={ready}")
     if matrix_rows:
         lines.extend(["", "## Robustness Matrix Details"])
+        if fact_blocked:
+            lines.append("> Fact check BLOCKED — values below are unverified, shown for process transparency only, not as citable results.")
+            lines.append("")
         lines.append("| Cell | Model | Datasets | Status | Key outputs | Diagnostics |")
         lines.append("|---|---|---|---|---|---|")
         for row in matrix_rows:
@@ -584,12 +590,21 @@ def export_research_report(
                 )
             )
     lines.extend(["", "## Preliminary Findings"])
-    if ready_findings:
+    if not ready_findings:
+        lines.append("- No publication-ready or compressed-preliminary numerical result was present in the supplied tool results.")
+    elif fact_blocked:
+        lines.append(
+            "- Fact check is BLOCKED for this turn — no numerical finding is cleared for the Results section. "
+            "Values are listed under \"Needs Verification\" below and must not be cited as established results."
+        )
+        lines.extend(["", "## Needs Verification (fact check blocked)"])
+        for finding in ready_findings:
+            lines.append(f"- {finding}")
+        lines.append("- Resolve the blocking fact-check issues before treating any value above as a result.")
+    else:
         for finding in ready_findings:
             lines.append(f"- {finding}")
         lines.append("- All numerical findings above are compressed-likelihood preliminary unless a full external likelihood is explicitly listed.")
-    else:
-        lines.append("- No publication-ready or compressed-preliminary numerical result was present in the supplied tool results.")
     if blocked_cells:
         lines.extend(["", "## Runnable Gaps"])
         for cell in blocked_cells:
@@ -828,6 +843,8 @@ def _paper_draft_from_report_parts(
     manifest: list[dict[str, Any]],
 ) -> str:
     """Create a conservative paper draft from verified report ingredients."""
+    fact_status = str(fact_report.get("status") or "not_run") if isinstance(fact_report, dict) else "not_run"
+    fact_blocked = fact_status == "blocked"
     dataset_text = (
         "\n".join(
             "- "
@@ -839,11 +856,16 @@ def _paper_draft_from_report_parts(
         if datasets
         else "- No dataset metadata was available in this draft package."
     )
-    finding_text = (
-        "\n".join(f"- {finding}" for finding in ready_findings)
-        if ready_findings
-        else "- No numerical result is currently supported by a publication-ready or compressed-preliminary tool run."
-    )
+    if not ready_findings:
+        results_text = "- No numerical result is currently supported by a publication-ready or compressed-preliminary tool run."
+    elif fact_blocked:
+        results_text = (
+            "- Fact check is BLOCKED for this turn — no numerical finding is cleared for Results. "
+            "The values are listed under Section 5 (Robustness and Scope -> Needs Verification) and "
+            "must not be cited as established results."
+        )
+    else:
+        results_text = "\n".join(f"- {finding}" for finding in ready_findings)
     matrix_text = (
         "\n".join(
             "- {label}: {status}; {outputs}; {diagnostics}".format(**row)
@@ -855,6 +877,12 @@ def _paper_draft_from_report_parts(
     limitation_text = "\n".join(f"- {gap}" for gap in plan.get("blocking_gaps", []) if isinstance(gap, str))
     if blocked_cells:
         limitation_text += ("\n" if limitation_text else "") + "\n".join(f"- {cell}" for cell in blocked_cells)
+    if fact_blocked and ready_findings:
+        limitation_text += ("\n" if limitation_text else "") + "\n".join(
+            ["### Needs Verification (fact check blocked)"]
+            + [f"- {finding}" for finding in ready_findings]
+            + ["- Resolve the blocking fact-check issues before treating any value above as a result."]
+        )
     if not limitation_text:
         limitation_text = "- No blocking gap was recorded by the research planner."
     reference_text = (
@@ -865,7 +893,6 @@ def _paper_draft_from_report_parts(
         if citations
         else "- No bibliography entries were extracted from the supplied tool results."
     )
-    fact_status = str(fact_report.get("status") or "not_run") if isinstance(fact_report, dict) else "not_run"
     return "\n".join([
         f"# Paper Draft: {title}",
         "",
@@ -900,7 +927,7 @@ def _paper_draft_from_report_parts(
         matrix_text,
         "",
         "## 4. Results",
-        finding_text,
+        results_text,
         "",
         "## 5. Robustness and Scope",
         limitation_text,
@@ -1604,13 +1631,17 @@ def _numeric_claim_tokens(text: str) -> list[str]:
 
 
 def _has_tension_significance_claim(text: str) -> bool:
-    """Return True only for actual n-sigma/tension numbers, not scope caveats."""
-    if not re.search(r"(?:tension|张力|σ|sigma)", text, re.I):
+    """Return True only for an actual n-sigma *tension* claim, not an error bar.
+
+    A bare "N sigma" — e.g. "67.3 +/- 1sigma", "< 1sigma apart", "within
+    2sigma" — is an uncertainty / agreement statement, NOT a tension. We only
+    treat an n-sigma number as a tension-significance claim when explicit
+    tension / discrepancy wording is present in the same line. This stops
+    uncertainty notation (the dominant noise source) from being flagged.
+    """
+    if not re.search(r"tension|张力|discrepan", text, re.I):
         return False
-    return bool(
-        re.search(r"\b\d+(?:\.\d+)?\s*(?:σ|sigma)\b", text, re.I)
-        or re.search(r"\b(?:n\s*[-=]\s*)?\d+(?:\.\d+)?\s*sigma\s+tension\b", text, re.I)
-    )
+    return bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:σ|sigma)\b", text, re.I))
 
 
 def _fact_claims_from_reply(
@@ -1628,6 +1659,8 @@ def _fact_claims_from_reply(
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped:
+            continue
+        if _line_is_markdown_structure(stripped):
             continue
         lowered = stripped.lower()
         if _line_is_gap_statement(lowered):
@@ -1753,6 +1786,7 @@ def _line_is_gap_statement(line: str) -> bool:
             "were not used",
             "not run here",
             "no full",
+            "not the full",
             "not a full external",
             "not a full weak-lensing",
             "not a full weak lensing",
@@ -1776,6 +1810,20 @@ def _line_is_gap_statement(line: str) -> bool:
             "not claimable",
         )
     )
+
+
+def _line_is_markdown_structure(line: str) -> bool:
+    """Markdown headings and table separator rows are layout, not claims.
+
+    e.g. "## 1.2 Executed cells", "### Cell A — DESI BAO", or "|---|:--:|---|".
+    Skipping them stops the fact verifier from extracting a heading or a table
+    rule as if it were a scientific claim.
+    """
+    if re.match(r"^#{1,6}\s", line):
+        return True
+    if re.match(r"^\|?[\s:|-]+\|?$", line) and ("-" in line or ":" in line):
+        return True
+    return False
 
 
 def _token_supported_by_alias(token: str, claimable: set[str]) -> bool:

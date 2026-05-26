@@ -608,6 +608,76 @@ def test_fact_verifier_does_not_treat_parameter_mentions_as_numbers() -> None:
     )
 
 
+def test_fact_verifier_ignores_error_bars_and_markdown_structure() -> None:
+    from app.services.research_program import verify_research_facts
+
+    # P03R regression: markdown headings, table separator rows, and "+/- 1 sigma"
+    # error-bar notation must NOT be extracted as unsupported scientific claims.
+    report = verify_research_facts(
+        tool_results=[],
+        final_reply=(
+            "## 1.2 Executed cells\n"
+            "### Cell A — DESI DR1 BAO only\n"
+            "| Parameter | Mean ± 1 sigma | 94% HDI | Notes |\n"
+            "|---|---|---|---|\n"
+        ),
+    )
+    real = [c for c in report["claims"] if "No strong scientific fact claim" not in c["text"]]
+    assert real == [], real
+
+
+def test_fact_verifier_distinguishes_error_bar_from_tension() -> None:
+    from app.services.research_program import _has_tension_significance_claim
+
+    # error bars / agreement statements are NOT tension claims
+    assert _has_tension_significance_claim("Mean ± 1 sigma") is False
+    assert _has_tension_significance_claim("H0 and H0_rd are < 1 sigma apart") is False
+    assert _has_tension_significance_claim("consistent within 2 sigma") is False
+    # genuine tension / discrepancy claims are still detected
+    assert _has_tension_significance_claim("H0 shows 4.2 sigma tension with Planck") is True
+    assert _has_tension_significance_claim("a 3 sigma discrepancy in S8") is True
+
+
+def test_export_research_report_gates_results_when_fact_check_blocked() -> None:
+    from app.services.research_program import export_research_report
+
+    # P03R regression: a blocked fact check must NOT leave numeric values in the
+    # Results section of either the report or the paper draft.
+    tool_results = [
+        {"tool": "run_research_matrix", "result": {
+            "publication_ready": True,
+            "parameters": {"H0": {"median": 67.3}},
+            "analysis_status": "COMPRESSED_CHAIN_READY",
+        }},
+        {"tool": "verify_research_facts", "result": {
+            "analysis_status": "FACT_CHECK_READY",
+            "fact_check_report": {"status": "blocked", "verified_claim_count": 1, "unsupported_claim_count": 4, "claims": []},
+        }},
+    ]
+    out = export_research_report(tool_results=tool_results, title="t")
+    assert "## Needs Verification (fact check blocked)" in out["markdown"]
+    assert "no numerical finding is cleared" in out["markdown"]
+    assert "Fact check is BLOCKED" in out["paper_draft_markdown"]
+
+
+def test_export_research_report_keeps_results_when_fact_check_passes() -> None:
+    from app.services.research_program import export_research_report
+
+    tool_results = [
+        {"tool": "run_research_matrix", "result": {
+            "publication_ready": True,
+            "parameters": {"H0": {"median": 67.3}},
+            "analysis_status": "COMPRESSED_CHAIN_READY",
+        }},
+        {"tool": "verify_research_facts", "result": {
+            "analysis_status": "FACT_CHECK_READY",
+            "fact_check_report": {"status": "passed", "verified_claim_count": 5, "unsupported_claim_count": 0, "claims": []},
+        }},
+    ]
+    out = export_research_report(tool_results=tool_results, title="t")
+    assert "Needs Verification (fact check blocked)" not in out["markdown"]
+
+
 def test_fact_verifier_skips_negative_full_likelihood_scope_statement() -> None:
     from app.services.research_program import (
         build_evidence_graph,
