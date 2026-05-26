@@ -27,7 +27,7 @@ default. A draft becomes publicly readable only after the owner explicitly uses
 | Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
 | Provenance | Tool results carry citation, archive version, field bibcodes, query hashes, run IDs, and acknowledgement metadata. |
 | Cosmology | Dataset registry, registered data-product loader, research planner, likelihood config builder, compressed posterior runner, controlled nested sampler, explicit chain diagnostics, evidence graph, and robustness matrix. |
-| Solar System | Asteroid / comet / NEO workflow: MPC + JPL Horizons + JPL SBDB + Sentry-II + DAMIT shape-model lookups, H–G magnitude reduction, Afρ dust production, NEATM thermal diameter/albedo fits, Öpik-style NEO impact-probability scaling, and Bus-DeMeo / SDSS-colour taxonomic classification. |
+| Solar System | Asteroid / comet / NEO workflow: MPC + JPL Horizons + JPL SBDB + Sentry-II + DAMIT shape-model lookups, H–G magnitude reduction, Afρ dust production, NEATM thermal diameter/albedo fits, Öpik-style NEO impact-probability scaling, and Bus-DeMeo / SDSS-colour taxonomic classification. **M0 limits**: deterministic single-value workflow (no research matrix / evidence graph), single-band NEATM, 11-class Bus-DeMeo, MPC→SBDB/Horizons fallback. |
 | Exoplanet | Transit + RV workflow: NASA Exoplanet Archive (`pscomppars`) + Confirmed Planets queries, TIC v8 target lookups, TESS light-curve retrieval, trapezoidal transit fitting (with batman/pytransit recommended for limb-darkened publication fits), Mandel & Agol-style transit-depth + Seager & Mallén-Ornelas geometry helpers, equilibrium-temperature and planet-density computations, and the legacy `fit_rv_orbit` Keplerian RV fitter. |
 | Modular focus gate | Three active prompt modules (`cosmology`, `solar_system`, `exoplanet`) plus 12 dormant modules. `prompt_loader` assembles a focus-aware SYSTEM_PROMPT (base + core + active module) and a per-focus tool allowlist, so non-focus tools are physically invisible to the LLM. |
 | Research infrastructure | Build paper candidate pools, mine papers for ToolSpecs, run 20-paper local mining rounds, build a tool ontology, identify platform gaps, and rank implementation queues before adding new runners. |
@@ -73,6 +73,12 @@ literature extraction or a dedicated measurement source.
 - Gated archive calls are distinct from failed or empty calls in the UI.
 - Data Sources panels expose `archive_version`, source authority, table/field
   citations, credits links, and acknowledgement templates.
+- Final replies are English-only — the numeric/citation gate ships English
+  patterns, so a non-English draft is regenerated in English once before being
+  blocked.
+- Citations are accepted only when the current turn's tools returned the
+  matching bibcode/ID; a real classic reference is still withheld if no tool
+  surfaced it this turn.
 
 ## Scientific Coverage
 
@@ -150,7 +156,7 @@ main references currently used by tools, prompts, and validation fixtures.
 |---|---|
 | Frontend | React 19, TypeScript strict, Vite, React Router, React Flow, Plotly |
 | Backend | FastAPI, SQLAlchemy async, Pydantic v2, SSE streaming |
-| AI | Manual provider/model selection across Claude, OpenAI, DeepSeek, local OpenAI-compatible backends, and local-only CLI adapters |
+| AI | Manual provider/model selection across Claude, OpenAI, DeepSeek, and local OpenAI-compatible HTTP backends (`LOCAL_MODEL_BASE_URL`, default localhost:8000) |
 | Astronomy | astropy, astroquery, specutils, photutils, reproject, pyvo, lightkurve |
 | Statistics | emcee, dynesty, ArviZ, celerite2, batman, scipy, scikit-learn |
 | Storage | PostgreSQL in production, SQLite for development, filesystem FITS storage |

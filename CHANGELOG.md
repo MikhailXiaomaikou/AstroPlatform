@@ -10,6 +10,25 @@ need entries unless they change user-visible behavior or research validity.
 
 ### Fixed
 
+- **Solar-system blind-test follow-up (2026-05-26, commit 2b85340).** Three
+  fixes surfaced by a 20-case DeepSeek blind run of the `solar_system` module:
+  - **English-only reply no longer discards the turn.** A non-English (CJK)
+    final reply previously hit a hard block and the whole answer was lost. The
+    agent loop (`api/chat.py`) now asks for one English regeneration
+    (`build_english_regeneration_prompt`, preserving every number/citation)
+    before falling back to the block — so a Chinese-prompt turn returns an
+    English answer instead of a blocked card.
+  - **Dates no longer mis-flagged as citations.** `claim_validator`'s
+    `_author_year_looks_like_noise` now treats current/future years and common
+    leading words as dates, so "The 2029", "Phaethon 2026", and "Ephemeris
+    (2026" are no longer withheld as fabricated author-year references.
+  - **Bibcode regex no longer eats markdown link tails.** `common/regex`
+    `BIBCODE_RE` was greedy (`\S+`) and swallowed `](url)` after a bibcode,
+    turning a valid `1998Icar..131..291H` into an `invalid_bibcode`; tightened
+    to bibcode-legal characters only.
+  - Blind-test runner (`scripts/blind_test_m0/runner.py`) gained
+    `--provider deepseek`. 275 claim_validator + cosmology regression tests
+    pass; A3/A4 DeepSeek reruns confirm the regen + bibcode fixes.
 - **Zero-fabrication hardening (anti-synthetic).** Closed several run_python
   fabrication-guard bypasses surfaced by blind testing:
   - `synthetic_code_detector` now catches `torch`/`jax`/`tensorflow` RNGs,

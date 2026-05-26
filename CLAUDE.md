@@ -206,7 +206,14 @@ CORS_ORIGINS=https://your-frontend.com
 
 Backend (optional):
 ```
-ANTHROPIC_API_KEY=sk-ant-...     # server-wide default for AI assistant
+ANTHROPIC_API_KEY=sk-ant-...     # server-wide default for AI assistant (Claude backend)
+DEEPSEEK_API_KEY=sk-...          # DeepSeek backend (inference_router reads this directly)
+PLATFORM_DEEPSEEK_API_KEY=sk-... # platform-wide shared DeepSeek key (server-side default);
+                                 # gated by SHARED_DEEPSEEK_API_KEY_ENABLED
+SHARED_DEEPSEEK_API_KEY_ENABLED=true  # expose the shared DeepSeek backend to all users (default true)
+LOCAL_MODEL_ENABLED=1            # enable the `local` OpenAI-compatible HTTP backend
+LOCAL_MODEL_BASE_URL=http://localhost:8000/v1  # local OpenAI-compatible server endpoint
+LOCAL_MODEL_NAME=...             # model id sent to the local server (also LOCAL_MODEL_API_KEY)
 ADS_API_KEY=...                  # NASA ADS citation search
 REDIS_URL=redis://...            # for caching (graceful fallback if unavailable)
                                  # supports rediss:// (TLS) for Upstash
