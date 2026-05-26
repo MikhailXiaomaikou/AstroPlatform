@@ -65,6 +65,15 @@ def _check_env(provider: str) -> str | None:
                 "    export OPENAI_CLI_COMMAND=codex"
             )
         return None
+    if provider == "deepseek":
+        key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        if not key:
+            raise SystemExit(
+                "缺 DEEPSEEK_API_KEY。\n"
+                "    export DEEPSEEK_API_KEY=sk-...\n"
+                "或在 backend/.env 里设,跑前先 `set -a; source .env; set +a`。"
+            )
+        return key
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not key:
         raise SystemExit(
@@ -96,6 +105,8 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
     tools = _filter_tools_by_research_focus(TOOLS)
     if provider == "local":
         profile = resolve_model_profile("local", "local:openai-cli")
+    elif provider == "deepseek":
+        profile = resolve_model_profile("deepseek", "deepseek:v4-pro")
     else:
         profile = resolve_model_profile("anthropic", "anthropic:default")
 
@@ -110,7 +121,7 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
             system=SYSTEM_PROMPT,
             messages=messages,
             tools=tools,
-            provider_api_keys={"anthropic": api_key} if api_key else {},
+            provider_api_keys={provider: api_key} if api_key else {},
             agent_name="blind_test",
             python_session_id=python_session_id,
             preferred_backend=provider,
@@ -199,9 +210,9 @@ async def main() -> None:
     parser.add_argument("--group", help="只跑指定 group (A/B/C/D/E)")
     parser.add_argument(
         "--provider",
-        choices=["anthropic", "local"],
+        choices=["anthropic", "local", "deepseek"],
         default="anthropic",
-        help="LLM backend: anthropic requires ANTHROPIC_API_KEY; local uses Codex/OpenAI CLI bridge.",
+        help="LLM backend: anthropic needs ANTHROPIC_API_KEY; deepseek needs DEEPSEEK_API_KEY; local uses the OpenAI-compatible local server.",
     )
     args = parser.parse_args()
 

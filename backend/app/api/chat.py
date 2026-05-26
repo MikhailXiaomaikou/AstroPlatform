@@ -4923,6 +4923,7 @@ async def _run_agent_loop(
         from app.services.claim_validator import (
             validate_claims,
             build_regeneration_prompt,
+            build_english_regeneration_prompt,
             build_zero_data_qualitative_regeneration_prompt,
             blocked_reply_with_narrative,
             attach_draft_to_banner,
@@ -4966,25 +4967,59 @@ async def _run_agent_loop(
                 )
             except Exception:
                 pass
-            logger.error(
-                "Non-English reply from %s — hard-blocking (CJK / full-"
-                "width characters detected in final reply; platform "
-                "contract requires English-only)",
-                agent_name,
-            )
-            clean_reply = (
-                "⚠ Reply blocked by platform policy: the assistant's final "
-                "reply must be in standard English.  Non-English characters "
-                "(Chinese / Japanese / Korean / full-width) were detected "
-                "in the draft reply.\n\n"
-                "This is a one-time notice; the assistant will regenerate "
-                "in English on the next turn.  If you prefer a different "
-                "language, please use an external translator — this is a "
-                "research-tool platform and English is the working "
-                "language for citation integrity (the zero-fabrication "
-                "numeric-claim gate only ships English regex patterns)."
-            )
-            fabrication_stats["blocked"] = True
+            # PART X plan D (revised): instead of hard-blocking a non-English
+            # draft outright, attempt one English regeneration that preserves
+            # every number and citation.  Only fall back to the hard block if
+            # the rewrite fails or is still non-English.  Keeps non-English
+            # prompts useful while preserving the English-only contract the
+            # downstream zero-fabrication regex gate depends on.
+            english_retry = ""
+            try:
+                english_messages = list(working_messages) + [
+                    {"role": "assistant", "content": clean_reply},
+                    {"role": "user", "content": build_english_regeneration_prompt()},
+                ]
+                english_regen = await _llm_messages_create(
+                    system=system,
+                    messages=english_messages,
+                    tools=[],
+                    provider_api_keys=provider_api_keys,
+                    agent_name=agent_name,
+                    preferred_backend=preferred_backend,
+                    model_profile=model_profile,
+                )
+                english_retry = str(english_regen.get("content", "") or "").strip()
+            except Exception as exc:
+                logger.warning("English regeneration failed: %s", exc)
+            if english_retry and not reply_contains_cjk(english_retry):
+                clean_reply = english_retry
+                cjk_detected = False
+                fabrication_stats["regenerations"] += 1
+                logger.info(
+                    "Non-English reply from %s recovered via one English "
+                    "regeneration",
+                    agent_name,
+                )
+            else:
+                logger.error(
+                    "Non-English reply from %s — hard-blocking after failed "
+                    "English regeneration (CJK / full-width characters "
+                    "detected; platform contract requires English-only)",
+                    agent_name,
+                )
+                clean_reply = (
+                    "⚠ Reply blocked by platform policy: the assistant's final "
+                    "reply must be in standard English.  Non-English characters "
+                    "(Chinese / Japanese / Korean / full-width) were detected "
+                    "in the draft reply.\n\n"
+                    "This is a one-time notice; the assistant will regenerate "
+                    "in English on the next turn.  If you prefer a different "
+                    "language, please use an external translator — this is a "
+                    "research-tool platform and English is the working "
+                    "language for citation integrity (the zero-fabrication "
+                    "numeric-claim gate only ships English regex patterns)."
+                )
+                fabrication_stats["blocked"] = True
 
         zero_data_claims = [] if cjk_detected else zero_data_but_quantitative(clean_reply, all_tool_results)
         if zero_data_claims:

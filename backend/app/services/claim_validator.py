@@ -27,6 +27,7 @@ Out of scope for R2:
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import math
@@ -2129,30 +2130,41 @@ def _author_year_is_suspicious(
     return len(matches) < 2
 
 
+# Tokens that legitimately precede a 4-digit number without forming an
+# author-year citation: calendar/figure/section words, English articles and
+# determiners, and generic solar-system prose nouns ("Ephemeris 2026").
+_NON_AUTHOR_TOKENS = frozenset({
+    "April", "August", "December", "February", "Figure", "January",
+    "July", "June", "March", "May", "November", "October",
+    "Section", "September", "Table",
+    "The", "A", "An", "This", "That", "These", "Those", "There", "Their",
+    "It", "Its", "In", "On", "At", "By", "As", "Of", "For", "From",
+    "Ephemeris", "Epoch", "Perihelion", "Aphelion", "Apparition",
+    "Approach", "Encounter", "Opposition", "Year",
+})
+
+_CURRENT_YEAR = datetime.date.today().year
+
+
 def _author_year_looks_like_noise(author: str, match_text: str) -> bool:
     if author.upper() in {"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"}:
         return True
+    # Known non-author tokens are never citations, even when a stray opening
+    # parenthesis sits between the word and the year ("Ephemeris (2026").
+    if author in _NON_AUTHOR_TOKENS:
+        return True
     if "et al" in match_text.lower():
         return False
+    # A current/future year with no "et al" and no bracketed citation shape
+    # reads as a date/epoch ("Phaethon 2026", "the 2029 approach"), not a
+    # published reference — those carry a past publication year.
+    if "(" not in match_text and "[" not in match_text:
+        year_match = re.search(r"\b((?:1[5-9]|20|21)\d{2})\b", match_text)
+        if year_match and int(year_match.group(1)) >= _CURRENT_YEAR:
+            return True
     if "(" in match_text or "[" in match_text:
         return False
-    return author in {
-        "April",
-        "August",
-        "December",
-        "February",
-        "Figure",
-        "January",
-        "July",
-        "June",
-        "March",
-        "May",
-        "November",
-        "October",
-        "Section",
-        "September",
-        "Table",
-    }
+    return False
 
 
 def _line_text(text: str, offset: int) -> str:
@@ -2292,6 +2304,29 @@ def build_regeneration_prompt(result: ValidationResult) -> str:
         "3. Do NOT call any tools again; just rewrite the prose.\n"
         "4. Do NOT invent substitute numbers.\n"
         "Respond with only the corrected reply."
+    )
+
+
+def build_english_regeneration_prompt() -> str:
+    """Ask the model to re-emit its previous reply in standard English.
+
+    The platform requires English-only final replies (the zero-fabrication
+    numeric-claim gate ships English regex only).  Instead of hard-blocking a
+    non-English draft, the agent loop requests one English rewrite that keeps
+    every number, unit, and citation verbatim.
+    """
+    return (
+        "STOP. Your previous reply contained non-English (CJK / full-width) "
+        "text. The platform requires the final reply to be in standard "
+        "English.\n\n"
+        "Rewrite your previous reply in standard English:\n"
+        "1. Preserve every numeric value, unit, citation, bibcode, "
+        "designation, and tool-backed fact EXACTLY as in the draft — do not "
+        "add, drop, or alter any number or reference.\n"
+        "2. Translate only the prose; keep equations and identifiers "
+        "unchanged.\n"
+        "3. Do not introduce any claim that was not already in the draft.\n"
+        "4. Output the English version only, with no preamble or apology."
     )
 
 
