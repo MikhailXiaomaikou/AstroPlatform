@@ -1160,86 +1160,6 @@ TOOLS = [
         },
     },
     {
-        "name": "get_object_dossier",
-        "description": (
-            "Generate a comprehensive cross-match dossier for a sky position. "
-            "Queries SIMBAD, Gaia DR3, SDSS, 2MASS, AllWISE, NED, and TNS concurrently "
-            "and returns structured photometry (ugriz, JHKs, W1-W4), astrometry "
-            "(parallax, proper motion, distance), redshift, host galaxy info, "
-            "cross-identifications, and prior transient classifications."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Object name (optional, e.g. 'SN 2024abc')"},
-                "ra": {"type": "number", "description": "Right ascension in degrees"},
-                "dec": {"type": "number", "description": "Declination in degrees"},
-            },
-        },
-    },
-    {
-        "name": "get_followup_recommendation",
-        "description": (
-            "Generate follow-up observation recommendations for a transient alert. "
-            "Analyses the classification, confidence, and available ancillary data to "
-            "produce a prioritised list of spectroscopy, photometry, X-ray, UV, or "
-            "archival follow-up observations with facility suggestions, exposure times, "
-            "and science goals."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "alert_id": {
-                    "type": "string",
-                    "description": "Alert ID (UUID or source_id) to look up from the database",
-                },
-                "ra": {
-                    "type": "number",
-                    "description": "Right ascension in degrees (used if alert_id not found or for ad-hoc queries)",
-                },
-                "dec": {
-                    "type": "number",
-                    "description": "Declination in degrees",
-                },
-                "magnitude": {
-                    "type": "number",
-                    "description": "Apparent magnitude of the transient",
-                },
-                "classification": {
-                    "type": "string",
-                    "description": "Classification type (e.g. SN_Ia, TDE, AGN, CV, Unknown)",
-                },
-            },
-        },
-    },
-    {
-        "name": "analyze_cross_wavelength",
-        "description": (
-            "Run cross-wavelength anomaly detection on a sky position. "
-            "Checks IR excess (W1-W2), X-ray/optical ratio, astrometric anomalies, "
-            "optical color consistency, SED shape vs blackbody, and variability. "
-            "Returns a list of checks with ANOMALY/NORMAL/SKIPPED status, "
-            "possible physical causes, and recommended follow-up observations."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Object name for coordinate resolution (optional if ra/dec provided)",
-                },
-                "ra": {
-                    "type": "number",
-                    "description": "Right ascension in degrees",
-                },
-                "dec": {
-                    "type": "number",
-                    "description": "Declination in degrees",
-                },
-            },
-        },
-    },
-    {
         "name": "crossmatch_catalogs",
         "description": (
             "Cross-match two astronomical catalogs by sky position. "
@@ -1730,6 +1650,12 @@ from app.services.ai_tools_paper_mining import (  # noqa: E402
 )
 TOOLS.extend(_PAPER_MINING_TOOL_SCHEMAS)
 
+from app.services.ai_tools_dossier import (  # noqa: E402
+    DOSSIER_TOOL_NAMES as _DOSSIER_TOOL_NAMES,
+    DOSSIER_TOOL_SCHEMAS as _DOSSIER_TOOL_SCHEMAS,
+)
+TOOLS.extend(_DOSSIER_TOOL_SCHEMAS)
+
 
 # ── Tool Executors ──
 
@@ -1921,12 +1847,14 @@ async def _execute_tool_inner(
         elif tool_name in _PAPER_MINING_TOOL_NAMES:
             from app.services.ai_tools_paper_mining import dispatch_paper_mining
             return await dispatch_paper_mining(tool_name, tool_input)
-        elif tool_name == "get_object_dossier":
-            return await _exec_get_dossier(tool_input)
-        elif tool_name == "get_followup_recommendation":
-            return await _exec_get_followup(tool_input)
-        elif tool_name == "analyze_cross_wavelength":
-            return await _exec_cross_wavelength(tool_input)
+        # ── H1 split (2026-05-26): dossier 3-tool centralized dispatch ──
+        # Deployment-readiness introspection scans this function body for
+        # quoted tool names. Keep in sync with DOSSIER_TOOL_NAMES:
+        # "get_object_dossier", "get_followup_recommendation",
+        # "analyze_cross_wavelength".
+        elif tool_name in _DOSSIER_TOOL_NAMES:
+            from app.services.ai_tools_dossier import dispatch_dossier
+            return await dispatch_dossier(tool_name, tool_input)
         elif tool_name == "crossmatch_catalogs":
             return await _exec_crossmatch_catalogs(tool_input, python_session_id)
         elif tool_name == "search_lightcurve":
@@ -8414,137 +8342,6 @@ def _estimate_age_from_turnoff(bp_rp: list, abs_mag: list,
                 "Brighter turnoff → higher mass → YOUNGER cluster.",
         "warnings": warnings_list,
     }
-
-
-async def _exec_get_dossier(inp: dict) -> dict:
-    """Generate a cross-match dossier for sky coordinates."""
-    from app.services.dossier_generator import generate_dossier
-
-    ra = inp.get("ra")
-    dec = inp.get("dec")
-    name = inp.get("name")
-
-    if ra is None or dec is None:
-        if name:
-            from app.services.name_resolver import resolve_name
-            resolved = await resolve_name(name)
-            if not resolved.resolved:
-                return {"error": f"Could not resolve '{name}': tried {resolved.aliases_tried}"}
-            ra, dec = resolved.ra, resolved.dec
-        else:
-            return {"error": "ra and dec are required (or provide a name for resolution)"}
-
-    dossier = await generate_dossier(ra=ra, dec=dec, name=name)
-    # Remove _raw to keep context window manageable
-    dossier.pop("_raw", None)
-    return dossier
-
-
-async def _exec_get_followup(inp: dict) -> dict:
-    """Generate follow-up observation recommendations for a transient."""
-    from app.services.followup_recommender import generate_followup
-
-    alert_id = inp.get("alert_id")
-    ra = inp.get("ra")
-    dec = inp.get("dec")
-    magnitude = inp.get("magnitude")
-    classification = inp.get("classification")
-
-    alert_dict: dict | None = None
-
-    # Try to look up from DB if alert_id is provided
-    if alert_id:
-        try:
-            import uuid as _uuid
-            from app.models.database import async_session
-            from app.models.schemas import TransientAlert
-            from sqlalchemy import select as sa_select
-
-            async with async_session() as session:
-                try:
-                    uid = _uuid.UUID(alert_id)
-                    stmt = sa_select(TransientAlert).where(TransientAlert.id == uid)
-                except ValueError:
-                    stmt = sa_select(TransientAlert).where(TransientAlert.source_id == alert_id)
-                result = await session.execute(stmt)
-                row = result.scalar_one_or_none()
-                if row:
-                    alert_dict = {
-                        "id": str(row.id),
-                        "source_id": row.source_id,
-                        "ra": row.ra,
-                        "dec": row.dec,
-                        "magnitude": row.magnitude,
-                        "classification": row.classification,
-                        "classification_confidence": row.classification_confidence,
-                        "redshift": row.redshift,
-                        "host_galaxy": row.host_galaxy,
-                        "discovery_date": row.discovery_date.isoformat() if row.discovery_date else None,
-                        "raw_data": row.raw_data,
-                    }
-        except Exception as exc:
-            logger.debug("Alert DB lookup in tool failed: %s", exc)
-
-    # Build alert dict from params if no DB record found
-    if alert_dict is None:
-        if ra is None or dec is None:
-            return {
-                "error": (
-                    "Could not find alert in database. "
-                    "Provide ra and dec for ad-hoc recommendations."
-                )
-            }
-        alert_dict = {
-            "source_id": alert_id or "ad-hoc",
-            "ra": ra,
-            "dec": dec,
-            "magnitude": magnitude,
-            "classification": classification,
-        }
-    else:
-        # Apply any overrides
-        if ra is not None:
-            alert_dict["ra"] = ra
-        if dec is not None:
-            alert_dict["dec"] = dec
-        if magnitude is not None:
-            alert_dict["magnitude"] = magnitude
-        if classification is not None:
-            alert_dict["classification"] = classification
-
-    # Generate dossier for enrichment (best-effort)
-    dossier = None
-    try:
-        from app.services.dossier_generator import generate_dossier
-        dossier = await generate_dossier(ra=alert_dict["ra"], dec=alert_dict["dec"])
-        dossier.pop("_raw", None)
-    except Exception:
-        pass
-
-    result = await generate_followup(alert=alert_dict, dossier=dossier)
-    return result
-
-
-async def _exec_cross_wavelength(inp: dict) -> dict:
-    """Run cross-wavelength anomaly detection on a sky position."""
-    from app.services.cross_wavelength import cross_wavelength_analysis
-
-    ra = inp.get("ra")
-    dec = inp.get("dec")
-    name = inp.get("name")
-
-    if ra is None or dec is None:
-        if name:
-            from app.services.name_resolver import resolve_name
-            resolved = await resolve_name(name)
-            if not resolved.resolved:
-                return {"error": f"Could not resolve '{name}': tried {resolved.aliases_tried}"}
-            ra, dec = resolved.ra, resolved.dec
-        else:
-            return {"error": "ra and dec are required (or provide a name for resolution)"}
-
-    result = await cross_wavelength_analysis(ra=ra, dec=dec)
-    return result
 
 
 async def _exec_crossmatch_catalogs(inp: dict, python_session_id: str = "default") -> dict:
