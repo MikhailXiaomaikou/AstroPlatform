@@ -18,6 +18,10 @@
           {
             "type": "command",
             "command": "python3 .claude/hooks/tsc-check.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/flag-defense-redline.py"
           }
         ]
       }

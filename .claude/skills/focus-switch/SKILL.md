@@ -7,14 +7,14 @@ description: Switch ASTRO_RESEARCH_FOCUS between cosmology / solar_system / exop
 
 astro-platform's focus gate hides tools per module via `backend/app/prompts/modules/<focus>/manifest.yaml`. Switching is one env var, but you should verify the allowlist resolves to the expected count and the SYSTEM_PROMPT assembles without import errors.
 
-## Expected tool counts (as of 2026-05-21)
+## Expected tool counts (as of 2026-05-25)
 
 | Focus | Allowed tools |
 |---|---|
-| `cosmology` | 50 (15 core + 21 cosmology-specific + 14 overlap) |
-| `solar_system` | 27 |
-| `exoplanet` | 24 |
-| `all` | 90 |
+| `cosmology` | 54 |
+| `solar_system` | 30 (18 core/overlap + 12 module) |
+| `exoplanet` | 27 (18 core/overlap + 9 module) |
+| `all` | 94 |
 
 If the count drifts unexpectedly, the manifest was edited.
 
