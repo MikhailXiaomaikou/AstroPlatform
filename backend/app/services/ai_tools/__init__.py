@@ -1068,98 +1068,6 @@ TOOLS = [
         },
     },
     {
-        "name": "plan_research_program",
-        "description": (
-            "Create a structured research plan before executing an observational "
-            "cosmology or measurement-relation research request. The plan identifies "
-            "hypotheses, probes, candidate registered datasets, model families, "
-            "runnable vs config-only gaps, and a proposed experiment matrix. It does "
-            "not produce scientific posterior or fit numbers."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "The user's research question or blind-test prompt.",
-                },
-                "paper_metadata": {
-                    "type": "object",
-                    "description": "Optional paper metadata for reproduction-test mode.",
-                },
-            },
-            "required": ["question"],
-        },
-    },
-    {
-        "name": "run_research_matrix",
-        "description": (
-            "Execute the runnable subset of a ResearchPlan. It runs compressed "
-            "likelihood chains where registered and returns not-runnable/config-only "
-            "cells for missing external likelihoods. Cite only cells with "
-            "publication_ready=true as compressed-likelihood preliminary."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "research_plan": {"type": "object", "description": "ResearchPlan from plan_research_program."},
-                "question": {"type": "string", "description": "Fallback research question if no plan object is supplied."},
-                "dataset_keys": {"type": "array", "items": {"type": "string"}},
-                "models": {"type": "array", "items": {"type": "string"}},
-                "random_seed": {"type": "integer"},
-                "n_samples": {"type": "integer"},
-            },
-        },
-    },
-    {
-        "name": "build_evidence_graph",
-        "description": (
-            "Build a claim-support graph from current-turn tool results. It links "
-            "claimable parameters to publication-ready tool runs, datasets, citations, "
-            "and flags unsupported numeric claims."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "tool_results": {"type": "array", "items": {"type": "object"}},
-                "final_reply": {"type": "string"},
-            },
-        },
-    },
-    {
-        "name": "verify_research_facts",
-        "description": (
-            "Verify final research claims against the current-turn evidence graph, "
-            "tool runs, dataset registry metadata, extracted tables, and citations. "
-            "This is a checking step only; it does not create new evidence."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "tool_results": {"type": "array", "items": {"type": "object"}},
-                "final_reply": {"type": "string"},
-                "evidence_graph": {"type": "object"},
-            },
-        },
-    },
-    {
-        "name": "export_research_report",
-        "description": (
-            "Generate an auditable Markdown research report draft from a ResearchPlan, "
-            "EvidenceGraph, and executed tool summaries. This is an export/drafting "
-            "step and does not create new scientific evidence."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "research_plan": {"type": "object"},
-                "evidence_graph": {"type": "object"},
-                "tool_results": {"type": "array", "items": {"type": "object"}},
-                "title": {"type": "string"},
-            },
-        },
-    },
-    {
         "name": "crossmatch_catalogs",
         "description": (
             "Cross-match two astronomical catalogs by sky position. "
@@ -1592,6 +1500,12 @@ from app.services.ai_tools_imaging import (  # noqa: E402
 )
 TOOLS.extend(_IMAGING_TOOL_SCHEMAS)
 
+from app.services.ai_tools_research import (  # noqa: E402
+    RESEARCH_TOOL_NAMES as _RESEARCH_TOOL_NAMES,
+    RESEARCH_TOOL_SCHEMAS as _RESEARCH_TOOL_SCHEMAS,
+)
+TOOLS.extend(_RESEARCH_TOOL_SCHEMAS)
+
 
 # ── Tool Executors ──
 
@@ -1763,16 +1677,15 @@ async def _execute_tool_inner(
         elif tool_name in _COSMOLOGY_TOOL_NAMES:
             from app.services.ai_tools_cosmology import dispatch_cosmology
             return await dispatch_cosmology(tool_name, tool_input, python_session_id)
-        elif tool_name == "plan_research_program":
-            return _exec_plan_research_program(tool_input)
-        elif tool_name == "run_research_matrix":
-            return _exec_run_research_matrix(tool_input)
-        elif tool_name == "build_evidence_graph":
-            return _exec_build_evidence_graph(tool_input)
-        elif tool_name == "verify_research_facts":
-            return _exec_verify_research_facts(tool_input)
-        elif tool_name == "export_research_report":
-            return _exec_export_research_report(tool_input)
+        # ── H1 split (2026-05-26): research-core 5-tool centralized dispatch ──
+        # Deployment-readiness introspection scans this function body for
+        # quoted tool names. Keep in sync with RESEARCH_TOOL_NAMES:
+        # "plan_research_program", "run_research_matrix",
+        # "build_evidence_graph", "verify_research_facts",
+        # "export_research_report".
+        elif tool_name in _RESEARCH_TOOL_NAMES:
+            from app.services.ai_tools_research import dispatch_research
+            return await dispatch_research(tool_name, tool_input)
         # ── H1 split (2026-05-26): paper-mining 7-tool centralized dispatch ──
         # Deployment-readiness introspection scans this function body for
         # quoted tool names. Keep in sync with PAPER_MINING_TOOL_NAMES:
@@ -7746,122 +7659,6 @@ def _exec_get_async_job_status(inp: dict) -> dict:
     return atr.format_status_for_tool(atr.get_async_job(job_id), requested_job_id=job_id)
 
 
-
-
-def _exec_plan_research_program(inp: dict) -> dict:
-    from app.services.research_program import plan_research_program
-
-    try:
-        metadata = inp.get("paper_metadata")
-        return plan_research_program(
-            question=str(inp.get("question") or ""),
-            paper_metadata=metadata if isinstance(metadata, dict) else None,
-        )
-    except Exception as exc:
-        return {
-            "success": False,
-            "__tool_status__": "FAILED",
-            "analysis_status": "FAILED",
-            "error": str(exc),
-            "error_class": exc.__class__.__name__,
-            "__do_not_claim__": True,
-        }
-
-
-def _exec_run_research_matrix(inp: dict) -> dict:
-    from app.services.research_program import run_research_matrix
-
-    try:
-        plan = inp.get("research_plan")
-        dataset_keys = inp.get("dataset_keys")
-        models = inp.get("models")
-        return run_research_matrix(
-            research_plan=plan if isinstance(plan, dict) else None,
-            question=str(inp.get("question") or ""),
-            dataset_keys=([str(key) for key in dataset_keys] if isinstance(dataset_keys, list) else None),
-            models=([str(model) for model in models] if isinstance(models, list) else None),
-            random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
-            n_samples=int(inp.get("n_samples") or 4000),
-        )
-    except Exception as exc:
-        return {
-            "success": False,
-            "__tool_status__": "FAILED",
-            "analysis_status": "FAILED",
-            "error": str(exc),
-            "error_class": exc.__class__.__name__,
-            "__do_not_claim__": True,
-            "__message_to_model__": (
-                "Research matrix execution failed. Do not quote posterior, "
-                "robustness, tension, or fit statistics from this result."
-            ),
-        }
-
-
-def _exec_build_evidence_graph(inp: dict) -> dict:
-    from app.services.research_program import build_evidence_graph
-
-    try:
-        tool_results = inp.get("tool_results")
-        return build_evidence_graph(
-            tool_results=tool_results if isinstance(tool_results, list) else None,
-            final_reply=str(inp.get("final_reply") or "") or None,
-        )
-    except Exception as exc:
-        return {
-            "success": False,
-            "__tool_status__": "FAILED",
-            "analysis_status": "FAILED",
-            "error": str(exc),
-            "error_class": exc.__class__.__name__,
-            "__do_not_claim__": True,
-        }
-
-
-def _exec_verify_research_facts(inp: dict) -> dict:
-    from app.services.research_program import verify_research_facts
-
-    try:
-        tool_results = inp.get("tool_results")
-        evidence_graph = inp.get("evidence_graph")
-        return verify_research_facts(
-            tool_results=tool_results if isinstance(tool_results, list) else None,
-            final_reply=str(inp.get("final_reply") or "") or None,
-            evidence_graph=evidence_graph if isinstance(evidence_graph, dict) else None,
-        )
-    except Exception as exc:
-        return {
-            "success": False,
-            "__tool_status__": "FAILED",
-            "analysis_status": "FAILED",
-            "error": str(exc),
-            "error_class": exc.__class__.__name__,
-            "__do_not_claim__": True,
-        }
-
-
-def _exec_export_research_report(inp: dict) -> dict:
-    from app.services.research_program import export_research_report
-
-    try:
-        plan = inp.get("research_plan")
-        graph = inp.get("evidence_graph")
-        tool_results = inp.get("tool_results")
-        return export_research_report(
-            research_plan=plan if isinstance(plan, dict) else None,
-            evidence_graph=graph if isinstance(graph, dict) else None,
-            tool_results=tool_results if isinstance(tool_results, list) else None,
-            title=str(inp.get("title") or "") or None,
-        )
-    except Exception as exc:
-        return {
-            "success": False,
-            "__tool_status__": "FAILED",
-            "analysis_status": "FAILED",
-            "error": str(exc),
-            "error_class": exc.__class__.__name__,
-            "__do_not_claim__": True,
-        }
 
 
 async def _exec_fit_isochrone(inp: dict) -> dict:
