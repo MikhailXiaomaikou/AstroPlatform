@@ -134,6 +134,118 @@ async def _serialize_session(
     }
 
 
+_INTERNAL_MARKER_PATTERNS = (
+    "<actions>",
+    "</actions>",
+    "<thinking>",
+    "<tools_returned_nothing",
+    "<toolsreturnednothing",
+)
+
+
+def _turn_tool_results(turn_messages: list[dict]) -> list[dict]:
+    """Flatten a turn's actions into {tool, result} dicts (current-turn only)."""
+    out: list[dict] = []
+    for message in turn_messages:
+        if not isinstance(message, dict):
+            continue
+        for action in message.get("actions") or []:
+            if not isinstance(action, dict):
+                continue
+            name = action.get("action") or action.get("tool")
+            tool_result = action.get("tool_result")
+            if isinstance(tool_result, dict):
+                out.append({"tool": name, "result": tool_result})
+            elif isinstance(tool_result, list):
+                for item in tool_result:
+                    if isinstance(item, dict):
+                        out.append({"tool": name, "result": item})
+    return out
+
+
+def _slice_turn(messages: list[dict], index: int | None = None) -> tuple[int, list[dict]]:
+    """Slice one conversation turn (a user message up to the next user message).
+
+    ``index=None`` returns the latest turn; out-of-range falls back to latest.
+    Gives callers a clean current-turn view with no other turns and no frontend
+    sidebar noise — the source data the blind-test evaluator should read instead
+    of scraping a full-page HTML snapshot.
+    """
+    user_positions = [
+        i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user"
+    ]
+    if not user_positions:
+        return 0, list(messages)
+    if index is None or not (0 <= index < len(user_positions)):
+        turn_idx = len(user_positions) - 1
+    else:
+        turn_idx = index
+    start = user_positions[turn_idx]
+    end = user_positions[turn_idx + 1] if turn_idx + 1 < len(user_positions) else len(messages)
+    return turn_idx, messages[start:end]
+
+
+def _summarize_turn(turn_index: int, turn_messages: list[dict]) -> dict:
+    """Structured current-turn transcript for automated blind-test evaluation."""
+    from app.services.research_program import _latest_fact_check_report
+
+    user_prompt = ""
+    assistant_reply = ""
+    for message in turn_messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        content = str(message.get("content") or "")
+        if role == "user" and not user_prompt:
+            user_prompt = content
+        elif role == "assistant" and content.strip():
+            assistant_reply = content
+
+    tool_results = _turn_tool_results(turn_messages)
+    tool_runs = [
+        {
+            "tool": tr.get("tool"),
+            "status": tr["result"].get("analysis_status") or tr["result"].get("__tool_status__"),
+            "publication_ready": bool(tr["result"].get("publication_ready")),
+        }
+        for tr in tool_results
+    ]
+
+    fact_report = _latest_fact_check_report(tool_results)
+    fact_check = None
+    if isinstance(fact_report, dict) and fact_report.get("status"):
+        fact_check = {
+            "status": fact_report.get("status"),
+            "verified_claim_count": fact_report.get("verified_claim_count", 0),
+            "unsupported_claim_count": fact_report.get("unsupported_claim_count", 0),
+        }
+
+    research_report_present = any(
+        tr.get("tool") == "export_research_report"
+        or (isinstance(tr.get("result"), dict) and tr["result"].get("analysis_status") == "RESEARCH_REPORT_READY")
+        for tr in tool_results
+    )
+    paper_draft_present = any(
+        isinstance(tr.get("result"), dict) and tr["result"].get("paper_draft_markdown")
+        for tr in tool_results
+    )
+
+    reply_l = assistant_reply.lower()
+    internal_markers_present = any(marker in reply_l for marker in _INTERNAL_MARKER_PATTERNS)
+
+    return {
+        "turn_index": turn_index,
+        "turn_complete": bool(assistant_reply.strip()),
+        "user_prompt": user_prompt,
+        "assistant_reply": assistant_reply,
+        "tool_runs": tool_runs,
+        "fact_check": fact_check,
+        "research_report_present": research_report_present,
+        "paper_draft_present": paper_draft_present,
+        "internal_markers_present": internal_markers_present,
+    }
+
+
 async def _restore_paper_drafts(session: ChatSession, snapshot_data: dict, db: AsyncSession) -> None:
     existing = (
         await db.execute(select(PaperDraft).where(PaperDraft.session_id == session.id))
@@ -317,6 +429,19 @@ async def get_shared_session(
     }
 
 
+@shared_router.get("/{token}/turns/latest")
+async def get_shared_latest_turn(
+    token: str,
+    index: int | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
+    """Clean current-turn transcript for automated evaluation (shared-token access)."""
+    shared, session = await _load_shared_session(token, db)
+    turn_index, turn_messages = _slice_turn(session.messages or [], index)
+    return {"session_id": str(session.id), **_summarize_turn(turn_index, turn_messages)}
+
+
 @shared_router.post("/{token}/fork")
 async def fork_shared_session(
     token: str,
@@ -354,6 +479,19 @@ async def fork_shared_session(
     await db.commit()
     await db.refresh(forked)
     return {"id": str(forked.id), "forked_from": str(session.id)}
+
+
+@router.get("/{session_id}/turns/latest")
+async def get_session_latest_turn(
+    session_id: str,
+    index: int | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Clean current-turn transcript for automated evaluation (owner-authenticated)."""
+    session = await _require_owned_session(session_id, user, db)
+    turn_index, turn_messages = _slice_turn(session.messages or [], index)
+    return {"session_id": str(session.id), **_summarize_turn(turn_index, turn_messages)}
 
 
 @router.get("/{session_id}/comments")
