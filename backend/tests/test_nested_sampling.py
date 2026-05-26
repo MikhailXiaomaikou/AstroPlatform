@@ -70,7 +70,7 @@ def test_controlled_nested_sampler_low_nlive_is_not_publication_ready():
 
 
 def test_ai_tool_wrapper_runs_nested_sampler():
-    from app.services.ai_tools import _exec_run_nested_sampler
+    from app.services.ai_tools_cosmology import _exec_run_nested_sampler
 
     result = _exec_run_nested_sampler(
         {

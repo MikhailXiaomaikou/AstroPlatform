@@ -2,6 +2,12 @@
 
 Wraps the core anomaly detection pipeline with an async-compatible
 interface suitable for use from FastAPI endpoints.
+
+Status (2026-05-26): dormant scaffold — not yet wired to any production
+path. `api/anomalies` serves feed/stats/dismiss but does not call this
+scanner; only the Week 3 integration test exercises it. Kept pending
+endpoint integration; do not delete (per the paper_tool dead-code audit
+precedent of keeping unwired-but-tested scaffolds).
 """
 
 import logging

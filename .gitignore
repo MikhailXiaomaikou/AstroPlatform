@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+venv/
 *.egg-info/
 .pytest_cache/
 # Coverage artifacts (L7)

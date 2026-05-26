@@ -35,7 +35,7 @@ def test_evaluate_chain_diagnostics_marks_single_chain_partial():
 
 
 def test_ai_tool_wrapper_evaluates_chain_diagnostics():
-    from app.services.ai_tools import _exec_evaluate_chain_diagnostics
+    from app.services.ai_tools_cosmology import _exec_evaluate_chain_diagnostics
 
     rng = np.random.default_rng(5)
     result = _exec_evaluate_chain_diagnostics(
