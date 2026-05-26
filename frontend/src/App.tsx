@@ -350,7 +350,7 @@ function JournalFooter() {
       </div>
       <div className="journal-footer-base">
         <span>© 2026 Standard Astro</span>
-        <span>claude-opus-4-7 · Planck18 · Gaia DR3 · PARSEC 3.9</span>
+        <span>Planck18 · Gaia DR3 · PARSEC 3.9</span>
       </div>
     </footer>
   );
