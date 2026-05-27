@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.inference_router import InferenceError, inference_router
 from app.ai.model_profiles import (
+    DEFAULT_AI_PROVIDER,
     DEFAULT_MODEL_BY_PROVIDER,
     ModelProfile,
     all_model_profiles,
@@ -1177,7 +1178,23 @@ async def chat_message_stream(
         except (TimeoutError, asyncio.TimeoutError):
             _run_failed = True
             timeout_s = int(workflow_budget["endpoint_timeout_seconds"])
-            yield f"data: {json.dumps({'type': 'error', 'message': f'AI workflow timed out after {timeout_s}s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
+            timeout_tool_results = _tool_results_from_stream_audit(
+                audit_trail if "audit_trail" in locals() else []
+            )
+            timeout_summary = _tool_grounded_timeout_summary(timeout_tool_results, timeout_s)
+            if timeout_summary.strip():
+                logger.warning(
+                    "AI workflow timed out after %ss; emitting tool-grounded "
+                    "timeout fallback from %d streamed tool result(s).",
+                    timeout_s,
+                    len(timeout_tool_results),
+                )
+                yield f"data: {json.dumps({'type': 'status', 'message': f'AI workflow timed out after {timeout_s}s; returning a tool-grounded partial summary.'})}\n\n"
+                yield f"data: {json.dumps({'type': 'text', 'content': timeout_summary})}\n\n"
+                for action in _tool_results_to_actions(timeout_tool_results):
+                    yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result'), 'tool_call_id': action.get('_tool_call_id')}, default=str)}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'message': f'AI workflow timed out after {timeout_s}s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
         except asyncio.CancelledError:
             _run_failed = True
             if work_task is not None and not work_task.done():
@@ -1982,6 +1999,90 @@ def _tool_results_to_actions(all_tool_results: list[dict]) -> list[dict]:
     return actions
 
 
+def _tool_results_from_stream_audit(audit_trail: list[dict]) -> list[dict]:
+    """Recover already-streamed tool results after an outer workflow timeout.
+
+    The SSE endpoint wraps the full agent loop in ``asyncio.wait_for``.  When
+    that outer timeout fires, the inner agent task is cancelled before it can
+    return its normal consolidated ``actions`` list.  The thinking stream,
+    however, has already emitted useful ``tool_result`` events to the browser
+    and to ``audit_trail``.  Reconstruct a minimal tool-result list from that
+    trail so timeout paths can still emit a deterministic, evidence-grounded
+    summary instead of a blank/error-only assistant turn.
+
+    This is intentionally generic: it does not special-case paper IDs,
+    datasets, or prompts. It only reuses tool outputs that appeared in the
+    current turn.
+    """
+    recovered: list[dict] = []
+    seen_ids: set[str] = set()
+    for evt in audit_trail or []:
+        if not isinstance(evt, dict) or evt.get("type") != "tool_result":
+            continue
+        tool = str(evt.get("tool") or evt.get("name") or "").strip()
+        if not tool:
+            continue
+        call_id = str(evt.get("tool_call_id") or evt.get("id") or "")
+        dedupe_key = call_id or f"{tool}:{len(recovered)}"
+        if dedupe_key in seen_ids:
+            continue
+        seen_ids.add(dedupe_key)
+        recovered.append({
+            "id": call_id or None,
+            "tool": tool,
+            "input": evt.get("input") if isinstance(evt.get("input"), dict) else {},
+            "result": evt.get("result"),
+        })
+    return recovered
+
+
+def _tool_grounded_timeout_summary(tool_results: list[dict], timeout_s: int) -> str:
+    """Build a safe user-facing summary when the workflow budget is exhausted."""
+    grounded = (
+        _research_tool_grounded_summary(tool_results)
+        or _line_lfr_tool_grounded_summary(tool_results)
+        or _statistics_tool_grounded_summary(tool_results)
+        or _cosmology_tool_grounded_summary(tool_results)
+        or ""
+    )
+    if grounded.strip():
+        return (
+            "The workflow reached its time budget before the final language "
+            "answer could be completed. The tools below did run in this turn, "
+            "so I am returning a deterministic tool-grounded partial summary; "
+            "no unsupported conclusion is being added.\n\n"
+            + grounded
+        )
+    if tool_results:
+        tool_names = ", ".join({
+            str(tr.get("tool") or tr.get("name") or "unknown")
+            for tr in tool_results
+            if isinstance(tr, dict)
+        })
+        return (
+            f"The workflow reached its {timeout_s}s time budget after running "
+            f"these tools: {tool_names}. The tool cards are the source of "
+            "truth for this partial run; no scientific conclusion is claimed "
+            "from the timeout path."
+        )
+    return ""
+
+
+def _format_dataset_gap_item(item: Any) -> str:
+    """Return a user-facing name for a missing/config-only dataset entry."""
+    if isinstance(item, dict):
+        key = str(item.get("key") or "").strip()
+        display = str(item.get("display_name") or item.get("service_name") or "").strip()
+        if display and key:
+            return f"{display} ({key})"
+        if display:
+            return display
+        if key:
+            return key
+        return "unnamed dataset"
+    return str(item)
+
+
 def _line_measurement_count_from_result(result: Any) -> int:
     if not isinstance(result, dict):
         return 0
@@ -2319,11 +2420,14 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     ready_cells: list[str] = []
     blocked_cells: list[str] = []
     ready_cell_summaries: list[str] = []
+    executed_not_ready_summaries: list[str] = []
+    config_only_summaries: list[str] = []
     if isinstance(matrix, dict):
         for cell in matrix.get("matrix") or []:
             if not isinstance(cell, dict):
                 continue
             label = str(cell.get("label") or "unnamed cell")
+            execution_level = str(cell.get("execution_level") or "").strip()
             if cell.get("publication_ready") is True:
                 ready_cells.append(label)
                 result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
@@ -2337,6 +2441,20 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                 h0 = params.get("H0") if isinstance(params, dict) and isinstance(params.get("H0"), dict) else None
                 if isinstance(h0, dict) and h0.get("median") is not None:
                     parts.append(f"H0 median {_fmt_tool_number(h0.get('median'))}")
+                omegam = (
+                    params.get("omegam")
+                    if isinstance(params, dict) and isinstance(params.get("omegam"), dict)
+                    else params.get("Omega_m")
+                    if isinstance(params, dict) and isinstance(params.get("Omega_m"), dict)
+                    else None
+                )
+                if isinstance(omegam, dict) and omegam.get("median") is not None:
+                    # Keep the parameter name in code formatting so Markdown
+                    # does not consume the underscore and render "Omegam".
+                    parts.append(f"`Omega_m` median {_fmt_tool_number(omegam.get('median'))}")
+                s8 = params.get("S8") if isinstance(params, dict) and isinstance(params.get("S8"), dict) else None
+                if isinstance(s8, dict) and s8.get("median") is not None:
+                    parts.append(f"S8 median {_fmt_tool_number(s8.get('median'))}")
                 if isinstance(diagnostics, dict):
                     ess = diagnostics.get("proposal_ess") or diagnostics.get("ess_bulk")
                     rhat = diagnostics.get("rhat")
@@ -2347,6 +2465,52 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                 ready_cell_summaries.append(" · ".join(parts))
             else:
                 blocked_cells.append(label)
+                result = cell.get("result") if isinstance(cell.get("result"), dict) else {}
+                diagnostics = (
+                    result.get("chain_diagnostics")
+                    if isinstance(result, dict) and isinstance(result.get("chain_diagnostics"), dict)
+                    else {}
+                )
+                warnings = [str(w) for w in cell.get("warnings") or [] if w]
+                datasets_not_run = (
+                    result.get("datasets_not_run")
+                    if isinstance(result, dict) and isinstance(result.get("datasets_not_run"), list)
+                    else []
+                )
+                if execution_level == "executed_not_ready" or diagnostics:
+                    detail_parts = [label]
+                    ess = diagnostics.get("proposal_ess") or diagnostics.get("ess_bulk")
+                    rhat = diagnostics.get("rhat")
+                    threshold = (
+                        diagnostics.get("thresholds", {}).get("ess_min")
+                        if isinstance(diagnostics.get("thresholds"), dict)
+                        else None
+                    )
+                    if ess is not None:
+                        if threshold is not None:
+                            detail_parts.append(
+                                f"ESS {_fmt_tool_number(ess)} below threshold {_fmt_tool_number(threshold)}"
+                            )
+                        else:
+                            detail_parts.append(f"ESS {_fmt_tool_number(ess)}")
+                    if rhat is not None:
+                        detail_parts.append(f"Rhat {_fmt_tool_number(rhat)}")
+                    detail_parts.append("not claimable")
+                    executed_not_ready_summaries.append(" · ".join(detail_parts))
+                elif execution_level == "config_only" or datasets_not_run:
+                    reason = ""
+                    if datasets_not_run:
+                        gap_names = [_format_dataset_gap_item(x) for x in datasets_not_run[:3]]
+                        suffix = f"; +{len(datasets_not_run) - 3} more" if len(datasets_not_run) > 3 else ""
+                        reason = "missing executable dataset(s): " + ", ".join(gap_names) + suffix
+                    elif warnings:
+                        reason = warnings[0]
+                    else:
+                        reason = "configuration only, no posterior run"
+                    config_only_summaries.append(f"{label} · {reason}")
+                else:
+                    reason = warnings[0] if warnings else "not runnable in this turn"
+                    config_only_summaries.append(f"{label} · {reason}")
 
     gaps = [
         str(item)
@@ -2357,12 +2521,25 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     if isinstance(evidence, dict):
         claimable = [str(item) for item in evidence.get("claimable_parameters") or []]
 
-    lines = [
-        "Research-mode summary:",
-        "",
+    lines = ["Research-mode summary:", ""]
+    if gaps:
+        lines.extend([
+            "Model-level limitation (read first)",
+            "- This paper-style question cannot be fully tested at its intended "
+            "model level because the required runner(s) are missing: "
+            + "; ".join(gaps[:3])
+            + ("." if len(gaps) <= 3 else f"; +{len(gaps) - 3} more."),
+            (
+                "- The executable baseline below is compressed-likelihood preliminary only."
+                if ready_cells
+                else "- No publication-ready compressed-likelihood baseline completed this turn."
+            ),
+            "",
+        ])
+    lines.extend([
         "What can be tested now",
         "- The research plan and matrix have been built from registered datasets and controlled runners.",
-    ]
+    ])
     if ready_cells:
         lines.append(
             "- Runnable compressed-likelihood preliminary cells: "
@@ -2401,13 +2578,19 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
         lines.append("- This turn supports dataset/method availability only, not posterior claims.")
 
     lines.extend(["", "Robustness"])
-    if blocked_cells:
+    if executed_not_ready_summaries:
         lines.append(
-            "- Some requested robustness branches are not yet numerical evidence because they require external likelihood execution: "
-            + ", ".join(blocked_cells[:5])
-            + ("." if len(blocked_cells) <= 5 else f", +{len(blocked_cells) - 5} more.")
+            "- Executed but not claimable because diagnostics were below publication threshold: "
+            + "; ".join(executed_not_ready_summaries[:5])
+            + ("." if len(executed_not_ready_summaries) <= 5 else f"; +{len(executed_not_ready_summaries) - 5} more.")
         )
-    else:
+    if config_only_summaries:
+        lines.append(
+            "- Config-only or not-runnable branches: "
+            + "; ".join(config_only_summaries[:5])
+            + ("." if len(config_only_summaries) <= 5 else f"; +{len(config_only_summaries) - 5} more.")
+        )
+    if not executed_not_ready_summaries and not config_only_summaries:
         lines.append("- All planned matrix cells that were generated are runnable in the current compressed layer.")
 
     lines.extend(["", "What drives the result"])
@@ -2422,18 +2605,37 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
 
     if isinstance(fact_check, dict):
         lines.extend(["", "Fact verification"])
-        lines.append(
-            f"- Draft fact-check status: {fact_check.get('status', 'unknown')}; "
-            f"{fact_check.get('verified_claim_count', 0)} verified, "
-            f"{fact_check.get('unsupported_claim_count', 0)} unsupported/contradicted."
-        )
-        rewrites = fact_check.get("safe_rewrites")
-        if isinstance(rewrites, list) and rewrites:
-            lines.append("- The final summary omits unsafe draft claims; use safe-rewrite guidance in the Fact Check card for the original draft.")
+        _fc_status = str(fact_check.get("status", "unknown"))
+        _rewrites = fact_check.get("safe_rewrites")
+        _has_rewrites = isinstance(_rewrites, list) and bool(_rewrites)
+        _verified = fact_check.get("verified_claim_count", 0)
+        _unsupported = fact_check.get("unsupported_claim_count", 0)
+        if _fc_status == "blocked" and _has_rewrites:
+            lines.append(
+                f"- Unsafe draft claims were detected and rewritten out of this "
+                f"final summary — the visible answer is safe "
+                f"({_verified} verified, {_unsupported} removed/rewritten)."
+            )
+        elif _fc_status == "blocked":
+            lines.append(
+                f"- Fact-check blocked the draft and no safe rewrite was available "
+                f"({_unsupported} unsupported/contradicted) — treat the tool cards "
+                f"as the source of truth."
+            )
+        else:
+            lines.append(
+                f"- Fact-check {_fc_status}: {_verified} verified, "
+                f"{_unsupported} unsupported/contradicted."
+            )
 
     lines.extend(["", "What is not yet supported"])
     if gaps:
         lines.extend(f"- {gap}" for gap in gaps[:5])
+    elif executed_not_ready_summaries or config_only_summaries:
+        if executed_not_ready_summaries:
+            lines.append("- Some executed cells need stronger diagnostics before their values can be treated as results.")
+        if config_only_summaries:
+            lines.append("- Some requested cells still need an executable likelihood runner or registered covariance.")
     else:
         lines.append("- Full external Cobaya/CosmoSIS reproduction is still outside the compressed preliminary layer.")
 
@@ -4455,8 +4657,25 @@ async def _run_agent_loop(
         if abstention_text_in_prose:
             text = _sanitize_tools_returned_nothing(text)
         if text:
-            text_parts.append(text)
-            await _emit({"type": "agent_text", "agent": agent_name, "content": text})
+            # Research/cosmology turns can produce draft prose immediately
+            # before a tool call.  That draft may contain literature priors or
+            # preliminary numbers that have not passed citation/fact checks.
+            # Keep the process visible, but do not expose or append unverified
+            # prose when the same turn is still executing tools.
+            if tool_calls_in_turn and (research_program_workflow or cosmology_likelihood_workflow):
+                await _emit({
+                    "type": "agent_text",
+                    "agent": agent_name,
+                    "content": (
+                        "Draft intermediate prose withheld until the current "
+                        "research-tool results pass evidence and fact checks."
+                    ),
+                    "draft": True,
+                    "not_claimable": True,
+                })
+            else:
+                text_parts.append(text)
+                await _emit({"type": "agent_text", "agent": agent_name, "content": text})
         if tool_calls_in_turn and abstention_text_in_prose:
             break
         if not tool_calls_in_turn:
@@ -5563,7 +5782,17 @@ async def _run_agent_loop(
         # Still need is_empty_turn for the fallback branch below.
         from app.services.claim_validator import is_empty_turn  # noqa: F401
 
-    if research_program_workflow and clean_reply.strip():
+    research_mode_result_present = research_program_workflow or any(
+        isinstance(tr, dict)
+        and tr.get("tool") in {
+            "plan_research_program",
+            "run_research_matrix",
+            "build_evidence_graph",
+        }
+        for tr in all_tool_results
+    )
+
+    if research_mode_result_present and clean_reply.strip():
         try:
             from app.services.research_program import verify_research_facts
 
@@ -5603,7 +5832,17 @@ async def _run_agent_loop(
         except Exception as exc:
             logger.warning("Research fact verification skipped: %s", exc)
 
-    if research_program_workflow and not any(
+    if research_mode_result_present:
+        # Research Mode answers must be the evidence graph's public surface, not
+        # a fresh model-written literature review.  The model is still used to
+        # choose and run tools, but the final prose is deterministic so it
+        # cannot introduce unsupported paper facts, citations, or background
+        # claims after the tools have completed.
+        tool_grounded_research_summary = _research_tool_grounded_summary(all_tool_results)
+        if tool_grounded_research_summary:
+            clean_reply = tool_grounded_research_summary
+
+    if research_mode_result_present and not any(
         tr.get("tool") == "export_research_report"
         for tr in all_tool_results
     ):
@@ -6097,7 +6336,9 @@ async def ai_backend_status(
             pass
 
     selected_provider = str(api_provider or "").strip().lower() or (
-        "anthropic" if "anthropic" in configured else (configured[0] if configured else "anthropic")
+        DEFAULT_AI_PROVIDER
+        if DEFAULT_AI_PROVIDER in configured
+        else (configured[0] if configured else DEFAULT_AI_PROVIDER)
     )
     selected_profile = resolve_model_profile(selected_provider, model_profile)
     profiles_by_id = all_model_profiles()

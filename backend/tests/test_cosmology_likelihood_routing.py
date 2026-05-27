@@ -879,3 +879,196 @@ def test_cosmology_grounded_summary_keeps_single_h0_prior_comparison_clean() -> 
         "TRGB: H0 = 69.83 km/s/Mpc."
     )
     assert _unsupported_cosmology_anchor_numeric_comparison(unsafe_comparison, tool_results) is True
+
+
+def test_timeout_fallback_recovers_research_tool_results_from_stream_audit() -> None:
+    from app.api.chat import (
+        _tool_grounded_timeout_summary,
+        _tool_results_from_stream_audit,
+    )
+
+    audit_trail = [
+        {"type": "status", "message": "running"},
+        {
+            "type": "tool_result",
+            "tool": "plan_research_program",
+            "tool_call_id": "plan1",
+            "result": {
+                "research_plan": {
+                    "required_probes": ["BAO", "CMB"],
+                    "model_families": ["lcdm"],
+                    "blocking_gaps": ["Pantheon+ requires external Cobaya/CosmoSIS."],
+                }
+            },
+        },
+        {
+            "type": "tool_result",
+            "tool": "run_research_matrix",
+            "tool_call_id": "matrix1",
+            "result": {
+                "ready_cells": 1,
+                "matrix_size": 2,
+                "matrix": [
+                    {
+                        "label": "BAO + CMB",
+                        "publication_ready": True,
+                        "result": {
+                            "parameters": {
+                                "H0": {"median": 67.31},
+                                "omegam": {"median": 0.3116},
+                            },
+                            "chain_diagnostics": {"proposal_ess": 471.3, "rhat": 1.0},
+                        },
+                    },
+                    {"label": "BAO + SN", "publication_ready": False},
+                ],
+            },
+        },
+        {
+            "type": "tool_result",
+            "tool": "build_evidence_graph",
+            "tool_call_id": "graph1",
+            "result": {
+                "evidence_graph": {
+                    "claimable_parameters": ["H0", "omegam"],
+                }
+            },
+        },
+    ]
+
+    recovered = _tool_results_from_stream_audit(audit_trail)
+    assert [item["tool"] for item in recovered] == [
+        "plan_research_program",
+        "run_research_matrix",
+        "build_evidence_graph",
+    ]
+
+    summary = _tool_grounded_timeout_summary(recovered, 420)
+    assert "time budget" in summary
+    assert "tool-grounded partial summary" in summary
+    assert "BAO + CMB" in summary
+    assert "H0 median 67.31" in summary
+    assert "`Omega_m` median 0.3116" in summary
+    assert "Pantheon+ requires external Cobaya/CosmoSIS" in summary
+
+
+def test_research_summary_separates_executed_not_ready_from_config_only() -> None:
+    from app.api.chat import _research_tool_grounded_summary
+
+    tool_results = [
+        {
+            "tool": "plan_research_program",
+            "result": {
+                "research_plan": {
+                    "required_probes": ["BAO", "CMB", "WL"],
+                    "model_families": ["lcdm"],
+                }
+            },
+        },
+        {
+            "tool": "run_research_matrix",
+            "result": {
+                "ready_cells": 1,
+                "matrix_size": 3,
+                "matrix": [
+                    {
+                        "label": "BAO + CMB",
+                        "publication_ready": True,
+                        "execution_level": "compressed_preliminary",
+                        "result": {
+                            "parameters": {
+                                "H0": {"median": 67.28},
+                                "omegam": {"median": 0.3117},
+                                "S8": {"median": 0.8317},
+                            },
+                            "chain_diagnostics": {"proposal_ess": 507.5, "rhat": 1.0},
+                        },
+                    },
+                    {
+                        "label": "BAO + WL",
+                        "publication_ready": False,
+                        "execution_level": "executed_not_ready",
+                        "result": {
+                            "parameters": {"S8": {"median": 0.7796}},
+                            "chain_diagnostics": {
+                                "proposal_ess": 105.0,
+                                "rhat": 1.0,
+                                "thresholds": {"ess_min": 400},
+                            },
+                        },
+                    },
+                    {
+                        "label": "BAO + SN",
+                        "publication_ready": False,
+                        "execution_level": "config_only",
+                        "warnings": ["Pantheon+ requires external Cobaya/CosmoSIS."],
+                    },
+                ],
+            },
+        },
+    ]
+
+    summary = _research_tool_grounded_summary(tool_results)
+
+    assert summary is not None
+    assert "BAO + CMB · H0 median 67.28 · `Omega_m` median 0.3117 · S8 median 0.8317" in summary
+    assert "Executed but not claimable" in summary
+    assert "BAO + WL · ESS 105 below threshold 400" in summary
+    assert "Config-only or not-runnable branches" in summary
+    assert "BAO + SN · Pantheon+ requires external Cobaya/CosmoSIS." in summary
+    assert "BAO + WL" not in summary.split("Config-only or not-runnable branches:", 1)[-1]
+
+
+def test_research_summary_formats_config_only_dataset_dicts_for_users() -> None:
+    from app.api.chat import _research_tool_grounded_summary
+
+    tool_results = [
+        {
+            "tool": "plan_research_program",
+            "result": {
+                "research_plan": {
+                    "required_probes": ["CMB_POLARIZATION_ROTATION"],
+                    "model_families": ["isotropic_beta"],
+                    "blocking_gaps": [
+                        "Planck PR4/NPIPE EB/TB polarization-rotation products requires an EB/TB likelihood.",
+                    ],
+                }
+            },
+        },
+        {
+            "tool": "run_research_matrix",
+            "result": {
+                "ready_cells": 0,
+                "matrix_size": 1,
+                "matrix": [
+                    {
+                        "label": "CMB rotation - isotropic beta",
+                        "publication_ready": False,
+                        "execution_level": "config_only",
+                        "result": {
+                            "datasets_not_run": [
+                                {
+                                    "key": "planck_pr4_ebtb_rotation",
+                                    "display_name": "Planck PR4/NPIPE EB/TB polarization-rotation products",
+                                    "execution_mode": "config_only",
+                                },
+                                {
+                                    "key": "act_dr6_ebtb_rotation",
+                                    "display_name": "ACT DR6 EB/TB polarization-rotation products",
+                                    "execution_mode": "config_only",
+                                },
+                            ]
+                        },
+                    }
+                ],
+            },
+        },
+    ]
+
+    summary = _research_tool_grounded_summary(tool_results)
+
+    assert summary is not None
+    assert "No publication-ready compressed-likelihood baseline completed this turn." in summary
+    assert "Planck PR4/NPIPE EB/TB polarization-rotation products (planck_pr4_ebtb_rotation)" in summary
+    assert "ACT DR6 EB/TB polarization-rotation products (act_dr6_ebtb_rotation)" in summary
+    assert "{'key':" not in summary

@@ -139,6 +139,49 @@
         "notes": "ALMA v2 entry covers Science Archive observation metadata via ObsCore/TAP. It does not provide derived line luminosities or FWHM measurements."
       }
     },
+    "arxiv": {
+      "match_patterns": [
+        "arxiv.org",
+        "arxiv",
+        "arxiv_free_text",
+        "arXiv:"
+      ],
+      "provenance": {
+        "service_key": "arxiv",
+        "service_name": "arXiv",
+        "creator": "Cornell University / arXiv",
+        "publisher": "arXiv",
+        "reference_url": "https://arxiv.org/",
+        "credits_page_url": "https://info.arxiv.org/help/general/index.html",
+        "acknowledgement_template": "This research used metadata and open e-print access from arXiv. arXiv paper records provide literature context only unless a table-extraction tool returns verified measurement rows."
+      },
+      "metadata": {
+        "last_verified": "2026-05-27",
+        "notes": "Literature metadata source. Does not support measurement, posterior, or numerical science claims by itself."
+      }
+    },
+    "ads_or_arxiv_object": {
+      "match_patterns": [
+        "ui.adsabs.harvard.edu",
+        "adsabs.harvard.edu",
+        "NASA ADS",
+        "ads_or_arxiv_object",
+        "ads_free_text"
+      ],
+      "provenance": {
+        "service_key": "ads_or_arxiv_object",
+        "service_name": "NASA ADS / arXiv literature search",
+        "creator": "NASA Astrophysics Data System and arXiv",
+        "publisher": "NASA ADS / arXiv",
+        "reference_url": "https://ui.adsabs.harvard.edu/",
+        "credits_page_url": "https://ui.adsabs.harvard.edu/about/",
+        "acknowledgement_template": "This research used NASA ADS and/or arXiv literature metadata for paper discovery. Literature search results provide citation/context evidence only unless a downstream extraction or likelihood tool returns verified measurement data."
+      },
+      "metadata": {
+        "last_verified": "2026-05-27",
+        "notes": "Combined literature-discovery provenance for search_literature results. It is intentionally paper-level context, not a measurement source."
+      }
+    },
     "jpl": {
       "match_patterns": [
         "ssd.jpl.nasa.gov/horizons",

@@ -9,7 +9,10 @@ import {
   writeStoredAiProvider,
   writeStoredAiModelProfile,
   AI_MODEL_OPTIONS,
+  DEFAULT_AI_PROVIDER,
   DEFAULT_AI_MODEL_BY_PROVIDER,
+  getApiKeysPersist,
+  setApiKeysPersist,
 } from "../../api/client";
 import type { ProviderMeta } from "../../api/client";
 
@@ -18,9 +21,17 @@ const PROVIDERS: Record<string, ProviderMeta> = {
   openai: { name: "OpenAI (GPT)", prefix: "sk-" },
   google: { name: "Google (Gemini)", prefix: "AI" },
   deepseek: { name: "DeepSeek", prefix: "sk-" },
+  local: { name: "Local OpenAI CLI / server", prefix: "" },
   custom: { name: "Custom / Other", prefix: "" },
 };
-const CHAT_PROVIDERS = ["anthropic", "openai", "deepseek"] as const;
+const IS_LOCAL_BROWSER =
+  typeof window !== "undefined"
+  && ["localhost", "127.0.0.1", "::1", ""].includes(window.location.hostname || "");
+const CHAT_PROVIDERS: readonly string[] = (
+  IS_LOCAL_BROWSER
+    ? ["anthropic", "openai", "deepseek", "local"]
+    : ["anthropic", "openai", "deepseek"]
+);
 
 // M9: delegate to the sessionStorage-first helpers in client.ts so that keys
 // don't silently leak across browser restarts.  A "Remember this browser"
@@ -34,7 +45,7 @@ function saveStoredKeys(keys: Record<string, string>) {
 }
 
 function getStoredPreferredProvider(): string {
-  return getStoredAiProvider() || "anthropic";
+  return getStoredAiProvider() || DEFAULT_AI_PROVIDER;
 }
 
 function getDefaultModel(provider: string): string {
@@ -43,11 +54,20 @@ function getDefaultModel(provider: string): string {
 
 export default function SettingsPage() {
   const [keys, setKeys] = useState<Record<string, string>>(getStoredKeys);
-  const [selectedProvider, setSelectedProvider] = useState("anthropic");
+  const [selectedProvider, setSelectedProvider] = useState(DEFAULT_AI_PROVIDER);
   const [preferredProvider, setPreferredProvider] = useState(getStoredPreferredProvider);
-  const [preferredModel, setPreferredModel] = useState(() => getPreferredAiModelProfile(getStoredPreferredProvider()) || "anthropic:default");
+  const [preferredModel, setPreferredModel] = useState(() => (
+    getPreferredAiModelProfile(getStoredPreferredProvider())
+    || getDefaultModel(getStoredPreferredProvider())
+  ));
   const [keyInput, setKeyInput] = useState("");
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [persist, setPersist] = useState<boolean>(() => getApiKeysPersist());
+
+  const handlePersistToggle = (next: boolean) => {
+    setPersist(next);
+    setApiKeysPersist(next);
+  };
 
   useEffect(() => {
     saveStoredKeys(keys);
@@ -91,7 +111,7 @@ export default function SettingsPage() {
     delete next[provider];
     setKeys(next);
     if (preferredProvider === provider) {
-      const fallback = CHAT_PROVIDERS.find((candidate) => Boolean(next[candidate])) || "anthropic";
+      const fallback = CHAT_PROVIDERS.find((candidate) => Boolean(next[candidate])) || DEFAULT_AI_PROVIDER;
       selectProvider(fallback);
     }
     setMessage({ type: "ok", text: `${PROVIDERS[provider]?.name || provider} key removed.` });
@@ -112,9 +132,60 @@ export default function SettingsPage() {
         <h2>AI API Keys</h2>
         <p className="settings-desc">
           Configure API keys for AI providers. The AI assistant uses your manually selected
-          provider and model; fallback is only used when that backend fails. Keys are stored
-          in your browser locally.
+          provider and model; fallback is only used when that backend fails.
         </p>
+        <div
+          role="note"
+          style={{
+            background: persist ? "rgba(34, 197, 94, 0.08)" : "rgba(255, 183, 0, 0.10)",
+            border: persist
+              ? "1px solid rgba(34, 197, 94, 0.35)"
+              : "1px solid rgba(255, 183, 0, 0.35)",
+            borderLeft: persist
+              ? "3px solid var(--color-green, #22c55e)"
+              : "3px solid #d99a00",
+            padding: "0.55rem 0.8rem",
+            borderRadius: 6,
+            margin: "0 0 12px 0",
+            fontSize: "0.82rem",
+            color: "var(--color-text-primary)",
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>
+            {persist ? "Keys persist in this browser" : "Keys are session-only by default"}
+          </div>
+          <div style={{ color: "var(--color-text-secondary)" }}>
+            {persist
+              ? "Your saved keys will survive a browser restart and stay in this browser's localStorage. Clear them with the Remove buttons below when you no longer need them."
+              : "Your saved keys live in sessionStorage and clear when this tab closes. Enable the toggle below to keep them across browser restarts."}
+          </div>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              marginTop: 8,
+              cursor: "pointer",
+              fontSize: "0.82rem",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={persist}
+              onChange={(e) => handlePersistToggle(e.target.checked)}
+            />
+            Remember this browser (persist keys across restarts)
+          </label>
+        </div>
+        {IS_LOCAL_BROWSER && (
+          <p className="settings-desc">
+            Local OpenAI CLI uses this machine&apos;s Codex/OpenAI CLI login and requires
+            <code> OPENAI_CLI_ENABLED=1 </code> on the local backend. It requests
+            Standard Astro tools, including network/archive and database tools,
+            through a backend-executed JSON bridge and is not available on the
+            hosted Render deployment.
+          </p>
+        )}
 
         <div className="settings-key-form" style={{ marginBottom: 12 }}>
           <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>

@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 
 import httpx
 
-from app.ai.model_profiles import ModelProfile, resolve_model_profile
+from app.ai.model_profiles import DEFAULT_AI_PROVIDER, ModelProfile, resolve_model_profile
 from app.models.database import async_session
 from app.models.schemas import InferenceLog
 
@@ -508,7 +508,7 @@ class InferenceRouter:
             "local": LocalBackend(),
             "deepseek": DeepSeekBackend(),
         }
-        default_backend = os.getenv("DEFAULT_AI_BACKEND", "claude")
+        default_backend = os.getenv("DEFAULT_AI_BACKEND", DEFAULT_AI_PROVIDER)
         self.agent_routing = {
             "orchestrator": os.getenv("ORCHESTRATOR_AGENT_BACKEND", default_backend),
             "data_agent": os.getenv("DATA_AGENT_BACKEND", default_backend),
@@ -518,7 +518,7 @@ class InferenceRouter:
             "visualization_agent": os.getenv("VISUALIZATION_AGENT_BACKEND", default_backend),
             "spectrum_agent": os.getenv("SPECTRUM_AGENT_BACKEND", default_backend),
         }
-        self.fallback_chain = [name for name in ["claude", "openai", "deepseek", "local"] if name in self.backends]
+        self.fallback_chain = [name for name in ["deepseek", "openai", "claude", "local"] if name in self.backends]
 
     def _backend_is_available(self, backend_name: str, provider_api_keys: dict[str, str] | None) -> bool:
         keys = provider_api_keys or {}

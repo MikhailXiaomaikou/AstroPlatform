@@ -85,6 +85,7 @@ vi.mock("../api/client", () => ({
   writeStoredAiProvider: vi.fn(),
   getPreferredAiProvider: vi.fn(() => "anthropic"),
   getPreferredAiModelProfile: vi.fn(() => "anthropic:default"),
+  DEFAULT_AI_PROVIDER: "deepseek",
   getAIBackendStatus: vi.fn(() => Promise.resolve({
     configured_backends: [],
     needs_setup: true,

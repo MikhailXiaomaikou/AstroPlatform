@@ -50,6 +50,15 @@ def test_provider_api_keys_can_read_shared_deepseek_from_settings(monkeypatch):
     assert keys["deepseek"] == "sk-settings-deepseek"
 
 
+def test_resolve_model_profile_defaults_to_deepseek():
+    from app.ai.model_profiles import resolve_model_profile
+
+    profile = resolve_model_profile(None, None)
+
+    assert profile.id == "deepseek:v4-pro"
+    assert profile.provider == "deepseek"
+
+
 @pytest.mark.asyncio
 async def test_ai_backend_status_reports_shared_deepseek_backend(app_client, monkeypatch):
     """Anonymous users can see that server-funded DeepSeek is available."""

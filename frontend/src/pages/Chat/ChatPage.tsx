@@ -9,6 +9,7 @@ import {
   getPreferredAiProvider,
   getPreferredAiModelProfile,
   AI_MODEL_OPTIONS,
+  DEFAULT_AI_PROVIDER,
   searchADS,
   getBibTeX,
   logOperation,
@@ -394,10 +395,10 @@ function hasStoredAiKey(): boolean {
 }
 
 function modelDisplayLabel(profile: AIModelProfile | null): string {
-  const provider = getPreferredAiProvider() || "anthropic";
+  const provider = getPreferredAiProvider() || DEFAULT_AI_PROVIDER;
   const profileId = getPreferredAiModelProfile(provider);
   const localOption = (AI_MODEL_OPTIONS[provider] || []).find((option) => option.id === profileId);
-  const label = profile?.display_name || localOption?.label || profileId || "Claude default";
+  const label = profile?.display_name || localOption?.label || profileId || "DeepSeek V4 Pro";
   const resolved = profile?.resolved_model_id;
   if (profileId === "openai:gpt-5.5" && resolved && resolved !== "gpt-5.5") {
     return `${label} -> ${resolved} fallback`;

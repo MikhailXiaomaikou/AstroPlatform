@@ -14,6 +14,8 @@ from typing import Any, Literal
 Provider = Literal["anthropic", "openai", "deepseek", "local"]
 EndpointKind = Literal["anthropic_messages", "chat_completions", "responses"]
 
+DEFAULT_AI_PROVIDER: Provider = "deepseek"
+
 
 @dataclass(frozen=True)
 class ModelProfile:
@@ -128,6 +130,25 @@ def _profiles() -> dict[str, ModelProfile]:
             resolved_model_id=os.getenv("LOCAL_MODEL_NAME", "local-model"),
             supports_tools=True,
             endpoint="chat_completions",
+            note=(
+                "Uses LOCAL_MODEL_BASE_URL / LOCAL_MODEL_NAME when "
+                "LOCAL_MODEL_ENABLED=1."
+            ),
+        ),
+        "local:openai-cli": ModelProfile(
+            id="local:openai-cli",
+            provider="local",
+            model_id="openai-cli",
+            display_name="OpenAI CLI (local subscription)",
+            api_ready=True,
+            resolved_model_id=os.getenv("OPENAI_CLI_MODEL", "codex-config-default"),
+            supports_tools=True,
+            endpoint="chat_completions",
+            note=(
+                "Local-only backend. Uses the installed Codex/OpenAI CLI login "
+                "instead of API keys and requests platform tools through a "
+                "backend-executed JSON bridge."
+            ),
         ),
     }
 
@@ -154,6 +175,9 @@ def normalize_model_profile_id(raw: str | None) -> str | None:
         "deepseek-v4-pro": "deepseek:v4-pro",
         "deepseek-v4-flash": "deepseek:v4-flash",
         "local": "local:default",
+        "openai-cli": "local:openai-cli",
+        "codex-cli": "local:openai-cli",
+        "local:codex": "local:openai-cli",
     }
     return aliases.get(value, value)
 
@@ -164,7 +188,7 @@ def resolve_model_profile(provider: str | None, requested: str | ModelProfile | 
     if provider_key == "claude":
         provider_key = "anthropic"
     if provider_key not in DEFAULT_MODEL_BY_PROVIDER:
-        provider_key = "anthropic"
+        provider_key = DEFAULT_AI_PROVIDER
 
     if isinstance(requested, ModelProfile):
         if requested.provider == provider_key:

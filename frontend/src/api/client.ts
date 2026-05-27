@@ -807,8 +807,8 @@ export async function exportChatMarkdown(
   title?: string,
   sessionId?: string | null,
 ): Promise<Blob> {
-  // sessionId 让后端在 figures 已被 localStorage offload 时, 从 chat_sessions
-  // DB 把完整 figures 拉回来再导出. 服务端保存的 messages 不会 prune.
+  // sessionId lets the backend retrieve the full figures from the chat_sessions DB
+  // when they have been offloaded from localStorage, for export. Server-side messages are never pruned.
   const { data } = await api.post("/api/export/report/from-chat", {
     messages,
     title: title || "AI Research Chat",
@@ -834,7 +834,7 @@ export async function exportChatNotebook(
 
 // ── Chat → HTML (self-contained) Export ──
 
-/** 单文件 HTML, 双击在浏览器看, 所有图 base64 内嵌, Ctrl+P 直接打 PDF. */
+/** Single-file HTML — double-click to open in browser; all figures base64-embedded; Ctrl+P prints to PDF. */
 export async function exportChatHtml(
   messages: Array<{ role: string; content: string; actions?: unknown[] }>,
   title?: string,
@@ -1727,6 +1727,8 @@ const AI_PROVIDER_STORAGE = "astro_ai_provider";
 const AI_MODEL_PROFILE_STORAGE = "astro_ai_model_profile";
 const PERSIST_FLAG_STORAGE = "astro_api_keys_persist";
 
+export const DEFAULT_AI_PROVIDER = "deepseek";
+
 export const DEFAULT_AI_MODEL_BY_PROVIDER: Record<string, string> = {
   anthropic: "anthropic:default",
   openai: "openai:gpt-5.5",
@@ -1747,9 +1749,16 @@ export const AI_MODEL_OPTIONS: Record<string, Array<{ id: string; label: string;
     { id: "deepseek:v4-flash", label: "DeepSeek V4 Flash" },
   ],
   local: [
-    { id: "local:default", label: "Local default" },
+    { id: "local:openai-cli", label: "OpenAI CLI", detail: "Local only; uses your CLI subscription login with backend-executed network/database tools" },
+    { id: "local:default", label: "OpenAI-compatible local server", detail: "Requires LOCAL_MODEL_ENABLED=1" },
   ],
 };
+
+function isLocalBrowserRuntime(): boolean {
+  if (typeof window === "undefined") return false;
+  const host = window.location?.hostname || "";
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "";
+}
 
 function _shouldPersist(): boolean {
   try {
@@ -1804,6 +1813,43 @@ export function getStoredApiKey(provider = "anthropic"): string | null {
     return (keys && typeof keys === "object" && keys[provider]) || null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Whether stored API keys are currently set to survive a browser restart.
+ * False (default) means keys live in sessionStorage and clear on tab close.
+ */
+export function getApiKeysPersist(): boolean {
+  return _shouldPersist();
+}
+
+/**
+ * Toggle whether API keys are persisted to localStorage across browser
+ * restarts. Existing keys are migrated to/from localStorage so the toggle
+ * takes effect immediately on the current key set (no need to re-enter).
+ */
+export function setApiKeysPersist(persist: boolean): void {
+  try {
+    if (persist) {
+      localStorage.setItem(PERSIST_FLAG_STORAGE, "1");
+    } else {
+      localStorage.removeItem(PERSIST_FLAG_STORAGE);
+    }
+  } catch {
+    /* ignore */
+  }
+  // Re-write current keys with the new persistence preference so the
+  // setting takes effect for already-saved keys, not just future writes.
+  const raw = _readFirstDefined(API_KEYS_STORAGE);
+  if (!raw) return;
+  try {
+    const keys = JSON.parse(raw);
+    if (keys && typeof keys === "object") {
+      writeStoredApiKeys(keys);
+    }
+  } catch {
+    /* ignore */
   }
 }
 
@@ -1868,7 +1914,7 @@ export function writeStoredAiModelProfile(modelProfile: string): void {
 }
 
 export function getPreferredAiModelProfile(provider?: string | null): string | null {
-  const selectedProvider = provider || getPreferredAiProvider() || getStoredAiProvider() || "anthropic";
+  const selectedProvider = provider || getPreferredAiProvider() || getStoredAiProvider() || DEFAULT_AI_PROVIDER;
   const stored = getStoredAiModelProfile();
   if (stored && stored.startsWith(`${selectedProvider}:`)) {
     return stored;
@@ -1898,18 +1944,79 @@ export function getStoredApiKeys(): Record<string, string> {
 export function getPreferredAiProvider(): string | null {
   const storedProvider = getStoredAiProvider();
   const keys = getStoredApiKeys();
-  if (storedProvider && ["anthropic", "openai", "deepseek", "local"].includes(storedProvider)) {
+  const allowedProviders = isLocalBrowserRuntime()
+    ? ["anthropic", "openai", "deepseek", "local"]
+    : ["anthropic", "openai", "deepseek"];
+  if (storedProvider && allowedProviders.includes(storedProvider)) {
     return storedProvider;
   }
-  for (const provider of ["anthropic", "openai", "deepseek"]) {
+  for (const provider of [DEFAULT_AI_PROVIDER, "openai", "anthropic"]) {
     if (keys[provider]) {
       return provider;
     }
   }
-  return null;
+  return DEFAULT_AI_PROVIDER;
+}
+
+// P1.3.c (2026-05-22): the SSE stream may drop mid-flight on Render
+// free-tier idle / proxy timeouts / network blips. ``sendChatMessage``
+// wraps the underlying single-attempt streamer and, on a stream-drop
+// error, retries exactly once with ``resume_from_session=true`` so the
+// backend can inject the workflow-checkpoint summary and the LLM can
+// pick up where it left off. Returns whatever the retry produces;
+// non-droppable failures (auth, model error, user abort) pass through
+// untouched.
+function _isResumableStreamDrop(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // The streamer raises localised "AI 回复中断 …" errors for every
+  // mid-flight drop variant (covered by the if-block at lines 2247-2260).
+  // Anything else is a deliberate failure (auth, model error, etc).
+  return err.message.startsWith("AI 回复中断");
 }
 
 export async function sendChatMessage(
+  messages: ChatMessage[],
+  context?: Record<string, unknown>,
+  onThinking?: (evt: ThinkingEvent) => void,
+  signal?: AbortSignal,
+  onActions?: (actions: ChatAction[]) => void,
+): Promise<ChatResponse> {
+  let firstErr: unknown;
+  try {
+    return await _sendChatMessageOnce(messages, context, onThinking, signal, onActions);
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    if (!_isResumableStreamDrop(err)) throw err;
+    firstErr = err;
+  }
+  // Single retry with the resume hint so the backend re-injects the
+  // workflow-checkpoint summary from the prior attempt. UI shows a
+  // status pill so the user sees the reconnect rather than dead air.
+  try {
+    onThinking?.({ type: "status", message: "Reconnecting — resuming from last checkpoint…" });
+  } catch {
+    /* onThinking should never crash the retry */
+  }
+  try {
+    return await _sendChatMessageOnce(
+      messages,
+      { ...(context ?? {}), resume_from_session: true },
+      onThinking,
+      signal,
+      onActions,
+    );
+  } catch (retryErr) {
+    // Preserve the original drop error so any caller / test that pattern-matches
+    // on it keeps working — a flaky retry shouldn't swap a known-shape error
+    // for an obscure "fetch returned undefined" TypeError. Log the retry
+    // exception for diagnostics, then re-throw the original.
+    if (signal?.aborted) throw retryErr;
+    console.debug("sendChatMessage resume retry also failed", retryErr);
+    throw firstErr;
+  }
+}
+
+async function _sendChatMessageOnce(
   messages: ChatMessage[],
   context?: Record<string, unknown>,
   onThinking?: (evt: ThinkingEvent) => void,
@@ -2172,8 +2279,8 @@ export async function sendChatMessage(
               });
             }
           } else if (evt.type === "error" && typeof evt.message === "string") {
-            // R11-NEW-1: 把 error_class 带出去, 让 UI 能对 payload_too_large
-            // 等特定类型显示专属引导 (如 "开始新聊天" 按钮).
+            // R11-NEW-1: Expose error_class so the UI can show type-specific guidance
+            // for errors like payload_too_large (e.g. a "Start new chat" button).
             const err = new Error(evt.message) as Error & { error_class?: string };
             if (typeof evt.error_class === "string") {
               err.error_class = evt.error_class;
@@ -2577,7 +2684,7 @@ export async function dismissAnomaly(id: string): Promise<{ id: string; dismisse
 }
 
 
-// ── 公开评论区 (Landing 页下方) ──
+// ── Public comment section (below the Landing page) ──
 
 export interface CommentPublicView {
   id: string;
