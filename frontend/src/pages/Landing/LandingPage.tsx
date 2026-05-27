@@ -14,11 +14,11 @@ import CommentSection from "./CommentSection";
  */
 
 const STATS: { value: string; labelKey: string }[] = [
-  { value: "23",  labelKey: "home.stat.archives" },
-  { value: "35",  labelKey: "home.stat.nodes" },
-  { value: "52",  labelKey: "home.stat.tools" },
-  { value: "0",   labelKey: "home.stat.fabricated" },
-  { value: "859", labelKey: "home.stat.tests" },
+  { value: "9",     labelKey: "home.stat.archives" },
+  { value: "3",     labelKey: "home.stat.modules" },
+  { value: "35",    labelKey: "home.stat.tools" },
+  { value: "0",     labelKey: "home.stat.fabricated" },
+  { value: "2,262", labelKey: "home.stat.tests" },
 ];
 
 interface TocEntry {
@@ -49,7 +49,7 @@ const TOC: TocEntry[] = [
     title: "Every MCMC report carries ESS, R̂, HDI, WAIC and LOO",
     body: "arviz diagnostics are blocking. Chains with ESS < 400 or R̂ > 1.05 are labelled insufficient before they can cite.",
     meta: "Rigor · p. 13",
-    to: "/pipeline",
+    to: "/chat",
   },
   {
     catKey: "home.cat.pipeline",
@@ -67,10 +67,10 @@ const TOC: TocEntry[] = [
   },
   {
     catKey: "home.cat.community",
-    title: "Templates for five canonical analyses",
-    body: "HR + isochrone, SN Ia peak magnitude, QSO single-epoch BH mass, photo-z catalogue, variable-star folding.",
+    title: "Worked analyses across all three active modules",
+    body: "Open-cluster HR + isochrone and SN Ia distances (cosmology), NEATM diameters and H–G phase curves (solar system), transit fits and equilibrium temperatures (exoplanets).",
     meta: "Workflow library · p. 27",
-    to: "/workspace",
+    to: "/chat",
   },
 ];
 
