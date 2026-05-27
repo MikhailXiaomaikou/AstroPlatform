@@ -2560,6 +2560,13 @@ def _run_emcee_chain(
         return result
 
     sampler = emcee.EnsembleSampler(n_walkers, ndim, log_prob_batch, vectorize=True)
+    # Seed the chain evolution deterministically (emcee otherwise draws stretch
+    # moves from numpy's global RNG, making random_seed / runner_hash a false
+    # reproducibility claim). Mirrors cosmology_mcmc.fit_cosmology_emcee.
+    try:
+        sampler.random_state = np.random.RandomState(seed).get_state()
+    except Exception:
+        logger.debug("emcee sampler random_state could not be set explicitly", exc_info=True)
     sampler.run_mcmc(p0, n_steps, progress=False)
 
     chain = sampler.get_chain(discard=n_burn, flat=True)  # (n_walkers*(n_steps-n_burn), ndim)
@@ -2584,9 +2591,17 @@ def _run_emcee_chain(
     try:
         tau = sampler.get_autocorr_time(quiet=True, discard=n_burn)
         n_draws_total = (n_steps - n_burn) * n_walkers
-        ess_estimate = float(n_draws_total / max(np.max(tau), 1.0))
+        # get_autocorr_time returns NaN for (near-)zero-variance parameters
+        # (e.g. a walker pinned to a prior edge). np.max would propagate the
+        # NaN into ess_estimate and later crash int(round(nan)) at the caller.
+        max_tau = float(np.nanmax(tau))
+        if not math.isfinite(max_tau) or max_tau <= 0:
+            raise ValueError("non-finite autocorrelation time")
+        ess_estimate = float(n_draws_total / max(max_tau, 1.0))
     except Exception:
         ess_estimate = float(chain.shape[0] / 10.0)  # conservative
+    if not math.isfinite(ess_estimate):
+        ess_estimate = float(chain.shape[0] / 10.0)
     return chain_out, best_chi2, ess_estimate, int(chain.shape[0]), list(set(compressed_errors))
 
 
