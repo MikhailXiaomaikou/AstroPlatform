@@ -1409,7 +1409,7 @@ def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text
     extended_models = [model for model in model_list if model != "lcdm"]
     special_model_gap = _has_dedicated_model_gap(prompt)
     baseline_model = "lcdm" if extended_models or special_model_gap else model_list[0]
-    combos: list[tuple[str, list[str]]] = [("All selected probes", matrix_keys)]
+    combos: list[tuple[str, list[str]]] = []
     bao = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "bao"]
     sn = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "sn"]
     cmb = [key for key in matrix_keys if get_cosmology_dataset(key).probe in {"cmb_compressed", "cmb_lensing"}]
@@ -1417,16 +1417,26 @@ def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text
     h0 = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "h0_prior"]
     if bao:
         combos.append(("BAO only", bao[:1]))
-        if sn:
-            combos.append(("BAO + SN", bao[:1] + sn[:1]))
-        if cmb:
-            combos.append(("BAO + CMB", bao[:1] + cmb[:1]))
-        if wl:
-            combos.append(("BAO + WL", bao[:1] + wl))
-        if sn and cmb:
-            combos.append(("BAO + SN + CMB", bao[:1] + sn[:1] + cmb[:1]))
-        if h0:
-            combos.append(("BAO + H0 prior", bao[:1] + h0[:1]))
+    if sn:
+        combos.append(("SN only", sn[:1]))
+    if cmb:
+        combos.append(("CMB only", cmb[:1]))
+    if bao and cmb:
+        combos.append(("BAO + CMB", bao[:1] + cmb[:1]))
+    if bao and sn:
+        combos.append(("BAO + SN", bao[:1] + sn[:1]))
+    if sn and cmb:
+        combos.append(("SN + CMB", sn[:1] + cmb[:1]))
+    if bao and wl:
+        combos.append(("BAO + WL", bao[:1] + wl))
+    if bao and sn and cmb:
+        combos.append(("BAO + SN + CMB", bao[:1] + sn[:1] + cmb[:1]))
+    if h0:
+        for label, combo in list(combos):
+            if h0[0] not in combo:
+                combos.append((f"{label} + H0 prior", combo + h0[:1]))
+    if not combos:
+        combos.append(("All selected probes", matrix_keys))
     seen: set[tuple[str, ...]] = set()
     matrix: list[dict[str, Any]] = []
     for label, combo in combos:
@@ -1777,6 +1787,13 @@ def _line_is_gap_statement(line: str) -> bool:
             "requires future runner",
             "requires a dedicated",
             "requires dedicated",
+            "would be needed",
+            "would be required",
+            "would require",
+            "would need",
+            "is needed for",
+            "are needed for",
+            "needed for",
             "missing covariance",
             "missing likelihood",
             "missing runner",

@@ -10,6 +10,31 @@ need entries unless they change user-visible behavior or research validity.
 
 ### Fixed
 
+- **Cosmology research-matrix + fact-check regression (2026-05-27).**
+  Hardened the BAO/SN/CMB compressed-likelihood workflow after an in-app
+  Chat UI regression test:
+  - Pantheon+ is now executable as a compressed-preliminary SN likelihood path
+    instead of remaining config-only for the first-phase research matrix.
+  - `run_research_matrix` now emits fixed BAO/SN/CMB cells, including
+    `BAO only`, `SN only`, `CMB only`, `BAO + CMB`, `BAO + SN`,
+    `SN + CMB`, `BAO + SN + CMB`, and H0-prior variants.
+  - Low-diagnostic cells are marked `executed_not_ready` rather than
+    claimable. In the Chat UI regression, `BAO + SN + CMB` executed but was
+    correctly withheld from Results because `ESS=38.8 < 400`.
+  - Fact verification now treats future-work scope statements such as "a full
+    external Cobaya/CosmoSIS chain would be needed" as gap statements, not as
+    contradictory claims that block the whole report.
+  - Verified in the local in-app Chat UI: `BAO + CMB` is ready with
+    `H0=67.305`, `Omega_m=0.3116`, `ESS=471`, and `Rhat=1.000`; the exported
+    report keeps ready cells in Results and moves low-ESS cells to
+    Robustness/Scope.
+  - Single-cell deep runs (`run_cosmology_likelihood_chain`) now auto-upgrade
+    from importance sampling to compressed-emcee when the importance ESS
+    collapses on a 3+ probe product (measured `BAO+SN+CMB` ESS 38 → 870+),
+    recovering a publication-ready posterior in ~11 s. Robustness/research
+    matrices keep the fast importance path, and their `executed_not_ready`
+    cells now carry a hint to re-run the flagship combination as a single-cell
+    deep run.
 - **Solar-system blind-test follow-up (2026-05-26, commit 2b85340).** Three
   fixes surfaced by a 20-case DeepSeek blind run of the `solar_system` module:
   - **English-only reply no longer discards the turn.** A non-English (CJK)

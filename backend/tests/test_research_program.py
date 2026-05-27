@@ -22,7 +22,8 @@ def test_research_plan_routes_multiprobe_cosmology_to_dag() -> None:
         "planck2018_compressed",
     ]
     assert plan["executable_level"] == "mixed"
-    assert any("Pantheon+" in gap for gap in plan["blocking_gaps"])
+    assert not any("Pantheon+" in gap for gap in plan["blocking_gaps"])
+    assert any("DES-SN" in gap or "Union3" in gap for gap in plan["blocking_gaps"])
     assert any(cell["label"] == "BAO + CMB" for cell in plan["proposed_experiment_matrix"])
 
 
@@ -38,8 +39,14 @@ def test_research_matrix_runs_executable_cells_and_marks_config_gaps() -> None:
     assert result["ready_cells"] >= 1
     assert any(cell["publication_ready"] is True for cell in result["matrix"])
     assert any(
-        cell["publication_ready"] is False
+        cell["publication_ready"] is True
+        and cell["dataset_keys"] == ["pantheon_plus"]
+        for cell in result["matrix"]
+    )
+    assert any(
+        cell["execution_level"] == "executed_not_ready"
         and "pantheon_plus" in cell["dataset_keys"]
+        and "planck2018_compressed" in cell["dataset_keys"]
         for cell in result["matrix"]
     )
 
@@ -728,6 +735,21 @@ def test_fact_verifier_does_not_block_spectra_likelihood_scope_gaps() -> None:
         claim["status"] == "unsupported" and claim["kind"] == "numeric"
         for claim in report["claims"]
     )
+
+
+def test_fact_verifier_skips_future_external_chain_gap_statement() -> None:
+    from app.services.research_program import verify_research_facts
+
+    report = verify_research_facts(
+        tool_results=[],
+        final_reply=(
+            "A full external Cobaya or CosmoSIS chain would be needed for "
+            "publication-ready BAO+SN+CMB claims."
+        ),
+    )
+
+    assert report["status"] in {"passed", "warning"}
+    assert not any(claim["status"] == "contradicted" for claim in report["claims"])
 
 
 def test_fact_verifier_blocks_unsupported_sigma_tension_claim() -> None:

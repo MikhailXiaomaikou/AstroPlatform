@@ -33,6 +33,7 @@ COSMOLOGY_TOOL_NAMES = frozenset(
         "evaluate_chain_diagnostics",
         "build_cosmology_robustness_matrix",
         "run_cosmology_robustness_matrix",
+        "assess_bao_bin_anomaly",
     }
 )
 
@@ -393,7 +394,7 @@ COSMOLOGY_TOOL_SCHEMAS = [
                 "supernova_sets": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "SN dataset alternatives. Default: Pantheon+, DES-SN5YR, Union3.",
+                    "description": "SN dataset alternatives. Default: Pantheon+; pass DES-SN5YR/Union3 explicitly for config-only comparison branches.",
                 },
                 "include_h0_prior": {
                     "type": "boolean",
@@ -433,7 +434,7 @@ COSMOLOGY_TOOL_SCHEMAS = [
                 "supernova_sets": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "SN dataset alternatives. Default: Pantheon+, DES-SN5YR, Union3.",
+                    "description": "SN dataset alternatives. Default: Pantheon+; pass DES-SN5YR/Union3 explicitly for config-only comparison branches.",
                 },
                 "include_h0_prior": {
                     "type": "boolean",
@@ -447,6 +448,26 @@ COSMOLOGY_TOOL_SCHEMAS = [
                 "n_samples": {"type": "integer", "description": "Posterior sample count per runnable cell."},
             },
             "required": ["model"],
+        },
+    },
+    {
+        "name": "assess_bao_bin_anomaly",
+        "description": (
+            "Run a DESI DR1 BAO redshift-bin geometry diagnostic using the "
+            "Alcock-Paczynski DM/DH ratios. This checks per-bin geometric "
+            "consistency under flat LCDM without using H0 or r_d, and returns "
+            "publication-ready preliminary Omega_m/AP residual diagnostics only "
+            "when the registered DESI DR1 BAO mean vector and covariance are used."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "omega_m_grid": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Optional [low, high, n] Omega_m grid. Default [0.10, 0.50, 401].",
+                },
+            },
         },
     },
 ]
@@ -674,6 +695,9 @@ def _exec_run_cosmology_likelihood_chain(inp: dict) -> dict:
             priors=inp.get("priors"),
             random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
             n_samples=int(inp.get("n_samples") or 4000),
+            # Single-cell deep run: upgrade to compressed-emcee when importance
+            # ESS collapses on multi-probe products (matrices keep the fast path).
+            allow_emcee_fallback=True,
         )
     except Exception as exc:
         return {
@@ -834,6 +858,31 @@ def _exec_run_cosmology_robustness_matrix(inp: dict) -> dict:
         }
 
 
+def _exec_assess_bao_bin_anomaly(inp: dict) -> dict:
+    from app.services.cosmology_likelihoods import run_alcock_paczynski_test
+
+    try:
+        grid_raw = inp.get("omega_m_grid")
+        grid: tuple[float, float, int] = (0.10, 0.50, 401)
+        if isinstance(grid_raw, list) and len(grid_raw) == 3:
+            grid = (float(grid_raw[0]), float(grid_raw[1]), int(grid_raw[2]))
+        return run_alcock_paczynski_test(omega_m_grid=grid)
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "publication_ready": False,
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "BAO redshift-bin diagnostic failed. Do not quote AP Omega_m, "
+                "per-bin residuals, outlier scores, or anomaly claims."
+            ),
+        }
+
+
 async def dispatch_cosmology(
     tool_name: str, tool_input: dict, python_session_id: str | None = None
 ) -> dict | None:
@@ -866,4 +915,6 @@ async def dispatch_cosmology(
         return _exec_build_cosmology_robustness_matrix(tool_input)
     elif tool_name == "run_cosmology_robustness_matrix":
         return _exec_run_cosmology_robustness_matrix(tool_input)
+    elif tool_name == "assess_bao_bin_anomaly":
+        return _exec_assess_bao_bin_anomaly(tool_input)
     return None

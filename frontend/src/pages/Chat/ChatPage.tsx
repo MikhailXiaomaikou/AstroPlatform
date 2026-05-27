@@ -568,6 +568,7 @@ function ActionCardInner({
     run_cosmology_likelihood_chain: "Cosmology Chain",
     run_cmb_rotation_likelihood: "CMB Rotation",
     run_cosmology_robustness_matrix: "Robustness Run",
+    assess_bao_bin_anomaly: "BAO Bin Diagnostic",
     run_nested_sampler: "Nested Sampler",
     evaluate_chain_diagnostics: "Chain Diagnostics",
     plan_research_program: "Research Plan",

@@ -235,7 +235,9 @@ def test_compressed_likelihood_runner_keeps_config_only_datasets_out_of_posterio
         n_samples=512,
     )
 
-    assert result["publication_ready"] is True
+    assert result["publication_ready"] is False
+    assert result["chain_tier"] == "blocked"
+    assert result["__do_not_claim__"] is True
     assert [entry["key"] for entry in result["datasets_used"]] == ["planck2018_compressed"]
     assert [entry["key"] for entry in result["datasets_not_run"]] == ["sdss_6df_bao"]
     assert "not run in compressed phase" in " ".join(result["warnings"])
@@ -343,9 +345,12 @@ def test_robustness_matrix_generates_bao_sn_cmb_h0_variants():
 
     assert matrix["success"] is True
     assert matrix["publication_ready"] is False
-    assert matrix["matrix_size"] == 12
+    assert matrix["matrix_size"] == 22
     assert "BAO only" in labels
     assert "BAO only + SH0ES H0" in labels
+    assert "SN only" in labels
+    assert "CMB only" in labels
+    assert "Pantheon+ + CMB" in labels
     assert "BAO + Pantheon+" in labels
     assert "BAO + Pantheon+ + CMB + SH0ES H0" in labels
     assert all(row["requires_chain_run"] for row in matrix["matrix"])
@@ -374,6 +379,23 @@ def test_executed_robustness_matrix_only_adds_weak_lensing_when_requested():
     assert "BAO + CMB + weak lensing" in labels_with
 
 
+@pytest.mark.asyncio
+async def test_bao_bin_anomaly_ai_tool_wraps_ap_diagnostic():
+    from app.services.ai_tools import execute_tool
+
+    result = await execute_tool(
+        "assess_bao_bin_anomaly",
+        {"omega_m_grid": [0.1, 0.5, 101]},
+        python_session_id="test",
+    )
+
+    assert result["success"] is True
+    assert result["publication_ready"] is True
+    assert result["analysis_status"] == "ALCOCK_PACZYNSKI_READY"
+    assert result["n_redshift_pairs"] >= 5
+    assert result["provenance"]["alcock_paczynski"]["input_dataset"] == "desi_dr1_bao"
+
+
 def test_compressed_runner_reports_no_executable_likelihood_reason():
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
@@ -383,8 +405,11 @@ def test_compressed_runner_reports_no_executable_likelihood_reason():
     )
 
     assert result["publication_ready"] is False
-    assert result["analysis_status"] == "NO_COMPRESSED_LIKELIHOOD"
-    assert "No selected dataset has a registered compressed Gaussian likelihood" in result["warnings"][0]
+    assert result["analysis_status"] == "PARTIAL"
+    assert result["chain_tier"] == "blocked"
+    assert [entry["key"] for entry in result["datasets_used"]] == ["pantheon_plus"]
+    assert [entry["key"] for entry in result["datasets_not_run"]] == ["des_sn5yr", "union3"]
+    assert "Datasets not run in compressed phase" in result["warnings"][1]
 
 
 @pytest.mark.asyncio
@@ -718,3 +743,49 @@ def test_eboss_dr16_rsd_nuisance_parameters_cover_per_subsample_systematics() ->
     assert any("LRG" in n for n in nuisance)
     assert any("ELG" in n for n in nuisance)
     assert any("QSO" in n for n in nuisance)
+
+
+def test_single_cell_emcee_fallback_upgrades_collapsed_3probe() -> None:
+    """3-probe importance ESS collapses (~38); allow_emcee_fallback upgrades the
+    single-cell chain to compressed-emcee and recovers a quotable posterior."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    keys = ["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"]
+
+    # Matrix / default path: fast importance sampling, ESS collapses on the
+    # 3-probe product, so the cell is not publication-ready.
+    fast = run_likelihood_chain(
+        model="lcdm", dataset_keys=keys, random_seed=42, n_samples=4000
+    )
+    assert fast["sampler"] == "bao_gaussian_importance"
+    assert fast["publication_ready"] is False
+
+    # Single-cell deep run: emcee upgrade clears the ESS floor.
+    deep = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=keys,
+        random_seed=42,
+        n_samples=4000,
+        allow_emcee_fallback=True,
+    )
+    assert deep["sampler"] == "compressed_emcee"
+    assert deep["publication_ready"] is True
+    assert deep["chain_tier"] == "publication"
+    assert deep["chain_diagnostics"]["ess_bulk"] >= 400
+    assert deep["chain_diagnostics"]["overall_status"] == "emcee_sampled"
+
+
+def test_emcee_fallback_skips_when_importance_ess_sufficient() -> None:
+    """2-probe importance already clears the ESS floor, so enabling the fallback
+    must not waste an emcee run — the fast importance path is kept."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    deep = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["desi_dr1_bao", "planck2018_compressed"],
+        random_seed=42,
+        n_samples=4000,
+        allow_emcee_fallback=True,
+    )
+    assert deep["sampler"] == "bao_gaussian_importance"
+    assert deep["publication_ready"] is True

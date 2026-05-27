@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
+import os
 import pathlib
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
@@ -21,6 +23,8 @@ from typing import Any, Literal
 import numpy as np
 
 from app.services.cosmology_mcmc import DEFAULT_PRIORS
+
+logger = logging.getLogger(__name__)
 
 CosmologyModel = Literal[
     "lcdm",
@@ -186,6 +190,19 @@ BAO_MODELS: tuple[CosmologyModel, ...] = ALL_MODELS
 CMB_MODELS: tuple[CosmologyModel, ...] = ALL_MODELS
 H0_MODELS: tuple[CosmologyModel, ...] = ALL_MODELS
 WL_MODELS: tuple[CosmologyModel, ...] = ALL_MODELS
+
+# Pantheon+SH0ES diagonal compressed preliminary summary.  This is registered
+# as a fast phase-1 executable SN constraint so research matrices can run
+# deterministically.  The full 1701-SN covariance chi² runner remains available
+# only behind PANTHEON_PLUS_FULL_CHI2_ENABLED because it is too slow for default
+# multi-cell chat workflows.
+_PANTHEON_PLUS_COMPRESSED_MEAN: tuple[float, float, float] = (73.04, 0.334, -19.253)
+_PANTHEON_PLUS_COMPRESSED_COV: tuple[tuple[float, float, float], ...] = (
+    (1.04 ** 2, 0.0, 0.0),
+    (0.0, 0.018 ** 2, 0.0),
+    (0.0, 0.0, 0.027 ** 2),
+)
+_PANTHEON_PLUS_COMPRESSED_NAMES: tuple[str, ...] = ("H0", "omegam", "M_B")
 
 
 _REGISTRY: dict[str, CosmologyDatasetEntry] = {
@@ -385,7 +402,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         display_name="Pantheon+",
         version="Pantheon+SH0ES DataRelease 2022",
         probe="sn",
-        status="external_likelihood",
+        status="ready",
         observables=("zHD", "zHEL", "mu", "mu_covariance"),
         units={"z": "dimensionless", "mu": "mag"},
         applicable_models=SN_MODELS,
@@ -401,12 +418,18 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         citations=(
             DatasetCitation(label="Scolnic et al. Pantheon+ sample", year=2022, arxiv="2112.03863"),
             DatasetCitation(label="Brout et al. Pantheon+ cosmology", year=2022, arxiv="2202.04077"),
+            DatasetCitation(
+                label="Riess et al. SH0ES calibration",
+                year=2022,
+                arxiv="2112.04510",
+                doi="10.3847/2041-8213/ac5c5b",
+            ),
         ),
         notes="Can be used with or without SH0ES calibration; keep H0 prior separate unless explicitly selected.",
         cobaya_likelihood="external:sn.pantheon_plus",
         cosmosis_module="Pantheon+_Data/5_COSMOLOGY/cosmosis_likelihoods",
         nuisance_parameters=("M_B",),
-        execution_mode="external_cobaya",
+        execution_mode="compressed_gaussian",
         data_products=(
             DataProductSpec(
                 product_type="sn_distance_modulus_table",
@@ -465,6 +488,30 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 description="Pantheon+SH0ES CosmoSIS likelihood wrapper.",
             ),
         ),
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=_PANTHEON_PLUS_COMPRESSED_NAMES,
+            mean=_PANTHEON_PLUS_COMPRESSED_MEAN,
+            covariance=_PANTHEON_PLUS_COMPRESSED_COV,
+            units={
+                "H0": "km s^-1 Mpc^-1",
+                "omegam": "dimensionless",
+                "M_B": "mag",
+            },
+            source_locator=(
+                "Pantheon+SH0ES 2022 cosmology summary compression "
+                "(Brout et al. 2022; Riess et al. 2022 calibration branch)."
+            ),
+            approximation=(
+                "Diagonal SN+SH0ES compressed preliminary summary for phase-1 "
+                "research matrices; not the full Pantheon+ covariance likelihood."
+            ),
+        ),
+        research_roles=("sn_distance_ladder", "late_universe_distance", "dark_energy_matrix"),
+        execution_level="compressed_preliminary",
+        independence_group="pantheon_plus_sn",
+        claimable_parameters=("H0", "omegam", "M_B"),
+        recommended_combinations=("desi_dr1_bao", "planck2018_compressed"),
+        do_not_combine_with=("des_sn5yr", "union3"),
     ),
     "des_sn5yr": CosmologyDatasetEntry(
         key="des_sn5yr",
@@ -1207,16 +1254,23 @@ def build_robustness_matrix(
     sampler: str = "mcmc",
 ) -> dict[str, Any]:
     model_key = _validate_model(model)
-    sn_keys = supernova_sets or ["pantheon_plus", "des_sn5yr", "union3"]
+    sn_keys = list(supernova_sets) if supernova_sets is not None else ["pantheon_plus"]
+    if not sn_keys:
+        sn_keys = ["pantheon_plus"]
     matrix: list[dict[str, Any]] = []
 
     base_combos: list[tuple[str, list[str]]] = [
         ("BAO only", ["desi_dr1_bao"]),
+        ("SN only", [sn_keys[0]]),
+        ("CMB only", ["planck2018_compressed"]),
         ("BAO + CMB", ["desi_dr1_bao", "planck2018_compressed"]),
     ]
     for sn_key in sn_keys:
         label = get_cosmology_dataset(sn_key).display_name
+        if sn_key != sn_keys[0]:
+            base_combos.append((f"{label} only", [sn_key]))
         base_combos.append((f"BAO + {label}", ["desi_dr1_bao", sn_key]))
+        base_combos.append((f"{label} + CMB", [sn_key, "planck2018_compressed"]))
         base_combos.append(
             (f"BAO + {label} + CMB", ["desi_dr1_bao", sn_key, "planck2018_compressed"])
         )
@@ -1324,13 +1378,16 @@ def run_likelihood_chain(
     priors: dict[str, Any] | None = None,
     random_seed: int | None = None,
     n_samples: int = 4000,
+    allow_emcee_fallback: bool = False,
 ) -> dict[str, Any]:
     """Run the phase-1 compressed Gaussian cosmology likelihood.
 
     This combines registry entries with explicit ``CompressedLikelihoodSpec``
     summaries and the DESI DR1 public Gaussian BAO mean/covariance products.
-    External SN/full-CMB likelihood packages are reported as not-run rather
-    than approximated silently.
+    Full external likelihood packages are reported as not-run unless a dataset
+    has an explicit registered compression.  Pantheon+ defaults to such an
+    SN compressed-preliminary path; the full covariance χ² runner is opt-in
+    via PANTHEON_PLUS_FULL_CHI2_ENABLED.
     """
     model_key = _validate_model(model)
     entries = _validate_dataset_selection(model_key, dataset_keys)
@@ -1343,6 +1400,7 @@ def run_likelihood_chain(
             priors=priors,
             seed=seed,
             sample_count=sample_count,
+            allow_emcee_fallback=allow_emcee_fallback,
         )
 
     # PART AI Phase 5 #2 Track 2 step 2: external_cobaya dispatch.
@@ -1476,7 +1534,7 @@ def run_likelihood_chain(
     if prior_violations:
         warnings.append("Posterior mean outside configured prior bounds for: " + ", ".join(prior_violations))
 
-    publication_ready = not invalid_specs and not prior_violations
+    publication_ready = not invalid_specs and not prior_violations and not skipped_entries
     # Compressed-Gaussian analytic path is binary by construction: the
     # posterior is closed-form so there is no "exploratory" intermediate.
     chain_tier = "publication" if publication_ready else "blocked"
@@ -1561,6 +1619,11 @@ def run_likelihood_chain(
         # Mirrors the per-tier message handling in _run_sampling_likelihood_chain.
         if invalid_specs:
             blocked_reason = "Invalid compressed-likelihood specs: " + "; ".join(invalid_specs)
+        elif skipped_entries:
+            blocked_reason = (
+                "Requested datasets were not numerically included: "
+                + ", ".join(entry.key for entry in skipped_entries)
+            )
         elif prior_violations:
             blocked_reason = (
                 "Posterior mean outside configured prior bounds for: "
@@ -1586,9 +1649,13 @@ def run_robustness_matrix(
     n_samples: int = 4000,
 ) -> dict[str, Any]:
     model_key = _validate_model(model)
-    sn_keys = supernova_sets or ["pantheon_plus", "des_sn5yr", "union3"]
+    sn_keys = list(supernova_sets) if supernova_sets is not None else ["pantheon_plus"]
+    if not sn_keys:
+        sn_keys = ["pantheon_plus"]
     combos: list[tuple[str, list[str]]] = [
         ("BAO only", ["desi_dr1_bao"]),
+        ("SN only", [sn_keys[0]]),
+        ("CMB only", ["planck2018_compressed"]),
         ("BAO + CMB", ["desi_dr1_bao", "planck2018_compressed"]),
     ]
     if include_weak_lensing:
@@ -1604,7 +1671,10 @@ def run_robustness_matrix(
         ))
     for sn_key in sn_keys:
         label = get_cosmology_dataset(sn_key).display_name
+        if sn_key != sn_keys[0]:
+            combos.append((f"{label} only", [sn_key]))
         combos.append((f"BAO + {label}", ["desi_dr1_bao", sn_key]))
+        combos.append((f"{label} + CMB", [sn_key, "planck2018_compressed"]))
         combos.append((f"BAO + {label} + CMB", ["desi_dr1_bao", sn_key, "planck2018_compressed"]))
     if include_h0_prior:
         combos.extend([
@@ -1633,14 +1703,26 @@ def run_robustness_matrix(
                     cell_status = "missing_likelihood"
                 elif run.get("execution_status") == "not_run" or "CONFIG" in _as:
                     cell_status = "config_only"
+                elif isinstance(run.get("chain_diagnostics"), dict):
+                    cell_status = "executed_not_ready"
                 else:
                     cell_status = "blocked"
+            execution_level = (
+                "compressed_preliminary"
+                if cell_status == "runnable"
+                else "executed_not_ready"
+                if cell_status == "executed_not_ready"
+                else "config_only"
+                if cell_status == "config_only"
+                else "not_available"
+            )
             matrix.append({
                 "label": label,
                 "dataset_keys": keys,
                 "runnable": bool(run.get("publication_ready")),
                 "publication_ready": bool(run.get("publication_ready")),
                 "status": cell_status,
+                "execution_level": execution_level,
                 "result": run,
                 "warnings": run.get("warnings", []),
             })
@@ -1656,6 +1738,21 @@ def run_robustness_matrix(
             })
 
     ready_cells = [row for row in matrix if row.get("publication_ready")]
+    not_ready_labels = [
+        row["label"] for row in matrix if row.get("status") == "executed_not_ready"
+    ]
+    matrix_message = (
+        "Summarize only cells with publication_ready=true as compressed preliminary "
+        "results. For non-runnable cells, say the external likelihood/config is still needed."
+    )
+    if not_ready_labels:
+        matrix_message += (
+            " Cells marked executed_not_ready ran but their importance-sampling ESS fell "
+            "below the publication floor (typically 3+ probe products). Do not quote those "
+            "cells directly; to obtain a quotable posterior for one, call "
+            "run_cosmology_likelihood_chain on that single dataset combination — it "
+            "auto-upgrades to compressed-emcee (~11 s) and can reach publication-ready ESS."
+        )
     return {
         "success": True,
         "__tool_status__": "COMPLETED" if ready_cells else "PARTIAL",
@@ -1670,10 +1767,7 @@ def run_robustness_matrix(
         "warnings": [
             "Robustness matrix uses compressed Gaussian summaries where available; config-only cells are not numerical evidence.",
         ],
-        "__message_to_model__": (
-            "Summarize only cells with publication_ready=true as compressed preliminary "
-            "results. For non-runnable cells, say the external likelihood/config is still needed."
-        ),
+        "__message_to_model__": matrix_message,
     }
 
 
@@ -1684,8 +1778,24 @@ def _is_executable_bao_entry(entry: CosmologyDatasetEntry) -> bool:
 # M6 (2026-05-18): Pantheon+SH0ES Python chi² runner — bypasses external
 # Cobaya for the SN-distance-modulus likelihood.  1701 SNe + full
 # stat+sys covariance from the 2022 data release, loaded lazily from
-# backend/data/pantheon_plus_2022/data.npz.
-PANTHEON_PLUS_EXECUTABLE_KEYS = {"pantheon_plus"}
+# backend/data/pantheon_plus_2022/data.npz.  It is intentionally opt-in:
+# default chat/research matrices use the fast registered compressed summary
+# above so a multi-cell workflow does not hang on the full covariance χ².
+PANTHEON_PLUS_FULL_CHI2_ENABLED = os.getenv("PANTHEON_PLUS_FULL_CHI2_ENABLED", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+PANTHEON_PLUS_EXECUTABLE_KEYS = {"pantheon_plus"} if PANTHEON_PLUS_FULL_CHI2_ENABLED else set()
+
+# ESS floor below which a single-cell chain auto-upgrades from importance
+# sampling to compressed-emcee.  Multi-probe products (3+ likelihoods) push the
+# joint posterior far narrower than any proposal Gaussian, so importance ESS
+# collapses (measured: BAO+SN+CMB ESS≈39).  emcee ensemble sampling recovers it
+# (≈780) in ~11 s, well inside the 45 s tool deadline.  Robustness/research
+# matrices keep the fast importance path so they stay inside their own deadline.
+_EMCEE_FALLBACK_ESS_FLOOR = 400.0
 
 
 def _is_executable_sn_entry(entry: CosmologyDatasetEntry) -> bool:
@@ -1699,6 +1809,7 @@ def _run_sampling_likelihood_chain(
     priors: dict[str, Any] | None,
     seed: int,
     sample_count: int,
+    allow_emcee_fallback: bool = False,
 ) -> dict[str, Any]:
     """Importance-sample executable low-dimensional likelihood products.
 
@@ -1723,7 +1834,12 @@ def _run_sampling_likelihood_chain(
 
     bao_entries = [entry for entry in entries if _is_executable_bao_entry(entry)]
     sn_entries = [entry for entry in entries if _is_executable_sn_entry(entry)]
-    compressed_entries = [entry for entry in entries if entry.compressed_likelihood is not None]
+    sn_entry_keys = {entry.key for entry in sn_entries}
+    compressed_entries = [
+        entry
+        for entry in entries
+        if entry.compressed_likelihood is not None and entry.key not in sn_entry_keys
+    ]
     executable_keys = {e.key for e in bao_entries} | {e.key for e in sn_entries}
     skipped_entries = [
         entry
@@ -1745,6 +1861,7 @@ def _run_sampling_likelihood_chain(
     prior_bounds = _sanitize_runner_priors(parameter_order, priors)
     rng = np.random.default_rng(seed)
     invalid_specs: list[str] = []
+    sampler_used = "bao_gaussian_importance"
 
     try:
         # Fast analytic-grid BAO-only path is calibrated for flat ΛCDM in the
@@ -1784,6 +1901,42 @@ def _run_sampling_likelihood_chain(
                 sn_entries=sn_entries,
             )
             invalid_specs.extend(compressed_errors)
+            # ESS-floor emcee upgrade (single-cell deep runs only).  Importance
+            # sampling collapses on 3+ probe products; emcee recovers a
+            # quotable posterior in ~11 s.  Matrices pass
+            # allow_emcee_fallback=False so they stay inside their own
+            # deadline.  Requires every entry to have an executable chi²
+            # (no skipped_entries) and ≥2 likelihood components.
+            n_components = len(bao_entries) + len(compressed_entries) + len(sn_entries)
+            if (
+                allow_emcee_fallback
+                and proposal_ess < _EMCEE_FALLBACK_ESS_FLOOR
+                and not skipped_entries
+                and n_components >= 2
+            ):
+                try:
+                    (
+                        posterior_samples,
+                        best_chi2,
+                        proposal_ess,
+                        proposal_draws,
+                        emcee_errors,
+                    ) = _run_emcee_chain(
+                        seed,
+                        parameter_order,
+                        prior_bounds,
+                        bao_entries,
+                        compressed_entries,
+                        sn_entries,
+                        sample_count,
+                    )
+                    invalid_specs.extend(emcee_errors)
+                    sampler_used = "compressed_emcee"
+                except Exception as exc:
+                    logger.warning(
+                        "compressed-emcee fallback failed (%s); keeping importance result",
+                        exc,
+                    )
     except Exception as exc:
         return _compressed_runner_unavailable(
             model_key=model_key,
@@ -1848,14 +2001,14 @@ def _run_sampling_likelihood_chain(
             f"Importance sampler ESS={proposal_ess:.1f} below publication threshold 400."
         )
 
-    publication_ready = not invalid_specs and proposal_ess >= 400.0
+    publication_ready = not invalid_specs and not skipped_entries and proposal_ess >= 400.0
     # Importance-sampler three-tier (mirrors fit_cosmology_emcee, 2026-05-21):
     #   publication: ESS ≥ 400 and no invalid specs
     #   exploratory: 100 ≤ ESS < 400 — posterior discussable but not citeable
     #   blocked:     ESS < 100 or invalid specs — do not claim numbers
     if publication_ready:
         chain_tier = "publication"
-    elif not invalid_specs and proposal_ess >= 100.0:
+    elif not invalid_specs and not skipped_entries and proposal_ess >= 100.0:
         chain_tier = "exploratory"
     else:
         chain_tier = "blocked"
@@ -1883,7 +2036,7 @@ def _run_sampling_likelihood_chain(
         "compressed_likelihood_preliminary": True,
         "model": model_key,
         "model_label": MODEL_LABELS[model_key],
-        "sampler": "bao_gaussian_importance",
+        "sampler": sampler_used,
         "parameters": summaries,
         "posterior_summary": summaries,
         "derived_params": derived_summaries,
@@ -1897,7 +2050,10 @@ def _run_sampling_likelihood_chain(
             "n_parameters": int(k),
         },
         "chain_diagnostics": {
-            "overall_status": "importance_resampled",
+            "overall_status": (
+                "emcee_sampled" if sampler_used == "compressed_emcee"
+                else "importance_resampled"
+            ),
             "publication_ready": publication_ready,
             "rhat": 1.0,
             "ess_bulk": int(min(round(proposal_ess), sample_count)),
@@ -1925,7 +2081,7 @@ def _run_sampling_likelihood_chain(
         "provenance": {
             "cosmology_likelihood": {
                 "registry_version": "2026-04-30",
-                "runner": "bao_gaussian_importance",
+                "runner": sampler_used,
                 "runner_hash": result_hash,
                 "dataset_keys": [entry.key for entry in entries],
                 "datasets_used": [entry.key for entry in used_entries],
@@ -1954,6 +2110,9 @@ def _run_sampling_likelihood_chain(
         blocked_reason = (
             f"Importance sampler ESS={proposal_ess:.0f} below exploratory floor 100"
             if not invalid_specs and proposal_ess < 100.0
+            else "Requested datasets were not numerically included: "
+            + ", ".join(entry.key for entry in skipped_entries)
+            if skipped_entries
             else "Invalid compressed-likelihood specs: " + "; ".join(invalid_specs)
             if invalid_specs
             else "Chain did not reach a quotable posterior"
@@ -2174,19 +2333,12 @@ def _draw_gaussian_centered_proposal(
     return samples, log_q
 
 
-# Pantheon+SH0ES proposal-only Gaussian approximation (Brout+ 2022 marginal
-# 1σ on the (H0, Ωm, M_B) plane).  This is *not* used in chi² — the real
-# Pantheon+ chi² uses the full 1701-SN covariance via _pantheon_plus_chi2_samples.
-# It exists purely to seed importance-sampling proposal draws near the SN
-# best fit so the mixture proposal can cover both Planck (H0≈67) and SN
-# (H0≈73) modes.
-_PANTHEON_PLUS_PROPOSAL_MEAN: tuple[float, float, float] = (73.04, 0.334, -19.253)
-_PANTHEON_PLUS_PROPOSAL_COV: tuple[tuple[float, float, float], ...] = (
-    (1.04 ** 2, 0.0, 0.0),
-    (0.0, 0.018 ** 2, 0.0),
-    (0.0, 0.0, 0.027 ** 2),
-)
-_PANTHEON_PLUS_PROPOSAL_NAMES: tuple[str, ...] = ("H0", "omegam", "M_B")
+# The full Pantheon+ χ² proposal reuses the registered compressed preliminary
+# Gaussian as its mixture component.  The χ² itself still uses the full 1701-SN
+# covariance via _pantheon_plus_chi2_samples when explicitly enabled.
+_PANTHEON_PLUS_PROPOSAL_MEAN = _PANTHEON_PLUS_COMPRESSED_MEAN
+_PANTHEON_PLUS_PROPOSAL_COV = _PANTHEON_PLUS_COMPRESSED_COV
+_PANTHEON_PLUS_PROPOSAL_NAMES = _PANTHEON_PLUS_COMPRESSED_NAMES
 
 
 def _draw_mixture_gaussian_proposal(
@@ -2206,22 +2358,19 @@ def _draw_mixture_gaussian_proposal(
     ``log[(1/N) Σᵢ q_i(θ)]`` so the importance ratio remains unbiased.
 
     Components:
-      1. Best compressed-likelihood Gaussian from ``compressed_entries``
-         (typically Planck18; tightest by normalized trace).
-      2. If ``include_pantheon_plus``, a Pantheon+SH0ES proposal Gaussian
-         centered on Brout+ 2022 best fit (H0=73.04, Ωm=0.334, M_B=-19.253).
+      1. Every compressed-likelihood Gaussian from ``compressed_entries`` that
+         overlaps the current parameter space.  Keeping all components matters
+         for tension cases such as Planck+Pantheon+, where a single "best"
+         anchor undersamples the other posterior mode.
+      2. If ``include_pantheon_plus``, the registered Pantheon+SH0ES
+         compressed preliminary Gaussian centered on the SN calibration branch.
 
     Returns ``(samples, log_q)`` or ``None`` if no component fits the
     requested parameter_order (caller falls back to uniform).
     """
     components: list[tuple[np.ndarray, np.ndarray, list[int], list[str]]] = []
 
-    # Component 1: best compressed-likelihood Gaussian.
-    best_entry: CosmologyDatasetEntry | None = None
-    best_trace = math.inf
-    best_local_idx: list[int] = []
-    best_sample_idx: list[int] = []
-    best_names: list[str] = []
+    # Component 1: registered compressed-likelihood Gaussians.
     for entry in compressed_entries:
         spec = entry.compressed_likelihood
         if spec is None:
@@ -2230,30 +2379,15 @@ def _draw_mixture_gaussian_proposal(
         names = [n for n in params if n in parameter_order]
         if not names:
             continue
-        local_idx = [params.index(n) for n in names]
-        cov = np.asarray(spec.covariance, dtype=float)[np.ix_(local_idx, local_idx)]
-        scales = np.array(
-            [prior_bounds[n][1] - prior_bounds[n][0] for n in names], dtype=float
-        )
-        if not np.all(scales > 0):
-            continue
-        trace_norm = float(np.sum(np.diagonal(cov) / (scales ** 2)))
-        if trace_norm < best_trace:
-            best_entry = entry
-            best_trace = trace_norm
-            best_local_idx = local_idx
-            best_sample_idx = [parameter_order.index(n) for n in names]
-            best_names = names
-    if best_entry is not None:
-        spec = best_entry.compressed_likelihood
-        assert spec is not None
-        mean = np.asarray(spec.mean, dtype=float)[best_local_idx]
+        local_idx = [params.index(name) for name in names]
+        sample_idx = [parameter_order.index(name) for name in names]
+        mean = np.asarray(spec.mean, dtype=float)[local_idx]
         cov = np.asarray(spec.covariance, dtype=float)[
-            np.ix_(best_local_idx, best_local_idx)
+            np.ix_(local_idx, local_idx)
         ]
-        components.append((mean, cov, best_sample_idx, best_names))
+        components.append((mean, cov, sample_idx, names))
 
-    # Component 2: Pantheon+SH0ES proposal Gaussian (proposal-only).
+    # Component 2: Pantheon+SH0ES compressed preliminary Gaussian.
     if include_pantheon_plus:
         names = [n for n in _PANTHEON_PLUS_PROPOSAL_NAMES if n in parameter_order]
         if names:
@@ -2333,7 +2467,7 @@ def _draw_mixture_gaussian_proposal(
     return samples, log_q_total
 
 
-def _run_emcee_for_sn_chain(
+def _run_emcee_chain(
     seed: int,
     parameter_order: list[str],
     prior_bounds: dict[str, tuple[float, float]],
@@ -2342,12 +2476,14 @@ def _run_emcee_for_sn_chain(
     sn_entries: list[CosmologyDatasetEntry],
     target_sample_count: int,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
-    """emcee MCMC for paths containing SN entries.
+    """emcee MCMC over any BAO + compressed + SN likelihood product.
 
-    Importance sampling collapses on Pantheon+'s tight χ² landscape (1701 SN
-    pin (H0, M_B) to a narrow ridge).  emcee ensemble sampling handles
-    tight likelihoods naturally — at 32 walkers × 800 steps after burn-in,
-    typical posterior ESS is in the thousands.
+    Importance sampling collapses on tight posteriors — both Pantheon+'s
+    1701-SN χ² ridge and 3+ probe products whose joint posterior is far
+    narrower than any proposal Gaussian.  emcee ensemble sampling handles
+    these naturally; at 32 walkers × ~1500 post-burn steps the posterior ESS
+    is in the hundreds-to-thousands.  Used both for the full-χ² SN path and as
+    the single-cell ESS-floor fallback for compressed multi-probe chains.
 
     Returns the same tuple as ``_draw_importance_posterior`` for drop-in
     substitution: ``(samples, best_chi2, effective_sample_size, n_draws,
@@ -2469,7 +2605,7 @@ def _draw_importance_posterior(
     if sn_entries and any(e.key == "pantheon_plus" for e in sn_entries):
         # Use the rng's bit-state to seed emcee deterministically.
         emcee_seed = int(rng.integers(0, 2**31 - 1))
-        return _run_emcee_for_sn_chain(
+        return _run_emcee_chain(
             emcee_seed,
             parameter_order,
             prior_bounds,
