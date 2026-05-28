@@ -21,7 +21,12 @@ on:
 jobs:
   blind-tests:
     runs-on: ubuntu-latest
-    if: ${{ vars.DAILY_BLIND_ENABLED == 'true' && secrets.ANTHROPIC_API_KEY != '' }}
+    # Activate when any of the supported provider keys is configured AND
+    # the user has explicitly opted in via the DAILY_BLIND_ENABLED variable.
+    # Three secret names are accepted (anthropic / deepseek / the
+    # platform-default deepseek). daily_blind.sh auto-picks --provider
+    # based on which env var is non-empty downstream.
+    if: ${{ vars.DAILY_BLIND_ENABLED == 'true' && (secrets.ANTHROPIC_API_KEY != '' || secrets.DEEPSEEK_API_KEY != '' || secrets.PLATFORM_DEEPSEEK_API_KEY != '') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +40,12 @@ jobs:
           ./venv/bin/pip install -r requirements.txt
       - name: Run blind tests (solar_system + exoplanet + cosmology)
         env:
+          # Map PLATFORM_DEEPSEEK_API_KEY (platform-default secret name)
+          # onto the DEEPSEEK_API_KEY env var the runner actually reads,
+          # so a single PLATFORM_DEEPSEEK_API_KEY secret is enough to
+          # activate the deepseek path.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || secrets.PLATFORM_DEEPSEEK_API_KEY }}
         run: |
           bash backend/scripts/daily_blind.sh
       - name: Upload blind-test results
