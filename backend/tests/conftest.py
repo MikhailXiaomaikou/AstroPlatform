@@ -1,7 +1,18 @@
 """Shared test fixtures for the standard-astro backend tests."""
 
 import os
+from pathlib import Path
+
 os.environ["RATE_LIMIT_ENABLED"] = "false"
+
+# Prod engine (app/models/database.py) is created at import time with
+# settings.database_url, default "sqlite+aiosqlite:///<repo>/backend/data/astro.db".
+# CI runners ship without that data/ directory, so the first connect raises
+# OperationalError: unable to open database file. Tests that import the prod
+# engine (TestSessionPaper, etc.) need this directory to exist before SQLAlchemy
+# tries to open it.
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 import uuid
 

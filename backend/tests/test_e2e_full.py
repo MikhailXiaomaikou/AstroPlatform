@@ -109,8 +109,15 @@ class TestScienceTools:
         assert "best_log_age" in r, f"Missing best_log_age in {list(r.keys())}"
 
     async def test_estimate_photo_z(self):
+        # Demo 7-template path: test_estimate_photo_z_pro below covers
+        # method="enhanced_template" (the default). Asking for the demo path
+        # here exercises a distinct code branch and finishes in <5 s instead
+        # of hitting the prod-side 60 s wait_for that wraps enhanced.
         r = await call_tool("estimate_photo_z", {
             "magnitudes": {"g": 22.1, "r": 21.5, "i": 20.8, "z": 20.3},
+            "mag_errors": {"g": 0.05, "r": 0.04, "i": 0.04, "z": 0.05},
+            "method": "template",
+            "allow_demo": True,
         })
         assert_no_error(r, "estimate_photo_z")
 
@@ -301,22 +308,27 @@ class TestLiteratureExport:
 
 class TestSessionPaper:
 
-    async def _create_session(self) -> str:
-        """Create a real ChatSession in DB and return its ID."""
+    async def _create_session(self) -> tuple[str, str]:
+        """Create a real ChatSession in DB; return (session_id, user_id).
+
+        The session-paper tools require an authenticated owner — they call
+        `_require_tool_session_owner` which short-circuits with a sign-in error
+        when `user_id` is missing. Tests must thread the owner's id through.
+        """
         import uuid
         from app.models.database import engine
         from app.models.schemas import Base, ChatSession
         from sqlalchemy.ext.asyncio import AsyncSession as AS
         from sqlalchemy.orm import sessionmaker
-        # Ensure tables exist
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async_session_factory = sessionmaker(engine, class_=AS, expire_on_commit=False)
         sid = uuid.uuid4()
+        uid = uuid.uuid4()
         async with async_session_factory() as db:
             session = ChatSession(
                 id=sid,
-                user_id=uuid.uuid4(),
+                user_id=uid,
                 title="E2E Test Session",
                 messages=[
                     {"role": "user", "content": "Analyze NGC 1647"},
@@ -325,21 +337,21 @@ class TestSessionPaper:
             )
             db.add(session)
             await db.commit()
-        return str(sid)
+        return str(sid), str(uid)
 
     async def test_validate_analysis(self):
-        sid = await self._create_session()
-        r = await call_tool("validate_analysis", {"session_id": sid})
+        sid, uid = await self._create_session()
+        r = await call_tool("validate_analysis", {"session_id": sid}, user_id=uid)
         assert_no_error(r, "validate_analysis")
 
     async def test_generate_paper_draft(self):
-        sid = await self._create_session()
-        r = await call_tool("generate_paper_draft", {}, chat_session_id=sid)
+        sid, uid = await self._create_session()
+        r = await call_tool("generate_paper_draft", {}, chat_session_id=sid, user_id=uid)
         assert_no_error(r, "generate_paper_draft")
 
     async def test_full_research_report(self):
-        sid = await self._create_session()
-        r = await call_tool("full_research_report", {"session_id": sid})
+        sid, uid = await self._create_session()
+        r = await call_tool("full_research_report", {"session_id": sid}, user_id=uid)
         # May have partial errors but should not crash
         assert isinstance(r, dict)
 
