@@ -127,4 +127,7 @@ jobs:
       - name: Run integration tests
         run: |
           cd backend
-          python -m pytest tests/ -v --tb=short -m "integration and not slow"
+          # Disable coverage gate: integration is a small slice (~44 cases) so
+          # its coverage (~19%) trivially fails pytest.ini's 45% threshold,
+          # which is calibrated for the unit-test suite in backend-test.
+          python -m pytest tests/ -v --tb=short -m "integration and not slow" --no-cov
