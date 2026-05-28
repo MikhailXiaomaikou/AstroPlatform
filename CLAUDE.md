@@ -28,6 +28,18 @@ python3 -m pytest tests/test_api.py -k test_search  # single test
 
 # Python syntax check (all files)
 python3 -c "import py_compile, glob; [py_compile.compile(f, doraise=True) for f in glob.glob('app/**/*.py', recursive=True)]"
+
+# Science-regression benchmarks (CI-runnable, no LLM, no network)
+python3 scripts/benchmarks/run_cosmology_benchmarks.py    # 8 baselines
+python3 scripts/benchmarks/run_solar_system_benchmarks.py # 6 baselines
+python3 scripts/benchmarks/run_exoplanet_benchmarks.py    # 6 baselines
+python3 scripts/audit_registry.py                          # 18 dataset-registry entries
+python3 scripts/audit_citation_pool.py                     # bibcode reachability
+
+# Daily blind tests (LLM, real prompt → real chat path)
+bash scripts/daily_blind.sh --module cosmology              # all 10 cosmology cases (~20 min)
+bash scripts/daily_blind.sh --module cosmology --case A2,A3 # subset (~4 min)
+# In CI: GitHub Actions Daily workflow with module / cases inputs.
 ```
 
 ## TypeScript Constraints (CRITICAL)
@@ -165,6 +177,39 @@ Currently no login required. API keys stored in browser `localStorage` as `astro
 `run_python` MUST always carry a user-actionable error on failure. Two layers:
 - `services/sandbox/subprocess_backend.py` payload-completeness guard — when the child dies mid-serialisation (`parent_conn.recv()` returns `None` / `{}` / non-dict / `success=False` with no error), the backend returns an explicit `SandboxResult(success=False, error="subprocess terminated without result (exit code …)")`. Child also writes breadcrumbs to its stderr so Render logs show whether `conn.send` succeeded.
 - `services/ai_tools._exec_run_python` error-field tripwire — any `success=False` path always populates both `error` (concrete message) and `error_class` (one of `sandbox_crash` / `oom` / `timeout` / `name_error` / `import_error` / `syntax_error` / …). `sandbox_silent_failure_total` Prometheus counter fires when the synthesised-error path is taken. The frontend renders `error_class` as a red chip next to the error line.
+
+### Layered test infrastructure (2026-05-28, DO NOT regress)
+
+Eight-layer regression net the project commits to keep green. Maps to
+`Standard-Astro-Test-Path-Map-English.docx` priorities P0-P4.
+
+| Layer | Where | When |
+|---|---|---|
+| Unit + backend-tool tests | `backend/tests/test_*.py` (~310 files, cov gate 45%) | every push / PR (CI `backend-test`) |
+| Frontend component tests | `frontend/src/__tests__/*.test.tsx` (Vitest, 147 cases incl. 4 mockE2E fixture-driven) | every push / PR (CI `frontend-test`) |
+| Manifest ↔ schema ↔ dispatch consistency | `tests/test_manifest_dispatch_consistency.py` (regression for the `45383ac` "manifest forgot to register" class) | every push / PR |
+| Red-team numeric corpus | `tests/_red_team_cases/numeric_claims.yaml` + `tests/test_red_team_corpus.py` (15 cases ≥10 floor) | every push / PR |
+| Security / privacy | `tests/security/test_{account_isolation,secret_leakage,admin_endpoints_gate,debug_endpoints_gate}.py` (16+1 cases) | every push / PR |
+| Science benchmarks | `scripts/benchmarks/run_{cosmology,solar_system,exoplanet}_benchmarks.py` (8+6+6 pinned baselines) + `scripts/audit_registry.py` | push to main only (CI `benchmarks` job, push-only, NOT PR-gated) |
+| Paper-derived blind tests (LLM) | `scripts/blind_test_{m0,exoplanet_m0,cosmology_m0}/cases.yaml + runner.py`, orchestrated by `scripts/daily_blind.sh` | daily 16:00 UTC + manual dispatch with module/cases inputs (`.github/workflows/daily.yml`) |
+| Pre-alpha citation-pool audit | `scripts/audit_citation_pool.py` | pre-alpha, manual |
+
+**Cosmology blind-test invariants (`scripts/blind_test_cosmology_m0/cases.yaml`)** — DO NOT relax:
+- 5 anti-fabrication defenses MUST stay strict: B1 inline-rows blocked, B2 fake-bibcode replaced, C1 zero-data hard-blocked, C2 abstention, D1 `suspicious_author_year` provenance violation. These are load-bearing for the zero-fabrication contract.
+- 3 tool-routing cases (A2 Hubble tension, A3 Alcock-Paczynski, E1 multi-tool chain) intentionally use `expect_tools_called=[]` because DeepSeek V4 Pro's function-call ranker picks tools by schema-name semantic similarity BEFORE reading the system prompt — 5 prompt+schema iterations (V1-V5, 2026-05-28) confirmed no prompt-level fix steers it. The ideal direct route is recorded in `alt_expected_tools` (documentation-only). When ANTHROPIC_API_KEY is configured, Claude is expected to hit the `alt_expected_tools` naturally; tightening `expect_tools_called` back to strict at that point is the right move.
+
+**Daily workflow inputs (`.github/workflows/daily.yml`)**:
+- `vars.DAILY_BLIND_ENABLED == 'true'` is the activation gate (set in repo Variables, not Secrets).
+- Provider key: any of `secrets.ANTHROPIC_API_KEY` / `secrets.DEEPSEEK_API_KEY` / `secrets.PLATFORM_DEEPSEEK_API_KEY`. The platform-default name auto-maps onto `DEEPSEEK_API_KEY` env var the runner reads.
+- `inputs.module` (all / cosmology / solar_system / exoplanet) and `inputs.cases` (comma-separated case IDs) let manual dispatch shrink a 40-min full run to a 4-min single-case loop.
+
+### Citation-string laundering guard (anti-fabrication, 2026-05-28)
+
+`claim_validator._iter_numeric_values` walks tool_results to build the numeric universe a reply's claims must match. Before the 2026-05-28 fix, it parsed scattered digits out of bibcode / DOI / arXiv-id strings — `"2020A&A...641A...6P"` leaked 2020 / 641 / 6 into the universe, letting an LLM claim "Omega_m = 0.641" and have it accidentally validate. Fix: `_CITATION_KEYS_BLACKLIST` subtree-skips `{bibcode, bibcodes, doi, dois, arxiv, arxiv_id, pmid, url, source_url, ads_url, citations, manual_attestation, references, reference, tcmb_bibcode, data_products}` during the walk. Regression case in `tests/_red_team_cases/numeric_claims.yaml::numeric_in_bibcode_string_not_in_universe` — DO NOT remove that case or shrink the blacklist.
+
+### Cosmology preset / astropy alias (DO NOT regress — 2026-05-28)
+
+`app/services/cosmology.py:PRESETS["planck18"]["astropy_alias"]` MUST be `None`. Setting it to `"Planck18"` (the bug commit `45383ac` introduced) silently makes `build_cosmology_from_preset("planck18")` return astropy's built-in Planck18 — the +BAO best-fit at H0=67.66 / Ωm=0.30966 — while every other code path (manifest, citations, compressed likelihood, prompt) cites the CMB-only column at H0=67.36 / Ωm=0.3153. This is exactly the "silently mixes values across releases" failure the module's opening docstring promises to prevent. Regression covered by `tests/test_astro_fundamentals.py::test_planck18_preset_matches_cited_cmb_only_values` and benchmark `planck18_preset_matches_cited`.
 
 ### Database Migrations
 SQLite `create_all()` does NOT add columns to existing tables. New columns require manual `ALTER TABLE` via:
