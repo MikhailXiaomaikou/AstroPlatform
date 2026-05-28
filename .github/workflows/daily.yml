@@ -33,6 +33,23 @@ on:
         required: false
         default: ""
         type: string
+      provider:
+        description: "LLM provider for the runner. 'auto' picks deepseek when only DEEPSEEK_API_KEY is set (the cheap daily-cron path), otherwise lets the runner default to anthropic."
+        required: false
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - anthropic
+          - deepseek
+      model:
+        description: "Claude model id when provider=anthropic (claude-opus-4-7 or claude-sonnet-4-6). Ignored when provider=deepseek or auto-picked deepseek."
+        required: false
+        default: "claude-sonnet-4-6"
+        type: choice
+        options:
+          - claude-sonnet-4-6
+          - claude-opus-4-7
 
 jobs:
   blind-tests:
@@ -67,10 +84,17 @@ jobs:
           # honors --module to skip the other two modules.
           BLIND_MODULE: ${{ inputs.module || 'all' }}
           BLIND_CASES: ${{ inputs.cases || '' }}
+          BLIND_PROVIDER: ${{ inputs.provider || 'auto' }}
+          # CLAUDE_MODEL is read directly by app.ai.model_profiles when
+          # provider=anthropic; ignored otherwise.
+          CLAUDE_MODEL: ${{ inputs.model || 'claude-sonnet-4-6' }}
         run: |
           set -- --module "$BLIND_MODULE"
           if [[ -n "$BLIND_CASES" ]]; then
             set -- "$@" --case "$BLIND_CASES"
+          fi
+          if [[ "$BLIND_PROVIDER" != "auto" ]]; then
+            set -- "$@" --provider "$BLIND_PROVIDER"
           fi
           bash backend/scripts/daily_blind.sh "$@"
       - name: Upload blind-test results
