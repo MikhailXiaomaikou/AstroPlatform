@@ -3791,6 +3791,16 @@ async def _run_agent_loop(
     - {"type": "tool_result", "agent": <name>, "tool": <name>, "result": <dict>}
       — fires when each tool completes.
     """
+    # 2026-05-28: normalise public provider names to canonical backend ids.
+    # The blind-test runners pass --provider anthropic / deepseek / openai,
+    # but inference_router registers backends under their internal names
+    # (claude vs anthropic, etc.). Without this mapping, --provider anthropic
+    # silently falls through to the first available fallback backend
+    # (DeepSeek when DEEPSEEK_API_KEY is also set), which is what caused
+    # the V7 Opus blind run to charge zero Anthropic credit.
+    if preferred_backend == "anthropic":
+        preferred_backend = "claude"
+
     import time as _time
 
     async def _emit(evt: dict) -> None:
