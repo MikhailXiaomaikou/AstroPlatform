@@ -705,6 +705,29 @@ _METADATA_KEYS_BLACKLIST: frozenset[str] = frozenset({
 })
 
 
+# 2026-05-28: citation-identifier keys (bibcode / doi / arxiv / URL / etc.)
+# carry a lot of digits that are NOT measurements — bibcode volumes / page
+# numbers, DOI fragments, arXiv IDs, publication years, ADS URLs.
+# Harvesting those into the numeric universe lets a fabricated claim match
+# accidentally (e.g. an LLM claim of "641" matches the volume parsed out of
+# "2020A&A...641A...6P", and the claim_validator's anti-fabrication contract
+# is silently bypassed via citation-string laundering).
+# Skipping the entire subtree because nothing under these keys is a
+# measurement — they're identifiers / references.
+_CITATION_KEYS_BLACKLIST: frozenset[str] = frozenset({
+    # Direct paper identifiers
+    "bibcode", "bibcodes", "tcmb_bibcode",
+    "doi", "dois", "doi_url",
+    "arxiv", "arxiv_id", "arxiv_ids",
+    "pmid", "ads_url", "url", "source_url",
+    # Container fields whose values are lists/dicts of identifier objects.
+    # Skipping the container drops the embedded labels too (e.g. "Riess+2022")
+    # which would otherwise leak the year as a numeric token.
+    "citations", "manual_attestation", "references", "reference",
+    "data_products",
+})
+
+
 # P0-a (2026-05-26): free-text / diagnostic fields carry prose numbers (years,
 # version strings, banner text, suggested next steps) that are NOT
 # observational values.  Harvesting digits from them inflates the numeric
@@ -750,6 +773,13 @@ def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Ite
             # L2: skip the entire systemic metadata field
             key_str = str(key).lower() if not isinstance(key, str) else key.lower()
             if key_str in _METADATA_KEYS_BLACKLIST:
+                continue
+            # 2026-05-28: skip the entire subtree under citation-identifier
+            # keys — bibcode / doi / arxiv / url / citations / references all
+            # carry digits that are identifiers, not measurements, and a
+            # fabricated claim must not legitimize itself by matching the
+            # parsed-out volume / year / arxiv-id of a cited paper.
+            if key_str in _CITATION_KEYS_BLACKLIST:
                 continue
             # P0-a: don't harvest prose digits from free-text field strings
             # (banner text, error messages, suggestions).  Nested structures

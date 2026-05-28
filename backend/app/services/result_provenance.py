@@ -487,6 +487,10 @@ _COMPUTE_TOOLS = {
     "run_cosmology_likelihood_chain", "run_cosmology_robustness_matrix",
     "run_cmb_rotation_likelihood",
     "run_nested_sampler", "evaluate_chain_diagnostics", "run_research_matrix",
+    # 2026-05-28 backfill: DESI BAO Alcock-Paczynski per-bin diagnostic.
+    # Added in f0622ca but never classified; was falling through to
+    # UNAVAILABLE/PARTIAL at runtime.
+    "assess_bao_bin_anomaly",
     # PART Y Batch 1 (audit follow-up): newer compute tools — line-relation
     # fitting on cited literature tables, luminosity-distance comparison
     # across cosmologies, gravitational-lensing demagnification of a sample.

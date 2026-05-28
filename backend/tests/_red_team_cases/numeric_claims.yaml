@@ -197,23 +197,27 @@ cases:
           density_g_cm3: 5.495
     expect_ok: true
 
-  # ── TODO (anti-fabrication gap, 2026-05-28): `_iter_numeric_values`
-  #    currently extracts scattered numerics from bibcode / doi strings,
-  #    so "2020A&A...641A...6P" leaks 2020 / 641 / 6 / etc. into the
-  #    universe and lets the LLM legitimize fabricated numbers via
-  #    citation-string laundering. Adding a citation-key blacklist to
-  #    _iter_numeric_values (mirroring the existing key blacklist) is the
-  #    fix. Re-add the regression case below once that lands.
-  #
-  # - name: numeric_in_bibcode_string_not_in_universe
-  #   description: A bibcode like "2020A&A...641A...6P" must NOT leak 641 / 2020 into the numeric universe.
-  #   reply: "We measure 641 something arbitrary."
-  #   tool_results:
-  #     - tool: run_cosmology_likelihood_chain
-  #       result:
-  #         provenance:
-  #           cosmology_likelihood:
-  #             citations:
-  #               - bibcode: "2020A&A...641A...6P"
-  #                 doi: "10.1051/0004-6361/201833910"
-  #   expect_ok: false
+  # ── Citation-string laundering guard ──────────────────────────────
+  # Regression target for the 2026-05-28 _CITATION_KEYS_BLACKLIST fix.
+  # Before the fix, _iter_numeric_values pulled scattered digits out of
+  # bibcode / doi / arxiv strings (e.g. "2020A&A...641A...6P" leaked
+  # 2020 / 641 / 6 into the universe), so an LLM claim of "641" would
+  # accidentally validate against a parsed-out volume number.
+  - name: numeric_in_bibcode_string_not_in_universe
+    description: |
+      A bibcode like "2020A&A...641A...6P" must NOT leak its parsed-out tokens
+      (2020 / 641 / 0.641) into the numeric universe. Before the
+      _CITATION_KEYS_BLACKLIST fix, an LLM could write 'Omega_m = 0.641' and
+      have it validate against the bibcode-laundered 0.641. After the fix,
+      citations are skipped entirely so the only universe is whatever the
+      tool actually measured — and a fabricated Ωm=0.641 has no support.
+    reply: "We measure Omega_m = 0.641 from this analysis."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          provenance:
+            cosmology_likelihood:
+              citations:
+                - bibcode: "2020A&A...641A...6P"
+                  doi: "10.1051/0004-6361/201833910"
+    expect_ok: false
