@@ -21,12 +21,12 @@ on:
 jobs:
   blind-tests:
     runs-on: ubuntu-latest
-    # Activate when any of the supported provider keys is configured AND
-    # the user has explicitly opted in via the DAILY_BLIND_ENABLED variable.
-    # Three secret names are accepted (anthropic / deepseek / the
-    # platform-default deepseek). daily_blind.sh auto-picks --provider
-    # based on which env var is non-empty downstream.
-    if: ${{ vars.DAILY_BLIND_ENABLED == 'true' && (secrets.ANTHROPIC_API_KEY != '' || secrets.DEEPSEEK_API_KEY != '' || secrets.PLATFORM_DEEPSEEK_API_KEY != '') }}
+    # GitHub Actions does NOT allow the `secrets` context in a job-level
+    # `if:` (only in step `if:` and `env:`), so the activation gate is the
+    # vars.DAILY_BLIND_ENABLED flag alone. If the user opts in via that
+    # variable but forgot to set the API-key secret, the runner aborts
+    # cleanly on missing-key — daily_blind.sh + runner.py both check.
+    if: ${{ vars.DAILY_BLIND_ENABLED == 'true' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
