@@ -19,5 +19,10 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/__tests__/setup.ts'],
+    // Playwright specs live under ./playwright/ and use @playwright/test
+    // (a separately-installed package, not in CI). They are NOT vitest
+    // tests — excluding the folder prevents vitest from collecting them
+    // and failing on the missing import resolution.
+    exclude: ['playwright/**', 'node_modules/**', 'dist/**'],
   },
 })
