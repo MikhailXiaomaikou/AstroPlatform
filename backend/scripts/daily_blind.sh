@@ -28,14 +28,16 @@ if [[ ! -x "$PY" ]]; then
   exit 2
 fi
 
-# Auto-pick --provider when the caller didn't pass one. The runner's
-# argparse default is "anthropic"; if only DEEPSEEK_API_KEY is set, the
-# runner's preflight aborts with "缺 ANTHROPIC_API_KEY" — so we have to
-# inject the right provider when the env tells us which key is live.
+# Default-provider policy (2026-05-28 update): always prefer DeepSeek
+# when its key is present and the caller didn't pass --provider
+# explicitly. The runner's argparse default is "anthropic"; the daily
+# cron should NEVER silently bill Anthropic just because both keys are
+# configured. Manual dispatch via daily.yml inputs.provider=anthropic
+# still overrides this (it sets --provider anthropic in the args).
 if [[ "$*" != *"--provider"* ]]; then
-  if [[ -n "${DEEPSEEK_API_KEY:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+  if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
     set -- "$@" --provider deepseek
-    echo "(daily_blind.sh) DEEPSEEK_API_KEY set, ANTHROPIC_API_KEY empty → --provider deepseek"
+    echo "(daily_blind.sh) DEEPSEEK_API_KEY set → --provider deepseek (default cron path)"
   fi
 fi
 
