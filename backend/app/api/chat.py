@@ -4032,12 +4032,23 @@ async def _run_agent_loop(
             tr.get("tool") == "build_evidence_graph"
             for tr in all_tool_results
         )
-        research_plan_pending = research_program_workflow and not research_plan_done
+        # 2026-05-28: when a cosmology direct-route trigger matches the
+        # user prompt (e.g. "Hubble tension", "Alcock-Paczynski"), suppress
+        # the research_program_workflow detour so the direct route below
+        # fires unopposed. Otherwise research_plan_pending at line 4570
+        # would inject plan_research_program first and the direct gate's
+        # "not tool_calls_in_turn" guard would skip.
+        research_plan_pending = (
+            research_program_workflow
+            and not research_plan_done
+            and not cosmology_direct_route_calls
+        )
         research_matrix_pending = (
             research_program_workflow
             and research_plan_done
             and cosmology_likelihood_workflow
             and not research_matrix_done
+            and not cosmology_direct_route_calls
         )
         research_evidence_pending = (
             research_program_workflow
