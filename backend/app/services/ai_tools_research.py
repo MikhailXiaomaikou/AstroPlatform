@@ -29,11 +29,17 @@ RESEARCH_TOOL_SCHEMAS = [
     {
         "name": "plan_research_program",
         "description": (
-            "Create a structured research plan before executing an observational "
-            "cosmology or measurement-relation research request. The plan identifies "
-            "hypotheses, probes, candidate registered datasets, model families, "
-            "runnable vs config-only gaps, and a proposed experiment matrix. It does "
-            "not produce scientific posterior or fit numbers."
+            "Multi-step research planner. USE ONLY for broad open-ended research "
+            "requests that span >=3 distinct tool layers (e.g. 'design a study to "
+            "test whether dark energy is dynamical', 'draft a paper section on the "
+            "S8 tension'). DO NOT call this for single-tool calculations — for "
+            "those, go DIRECT to the specific tool. Examples that should NOT use "
+            "this planner: 'compute the Hubble tension' (use compare_luminosity_"
+            "distances), 'run an Alcock-Paczynski test' (use assess_bao_bin_anomaly), "
+            "'fit my distance modulus rows' (use fit_cosmology_mcmc), 'run a "
+            "BAO+CMB+SN ΛCDM combined chain' (use run_cosmology_robustness_matrix). "
+            "The plan returns hypotheses, probes, datasets, models, and gaps; it does "
+            "NOT produce posterior numbers or fit results."
         ),
         "input_schema": {
             "type": "object",
@@ -53,10 +59,15 @@ RESEARCH_TOOL_SCHEMAS = [
     {
         "name": "run_research_matrix",
         "description": (
-            "Execute the runnable subset of a ResearchPlan. It runs compressed "
-            "likelihood chains where registered and returns not-runnable/config-only "
-            "cells for missing external likelihoods. Cite only cells with "
-            "publication_ready=true as compressed-likelihood preliminary."
+            "Cross-module research-matrix orchestrator. PREFER the focus-specific "
+            "version when the request is in one vertical: under "
+            "ASTRO_RESEARCH_FOCUS=cosmology, use run_cosmology_robustness_matrix "
+            "directly for BAO/SN/CMB combinations — it knows the cosmology dataset "
+            "registry by name and produces tighter compressed-likelihood cells. "
+            "Only use this generic run_research_matrix when (a) a previous "
+            "plan_research_program call returned a multi-vertical plan, or (b) the "
+            "user explicitly asks for a generic plan-derived matrix. Cite only "
+            "publication_ready=true cells as compressed-likelihood preliminary."
         ),
         "input_schema": {
             "type": "object",

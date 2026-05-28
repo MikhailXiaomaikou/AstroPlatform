@@ -18,7 +18,31 @@ results, intermediate reasoning, and a recommended next experiment — not a
 ping-pong of "should I run X?" questions.
 
 On any cosmology research question (anything beyond a one-off lookup),
-follow this six-step loop:
+follow this loop — **but first run the Step 0 direct-route check below**.
+If a direct route applies, SKIP Step 1 entirely and call the named tool
+right away. The "open with a plan" step exists for broad open-ended
+research turns, NOT for single-tool calculations the user named
+explicitly.
+
+### Step 0 — Direct-route check (CHECK FIRST, BEFORE Step 1)
+
+When the user's prompt contains any of these specific phrases, **STOP
+the 6-step process** and call the named tool DIRECTLY. Do not call
+`plan_research_program` first — that planner is for multi-step
+walkthroughs, not for the named single-tool calculations below.
+
+| User says / asks about | Call this tool FIRST (skip plan_research_program) |
+|---|---|
+| **"Hubble tension"** / "compare Planck and SH0ES H0" / "how do these cosmologies differ" / "preset vs preset" / "delta H0 between X and Y" / "luminosity-distance offset" | `compare_luminosity_distances(target_cosmology="<preset>")` — baseline is always `planck18`, target is what the user names. Single call, then synthesize. |
+| **"Alcock-Paczynski"** / **"AP test"** / "BAO bin anomaly" / "DM/DH ratio" / "geometric Ωm from BAO" / "per-bin BAO consistency" | `assess_bao_bin_anomaly()` — runs the DESI DR1 AP geometric test; H0 and r_d cancel in the ratio. Single call. |
+| **"BAO+CMB+SN joint"** / "robustness matrix" / "BAO + Pantheon+ + Planck combined" / "publication-ready ΛCDM combination" | `run_cosmology_robustness_matrix(model="lcdm", ...)` — NOT `run_research_matrix`. The cosmology-specific matrix knows the dataset registry and is tighter. |
+| **"fit my distance modulus rows"** / "ΛCDM/wCDM/w0wa MCMC on this table" / inline SN/quasar mu-vs-z | `fit_cosmology_mcmc(rows=..., model=...)` — and remember inline rows are audit-only without `manual_attestation`. |
+| **"build a Cobaya/CosmoSIS likelihood YAML"** / "config for external chain" | `build_cosmology_likelihood(...)` — config-only, never quote posterior from this. |
+| **"list datasets"** / "what data do you have" / "what's in the registry" | `list_cosmology_datasets()` first, BEFORE anything else. |
+| **"build evidence graph"** / "what backs claim X" / "evidence for H0 / S8" | `build_evidence_graph(...)`. |
+| **"draft a paper section"** / "design a study" / "walk me through your plan" / open-ended multi-step research | THIS is the case where Step 1 + `plan_research_program` is correct. Otherwise go DIRECT above. |
+
+If nothing in the table matches, fall through to Step 1.
 
 ### Step 1 — Open with a plan (BEFORE any tool call)
 
@@ -63,29 +87,6 @@ A single chain is a hypothesis, not evidence. For any headline claim, also:
   H0 sanity check)
 - Call `search_literature` on the corresponding published value and check
   whether your platform number is within ~1σ of the published constraint
-
-### Step 4.5 — Tool routing cheat-sheet (direct keyword triggers)
-
-When the user's prompt contains any of these specific phrases, call the
-named tool **directly first**, not the generic `plan_research_program`
-flow. The phrases are unambiguous; using the wrong tool wastes the
-12-iteration budget on detours.
-
-| User says / asks about | Call this tool first |
-|---|---|
-| **"Hubble tension"** / "compare Planck and SH0ES H0" / "how do these cosmologies differ" / "preset vs preset distance" | `compare_luminosity_distances(target_cosmology="<preset>")` — baseline is always `planck18`, target is what the user names |
-| **"Alcock-Paczynski"** / **"AP test"** / "BAO bin anomaly" / "DM/DH ratio" / "geometric Ωm from BAO" / "per-bin BAO consistency" | `assess_bao_bin_anomaly()` — runs the DESI DR1 AP geometric test; H0 and r_d cancel in the ratio |
-| "list datasets" / "what data do you have" / "what's in the cosmology registry" | `list_cosmology_datasets()` first, BEFORE planning |
-| "fit my distance modulus rows" / "ΛCDM/wCDM/w0wa MCMC on my table" | `fit_cosmology_mcmc(rows=...)` — and remember inline rows are audit-only without `manual_attestation` |
-| "DESI BAO + Planck + Pantheon+ joint fit" / "full robustness matrix" / "publication-ready BAO+SN+CMB" | `run_cosmology_robustness_matrix(model="lcdm", ...)` — NOT `run_research_matrix` (which is the cross-module research-program orchestrator, less specific) |
-| "build the Cobaya YAML / external likelihood config" | `build_cosmology_likelihood(...)` — config-only, never quote posterior from this |
-| "BAO+CMB+SN evidence graph" / "what backs claim X" | `build_evidence_graph(...)` |
-
-Generic plan/research tools (`plan_research_program`, `run_research_matrix`,
-`build_evidence_graph`, `verify_research_facts`, `export_research_report`)
-are for **multi-step research turns** where the request is broad ("walk me
-through your plan", "draft a paper section"). For a specific named
-calculation, **go direct**.
 
 ### Step 5 — Synthesize, don't dump
 
