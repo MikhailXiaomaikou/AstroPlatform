@@ -3516,13 +3516,15 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
     if not t:
         return None
 
+    # Only phrases whose comparison target is unequivocally SH0ES. Vague
+    # triggers ("compare cosmologies", "delta h0", "luminosity-distance
+    # offset", "preset vs preset") were removed 2026-05-28: they hard-coded
+    # target_cosmology=riess22_shoes and overrode the user's real intent
+    # (e.g. "compare cosmologies planck18 vs wcdm"). Those fall through to
+    # the LLM's own routing now.
     hubble_triggers = (
         "hubble tension",
         "compare planck and sh0es",
-        "delta h0",
-        "compare cosmologies",
-        "luminosity-distance offset",
-        "preset vs preset",
     )
     if any(k in t for k in hubble_triggers):
         return [{
@@ -3531,10 +3533,12 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
             "input": {"target_cosmology": "riess22_shoes"},
         }]
 
+    # "ap test" removed 2026-05-28: as a bare substring it matched "snap test"
+    # (SNAP = a real dark-energy mission), "map test", "heatmap test" — all
+    # plausible in a cosmology chat. "alcock-paczynski" alone is unambiguous.
     ap_triggers = (
         "alcock-paczynski",
         "alcock paczynski",
-        "ap test",
         "dm/dh ratio",
         "bao bin anomaly",
         "per-bin bao",
@@ -3991,7 +3995,8 @@ async def _run_agent_loop(
         ]
         # L1: research-focus filter (outermost). Drop tools that are not
         # in the active focus's allowlist before any later domain-specific
-        # gate runs. No-op when ASTRO_RESEARCH_FOCUS=all (default).
+        # gate runs. No-op only when ASTRO_RESEARCH_FOCUS=all; the default is
+        # "cosmology" (chat.py:58), so this filter IS active by default.
         visible_tools = _filter_tools_by_research_focus(visible_tools)
         line_relation_workflow = _is_line_relation_workflow(latest_user_text)
         literature_searches_done = sum(
@@ -4679,6 +4684,7 @@ async def _run_agent_loop(
             and not tool_calls_in_turn
             and not all_tool_results
             and cosmology_direct_route_calls
+            and _ASTRO_RESEARCH_FOCUS == "cosmology"
         ):
             text = ""
             tool_calls_in_turn = deepcopy(cosmology_direct_route_calls)
