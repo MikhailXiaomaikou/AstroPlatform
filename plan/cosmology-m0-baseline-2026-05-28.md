@@ -95,11 +95,20 @@ JSON 上传 artifact。**当前 8/8 通过**。
 - D1 8 工具组合(plan + matrix + assess_bao + compare_lum + 4×chain_run),正常研究 case 未被闸门吃掉
 - E1 5 工具完整研究链(plan/matrix/evidence/verify/export)严格期望对齐
 
-**模型层发现**:DeepSeek + Anthropic Opus 两个 OpenAI-style function-calling 模型
-**都把"Hubble tension"/"Alcock-Paczynski"按 schema name 语义匹配优先送给
-`plan_research_program`,无视 system prompt 内的路由指令**——这是模型层硬偏好
-不是 prompt 问题,跑了 5 轮 prompt 工程(V1-V5)做了顶端表格、NEG-FIRST schema、
-强制语气均无效。
+**模型层发现(仅 DeepSeek 实测)**:DeepSeek V4 Pro 把"Hubble tension"/
+"Alcock-Paczynski"按 schema name 语义匹配优先送给 `plan_research_program`,
+无视 system prompt 内的路由指令。跑了 5 轮 prompt 工程(V1-V5)做了顶端路由表、
+NEG-FIRST schema、强制语气均无效——说明这是 DeepSeek function-call ranker 的硬偏好,
+不是 prompt 写得不够好。
+
+**Opus 行为至今未知(重要诚实声明)**:V7 本想用 Opus 做对照,但
+`preferred_backend="anthropic"` 没映射到 backend key `"claude"`,silent fallback
+回了 DeepSeek(零扣费佐证);commit `633ce8b` 修了 mapping 后 V8 仍零扣费,
+指向 Anthropic key 无有效余额 / 请求未真正发出。**因此本平台从未产生过一次有效的
+Opus 盲测运行**——上面所谓"Opus 也走 planner"在早期草稿里是错的,实际只有 DeepSeek
+被验证过。Opus 很可能先读完 prompt 再选工具(从而自然命中 A2/A3 的
+`alt_expected_tools`,无需闸门),但这是基于模型差异的**推测,无产线数据支撑**,
+列入第 4 节待验证边界。
 
 **解决方案**:`app/api/chat.py::_cosmology_direct_route_from_prompt`(commit `6be3f8b` + `b857baf`),
 仿照既有 `_inline_statistics_tool_call_from_prompt` 模式做服务端早起闸门——
@@ -119,7 +128,8 @@ JSON 上传 artifact。**当前 8/8 通过**。
 > - 距离/距离模数计算的科学正确性,精度对齐 astropy 在 1e-3 mag 以内
 > - 任何 LLM 现行行为下,5 类典型伪造路径会被对应防线拦下
 > - 现有 CI 闭环对回归提供秒级反馈,push 到 main 即检测
-> - DeepSeek 当前版本下,10/10 blind-test case 走严格期望路径
+> - DeepSeek 当前版本 **+ 服务端早起闸门** 下,10/10 blind-test case 走严格期望路径
+>   (其中 A2/A3 由闸门确定性兜底,**非 DeepSeek 自主路由**;B/C/D/E 是模型自身行为)
 >
 > **不主张**:
 > - 模块"完成了"——更多 cosmology 工作流(强透镜、CMB lensing 全 likelihood、
@@ -140,7 +150,7 @@ JSON 上传 artifact。**当前 8/8 通过**。
 | 物理 kernel | flat ΛCDM/wCDM/w0waCDM,massless ν | 曲率 Ωk、有质量中微子、辐射、Cobaya 真跑 |
 | 反幻造防线 | 5 类(数值幻造/假引用/zero-data/越界外推/可疑作者-年份) | 语义级幻造(对的数字配错论文之类) |
 | 多探针组合 | 线性 precision-matrix(compressed-Gaussian preliminary) | S8 非线性组合(σ8/Ωm → 派生 S8)、Pantheon+ 全 1701-SN 协方差 |
-| LLM provider | DeepSeek V4 Pro 真实数据;Opus/Sonnet 未真激活 | Claude 真实行为需修 `preferred_backend` mapping(已修但需 token 验证) |
+| LLM provider | DeepSeek V4 Pro 真实数据 | Opus/Sonnet **零有效运行**:mapping 已修(`633ce8b`),但 V8 复测仍零扣费 → Anthropic key 疑无余额/未真发请求,需换有效 key 才能验 Claude 路由 |
 | 部署健康 | 无 smoke | Render 部署后状态、API 端点活性 |
 | 真浏览器 UI | mock E2E 1 fixture | Playwright 配置就绪未 install |
 
