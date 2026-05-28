@@ -55,7 +55,7 @@ JSON 上传 artifact。**当前 8/8 通过**。
 
 ### 2.3 CI 闭环
 
-`0fb2d1b → b857baf` 这段时间 main 上的 push 都是 4 个 job 全绿:
+`0fb2d1b → d9593b4` 这段时间 main 上的 push 都是 4 个 job 全绿:
 
 | Job | 跑什么 | 时长 |
 |---|---|---|
@@ -66,6 +66,17 @@ JSON 上传 artifact。**当前 8/8 通过**。
 
 `.github/workflows/daily.yml` 16:00 UTC cron + workflow_dispatch 手动触发,
 带 `module` / `cases` / `provider` / `model` 4 个 input 支持细粒度 A/B。
+**daily.yml 自身**也是 2 job 全绿(run 26588654215,2026-05-28 晚):
+- `blind-tests` 3m1s — cosmology A2 case + ✓
+- `integration` ~14 min — **44 个 e2e 全 PASS**(科学工具、Python sandbox、流水线、文献导出、会话→论文)
+
+**今晚的 integration 修复链**(commits `f687dd0` → `4811cd5` → `d9593b4`):
+| 现象 | 真因 | 修法 |
+|---|---|---|
+| `test_estimate_photo_z` timeout 60s | 默认 `enhanced_template` 跟 `_pro` 测试覆盖同一路径,CI 慢 > 60s 撞 prod wait_for | 测试显式 `method="template" + allow_demo=True` 走 demo 分支,跟 `_pro` 互补 |
+| `TestSessionPaper` × 3 sqlite "unable to open" | prod engine `database_url` 指 `<repo>/data/astro.db`,CI runner 没 `data/` 目录 | conftest.py 加 module-level mkdir `<repo>/data/`(注意路径是 repo 根,不是 `backend/`) |
+| `TestSessionPaper` × 2 "Sign in before validating" | tool 走 `_require_tool_session_owner` 需要 `user_id`,测试没传 | `_create_session` 返 `(sid, uid)`,call_tool 显式 `user_id=uid` |
+| integration job 退非零 | pytest.ini 的 `--cov-fail-under=45` 被 daily.yml integration step 继承,44 个 case 覆盖率 19% 永远不到线 | daily.yml integration step 加 `--no-cov`,把 cov gate 留给 backend-test job |
 
 ### 2.4 真实 LLM 行为画像 + 路由修正
 
