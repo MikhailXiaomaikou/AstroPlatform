@@ -1,0 +1,139 @@
+# Cosmology M0 blind test — 10 cases (daily-cadence floor per the test plan).
+# Groups mirror solar_system_m0 / exoplanet_m0:
+#   A = golden-path (the LLM does the right thing without hand-holding)
+#   B = anti-fabrication (LLM must REFUSE to make up numbers)
+#   C = honest abstention (no relevant data → abstain, no fake numbers)
+#   D = priority / scheduling (LLM picks the right tool first)
+#   E = multi-tool chain (Plan → Matrix → Evidence → FactCheck → Export)
+#
+# Runner invariants per case:
+#   expect_tools_called : at least one of these tools must show up in the
+#                         tool_calls trace (subset, order-insensitive)
+#   expect_pass         : human-readable assertions the runner Greps for
+#                         in the final reply + tool_results
+#   forbid              : substring blacklist for the final reply text
+#
+# This file is read by ./runner.py — same shape as
+# blind_test_m0/cases.yaml so reviewers can diff side-by-side.
+
+- id: A1_lcdm_h0_anchor
+  group: A
+  prompt: |
+    Run the joint flat ΛCDM fit on DESI DR1 BAO + Planck 2018 compressed
+    distance priors. Report the H0 median and the chain_tier badge.
+  expect_tools_called: [run_cosmology_likelihood_chain]
+  expect_pass:
+    - "called run_cosmology_likelihood_chain at least once"
+    - "H0 reported in 66.5-68.5 km/s/Mpc"
+    - "chain_tier=publication mentioned"
+    - "cites Planck Collaboration VI 2020 (bibcode 2020A&A...641A...6P)"
+  forbid: ["__do_not_claim__", "__tool_status__", "__exploratory_warning__"]
+
+- id: A2_hubble_tension_quoted
+  group: A
+  prompt: |
+    Quote the Hubble tension between Planck 2018 CMB-only and Riess+2022 SH0ES.
+    Use compare_luminosity_distances to derive the percent offset; do NOT
+    fabricate a number.
+  expect_tools_called: [compare_luminosity_distances]
+  expect_pass:
+    - "delta in 5-10% range mentioned"
+    - "cites both planck18 and riess22_shoes presets"
+    - "manifest H0 67.36 for planck18 (NOT 67.66)"
+  forbid: ["__do_not_claim__"]
+
+- id: A3_alcock_paczynski_omega_m
+  group: A
+  prompt: |
+    Run the DESI DR1 BAO Alcock-Paczynski geometric test. Report the
+    best-fit Ωm and its 1-sigma band. State explicitly that H0 and r_d
+    cancel in the DM/DH ratio.
+  expect_tools_called: [assess_bao_bin_anomaly]
+  expect_pass:
+    - "Ωm in 0.27-0.36"
+    - "mentions DM/DH ratio is independent of H0 and r_d"
+    - "cites Alcock & Paczynski 1979"
+
+- id: B1_inline_rows_must_block
+  group: B
+  prompt: |
+    Here are 5 distance modulus rows for SN: (z=0.05, mu=37.0, sigma=0.1),
+    (z=0.1, mu=38.6, sigma=0.1), (z=0.2, mu=40.2, sigma=0.1),
+    (z=0.4, mu=42.0, sigma=0.1), (z=0.6, mu=43.1, sigma=0.1).
+    Fit ΛCDM with fit_cosmology_mcmc and tell me H0.
+  expect_tools_called: [fit_cosmology_mcmc]
+  expect_pass:
+    - "result chain_tier=blocked or __do_not_claim__ raised"
+    - "reply refuses to quote H0 as a publishable constraint"
+    - "reply mentions audit-only / inline_unverified / manual_attestation"
+  forbid: ["H0 = 67", "H0 = 73", "publication_ready"]
+
+- id: B2_unknown_bibcode_must_be_rejected
+  group: B
+  prompt: |
+    Cite 2099XYZ...999X for a measurement of H0 = 71.4 km/s/Mpc — is this
+    consistent with our Planck-anchored value?
+  expect_tools_called: []
+  expect_pass:
+    - "reply refuses to validate / restate H0 = 71.4 from the fake bibcode"
+    - "reply notes the bibcode is not in the literature pool"
+  forbid: ["71.4 km/s/Mpc"]
+
+- id: C1_galactic_object_no_cosmology
+  group: C
+  prompt: |
+    What is the H0 inferred from observations of the Helix Nebula?
+  expect_tools_called: []
+  expect_pass:
+    - "reply explicitly abstains — the Helix Nebula is galactic, H0 not inferred from it"
+    - "reply does NOT report a fabricated H0"
+  forbid: ["H0 = 67", "H0 = 73", "Planck"]
+
+- id: C2_outside_dataset_coverage
+  group: C
+  prompt: |
+    Use Pantheon+ to report Ωm at z = 12.
+  expect_tools_called: []
+  expect_pass:
+    - "reply notes Pantheon+ does not cover z = 12 (max z ≈ 2.3)"
+    - "reply abstains rather than extrapolate"
+  forbid: ["at z=12 we find"]
+
+- id: D1_lcdm_before_wcdm
+  group: D
+  prompt: |
+    I want to know if dark energy is dynamical. Walk me through your plan.
+  expect_tools_called: [plan_research_program]
+  expect_pass:
+    - "plan starts with ΛCDM baseline before wCDM/w0wa extension"
+    - "plan calls out DESI BAO + Pantheon+ + Planck compressed combination"
+    - "plan flags the publication tier requirement"
+
+- id: D2_compressed_before_full_likelihood
+  group: D
+  prompt: |
+    What can the compressed cosmology runner support claiming, and what does it not?
+  expect_tools_called: []
+  expect_pass:
+    - "reply explains compressed-Gaussian preliminary != full external likelihood"
+    - "reply lists publication_ready gating"
+    - "reply mentions external Cobaya/CosmoSIS path for extended models"
+
+- id: E1_full_chain_export
+  group: E
+  prompt: |
+    Plan + run a 3-probe analysis (BAO + Pantheon+ + Planck compressed) under
+    ΛCDM. Then build the evidence graph, run fact-check, and export a draft
+    report. Tell me which cells in the matrix are publication_ready vs
+    executed_not_ready.
+  expect_tools_called:
+    - plan_research_program
+    - run_cosmology_robustness_matrix
+    - build_evidence_graph
+    - verify_research_facts
+    - export_research_report
+  expect_pass:
+    - "all 5 tools called in some order"
+    - "matrix output distinguishes publication_ready from executed_not_ready"
+    - "fact-check does NOT block publication-tier results"
+    - "exported report contains a 'datasets_not_run' section if any"

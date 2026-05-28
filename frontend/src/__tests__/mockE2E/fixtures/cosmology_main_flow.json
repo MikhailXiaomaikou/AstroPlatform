@@ -1,0 +1,73 @@
+{
+  "name": "cosmology_main_flow",
+  "description": "Golden-path cosmology chat turn: user asks for BAO+CMB H0, agent runs run_cosmology_likelihood_chain, returns publication-tier result, reply cites Planck + 67.36.",
+  "input": {
+    "messages": [
+      {"role": "user", "content": "Run BAO+CMB ΛCDM and report H0."}
+    ],
+    "focus": "cosmology"
+  },
+  "thinking_events": [
+    {
+      "type": "tool_call",
+      "tool": "run_cosmology_likelihood_chain",
+      "tool_input": {
+        "model": "lcdm",
+        "dataset_keys": ["desi_dr1_bao", "planck2018_compressed"]
+      }
+    },
+    {
+      "type": "tool_result",
+      "tool": "run_cosmology_likelihood_chain",
+      "result": {
+        "success": true,
+        "__tool_status__": "COMPLETED",
+        "analysis_status": "COMPRESSED_CHAIN_READY",
+        "publication_ready": true,
+        "chain_tier": "publication",
+        "model": "lcdm",
+        "sampler": "bao_gaussian_importance",
+        "parameters": {
+          "H0": {"median": 67.36, "std": 0.42, "hdi_94": [66.5, 68.2]},
+          "omegam": {"median": 0.3153, "std": 0.0073, "hdi_94": [0.301, 0.330]},
+          "rd": {"median": 147.0, "std": 0.6, "hdi_94": [145.8, 148.2]}
+        },
+        "chain_diagnostics": {
+          "overall_status": "importance_resampled",
+          "publication_ready": true,
+          "rhat": 1.0,
+          "ess_bulk": 506,
+          "proposal_ess": 506.2,
+          "n_draws": 4000,
+          "n_chains": 1
+        },
+        "dataset_keys": ["desi_dr1_bao", "planck2018_compressed"],
+        "datasets_used": [
+          {"key": "desi_dr1_bao", "display_name": "DESI DR1 BAO"},
+          {"key": "planck2018_compressed", "display_name": "Planck 2018 compressed distance priors"}
+        ],
+        "provenance": {
+          "cosmology_likelihood": {
+            "runner": "bao_gaussian_importance",
+            "citations": [
+              {"label": "DESI DR1", "bibcode": "2024arXiv240403002D", "arxiv": "2404.03002"},
+              {"label": "Planck 2018 VI", "bibcode": "2020A&A...641A...6P", "doi": "10.1051/0004-6361/201833910"}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "agent_text",
+      "text": "From the joint DESI DR1 BAO + Planck 2018 compressed likelihood under flat ΛCDM, we find H0 = 67.36 ± 0.42 km/s/Mpc and Ωm = 0.3153 ± 0.0073 (DESI Collaboration 2024; Planck Collaboration VI 2020)."
+    }
+  ],
+  "expected_ui": {
+    "tool_card_visible": "run_cosmology_likelihood_chain",
+    "tool_card_status": "COMPLETED",
+    "tool_card_tier_badge": "publication",
+    "agent_text_contains": ["H0 = 67.36", "Planck Collaboration VI 2020"],
+    "do_not_claim_marker_leak": false,
+    "tool_message_to_model_leak": false
+  }
+}

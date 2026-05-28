@@ -1,0 +1,219 @@
+# Red-team numeric-claim corpus for ``app.services.claim_validator``.
+#
+# Each case feeds a reply + tool_results pair into ``validate_claims`` and
+# asserts the boolean ``expect_ok`` (True = no fabrication detected, False =
+# at least one claim falls outside the harvested numeric universe within
+# tolerance). Cases mirror real bug patterns the production system has seen.
+#
+# When adding a case:
+# - keep ``reply`` short (one paragraph max)
+# - keep ``tool_results`` minimal (just enough to set the universe / push
+#   into strict-mode when the case calls for it)
+# - prefer numbers that are NOT close to row counts / indices / 0 / 1
+#   (those collide with the numeric universe naturally)
+#
+# The fail mode is per-case: if a case starts failing after a change, decide
+# whether the SCIENCE is wrong (fix the case) or the VALIDATOR is wrong
+# (fix the validator) — never silently relax expect_ok.
+
+cases:
+  # ── Numeric pool hits / misses ────────────────────────────────────
+  - name: cosmology_h0_in_pool_passes
+    description: H0 value matches Planck 2018 median in tool_results.
+    reply: "Our analysis finds H0 = 67.36 km/s/Mpc, consistent with Planck."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            H0:
+              median: 67.36
+              hdi_94: [66.8, 67.9]
+            omegam:
+              median: 0.3153
+            sigma8:
+              median: 0.8111
+            S8:
+              median: 0.832
+    expect_ok: true
+
+  - name: cosmology_h0_fabricated_outside_tolerance
+    description: H0=73.04 (SH0ES) claimed but tool_results contain only Planck (67.36).
+    reply: "Our chain returns H0 = 73.04 km/s/Mpc."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            H0:
+              median: 67.36
+            omegam:
+              median: 0.3153
+            sigma8:
+              median: 0.8111
+            S8:
+              median: 0.832
+    expect_ok: false
+
+  - name: cosmology_h0_within_default_tolerance
+    description: claimed 67.4 vs universe 67.36 is within the default ±1% tolerance.
+    reply: "We measure H0 = 67.4 km/s/Mpc from BAO+CMB."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            H0:
+              median: 67.36
+            omegam:
+              median: 0.3153
+            sigma8:
+              median: 0.8111
+            S8:
+              median: 0.832
+    expect_ok: true
+
+  - name: cosmology_S8_fabricated
+    description: S8 = 0.776 (DES) cited but only Planck S8=0.832 in universe.
+    reply: "The S8 tension persists at S8 = 0.776 from weak lensing."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            H0:
+              median: 67.36
+            sigma8:
+              median: 0.8111
+            S8:
+              median: 0.832
+    expect_ok: false
+
+  - name: cosmology_omega_m_in_pool
+    description: Ωm in pool exactly.
+    reply: "The matter density we recover is Omega_m = 0.3153."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            H0:
+              median: 67.36
+            omegam:
+              median: 0.3153
+            sigma8:
+              median: 0.8111
+            S8:
+              median: 0.832
+    expect_ok: true
+
+  - name: cosmology_w0_fabricated
+    description: w0 claim with no w0 in tool_results.
+    reply: "We constrain w_0 = -0.95 from the joint fit."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            H0:
+              median: 67.36
+            omegam:
+              median: 0.3153
+            sigma8:
+              median: 0.8111
+            S8:
+              median: 0.832
+    expect_ok: false
+
+  # ── Edge: no claims (honest abstention) ───────────────────────────
+  - name: honest_abstention_no_numbers
+    description: pure narrative with no numeric claims should always pass.
+    reply: "We were unable to retrieve the relevant Planck data product for this redshift bin."
+    tool_results: []
+    expect_ok: true
+
+  # ── Strict-mode edge (small universe) ─────────────────────────────
+  - name: strict_mode_close_but_outside
+    description: small universe triggers strict tolerance (0.1%); 67.50 vs 67.36 is ~0.21% diff — should block.
+    reply: "Our chain returns H0 = 67.50 km/s/Mpc."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          H0_median: 67.36
+    expect_ok: false
+
+  - name: strict_mode_exact_in_small_universe
+    description: small universe triggers strict tolerance; exact match still passes.
+    reply: "Our chain returns H0 = 67.36 km/s/Mpc."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          H0_median: 67.36
+    expect_ok: true
+
+  # ── Solar system ──────────────────────────────────────────────────
+  - name: solar_system_ceres_diameter_in_pool
+    description: Ceres D=940 km present in universe.
+    reply: "Our diameter estimate for Ceres is D = 940 km."
+    tool_results:
+      - tool: compute_solar_system_diameter
+        result:
+          diameter_km: 940
+          albedo: 0.090
+          method: harris_1998
+    expect_ok: true
+
+  - name: solar_system_ceres_diameter_fabricated
+    description: D=600 km claimed but only ~940 km recovered.
+    reply: "Our diameter estimate for Ceres is D = 600 km."
+    tool_results:
+      - tool: compute_solar_system_diameter
+        result:
+          diameter_km: 940
+          albedo: 0.090
+          method: harris_1998
+    expect_ok: false
+
+  # ── Exoplanet ─────────────────────────────────────────────────────
+  - name: exoplanet_T_eq_in_pool
+    description: T_eq close to HD 209458 b in universe.
+    reply: "We compute an equilibrium temperature of T_eq = 1347 K."
+    tool_results:
+      - tool: compute_equilibrium_temperature
+        result:
+          T_eq_K: 1346.67
+          albedo_used: 0.3
+    expect_ok: true
+
+  - name: exoplanet_T_eq_fabricated
+    description: T_eq=2000 K outside universe.
+    reply: "We compute an equilibrium temperature of T_eq = 2000 K."
+    tool_results:
+      - tool: compute_equilibrium_temperature
+        result:
+          T_eq_K: 1346.67
+    expect_ok: false
+
+  - name: exoplanet_density_in_pool
+    description: density value matches tool_results.
+    reply: "The bulk density is 5.50 g/cm^3."
+    tool_results:
+      - tool: compute_planet_density
+        result:
+          density_g_cm3: 5.495
+    expect_ok: true
+
+  # ── TODO (anti-fabrication gap, 2026-05-28): `_iter_numeric_values`
+  #    currently extracts scattered numerics from bibcode / doi strings,
+  #    so "2020A&A...641A...6P" leaks 2020 / 641 / 6 / etc. into the
+  #    universe and lets the LLM legitimize fabricated numbers via
+  #    citation-string laundering. Adding a citation-key blacklist to
+  #    _iter_numeric_values (mirroring the existing key blacklist) is the
+  #    fix. Re-add the regression case below once that lands.
+  #
+  # - name: numeric_in_bibcode_string_not_in_universe
+  #   description: A bibcode like "2020A&A...641A...6P" must NOT leak 641 / 2020 into the numeric universe.
+  #   reply: "We measure 641 something arbitrary."
+  #   tool_results:
+  #     - tool: run_cosmology_likelihood_chain
+  #       result:
+  #         provenance:
+  #           cosmology_likelihood:
+  #             citations:
+  #               - bibcode: "2020A&A...641A...6P"
+  #                 doi: "10.1051/0004-6361/201833910"
+  #   expect_ok: false

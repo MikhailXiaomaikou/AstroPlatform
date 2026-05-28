@@ -54,3 +54,47 @@ jobs:
         run: pip install ruff
       - name: Lint backend
         run: cd backend && ruff check app/ --select E,W,F --ignore E501
+
+  benchmarks:
+    # Science-regression smoke (cosmology benchmarks + registry audit).
+    # Push-only so a benchmark regression on main is loud, but PRs are NOT
+    # gated on it — keeps PR review velocity, surfaces regressions
+    # immediately after merge for follow-up.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+      - name: Cosmology benchmarks
+        run: |
+          cd backend
+          python scripts/benchmarks/run_cosmology_benchmarks.py --json /tmp/cosmology_benchmarks.json
+      - name: Solar-system benchmarks
+        run: |
+          cd backend
+          python scripts/benchmarks/run_solar_system_benchmarks.py --json /tmp/solar_system_benchmarks.json
+      - name: Exoplanet benchmarks
+        run: |
+          cd backend
+          python scripts/benchmarks/run_exoplanet_benchmarks.py --json /tmp/exoplanet_benchmarks.json
+      - name: Cosmology registry audit
+        run: |
+          cd backend
+          python scripts/audit_registry.py --json /tmp/registry_audit.json
+      - name: Upload benchmark JSON artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks-${{ github.sha }}
+          path: |
+            /tmp/cosmology_benchmarks.json
+            /tmp/solar_system_benchmarks.json
+            /tmp/exoplanet_benchmarks.json
+            /tmp/registry_audit.json
+          if-no-files-found: ignore

@@ -1,0 +1,71 @@
+name: Daily
+
+# Daily blind tests + integration tests. NOT part of the per-PR gate
+# (those live in ci.yml). Triggers at 16:00 UTC (~00:00 Beijing) and
+# can be manually fired via workflow_dispatch.
+#
+# Requirements (set in repo Settings → Secrets and variables → Actions):
+#   ANTHROPIC_API_KEY   — for the blind-test LLM calls (any provider key
+#                          recognized by app.ai.inference_router will work;
+#                          this is just the default)
+#
+# If no secret is configured the blind-test job is skipped (the if-guard
+# below) but integration tests still run. That keeps the daily cron from
+# spuriously red-X-ing the repo health badge while keys are being set up.
+
+on:
+  schedule:
+    - cron: "0 16 * * *"      # 16:00 UTC daily
+  workflow_dispatch: {}        # manual button in the Actions UI
+
+jobs:
+  blind-tests:
+    runs-on: ubuntu-latest
+    if: ${{ vars.DAILY_BLIND_ENABLED == 'true' && secrets.ANTHROPIC_API_KEY != '' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          cd backend
+          python -m venv venv
+          ./venv/bin/pip install -r requirements.txt
+      - name: Run blind tests (solar_system + exoplanet + cosmology)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          bash backend/scripts/daily_blind.sh
+      - name: Upload blind-test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blind-tests-${{ github.run_id }}
+          path: |
+            backend/scripts/blind_test_m0/results_*
+            backend/scripts/blind_test_exoplanet_m0/results_*
+            backend/scripts/blind_test_cosmology_m0/results_*
+          if-no-files-found: ignore
+
+  integration:
+    # API-integration tests are pytest cases marked @pytest.mark.integration;
+    # they exercise the Research Plan → Matrix → Evidence → FactCheck → Export
+    # chain with fixed inputs and no LLM. Pure pytest (no key needed).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest-cov
+      - name: Run integration tests
+        run: |
+          cd backend
+          python -m pytest tests/ -v --tb=short -m "integration and not slow"
