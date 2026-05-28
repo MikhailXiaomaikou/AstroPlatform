@@ -3495,6 +3495,62 @@ def _cosmology_likelihood_build_calls_from_prompt(text: str) -> list[dict[str, A
     ]
 
 
+def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | None:
+    """Detect explicit single-tool cosmology requests and return a forced
+    first-iteration tool call list.
+
+    Both DeepSeek and Anthropic's function-call rankers default to
+    `plan_research_program` for any "research-flavored" user phrasing
+    regardless of how specific the user is. Five rounds of prompt + schema
+    work (2026-05-28 V1-V5) failed to steer them on "Hubble tension" and
+    "Alcock-Paczynski" prompts. This deterministic gate fires BEFORE the
+    first LLM call and pre-executes the right cosmology tool, then lets the
+    LLM continue with the result already in hand — same pattern as
+    `_inline_statistics_tool_call_from_prompt` and
+    `_cosmology_likelihood_run_calls_from_prompt`.
+
+    Returns ``None`` when no trigger phrase matches → normal agent loop.
+    """
+    raw = str(text or "")
+    t = raw.lower()
+    if not t:
+        return None
+
+    hubble_triggers = (
+        "hubble tension",
+        "compare planck and sh0es",
+        "delta h0",
+        "compare cosmologies",
+        "luminosity-distance offset",
+        "preset vs preset",
+    )
+    if any(k in t for k in hubble_triggers):
+        return [{
+            "id": f"direct_route_{uuid.uuid4().hex}",
+            "name": "compare_luminosity_distances",
+            "input": {"target_cosmology": "riess22_shoes"},
+        }]
+
+    ap_triggers = (
+        "alcock-paczynski",
+        "alcock paczynski",
+        "ap test",
+        "dm/dh ratio",
+        "bao bin anomaly",
+        "per-bin bao",
+        "geometric omega_m from bao",
+        "geometric ωm from bao",
+    )
+    if any(k in t for k in ap_triggers):
+        return [{
+            "id": f"direct_route_{uuid.uuid4().hex}",
+            "name": "assess_bao_bin_anomaly",
+            "input": {},
+        }]
+
+    return None
+
+
 def _cosmology_likelihood_run_calls_from_prompt(text: str) -> list[dict[str, Any]]:
     if _cosmology_requires_dedicated_spectra_likelihood(text):
         return []
@@ -3896,6 +3952,10 @@ async def _run_agent_loop(
     cosmology_likelihood_workflow = _is_cosmology_likelihood_workflow(latest_user_text)
     cosmology_likelihood_build_calls = _cosmology_likelihood_build_calls_from_prompt(latest_user_text)
     cosmology_likelihood_run_calls = _cosmology_likelihood_run_calls_from_prompt(latest_user_text)
+    # 2026-05-28: deterministic single-tool route for "Hubble tension" and
+    # "Alcock-Paczynski" prompts. Fires on iteration 0 only, bypasses the
+    # first LLM call. None when no trigger phrase matches.
+    cosmology_direct_route_calls = _cosmology_direct_route_from_prompt(latest_user_text)
 
     hit_iteration_cap = False
     hit_deadline = False
@@ -4596,6 +4656,28 @@ async def _run_agent_loop(
                 "message": (
                     "Running the phase-1 compressed Gaussian cosmology "
                     "likelihood for registered executable summaries."
+                ),
+            })
+        # 2026-05-28: cosmology direct-route early gate. Fires only on the
+        # first iteration with no tool history. Bypasses both DeepSeek's and
+        # Anthropic's first-call planner bias for explicit "Hubble tension"
+        # / "Alcock-Paczynski" prompts. Mirrors _inline_statistics_tool_call
+        # injection pattern (line 3029).
+        if (
+            _iteration == 0
+            and not tool_calls_in_turn
+            and not all_tool_results
+            and cosmology_direct_route_calls
+        ):
+            text = ""
+            tool_calls_in_turn = deepcopy(cosmology_direct_route_calls)
+            forced_tool_call_override = True
+            await _emit({
+                "type": "status",
+                "message": (
+                    f"Direct-route trigger matched: calling "
+                    f"`{cosmology_direct_route_calls[0]['name']}` "
+                    "directly to bypass the planner detour."
                 ),
             })
         if force_table_extraction and not tool_calls_in_turn and arxiv_candidates:

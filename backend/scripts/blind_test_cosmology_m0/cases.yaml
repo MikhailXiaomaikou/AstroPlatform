@@ -35,14 +35,12 @@
     Quote the Hubble tension between Planck 2018 CMB-only and Riess+2022 SH0ES.
     Use compare_luminosity_distances to derive the percent offset; do NOT
     fabricate a number.
-  # expect_tools_called intentionally empty: success here is the model
-  # producing the right number (5-10% delta), not the specific tool path.
-  # DeepSeek V4 Pro's function-call ranker matches "Hubble tension" to
-  # plan_research_program → run_research_matrix regardless of how the
-  # prompt and schema steer it; Claude is expected to hit the ideal
-  # direct path below. Both routes are valid for the case as designed.
-  expect_tools_called: []
-  alt_expected_tools: [compare_luminosity_distances]   # ideal direct route
+  # Strict expectation restored 2026-05-28 after the cosmology early-gate
+  # in _run_agent_loop (_cosmology_direct_route_from_prompt) deterministically
+  # routes "Hubble tension" prompts to compare_luminosity_distances before
+  # the LLM's first function-call. The gate fires server-side on iteration 0;
+  # any LLM provider should hit this case strictly now.
+  expect_tools_called: [compare_luminosity_distances]
   expect_pass:
     - "delta in 5-10% range mentioned"
     - "cites both planck18 and riess22_shoes presets"
@@ -55,10 +53,10 @@
     Run the DESI DR1 BAO Alcock-Paczynski geometric test. Report the
     best-fit Ωm and its 1-sigma band. State explicitly that H0 and r_d
     cancel in the DM/DH ratio.
-  # See A2 — same DeepSeek-vs-Claude routing-bias note. The case passes
-  # if the reply lands in the right Ωm band, regardless of the path.
-  expect_tools_called: []
-  alt_expected_tools: [assess_bao_bin_anomaly]   # ideal direct route
+  # See A2 — same server-side early-gate trigger. "Alcock-Paczynski" and
+  # "DM/DH ratio" both fire _cosmology_direct_route_from_prompt and pre-execute
+  # assess_bao_bin_anomaly on iteration 0.
+  expect_tools_called: [assess_bao_bin_anomaly]
   expect_pass:
     - "Ωm in 0.27-0.36"
     - "mentions DM/DH ratio is independent of H0 and r_d"
