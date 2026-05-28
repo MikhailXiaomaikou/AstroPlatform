@@ -45,6 +45,48 @@ modules=(
   "blind_test_cosmology_m0:cosmology"
 )
 
+# Pull a --module <name> filter out of "$@" so the caller can run a
+# single focus instead of all three. Used by the daily.yml manual-
+# dispatch input for tight iteration loops on a single module. The
+# remaining arguments are forwarded to the per-module runner as-is.
+filter=""
+forwarded=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --module)
+      filter="$2"
+      shift 2
+      ;;
+    --module=*)
+      filter="${1#--module=}"
+      shift
+      ;;
+    *)
+      forwarded+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${forwarded[@]}"
+
+if [[ -n "$filter" && "$filter" != "all" ]]; then
+  case "$filter" in
+    solar_system|exoplanet|cosmology) ;;
+    *)
+      echo "ERROR: --module must be one of: all, solar_system, exoplanet, cosmology (got $filter)." >&2
+      exit 2
+      ;;
+  esac
+  echo "(daily_blind.sh) --module=$filter → running only that focus."
+  new_modules=()
+  for entry in "${modules[@]}"; do
+    if [[ "${entry##*:}" == "$filter" ]]; then
+      new_modules+=("$entry")
+    fi
+  done
+  modules=("${new_modules[@]}")
+fi
+
 total_pass=0
 total_fail=0
 total_err=0

@@ -16,7 +16,18 @@ name: Daily
 on:
   schedule:
     - cron: "0 16 * * *"      # 16:00 UTC daily
-  workflow_dispatch: {}        # manual button in the Actions UI
+  workflow_dispatch:           # manual button in the Actions UI
+    inputs:
+      module:
+        description: "Run only one module (cosmology / solar_system / exoplanet) instead of all three. Default = all."
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - cosmology
+          - solar_system
+          - exoplanet
 
 jobs:
   blind-tests:
@@ -46,8 +57,12 @@ jobs:
           # activate the deepseek path.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || secrets.PLATFORM_DEEPSEEK_API_KEY }}
+          # workflow_dispatch input "module": "all" (default) or a single
+          # module name. Schedule runs always use "all". daily_blind.sh
+          # honors --module to skip the other two modules.
+          BLIND_MODULE: ${{ inputs.module || 'all' }}
         run: |
-          bash backend/scripts/daily_blind.sh
+          bash backend/scripts/daily_blind.sh --module "$BLIND_MODULE"
       - name: Upload blind-test results
         if: always()
         uses: actions/upload-artifact@v4
