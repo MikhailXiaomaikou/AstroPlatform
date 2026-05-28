@@ -227,8 +227,16 @@ class TestSecurityHeaders:
         assert resp.headers.get("X-Frame-Options") == "DENY"
 
     async def test_security_headers_on_api_route(self, app_client):
-        """Security headers must be present on API routes, not just /health."""
-        resp = await app_client.get("/api/data/search", params={"q": "M31"})
+        """Security headers must be present on API routes, not just /health.
+
+        Uses /api/auth/me (returns 401 without a bearer token, still flows
+        through the security-headers middleware) so the test does not depend
+        on the connector_cache sqlite file path. The previous /api/data/search
+        wrote to a `data/connector_cache.db` that doesn't exist on fresh CI
+        runners and broke this assertion environmentally — pure middleware
+        behavior is what we want to verify here.
+        """
+        resp = await app_client.get("/api/auth/me")
         assert resp.headers.get("X-Content-Type-Options") == "nosniff"
         assert resp.headers.get("X-Frame-Options") == "DENY"
         assert resp.headers.get("X-XSS-Protection") == "1; mode=block"

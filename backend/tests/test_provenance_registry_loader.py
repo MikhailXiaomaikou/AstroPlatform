@@ -15,6 +15,10 @@ def test_load_registry_has_current_services():
     assert set(registry["services"]) == {
         "vizier", "gaia", "simbad", "ned", "2mass", "alma",
         "jpl", "mpc", "sbdb", "sentry", "damit", "nasa_exoplanet_archive",
+        # 2026-05-28 backfill: arxiv + the unified ADS/arxiv object lookup
+        # were added to the fallback registry after this assertion was first
+        # pinned. Adding them here so the snapshot is intentional going forward.
+        "arxiv", "ads_or_arxiv_object",
     }
 
 
