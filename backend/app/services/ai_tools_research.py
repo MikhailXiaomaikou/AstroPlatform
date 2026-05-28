@@ -29,17 +29,18 @@ RESEARCH_TOOL_SCHEMAS = [
     {
         "name": "plan_research_program",
         "description": (
-            "Multi-step research planner. USE ONLY for broad open-ended research "
-            "requests that span >=3 distinct tool layers (e.g. 'design a study to "
-            "test whether dark energy is dynamical', 'draft a paper section on the "
-            "S8 tension'). DO NOT call this for single-tool calculations — for "
-            "those, go DIRECT to the specific tool. Examples that should NOT use "
-            "this planner: 'compute the Hubble tension' (use compare_luminosity_"
-            "distances), 'run an Alcock-Paczynski test' (use assess_bao_bin_anomaly), "
-            "'fit my distance modulus rows' (use fit_cosmology_mcmc), 'run a "
-            "BAO+CMB+SN ΛCDM combined chain' (use run_cosmology_robustness_matrix). "
-            "The plan returns hypotheses, probes, datasets, models, and gaps; it does "
-            "NOT produce posterior numbers or fit results."
+            "DO NOT CALL FOR: 'Hubble tension' / 'compare Planck and SH0ES H0' / "
+            "'preset vs preset distance' → use compare_luminosity_distances instead; "
+            "'Alcock-Paczynski' / 'AP test' / 'BAO bin anomaly' / 'DM/DH ratio' → "
+            "use assess_bao_bin_anomaly instead; 'fit distance modulus rows' / "
+            "'ΛCDM/wCDM MCMC on this table' → use fit_cosmology_mcmc instead; "
+            "'BAO+CMB+SN joint' / 'robustness matrix' / 'publication-ready ΛCDM "
+            "combination' → use run_cosmology_robustness_matrix instead. "
+            "ONLY USE for broad open-ended research turns that span >=3 distinct "
+            "tool layers (e.g. 'design a study to test if dark energy is dynamical', "
+            "'draft a paper section on the S8 tension'). Returns a research plan "
+            "(hypotheses, probes, datasets, models, gaps); does NOT produce posterior "
+            "numbers or fit results."
         ),
         "input_schema": {
             "type": "object",

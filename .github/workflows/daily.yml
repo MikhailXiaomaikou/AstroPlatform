@@ -28,6 +28,11 @@ on:
           - cosmology
           - solar_system
           - exoplanet
+      cases:
+        description: "Comma-separated case IDs to run (e.g. A2,A3). Empty = all cases in the module(s). Tight iteration loops use this to shrink a 20-min run to 1-2 cases × ~2 min each."
+        required: false
+        default: ""
+        type: string
 
 jobs:
   blind-tests:
@@ -61,8 +66,13 @@ jobs:
           # module name. Schedule runs always use "all". daily_blind.sh
           # honors --module to skip the other two modules.
           BLIND_MODULE: ${{ inputs.module || 'all' }}
+          BLIND_CASES: ${{ inputs.cases || '' }}
         run: |
-          bash backend/scripts/daily_blind.sh --module "$BLIND_MODULE"
+          set -- --module "$BLIND_MODULE"
+          if [[ -n "$BLIND_CASES" ]]; then
+            set -- "$@" --case "$BLIND_CASES"
+          fi
+          bash backend/scripts/daily_blind.sh "$@"
       - name: Upload blind-test results
         if: always()
         uses: actions/upload-artifact@v4
