@@ -1,164 +1,55 @@
 # Standard Astro
 
-> **Validated and usable today: observational cosmology and solar-system objects.**
-> These two modules have been through blind-test validation (cosmology across
-> 50+ paper-derived cases, solar-system across a 20-case round) and are what the
-> platform actually stands behind.
->
-> **Experimental: exoplanets.** The exoplanet module (transit / RV /
-> equilibrium-temperature workflow) is wired up and selectable via
-> `ASTRO_RESEARCH_FOCUS=exoplanet`, but has **not** been through blind-test
-> validation yet — treat its outputs as experimental.
->
-> **Planned, not yet started:** every other domain module (stellar, AGN, X-ray,
-> pulsars, galaxy morphology, image reduction, etc.) lives under
-> `backend/app/prompts/modules/_dormant_*` with its tools hidden from the LLM
-> until it is promoted.
->
-> Runtime focus is selected per process via `ASTRO_RESEARCH_FOCUS` (defaults to
-> `cosmology`; `solar_system` for the asteroid / comet / NEO workflow,
-> `exoplanet` for the experimental transit / RV workflow).
-
 AI-native astronomy research platform for archive discovery, analysis,
-statistical inference, provenance tracking, collaboration, and paper export.
+statistical inference, provenance tracking, and paper export.
 
-Recent project changes are tracked in [CHANGELOG.md](./CHANGELOG.md).
+> **Module status.** Validated and usable today: **cosmology** (blind-tested
+> across 50+ paper-derived cases) and **solar-system small bodies** (20-case
+> blind round). **Exoplanets** are wired up and selectable but **not** yet
+> blind-test validated — treat outputs as experimental. Every other domain
+> (stellar, AGN, X-ray, pulsars, galaxy morphology, image reduction, …) lives
+> under `backend/app/prompts/modules/_dormant_*` with its tools hidden from the
+> LLM until promoted. Runtime focus is per-process via `ASTRO_RESEARCH_FOCUS`
+> (`cosmology` default / `solar_system` / `exoplanet`).
 
-Paper drafts generated from AI sessions are private to the owner account by
-default. A draft becomes publicly readable only after the owner explicitly uses
-**Publish Draft**, which creates a revocable `/papers/public/:token` link.
+Recent changes: [CHANGELOG.md](./CHANGELOG.md).
 
 ## What It Does
 
 | Area | Summary |
 |---|---|
-| Data access | Query active provenance-v2 sources from one interface. |
-| AI assistant | Multi-tool research agent for archive queries, ADQL, literature review, paper-to-tool mining, table extraction, research planning, evidence graphs, analysis, fitting, and paper drafting. |
-| Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain analysis, image processing, and Bayesian inference. |
-| Provenance | Tool results carry citation, archive version, field bibcodes, query hashes, run IDs, and acknowledgement metadata. |
-| Cosmology | Dataset registry, registered data-product loader, research planner, likelihood config builder, compressed posterior runner, controlled nested sampler, explicit chain diagnostics, evidence graph, and robustness matrix. |
-| Solar System | Asteroid / comet / NEO workflow: MPC + JPL Horizons + JPL SBDB + Sentry-II + DAMIT shape-model lookups, H–G magnitude reduction, Afρ dust production, NEATM thermal diameter/albedo fits, Öpik-style NEO impact-probability scaling, and Bus-DeMeo / SDSS-colour taxonomic classification. **M0 limits**: deterministic single-value workflow (no research matrix / evidence graph), single-band NEATM, 11-class Bus-DeMeo, MPC→SBDB/Horizons fallback. |
-| Exoplanet *(experimental — not yet blind-test validated)* | Transit + RV workflow: NASA Exoplanet Archive (`pscomppars`) + Confirmed Planets queries, TIC v8 target lookups, TESS light-curve retrieval, trapezoidal transit fitting (with batman/pytransit recommended for limb-darkened publication fits), Mandel & Agol-style transit-depth + Seager & Mallén-Ornelas geometry helpers, equilibrium-temperature and planet-density computations, and the legacy `fit_rv_orbit` Keplerian RV fitter. |
-| Modular focus gate | Three active prompt modules (`cosmology`, `solar_system`, `exoplanet`) plus 12 dormant modules. `prompt_loader` assembles a focus-aware SYSTEM_PROMPT (base + core + active module) and a per-focus tool allowlist, so non-focus tools are physically invisible to the LLM. |
-| Research infrastructure | Build paper candidate pools, mine papers for ToolSpecs, run 20-paper local mining rounds, build a tool ontology, identify platform gaps, and rank implementation queues before adding new runners. |
-| Spectral measurements | Literature-table rows can be validated as fit-ready spectral measurements before line-relation fitting. |
-| Statistics | Deterministic robust summaries, regression helpers, bootstrap intervals, and censored-data summaries reduce ad-hoc analysis code. |
-| Export | Paper drafts, BibTeX, acknowledgement text, notebooks, figures, and reproducibility packages. |
+| Data access | Query 9 active provenance-v2 archive sources from one interface. |
+| AI assistant | Multi-tool research agent — archive queries, ADQL, literature, table extraction, research planning, evidence graphs, analysis, fitting, paper drafting. |
+| Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain, image processing, Bayesian inference. |
+| Provenance | Every tool result carries citation, archive version, field bibcodes, query hash, run ID, and acknowledgement metadata. |
+| Cosmology module | Dataset registry, likelihood configs (BAO / SN / CMB / lensing), compressed posterior runner, controlled nested sampler, chain diagnostics, robustness matrix. |
+| Solar-system module (M0) | MPC / JPL Horizons / SBDB / Sentry-II / DAMIT queries, H–G phase reduction, Afρ, NEATM diameters, NEO impact-probability scaling, Bus-DeMeo / SDSS-colour taxonomy. |
+| Exoplanet module (M0, experimental) | NASA Exoplanet Archive + TESS / TIC queries, trapezoidal transit fitting, equilibrium-temperature / density helpers, Keplerian RV fitting. |
+| Modular focus gate | 3 active prompt modules + 12 dormant; `prompt_loader` builds a focus-aware `SYSTEM_PROMPT` and per-focus tool allowlist so non-focus tools are physically invisible to the LLM. |
+| Export | Paper drafts, BibTeX, acknowledgement text, notebooks, figures, reproducibility packages. |
 
 ## Active Data Sources
 
-The connector registry has 26 source keys. During the provenance-v2 rollout,
-sources without upgraded citation and `archive_version` metadata are
-maintenance-gated instead of silently returning weak-provenance data.
+9 provenance-v2 sources: **VizieR**, **Gaia DR3**, **SIMBAD**, **NED**,
+**2MASS**, **ALMA Science Archive** (observation metadata only), **JPL
+Horizons**, **IAU Minor Planet Center**, **NASA Exoplanet Archive**.
 
-Active provenance-v2 sources:
-
-- VizieR (`vizier`)
-- Gaia DR3 (`gaia`)
-- SIMBAD (`simbad`)
-- NED (`ned`)
-- 2MASS (`2mass`)
-- ALMA Science Archive observation metadata (`alma`)
-- JPL Horizons ephemerides (`jpl`) — activated with the solar-system module
-- IAU Minor Planet Center orbits (`mpc`) — activated with the solar-system module
-- NASA Exoplanet Archive (`nasa_exoplanet_archive`) — activated with the exoplanet module; `pscomppars` composite-parameters TAP via `astroquery.ipac.nexsci`
-
-Maintenance-gated sources include SDSS / SDSS spectra, MAST, JWST, ESO, IRSA,
+17 maintenance-gated keys (return `UNAVAILABLE` until each ships independent
+`archive_version` provenance): SDSS, sdss_spec, MAST, JWST, ESO, IRSA,
 Chandra, XMM-Newton, AllWISE, LAMOST, DESI, Pan-STARRS, NVSS, FIRST, ATNF
-Pulsar, SPARC, and FRBSTATS. Gated sources return an `UNAVAILABLE` tool
-status and instruct the AI to suggest active alternatives.
-
-ALMA currently provides observation metadata only. Derived line luminosities,
-FWHM values, and line-relation fits require cited measurement tables from
-literature extraction or a dedicated measurement source.
+Pulsar, SPARC, FRBSTATS.
 
 ## Guardrails
 
-- Numerical claims are checked against current-turn tool outputs.
-- Citation claims are checked against tool-sourced bibcodes, arXiv IDs, DOIs,
-  and row-level table provenance.
-- Synthetic or demonstration outputs are marked non-citeable.
-- Paper-level literature search supports context and citations, but not
-  measurement claims unless tables are extracted and normalized.
-- Gated archive calls are distinct from failed or empty calls in the UI.
-- Data Sources panels expose `archive_version`, source authority, table/field
-  citations, credits links, and acknowledgement templates.
-- Final replies are English-only — the numeric/citation gate ships English
-  patterns, so a non-English draft is regenerated in English once before being
-  blocked.
-- Citations are accepted only when the current turn's tools returned the
-  matching bibcode/ID; a real classic reference is still withheld if no tool
-  surfaced it this turn.
-
-## Scientific Coverage
-
-Standard Astro includes workflows for:
-
-- Gaia DR3 tables and variability products
-- SIMBAD/NED/VizieR/2MASS object and catalog work
-- ALMA high-redshift line-observation metadata
-- Literature search and arXiv table extraction
-- Paper candidate pools, paper-to-tool mining, 20-paper continuous loop state, ToolSpec ontology, gap matrix, and implementation queue planning
-- Spectral analysis, line fitting, and equivalent widths
-- Photometry, source extraction, PSF work, and extinction handling
-- Isochrone fitting and cluster analysis
-- Time-domain period, transit, flare, and RV workflows
-- Galaxy SFR, morphology, rotation-curve, and X-ray tools
-- Observational cosmology likelihood configs plus compressed Gaussian posterior runner and controlled Gaussian nested sampler
-- Solar-system small bodies: MPC orbit lookups, JPL Horizons ephemerides, JPL SBDB orbit / close-approach / Sentry-II risk queries, DAMIT shape-model fetch, H–G phase-function magnitude reduction, Afρ dust production, NEATM thermal modelling, NEO impact-probability scaling, and Bus-DeMeo / SDSS-colour taxonomic classification
-- Exoplanets: NASA Exoplanet Archive `pscomppars` + Confirmed Planets queries, TIC v8 target lookups, TESS light-curve retrieval via `lightkurve`, trapezoidal Nelder-Mead transit fitting (batman/pytransit recommended for limb-darkened publication fits), Seager & Mallén-Ornelas geometry + Mandel & Agol transit-depth helpers, equilibrium-temperature and planet-density computations, and Keplerian RV orbit fitting
-- Research Mode planning, evidence graphs, fact checks, and compressed-likelihood experiment matrices
-- Paper drafting, bibliography generation, and reproducibility export
-
-## Reference Literature
-
-The codebase keeps scientific constants, formula choices, and workflow priors
-anchored to explicit literature references. This table is a compact map of the
-main references currently used by tools, prompts, and validation fixtures.
-
-| Area | Reference | Used for |
-|---|---|---|
-| Extinction law | Cardelli, Clayton & Mathis 1989, ApJ 345, 245 | CCM89 optical/IR extinction curve |
-| Dust attenuation | Calzetti et al. 2000, ApJ 533, 682 | Starburst attenuation in photo-z / SED workflows |
-| IGM absorption | Madau 1995, ApJ 441, 18 | High-redshift IGM absorption approximation |
-| Gaia extinction coefficients | Wang & Chen 2019, ApJ 877, 116 | Gaia-band extinction ratios |
-| PARSEC isochrones | Bressan et al. 2012, MNRAS 427, 127 | Isochrone fitting and turnoff fallback calibration |
-| RR Lyrae PLZ | Muraveva et al. 2018, MNRAS 481, 1195 | RR Lyrae distance workflow guidance |
-| Cepheid Leavitt law | Ripepi et al. 2019, A&A 625, A14 | Cepheid distance workflow guidance |
-| Star-formation rates | Kennicutt & Evans 2012, ARA&A 50, 531 | Hα, UV, IR, and radio SFR calibrations |
-| Pulsar derived quantities | Lorimer & Kramer 2004, Handbook of Pulsar Astronomy | Characteristic age, surface B, spin-down luminosity |
-| Binary mass function | Hilditch 2001, An Introduction to Close Binary Stars | Spectroscopic binary mass-function relation |
-| Variability index | Stetson 1996, PASP 108, 851 | Stetson K variability statistic |
-| White dwarf cooling | Bédard et al. 2020, ApJ 901, 93 | Montreal cooling-age interpolation |
-| NFW halo | Navarro, Frenk & White 1996, ApJ 462, 563 | Dark-matter halo profile guidance |
-| SPARC rotation curves | Lelli, McGaugh & Schombert 2016, AJ 152, 157 | Galaxy rotation-curve catalog context |
-| [CII] ALPINE tables | Béthermin et al. 2020, A&A 643, A2 | High-z [CII] table extraction and LFR tests |
-| Gaia DR3 | Gaia Collaboration 2023, A&A 674, A1 | Gaia DR3 table-level citation |
-| SIMBAD | Wenger et al. 2000, A&AS 143, 9 | SIMBAD registry citation |
-| 2MASS | Skrutskie et al. 2006, AJ 131, 1163 | 2MASS registry citation |
-| DESI DR1 BAO | DESI Collaboration 2024, arXiv:2404.03002 | Registry entry with public BAO mean/covariance data products |
-| SDSS + 6dF BAO | Beutler et al. 2011; Alam et al. 2017; eBOSS Collaboration 2021 | ACT-era / pre-DESI BAO likelihood planning |
-| Pantheon+ | Scolnic et al. 2022; Brout et al. 2022 | SN distance table, covariance, and CosmoSIS likelihood product links |
-| ACT DR6 lensing | Madhavacheril et al. 2024, arXiv:2304.05203 | Compressed CMB-lensing S8/H0 consistency checks |
-| Planck 2018 | Planck Collaboration VI 2020, A&A 641, A6 | Compressed CMB baseline, PLA likelihood-code link, and ΛCDM comparison |
-| KiDS-1000 cosmic shear | Asgari et al. 2021, arXiv:2007.15633 | Weak-lensing S8 comparison branch |
-| DES Y3 3x2pt | DES Collaboration 2022, arXiv:2105.13549 | Galaxy weak-lensing + clustering comparison branch |
-| HSC Y1 cosmic shear | Hamana et al. 2020, arXiv:1906.06041 | HSC weak-lensing S8 comparison branch |
-| SH0ES prior | Riess et al. 2011 / 2022 | H0 prior provenance in cosmology workflows |
-| Supernova cosmology | Suzuki et al. 2012, ApJ 746, 85 | Union-style Ωm / SN cosmology context |
-| JPL Horizons ephemerides | Giorgini et al. 1996, BAAS 28, 1158 (1996DPS....28.2504G) | Solar-system body ephemerides via JPL Horizons API |
-| Asteroid H–G magnitude system | Bowell et al. 1989, in Asteroids II, p. 524 | Phase-function reduction for absolute magnitude H and slope G |
-| Cometary Afρ | A'Hearn et al. 1984, AJ 89, 579 | Dust-production proxy for comets |
-| NEATM thermal model | Harris 1998, Icarus 131, 291; Mainzer et al. 2011, ApJ 731, 53 | Asteroid diameter and albedo from thermal IR fluxes |
-| NEO impact probability | Öpik 1951; Wetherill 1967; Morbidelli & Gladman 1998; Morbidelli et al. 2002 | Closed-form NEO collision-probability scaling |
-| Asteroid taxonomy (Bus-DeMeo) | DeMeo et al. 2009, Icarus 202, 160 | Reflectance-spectrum asteroid classification |
-| Asteroid taxonomy (SDSS colours) | Carvano et al. 2010, A&A 510, A43 | SDSS griz-colour asteroid classification |
-| Asteroid shape models | Ďurech et al. 2010, A&A 513, A46 | DAMIT shape-model lookups |
-| NASA Exoplanet Archive | Akeson et al. 2013, PASP 125, 989 | `pscomppars` composite-parameters table and Confirmed Planets registry citation |
-| Transit light curves | Mandel & Agol 2002, ApJ 580, L171 | Analytic transit-light-curve formalism for limb-darkened fits |
-| Transit geometry | Seager & Mallén-Ornelas 2003, ApJ 585, 1038 | Closed-form transit duration / depth / inclination relations |
-| TESS mission | Ricker et al. 2015, JATIS 1, 014003 | Mission-level citation for TESS light-curve data products |
-| TESS Input Catalog (TIC v8) | Stassun et al. 2019, AJ 158, 138 | Stellar parameters for TESS target selection |
+- Numerical and citation claims are checked against current-turn tool outputs
+  and tool-sourced bibcodes / DOIs / table-row provenance; non-cited values
+  are regenerated or blocked.
+- Synthetic or demonstration outputs are explicitly marked non-citeable.
+- Failed, empty, and maintenance-gated calls render as distinct UI states.
+- Final replies are English-only (the gate ships English patterns; non-English
+  drafts get one English regeneration before being blocked).
+- Paper drafts are private to the owner; **Publish Draft** is the only way to
+  expose one, via a revocable `/papers/public/:token` link.
 
 ## Tech Stack
 
@@ -166,7 +57,7 @@ main references currently used by tools, prompts, and validation fixtures.
 |---|---|
 | Frontend | React 19, TypeScript strict, Vite, React Router, React Flow, Plotly |
 | Backend | FastAPI, SQLAlchemy async, Pydantic v2, SSE streaming |
-| AI | Manual provider/model selection across Claude, OpenAI, DeepSeek, and local OpenAI-compatible HTTP backends (`LOCAL_MODEL_BASE_URL`, default localhost:8000) |
+| AI | Manual provider / model selection across Claude, OpenAI, DeepSeek, and local OpenAI-compatible HTTP backends |
 | Astronomy | astropy, astroquery, specutils, photutils, reproject, pyvo, lightkurve |
 | Statistics | emcee, dynesty, ArviZ, celerite2, batman, scipy, scikit-learn |
 | Storage | PostgreSQL in production, SQLite for development, filesystem FITS storage |
@@ -178,7 +69,7 @@ main references currently used by tools, prompts, and validation fixtures.
 backend/
   app/
     ai/                 Inference router, model profiles, specialist agents
-    api/                FastAPI routers for chat, data, auth, export, pipeline, admin
+    api/                FastAPI routers (chat, data, auth, export, pipeline, admin)
     connectors/         Archive connector implementations and availability gates
     pipeline/           Visual DAG engine and node implementations
     services/           AI tools, provenance, literature, sandbox, analysis services
@@ -197,9 +88,10 @@ frontend/
 - Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
 - Quick start: [docs/QUICKSTART.md](./docs/QUICKSTART.md)
 - API reference: [docs/API_REFERENCE.md](./docs/API_REFERENCE.md)
+- Reference literature: [docs/REFERENCES.md](./docs/REFERENCES.md)
 - Source mapping: [docs/SOURCE_MAPPING.md](./docs/SOURCE_MAPPING.md)
 - Deployment notes: [DEPLOYMENT.md](./DEPLOYMENT.md)
-- Agent/development notes: [CLAUDE.md](./CLAUDE.md)
+- Agent / development notes: [CLAUDE.md](./CLAUDE.md)
 
 ## License
 
