@@ -87,7 +87,13 @@ async def load_cosmology_data_product(
 
     text = raw_bytes.decode("utf-8", errors="replace")
     parsed = _parse_product_text(text, product=product, max_preview_rows=max_preview_rows)
-    publication_ready = bool(parsed.get("parse_success")) and (hash_verified or content_override is not None or not product.sha256)
+    # positive_definite defaults True for non-matrix products (tables don't
+    # set it); only covariance matrices are gated on actual PD-ness.
+    publication_ready = (
+        bool(parsed.get("parse_success"))
+        and parsed.get("positive_definite", True)
+        and (hash_verified or content_override is not None or not product.sha256)
+    )
     status = "COMPLETED" if parsed.get("parse_success") else "PARTIAL"
     return {
         "success": bool(parsed.get("parse_success")),
@@ -153,13 +159,16 @@ def _compressed_likelihood_data_product(
     cov = np.asarray(spec.covariance, dtype=float)
     symmetric = bool(cov.ndim == 2 and cov.shape[0] == cov.shape[1] and np.allclose(cov, cov.T, rtol=1e-6, atol=1e-12))
     positive_diagonal = bool(symmetric and np.all(np.diag(cov) > 0))
+    positive_definite = _is_positive_definite(cov)
     finite = bool(np.all(np.isfinite(cov)) and np.all(np.isfinite(np.asarray(spec.mean, dtype=float))))
-    publication_ready = bool(finite and symmetric and positive_diagonal)
+    publication_ready = bool(finite and symmetric and positive_definite)
     warnings = []
     if not symmetric:
         warnings.append("Registered compressed covariance is not symmetric.")
     if symmetric and not positive_diagonal:
         warnings.append("Registered compressed covariance has non-positive diagonal entries.")
+    if symmetric and positive_diagonal and not positive_definite:
+        warnings.append("Registered compressed covariance is not positive-definite.")
     return {
         "success": True,
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
@@ -189,6 +198,7 @@ def _compressed_likelihood_data_product(
             "covariance_shape": list(cov.shape),
             "covariance_symmetric": symmetric,
             "positive_diagonal": positive_diagonal,
+            "positive_definite": positive_definite,
             "source_locator": spec.source_locator,
             "approximation": spec.approximation,
             "preview": {
@@ -278,6 +288,26 @@ def _dimension_prefixed_flat_covariance(rows: list[list[str]]) -> np.ndarray | N
     return np.asarray(remaining, dtype=float).reshape((n, n))
 
 
+def _is_positive_definite(matrix: np.ndarray) -> bool:
+    """True only for a finite, symmetric, positive-definite matrix.
+
+    A positive diagonal is necessary but not sufficient for a valid
+    covariance — strong off-diagonal terms can still make it indefinite.
+    Cholesky succeeds iff the matrix is symmetric positive-definite.
+    """
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        return False
+    if not np.all(np.isfinite(matrix)):
+        return False
+    if not np.allclose(matrix, matrix.T, rtol=1e-6, atol=1e-12):
+        return False
+    try:
+        np.linalg.cholesky(matrix)
+        return True
+    except np.linalg.LinAlgError:
+        return False
+
+
 def _parse_matrix(
     matrix: np.ndarray | None,
     *,
@@ -289,6 +319,7 @@ def _parse_matrix(
     square = matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]
     symmetric = bool(square and np.allclose(matrix, matrix.T, rtol=1e-6, atol=1e-12))
     positive_diagonal = bool(square and np.all(np.diag(matrix) > 0))
+    positive_definite = _is_positive_definite(matrix)
     finite = bool(np.all(np.isfinite(matrix)))
     warnings: list[str] = []
     if not square:
@@ -297,6 +328,8 @@ def _parse_matrix(
         warnings.append("Covariance matrix is not symmetric within tolerance.")
     if square and not positive_diagonal:
         warnings.append("Covariance matrix has non-positive diagonal entries.")
+    if square and positive_diagonal and not positive_definite:
+        warnings.append("Covariance matrix is not positive-definite.")
     return {
         "parse_success": finite and square,
         "kind": "matrix",
@@ -306,6 +339,7 @@ def _parse_matrix(
         "square": square,
         "symmetric": symmetric,
         "positive_diagonal": positive_diagonal,
+        "positive_definite": positive_definite,
         "preview": _finite_preview(matrix, max_preview_rows=max_preview_rows),
         "warnings": warnings,
     }

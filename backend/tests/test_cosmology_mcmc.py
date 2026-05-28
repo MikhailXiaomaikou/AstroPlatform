@@ -292,3 +292,43 @@ def test_cobaya_unavailable_is_structured_when_missing_or_disabled(monkeypatch):
     assert result["__do_not_claim__"] is True
     assert result["provenance"]["cosmology"]["sampler"] == "cobaya"
     assert "phase-1 disabled" in result["error"]
+
+
+def test_manual_attestation_requires_ads_confirmation(monkeypatch):
+    """Inline rows + attestation upgrade to citeable (cached_real) only when
+    ADS confirms the bibcode. An unconfirmable reference stays audit-only and
+    the bibcode is dropped so it cannot reach the citation pool."""
+    import asyncio
+
+    from app.services import ai_tools_cosmology as atc
+
+    inp = {
+        "rows": toy_distance_modulus_rows(),
+        "manual_attestation": {"source": "Riess+2022", "bibcode": "2022ApJ...934L...7R"},
+    }
+
+    async def _confirmed(**kwargs):
+        return True
+
+    async def _unconfirmed(**kwargs):
+        return False
+
+    monkeypatch.setattr(
+        "app.services.literature_engine.resolve_bibcode_exists", _confirmed
+    )
+    _rows, origin, cache_key, attestation = asyncio.run(
+        atc._cosmology_rows_from_input(inp, None)
+    )
+    assert origin == "cached_real"
+    assert attestation is not None
+    assert cache_key == "manual_attestation:2022ApJ...934L...7R"
+
+    monkeypatch.setattr(
+        "app.services.literature_engine.resolve_bibcode_exists", _unconfirmed
+    )
+    _rows, origin, cache_key, attestation = asyncio.run(
+        atc._cosmology_rows_from_input(inp, None)
+    )
+    assert origin == "inline_unverified"
+    assert attestation is None  # dropped — must not enter the citation pool
+    assert cache_key is None

@@ -54,7 +54,12 @@ PRESETS: dict[str, dict[str, Any]] = {
         "bibcode": "2020A&A...641A...6P",
         "doi": "10.1051/0004-6361/201833910",
         "tcmb_bibcode": "2009ApJ...707..916F",
-        "astropy_alias": "Planck18",
+        # NOT astropy's Planck18 built-in: that object is the +BAO best fit
+        # (H0=67.66, Om0=0.30966), but this preset is the CMB-only column
+        # (H0=67.36, Om0=0.3153). Aliasing to the built-in silently computed
+        # distances at +BAO values while citing CMB-only numbers — build from
+        # our own values so computed distances match the cited cosmology.
+        "astropy_alias": None,
         "reference": "Planck Collaboration VI 2020, A&A 641 A6 (CMB only)",
         "description": (
             "CMB-only LambdaCDM baseline. Standard for high-z / CMB / "
@@ -244,12 +249,14 @@ def get_preset(name: str | None = None) -> dict[str, Any]:
 def build_cosmology_from_preset(name: str | None = None):
     """Build an astropy ``FlatLambdaCDM`` from a named preset.
 
-    Returns the astropy built-in object when the preset has an
-    ``astropy_alias`` matching a built-in (currently only ``planck18``).
-    Otherwise builds a fresh ``FlatLambdaCDM`` with the preset's
-    H0/Om0/Ob0/Tcmb0. For TRGB / SH0ES (where Om0 is None), uses the
-    Planck18 Om0 as the background-cosmology working assumption — and
-    documents this in the result via :func:`cosmology_manifest`.
+    Builds a fresh ``FlatLambdaCDM`` from the preset's own H0/Om0/Ob0/Tcmb0
+    so computed distances match the cited values. No PART AA preset aliases
+    to an astropy built-in (planck18 deliberately does not — astropy's
+    Planck18 is the +BAO fit, not our CMB-only column). The built-in path
+    below only fires for legacy capital-case aliases. For TRGB / SH0ES
+    (where Om0 is None), uses the Planck18 Om0 as the background-cosmology
+    working assumption — documented in the result via
+    :func:`cosmology_manifest`.
     """
     from astropy.cosmology import FlatLambdaCDM, Planck15, Planck18, WMAP5, WMAP7, WMAP9
 
@@ -278,7 +285,7 @@ def build_cosmology_from_preset(name: str | None = None):
     ob0 = preset["Ob0"] if preset["Ob0"] is not None else PRESETS["planck18"]["Ob0"]
     tcmb0 = preset["Tcmb0"] or 2.7255
 
-    return FlatLambdaCDM(H0=h0, Om0=om0, Ob0=ob0, Tcmb0=tcmb0)
+    return FlatLambdaCDM(H0=h0, Om0=om0, Ob0=ob0, Tcmb0=tcmb0, name=preset["name"])
 
 
 def get_cosmology(name: str | None = None):
@@ -295,17 +302,22 @@ def get_cosmology(name: str | None = None):
     Unknown names fall back to the default preset (planck18) with a
     warning so the caller still gets a valid cosmology.
     """
-    from astropy.cosmology import FlatLambdaCDM, Planck15, Planck18, WMAP5, WMAP7, WMAP9
+    from astropy.cosmology import FlatLambdaCDM, Planck15, WMAP5, WMAP7, WMAP9
 
     key = (name or default_cosmology_name()).strip()
+
+    # Legacy capital-case astropy name for our curated CMB-only preset:
+    # route to the PART AA preset so computed distances match the cited
+    # 67.36/0.3153. astropy's built-in Planck18 is the +BAO fit (67.66).
+    if key == "Planck18":
+        key = "planck18"
 
     # PART AA preset path
     if key in PRESETS:
         return build_cosmology_from_preset(key)
 
-    # Legacy astropy aliases
+    # Legacy astropy aliases (Planck18 handled above via the curated preset)
     table = {
-        "Planck18": Planck18,
         "Planck15": Planck15,
         "WMAP9": WMAP9,
         "WMAP7": WMAP7,
@@ -332,8 +344,8 @@ def get_cosmology(name: str | None = None):
                     pass
         return FlatLambdaCDM(H0=h0, Om0=om0)
 
-    logger.warning("Unknown cosmology %r; falling back to Planck18", key)
-    return Planck18
+    logger.warning("Unknown cosmology %r; falling back to planck18 preset", key)
+    return build_cosmology_from_preset("planck18")
 
 
 def cosmology_manifest(name: str | None = None) -> dict[str, Any]:

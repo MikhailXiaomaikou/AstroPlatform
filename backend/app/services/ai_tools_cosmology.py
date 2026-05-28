@@ -1,6 +1,6 @@
 """Cosmology AI tools — extracted from ai_tools/__init__.py (H1 split, 2026-05-26).
 
-The 12 likelihood / MCMC / robustness tools whose implementations are thin
+The 13 likelihood / MCMC / robustness tools whose implementations are thin
 wrappers over the cosmology_mcmc / cosmology_likelihoods /
 cosmology_data_products / cmb_rotation_likelihoods / nested_sampling /
 chain_diagnostics service modules.
@@ -473,7 +473,21 @@ COSMOLOGY_TOOL_SCHEMAS = [
 ]
 
 
-def _cosmology_rows_from_input(
+def _record_attestation_upgrade(verified: bool) -> None:
+    """Audit counter for the manual_attestation citeable-upgrade path."""
+    try:
+        from app.observability.metrics import record_counter
+
+        record_counter(
+            "cosmology_attestation_upgrade_total",
+            1.0,
+            outcome="verified" if verified else "unverified",
+        )
+    except Exception:
+        pass
+
+
+async def _cosmology_rows_from_input(
     inp: dict, python_session_id: str | None
 ) -> tuple[list[dict[str, Any]], str, str | None, dict[str, Any] | None]:
     from app.services.ai_tools import (
@@ -488,11 +502,26 @@ def _cosmology_rows_from_input(
         normalized = [dict(row) for row in rows if isinstance(row, dict)]
         if attestation_raw is not None:
             attestation = _validate_manual_attestation(attestation_raw)
-            # Inline rows + attestation get upgraded to a citeable origin, but the
-            # source_cache_key encodes the attestation reference so audit logs can
-            # tell apart "real cache hit" from "user-attested inline upload".
-            source_id = attestation["bibcode"] or attestation["arxiv"] or attestation["doi"]
-            return normalized, "cached_real", f"manual_attestation:{source_id}", attestation
+            # Inline rows + attestation upgrade to a citeable origin ONLY when
+            # ADS confirms the cited reference is real. Without this check a
+            # fabricated-but-plausible bibcode could launder model-invented rows
+            # into a citeable fit (and inject the bibcode into the citation pool).
+            from app.services.literature_engine import resolve_bibcode_exists
+
+            verified = await resolve_bibcode_exists(
+                bibcode=attestation.get("bibcode"),
+                arxiv=attestation.get("arxiv"),
+                doi=attestation.get("doi"),
+            )
+            _record_attestation_upgrade(verified)
+            if verified:
+                # source_cache_key encodes the attestation reference so audit
+                # logs tell "real cache hit" apart from "user-attested upload".
+                source_id = attestation["bibcode"] or attestation["arxiv"] or attestation["doi"]
+                return normalized, "cached_real", f"manual_attestation:{source_id}", attestation
+            # ADS could not confirm the reference: keep audit-only and DROP the
+            # attestation so the unverified bibcode never reaches the citation pool.
+            return normalized, "inline_unverified", None, None
         return normalized, "inline_unverified", None, None
 
     cache_key = str(inp.get("cache_key") or "").strip()
@@ -535,7 +564,7 @@ async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> 
     )
 
     try:
-        rows, input_data_origin, source_cache_key, attestation = _cosmology_rows_from_input(
+        rows, input_data_origin, source_cache_key, attestation = await _cosmology_rows_from_input(
             inp, python_session_id
         )
         model = str(inp.get("model") or "flat_lcdm")
@@ -560,11 +589,28 @@ async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> 
         # a previous submit_async_job re-entered this code path), force the
         # synchronous emcee chain. Otherwise we'd submit a new Celery task
         # from inside a Celery task and deadlock on the worker queue.
+        attestation_rejected = (
+            inp.get("manual_attestation") is not None
+            and input_data_origin == "inline_unverified"
+        )
         if in_async_worker():
-            return await asyncio.to_thread(fit_cosmology_emcee, **kwargs)
-        if should_run_background(n_walkers, n_steps, bool(inp.get("background", False))):
-            return submit_emcee_job(**kwargs)
-        return await asyncio.to_thread(fit_cosmology_emcee, **kwargs)
+            result = await asyncio.to_thread(fit_cosmology_emcee, **kwargs)
+        elif should_run_background(n_walkers, n_steps, bool(inp.get("background", False))):
+            result = submit_emcee_job(**kwargs)
+        else:
+            result = await asyncio.to_thread(fit_cosmology_emcee, **kwargs)
+        if attestation_rejected and isinstance(result, dict):
+            note = (
+                "manual_attestation reference could not be confirmed in ADS (or "
+                "ADS is unavailable); rows kept audit-only and the cited bibcode "
+                "was NOT added to the citation pool."
+            )
+            warns = result.get("warnings")
+            if isinstance(warns, list):
+                warns.append(note)
+            else:
+                result["warnings"] = [note]
+        return result
     except Exception as exc:
         return {
             "success": False,
@@ -584,7 +630,7 @@ async def _exec_run_cobaya_cosmology(inp: dict, python_session_id: str | None) -
     from app.services.cosmology_mcmc import run_cobaya_cosmology
 
     try:
-        rows, _input_data_origin, _source_cache_key, _attestation = _cosmology_rows_from_input(
+        rows, _input_data_origin, _source_cache_key, _attestation = await _cosmology_rows_from_input(
             inp, python_session_id
         )
         return await asyncio.to_thread(
@@ -886,7 +932,7 @@ def _exec_assess_bao_bin_anomaly(inp: dict) -> dict:
 async def dispatch_cosmology(
     tool_name: str, tool_input: dict, python_session_id: str | None = None
 ) -> dict | None:
-    """Unified entry point for ai_tools/__init__: routes the 12 cosmology tools.
+    """Unified entry point for ai_tools/__init__: routes the 13 cosmology tools.
 
     Returns None for an unknown tool name so the caller can fall through; the
     caller already guards with ``tool_name in COSMOLOGY_TOOL_NAMES``.

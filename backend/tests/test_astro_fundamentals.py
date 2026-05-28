@@ -26,9 +26,12 @@ def test_cosmology_default_is_planck18():
     from app.services.cosmology import get_cosmology, cosmology_manifest
 
     cosmo = get_cosmology()
-    # PART AA: get_cosmology() resolves the platform default preset to the
-    # astropy Planck18 built-in (alias on the planck18 PART AA preset).
-    assert cosmo.name == "Planck18"
+    # planck18 builds a fresh FlatLambdaCDM from the curated CMB-only values
+    # (H0=67.36/Om0=0.3153), NOT astropy's built-in Planck18 (the +BAO fit at
+    # 67.66) — so computed distances match the cited cosmology.
+    assert cosmo.name == "planck18"
+    assert abs(float(cosmo.H0.value) - 67.36) < 0.01
+    assert abs(float(cosmo.Om0) - 0.3153) < 0.001
     manifest = cosmology_manifest()
     # PART AA: preset name is now lowercase "planck18" + carries a bibcode.
     assert manifest["name"] == "planck18"
@@ -52,6 +55,25 @@ def test_cosmology_custom_flat_lcdm():
     cosmo = get_cosmology("FlatLambdaCDM_H70p0_Om0p3")
     assert 69 < float(cosmo.H0.value) < 71
     assert 0.28 < float(cosmo.Om0) < 0.32
+
+
+def test_planck18_preset_matches_cited_cmb_only_values():
+    """Regression: planck18 must compute distances at its cited CMB-only
+    H0=67.36/Om0=0.3153, not astropy's built-in Planck18 (+BAO fit, 67.66).
+    planck18 and planck18_bao are distinct cosmologies and must give
+    distinguishable luminosity distances — the old astropy_alias bug
+    collapsed planck18 onto the +BAO object."""
+    from app.services.cosmology import build_cosmology_from_preset, get_cosmology
+
+    p18 = build_cosmology_from_preset("planck18")
+    p18_bao = build_cosmology_from_preset("planck18_bao")
+    assert abs(float(p18.H0.value) - 67.36) < 0.01
+    assert abs(float(p18_bao.H0.value) - 67.66) < 0.01
+    dl_p18 = float(p18.luminosity_distance(1.0).value)
+    dl_bao = float(p18_bao.luminosity_distance(1.0).value)
+    assert abs(dl_p18 - dl_bao) > 1.0  # Mpc; ~13 Mpc in practice
+    # Legacy capital-case "Planck18" must also resolve to the CMB-only preset.
+    assert abs(float(get_cosmology("Planck18").H0.value) - 67.36) < 0.01
 
 
 # --------------------------------------------------------------------

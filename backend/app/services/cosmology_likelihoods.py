@@ -607,7 +607,21 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             ),
             DatasetCitation(label="Chen, Huang & Wang distance priors", year=2019, arxiv="1808.05724", doi="10.1088/1475-7516/2019/02/028"),
         ),
-        notes="Compressed CMB prior, not a replacement for the full Planck likelihood in extended models.",
+        notes=(
+            "Compressed CMB prior, not a replacement for the full Planck likelihood "
+            "in extended models. Known approximation: the (H0, Omega_m, sigma8, S8) "
+            "summary is treated as a diagonal independent-Gaussian likelihood, but "
+            "S8 == sigma8 * (Omega_m/0.3)^0.5 is exactly determined by the other "
+            "two, so this mildly double-counts the clustering amplitude and gives "
+            "an internally inconsistent joint posterior (sigma_8/Omega_m would imply "
+            "S8 ~ 0.832 but the combined-with-WL S8 is reported lower). A correct "
+            "treatment samples (H0, Omega_m, sigma8) and applies the WL S8 "
+            "likelihood on the derived S8 with a non-diagonal Planck covariance "
+            "from the public chains -- see scripts/fetch_planck2018_compressed.py "
+            "for the script that produces that covariance artifact; the registry "
+            "wire-in is a planned follow-up. Until then, treat S8 / S8-tension "
+            "numbers from this compressed runner as preliminary, not publication."
+        ),
         cobaya_likelihood="external:planck_2018_distance_prior",
         cosmosis_module="external:planck2018_distance_priors",
         execution_mode="compressed_gaussian",
@@ -650,7 +664,14 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 "S8": "dimensionless",
             },
             source_locator="Planck Collaboration VI 2020 Table 2 baseline; S8 derived summary.",
-            approximation="Diagonal compressed ΛCDM posterior summary; not the full Planck likelihood.",
+            approximation=(
+                "Diagonal compressed ΛCDM posterior summary; not the full Planck "
+                "likelihood. S8 is listed alongside sigma8/Omega_m as if independent, "
+                "but S8 == sigma8 * (Omega_m/0.3)^0.5 — so the joint is mildly "
+                "internally inconsistent. Non-diagonal real chain covariance + S8 "
+                "as a derived per-sample quantity is the planned follow-up "
+                "(scripts/fetch_planck2018_compressed.py produces the covariance)."
+            ),
         ),
     ),
     "act_dr6_lensing": CosmologyDatasetEntry(
@@ -1963,7 +1984,10 @@ def _run_sampling_likelihood_chain(
 
     used_keys = {entry.key for entry in bao_entries + compressed_entries}
     used_entries = [entry for entry in entries if entry.key in used_keys]
-    n_constraints = 12 * len(bao_entries) + sum(
+    # Each executable BAO entry contributes the full DESI DR1 measurement
+    # vector (12 data points); derive from the vector so a future BAO dataset
+    # with a different length doesn't silently feed a wrong BIC penalty.
+    n_constraints = len(DESI_DR1_BAO_MEAN_VECTOR) * len(bao_entries) + sum(
         len(entry.compressed_likelihood.parameters)
         for entry in compressed_entries
         if entry.compressed_likelihood is not None
@@ -3155,8 +3179,8 @@ def run_alcock_paczynski_test(
             "alcock_paczynski": {
                 "input_dataset": "desi_dr1_bao",
                 "n_pairs_used": len(pairs),
-                "z_grid_min_max": [float(omega_m.min()), float(omega_m.max())],
-                "z_grid_resolution": int(omega_m_n),
+                "omega_m_grid_min_max": [float(omega_m.min()), float(omega_m.max())],
+                "omega_m_grid_resolution": int(omega_m_n),
                 "H0_cancellation": "DM/DH ratio is independent of H0 and r_d",
                 "model_assumed": "flat LCDM",
                 "free_parameters": ["omegam"],

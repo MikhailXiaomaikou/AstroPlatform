@@ -47,6 +47,51 @@ def _cache_set(key: str, value: dict) -> None:
     _cache[key] = (time.monotonic(), value)
 
 
+async def resolve_bibcode_exists(
+    *,
+    bibcode: str | None = None,
+    arxiv: str | None = None,
+    doi: str | None = None,
+) -> bool:
+    """Confirm a citation identifier resolves to >=1 real ADS record.
+
+    Gates the manual_attestation citeable upgrade for inline cosmology rows:
+    a self-declared bibcode is only honoured if ADS actually has it, so a
+    fabricated reference cannot launder inline rows into a citeable fit.
+
+    Fails closed: missing ADS_API_KEY, network error, timeout, or zero hits
+    all return False, keeping the rows audit-only (the safe direction).
+    """
+    bibcode = (bibcode or "").strip()
+    arxiv = (arxiv or "").strip()
+    doi = (doi or "").strip()
+    if bibcode:
+        query = f'bibcode:"{bibcode}"'
+    elif doi:
+        query = f'doi:"{doi}"'
+    elif arxiv:
+        query = f'arxiv:"{arxiv}"'
+    else:
+        return False
+
+    ads_api_key = os.getenv("ADS_API_KEY", "")
+    if not ads_api_key:
+        logger.info("resolve_bibcode_exists: ADS_API_KEY unset; %r treated as unverified", query)
+        return False
+
+    headers = {"Authorization": f"Bearer {ads_api_key}"}
+    params = {"q": query, "fl": "bibcode", "rows": 1}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(ADS_API_BASE, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.warning("resolve_bibcode_exists: ADS lookup failed for %r: %s", query, exc)
+        return False
+    return int(data.get("response", {}).get("numFound", 0)) >= 1
+
+
 def _format_first_author(authors: list[str]) -> str:
     """Format author list as 'First Author et al.' or single author."""
     if not authors:
