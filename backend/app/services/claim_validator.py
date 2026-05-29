@@ -822,6 +822,125 @@ def _matches_any(value: float, universe: set[float], tolerance: float) -> bool:
     return False
 
 
+# ── 4.1 (2026-05-29): label-aware cosmology-parameter matching ───────────────
+# The flat numeric universe is label-blind: a claim "σ8 = 0.315" was "supported"
+# by ANY tool number within ±1% — e.g. an unrelated Ωm=0.3153 — so a cosmology
+# parameter value could *launder* off a coincidentally-close number for a
+# DIFFERENT quantity.  For claims we can pin to a specific cosmology parameter,
+# we instead match ONLY against that parameter's own tool-produced values.
+#
+# Canonical parameter names + the stat suffixes a key may carry (median/best/…)
+# so dict keys like "omega_m_best" or "H0_median" still resolve to the param.
+_COSMO_PARAM_EXACT: dict[str, str] = {
+    "h0": "H0", "omegam": "omegam", "sigma8": "sigma8", "s8": "S8",
+    "w0": "w0", "wa": "wa", "w": "w", "rd": "rd", "mb": "M_B", "h0rd": "H0_rd",
+}
+# Roots tried longest-first; a key resolves if it equals a root or is the root
+# followed by a known statistic suffix.
+_COSMO_PARAM_ROOTS: tuple[tuple[str, str], ...] = (
+    ("sigma8", "sigma8"), ("omegam", "omegam"), ("h0rd", "H0_rd"),
+    ("h0", "H0"), ("s8", "S8"), ("w0", "w0"), ("wa", "wa"), ("rd", "rd"),
+)
+_COSMO_STAT_SUFFIXES: frozenset[str] = frozenset({
+    "", "median", "mean", "best", "low", "high", "value", "val",
+    "1sigmalow", "1sigmahigh", "q16", "q84", "hdilow94", "hdihigh94", "std",
+})
+
+
+def _canonicalize_cosmology_param(name: Any) -> str | None:
+    norm = re.sub(r"[^a-z0-9]", "", str(name).lower())
+    if not norm:
+        return None
+    if norm in _COSMO_PARAM_EXACT:
+        return _COSMO_PARAM_EXACT[norm]
+    for root, canon in _COSMO_PARAM_ROOTS:
+        if norm.startswith(root) and norm[len(root):] in _COSMO_STAT_SUFFIXES:
+            return canon
+    return None
+
+
+# extract_claims already tags canonical-symbol cosmology claims with a
+# parameter-specific pattern label (cosmology_h0 / _om0 / _w0 / _wa / _sigma8 /
+# _s8 — see _PATTERNS).  That tag IS the parameter identity, so we map straight
+# off it rather than re-scanning text (a window scan misattributes because a
+# cosmology claim's span starts at its label, so "before the number" catches the
+# PREVIOUS clause's parameter).
+_CLAIM_LABEL_TO_COSMO_PARAM: dict[str, str] = {
+    "cosmology_h0": "H0",
+    "cosmology_om0": "omegam",
+    "cosmology_w0": "w0",
+    "cosmology_wa": "wa",
+    "cosmology_sigma8": "sigma8",
+    "cosmology_s8": "S8",
+}
+
+
+def _claim_cosmology_param(claim: "Claim") -> str | None:
+    """Canonical cosmology parameter a claim is about, or None for claims not
+    captured by a parameter-specific cosmology pattern."""
+    return _CLAIM_LABEL_TO_COSMO_PARAM.get(claim.label)
+
+
+def _build_cosmology_labeled_universe(payload: Any, out: dict[str, set[float]] | None = None) -> dict[str, set[float]]:
+    """Map each cosmology parameter to the set of numeric values the tools
+    actually produced for it (parameter dicts, derived_params, pairwise tensions,
+    and dataset compressed-spec means).  Harvested broadly so legitimate quotes
+    of a parameter's median / 1σ edge / published value all match."""
+    if out is None:
+        out = {}
+    if isinstance(payload, dict):
+        if _is_tainted_synthetic_payload(payload):
+            return out
+        # Parallel parameters/mean(/covariance) list form (dataset specs).
+        params = payload.get("parameters")
+        mean = payload.get("mean")
+        if (
+            isinstance(params, (list, tuple))
+            and isinstance(mean, (list, tuple))
+            and len(params) == len(mean)
+            and params
+            and all(isinstance(p, str) for p in params)
+        ):
+            cov = payload.get("covariance")
+            for i, pname in enumerate(params):
+                canon = _canonicalize_cosmology_param(pname)
+                if canon is None or isinstance(mean[i], bool) or not isinstance(mean[i], (int, float)):
+                    continue
+                m = float(mean[i])
+                bucket = out.setdefault(canon, set())
+                bucket.add(m)
+                try:
+                    var = float(cov[i][i])  # type: ignore[index]
+                    if var > 0:
+                        s = math.sqrt(var)
+                        bucket.add(m - s)
+                        bucket.add(m + s)
+                except Exception:
+                    pass
+        # A "parameter" field naming the quantity (pairwise_tensions rows).
+        named = payload.get("parameter") or payload.get("param")
+        ctx = _canonicalize_cosmology_param(named) if isinstance(named, str) else None
+        for key, val in payload.items():
+            key_str = str(key).lower()
+            if key_str in _METADATA_KEYS_BLACKLIST or key_str in _CITATION_KEYS_BLACKLIST:
+                continue
+            canon_key = _canonicalize_cosmology_param(key)
+            if canon_key is not None:
+                bucket = out.setdefault(canon_key, set())
+                for v in _iter_numeric_values(val):
+                    bucket.add(v)
+            elif ctx is not None and key not in {"parameter", "param"}:
+                bucket = out.setdefault(ctx, set())
+                for v in _iter_numeric_values(val):
+                    bucket.add(v)
+            else:
+                _build_cosmology_labeled_universe(val, out)
+    elif isinstance(payload, (list, tuple)):
+        for val in payload:
+            _build_cosmology_labeled_universe(val, out)
+    return out
+
+
 # F1.3: when the tool-result universe is thin, switch to a tight tolerance
 # so an invented number cannot accidentally match some stray column index
 # or row count.  10 entries was chosen to be larger than the typical
@@ -871,7 +990,21 @@ def validate_claims(
             strict_mode=strict_mode,
         )
 
-    uncited = [c for c in claims if not _matches_any(c.value, universe, effective_tol)]
+    # 4.1: label-aware cosmology-parameter matching.  When a claim is recognisably
+    # about a cosmology parameter that the tools actually produced, it must match
+    # THAT parameter's own values — not any coincidentally-close number elsewhere
+    # in the universe.  This closes the cross-label ±1% laundering surface (e.g.
+    # an "σ8 = 0.315" claim being validated by an unrelated Ωm=0.3153).  Claims we
+    # can't pin to a produced parameter keep the existing global-universe check.
+    labeled = _build_cosmology_labeled_universe(tool_results) if tool_results else {}
+    uncited: list[Claim] = []
+    for c in claims:
+        param = _claim_cosmology_param(c)
+        if param is not None and labeled.get(param):
+            if not _matches_any(c.value, labeled[param], effective_tol):
+                uncited.append(c)
+        elif not _matches_any(c.value, universe, effective_tol):
+            uncited.append(c)
     return ValidationResult(
         ok=not uncited,
         claims=claims,

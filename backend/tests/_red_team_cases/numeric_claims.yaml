@@ -221,3 +221,95 @@ cases:
                 - bibcode: "2020A&A...641A...6P"
                   doi: "10.1051/0004-6361/201833910"
     expect_ok: false
+
+  # ── 4.1 cross-label ±1% laundering (2026-05-29) ───────────────────
+  # The flat numeric universe is label-blind: before label-aware matching, a
+  # cosmology parameter claim was "supported" by ANY tool number within ±1%,
+  # so a fabricated value could launder off a coincidentally-close number for a
+  # DIFFERENT quantity. These cases pin that the value must now match its OWN
+  # parameter's tool-produced values.
+  - name: cosmology_sigma8_launders_off_omegam
+    description: |
+      σ8 = 0.315 is fabricated (real σ8 = 0.811) but lands within ±1% of the
+      UNRELATED Ωm = 0.3153 in the universe. Pre-4.1 the flat universe let it
+      pass; label-aware matching ties the σ8 claim to the σ8 values only, so it
+      is correctly blocked.
+    reply: "Our fit gives sigma_8 = 0.315 from the joint chain."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            H0: {median: 67.36}
+            omegam: {median: 0.3153}
+            sigma8: {median: 0.811}
+            S8: {median: 0.832}
+    expect_ok: false
+
+  - name: cosmology_s8_launders_off_sigma8
+    description: |
+      S8 = 0.811 is fabricated (real S8 = 0.832) but exactly equals the σ8 value
+      in the universe. Must be blocked: an S8 claim can only be supported by S8
+      values, not by σ8.
+    reply: "We find S8 = 0.811 from weak lensing."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            H0: {median: 67.36}
+            sigma8: {median: 0.811}
+            S8: {median: 0.832}
+    expect_ok: false
+
+  - name: cosmology_h0_launders_off_unrelated_chi2
+    description: |
+      H0 = 70.5 is fabricated (real H0 = 67.36) but matches an unrelated χ² = 70.5
+      that flows into the global universe. Label-aware matching blocks it because
+      70.5 is not within ±1% of any H0 value the tools produced.
+    reply: "The Hubble rate is H0 = 70.5 km/s/Mpc."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            H0: {median: 67.36}
+          fit_statistics:
+            chi2: 70.5
+    expect_ok: false
+
+  - name: cosmology_sigma8_legit_passes
+    description: σ8 claim equals the tool-produced σ8 — must pass (no over-block).
+    reply: "Our fit gives sigma_8 = 0.811."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            sigma8: {median: 0.811}
+            omegam: {median: 0.3153}
+    expect_ok: true
+
+  - name: cosmology_s8_one_sigma_edge_passes
+    description: |
+      Quoting the lower 1σ edge of S8 must pass — the labeled S8 universe is
+      harvested broadly (median + hdi edges), not just the median.
+    reply: "S8 reaches as low as S8 = 0.81 at the 1-sigma edge."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            S8: {median: 0.83, hdi_94: [0.81, 0.85]}
+    expect_ok: true
+
+  - name: cosmology_s8_published_dataset_value_passes
+    description: |
+      Citing a dataset's published S8 (parallel parameters/mean list form from
+      list_cosmology_datasets) must pass — the labeled harvest pairs mean[i] with
+      parameters[i].
+    reply: "KiDS-1000 reports S8 = 0.759."
+    tool_results:
+      - tool: list_cosmology_datasets
+        result:
+          datasets:
+            - key: kids1000_wl
+              compressed_likelihood:
+                parameters: ["S8"]
+                mean: [0.759]
+    expect_ok: true
