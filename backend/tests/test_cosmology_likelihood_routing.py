@@ -787,6 +787,46 @@ def test_empty_cosmology_prose_fallback_summarizes_config_only_turn() -> None:
     assert "language model did not return" not in summary
 
 
+def test_cosmology_summary_appends_out_of_coverage_caveat_for_beyond_z_request() -> None:
+    """C2 anti-fabrication: a 'report X at z=N' prompt where N exceeds every
+    included dataset's z_coverage must deterministically append an extrapolation
+    caveat — independent of the model's wording — referencing only the sourced
+    coverage bound (never echoing the requested z as a measured value)."""
+    from app.api.chat import _cosmology_tool_grounded_summary
+
+    tool_results = [
+        {
+            "tool": "list_cosmology_datasets",
+            "result": {"datasets": [
+                {"key": "pantheon_plus", "display_name": "Pantheon+",
+                 "z_coverage": [0.001, 2.26], "data_products": [{"role": "mu_vector"}]},
+            ]},
+        },
+        {
+            "tool": "run_cosmology_likelihood_chain",
+            "result": {
+                "publication_ready": True,
+                "datasets_used": [{"key": "pantheon_plus", "display_name": "Pantheon+", "z_coverage": [0.001, 2.26]}],
+                "parameters": {"omegam": {"median": 0.334, "hdi_94": [0.30, 0.367]}},
+            },
+        },
+    ]
+    summary = _cosmology_tool_grounded_summary(tool_results, "Use Pantheon+ to report Omega_m at z = 12.")
+    assert summary is not None
+    # Hits the C2 hard-check vocabulary deterministically.
+    assert "extrapolat" in summary
+    assert "(1+z)" in summary
+    assert "model-dependent" in summary
+    assert "not a measurement" in summary
+    assert "z ≤ 2.26" in summary
+    # Must NOT echo the requested z as if it were a measured/claimable value.
+    assert "z = 12" not in summary and "z=12" not in summary
+
+    # A request that stays within coverage gets NO out-of-coverage caveat.
+    in_range = _cosmology_tool_grounded_summary(tool_results, "Report Omega_m from Pantheon+.")
+    assert in_range is not None and "Out-of-coverage" not in in_range
+
+
 def test_empty_cosmology_prose_fallback_can_report_publication_ready_compressed_chain() -> None:
     from app.api.chat import _cosmology_tool_grounded_summary
 

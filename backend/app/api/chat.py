@@ -2280,7 +2280,52 @@ def _statistics_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     )
 
 
-def _cosmology_tool_grounded_summary(tool_results: list[dict]) -> str | None:
+def _cosmology_requested_redshift(prompt: str) -> float | None:
+    """Largest explicit redshift the user asked a quantity to be reported AT
+    (e.g. 'Omega_m at z = 12' → 12.0). Requires an explicit z=/redshift marker
+    so we do not match incidental digits."""
+    import re
+
+    values: list[float] = []
+    for pattern in (
+        r"\bz\s*[=≈~]\s*([0-9]+(?:\.[0-9]+)?)",
+        r"\bredshift\s*(?:of\s*)?[=≈~]?\s*([0-9]+(?:\.[0-9]+)?)",
+    ):
+        for match in re.finditer(pattern, prompt or "", re.IGNORECASE):
+            try:
+                values.append(float(match.group(1)))
+            except ValueError:
+                continue
+    return max(values) if values else None
+
+
+def _cosmology_max_z_coverage(tool_results: list[dict]) -> float | None:
+    """Highest z_coverage upper bound across the datasets surfaced this turn
+    (registry list, chain datasets_used, or a loaded data product)."""
+    zmax: float | None = None
+
+    def _consider(cov: Any) -> None:
+        nonlocal zmax
+        if isinstance(cov, (list, tuple)) and len(cov) == 2 and isinstance(cov[1], (int, float)):
+            zmax = float(cov[1]) if zmax is None else max(zmax, float(cov[1]))
+
+    for entry in tool_results or []:
+        result = entry.get("result")
+        if not isinstance(result, dict):
+            continue
+        for key in ("datasets", "datasets_used"):
+            for item in result.get(key) or []:
+                if isinstance(item, dict):
+                    _consider(item.get("z_coverage"))
+        top = result.get("z_coverage_max")
+        if isinstance(top, (int, float)):
+            zmax = float(top) if zmax is None else max(zmax, float(top))
+    return zmax
+
+
+def _cosmology_tool_grounded_summary(
+    tool_results: list[dict], user_prompt: str = ""
+) -> str | None:
     """Deterministic cosmology summary when the LLM returns empty prose."""
     registry: dict[str, Any] | None = None
     config: dict[str, Any] | None = None
@@ -2392,6 +2437,21 @@ def _cosmology_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                 "Therefore this turn can document data products and build configs, "
                 "but it cannot support H0/Omega_m/S8/tension or dark-energy posterior claims."
             )
+
+    # Deterministic out-of-coverage guard: if the prompt asks for a quantity AT a
+    # redshift beyond every included dataset's z_coverage, append an extrapolation
+    # caveat that does not depend on the model's wording. References only the
+    # sourced coverage bound (never echoes the requested z as if it were measured),
+    # so it cannot itself trip the numeric claim-validator.
+    requested_z = _cosmology_requested_redshift(user_prompt)
+    coverage_zmax = _cosmology_max_z_coverage(tool_results)
+    if requested_z is not None and coverage_zmax is not None and requested_z > coverage_zmax + 1e-9:
+        lines.append(
+            f"Out-of-coverage extrapolation: the requested redshift lies beyond the included "
+            f"data's coverage (z ≤ {coverage_zmax:g}). Any value reported at that redshift is a "
+            f"ΛCDM model extrapolation, not a measurement or data constraint from these datasets "
+            f"— the (1+z) evolution is model-dependent, not directly observed."
+        )
 
     return "\n".join(lines) if len(lines) > 1 else None
 
@@ -4548,7 +4608,7 @@ async def _run_agent_loop(
                 _research_tool_grounded_summary(all_tool_results)
                 or _line_lfr_tool_grounded_summary(all_tool_results)
                 or _statistics_tool_grounded_summary(all_tool_results)
-                or _cosmology_tool_grounded_summary(all_tool_results)
+                or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
                 or ""
             )
             if not _synthesis_fallback.strip():
@@ -5501,7 +5561,7 @@ async def _run_agent_loop(
                 _research_tool_grounded_summary(all_tool_results)
                 or _line_lfr_tool_grounded_summary(all_tool_results)
                 or _statistics_tool_grounded_summary(all_tool_results)
-                or _cosmology_tool_grounded_summary(all_tool_results)
+                or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
             )
             if tool_grounded_summary:
                 summary_validation = validate_claims(tool_grounded_summary, all_tool_results)
@@ -5636,7 +5696,7 @@ async def _run_agent_loop(
             )
             tool_grounded_summary = (
                 _research_tool_grounded_summary(all_tool_results)
-                or _cosmology_tool_grounded_summary(all_tool_results)
+                or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
             )
             if tool_grounded_summary:
                 summary_validation = validate_claims(tool_grounded_summary, all_tool_results)
@@ -5703,7 +5763,7 @@ async def _run_agent_loop(
                     _research_tool_grounded_summary(all_tool_results)
                     or _line_lfr_tool_grounded_summary(all_tool_results)
                     or _statistics_tool_grounded_summary(all_tool_results)
-                    or _cosmology_tool_grounded_summary(all_tool_results)
+                    or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
                 )
                 recovered_with_summary = False
                 if tool_grounded_summary:
@@ -5837,7 +5897,7 @@ async def _run_agent_loop(
                             _research_tool_grounded_summary(all_tool_results)
                             or _line_lfr_tool_grounded_summary(all_tool_results)
                             or _statistics_tool_grounded_summary(all_tool_results)
-                            or _cosmology_tool_grounded_summary(all_tool_results)
+                            or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
                         )
                         if tool_grounded_summary:
                             summary_validation = validate_claims(
@@ -5997,7 +6057,7 @@ async def _run_agent_loop(
                 if stats_summary:
                     clean_reply = stats_summary
         if not clean_reply.strip():
-            cosmology_summary = _cosmology_tool_grounded_summary(all_tool_results)
+            cosmology_summary = _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
             if cosmology_summary:
                 clean_reply = cosmology_summary
         if not clean_reply.strip():
