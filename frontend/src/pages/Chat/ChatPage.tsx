@@ -51,6 +51,7 @@ import {
   validatePaperSession,
 } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
+import ResearchStepsCard, { isResearchTurn } from "../../components/chat/ResearchStepsCard";
 import AckButton from "../../components/chat/AckButton";
 import CosmologyMCMCPanel from "../../components/chat/CosmologyMCMCPanel";
 import CosmologyLikelihoodPanel from "../../components/chat/CosmologyLikelihoodPanel";
@@ -5227,25 +5228,43 @@ export default function ChatPage() {
               </div>
               {msg.actions && msg.actions.length > 0 && (
                 <div className="chat-actions-list">
-                  <span className="chat-actions-label">
-                    Suggested actions:
-                  </span>
-                  {msg.actions.map((action, idx) => (
-                    <ActionCard
-                      key={idx}
-                      action={action}
-                      index={idx}
-                      result={msg.actionResults?.get(idx)}
-                      executing={executingActions.has(
-                        `${msg.id}-${idx}`
-                      )}
-                      conversationProvenance={conversationProvenance}
-                      onCopyAcknowledgement={() => showToast("Copied", "success")}
-                      onExecute={(i, a) =>
-                        handleExecuteAction(msg.id, i, a)
-                      }
-                    />
-                  ))}
+                  {isResearchTurn(msg.actions) ? (
+                    <ResearchStepsCard actions={msg.actions} />
+                  ) : (
+                    <span className="chat-actions-label">
+                      Suggested actions:
+                    </span>
+                  )}
+                  {(() => {
+                    const cards = msg.actions!.map((action, idx) => (
+                      <ActionCard
+                        key={idx}
+                        action={action}
+                        index={idx}
+                        result={msg.actionResults?.get(idx)}
+                        executing={executingActions.has(
+                          `${msg.id}-${idx}`
+                        )}
+                        conversationProvenance={conversationProvenance}
+                        onCopyAcknowledgement={() => showToast("Copied", "success")}
+                        onExecute={(i, a) =>
+                          handleExecuteAction(msg.id, i, a)
+                        }
+                      />
+                    ));
+                    // Research turns: fold the raw tool cards behind a collapsed
+                    // disclosure so the clean step card leads, audit trail stays.
+                    return isResearchTurn(msg.actions) ? (
+                      <details className="chat-raw-actions">
+                        <summary style={{ cursor: "pointer", color: "#6b7280", fontSize: 12, margin: "4px 0" }}>
+                          Show raw tool cards ({msg.actions!.length})
+                        </summary>
+                        {cards}
+                      </details>
+                    ) : (
+                      cards
+                    );
+                  })()}
                 </div>
               )}
             </div>
