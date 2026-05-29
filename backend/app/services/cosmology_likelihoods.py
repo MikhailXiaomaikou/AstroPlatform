@@ -1479,6 +1479,52 @@ EBOSS_DR16_FSIGMA8: tuple[tuple[float, float, float], ...] = (
 )
 
 
+def compute_model_comparison(
+    baseline_result: dict[str, Any], extended_result: dict[str, Any]
+) -> dict[str, Any]:
+    """Δχ² / ΔAIC / ΔBIC between a baseline (ΛCDM) and an extended-model fit
+    on the SAME datasets — the real model-comparison the per-run delta_chi²=0.0
+    placeholder never provided.
+
+    Sign convention: Δ = extended − baseline. Δχ² < 0 means the extra freedom
+    fits the data better; ΔAIC/ΔBIC already penalise the extra parameters, so
+    they answer 'is that improvement worth the added parameters'. Preference is
+    read off ΔAIC on a Jeffreys-like scale (|ΔAIC|<2 inconclusive)."""
+    bf = baseline_result.get("fit_statistics") or {}
+    ef = extended_result.get("fit_statistics") or {}
+
+    def _num(d: dict[str, Any], key: str) -> float | None:
+        v = d.get(key)
+        return float(v) if isinstance(v, (int, float)) else None
+
+    def _delta(key: str) -> float | None:
+        b, e = _num(bf, key), _num(ef, key)
+        return round(e - b, 4) if (b is not None and e is not None) else None
+
+    base_model = str(baseline_result.get("model") or "lcdm")
+    ext_model = str(extended_result.get("model") or "")
+    delta_aic = _delta("aic")
+    k_b, k_e = _num(bf, "n_parameters"), _num(ef, "n_parameters")
+    if delta_aic is None:
+        preferred = "undetermined"
+    elif delta_aic < -2.0:
+        preferred = ext_model
+    elif delta_aic > 2.0:
+        preferred = base_model
+    else:
+        preferred = "inconclusive"
+    return {
+        "baseline_model": base_model,
+        "extended_model": ext_model,
+        "delta_chi2": _delta("chi2"),
+        "delta_aic": delta_aic,
+        "delta_bic": _delta("bic"),
+        "n_extra_params": int(k_e - k_b) if (k_b is not None and k_e is not None) else None,
+        "preferred": preferred,
+        "convention": "delta = extended - baseline; negative favors the extended model; |delta_aic|<2 is inconclusive",
+    }
+
+
 def run_likelihood_chain(
     *,
     model: str,

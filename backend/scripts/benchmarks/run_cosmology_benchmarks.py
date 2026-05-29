@@ -306,6 +306,76 @@ def bench_dataset_z_coverage() -> dict[str, Any]:
     }
 
 
+def bench_model_comparison_delta() -> dict[str, Any]:
+    """Real model comparison Δχ²/ΔAIC/ΔBIC (3.2, 2026-05-29).
+
+    compute_model_comparison(lcdm, wcdm) on DESI BAO + Planck compressed must
+    return finite deltas, exactly 1 extra parameter (w), and NOT prefer wCDM —
+    w≈-1 there, so the extra freedom buys no fit improvement and AIC favors the
+    simpler ΛCDM. Guards the formerly-hardcoded delta_chi²=0.0 placeholder."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain, compute_model_comparison
+
+    ds = ["desi_dr1_bao", "planck2018_compressed"]
+    lcdm = run_likelihood_chain(model="lcdm", dataset_keys=ds, n_samples=4000, random_seed=42)
+    wcdm = run_likelihood_chain(model="wcdm", dataset_keys=ds, n_samples=4000, random_seed=42)
+    cmp = compute_model_comparison(lcdm, wcdm)
+    finite = all(cmp[k] is not None for k in ("delta_chi2", "delta_aic", "delta_bic"))
+    return {
+        "pass": (
+            finite
+            and cmp["n_extra_params"] == 1
+            and cmp["preferred"] in {"lcdm", "inconclusive"}
+        ),
+        "delta_chi2": cmp["delta_chi2"],
+        "delta_aic": cmp["delta_aic"],
+        "n_extra_params": cmp["n_extra_params"],
+        "preferred": cmp["preferred"],
+        "target": "finite Δχ²/ΔAIC/ΔBIC, 1 extra param, wCDM NOT preferred over ΛCDM (w≈-1)",
+    }
+
+
+def bench_growth_kernel_vs_exact_lcdm() -> dict[str, Any]:
+    """Growth kernel (1A) cross-validated against the EXACT ΛCDM linear-growth
+    integral (3.3, 2026-05-29).
+
+    The fσ8 path uses the Linder γ-index fitting formula f=Ωm(z)^γ with an
+    analytic D(z)/D(0). Until now only self-consistent anchors (f(0)=Ωm^0.55,
+    D(0)/D(0)=1) were pinned — no z>0 external reference. This compares the
+    kernel to the exact flat-ΛCDM growth D(a) ∝ E(a)·∫₀ᵃ da'/(a'E(a'))³ and
+    f=dlnD/dlna over z∈{0.2,0.5,1.0,1.5,2.0}. The γ-approximation is good to
+    ~0.1-1%; measured worst rel-err is 0.14% (f) / 0.037% (D)."""
+    from scipy.integrate import quad
+    from app.services.cosmology_likelihoods import _growth_rate_f, _growth_factor_ratio
+
+    om = 0.31
+    ol = 1.0 - om
+    e_of_a = lambda a: (om / a ** 3 + ol) ** 0.5  # noqa: E731
+    integrand = lambda a: 1.0 / (a * e_of_a(a)) ** 3  # noqa: E731
+
+    def d_unnorm(a: float) -> float:
+        val, _ = quad(integrand, 0.0, a)
+        return e_of_a(a) * val
+
+    lcdm_w0, lcdm_wa = np.array([-1.0]), np.array([0.0])
+    om_arr = np.array([om])
+    worst_f = worst_d = 0.0
+    for z in (0.2, 0.5, 1.0, 1.5, 2.0):
+        a = 1.0 / (1.0 + z)
+        d_exact = d_unnorm(a) / d_unnorm(1.0)
+        dlna = 1e-4
+        f_exact = (np.log(d_unnorm(a * np.exp(dlna))) - np.log(d_unnorm(a * np.exp(-dlna)))) / (2 * dlna)
+        f_kernel = float(_growth_rate_f(z, om_arr, lcdm_w0, lcdm_wa)[0])
+        d_kernel = float(_growth_factor_ratio(z, om_arr, lcdm_w0, lcdm_wa)[0])
+        worst_f = max(worst_f, abs(f_kernel - f_exact) / f_exact)
+        worst_d = max(worst_d, abs(d_kernel - d_exact) / d_exact)
+    return {
+        "pass": worst_f < 0.005 and worst_d < 0.001,
+        "worst_f_rel_err": round(worst_f, 5),
+        "worst_D_rel_err": round(worst_d, 5),
+        "target": "Linder-γ growth within 0.5% (f) / 0.1% (D) of exact flat-ΛCDM integral over z≤2",
+    }
+
+
 def bench_cosmic_chronometer_hz() -> dict[str, Any]:
     """Cosmic-chronometer H(z) executable likelihood (1C, 2026-05-29).
 
@@ -415,6 +485,8 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("dataset_z_coverage", bench_dataset_z_coverage),
     ("cosmic_chronometer_hz", bench_cosmic_chronometer_hz),
     ("eboss_fsigma8_growth", bench_eboss_fsigma8_growth),
+    ("growth_kernel_vs_exact_lcdm", bench_growth_kernel_vs_exact_lcdm),
+    ("model_comparison_delta", bench_model_comparison_delta),
 ]
 
 

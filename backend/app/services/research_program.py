@@ -17,6 +17,7 @@ from app.services.cmb_rotation_likelihoods import (
 )
 from app.services.cosmology_likelihoods import (
     build_likelihood_config,
+    compute_model_comparison,
     get_cosmology_dataset,
     run_likelihood_chain,
 )
@@ -327,6 +328,26 @@ def run_research_matrix(
             })
 
     ready = [cell for cell in cells if cell.get("publication_ready")]
+    # Model comparison: pair the ΛCDM baseline cell with each extended-model cell
+    # computed on the SAME datasets (Δχ²/ΔAIC/ΔBIC). Reuses cells already fit —
+    # no extra chains — and answers "is wCDM/w0wa preferred over ΛCDM here".
+    model_comparisons: list[dict[str, Any]] = []
+    cells_by_data: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for cell in cells:
+        result = cell.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("fit_statistics"), dict):
+            continue
+        cells_by_data.setdefault(tuple(sorted(cell.get("dataset_keys") or [])), []).append(cell)
+    for data_key, group in cells_by_data.items():
+        baseline = next((c for c in group if str(c.get("model")) == "lcdm"), None)
+        if baseline is None:
+            continue
+        for cell in group:
+            if str(cell.get("model")) == "lcdm":
+                continue
+            comparison = compute_model_comparison(baseline["result"], cell["result"])
+            comparison["dataset_keys"] = list(data_key)
+            model_comparisons.append(comparison)
     return {
         "success": True,
         "__tool_status__": "COMPLETED" if ready else "PARTIAL",
@@ -335,6 +356,7 @@ def run_research_matrix(
         "claim_scope": "research_matrix_compressed_preliminary",
         "research_plan": plan,
         "matrix": cells,
+        "model_comparisons": model_comparisons,
         "matrix_size": len(cells),
         "ready_cells": len(ready),
         "warnings": [
