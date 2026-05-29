@@ -34,6 +34,7 @@ COSMOLOGY_TOOL_NAMES = frozenset(
         "build_cosmology_robustness_matrix",
         "run_cosmology_robustness_matrix",
         "assess_bao_bin_anomaly",
+        "audit_published_constraint",
     }
 )
 
@@ -468,6 +469,54 @@ COSMOLOGY_TOOL_SCHEMAS = [
                     "description": "Optional [low, high, n] Omega_m grid. Default [0.10, 0.50, 401].",
                 },
             },
+        },
+    },
+    {
+        "name": "audit_published_constraint",
+        "description": (
+            "Audit a PUBLISHED cosmology constraint: reproduce it with the platform's real "
+            "compressed-likelihood runner over registered datasets, then report the per-parameter "
+            "n-sigma tension between the published value and the reproduced value. Use when the "
+            "user gives a paper's quoted parameter value(s) (e.g. SH0ES H0=73.04+/-1.04) and wants "
+            "to check them against in-platform data. Output is a TENSION / agreement report, NOT a "
+            "fabrication verdict — a real tension means the measurements disagree, not that the "
+            "paper is wrong. Parameters the platform cannot reproduce are marked NOT_REPRODUCED "
+            "(a coverage gap), and unrunnable datasets are reported as BLOCKED rather than guessed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "description": "Cosmology model to reproduce under, e.g. lcdm / wcdm / w0wa_cdm.",
+                },
+                "dataset_keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Registry dataset keys to reproduce with, e.g. [\"desi_dr1_bao\", \"pantheon_plus\"]. Non-runnable keys are reported as unavailable.",
+                },
+                "claimed": {
+                    "type": "object",
+                    "description": "Published values to audit, mapping parameter name to [value, sigma] (sigma optional), e.g. {\"H0\": [73.04, 1.04], \"omegam\": [0.298, 0.008]}.",
+                },
+                "paper_ref": {
+                    "type": "object",
+                    "description": "Source of the published value: {source, and at least one of bibcode/arxiv/doi}. Recorded for provenance and added to citations.",
+                    "properties": {
+                        "source": {"type": "string"},
+                        "bibcode": {"type": "string"},
+                        "arxiv": {"type": "string"},
+                        "doi": {"type": "string"},
+                    },
+                },
+                "claimed_datasets": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional: datasets the published value used, to detect overlap with the reproduction (overlap makes the n-sigma not a clean independent comparison).",
+                },
+                "random_seed": {"type": "integer", "description": "Deterministic seed for the reproduction."},
+            },
+            "required": ["model", "dataset_keys", "claimed"],
         },
     },
 ]
@@ -929,6 +978,35 @@ def _exec_assess_bao_bin_anomaly(inp: dict) -> dict:
         }
 
 
+def _exec_audit_published_constraint(inp: dict) -> dict:
+    from app.services.cosmology_audit import audit_published_constraint
+
+    try:
+        dataset_keys = inp.get("dataset_keys") or []
+        if not isinstance(dataset_keys, list):
+            raise ValueError("dataset_keys must be a list")
+        claimed = inp.get("claimed")
+        if not isinstance(claimed, dict) or not claimed:
+            raise ValueError("claimed must be a non-empty object mapping parameter -> [value, sigma]")
+        return audit_published_constraint(
+            model=str(inp.get("model") or ""),
+            dataset_keys=[str(key) for key in dataset_keys],
+            claimed=claimed,
+            paper_ref=inp.get("paper_ref") if isinstance(inp.get("paper_ref"), dict) else None,
+            claimed_datasets=inp.get("claimed_datasets") if isinstance(inp.get("claimed_datasets"), list) else None,
+            random_seed=int(inp["random_seed"]) if inp.get("random_seed") is not None else None,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+        }
+
+
 async def dispatch_cosmology(
     tool_name: str, tool_input: dict, python_session_id: str | None = None
 ) -> dict | None:
@@ -963,4 +1041,6 @@ async def dispatch_cosmology(
         return _exec_run_cosmology_robustness_matrix(tool_input)
     elif tool_name == "assess_bao_bin_anomaly":
         return _exec_assess_bao_bin_anomaly(tool_input)
+    elif tool_name == "audit_published_constraint":
+        return _exec_audit_published_constraint(tool_input)
     return None

@@ -491,6 +491,9 @@ _COMPUTE_TOOLS = {
     # Added in f0622ca but never classified; was falling through to
     # UNAVAILABLE/PARTIAL at runtime.
     "assess_bao_bin_anomaly",
+    # audit_published_constraint (2026-05-27): reproduces a published constraint
+    # and reports n-sigma tension; COMPUTE because it runs the likelihood chain.
+    "audit_published_constraint",
     # PART Y Batch 1 (audit follow-up): newer compute tools — line-relation
     # fitting on cited literature tables, luminosity-distance comparison
     # across cosmologies, gravitational-lensing demagnification of a sample.

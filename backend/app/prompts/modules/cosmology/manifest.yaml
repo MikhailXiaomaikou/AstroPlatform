@@ -6,12 +6,13 @@ status: active
 prompt_file: prompt.md
 
 # Tools loaded for this module = core (via core/infrastructure.yaml)
-#                              + cosmology-specific (23)
+#                              + cosmology-specific (24)
 #                              + overlap (14, shared with N+1 modules)
-# Total: 18 + 23 + 14 = 55 visible tools.
+# Total: 18 + 24 + 14 = 56 visible tools.
 tools:
-  # ── cosmology-specific (23) ──
+  # ── cosmology-specific (24) ──
   - assess_bao_bin_anomaly
+  - audit_published_constraint
   - build_cosmology_likelihood
   - build_cosmology_robustness_matrix
   - build_evidence_graph
