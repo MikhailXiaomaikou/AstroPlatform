@@ -38,6 +38,7 @@ COSMOLOGY_PROBE_DATASETS: dict[str, list[str]] = {
         "megamaser_h0_pesce20",
     ],
     "hz": ["cosmic_chronometers"],
+    "rsd": ["eboss_dr16_rsd"],
 }
 
 
@@ -1092,7 +1093,13 @@ def _required_probes(text: str) -> list[str]:
         probes.append("H0")
     if "chronometer" in prompt or "h(z)" in prompt:
         probes.append("HZ")
-    if _is_early_dark_energy_question(prompt) and not any(probe in probes for probe in ("BAO", "SN", "CMB", "WL", "H0", "HZ")):
+    if any(tok in prompt for tok in (
+        "rsd", "fσ8", "fσ₈", "fsigma8", "f sigma8", "f-sigma8",
+        "growth rate", "growth of structure", "structure growth",
+        "redshift-space", "redshift space distortion",
+    )):
+        probes.append("RSD")
+    if _is_early_dark_energy_question(prompt) and not any(probe in probes for probe in ("BAO", "SN", "CMB", "WL", "H0", "HZ", "RSD")):
         probes.append("CMB")
     if (
         "[cii]" in prompt
@@ -1133,6 +1140,8 @@ def _candidate_datasets(probes: list[str], text: str) -> list[str]:
         keys.extend(COSMOLOGY_PROBE_DATASETS["h0_anchors"] if "compare" in prompt or "比较" in prompt else COSMOLOGY_PROBE_DATASETS["h0"])
     if "HZ" in probes:
         keys.extend(COSMOLOGY_PROBE_DATASETS["hz"])
+    if "RSD" in probes:
+        keys.extend(COSMOLOGY_PROBE_DATASETS["rsd"])
     return _clean_dataset_keys(keys)
 
 
@@ -1415,12 +1424,18 @@ def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text
     cmb = [key for key in matrix_keys if get_cosmology_dataset(key).probe in {"cmb_compressed", "cmb_lensing"}]
     wl = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "weak_lensing"]
     h0 = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "h0_prior"]
+    cc = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "hz"]
+    rsd = [key for key in matrix_keys if get_cosmology_dataset(key).probe == "rsd"]
     if bao:
         combos.append(("BAO only", bao[:1]))
     if sn:
         combos.append(("SN only", sn[:1]))
     if cmb:
         combos.append(("CMB only", cmb[:1]))
+    if cc:
+        combos.append(("CC H(z) only", cc[:1]))
+    if rsd:
+        combos.append(("RSD fσ8 only", rsd[:1]))
     if bao and cmb:
         combos.append(("BAO + CMB", bao[:1] + cmb[:1]))
     if bao and sn:
@@ -1429,6 +1444,10 @@ def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text
         combos.append(("SN + CMB", sn[:1] + cmb[:1]))
     if bao and wl:
         combos.append(("BAO + WL", bao[:1] + wl))
+    if bao and cc:
+        combos.append(("BAO + CC H(z)", bao[:1] + cc[:1]))
+    if bao and rsd:
+        combos.append(("BAO + RSD fσ8", bao[:1] + rsd[:1]))
     if bao and sn and cmb:
         combos.append(("BAO + SN + CMB", bao[:1] + sn[:1] + cmb[:1]))
     if h0:

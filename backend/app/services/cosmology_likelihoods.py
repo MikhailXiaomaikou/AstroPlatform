@@ -338,6 +338,9 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         # NOT report a growth-rate measurement (Alam+2021 Fig.1), so the earlier
         # (0.15, 2.33) overstated the fσ8 reach.
         z_coverage=(0.15, 1.48),
+        # Executable in-process via the dedicated fσ8 growth χ² path (1A); the
+        # "external_likelihood" label follows the desi_dr1_bao convention (full
+        # external likelihood is higher fidelity), NOT "cannot run in-process".
         status="external_likelihood",
         observables=("f_sigma8",),
         units={"f_sigma8": "dimensionless", "redshift": "dimensionless"},
