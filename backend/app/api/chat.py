@@ -2330,6 +2330,7 @@ def _cosmology_tool_grounded_summary(
     registry: dict[str, Any] | None = None
     config: dict[str, Any] | None = None
     chain: dict[str, Any] | None = None
+    ap_test: dict[str, Any] | None = None
     for entry in tool_results or []:
         result = entry.get("result")
         if not isinstance(result, dict):
@@ -2345,8 +2346,10 @@ def _cosmology_tool_grounded_summary(
             "run_cmb_rotation_likelihood",
         }:
             chain = result
+        elif tool == "assess_bao_bin_anomaly":
+            ap_test = result
 
-    if not any((registry, config, chain)):
+    if not any((registry, config, chain, ap_test)):
         return None
 
     dataset_names: list[str] = []
@@ -2449,6 +2452,29 @@ def _cosmology_tool_grounded_summary(
                 "Therefore this turn can document data products and build configs, "
                 "but it cannot support H0/Omega_m/S8/tension or dark-energy posterior claims."
             )
+
+    # Alcock-Paczynski geometric test (assess_bao_bin_anomaly): surface the
+    # tool-grounded Ωm result deterministically so a research-mode AP turn shows
+    # the actual finding instead of an empty/blocked card (the model's draft is
+    # discarded in research mode, so this summary must carry the result itself).
+    if isinstance(ap_test, dict) and isinstance(ap_test.get("omega_m_best"), (int, float)):
+        om = float(ap_test["omega_m_best"])
+        lo = ap_test.get("omega_m_1sigma_low")
+        hi = ap_test.get("omega_m_1sigma_high")
+        chi2 = ap_test.get("chi2_min")
+        ndof = ap_test.get("n_dof")
+        ap_line = f"- Alcock-Paczynski geometric test (DESI DR1 BAO): best-fit Ωm = {_fmt_tool_number(om)}"
+        if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+            ap_line += f" (1σ {_fmt_tool_number(lo)}–{_fmt_tool_number(hi)})"
+        if isinstance(chi2, (int, float)) and isinstance(ndof, (int, float)) and ndof:
+            ap_line += f"; χ² = {_fmt_tool_number(chi2)} ({_fmt_tool_number(chi2 / ndof)} per dof)"
+        ap_line += "."
+        lines.append(ap_line)
+        lines.append(
+            "- The AP test constrains Ωm through the DM/DH ratio, which is independent "
+            "of H0 and the sound horizon r_d (both cancel in the ratio). Method: "
+            "Alcock & Paczynski 1979."
+        )
 
     # Deterministic out-of-coverage guard: if the prompt asks for a quantity AT a
     # redshift beyond every included dataset's z_coverage, append an extrapolation
@@ -5973,6 +5999,7 @@ async def _run_agent_loop(
         for tr in all_tool_results
     )
 
+    held_reply_produced = False
     if research_mode_result_present and clean_reply.strip():
         try:
             from app.services.research_program import verify_research_facts
@@ -5990,9 +6017,28 @@ async def _run_agent_loop(
             }
             all_tool_results.append(fact_tool_result)
             if fact_result.get("status") == "blocked":
-                safe_summary = _research_tool_grounded_summary(all_tool_results)
+                # HOLD instead of whole-reply nuke: keep the tool-grounded
+                # deterministic core (now incl. the cosmology/AP summary) and
+                # surface the un-grounded claims as a held footer — the verified
+                # result is no longer lost just because the model embellished.
+                safe_summary = (
+                    _research_tool_grounded_summary(all_tool_results)
+                    or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
+                )
+                held_claims = [
+                    c for c in (fact_result.get("claims") or [])
+                    if c.get("status") in {"unsupported", "contradicted"}
+                ]
                 if safe_summary:
                     clean_reply = safe_summary
+                    if held_claims:
+                        clean_reply += (
+                            f"\n\n⚠ {len(held_claims)} claim(s) in the draft were held — not "
+                            "grounded by any tool this turn — and excluded from the result "
+                            "above. See the Fact Check panel for each held claim and how to "
+                            "ground it (e.g. run the corresponding tool)."
+                        )
+                    held_reply_produced = True
                 else:
                     clean_reply = (
                         "The research run completed, but fact verification found "
@@ -6013,13 +6059,17 @@ async def _run_agent_loop(
         except Exception as exc:
             logger.warning("Research fact verification skipped: %s", exc)
 
-    if research_mode_result_present:
+    if research_mode_result_present and not held_reply_produced:
         # Research Mode answers must be the evidence graph's public surface, not
         # a fresh model-written literature review.  The model is still used to
         # choose and run tools, but the final prose is deterministic so it
         # cannot introduce unsupported paper facts, citations, or background
-        # claims after the tools have completed.
-        tool_grounded_research_summary = _research_tool_grounded_summary(all_tool_results)
+        # claims after the tools have completed. (Skipped when a held reply was
+        # already produced above, so the held footer is not clobbered.)
+        tool_grounded_research_summary = (
+            _research_tool_grounded_summary(all_tool_results)
+            or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
+        )
         if tool_grounded_research_summary:
             clean_reply = tool_grounded_research_summary
 
@@ -6390,9 +6440,27 @@ async def _run_orchestrated_chat(
             merged_tool_results.append(fact_tool_result)
             merged_actions.extend(_tool_results_to_actions([fact_tool_result]))
             if fact_result.get("status") == "blocked":
-                safe_summary = _research_tool_grounded_summary(merged_tool_results)
+                # HOLD (mirror the single-agent path): keep the tool-grounded core
+                # + surface held claims as a footer instead of nuking the reply.
+                safe_summary = (
+                    _research_tool_grounded_summary(merged_tool_results)
+                    or _cosmology_tool_grounded_summary(
+                        merged_tool_results, latest_research_user_text or ""
+                    )
+                )
+                held_claims = [
+                    c for c in (fact_result.get("claims") or [])
+                    if c.get("status") in {"unsupported", "contradicted"}
+                ]
                 if safe_summary:
                     merged_reply = safe_summary
+                    if held_claims:
+                        merged_reply += (
+                            f"\n\n⚠ {len(held_claims)} claim(s) in the draft were held — not "
+                            "grounded by any tool this turn — and excluded from the result "
+                            "above. See the Fact Check panel for each held claim and how to "
+                            "ground it."
+                        )
                 else:
                     merged_reply = (
                         "The research run completed, but fact verification found "
