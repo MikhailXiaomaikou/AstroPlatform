@@ -29,7 +29,9 @@ cosmology 是平台第一个 active 研究模块。M0 的**已验证能力**(物
 |---|---|---|---|
 | **M0-C** | 曲率 `Ok0` + 有质量中微子 `Mnu` distance kernel + benchmark | ✅ Shipped | commit `c4b5ca6`;9/9 benchmark;curved(精确 sinn)+ ν(非相对论 fold-in)对 astropy **2.95e-4 mag**;flat 逐字节不变 |
 | **M0-F** | 数据集 `z_coverage` 元数据 + 后端 surface + C2 后端锚 | ✅ Shipped | 见 §3;benchmark **10/10**(新 `dataset_z_coverage`)+ cosmology-smoke 4/4 + C2 锚离线验证(正例 PASS / 负例 SOFT-FAIL) |
-| **M0-E** | 增长率 `f(z)` / `fσ8`(RSD growth-rate kernel) | ⬜ 待办 | — |
+| **1A (=M0-E)** | 增长率 `f(z)`/`fσ8` Linder-γ kernel + eBOSS DR16 RSD executable | ✅ Shipped | 本轮提交;benchmark `eboss_fsigma8_growth`(f(0)=Ωm^0.55、D(0)/D(0)=1、Planck reduced χ²=1.59);6 点 RSD-only fσ8 读自 Alam+2021 Table III;σ8 进采样,DESI+eBOSS+Planck 复现 σ8=0.811 |
+| **1C** | 宇宙学钟 `H(z)` executable(31 点,Gómez-Valent & Amendola 2018) | ✅ Shipped | 本轮提交;benchmark `cosmic_chronometer_hz`(Planck reduced χ²=0.51);H(z)=H0·E(z) 对角 χ²;CC+DESI(emcee)publication ESS 1301 |
+| **1B** | S8 改逐样本派生量(σ8·√(Ωm/0.3)) | ⏸ 暂缓 | 高风险采样器重构(S8 织进 3 条评估路径 + ESS 调参 + 多个回归测试);对外 pairwise S8 张力已正确,错接仅在已标 preliminary 的联合后验;留单独一轮 |
 | **M1-A** | CAMB 理论功率谱工具(跨入 M1 里程碑) | ⬜ 待办 | — |
 
 > 任务 ID 从 C 跳到 E/F:更早的 M0 子项(基础 distance kernel、likelihood

@@ -331,10 +331,13 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
     # RSD-only, or BAO+RSD joint analyses.
     "eboss_dr16_rsd": CosmologyDatasetEntry(
         key="eboss_dr16_rsd",
-        display_name="eBOSS DR16 + 6dFGS + BOSS RSD f·σ8 compilation",
-        version="Alam+ 2021 RSD compilation (7 z-bins: 6dFGS, BOSS LOWZ/CMASS, eBOSS LRG/ELG/QSO/Lyα)",
+        display_name="eBOSS DR16 + BOSS RSD f·σ8 (SDSS lineage)",
+        version="Alam+ 2021 Table III RSD-only fσ8 (6 SDSS bins: MGS / BOSS×2 / eBOSS LRG·ELG·QSO; diagonal)",
         probe="rsd",
-        z_coverage=(0.15, 2.33),
+        # fσ8 coverage ends at z=1.48 (eBOSS QSO): the Lyα sample at z=2.33 does
+        # NOT report a growth-rate measurement (Alam+2021 Fig.1), so the earlier
+        # (0.15, 2.33) overstated the fσ8 reach.
+        z_coverage=(0.15, 1.48),
         status="external_likelihood",
         observables=("f_sigma8",),
         units={"f_sigma8": "dimensionless", "redshift": "dimensionless"},
@@ -388,16 +391,17 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             ),
         ),
         notes=(
-            "RSD f·σ8 data at z = 0.15, 0.38, 0.51, 0.70, 0.85, 1.48, "
-            "2.33. Tests whether σ8 growth history matches LCDM "
-            "prediction; independent of weak-lensing snapshot σ8 "
-            "(different epoch) AND of cluster-count σ8 (different "
-            "physics). Use as third axis of σ8 tension cross-check "
-            "alongside SPT cluster + cosmic shear. Phase-2 cobaya "
-            "execution required — compressed Gaussian path not yet "
-            "implemented because f·σ8(z) requires solving the LCDM "
-            "growth equation per parameter sample, not closed-form "
-            "from H0/Ωm."
+            "Executable in-process: 6 RSD-only fσ8 points at z = 0.15, 0.38, "
+            "0.51, 0.70, 0.85, 1.48 (Alam+2021 Table III, SDSS-only — 6dFGS "
+            "excluded, Lyα reports no fσ8). Predicted as fσ8(z)=f(z)·σ8·D(z)/D(0) "
+            "with the Linder γ-index growth kernel; diagonal covariance (Table "
+            "III note a treats per-tracer errors as Gaussian, correlations "
+            "ignored). Tests whether σ8 growth history matches ΛCDM — third axis "
+            "of σ8 tension cross-check alongside cosmic shear (1+z snapshot σ8) "
+            "and SPT clusters (M–T counting σ8). The γ-parametrisation is a "
+            "~0.1–1% approximation vs a full Boltzmann growth solve; the broader "
+            "6dFGS/Lyα citations document the RSD-compilation context. "
+            "fσ8 is H0-independent, so this constrains the (Ωm, σ8) combination."
         ),
         cobaya_likelihood="external:rsd.eboss_dr16_alam21",
         cosmosis_module="likelihood/rsd/eboss_dr16/eboss_dr16_rsd.py",
@@ -406,7 +410,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "rsd_systematics_LRG", "rsd_systematics_ELG",
             "rsd_systematics_QSO",
         ),
-        execution_mode="external_cobaya",
+        execution_mode="compressed_gaussian",
     ),
     "pantheon_plus": CosmologyDatasetEntry(
         key="pantheon_plus",
@@ -854,30 +858,49 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
     "cosmic_chronometers": CosmologyDatasetEntry(
         key="cosmic_chronometers",
         display_name="Cosmic chronometers H(z)",
-        version="Moresco-style H(z) compilation with covariance recipe",
+        version="Gómez-Valent & Amendola 2018 compilation (31 differential-age H(z), diagonal covariance)",
         probe="hz",
         z_coverage=(0.07, 1.965),
-        status="metadata_only",
+        # Executable in-process via the dedicated diagonal H(z) χ² path (like
+        # desi_dr1_bao); "external_likelihood" because the higher-fidelity full
+        # Moresco+2020 systematic-covariance version remains an external package.
+        status="external_likelihood",
         observables=("z", "H_z", "H_z_covariance"),
         units={"z": "dimensionless", "H_z": "km s^-1 Mpc^-1"},
         applicable_models=ALL_MODELS,
         likelihood_family="hz_gaussian",
         covariance=CovarianceSpec(
-            kind="recipe covariance",
-            provided=False,
-            description="Current public table requires adding systematic covariance following Moresco et al. recipes.",
+            kind="diagonal covariance",
+            provided=True,
+            description=(
+                "31 differential-age H(z) points with diagonal covariance "
+                "(D_ij = σ_i² δ_ij) per Gómez-Valent & Amendola 2018 Table 1. "
+                "The fuller Moresco et al. 2020 systematic covariance is a "
+                "documented refinement not applied in this phase-1 runner."
+            ),
             url="https://cluster.difa.unibo.it/astro/CC_data/",
-            format="H(z) table + covariance recipe",
+            format="H(z) table (diagonal errors)",
         ),
         source_url="https://cluster.difa.unibo.it/astro/CC_data/",
         citations=(
+            DatasetCitation(
+                label="Gómez-Valent & Amendola CC H(z) compilation",
+                year=2018, arxiv="1802.01505", doi="10.1088/1475-7516/2018/04/051",
+            ),
             DatasetCitation(label="Moresco et al. covariance systematics", year=2020, arxiv="2003.07362"),
             DatasetCitation(label="Jiao et al. LEGA-C chronometers", year=2022, arxiv="2205.05701"),
         ),
-        notes="Do not treat diagonal-only CC errors as publication-grade if the systematic covariance was omitted.",
+        notes=(
+            "31 model-independent H(z) measurements from differential ages of "
+            "passive galaxies (z 0.07–1.965), executable in-process as a flat "
+            "w0waCDM H(z)=H0·E(z) χ² with diagonal covariance. Independent "
+            "expansion-rate probe; combine with BAO/SN/CMB. Diagonal-only: the "
+            "Moresco+2020 systematic covariance would inflate errors, so treat "
+            "as preliminary-grade rather than full-systematics publication."
+        ),
         cobaya_likelihood="external:cosmic_chronometers",
         cosmosis_module="external:hz/cosmic_chronometers",
-        execution_mode="external_cobaya",
+        execution_mode="compressed_gaussian",
     ),
     "shoes_h0_riess22": CosmologyDatasetEntry(
         key="shoes_h0_riess22",
@@ -1407,6 +1430,51 @@ DESI_DR1_BAO_COVARIANCE: tuple[tuple[float, ...], ...] = (
 C_LIGHT_KM_S = 299792.458
 
 
+# ── Cosmic-chronometer H(z) executable likelihood (2026-05-29) ──────────────
+# 31 differential-age H(z) measurements [km/s/Mpc] compiled by Gómez-Valent &
+# Amendola 2018 (JCAP 04, 051; arXiv:1802.01505) Table 1, which collects the
+# cosmic-chronometer points of Zhang+2014, Jimenez+2003, Simon+2005, Stern+2010,
+# Moresco+2012/2015, Moresco+2016 and Ratsimbazafy+2017.  That paper uses a
+# DIAGONAL covariance (D_ij = σ_i² δ_ij) and we follow it.  The fuller Moresco
+# et al. 2020 (arXiv:2003.07362) systematic covariance is a documented refinement
+# that is NOT applied here — keeping this a preliminary-grade, growth-independent
+# expansion-rate probe, consistent with the registry entry's standing warning.
+COSMIC_CHRONOMETER_EXECUTABLE_KEYS = {"cosmic_chronometers"}
+COSMIC_CHRONOMETER_HZ: tuple[tuple[float, float, float], ...] = (
+    (0.07, 69.0, 19.6), (0.09, 69.0, 12.0), (0.12, 68.6, 26.2), (0.17, 83.0, 8.0),
+    (0.1791, 75.0, 4.0), (0.1993, 75.0, 5.0), (0.2, 72.9, 29.6), (0.27, 77.0, 14.0),
+    (0.28, 88.8, 36.6), (0.3519, 83.0, 14.0), (0.3802, 83.0, 13.5), (0.4, 95.0, 17.0),
+    (0.4004, 77.0, 10.2), (0.4247, 87.1, 11.2), (0.4497, 92.8, 12.9), (0.47, 89.0, 49.6),
+    (0.4783, 80.9, 9.0), (0.48, 97.0, 62.0), (0.5929, 104.0, 13.0), (0.6797, 92.0, 8.0),
+    (0.7812, 105.0, 12.0), (0.8754, 125.0, 17.0), (0.88, 90.0, 40.0), (0.9, 117.0, 23.0),
+    (1.037, 154.0, 20.0), (1.3, 168.0, 17.0), (1.363, 160.0, 33.6), (1.43, 177.0, 18.0),
+    (1.53, 140.0, 14.0), (1.75, 202.0, 40.0), (1.965, 186.5, 50.4),
+)
+
+
+# ── eBOSS DR16 RSD fσ8 executable likelihood (2026-05-29) ───────────────────
+# 6 RSD-only growth-rate measurements fσ8(z_eff) [dimensionless] from the SDSS
+# lineage, read directly from Alam et al. 2021 (eBOSS DR16 cosmological
+# implications, arXiv:2007.08991) Table III, "RSD-Only Measurements" column —
+# the values marginalised over the BAO distances D_M/r_d, D_H/r_d, so they are
+# the clean standalone growth probe to combine with a SEPARATE BAO dataset
+# (e.g. DESI) without double-counting distances.  Table III footnote (a) states
+# the per-tracer uncertainties are Gaussian approximations "ignoring the
+# correlations between measurements", so a DIAGONAL covariance is exactly the
+# published Gaussian approximation, not a shortcut.  SDSS-only: 6dFGS is
+# excluded (the paper does not include it) and Lyα (z=2.33) reports no fσ8,
+# so the executable vector is 6 points (not the 7 the registry notes implied).
+EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS = {"eboss_dr16_rsd"}
+EBOSS_DR16_FSIGMA8: tuple[tuple[float, float, float], ...] = (
+    (0.15, 0.53, 0.16),    # SDSS MGS
+    (0.38, 0.500, 0.047),  # BOSS Galaxy
+    (0.51, 0.455, 0.039),  # BOSS Galaxy
+    (0.70, 0.448, 0.043),  # eBOSS LRG
+    (0.85, 0.315, 0.095),  # eBOSS ELG
+    (1.48, 0.462, 0.045),  # eBOSS QSO
+)
+
+
 def run_likelihood_chain(
     *,
     model: str,
@@ -1429,7 +1497,12 @@ def run_likelihood_chain(
     entries = _validate_dataset_selection(model_key, dataset_keys)
     seed = int(random_seed if random_seed is not None else 20260502)
     sample_count = max(256, min(int(n_samples or 4000), 20000))
-    if any(_is_executable_bao_entry(entry) for entry in entries):
+    if any(
+        _is_executable_bao_entry(entry)
+        or _is_executable_cc_entry(entry)
+        or _is_executable_rsd_entry(entry)
+        for entry in entries
+    ):
         return _run_sampling_likelihood_chain(
             model_key=model_key,
             entries=entries,
@@ -1811,6 +1884,14 @@ def _is_executable_bao_entry(entry: CosmologyDatasetEntry) -> bool:
     return entry.key in DESI_DR1_BAO_EXECUTABLE_KEYS
 
 
+def _is_executable_cc_entry(entry: CosmologyDatasetEntry) -> bool:
+    return entry.key in COSMIC_CHRONOMETER_EXECUTABLE_KEYS
+
+
+def _is_executable_rsd_entry(entry: CosmologyDatasetEntry) -> bool:
+    return entry.key in EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS
+
+
 # M6 (2026-05-18): Pantheon+SH0ES Python chi² runner — bypasses external
 # Cobaya for the SN-distance-modulus likelihood.  1701 SNe + full
 # stat+sys covariance from the 2022 data release, loaded lazily from
@@ -1869,6 +1950,8 @@ def _run_sampling_likelihood_chain(
         )
 
     bao_entries = [entry for entry in entries if _is_executable_bao_entry(entry)]
+    cc_entries = [entry for entry in entries if _is_executable_cc_entry(entry)]
+    rsd_entries = [entry for entry in entries if _is_executable_rsd_entry(entry)]
     sn_entries = [entry for entry in entries if _is_executable_sn_entry(entry)]
     sn_entry_keys = {entry.key for entry in sn_entries}
     compressed_entries = [
@@ -1876,7 +1959,12 @@ def _run_sampling_likelihood_chain(
         for entry in entries
         if entry.compressed_likelihood is not None and entry.key not in sn_entry_keys
     ]
-    executable_keys = {e.key for e in bao_entries} | {e.key for e in sn_entries}
+    executable_keys = (
+        {e.key for e in bao_entries}
+        | {e.key for e in sn_entries}
+        | {e.key for e in cc_entries}
+        | {e.key for e in rsd_entries}
+    )
     skipped_entries = [
         entry
         for entry in entries
@@ -1884,7 +1972,8 @@ def _run_sampling_likelihood_chain(
         and entry.compressed_likelihood is None
     ]
     parameter_order = _sampling_parameter_order(
-        bao_entries, compressed_entries, sn_entries, model_key=model_key
+        bao_entries, compressed_entries, sn_entries, model_key=model_key,
+        cc_entries=cc_entries, rsd_entries=rsd_entries,
     )
     if not parameter_order:
         return _compressed_runner_unavailable(
@@ -1907,6 +1996,8 @@ def _run_sampling_likelihood_chain(
             bao_entries
             and not compressed_entries
             and not sn_entries
+            and not cc_entries
+            and not rsd_entries
             and parameter_order == ["H0", "omegam", "rd"]
         ):
             (
@@ -1935,6 +2026,8 @@ def _run_sampling_likelihood_chain(
                 compressed_entries,
                 sample_count,
                 sn_entries=sn_entries,
+                cc_entries=cc_entries,
+                rsd_entries=rsd_entries,
             )
             invalid_specs.extend(compressed_errors)
             # ESS-floor emcee upgrade (single-cell deep runs only).  Importance
@@ -1943,7 +2036,10 @@ def _run_sampling_likelihood_chain(
             # allow_emcee_fallback=False so they stay inside their own
             # deadline.  Requires every entry to have an executable chi²
             # (no skipped_entries) and ≥2 likelihood components.
-            n_components = len(bao_entries) + len(compressed_entries) + len(sn_entries)
+            n_components = (
+                len(bao_entries) + len(compressed_entries) + len(sn_entries)
+                + len(cc_entries) + len(rsd_entries)
+            )
             if (
                 allow_emcee_fallback
                 and proposal_ess < _EMCEE_FALLBACK_ESS_FLOOR
@@ -1965,6 +2061,8 @@ def _run_sampling_likelihood_chain(
                         compressed_entries,
                         sn_entries,
                         sample_count,
+                        cc_entries=cc_entries,
+                        rsd_entries=rsd_entries,
                     )
                     invalid_specs.extend(emcee_errors)
                     sampler_used = "compressed_emcee"
@@ -1997,15 +2095,23 @@ def _run_sampling_likelihood_chain(
         if name in summaries:
             derived_summaries[name] = summaries[name]
 
-    used_keys = {entry.key for entry in bao_entries + compressed_entries}
+    used_keys = {
+        entry.key for entry in bao_entries + compressed_entries + cc_entries + rsd_entries
+    }
     used_entries = [entry for entry in entries if entry.key in used_keys]
     # Each executable BAO entry contributes the full DESI DR1 measurement
-    # vector (12 data points); derive from the vector so a future BAO dataset
-    # with a different length doesn't silently feed a wrong BIC penalty.
-    n_constraints = len(DESI_DR1_BAO_MEAN_VECTOR) * len(bao_entries) + sum(
-        len(entry.compressed_likelihood.parameters)
-        for entry in compressed_entries
-        if entry.compressed_likelihood is not None
+    # vector (12 data points); cosmic chronometers contribute 31 H(z) points;
+    # eBOSS RSD contributes 6 fσ8 points.  Derive from the vectors so a future
+    # dataset with a different length doesn't silently feed a wrong BIC penalty.
+    n_constraints = (
+        len(DESI_DR1_BAO_MEAN_VECTOR) * len(bao_entries)
+        + len(COSMIC_CHRONOMETER_HZ) * len(cc_entries)
+        + len(EBOSS_DR16_FSIGMA8) * len(rsd_entries)
+        + sum(
+            len(entry.compressed_likelihood.parameters)
+            for entry in compressed_entries
+            if entry.compressed_likelihood is not None
+        )
     )
     k = len(parameter_order)
     aic = best_chi2 + 2.0 * k
@@ -2170,10 +2276,23 @@ def _sampling_parameter_order(
     sn_entries: list[CosmologyDatasetEntry] | None = None,
     *,
     model_key: str = "lcdm",
+    cc_entries: list[CosmologyDatasetEntry] | None = None,
+    rsd_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> list[str]:
     order: list[str] = []
     if bao_entries:
         order.extend(["H0", "omegam", "rd"])
+    if cc_entries:
+        # Cosmic chronometers measure H(z) = H0·E(z), constraining (H0, Ωm).
+        for param in ("H0", "omegam"):
+            if param not in order:
+                order.append(param)
+    if rsd_entries:
+        # RSD fσ8(z) = f(z)·σ8·D(z)/D(0) is H0-independent; it constrains the
+        # growth combination of (Ωm, σ8) [+ the DE EoS via γ(w)].
+        for param in ("omegam", "sigma8"):
+            if param not in order:
+                order.append(param)
     if sn_entries:
         # Pantheon+ chi² needs (H0, Ωm, M_B). H0 / Ωm overlap with BAO/CMB;
         # M_B (SN Ia absolute-magnitude nuisance) is unique to SN.
@@ -2514,7 +2633,11 @@ def _run_emcee_chain(
     compressed_entries: list[CosmologyDatasetEntry],
     sn_entries: list[CosmologyDatasetEntry],
     target_sample_count: int,
+    cc_entries: list[CosmologyDatasetEntry] | None = None,
+    rsd_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
+    cc_entries = cc_entries or []
+    rsd_entries = rsd_entries or []
     """emcee MCMC over any BAO + compressed + SN likelihood product.
 
     Importance sampling collapses on tight posteriors — both Pantheon+'s
@@ -2586,6 +2709,12 @@ def _run_emcee_chain(
         for entry in bao_entries:
             if entry.key == "desi_dr1_bao":
                 chi2 += _desi_dr1_bao_chi2_samples(valid, parameter_order)
+        for entry in cc_entries:
+            if entry.key == "cosmic_chronometers":
+                chi2 += _cosmic_chronometer_chi2_samples(valid, parameter_order)
+        for entry in rsd_entries:
+            if entry.key == "eboss_dr16_rsd":
+                chi2 += _eboss_fsigma8_chi2_samples(valid, parameter_order)
         for entry in sn_entries:
             if entry.key == "pantheon_plus":
                 chi2 += _pantheon_plus_chi2_samples(valid, parameter_order)
@@ -2653,7 +2782,11 @@ def _draw_importance_posterior(
     sample_count: int,
     *,
     sn_entries: list[CosmologyDatasetEntry] | None = None,
+    cc_entries: list[CosmologyDatasetEntry] | None = None,
+    rsd_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
+    cc_entries = cc_entries or []
+    rsd_entries = rsd_entries or []
     # SN paths bypass importance sampling — Pantheon+'s 1701-SN χ² is too
     # tight for any proposal Gaussian to cover efficiently.  Use emcee MCMC.
     if sn_entries and any(e.key == "pantheon_plus" for e in sn_entries):
@@ -2667,6 +2800,8 @@ def _draw_importance_posterior(
             compressed_entries,
             sn_entries,
             sample_count,
+            cc_entries=cc_entries,
+            rsd_entries=rsd_entries,
         )
 
     proposal_count = min(max(sample_count * 25, 80_000), 300_000)
@@ -2691,6 +2826,12 @@ def _draw_importance_posterior(
     for entry in bao_entries:
         if entry.key == "desi_dr1_bao":
             chi2 += _desi_dr1_bao_chi2_samples(samples, parameter_order)
+    for entry in cc_entries:
+        if entry.key == "cosmic_chronometers":
+            chi2 += _cosmic_chronometer_chi2_samples(samples, parameter_order)
+    for entry in rsd_entries:
+        if entry.key == "eboss_dr16_rsd":
+            chi2 += _eboss_fsigma8_chi2_samples(samples, parameter_order)
     for entry in (sn_entries or []):
         if entry.key == "pantheon_plus":
             chi2 += _pantheon_plus_chi2_samples(samples, parameter_order)
@@ -2765,6 +2906,132 @@ def _desi_dr1_bao_predictions(samples: np.ndarray, parameter_order: list[str]) -
         else:
             raise ValueError(f"unsupported DESI BAO quantity {quantity!r}")
     return predictions
+
+
+def _cosmic_chronometer_hz_predictions(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """Predicted H(z) [km/s/Mpc] for each posterior sample at the 31 cosmic-
+    chronometer redshifts.  H(z) = c / D_H(z) where D_H = c / H(z) is the Hubble
+    distance from the same flat w0waCDM kernel used for BAO."""
+    h0 = samples[:, parameter_order.index("H0")]
+    omegam = samples[:, parameter_order.index("omegam")]
+    n_samples = samples.shape[0]
+    if "w0" in parameter_order:
+        w0 = samples[:, parameter_order.index("w0")]
+    elif "w" in parameter_order:
+        w0 = samples[:, parameter_order.index("w")]
+    else:
+        w0 = np.full(n_samples, -1.0, dtype=float)
+    wa = samples[:, parameter_order.index("wa")] if "wa" in parameter_order else np.zeros(n_samples)
+    predictions = np.empty((n_samples, len(COSMIC_CHRONOMETER_HZ)), dtype=float)
+    for col, (z, _h_obs, _sigma) in enumerate(COSMIC_CHRONOMETER_HZ):
+        _dm, dh, _dv = _flat_de_distances_at_z(z, h0, omegam, w0=w0, wa=wa)
+        predictions[:, col] = C_LIGHT_KM_S / dh  # H(z) = c / D_H(z)
+    return predictions
+
+
+def _cosmic_chronometer_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """Diagonal-covariance χ² of the 31-point cosmic-chronometer H(z) vector.
+
+    Gómez-Valent & Amendola 2018 use a diagonal covariance for this compilation,
+    so χ² = Σ_i ((H_pred(z_i) − H_obs_i) / σ_i)²."""
+    observed = np.asarray([row[1] for row in COSMIC_CHRONOMETER_HZ], dtype=float)
+    sigma = np.asarray([row[2] for row in COSMIC_CHRONOMETER_HZ], dtype=float)
+    predictions = _cosmic_chronometer_hz_predictions(samples, parameter_order)
+    residual = predictions - observed
+    return np.sum((residual / sigma) ** 2, axis=1)
+
+
+# ── Structure-growth kernel for RSD fσ8 (Linder γ-parametrisation) ──────────
+def _growth_index_gamma(w0: np.ndarray, wa: np.ndarray) -> np.ndarray:
+    """Growth index γ (Linder & Cahn 2007).  ΛCDM → 0.55.  With CPL w(z=1) =
+    w0 + wa·(1−a) at a=0.5: γ = 0.55 + 0.05[1+w(z=1)] for w(z=1) ≥ −1, else
+    γ = 0.55 + 0.02[1+w(z=1)] (the phantom-side slope)."""
+    w_z1 = w0 + 0.5 * wa
+    return np.where(
+        w_z1 >= -1.0,
+        0.55 + 0.05 * (1.0 + w_z1),
+        0.55 + 0.02 * (1.0 + w_z1),
+    )
+
+
+def _omega_m_of_z(
+    z: float, omegam: np.ndarray, w0: np.ndarray, wa: np.ndarray
+) -> np.ndarray:
+    """Matter density fraction Ωm(z) = Ωm(1+z)³ / E²(z) for flat w0waCDM."""
+    one_plus_z = 1.0 + z
+    rho_de = _de_energy_density(1.0 / one_plus_z, w0, wa)
+    ez2 = omegam * one_plus_z ** 3 + (1.0 - omegam) * rho_de
+    return omegam * one_plus_z ** 3 / ez2
+
+
+def _growth_rate_f(
+    z: float, omegam: np.ndarray, w0: np.ndarray, wa: np.ndarray
+) -> np.ndarray:
+    """Linear growth rate f(z) = Ωm(z)^γ."""
+    return _omega_m_of_z(z, omegam, w0, wa) ** _growth_index_gamma(w0, wa)
+
+
+def _growth_factor_ratio(
+    z: float, omegam: np.ndarray, w0: np.ndarray, wa: np.ndarray
+) -> np.ndarray:
+    """Normalised linear growth factor D(z)/D(0) = exp(−∫₀^z f(z')/(1+z') dz').
+
+    f = dlnD/dlna ⇒ dlnD/dz = −f/(1+z); 32-point Gauss-Legendre quadrature.
+    Sample arrays (omegam, w0, wa) are (N,); returns (N,)."""
+    if z <= 0.0:
+        return np.ones_like(omegam)
+    nodes, weights = np.polynomial.legendre.leggauss(32)
+    zp = 0.5 * z * (nodes + 1.0)                                    # (K,)
+    one_plus_zp = 1.0 + zp                                          # (K,)
+    rho_de = _de_energy_density(
+        1.0 / one_plus_zp[None, :], w0[:, None], wa[:, None]
+    )                                                              # (N,K)
+    ez2 = omegam[:, None] * one_plus_zp[None, :] ** 3 + (1.0 - omegam[:, None]) * rho_de
+    omega_m_zp = omegam[:, None] * one_plus_zp[None, :] ** 3 / ez2  # (N,K)
+    gamma = _growth_index_gamma(w0, wa)[:, None]                    # (N,1)
+    integrand = omega_m_zp ** gamma / one_plus_zp[None, :]          # (N,K)
+    integral = 0.5 * z * np.sum(weights[None, :] * integrand, axis=1)  # (N,)
+    return np.exp(-integral)
+
+
+def _eboss_fsigma8_predictions(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """Predicted fσ8(z) = f(z)·σ8·D(z)/D(0) at the 6 eBOSS RSD effective
+    redshifts for each posterior sample.  Needs omegam + sigma8 in parameter
+    order (added for RSD selections); fσ8 is H0-independent."""
+    omegam = samples[:, parameter_order.index("omegam")]
+    sigma8 = samples[:, parameter_order.index("sigma8")]
+    n_samples = samples.shape[0]
+    if "w0" in parameter_order:
+        w0 = samples[:, parameter_order.index("w0")]
+    elif "w" in parameter_order:
+        w0 = samples[:, parameter_order.index("w")]
+    else:
+        w0 = np.full(n_samples, -1.0, dtype=float)
+    wa = samples[:, parameter_order.index("wa")] if "wa" in parameter_order else np.zeros(n_samples)
+    predictions = np.empty((n_samples, len(EBOSS_DR16_FSIGMA8)), dtype=float)
+    for col, (z, _v, _s) in enumerate(EBOSS_DR16_FSIGMA8):
+        f_z = _growth_rate_f(z, omegam, w0, wa)
+        d_ratio = _growth_factor_ratio(z, omegam, w0, wa)
+        predictions[:, col] = f_z * sigma8 * d_ratio
+    return predictions
+
+
+def _eboss_fsigma8_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """Diagonal-covariance χ² of the 6-point eBOSS DR16 RSD fσ8 vector
+    (Alam+2021 Table III footnote a: per-tracer Gaussian, correlations ignored)."""
+    observed = np.asarray([row[1] for row in EBOSS_DR16_FSIGMA8], dtype=float)
+    sigma = np.asarray([row[2] for row in EBOSS_DR16_FSIGMA8], dtype=float)
+    predictions = _eboss_fsigma8_predictions(samples, parameter_order)
+    residual = predictions - observed
+    return np.sum((residual / sigma) ** 2, axis=1)
 
 
 # M6 (2026-05-18): Pantheon+SH0ES 2022 data loader.  Lazy-loaded from a
@@ -3019,6 +3286,18 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 "source_locator": "DESI DR1 BAO ALL_GCcomb mean/covariance files",
                 "approximation": "Gaussian BAO mean/covariance evaluated against flat LCDM distances",
                 "data_products": [product.to_dict() for product in entry.data_products],
+            })
+        elif entry.key == "cosmic_chronometers":
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": "Gómez-Valent & Amendola 2018 (arXiv:1802.01505) Table 1 — 31 cosmic-chronometer H(z)",
+                "approximation": "Diagonal-covariance H(z)=H0·E(z) χ² (flat w0waCDM); full Moresco+2020 systematic covariance not applied",
+            })
+        elif entry.key == "eboss_dr16_rsd":
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": "Alam et al. 2021 (arXiv:2007.08991) Table III RSD-only column — 6 eBOSS DR16 fσ8(z)",
+                "approximation": "Diagonal-covariance fσ8=f(z)·σ8·D(z)/D(0) χ² with Linder γ growth index; per-tracer Gaussian (correlations ignored, per Table III note a)",
             })
         elif entry.compressed_likelihood is not None:
             records.append({

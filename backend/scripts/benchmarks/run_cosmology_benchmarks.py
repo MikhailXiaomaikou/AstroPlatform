@@ -281,7 +281,8 @@ def bench_dataset_z_coverage() -> dict[str, Any]:
         "union3": (0.01, 2.26),
         "desi_dr1_bao": (0.295, 2.33),
         "sdss_6df_bao": (0.106, 2.33),
-        "eboss_dr16_rsd": (0.15, 2.33),
+        # eBOSS RSD fσ8 ends at z=1.48 (Lyα z=2.33 reports no growth rate).
+        "eboss_dr16_rsd": (0.15, 1.48),
         "cosmic_chronometers": (0.07, 1.965),
     }
     # Probes with no discrete-z coverage interval MUST stay None (H0 priors,
@@ -305,6 +306,102 @@ def bench_dataset_z_coverage() -> dict[str, Any]:
     }
 
 
+def bench_cosmic_chronometer_hz() -> dict[str, Any]:
+    """Cosmic-chronometer H(z) executable likelihood (1C, 2026-05-29).
+
+    31 differential-age H(z) points (Gómez-Valent & Amendola 2018, arXiv:1802.01505)
+    wired as a flat-w0waCDM H(z)=H0·E(z) diagonal χ². At the Planck CMB-only
+    fiducial (H0=67.36, Ωm=0.315) the reduced χ² should sit below ~1 — CC errors
+    are conservative and the literature reports χ²/dof ≈ 0.5 vs ΛCDM. Also confirms
+    run_likelihood_chain now EXECUTES cosmic_chronometers in-process (datasets_used,
+    not datasets_not_run) instead of returning an external-Cobaya config stub.
+    """
+    from app.services.cosmology_likelihoods import (
+        run_likelihood_chain,
+        COSMIC_CHRONOMETER_HZ,
+        _cosmic_chronometer_chi2_samples,
+    )
+    theta = np.array([[67.36, 0.315]])
+    chi2 = float(_cosmic_chronometer_chi2_samples(theta, ["H0", "omegam"])[0])
+    ndof = len(COSMIC_CHRONOMETER_HZ) - 2
+    reduced = chi2 / ndof
+    r = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["cosmic_chronometers"],
+        n_samples=2000,
+        random_seed=42,
+    )
+    used = [d["key"] for d in r["datasets_used"]]
+    executed = (
+        bool(r["success"])
+        and "cosmic_chronometers" in used
+        and r["chain_tier"] != "blocked"
+    )
+    return {
+        "pass": 0.3 < reduced < 1.2 and executed,
+        "n_points": len(COSMIC_CHRONOMETER_HZ),
+        "chi2_planck_fiducial": round(chi2, 3),
+        "reduced_chi2": round(reduced, 4),
+        "chain_tier": r["chain_tier"],
+        "executed_in_process": executed,
+        "target": "reduced χ²(Planck fid) in [0.3, 1.2] + CC runs in-process (not skipped)",
+    }
+
+
+def bench_eboss_fsigma8_growth() -> dict[str, Any]:
+    """eBOSS DR16 RSD fσ8 executable + growth kernel (1A, 2026-05-29).
+
+    Pins (1) the growth kernel at z=0: f(0)=Ωm^0.55 and D(0)/D(0)=1; (2) the
+    reduced χ² of the 6-point fσ8 vector (Alam+2021 Table III RSD-only) at the
+    Planck fiducial (Ωm=0.3153, σ8=0.811) — ΛCDM mildly over-predicts growth so
+    χ²/dof is order-unity; (3) that run_likelihood_chain now executes
+    eboss_dr16_rsd in-process (fσ8=f·σ8·D(z)/D(0), Linder γ) instead of an
+    external-Cobaya stub.
+    """
+    from app.services.cosmology_likelihoods import (
+        run_likelihood_chain,
+        EBOSS_DR16_FSIGMA8,
+        _eboss_fsigma8_chi2_samples,
+        _growth_rate_f,
+        _growth_factor_ratio,
+    )
+    om = np.array([0.3153])
+    lcdm_w0, lcdm_wa = np.array([-1.0]), np.array([0.0])
+    f0 = float(_growth_rate_f(0.0, om, lcdm_w0, lcdm_wa)[0])
+    d0 = float(_growth_factor_ratio(0.0, om, lcdm_w0, lcdm_wa)[0])
+    theta = np.array([[0.3153, 0.811]])
+    chi2 = float(_eboss_fsigma8_chi2_samples(theta, ["omegam", "sigma8"])[0])
+    ndof = len(EBOSS_DR16_FSIGMA8) - 2
+    reduced = chi2 / ndof
+    r = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["eboss_dr16_rsd"],
+        n_samples=2000,
+        random_seed=42,
+    )
+    used = [d["key"] for d in r["datasets_used"]]
+    executed = (
+        bool(r["success"])
+        and "eboss_dr16_rsd" in used
+        and r["chain_tier"] != "blocked"
+    )
+    return {
+        "pass": (
+            abs(f0 - 0.3153 ** 0.55) < 1e-6
+            and abs(d0 - 1.0) < 1e-9
+            and 0.3 < reduced < 2.5
+            and executed
+        ),
+        "f0_growth_rate": round(f0, 4),
+        "d0_growth_factor": round(d0, 6),
+        "n_points": len(EBOSS_DR16_FSIGMA8),
+        "reduced_chi2_planck": round(reduced, 4),
+        "chain_tier": r["chain_tier"],
+        "executed_in_process": executed,
+        "target": "f(0)=Ωm^0.55, D(0)/D(0)=1, reduced χ²(Planck) in [0.3,2.5], eBOSS runs in-process",
+    }
+
+
 BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("lcdm_h0_anchor", bench_lcdm_h0_anchor),
     ("wcdm_w_near_minus_one", bench_wcdm_w_near_minus_one),
@@ -316,6 +413,8 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("planck18_preset_matches_cited", bench_planck18_preset_matches_cited),
     ("compressed_chain_exploratory_tier", bench_compressed_chain_exploratory_tier),
     ("dataset_z_coverage", bench_dataset_z_coverage),
+    ("cosmic_chronometer_hz", bench_cosmic_chronometer_hz),
+    ("eboss_fsigma8_growth", bench_eboss_fsigma8_growth),
 ]
 
 

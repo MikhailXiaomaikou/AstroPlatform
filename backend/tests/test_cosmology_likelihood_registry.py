@@ -669,19 +669,21 @@ def test_spt_cluster_alone_chain_returns_2d_constraint() -> None:
 
 def test_eboss_dr16_rsd_registered() -> None:
     """spec paper #6 RSD growth-rate side: eBOSS DR16 RSD compilation
-    (Alam+ 2021) covering z=0.15..2.33, complement to BAO distance ratios.
-    Independent of weak-lensing σ8 (1+z snapshot) AND cluster σ8 (M-T
-    counting) — third axis of σ8 tension cross-check."""
+    (Alam+ 2021) covering z=0.15..1.48 (RSD-only fσ8), complement to BAO
+    distance ratios. Independent of weak-lensing σ8 (1+z snapshot) AND cluster
+    σ8 (M-T counting) — third axis of σ8 tension cross-check."""
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
     entry = get_cosmology_dataset("eboss_dr16_rsd")
     assert entry.probe == "rsd"
     assert entry.likelihood_family == "gaussian_rsd"
-    assert entry.execution_mode == "external_cobaya"
+    # 2026-05-29 (1A): now executable in-process via the Linder-γ growth kernel
+    # (fσ8 = f·σ8·D(z)/D(0)), so execution_mode flipped external_cobaya →
+    # compressed_gaussian. status stays "external_likelihood" (the DESI-BAO
+    # convention for an executable dedicated-path probe whose full external
+    # likelihood is higher fidelity).
+    assert entry.execution_mode == "compressed_gaussian"
     assert entry.observables == ("f_sigma8",)
-    # Phase-1 status: status="external_likelihood" because RSD f·σ8(z)
-    # requires solving LCDM growth equation per parameter sample, not
-    # closed-form Gaussian; phase-2 cobaya path will execute it.
     assert entry.status == "external_likelihood"
 
 
