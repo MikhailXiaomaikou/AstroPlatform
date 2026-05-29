@@ -344,15 +344,16 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         applicable_models=BAO_MODELS,
         likelihood_family="gaussian_rsd",
         covariance=CovarianceSpec(
-            kind="block covariance (7 z-bins, mostly diagonal)",
+            kind="diagonal covariance (6 SDSS z-bins)",
             provided=True,
             description=(
-                "RSD f·σ8(z) measurements at 7 redshift bins covering "
-                "0.15 < z < 2.33. Cross-correlation between z-bins is "
-                "small (different surveys); BOSS LOWZ-CMASS is the only "
-                "non-trivial off-diagonal. Together with BAO distance "
-                "ratios this constrains σ8 growth history independent "
-                "of weak-lensing 1+z snapshots."
+                "RSD-only f·σ8(z) at 6 SDSS redshift bins covering "
+                "0.15 ≤ z ≤ 1.48 (MGS / BOSS×2 / eBOSS LRG·ELG·QSO; Lyα at "
+                "z=2.33 reports no growth rate). Diagonal covariance per "
+                "Alam+2021 Table III note a (per-tracer Gaussian, inter-bin "
+                "correlations ignored). Together with BAO distance ratios this "
+                "constrains the σ8 growth history independent of weak-lensing "
+                "1+z snapshots."
             ),
             url="https://svn.sdss.org/public/data/eboss/DR16cosmo/tags/v1_0_1/",
             format="SDSS/eBOSS DR16 RSD likelihood data products",
@@ -1943,7 +1944,8 @@ def _run_sampling_likelihood_chain(
             entries=entries,
             seed=seed,
             reason=(
-                "DESI DR1 phase-1 BAO runner is flat-geometry, massless-"
+                "The phase-1 in-process runner (BAO distance ratios, cosmic-"
+                "chronometer H(z), RSD fσ8 growth) is flat-geometry, massless-"
                 "neutrino only. Curvature (ok_*) and neutrino-mass (*_mnu) "
                 "extensions need the external Cobaya/CosmoSIS likelihood."
             ),
@@ -2636,8 +2638,6 @@ def _run_emcee_chain(
     cc_entries: list[CosmologyDatasetEntry] | None = None,
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
-    cc_entries = cc_entries or []
-    rsd_entries = rsd_entries or []
     """emcee MCMC over any BAO + compressed + SN likelihood product.
 
     Importance sampling collapses on tight posteriors — both Pantheon+'s
@@ -2651,6 +2651,8 @@ def _run_emcee_chain(
     substitution: ``(samples, best_chi2, effective_sample_size, n_draws,
     compressed_errors)``.
     """
+    cc_entries = cc_entries or []
+    rsd_entries = rsd_entries or []
     import emcee
 
     rng = np.random.default_rng(seed)
@@ -2926,8 +2928,10 @@ def _cosmic_chronometer_hz_predictions(
     wa = samples[:, parameter_order.index("wa")] if "wa" in parameter_order else np.zeros(n_samples)
     predictions = np.empty((n_samples, len(COSMIC_CHRONOMETER_HZ)), dtype=float)
     for col, (z, _h_obs, _sigma) in enumerate(COSMIC_CHRONOMETER_HZ):
-        _dm, dh, _dv = _flat_de_distances_at_z(z, h0, omegam, w0=w0, wa=wa)
-        predictions[:, col] = C_LIGHT_KM_S / dh  # H(z) = c / D_H(z)
+        # H(z) = H0·E(z) is closed-form — no comoving-distance integral needed.
+        rho_de = _de_energy_density(1.0 / (1.0 + z), w0, wa)
+        ez = np.sqrt(omegam * (1.0 + z) ** 3 + (1.0 - omegam) * rho_de)
+        predictions[:, col] = h0 * ez
     return predictions
 
 
@@ -2946,6 +2950,10 @@ def _cosmic_chronometer_chi2_samples(
 
 
 # ── Structure-growth kernel for RSD fσ8 (Linder γ-parametrisation) ──────────
+# 32-node Gauss-Legendre rule for the growth-factor integral, computed once.
+_GROWTH_GL32_NODES, _GROWTH_GL32_WEIGHTS = np.polynomial.legendre.leggauss(32)
+
+
 def _growth_index_gamma(w0: np.ndarray, wa: np.ndarray) -> np.ndarray:
     """Growth index γ (Linder & Cahn 2007).  ΛCDM → 0.55.  With CPL w(z=1) =
     w0 + wa·(1−a) at a=0.5: γ = 0.55 + 0.05[1+w(z=1)] for w(z=1) ≥ −1, else
@@ -2984,7 +2992,7 @@ def _growth_factor_ratio(
     Sample arrays (omegam, w0, wa) are (N,); returns (N,)."""
     if z <= 0.0:
         return np.ones_like(omegam)
-    nodes, weights = np.polynomial.legendre.leggauss(32)
+    nodes, weights = _GROWTH_GL32_NODES, _GROWTH_GL32_WEIGHTS
     zp = 0.5 * z * (nodes + 1.0)                                    # (K,)
     one_plus_zp = 1.0 + zp                                          # (K,)
     rho_de = _de_energy_density(

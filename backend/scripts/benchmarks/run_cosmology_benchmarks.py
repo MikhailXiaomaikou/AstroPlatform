@@ -389,7 +389,7 @@ def bench_eboss_fsigma8_growth() -> dict[str, Any]:
         "pass": (
             abs(f0 - 0.3153 ** 0.55) < 1e-6
             and abs(d0 - 1.0) < 1e-9
-            and 0.3 < reduced < 2.5
+            and 0.3 < reduced < 2.0
             and executed
         ),
         "f0_growth_rate": round(f0, 4),
@@ -398,7 +398,7 @@ def bench_eboss_fsigma8_growth() -> dict[str, Any]:
         "reduced_chi2_planck": round(reduced, 4),
         "chain_tier": r["chain_tier"],
         "executed_in_process": executed,
-        "target": "f(0)=Ωm^0.55, D(0)/D(0)=1, reduced χ²(Planck) in [0.3,2.5], eBOSS runs in-process",
+        "target": "f(0)=Ωm^0.55, D(0)/D(0)=1, reduced χ²(Planck) in [0.3,2.0], eBOSS runs in-process",
     }
 
 
