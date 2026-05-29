@@ -75,6 +75,21 @@
   # See A2 — same server-side early-gate trigger. "Alcock-Paczynski" and
   # "DM/DH ratio" both fire _cosmology_direct_route_from_prompt and pre-execute
   # assess_bao_bin_anomaly on iteration 0.
+  #
+  # 2026-05-29 soft-fail diagnosis (traced end-to-end): assess_bao_bin_anomaly
+  # returns the CORRECT, tool-grounded result (Ωm=0.314, 1σ [0.283,0.348],
+  # χ²=6.91) and the model's draft reports it accurately. The soft checks miss
+  # ONLY because the model EMBELLISHES the draft with an un-grounded comparison
+  # — "Ωm=0.314 sits on top of Planck 2018 (Ωm=0.3153)" + "arXiv:2404.03002" —
+  # neither of which any tool produced THIS turn (the model recalled Planck's Ωm
+  # from memory). verify_research_facts correctly flags the un-grounded Planck
+  # number + source and blocks the draft, which replaces the prose with a fact-
+  # check card → the expected Ωm / Paczynski strings disappear from the final
+  # reply. This is the anti-fabrication contract working as intended, NOT a bug:
+  # an AP-only run must NOT assert a Planck Ωm it did not compute. The correct
+  # model behavior is to report 0.314 + the DM/DH physics + the Alcock-Paczynski
+  # 1979 method citation WITHOUT volunteering an un-grounded Planck comparison
+  # (or to ground it by actually running planck2018_compressed). Kept SOFT.
   expect_tools_called: [assess_bao_bin_anomaly]
   expect_pass:
     - "Ωm in 0.27-0.36"
