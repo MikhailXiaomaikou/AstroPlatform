@@ -2351,6 +2351,7 @@ def _cosmology_tool_grounded_summary(
 
     dataset_names: list[str] = []
     data_product_notes: list[str] = []
+    citation_refs: list[str] = []
     if isinstance(registry, dict):
         for item in registry.get("datasets") or []:
             if not isinstance(item, dict):
@@ -2361,12 +2362,23 @@ def _cosmology_tool_grounded_summary(
             products = item.get("data_products")
             if isinstance(products, list) and products:
                 data_product_notes.append(f"{name}: {len(products)} machine-readable product(s)")
+            # Carry the registry's own citations into the summary so it is
+            # provenance-complete (these bibcodes come straight from this turn's
+            # tool_results, so they are already in the citation pool).
+            for cite in item.get("citations") or []:
+                if not isinstance(cite, dict):
+                    continue
+                ref = str(cite.get("bibcode") or cite.get("arxiv") or cite.get("doi") or "").strip()
+                if ref and ref not in citation_refs:
+                    citation_refs.append(ref)
 
     lines = ["Tool-grounded cosmology summary:"]
     if dataset_names:
         lines.append(f"- Registry selection: {', '.join(dataset_names)}.")
     if data_product_notes:
         lines.append(f"- Data products: {'; '.join(data_product_notes)}.")
+    if citation_refs:
+        lines.append(f"- Source citations: {', '.join(citation_refs[:8])}.")
 
     if isinstance(config, dict):
         model = config.get("model") or config.get("model_label") or "not reported"
