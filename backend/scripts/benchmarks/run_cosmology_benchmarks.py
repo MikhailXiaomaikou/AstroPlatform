@@ -168,6 +168,44 @@ def bench_distance_modulus_vs_astropy() -> dict[str, Any]:
     }
 
 
+def bench_curved_neutrino_distance_vs_astropy() -> dict[str, Any]:
+    """Curved + massive-neutrino distance_modulus_model vs astropy (<1e-3 mag).
+
+    Curvature uses the exact FLRW sinn transverse distance (Hogg 1999 Eq.16,
+    machine precision); massive neutrinos use the non-relativistic fold-into-
+    matter approximation, valid at z≤2.3 (measured ~3e-4 mag). Guards the
+    2026-05-28 M0-C kernel extension (ok_*/​*_mnu models).
+    """
+    from app.services.cosmology_mcmc import distance_modulus_model
+    from astropy.cosmology import FlatLambdaCDM, LambdaCDM, w0waCDM
+    import astropy.units as u
+    worst = 0.0
+    for z_val in (0.1, 0.5, 1.0, 2.3):
+        z_arr = np.array([z_val])
+        # Curvature (open + closed) vs astropy LambdaCDM, Tcmb0=0 pure-curvature.
+        for ok0 in (-0.1, 0.1):
+            worst = max(worst, abs(
+                distance_modulus_model(z_arr, "ok_lcdm", {"H0": 70.0, "Om0": 0.30, "Ok0": ok0})[0]
+                - LambdaCDM(H0=70.0, Om0=0.30, Ode0=1.0 - 0.30 - ok0, Tcmb0=0).distmod(z_arr).value[0]
+            ))
+        # Curvature + CPL dark energy.
+        worst = max(worst, abs(
+            distance_modulus_model(z_arr, "ok_w0wa_cdm", {"H0": 70.0, "Om0": 0.30, "Ok0": 0.05, "w0": -0.9, "wa": 0.1})[0]
+            - w0waCDM(H0=70.0, Om0=0.30, Ode0=1.0 - 0.30 - 0.05, w0=-0.9, wa=0.1, Tcmb0=0).distmod(z_arr).value[0]
+        ))
+        # Massive neutrinos: fold-into-matter approx vs astropy m_nu (Tcmb0=2.7255).
+        for mnu in (0.06, 0.3):
+            worst = max(worst, abs(
+                distance_modulus_model(z_arr, "lcdm_mnu", {"H0": 67.4, "Om0": 0.30, "Mnu": mnu})[0]
+                - FlatLambdaCDM(H0=67.4, Om0=0.30, m_nu=[mnu / 3] * 3 * u.eV, Tcmb0=2.7255).distmod(z_arr).value[0]
+            ))
+    return {
+        "pass": worst < 1e-3,
+        "worst_diff_mag": round(float(worst), 6),
+        "target": "curved (exact sinn) + neutrino (non-rel fold-in) within 1e-3 mag of astropy",
+    }
+
+
 def bench_planck18_preset_matches_cited() -> dict[str, Any]:
     """planck18 preset must compute distances at the cited CMB-only values.
 
@@ -232,6 +270,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("alcock_paczynski_omega_m", bench_alcock_paczynski_omega_m),
     ("chain_tier_blocked_on_inline", bench_chain_tier_blocked_on_inline),
     ("distance_modulus_vs_astropy", bench_distance_modulus_vs_astropy),
+    ("curved_neutrino_distance_vs_astropy", bench_curved_neutrino_distance_vs_astropy),
     ("planck18_preset_matches_cited", bench_planck18_preset_matches_cited),
     ("compressed_chain_exploratory_tier", bench_compressed_chain_exploratory_tier),
 ]

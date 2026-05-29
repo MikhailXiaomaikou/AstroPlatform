@@ -30,12 +30,26 @@ DEFAULT_PRIORS: dict[str, tuple[float, float]] = {
     # (-3, 2) in the runner; aligning to the DESI DR1 (-3, 2) convention,
     # which also keeps (1+z)^(3(1+w0+wa)) numerically stable over z ≤ 3).
     "wa": (-3.0, 2.0),
+    # Spatial curvature density today. Bounds align with cosmology_likelihoods
+    # omegak (-0.3, 0.3). Standard FLRW Ωk(1+z)² term in E(z).
+    "Ok0": (-0.3, 0.3),
+    # Summed neutrino mass in eV. Bounds align with cosmology_likelihoods
+    # mnu (0, 1). Folded into matter via Ω_ν=Mnu/(93.14 h²) (non-rel at z≤2.3).
+    "Mnu": (0.0, 1.0),
 }
 
 MODEL_PARAMETERS: dict[str, tuple[str, ...]] = {
     "flat_lcdm": ("H0", "Om0"),
     "flat_wcdm": ("H0", "Om0", "w0"),
     "flat_w0wa_cdm": ("H0", "Om0", "w0", "wa"),
+    # Curved variants — add Ok0 (registry parity with cosmology_likelihoods
+    # ok_* models). Curvature enters E(z) and the transverse-distance sinn.
+    "ok_lcdm": ("H0", "Om0", "Ok0"),
+    "ok_wcdm": ("H0", "Om0", "Ok0", "w0"),
+    "ok_w0wa_cdm": ("H0", "Om0", "Ok0", "w0", "wa"),
+    # Massive-neutrino variants — add Mnu (eV); folded into the matter term.
+    "lcdm_mnu": ("H0", "Om0", "Mnu"),
+    "w0wa_cdm_mnu": ("H0", "Om0", "Mnu", "w0", "wa"),
 }
 
 SYNC_SAMPLE_BUDGET = 80_000
@@ -188,12 +202,20 @@ def distance_modulus_model(z: np.ndarray, model: str, params: dict[str, float]) 
 
     H0 = float(params["H0"])
     Om0 = float(params["Om0"])
-    if model == "flat_lcdm":
-        w0, wa = -1.0, 0.0
-    elif model == "flat_wcdm":
-        w0, wa = float(params["w0"]), 0.0
-    else:  # flat_w0wa_cdm
-        w0, wa = float(params["w0"]), float(params["wa"])
+    # w0/wa default to the ΛCDM limit; curvature Ok0 and neutrino mass Mnu
+    # default to zero, so flat_lcdm/wcdm/w0wa_cdm are byte-identical to before.
+    w0 = float(params.get("w0", -1.0))
+    wa = float(params.get("wa", 0.0))
+    Ok0 = float(params.get("Ok0", 0.0))
+    Mnu = float(params.get("Mnu", 0.0))
+
+    # Massive neutrinos: non-relativistic at z≤2.3 (z_nr≈1890·mν/eV ≫ 2.3 for
+    # Σmν≲1 eV), so fold Ω_ν into the matter term. Ω_ν h²=Σmν/93.14 eV with
+    # Neff=3.046 (PDG; Lesgourgues & Pastor 2006). astropy keeps neutrinos out
+    # of Om0, so benchmarks pass Om0 (no ν) + m_nu separately; this matches.
+    if Mnu > 0.0:
+        h = H0 / 100.0
+        Om0 = Om0 + Mnu / (93.14 * h * h)
 
     z_arr = np.asarray(z, dtype=float)
     # x[j, k] = 0.5 * z[j] * (node_k + 1) — quadrature points in (0, z_j)
@@ -204,10 +226,22 @@ def distance_modulus_model(z: np.ndarray, model: str, params: dict[str, float]) 
         rho_de = 1.0
     else:
         rho_de = a_int ** (-3.0 * (1.0 + w0 + wa)) * np.exp(-3.0 * wa * (1.0 - a_int))
-    ez = np.sqrt(Om0 * one_plus_x ** 3 + (1.0 - Om0) * rho_de)
+    # Friedmann E(z) with curvature term Ωk(1+z)² (standard FLRW). Ode0 closes
+    # the budget: Ode0 = 1 − Om0 − Ok0 (flat ⇒ Ok0=0 ⇒ 1−Om0, unchanged).
+    Ode0 = 1.0 - Om0 - Ok0
+    ez = np.sqrt(Om0 * one_plus_x ** 3 + Ok0 * one_plus_x ** 2 + Ode0 * rho_de)
     integral = 0.5 * z_arr * np.sum(_DM_GL_WEIGHTS[None, :] / ez, axis=1)
-    dm_mpc = (_C_LIGHT_KM_S / H0) * integral           # comoving distance in Mpc
-    dl_mpc = (1.0 + z_arr) * dm_mpc                    # luminosity distance
+    d_c = (_C_LIGHT_KM_S / H0) * integral               # line-of-sight comoving distance
+    # Transverse comoving distance D_M (Hogg 1999, arXiv:astro-ph/9905116 Eq.16):
+    # open (Ok0>0) → sinh, closed (Ok0<0) → sin, flat → D_M = D_C.
+    if abs(Ok0) < 1e-8:
+        d_m = d_c
+    else:
+        d_h = _C_LIGHT_KM_S / H0
+        sqrt_ok = math.sqrt(abs(Ok0))
+        arg = sqrt_ok * d_c / d_h
+        d_m = (d_h / sqrt_ok) * (np.sinh(arg) if Ok0 > 0.0 else np.sin(arg))
+    dl_mpc = (1.0 + z_arr) * d_m                         # luminosity distance
     return 5.0 * np.log10(dl_mpc) + 25.0
 
 
