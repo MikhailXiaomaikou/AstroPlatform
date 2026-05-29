@@ -290,38 +290,40 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
     ),
     "sdss_6df_bao": CosmologyDatasetEntry(
         key="sdss_6df_bao",
-        display_name="SDSS + 6dF BAO compilation",
-        version="6dFGS + SDSS/BOSS/eBOSS DR16 BAO public compilation",
+        display_name="6dFGS + SDSS MGS low-z BAO",
+        version="6dFGS (2011) + SDSS MGS (2015) D_V/r_d, Aubourg+ 2015 compilation",
         probe="bao",
-        z_coverage=(0.106, 2.33),
+        z_coverage=(0.106, 0.15),
         status="external_likelihood",
-        observables=("DM_over_rd", "DH_over_rd", "DV_over_rd", "H_rd", "D_A_over_rd"),
+        observables=("DV_over_rd",),
         units={"distance_ratios": "dimensionless", "redshift": "dimensionless"},
         applicable_models=BAO_MODELS,
         likelihood_family="gaussian_bao",
         covariance=CovarianceSpec(
-            kind="block covariance",
+            kind="diagonal covariance",
             provided=True,
             description=(
-                "Legacy low-redshift BAO compilation used by pre-DESI ACT/Planck "
-                "cross-checks; includes 6dFGS and SDSS/BOSS/eBOSS measurements."
+                "Two independent low-redshift D_V/r_d anchors (6dFGS z=0.106, "
+                "SDSS MGS z=0.15) as compiled in Aubourg et al. 2015 Table II; "
+                "treated as uncorrelated (different surveys / volumes)."
             ),
-            url="https://svn.sdss.org/public/data/eboss/DR16cosmo/tags/v1_0_1/",
-            format="SDSS/eBOSS DR16 BAO likelihood data products",
+            url="https://arxiv.org/abs/1411.1074",
+            format="Compressed Gaussian D_V/r_d measurements",
         ),
-        source_url="https://svn.sdss.org/public/data/eboss/DR16cosmo/tags/v1_0_1/",
+        source_url="https://arxiv.org/abs/1411.1074",
         citations=(
             DatasetCitation(label="Beutler et al. 6dFGS BAO", year=2011, arxiv="1106.3366"),
-            DatasetCitation(label="Alam et al. BOSS DR12 BAO", year=2017, arxiv="1607.03155"),
-            DatasetCitation(label="eBOSS Collaboration DR16 cosmology", year=2021, arxiv="2007.08991"),
+            DatasetCitation(label="Ross et al. SDSS DR7 MGS BAO", year=2015, arxiv="1409.3242"),
+            DatasetCitation(label="Aubourg et al. cosmological implications compilation", year=2015, arxiv="1411.1074"),
         ),
         notes=(
-            "Prefer this over DESI DR1 when reproducing ACT DR6 lensing-era "
-            "BAO combinations or papers that explicitly say BAO from SDSS and 6dF."
+            "Pre-DESI low-z BAO anchor: only the two D_V/r_d points (6dFGS z=0.106, "
+            "SDSS MGS z=0.15) are sourced and executed in-process. Does NOT include "
+            "the BOSS/eBOSS DR16 intermediate-z bins — use desi_dr1_bao for z>0.15 BAO."
         ),
         cobaya_likelihood="external:bao.sdss_6df_legacy",
         cosmosis_module="likelihood/bao/sdss_dr16_6df/sdss_6df_bao.py",
-        execution_mode="external_cobaya",
+        execution_mode="compressed_gaussian",
     ),
     # ── PART AI Phase 5: RSD f·σ8 multi-z compilation (Alam+ 2021) ──
     # eBOSS DR16 cosmology paper (arXiv:2007.08991) reports growth-rate
@@ -1432,7 +1434,6 @@ RUNNER_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
 }
 
 
-DESI_DR1_BAO_EXECUTABLE_KEYS = {"desi_dr1_bao"}
 DESI_DR1_BAO_MEAN_VECTOR: tuple[tuple[float, float, str], ...] = (
     (0.295, 7.92512927, "DV_over_rs"),
     (0.510, 13.62003080, "DM_over_rs"),
@@ -1461,6 +1462,31 @@ DESI_DR1_BAO_COVARIANCE: tuple[tuple[float, ...], ...] = (
     (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 8.89752928e-01, -7.69477120e-02),
     (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -7.69477120e-02, 2.91860447e-02),
 )
+
+# ── SDSS-MGS + 6dFGS low-z BAO executable likelihood (2026-05-29, Tier 2B) ──
+# Two isotropic D_V/r_d anchors below the DESI redshift floor, compiled by
+# Aubourg et al. 2015 (arXiv:1411.1074) Table II and reused by BOSS/eBOSS
+# (Alam+2021 Table III): 6dFGS z=0.106 → D_V/r_d = 3.047 ± 0.137 (Beutler+2011,
+# arXiv:1106.3366) and SDSS-MGS z=0.15 → D_V/r_d = 4.47 ± 0.17 (Ross+2015,
+# arXiv:1409.3242). NOTE: the adversarial cross-check rejected a naive inversion
+# of 6dFGS's published r_d/D_V=0.336 (→2.976); the compilation value 3.047 is the
+# one the BAO distance-ratio convention here consumes. Two independent surveys →
+# diagonal covariance.
+SDSS_6DF_BAO_MEAN_VECTOR: tuple[tuple[float, float, str], ...] = (
+    (0.106, 3.047, "DV_over_rd"),
+    (0.150, 4.470, "DV_over_rd"),
+)
+SDSS_6DF_BAO_COVARIANCE: tuple[tuple[float, ...], ...] = (
+    (0.137 ** 2, 0.0),
+    (0.0, 0.17 ** 2),
+)
+
+# Per-dataset executable BAO data (mean vector + covariance). Adding a low-z BAO
+# anchor is now a registry entry, not a new code path.
+_BAO_DATA: dict[str, tuple[tuple[tuple[float, float, str], ...], tuple[tuple[float, ...], ...]]] = {
+    "desi_dr1_bao": (DESI_DR1_BAO_MEAN_VECTOR, DESI_DR1_BAO_COVARIANCE),
+    "sdss_6df_bao": (SDSS_6DF_BAO_MEAN_VECTOR, SDSS_6DF_BAO_COVARIANCE),
+}
 C_LIGHT_KM_S = 299792.458
 
 
@@ -1961,7 +1987,7 @@ def run_robustness_matrix(
 
 
 def _is_executable_bao_entry(entry: CosmologyDatasetEntry) -> bool:
-    return entry.key in DESI_DR1_BAO_EXECUTABLE_KEYS
+    return entry.key in _BAO_DATA
 
 
 def _is_executable_cc_entry(entry: CosmologyDatasetEntry) -> bool:
@@ -2071,10 +2097,12 @@ def _run_sampling_likelihood_chain(
 
     try:
         # Fast analytic-grid BAO-only path is calibrated for flat ΛCDM in the
-        # natural (H0, omegam, rd) plane; wCDM / w0waCDM add extra dimensions
-        # so we fall through to the importance sampler instead.
+        # natural (H0, omegam, rd) plane against the DESI DR1 vector specifically;
+        # wCDM / w0waCDM add extra dimensions and other BAO datasets have their own
+        # vectors, so anything else falls through to the importance sampler.
         if (
             bao_entries
+            and all(entry.key == "desi_dr1_bao" for entry in bao_entries)
             and not compressed_entries
             and not sn_entries
             and not cc_entries
@@ -2180,12 +2208,12 @@ def _run_sampling_likelihood_chain(
         entry.key for entry in bao_entries + compressed_entries + cc_entries + rsd_entries
     }
     used_entries = [entry for entry in entries if entry.key in used_keys]
-    # Each executable BAO entry contributes the full DESI DR1 measurement
-    # vector (12 data points); cosmic chronometers contribute 31 H(z) points;
-    # eBOSS RSD contributes 6 fσ8 points.  Derive from the vectors so a future
+    # Each executable BAO entry contributes its own measurement vector (DESI DR1
+    # = 12 points, 6dFGS+MGS = 2 points); cosmic chronometers contribute 31 H(z)
+    # points; eBOSS RSD contributes 6 fσ8 points.  Derive from the vectors so a
     # dataset with a different length doesn't silently feed a wrong BIC penalty.
     n_constraints = (
-        len(DESI_DR1_BAO_MEAN_VECTOR) * len(bao_entries)
+        sum(len(_BAO_DATA[entry.key][0]) for entry in bao_entries)
         + len(COSMIC_CHRONOMETER_HZ) * len(cc_entries)
         + len(EBOSS_DR16_FSIGMA8) * len(rsd_entries)
         + sum(
@@ -2438,7 +2466,7 @@ def _draw_desi_bao_only_posterior(
         flat_om[valid],
         flat_q[valid],
     ])
-    chi2 = _desi_dr1_bao_chi2_samples(grid_samples, parameter_order)
+    chi2 = _bao_chi2_samples(grid_samples, parameter_order, "desi_dr1_bao")
     best_chi2 = float(np.min(chi2))
     marginal_h0_prior = np.log(h0_cond_high[valid] / h0_cond_low[valid])
     log_weights = -0.5 * (chi2 - best_chi2) + np.log(marginal_h0_prior)
@@ -2788,8 +2816,7 @@ def _run_emcee_chain(
         valid = theta_batch[in_box]
         chi2 = np.zeros(valid.shape[0], dtype=float)
         for entry in bao_entries:
-            if entry.key == "desi_dr1_bao":
-                chi2 += _desi_dr1_bao_chi2_samples(valid, parameter_order)
+            chi2 += _bao_chi2_samples(valid, parameter_order, entry.key)
         for entry in cc_entries:
             if entry.key == "cosmic_chronometers":
                 chi2 += _cosmic_chronometer_chi2_samples(valid, parameter_order)
@@ -2905,8 +2932,7 @@ def _draw_importance_posterior(
 
     chi2 = np.zeros(samples.shape[0], dtype=float)
     for entry in bao_entries:
-        if entry.key == "desi_dr1_bao":
-            chi2 += _desi_dr1_bao_chi2_samples(samples, parameter_order)
+        chi2 += _bao_chi2_samples(samples, parameter_order, entry.key)
     for entry in cc_entries:
         if entry.key == "cosmic_chronometers":
             chi2 += _cosmic_chronometer_chi2_samples(samples, parameter_order)
@@ -2945,15 +2971,22 @@ def _draw_importance_posterior(
     return posterior_samples, best_chi2, proposal_ess, int(samples.shape[0]), compressed_errors
 
 
-def _desi_dr1_bao_chi2_samples(samples: np.ndarray, parameter_order: list[str]) -> np.ndarray:
-    observed = np.asarray([row[1] for row in DESI_DR1_BAO_MEAN_VECTOR], dtype=float)
-    covariance = np.asarray(DESI_DR1_BAO_COVARIANCE, dtype=float)
-    predictions = _desi_dr1_bao_predictions(samples, parameter_order)
+def _bao_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str], key: str = "desi_dr1_bao"
+) -> np.ndarray:
+    mean_vector, cov = _BAO_DATA[key]
+    observed = np.asarray([row[1] for row in mean_vector], dtype=float)
+    covariance = np.asarray(cov, dtype=float)
+    predictions = _bao_predictions(samples, parameter_order, mean_vector)
     residual = predictions - observed
     return np.einsum("ni,ij,nj->n", residual, np.linalg.inv(covariance), residual)
 
 
-def _desi_dr1_bao_predictions(samples: np.ndarray, parameter_order: list[str]) -> np.ndarray:
+def _bao_predictions(
+    samples: np.ndarray,
+    parameter_order: list[str],
+    mean_vector: tuple[tuple[float, float, str], ...],
+) -> np.ndarray:
     h0 = samples[:, parameter_order.index("H0")]
     omegam = samples[:, parameter_order.index("omegam")]
     rd = samples[:, parameter_order.index("rd")]
@@ -2972,9 +3005,9 @@ def _desi_dr1_bao_predictions(samples: np.ndarray, parameter_order: list[str]) -
         wa = samples[:, parameter_order.index("wa")]
     else:
         wa = np.zeros(n_samples, dtype=float)
-    predictions = np.empty((n_samples, len(DESI_DR1_BAO_MEAN_VECTOR)), dtype=float)
+    predictions = np.empty((n_samples, len(mean_vector)), dtype=float)
     distance_cache: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-    for col, (z, _value, quantity) in enumerate(DESI_DR1_BAO_MEAN_VECTOR):
+    for col, (z, _value, quantity) in enumerate(mean_vector):
         if z not in distance_cache:
             distance_cache[z] = _flat_de_distances_at_z(z, h0, omegam, w0=w0, wa=wa)
         dm, dh, dv = distance_cache[z]
@@ -2985,7 +3018,7 @@ def _desi_dr1_bao_predictions(samples: np.ndarray, parameter_order: list[str]) -
         elif quantity in {"DV_over_rs", "DV_over_rd"}:
             predictions[:, col] = dv / rd
         else:
-            raise ValueError(f"unsupported DESI BAO quantity {quantity!r}")
+            raise ValueError(f"unsupported BAO quantity {quantity!r}")
     return predictions
 
 

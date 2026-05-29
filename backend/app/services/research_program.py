@@ -1547,6 +1547,7 @@ def _claimable_params_for_entry(entry: dict[str, Any]) -> list[str]:
     # for these even though they carry no CompressedLikelihoodSpec.
     executable_claimables = {
         "desi_dr1_bao": ["H0", "omegam", "rd", "H0_rd"],
+        "sdss_6df_bao": ["H0", "omegam", "rd", "H0_rd"],
         "cosmic_chronometers": ["H0", "omegam"],
         "eboss_dr16_rsd": ["omegam", "sigma8"],
     }

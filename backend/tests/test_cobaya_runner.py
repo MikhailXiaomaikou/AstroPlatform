@@ -83,7 +83,7 @@ def test_is_external_enabled_truthy_with_cobaya_ok(
 
 
 def test_dispatch_returns_translation_pending_until_step3() -> None:
-    entries = _validate_dataset_selection("lcdm", ["sdss_6df_bao"])
+    entries = _validate_dataset_selection("lcdm", ["spt3g_cmb"])
     out = dispatch_external_cobaya(
         model_key="lcdm",
         entries=entries,
@@ -96,7 +96,7 @@ def test_dispatch_returns_translation_pending_until_step3() -> None:
     assert out["__do_not_claim__"] is True
     assert out["error_class"] == CobayaLikelihoodTranslationPending.error_class
     assert "translation" in out["__message_to_model__"].lower()
-    assert out["dataset_keys"] == ["sdss_6df_bao"]
+    assert out["dataset_keys"] == ["spt3g_cmb"]
     assert out["datasets_used"] == []
     runner_meta = out["provenance"]["cosmology_likelihood"]
     assert runner_meta["runner"] == "cobaya:not_run"
@@ -122,7 +122,7 @@ def test_dispatch_with_no_entries_returns_failure() -> None:
 
 
 def test_build_cobaya_yaml_has_required_sections(tmp_path: Path) -> None:
-    entries = _validate_dataset_selection("lcdm", ["sdss_6df_bao"])
+    entries = _validate_dataset_selection("lcdm", ["spt3g_cmb"])
     yaml = _build_cobaya_yaml(
         model_key="lcdm",
         entries=entries,
@@ -133,7 +133,7 @@ def test_build_cobaya_yaml_has_required_sections(tmp_path: Path) -> None:
     )
     # Must contain registered cobaya_likelihood adapter name (step 2 emits
     # the original string; step 3 will translate it).
-    assert "external:bao.sdss_6df_legacy" in yaml
+    assert "external:cmb.spt3g_2018" in yaml
     assert "theory:" in yaml and "camb:" in yaml
     assert "params:" in yaml
     assert "H0:" in yaml and "omegam:" in yaml
@@ -147,7 +147,7 @@ def test_build_cobaya_yaml_packages_path_when_env_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("COBAYA_PACKAGES_PATH", "/app/cobaya_packages")
-    entries = _validate_dataset_selection("lcdm", ["sdss_6df_bao"])
+    entries = _validate_dataset_selection("lcdm", ["spt3g_cmb"])
     yaml = _build_cobaya_yaml(
         model_key="lcdm",
         entries=entries,
@@ -160,7 +160,7 @@ def test_build_cobaya_yaml_packages_path_when_env_set(
 
 
 def test_build_cobaya_yaml_unsupported_sampler_raises(tmp_path: Path) -> None:
-    entries = _validate_dataset_selection("lcdm", ["sdss_6df_bao"])
+    entries = _validate_dataset_selection("lcdm", ["spt3g_cmb"])
     with pytest.raises(CobayaConfigError):
         _build_cobaya_yaml(
             model_key="lcdm",
@@ -173,7 +173,7 @@ def test_build_cobaya_yaml_unsupported_sampler_raises(tmp_path: Path) -> None:
 
 
 def test_build_cobaya_yaml_mcmc_sampler_includes_rminus1(tmp_path: Path) -> None:
-    entries = _validate_dataset_selection("lcdm", ["sdss_6df_bao"])
+    entries = _validate_dataset_selection("lcdm", ["spt3g_cmb"])
     yaml = _build_cobaya_yaml(
         model_key="lcdm",
         entries=entries,
@@ -268,7 +268,7 @@ def test_run_likelihood_chain_default_off_does_not_invoke_cobaya(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("EXTERNAL_COBAYA_ENABLED", raising=False)
-    out = run_likelihood_chain(model="lcdm", dataset_keys=["sdss_6df_bao"])
+    out = run_likelihood_chain(model="lcdm", dataset_keys=["spt3g_cmb"])
     # Legacy path → compressed_gaussian_analytic runner
     assert (
         out["provenance"]["cosmology_likelihood"]["runner"]
@@ -291,7 +291,7 @@ def test_run_likelihood_chain_dispatches_to_cobaya_when_enabled(
             "provenance": {"cosmology_likelihood": {"runner": "cobaya:not_run"}},
         },
     ) as mock_dispatch:
-        out = run_likelihood_chain(model="lcdm", dataset_keys=["sdss_6df_bao"])
+        out = run_likelihood_chain(model="lcdm", dataset_keys=["spt3g_cmb"])
     assert mock_dispatch.called
     assert out["error_class"] == "test_sentinel"
     assert out["provenance"]["cosmology_likelihood"]["runner"] == "cobaya:not_run"
@@ -313,7 +313,7 @@ def test_run_likelihood_chain_mixed_selection_keeps_legacy_path(
             "app.services.cobaya_runner.dispatch_external_cobaya",
             return_value={"runner_called": True},
         ) as cobaya_dispatch:
-            run_likelihood_chain(model="lcdm", dataset_keys=["sdss_6df_bao"])
+            run_likelihood_chain(model="lcdm", dataset_keys=["spt3g_cmb"])
         assert cobaya_dispatch.called
         # Mixed selection — desi_dr1_bao is BAO-direct executable, must take
         # precedence over the cobaya path (legacy bao sampling path runs).
@@ -321,7 +321,7 @@ def test_run_likelihood_chain_mixed_selection_keeps_legacy_path(
             "app.services.cobaya_runner.dispatch_external_cobaya"
         ) as cobaya_dispatch:
             run_likelihood_chain(
-                model="lcdm", dataset_keys=["desi_dr1_bao", "sdss_6df_bao"]
+                model="lcdm", dataset_keys=["desi_dr1_bao", "spt3g_cmb"]
             )
         assert not cobaya_dispatch.called
 
@@ -332,7 +332,7 @@ def test_run_likelihood_chain_mixed_selection_keeps_legacy_path(
 
 
 def test_runner_failure_envelope_carries_error_class() -> None:
-    entries = _validate_dataset_selection("lcdm", ["sdss_6df_bao"])
+    entries = _validate_dataset_selection("lcdm", ["spt3g_cmb"])
     failure = cobaya_runner._runner_failure(  # noqa: SLF001 — internal access for test coverage
         model_key="lcdm",
         entries=entries,

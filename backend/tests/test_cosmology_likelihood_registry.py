@@ -230,7 +230,7 @@ def test_compressed_likelihood_runner_keeps_config_only_datasets_out_of_posterio
 
     result = run_likelihood_chain(
         model="lcdm",
-        dataset_keys=["sdss_6df_bao", "planck2018_compressed"],
+        dataset_keys=["spt3g_cmb", "planck2018_compressed"],
         random_seed=123,
         n_samples=512,
     )
@@ -239,7 +239,7 @@ def test_compressed_likelihood_runner_keeps_config_only_datasets_out_of_posterio
     assert result["chain_tier"] == "blocked"
     assert result["__do_not_claim__"] is True
     assert [entry["key"] for entry in result["datasets_used"]] == ["planck2018_compressed"]
-    assert [entry["key"] for entry in result["datasets_not_run"]] == ["sdss_6df_bao"]
+    assert [entry["key"] for entry in result["datasets_not_run"]] == ["spt3g_cmb"]
     assert "not run in compressed phase" in " ".join(result["warnings"])
 
 
@@ -309,7 +309,7 @@ def test_likelihood_builder_can_plan_act_era_bao_and_weak_lensing_comparison():
         "hsc_y1_cosmic_shear",
     }
     citations = str(result["provenance"]["cosmology_likelihood"]["citations"])
-    assert "eBOSS Collaboration" in citations
+    assert "Aubourg" in citations
     assert "KiDS-1000" in citations
     assert "DES Collaboration" in citations
     assert "HSC Y1" in citations

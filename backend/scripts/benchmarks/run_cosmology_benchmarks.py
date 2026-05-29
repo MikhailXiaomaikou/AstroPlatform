@@ -280,7 +280,9 @@ def bench_dataset_z_coverage() -> dict[str, Any]:
         "des_sn5yr": (0.025, 1.13),
         "union3": (0.01, 2.26),
         "desi_dr1_bao": (0.295, 2.33),
-        "sdss_6df_bao": (0.106, 2.33),
+        # 6dFGS z=0.106 + SDSS MGS z=0.15 are the only two D_V/r_d anchors
+        # actually sourced/executed (Tier 2B); no BOSS/eBOSS intermediate-z bins.
+        "sdss_6df_bao": (0.106, 0.15),
         # eBOSS RSD fσ8 ends at z=1.48 (Lyα z=2.33 reports no growth rate).
         "eboss_dr16_rsd": (0.15, 1.48),
         "cosmic_chronometers": (0.07, 1.965),
@@ -504,6 +506,52 @@ def bench_eboss_fsigma8_growth() -> dict[str, Any]:
     }
 
 
+def bench_sdss_6df_bao_executable() -> dict[str, Any]:
+    """6dFGS + SDSS MGS low-z BAO executable (2B, 2026-05-29).
+
+    Pins (1) the D_V/r_d predictions at the Planck 2018 fiducial (H0=67.36,
+    Ωm=0.3153, r_d=147.09) against the two sourced anchors — 6dFGS z=0.106 →
+    3.047±0.137 and SDSS MGS z=0.15 → 4.47±0.17 (Aubourg+2015 Table II) — both
+    within ~1σ; (2) the fixed-cosmology χ²/2 is order-unity; (3) that
+    run_likelihood_chain now executes sdss_6df_bao in-process via the generalized
+    per-dataset BAO registry instead of the external-Cobaya stub.
+    """
+    from app.services.cosmology_likelihoods import (
+        run_likelihood_chain,
+        SDSS_6DF_BAO_MEAN_VECTOR,
+        _bao_predictions,
+        _bao_chi2_samples,
+    )
+    order = ["H0", "omegam", "rd"]
+    theta = np.array([[67.36, 0.3153, 147.09]])
+    pred = _bao_predictions(theta, order, SDSS_6DF_BAO_MEAN_VECTOR)[0]
+    chi2 = float(_bao_chi2_samples(theta, order, "sdss_6df_bao")[0])
+    sigma = (0.137, 0.17)
+    obs = (3.047, 4.470)
+    pulls = [abs(float(pred[i]) - obs[i]) / sigma[i] for i in range(2)]
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["sdss_6df_bao"], n_samples=2000, random_seed=42
+    )
+    used = [d["key"] for d in r["datasets_used"]]
+    executed = (
+        bool(r["success"]) and "sdss_6df_bao" in used and r["chain_tier"] != "blocked"
+    )
+    return {
+        "pass": (
+            max(pulls) < 1.5
+            and 0.1 < chi2 / 2 < 2.0
+            and executed
+        ),
+        "pred_dv_rd_z0106": round(float(pred[0]), 4),
+        "pred_dv_rd_z015": round(float(pred[1]), 4),
+        "pulls_sigma": [round(p, 2) for p in pulls],
+        "reduced_chi2_planck": round(chi2 / 2, 4),
+        "chain_tier": r["chain_tier"],
+        "executed_in_process": executed,
+        "target": "D_V/r_d within 1.5σ of 6dFGS/MGS, χ²/2 order-unity, sdss_6df runs in-process",
+    }
+
+
 BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("lcdm_h0_anchor", bench_lcdm_h0_anchor),
     ("wcdm_w_near_minus_one", bench_wcdm_w_near_minus_one),
@@ -517,6 +565,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("dataset_z_coverage", bench_dataset_z_coverage),
     ("cosmic_chronometer_hz", bench_cosmic_chronometer_hz),
     ("eboss_fsigma8_growth", bench_eboss_fsigma8_growth),
+    ("sdss_6df_bao_executable", bench_sdss_6df_bao_executable),
     ("growth_kernel_vs_exact_lcdm", bench_growth_kernel_vs_exact_lcdm),
     ("model_comparison_delta", bench_model_comparison_delta),
     ("sn_omegam_compressed", bench_sn_omegam_compressed),
