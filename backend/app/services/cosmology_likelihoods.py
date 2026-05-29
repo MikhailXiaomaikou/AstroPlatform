@@ -663,18 +663,15 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         notes=(
             "Compressed CMB prior, not a replacement for the full Planck likelihood "
-            "in extended models. Known approximation: the (H0, Omega_m, sigma8, S8) "
-            "summary is treated as a diagonal independent-Gaussian likelihood, but "
-            "S8 == sigma8 * (Omega_m/0.3)^0.5 is exactly determined by the other "
-            "two, so this mildly double-counts the clustering amplitude and gives "
-            "an internally inconsistent joint posterior (sigma_8/Omega_m would imply "
-            "S8 ~ 0.832 but the combined-with-WL S8 is reported lower). A correct "
-            "treatment samples (H0, Omega_m, sigma8) and applies the WL S8 "
-            "likelihood on the derived S8 with a non-diagonal Planck covariance "
-            "from the public chains -- see scripts/fetch_planck2018_compressed.py "
-            "for the script that produces that covariance artifact; the registry "
-            "wire-in is a planned follow-up. Until then, treat S8 / S8-tension "
-            "numbers from this compressed runner as preliminary, not publication."
+            "in extended models. The (H0, Omega_m, sigma8, S8) summary uses a "
+            "diagonal covariance, but as of 1B (2026-05-29) the runner samples only "
+            "(H0, Omega_m, sigma8) and computes S8 == sigma8 * (Omega_m/0.3)^0.5 as "
+            "a derived quantity, applying the S8 row on that derived value, so the "
+            "joint posterior is internally consistent and the WL S8 likelihood pulls "
+            "on the sigma8/Omega_m combination as it should. A real non-diagonal "
+            "Planck covariance from the public chains remains a follow-up -- see "
+            "scripts/fetch_planck2018_compressed.py. Treat these as compressed-"
+            "preliminary, not full-likelihood, constraints."
         ),
         cobaya_likelihood="external:planck_2018_distance_prior",
         cosmosis_module="external:planck2018_distance_priors",
@@ -720,10 +717,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             source_locator="Planck Collaboration VI 2020 Table 2 baseline; S8 derived summary.",
             approximation=(
                 "Diagonal compressed ΛCDM posterior summary; not the full Planck "
-                "likelihood. S8 is listed alongside sigma8/Omega_m as if independent, "
-                "but S8 == sigma8 * (Omega_m/0.3)^0.5 — so the joint is mildly "
-                "internally inconsistent. Non-diagonal real chain covariance + S8 "
-                "as a derived per-sample quantity is the planned follow-up "
+                "likelihood. The S8 row is kept for its published 1σ but the runner "
+                "treats S8 == sigma8 * (Omega_m/0.3)^0.5 as a *derived* quantity "
+                "(1B, 2026-05-29): the sampler never explores an independent S8, so "
+                "the σ8/Ωm/S8 joint is now internally consistent. Real non-diagonal "
+                "chain covariance remains a follow-up "
                 "(scripts/fetch_planck2018_compressed.py produces the covariance)."
             ),
         ),
@@ -1434,6 +1432,53 @@ RUNNER_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
 }
 
 
+# ── S8 as a derived quantity (1B, 2026-05-29) ────────────────────────────────
+# S8 ≡ σ8 · √(Ωm / 0.3) is *defined* by σ8 and Ωm; it is NOT an independent
+# degree of freedom.  Whenever the sampled parameter set contains both σ8 and
+# Ωm we drop S8 from the sampled axes and instead compute it per posterior
+# sample, applying any dataset's S8 Gaussian on that derived value.  When σ8
+# and Ωm are not both sampled (e.g. KiDS/DES/HSC/ACT alone, which only report
+# S8) there is nothing to be inconsistent with, so S8 stays a directly sampled
+# measurement exactly as before.
+S8_PIVOT_OMEGAM = 0.3
+
+
+def _s8_is_derived(parameter_order: list[str]) -> bool:
+    return "sigma8" in parameter_order and "omegam" in parameter_order
+
+
+def _derived_s8_from_samples(samples: np.ndarray, parameter_order: list[str]) -> np.ndarray:
+    sigma8 = samples[:, parameter_order.index("sigma8")]
+    omegam = samples[:, parameter_order.index("omegam")]
+    return sigma8 * np.sqrt(omegam / S8_PIVOT_OMEGAM)
+
+
+def _drop_derived_s8(order: list[str]) -> list[str]:
+    """Remove S8 from a sampled parameter order when it is derivable from the
+    co-sampled σ8 and Ωm (so the sampler never explores an S8 that violates the
+    σ8/Ωm relation)."""
+    if "S8" in order and "sigma8" in order and "omegam" in order:
+        return [param for param in order if param != "S8"]
+    return order
+
+
+def _s8_gaussian_constraints(
+    entries: list[CosmologyDatasetEntry],
+) -> list[tuple[float, float]]:
+    """(mean, sigma) for every compressed spec that carries an S8 row — applied
+    on the derived S8 when σ8/Ωm are sampled."""
+    out: list[tuple[float, float]] = []
+    for entry in entries:
+        spec = entry.compressed_likelihood
+        if spec is None or "S8" not in spec.parameters:
+            continue
+        idx = list(spec.parameters).index("S8")
+        var = float(np.asarray(spec.covariance, dtype=float)[idx][idx])
+        if var > 0:
+            out.append((float(np.asarray(spec.mean, dtype=float)[idx]), math.sqrt(var)))
+    return out
+
+
 DESI_DR1_BAO_MEAN_VECTOR: tuple[tuple[float, float, str], ...] = (
     (0.295, 7.92512927, "DV_over_rs"),
     (0.510, 13.62003080, "DM_over_rs"),
@@ -1714,12 +1759,40 @@ def run_likelihood_chain(
         if not (prior_bounds[name][0] <= float(value) <= prior_bounds[name][1])
     ]
     rng = np.random.default_rng(seed)
-    samples = rng.multivariate_normal(posterior_mean, posterior_cov, size=sample_count)
+    # Apply any derived-S8 (σ8·√(Ωm/0.3)) constraints by importance-reweighting
+    # the narrow closed-form proposal.  The linear precision matrix only saw the
+    # σ8/Ωm rows; the WL/Planck S8 rows are folded in here on the *derived* value
+    # so the sampler can never explore an S8 inconsistent with σ8/Ωm.
+    s8_constraints = _s8_gaussian_constraints(compressed_entries)
+    s8_ess: float | None = None
+    if s8_constraints and _s8_is_derived(parameter_order):
+        # The proposal is closed-form (cheap), so oversample a fixed pool: the
+        # importance ESS then clears the 400 publication floor even for small
+        # requested clouds and several S8 datasets in tension (planck+5WL ESS≈1.8k
+        # at pool 8000 vs 233 at the bare sample_count of 1000).
+        pool = max(sample_count, 8000)
+        proposal = rng.multivariate_normal(posterior_mean, posterior_cov, size=pool)
+        derived = _derived_s8_from_samples(proposal, parameter_order)
+        log_w = np.zeros(pool, dtype=float)
+        for mean_s8, sigma_s8 in s8_constraints:
+            log_w += -0.5 * ((derived - mean_s8) / sigma_s8) ** 2
+        log_w -= log_w.max()
+        weights = np.exp(log_w)
+        weights /= weights.sum()
+        s8_ess = float(1.0 / np.sum(weights ** 2))
+        samples = proposal[rng.choice(pool, size=sample_count, p=weights)]
+    else:
+        samples = rng.multivariate_normal(posterior_mean, posterior_cov, size=sample_count)
     summaries = {
         name: _posterior_summary(samples[:, index])
         for index, name in enumerate(parameter_order)
     }
-    chi2 = _combined_chi2(compressed_entries, parameter_order, posterior_mean)
+    if _s8_is_derived(parameter_order):
+        summaries["S8"] = _posterior_summary(
+            _derived_s8_from_samples(samples, parameter_order)
+        )
+    chi2_point = samples.mean(axis=0) if s8_ess is not None else posterior_mean
+    chi2 = _combined_chi2(compressed_entries, parameter_order, chi2_point)
     k = len(parameter_order)
     n_constraints = sum(
         len(entry.compressed_likelihood.parameters)
@@ -1748,10 +1821,22 @@ def run_likelihood_chain(
         warnings.extend(invalid_specs)
     if prior_violations:
         warnings.append("Posterior mean outside configured prior bounds for: " + ", ".join(prior_violations))
+    s8_underpowered = s8_ess is not None and s8_ess < 400.0
+    if s8_underpowered:
+        warnings.append(
+            f"Derived-S8 reweighting ESS={s8_ess:.0f} below the 400 publication "
+            "floor; S8-combined posterior is exploratory only."
+        )
 
-    publication_ready = not invalid_specs and not prior_violations and not skipped_entries
-    # Compressed-Gaussian analytic path is binary by construction: the
-    # posterior is closed-form so there is no "exploratory" intermediate.
+    publication_ready = (
+        not invalid_specs
+        and not prior_violations
+        and not skipped_entries
+        and not s8_underpowered
+    )
+    # Compressed-Gaussian analytic path is otherwise binary by construction: the
+    # posterior is closed-form so there is no "exploratory" intermediate (the
+    # only soft gate is the derived-S8 reweighting ESS above).
     chain_tier = "publication" if publication_ready else "blocked"
     result: dict[str, Any] = {
         "success": True,
@@ -1781,10 +1866,14 @@ def run_likelihood_chain(
             "n_parameters": int(k),
         },
         "chain_diagnostics": {
-            "overall_status": "analytic_gaussian",
+            "overall_status": (
+                "analytic_gaussian"
+                if s8_ess is None
+                else "analytic_gaussian_s8_reweighted"
+            ),
             "publication_ready": publication_ready,
             "rhat": 1.0,
-            "ess_bulk": sample_count,
+            "ess_bulk": int(round(s8_ess)) if s8_ess is not None else sample_count,
             "n_draws": sample_count,
             "n_chains": 1,
             "thresholds": {"ess_min": 400, "rhat_max": 1.05},
@@ -2192,6 +2281,11 @@ def _run_sampling_likelihood_chain(
         for index, name in enumerate(parameter_order)
     }
     derived_samples: dict[str, np.ndarray] = {}
+    # S8 is reported as a derived quantity (σ8·√(Ωm/0.3)) rather than a sampled
+    # column, so its posterior is exactly consistent with the σ8/Ωm posterior.
+    if _s8_is_derived(parameter_order):
+        derived_samples["S8"] = _derived_s8_from_samples(posterior_samples, parameter_order)
+        summaries["S8"] = _posterior_summary(derived_samples["S8"])
     if "H0" in parameter_order and "rd" in parameter_order:
         h0 = posterior_samples[:, parameter_order.index("H0")]
         rd = posterior_samples[:, parameter_order.index("rd")]
@@ -2417,9 +2511,10 @@ def _sampling_parameter_order(
         if param not in order:
             order.append(param)
     preferred = ["H0", "omegam", "rd", "w", "w0", "wa", "sigma8", "S8", "M_B"]
-    return [param for param in preferred if param in order] + [
+    ordered = [param for param in preferred if param in order] + [
         param for param in order if param not in preferred
     ]
+    return _drop_derived_s8(ordered)
 
 
 def _draw_uniform_prior_samples(
@@ -3377,20 +3472,37 @@ def _compressed_chi2_samples(
 ) -> tuple[np.ndarray, list[str]]:
     total = np.zeros(samples.shape[0], dtype=float)
     invalid_specs: list[str] = []
+    # S8 = σ8·√(Ωm/0.3) is derived (not a sampled column) whenever σ8 and Ωm are
+    # both sampled; its Gaussian then applies on the derived per-sample value.
+    derived_s8 = (
+        _derived_s8_from_samples(samples, parameter_order)
+        if _s8_is_derived(parameter_order)
+        else None
+    )
     for entry in compressed_entries:
         spec = entry.compressed_likelihood
         if spec is None:
             continue
         try:
             params = list(spec.parameters)
-            names = [name for name in params if name in parameter_order]
+            names = [
+                name
+                for name in params
+                if name in parameter_order
+                or (name == "S8" and derived_s8 is not None)
+            ]
             if not names:
                 continue
-            sample_idx = [parameter_order.index(name) for name in names]
             local_idx = [params.index(name) for name in names]
             mean = np.asarray(spec.mean, dtype=float)[local_idx]
             cov = np.asarray(spec.covariance, dtype=float)[np.ix_(local_idx, local_idx)]
-            residual = samples[:, sample_idx] - mean
+            columns = [
+                derived_s8
+                if name == "S8" and name not in parameter_order
+                else samples[:, parameter_order.index(name)]
+                for name in names
+            ]
+            residual = np.column_stack(columns) - mean
             total += np.einsum("ni,ij,nj->n", residual, np.linalg.inv(cov), residual)
         except Exception as exc:
             invalid_specs.append(f"{entry.key}: {exc}")
@@ -3619,9 +3731,10 @@ def _compressed_parameter_order(entries: list[CosmologyDatasetEntry]) -> list[st
                 order.append(param)
     # Keep familiar cosmology params first for stable UI/test output.
     preferred = ["H0", "omegam", "sigma8", "S8"]
-    return [param for param in preferred if param in order] + [
+    ordered = [param for param in preferred if param in order] + [
         param for param in order if param not in preferred
     ]
+    return _drop_derived_s8(ordered)
 
 
 def _all_external_cobaya(entries: list[CosmologyDatasetEntry]) -> bool:
@@ -3712,18 +3825,36 @@ def _combined_chi2(
     posterior_mean: np.ndarray,
 ) -> float:
     params = {name: float(posterior_mean[index]) for index, name in enumerate(parameter_order)}
+    # Derived S8 at this parameter point (σ8·√(Ωm/0.3)) when both are present —
+    # so the WL/Planck S8 rows still enter χ² even though S8 is not sampled.
+    derived_s8 = (
+        params["sigma8"] * math.sqrt(params["omegam"] / S8_PIVOT_OMEGAM)
+        if "sigma8" in params and "omegam" in params
+        else None
+    )
     total = 0.0
     for entry in entries:
         spec = entry.compressed_likelihood
         if spec is None:
             continue
-        names = [name for name in spec.parameters if name in params]
+        names = [
+            name
+            for name in spec.parameters
+            if name in params or (name == "S8" and derived_s8 is not None)
+        ]
         if not names:
             continue
         local_idx = [list(spec.parameters).index(name) for name in names]
         mean = np.asarray(spec.mean, dtype=float)[local_idx]
         cov = np.asarray(spec.covariance, dtype=float)[np.ix_(local_idx, local_idx)]
-        residual = np.asarray([params[name] for name in names], dtype=float) - mean
+        vec = np.asarray(
+            [
+                derived_s8 if (name == "S8" and name not in params) else params[name]
+                for name in names
+            ],
+            dtype=float,
+        )
+        residual = vec - mean
         total += float(residual.T @ np.linalg.inv(cov) @ residual)
     return total
 

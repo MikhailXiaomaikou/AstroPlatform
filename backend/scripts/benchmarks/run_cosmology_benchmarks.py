@@ -552,6 +552,58 @@ def bench_sdss_6df_bao_executable() -> dict[str, Any]:
     }
 
 
+def bench_s8_derived_consistency() -> dict[str, Any]:
+    """S8 as a derived quantity, not a sampled column (1B, 2026-05-29).
+
+    Pins (1) S8 ≡ σ8·√(Ωm/0.3) holds at the reported medians for Planck (analytic
+    path) and BAO+Planck (importance path) — i.e. the sampler no longer explores
+    an independent S8; (2) the prod BAO+Planck order is 4-D [H0,Ωm,rd,σ8] with no
+    sampled S8; (3) Planck+KiDS still runs publication-ready (reweighted ESS≥400)
+    and the KiDS S8 pulls the derived S8 below the Planck-only value.
+    """
+    from app.services.cosmology_likelihoods import (
+        run_likelihood_chain,
+        _sampling_parameter_order,
+        get_cosmology_dataset,
+    )
+
+    def derived_ok(r: dict[str, Any]) -> bool:
+        p = r.get("parameters", {})
+        s8, sig, om = p.get("S8"), p.get("sigma8"), p.get("omegam")
+        if not (s8 and sig and om):
+            return False
+        return abs(s8["median"] - sig["median"] * (om["median"] / 0.3) ** 0.5) < 0.005
+
+    planck = run_likelihood_chain(model="lcdm", dataset_keys=["planck2018_compressed"],
+                                  random_seed=42, n_samples=4000)
+    bao_planck = run_likelihood_chain(model="lcdm",
+                                      dataset_keys=["desi_dr1_bao", "planck2018_compressed"],
+                                      random_seed=42, n_samples=4000)
+    planck_kids = run_likelihood_chain(model="lcdm",
+                                       dataset_keys=["planck2018_compressed", "kids1000_wl"],
+                                       random_seed=42, n_samples=4000)
+    prod_order = _sampling_parameter_order(
+        [get_cosmology_dataset("desi_dr1_bao")], [get_cosmology_dataset("planck2018_compressed")]
+    )
+    s8_planck = planck["parameters"]["S8"]["median"]
+    s8_kids = planck_kids["parameters"]["S8"]["median"]
+    return {
+        "pass": (
+            derived_ok(planck)
+            and derived_ok(bao_planck)
+            and prod_order == ["H0", "omegam", "rd", "sigma8"]
+            and planck_kids["publication_ready"]
+            and planck_kids["chain_diagnostics"]["ess_bulk"] >= 400
+            and s8_kids < s8_planck
+        ),
+        "prod_bao_planck_order": prod_order,
+        "s8_planck": round(s8_planck, 4),
+        "s8_planck_kids": round(s8_kids, 4),
+        "planck_kids_ess": planck_kids["chain_diagnostics"]["ess_bulk"],
+        "target": "S8=σ8·√(Ωm/0.3) derived (not sampled); prod order 4-D; Planck+KiDS pub-ready, KiDS pulls S8 down",
+    }
+
+
 BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("lcdm_h0_anchor", bench_lcdm_h0_anchor),
     ("wcdm_w_near_minus_one", bench_wcdm_w_near_minus_one),
@@ -566,6 +618,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("cosmic_chronometer_hz", bench_cosmic_chronometer_hz),
     ("eboss_fsigma8_growth", bench_eboss_fsigma8_growth),
     ("sdss_6df_bao_executable", bench_sdss_6df_bao_executable),
+    ("s8_derived_consistency", bench_s8_derived_consistency),
     ("growth_kernel_vs_exact_lcdm", bench_growth_kernel_vs_exact_lcdm),
     ("model_comparison_delta", bench_model_comparison_delta),
     ("sn_omegam_compressed", bench_sn_omegam_compressed),

@@ -21,7 +21,9 @@ History:
   the thousands while still covering BAO+Planck combined σ_H0 ≈ 0.5
   (Planck-dominated; 2.5σ_Planck=1.35 is comfortable).
 
-Tests below pin both the 3-D fixture (legacy) and the 5-D prod path.
+Tests below pin both the 3-D fixture (legacy) and the prod path. Since 1B
+(2026-05-29) the prod BAO+Planck order is 4-D [H0, Ωm, rd, σ8] — S8 is derived
+(σ8·√(Ωm/0.3)), not sampled — which also removes one inflated proposal dim.
 """
 
 from __future__ import annotations
@@ -31,6 +33,9 @@ import numpy as np
 from app.services.cosmology_likelihoods import (
     _draw_gaussian_centered_proposal,
     _draw_importance_posterior,
+    _derived_s8_from_samples,
+    _sampling_parameter_order,
+    _sanitize_runner_priors,
     get_cosmology_dataset,
 )
 
@@ -117,36 +122,28 @@ def test_importance_posterior_bao_plus_planck_recovers_ess():
     assert 0.27 < float(np.median(posterior[:, 1])) < 0.33
 
 
-def test_importance_posterior_bao_plus_planck_5d_with_sigma8_S8():
-    """Prod path regression: BAO+Planck with the **full 5-D parameter_order**
-    [H0, Ωm, rd, σ8, S8].
+def test_importance_posterior_bao_plus_planck_4d_s8_derived():
+    """Prod path regression: BAO+Planck.
 
-    Why this needs its own test instead of just the 3-D one above:
-    Planck's compressed Gaussian advertises four parameters
-    (H0, Ωm, σ8, S8); ``_sampling_parameter_order`` includes them all
-    when Planck is in the dataset list, so the prod ``parameter_order``
-    is 5-D, not 3-D.  The Gaussian-centered proposal then has 4 inflated
-    dimensions.  At inflation=5.0 the per-dim efficiency 1/5 compounds
-    to 1/625 ≈ 0.16% and ESS ≈ 30 — exactly the prod regression seen
-    on 2026-05-10.  Inflation=2.5 gives 0.4⁴ ≈ 2.5%, ESS in the
-    hundreds-to-thousands range, comfortably over the 400 threshold.
+    Planck's compressed Gaussian advertises four parameters (H0, Ωm, σ8, S8),
+    but as of 1B (2026-05-29) S8 ≡ σ8·√(Ωm/0.3) is a *derived* quantity, not a
+    sampled column.  So the prod ``_sampling_parameter_order`` is 4-D
+    [H0, Ωm, rd, σ8] — one fewer inflated Gaussian dimension than the old 5-D
+    path, which also helps the proposal efficiency.
 
-    Locks: 5-D ESS > 400, posterior centered on Planck-dominated
-    BAO+Planck combined H0 ≈ 67.4 / Ωm ≈ 0.31.
+    Locks: (a) the prod order really is 4-D with NO sampled S8; (b) ESS > 400;
+    (c) posterior centered on Planck-dominated H0 ≈ 67.4 / Ωm ≈ 0.31; (d) the
+    derived S8 is internally consistent with the σ8/Ωm posterior.
     """
     rng = np.random.default_rng(42)
-    # Mirror prod _sampling_parameter_order + _sanitize_runner_priors output
-    # for the BAO+CMB cell of the cosmology Research Matrix.
-    parameter_order = ["H0", "omegam", "rd", "sigma8", "S8"]
-    prior_bounds = {
-        "H0": (50.0, 90.0),
-        "omegam": (0.05, 0.6),
-        "rd": (130.0, 170.0),
-        "sigma8": (0.4, 1.2),
-        "S8": (0.4, 1.2),
-    }
     bao_entries = [_entry("desi_dr1_bao")]
     compressed_entries = [_entry("planck2018_compressed")]
+
+    # The real prod order — must be 4-D and must NOT sample S8.
+    parameter_order = _sampling_parameter_order(bao_entries, compressed_entries)
+    assert parameter_order == ["H0", "omegam", "rd", "sigma8"], parameter_order
+    assert "S8" not in parameter_order
+    prior_bounds = _sanitize_runner_priors(parameter_order, None)
 
     posterior, _, proposal_ess, _, errors = _draw_importance_posterior(
         rng, parameter_order, prior_bounds,
@@ -154,16 +151,20 @@ def test_importance_posterior_bao_plus_planck_5d_with_sigma8_S8():
     )
     assert errors == [], f"Compressed-likelihood errors: {errors}"
     assert proposal_ess > 400.0, (
-        f"5-D BAO+Planck ESS={proposal_ess:.1f} regressed below the 400 "
-        f"publication threshold.  Did inflation get bumped back up to 5.0? "
-        f"At inflation=5.0 the prod 4-Gaussian-dim path collapses to "
-        f"ESS ≈ 30; at inflation=2.5 it should stay > 400."
+        f"4-D BAO+Planck ESS={proposal_ess:.1f} regressed below the 400 "
+        "publication threshold."
     )
     # H0 posterior must concentrate near Planck mean 67.36; 1σ_Planck = 0.54.
     h0_median = float(np.median(posterior[:, 0]))
     om_median = float(np.median(posterior[:, 1]))
     assert 66.0 < h0_median < 69.0, f"H0 median {h0_median} drifted off Planck"
     assert 0.27 < om_median < 0.34, f"Ωm median {om_median} drifted off Planck"
+    # Derived S8 must equal σ8·√(Ωm/0.3) sample-by-sample (no free S8 axis).
+    derived = _derived_s8_from_samples(posterior, parameter_order)
+    sigma8 = posterior[:, parameter_order.index("sigma8")]
+    omegam = posterior[:, parameter_order.index("omegam")]
+    assert np.allclose(derived, sigma8 * np.sqrt(omegam / 0.3))
+    assert 0.78 < float(np.median(derived)) < 0.86
 
 
 def test_importance_posterior_planck_only_has_high_ess():
