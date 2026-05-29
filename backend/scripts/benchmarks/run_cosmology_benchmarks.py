@@ -263,6 +263,48 @@ def bench_compressed_chain_exploratory_tier() -> dict[str, Any]:
     }
 
 
+def bench_dataset_z_coverage() -> dict[str, Any]:
+    """Pin each registered dataset's declared redshift coverage (M0-F).
+
+    z_coverage is the deterministic backend fact that load_cosmology_data_product
+    / list_cosmology_datasets surface so that "report X at z=N" beyond a dataset's
+    range is recognisable as ΛCDM extrapolation, not a data constraint (blind-test
+    C2). This is the LLM-independent regression guard: if a registry edit moves
+    Pantheon+'s ceiling off z=2.26, or drops a coverage that the C2 anchor depends
+    on, CI goes red here — not silently in a daily blind run.
+    """
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    expected = {
+        "pantheon_plus": (0.001, 2.26),
+        "des_sn5yr": (0.025, 1.13),
+        "union3": (0.01, 2.26),
+        "desi_dr1_bao": (0.295, 2.33),
+        "sdss_6df_bao": (0.106, 2.33),
+        "eboss_dr16_rsd": (0.15, 2.33),
+        "cosmic_chronometers": (0.07, 1.965),
+    }
+    # Probes with no discrete-z coverage interval MUST stay None (H0 priors,
+    # CMB primary/compressed). Guards against accidentally faking a range.
+    none_keys = ("planck2018_compressed", "shoes_h0_riess22", "spt3g_cmb")
+    mismatches: list[dict[str, Any]] = []
+    for key, want in expected.items():
+        got = get_cosmology_dataset(key).z_coverage
+        if got is None or abs(got[0] - want[0]) > 1e-9 or abs(got[1] - want[1]) > 1e-9:
+            mismatches.append({"key": key, "want": list(want), "got": list(got) if got else None})
+    for key in none_keys:
+        got = get_cosmology_dataset(key).z_coverage
+        if got is not None:
+            mismatches.append({"key": key, "want": None, "got": list(got)})
+    return {
+        "pass": not mismatches,
+        "n_pinned": len(expected) + len(none_keys),
+        "pantheon_plus_z_max": get_cosmology_dataset("pantheon_plus").z_coverage[1],
+        "mismatches": mismatches,
+        "target": "registered z_coverage matches pinned survey ranges; non-z probes stay None",
+    }
+
+
 BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("lcdm_h0_anchor", bench_lcdm_h0_anchor),
     ("wcdm_w_near_minus_one", bench_wcdm_w_near_minus_one),
@@ -273,6 +315,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("curved_neutrino_distance_vs_astropy", bench_curved_neutrino_distance_vs_astropy),
     ("planck18_preset_matches_cited", bench_planck18_preset_matches_cited),
     ("compressed_chain_exploratory_tier", bench_compressed_chain_exploratory_tier),
+    ("dataset_z_coverage", bench_dataset_z_coverage),
 ]
 
 

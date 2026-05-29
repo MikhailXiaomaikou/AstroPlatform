@@ -161,6 +161,14 @@ class CosmologyDatasetEntry:
     claimable_parameters: tuple[str, ...] = field(default_factory=tuple)
     recommended_combinations: tuple[str, ...] = field(default_factory=tuple)
     do_not_combine_with: tuple[str, ...] = field(default_factory=tuple)
+    # Redshift coverage (z_min, z_max) of this dataset's actual measurements.
+    # None when the probe has no discrete-z coverage interval: H0 priors (z≈0),
+    # CMB primary/compressed (z*≈1090), CMB-lensing kernels, cosmic-shear
+    # tomographic kernels, compressed σ8 cluster priors. Surfaced to the LLM by
+    # list_cosmology_datasets / load_cosmology_data_product so that asking to
+    # "report X at z=N" beyond this range is recognisable as ΛCDM extrapolation
+    # rather than a data constraint.
+    z_coverage: tuple[float, float] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -211,6 +219,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         display_name="DESI DR1 BAO",
         version="DR1 2024 BAO likelihood",
         probe="bao",
+        z_coverage=(0.295, 2.33),
         status="external_likelihood",
         observables=("DM_over_rd", "DH_over_rd", "DV_over_rd"),
         units={"distance_ratios": "dimensionless", "redshift": "dimensionless"},
@@ -284,6 +293,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         display_name="SDSS + 6dF BAO compilation",
         version="6dFGS + SDSS/BOSS/eBOSS DR16 BAO public compilation",
         probe="bao",
+        z_coverage=(0.106, 2.33),
         status="external_likelihood",
         observables=("DM_over_rd", "DH_over_rd", "DV_over_rd", "H_rd", "D_A_over_rd"),
         units={"distance_ratios": "dimensionless", "redshift": "dimensionless"},
@@ -324,6 +334,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         display_name="eBOSS DR16 + 6dFGS + BOSS RSD f·σ8 compilation",
         version="Alam+ 2021 RSD compilation (7 z-bins: 6dFGS, BOSS LOWZ/CMASS, eBOSS LRG/ELG/QSO/Lyα)",
         probe="rsd",
+        z_coverage=(0.15, 2.33),
         status="external_likelihood",
         observables=("f_sigma8",),
         units={"f_sigma8": "dimensionless", "redshift": "dimensionless"},
@@ -402,6 +413,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         display_name="Pantheon+",
         version="Pantheon+SH0ES DataRelease 2022",
         probe="sn",
+        z_coverage=(0.001, 2.26),
         status="ready",
         observables=("zHD", "zHEL", "mu", "mu_covariance"),
         units={"z": "dimensionless", "mu": "mag"},
@@ -518,6 +530,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         display_name="DES-SN 5YR",
         version="DES-SN5YR Release 1 / 2024 cosmology sample",
         probe="sn",
+        z_coverage=(0.025, 1.13),
         status="external_likelihood",
         observables=("z", "mu", "mu_covariance"),
         units={"z": "dimensionless", "mu": "mag"},
@@ -551,6 +564,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         display_name="Union3 / UNITY1.5",
         version="Union3 2023 arXiv release",
         probe="sn",
+        z_coverage=(0.01, 2.26),
         status="external_likelihood",
         observables=("z", "distance_modulus", "unity_covariance_or_posterior"),
         units={"z": "dimensionless", "mu": "mag"},
@@ -842,6 +856,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         display_name="Cosmic chronometers H(z)",
         version="Moresco-style H(z) compilation with covariance recipe",
         probe="hz",
+        z_coverage=(0.07, 1.965),
         status="metadata_only",
         observables=("z", "H_z", "H_z_covariance"),
         units={"z": "dimensionless", "H_z": "km s^-1 Mpc^-1"},

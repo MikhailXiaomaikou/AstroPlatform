@@ -19,6 +19,29 @@ import numpy as np
 from app.services.cosmology_likelihoods import DataProductSpec, get_cosmology_dataset
 
 
+def _z_coverage_fields(entry: Any) -> dict[str, Any]:
+    """Surface the dataset's declared redshift coverage as deterministic top-level
+    fields. ``z_coverage_max`` / ``z_coverage_min`` are scalars so the blind-test
+    runner's ``tool_result_status`` check (and the LLM) can anchor on a backend
+    fact: a quantity reported outside [z_min, z_max] is a ΛCDM extrapolation, not
+    a data constraint. ``None`` when the probe has no discrete-z coverage interval
+    (H0 priors at z≈0, CMB at z*, cosmic-shear tomographic kernels)."""
+    cov = getattr(entry, "z_coverage", None)
+    if not cov:
+        return {"z_coverage": None, "z_coverage_min": None, "z_coverage_max": None}
+    z_min, z_max = float(cov[0]), float(cov[1])
+    return {
+        "z_coverage": [z_min, z_max],
+        "z_coverage_min": z_min,
+        "z_coverage_max": z_max,
+        "coverage_note": (
+            f"{entry.display_name} measurements span z ∈ [{z_min:g}, {z_max:g}]. "
+            "A quantity reported outside this range is a ΛCDM model extrapolation, "
+            "not a data constraint from this dataset."
+        ),
+    }
+
+
 async def load_cosmology_data_product(
     *,
     dataset_key: str,
@@ -103,6 +126,7 @@ async def load_cosmology_data_product(
         "dataset_key": entry.key,
         "dataset_display_name": entry.display_name,
         "dataset_version": entry.version,
+        **_z_coverage_fields(entry),
         "product": product.to_dict(),
         "source": source,
         "sha256": digest,
@@ -177,6 +201,7 @@ def _compressed_likelihood_data_product(
         "dataset_key": entry.key,
         "dataset_display_name": entry.display_name,
         "dataset_version": entry.version,
+        **_z_coverage_fields(entry),
         "product": {
             "product_type": "compressed_gaussian_likelihood",
             "role": "compressed_likelihood",
