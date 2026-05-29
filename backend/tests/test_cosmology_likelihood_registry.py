@@ -399,16 +399,19 @@ async def test_bao_bin_anomaly_ai_tool_wraps_ap_diagnostic():
 def test_compressed_runner_reports_no_executable_likelihood_reason():
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
+    # des_sn5yr / union3 became executable (Tier 2A, compressed SN-only Ωm), so
+    # spt3g_cmb (full TT/TE/EE, still external_cobaya) is now the config-only
+    # exemplar for verifying the runner reports a not-run dataset.
     result = run_likelihood_chain(
         model="lcdm",
-        dataset_keys=["pantheon_plus", "des_sn5yr", "union3"],
+        dataset_keys=["pantheon_plus", "spt3g_cmb"],
     )
 
     assert result["publication_ready"] is False
     assert result["analysis_status"] == "PARTIAL"
     assert result["chain_tier"] == "blocked"
     assert [entry["key"] for entry in result["datasets_used"]] == ["pantheon_plus"]
-    assert [entry["key"] for entry in result["datasets_not_run"]] == ["des_sn5yr", "union3"]
+    assert [entry["key"] for entry in result["datasets_not_run"]] == ["spt3g_cmb"]
     assert "Datasets not run in compressed phase" in result["warnings"][1]
 
 

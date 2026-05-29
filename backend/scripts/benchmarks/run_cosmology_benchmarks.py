@@ -306,6 +306,38 @@ def bench_dataset_z_coverage() -> dict[str, Any]:
     }
 
 
+def bench_sn_omegam_compressed() -> dict[str, Any]:
+    """DES-SN5YR + Union3 compressed SN-only flat-ΛCDM Ωm (Tier 2A, 2026-05-29).
+
+    Both newly-executable SN datasets must recover their published flat-ΛCDM
+    SN-only Ωm as a 1D Gaussian and reach publication tier: DES-SN5YR Ωm=0.352
+    (Abbott+2024) and Union3 Ωm=0.356 (Rubin+2023). Pins the transcribed
+    compressed-likelihood means so a value typo is caught."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    out: dict[str, Any] = {}
+    ok = True
+    for key, expected in (("des_sn5yr", 0.352), ("union3", 0.356)):
+        r = run_likelihood_chain(model="lcdm", dataset_keys=[key], n_samples=4000, random_seed=42)
+        med = r.get("parameters", {}).get("omegam", {}).get("median")
+        used = [d.get("key") for d in r.get("datasets_used", [])]
+        good = (
+            r.get("success") is True
+            and r.get("chain_tier") == "publication"
+            and key in used
+            and isinstance(med, (int, float))
+            and abs(med - expected) < 0.005
+        )
+        ok = ok and good
+        out[key] = {"omegam_median": round(med, 4) if isinstance(med, (int, float)) else None,
+                    "expected": expected, "tier": r.get("chain_tier")}
+    return {
+        "pass": ok,
+        **out,
+        "target": "des_sn5yr Ωm≈0.352, union3 Ωm≈0.356, both publication, both executed in-process",
+    }
+
+
 def bench_model_comparison_delta() -> dict[str, Any]:
     """Real model comparison Δχ²/ΔAIC/ΔBIC (3.2, 2026-05-29).
 
@@ -487,6 +519,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("eboss_fsigma8_growth", bench_eboss_fsigma8_growth),
     ("growth_kernel_vs_exact_lcdm", bench_growth_kernel_vs_exact_lcdm),
     ("model_comparison_delta", bench_model_comparison_delta),
+    ("sn_omegam_compressed", bench_sn_omegam_compressed),
 ]
 
 

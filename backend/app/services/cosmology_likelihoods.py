@@ -561,11 +561,27 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 doi="10.5281/zenodo.12720778",
             ),
         ),
-        notes="Photometrically classified DES SN sample; useful robustness partner for Pantheon+/Union3.",
+        notes=(
+            "Photometrically classified DES SN sample; robustness partner for "
+            "Pantheon+/Union3. Executable in-process as a compressed SN-only "
+            "flat-ΛCDM Ωm Gaussian (Ωm=0.352±0.017). The 1D Ωm summary supports a "
+            "ΛCDM Ωm cross-comparison and a mild prior, but carries NO distance-"
+            "modulus shape, so it cannot reproduce a w0/wa dark-energy-EoS "
+            "constraint — that needs the released 1829-SN distance vector + "
+            "covariance (external data product)."
+        ),
         cobaya_likelihood="external:sn.des_sn5yr",
         cosmosis_module="external:DES-SN5YR",
         nuisance_parameters=("M_B",),
-        execution_mode="external_cobaya",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("omegam",),
+            mean=(0.352,),
+            covariance=((0.017 ** 2,),),
+            units={"omegam": "dimensionless"},
+            source_locator="DES Collaboration (Abbott et al.) 2024 (arXiv:2401.02929) Table 2, Flat-ΛCDM SN-only / no external priors: Ωm = 0.352 ± 0.017.",
+            approximation="1D SN-only flat-ΛCDM Ωm Gaussian; NOT the full 1829-SN distance-modulus + covariance likelihood (external).",
+        ),
     ),
     "union3": CosmologyDatasetEntry(
         key="union3",
@@ -589,11 +605,25 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         citations=(
             DatasetCitation(label="Rubin et al. Union3/UNITY1.5", year=2023, arxiv="2311.12098"),
         ),
-        notes="Use as an independent SN robustness branch; do not mix with Pantheon+ as if independent.",
+        notes=(
+            "Independent SN robustness branch; do not mix with Pantheon+ as if "
+            "independent. Executable in-process as a compressed SN-only flat-ΛCDM "
+            "Ωm Gaussian (Ωm=0.356±0.027). Same caveat as DES-SN5YR: a 1D Ωm "
+            "summary for ΛCDM cross-comparison, NOT the full 22-bin binned-distance "
+            "vector needed for w0/wa dark-energy work (external, Zenodo)."
+        ),
         cobaya_likelihood="external:sn.union3",
         cosmosis_module="external:Union3/UNITY1.5",
         nuisance_parameters=("M_B",),
-        execution_mode="external_cobaya",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("omegam",),
+            mean=(0.356,),
+            covariance=((0.027 ** 2,),),
+            units={"omegam": "dimensionless"},
+            source_locator="Rubin et al. 2023 (arXiv:2311.12098) Table 9, Flat-ΛCDM SN-only: Ωm = 0.356 (+0.028/-0.026); symmetrized σ = 0.027.",
+            approximation="1D SN-only flat-ΛCDM Ωm Gaussian; NOT the full 22-bin Union3 binned-distance + inverse-covariance likelihood (external, Zenodo).",
+        ),
     ),
     "planck2018_compressed": CosmologyDatasetEntry(
         key="planck2018_compressed",

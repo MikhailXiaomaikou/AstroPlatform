@@ -21,9 +21,11 @@ def test_research_plan_routes_multiprobe_cosmology_to_dag() -> None:
         "union3",
         "planck2018_compressed",
     ]
-    assert plan["executable_level"] == "mixed"
-    assert not any("Pantheon+" in gap for gap in plan["blocking_gaps"])
-    assert any("DES-SN" in gap or "Union3" in gap for gap in plan["blocking_gaps"])
+    # Tier 2A made des_sn5yr / union3 executable (compressed SN-only Ωm), so all
+    # five candidates now run in-process: no blocking gaps, and the plan upgrades
+    # from "mixed" to fully compressed-preliminary executable.
+    assert plan["executable_level"] == "compressed_preliminary"
+    assert plan["blocking_gaps"] == []
     assert any(cell["label"] == "BAO + CMB" for cell in plan["proposed_experiment_matrix"])
 
 
