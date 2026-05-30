@@ -35,8 +35,18 @@ COSMOLOGY_TOOL_NAMES = frozenset(
         "run_cosmology_robustness_matrix",
         "assess_bao_bin_anomaly",
         "audit_published_constraint",
+        "compute_theory_cmb_spectrum",
     }
 )
+
+
+# Process-global lock for the CAMB theory-spectrum tool. CAMB's Fortran kernel is
+# NOT re-entrant: two get_results() calls executing concurrently in one worker
+# segfault the process (measured 8/8 at lmax=2500). The agent loop dispatches a
+# turn's tool calls via asyncio.gather, so the model asking for two spectra in
+# one turn would otherwise crash the single web worker — this serialization is
+# load-bearing, not defensive. One CAMB call at a time per process.
+_CAMB_LOCK = asyncio.Lock()
 
 
 COSMOLOGY_TOOL_SCHEMAS = [
@@ -519,6 +529,31 @@ COSMOLOGY_TOOL_SCHEMAS = [
             "required": ["model", "dataset_keys", "claimed"],
         },
     },
+    {
+        "name": "compute_theory_cmb_spectrum",
+        "description": (
+            "Compute the theoretical lensed CMB TT/TE/EE angular power spectrum "
+            "(D_l = l(l+1)C_l/2pi, in microK^2) from a flat-LCDM parameter set using "
+            "CAMB (a Boltzmann code). This is a FORWARD THEORY PREDICTION for the "
+            "given parameters — NOT a fit to data, a measurement, or a posterior. "
+            "Use it to predict or compare a model spectrum (e.g. the first acoustic "
+            "peak position/height), never to claim an observational constraint. Any "
+            "omitted parameter defaults to Planck 2018 base-LCDM. lmax is capped at 2500."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "H0": {"type": "number", "description": "Hubble constant in km/s/Mpc (default 67.36; allowed 40-100)."},
+                "ombh2": {"type": "number", "description": "Physical baryon density Omega_b h^2 (default 0.02237; allowed 0.015-0.035)."},
+                "omch2": {"type": "number", "description": "Physical cold dark matter density Omega_c h^2 (default 0.1200; allowed 0.05-0.30)."},
+                "ns": {"type": "number", "description": "Scalar spectral index n_s (default 0.9649; allowed 0.85-1.05)."},
+                "As": {"type": "number", "description": "Scalar amplitude A_s (default 2.1e-9; allowed 1e-9 to 4e-9)."},
+                "tau": {"type": "number", "description": "Reionization optical depth tau (default 0.0544; allowed 0.01-0.12)."},
+                "lmax": {"type": "integer", "description": "Maximum multipole (default 2500; values above 2500 are clamped to 2500)."},
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -701,6 +736,59 @@ async def _exec_run_cobaya_cosmology(inp: dict, python_session_id: str | None) -
             "__message_to_model__": (
                 "Cobaya cosmology did not produce a valid posterior. Do not quote "
                 "cosmology constraints from this call."
+            ),
+        }
+
+
+async def _exec_compute_theory_cmb_spectrum(inp: dict) -> dict:
+    """CAMB forward theory CMB spectrum. Serialized behind _CAMB_LOCK (Fortran
+    kernel is non-reentrant) and run off the event loop via asyncio.to_thread."""
+    from app.services.cosmology_theory_spectrum import (
+        TheorySpectrumError,
+        compute_theory_cmb_spectrum,
+    )
+
+    try:
+        async with _CAMB_LOCK:
+            return await asyncio.to_thread(compute_theory_cmb_spectrum, inp)
+    except TheorySpectrumError as exc:
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": "invalid_theory_spectrum_input",
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "compute_theory_cmb_spectrum rejected the input parameters: "
+                f"{exc}. Fix the cosmological parameters and retry; do not quote "
+                "any spectrum values."
+            ),
+        }
+    except ImportError as exc:
+        return {
+            "success": False,
+            "__tool_status__": "UNAVAILABLE",
+            "analysis_status": "UNAVAILABLE",
+            "error": str(exc),
+            "error_class": "camb_not_installed",
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "CAMB is not installed in this environment, so a theory CMB "
+                "spectrum cannot be computed. Do not fabricate spectrum values."
+            ),
+        }
+    except Exception as exc:  # CAMB compute failure
+        return {
+            "success": False,
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "error": str(exc),
+            "error_class": exc.__class__.__name__,
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "CAMB failed to produce a theory spectrum. Do not quote spectrum "
+                "values from this call."
             ),
         }
 
@@ -1010,7 +1098,7 @@ def _exec_audit_published_constraint(inp: dict) -> dict:
 async def dispatch_cosmology(
     tool_name: str, tool_input: dict, python_session_id: str | None = None
 ) -> dict | None:
-    """Unified entry point for ai_tools/__init__: routes the 13 cosmology tools.
+    """Unified entry point for ai_tools/__init__: routes the cosmology tools.
 
     Returns None for an unknown tool name so the caller can fall through; the
     caller already guards with ``tool_name in COSMOLOGY_TOOL_NAMES``.
@@ -1043,4 +1131,6 @@ async def dispatch_cosmology(
         return _exec_assess_bao_bin_anomaly(tool_input)
     elif tool_name == "audit_published_constraint":
         return _exec_audit_published_constraint(tool_input)
+    elif tool_name == "compute_theory_cmb_spectrum":
+        return await _exec_compute_theory_cmb_spectrum(tool_input)
     return None

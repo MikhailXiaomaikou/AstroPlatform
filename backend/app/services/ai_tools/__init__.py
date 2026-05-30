@@ -1665,7 +1665,7 @@ async def _execute_tool_inner(
             return await _exec_fit_isochrone(tool_input)
         elif tool_name == "get_async_job_status":
             return _exec_get_async_job_status(tool_input)
-        # ── H1 split (2026-05-26): cosmology 14-tool centralized dispatch ──
+        # ── H1 split (2026-05-26): cosmology centralized dispatch ──
         # Deployment-readiness introspection scans this function body for
         # quoted tool names. Keep this inventory in sync with COSMOLOGY_TOOL_NAMES:
         # "fit_cosmology_mcmc", "run_cobaya_cosmology",
@@ -1674,7 +1674,8 @@ async def _execute_tool_inner(
         # "run_cosmology_likelihood_chain", "run_cmb_rotation_likelihood",
         # "run_nested_sampler", "evaluate_chain_diagnostics",
         # "build_cosmology_robustness_matrix", "run_cosmology_robustness_matrix",
-        # "assess_bao_bin_anomaly", "audit_published_constraint".
+        # "assess_bao_bin_anomaly", "audit_published_constraint",
+        # "compute_theory_cmb_spectrum".
         elif tool_name in _COSMOLOGY_TOOL_NAMES:
             from app.services.ai_tools_cosmology import dispatch_cosmology
             return await dispatch_cosmology(tool_name, tool_input, python_session_id)

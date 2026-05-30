@@ -494,6 +494,9 @@ _COMPUTE_TOOLS = {
     # audit_published_constraint (2026-05-27): reproduces a published constraint
     # and reports n-sigma tension; COMPUTE because it runs the likelihood chain.
     "audit_published_constraint",
+    # compute_theory_cmb_spectrum (2026-05-31, M1-A): CAMB forward theory CMB
+    # power spectrum; COMPUTE — a model prediction, not a measurement.
+    "compute_theory_cmb_spectrum",
     # PART Y Batch 1 (audit follow-up): newer compute tools — line-relation
     # fitting on cited literature tables, luminosity-distance comparison
     # across cosmologies, gravitational-lensing demagnification of a sample.

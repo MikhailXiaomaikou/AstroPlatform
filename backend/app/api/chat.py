@@ -1854,6 +1854,12 @@ async def _execute_tool_calls(
         "query_exoplanet_archive": 60.0,
         "query_confirmed_planets": 60.0,
         "query_tess_target_list": 60.0,
+        # ── M1-A (2026-05-31): CAMB theory CMB spectrum ──
+        # A bounded lmax<=2500 CAMB call is a few seconds, but calls serialize
+        # behind a process-global lock (CAMB's Fortran kernel is non-reentrant)
+        # and the first call pays a one-time camb import; 90 s gives headroom
+        # for queueing under load + cold import without false timeouts.
+        "compute_theory_cmb_spectrum": 90.0,
     }
     _TOOL_DEADLINE_DEFAULT = 45.0
 
