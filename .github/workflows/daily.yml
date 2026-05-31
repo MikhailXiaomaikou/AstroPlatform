@@ -19,7 +19,7 @@ on:
   workflow_dispatch:           # manual button in the Actions UI
     inputs:
       module:
-        description: "Run only one module (cosmology / solar_system / exoplanet) instead of all three. Default = all."
+        description: "Run only one module (cosmology / solar_system) instead of both. Default = all."
         required: false
         default: "all"
         type: choice
@@ -27,7 +27,6 @@ on:
           - all
           - cosmology
           - solar_system
-          - exoplanet
       cases:
         description: "Comma-separated case IDs to run (e.g. A2,A3). Empty = all cases in the module(s). Tight iteration loops use this to shrink a 20-min run to 1-2 cases × ~2 min each."
         required: false
@@ -71,7 +70,7 @@ jobs:
           cd backend
           python -m venv venv
           ./venv/bin/pip install -r requirements.txt
-      - name: Run blind tests (solar_system + exoplanet + cosmology)
+      - name: Run blind tests (solar_system + cosmology)
         env:
           # Map PLATFORM_DEEPSEEK_API_KEY (platform-default secret name)
           # onto the DEEPSEEK_API_KEY env var the runner actually reads,
@@ -104,7 +103,6 @@ jobs:
           name: blind-tests-${{ github.run_id }}
           path: |
             backend/scripts/blind_test_m0/results_*
-            backend/scripts/blind_test_exoplanet_m0/results_*
             backend/scripts/blind_test_cosmology_m0/results_*
           if-no-files-found: ignore
 

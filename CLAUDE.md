@@ -30,9 +30,8 @@ python3 -m pytest tests/test_api.py -k test_search  # single test
 python3 -c "import py_compile, glob; [py_compile.compile(f, doraise=True) for f in glob.glob('app/**/*.py', recursive=True)]"
 
 # Science-regression benchmarks (CI-runnable, no LLM, no network)
-python3 scripts/benchmarks/run_cosmology_benchmarks.py    # 8 baselines
+python3 scripts/benchmarks/run_cosmology_benchmarks.py    # 17 baselines
 python3 scripts/benchmarks/run_solar_system_benchmarks.py # 6 baselines
-python3 scripts/benchmarks/run_exoplanet_benchmarks.py    # 6 baselines
 python3 scripts/audit_registry.py                          # 18 dataset-registry entries
 python3 scripts/audit_citation_pool.py                     # bibcode reachability
 

@@ -19,21 +19,19 @@ jobs:
           pip install -r requirements.txt
       - name: Run tests with coverage (cosmology + shared infra)
         # Scoped to the active cosmology module + shared/core infrastructure.
-        # The dormant solar_system / exoplanet vertical-specific tests are
-        # excluded (their DOMAIN modules only — every shared test, incl.
-        # test_claim_validator_solar_system / test_astro_* which exercise core
-        # infra via vertical fixtures, is kept). The exclusion list was produced
-        # by classifying all 137 test files and adversarially verifying each
-        # exclusion cannot drop cosmology or shared coverage. Measured coverage
-        # with these 11 excluded: 59% (gate is 45%), 2344 passed.
+        # The exoplanet vertical tests were deleted (dormant module); the
+        # dormant solar_system vertical-specific DOMAIN tests are excluded here
+        # — every shared test (incl. test_claim_validator_solar_system /
+        # test_astro_* which exercise core infra via vertical fixtures) is kept.
+        # The exclusion list was produced by classifying all test files and
+        # adversarially verifying each exclusion cannot drop cosmology or shared
+        # coverage. Measured coverage: 59% (gate is 45%), 2344 passed.
         run: |
           cd backend
           pip install pytest-cov
           python -m pytest tests/ -v --tb=short --cov=app --cov-report=term-missing \
-            --ignore=tests/test_ai_tools_exoplanet.py \
             --ignore=tests/test_ai_tools_solar_system.py \
             --ignore=tests/test_carvano_calibration.py \
-            --ignore=tests/test_exoplanet_services.py \
             --ignore=tests/test_jpl_connector.py \
             --ignore=tests/test_mpc_connector.py \
             --ignore=tests/test_solar_system_dynamics.py \
@@ -98,10 +96,6 @@ jobs:
         run: |
           cd backend
           python scripts/benchmarks/run_solar_system_benchmarks.py --json /tmp/solar_system_benchmarks.json
-      - name: Exoplanet benchmarks
-        run: |
-          cd backend
-          python scripts/benchmarks/run_exoplanet_benchmarks.py --json /tmp/exoplanet_benchmarks.json
       - name: Cosmology registry audit
         run: |
           cd backend
@@ -114,6 +108,5 @@ jobs:
           path: |
             /tmp/cosmology_benchmarks.json
             /tmp/solar_system_benchmarks.json
-            /tmp/exoplanet_benchmarks.json
             /tmp/registry_audit.json
           if-no-files-found: ignore
