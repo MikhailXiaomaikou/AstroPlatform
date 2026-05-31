@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createUserTool,
   deleteUserTool,
@@ -59,7 +59,7 @@ export default function UserToolsPage() {
 
   const isLoggedIn = useMemo(() => Boolean(localStorage.getItem("astro_token")), []);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!isLoggedIn) {
       setTools([]);
       setLoading(false);
@@ -74,11 +74,11 @@ export default function UserToolsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [isLoggedIn]);
 
   useEffect(() => {
     void refresh();
-  }, [isLoggedIn]);
+  }, [refresh]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

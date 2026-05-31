@@ -6,9 +6,12 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import tempfile
 import time
 import uuid
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import httpx
 
@@ -114,6 +117,115 @@ def _extract_openai_content_text(content: object) -> str:
         if item.get("type") in {"output_text", "text"} and isinstance(item.get("content"), str):
             text_parts.append(str(item["content"]))
     return "\n\n".join(part for part in text_parts if part).strip()
+
+
+OPENAI_CLI_PRIORITY_TOOL_NAMES = [
+    "search_literature",
+    "extract_literature_tables",
+    "fit_line_lfr",
+    "compare_luminosity_distances",
+    "demagnify_sample",
+    "run_cosmology_likelihood_chain",
+    "run_cosmology_robustness_matrix",
+    "plan_research_program",
+]
+
+
+def _cli_tool_specs_for_prompt(tools: list[dict] | None) -> list[dict]:
+    """Return compact tool specs for the local CLI bridge prompt.
+
+    The CLI bridge sees tools only as JSON text, not as native function
+    schemas. Keep paper/table/cosmology workflow tools near the front so the
+    model does not falsely conclude that the backend cannot run them.
+    """
+    raw_specs = [
+        {
+            "name": tool.get("name"),
+            "input_schema": tool.get("input_schema") or tool.get("parameters") or {},
+            "description": tool.get("description") or "",
+        }
+        for tool in (tools or [])
+        if tool.get("name")
+    ]
+    priority = {name: index for index, name in enumerate(OPENAI_CLI_PRIORITY_TOOL_NAMES)}
+    return [
+        spec for _, spec in sorted(
+            enumerate(raw_specs),
+            key=lambda item: (priority.get(str(item[1].get("name")), len(priority)), item[0]),
+        )
+    ]
+
+
+def _format_cli_prompt(
+    messages: list[dict],
+    *,
+    system: str | None = None,
+    tools: list[dict] | None = None,
+    retry_note: str | None = None,
+) -> str:
+    tool_summaries = _cli_tool_specs_for_prompt(tools)
+    tool_names = [str(tool.get("name") or "") for tool in tool_summaries if tool.get("name")]
+    has_research_workflow_tools = any(
+        name in tool_names
+        for name in {
+            "search_literature",
+            "extract_literature_tables",
+            "fit_line_lfr",
+            "compare_luminosity_distances",
+            "demagnify_sample",
+        }
+    )
+    payload = {
+        "system": system or "",
+        "messages": _normalize_openai_messages(messages),
+        "available_tools": tool_summaries,
+    }
+    correction = (
+        f"\n\nprotocol_correction: {retry_note}\n"
+        if retry_note
+        else ""
+    )
+    workflow_note = (
+        "\nThe available tool list already includes the paper/table/cosmology/LFR "
+        "workflow tools. Do not tell the user to enable these listed tools; "
+        "request them through tool_calls when they are needed.\n"
+        if has_research_workflow_tools
+        else "\n"
+    )
+    return (
+        "You are the local Standard Astro model bridge. You cannot execute "
+        "Standard Astro tools yourself; instead you must request them through "
+        "this JSON bridge so the backend can execute ADQL/database access, "
+        "literature/network search, table extraction, Python analysis, and "
+        "other platform tools.\n\n"
+        "Return ONLY one JSON object. Do not use Markdown.\n"
+        "Allowed shapes:\n"
+        "1. {\"content\":\"final natural-language answer\"}\n"
+        "2. {\"tool_calls\":[{\"name\":\"TOOL_NAME\",\"input\":{...}}]}\n\n"
+        f"Available tool names include: {', '.join(tool_names) if tool_names else '(none)'}.\n"
+        "If tools are needed, choose from available_tools and return tool_calls. "
+        "Do not say you cannot use tools from this chat environment; the backend "
+        "will execute requested tool calls for you.\n"
+        f"{workflow_note}"
+        f"{correction}\n"
+        "Conversation payload:\n"
+        f"{json.dumps(payload, ensure_ascii=False, default=str)}"
+    )
+
+
+def _cli_bridge_self_blocked(text: str) -> bool:
+    """Detect when the CLI answered as if platform tools were unavailable."""
+    lowered = str(text or "").lower()
+    return (
+        "tool" in lowered
+        and (
+            "cannot use" in lowered
+            or "can't use" in lowered
+            or "cannot execute" in lowered
+            or "not available in this backend tool list" in lowered
+            or "enable search_literature" in lowered
+        )
+    )
 
 
 class LLMBackend(ABC):
@@ -481,12 +593,179 @@ class LocalBackend(OpenAICompatibleBackend):
         super().__init__(model_env="LOCAL_MODEL_NAME", key_env="LOCAL_MODEL_API_KEY", base_url=os.getenv("LOCAL_MODEL_BASE_URL", "http://localhost:8000/v1"))
 
     async def complete(self, messages, *, system=None, tools=None, max_tokens=4096, temperature=0.0, api_key=None, provider_api_keys=None, request_timeout=None, model_profile=None):
+        profile = self._profile(model_profile)
+        if (
+            profile
+            and profile.id == "local:openai-cli"
+            and os.getenv("OPENAI_CLI_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        ):
+            return await self._complete_openai_cli(
+                messages,
+                system=system,
+                tools=tools,
+                max_tokens=max_tokens,
+                request_timeout=request_timeout,
+                model_profile=profile,
+            )
         if not os.getenv("LOCAL_MODEL_ENABLED", ""):
             raise InferenceError("Local model backend is not enabled. Set LOCAL_MODEL_ENABLED=1 and provide an OpenAI-compatible server.")
         return await super().complete(messages, system=system, tools=tools, max_tokens=max_tokens, temperature=temperature, api_key=api_key, provider_api_keys=provider_api_keys, request_timeout=request_timeout, model_profile=model_profile)
 
     def model_name(self) -> str:
         return os.getenv("LOCAL_MODEL_NAME", "local-model")
+
+    def _openai_cli_prompt(
+        self,
+        messages: list[dict],
+        *,
+        system: str | None,
+        tools: list[dict] | None,
+        retry_note: str | None = None,
+    ) -> str:
+        return _format_cli_prompt(messages, system=system, tools=tools, retry_note=retry_note)
+
+    @staticmethod
+    def _strip_json_fence(text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            stripped = "\n".join(lines).strip()
+        return stripped
+
+    def _parse_openai_cli_result(self, text: str) -> tuple[str, list[dict]]:
+        raw = self._strip_json_fence(text)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return text.strip(), []
+        if not isinstance(data, dict):
+            return text.strip(), []
+        content = str(data.get("content") or data.get("text") or "")
+        tool_calls: list[dict] = []
+        for item in data.get("tool_calls") or data.get("tools") or []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("tool") or item.get("function")
+            if not name:
+                continue
+            args = item.get("input")
+            if args is None:
+                args = item.get("arguments")
+            if args is None:
+                args = item.get("args")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {"query": args}
+            if not isinstance(args, dict):
+                args = {}
+            tool_calls.append({
+                "id": item.get("id") or str(uuid.uuid4()),
+                "name": str(name),
+                "input": args,
+            })
+        if tool_calls:
+            content = ""
+        return content, tool_calls
+
+    async def _complete_openai_cli(
+        self,
+        messages,
+        *,
+        system=None,
+        tools=None,
+        max_tokens=4096,
+        request_timeout=None,
+        model_profile: ModelProfile,
+    ):
+        command = os.getenv("OPENAI_CLI_COMMAND", "codex")
+        cli_path = shutil.which(command) or command
+        timeout = request_timeout or 120.0
+        attempts = 2
+        last_text = ""
+        retry_note: str | None = None
+
+        for attempt in range(attempts):
+            with tempfile.TemporaryDirectory(prefix="standard-astro-openai-cli-") as tmp:
+                output_path = Path(tmp) / "last_message.json"
+                prompt = self._openai_cli_prompt(
+                    messages,
+                    system=system,
+                    tools=tools,
+                    retry_note=retry_note,
+                )
+                cmd = [
+                    cli_path,
+                    "exec",
+                    "--ephemeral",
+                    "--sandbox",
+                    "read-only",
+                    "--output-last-message",
+                    str(output_path),
+                ]
+                if model_profile.resolved_model_id and model_profile.resolved_model_id != "codex-config-default":
+                    cmd.extend(["--model", model_profile.resolved_model_id])
+                cmd.append("-")
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(prompt.encode("utf-8")),
+                        timeout=timeout,
+                    )
+                except asyncio.TimeoutError:
+                    raise InferenceError(f"OpenAI CLI request timed out after {timeout}s")
+                except OSError as exc:
+                    raise InferenceError(f"OpenAI CLI could not be started: {exc}")
+                if proc.returncode != 0:
+                    err = stderr.decode("utf-8", errors="replace").strip()
+                    raise InferenceError(f"OpenAI CLI exited with {proc.returncode}: {err[:500]}")
+                if output_path.exists():
+                    last_text = output_path.read_text(encoding="utf-8", errors="replace")
+                else:
+                    last_text = stdout.decode("utf-8", errors="replace")
+                if (
+                    attempt == 0
+                    and tools
+                    and _cli_bridge_self_blocked(last_text)
+                ):
+                    retry_note = (
+                        "Your previous response refused tool use. In this bridge, "
+                        "you request tools by returning JSON tool_calls; the backend executes them."
+                    )
+                    continue
+                content, tool_calls = self._parse_openai_cli_result(last_text)
+                if not content and not tool_calls:
+                    raise InferenceError("OpenAI CLI returned an empty completion")
+                return {
+                    "content": content,
+                    "tool_calls": tool_calls,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "stop_reason": "tool_calls" if tool_calls else "stop",
+                    "backend_name": self.backend_label,
+                    "model_name": model_profile.resolved_model_id,
+                    "model_profile": model_profile.id,
+                }
+
+        content, tool_calls = self._parse_openai_cli_result(last_text)
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "stop_reason": "tool_calls" if tool_calls else "stop",
+            "backend_name": self.backend_label,
+            "model_name": model_profile.resolved_model_id,
+            "model_profile": model_profile.id,
+        }
 
 
 class DeepSeekBackend(OpenAICompatibleBackend):
@@ -529,7 +808,7 @@ class InferenceRouter:
         if backend_name == "deepseek":
             return bool(keys.get("deepseek") or os.getenv("DEEPSEEK_API_KEY", ""))
         if backend_name == "local":
-            return bool(os.getenv("LOCAL_MODEL_ENABLED", ""))
+            return bool(os.getenv("LOCAL_MODEL_ENABLED", "") or os.getenv("OPENAI_CLI_ENABLED", ""))
         return backend_name in self.backends
 
     def _provider_for_backend(self, backend_name: str) -> str:

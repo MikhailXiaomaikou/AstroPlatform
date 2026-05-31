@@ -3859,6 +3859,40 @@ def _combined_chi2(
     return total
 
 
+def _compressed_s8_mean_var(
+    spec: CompressedLikelihoodSpec,
+) -> tuple[float, float, str] | None:
+    """Return (S8 mean, variance, source) for direct or derived S8 specs."""
+
+    params = list(spec.parameters)
+    mean = np.asarray(spec.mean, dtype=float)
+    cov = np.asarray(spec.covariance, dtype=float)
+    if "S8" in params:
+        idx = params.index("S8")
+        return float(mean[idx]), float(cov[idx][idx]), "direct"
+    if "sigma8" not in params or "omegam" not in params:
+        return None
+    sigma_idx = params.index("sigma8")
+    omegam_idx = params.index("omegam")
+    sigma8 = float(mean[sigma_idx])
+    omegam = float(mean[omegam_idx])
+    if sigma8 <= 0 or omegam <= 0:
+        return None
+    s8 = sigma8 * math.sqrt(omegam / S8_PIVOT_OMEGAM)
+    # First-order error propagation from (sigma8, Omega_m).  This is sufficient
+    # for the compressed tension table; the full posterior still comes from the
+    # sampler and is reported separately.
+    grad = np.asarray([
+        s8 / sigma8,
+        0.5 * s8 / omegam,
+    ])
+    subcov = cov[np.ix_([sigma_idx, omegam_idx], [sigma_idx, omegam_idx])]
+    variance = float(grad.T @ subcov @ grad)
+    if not math.isfinite(variance) or variance <= 0:
+        return None
+    return float(s8), variance, "derived_from_sigma8_omegam"
+
+
 def _pairwise_tensions(entries: list[CosmologyDatasetEntry]) -> list[dict[str, Any]]:
     tensions: list[dict[str, Any]] = []
     specs = [
@@ -3894,7 +3928,48 @@ def _pairwise_tensions(entries: list[CosmologyDatasetEntry]) -> list[dict[str, A
                     "value_a": float(left_spec.mean[li]),
                     "value_b": float(right_spec.mean[ri]),
                 })
-    tensions.sort(key=lambda item: float(item["sigma"]), reverse=True)
+            if "S8" not in common:
+                left_s8 = _compressed_s8_mean_var(left_spec)
+                right_s8 = _compressed_s8_mean_var(right_spec)
+                if left_s8 is not None and right_s8 is not None:
+                    left_value, left_var, left_source = left_s8
+                    right_value, right_var, right_source = right_s8
+                    denom = math.sqrt(max(left_var + right_var, 0.0))
+                    if denom > 0:
+                        delta = left_value - right_value
+                        tensions.append({
+                            "parameter": "S8",
+                            "dataset_a": left_entry.key,
+                            "dataset_b": right_entry.key,
+                            "delta": round(delta, 6),
+                            "sigma": round(abs(delta) / denom, 3),
+                            "value_a": round(left_value, 6),
+                            "value_b": round(right_value, 6),
+                            "comparison": "derived_pairwise",
+                            "value_a_source": left_source,
+                            "value_b_source": right_source,
+                            "note": (
+                                "S8 compared after deriving it from sigma8 and "
+                                "Omega_m where a compressed summary did not carry "
+                                "S8 directly."
+                            ),
+                        })
+                elif (
+                    ("S8" in left_spec.parameters or {"sigma8", "omegam"} <= set(left_spec.parameters))
+                    and ("S8" in right_spec.parameters or {"sigma8", "omegam"} <= set(right_spec.parameters))
+                ):
+                    tensions.append({
+                        "parameter": "S8",
+                        "dataset_a": left_entry.key,
+                        "dataset_b": right_entry.key,
+                        "sigma": None,
+                        "status": "not_comparable",
+                        "reason": "S8 uncertainty could not be propagated from the registered compressed covariance.",
+                    })
+    tensions.sort(
+        key=lambda item: float(item["sigma"]) if isinstance(item.get("sigma"), (int, float)) else -1.0,
+        reverse=True,
+    )
     return tensions
 
 

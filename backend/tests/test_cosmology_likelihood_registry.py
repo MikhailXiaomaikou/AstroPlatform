@@ -193,6 +193,67 @@ def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints(
     assert len(result["datasets_used"]) == 5
 
 
+def test_pairwise_tensions_compare_direct_s8_to_derived_sigma8_omegam():
+    from app.services.cosmology_likelihoods import (
+        CompressedLikelihoodSpec,
+        CosmologyDatasetEntry,
+        CovarianceSpec,
+        DatasetCitation,
+        _pairwise_tensions,
+    )
+
+    base_kwargs = {
+        "version": "test",
+        "status": "ready",
+        "observables": ("S8",),
+        "units": {"S8": "dimensionless"},
+        "applicable_models": ("lcdm",),
+        "likelihood_family": "compressed_gaussian",
+        "covariance": CovarianceSpec(kind="gaussian", provided=True, description="test"),
+        "source_url": "https://example.invalid",
+        "citations": (DatasetCitation(label="Test", year=2026),),
+        "notes": "test fixture",
+        "execution_mode": "compressed_gaussian",
+    }
+    wl = CosmologyDatasetEntry(
+        key="wl_s8",
+        display_name="WL S8",
+        probe="weak_lensing",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("S8",),
+            mean=(0.760,),
+            covariance=((0.02**2,),),
+            source_locator="test",
+            approximation="test",
+        ),
+        **base_kwargs,
+    )
+    cmb = CosmologyDatasetEntry(
+        key="cmb_sigma8_omegam",
+        display_name="CMB sigma8/Omega_m",
+        probe="cmb",
+        observables=("sigma8", "omegam"),
+        units={"sigma8": "dimensionless", "omegam": "dimensionless"},
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("sigma8", "omegam"),
+            mean=(0.810, 0.300),
+            covariance=((0.01**2, 0.0), (0.0, 0.01**2)),
+            source_locator="test",
+            approximation="test",
+        ),
+        **{k: v for k, v in base_kwargs.items() if k not in {"observables", "units"}},
+    )
+
+    tensions = _pairwise_tensions([wl, cmb])
+    s8 = next(item for item in tensions if item["parameter"] == "S8")
+
+    assert s8["comparison"] == "derived_pairwise"
+    assert s8["value_a_source"] == "direct"
+    assert s8["value_b_source"] == "derived_from_sigma8_omegam"
+    assert s8["value_b"] == pytest.approx(0.810)
+    assert s8["sigma"] > 1.0
+
+
 def test_desi_dr1_bao_data_product_runner_produces_publication_ready_preliminary_chain():
     from app.services.cosmology_likelihoods import run_likelihood_chain
 

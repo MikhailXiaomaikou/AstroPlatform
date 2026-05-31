@@ -603,6 +603,117 @@ def _is_tool_inventory_request(message: str) -> bool:
     return any(marker in msg for marker in zh_markers + en_markers)
 
 
+def _slim_tool_result_for_sse(result: Any, *, max_bytes: int = 8000) -> Any:
+    """Shrink large tool results before putting them on the live SSE wire.
+
+    The backend already gives the model a bounded tool-result block.  The
+    browser stream has a different constraint: it only needs enough structure
+    to render cards/panels and diagnostics.  Sending full rows/figures/stdout
+    after final text can keep the response open for minutes, leaving the Chat
+    UI stuck in "Stop" state even though the answer is visible.
+    """
+    try:
+        raw = json.dumps(result, default=str)
+    except (TypeError, ValueError):
+        return result
+    if len(raw) <= max_bytes or not isinstance(result, dict):
+        return result
+
+    src = dict(result)
+    keep = {
+        "success", "error", "error_class",
+        "stderr", "stderr_note", "traceback",
+        "exit_code", "backend", "duration_ms",
+        "mode", "auto_escalated_mode", "note",
+        "analysis_status", "data_origin",
+        "__tool_status__", "__do_not_claim__",
+        "__message_to_model__",
+        "row_count", "columns", "meta",
+    }
+    slim = {k: src[k] for k in keep if k in src}
+    status = str(src.get("analysis_status") or "")
+
+    if status == "RESEARCH_PLAN_READY" and isinstance(src.get("research_plan"), dict):
+        slim["research_plan"] = src["research_plan"]
+        for key in ("plan_id", "dataset_count", "matrix_size", "publication_ready"):
+            if key in src:
+                slim[key] = src[key]
+
+    if status.startswith("RESEARCH_MATRIX") and isinstance(src.get("matrix"), list):
+        compact_cells: list[dict[str, Any]] = []
+        for cell in src.get("matrix", [])[:10]:
+            if not isinstance(cell, dict):
+                continue
+            result_obj = cell.get("result") if isinstance(cell.get("result"), dict) else {}
+            params = (
+                result_obj.get("parameters")
+                if isinstance(result_obj, dict) and isinstance(result_obj.get("parameters"), dict)
+                else {}
+            )
+            diagnostics = (
+                result_obj.get("chain_diagnostics")
+                if isinstance(result_obj, dict) and isinstance(result_obj.get("chain_diagnostics"), dict)
+                else {}
+            )
+            compact_cells.append({
+                "label": cell.get("label"),
+                "model": cell.get("model"),
+                "dataset_keys": cell.get("dataset_keys"),
+                "publication_ready": cell.get("publication_ready"),
+                "runnable": cell.get("runnable"),
+                "execution_level": cell.get("execution_level"),
+                "warnings": cell.get("warnings"),
+                "result": {
+                    "publication_ready": result_obj.get("publication_ready") if isinstance(result_obj, dict) else None,
+                    "parameters": {
+                        name: params.get(name)
+                        for name in ("H0", "omegam", "sigma8", "S8", "rd", "H0_rd")
+                        if isinstance(params, dict) and name in params
+                    },
+                    "chain_diagnostics": diagnostics,
+                    "datasets_not_run": (
+                        result_obj.get("datasets_not_run")
+                        if isinstance(result_obj, dict)
+                        else None
+                    ),
+                },
+            })
+        slim["matrix"] = compact_cells
+        for key in ("matrix_size", "ready_cells", "publication_ready", "claim_scope"):
+            if key in src:
+                slim[key] = src[key]
+
+    if status == "EVIDENCE_GRAPH_READY" and isinstance(src.get("evidence_graph"), dict):
+        graph = src["evidence_graph"]
+        slim["evidence_graph"] = {
+            "claimable_parameters": graph.get("claimable_parameters"),
+            "supported_claims": graph.get("supported_claims"),
+            "unsupported_claims": graph.get("unsupported_claims"),
+        }
+        if "claimable_parameters" in src:
+            slim["claimable_parameters"] = src["claimable_parameters"]
+
+    for big_key in ("rows", "data", "figures", "variables", "variable_types", "stdout"):
+        if big_key not in src:
+            continue
+        try:
+            value = src[big_key]
+            if isinstance(value, (list, tuple)):
+                slim[f"{big_key}__preview__"] = {"n_items": len(value), "truncated": True}
+            elif isinstance(value, dict):
+                slim[f"{big_key}__preview__"] = {"n_keys": len(value), "truncated": True}
+            elif isinstance(value, str) and len(value) > 2000:
+                slim[big_key] = value[:2000] + "…[truncated]"
+            else:
+                slim[big_key] = value
+        except Exception:
+            pass
+
+    slim["__preview__"] = True
+    slim["__original_size__"] = len(raw)
+    return slim
+
+
 def _trim_large_tool_results(messages: list[dict]) -> list[dict]:
     """G6.2: shrink oversized tool_result / assistant content so the full
     message array stays under Anthropic's ~200 KB prompt cap.
@@ -1174,7 +1285,7 @@ async def chat_message_stream(
             # and the live-stream tool_result events above carry a __preview__
             # only, so the final ones deliver the full actions list.
             for action in response["actions"]:
-                yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result'), 'tool_call_id': action.get('_tool_call_id')}, default=str)}\n\n"
+                yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': _slim_tool_result_for_sse(action.get('tool_result')), 'tool_call_id': action.get('_tool_call_id')}, default=str)}\n\n"
         except (TimeoutError, asyncio.TimeoutError):
             _run_failed = True
             timeout_s = int(workflow_budget["endpoint_timeout_seconds"])
@@ -1192,7 +1303,7 @@ async def chat_message_stream(
                 yield f"data: {json.dumps({'type': 'status', 'message': f'AI workflow timed out after {timeout_s}s; returning a tool-grounded partial summary.'})}\n\n"
                 yield f"data: {json.dumps({'type': 'text', 'content': timeout_summary})}\n\n"
                 for action in _tool_results_to_actions(timeout_tool_results):
-                    yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': action.get('tool_result'), 'tool_call_id': action.get('_tool_call_id')}, default=str)}\n\n"
+                    yield f"data: {json.dumps({'type': 'tool_result', 'tool': action.get('action'), 'result': _slim_tool_result_for_sse(action.get('tool_result')), 'tool_call_id': action.get('_tool_call_id')}, default=str)}\n\n"
             else:
                 yield f"data: {json.dumps({'type': 'error', 'message': f'AI workflow timed out after {timeout_s}s. Try a narrower query or split the task into query + analysis steps.'})}\n\n"
         except asyncio.CancelledError:
@@ -2750,6 +2861,20 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
     return "\n".join(lines)
 
 
+def _tool_grounded_summary(
+    tool_results: list[dict],
+    user_prompt: str = "",
+) -> str | None:
+    """Return the safest deterministic summary available from same-turn tools."""
+
+    return (
+        _research_tool_grounded_summary(tool_results)
+        or _line_lfr_tool_grounded_summary(tool_results)
+        or _statistics_tool_grounded_summary(tool_results)
+        or _cosmology_tool_grounded_summary(tool_results, user_prompt)
+    )
+
+
 def _cosmology_dataset_keys_present(tool_results: list[dict]) -> set[str]:
     keys: set[str] = set()
 
@@ -3630,7 +3755,21 @@ def _cosmology_direct_route_from_prompt(text: str) -> list[dict[str, Any]] | Non
         "hubble tension",
         "compare planck and sh0es",
     )
-    if any(k in t for k in hubble_triggers):
+    matrix_or_extended_context = (
+        "matrix" in t
+        or "fisher" in t
+        or "covariance" in t
+        or "constraint-direction" in t
+        or "constraint direction" in t
+        or "curvature" in t
+        or "constant-w" in t
+        or "extended" in t
+        or "dark-energy model" in t
+        or "dark energy model" in t
+        or "build an auditable" in t
+        or "available cmb/bao/sn/h0 information" in t
+    )
+    if any(k in t for k in hubble_triggers) and not matrix_or_extended_context:
         return [{
             "id": f"direct_route_{uuid.uuid4().hex}",
             "name": "compare_luminosity_distances",
@@ -4648,13 +4787,9 @@ async def _run_agent_loop(
             # final LLM synthesis call failed (all configured backends down).
             # Do not return an empty answer — emit a deterministic
             # tool-grounded summary built from the results already gathered.
-            _synthesis_fallback = (
-                _research_tool_grounded_summary(all_tool_results)
-                or _line_lfr_tool_grounded_summary(all_tool_results)
-                or _statistics_tool_grounded_summary(all_tool_results)
-                or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
-                or ""
-            )
+            _synthesis_fallback = _tool_grounded_summary(
+                all_tool_results, latest_user_text
+            ) or ""
             if not _synthesis_fallback.strip():
                 raise
             logger.warning(
@@ -6010,6 +6145,10 @@ async def _run_agent_loop(
         try:
             from app.services.research_program import verify_research_facts
 
+            await _emit({
+                "type": "status",
+                "message": "Running fact check before finalizing the research summary.",
+            })
             fact_input = {
                 "tool_results": _compact_tool_results_for_evidence(all_tool_results),
                 "final_reply": clean_reply,
@@ -6036,6 +6175,13 @@ async def _run_agent_loop(
                     if c.get("status") in {"unsupported", "contradicted"}
                 ]
                 if safe_summary:
+                    await _emit({
+                        "type": "status",
+                        "message": (
+                            "Draft failed the fact-check guardrail; generating a "
+                            "tool-grounded safe summary."
+                        ),
+                    })
                     clean_reply = safe_summary
                     if held_claims:
                         clean_reply += (
@@ -6307,6 +6453,13 @@ async def _run_orchestrated_chat(
                 result["reply"],
             )
 
+    latest_research_user_text = ""
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            latest_research_user_text = str(message.get("content") or "")
+            break
+    merged_research_workflow = _is_research_program_workflow(latest_research_user_text)
+
     merged_actions: list[dict] = []
     merged_tool_results: list[dict] = []
     for result in agent_results:
@@ -6420,14 +6573,28 @@ async def _run_orchestrated_chat(
                 # Stage 6 P0: preserve merged-reply narrative
                 merged_reply = blocked_reply_with_narrative(validation, merged_reply)
         except Exception as exc:
-            logger.warning("Merged-reply claim validation failed open: %s", exc)
+            if merged_research_workflow:
+                logger.exception(
+                    "Merged-reply claim validation failed closed for research workflow"
+                )
+                safe_summary = _tool_grounded_summary(
+                    merged_tool_results, latest_research_user_text
+                )
+                merged_reply = (
+                    "The specialist agents completed tool work, but the platform "
+                    "could not safely validate the merged prose. Below is a "
+                    "tool-grounded fallback summary; no unsupported conclusion is "
+                    "added.\n\n"
+                    + (
+                        safe_summary
+                        or "The tool cards below are the source of truth for this turn. "
+                        "Please rerun the missing evidence path before quoting any "
+                        "posterior, fit, or tension values."
+                    )
+                )
+            else:
+                logger.warning("Merged-reply claim validation failed open: %s", exc)
 
-    latest_research_user_text = ""
-    for message in reversed(messages):
-        if isinstance(message, dict) and message.get("role") == "user":
-            latest_research_user_text = str(message.get("content") or "")
-            break
-    merged_research_workflow = _is_research_program_workflow(latest_research_user_text)
     if merged_research_workflow and merged_reply.strip():
         try:
             from app.services.research_program import verify_research_facts

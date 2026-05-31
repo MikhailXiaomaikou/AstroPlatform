@@ -24,6 +24,8 @@ const STEP_TITLES: Record<string, string> = {
 
 const RESEARCH_TOOLS = new Set(Object.keys(STEP_TITLES));
 
+// Exported for ChatPage/test routing; component state is not affected.
+// eslint-disable-next-line react-refresh/only-export-components
 export function isResearchTurn(actions: ChatAction[] | undefined): boolean {
   return !!actions && actions.some((a) => RESEARCH_TOOLS.has(String(a.action)));
 }

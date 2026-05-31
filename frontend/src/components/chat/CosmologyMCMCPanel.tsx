@@ -17,6 +17,12 @@ type Tension = {
   sigma?: number;
   value_a?: number;
   value_b?: number;
+  status?: string;
+  reason?: string;
+  comparison?: string;
+  value_a_source?: string;
+  value_b_source?: string;
+  note?: string;
 };
 
 function fmt(value: unknown, digits = 4): string {
@@ -82,6 +88,9 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
     .filter((t) => typeof t.sigma === "number" && Number.isFinite(t.sigma))
     .sort((a, b) => (b.sigma ?? 0) - (a.sigma ?? 0))
     .slice(0, 8);
+  const notComparableTensions = tensionsRaw
+    .filter((t) => t.status === "not_comparable")
+    .slice(0, 4);
 
   return (
     <div style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
@@ -217,7 +226,14 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
                   const sigmaColor = strong ? "#7f1d1d" : medium ? "#a06500" : "var(--color-text-secondary)";
                   return (
                     <tr key={`${t.parameter}-${t.dataset_a}-${t.dataset_b}-${i}`} style={{ borderTop: "1px solid var(--color-border)", background: rowBg }}>
-                      <td style={{ padding: "3px 6px", color: "var(--color-text-primary)", fontWeight: 600 }}>{String(t.parameter || "—")}</td>
+                      <td style={{ padding: "3px 6px", color: "var(--color-text-primary)", fontWeight: 600 }}>
+                        {String(t.parameter || "—")}
+                        {t.comparison === "derived_pairwise" ? (
+                          <span title={String(t.note || "Derived comparison")} style={{ marginLeft: 4, color: "var(--color-text-tertiary)", fontWeight: 500 }}>
+                            derived
+                          </span>
+                        ) : null}
+                      </td>
                       <td style={{ padding: "3px 6px" }}>{String(t.dataset_a || "—")}</td>
                       <td style={{ padding: "3px 6px" }}>{String(t.dataset_b || "—")}</td>
                       <td style={{ padding: "3px 6px" }}>{fmt(t.value_a, 3)}</td>
@@ -232,6 +248,14 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {notComparableTensions.length > 0 && (
+        <div style={{ marginTop: 8, color: "var(--color-text-tertiary)", fontSize: "0.72rem" }}>
+          Not comparable: {notComparableTensions.map((t) =>
+            `${String(t.parameter || "parameter")} (${String(t.dataset_a || "A")} vs ${String(t.dataset_b || "B")})`
+          ).join("; ")}. {String(notComparableTensions[0]?.reason || "Missing covariance information.")}
         </div>
       )}
 

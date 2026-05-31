@@ -259,6 +259,43 @@ interface DisplayMessage {
   _action_hint?: "new_chat";
 }
 
+function sanitizeAiFailureForUser(errorDetail: string): string {
+  const detail = String(errorDetail || "").trim();
+  if (/All configured AI backends failed|backend failed|OpenAI CLI backend failed|deepseek|anthropic|openai/i.test(detail)) {
+    return "The selected AI backend failed before it could produce a verified final answer. No scientific result should be inferred from this failed turn.";
+  }
+  return detail || "The selected AI backend failed before it could produce a verified final answer.";
+}
+
+function buildBackendFailureMessage(errorDetail: string, hint = ""): string {
+  return [
+    sanitizeAiFailureForUser(errorDetail),
+    "",
+    "No tool-grounded scientific conclusion was produced. Please retry, switch model/provider, or narrow the request.",
+    hint,
+  ].filter(Boolean).join("\n");
+}
+
+function buildToolGroundedErrorFallback(errorDetail: string, actions: ChatAction[]): string {
+  const toolNames = Array.from(new Set(
+    actions
+      .map((action) => String(action.action || "").trim())
+      .filter(Boolean),
+  ));
+  const visibleTools = toolNames.length
+    ? toolNames.slice(0, 8).join(", ") + (toolNames.length > 8 ? `, +${toolNames.length - 8} more` : "")
+    : "the streamed tool cards";
+  return [
+    "The research tools streamed results, but the final language synthesis failed before a normal prose answer could be produced.",
+    "",
+    `Executed tool cards are still visible below: ${visibleTools}. Treat those tool cards as the source of truth for this turn.`,
+    "",
+    "No additional scientific conclusion is being added by this fallback. Rerun the missing evidence path before quoting posterior, fit, tension, or significance values.",
+    "",
+    `Technical failure: ${sanitizeAiFailureForUser(errorDetail)}`,
+  ].join("\n");
+}
+
 function getActionToolResult(action: ChatAction): Record<string, unknown> | undefined {
   const result = (action as Record<string, unknown>).tool_result;
   return result && typeof result === "object" ? result as Record<string, unknown> : undefined;
@@ -4205,7 +4242,10 @@ export default function ChatPage() {
     // tool_result events during the agent loop; we append each to the
     // pending bubble so the user sees what the AI is doing in real time.
     const onThinking = (evt: ThinkingEvent) => {
-      if (evt.type === "status") return; // heartbeat, ignore in UI
+      const statusMessage = evt.type === "status" ? String(evt.message || "") : "";
+      if (evt.type === "status" && !/(fact|guardrail|fallback|summary|deadline|matrix|likelihood|research|evidence|checkpoint|resume|reconnect)/i.test(statusMessage)) {
+        return; // heartbeat, ignore in UI
+      }
       if (evt.type === "honest_abstention") {
         // F3.2: stash the abstention payload on the pending message so
         // the final render path can show HonestAbstentionCard.
@@ -4223,8 +4263,8 @@ export default function ChatPage() {
         agent: "agent" in evt ? evt.agent : undefined,
         tool: evt.type === "tool_call" || evt.type === "tool_progress" || evt.type === "tool_result" ? evt.tool : undefined,
         text:
-          evt.type === "agent_text" || evt.type === "tool_progress"
-            ? (evt.type === "agent_text" ? evt.content : evt.message)
+          evt.type === "agent_text" || evt.type === "tool_progress" || evt.type === "status"
+            ? (evt.type === "agent_text" ? evt.content : evt.type === "tool_progress" ? evt.message : evt.message)
             : evt.type === "workflow_budget"
               ? `${evt.mode} budget: ${evt.agent_loop_seconds}s loop, ${evt.max_iterations} iterations`
               : evt.type === "workflow_checkpoint"
@@ -4353,12 +4393,15 @@ export default function ChatPage() {
       const hint = errorClass === "payload_too_large"
         ? "\n\n👉 点下方按钮开始新聊天 (会清空当前会话的历史):"
         : "";
+      const hasStreamedToolResults = streamedActions.length > 0;
       const errorMsg: DisplayMessage = {
         id: pendingId,
         role: "assistant",
-        content: `Sorry, I encountered an error: ${errorDetail}${hint}`,
+	        content: hasStreamedToolResults
+	          ? buildToolGroundedErrorFallback(errorDetail, streamedActions)
+	          : buildBackendFailureMessage(errorDetail, hint),
         actions: streamedActions.length > 0 ? streamedActions : undefined,
-        _action_hint: errorClass === "payload_too_large" ? "new_chat" : undefined,
+        _action_hint: !hasStreamedToolResults && errorClass === "payload_too_large" ? "new_chat" : undefined,
       };
       setMessages((prev) => prev.map((m) => (m.id === pendingId ? errorMsg : m)));
       track("error.ai_failed", {
@@ -5062,6 +5105,11 @@ export default function ChatPage() {
                           <li key={i} style={{ padding: "3px 0", borderLeft: "2px solid #ccc", paddingLeft: 8, marginBottom: 2 }}>
                             {step.kind === "agent_text" && (
                               <span>💭 {step.text}</span>
+                            )}
+                            {step.kind === "status" && (
+                              <span>
+                                ⏳ <span style={{ color: "#4b5563" }}>{step.text}</span>
+                              </span>
                             )}
                             {step.kind === "tool_call" && (
                               <span>

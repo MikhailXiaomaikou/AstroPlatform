@@ -525,6 +525,57 @@ describe("ChatPage", () => {
     await screen.findByText("Done");
   });
 
+  it("shows a tool-grounded fallback when synthesis fails after streamed tools", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockImplementationOnce(async (
+      _messages,
+      _context,
+      _onThinking,
+      _signal,
+      onActions,
+    ) => {
+      onActions?.([{
+        action: "run_cosmology_likelihood_chain",
+        tool_result: {
+          publication_ready: true,
+          parameters: { H0: { median: 67.4 } },
+        },
+        _auto_executed: true,
+        _stream_preview: true,
+      }]);
+      throw new Error("All configured AI backends failed: deepseek:");
+    });
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "run cosmology matrix" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText(/The research tools streamed results/);
+    expect(screen.queryByText(/^Sorry, I encountered an error/)).not.toBeInTheDocument();
+    expect(screen.getByText(/run_cosmology_likelihood_chain/)).toBeInTheDocument();
+  });
+
+  it("does not expose provider internals when synthesis fails before tools stream", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    vi.mocked(sendChatMessage).mockRejectedValueOnce(
+      new Error("All configured AI backends failed: deepseek: upstream timeout"),
+    );
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "run cosmology matrix" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText(/The selected AI backend failed before it could produce a verified final answer/);
+    expect(screen.queryByText(/All configured AI backends failed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/upstream timeout/)).not.toBeInTheDocument();
+  });
+
   it("renders run_python stderr even when the tool succeeds", async () => {
     vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
     vi.mocked(sendChatMessage).mockResolvedValueOnce({
