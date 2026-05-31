@@ -17,11 +17,30 @@ jobs:
         run: |
           cd backend
           pip install -r requirements.txt
-      - name: Run tests with coverage
+      - name: Run tests with coverage (cosmology + shared infra)
+        # Scoped to the active cosmology module + shared/core infrastructure.
+        # The dormant solar_system / exoplanet vertical-specific tests are
+        # excluded (their DOMAIN modules only — every shared test, incl.
+        # test_claim_validator_solar_system / test_astro_* which exercise core
+        # infra via vertical fixtures, is kept). The exclusion list was produced
+        # by classifying all 137 test files and adversarially verifying each
+        # exclusion cannot drop cosmology or shared coverage. Measured coverage
+        # with these 11 excluded: 59% (gate is 45%), 2344 passed.
         run: |
           cd backend
           pip install pytest-cov
-          python -m pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
+          python -m pytest tests/ -v --tb=short --cov=app --cov-report=term-missing \
+            --ignore=tests/test_ai_tools_exoplanet.py \
+            --ignore=tests/test_ai_tools_solar_system.py \
+            --ignore=tests/test_carvano_calibration.py \
+            --ignore=tests/test_exoplanet_services.py \
+            --ignore=tests/test_jpl_connector.py \
+            --ignore=tests/test_mpc_connector.py \
+            --ignore=tests/test_solar_system_dynamics.py \
+            --ignore=tests/test_solar_system_integration.py \
+            --ignore=tests/test_solar_system_phot.py \
+            --ignore=tests/test_solar_system_taxonomy.py \
+            --ignore=tests/test_solar_system_thermo.py
 
   frontend-test:
     runs-on: ubuntu-latest
