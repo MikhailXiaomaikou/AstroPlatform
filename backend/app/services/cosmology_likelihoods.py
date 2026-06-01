@@ -933,6 +933,23 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "Moresco+2020 systematic covariance would inflate errors, so treat "
             "as preliminary-grade rather than full-systematics publication."
         ),
+        data_products=(
+            DataProductSpec(
+                product_type="hz_measurement_vector",
+                role="hz_measurement_vector",
+                url="https://cluster.difa.unibo.it/astro/CC_data/",
+                format="ASCII table (z, H, sigma_H)",
+                description=(
+                    "31 differential-age H(z) points transcribed from "
+                    "Gómez-Valent & Amendola 2018 Table 1. No single machine-"
+                    "readable upstream release exists, so the sha256 pins the "
+                    "committed artifact (drift guard); covariance is diagonal."
+                ),
+                columns=("z", "H_z", "sigma_H"),
+                rows=31,
+                sha256="2793de7a2a5ab29a45545fefe35988ca90a369516d64c4605d02a1907fdc8fad",
+            ),
+        ),
         cobaya_likelihood="external:cosmic_chronometers",
         cosmosis_module="external:hz/cosmic_chronometers",
         execution_mode="compressed_gaussian",
@@ -1622,7 +1639,10 @@ C_LIGHT_KM_S = 299792.458
 # that is NOT applied here — keeping this a preliminary-grade, growth-independent
 # expansion-rate probe, consistent with the registry entry's standing warning.
 COSMIC_CHRONOMETER_EXECUTABLE_KEYS = {"cosmic_chronometers"}
-COSMIC_CHRONOMETER_HZ: tuple[tuple[float, float, float], ...] = (
+# Legacy hand-typed CC H(z) — kept only as the loader fallback for environments
+# missing the vendored file. Byte-derived into data/cosmology/cosmic_chronometers/
+# hz.txt, which is what the fit actually reads (provenance-binding, T1-U1/U2).
+_HARDCODED_CC_HZ: tuple[tuple[float, float, float], ...] = (
     (0.07, 69.0, 19.6), (0.09, 69.0, 12.0), (0.12, 68.6, 26.2), (0.17, 83.0, 8.0),
     (0.1791, 75.0, 4.0), (0.1993, 75.0, 5.0), (0.2, 72.9, 29.6), (0.27, 77.0, 14.0),
     (0.28, 88.8, 36.6), (0.3519, 83.0, 14.0), (0.3802, 83.0, 13.5), (0.4, 95.0, 17.0),
@@ -1632,6 +1652,47 @@ COSMIC_CHRONOMETER_HZ: tuple[tuple[float, float, float], ...] = (
     (1.037, 154.0, 20.0), (1.3, 168.0, 17.0), (1.363, 160.0, 33.6), (1.43, 177.0, 18.0),
     (1.53, 140.0, 14.0), (1.75, 202.0, 40.0), (1.965, 186.5, 50.4),
 )
+
+
+@lru_cache(maxsize=None)
+def load_verified_cc_data(dataset_key: str) -> dict[str, Any]:
+    """Load the cosmic-chronometer H(z) vector from the vendored, sha256-pinned
+    file so the fitted vector IS the checksummed array (object identity).
+    cov_fidelity is 'diagonal' — the H(z) covariance is diagonal here; the
+    Moresco+2020 systematic covariance is a separate (offline) upgrade, distinct
+    from a released full covariance like DESI's.  Honest fallback to the legacy
+    hand-typed vector with cov_fidelity='literature_typed' if the file is absent.
+    """
+    path = _VENDORED_COSMO_DATA_DIR / dataset_key / "hz.txt"
+    if not path.exists():
+        return {
+            "hz_vector": tuple(_HARDCODED_CC_HZ),
+            "sha256": None,
+            "hash_verified": False,
+            "cov_fidelity": "literature_typed",
+        }
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    verified = digest == _registry_product_sha256(dataset_key, "hz_measurement_vector")
+    rows: list[tuple[float, float, float]] = []
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        z_str, h_str, sigma_str = stripped.split()
+        rows.append((float(z_str), float(h_str), float(sigma_str)))
+    return {
+        "hz_vector": tuple(rows),
+        "sha256": digest,
+        "hash_verified": bool(verified),
+        "cov_fidelity": "diagonal" if verified else "unverified",
+    }
+
+
+# The H(z) vector the chi² fits — sourced from the verified loader so the fit
+# reads the sha256-pinned committed artifact, not a hand-typed copy.
+COSMIC_CHRONOMETER_HZ: tuple[tuple[float, float, float], ...] = load_verified_cc_data(
+    "cosmic_chronometers"
+)["hz_vector"]
 
 
 # ── eBOSS DR16 RSD fσ8 executable likelihood (2026-05-29) ───────────────────
