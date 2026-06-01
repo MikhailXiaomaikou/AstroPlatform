@@ -77,6 +77,87 @@ function fmtNumber(value: unknown, digits = 3): string {
   return Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(digits);
 }
 
+function finiteNumber(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function cellChartStatus(cell: Record<string, unknown>): string {
+  if (cell.publication_ready) return "ready";
+  const level = String(cell.execution_level || "missing");
+  if (level === "partial_dataset_run") return "partial";
+  if (level === "executed_not_ready") return "not_ready";
+  if (level === "config_only") return "config_only";
+  return "missing";
+}
+
+function parameterSummaryRows(cell: Record<string, unknown>, label: string): Record<string, unknown>[] {
+  const result = asRecord(cell.result);
+  const params = asRecord(result.parameters || result.posterior_summary || result.derived_params);
+  const preferred = ["H0", "S8", "omegam", "Omega_m", "sigma8", "w0", "wa", "beta_deg"];
+  return preferred.flatMap((parameter) => {
+    const summary = asRecord(params[parameter]);
+    const median = finiteNumber(summary.median);
+    if (median === null) return [];
+    const low = finiteNumber(summary.hdi_low_94)
+      ?? (Array.isArray(summary.hdi_94) ? finiteNumber(summary.hdi_94[0]) : null)
+      ?? (finiteNumber(summary.std) !== null ? median - Number(summary.std) : null);
+    const high = finiteNumber(summary.hdi_high_94)
+      ?? (Array.isArray(summary.hdi_94) ? finiteNumber(summary.hdi_94[1]) : null)
+      ?? (finiteNumber(summary.std) !== null ? median + Number(summary.std) : null);
+    return [{
+      label,
+      parameter: parameter === "Omega_m" ? "omegam" : parameter,
+      median,
+      low,
+      high,
+      publication_ready: Boolean(cell.publication_ready),
+      execution_level: cell.execution_level || "not_available",
+    }];
+  });
+}
+
+function buildFallbackResearchCharts(matrix: Record<string, unknown>[]): Record<string, unknown> {
+  if (!matrix.length) return {};
+  const matrixStatus = matrix.map((cell, index) => ({
+    label: String(cell.label || `Cell ${index + 1}`),
+    status: cellChartStatus(cell),
+    execution_level: cell.execution_level || "not_available",
+    publication_ready: Boolean(cell.publication_ready),
+    dataset_keys: asArray<string>(cell.dataset_keys),
+    model: cell.model,
+  }));
+  const posteriorForest = matrix.flatMap((cell, index) => (
+    parameterSummaryRows(cell, String(cell.label || `Cell ${index + 1}`))
+  ));
+  const diagnostics = matrix.flatMap((cell, index) => {
+    const result = asRecord(cell.result);
+    const chain = asRecord(result.chain_diagnostics);
+    const ess = finiteNumber(chain.proposal_ess ?? chain.ess_bulk ?? chain.posterior_ess);
+    const rhat = finiteNumber(chain.rhat);
+    if (ess === null && rhat === null) return [];
+    const thresholds = asRecord(chain.thresholds);
+    return [{
+      label: String(cell.label || `Cell ${index + 1}`),
+      ess,
+      rhat,
+      publication_ready: Boolean(cell.publication_ready),
+      execution_level: cell.execution_level || "not_available",
+      ess_threshold: finiteNumber(thresholds.ess_min) ?? 400,
+      rhat_threshold: finiteNumber(thresholds.rhat_max) ?? 1.05,
+    }];
+  });
+  return {
+    chart_version: 1,
+    matrix_status: matrixStatus,
+    posterior_forest: posteriorForest.slice(0, 24),
+    diagnostics: diagnostics.slice(0, 24),
+    notes: [
+      "Charts are deterministic renderings of current-turn Research Matrix cells.",
+    ],
+  };
+}
+
 function matrixCellStatus(cell: Record<string, unknown>): string {
   if (cell.publication_ready) return "compressed preliminary posterior";
   const level = String(cell.execution_level || "not_available");
@@ -84,6 +165,146 @@ function matrixCellStatus(cell: Record<string, unknown>): string {
   if (level === "executed_not_ready") return "posterior attempted; diagnostics below threshold";
   if (level === "config_only") return "configuration only, no posterior run yet";
   return level.replace(/_/g, " ");
+}
+
+function statusColor(status: string): string {
+  const key = status.toLowerCase();
+  if (key === "ready") return "#16a34a";
+  if (key === "partial") return "#0ea5e9";
+  if (key === "not_ready") return "#d97706";
+  if (key === "config_only") return "#a16207";
+  return "#dc2626";
+}
+
+function ellipsize(label: string, max = 24): string {
+  return label.length > max ? `${label.slice(0, max - 1)}…` : label;
+}
+
+function MatrixStatusChart({ rows }: { rows: Record<string, unknown>[] }) {
+  if (!rows.length) return null;
+  const width = 520;
+  const rowH = 24;
+  const height = 20 + Math.min(rows.length, 8) * rowH;
+  const visible = rows.slice(0, 8);
+  return (
+    <div>
+      <div style={{ fontWeight: 600, color: "var(--color-text-primary)", marginBottom: 3 }}>Matrix status map</div>
+      <svg role="img" aria-label="Research matrix status chart" viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", maxWidth: 640, height: "auto" }}>
+        {visible.map((row, idx) => {
+          const status = String(row.status || "missing");
+          const y = 18 + idx * rowH;
+          return (
+            <g key={`${row.label || idx}`}>
+              <text x="0" y={y + 11} fontSize="11" fill="currentColor">{ellipsize(String(row.label || `Cell ${idx + 1}`), 28)}</text>
+              <rect x="190" y={y} width="210" height="14" rx="3" fill="rgba(120,120,120,.12)" />
+              <rect x="190" y={y} width={status === "ready" ? 210 : status === "partial" ? 150 : status === "not_ready" ? 110 : status === "config_only" ? 75 : 42} height="14" rx="3" fill={statusColor(status)} />
+              <text x="412" y={y + 11} fontSize="10" fill="currentColor">{String(row.execution_level || status).replace(/_/g, " ")}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function PosteriorForestChart({ rows }: { rows: Record<string, unknown>[] }) {
+  const priority = ["H0", "S8", "omegam", "sigma8", "w0", "wa", "beta_deg"];
+  const parameter = priority.find((name) => rows.some((row) => String(row.parameter) === name));
+  if (!parameter) return null;
+  const visible = rows.filter((row) => String(row.parameter) === parameter && finiteNumber(row.median) !== null).slice(0, 8);
+  if (!visible.length) return null;
+  const values = visible.flatMap((row) => {
+    const median = finiteNumber(row.median);
+    const low = finiteNumber(row.low) ?? median;
+    const high = finiteNumber(row.high) ?? median;
+    return [low, median, high].filter((v): v is number => v !== null);
+  });
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const pad = (max - min || 1) * 0.08;
+  const xMin = min - pad;
+  const xMax = max + pad;
+  const x = (value: number) => 190 + ((value - xMin) / (xMax - xMin || 1)) * 250;
+  const width = 520;
+  const rowH = 25;
+  const height = 32 + visible.length * rowH;
+  return (
+    <div>
+      <div style={{ fontWeight: 600, color: "var(--color-text-primary)", marginBottom: 3 }}>Posterior forest: {parameter}</div>
+      <svg role="img" aria-label={`Posterior forest chart for ${parameter}`} viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", maxWidth: 640, height: "auto" }}>
+        <line x1="190" x2="440" y1="18" y2="18" stroke="rgba(120,120,120,.35)" />
+        <text x="190" y="12" fontSize="10" fill="currentColor">{fmtNumber(xMin, 2)}</text>
+        <text x="414" y="12" fontSize="10" fill="currentColor">{fmtNumber(xMax, 2)}</text>
+        {visible.map((row, idx) => {
+          const median = finiteNumber(row.median) ?? 0;
+          const low = finiteNumber(row.low) ?? median;
+          const high = finiteNumber(row.high) ?? median;
+          const y = 34 + idx * rowH;
+          const ready = Boolean(row.publication_ready);
+          return (
+            <g key={`${row.label || idx}-${parameter}`}>
+              <text x="0" y={y + 4} fontSize="11" fill="currentColor">{ellipsize(String(row.label || `Cell ${idx + 1}`), 28)}</text>
+              <line x1={x(low)} x2={x(high)} y1={y} y2={y} stroke={ready ? "#16a34a" : "#d97706"} strokeWidth="2" />
+              <circle cx={x(median)} cy={y} r="4" fill={ready ? "#16a34a" : "#d97706"} />
+              <text x="452" y={y + 4} fontSize="10" fill="currentColor">{fmtNumber(median, 2)}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function DiagnosticsChart({ rows }: { rows: Record<string, unknown>[] }) {
+  const visible = rows.filter((row) => finiteNumber(row.ess) !== null || finiteNumber(row.rhat) !== null).slice(0, 8);
+  if (!visible.length) return null;
+  const width = 520;
+  const rowH = 25;
+  const height = 24 + visible.length * rowH;
+  return (
+    <div>
+      <div style={{ fontWeight: 600, color: "var(--color-text-primary)", marginBottom: 3 }}>Chain diagnostics</div>
+      <svg role="img" aria-label="Chain diagnostics chart" viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", maxWidth: 640, height: "auto" }}>
+        {visible.map((row, idx) => {
+          const ess = finiteNumber(row.ess) ?? 0;
+          const threshold = finiteNumber(row.ess_threshold) ?? 400;
+          const rhat = finiteNumber(row.rhat);
+          const y = 18 + idx * rowH;
+          const barW = Math.min(220, Math.max(4, (ess / Math.max(threshold * 1.25, 1)) * 220));
+          const pass = ess >= threshold && (rhat === null || rhat <= (finiteNumber(row.rhat_threshold) ?? 1.05));
+          return (
+            <g key={`${row.label || idx}-diag`}>
+              <text x="0" y={y + 11} fontSize="11" fill="currentColor">{ellipsize(String(row.label || `Cell ${idx + 1}`), 28)}</text>
+              <rect x="190" y={y} width="220" height="14" rx="3" fill="rgba(120,120,120,.12)" />
+              <rect x="190" y={y} width={barW} height="14" rx="3" fill={pass ? "#16a34a" : "#d97706"} />
+              <text x="422" y={y + 11} fontSize="10" fill="currentColor">ESS {fmtNumber(ess, 0)} · Rhat {fmtNumber(rhat, 3)}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function ResearchChartsView({ charts }: { charts: Record<string, unknown> }) {
+  const matrixRows = asArray<Record<string, unknown>>(charts.matrix_status);
+  const forestRows = asArray<Record<string, unknown>>(charts.posterior_forest);
+  const diagnosticRows = asArray<Record<string, unknown>>(charts.diagnostics);
+  if (!matrixRows.length && !forestRows.length && !diagnosticRows.length) return null;
+  return (
+    <div style={{ display: "grid", gap: 10, padding: "8px 0", borderTop: "1px solid var(--color-border)" }} data-testid="research-visual-diagnostics">
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <strong style={{ color: "var(--color-text-primary)" }}>Visual Diagnostics</strong>
+        <Badge tone="compressed_preliminary">deterministic charts</Badge>
+      </div>
+      <MatrixStatusChart rows={matrixRows} />
+      <PosteriorForestChart rows={forestRows} />
+      <DiagnosticsChart rows={diagnosticRows} />
+      {asArray<string>(charts.notes).slice(0, 1).map((note) => (
+        <div key={note} style={{ color: "var(--color-text-tertiary)", fontSize: "0.72rem" }}>{note}</div>
+      ))}
+    </div>
+  );
 }
 
 function PlanView({ plan }: { plan: ResearchPlan }) {
@@ -147,6 +368,8 @@ function PlanView({ plan }: { plan: ResearchPlan }) {
 
 function MatrixView({ result }: { result: Record<string, unknown> }) {
   const matrix = asArray<Record<string, unknown>>(result.matrix);
+  const suppliedCharts = asRecord(result.research_charts);
+  const charts = Object.keys(suppliedCharts).length ? suppliedCharts : buildFallbackResearchCharts(matrix);
   return (
     <div style={{ display: "grid", gap: 7 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -156,6 +379,7 @@ function MatrixView({ result }: { result: Record<string, unknown> }) {
         </Badge>
         <span>{String(result.ready_cells || 0)} / {String(result.matrix_size || matrix.length)} ready</span>
       </div>
+      <ResearchChartsView charts={charts} />
       {matrix.slice(0, 10).map((cell, index) => (
         <div key={`${cell.label || index}`} style={{ borderTop: "1px solid var(--color-border)", paddingTop: 5 }}>
           {(() => {

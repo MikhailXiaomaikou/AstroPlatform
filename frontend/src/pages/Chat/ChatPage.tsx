@@ -259,6 +259,49 @@ interface DisplayMessage {
   _action_hint?: "new_chat";
 }
 
+function resultForAction(
+  action: ChatAction,
+  index: number,
+  actionResults?: Map<number, Record<string, unknown>>,
+): Record<string, unknown> | undefined {
+  const streamedResult = actionResults?.get(index);
+  if (streamedResult && typeof streamedResult === "object") return streamedResult;
+  const embeddedResult = (action as Record<string, unknown>).tool_result;
+  return embeddedResult && typeof embeddedResult === "object"
+    ? embeddedResult as Record<string, unknown>
+    : undefined;
+}
+
+function VisibleResearchDiagnostics({
+  actions,
+  actionResults,
+}: {
+  actions: ChatAction[];
+  actionResults?: Map<number, Record<string, unknown>>;
+}) {
+  const primary = actions
+    .map((action, index) => ({
+      tool: String(action.action || ""),
+      result: resultForAction(action, index, actionResults),
+    }))
+    .find(({ tool, result }) => (
+      tool === "run_research_matrix"
+      && result
+      && (
+        (Array.isArray(result.matrix) && result.matrix.length > 0)
+        || (typeof result.research_charts === "object" && result.research_charts !== null)
+      )
+    ));
+
+  if (!primary?.result) return null;
+
+  return (
+    <div className="chat-visible-research-diagnostics">
+      <ResearchProgramPanel result={primary.result} />
+    </div>
+  );
+}
+
 function sanitizeAiFailureForUser(errorDetail: string): string {
   const detail = String(errorDetail || "").trim();
   if (/All configured AI backends failed|backend failed|OpenAI CLI backend failed|deepseek|anthropic|openai/i.test(detail)) {
@@ -5277,7 +5320,13 @@ export default function ChatPage() {
               {msg.actions && msg.actions.length > 0 && (
                 <div className="chat-actions-list">
                   {isResearchTurn(msg.actions) ? (
-                    <ResearchStepsCard actions={msg.actions} />
+                    <>
+                      <ResearchStepsCard actions={msg.actions} />
+                      <VisibleResearchDiagnostics
+                        actions={msg.actions}
+                        actionResults={msg.actionResults}
+                      />
+                    </>
                   ) : (
                     <span className="chat-actions-label">
                       Suggested actions:

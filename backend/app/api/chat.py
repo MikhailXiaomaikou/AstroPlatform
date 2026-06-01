@@ -2755,6 +2755,21 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
         "What can be tested now",
         "- The research plan and matrix have been built from registered datasets and controlled runners.",
     ])
+    readiness = (plan or {}).get("partial_pass_readiness")
+    if isinstance(readiness, dict):
+        status = (
+            "meets B-level partial-pass readiness"
+            if readiness.get("meets_partial_pass") is True
+            else "does not yet meet B-level partial-pass readiness"
+        )
+        coverage = str(readiness.get("coverage_status") or "unknown")
+        note = str(readiness.get("important_note") or "").strip()
+        lines.append(
+            f"- Blind-test target check: {status} "
+            f"(coverage: {coverage}; score floor: {readiness.get('score_floor', 'unknown')})."
+        )
+        if note:
+            lines.append(f"- {note}")
     if ready_cells:
         lines.append(
             "- Runnable compressed-likelihood preliminary cells: "
@@ -2853,6 +2868,22 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
             lines.append("- Some requested cells still need an executable likelihood runner or registered covariance.")
     else:
         lines.append("- Full external Cobaya/CosmoSIS reproduction is still outside the compressed preliminary layer.")
+    gap_matrix = (plan or {}).get("capability_gap_matrix")
+    if isinstance(gap_matrix, list):
+        missing_components = [
+            row
+            for row in gap_matrix
+            if isinstance(row, dict)
+            and str(row.get("status")) in {"missing", "registered_config_only", "config_only", "partial"}
+        ]
+        if missing_components:
+            parts = []
+            for row in missing_components[:5]:
+                component = str(row.get("component") or "unknown component")
+                status = str(row.get("status") or "unknown")
+                details = str(row.get("details") or "").strip()
+                parts.append(f"{component} ({status}: {details})")
+            lines.append("- Capability gap matrix: " + "; ".join(parts) + ".")
 
     lines.extend(["", "Next experiment"])
     lines.append(

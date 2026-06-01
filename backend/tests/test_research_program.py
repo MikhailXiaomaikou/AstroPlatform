@@ -51,6 +51,13 @@ def test_research_matrix_runs_executable_cells_and_marks_config_gaps() -> None:
         and "planck2018_compressed" in cell["dataset_keys"]
         for cell in result["matrix"]
     )
+    charts = result["research_charts"]
+    assert charts["chart_version"] == 1
+    assert charts["matrix_status"]
+    assert charts["posterior_forest"]
+    assert charts["diagnostics"]
+    assert any(row["parameter"] == "H0" for row in charts["posterior_forest"])
+    assert any(row["status"] == "ready" for row in charts["matrix_status"])
 
 
 def test_workflow2_bao_cmb_public_path_is_publication_ready() -> None:
@@ -106,6 +113,31 @@ def test_cmb_polarization_rotation_does_not_use_distance_priors() -> None:
     assert matrix["ready_cells"] == 0
     assert matrix["matrix"][0]["model"] == "isotropic_beta"
     assert matrix["matrix"][0]["publication_ready"] is False
+
+
+def test_cmb_rotation_scope_gap_counts_as_partial_pass_readiness() -> None:
+    from app.services.research_program import plan_research_program, run_research_matrix
+
+    prompt = (
+        "I want to test CMB polarization rotation using EB/TB parity-odd "
+        "correlations. Identify data vectors, covariance, calibration priors, "
+        "and likelihood gaps without using distance priors."
+    )
+
+    plan = plan_research_program(question=prompt)["research_plan"]
+    readiness = plan["partial_pass_readiness"]
+    gap_rows = plan["capability_gap_matrix"]
+
+    assert readiness["target"] == "B_OR_BETTER_PARTIAL_PASS_95"
+    assert readiness["meets_partial_pass"] is True
+    assert readiness["score_floor"] == "B"
+    assert readiness["coverage_status"] == "domain_gap_mapped"
+    assert any(row["component"].endswith(":covariance") for row in gap_rows)
+    assert any(row["component"].endswith(":rotation_likelihood") for row in gap_rows)
+
+    matrix = run_research_matrix(research_plan=plan)
+    assert matrix["partial_pass_readiness"]["meets_partial_pass"] is True
+    assert matrix["capability_gap_matrix"]
 
 
 def test_cmb_polarization_rotation_hyphenated_prompt_does_not_use_distance_priors() -> None:
@@ -323,6 +355,12 @@ def test_primordial_feature_request_does_not_use_compressed_distance_priors() ->
     assert matrix["publication_ready"] is False
     assert matrix["ready_cells"] == 0
     assert matrix["matrix"] == []
+    assert plan["partial_pass_readiness"]["meets_partial_pass"] is True
+    assert plan["partial_pass_readiness"]["coverage_status"] == "domain_gap_mapped"
+    assert any(
+        row["component"] == "primordial_feature:look_elsewhere"
+        for row in plan["capability_gap_matrix"]
+    )
 
 
 def test_primordial_feature_spectra_variants_do_not_use_distance_priors() -> None:
@@ -366,6 +404,18 @@ def test_ede_request_records_missing_model_but_runs_lcdm_baseline() -> None:
         and any("baseline only" in warning.lower() for warning in cell.get("warnings", []))
         for cell in matrix["matrix"]
     )
+    assert plan["partial_pass_readiness"]["meets_partial_pass"] is True
+    assert plan["partial_pass_readiness"]["coverage_status"] == "runnable_baseline_available"
+
+
+def test_unknown_research_question_does_not_meet_partial_pass_readiness() -> None:
+    from app.services.research_program import plan_research_program
+
+    plan = plan_research_program(question="Can you think about this vague project?")["research_plan"]
+
+    assert plan["required_probes"] == []
+    assert plan["partial_pass_readiness"]["meets_partial_pass"] is False
+    assert plan["partial_pass_readiness"]["score_floor"] == "C"
 
 
 def test_transient_early_energy_wording_stays_in_cosmology_research_mode() -> None:

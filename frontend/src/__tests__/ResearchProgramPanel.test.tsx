@@ -45,6 +45,20 @@ describe("ResearchProgramPanel", () => {
           publication_ready: true,
           ready_cells: 2,
           matrix_size: 3,
+          research_charts: {
+            matrix_status: [
+              { label: "BAO only", status: "ready", execution_level: "compressed_preliminary", publication_ready: true },
+              { label: "BAO + CMB", status: "ready", execution_level: "compressed_preliminary", publication_ready: true },
+              { label: "BAO + SN", status: "config_only", execution_level: "config_only", publication_ready: false },
+            ],
+            posterior_forest: [
+              { label: "BAO + CMB", parameter: "H0", median: 67.31, low: 66.4, high: 68.2, publication_ready: true },
+            ],
+            diagnostics: [
+              { label: "BAO + CMB", ess: 471.3, rhat: 1.0, ess_threshold: 400, rhat_threshold: 1.05, publication_ready: true },
+            ],
+            notes: ["Charts are deterministic renderings of current-turn Research Matrix cells."],
+          },
           matrix: [
             { label: "BAO only", model: "lcdm", dataset_keys: ["desi_dr1_bao"], publication_ready: true },
             {
@@ -65,9 +79,14 @@ describe("ResearchProgramPanel", () => {
     );
 
     expect(screen.getByText("Research Matrix")).toBeInTheDocument();
+    expect(screen.getByTestId("research-visual-diagnostics")).toBeInTheDocument();
+    expect(screen.getByText("Visual Diagnostics")).toBeInTheDocument();
+    expect(screen.getByText("Matrix status map")).toBeInTheDocument();
+    expect(screen.getByText("Posterior forest: H0")).toBeInTheDocument();
+    expect(screen.getByText("Chain diagnostics")).toBeInTheDocument();
     expect(screen.getByText("runnable cells ready")).toBeInTheDocument();
     expect(screen.getByText(/2 \/ 3 ready/)).toBeInTheDocument();
-    expect(screen.getByText(/BAO only/)).toBeInTheDocument();
+    expect(screen.getAllByText(/BAO only/).length).toBeGreaterThan(0);
     expect(screen.getByText(/H0 median 67.310 · ESS 471 · Rhat 1.000/)).toBeInTheDocument();
     expect(screen.getByText(/configuration only, no posterior run yet/)).toBeInTheDocument();
   });
