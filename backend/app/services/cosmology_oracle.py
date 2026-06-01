@@ -87,6 +87,51 @@ def is_covered(goal_key: str) -> bool:
     return get_anchor(goal_key) is not None
 
 
+def route_goal(goal_key: str) -> dict:
+    """Decide whether a goal may be answered autonomously.  Covered (anchored)
+    goals route to 'answer'; everything else routes to 'human_review'.  This is
+    the rail that enforces 'no off-anchor autonomous conclusions' — it does NOT
+    authorize off-anchor autonomy (flipping an uncovered goal to 'answer' is a
+    policy decision, not a code change here)."""
+    if is_covered(goal_key):
+        return {"route": "answer", "goal_key": goal_key}
+    return {
+        "route": "human_review",
+        "goal_key": goal_key,
+        "reason": "off_anchor_not_in_oracle_coverage",
+        "suggested_next_step": (
+            "This goal has no reproduced published anchor. Add and verify an "
+            "OracleAnchor (T1-U9/U10) and re-measure coverage before answering it "
+            "autonomously, or route it to a human reviewer."
+        ),
+    }
+
+
+def off_anchor_abstention(goal_key: str) -> dict:
+    """For an off-anchor goal, return a structured-abstention envelope that
+    renders via the existing HonestAbstentionCard banner vocabulary
+    (__tool_status__/__do_not_claim__/__message_to_model__/__suggested_next_step__)
+    and carries NO numeric conclusion.  A covered goal passes straight through."""
+    routing = route_goal(goal_key)
+    if routing["route"] == "answer":
+        return routing
+    return {
+        "__tool_status__": "UNAVAILABLE",
+        "__do_not_claim__": True,
+        "off_anchor_abstained": True,
+        "route": "human_review",
+        "goal_key": goal_key,
+        "publication_ready": False,
+        "__message_to_model__": (
+            f"The goal '{goal_key}' is off-anchor: it has no reproduced published "
+            "anchor in the oracle-coverage table, so v1 must not emit an autonomous "
+            "numeric conclusion. Report that it was routed to human review; do not "
+            "fabricate or estimate a value."
+        ),
+        "__suggested_next_step__": routing["suggested_next_step"],
+    }
+
+
 def oracle_coverage() -> dict:
     """Measure what fraction of the goal universe is backed by a reproduced
     published anchor.  Measurement ONLY — it authorizes nothing; it is the number
