@@ -1871,6 +1871,75 @@ EBOSS_DR16_FSIGMA8: tuple[tuple[float, float, float], ...] = load_verified_rsd_d
 )["fsigma8_vector"]
 
 
+# ── T1-U7: self-policing pin enforcement ────────────────────────────────────
+# Single source of truth: every in-process-executable probe must read a
+# sha256-verified vendored file for the role its loader checks.  Honest
+# exception: a probe with no released data file (a hand-typed literature
+# compilation) is allowlisted and must certify 'literature_typed' instead.
+_NO_RELEASED_FILE_OK = frozenset({"sdss_6df_bao"})
+_EXECUTABLE_PROBE_ROLE: dict[str, str] = {
+    "desi_dr1_bao": "covariance",
+    "cosmic_chronometers": "hz_measurement_vector",
+    "eboss_dr16_rsd": "rsd_measurement_vector",
+    "pantheon_plus": "sn_full_data_npz",
+}
+
+
+def _executable_probe_keys() -> set[str]:
+    """Every probe key the phase-1 runner can fit in-process.  Flag-independent:
+    the Pantheon+ full-cov pin must exist whether or not the runtime flag is on."""
+    return (
+        set(_BAO_DATA)
+        | set(COSMIC_CHRONOMETER_EXECUTABLE_KEYS)
+        | set(EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS)
+        | {"pantheon_plus"}
+    )
+
+
+def audit_executable_pins() -> list[str]:
+    """Issues (empty == clean): every in-process-executable probe must read a
+    sha256-verified vendored file (hash_verified True, fidelity full/diagonal),
+    EXCEPT allowlisted no-released-file probes, which must certify
+    'literature_typed'.  Used by tests and scripts/audit_registry.py so a future
+    executable probe cannot ship without a pinned, verified data product."""
+    issues: list[str] = []
+    for key in sorted(_executable_probe_keys()):
+        if key in _BAO_DATA:
+            verified = load_verified_bao_data(key)
+        elif key in COSMIC_CHRONOMETER_EXECUTABLE_KEYS:
+            verified = load_verified_cc_data(key)
+        elif key in EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS:
+            verified = load_verified_rsd_data(key)
+        else:
+            verified = load_verified_pantheon_plus_data(key)
+
+        if key in _NO_RELEASED_FILE_OK:
+            if verified["cov_fidelity"] != "literature_typed":
+                issues.append(
+                    f"{key}: allowlisted no-released-file probe must certify "
+                    f"'literature_typed', got {verified['cov_fidelity']!r}"
+                )
+            continue
+
+        role = _EXECUTABLE_PROBE_ROLE.get(key)
+        if role is None:
+            issues.append(f"{key}: executable but missing from _EXECUTABLE_PROBE_ROLE")
+            continue
+        if not _registry_product_sha256(key, role):
+            issues.append(f"{key}: no sha256-pinned DataProductSpec for role {role!r}")
+        if not verified.get("hash_verified"):
+            issues.append(
+                f"{key}: vendored file not sha256-verified "
+                f"(hash_verified=False, cov_fidelity={verified['cov_fidelity']!r})"
+            )
+        elif verified["cov_fidelity"] not in ("full", "diagonal"):
+            issues.append(
+                f"{key}: verified but fidelity {verified['cov_fidelity']!r} is not a "
+                "file-backed grade (expected 'full' or 'diagonal')"
+            )
+    return issues
+
+
 def compute_model_comparison(
     baseline_result: dict[str, Any], extended_result: dict[str, Any]
 ) -> dict[str, Any]:

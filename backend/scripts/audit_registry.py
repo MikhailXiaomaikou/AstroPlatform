@@ -102,12 +102,17 @@ def main() -> int:
     args = ap.parse_args()
 
     from app.services.cosmology_likelihoods import _REGISTRY as REGISTRY
+    from app.services.cosmology_likelihoods import audit_executable_pins
 
     per_entry: dict[str, list[str]] = {}
     for key, entry in sorted(REGISTRY.items()):
         issues = _audit_entry(entry)
         if issues:
             per_entry[key] = issues
+
+    # T1-U7: every in-process-executable probe must read a sha256-verified
+    # vendored file (or be an allowlisted no-released-file literature probe).
+    executable_pin_issues = audit_executable_pins()
 
     payload = {
         "suite": "registry_audit",
@@ -116,13 +121,14 @@ def main() -> int:
         "n_clean": len(REGISTRY) - len(per_entry),
         "n_dirty": len(per_entry),
         "issues_by_dataset": per_entry,
+        "executable_pin_issues": executable_pin_issues,
     }
     print(json.dumps(payload, indent=2, default=str))
     if args.json:
         with open(args.json, "w") as fp:
             json.dump(payload, fp, indent=2, default=str)
 
-    return 0 if not per_entry else 1
+    return 0 if not per_entry and not executable_pin_issues else 1
 
 
 if __name__ == "__main__":
