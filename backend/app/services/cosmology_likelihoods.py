@@ -1717,15 +1717,25 @@ _COV_FIDELITY_ORDER = ("unverified", "literature_typed", "diagonal", "full")
 
 
 def _entry_verification(entry: CosmologyDatasetEntry) -> tuple[str | None, str | None]:
-    """(cov_fidelity, sha256) for one executable probe entry, via its verified
-    loader.  Returns (None, None) for probes that do not yet have a vendored
-    loader (e.g. Pantheon+ full-cov) so they are simply not stamped."""
+    """(cov_fidelity, sha256) for one executed probe entry.  Branch precedence,
+    strongest binding first: a released sha256-pinned covariance file
+    (BAO/CC/RSD diagonal/full, or the Pantheon+ full-cov npz when the full path
+    is enabled) -> a hand-typed published Gaussian summary ('literature_typed',
+    no released file to checksum) -> unstamped (None).  An executed entry returns
+    (None, None) only when it is neither a verified file nor a compressed
+    summary, so no executed probe slips through the publication gate unstamped."""
     if entry.key in _BAO_DATA:
         verified = load_verified_bao_data(entry.key)
     elif _is_executable_cc_entry(entry):
         verified = load_verified_cc_data(entry.key)
     elif _is_executable_rsd_entry(entry):
         verified = load_verified_rsd_data(entry.key)
+    elif _is_executable_sn_entry(entry):
+        verified = load_verified_pantheon_plus_data(entry.key)
+    elif entry.compressed_likelihood is not None:
+        # Hand-typed published Gaussian summary — honest 'literature_typed'; there
+        # is no released, vendored file to sha256-verify, so never 'full'/'diagonal'.
+        return ("literature_typed", None)
     else:
         return (None, None)
     return (verified["cov_fidelity"], verified.get("sha256"))
@@ -1740,7 +1750,11 @@ def _aggregate_cov_fidelity(
     'full'; artifact_sha256 pins every verified probe's file."""
     fidelities: list[str] = []
     artifact_sha256: dict[str, str | None] = {}
+    seen: set[str] = set()
     for entry in executed_entries:
+        if entry.key in seen:  # an entry can appear in two probe lists; verify once
+            continue
+        seen.add(entry.key)
         fidelity, sha = _entry_verification(entry)
         if fidelity is None:
             continue
@@ -2116,6 +2130,10 @@ def run_likelihood_chain(
     # posterior is closed-form so there is no "exploratory" intermediate (the
     # only soft gate is the derived-S8 reweighting ESS above).
     chain_tier = "publication" if publication_ready else "blocked"
+    # Every executed compressed summary is a hand-typed Gaussian -> 'literature_typed'
+    # (no released file to checksum); stamp it so a compressed-only chain is never
+    # left with an unstamped (None) fidelity that the publication gate ignores.
+    cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(compressed_entries)
     result: dict[str, Any] = {
         "success": True,
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
@@ -2189,6 +2207,8 @@ def run_likelihood_chain(
                     }
                     for entry in compressed_entries
                 ],
+                "cov_fidelity": cov_fidelity,
+                "artifact_sha256": artifact_sha256,
                 "publication_ready": publication_ready,
             },
         },
@@ -2628,7 +2648,7 @@ def _run_sampling_likelihood_chain(
         )
 
     cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(
-        bao_entries + cc_entries + rsd_entries + sn_entries
+        bao_entries + cc_entries + rsd_entries + sn_entries + compressed_entries
     )
     if cov_fidelity == "unverified":
         warnings.append(

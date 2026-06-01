@@ -107,3 +107,45 @@ def test_load_cosmology_data_product_reads_local_for_rsd():
 
     out = asyncio.run(load_cosmology_data_product(dataset_key="eboss_dr16_rsd"))
     assert out["hash_verified"] is True and out["source"].startswith("local:")
+
+
+# ── T1-U6c: executed compressed-Gaussian summaries certify 'literature_typed' ──
+# A hand-typed Gaussian summary is honestly 'literature_typed' (no released file),
+# never None.  This generalizes to ALL compressed probes (SN + CMB), which is what
+# keeps the U6b None-gate from blocking a legitimate compressed chain.
+
+def test_sn_compressed_only_chain_is_literature_typed():
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["pantheon_plus"], n_samples=2000, random_seed=42)
+    prov = r["provenance"]["cosmology_likelihood"]
+    assert prov["cov_fidelity"] == "literature_typed"
+    assert r["publication_ready"] is True
+
+
+def test_des_and_union3_compressed_are_literature_typed():
+    for ds in ("des_sn5yr", "union3"):
+        r = run_likelihood_chain(model="lcdm", dataset_keys=[ds], n_samples=2000, random_seed=42)
+        prov = r["provenance"]["cosmology_likelihood"]
+        assert prov["cov_fidelity"] == "literature_typed", ds
+        assert r["chain_tier"] == "publication", ds
+
+
+def test_cmb_compressed_is_literature_typed_not_none():
+    # NOT SN: proves the rule is "any executed hand-typed Gaussian", so the U6b
+    # None-gate cannot block a legitimate compressed-CMB chain.
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["planck2018_compressed"], n_samples=2000, random_seed=42)
+    assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] == "literature_typed"
+
+
+def test_compressed_summary_never_labeled_full_or_diagonal():
+    for ds in ("pantheon_plus", "des_sn5yr", "union3", "planck2018_compressed"):
+        r = run_likelihood_chain(model="lcdm", dataset_keys=[ds], n_samples=2000, random_seed=42)
+        assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] not in ("full", "diagonal"), ds
+
+
+def test_full_sn_path_entry_verifies_as_full(monkeypatch):
+    # When the full 1701-SN path is enabled, the SN entry verifies as 'full' via
+    # the sha256-pinned npz — entry-level check, no 208s fit needed.
+    monkeypatch.setattr(cl, "PANTHEON_PLUS_EXECUTABLE_KEYS", {"pantheon_plus"})
+    entry = cl.get_cosmology_dataset("pantheon_plus")
+    fidelity, sha = cl._entry_verification(entry)
+    assert fidelity == "full" and sha
