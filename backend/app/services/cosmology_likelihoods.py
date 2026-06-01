@@ -108,6 +108,12 @@ class DataProductSpec:
     columns: tuple[str, ...] = field(default_factory=tuple)
     rows: int | None = None
     sha256: str | None = None
+    # Path (relative to the backend/ root) of a vendored copy whose sha256 is the
+    # one pinned above.  Set when `url` points at a directory/landing page rather
+    # than a single machine-readable file (e.g. CC/RSD), so loaders read the
+    # local file and the digest check is meaningful instead of hashing an HTML
+    # index.
+    local_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -425,6 +431,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 columns=("z", "fsigma8", "sigma"),
                 rows=6,
                 sha256="5d9bb1559ad9d2df4809e80b308681dea4b635ff7f64be39e316d8efe84b79c9",
+                local_path="data/cosmology/eboss_dr16_rsd/fsigma8.txt",
             ),
         ),
         cobaya_likelihood="external:rsd.eboss_dr16_alam21",
@@ -965,6 +972,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 columns=("z", "H_z", "sigma_H"),
                 rows=31,
                 sha256="2793de7a2a5ab29a45545fefe35988ca90a369516d64c4605d02a1907fdc8fad",
+                local_path="data/cosmology/cosmic_chronometers/hz.txt",
             ),
         ),
         cobaya_likelihood="external:cosmic_chronometers",
@@ -1583,6 +1591,44 @@ def _registry_product_sha256(dataset_key: str, role: str) -> str | None:
     return None
 
 
+def _load_verified_diagonal_vector(
+    dataset_key: str, filename: str, role: str
+) -> dict[str, Any]:
+    """Shared robust loader for sha256-pinned 3-column (z, value, σ) diagonal data
+    products (cosmic-chronometer H(z), eBOSS fσ8).  Returns
+    {vector, sha256, hash_verified, cov_fidelity}; vector is None on any failure
+    so the caller substitutes its hand-typed fallback.  Failure semantics:
+    file present + digest matches -> 'diagonal'; present + digest mismatch ->
+    'unverified'; expected (registry-pinned) file missing or unparseable ->
+    'unverified' (never an import-time crash, never a silent wrong-shape/empty
+    vector); no registry product at all -> 'literature_typed'.
+    """
+    pinned = _registry_product_sha256(dataset_key, role)
+    path = _VENDORED_COSMO_DATA_DIR / dataset_key / filename
+    if not path.exists():
+        return {
+            "vector": None, "sha256": None, "hash_verified": False,
+            "cov_fidelity": "unverified" if pinned else "literature_typed",
+        }
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        arr = np.atleast_2d(np.loadtxt(path, comments="#"))
+        if arr.shape[0] == 0 or arr.shape[1] != 3:
+            raise ValueError(f"expected a non-empty 3-column table, got shape {arr.shape}")
+        vector = tuple((float(z), float(v), float(s)) for z, v, s in arr)
+        verified = digest == pinned
+        return {
+            "vector": vector, "sha256": digest, "hash_verified": bool(verified),
+            "cov_fidelity": "diagonal" if verified else "unverified",
+        }
+    except Exception as exc:  # malformed/truncated file — degrade, never crash import
+        logger.warning(
+            "cosmology data product %s/%s failed to load (%s); marking unverified",
+            dataset_key, filename, exc,
+        )
+        return {"vector": None, "sha256": None, "hash_verified": False, "cov_fidelity": "unverified"}
+
+
 @lru_cache(maxsize=None)
 def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
     """Load a BAO (mean, covariance) from the vendored, sha256-pinned data-product
@@ -1594,35 +1640,47 @@ def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
     """
     mean_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "mean.txt"
     cov_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "cov.txt"
-    if not (mean_path.exists() and cov_path.exists()):
+    pinned = _registry_product_sha256(dataset_key, "covariance")
+
+    def _fallback(fidelity: str) -> dict[str, Any]:
         mean_vector, cov = _HARDCODED_BAO[dataset_key]
         return {
             "mean_vector": tuple(mean_vector),
             "covariance": np.asarray(cov, dtype=float),
-            "sha256": None,
-            "hash_verified": False,
-            "cov_fidelity": "literature_typed",
+            "sha256": None, "hash_verified": False, "cov_fidelity": fidelity,
         }
-    mean_digest = hashlib.sha256(mean_path.read_bytes()).hexdigest()
-    cov_digest = hashlib.sha256(cov_path.read_bytes()).hexdigest()
-    mean_ok = mean_digest == _registry_product_sha256(dataset_key, "measurement_vector")
-    cov_ok = cov_digest == _registry_product_sha256(dataset_key, "covariance")
-    mean_vector_list: list[tuple[float, float, str]] = []
-    for line in mean_path.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        z_str, value_str, quantity = stripped.split()
-        mean_vector_list.append((float(z_str), float(value_str), quantity))
-    covariance = np.loadtxt(cov_path)
-    return {
-        "mean_vector": tuple(mean_vector_list),
-        "covariance": covariance,
-        "sha256": cov_digest,
-        "mean_sha256": mean_digest,
-        "hash_verified": bool(mean_ok and cov_ok),
-        "cov_fidelity": "full" if (mean_ok and cov_ok) else "unverified",
-    }
+
+    if not (mean_path.exists() and cov_path.exists()):
+        # expected pinned product missing -> unverified (blocks publication);
+        # no released product (e.g. 6dFGS+MGS) -> honest literature_typed.
+        return _fallback("unverified" if pinned else "literature_typed")
+    try:
+        mean_digest = hashlib.sha256(mean_path.read_bytes()).hexdigest()
+        cov_digest = hashlib.sha256(cov_path.read_bytes()).hexdigest()
+        mean_ok = mean_digest == _registry_product_sha256(dataset_key, "measurement_vector")
+        cov_ok = cov_digest == pinned
+        mean_vector_list: list[tuple[float, float, str]] = []
+        for line in mean_path.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            z_str, value_str, quantity = stripped.split()
+            mean_vector_list.append((float(z_str), float(value_str), quantity))
+        covariance = np.loadtxt(cov_path)
+        n = len(mean_vector_list)
+        if n == 0 or covariance.shape != (n, n):
+            raise ValueError(f"mean/cov shape mismatch: {n} points vs cov {covariance.shape}")
+        return {
+            "mean_vector": tuple(mean_vector_list),
+            "covariance": covariance,
+            "sha256": cov_digest,
+            "mean_sha256": mean_digest,
+            "hash_verified": bool(mean_ok and cov_ok),
+            "cov_fidelity": "full" if (mean_ok and cov_ok) else "unverified",
+        }
+    except Exception as exc:  # malformed/truncated file — degrade, never crash import
+        logger.warning("BAO data product %s failed to load (%s); marking unverified", dataset_key, exc)
+        return _fallback("unverified")
 
 
 # What the chi² fits — sourced from the verified loader so the fitted covariance
@@ -1636,13 +1694,51 @@ _BAO_DATA: dict[str, tuple[Any, Any]] = {
 }
 
 
-def _bao_cov_fidelity(bao_entries: list[CosmologyDatasetEntry]) -> str | None:
-    """Aggregate covariance fidelity across the BAO entries actually fit: 'full'
-    only when every BAO entry used its sha256-verified released covariance."""
-    fidelities = [load_verified_bao_data(entry.key)["cov_fidelity"] for entry in bao_entries]
+# Weakest -> strongest covariance fidelity. 'unverified' = vendored file present
+# but its digest mismatched the registry pin (tampering/corruption — must block
+# publication); 'literature_typed' = honest hand-typed compilation (no released
+# file); 'diagonal' = sha256-pinned vector with diagonal covariance; 'full' =
+# sha256-verified released FULL covariance.
+_COV_FIDELITY_ORDER = ("unverified", "literature_typed", "diagonal", "full")
+
+
+def _entry_verification(entry: CosmologyDatasetEntry) -> tuple[str | None, str | None]:
+    """(cov_fidelity, sha256) for one executable probe entry, via its verified
+    loader.  Returns (None, None) for probes that do not yet have a vendored
+    loader (e.g. Pantheon+ full-cov) so they are simply not stamped."""
+    if entry.key in _BAO_DATA:
+        verified = load_verified_bao_data(entry.key)
+    elif _is_executable_cc_entry(entry):
+        verified = load_verified_cc_data(entry.key)
+    elif _is_executable_rsd_entry(entry):
+        verified = load_verified_rsd_data(entry.key)
+    else:
+        return (None, None)
+    return (verified["cov_fidelity"], verified.get("sha256"))
+
+
+def _aggregate_cov_fidelity(
+    executed_entries: list[CosmologyDatasetEntry],
+) -> tuple[str | None, dict[str, str | None]]:
+    """Aggregate (cov_fidelity, artifact_sha256 map) across EVERY executed probe,
+    not just BAO.  cov_fidelity is the WEAKEST across probes ('full' only when
+    all are full), so a BAO(full)+CC(diagonal) chain reports 'diagonal', never
+    'full'; artifact_sha256 pins every verified probe's file."""
+    fidelities: list[str] = []
+    artifact_sha256: dict[str, str | None] = {}
+    for entry in executed_entries:
+        fidelity, sha = _entry_verification(entry)
+        if fidelity is None:
+            continue
+        fidelities.append(fidelity)
+        artifact_sha256[entry.key] = sha
     if not fidelities:
-        return None
-    return "full" if all(fidelity == "full" for fidelity in fidelities) else "literature_typed"
+        return (None, artifact_sha256)
+    weakest = min(
+        fidelities,
+        key=lambda f: _COV_FIDELITY_ORDER.index(f) if f in _COV_FIDELITY_ORDER else -1,
+    )
+    return (weakest, artifact_sha256)
 C_LIGHT_KM_S = 299792.458
 
 
@@ -1675,33 +1771,17 @@ _HARDCODED_CC_HZ: tuple[tuple[float, float, float], ...] = (
 def load_verified_cc_data(dataset_key: str) -> dict[str, Any]:
     """Load the cosmic-chronometer H(z) vector from the vendored, sha256-pinned
     file so the fitted vector IS the checksummed array (object identity).
-    cov_fidelity is 'diagonal' — the H(z) covariance is diagonal here; the
-    Moresco+2020 systematic covariance is a separate (offline) upgrade, distinct
-    from a released full covariance like DESI's.  Honest fallback to the legacy
-    hand-typed vector with cov_fidelity='literature_typed' if the file is absent.
-    """
-    path = _VENDORED_COSMO_DATA_DIR / dataset_key / "hz.txt"
-    if not path.exists():
-        return {
-            "hz_vector": tuple(_HARDCODED_CC_HZ),
-            "sha256": None,
-            "hash_verified": False,
-            "cov_fidelity": "literature_typed",
-        }
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    verified = digest == _registry_product_sha256(dataset_key, "hz_measurement_vector")
-    rows: list[tuple[float, float, float]] = []
-    for line in path.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        z_str, h_str, sigma_str = stripped.split()
-        rows.append((float(z_str), float(h_str), float(sigma_str)))
+    cov_fidelity is 'diagonal' on success (diagonal covariance; the Moresco+2020
+    systematic covariance is a separate offline upgrade, distinct from a released
+    full covariance), 'unverified' on a missing-but-pinned or corrupt file.  The
+    fitted vector falls back to the hand-typed values only to keep the fit
+    running; the 'unverified' fidelity then blocks publication."""
+    raw = _load_verified_diagonal_vector(dataset_key, "hz.txt", "hz_measurement_vector")
     return {
-        "hz_vector": tuple(rows),
-        "sha256": digest,
-        "hash_verified": bool(verified),
-        "cov_fidelity": "diagonal" if verified else "unverified",
+        "hz_vector": raw["vector"] if raw["vector"] is not None else tuple(_HARDCODED_CC_HZ),
+        "sha256": raw["sha256"],
+        "hash_verified": raw["hash_verified"],
+        "cov_fidelity": raw["cov_fidelity"],
     }
 
 
@@ -1742,33 +1822,17 @@ _HARDCODED_EBOSS_FSIGMA8: tuple[tuple[float, float, float], ...] = (
 def load_verified_rsd_data(dataset_key: str) -> dict[str, Any]:
     """Load the eBOSS RSD fσ8 vector from the vendored, sha256-pinned file so the
     fitted vector IS the checksummed array (object identity).  cov_fidelity is
-    'diagonal' — only per-tracer diagonal errors are published (Alam+2021 Table
-    III note a); the full 6×6 inter-bin covariance is a separate offline
-    reconstruction.  Honest fallback to the hand-typed vector with
-    cov_fidelity='literature_typed' if the file is absent.
-    """
-    path = _VENDORED_COSMO_DATA_DIR / dataset_key / "fsigma8.txt"
-    if not path.exists():
-        return {
-            "fsigma8_vector": tuple(_HARDCODED_EBOSS_FSIGMA8),
-            "sha256": None,
-            "hash_verified": False,
-            "cov_fidelity": "literature_typed",
-        }
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    verified = digest == _registry_product_sha256(dataset_key, "rsd_measurement_vector")
-    rows: list[tuple[float, float, float]] = []
-    for line in path.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        z_str, f_str, sigma_str = stripped.split()
-        rows.append((float(z_str), float(f_str), float(sigma_str)))
+    'diagonal' on success (only per-tracer diagonal errors are published,
+    Alam+2021 Table III note a; the full 6×6 inter-bin covariance is a separate
+    offline reconstruction), 'unverified' on a missing-but-pinned or corrupt
+    file.  The fitted vector falls back to the hand-typed values to keep the fit
+    running; the 'unverified' fidelity then blocks publication."""
+    raw = _load_verified_diagonal_vector(dataset_key, "fsigma8.txt", "rsd_measurement_vector")
     return {
-        "fsigma8_vector": tuple(rows),
-        "sha256": digest,
-        "hash_verified": bool(verified),
-        "cov_fidelity": "diagonal" if verified else "unverified",
+        "fsigma8_vector": raw["vector"] if raw["vector"] is not None else tuple(_HARDCODED_EBOSS_FSIGMA8),
+        "sha256": raw["sha256"],
+        "hash_verified": raw["hash_verified"],
+        "cov_fidelity": raw["cov_fidelity"],
     }
 
 
@@ -2549,7 +2613,20 @@ def _run_sampling_likelihood_chain(
             f"Importance sampler ESS={proposal_ess:.1f} below publication threshold 400."
         )
 
-    publication_ready = not invalid_specs and not skipped_entries and proposal_ess >= 400.0
+    cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(
+        bao_entries + cc_entries + rsd_entries + sn_entries
+    )
+    if cov_fidelity == "unverified":
+        warnings.append(
+            "A fitted data product failed sha256 verification (vendored file "
+            "missing or bytes do not match the registry pin); not publication-ready."
+        )
+    publication_ready = (
+        not invalid_specs
+        and not skipped_entries
+        and proposal_ess >= 400.0
+        and cov_fidelity != "unverified"
+    )
     # Importance-sampler three-tier (mirrors fit_cosmology_emcee, 2026-05-21):
     #   publication: ESS ≥ 400 and no invalid specs
     #   exploratory: 100 ≤ ESS < 400 — posterior discussable but not citeable
@@ -2636,11 +2713,8 @@ def _run_sampling_likelihood_chain(
                 "datasets_not_run": [entry.key for entry in skipped_entries],
                 "citations": _collect_citations(entries),
                 "compressed_sources": _sampling_source_records(used_entries),
-                "cov_fidelity": _bao_cov_fidelity(bao_entries),
-                "artifact_sha256": {
-                    entry.key: load_verified_bao_data(entry.key).get("sha256")
-                    for entry in bao_entries
-                },
+                "cov_fidelity": cov_fidelity,
+                "artifact_sha256": artifact_sha256,
                 "publication_ready": publication_ready,
             },
         },

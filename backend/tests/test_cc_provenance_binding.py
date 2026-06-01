@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 
 import numpy as np
+import pytest
 
 
 def test_cc_registry_has_sha256_pinned_hz_product():
@@ -67,4 +68,18 @@ def test_cc_binding_introduces_zero_numeric_drift():
     assert cl.COSMIC_CHRONOMETER_HZ[-1] == (1.965, 186.5, 50.4)
     theta = np.array([[67.36, 0.3153]])
     chi2 = float(cl._cosmic_chronometer_chi2_samples(theta, ["H0", "omegam"])[0])
-    assert np.isfinite(chi2) and chi2 > 0
+    # Pin the actual chi2 (not just >0) so a prediction-kernel regression is caught.
+    assert chi2 == pytest.approx(14.8893, abs=1e-3)
+
+
+def test_vendored_cc_matches_registry_rows_and_hardcoded_fallback():
+    """Drift guards: the registry rows count and the hand-typed fallback must both
+    stay in sync with the vendored file the fit reads."""
+    from app.services import cosmology_likelihoods as cl
+
+    spec = next(
+        p for p in cl.get_cosmology_dataset("cosmic_chronometers").data_products
+        if p.role == "hz_measurement_vector"
+    )
+    assert spec.rows == len(cl.COSMIC_CHRONOMETER_HZ)  # #9
+    assert tuple(cl._HARDCODED_CC_HZ) == cl.COSMIC_CHRONOMETER_HZ  # #12: literal == file

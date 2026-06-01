@@ -1,0 +1,5 @@
+# Pin LF for vendored cosmology data products so their sha256 digests (which the
+# in-process loaders verify against the registry) are stable across platforms —
+# a CRLF checkout on Windows would otherwise flip every digest and break
+# provenance verification despite byte-identical parsed numbers.
+backend/data/cosmology/**/*.txt text eol=lf

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 
 import numpy as np
+import pytest
 
 
 def test_rsd_registry_has_sha256_pinned_product():
@@ -65,4 +66,18 @@ def test_rsd_binding_introduces_zero_numeric_drift():
     assert cl.EBOSS_DR16_FSIGMA8[-1] == (1.48, 0.462, 0.045)
     theta = np.array([[0.3153, 0.811]])
     chi2 = float(cl._eboss_fsigma8_chi2_samples(theta, ["omegam", "sigma8"])[0])
-    assert np.isfinite(chi2) and chi2 > 0
+    # Pin the actual chi2 (not just >0) so a prediction-kernel regression is caught.
+    assert chi2 == pytest.approx(6.3578, abs=1e-3)
+
+
+def test_vendored_rsd_matches_registry_rows_and_hardcoded_fallback():
+    """Drift guards: registry rows and the hand-typed fallback stay in sync with
+    the vendored file the fit reads."""
+    from app.services import cosmology_likelihoods as cl
+
+    spec = next(
+        p for p in cl.get_cosmology_dataset("eboss_dr16_rsd").data_products
+        if p.role == "rsd_measurement_vector"
+    )
+    assert spec.rows == len(cl.EBOSS_DR16_FSIGMA8)  # #9
+    assert tuple(cl._HARDCODED_EBOSS_FSIGMA8) == cl.EBOSS_DR16_FSIGMA8  # #12: literal == file

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import pathlib
 from typing import Any
 
 import httpx
@@ -82,6 +83,25 @@ async def load_cosmology_data_product(
     source = "content_override"
     if content_override is not None:
         raw_bytes = content_override.encode("utf-8") if isinstance(content_override, str) else bytes(content_override)
+    elif getattr(product, "local_path", None):
+        # Vendored local copy whose sha256 is the pinned digest (used when `url`
+        # is a directory/landing page rather than a single machine-readable file,
+        # e.g. CC/RSD). Read it directly so the digest check is meaningful and
+        # network-free, instead of hashing an HTML index.
+        local = pathlib.Path(__file__).resolve().parents[2] / product.local_path
+        if not local.exists():
+            return {
+                "success": False,
+                "__tool_status__": "UNAVAILABLE",
+                "analysis_status": "COSMOLOGY_DATA_PRODUCT_UNAVAILABLE",
+                "publication_ready": False,
+                "dataset_key": entry.key,
+                "product": product.to_dict(),
+                "error": f"Vendored local data product not found at {product.local_path}.",
+                "__do_not_claim__": True,
+            }
+        raw_bytes = local.read_bytes()
+        source = f"local:{product.local_path}"
     elif not allow_network:
         return {
             "success": False,
