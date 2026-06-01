@@ -64,9 +64,44 @@ PUBLISHED_ANCHORS: tuple[OracleAnchor, ...] = (
 )
 
 
+# Goals the platform may be ASKED to constrain but for which it has NO reproduced
+# published anchor: extended-model parameters the phase-1 in-process runner cannot
+# fit (curvature/neutrino-mass need external Cobaya; the w0/wa dark-energy EOS is a
+# research target, not an anchored constraint).  Listed explicitly so coverage
+# reports the gap honestly instead of hiding it.
+OFF_ANCHOR_GOALS: tuple[str, ...] = (
+    "w0_dark_energy_eos",
+    "wa_dark_energy_evolution",
+    "omega_k_curvature",
+    "neutrino_mass_sum",
+)
+
+
 def get_anchor(goal_key: str) -> OracleAnchor | None:
     """Return the anchor for a goal key, or None if it is off-anchor."""
     return next((a for a in PUBLISHED_ANCHORS if a.goal_key == goal_key), None)
+
+
+def is_covered(goal_key: str) -> bool:
+    """True iff the goal is backed by a reproduced published anchor."""
+    return get_anchor(goal_key) is not None
+
+
+def oracle_coverage() -> dict:
+    """Measure what fraction of the goal universe is backed by a reproduced
+    published anchor.  Measurement ONLY — it authorizes nothing; it is the number
+    that must be reviewed before any off-anchor autonomy is enabled (T1-U12 routes
+    uncovered goals to human review)."""
+    covered = tuple(a.goal_key for a in PUBLISHED_ANCHORS)
+    uncovered = OFF_ANCHOR_GOALS
+    n_goals = len(covered) + len(uncovered)
+    return {
+        "n_goals": n_goals,
+        "n_covered": len(covered),
+        "coverage_fraction": round(len(covered) / n_goals, 4),
+        "covered_goals": list(covered),
+        "uncovered_goals": list(uncovered),
+    }
 
 
 def reproduce_anchor(anchor: OracleAnchor) -> dict:
