@@ -2120,20 +2120,26 @@ def run_likelihood_chain(
             "floor; S8-combined posterior is exploratory only."
         )
 
+    # Every executed compressed summary is a hand-typed Gaussian -> 'literature_typed'
+    # (no released file to checksum); stamp it so a compressed-only chain is never
+    # left with an unstamped (None) fidelity the publication gate would ignore.
+    cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(compressed_entries)
+    if cov_fidelity in (None, "unverified"):
+        warnings.append(
+            "A fitted data product failed sha256 verification or is an unstamped "
+            f"probe (cov_fidelity={cov_fidelity!r}); not publication-ready."
+        )
     publication_ready = (
         not invalid_specs
         and not prior_violations
         and not skipped_entries
         and not s8_underpowered
+        and cov_fidelity not in (None, "unverified")
     )
     # Compressed-Gaussian analytic path is otherwise binary by construction: the
     # posterior is closed-form so there is no "exploratory" intermediate (the
     # only soft gate is the derived-S8 reweighting ESS above).
     chain_tier = "publication" if publication_ready else "blocked"
-    # Every executed compressed summary is a hand-typed Gaussian -> 'literature_typed'
-    # (no released file to checksum); stamp it so a compressed-only chain is never
-    # left with an unstamped (None) fidelity that the publication gate ignores.
-    cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(compressed_entries)
     result: dict[str, Any] = {
         "success": True,
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
@@ -2650,16 +2656,17 @@ def _run_sampling_likelihood_chain(
     cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(
         bao_entries + cc_entries + rsd_entries + sn_entries + compressed_entries
     )
-    if cov_fidelity == "unverified":
+    if cov_fidelity in (None, "unverified"):
         warnings.append(
             "A fitted data product failed sha256 verification (vendored file "
-            "missing or bytes do not match the registry pin); not publication-ready."
+            "missing or bytes do not match the registry pin) or is an unstamped "
+            f"probe (cov_fidelity={cov_fidelity!r}); not publication-ready."
         )
     publication_ready = (
         not invalid_specs
         and not skipped_entries
         and proposal_ess >= 400.0
-        and cov_fidelity != "unverified"
+        and cov_fidelity not in (None, "unverified")
     )
     # Importance-sampler three-tier (mirrors fit_cosmology_emcee, 2026-05-21):
     #   publication: ESS ≥ 400 and no invalid specs

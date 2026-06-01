@@ -149,3 +149,26 @@ def test_full_sn_path_entry_verifies_as_full(monkeypatch):
     entry = cl.get_cosmology_dataset("pantheon_plus")
     fidelity, sha = cl._entry_verification(entry)
     assert fidelity == "full" and sha
+
+
+# ── T1-U6b: an unstamped (None) fidelity can no longer be publication-ready ──
+# Defense in depth: if any executed probe ever slips through unstamped (None),
+# the chain must be blocked exactly like an 'unverified' one — on BOTH runners.
+
+def test_none_cov_fidelity_blocks_publication_sampling_path(monkeypatch):
+    monkeypatch.setattr(cl, "_aggregate_cov_fidelity", lambda entries: (None, {}))
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["desi_dr1_bao"], n_samples=2000, random_seed=42)
+    prov = r["provenance"]["cosmology_likelihood"]
+    assert prov["cov_fidelity"] is None
+    assert r["publication_ready"] is False
+    assert r["chain_tier"] != "publication"
+    assert any("sha256 verification" in w for w in r["warnings"])
+
+
+def test_none_cov_fidelity_blocks_publication_inline_path(monkeypatch):
+    monkeypatch.setattr(cl, "_aggregate_cov_fidelity", lambda entries: (None, {}))
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["pantheon_plus"], n_samples=2000, random_seed=42)
+    prov = r["provenance"]["cosmology_likelihood"]
+    assert prov["cov_fidelity"] is None
+    assert r["publication_ready"] is False
+    assert r["chain_tier"] != "publication"
