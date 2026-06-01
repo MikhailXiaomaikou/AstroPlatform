@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import pathlib
+from functools import lru_cache
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -1526,12 +1527,88 @@ SDSS_6DF_BAO_COVARIANCE: tuple[tuple[float, ...], ...] = (
     (0.0, 0.17 ** 2),
 )
 
-# Per-dataset executable BAO data (mean vector + covariance). Adding a low-z BAO
-# anchor is now a registry entry, not a new code path.
-_BAO_DATA: dict[str, tuple[tuple[tuple[float, float, str], ...], tuple[tuple[float, ...], ...]]] = {
+# Legacy hand-typed BAO (mean, covariance) values, kept only as the fallback for
+# datasets without a vendored sha256-pinned file. The DESI hand-typed constants
+# are byte-identical to the vendored file (verified), so binding shifts no number.
+_HARDCODED_BAO: dict[str, tuple[Any, Any]] = {
     "desi_dr1_bao": (DESI_DR1_BAO_MEAN_VECTOR, DESI_DR1_BAO_COVARIANCE),
     "sdss_6df_bao": (SDSS_6DF_BAO_MEAN_VECTOR, SDSS_6DF_BAO_COVARIANCE),
 }
+
+# Vendored, sha256-pinned cosmology data products. They live here so the array
+# the chi² actually fits IS the array the registry checksum verifies — closing
+# the "decorative provenance" hole where the checksum certified a file the fit
+# never read (Step 1 provenance-binding, 2026-06-01).
+_VENDORED_COSMO_DATA_DIR = pathlib.Path(__file__).resolve().parents[2] / "data" / "cosmology"
+
+
+def _registry_product_sha256(dataset_key: str, role: str) -> str | None:
+    for product in get_cosmology_dataset(dataset_key).data_products:
+        if product.role == role:
+            return product.sha256
+    return None
+
+
+@lru_cache(maxsize=None)
+def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
+    """Load a BAO (mean, covariance) from the vendored, sha256-pinned data-product
+    files and verify the digests against the registry, so the fitted covariance IS
+    the checksum-verified array (``cov_fidelity='full'``).  Falls back to the
+    legacy hand-typed values with ``cov_fidelity='literature_typed'`` — an honest
+    downgrade, never a silent wrong-shape covariance — only when no vendored file
+    is present (e.g. the 6dFGS+MGS low-z compilation, which has no released file).
+    """
+    mean_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "mean.txt"
+    cov_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "cov.txt"
+    if not (mean_path.exists() and cov_path.exists()):
+        mean_vector, cov = _HARDCODED_BAO[dataset_key]
+        return {
+            "mean_vector": tuple(mean_vector),
+            "covariance": np.asarray(cov, dtype=float),
+            "sha256": None,
+            "hash_verified": False,
+            "cov_fidelity": "literature_typed",
+        }
+    mean_digest = hashlib.sha256(mean_path.read_bytes()).hexdigest()
+    cov_digest = hashlib.sha256(cov_path.read_bytes()).hexdigest()
+    mean_ok = mean_digest == _registry_product_sha256(dataset_key, "measurement_vector")
+    cov_ok = cov_digest == _registry_product_sha256(dataset_key, "covariance")
+    mean_vector_list: list[tuple[float, float, str]] = []
+    for line in mean_path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        z_str, value_str, quantity = stripped.split()
+        mean_vector_list.append((float(z_str), float(value_str), quantity))
+    covariance = np.loadtxt(cov_path)
+    return {
+        "mean_vector": tuple(mean_vector_list),
+        "covariance": covariance,
+        "sha256": cov_digest,
+        "mean_sha256": mean_digest,
+        "hash_verified": bool(mean_ok and cov_ok),
+        "cov_fidelity": "full" if (mean_ok and cov_ok) else "unverified",
+    }
+
+
+# What the chi² fits — sourced from the verified loader so the fitted covariance
+# and the registry checksum are the SAME array object.
+_BAO_DATA: dict[str, tuple[Any, Any]] = {
+    key: (
+        load_verified_bao_data(key)["mean_vector"],
+        load_verified_bao_data(key)["covariance"],
+    )
+    for key in _HARDCODED_BAO
+}
+
+
+def _bao_cov_fidelity(bao_entries: list[CosmologyDatasetEntry]) -> str | None:
+    """Aggregate covariance fidelity across the BAO entries actually fit: 'full'
+    only when every BAO entry used its sha256-verified released covariance."""
+    fidelities = [load_verified_bao_data(entry.key)["cov_fidelity"] for entry in bao_entries]
+    if not fidelities:
+        return None
+    return "full" if all(fidelity == "full" for fidelity in fidelities) else "literature_typed"
 C_LIGHT_KM_S = 299792.458
 
 
@@ -1652,6 +1729,7 @@ def run_likelihood_chain(
         _is_executable_bao_entry(entry)
         or _is_executable_cc_entry(entry)
         or _is_executable_rsd_entry(entry)
+        or _is_executable_sn_entry(entry)
         for entry in entries
     ):
         return _run_sampling_likelihood_chain(
@@ -2436,6 +2514,11 @@ def _run_sampling_likelihood_chain(
                 "datasets_not_run": [entry.key for entry in skipped_entries],
                 "citations": _collect_citations(entries),
                 "compressed_sources": _sampling_source_records(used_entries),
+                "cov_fidelity": _bao_cov_fidelity(bao_entries),
+                "artifact_sha256": {
+                    entry.key: load_verified_bao_data(entry.key).get("sha256")
+                    for entry in bao_entries
+                },
                 "publication_ready": publication_ready,
             },
         },
