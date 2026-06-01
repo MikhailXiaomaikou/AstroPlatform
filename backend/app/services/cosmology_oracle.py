@@ -67,3 +67,30 @@ PUBLISHED_ANCHORS: tuple[OracleAnchor, ...] = (
 def get_anchor(goal_key: str) -> OracleAnchor | None:
     """Return the anchor for a goal key, or None if it is off-anchor."""
     return next((a for a in PUBLISHED_ANCHORS if a.goal_key == goal_key), None)
+
+
+def reproduce_anchor(anchor: OracleAnchor) -> dict:
+    """Run the real in-process chain for an anchor and check it reproduces the
+    published value within tolerance.  This is the correctness axis (does the fit
+    land on the right number), distinct from provenance (did the number come from
+    a verified tool).  run_likelihood_chain is imported lazily to keep this module
+    a dependency-free data table."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    r = run_likelihood_chain(
+        model=anchor.model, dataset_keys=list(anchor.datasets), n_samples=4000, random_seed=42,
+    )
+    med = (r.get("parameters", {}).get(anchor.parameter, {}) or {}).get("median")
+    has_value = isinstance(med, (int, float))
+    within = has_value and abs(float(med) - anchor.value) <= anchor.tol
+    return {
+        "goal_key": anchor.goal_key,
+        "parameter": anchor.parameter,
+        "published_value": anchor.value,
+        "tol": anchor.tol,
+        "reproduced_value": float(med) if has_value else None,
+        "within_tol": bool(within),
+        "publication_ready": bool(r.get("publication_ready")),
+        "datasets": list(anchor.datasets),
+        "source_arxiv": anchor.source_arxiv,
+    }
