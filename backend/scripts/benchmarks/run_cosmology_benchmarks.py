@@ -340,6 +340,64 @@ def bench_sn_omegam_compressed() -> dict[str, Any]:
     }
 
 
+def bench_sn_compressed_provenance() -> dict[str, Any]:
+    """T1-U8a: SN-only compressed chains certify honest provenance (2026-06-01).
+
+    Every compressed SN-only chain must stamp cov_fidelity='literature_typed' (a
+    hand-typed Gaussian, no released file to checksum), reach publication tier,
+    and NEVER over-claim 'full'/'diagonal' or leave the fidelity unstamped (None).
+    Locks the T1-U6 fix so the 'fake receipt' SN hole cannot silently reopen."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain
+
+    out: dict[str, Any] = {}
+    ok = True
+    for key in ("pantheon_plus", "des_sn5yr", "union3"):
+        r = run_likelihood_chain(model="lcdm", dataset_keys=[key], n_samples=4000, random_seed=42)
+        prov = r.get("provenance", {}).get("cosmology_likelihood", {})
+        fid = prov.get("cov_fidelity")
+        good = fid == "literature_typed" and r.get("publication_ready") is True
+        ok = ok and good
+        out[key] = {"cov_fidelity": fid, "publication_ready": r.get("publication_ready")}
+    return {
+        "pass": ok,
+        **out,
+        "target": "SN-only compressed chains certify literature_typed + publication, never None/full/diagonal",
+    }
+
+
+def bench_pantheon_full_cov_fidelity() -> dict[str, Any]:
+    """T1-U8b: the full 1701-SN path certifies a sha256-verified FULL covariance.
+
+    SLOW OPT-IN — the full Pantheon+SH0ES χ² fit is ~208s, far past the 45s chat
+    deadline, so it is skipped unless PANTHEON_PLUS_FULL_CHI2_ENABLED is set
+    (running it routinely needs the paid background worker). When enabled, the
+    pantheon_plus chain must stamp cov_fidelity='full' with the verified npz
+    digest in artifact_sha256."""
+    from app.services.cosmology_likelihoods import (
+        PANTHEON_PLUS_FULL_CHI2_ENABLED,
+        load_verified_pantheon_plus_data,
+        run_likelihood_chain,
+    )
+
+    if not PANTHEON_PLUS_FULL_CHI2_ENABLED:
+        return {
+            "pass": True,
+            "skipped": "needs PANTHEON_PLUS_FULL_CHI2_ENABLED (~208s full 1701-SN fit; paid worker)",
+            "target": "full SN path certifies cov_fidelity='full' with verified npz sha256",
+        }
+    expected_sha = load_verified_pantheon_plus_data("pantheon_plus")["sha256"]
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["pantheon_plus"], n_samples=2000, random_seed=42)
+    prov = r.get("provenance", {}).get("cosmology_likelihood", {})
+    fid = prov.get("cov_fidelity")
+    sha = (prov.get("artifact_sha256") or {}).get("pantheon_plus")
+    return {
+        "pass": fid == "full" and sha == expected_sha and r.get("publication_ready") is True,
+        "cov_fidelity": fid,
+        "artifact_sha256_match": sha == expected_sha,
+        "target": "full SN path certifies cov_fidelity='full' with verified npz sha256",
+    }
+
+
 def bench_model_comparison_delta() -> dict[str, Any]:
     """Real model comparison Δχ²/ΔAIC/ΔBIC (3.2, 2026-05-29).
 
@@ -622,6 +680,8 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("growth_kernel_vs_exact_lcdm", bench_growth_kernel_vs_exact_lcdm),
     ("model_comparison_delta", bench_model_comparison_delta),
     ("sn_omegam_compressed", bench_sn_omegam_compressed),
+    ("sn_compressed_provenance", bench_sn_compressed_provenance),
+    ("pantheon_full_cov_fidelity", bench_pantheon_full_cov_fidelity),
 ]
 
 
