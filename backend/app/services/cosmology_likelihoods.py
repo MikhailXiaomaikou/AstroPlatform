@@ -479,6 +479,20 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         execution_mode="compressed_gaussian",
         data_products=(
             DataProductSpec(
+                product_type="sn_full_data_npz",
+                role="sn_full_data_npz",
+                url="https://github.com/PantheonPlusSH0ES/DataRelease",
+                format="npz",
+                description=(
+                    "Vendored Pantheon+SH0ES 1701-SN bundle (z_hd, z_hel, mu, "
+                    "mu_err_diag, full stat+sys covariance) the in-process χ² reads."
+                ),
+                columns=("z_hd", "z_hel", "mu", "mu_err_diag", "cov"),
+                rows=1701,
+                sha256="d6b3ed124fa038c02bdc4457f4f7aff8bf6e9f6b41e1257f530c90d7bd1f8cca",
+                local_path="data/pantheon_plus_2022/data.npz",
+            ),
+            DataProductSpec(
                 product_type="sn_distance_modulus_table",
                 role="data_table",
                 url=(
@@ -3539,28 +3553,67 @@ _PANTHEON_PLUS_DATA_DIR = (
 )
 _pantheon_plus_data_cache: dict[str, np.ndarray] | None = None
 
+_PANTHEON_PLUS_ARRAY_KEYS = ("z_hd", "z_hel", "mu", "mu_err_diag", "cov", "cov_inv")
+
+
+@lru_cache(maxsize=None)
+def load_verified_pantheon_plus_data(dataset_key: str = "pantheon_plus") -> dict[str, Any]:
+    """Load the Pantheon+SH0ES 1701-SN bundle from the vendored, sha256-pinned
+    ``data.npz`` and verify its digest against the registry, so the covariance the
+    χ² inverts IS the checksummed array (object identity).  cov_fidelity is "full"
+    on a digest match (the stat+sys matrix is a released FULL covariance),
+    "unverified" on a present-but-mismatched/corrupt file (blocks publication).  A
+    missing-but-pinned file degrades to "unverified" with no arrays (so
+    _entry_verification can stamp it without an import-time crash); the full-cov
+    fit then re-raises a clear FileNotFoundError via _load_pantheon_plus_data.
+    """
+    pinned = _registry_product_sha256(dataset_key, "sn_full_data_npz")
+    npz_path = _PANTHEON_PLUS_DATA_DIR / "data.npz"
+
+    def _fallback(fidelity: str) -> dict[str, Any]:
+        return {
+            "z_hd": None, "z_hel": None, "mu": None, "mu_err_diag": None,
+            "cov": None, "cov_inv": None,
+            "sha256": None, "hash_verified": False, "cov_fidelity": fidelity,
+        }
+
+    if not npz_path.exists():
+        return _fallback("unverified" if pinned else "literature_typed")
+    try:
+        digest = hashlib.sha256(npz_path.read_bytes()).hexdigest()
+        npz = np.load(npz_path)
+        cov = np.asarray(npz["cov"], dtype=np.float64)
+        verified = digest == pinned
+        return {
+            "z_hd": np.asarray(npz["z_hd"], dtype=np.float64),
+            "z_hel": np.asarray(npz["z_hel"], dtype=np.float64),
+            "mu": np.asarray(npz["mu"], dtype=np.float64),
+            "mu_err_diag": np.asarray(npz["mu_err_diag"], dtype=np.float64),
+            "cov": cov,
+            "cov_inv": np.linalg.inv(cov),
+            "sha256": digest,
+            "hash_verified": bool(verified),
+            "cov_fidelity": "full" if verified else "unverified",
+        }
+    except Exception as exc:  # malformed/truncated npz — degrade, never crash import
+        logger.warning("Pantheon+ data product failed to load (%s); marking unverified", exc)
+        return _fallback("unverified")
+
 
 def _load_pantheon_plus_data() -> dict[str, np.ndarray]:
     global _pantheon_plus_data_cache
     if _pantheon_plus_data_cache is not None:
         return _pantheon_plus_data_cache
-    npz_path = _PANTHEON_PLUS_DATA_DIR / "data.npz"
-    if not npz_path.exists():
+    verified = load_verified_pantheon_plus_data("pantheon_plus")
+    if verified["cov"] is None:
         raise FileNotFoundError(
-            f"Pantheon+SH0ES data file missing: {npz_path}. "
+            f"Pantheon+SH0ES data file missing: {_PANTHEON_PLUS_DATA_DIR / 'data.npz'}. "
             "Run `python scripts/fetch_pantheon_plus.py` to download "
             "the 2022 release (~20 MB)."
         )
-    npz = np.load(npz_path)
-    cov = np.asarray(npz["cov"], dtype=np.float64)
-    _pantheon_plus_data_cache = {
-        "z_hd": np.asarray(npz["z_hd"], dtype=np.float64),
-        "z_hel": np.asarray(npz["z_hel"], dtype=np.float64),
-        "mu": np.asarray(npz["mu"], dtype=np.float64),
-        "mu_err_diag": np.asarray(npz["mu_err_diag"], dtype=np.float64),
-        "cov": cov,
-        "cov_inv": np.linalg.inv(cov),
-    }
+    # Source the fitted arrays FROM the verified loader so the covariance the χ²
+    # inverts is the same object the registry checksum verified (object identity).
+    _pantheon_plus_data_cache = {key: verified[key] for key in _PANTHEON_PLUS_ARRAY_KEYS}
     return _pantheon_plus_data_cache
 
 
