@@ -1,0 +1,7 @@
+# eBOSS DR16 RSD: [z] [fsigma8] [sigma]  (Alam et al. 2021 Table III, RSD-only, per-tracer diagonal)
+0.15 0.53 0.16
+0.38 0.5 0.047
+0.51 0.455 0.039
+0.7 0.448 0.043
+0.85 0.315 0.095
+1.48 0.462 0.045

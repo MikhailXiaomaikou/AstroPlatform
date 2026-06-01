@@ -410,6 +410,23 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "6dFGS/Lyα citations document the RSD-compilation context. "
             "fσ8 is H0-independent, so this constrains the (Ωm, σ8) combination."
         ),
+        data_products=(
+            DataProductSpec(
+                product_type="rsd_measurement_vector",
+                role="rsd_measurement_vector",
+                url="https://svn.sdss.org/public/data/eboss/DR16cosmo/tags/v1_0_1/",
+                format="ASCII table (z, fsigma8, sigma)",
+                description=(
+                    "6 RSD-only fσ8 points (z, fσ8, σ) from Alam et al. 2021 "
+                    "Table III; per-tracer diagonal errors (Table III note a, "
+                    "correlations ignored). sha256 pins the committed artifact; "
+                    "the full 6×6 inter-bin covariance is not a vendorable table."
+                ),
+                columns=("z", "fsigma8", "sigma"),
+                rows=6,
+                sha256="5d9bb1559ad9d2df4809e80b308681dea4b635ff7f64be39e316d8efe84b79c9",
+            ),
+        ),
         cobaya_likelihood="external:rsd.eboss_dr16_alam21",
         cosmosis_module="likelihood/rsd/eboss_dr16/eboss_dr16_rsd.py",
         nuisance_parameters=(
@@ -1708,7 +1725,10 @@ COSMIC_CHRONOMETER_HZ: tuple[tuple[float, float, float], ...] = load_verified_cc
 # excluded (the paper does not include it) and Lyα (z=2.33) reports no fσ8,
 # so the executable vector is 6 points (not the 7 the registry notes implied).
 EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS = {"eboss_dr16_rsd"}
-EBOSS_DR16_FSIGMA8: tuple[tuple[float, float, float], ...] = (
+# Legacy hand-typed eBOSS fσ8 — kept only as the loader fallback. Byte-derived
+# into data/cosmology/eboss_dr16_rsd/fsigma8.txt, which is what the fit reads
+# (provenance-binding, T1-U3/U4).
+_HARDCODED_EBOSS_FSIGMA8: tuple[tuple[float, float, float], ...] = (
     (0.15, 0.53, 0.16),    # SDSS MGS
     (0.38, 0.500, 0.047),  # BOSS Galaxy
     (0.51, 0.455, 0.039),  # BOSS Galaxy
@@ -1716,6 +1736,47 @@ EBOSS_DR16_FSIGMA8: tuple[tuple[float, float, float], ...] = (
     (0.85, 0.315, 0.095),  # eBOSS ELG
     (1.48, 0.462, 0.045),  # eBOSS QSO
 )
+
+
+@lru_cache(maxsize=None)
+def load_verified_rsd_data(dataset_key: str) -> dict[str, Any]:
+    """Load the eBOSS RSD fσ8 vector from the vendored, sha256-pinned file so the
+    fitted vector IS the checksummed array (object identity).  cov_fidelity is
+    'diagonal' — only per-tracer diagonal errors are published (Alam+2021 Table
+    III note a); the full 6×6 inter-bin covariance is a separate offline
+    reconstruction.  Honest fallback to the hand-typed vector with
+    cov_fidelity='literature_typed' if the file is absent.
+    """
+    path = _VENDORED_COSMO_DATA_DIR / dataset_key / "fsigma8.txt"
+    if not path.exists():
+        return {
+            "fsigma8_vector": tuple(_HARDCODED_EBOSS_FSIGMA8),
+            "sha256": None,
+            "hash_verified": False,
+            "cov_fidelity": "literature_typed",
+        }
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    verified = digest == _registry_product_sha256(dataset_key, "rsd_measurement_vector")
+    rows: list[tuple[float, float, float]] = []
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        z_str, f_str, sigma_str = stripped.split()
+        rows.append((float(z_str), float(f_str), float(sigma_str)))
+    return {
+        "fsigma8_vector": tuple(rows),
+        "sha256": digest,
+        "hash_verified": bool(verified),
+        "cov_fidelity": "diagonal" if verified else "unverified",
+    }
+
+
+# The fσ8 vector the chi² fits — sourced from the verified loader so the fit
+# reads the sha256-pinned committed artifact, not a hand-typed copy.
+EBOSS_DR16_FSIGMA8: tuple[tuple[float, float, float], ...] = load_verified_rsd_data(
+    "eboss_dr16_rsd"
+)["fsigma8_vector"]
 
 
 def compute_model_comparison(
