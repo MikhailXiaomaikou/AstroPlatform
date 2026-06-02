@@ -1,0 +1,27 @@
+# Feasibility test: evaluate CAMB + the 4 clik-free Planck 2018 likelihoods once at
+# the Planck 2018 fiducial, to confirm the full-CMB path runs and returns a finite
+# log-likelihood (chi2 ~ number of CMB data points). Nuisance params take their
+# bundled reference values.
+theory:
+  camb:
+    extra_args:
+      lens_potential_accuracy: 1
+likelihood:
+  planck_2018_lowl.TT:
+  planck_2018_lowl.EE_sroll2:
+  planck_2018_highl_CamSpec2021.TTTEEE:
+  planck_2018_lensing.native:
+params:
+  H0: 67.36
+  ombh2: 0.02237
+  omch2: 0.1200
+  tau: 0.0544
+  ns: 0.9649
+  logA:
+    value: 3.044
+    drop: true
+  As:
+    value: "lambda logA: 1e-10*np.exp(logA)"
+  mnu: 0.06
+sampler:
+  evaluate:
