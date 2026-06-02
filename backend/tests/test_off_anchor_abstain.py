@@ -80,3 +80,34 @@ def test_extended_models_converge_but_stay_off_anchor_review():
     # lcdm (anchored Ωm/H0) is NOT off-anchor — unaffected, may still publish.
     r2 = run_likelihood_chain(model="lcdm", dataset_keys=["desi_dr1_bao"], n_samples=2000, random_seed=42)
     assert not r2.get("off_anchor_review_required")
+
+
+def test_external_cobaya_runner_applies_off_anchor_gate():
+    """Code-review fix: the external Cobaya success path (_runner_success) must
+    apply the SAME off-anchor guard as the in-process path. A converged off-anchor
+    extended model is never publication_ready and carries off_anchor_review_required
+    (claim_validator keys only on publication_ready, so without this an external
+    w0/wa chain could be quoted as a published conclusion). lcdm is unaffected."""
+    from app.services.cobaya_runner import _runner_success
+    from app.services.cosmology_likelihoods import get_cosmology_dataset
+
+    good_diag = {"overall_status": "ok", "rhat": 1.01, "ess_bulk": 1200}
+    entries = [
+        get_cosmology_dataset(k)
+        for k in ("desi_dr1_bao", "pantheon_plus", "planck2018_compressed")
+    ]
+    r = _runner_success(
+        model_key="w0wa_cdm", entries=entries, seed=42, sampler="mcmc",
+        summaries={"w0": {"median": -0.83}, "wa": {"median": -0.75}},
+        diagnostics=good_diag, chain_meta={}, stdout_tail="",
+    )
+    assert r["publication_ready"] is False
+    assert r["off_anchor_review_required"] is True
+
+    r2 = _runner_success(
+        model_key="lcdm", entries=[get_cosmology_dataset("desi_dr1_bao")], seed=42,
+        sampler="mcmc", summaries={"omegam": {"median": 0.30}},
+        diagnostics=good_diag, chain_meta={}, stdout_tail="",
+    )
+    assert r2["publication_ready"] is True
+    assert r2["off_anchor_review_required"] is False

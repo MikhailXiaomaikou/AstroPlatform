@@ -128,6 +128,31 @@ async def load_cosmology_data_product(
     if not product.sha256:
         warnings.append("Registry entry has no sha256; content integrity is not pinned.")
 
+    # Binary products (e.g. the Pantheon+ data.npz) must NOT be utf-8-decoded and
+    # parsed as a text table: that turned a 20 MB blob into ~556k garbage "rows"
+    # flagged publication_ready.  A matching sha256 only proves the bytes are the
+    # pinned bytes, NOT that they are a parseable ASCII table, so it cannot rescue
+    # this.  Refuse here; binary products load via the in-process likelihood runner.
+    fmt = str(getattr(product, "format", "") or "").lower()
+    if fmt in {"npz", "npy", "fits", "binary", "hdf5", "h5"}:
+        return {
+            "success": False,
+            "__tool_status__": "UNAVAILABLE",
+            "analysis_status": "COSMOLOGY_DATA_PRODUCT_UNAVAILABLE",
+            "publication_ready": False,
+            "dataset_key": entry.key,
+            "product": product.to_dict(),
+            "source": source,
+            "sha256": digest,
+            "hash_verified": hash_verified,
+            "warnings": warnings + [
+                f"Binary data product (format={fmt!r}) is not text-parseable; "
+                "load it via the in-process likelihood runner, not this loader."
+            ],
+            "error": f"Binary data product (format={fmt!r}) cannot be parsed as a text table.",
+            "__do_not_claim__": True,
+        }
+
     text = raw_bytes.decode("utf-8", errors="replace")
     parsed = _parse_product_text(text, product=product, max_preview_rows=max_preview_rows)
     # positive_definite defaults True for non-matrix products (tables don't

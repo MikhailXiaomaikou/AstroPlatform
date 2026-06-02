@@ -631,17 +631,26 @@ def _runner_success(
         MODEL_LABELS,
         _collect_citations,
     )
+    from app.services.cosmology_oracle import chain_is_off_anchor
 
+    # Off-anchor guard (mirrors the in-process sampling path): a converged
+    # extended-model chain whose frontier parameters (w/w0/wa) have no reproduced
+    # anchor is never publication-ready, even via the external Cobaya backend —
+    # otherwise claim_validator (which keys only on publication_ready) would let
+    # its w0/wa be quoted as a published conclusion.
+    off_anchor = chain_is_off_anchor(model_key, [entry.key for entry in entries])
     publication_ready = (
         diagnostics.get("overall_status") == "ok"
         and (diagnostics.get("rhat") or 0.0) <= 1.05
         and (diagnostics.get("ess_bulk") or 0.0) >= 400
+        and not off_anchor
     )
     return {
         "success": True,
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
         "analysis_status": "EXTERNAL_COBAYA_READY" if publication_ready else "PARTIAL",
         "publication_ready": publication_ready,
+        "off_anchor_review_required": off_anchor,
         "model": model_key,
         "model_label": MODEL_LABELS.get(model_key, model_key),
         "sampler": f"cobaya:{sampler}",

@@ -2212,12 +2212,20 @@ def run_likelihood_chain(
     cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
         compressed_entries, warnings
     )
+    # Off-anchor guard, mirrored from the sampling path: an extended-model chain
+    # whose frontier parameters (w/w0/wa) have no reproduced anchor is never
+    # publication-ready.  This analytic branch is lcdm-only today (guarded
+    # upstream), so chain_is_off_anchor short-circuits to False — a no-op now
+    # that removes the latent asymmetry if that upstream guard is ever relaxed.
+    from app.services.cosmology_oracle import chain_is_off_anchor
+    off_anchor = chain_is_off_anchor(model_key, [entry.key for entry in compressed_entries])
     publication_ready = (
         not invalid_specs
         and not prior_violations
         and not skipped_entries
         and not s8_underpowered
         and fidelity_ok
+        and not off_anchor
     )
     # Compressed-Gaussian analytic path is otherwise binary by construction: the
     # posterior is closed-form so there is no "exploratory" intermediate (the
@@ -2229,6 +2237,7 @@ def run_likelihood_chain(
         "analysis_status": "COMPRESSED_CHAIN_READY" if publication_ready else "PARTIAL",
         "publication_ready": publication_ready,
         "chain_tier": chain_tier,
+        "off_anchor_review_required": off_anchor,
         "claim_scope": "compressed_likelihood_preliminary",
         "compressed_likelihood_preliminary": True,
         "model": model_key,
@@ -2686,7 +2695,8 @@ def _run_sampling_likelihood_chain(
             derived_summaries[name] = summaries[name]
 
     used_keys = {
-        entry.key for entry in bao_entries + compressed_entries + cc_entries + rsd_entries
+        entry.key
+        for entry in bao_entries + compressed_entries + cc_entries + rsd_entries + sn_entries
     }
     used_entries = [entry for entry in entries if entry.key in used_keys]
     # Each executable BAO entry contributes its own measurement vector (DESI DR1
@@ -3736,6 +3746,11 @@ def _load_pantheon_plus_data() -> dict[str, np.ndarray]:
             "Run `python scripts/fetch_pantheon_plus.py` to download "
             "the 2022 release (~20 MB)."
         )
+    if verified.get("cov_fidelity") == "unverified":
+        raise ValueError(
+            "Pantheon+ covariance failed sha256 verification (digest mismatch); "
+            "refusing to compute chi2 from unverified data — re-fetch the release."
+        )
     return {
         "z_hd": verified["z_hd"], "z_hel": verified["z_hel"], "mu": verified["mu"],
         "mu_err_diag": verified["mu_err_diag"], "cov": verified["cov"],
@@ -4558,7 +4573,13 @@ def _build_cosmosis_config(
 
 def _model_theory_args(model: str) -> dict[str, Any]:
     args: dict[str, Any] = {"dark_energy_model": "lambda"}
-    if "wcdm" in model:
+    if "w0wa" in model:
+        # CPL w(a)=w0+wa(1-a): PPF lets w cross -1.  The substring "wcdm" is NOT
+        # contained in "w0wa_cdm", so the CPL keys must be matched explicitly and
+        # FIRST — otherwise every w0waCDM model silently fell through to "lambda"
+        # (a pure cosmological constant) while w0/wa were still being sampled.
+        args["dark_energy_model"] = "ppf"
+    elif "wcdm" in model:
         args["dark_energy_model"] = "fluid"
     if "mnu" in model:
         args["num_massive_neutrinos"] = 1

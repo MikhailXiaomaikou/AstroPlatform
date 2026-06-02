@@ -109,6 +109,26 @@ def test_load_cosmology_data_product_reads_local_for_rsd():
     assert out["hash_verified"] is True and out["source"].startswith("local:")
 
 
+def test_npz_binary_product_refused_not_parsed_as_text():
+    """Code-review fix: selecting the Pantheon+ binary npz product by product_type
+    must NOT utf-8-decode it into a ~556k-row garbage table flagged
+    publication_ready. The LAST-ordering only guarded the default no-role call; an
+    explicit product_type defeated it. The loader now short-circuits binary
+    formats to UNAVAILABLE + __do_not_claim__ (sha256 match does not rescue it)."""
+    from app.services.cosmology_data_products import load_cosmology_data_product
+
+    out = asyncio.run(load_cosmology_data_product(
+        dataset_key="pantheon_plus",
+        product_type="sn_full_data_npz",
+        allow_network=False,
+    ))
+    assert out["success"] is False
+    assert out["publication_ready"] is False
+    assert out["__tool_status__"] == "UNAVAILABLE"
+    assert out["__do_not_claim__"] is True
+    assert "parse" not in out  # no fabricated parsed table
+
+
 # ── T1-U6c: executed compressed-Gaussian summaries certify 'literature_typed' ──
 # A hand-typed Gaussian summary is honestly 'literature_typed' (no released file),
 # never None.  This generalizes to ALL compressed probes (SN + CMB), which is what

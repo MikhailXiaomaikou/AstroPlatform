@@ -1,5 +1,10 @@
-# Full w0waCDM reproduction: DESI DR1 BAO + Pantheon+ SN + Planck 2018 CMB
-# (clik-free), via Cobaya + CAMB, using Cobaya's OWN native official likelihoods.
+# w0waCDM: DESI DR1 BAO + Pantheon+ SN + a CLIK-FREE Planck 2018 CMB stack
+# (CamSpec2021 high-l TT/TE/EE + native low-l TT/EE + native lensing), via Cobaya
+# + CAMB using Cobaya's OWN native official likelihoods.  NOTE: DESI 2024 VI's
+# published "CMB" is plik (PR3) high-l + PR4/ACT lensing — we use the clik-free
+# CamSpec+native stack because plik needs the clik C library (hard on macOS).
+# So this is a CLOSE proxy, NOT byte-identical: expect w0/wa within a few tenths
+# of a sigma of Table 3, not an exact match.
 # Target (DESI 2024 VI Table 3, DESI+CMB+PantheonPlus): w0 = -0.827 +- 0.063,
 # wa = -0.75 (+0.29/-0.25), ~2.5 sigma from LambdaCDM (w0=-1, wa=0).
 theory:
@@ -69,5 +74,5 @@ sampler:
   mcmc:
     drag: true
     oversample_power: 0.4
-    Rminus1_stop: 0.05      # coarse first pass; tighten to 0.01 for the final run
+    Rminus1_stop: 0.05      # COARSE first pass / preliminary read ONLY; analyze_w0wa_run.py refuses to call 0.05 a clean reproduction. Tighten to 0.01 and resume for the publication-grade final.
     max_tries: 10000
