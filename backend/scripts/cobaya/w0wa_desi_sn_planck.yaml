@@ -1,0 +1,73 @@
+# Full w0waCDM reproduction: DESI DR1 BAO + Pantheon+ SN + Planck 2018 CMB
+# (clik-free), via Cobaya + CAMB, using Cobaya's OWN native official likelihoods.
+# Target (DESI 2024 VI Table 3, DESI+CMB+PantheonPlus): w0 = -0.827 +- 0.063,
+# wa = -0.75 (+0.29/-0.25), ~2.5 sigma from LambdaCDM (w0=-1, wa=0).
+theory:
+  camb:
+    extra_args:
+      lens_potential_accuracy: 1
+      num_massive_neutrinos: 1
+      dark_energy_model: ppf   # PPF allows w(a) to cross -1
+likelihood:
+  planck_2018_lowl.TT:
+  planck_2018_lowl.EE_sroll2:
+  planck_2018_highl_CamSpec2021.TTTEEE:
+  planck_2018_lensing.native:
+  bao.desi_2024_bao_all:
+  sn.pantheonplus:
+params:
+  ombh2:
+    prior: {min: 0.005, max: 0.1}
+    ref: {dist: norm, loc: 0.02237, scale: 0.0002}
+    proposal: 0.0001
+    latex: \Omega_\mathrm{b} h^2
+  omch2:
+    prior: {min: 0.001, max: 0.99}
+    ref: {dist: norm, loc: 0.12, scale: 0.002}
+    proposal: 0.001
+    latex: \Omega_\mathrm{c} h^2
+  H0:
+    prior: {min: 40, max: 100}
+    ref: {dist: norm, loc: 67, scale: 2}
+    proposal: 1.0
+    latex: H_0
+  tau:
+    prior: {min: 0.01, max: 0.8}
+    ref: {dist: norm, loc: 0.055, scale: 0.006}
+    proposal: 0.003
+    latex: \tau_\mathrm{reio}
+  ns:
+    prior: {min: 0.8, max: 1.2}
+    ref: {dist: norm, loc: 0.965, scale: 0.004}
+    proposal: 0.002
+    latex: n_\mathrm{s}
+  logA:
+    prior: {min: 1.61, max: 3.91}
+    ref: {dist: norm, loc: 3.05, scale: 0.01}
+    proposal: 0.005
+    drop: true
+    latex: \log(10^{10} A_\mathrm{s})
+  As:
+    value: "lambda logA: 1e-10*np.exp(logA)"
+    latex: A_\mathrm{s}
+  w:
+    prior: {min: -3.0, max: -0.3}
+    ref: {dist: norm, loc: -0.9, scale: 0.1}
+    proposal: 0.05
+    latex: w_0
+  wa:
+    prior: {min: -3.0, max: 2.0}
+    ref: {dist: norm, loc: -0.3, scale: 0.3}
+    proposal: 0.2
+    latex: w_a
+  mnu: 0.06
+  omegam:
+    latex: \Omega_\mathrm{m}
+  sigma8:
+    latex: \sigma_8
+sampler:
+  mcmc:
+    drag: true
+    oversample_power: 0.4
+    Rminus1_stop: 0.05      # coarse first pass; tighten to 0.01 for the final run
+    max_tries: 10000

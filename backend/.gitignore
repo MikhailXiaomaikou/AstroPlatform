@@ -1,3 +1,4 @@
 
 # Cobaya-installed Planck/CMB likelihood data (large; install locally)
 packages/
+cobaya_runs/
