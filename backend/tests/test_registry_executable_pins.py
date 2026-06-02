@@ -17,11 +17,21 @@ def test_every_executable_probe_reads_a_verified_pinned_file():
     assert issues == [], "executable probes without a verified sha256 pin:\n" + "\n".join(issues)
 
 
-def test_role_map_covers_every_non_allowlisted_executable_probe():
-    keys = cl._executable_probe_keys()
-    assert keys, "no executable probes discovered"
-    for k in keys - cl._NO_RELEASED_FILE_OK:
-        assert k in cl._EXECUTABLE_PROBE_ROLE, f"{k} executable but has no verified-role mapping"
+def test_every_non_allowlisted_executable_probe_certifies_a_file_backed_fidelity():
+    # The audit relies on the loader's own hash_verified/cov_fidelity (no parallel
+    # role map): each non-allowlisted executable probe must verify to a file-backed
+    # grade.
+    for k in cl._executable_probe_keys() - cl._NO_RELEASED_FILE_OK:
+        if k in cl._BAO_DATA:
+            v = cl.load_verified_bao_data(k)
+        elif k in cl.COSMIC_CHRONOMETER_EXECUTABLE_KEYS:
+            v = cl.load_verified_cc_data(k)
+        elif k in cl.EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS:
+            v = cl.load_verified_rsd_data(k)
+        else:
+            v = cl.load_verified_pantheon_plus_data(k)
+        assert v["hash_verified"] is True, k
+        assert v["cov_fidelity"] in ("full", "diagonal"), (k, v["cov_fidelity"])
 
 
 def test_sdss_6df_is_the_allowlisted_no_file_probe():

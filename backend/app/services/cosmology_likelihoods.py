@@ -1771,6 +1771,26 @@ def _aggregate_cov_fidelity(
         key=lambda f: _COV_FIDELITY_ORDER.index(f) if f in _COV_FIDELITY_ORDER else -1,
     )
     return (weakest, artifact_sha256)
+
+
+def _finalize_cov_fidelity(
+    executed_entries: list[CosmologyDatasetEntry], warnings: list[str]
+) -> tuple[str | None, dict[str, str | None], bool]:
+    """Aggregate cov_fidelity across executed probes, append the publication-block
+    warning when it is unstamped (None) or unverified, and return whether it is
+    publication-eligible.  Single source for BOTH runners (inline analytic +
+    sampling) so the None/unverified gate and its warning cannot drift apart."""
+    cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(executed_entries)
+    fidelity_ok = cov_fidelity not in (None, "unverified")
+    if not fidelity_ok:
+        warnings.append(
+            "A fitted data product failed sha256 verification (vendored file "
+            "missing or bytes do not match the registry pin) or is an unstamped "
+            f"probe (cov_fidelity={cov_fidelity!r}); not publication-ready."
+        )
+    return cov_fidelity, artifact_sha256, fidelity_ok
+
+
 C_LIGHT_KM_S = 299792.458
 
 
@@ -1881,12 +1901,6 @@ EBOSS_DR16_FSIGMA8: tuple[tuple[float, float, float], ...] = load_verified_rsd_d
 # exception: a probe with no released data file (a hand-typed literature
 # compilation) is allowlisted and must certify 'literature_typed' instead.
 _NO_RELEASED_FILE_OK = frozenset({"sdss_6df_bao"})
-_EXECUTABLE_PROBE_ROLE: dict[str, str] = {
-    "desi_dr1_bao": "covariance",
-    "cosmic_chronometers": "hz_measurement_vector",
-    "eboss_dr16_rsd": "rsd_measurement_vector",
-    "pantheon_plus": "sn_full_data_npz",
-}
 
 
 def _executable_probe_keys() -> set[str]:
@@ -1905,7 +1919,12 @@ def audit_executable_pins() -> list[str]:
     sha256-verified vendored file (hash_verified True, fidelity full/diagonal),
     EXCEPT allowlisted no-released-file probes, which must certify
     'literature_typed'.  Used by tests and scripts/audit_registry.py so a future
-    executable probe cannot ship without a pinned, verified data product."""
+    executable probe cannot ship without a pinned, verified data product.
+
+    The check relies on each loader's own hash_verified/cov_fidelity — which can
+    only be True / 'full' / 'diagonal' when a sha256-pinned product matched the
+    vendored file — so there is no parallel role map that could drift out of sync
+    with what the loaders actually verify."""
     issues: list[str] = []
     for key in sorted(_executable_probe_keys()):
         if key in _BAO_DATA:
@@ -1925,12 +1944,6 @@ def audit_executable_pins() -> list[str]:
                 )
             continue
 
-        role = _EXECUTABLE_PROBE_ROLE.get(key)
-        if role is None:
-            issues.append(f"{key}: executable but missing from _EXECUTABLE_PROBE_ROLE")
-            continue
-        if not _registry_product_sha256(key, role):
-            issues.append(f"{key}: no sha256-pinned DataProductSpec for role {role!r}")
         if not verified.get("hash_verified"):
             issues.append(
                 f"{key}: vendored file not sha256-verified "
@@ -2196,18 +2209,15 @@ def run_likelihood_chain(
     # Every executed compressed summary is a hand-typed Gaussian -> 'literature_typed'
     # (no released file to checksum); stamp it so a compressed-only chain is never
     # left with an unstamped (None) fidelity the publication gate would ignore.
-    cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(compressed_entries)
-    if cov_fidelity in (None, "unverified"):
-        warnings.append(
-            "A fitted data product failed sha256 verification or is an unstamped "
-            f"probe (cov_fidelity={cov_fidelity!r}); not publication-ready."
-        )
+    cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
+        compressed_entries, warnings
+    )
     publication_ready = (
         not invalid_specs
         and not prior_violations
         and not skipped_entries
         and not s8_underpowered
-        and cov_fidelity not in (None, "unverified")
+        and fidelity_ok
     )
     # Compressed-Gaussian analytic path is otherwise binary by construction: the
     # posterior is closed-form so there is no "exploratory" intermediate (the
@@ -2726,20 +2736,14 @@ def _run_sampling_likelihood_chain(
             f"Importance sampler ESS={proposal_ess:.1f} below publication threshold 400."
         )
 
-    cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(
-        bao_entries + cc_entries + rsd_entries + sn_entries + compressed_entries
+    cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
+        bao_entries + cc_entries + rsd_entries + sn_entries + compressed_entries, warnings
     )
-    if cov_fidelity in (None, "unverified"):
-        warnings.append(
-            "A fitted data product failed sha256 verification (vendored file "
-            "missing or bytes do not match the registry pin) or is an unstamped "
-            f"probe (cov_fidelity={cov_fidelity!r}); not publication-ready."
-        )
     publication_ready = (
         not invalid_specs
         and not skipped_entries
         and proposal_ess >= 400.0
-        and cov_fidelity not in (None, "unverified")
+        and fidelity_ok
     )
     # Importance-sampler three-tier (mirrors fit_cosmology_emcee, 2026-05-21):
     #   publication: ESS ≥ 400 and no invalid specs
