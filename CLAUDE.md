@@ -30,7 +30,7 @@ python3 -m pytest tests/test_api.py -k test_search  # single test
 python3 -c "import py_compile, glob; [py_compile.compile(f, doraise=True) for f in glob.glob('app/**/*.py', recursive=True)]"
 
 # Science-regression benchmarks (CI-runnable, no LLM, no network)
-python3 scripts/benchmarks/run_cosmology_benchmarks.py    # 17 baselines
+python3 scripts/benchmarks/run_cosmology_benchmarks.py    # 20 baselines
 python3 scripts/benchmarks/run_solar_system_benchmarks.py # 6 baselines
 python3 scripts/audit_registry.py                          # 18 dataset-registry entries
 python3 scripts/audit_citation_pool.py                     # bibcode reachability
@@ -189,7 +189,7 @@ Eight-layer regression net the project commits to keep green. Maps to
 | Manifest ↔ schema ↔ dispatch consistency | `tests/test_manifest_dispatch_consistency.py` (regression for the `45383ac` "manifest forgot to register" class) | every push / PR |
 | Red-team numeric corpus | `tests/_red_team_cases/numeric_claims.yaml` + `tests/test_red_team_corpus.py` (15 cases ≥10 floor) | every push / PR |
 | Security / privacy | `tests/security/test_{account_isolation,secret_leakage,admin_endpoints_gate,debug_endpoints_gate}.py` (16+1 cases) | every push / PR |
-| Science benchmarks | `scripts/benchmarks/run_{cosmology,solar_system,exoplanet}_benchmarks.py` (8+6+6 pinned baselines) + `scripts/audit_registry.py` | push to main only (CI `benchmarks` job, push-only, NOT PR-gated) |
+| Science benchmarks | `scripts/benchmarks/run_{cosmology,solar_system,exoplanet}_benchmarks.py` (20+6+6 pinned baselines) + `scripts/audit_registry.py` | push to main only (CI `benchmarks` job, push-only, NOT PR-gated) |
 | Paper-derived blind tests (LLM) | `scripts/blind_test_{m0,exoplanet_m0,cosmology_m0}/cases.yaml + runner.py`, orchestrated by `scripts/daily_blind.sh` | daily 16:00 UTC + manual dispatch with module/cases inputs (`.github/workflows/daily.yml`) |
 | Pre-alpha citation-pool audit | `scripts/audit_citation_pool.py` | pre-alpha, manual |
 

@@ -57,3 +57,22 @@ def test_consistency_goal_is_abstained_not_answered():
     assert out["route"] == "human_review"
     assert out["off_anchor_abstained"] is True
     assert out["publication_ready"] is False
+
+
+def test_extended_off_anchor_models_never_reach_publication_tier():
+    """The abstain policy ("no off-anchor autonomous conclusions") is ALREADY
+    enforced in the live chain path, not only by the oracle rail: every non-LCDM
+    extended model (off-anchor w0/wa / curvature / neutrino-mass parameters) comes
+    back publication_ready=False, so the claim_validator — which supports posterior
+    claims only when publication_ready=True — cannot let an off-anchor parameter be
+    quoted as a published conclusion. This locks that guarantee, so if a future
+    change makes an extended model publication-ready, it fails here and forces the
+    oracle abstain rail to be wired in at that point."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain, SUPPORTED_MODELS
+
+    ds = ["desi_dr1_bao", "pantheon_plus"]
+    for m in SUPPORTED_MODELS:
+        if m == "lcdm":
+            continue
+        r = run_likelihood_chain(model=m, dataset_keys=ds, n_samples=2000, random_seed=42)
+        assert r.get("publication_ready") is not True, (m, r.get("chain_tier"))
