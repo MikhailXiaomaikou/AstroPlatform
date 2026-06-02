@@ -416,7 +416,7 @@ def bench_w0wa_full_sn_w0_tight() -> dict[str, Any]:
         return {
             "pass": True,
             "skipped": "needs PANTHEON_PLUS_FULL_CHI2_ENABLED (~5 min full 1701-SN w0wa fit; local/Actions, free)",
-            "target": "full-SN w0waCDM tightens σ_w0 to ≤ 0.09 (~DESI 0.063) at publication tier",
+            "target": "full-SN w0waCDM tightens σ_w0 to ≤ 0.09 (~DESI 0.063); stays off-anchor exploratory",
         }
     r = run_likelihood_chain(
         model="w0wa_cdm",
@@ -426,10 +426,19 @@ def bench_w0wa_full_sn_w0_tight() -> dict[str, Any]:
     w0 = r.get("parameters", {}).get("w0", {})
     sig = w0.get("std")
     return {
-        "pass": isinstance(sig, (int, float)) and sig <= 0.09 and r.get("publication_ready") is True,
+        # The benchmark's point is the DATA-COMPRESSION claim: the full 1701-SN
+        # covariance tightens σ_w0 to ~DESI precision.  w0waCDM is off-anchor, so by
+        # the safety contract it MUST stay exploratory (publication_ready False +
+        # off_anchor_review_required True), never publication — assert that too.
+        "pass": (
+            isinstance(sig, (int, float)) and sig <= 0.09
+            and r.get("publication_ready") is False
+            and r.get("off_anchor_review_required") is True
+        ),
         "w0_median": w0.get("median"),
         "w0_sigma": sig,
-        "target": "full-SN w0waCDM tightens σ_w0 to ≤ 0.09 (~DESI 0.063) at publication tier",
+        "off_anchor_review_required": r.get("off_anchor_review_required"),
+        "target": "full-SN w0waCDM tightens σ_w0 to ≤ 0.09 (~DESI 0.063); stays off-anchor exploratory",
     }
 
 
@@ -727,9 +736,30 @@ def bench_s8_derived_consistency() -> dict[str, Any]:
     }
 
 
+def bench_cmb_distance_prior_reproduces_planck() -> dict[str, Any]:
+    """The CMB distance-prior kernel must reproduce the published Planck 2018
+    distance priors at LCDM-Planck params (Chen-Huang-Wang 2019, arXiv:1808.05724,
+    Table I): R=1.7502±0.0046, l_A=301.471±0.090. Locks the acoustic-scale prior
+    used for extended FLAT dark-energy CMB constraints so the physics can't drift."""
+    from app.services.cosmology_likelihoods import _cmb_distance_priors
+
+    R, lA, _ = _cmb_distance_priors(0.3153, 67.36, 0.02237, w0=-1.0, wa=0.0)
+    return {
+        # Tight bounds around the validated kernel output (R≈1.7496, l_A≈301.55),
+        # both inside ~1σ of the published prior.
+        "pass": (1.749 < R < 1.751) and (301.40 < lA < 301.70),
+        "R": round(R, 4),
+        "l_A": round(lA, 3),
+        "R_pub_dev_sigma": round((R - 1.7502) / 0.0046, 2),
+        "lA_pub_dev_sigma": round((lA - 301.471) / 0.090, 2),
+        "target": "R=1.7502±0.0046, l_A=301.471±0.090 (CHW2019 Table I), within ~1σ",
+    }
+
+
 BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("lcdm_h0_anchor", bench_lcdm_h0_anchor),
     ("wcdm_w_near_minus_one", bench_wcdm_w_near_minus_one),
+    ("cmb_distance_prior_reproduces_planck", bench_cmb_distance_prior_reproduces_planck),
     ("hubble_tension_planck18_vs_riess22", bench_hubble_tension_planck18_vs_riess22),
     ("alcock_paczynski_omega_m", bench_alcock_paczynski_omega_m),
     ("chain_tier_blocked_on_inline", bench_chain_tier_blocked_on_inline),
