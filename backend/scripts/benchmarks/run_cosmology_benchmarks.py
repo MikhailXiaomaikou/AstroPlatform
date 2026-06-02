@@ -398,6 +398,36 @@ def bench_pantheon_full_cov_fidelity() -> dict[str, Any]:
     }
 
 
+def bench_oracle_genuine_reproductions() -> dict[str, Any]:
+    """T1-U16: every GENUINE oracle anchor reproduces its published value.
+
+    Runs the harness over the independent (parameter recovery: DESI-only Ωm,
+    DESI+CMB Ωm) and fit_quality (reduced χ²: CC, eBOSS) anchors and asserts each
+    lands within tolerance.  The compressed self-consistency anchors are excluded
+    — they trivially recover their own input and are not a correctness check."""
+    from app.services.cosmology_oracle import PUBLISHED_ANCHORS, reproduce_anchor
+
+    out: dict[str, Any] = {}
+    ok = True
+    for a in PUBLISHED_ANCHORS:
+        if a.independence == "consistency":
+            continue
+        r = reproduce_anchor(a)
+        ok = ok and bool(r["within_tol"])
+        val = r["reproduced_value"]
+        out[a.goal_key] = {
+            "kind": a.independence,
+            "reproduced": round(val, 4) if isinstance(val, (int, float)) else None,
+            "published": a.value,
+            "within_tol": r["within_tol"],
+        }
+    return {
+        "pass": ok,
+        **out,
+        "target": "every independent + fit_quality oracle anchor reproduces within tol",
+    }
+
+
 def bench_model_comparison_delta() -> dict[str, Any]:
     """Real model comparison Δχ²/ΔAIC/ΔBIC (3.2, 2026-05-29).
 
@@ -682,6 +712,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("sn_omegam_compressed", bench_sn_omegam_compressed),
     ("sn_compressed_provenance", bench_sn_compressed_provenance),
     ("pantheon_full_cov_fidelity", bench_pantheon_full_cov_fidelity),
+    ("oracle_genuine_reproductions", bench_oracle_genuine_reproductions),
 ]
 
 
