@@ -44,6 +44,15 @@ def test_coverage_reports_genuine_reproductions():
     assert "pantheon_plus_omegam" not in cov["genuine_goals"]
 
 
+def test_coverage_reports_denominator_stable_genuine_metric():
+    # genuine_of_anchored divides genuine by the ANCHOR count, not by a denominator
+    # that includes the off-anchor list — so it does not move when an off-anchor
+    # goal is added/removed (code-review #9).
+    cov = oracle_coverage()
+    n_gen = sum(1 for a in PUBLISHED_ANCHORS if a.independence in ("independent", "fit_quality"))
+    assert cov["genuine_of_anchored"] == round(n_gen / cov["n_covered"], 4)
+
+
 def test_is_covered_distinguishes_anchored_from_off_anchor():
     assert is_covered("desi_dr1_bao_omegam") is True
     assert is_covered("omega_k_curvature") is False

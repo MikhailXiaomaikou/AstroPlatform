@@ -44,32 +44,37 @@ PUBLISHED_ANCHORS: tuple[OracleAnchor, ...] = (
         "2404.03002", "DESI DR1 BAO flat-ΛCDM Ωm (Adame et al. 2024)",
     ),
     OracleAnchor(
-        # Genuine joint reproduction: fitting DESI BAO distance ratios + the
-        # Planck CMB compressed summary recovers Ωm BETWEEN the two inputs
-        # (DESI-only 0.295, Planck-only 0.3153), landing near the published
-        # DESI 2024 VI BAO+CMB value 0.307 ± 0.005.  tol 0.015 is honest about
-        # our compressed-Planck approximation vs the full Planck likelihood.
-        "desi_cmb_omegam", "omegam", 0.307, 0.015,
+        # Joint BAO+CMB fit (sums both χ²); recovers Ωm=0.312, consistent with the
+        # published DESI 2024 VI BAO+CMB value 0.307 ± 0.005 within tol.  HONEST
+        # CAVEAT: the compressed-Planck Ωm (σ≈0.007) is much tighter than the BAO
+        # Ωm constraint, so this joint is CMB-dominated — the recovered 0.312 sits
+        # near Planck-only (0.3153), not midway, and the BAO leg moves it only
+        # weakly.  It demonstrates the platform can combine probes, but is a weak
+        # test of the BAO contribution.  tol 0.012 (≈2.4σ) over the published error.
+        "desi_cmb_omegam", "omegam", 0.307, 0.012,
         ("desi_dr1_bao", "planck2018_compressed"), "lcdm",
         "independent",
         "2404.03002", "DESI DR1 BAO + CMB flat-ΛCDM Ωm (DESI 2024 VI)",
     ),
     OracleAnchor(
         # Genuine fit-quality reproduction (not a parameter recovery — CC-only
-        # H0/Ωm are degenerate): flat-ΛCDM fits the 31 published cosmic-
-        # chronometer H(z) points with reduced χ² ≈ 0.5 (conservative CC errors).
-        # Band [0.3, 1.2] mirrors the cosmic_chronometer_hz benchmark.
-        "cc_fit_quality", "chi2_dof", 0.75, 0.45, ("cosmic_chronometers",), "lcdm",
+        # H0/Ωm are degenerate): flat-ΛCDM fits the 31 published cosmic-chronometer
+        # H(z) points (data source: Gómez-Valent & Amendola 2018) with reduced χ²
+        # in the good-fit range.  value=1.0 is the EXPECTED reduced χ² of a correct
+        # model (a statistical expectation, NOT a number this paper reports);
+        # tol=0.6 is the acceptable-fit window.  Actual recovery ≈ 0.50.
+        "cc_fit_quality", "chi2_dof", 1.0, 0.6, ("cosmic_chronometers",), "lcdm",
         "fit_quality",
-        "1802.01505", "Cosmic-chronometer H(z) ΛCDM fit quality (Gómez-Valent & Amendola 2018 compilation)",
+        "1802.01505", "Cosmic-chronometer H(z) ΛCDM fit quality (data: Gómez-Valent & Amendola 2018)",
     ),
     OracleAnchor(
         # Genuine fit-quality reproduction: flat-ΛCDM growth fits the 6 published
-        # eBOSS DR16 RSD fσ8 points with reduced χ² ≈ 1.3.  Band [0.3, 2.0]
-        # mirrors the eboss_fsigma8_growth benchmark.
-        "eboss_fit_quality", "chi2_dof", 1.15, 0.85, ("eboss_dr16_rsd",), "lcdm",
+        # eBOSS DR16 RSD fσ8 points (data source: Alam et al. 2021).  value=1.0 is
+        # the expected reduced χ² of a correct model (not a paper-reported number);
+        # tol=0.7 is the acceptable-fit window.  Actual recovery ≈ 1.32.
+        "eboss_fit_quality", "chi2_dof", 1.0, 0.7, ("eboss_dr16_rsd",), "lcdm",
         "fit_quality",
-        "2007.08991", "eBOSS DR16 RSD fσ8 ΛCDM growth fit quality (Alam et al. 2021)",
+        "2007.08991", "eBOSS DR16 RSD fσ8 ΛCDM growth fit quality (data: Alam et al. 2021)",
     ),
     OracleAnchor(
         "pantheon_plus_omegam", "omegam", 0.334, 0.05, ("pantheon_plus",), "lcdm",
@@ -212,6 +217,9 @@ def oracle_coverage() -> dict:
         "n_fit_quality": len(fit_quality),
         "n_genuine": len(genuine),
         "genuine_fraction": round(len(genuine) / n_goals, 4),
+        # Denominator-stable: fraction of ANCHORS that are genuine — does not move
+        # when the off-anchor list is edited (genuine_fraction's denominator does).
+        "genuine_of_anchored": round(len(genuine) / len(covered), 4) if covered else 0.0,
         "independent_goals": list(independent),
         "fit_quality_goals": list(fit_quality),
         "genuine_goals": list(genuine),
