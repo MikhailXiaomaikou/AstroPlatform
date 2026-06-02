@@ -12,6 +12,7 @@ it does not silently run external likelihoods that are not installed.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import math
@@ -3650,11 +3651,6 @@ def _eboss_fsigma8_chi2_samples(
 _PANTHEON_PLUS_DATA_DIR = (
     pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "pantheon_plus_2022"
 )
-_pantheon_plus_data_cache: dict[str, np.ndarray] | None = None
-
-_PANTHEON_PLUS_ARRAY_KEYS = ("z_hd", "z_hel", "mu", "mu_err_diag", "cov", "cov_inv")
-
-
 @lru_cache(maxsize=None)
 def load_verified_pantheon_plus_data(dataset_key: str = "pantheon_plus") -> dict[str, Any]:
     """Load the Pantheon+SH0ES 1701-SN bundle from the vendored, sha256-pinned
@@ -3663,33 +3659,33 @@ def load_verified_pantheon_plus_data(dataset_key: str = "pantheon_plus") -> dict
     on a digest match (the stat+sys matrix is a released FULL covariance),
     "unverified" on a present-but-mismatched/corrupt file (blocks publication).  A
     missing-but-pinned file degrades to "unverified" with no arrays (so
-    _entry_verification can stamp it without an import-time crash); the full-cov
-    fit then re-raises a clear FileNotFoundError via _load_pantheon_plus_data.
+    _entry_verification can stamp it without an import-time crash).  The expensive
+    1701x1701 inverse is NOT computed here — verify-only callers
+    (_entry_verification, audit_executable_pins) need only the digest + fidelity;
+    the fit path derives cov_inv lazily via _pantheon_plus_cov_inv().
     """
     pinned = _registry_product_sha256(dataset_key, "sn_full_data_npz")
     npz_path = _PANTHEON_PLUS_DATA_DIR / "data.npz"
 
     def _fallback(fidelity: str) -> dict[str, Any]:
         return {
-            "z_hd": None, "z_hel": None, "mu": None, "mu_err_diag": None,
-            "cov": None, "cov_inv": None,
+            "z_hd": None, "z_hel": None, "mu": None, "mu_err_diag": None, "cov": None,
             "sha256": None, "hash_verified": False, "cov_fidelity": fidelity,
         }
 
     if not npz_path.exists():
         return _fallback("unverified" if pinned else "literature_typed")
     try:
-        digest = hashlib.sha256(npz_path.read_bytes()).hexdigest()
-        npz = np.load(npz_path)
-        cov = np.asarray(npz["cov"], dtype=np.float64)
+        raw = npz_path.read_bytes()  # read once: the hash and np.load share these bytes
+        digest = hashlib.sha256(raw).hexdigest()
+        npz = np.load(io.BytesIO(raw))
         verified = digest == pinned
         return {
             "z_hd": np.asarray(npz["z_hd"], dtype=np.float64),
             "z_hel": np.asarray(npz["z_hel"], dtype=np.float64),
             "mu": np.asarray(npz["mu"], dtype=np.float64),
             "mu_err_diag": np.asarray(npz["mu_err_diag"], dtype=np.float64),
-            "cov": cov,
-            "cov_inv": np.linalg.inv(cov),
+            "cov": np.asarray(npz["cov"], dtype=np.float64),
             "sha256": digest,
             "hash_verified": bool(verified),
             "cov_fidelity": "full" if verified else "unverified",
@@ -3699,10 +3695,20 @@ def load_verified_pantheon_plus_data(dataset_key: str = "pantheon_plus") -> dict
         return _fallback("unverified")
 
 
+@lru_cache(maxsize=None)
+def _pantheon_plus_cov_inv() -> np.ndarray:
+    """Inverse of the verified 1701x1701 SN covariance — computed once, ONLY on the
+    fit path (kept out of load_verified_pantheon_plus_data so verify-only callers
+    do not pay the inversion just to read a digest/fidelity)."""
+    return np.linalg.inv(load_verified_pantheon_plus_data("pantheon_plus")["cov"])
+
+
 def _load_pantheon_plus_data() -> dict[str, np.ndarray]:
-    global _pantheon_plus_data_cache
-    if _pantheon_plus_data_cache is not None:
-        return _pantheon_plus_data_cache
+    """Arrays the Pantheon+ χ² fits, sourced from the sha256-verified loader (cov
+    IS the checksummed object) with cov_inv derived lazily.  No separate module
+    cache: load_verified is lru-cached and _pantheon_plus_cov_inv memoizes the
+    inverse, so this returns coherent objects without a second invalidation surface
+    that could go stale or defeat a monkeypatch of the loader."""
     verified = load_verified_pantheon_plus_data("pantheon_plus")
     if verified["cov"] is None:
         raise FileNotFoundError(
@@ -3710,10 +3716,11 @@ def _load_pantheon_plus_data() -> dict[str, np.ndarray]:
             "Run `python scripts/fetch_pantheon_plus.py` to download "
             "the 2022 release (~20 MB)."
         )
-    # Source the fitted arrays FROM the verified loader so the covariance the χ²
-    # inverts is the same object the registry checksum verified (object identity).
-    _pantheon_plus_data_cache = {key: verified[key] for key in _PANTHEON_PLUS_ARRAY_KEYS}
-    return _pantheon_plus_data_cache
+    return {
+        "z_hd": verified["z_hd"], "z_hel": verified["z_hel"], "mu": verified["mu"],
+        "mu_err_diag": verified["mu_err_diag"], "cov": verified["cov"],
+        "cov_inv": _pantheon_plus_cov_inv(),
+    }
 
 
 # Pantheon+SH0ES baseline absolute magnitude.  The MU_SH0ES column in the

@@ -57,8 +57,12 @@ def test_fitted_cov_is_the_checksummed_object():
 
     verified = cl.load_verified_pantheon_plus_data("pantheon_plus")
     fitted = cl._load_pantheon_plus_data()
+    # cov (the checksummed artifact) IS the same object the loader verified.
     assert fitted["cov"] is verified["cov"]
-    assert fitted["cov_inv"] is verified["cov_inv"]
+    # cov_inv is DERIVED from that verified cov (not itself a checksummed artifact),
+    # so assert it is the correct inverse rather than object identity.
+    n = fitted["cov"].shape[0]
+    assert np.allclose(fitted["cov_inv"] @ fitted["cov"], np.eye(n), atol=1e-6)
 
 
 def test_pantheon_binding_zero_drift():
