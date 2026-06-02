@@ -236,8 +236,11 @@ def reproduce_anchor(anchor: OracleAnchor) -> dict:
     a dependency-free data table."""
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
+    # 2000 importance samples is ample for the point-median tolerances here (the
+    # tightest is desi_cmb at 0.012); halves the compute the harness + benchmark
+    # re-run across every anchor.
     r = run_likelihood_chain(
-        model=anchor.model, dataset_keys=list(anchor.datasets), n_samples=4000, random_seed=42,
+        model=anchor.model, dataset_keys=list(anchor.datasets), n_samples=2000, random_seed=42,
     )
     if anchor.parameter == "chi2_dof":
         # Fit-quality anchor: genuinely compute reduced χ² = χ² / (N_data - N_params).

@@ -7,6 +7,8 @@ would be marked slow opt-in (none today).
 """
 from __future__ import annotations
 
+import pytest
+
 from app.services import cosmology_oracle as co
 from app.services.cosmology_oracle import PUBLISHED_ANCHORS, reproduce_anchor
 
@@ -29,12 +31,15 @@ def test_reproduce_anchor_result_shape():
 
 
 def test_fit_quality_anchors_reproduce_chi2_dof():
-    # The harness genuinely computes reduced χ² for fit-quality anchors and
-    # checks it lands in the good-fit band (not a self-echo).
-    for key in ("cc_fit_quality", "eboss_fit_quality"):
+    # The harness genuinely computes reduced χ² for fit-quality anchors and checks
+    # the good-fit band.  Pin the ACTUAL values tightly too (in addition to the
+    # wide oracle band) so a real regression — e.g. doubling CC χ²/dof — is caught,
+    # which the [0.4,1.6]/[0.3,1.7] acceptance band alone would not catch.
+    expected = {"cc_fit_quality": 0.50, "eboss_fit_quality": 1.32}
+    for key, exp in expected.items():
         out = reproduce_anchor(co.get_anchor(key))
         assert out["within_tol"] is True, (key, out["reproduced_value"])
-        assert out["reproduced_value"] > 0
+        assert out["reproduced_value"] == pytest.approx(exp, abs=0.1), key
 
 
 def test_reproduce_anchor_flags_a_wrong_published_value():

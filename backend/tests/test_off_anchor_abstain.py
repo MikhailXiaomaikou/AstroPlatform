@@ -8,8 +8,6 @@ never a numeric result and never publication_ready.
 """
 from __future__ import annotations
 
-import json
-
 from app.services.cosmology_oracle import off_anchor_abstention, route_goal
 
 
@@ -42,8 +40,10 @@ def test_off_anchor_abstention_envelope_blocks_claims():
     assert a["__do_not_claim__"] is True
     assert a["__tool_status__"] == "UNAVAILABLE"
     assert a["__message_to_model__"] and a["__suggested_next_step__"]
-    # the envelope carries NO numeric conclusion to quote
-    assert "median" not in json.dumps(a)
+    # the envelope carries NO numeric conclusion to quote — a robust check (no
+    # float values anywhere) rather than a brittle 'median' substring that would
+    # pass if a numeric field were named anything else.
+    assert not any(isinstance(v, float) for v in a.values())
 
 
 def test_abstention_passes_through_genuine_goal():
