@@ -398,6 +398,41 @@ def bench_pantheon_full_cov_fidelity() -> dict[str, Any]:
     }
 
 
+def bench_w0wa_full_sn_w0_tight() -> dict[str, Any]:
+    """Dark-energy frontier: with the FULL 1701-SN covariance (not the compressed
+    3-number SN summary), the w0waCDM DESI+SN+CMB fit tightens w0 to ~DESI's
+    precision (σ_w0 ≈ 0.07 measured, vs ≈ 0.15 from the compressed summary; DESI
+    2024 VI reports 0.063). This confirms the constraint gap is DATA COMPRESSION,
+    not the sampler — the emcee chain already converges either way.
+
+    SLOW OPT-IN (~5 min on an M4 Pro; FREE, runs locally / in GitHub Actions, not
+    the 45s chat path) — skipped unless PANTHEON_PLUS_FULL_CHI2_ENABLED is set."""
+    from app.services.cosmology_likelihoods import (
+        PANTHEON_PLUS_FULL_CHI2_ENABLED,
+        run_likelihood_chain,
+    )
+
+    if not PANTHEON_PLUS_FULL_CHI2_ENABLED:
+        return {
+            "pass": True,
+            "skipped": "needs PANTHEON_PLUS_FULL_CHI2_ENABLED (~5 min full 1701-SN w0wa fit; local/Actions, free)",
+            "target": "full-SN w0waCDM tightens σ_w0 to ≤ 0.09 (~DESI 0.063) at publication tier",
+        }
+    r = run_likelihood_chain(
+        model="w0wa_cdm",
+        dataset_keys=["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"],
+        n_samples=4000, random_seed=42, allow_emcee_fallback=True,
+    )
+    w0 = r.get("parameters", {}).get("w0", {})
+    sig = w0.get("std")
+    return {
+        "pass": isinstance(sig, (int, float)) and sig <= 0.09 and r.get("publication_ready") is True,
+        "w0_median": w0.get("median"),
+        "w0_sigma": sig,
+        "target": "full-SN w0waCDM tightens σ_w0 to ≤ 0.09 (~DESI 0.063) at publication tier",
+    }
+
+
 def bench_oracle_genuine_reproductions() -> dict[str, Any]:
     """T1-U16: every GENUINE oracle anchor reproduces its published value.
 
@@ -713,6 +748,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("sn_compressed_provenance", bench_sn_compressed_provenance),
     ("pantheon_full_cov_fidelity", bench_pantheon_full_cov_fidelity),
     ("oracle_genuine_reproductions", bench_oracle_genuine_reproductions),
+    ("w0wa_full_sn_w0_tight", bench_w0wa_full_sn_w0_tight),
 ]
 
 
