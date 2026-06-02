@@ -44,6 +44,17 @@ PUBLISHED_ANCHORS: tuple[OracleAnchor, ...] = (
         "2404.03002", "DESI DR1 BAO flat-ΛCDM Ωm (Adame et al. 2024)",
     ),
     OracleAnchor(
+        # Genuine joint reproduction: fitting DESI BAO distance ratios + the
+        # Planck CMB compressed summary recovers Ωm BETWEEN the two inputs
+        # (DESI-only 0.295, Planck-only 0.3153), landing near the published
+        # DESI 2024 VI BAO+CMB value 0.307 ± 0.005.  tol 0.015 is honest about
+        # our compressed-Planck approximation vs the full Planck likelihood.
+        "desi_cmb_omegam", "omegam", 0.307, 0.015,
+        ("desi_dr1_bao", "planck2018_compressed"), "lcdm",
+        "independent",
+        "2404.03002", "DESI DR1 BAO + CMB flat-ΛCDM Ωm (DESI 2024 VI)",
+    ),
+    OracleAnchor(
         "pantheon_plus_omegam", "omegam", 0.334, 0.05, ("pantheon_plus",), "lcdm",
         "consistency",
         "2202.04077", "Pantheon+SH0ES SN Ωm (Brout et al. 2022)",

@@ -25,9 +25,9 @@ def test_coverage_reports_fraction_and_uncovered():
 
 
 def test_coverage_fraction_is_pinned():
-    # 7 anchored / (7 + 4 off-anchor) — pin it so adding an anchor is a visible,
+    # 8 anchored / (8 + 4 off-anchor) — pin it so adding an anchor is a visible,
     # reviewed change to coverage rather than a silent drift.
-    assert oracle_coverage()["coverage_fraction"] == round(7 / 11, 4)
+    assert oracle_coverage()["coverage_fraction"] == round(8 / 12, 4)
 
 
 def test_is_covered_distinguishes_anchored_from_off_anchor():

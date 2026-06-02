@@ -60,3 +60,13 @@ def test_compressed_anchors_are_consistency_desi_is_independent():
         "union3_omegam", "planck2018_h0", "planck2018_omegam",
     ):
         assert by_key[k] == "consistency", k
+
+
+def test_desi_cmb_joint_is_an_independent_anchor():
+    # T1-U14: DESI BAO + Planck CMB combination genuinely recovers Ωm between the
+    # two inputs (a real joint fit, not echoing one input).
+    a = get_anchor("desi_cmb_omegam")
+    assert a is not None
+    assert a.independence == "independent"
+    assert a.datasets == ("desi_dr1_bao", "planck2018_compressed")
+    assert a.value == 0.307  # DESI 2024 VI BAO+CMB flat-ΛCDM
