@@ -23,6 +23,11 @@ class OracleAnchor:
     tol: float               # absolute tolerance for "reproduced"
     datasets: tuple[str, ...]
     model: str
+    # "independent" = the fit recovers the published number from RAW data +
+    # physics (a genuine reproduction).  "consistency" = a compressed Gaussian
+    # summary recovers its own input mean (a self-consistency check, not
+    # independent validation).  Only honest if set per anchor by inspection.
+    independence: str
     source_arxiv: str        # arXiv id of the source paper
     source_label: str
 
@@ -35,30 +40,37 @@ class OracleAnchor:
 PUBLISHED_ANCHORS: tuple[OracleAnchor, ...] = (
     OracleAnchor(
         "desi_dr1_bao_omegam", "omegam", 0.295, 0.02, ("desi_dr1_bao",), "lcdm",
+        "independent",
         "2404.03002", "DESI DR1 BAO flat-ΛCDM Ωm (Adame et al. 2024)",
     ),
     OracleAnchor(
         "pantheon_plus_omegam", "omegam", 0.334, 0.05, ("pantheon_plus",), "lcdm",
+        "consistency",
         "2202.04077", "Pantheon+SH0ES SN Ωm (Brout et al. 2022)",
     ),
     OracleAnchor(
         "pantheon_plus_h0", "H0", 73.04, 3.0, ("pantheon_plus",), "lcdm",
+        "consistency",
         "2112.04510", "SH0ES SN-calibrated H0 (Riess et al. 2022)",
     ),
     OracleAnchor(
         "des_sn5yr_omegam", "omegam", 0.352, 0.03, ("des_sn5yr",), "lcdm",
+        "consistency",
         "2401.02929", "DES-SN5YR SN-only Ωm (Abbott et al. 2024)",
     ),
     OracleAnchor(
         "union3_omegam", "omegam", 0.356, 0.05, ("union3",), "lcdm",
+        "consistency",
         "2311.12098", "Union3 SN-only Ωm (Rubin et al. 2023)",
     ),
     OracleAnchor(
         "planck2018_h0", "H0", 67.36, 1.0, ("planck2018_compressed",), "lcdm",
+        "consistency",
         "1807.06209", "Planck 2018 CMB-only H0 (Planck Collaboration 2020)",
     ),
     OracleAnchor(
         "planck2018_omegam", "omegam", 0.3153, 0.02, ("planck2018_compressed",), "lcdm",
+        "consistency",
         "1807.06209", "Planck 2018 CMB-only Ωm (Planck Collaboration 2020)",
     ),
 )
@@ -138,12 +150,18 @@ def oracle_coverage() -> dict:
     that must be reviewed before any off-anchor autonomy is enabled (T1-U12 routes
     uncovered goals to human review)."""
     covered = tuple(a.goal_key for a in PUBLISHED_ANCHORS)
+    independent = tuple(a.goal_key for a in PUBLISHED_ANCHORS if a.independence == "independent")
     uncovered = OFF_ANCHOR_GOALS
     n_goals = len(covered) + len(uncovered)
     return {
         "n_goals": n_goals,
         "n_covered": len(covered),
         "coverage_fraction": round(len(covered) / n_goals, 4),
+        # The number that actually gates autonomy: genuine reproductions (raw
+        # data + physics), NOT compressed self-consistency checks.
+        "n_independent": len(independent),
+        "independent_fraction": round(len(independent) / n_goals, 4),
+        "independent_goals": list(independent),
         "covered_goals": list(covered),
         "uncovered_goals": list(uncovered),
     }

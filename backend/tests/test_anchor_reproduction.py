@@ -31,5 +31,8 @@ def test_reproduce_anchor_result_shape():
 def test_reproduce_anchor_flags_a_wrong_published_value():
     # Sanity: a deliberately-wrong value with a tight tolerance is NOT reproduced.
     a = co.get_anchor("desi_dr1_bao_omegam")
-    bad = co.OracleAnchor(a.goal_key, a.parameter, 0.10, 0.001, a.datasets, a.model, a.source_arxiv, a.source_label)
+    bad = co.OracleAnchor(
+        a.goal_key, a.parameter, 0.10, 0.001, a.datasets, a.model,
+        a.independence, a.source_arxiv, a.source_label,
+    )
     assert reproduce_anchor(bad)["within_tol"] is False

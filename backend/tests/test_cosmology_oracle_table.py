@@ -42,3 +42,21 @@ def test_oracle_values_match_live_registry_constants():
 
 def test_get_anchor_returns_none_for_off_anchor_goal():
     assert get_anchor("w0wa_dark_energy_eos") is None
+
+
+# ── T1-U13: anchors are classified independent (genuine reproduction) vs
+# consistency (a compressed summary recovers its own input). ──
+
+def test_every_anchor_is_classified_independent_or_consistency():
+    for a in PUBLISHED_ANCHORS:
+        assert a.independence in ("independent", "consistency"), a.goal_key
+
+
+def test_compressed_anchors_are_consistency_desi_is_independent():
+    by_key = {a.goal_key: a.independence for a in PUBLISHED_ANCHORS}
+    assert by_key["desi_dr1_bao_omegam"] == "independent"
+    for k in (
+        "pantheon_plus_omegam", "pantheon_plus_h0", "des_sn5yr_omegam",
+        "union3_omegam", "planck2018_h0", "planck2018_omegam",
+    ):
+        assert by_key[k] == "consistency", k

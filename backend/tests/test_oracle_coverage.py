@@ -34,3 +34,18 @@ def test_is_covered_distinguishes_anchored_from_off_anchor():
     assert is_covered("desi_dr1_bao_omegam") is True
     assert is_covered("omega_k_curvature") is False
     assert is_covered("totally_made_up_goal") is False
+
+
+# ── T1-U13: coverage reports GENUINE (independent) reproductions separately ──
+
+def test_coverage_reports_independent_reproductions():
+    cov = oracle_coverage()
+    for k in ("n_independent", "independent_fraction", "independent_goals"):
+        assert k in cov, k
+    n_indep = sum(1 for a in PUBLISHED_ANCHORS if a.independence == "independent")
+    assert cov["n_independent"] == n_indep
+    assert cov["independent_fraction"] == round(n_indep / cov["n_goals"], 4)
+    # the genuine DESI reproduction is in the independent set; a compressed
+    # consistency check is not.
+    assert "desi_dr1_bao_omegam" in cov["independent_goals"]
+    assert "pantheon_plus_omegam" not in cov["independent_goals"]
