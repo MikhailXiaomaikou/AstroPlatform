@@ -59,20 +59,24 @@ def test_consistency_goal_is_abstained_not_answered():
     assert out["publication_ready"] is False
 
 
-def test_extended_off_anchor_models_never_reach_publication_tier():
-    """The abstain policy ("no off-anchor autonomous conclusions") is ALREADY
-    enforced in the live chain path, not only by the oracle rail: every non-LCDM
-    extended model (off-anchor w0/wa / curvature / neutrino-mass parameters) comes
-    back publication_ready=False, so the claim_validator — which supports posterior
-    claims only when publication_ready=True — cannot let an off-anchor parameter be
-    quoted as a published conclusion. This locks that guarantee, so if a future
-    change makes an extended model publication-ready, it fails here and forces the
-    oracle abstain rail to be wired in at that point."""
-    from app.services.cosmology_likelihoods import run_likelihood_chain, SUPPORTED_MODELS
+def test_extended_models_converge_but_stay_off_anchor_review():
+    """The chat tool runs extended models with allow_emcee_fallback=True, so they
+    CONVERGE. The safety guard: a converged off-anchor extended model (novel w0/wa)
+    is at most 'exploratory' — never publication_ready — and carries
+    off_anchor_review_required, so claim_validator (posterior claims only when
+    publication_ready=True) cannot let its w0/wa be quoted as a published
+    conclusion. lcdm goals are anchored, so they are unaffected and can publish."""
+    from app.services.cosmology_likelihoods import run_likelihood_chain
 
-    ds = ["desi_dr1_bao", "pantheon_plus"]
-    for m in SUPPORTED_MODELS:
-        if m == "lcdm":
-            continue
-        r = run_likelihood_chain(model=m, dataset_keys=ds, n_samples=2000, random_seed=42)
-        assert r.get("publication_ready") is not True, (m, r.get("chain_tier"))
+    r = run_likelihood_chain(
+        model="w0wa_cdm",
+        dataset_keys=["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"],
+        n_samples=2000, random_seed=42, allow_emcee_fallback=True,
+    )
+    assert r["publication_ready"] is False
+    assert r["chain_tier"] != "publication"
+    assert r.get("off_anchor_review_required") is True
+
+    # lcdm (anchored Ωm/H0) is NOT off-anchor — unaffected, may still publish.
+    r2 = run_likelihood_chain(model="lcdm", dataset_keys=["desi_dr1_bao"], n_samples=2000, random_seed=42)
+    assert not r2.get("off_anchor_review_required")

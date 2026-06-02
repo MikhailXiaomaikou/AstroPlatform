@@ -2739,11 +2739,26 @@ def _run_sampling_likelihood_chain(
     cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
         bao_entries + cc_entries + rsd_entries + sn_entries + compressed_entries, warnings
     )
+    # Off-anchor safety guard: a converged extended-model chain whose novel frontier
+    # parameters (w/w0/wa) have no reproduced published anchor is NOT publication-
+    # ready — at most exploratory + routed to human review — so claim_validator
+    # (posterior claims only when publication_ready) cannot let its w0/wa be quoted
+    # as a published conclusion.  The chat tool runs these with emcee, so this guard
+    # is what actually holds the "no off-anchor conclusions" line in the live path.
+    from app.services.cosmology_oracle import chain_is_off_anchor
+    off_anchor = chain_is_off_anchor(model_key, [entry.key for entry in used_entries])
+    if off_anchor:
+        warnings.append(
+            "Off-anchor frontier parameters (w/w0/wa) have no reproduced published "
+            "anchor; result is exploratory and routed to human review, not "
+            "publication-ready."
+        )
     publication_ready = (
         not invalid_specs
         and not skipped_entries
         and proposal_ess >= 400.0
         and fidelity_ok
+        and not off_anchor
     )
     # Importance-sampler three-tier (mirrors fit_cosmology_emcee, 2026-05-21):
     #   publication: ESS ≥ 400 and no invalid specs
@@ -2775,6 +2790,7 @@ def _run_sampling_likelihood_chain(
         ),
         "publication_ready": publication_ready,
         "chain_tier": chain_tier,
+        "off_anchor_review_required": off_anchor,
         "claim_scope": "compressed_likelihood_preliminary",
         "compressed_likelihood_preliminary": True,
         "model": model_key,

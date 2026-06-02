@@ -140,6 +140,23 @@ def is_genuine(goal_key: str) -> bool:
     return a is not None and a.independence in ("independent", "fit_quality")
 
 
+def chain_is_off_anchor(model: str, dataset_keys) -> bool:
+    """True if a fit introduces frontier parameters (w/w0/wa/Ωk/Mν) with NO genuine
+    reproduced anchor for this exact (model, datasets) goal — so its novel
+    parameters must not be quoted as a published conclusion (exploratory + human
+    review only).  LCDM goals are anchored (Ωm/H0) and never off-anchor.  Any
+    extended model is off-anchor unless an 'independent' anchor reproduces that same
+    model+datasets — none today; the Phase-2 full-CMB dark-energy reproduction will
+    register the first one, at which point THAT goal may publish."""
+    if model == "lcdm":
+        return False
+    keys = set(dataset_keys or ())
+    for a in PUBLISHED_ANCHORS:
+        if a.independence == "independent" and a.model == model and set(a.datasets) == keys:
+            return False
+    return True
+
+
 def route_goal(goal_key: str) -> dict:
     """Decide whether a goal may be answered autonomously.  Only GENUINELY
     reproduced goals route to 'answer'; a compressed self-consistency anchor is
