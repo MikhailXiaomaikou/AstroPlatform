@@ -13,8 +13,19 @@ import json
 from app.services.cosmology_oracle import off_anchor_abstention, route_goal
 
 
-def test_covered_goal_routes_to_answer():
-    assert route_goal("desi_dr1_bao_omegam")["route"] == "answer"
+def test_genuine_goal_routes_to_answer():
+    # Only genuinely-reproduced goals (independent parameter recovery or
+    # fit-quality) are autonomously answerable.
+    assert route_goal("desi_dr1_bao_omegam")["route"] == "answer"       # independent
+    assert route_goal("cc_fit_quality")["route"] == "answer"            # fit_quality
+
+
+def test_consistency_goal_routes_to_human_review():
+    # A compressed self-consistency anchor (the summary echoes its own input) is
+    # NOT a genuine reproduction, so it must NOT be autonomously answered.
+    r = route_goal("pantheon_plus_omegam")
+    assert r["route"] == "human_review"
+    assert r["reason"] == "consistency_only_not_independently_reproduced"
 
 
 def test_off_anchor_goal_routes_to_human_review():
@@ -35,7 +46,14 @@ def test_off_anchor_abstention_envelope_blocks_claims():
     assert "median" not in json.dumps(a)
 
 
-def test_off_anchor_abstention_passes_through_covered_goal():
-    out = off_anchor_abstention("pantheon_plus_omegam")
+def test_abstention_passes_through_genuine_goal():
+    out = off_anchor_abstention("desi_dr1_bao_omegam")  # genuine independent
     assert out["route"] == "answer"
     assert not out.get("off_anchor_abstained")
+
+
+def test_consistency_goal_is_abstained_not_answered():
+    out = off_anchor_abstention("pantheon_plus_omegam")  # consistency self-echo
+    assert out["route"] == "human_review"
+    assert out["off_anchor_abstained"] is True
+    assert out["publication_ready"] is False

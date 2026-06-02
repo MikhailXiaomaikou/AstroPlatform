@@ -123,24 +123,41 @@ def get_anchor(goal_key: str) -> OracleAnchor | None:
 
 
 def is_covered(goal_key: str) -> bool:
-    """True iff the goal is backed by a reproduced published anchor."""
+    """True iff the goal has any published anchor (genuine OR consistency)."""
     return get_anchor(goal_key) is not None
 
 
+def is_genuine(goal_key: str) -> bool:
+    """True iff the goal is backed by a GENUINE reproduction — an independent
+    parameter recovery or a fit-quality validation — NOT merely a compressed
+    self-consistency anchor that recovers its own input mean."""
+    a = get_anchor(goal_key)
+    return a is not None and a.independence in ("independent", "fit_quality")
+
+
 def route_goal(goal_key: str) -> dict:
-    """Decide whether a goal may be answered autonomously.  Covered (anchored)
-    goals route to 'answer'; everything else routes to 'human_review'.  This is
-    the rail that enforces 'no off-anchor autonomous conclusions' — it does NOT
-    authorize off-anchor autonomy (flipping an uncovered goal to 'answer' is a
-    policy decision, not a code change here)."""
-    if is_covered(goal_key):
+    """Decide whether a goal may be answered autonomously.  Only GENUINELY
+    reproduced goals route to 'answer'; a compressed self-consistency anchor is
+    not validation, so it routes to human_review like any off-anchor goal.  This
+    enforces 'no off-anchor autonomous conclusions' and does NOT authorize
+    off-anchor autonomy (a policy decision, not a code change here)."""
+    if is_genuine(goal_key):
         return {"route": "answer", "goal_key": goal_key}
+    consistency_only = is_covered(goal_key)
     return {
         "route": "human_review",
         "goal_key": goal_key,
-        "reason": "off_anchor_not_in_oracle_coverage",
+        "reason": (
+            "consistency_only_not_independently_reproduced"
+            if consistency_only
+            else "off_anchor_not_in_oracle_coverage"
+        ),
         "suggested_next_step": (
-            "This goal has no reproduced published anchor. Add and verify an "
+            "This goal has only a compressed self-consistency anchor (the summary "
+            "recovers its own input mean), not a genuine reproduction. Add and "
+            "verify an independent or fit-quality anchor, or route to a human reviewer."
+            if consistency_only
+            else "This goal has no reproduced published anchor. Add and verify an "
             "OracleAnchor (T1-U9/U10) and re-measure coverage before answering it "
             "autonomously, or route it to a human reviewer."
         ),
@@ -163,9 +180,9 @@ def off_anchor_abstention(goal_key: str) -> dict:
         "goal_key": goal_key,
         "publication_ready": False,
         "__message_to_model__": (
-            f"The goal '{goal_key}' is off-anchor: it has no reproduced published "
-            "anchor in the oracle-coverage table, so v1 must not emit an autonomous "
-            "numeric conclusion. Report that it was routed to human review; do not "
+            f"The goal '{goal_key}' is not genuinely reproduced (reason: "
+            f"{routing['reason']}), so v1 must not emit an autonomous numeric "
+            "conclusion. Report that it was routed to human review; do not "
             "fabricate or estimate a value."
         ),
         "__suggested_next_step__": routing["suggested_next_step"],
