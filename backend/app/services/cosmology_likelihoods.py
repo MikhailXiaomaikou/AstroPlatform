@@ -479,20 +479,6 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         execution_mode="compressed_gaussian",
         data_products=(
             DataProductSpec(
-                product_type="sn_full_data_npz",
-                role="sn_full_data_npz",
-                url="https://github.com/PantheonPlusSH0ES/DataRelease",
-                format="npz",
-                description=(
-                    "Vendored Pantheon+SH0ES 1701-SN bundle (z_hd, z_hel, mu, "
-                    "mu_err_diag, full stat+sys covariance) the in-process χ² reads."
-                ),
-                columns=("z_hd", "z_hel", "mu", "mu_err_diag", "cov"),
-                rows=1701,
-                sha256="d6b3ed124fa038c02bdc4457f4f7aff8bf6e9f6b41e1257f530c90d7bd1f8cca",
-                local_path="data/pantheon_plus_2022/data.npz",
-            ),
-            DataProductSpec(
                 product_type="sn_distance_modulus_table",
                 role="data_table",
                 url=(
@@ -547,6 +533,23 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 ),
                 format="Python / CosmoSIS module",
                 description="Pantheon+SH0ES CosmoSIS likelihood wrapper.",
+            ),
+            DataProductSpec(
+                # Kept LAST so it is never the default product returned by
+                # load_cosmology_data_product (no role): its local_path is a 20MB
+                # binary blob that must not be parsed as a text table (code-review #1).
+                product_type="sn_full_data_npz",
+                role="sn_full_data_npz",
+                url="https://github.com/PantheonPlusSH0ES/DataRelease",
+                format="npz",
+                description=(
+                    "Vendored Pantheon+SH0ES 1701-SN bundle (z_hd, z_hel, mu, "
+                    "mu_err_diag, full stat+sys covariance) the in-process χ² reads."
+                ),
+                columns=("z_hd", "z_hel", "mu", "mu_err_diag", "cov"),
+                rows=1701,
+                sha256="d6b3ed124fa038c02bdc4457f4f7aff8bf6e9f6b41e1257f530c90d7bd1f8cca",
+                local_path="data/pantheon_plus_2022/data.npz",
             ),
         ),
         compressed_likelihood=CompressedLikelihoodSpec(

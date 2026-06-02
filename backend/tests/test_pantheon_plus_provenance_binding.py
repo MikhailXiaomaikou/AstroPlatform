@@ -10,6 +10,7 @@ matrix IS a released FULL covariance, so cov_fidelity is "full" once the vendore
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 import numpy as np
@@ -71,4 +72,23 @@ def test_pantheon_binding_zero_drift():
     theta = np.array([[73.04, 0.334, -19.253]])
     chi2 = float(cl._pantheon_plus_chi2_samples(theta, ["H0", "omegam", "M_B"])[0])
     # Pin the actual chi2 (captured pre-binding) so any prediction/data drift fails.
-    assert chi2 == pytest.approx(1755.9316662998824, abs=1e-3)
+    # Deterministic value (fixed theta + data, no RNG); tol tight enough to catch a
+    # real prediction-kernel drift, not 9 orders looser than the float noise floor.
+    assert chi2 == pytest.approx(1755.9316662998824, abs=1e-6)
+
+
+def test_default_pantheon_product_is_not_the_binary_npz():
+    """REGRESSION (code-review #1): the sha256-pinned binary .npz must NOT be the
+    DEFAULT product of load_cosmology_data_product (no role). It has a local_path,
+    so if it is products[0] the loader reads 20MB of binary, UTF-8-decodes it, and
+    _parse_product_text reports ~556932 junk rows as COMPLETED + publication_ready
+    — a zero-fabrication regression. The ASCII distance table must stay the default."""
+    from app.services.cosmology_data_products import load_cosmology_data_product
+
+    out = asyncio.run(
+        load_cosmology_data_product(dataset_key="pantheon_plus", allow_network=False)
+    )
+    assert "data.npz" not in str(out.get("source") or ""), "default product is the binary npz"
+    # network-free, the default ASCII table has no local copy -> UNAVAILABLE, never
+    # a publication-ready fabricated table.
+    assert out.get("publication_ready") is not True
