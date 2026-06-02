@@ -25,9 +25,23 @@ def test_coverage_reports_fraction_and_uncovered():
 
 
 def test_coverage_fraction_is_pinned():
-    # 8 anchored / (8 + 4 off-anchor) — pin it so adding an anchor is a visible,
-    # reviewed change to coverage rather than a silent drift.
-    assert oracle_coverage()["coverage_fraction"] == round(8 / 12, 4)
+    # 10 anchored / (10 + 4 off-anchor) — pin it so adding an anchor is a
+    # visible, reviewed change to coverage rather than a silent drift.
+    assert oracle_coverage()["coverage_fraction"] == round(10 / 14, 4)
+
+
+def test_coverage_reports_genuine_reproductions():
+    # "genuine" = independent (parameter recovery) + fit_quality (χ²/dof), as
+    # opposed to consistency (compressed self-echo).
+    cov = oracle_coverage()
+    n_indep = sum(1 for a in PUBLISHED_ANCHORS if a.independence == "independent")
+    n_fq = sum(1 for a in PUBLISHED_ANCHORS if a.independence == "fit_quality")
+    assert cov["n_fit_quality"] == n_fq
+    assert cov["n_genuine"] == n_indep + n_fq
+    assert cov["genuine_fraction"] == round((n_indep + n_fq) / cov["n_goals"], 4)
+    for k in ("desi_dr1_bao_omegam", "desi_cmb_omegam", "cc_fit_quality", "eboss_fit_quality"):
+        assert k in cov["genuine_goals"], k
+    assert "pantheon_plus_omegam" not in cov["genuine_goals"]
 
 
 def test_is_covered_distinguishes_anchored_from_off_anchor():

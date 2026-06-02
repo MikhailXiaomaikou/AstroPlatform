@@ -47,9 +47,20 @@ def test_get_anchor_returns_none_for_off_anchor_goal():
 # ── T1-U13: anchors are classified independent (genuine reproduction) vs
 # consistency (a compressed summary recovers its own input). ──
 
-def test_every_anchor_is_classified_independent_or_consistency():
+def test_every_anchor_is_classified():
     for a in PUBLISHED_ANCHORS:
-        assert a.independence in ("independent", "consistency"), a.goal_key
+        assert a.independence in ("independent", "fit_quality", "consistency"), a.goal_key
+
+
+def test_fit_quality_anchors_are_cc_and_eboss_chi2_dof():
+    by_key = {a.goal_key: a for a in PUBLISHED_ANCHORS}
+    for key, dataset in (("cc_fit_quality", "cosmic_chronometers"),
+                         ("eboss_fit_quality", "eboss_dr16_rsd")):
+        a = by_key.get(key)
+        assert a is not None, key
+        assert a.independence == "fit_quality"
+        assert a.parameter == "chi2_dof"
+        assert a.datasets == (dataset,)
 
 
 def test_compressed_anchors_are_consistency_desi_is_independent():

@@ -28,6 +28,15 @@ def test_reproduce_anchor_result_shape():
     assert isinstance(out["reproduced_value"], float)
 
 
+def test_fit_quality_anchors_reproduce_chi2_dof():
+    # The harness genuinely computes reduced χ² for fit-quality anchors and
+    # checks it lands in the good-fit band (not a self-echo).
+    for key in ("cc_fit_quality", "eboss_fit_quality"):
+        out = reproduce_anchor(co.get_anchor(key))
+        assert out["within_tol"] is True, (key, out["reproduced_value"])
+        assert out["reproduced_value"] > 0
+
+
 def test_reproduce_anchor_flags_a_wrong_published_value():
     # Sanity: a deliberately-wrong value with a tight tolerance is NOT reproduced.
     a = co.get_anchor("desi_dr1_bao_omegam")
