@@ -57,6 +57,9 @@ ADAPTER_TO_COBAYA: Final[dict[str, str | None]] = {
     # third-party package. Candidate: `bao.desi_dr1_bao` or class in
     # `cobaya_likelihood_desi.dr1`.
     "external:desilike.desi_dr1_bao": None,
+    # TODO(step3): DESI DR2 BAO (2025, arXiv:2503.14738) — same desilike path as
+    # DR1, DR2 data vector. Candidate: `bao.desi_dr2_bao` or `cobaya_likelihood_desi.dr2`.
+    "external:desilike.desi_dr2_bao": None,
     # TODO(step3): 6dFGS BAO (Beutler+ 2011). Candidate cobaya core:
     # `bao.sixdf_2011`. Verify against current Cobaya release.
     "external:bao.sdss_6df_legacy": None,

@@ -296,6 +296,92 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             ),
         ),
     ),
+    "desi_dr2_bao": CosmologyDatasetEntry(
+        key="desi_dr2_bao",
+        display_name="DESI DR2 BAO",
+        version="DR2 2025 BAO likelihood",
+        probe="bao",
+        z_coverage=(0.295, 2.33),
+        status="external_likelihood",
+        observables=("DM_over_rd", "DH_over_rd", "DV_over_rd"),
+        units={"distance_ratios": "dimensionless", "redshift": "dimensionless"},
+        applicable_models=BAO_MODELS,
+        likelihood_family="gaussian_bao",
+        covariance=CovarianceSpec(
+            kind="block covariance",
+            provided=True,
+            description=(
+                "DESI DR2 combined BAO Gaussian covariance (13x13) for "
+                "BGS/LRG/ELG/QSO/LyA bins. The public file labels the quantities "
+                "DM/DH/DV_over_rs; r_s(z_drag) is identical to r_d."
+            ),
+            url=(
+                "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/"
+                "desi_bao_dr2/desi_gaussian_bao_ALL_GCcomb_cov.txt"
+            ),
+            format="DESI DR2 / CobayaSampler bao_data ASCII matrix",
+        ),
+        source_url="https://arxiv.org/abs/2503.14738",
+        citations=(
+            DatasetCitation(
+                label="DESI Collaboration 2025 DR2 BAO measurements",
+                year=2025,
+                arxiv="2503.14738",
+            ),
+            DatasetCitation(
+                label="DESI Collaboration 2025 DR2 cosmological constraints",
+                year=2025,
+                arxiv="2503.14739",
+            ),
+        ),
+        notes=(
+            "DESI DR2 (2025) supersedes DR1 as the primary late-universe BAO "
+            "distance anchor; it drove the w0waCDM dark-energy preference. Use as "
+            "BAO-only or combined; requires an rd prior or CMB calibration."
+        ),
+        cobaya_likelihood="external:desilike.desi_dr2_bao",
+        cosmosis_module="likelihood/bao/desi-dr2/desi_dr2.py",
+        execution_mode="compressed_gaussian",
+        recommended_combinations=("planck2018_compressed", "bbn_ombh2_schoeneberg24"),
+        data_products=(
+            DataProductSpec(
+                product_type="bao_measurement_vector",
+                role="measurement_vector",
+                url=(
+                    "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/"
+                    "desi_bao_dr2/desi_gaussian_bao_ALL_GCcomb_mean.txt"
+                ),
+                format="ASCII table",
+                description="DESI DR2 combined BAO Gaussian mean vector (13 rows).",
+                columns=("z", "value", "quantity"),
+                rows=13,
+                sha256="9ac154ab583ce759c0f7eef3c978c7c70a6ead2d18774caceadf1a350a640585",
+            ),
+            DataProductSpec(
+                product_type="bao_covariance_matrix",
+                role="covariance",
+                url=(
+                    "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/"
+                    "desi_bao_dr2/desi_gaussian_bao_ALL_GCcomb_cov.txt"
+                ),
+                format="ASCII matrix",
+                description="DESI DR2 combined BAO Gaussian covariance matrix (13x13).",
+                rows=13,
+                sha256="252a143274c8a07c78694c119617d36594f6d7965d00319ca611c6ffb886e509",
+            ),
+            DataProductSpec(
+                product_type="bao_bin_products",
+                role="bin_level_measurements",
+                url="https://github.com/CobayaSampler/bao_data/tree/master/desi_bao_dr2",
+                format="ASCII mean/cov pairs",
+                description=(
+                    "Per-tracer DESI DR2 BAO mean/covariance files for BGS, LRG "
+                    "(two z bins), LRG+ELG, ELG, QSO, and LyA."
+                ),
+                columns=("z", "value", "quantity"),
+            ),
+        ),
+    ),
     "sdss_6df_bao": CosmologyDatasetEntry(
         key="sdss_6df_bao",
         display_name="6dFGS + SDSS MGS low-z BAO",
@@ -1186,6 +1272,53 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"H0": "km s^-1 Mpc^-1"},
             source_locator="Pesce et al. 2020 megamaser H0 prior.",
             approximation="Scalar Gaussian H0 prior; geometric anchor only.",
+        ),
+    ),
+    "bbn_ombh2_schoeneberg24": CosmologyDatasetEntry(
+        key="bbn_ombh2_schoeneberg24",
+        display_name="BBN omega_b prior (Schöneberg 2024)",
+        version="Schöneberg 2024 conservative LCDM BBN omega_b h^2",
+        probe="bbn_prior",
+        z_coverage=None,
+        status="ready",
+        observables=("ombh2",),
+        units={"ombh2": "dimensionless"},
+        applicable_models=BAO_MODELS,
+        likelihood_family="gaussian_prior",
+        covariance=CovarianceSpec(
+            kind="1D gaussian variance",
+            provided=True,
+            description=(
+                "omega_b h^2 = 0.02218 +/- 0.00055 (conservative LCDM; PDG "
+                "light-element abundances; PRyMordial nuclear-rate marginalization)."
+            ),
+            url="https://arxiv.org/abs/2401.15054",
+            format="scalar Gaussian prior",
+        ),
+        source_url="https://arxiv.org/abs/2401.15054",
+        citations=(
+            DatasetCitation(
+                label="Schöneberg 2024 BBN baryon abundance update",
+                year=2024,
+                arxiv="2401.15054",
+            ),
+        ),
+        notes=(
+            "Standard BBN omega_b prior for sound-horizon-independent / CMB-free "
+            "BAO+BBN inference (the prior DESI adopts). Without it a 'CMB-free' run "
+            "is silently contaminated by the Planck-compressed omega_b. Schöneberg "
+            "2024 also reports 0.02196 +/- 0.00063 under ab-initio Deuterium rates."
+        ),
+        cobaya_likelihood="gaussian:ombh2=0.02218,sigma=0.00055",
+        cosmosis_module="prior ombh2 = gaussian 0.02218 0.00055",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("ombh2",),
+            mean=(0.02218,),
+            covariance=((0.00055 ** 2,),),
+            units={"ombh2": "dimensionless"},
+            source_locator="Schöneberg 2024 (arXiv:2401.15054) conservative LCDM BBN omega_b h^2; PDG light-element abundances.",
+            approximation="Scalar Gaussian omega_b h^2 prior; PRyMordial nuclear-rate marginalization.",
         ),
     ),
     "spt3g_cmb": CosmologyDatasetEntry(
