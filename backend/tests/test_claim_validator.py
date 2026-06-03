@@ -1042,22 +1042,6 @@ def test_thousands_normalization_leaves_list_separators_untouched():
     assert _strip_thousands_separators("count 1,234,567 rows") == "count 1234567 rows"
 
 
-# -------------------- PART AD: exoplanet whitelist (B1) --------------------
-
-
-def test_exoplanet_archive_satisfies_age_literature_prior():
-    reply = "The host star age is 4.5 Gyr."
-    # The claim must be extracted as age_gyr...
-    assert any(c.label == "age_gyr" for c in extract_claims(reply))
-    # ...and a successful exoplanet-archive query now satisfies the prior gate
-    # (previously this real result was flagged as an unsupported textbook prior).
-    tool_results = [
-        {"tool": "query_exoplanet_archive", "result": {"success": True, "st_age": 4.5}},
-    ]
-    violations = literature_prior_violations(reply, tool_results)
-    assert all(v.label != "age_gyr" for v in violations)
-
-
 # -------------------- PART AD: partial-failure fabrication (B2) --------------------
 
 

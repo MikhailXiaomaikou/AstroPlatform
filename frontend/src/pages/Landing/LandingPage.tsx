@@ -12,11 +12,11 @@ import CommentSection from "./CommentSection";
  */
 
 const STATS: { value: string; labelKey: string }[] = [
-  { value: "9",     labelKey: "home.stat.archives" },
-  { value: "3",     labelKey: "home.stat.modules" },
-  { value: "35",    labelKey: "home.stat.tools" },
+  { value: "6",     labelKey: "home.stat.archives" },
+  { value: "1",     labelKey: "home.stat.modules" },
+  { value: "57",    labelKey: "home.stat.tools" },
   { value: "0",     labelKey: "home.stat.fabricated" },
-  { value: "2,262", labelKey: "home.stat.tests" },
+  { value: "2,207", labelKey: "home.stat.tests" },
 ];
 
 interface TocEntry {

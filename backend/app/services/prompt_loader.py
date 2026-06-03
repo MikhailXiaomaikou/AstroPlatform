@@ -51,11 +51,9 @@ def _module_dir(name: str) -> Path:
 def _active_module_names(focus: str) -> list[str]:
     """Return active module names for a given ASTRO_RESEARCH_FOCUS.
 
-    Hardcoded — 3 active modules reached (2026-05-20); ModuleRegistry
-    abstraction decision deferred to next iteration (Karpathy three-similar threshold).
+    Cosmology-only repo (solar_system / exoplanet extracted to
+    standard-astro-verticals, 2026-06-03):
       - ``cosmology`` -> ``["cosmology"]``
-      - ``solar_system`` -> ``["solar_system"]`` (M0 2026-05-18)
-      - ``exoplanet`` -> ``["exoplanet"]`` (M0 2026-05-20)
       - ``all`` / unknown / empty -> all modules (active + historical _dormant_)
     """
     if focus == "cosmology":

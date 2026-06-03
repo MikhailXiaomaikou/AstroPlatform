@@ -1,6 +1,6 @@
 """Verify provider payloads disable in-turn parallel tool calls.
 
-The solar_system C2 case exposed that a model can issue many identical tool
+A repeated-tool-call case exposed that a model can issue many identical tool
 calls in one response before the circuit breaker gets a chance to disable that
 tool. These tests exercise the actual provider payloads instead of grepping the
 router source.
@@ -15,8 +15,8 @@ import pytest
 
 def _tool_spec() -> dict:
     return {
-        "name": "fetch_horizons_ephemeris",
-        "description": "Fetch JPL Horizons ephemeris time series.",
+        "name": "fit_cosmology_mcmc",
+        "description": "Run a cosmology likelihood fit.",
         "input_schema": {
             "type": "object",
             "properties": {"target": {"type": "string"}},
@@ -50,7 +50,7 @@ async def test_anthropic_payload_disables_parallel_tool_use(monkeypatch):
     )
 
     result = await ClaudeBackend().complete(
-        [{"role": "user", "content": "Need ephemeris"}],
+        [{"role": "user", "content": "Run a cosmology fit"}],
         tools=[_tool_spec()],
         api_key="sk-ant-test",
     )
@@ -138,14 +138,14 @@ async def test_openai_chat_payload_disables_parallel_tool_calls(monkeypatch):
     monkeypatch.setattr("app.ai.inference_router.httpx.AsyncClient", FakeClient)
 
     result = await OpenAIBackend().complete(
-        [{"role": "user", "content": "Need ephemeris"}],
+        [{"role": "user", "content": "Run a cosmology fit"}],
         tools=[_tool_spec()],
         provider_api_keys={"openai": "sk-openai-test"},
     )
 
     payload = captured["json"]
     assert result["content"] == "ok"
-    assert payload["tools"][0]["function"]["name"] == "fetch_horizons_ephemeris"
+    assert payload["tools"][0]["function"]["name"] == "fit_cosmology_mcmc"
     assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is False
 

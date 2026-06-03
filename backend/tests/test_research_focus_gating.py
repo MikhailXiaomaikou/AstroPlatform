@@ -83,14 +83,36 @@ def test_focus_explicit_all_disables_filter(monkeypatch) -> None:
     assert out == [{"name": "anything"}]
 
 
-def test_focus_unknown_value_falls_back_to_no_filter(monkeypatch) -> None:
-    """Typos / unknown focus values must NOT silently delete tools.
-    Only the literal 'cosmology' triggers gating."""
-    chat = _reload_chat_with_focus(monkeypatch, "stellar")  # not "cosmology"
+def test_focus_unknown_value_fails_closed_to_cosmology(monkeypatch) -> None:
+    """Typos / unknown / stale focus values fail CLOSED to the cosmology
+    allowlist (contract flipped 2026-06-03 when solar_system/exoplanet were
+    extracted to standard-astro-verticals). They must NOT expose the full tool
+    surface — only the explicit 'all' escape hatch disables gating."""
+    chat = _reload_chat_with_focus(monkeypatch, "stellar")  # not "cosmology", not "all"
 
     fake_tools = [{"name": "fit_isochrone"}, {"name": "fit_cosmology_mcmc"}]
     out = chat._filter_tools_by_research_focus(fake_tools)
-    assert out == fake_tools
+    assert [t["name"] for t in out] == ["fit_cosmology_mcmc"]
+
+
+def test_focus_stale_extracted_module_pin_fails_closed(monkeypatch) -> None:
+    """A leftover ASTRO_RESEARCH_FOCUS=solar_system / exoplanet pin (both modules
+    were extracted on 2026-06-03) must fail closed to cosmology, NOT expose every
+    tool (incl. retained dormant tools like reduce_ccd_image / x_ray_spectral_fit)
+    while the system prompt is cosmology-only."""
+    for stale in ("solar_system", "exoplanet"):
+        chat = _reload_chat_with_focus(monkeypatch, stale)
+        fake_tools = [
+            {"name": "fit_cosmology_mcmc"},
+            {"name": "fit_isochrone"},
+            {"name": "reduce_ccd_image"},
+            {"name": "x_ray_spectral_fit"},
+        ]
+        out = chat._filter_tools_by_research_focus(fake_tools)
+        assert [t["name"] for t in out] == ["fit_cosmology_mcmc"], (
+            f"stale focus {stale!r} should fail closed to cosmology; "
+            f"survived: {[t['name'] for t in out]}"
+        )
 
 
 # ── Contract 2: focus="cosmology" — allowlist content ──────────────
@@ -266,9 +288,9 @@ def test_focus_cosmology_preserves_all_existing_prompt_sections(monkeypatch) -> 
     ("COSMOLOGY", True),
     ("Cosmology", True),
     ("  cosmology  ", True),  # whitespace trimmed
-    ("all", False),
-    ("", False),
-    ("xyz", False),
+    ("all", False),       # explicit escape hatch — gating disabled
+    ("", True),           # empty / stale / unknown now fails closed to cosmology
+    ("xyz", True),
 ])
 def test_focus_env_value_is_lowercased_and_stripped(
     monkeypatch, raw_value: str, expected_filtered: bool,

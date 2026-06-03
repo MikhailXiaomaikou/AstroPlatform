@@ -1,12 +1,11 @@
 """G3.4 + 2026-05-20: Circuit-breaker coverage for hard-reject error_class.
 
-Solar-system M0 blind test C2 case (Phaethon 100-year daily ephemeris) showed:
-after fetch_horizons_ephemeris received a local range_too_large rejection, the LLM
-retried 12 times without triggering the circuit breaker, wasting 12 LLM calls.
-Root cause has two layers:
+A blind-test case showed: after a data-fetch tool received a local
+range_too_large rejection, the LLM retried 12 times without triggering the
+circuit breaker, wasting 12 LLM calls. Root cause has two layers:
 
-1. fetch_horizons_ephemeris (and 5 other solar_system data-fetch tools) were not in
-   `_DATA_FETCH_TOOLS`, so the entire hard_failure counting logic was skipped by the outer if.
+1. the data-fetch tool was not in `_DATA_FETCH_TOOLS`, so the entire
+   hard_failure counting logic was skipped by the outer if.
 2. The soft_failure check was missing the `err_class in _HARD_REJECT_ERROR_CLASSES` short-circuit;
    future error messages containing keywords like "too large" would be wrongly classified as soft.
 

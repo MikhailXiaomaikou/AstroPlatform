@@ -66,13 +66,18 @@ _FOCUS_GATED_VALUES = frozenset({"cosmology"})
 def _filter_tools_by_research_focus(tools: list[dict]) -> list[dict]:
     """L1 hard tool gating per ASTRO_RESEARCH_FOCUS env.
 
-    Foci in ``_FOCUS_GATED_VALUES`` trigger manifest-driven tool whitelist filtering.
-    Other values ("all", "", "stellar", typos, etc.) are no-ops — only literal
-    active module names enter the filtering path.
+    ``all`` is the explicit escape hatch that exposes every tool (admin/debug).
+    A gated focus in ``_FOCUS_GATED_VALUES`` uses its own manifest allowlist.
+    Any other value — empty, a typo, or a stale pin of an extracted module
+    (e.g. ``solar_system`` / ``exoplanet`` after they moved to
+    standard-astro-verticals on 2026-06-03) — fails CLOSED to the default
+    cosmology allowlist rather than silently exposing the full tool surface
+    (incl. retained dormant tools) under a cosmology-only system prompt.
     """
-    if _ASTRO_RESEARCH_FOCUS not in _FOCUS_GATED_VALUES:
+    if _ASTRO_RESEARCH_FOCUS == "all":
         return tools
-    allowed = build_allowed_tools(_ASTRO_RESEARCH_FOCUS)
+    focus = _ASTRO_RESEARCH_FOCUS if _ASTRO_RESEARCH_FOCUS in _FOCUS_GATED_VALUES else "cosmology"
+    allowed = build_allowed_tools(focus)
     return [t for t in tools if t.get("name") in allowed]
 
 

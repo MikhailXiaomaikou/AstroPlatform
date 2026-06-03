@@ -3,14 +3,14 @@
 AI-native astronomy research platform for archive discovery, analysis,
 statistical inference, provenance tracking, and paper export.
 
-> **Module status.** Validated and usable today: **cosmology** (blind-tested
-> across 50+ paper-derived cases) and **solar-system small bodies** (20-case
-> blind round). **Exoplanets** are wired up and selectable but **not** yet
-> blind-test validated — treat outputs as experimental. Every other domain
-> (stellar, AGN, X-ray, pulsars, galaxy morphology, image reduction, …) lives
-> under `backend/app/prompts/modules/_dormant_*` with its tools hidden from the
-> LLM until promoted. Runtime focus is per-process via `ASTRO_RESEARCH_FOCUS`
-> (`cosmology` default / `solar_system` / `exoplanet`).
+> **Module status.** This repository is **cosmology-only**: the sole active
+> module is **observational cosmology** (blind-tested across 50+ paper-derived
+> cases). The solar-system and exoplanet verticals were extracted to the sibling
+> **standard-astro-verticals** repo (2026-06-03). Every other domain (stellar,
+> AGN, X-ray, pulsars, galaxy morphology, image reduction, …) lives under
+> `backend/app/prompts/modules/_dormant_*` with its tools hidden from the LLM
+> until promoted. Runtime focus is per-process via `ASTRO_RESEARCH_FOCUS`
+> (`cosmology` default; any value other than `all` fails closed to cosmology).
 
 Recent changes: [CHANGELOG.md](./CHANGELOG.md).
 
@@ -18,21 +18,18 @@ Recent changes: [CHANGELOG.md](./CHANGELOG.md).
 
 | Area | Summary |
 |---|---|
-| Data access | Query 9 active provenance-v2 archive sources from one interface. |
+| Data access | Query 6 active provenance-v2 archive sources from one interface. |
 | AI assistant | Multi-tool research agent — archive queries, ADQL, literature, table extraction, research planning, evidence graphs, analysis, fitting, paper drafting. |
 | Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain, image processing, Bayesian inference. |
 | Provenance | Every tool result carries citation, archive version, field bibcodes, query hash, run ID, and acknowledgement metadata. |
 | Cosmology module | Dataset registry, likelihood configs (BAO / SN / CMB / lensing), compressed posterior runner, controlled nested sampler, chain diagnostics, robustness matrix. |
-| Solar-system module (M0) | MPC / JPL Horizons / SBDB / Sentry-II / DAMIT queries, H–G phase reduction, Afρ, NEATM diameters, NEO impact-probability scaling, Bus-DeMeo / SDSS-colour taxonomy. |
-| Exoplanet module (M0, experimental) | NASA Exoplanet Archive + TESS / TIC queries, trapezoidal transit fitting, equilibrium-temperature / density helpers, Keplerian RV fitting. |
-| Modular focus gate | 3 active prompt modules + 12 dormant; `prompt_loader` builds a focus-aware `SYSTEM_PROMPT` and per-focus tool allowlist so non-focus tools are physically invisible to the LLM. |
+| Modular focus gate | 1 active prompt module (cosmology) + 12 dormant; `prompt_loader` builds a focus-aware `SYSTEM_PROMPT` and per-focus tool allowlist so non-focus tools are physically invisible to the LLM. |
 | Export | Paper drafts, BibTeX, acknowledgement text, notebooks, figures, reproducibility packages. |
 
 ## Active Data Sources
 
-9 provenance-v2 sources: **VizieR**, **Gaia DR3**, **SIMBAD**, **NED**,
-**2MASS**, **ALMA Science Archive** (observation metadata only), **JPL
-Horizons**, **IAU Minor Planet Center**, **NASA Exoplanet Archive**.
+6 provenance-v2 sources: **VizieR**, **Gaia DR3**, **SIMBAD**, **NED**,
+**2MASS**, **ALMA Science Archive** (observation metadata only).
 
 17 maintenance-gated keys (return `UNAVAILABLE` until each ships independent
 `archive_version` provenance): SDSS, sdss_spec, MAST, JWST, ESO, IRSA,

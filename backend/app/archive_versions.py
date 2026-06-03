@@ -29,7 +29,6 @@ ARCHIVE_VERSIONS: dict[str, str] = {
     "jwst": "live",
     "nvss": "1998",
     "first": "14dec17",
-    "jpl_horizons": "live",
     "atnf_pulsar": "PSRCAT 2.6.1",
     "sparc": "2016",
     "frbstats": "live",

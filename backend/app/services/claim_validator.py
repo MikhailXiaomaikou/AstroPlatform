@@ -1775,8 +1775,6 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
         for violation in violations
     ]
     cosmology_note = _cosmology_manifest_block_note(violations)
-    solar_system_note = _solar_system_manifest_block_note(violations)
-    exoplanet_note = _exoplanet_manifest_block_note(violations)
     if any(v.kind == "paper_numeric_missing_citation" for v in violations):
         return (
             "⚠ Citation provenance check failed: the assistant reported numeric "
@@ -1784,8 +1782,6 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
             "the same sentence. The unsupported phrases were:\n\n"
             + "\n".join(lines)
             + cosmology_note
-            + solar_system_note
-            + exoplanet_note
             + "\n\nFor literature-derived numbers, cite the source directly in "
             "the sentence that contains the number, for example "
             "`(DESI Collaboration 2024; arXiv:2404.03002)`. If multiple papers "
@@ -1796,8 +1792,6 @@ def blocked_citation_reply_text(violations: list[CitationViolation]) -> str:
         "not present in this turn's tool provenance. The unsupported citations were:\n\n"
         + "\n".join(lines)
         + cosmology_note
-        + solar_system_note
-        + exoplanet_note
         + "\n\nPlease re-run the relevant archive or literature query so the citation "
         "appears in tool_results before using it."
     )
@@ -1835,108 +1829,6 @@ def _cosmology_manifest_block_note(violations: list[CitationViolation]) -> str:
         "Call a cosmology provenance tool such as `compare_luminosity_distances` "
         "or run the relevant fit with an explicit `cosmology=` argument before "
         "quoting the preset bibcode."
-    )
-
-
-# ── M0 Commit 5 (2026-05-18): solar_system canonical bibcodes ──
-#
-# 14 keystone references in the small-body field. When the LLM cites one of
-# these bibcodes without first querying the corresponding tool, claim_validator
-# marks it as invalid_bibcode and uses _solar_system_manifest_block_note to
-# tell the user which tool to call.
-SOLAR_SYSTEM_CANONICAL_BIBCODES: dict[str, str] = {
-    "1989aste.conf..524B": "Bowell+ 1989 — H, G phase function (compute_hg_magnitude)",
-    "1996DPS....28.2504G": "Giorgini+ 1996 — JPL Horizons (fetch_horizons_ephemeris)",
-    "2003CeMDA..85..145K": "Knežević & Milani 2003 — proper elements",
-    "2012A&A...537A.128R": "Rein & Liu 2012 — REBOUND N-body integrator",
-    "2019JOSS....4.1426M": "Mommert+ 2019 — sbpy (small-body Python)",
-    "2009Icar..202..160D": "DeMeo+ 2009 — Bus-DeMeo taxonomy (classify_asteroid_busdemeo)",
-    "2010A&A...513A..46D": "Ďurech+ 2010 — DAMIT (query_damit_shape_model)",
-    "2010A&A...510A..43C": "Carvano+ 2010 — SDSS taxonomy (classify_asteroid_sdss_colors)",
-    "1984AJ.....89..579A": "A'Hearn+ 1984 — Afρ (compute_afrho)",
-    "2011ApJ...743..156M": "Mainzer+ 2011 — NEATM (fit_neatm_diameter_albedo)",
-    "1998Icar..131..291H": "Harris 1998 — NEATM original (fit_neatm_diameter_albedo)",
-    "2002Icar..158..329M": "Morbidelli+ 2002 — NEO collision (compute_neo_collision_probability)",
-    "2009M&PS...44.1853G": "Granvik+ 2009 — OpenOrb orbit determination",
-    "2019AJ....157...98G": "Ginsburg+ 2019 — astroquery (Horizons/MPC interfaces)",
-}
-
-
-def _solar_system_manifest_block_note(violations: list[CitationViolation]) -> str:
-    """Strict-mode hint: a solar_system canonical bibcode was cited but no
-    corresponding tool result was returned this turn.
-
-    Mirrors the cosmology pattern — these bibcodes are not implicitly added to
-    the valid pool. Instead the LLM is told which tool to call
-    (compute_hg_magnitude / fetch_horizons_ephemeris /
-    classify_asteroid_busdemeo / ...) so the manifest enters tool_results.
-    """
-    invalid = {
-        str(v.match_text).strip()
-        for v in violations
-        if v.kind == "invalid_bibcode"
-    }
-    if not invalid:
-        return ""
-    hits = sorted(set(invalid) & set(SOLAR_SYSTEM_CANONICAL_BIBCODES.keys()))
-    if not hits:
-        return ""
-    lines = [
-        f"  - {bibcode}: {SOLAR_SYSTEM_CANONICAL_BIBCODES[bibcode]}"
-        for bibcode in hits
-    ]
-    return (
-        "\n\nNote: one or more unsupported bibcode(s) are platform solar_system "
-        "canonical references:\n"
-        + "\n".join(lines)
-        + "\n  Strict citation mode requires the corresponding tool to run this turn. "
-        "Call the indicated tool (in parentheses) before quoting its bibcode, "
-        "or remove the bibcode from prose."
-    )
-
-
-# ── M0 2026-05-20: exoplanet canonical bibcodes ──
-#
-# 8 keystone references in the exoplanet field. Mirror solar_system pattern:
-# when LLM cites without calling the corresponding tool, claim_validator marks
-# it as invalid_bibcode and uses _exoplanet_manifest_block_note for hint.
-EXOPLANET_CANONICAL_BIBCODES: dict[str, str] = {
-    "2002ApJ...580L.171M": "Mandel & Agol 2002 — analytic transit (fit_transit)",
-    "2003ApJ...585.1038S": "Seager & Mallén-Ornelas 2003 — T_eq / transit geometry "
-                          "(compute_equilibrium_temperature / compute_transit_depth)",
-    "2013PASP..125..989A": "Akeson+ 2013 — NASA Exoplanet Archive "
-                          "(query_exoplanet_archive / query_confirmed_planets)",
-    "2015JATIS...1a4003R": "Ricker+ 2015 — TESS mission (fetch_tess_lightcurve)",
-    "2019AJ....158..138S": "Stassun+ 2019 — TIC v8 catalog (query_tess_target_list)",
-    "2010Sci...327..977B": "Borucki+ 2010 — Kepler mission",
-    "2002A&A...391..369K": "Kovács+ 2002 — BLS box-fitting",
-    "2017Natur.542..456G": "Gillon+ 2017 — TRAPPIST-1 system",
-}
-
-
-def _exoplanet_manifest_block_note(violations: list[CitationViolation]) -> str:
-    """Strict-mode hint for exoplanet canonical bibcode without supporting tool."""
-    invalid = {
-        str(v.match_text).strip()
-        for v in violations
-        if v.kind == "invalid_bibcode"
-    }
-    if not invalid:
-        return ""
-    hits = sorted(set(invalid) & set(EXOPLANET_CANONICAL_BIBCODES.keys()))
-    if not hits:
-        return ""
-    lines = [
-        f"  - {bibcode}: {EXOPLANET_CANONICAL_BIBCODES[bibcode]}"
-        for bibcode in hits
-    ]
-    return (
-        "\n\nNote: one or more unsupported bibcode(s) are platform exoplanet "
-        "canonical references:\n"
-        + "\n".join(lines)
-        + "\n  Strict citation mode requires the corresponding tool to run this turn. "
-        "Call the indicated tool (in parentheses) before quoting its bibcode, "
-        "or remove the bibcode from prose."
     )
 
 
@@ -2115,31 +2007,6 @@ _CITABLE_ANALYSIS_TOOLS: frozenset[str] = frozenset({
     "run_cobaya_cosmology",
     "run_python",
     "search_line_measurements",
-    # PART AD: exoplanet module — real archive queries + transit/RV fits +
-    # physical-quantity computations; their numbers are tool-backed.
-    "query_exoplanet_archive",
-    "query_confirmed_planets",
-    "fetch_tess_lightcurve",
-    "fit_transit",
-    "fit_rv_orbit",
-    "compute_equilibrium_temperature",
-    "compute_transit_depth",
-    "compute_planet_density",
-    "query_tess_target_list",
-    # PART AD: solar-system module — MPC/Horizons/SBDB/Sentry/DAMIT queries +
-    # H-G/Afrho/NEATM/Opik computations + taxonomy classification.
-    "query_mpc_orbit",
-    "fetch_horizons_ephemeris",
-    "query_sbdb_orbit",
-    "query_sbdb_close_approaches",
-    "query_sentry_risk",
-    "query_damit_shape_model",
-    "compute_hg_magnitude",
-    "compute_afrho",
-    "fit_neatm_diameter_albedo",
-    "compute_neo_collision_probability",
-    "classify_asteroid_busdemeo",
-    "classify_asteroid_sdss_colors",
 })
 
 
@@ -2818,29 +2685,22 @@ def dump_tool_universe(tool_results: Any, limit: int = 50) -> str:
 _LITERATURE_PRIOR_LABELS_REQUIRE_TOOL: dict[str, tuple[str, ...]] = {
     # age: must be measured (fit_isochrone), cited (search_literature),
     # or fetched from a dossier (get_object_dossier).
-    # PART AD: exoplanet archive returns real host-star age / mass and system
-    # distance (st_age / st_mass / sy_dist), so those queries can support these.
     "age_myr": (
         "fit_isochrone", "search_literature", "get_object_dossier",
-        "query_exoplanet_archive", "query_confirmed_planets",
     ),
     "age_gyr": (
         "fit_isochrone", "search_literature", "get_object_dossier",
-        "query_exoplanet_archive", "query_confirmed_planets",
     ),
     # mass: in addition to fitting / literature / dossier, may also come
-    # from a Gaia / SDSS mass column (run_adql) or the exoplanet archive.
+    # from a Gaia / SDSS mass column (run_adql).
     "mass_solar": (
         "fit_isochrone", "search_literature", "get_object_dossier", "run_adql",
-        "query_exoplanet_archive", "query_confirmed_planets",
     ),
     # distance: Gaia parallax (run_adql / get_object_info), extinction helper
-    # (get_extinction returns a distance), dossier, literature, or exoplanet
-    # system distance.
+    # (get_extinction returns a distance), dossier, or literature.
     "distance_pc": (
         "run_adql", "search_literature", "get_object_dossier",
         "get_object_info", "get_extinction",
-        "query_exoplanet_archive", "query_confirmed_planets",
     ),
     "distance_kpc": (
         "search_literature", "get_object_dossier", "get_object_info",
