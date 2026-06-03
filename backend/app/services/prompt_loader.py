@@ -60,10 +60,6 @@ def _active_module_names(focus: str) -> list[str]:
     """
     if focus == "cosmology":
         return ["cosmology"]
-    if focus == "solar_system":
-        return ["solar_system"]
-    if focus == "exoplanet":
-        return ["exoplanet"]
     # "all" / unknown / empty → load everything (no focus gating).
     # Includes active modules (no _dormant_ prefix) and dormant modules (with _dormant_ prefix).
     modules_dir = _PROMPTS_ROOT / "modules"
@@ -104,9 +100,8 @@ def build_system_prompt(focus: str) -> str:
 
     # Focus-specific appendix appended at the END (legacy L4 behavior:
     # "the LLM should see this last"). Loaded for any active-module focus
-    # whose dir contains an appendix.md.  M0 2026-05-18: extended from
-    # cosmology-only to support solar_system.
-    if focus in {"cosmology", "solar_system", "exoplanet"}:
+    # whose dir contains an appendix.md.
+    if focus == "cosmology":
         appendix_path = _PROMPTS_ROOT / "modules" / focus / "appendix.md"
         if appendix_path.exists():
             text = text + "\n\n" + _read_text(appendix_path)

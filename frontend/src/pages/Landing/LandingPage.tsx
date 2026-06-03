@@ -1,7 +1,5 @@
-import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useI18n } from "../../i18n";
-import { getBackendConfig } from "../../api/config";
 import CommentSection from "./CommentSection";
 
 /**
@@ -67,8 +65,8 @@ const TOC: TocEntry[] = [
   },
   {
     catKey: "home.cat.community",
-    title: "Worked analyses across all three active modules",
-    body: "Open-cluster HR + isochrone and SN Ia distances (cosmology), NEATM diameters and H–G phase curves (solar system), transit fits and equilibrium temperatures (exoplanets).",
+    title: "Worked analyses for observational cosmology",
+    body: "Open-cluster HR + isochrone fits, SN Ia distance moduli, DESI BAO likelihood chains, and Planck-compressed CMB distance priors — each with a full reproducibility envelope.",
     meta: "Workflow library · p. 27",
     to: "/chat",
   },
@@ -77,18 +75,8 @@ const TOC: TocEntry[] = [
 export default function LandingPage() {
   const navigate = useNavigate();
   const { t } = useI18n();
-  // M0 Commit 6 (2026-05-18): Switch the hero copy based on backend focus. cosmology is the default;
-  // solar_system uses the .solar_system suffix keys. Unknown focus / fetch failure -> cosmology default.
-  const [backendFocus, setBackendFocus] = useState<string>("cosmology");
-  useEffect(() => {
-    getBackendConfig()
-      .then((cfg) => setBackendFocus(cfg.focus || "cosmology"))
-      .catch(() => {});
-  }, []);
-  const eyebrowKey =
-    backendFocus === "solar_system" ? "home.eyebrow.solar_system" : "home.eyebrow";
-  const titleKey =
-    backendFocus === "solar_system" ? "home.title.solar_system" : "home.title";
+  const eyebrowKey = "home.eyebrow";
+  const titleKey = "home.title";
 
   return (
     <div className="journal-page journal-home">

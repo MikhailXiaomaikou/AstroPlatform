@@ -9,12 +9,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 V2_AVAILABLE_CONNECTORS = frozenset(
-    {"vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc", "nasa_exoplanet_archive"}
+    {"vizier", "gaia", "simbad", "ned", "2mass", "alma"}
 )
-# User-facing alternatives list (recommended in UNAVAILABLE banner). exoplanet M0 (2026-05-20)
-# adds nasa_exoplanet_archive.
+# User-facing alternatives list (recommended in UNAVAILABLE banner).
 AVAILABLE_ALTERNATIVES = (
-    "vizier", "gaia", "simbad", "ned", "2mass", "alma", "jpl", "mpc", "nasa_exoplanet_archive",
+    "vizier", "gaia", "simbad", "ned", "2mass", "alma",
 )
 
 

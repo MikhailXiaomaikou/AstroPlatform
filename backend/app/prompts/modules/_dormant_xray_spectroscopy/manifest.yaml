@@ -1,8 +1,0 @@
-# Dormant module manifest (M1 Phase 2, 2026-05-18)
-# NOT loaded under ASTRO_RESEARCH_FOCUS=cosmology.
-name: xray_spectroscopy
-display: X-ray Spectroscopy (Sherpa)
-status: dormant
-prompt_file: prompt.md
-tools:
-  - x_ray_spectral_fit

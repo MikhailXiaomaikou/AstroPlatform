@@ -19,14 +19,12 @@ on:
   workflow_dispatch:           # manual button in the Actions UI
     inputs:
       module:
-        description: "Module to run. The scheduled daily runs cosmology only; pick 'all' or 'solar_system' here for a manual run of the dormant vertical."
+        description: "Module to run. cosmology is the only active module in this repo."
         required: false
         default: "cosmology"
         type: choice
         options:
           - cosmology
-          - all
-          - solar_system
       cases:
         description: "Comma-separated case IDs to run (e.g. A2,A3). Empty = all cases in the module(s). Tight iteration loops use this to shrink a 20-min run to 1-2 cases × ~2 min each."
         required: false
@@ -78,10 +76,8 @@ jobs:
           # activate the deepseek path.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || secrets.PLATFORM_DEEPSEEK_API_KEY }}
-          # The scheduled daily runs cosmology only (cosmology is the active
-          # module). The cron has no inputs, so the `|| 'cosmology'` fallback
-          # applies; a manual workflow_dispatch can still pick 'all' or
-          # 'solar_system'. daily_blind.sh honors --module.
+          # cosmology is the only active module; the cron has no inputs, so the
+          # `|| 'cosmology'` fallback applies. daily_blind.sh honors --module.
           BLIND_MODULE: ${{ inputs.module || 'cosmology' }}
           BLIND_CASES: ${{ inputs.cases || '' }}
           BLIND_PROVIDER: ${{ inputs.provider || 'auto' }}
@@ -103,7 +99,6 @@ jobs:
         with:
           name: blind-tests-${{ github.run_id }}
           path: |
-            backend/scripts/blind_test_m0/results_*
             backend/scripts/blind_test_cosmology_m0/results_*
           if-no-files-found: ignore
 

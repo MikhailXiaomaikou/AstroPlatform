@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Daily blind-test driver — solar_system + cosmology in one shot.
+# Daily blind-test driver — cosmology.
 #
 # Each per-module runner reads its own cases.yaml, talks to an LLM via the
 # real chat path, and dumps a results_<timestamp>/ directory next to its
@@ -42,7 +42,6 @@ if [[ "$*" != *"--provider"* ]]; then
 fi
 
 modules=(
-  "blind_test_m0:solar_system"
   "blind_test_cosmology_m0:cosmology"
 )
 
@@ -72,9 +71,9 @@ set -- "${forwarded[@]}"
 
 if [[ -n "$filter" && "$filter" != "all" ]]; then
   case "$filter" in
-    solar_system|cosmology) ;;
+    cosmology) ;;
     *)
-      echo "ERROR: --module must be one of: all, solar_system, cosmology (got $filter)." >&2
+      echo "ERROR: --module must be one of: all, cosmology (got $filter)." >&2
       exit 2
       ;;
   esac

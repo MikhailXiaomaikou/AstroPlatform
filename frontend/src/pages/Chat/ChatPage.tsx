@@ -58,11 +58,6 @@ import CosmologyLikelihoodPanel from "../../components/chat/CosmologyLikelihoodP
 import ResearchProgramPanel from "../../components/chat/ResearchProgramPanel";
 import DefaultToolResultPanel from "../../components/chat/DefaultToolResultPanel";
 import DataSourcesPanel from "../../components/chat/DataSourcesPanel";
-import TablePanel from "../../components/viz/TablePanel";
-import type { TableField } from "../../components/viz/TablePanel";
-import WarningCard from "../../components/viz/WarningCard";
-import PlotlyXYPanel from "../../components/viz/PlotlyXYPanel";
-import BarChartPanel from "../../components/viz/BarChartPanel";
 import ErrorBoundary from "../../components/ErrorBoundary";
 import { useI18n } from "../../i18n";
 import { useAuth } from "../../context/AuthContext";
@@ -667,28 +662,6 @@ function ActionCardInner({
     run_cobaya_cosmology: "Cobaya Cosmology",
     get_cosmology_run_status: "Cosmology Job Status",
     load_cosmology_data_product: "Cosmology Data Product",
-    // ── Solar System M0 (2026-05-18) ──
-    query_mpc_orbit: "MPC Orbit",
-    fetch_horizons_ephemeris: "Horizons Ephemeris",
-    query_sbdb_orbit: "SBDB Orbit",
-    query_sbdb_close_approaches: "Close Approaches",
-    query_sentry_risk: "Sentry-II Risk",
-    query_damit_shape_model: "DAMIT Shape Model",
-    compute_hg_magnitude: "H-G Phase Function",
-    compute_afrho: "Afρ Comet Activity",
-    fit_neatm_diameter_albedo: "NEATM Fit",
-    compute_neo_collision_probability: "Öpik Collision",
-    classify_asteroid_busdemeo: "Bus-DeMeo Class",
-    classify_asteroid_sdss_colors: "Carvano SDSS Class",
-    // ── Exoplanet M0 (2026-05-20) ──
-    query_exoplanet_archive: "Exoplanet Archive",
-    query_confirmed_planets: "Confirmed Planets",
-    fetch_tess_lightcurve: "TESS Lightcurve",
-    fit_transit: "Transit Fit",
-    compute_equilibrium_temperature: "Equilibrium Temperature",
-    compute_transit_depth: "Transit Depth",
-    compute_planet_density: "Planet Density",
-    query_tess_target_list: "TESS Targets",
   };
 
   const icons: Record<string, string> = {
@@ -735,28 +708,6 @@ function ActionCardInner({
     run_cobaya_cosmology: "📉",
     get_cosmology_run_status: "⏱",
     load_cosmology_data_product: "📦",
-    // ── Solar System M0 (2026-05-18) ──
-    query_mpc_orbit: "🪨",
-    fetch_horizons_ephemeris: "🛰️",
-    query_sbdb_orbit: "🌑",
-    query_sbdb_close_approaches: "⏱",
-    query_sentry_risk: "⚠️",
-    query_damit_shape_model: "🔺",
-    compute_hg_magnitude: "💫",
-    compute_afrho: "☄️",
-    fit_neatm_diameter_albedo: "🌡️",
-    compute_neo_collision_probability: "💥",
-    classify_asteroid_busdemeo: "🔭",
-    classify_asteroid_sdss_colors: "🎨",
-    // ── Exoplanet M0 (2026-05-20) ──
-    query_exoplanet_archive: "🪐",
-    query_confirmed_planets: "🌍",
-    fetch_tess_lightcurve: "📈",
-    fit_transit: "📉",
-    compute_equilibrium_temperature: "🌡️",
-    compute_transit_depth: "📏",
-    compute_planet_density: "⚖️",
-    query_tess_target_list: "⭐",
   };
 
   const isAutoExecuted = !!(action as Record<string, unknown>)._auto_executed;
@@ -1943,150 +1894,6 @@ function AutoToolResult({ toolName, result }: { toolName: string; result: Record
     || toolName === "run_paper_tool_mining_loop"
   ) {
     return <ResearchProgramPanel result={result} />;
-  }
-
-  // ── M1 (2026-05-20): Solar System + Exoplanet Panel routing ──
-  // 20 tools mapped onto 4 generic panels (Karpathy 三相似才抽象).
-
-  // TablePanel: dict of named scalar fields (orbital elements / planet params).
-  if (
-    toolName === "query_mpc_orbit"
-    || toolName === "query_sbdb_orbit"
-    || toolName === "query_exoplanet_archive"
-    || toolName === "fit_neatm_diameter_albedo"
-    || toolName === "fit_transit"
-  ) {
-    // collect numeric fields from result (skip banner/meta keys)
-    const skipKeys = new Set([
-      "__tool_status__", "__do_not_claim__", "__message_to_model__", "__suggested_next_step__",
-      "success", "analysis_status", "data_origin", "reproducibility", "source_urls",
-      "archive_ids", "provenance", "_provenance_dataset", "results", "n_results", "n_total",
-      "designation", "target", "reference", "bibcode", "citations", "error", "error_class",
-      "method",
-    ]);
-    const fields: TableField[] = [];
-    Object.entries(result).forEach(([k, v]) => {
-      if (skipKeys.has(k)) return;
-      if (v === null || v === undefined) return;
-      if (typeof v === "number" || typeof v === "string") {
-        fields.push({ label: k, value: v });
-      }
-    });
-    // also pull orbital_elements if nested
-    const oe = result.orbital_elements;
-    if (oe && typeof oe === "object" && !Array.isArray(oe)) {
-      Object.entries(oe as Record<string, unknown>).forEach(([k, v]) => {
-        if (typeof v === "number" || typeof v === "string") {
-          fields.push({ label: k, value: v as number | string });
-        }
-      });
-    }
-    const title = (result.target as string) || (result.designation as string) || toolName;
-    const caveat = result.__do_not_claim__ ? (result.__message_to_model__ as string) : undefined;
-    return <TablePanel title={title} subtitle={toolName} fields={fields} caveat={caveat}
-              footer={result.reference ? `Reference: ${result.reference}` : undefined} />;
-  }
-
-  // WarningCard: single risk metric or single derived value with caveat.
-  if (toolName === "query_sentry_risk") {
-    const prob = (result.cumulative_impact_probability as number)
-      ?? (result.impact_probability as number)
-      ?? null;
-    const sev = (typeof prob === "number" && prob > 1e-4) ? "danger"
-      : (typeof prob === "number" && prob > 1e-7) ? "warn" : "ok";
-    return <WarningCard
-      title={`Sentry-II Risk — ${result.designation || result.target || "object"}`}
-      value={prob} unit="(100-yr cumulative)" severity={sev}
-      caveat={(result.__message_to_model__ as string) ||
-        "NASA Sentry-II is the authoritative source for NEO impact risk; Öpik upper bounds are NOT actual probabilities."}
-      footer={result.reference ? `Source: ${result.reference}` : undefined} />;
-  }
-  if (toolName === "compute_neo_collision_probability") {
-    return <WarningCard
-      title="Öpik 100-yr Upper Bound"
-      value={result.opik_upper_bound_100yr as number}
-      severity="warn"
-      caveat="This is a GEOMETRIC upper bound, NOT the actual impact probability. Real risk requires Sentry-II (typically 10⁴–10⁶× smaller)."
-      footer={(result.reference as string) || ""} />;
-  }
-  if (toolName === "compute_afrho") {
-    return <WarningCard title="Afρ Comet Activity"
-      value={result.Afrho_cm as number} unit="cm" severity="info"
-      caveat="Afρ is a phase-corrected proxy for comet dust production (A'Hearn+ 1984)."
-      footer={(result.reference as string) || ""} />;
-  }
-  if (toolName === "compute_equilibrium_temperature") {
-    return <WarningCard title="Planet T_eq"
-      value={result.T_eq_K as number} unit="K" severity="info"
-      caveat={`Albedo = ${result.albedo_used}, redistribution factor = ${result.redistribution_factor}. Archive pl_eqt often assumes A=0.`}
-      footer={(result.reference as string) || ""} />;
-  }
-  if (toolName === "compute_transit_depth") {
-    return <WarningCard title="Transit Depth"
-      value={result.depth_ppm as number} unit="ppm" severity="info"
-      caveat="Geometric (R_p / R_star)²; no limb darkening."
-      footer={(result.reference as string) || ""} />;
-  }
-  if (toolName === "compute_planet_density") {
-    return <WarningCard title="Planet Mean Density"
-      value={result.density_g_cm3 as number} unit="g/cm³" severity="info"
-      caveat={`Earth ratio: ${(result.earth_density_ratio as number)?.toFixed(2)}× (Earth=5.51, Jupiter=1.33)`}
-      footer={(result.reference as string) || ""} />;
-  }
-
-  // PlotlyXYPanel: time-series, phase functions, lightcurves.
-  if (toolName === "fetch_horizons_ephemeris") {
-    const rows = (result.rows as Array<Record<string, number>>) || [];
-    if (rows.length === 0) {
-      return <div style={{ fontSize: 12, color: "#888", padding: 8 }}>Horizons returned no rows.</div>;
-    }
-    const x = rows.map((_, i) => i);
-    const v_curve = rows.map(r => r.V ?? r.v ?? 0);
-    return <PlotlyXYPanel
-      x={x} y={v_curve}
-      x_label="epoch index" y_label="V magnitude"
-      title={`${result.target || "object"} — Horizons V curve`}
-      mode="lines+markers"
-      y_invert={true}
-      caveat={result.__do_not_claim__ ? (result.__message_to_model__ as string) : undefined} />;
-  }
-  if (toolName === "compute_hg_magnitude") {
-    const phases = (result.phase_angles_deg as number[]) || [];
-    const v_app = (result.V_apparent as number[]) || [];
-    return <PlotlyXYPanel
-      x={phases} y={v_app}
-      x_label="phase angle (deg)" y_label="V apparent"
-      title="H-G Phase Function (Bowell+ 1989)"
-      mode="lines+markers" y_invert={true} />;
-  }
-  if (toolName === "fetch_tess_lightcurve") {
-    const time = (result.time as number[]) || [];
-    const flux = (result.flux as number[]) || [];
-    return <PlotlyXYPanel
-      x={time} y={flux}
-      x_label="BTJD (BJD - 2457000)" y_label="normalized flux"
-      title={`TESS Light Curve — ${result.target || ""} (sector ${result.sector || "?"})`}
-      mode="markers" />;
-  }
-
-  // BarChartPanel: classification χ² over fixed class set.
-  if (toolName === "classify_asteroid_busdemeo") {
-    const all_chi = (result.all_chi_sq as Record<string, number>) || {};
-    return <BarChartPanel
-      categories={Object.keys(all_chi)}
-      values={Object.values(all_chi)}
-      highlight_label={result.best_class as string}
-      title={`Bus-DeMeo classification (${result.classification_system || ""})`}
-      value_label="χ²" />;
-  }
-  if (toolName === "classify_asteroid_sdss_colors") {
-    const all_chi = (result.all_chi2 as Record<string, number>) || (result.all_distances as Record<string, number>) || {};
-    return <BarChartPanel
-      categories={Object.keys(all_chi)}
-      values={Object.values(all_chi)}
-      highlight_label={result.best_class as string}
-      title={`Carvano 2010 SDSS classification (${result.classification_system || ""})`}
-      value_label="χ²" />;
   }
 
   // Pipeline

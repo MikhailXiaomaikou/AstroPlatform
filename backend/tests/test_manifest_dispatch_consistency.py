@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-ACTIVE_FOCI = ("cosmology", "solar_system", "exoplanet")
+ACTIVE_FOCI = ("cosmology",)
 
 
 @pytest.fixture(autouse=True)
@@ -85,16 +85,13 @@ def test_no_duplicate_tool_schemas_in_global_TOOLS() -> None:
 
 @pytest.mark.parametrize("focus", ACTIVE_FOCI)
 def test_module_specific_tool_names_subset_of_schemas(focus: str) -> None:
-    """The per-module dispatch frozenset (COSMOLOGY_TOOL_NAMES /
-    SOLAR_SYSTEM_TOOL_NAMES / EXOPLANET_TOOL_NAMES) must be a subset of
-    the global schema names — otherwise the dispatcher claims to handle
-    a tool that has no schema, so execute_tool would be called with a
+    """The per-module dispatch frozenset (COSMOLOGY_TOOL_NAMES) must be a
+    subset of the global schema names — otherwise the dispatcher claims to
+    handle a tool that has no schema, so execute_tool would be called with a
     tool the LLM cannot reasonably emit."""
     import importlib
     module_attr = {
         "cosmology": ("app.services.ai_tools_cosmology", "COSMOLOGY_TOOL_NAMES"),
-        "solar_system": ("app.services.ai_tools_solar_system", "SOLAR_SYSTEM_TOOL_NAMES"),
-        "exoplanet": ("app.services.ai_tools_exoplanet", "EXOPLANET_TOOL_NAMES"),
     }[focus]
     mod = importlib.import_module(module_attr[0])
     names = set(getattr(mod, module_attr[1]))

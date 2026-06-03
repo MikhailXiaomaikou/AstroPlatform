@@ -57,7 +57,7 @@ describe("mockE2E chatFlow", () => {
     const f = loadFixture(name);
     expect(f.name).toBe(name);
     expect(f.thinking_events.length).toBeGreaterThan(0);
-    expect(f.input.focus).toMatch(/^(cosmology|solar_system|exoplanet)$/);
+    expect(f.input.focus).toMatch(/^cosmology$/);
   });
 
   it.each(FIXTURE_NAMES)("%s — tool_result events carry the expected anti-fabrication fields", (name) => {

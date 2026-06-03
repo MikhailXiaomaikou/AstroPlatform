@@ -1456,23 +1456,6 @@ TOOLS = [
     },
 ]
 
-# ── M0 Commit 4 (2026-05-18): solar_system 12-tool schema ──
-# Consolidated in ai_tools_solar_system.py and injected into TOOLS via extend
-# (avoids further bloating the 9k+ line ai_tools.py).
-# _exec_tool dispatch routes through a single elif to dispatch_solar_system.
-from app.services.ai_tools_solar_system import (  # noqa: E402
-    SOLAR_SYSTEM_TOOL_SCHEMAS as _SOLAR_SYSTEM_TOOL_SCHEMAS,
-    SOLAR_SYSTEM_TOOL_NAMES as _SOLAR_SYSTEM_TOOL_NAMES,
-)
-TOOLS.extend(_SOLAR_SYSTEM_TOOL_SCHEMAS)
-
-# ── M0 2026-05-20: exoplanet 8 tools (3rd active module) ──
-from app.services.ai_tools_exoplanet import (  # noqa: E402
-    EXOPLANET_TOOL_SCHEMAS as _EXOPLANET_TOOL_SCHEMAS,
-    EXOPLANET_TOOL_NAMES as _EXOPLANET_TOOL_NAMES,
-)
-TOOLS.extend(_EXOPLANET_TOOL_SCHEMAS)
-
 # ── H1 split (2026-05-26): cosmology tools (schemas + executors) extracted to
 # ai_tools_cosmology.py; schemas injected via TOOLS.extend, execution delegated
 # via dispatch_cosmology (mirrors solar_system / exoplanet).
@@ -1957,28 +1940,6 @@ async def _execute_tool_inner(
             return await _exec_query_gaia_cluster(tool_input, python_session_id)
         elif tool_name == "get_extinction":
             return await _exec_get_extinction(tool_input)
-        # ── M0 Commit 4: solar_system 12-tool centralized dispatch ──
-        # Deployment-readiness introspection scans this function body for
-        # quoted tool names. Keep this explicit inventory in sync with
-        # _SOLAR_SYSTEM_TOOL_NAMES while dispatch remains centralized:
-        # "query_mpc_orbit", "fetch_horizons_ephemeris",
-        # "query_sbdb_orbit", "query_sbdb_close_approaches",
-        # "query_sentry_risk", "query_damit_shape_model",
-        # "compute_hg_magnitude", "compute_afrho",
-        # "fit_neatm_diameter_albedo", "compute_neo_collision_probability",
-        # "classify_asteroid_busdemeo", "classify_asteroid_sdss_colors".
-        elif tool_name in _SOLAR_SYSTEM_TOOL_NAMES:
-            from app.services.ai_tools_solar_system import dispatch_solar_system
-            return await dispatch_solar_system(tool_name, tool_input)
-        # ── M0 2026-05-20: exoplanet 8-tool centralized dispatch ──
-        # Group-dispatched exoplanet tools:
-        # "query_exoplanet_archive", "query_confirmed_planets",
-        # "fetch_tess_lightcurve", "fit_transit",
-        # "compute_equilibrium_temperature", "compute_transit_depth",
-        # "compute_planet_density", "query_tess_target_list".
-        elif tool_name in _EXOPLANET_TOOL_NAMES:
-            from app.services.ai_tools_exoplanet import dispatch_exoplanet
-            return await dispatch_exoplanet(tool_name, tool_input)
         else:
             # R6-NEW-2: return a concrete error_class + available tool list for unknown
             # tools so the AI can self-correct on the next turn (no more hallucinated

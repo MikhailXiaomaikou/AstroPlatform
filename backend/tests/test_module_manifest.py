@@ -119,10 +119,30 @@ def test_no_tool_appears_in_both_core_and_a_module_manifest():
         )
 
 
-def test_every_real_tool_appears_in_at_least_one_manifest():
-    """Every TOOLS entry must be classified somewhere — core, cosmology,
-    or one of the dormant modules. Catches new tools added to ai_tools.py
-    that nobody mapped."""
+# Tools whose implementation is intentionally retained in ai_tools.TOOLS but
+# which belong to no active manifest in this cosmology-only repo. They fall into
+# two buckets: shared multi-domain infrastructure kept for cosmology (pipeline
+# generation/execution, generic analysis validation) and dormant-domain tool
+# implementations whose prompt modules were extracted to standard-astro-verticals
+# (paper-mining/tool-ontology, image reduction, stellar isochrone, galaxy Sérsic,
+# pulsar timing, X-ray spectral fit, Keplerian RV). The cosmology focus gate hides
+# every one of these from the LLM (build_allowed_tools("cosmology") excludes them);
+# they remain only so the registry/dispatch stays internally consistent.
+_RETAINED_UNMANIFESTED_TOOLS = frozenset({
+    "generate_pipeline", "run_pipeline", "validate_analysis",
+    "generate_paper_draft", "build_paper_mining_candidate_pool", "mine_paper_tools",
+    "run_paper_tool_mining_batch", "run_paper_tool_mining_loop",
+    "build_tool_ontology", "build_tool_gap_matrix", "rank_tool_implementation_queue",
+    "reduce_ccd_image", "solve_astrometry", "extract_photometry", "extract_sources",
+    "fit_isochrone", "fit_sersic_morphology", "pulsar_derived_quantities",
+    "x_ray_spectral_fit", "fit_rv_orbit",
+})
+
+
+def test_every_real_tool_appears_in_a_manifest_or_retained_set():
+    """Every TOOLS entry must be classified — core, cosmology, or the explicitly
+    documented retained-but-unmanifested set above. Catches NEW tools added to
+    ai_tools.py that nobody mapped (they'd land outside both sets)."""
     real_tools = _tool_names_in_ai_tools()
     core_yaml = _load_yaml(_PROMPTS_ROOT / "core" / "infrastructure.yaml")
     classified = set(core_yaml.get("tools") or [])
@@ -130,8 +150,9 @@ def test_every_real_tool_appears_in_at_least_one_manifest():
     for _, manifest, _ in _module_manifests():
         classified.update(manifest.get("tools") or [])
 
-    unclassified = real_tools - classified
+    unclassified = real_tools - classified - _RETAINED_UNMANIFESTED_TOOLS
     assert not unclassified, (
         f"Tools in ai_tools.TOOLS not classified in any manifest: {sorted(unclassified)}. "
-        f"Add them to core/infrastructure.yaml or modules/<m>/manifest.yaml."
+        f"Add them to core/infrastructure.yaml, modules/<m>/manifest.yaml, or "
+        f"(if intentionally dormant/shared) _RETAINED_UNMANIFESTED_TOOLS."
     )

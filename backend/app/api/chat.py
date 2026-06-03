@@ -59,10 +59,8 @@ _ASTRO_RESEARCH_FOCUS = os.getenv("ASTRO_RESEARCH_FOCUS", "cosmology").strip().l
 
 # Foci that trigger L1 hard tool gating.  To add a new active module:
 # (1) add the focus literal here, (2) add a branch in prompt_loader._active_module_names,
-# (3) write the tools list in modules/<name>/manifest.yaml. Karpathy's rule of three:
-# now at the 3rd active module (exoplanet, 2026-05-20) — abstraction decision
-# deferred to next iteration to avoid mid-M0 refactor; collect more usage data first.
-_FOCUS_GATED_VALUES = frozenset({"cosmology", "solar_system", "exoplanet"})
+# (3) write the tools list in modules/<name>/manifest.yaml.
+_FOCUS_GATED_VALUES = frozenset({"cosmology"})
 
 
 def _filter_tools_by_research_focus(tools: list[dict]) -> list[dict]:
@@ -1947,24 +1945,6 @@ async def _execute_tool_calls(
         # MAST / lightkurve cold starts are often >45s on Render.  Keep the
         # default mode bounded, then stretch it explicitly in long mode below.
         "search_lightcurve": 90.0,
-        # ── M0 Commit 4 (2026-05-18): solar_system tool deadline adjustments ──
-        # Horizons cold-start on Render free tier is often >45 s; give it 90 s.
-        # MPC/SBDB/Sentry have a 30 s single-HTTP-call limit; add retry/parse
-        # slack to give 60 s. DAMIT is a slow host; 60 s.
-        # Formula/classification tools (HG/Afro/NEATM/Opik/Bus-DeMeo/Carvano) are instant; 45 s default is enough.
-        "fetch_horizons_ephemeris": 90.0,
-        "query_mpc_orbit": 60.0,
-        "query_sbdb_orbit": 60.0,
-        "query_sbdb_close_approaches": 60.0,
-        "query_sentry_risk": 60.0,
-        "query_damit_shape_model": 60.0,
-        # ── M0 2026-05-20: exoplanet tool deadlines ──
-        # TESS lightcurve download via MAST can take 60-90 s for new sectors;
-        # NEA queries usually under 30 s but give 60 s slack.
-        "fetch_tess_lightcurve": 120.0,
-        "query_exoplanet_archive": 60.0,
-        "query_confirmed_planets": 60.0,
-        "query_tess_target_list": 60.0,
         # ── M1-A (2026-05-31): CAMB theory CMB spectrum ──
         # A bounded lmax<=2500 CAMB call is a few seconds, but calls serialize
         # behind a process-global lock (CAMB's Fortran kernel is non-reentrant)
@@ -4193,11 +4173,6 @@ async def _run_agent_loop(
         "crossmatch_catalogs", "query_gaia_cluster", "get_object_info",
         "get_object_dossier", "get_extinction", "search_literature",
         "extract_literature_tables", "query_high_velocity_stars",
-        # solar_system M0 (2026-05-20): 6 small-body data-query tools also need
-        # G3.4 circuit-breaker coverage, otherwise they can hard-fail N times
-        # without ever being disabled. Confirmed by C2 case testing.
-        "query_mpc_orbit", "fetch_horizons_ephemeris", "query_sbdb_orbit",
-        "query_sbdb_close_approaches", "query_sentry_risk", "query_damit_shape_model",
     }
     MAX_LINE_RELATION_TABLE_EXTRACT_ATTEMPTS = 2
     # G3.4 + H0.7: tool → failure count this turn.  When ≥

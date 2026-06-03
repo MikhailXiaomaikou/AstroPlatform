@@ -1,8 +1,0 @@
-# Dormant module manifest (M1 Phase 2, 2026-05-18)
-# NOT loaded under ASTRO_RESEARCH_FOCUS=cosmology.
-name: high_z_galaxy
-display: High-z Galaxy (line family lookup helper, no LLM tools)
-status: dormant
-prompt_file: prompt.md
-tools:
-  # No LLM tools (prompt + helper module only).

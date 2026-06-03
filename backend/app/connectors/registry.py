@@ -21,9 +21,6 @@ def _init():
         from app.connectors.vizier import VizierConnector
         from app.connectors.ned import NEDConnector
         from app.connectors.twomass import TwoMASSConnector
-        from app.connectors.jpl import JPLHorizonsConnector
-        from app.connectors.mpc import MPCConnector
-        from app.connectors.nasa_exoplanet_archive import NASAExoplanetArchiveConnector
 
         _connectors = {
             "gaia": GaiaConnector(),
@@ -32,9 +29,6 @@ def _init():
             "vizier": VizierConnector(),
             "ned": NEDConnector(),
             "2mass": TwoMASSConnector(),
-            "jpl": JPLHorizonsConnector(),
-            "mpc": MPCConnector(),
-            "nasa_exoplanet_archive": NASAExoplanetArchiveConnector(),
         }
 
 
@@ -42,8 +36,7 @@ CONNECTORS_KEYS = [
     "sdss", "sdss_spec", "gaia", "simbad", "vizier", "mast", "ned", "2mass",
     "chandra", "allwise", "alma", "eso", "irsa", "jwst", "lamost", "desi",
     "panstarrs", "xmm", "nvss", "first",
-    "jpl", "mpc", "atnf_pulsar", "sparc", "frbstats",
-    "nasa_exoplanet_archive",
+    "atnf_pulsar", "sparc", "frbstats",
 ]
 
 

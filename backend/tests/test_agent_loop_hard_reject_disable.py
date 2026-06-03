@@ -17,26 +17,6 @@ from __future__ import annotations
 import inspect
 
 
-def test_solar_system_data_tools_in_data_fetch_set():
-    """All 6 solar_system data-fetch tools must be in _DATA_FETCH_TOOLS, otherwise
-    the G3.4 circuit breaker has no effect on them."""
-    from app.api import chat as chat_mod
-
-    src = inspect.getsource(chat_mod._run_agent_loop)
-    for tool in [
-        "query_mpc_orbit",
-        "fetch_horizons_ephemeris",
-        "query_sbdb_orbit",
-        "query_sbdb_close_approaches",
-        "query_sentry_risk",
-        "query_damit_shape_model",
-    ]:
-        assert f'"{tool}"' in src, (
-            f"{tool} 不在 _DATA_FETCH_TOOLS — G3.4 熔断对它无效, "
-            f"参考 chat.py L4166 的 `if tool_name in _DATA_FETCH_TOOLS`"
-        )
-
-
 def test_hard_reject_error_classes_defined():
     """_HARD_REJECT_ERROR_CLASSES frozenset must exist and contain the 3 core classes.
 

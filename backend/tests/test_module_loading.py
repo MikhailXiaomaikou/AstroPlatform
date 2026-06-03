@@ -93,15 +93,16 @@ def test_archive_manifest_placeholder_is_resolved():
 # ── focus=all ──────────────────────────────────────────────────────
 
 
-def test_all_focus_loads_every_module():
+def test_all_focus_loads_cosmology_the_only_module():
     from app.services.prompt_loader import build_system_prompt
 
     sp = build_system_prompt("all")
-    # Should contain cosmology AND every dormant module's section keywords
+    # cosmology-only repo: cosmology is the sole module; the removed
+    # solar-system / exoplanet / dormant sections must NOT appear.
     assert "COSMOLOGY PRESETS" in sp
-    assert "X-ray spectral analysis workflow" in sp
-    assert "Pulsar analysis" in sp
-    assert "Solar system objects" in sp
+    assert "X-ray spectral analysis workflow" not in sp
+    assert "Pulsar analysis" not in sp
+    assert "Solar system objects" not in sp
 
 
 def test_all_focus_does_not_append_cosmology_appendix():
@@ -157,62 +158,10 @@ def test_cosmology_allowed_tools_excludes_dormant():
     assert "fit_transit_model" not in tools  # _dormant_exoplanet
 
 
-def test_all_focus_includes_every_tool():
-    """ASTRO_RESEARCH_FOCUS=all must expose every TOOLS entry."""
-    from app.services.ai_tools import TOOLS
+def test_all_focus_surfaces_full_cosmology_core_surface():
+    """cosmology-only repo: cosmology is the sole module, so focus=all
+    surfaces exactly the same core+cosmology allowlist as focus=cosmology.
+    (Dormant-tool schemas may remain in TOOLS but no focus exposes them.)"""
     from app.services.prompt_loader import build_allowed_tools
 
-    all_tools = {t["name"] for t in TOOLS}
-    allowed = build_allowed_tools("all")
-    missing = all_tools - allowed
-    assert not missing, f"focus=all dropped tools: {sorted(missing)}"
-
-
-# ── focus=solar_system (M0 Commit 1, 2026-05-18) ───────────────────
-
-
-def test_solar_system_prompt_loaded_when_focus_is_solar_system():
-    """focus=solar_system loads content from modules/solar_system/prompt.md."""
-    from app.services.prompt_loader import build_system_prompt
-
-    sp = build_system_prompt("solar_system")
-    # Known strings from Solar-system module prompt.md (seeded from _dormant_solar_system):
-    assert "Solar system objects" in sp
-    # Cross-module infrastructure (core/) must still be present
-    assert "ADQL aggregate-function semantics" in sp
-    assert "Python Code Execution" in sp
-
-
-def test_solar_system_focus_excludes_cosmology_workflow():
-    """focus=solar_system should not load cosmology module sections."""
-    from app.services.prompt_loader import build_system_prompt
-
-    sp = build_system_prompt("solar_system")
-    assert "COSMOLOGY PRESETS" not in sp
-    assert "Distance estimation hierarchy" not in sp
-    assert "Variable star workflow" not in sp
-
-
-def test_solar_system_allowed_tools_at_commit1_is_core_only():
-    """M0 Commit 1: manifest.yaml tools is [], only core tools remain under solar_system focus."""
-    from app.services.prompt_loader import build_allowed_tools
-
-    tools = build_allowed_tools("solar_system")
-    # Core tools (from core/infrastructure.yaml) must be present
-    assert "run_python" in tools
-    assert "search_literature" in tools
-    assert "run_adql" in tools
-    # Cosmology-specific tools must not be present
-    assert "fit_cosmology_mcmc" not in tools
-    assert "run_cosmology_robustness_matrix" not in tools
-    assert "build_cosmology_likelihood" not in tools
-
-
-def test_all_focus_still_loads_solar_system_after_mv():
-    """After mv _dormant_solar_system → solar_system, focus=all fallback can still
-    iterate to the solar_system module (active dirs also count)."""
-    from app.services.prompt_loader import build_system_prompt
-
-    sp = build_system_prompt("all")
-    assert "Solar system objects" in sp
-    assert "COSMOLOGY PRESETS" in sp  # cosmology also present
+    assert build_allowed_tools("all") == build_allowed_tools("cosmology")

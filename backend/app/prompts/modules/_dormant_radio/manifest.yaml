@@ -1,7 +1,0 @@
-# Dormant module manifest (M1 Phase 2, 2026-05-18)
-# NOT loaded under ASTRO_RESEARCH_FOCUS=cosmology.
-name: radio
-display: Radio Astronomy (NVSS / FIRST)
-status: dormant
-prompt_file: prompt.md
-tools:

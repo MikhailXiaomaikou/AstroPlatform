@@ -1,7 +1,0 @@
-# Dormant module manifest (M1 Phase 2, 2026-05-18)
-# NOT loaded under ASTRO_RESEARCH_FOCUS=cosmology.
-name: team_workspace
-display: Team Workspace
-status: dormant
-prompt_file: prompt.md
-tools:
