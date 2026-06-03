@@ -14,6 +14,7 @@ from app.auth import (
     create_access_token,
     get_current_user,
     hash_password,
+    local_dev_no_auth_enabled,
     verify_password,
 )
 from app.config import settings
@@ -373,6 +374,9 @@ async def _require_admin(request: Request):
     the admin surface.  Now we allow the open path ONLY when ENV is the
     literal string "dev" — the default/unset case blocks.
     """
+    if local_dev_no_auth_enabled():
+        return
+
     import os
     _env = os.getenv("ENV", "").strip().lower()
     if not settings.admin_secret:
@@ -414,6 +418,9 @@ async def require_admin_any(
     dependency overrides work in tests.  events.py / inference.py /
     admin_stats.py all call `Depends(require_admin_any)`.
     """
+    if local_dev_no_auth_enabled():
+        return None
+
     # ── path 1: X-Admin-Secret
     if settings.admin_secret:
         provided = request.headers.get("X-Admin-Secret", "")

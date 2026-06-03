@@ -1,5 +1,6 @@
 """JWT authentication utilities."""
 
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -15,6 +16,53 @@ from app.models.database import get_db
 from app.models.schemas import User
 
 security = HTTPBearer(auto_error=False)
+
+_LOCAL_DEV_USERNAME = "local-dev"
+_LOCAL_DEV_EMAIL = "local-dev@localhost"
+
+
+def _env_truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def local_dev_no_auth_enabled() -> bool:
+    """Return True when this process explicitly opts into local no-auth mode.
+
+    The flag is intentionally ignored in production.  The desktop launcher sets
+    both LOCAL_DEV_NO_AUTH=1 and ENV=dev, while Render should set neither.
+    """
+    if not _env_truthy(os.getenv("LOCAL_DEV_NO_AUTH")):
+        return False
+    env = os.getenv("ENV", "").strip().lower()
+    return env in {"dev", "development", "local", "test"}
+
+
+async def get_or_create_local_dev_user(db: AsyncSession) -> User:
+    """Persist and return the deterministic local desktop user."""
+    result = await db.execute(select(User).where(User.username == _LOCAL_DEV_USERNAME))
+    user = result.scalar_one_or_none()
+    if user is not None:
+        return user
+
+    user = User(
+        username=_LOCAL_DEV_USERNAME,
+        email=_LOCAL_DEV_EMAIL,
+        password_hash=hash_password(uuid.uuid4().hex),
+        subscription_tier="institution",
+        display_name="Local Dev",
+    )
+    db.add(user)
+    try:
+        await db.commit()
+        await db.refresh(user)
+        return user
+    except Exception:
+        await db.rollback()
+        result = await db.execute(select(User).where(User.username == _LOCAL_DEV_USERNAME))
+        user = result.scalar_one_or_none()
+        if user is None:
+            raise
+        return user
 
 
 def hash_password(password: str) -> str:
@@ -43,6 +91,8 @@ async def get_current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> User:
+    if local_dev_no_auth_enabled():
+        return await get_or_create_local_dev_user(db)
     if creds is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     user_id = decode_token(creds.credentials)
@@ -58,6 +108,8 @@ async def get_optional_user(
     db: AsyncSession = Depends(get_db),
 ) -> User | None:
     """Returns user if authenticated, None otherwise. For endpoints that work with or without auth."""
+    if local_dev_no_auth_enabled():
+        return await get_or_create_local_dev_user(db)
     if creds is None:
         return None
     try:

@@ -118,10 +118,21 @@ export async function googleLogin(credential: string): Promise<TokenResponse> {
 
 export function logout() {
   localStorage.removeItem("astro_token");
+  if (!isLocalNoAuthEnabledByEnv()) {
+    localStorage.removeItem("astro_local_no_auth");
+  }
+}
+
+function isLocalNoAuthEnabledByEnv(): boolean {
+  return String(import.meta.env.VITE_LOCAL_DEV_NO_AUTH || "").toLowerCase() === "1";
+}
+
+export function isLocalNoAuthEnabled(): boolean {
+  return isLocalNoAuthEnabledByEnv() || localStorage.getItem("astro_local_no_auth") === "1";
 }
 
 export function isAuthenticated(): boolean {
-  return !!localStorage.getItem("astro_token");
+  return !!localStorage.getItem("astro_token") || isLocalNoAuthEnabled();
 }
 
 export async function trackEvent(
@@ -1727,13 +1738,13 @@ const AI_PROVIDER_STORAGE = "astro_ai_provider";
 const AI_MODEL_PROFILE_STORAGE = "astro_ai_model_profile";
 const PERSIST_FLAG_STORAGE = "astro_api_keys_persist";
 
-export const DEFAULT_AI_PROVIDER = "deepseek";
+export const DEFAULT_AI_PROVIDER = isLocalNoAuthEnabledByEnv() ? "local" : "deepseek";
 
 export const DEFAULT_AI_MODEL_BY_PROVIDER: Record<string, string> = {
   anthropic: "anthropic:default",
   openai: "openai:gpt-5.5",
   deepseek: "deepseek:v4-pro",
-  local: "local:default",
+  local: isLocalNoAuthEnabledByEnv() ? "local:openai-cli" : "local:default",
 };
 
 export const AI_MODEL_OPTIONS: Record<string, Array<{ id: string; label: string; detail?: string }>> = {

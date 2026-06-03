@@ -5,6 +5,7 @@ import {
   listUserTools,
   type UserToolDefinition,
 } from "../../api/userTools";
+import { isAuthenticated } from "../../api/client";
 
 const DEFAULT_SCHEMA = `{
   "type": "object",
@@ -57,7 +58,7 @@ export default function UserToolsPage() {
   const [inputSchemaText, setInputSchemaText] = useState(DEFAULT_SCHEMA);
   const [stepsText, setStepsText] = useState(DEFAULT_STEPS);
 
-  const isLoggedIn = useMemo(() => Boolean(localStorage.getItem("astro_token")), []);
+  const isLoggedIn = useMemo(() => isAuthenticated(), []);
 
   const refresh = useCallback(async () => {
     if (!isLoggedIn) {
