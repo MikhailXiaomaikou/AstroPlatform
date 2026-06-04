@@ -1,95 +1,86 @@
 # Standard Astro
 
-AI-native astronomy research platform for archive discovery, analysis,
-statistical inference, provenance tracking, and paper export.
+**An AI research copilot for observational cosmology that you can trust with a number.**
 
-> **Module status.** This repository is **cosmology-only**: the sole active
-> module is **observational cosmology** (blind-tested across 50+ paper-derived
-> cases). The solar-system and exoplanet verticals were extracted to the sibling
-> **standard-astro-verticals** repo (2026-06-03). Every other domain (stellar,
-> AGN, X-ray, pulsars, galaxy morphology, image reduction, …) lives under
-> `backend/app/prompts/modules/_dormant_*` with its tools hidden from the LLM
-> until promoted. Runtime focus is per-process via `ASTRO_RESEARCH_FOCUS`
-> (`cosmology` default; any value other than `all` fails closed to cosmology).
+Standard Astro is built for working cosmologists. You ask a research question in
+plain language; the assistant queries real archives, runs real likelihoods and
+fits, and writes up the result — with every figure, parameter, and citation
+traceable back to the tool run and dataset that produced it. If it can't back a
+claim with a current-turn tool result, it tells you so instead of guessing.
 
-Recent changes: [CHANGELOG.md](./CHANGELOG.md).
+## The one idea that matters
 
-## What It Does
+**The model never touches your data.** The LLM only proposes structured tool
+calls; the backend runs them, wraps the output in provenance, and hands the
+normalized result back. That single chokepoint is where archive availability,
+synthetic-data detection, numeric validation (±1% against tool output), and
+citation checking are enforced — so the assistant is *structurally* unable to
+fabricate a value and pass it off as observed.
 
-| Area | Summary |
-|---|---|
-| Data access | Query 6 active provenance-v2 archive sources from one interface. |
-| AI assistant | Multi-tool research agent — archive queries, ADQL, literature, table extraction, research planning, evidence graphs, analysis, fitting, paper drafting. |
-| Pipelines | Visual DAG editor for CCD reduction, spectroscopy, photometry, time-domain, image processing, Bayesian inference. |
-| Provenance | Every tool result carries citation, archive version, field bibcodes, query hash, run ID, and acknowledgement metadata. |
-| Cosmology module | Dataset registry, likelihood configs (BAO / SN / CMB / lensing), compressed posterior runner, controlled nested sampler, chain diagnostics, robustness matrix. |
-| Modular focus gate | 1 active prompt module (cosmology) + 12 dormant; `prompt_loader` builds a focus-aware `SYSTEM_PROMPT` and per-focus tool allowlist so non-focus tools are physically invisible to the LLM. |
-| Export | Paper drafts, BibTeX, acknowledgement text, notebooks, figures, reproducibility packages. |
+When the tools come back empty, you get an honest "here's what I tried and why
+it didn't work" card, not invented prose.
 
-## Active Data Sources
+## What you can do
 
-6 provenance-v2 sources: **VizieR**, **Gaia DR3**, **SIMBAD**, **NED**,
-**2MASS**, **ALMA Science Archive** (observation metadata only).
+- **Ask in chat** — archive queries, ADQL, literature search, table extraction
+  from papers, analysis, fitting, and drafting, all from one conversation.
+- **Run cosmology** — dataset registry, BAO / SN / CMB / lensing likelihood
+  configs, a compressed-posterior runner and a controlled nested sampler, MCMC,
+  chain diagnostics, and a robustness matrix. Blind-tested on 50+ cases derived
+  from real papers.
+- **Mine papers into tools** — turn methods sections into reusable, cited
+  capability specs.
+- **Export** — paper drafts, BibTeX, acknowledgement text, notebooks, figures,
+  and reproducibility bundles. Drafts are private until you publish them.
 
-17 maintenance-gated keys (return `UNAVAILABLE` until each ships independent
-`archive_version` provenance): SDSS, sdss_spec, MAST, JWST, ESO, IRSA,
-Chandra, XMM-Newton, AllWISE, LAMOST, DESI, Pan-STARRS, NVSS, FIRST, ATNF
-Pulsar, SPARC, FRBSTATS.
+## Scope
 
-## Guardrails
+This repository is **cosmology-only**. The single active module is observational
+cosmology; the solar-system and exoplanet verticals (and the dormant domains)
+were extracted to the sibling **standard-astro-verticals** repo on 2026-06-03.
+Runtime focus is set per-process via `ASTRO_RESEARCH_FOCUS` (defaults to
+`cosmology`; anything other than `all` falls back to it).
 
-- Numerical and citation claims are checked against current-turn tool outputs
-  and tool-sourced bibcodes / DOIs / table-row provenance; non-cited values
-  are regenerated or blocked.
-- Synthetic or demonstration outputs are explicitly marked non-citeable.
-- Failed, empty, and maintenance-gated calls render as distinct UI states.
-- Final replies are English-only (the gate ships English patterns; non-English
-  drafts get one English regeneration before being blocked).
-- Paper drafts are private to the owner; **Publish Draft** is the only way to
-  expose one, via a revocable `/papers/public/:token` link.
+## Data sources
 
-## Tech Stack
+Six provenance-v2 archives are live: **VizieR**, **Gaia DR3**, **SIMBAD**,
+**NED**, **2MASS**, and the **ALMA Science Archive** (observation metadata).
+Another 17 connector keys (SDSS, MAST, JWST, DESI, Chandra, …) return an
+`UNAVAILABLE` maintenance banner until each ships its own `archive_version`
+provenance — they are gated, not faked.
+
+## Tech stack
 
 | Layer | Stack |
 |---|---|
-| Frontend | React 19, TypeScript strict, Vite, React Router, React Flow, Plotly |
+| Frontend | React 19, TypeScript (strict), Vite, Plotly |
 | Backend | FastAPI, SQLAlchemy async, Pydantic v2, SSE streaming |
-| AI | Manual provider / model selection across Claude, OpenAI, DeepSeek, and local OpenAI-compatible HTTP backends |
-| Astronomy | astropy, astroquery, specutils, photutils, reproject, pyvo, lightkurve |
-| Statistics | emcee, dynesty, ArviZ, celerite2, batman, scipy, scikit-learn |
-| Storage | PostgreSQL in production, SQLite for development, filesystem FITS storage |
-| Reliability | Subprocess-isolated Python sandbox, connector cache, upstream throttling, Prometheus metrics |
+| AI | Manual provider/model choice across Claude, OpenAI, DeepSeek, and local OpenAI-compatible backends |
+| Science | astropy, astroquery, emcee, dynesty, cobaya, CAMB, ArviZ |
+| Storage | PostgreSQL (prod) / SQLite (dev); filesystem or S3 for FITS; Redis cache |
 
-## Repository Layout
+## Run it
 
-```text
-backend/
-  app/
-    ai/                 Inference router, model profiles, specialist agents
-    api/                FastAPI routers (chat, data, auth, export, pipeline, admin)
-    connectors/         Archive connector implementations and availability gates
-    pipeline/           Visual DAG engine and node implementations
-    services/           AI tools, provenance, literature, sandbox, analysis services
-  tests/                Backend pytest suite
+```bash
+# Backend (from backend/)
+source venv/bin/activate
+uvicorn app.main:app --reload --port 8000
 
-frontend/
-  src/
-    api/                Typed API and SSE client
-    components/         Chat cards, provenance panels, visualization components
-    pages/              Chat, Data Browser, Pipeline Studio, Workspace, Account, Help
-    __tests__/          Vitest suite
+# Frontend (from frontend/)
+npm run dev        # http://localhost:5173
 ```
+
+See [docs/QUICKSTART.md](./docs/QUICKSTART.md) for first-run setup.
 
 ## Documentation
 
 - Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
-- Quick start: [docs/QUICKSTART.md](./docs/QUICKSTART.md)
 - API reference: [docs/API_REFERENCE.md](./docs/API_REFERENCE.md)
 - Reference literature: [docs/REFERENCES.md](./docs/REFERENCES.md)
-- Source mapping: [docs/SOURCE_MAPPING.md](./docs/SOURCE_MAPPING.md)
-- Deployment notes: [DEPLOYMENT.md](./DEPLOYMENT.md)
+- Deployment: [DEPLOYMENT.md](./DEPLOYMENT.md)
 - Agent / development notes: [CLAUDE.md](./CLAUDE.md)
+- Recent changes: [CHANGELOG.md](./CHANGELOG.md)
 
 ## License
 
-Released under the MIT License. See [LICENSE](./LICENSE) for details.
+MIT — see [LICENSE](./LICENSE).
