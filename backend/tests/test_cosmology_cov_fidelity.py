@@ -449,3 +449,26 @@ def test_des_sn5yr_full_path_labels_emcee_sampler(monkeypatch):
     assert r["sampler"] == "sn_emcee"
     assert r["chain_diagnostics"]["overall_status"] == "emcee_sampled"
     assert r["provenance"]["cosmology_likelihood"]["runner"] == "sn_emcee"
+
+
+# ── CCHP JWST+HST TRGB H0 prior (tier-3 cheap prior, 2026-06-05) ─────────────
+
+def test_cchp_h0_freedman24_prior_value_and_uncertainty():
+    e = cl.get_cosmology_dataset("cchp_h0_freedman24")
+    spec = e.compressed_likelihood
+    assert spec.parameters == ("H0",)
+    assert spec.mean == (70.39,)
+    # σ = stat 1.22 ⊕ sys 1.33 ⊕ σ_SN 0.70 in quadrature
+    assert abs(spec.covariance[0][0] - (1.22 ** 2 + 1.33 ** 2 + 0.70 ** 2)) < 1e-9
+    assert any(c.arxiv == "2408.06153" for c in e.citations)
+
+
+def test_cchp_h0_not_combined_with_2019_trgb():
+    # Same CCHP TRGB program/sample — co-adding double-counts, must block.
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["cchp_h0_freedman24", "trgb_h0_freedman19"],
+        n_samples=2000, random_seed=42,
+    )
+    assert r["publication_ready"] is False
+    assert r["chain_tier"] == "blocked"
+    assert any("overlap" in w and "co-added" in w for w in r["warnings"])

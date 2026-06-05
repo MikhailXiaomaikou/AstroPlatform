@@ -1475,6 +1475,67 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             approximation="Scalar Gaussian H0 prior; mid-rung distance ladder anchor.",
         ),
     ),
+    "cchp_h0_freedman24": CosmologyDatasetEntry(
+        key="cchp_h0_freedman24",
+        display_name="CCHP HST+JWST TRGB H0 prior (Freedman+ 2024)",
+        version="Freedman et al. 2024/2025 CCHP HST+JWST TRGB H0 (ApJ 985, 203)",
+        probe="h0_prior",
+        status="ready",
+        observables=("H0",),
+        units={"H0": "km s^-1 Mpc^-1"},
+        applicable_models=H0_MODELS,
+        likelihood_family="gaussian_prior",
+        covariance=CovarianceSpec(
+            kind="1D gaussian variance",
+            provided=True,
+            description=(
+                "H0 = 70.39 +/- 1.936 km/s/Mpc (combined HST+JWST TRGB, 24 SN Ia "
+                "calibrators). The 1.936 is stat 1.22, sys 1.33 and sigma_SN 0.70 "
+                "added in quadrature."
+            ),
+            url="https://arxiv.org/abs/2408.06153",
+            format="scalar Gaussian prior",
+        ),
+        source_url="https://arxiv.org/abs/2408.06153",
+        citations=(
+            DatasetCitation(
+                label="Freedman et al. CCHP HST+JWST TRGB H0",
+                year=2024,
+                arxiv="2408.06153",
+                doi="10.3847/1538-4357/adce78",
+            ),
+            # Context-only comparison anchor (the notes call this a SH0ES
+            # alternate); cited so that prose is provenance-visible without the
+            # TRGB-only run combining SH0ES.
+            DatasetCitation(
+                label="Riess et al. SH0ES comparison anchor",
+                year=2022,
+                arxiv="2112.04510",
+                doi="10.3847/2041-8213/ac5c5b",
+            ),
+        ),
+        notes=(
+            "JWST-era update of the CCHP TRGB distance-ladder H0 anchor "
+            "(supersedes the HST-only trgb_h0_freedman19; three CCHP methods "
+            "TRGB/JAGB/Cepheid agree to ~1%). Sits near 70, between SH0ES "
+            "(~73) and Planck (~67.4). Use as a SH0ES alternate / cross-check; "
+            "do NOT combine with SH0ES naively (shared SN Ia rung) nor with "
+            "trgb_h0_freedman19 (same CCHP program / TRGB sample) — that "
+            "double-counts."
+        ),
+        do_not_combine_with=("trgb_h0_freedman19",),
+        cobaya_likelihood="gaussian:H0=70.39,sigma=1.936",
+        cosmosis_module="prior H0 = gaussian 70.39 1.936",
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("H0",),
+            mean=(70.39,),
+            covariance=((1.22 ** 2 + 1.33 ** 2 + 0.70 ** 2,),),
+            units={"H0": "km s^-1 Mpc^-1"},
+            source_locator="Freedman et al. 2024 (arXiv:2408.06153) combined HST+JWST TRGB H0 = 70.39 +/- 1.22(stat) +/- 1.33(sys) +/- 0.70(sigma_SN).",
+            approximation="Scalar Gaussian H0 prior (stat/sys/sigma_SN added in quadrature); JWST-era distance-ladder anchor.",
+        ),
+    ),
     "h0licow_h0": CosmologyDatasetEntry(
         key="h0licow_h0",
         display_name="H0LiCOW H0 prior (Wong+ 2020)",
