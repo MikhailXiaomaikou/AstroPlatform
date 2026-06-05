@@ -1696,6 +1696,8 @@ def _claimable_params_for_entry(entry: dict[str, Any]) -> list[str]:
         "cosmic_chronometers": ["H0", "omegam"],
         "cosmic_chronometers_moresco20": ["H0", "omegam"],
         "eboss_dr16_rsd": ["omegam", "sigma8"],
+        "eboss_dr16_lrg_fsbao": ["H0", "omegam", "rd", "sigma8", "H0_rd"],
+        "eboss_dr16_qso_fsbao": ["H0", "omegam", "rd", "sigma8", "H0_rd"],
     }
     return executable_claimables.get(str(entry.get("key")), [])
 

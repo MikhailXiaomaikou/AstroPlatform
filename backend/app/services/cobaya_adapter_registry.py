@@ -66,6 +66,11 @@ ADAPTER_TO_COBAYA: Final[dict[str, str | None]] = {
     # TODO(step3): eBOSS DR16 RSD (Alam+ 2021). Likely in
     # `cobaya-likelihood-sdss` third-party package.
     "external:rsd.eboss_dr16_alam21": None,
+    # TODO(step3): eBOSS DR16 FSBAO joint (D_M/r_s, D_H/r_s, fσ8) per tracer
+    # (SDSS DR16; CobayaSampler/bao_data). Cobaya ships these as `sdss_DR16_*`
+    # BAO+FS likelihoods. Until then, None.
+    "external:fsbao.sdss_dr16_lrg": None,
+    "external:fsbao.sdss_dr16_qso": None,
     # ── Supernovae ───────────────────────────────────────────────────────
     # TODO(step3): Pantheon+ SN. Candidate: `sn.pantheonplus` (Cobaya 3.5+)
     # or third-party `cobaya-likelihood-pantheonplus`.

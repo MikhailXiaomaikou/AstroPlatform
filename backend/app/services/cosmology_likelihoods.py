@@ -521,6 +521,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 local_path="data/cosmology/eboss_dr16_rsd/fsigma8.txt",
             ),
         ),
+        do_not_combine_with=("eboss_dr16_lrg_fsbao", "eboss_dr16_qso_fsbao"),
         cobaya_likelihood="external:rsd.eboss_dr16_alam21",
         cosmosis_module="likelihood/rsd/eboss_dr16/eboss_dr16_rsd.py",
         nuisance_parameters=(
@@ -528,6 +529,135 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "rsd_systematics_LRG", "rsd_systematics_ELG",
             "rsd_systematics_QSO",
         ),
+        execution_mode="compressed_gaussian",
+    ),
+    "eboss_dr16_lrg_fsbao": CosmologyDatasetEntry(
+        key="eboss_dr16_lrg_fsbao",
+        display_name="eBOSS DR16 LRG FSBAO (D_M/r_s, D_H/r_s, fσ8)",
+        version="SDSS DR16 BAO+RSD consensus LRG: BOSS z=0.38,0.51 + eBOSS z=0.698, joint (D_M/r_s,D_H/r_s,fσ8), full 9×9 covariance",
+        probe="bao_rsd",
+        z_coverage=(0.38, 0.698),
+        status="external_likelihood",
+        observables=("DM_over_rs", "DH_over_rs", "f_sigma8"),
+        units={"DM_over_rs": "dimensionless", "DH_over_rs": "dimensionless", "f_sigma8": "dimensionless"},
+        applicable_models=BAO_MODELS,
+        likelihood_family="fsbao_gaussian",
+        covariance=CovarianceSpec(
+            kind="full covariance",
+            provided=True,
+            description=(
+                "Joint (D_M/r_s, D_H/r_s, fσ8) at 3 LRG redshifts (BOSS z=0.38,0.51 + "
+                "eBOSS z=0.698) with the FULL 9×9 distance+growth covariance from the SDSS "
+                "DR16 release. Higher-fidelity companion to the fσ8-only diagonal entry "
+                "'eboss_dr16_rsd'; the two share tracers and must not be co-added."
+            ),
+            url="https://github.com/CobayaSampler/bao_data",
+            format="z value quantity table + N×N covtot",
+        ),
+        source_url="https://github.com/CobayaSampler/bao_data",
+        citations=(
+            DatasetCitation(label="Alam et al. eBOSS DR16 cosmological implications", year=2021, arxiv="2007.08991"),
+            DatasetCitation(label="Bautista et al. eBOSS DR16 LRG BAO+RSD", year=2021, arxiv="2007.08993"),
+            DatasetCitation(label="Gil-Marín et al. eBOSS DR16 LRG full-shape", year=2020, arxiv="2007.08994"),
+        ),
+        notes=(
+            "9-element joint vector (D_M/r_s, D_H/r_s, fσ8 at z=0.38, 0.51, 0.698) with the "
+            "released full covariance, executed in-process as a flat w0waCDM rᵀC⁻¹r χ² that "
+            "predicts both BAO distance ratios and the fσ8 growth rate. Constrains (H0, Ωm, "
+            "r_d, σ8). Do NOT co-add with 'eboss_dr16_rsd' (same tracers' fσ8) — double-counts. "
+            "No survey overlap with DESI BAO. ELG (grid likelihood) and Lyα/MGS (BAO-only) are "
+            "not part of this Gaussian FSBAO entry."
+        ),
+        data_products=(
+            DataProductSpec(
+                product_type="fsbao_measurement_vector",
+                role="measurement_vector",
+                url="https://raw.githubusercontent.com/CobayaSampler/bao_data/master/sdss_DR16_BAOplus_LRG_FSBAO_DMDHfs8.dat",
+                format="ASCII (z, value, quantity)",
+                description="SDSS DR16 LRG joint (D_M/r_s, D_H/r_s, fσ8) measurement vector, vendored verbatim.",
+                columns=("z", "value", "quantity"),
+                rows=9,
+                sha256="a098ea4df320ac1c18a9404237a75ae26953e16403a20294beb1d9573be33c56",
+                local_path="data/cosmology/eboss_dr16_lrg_fsbao/mean.txt",
+            ),
+            DataProductSpec(
+                product_type="fsbao_covariance",
+                role="covariance",
+                url="https://raw.githubusercontent.com/CobayaSampler/bao_data/master/sdss_DR16_BAOplus_LRG_FSBAO_DMDHfs8_covtot.txt",
+                format="ASCII 9×9 matrix",
+                description="SDSS DR16 LRG full 9×9 distance+growth covariance (covtot), vendored verbatim.",
+                columns=("cov_ij",),
+                rows=9,
+                sha256="409cabbf4ccf6993053427f5a34d52e6557f2429c17777267459471180e72f96",
+                local_path="data/cosmology/eboss_dr16_lrg_fsbao/cov.txt",
+            ),
+        ),
+        do_not_combine_with=("eboss_dr16_rsd",),
+        cobaya_likelihood="external:fsbao.sdss_dr16_lrg",
+        cosmosis_module="external:fsbao/sdss_dr16_lrg",
+        execution_mode="compressed_gaussian",
+    ),
+    "eboss_dr16_qso_fsbao": CosmologyDatasetEntry(
+        key="eboss_dr16_qso_fsbao",
+        display_name="eBOSS DR16 QSO FSBAO (D_M/r_s, D_H/r_s, fσ8)",
+        version="SDSS DR16 BAO+RSD consensus QSO: z=1.48, joint (D_M/r_s,D_H/r_s,fσ8), full 3×3 covariance",
+        probe="bao_rsd",
+        z_coverage=(1.48, 1.48),
+        status="external_likelihood",
+        observables=("DM_over_rs", "DH_over_rs", "f_sigma8"),
+        units={"DM_over_rs": "dimensionless", "DH_over_rs": "dimensionless", "f_sigma8": "dimensionless"},
+        applicable_models=BAO_MODELS,
+        likelihood_family="fsbao_gaussian",
+        covariance=CovarianceSpec(
+            kind="full covariance",
+            provided=True,
+            description=(
+                "Joint (D_M/r_s, D_H/r_s, fσ8) at the eBOSS QSO effective redshift z=1.48 with "
+                "the FULL 3×3 distance+growth covariance from the SDSS DR16 release. Higher-"
+                "fidelity companion to the fσ8-only diagonal entry 'eboss_dr16_rsd'."
+            ),
+            url="https://github.com/CobayaSampler/bao_data",
+            format="z value quantity table + N×N covtot",
+        ),
+        source_url="https://github.com/CobayaSampler/bao_data",
+        citations=(
+            DatasetCitation(label="Alam et al. eBOSS DR16 cosmological implications", year=2021, arxiv="2007.08991"),
+            DatasetCitation(label="Hou et al. eBOSS DR16 QSO BAO+RSD", year=2021, arxiv="2007.08998"),
+            DatasetCitation(label="Neveux et al. eBOSS DR16 QSO full-shape", year=2020, arxiv="2007.08999"),
+        ),
+        notes=(
+            "3-element joint vector (D_M/r_s, D_H/r_s, fσ8 at z=1.48) with the released full "
+            "3×3 covariance, executed in-process as a flat w0waCDM rᵀC⁻¹r χ² predicting BAO "
+            "distance ratios and the fσ8 growth rate. Constrains (H0, Ωm, r_d, σ8). Do NOT "
+            "co-add with 'eboss_dr16_rsd' (same QSO fσ8) — double-counts. No DESI overlap."
+        ),
+        data_products=(
+            DataProductSpec(
+                product_type="fsbao_measurement_vector",
+                role="measurement_vector",
+                url="https://raw.githubusercontent.com/CobayaSampler/bao_data/master/sdss_DR16_BAOplus_QSO_FSBAO_DMDHfs8.dat",
+                format="ASCII (z, value, quantity)",
+                description="SDSS DR16 QSO joint (D_M/r_s, D_H/r_s, fσ8) measurement vector, vendored verbatim.",
+                columns=("z", "value", "quantity"),
+                rows=3,
+                sha256="cddd6cbbca7dadc910a5e8742f1f2144c066cb347b8ba03ae0bd4876fa06d8ed",
+                local_path="data/cosmology/eboss_dr16_qso_fsbao/mean.txt",
+            ),
+            DataProductSpec(
+                product_type="fsbao_covariance",
+                role="covariance",
+                url="https://raw.githubusercontent.com/CobayaSampler/bao_data/master/sdss_DR16_BAOplus_QSO_FSBAO_DMDHfs8_covtot.txt",
+                format="ASCII 3×3 matrix",
+                description="SDSS DR16 QSO full 3×3 distance+growth covariance (covtot), vendored verbatim.",
+                columns=("cov_ij",),
+                rows=3,
+                sha256="88f844447fb546792769cdf09b4df7b7a7f77a948f02ef371f54a6f7dddb3d41",
+                local_path="data/cosmology/eboss_dr16_qso_fsbao/cov.txt",
+            ),
+        ),
+        do_not_combine_with=("eboss_dr16_rsd",),
+        cobaya_likelihood="external:fsbao.sdss_dr16_qso",
+        cosmosis_module="external:fsbao/sdss_dr16_qso",
         execution_mode="compressed_gaussian",
     ),
     "pantheon_plus": CosmologyDatasetEntry(
@@ -1989,6 +2119,73 @@ _BAO_DATA: dict[str, tuple[Any, Any]] = {
 }
 
 
+# ── eBOSS DR16 FSBAO joint (D_M/r_s, D_H/r_s, fσ8) full-covariance (2026-06-05) ──
+# Per-tracer joint distance+growth likelihoods from the SDSS DR16 release
+# (CobayaSampler/bao_data, sdss_DR16_BAOplus_{LRG,QSO}_FSBAO_DMDHfs8.dat +
+# _covtot.txt), the higher-fidelity full-covariance companion to the fσ8-only
+# diagonal entry "eboss_dr16_rsd" (which is left untouched). Raw upstream files
+# are vendored and sha256-pinned verbatim (no reproduction step needed).
+EBOSS_DR16_FSBAO_EXECUTABLE_KEYS = {"eboss_dr16_lrg_fsbao", "eboss_dr16_qso_fsbao"}
+
+
+@lru_cache(maxsize=None)
+def load_verified_fsbao_data(dataset_key: str) -> dict[str, Any]:
+    """Load an eBOSS DR16 FSBAO (z, value, quantity) measurement vector + FULL
+    covariance from the vendored, sha256-pinned mean.txt / cov.txt so the fitted
+    covariance IS the checksum-verified array. ``quantity`` is one of
+    {DM_over_rs, DH_over_rs, f_sigma8}. cov_fidelity is 'full' on a digest match,
+    'unverified' on a missing-but-pinned or corrupt file (blocks publication).
+    A released full covariance has no honest hand-typed substitute, so there is
+    no literature_typed fallback."""
+    mean_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "mean.txt"
+    cov_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "cov.txt"
+    pinned_cov = _registry_product_sha256(dataset_key, "covariance")
+    pinned_mean = _registry_product_sha256(dataset_key, "measurement_vector")
+    unverified = {
+        "mean_vector": None, "covariance": None, "sha256": None,
+        "hash_verified": False, "cov_fidelity": "unverified",
+    }
+    if not (mean_path.exists() and cov_path.exists()):
+        return unverified
+    try:
+        mean_digest = hashlib.sha256(mean_path.read_bytes()).hexdigest()
+        cov_digest = hashlib.sha256(cov_path.read_bytes()).hexdigest()
+        rows: list[tuple[float, float, str]] = []
+        for line in mean_path.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            z_str, value_str, quantity = stripped.split()
+            rows.append((float(z_str), float(value_str), quantity))
+        covariance = np.loadtxt(cov_path)
+        n = len(rows)
+        if n == 0 or covariance.shape != (n, n):
+            raise ValueError(f"mean/cov shape mismatch: {n} points vs cov {covariance.shape}")
+        verified = (mean_digest == pinned_mean) and (cov_digest == pinned_cov)
+        return {
+            "mean_vector": tuple(rows),
+            "covariance": covariance,
+            "sha256": cov_digest,
+            "mean_sha256": mean_digest,
+            "hash_verified": bool(verified),
+            "cov_fidelity": "full" if verified else "unverified",
+        }
+    except Exception as exc:  # malformed/truncated file — degrade, never crash import
+        logger.warning("FSBAO data product %s failed to load (%s); marking unverified", dataset_key, exc)
+        return unverified
+
+
+# (mean_vector, covariance) the FSBAO χ² fits — sourced from the verified loader so
+# the fit reads the sha256-pinned committed artifacts.
+_FSBAO_DATA: dict[str, tuple[Any, Any]] = {
+    key: (
+        load_verified_fsbao_data(key)["mean_vector"],
+        load_verified_fsbao_data(key)["covariance"],
+    )
+    for key in EBOSS_DR16_FSBAO_EXECUTABLE_KEYS
+}
+
+
 # Weakest -> strongest covariance fidelity. 'unverified' = vendored file present
 # but its digest mismatched the registry pin (tampering/corruption — must block
 # publication); 'literature_typed' = honest hand-typed compilation (no released
@@ -2007,6 +2204,8 @@ def _entry_verification(entry: CosmologyDatasetEntry) -> tuple[str | None, str |
     summary, so no executed probe slips through the publication gate unstamped."""
     if entry.key in _BAO_DATA:
         verified = load_verified_bao_data(entry.key)
+    elif _is_executable_fsbao_entry(entry):
+        verified = load_verified_fsbao_data(entry.key)
     elif _is_executable_cc_full_cov_entry(entry):
         verified = load_verified_cc_full_cov_data(entry.key)
     elif _is_executable_cc_entry(entry):
@@ -2266,6 +2465,7 @@ def _executable_probe_keys() -> set[str]:
         | set(COSMIC_CHRONOMETER_EXECUTABLE_KEYS)
         | set(COSMIC_CHRONOMETER_FULL_COV_KEYS)
         | set(EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS)
+        | set(EBOSS_DR16_FSBAO_EXECUTABLE_KEYS)
         | {"pantheon_plus"}
     )
 
@@ -2285,6 +2485,8 @@ def audit_executable_pins() -> list[str]:
     for key in sorted(_executable_probe_keys()):
         if key in _BAO_DATA:
             verified = load_verified_bao_data(key)
+        elif key in EBOSS_DR16_FSBAO_EXECUTABLE_KEYS:
+            verified = load_verified_fsbao_data(key)
         elif key in COSMIC_CHRONOMETER_FULL_COV_KEYS:
             verified = load_verified_cc_full_cov_data(key)
         elif key in COSMIC_CHRONOMETER_EXECUTABLE_KEYS:
@@ -2387,6 +2589,7 @@ def run_likelihood_chain(
         _is_executable_bao_entry(entry)
         or _is_executable_cc_entry(entry)
         or _is_executable_rsd_entry(entry)
+        or _is_executable_fsbao_entry(entry)
         or _is_executable_sn_entry(entry)
         for entry in entries
     ):
@@ -2853,6 +3056,10 @@ def _is_executable_rsd_entry(entry: CosmologyDatasetEntry) -> bool:
     return entry.key in EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS
 
 
+def _is_executable_fsbao_entry(entry: CosmologyDatasetEntry) -> bool:
+    return entry.key in EBOSS_DR16_FSBAO_EXECUTABLE_KEYS
+
+
 # M6 (2026-05-18): Pantheon+SH0ES Python chi² runner — bypasses external
 # Cobaya for the SN-distance-modulus likelihood.  1701 SNe + full
 # stat+sys covariance from the 2022 data release, loaded lazily from
@@ -2914,6 +3121,7 @@ def _run_sampling_likelihood_chain(
     bao_entries = [entry for entry in entries if _is_executable_bao_entry(entry)]
     cc_entries = [entry for entry in entries if _is_executable_cc_entry(entry)]
     rsd_entries = [entry for entry in entries if _is_executable_rsd_entry(entry)]
+    fsbao_entries = [entry for entry in entries if _is_executable_fsbao_entry(entry)]
     sn_entries = [entry for entry in entries if _is_executable_sn_entry(entry)]
     sn_entry_keys = {entry.key for entry in sn_entries}
     compressed_entries = [
@@ -2926,6 +3134,7 @@ def _run_sampling_likelihood_chain(
         | {e.key for e in sn_entries}
         | {e.key for e in cc_entries}
         | {e.key for e in rsd_entries}
+        | {e.key for e in fsbao_entries}
     )
     skipped_entries = [
         entry
@@ -2935,7 +3144,7 @@ def _run_sampling_likelihood_chain(
     ]
     parameter_order = _sampling_parameter_order(
         bao_entries, compressed_entries, sn_entries, model_key=model_key,
-        cc_entries=cc_entries, rsd_entries=rsd_entries,
+        cc_entries=cc_entries, rsd_entries=rsd_entries, fsbao_entries=fsbao_entries,
     )
     if not parameter_order:
         return _compressed_runner_unavailable(
@@ -2992,6 +3201,7 @@ def _run_sampling_likelihood_chain(
                 sn_entries=sn_entries,
                 cc_entries=cc_entries,
                 rsd_entries=rsd_entries,
+                fsbao_entries=fsbao_entries,
             )
             invalid_specs.extend(compressed_errors)
             # ESS-floor emcee upgrade (single-cell deep runs only).  Importance
@@ -3002,7 +3212,7 @@ def _run_sampling_likelihood_chain(
             # (no skipped_entries) and ≥2 likelihood components.
             n_components = (
                 len(bao_entries) + len(compressed_entries) + len(sn_entries)
-                + len(cc_entries) + len(rsd_entries)
+                + len(cc_entries) + len(rsd_entries) + len(fsbao_entries)
             )
             if (
                 allow_emcee_fallback
@@ -3027,6 +3237,7 @@ def _run_sampling_likelihood_chain(
                         sample_count,
                         cc_entries=cc_entries,
                         rsd_entries=rsd_entries,
+                        fsbao_entries=fsbao_entries,
                     )
                     invalid_specs.extend(emcee_errors)
                     sampler_used = "compressed_emcee"
@@ -3066,7 +3277,7 @@ def _run_sampling_likelihood_chain(
 
     used_keys = {
         entry.key
-        for entry in bao_entries + compressed_entries + cc_entries + rsd_entries + sn_entries
+        for entry in bao_entries + compressed_entries + cc_entries + rsd_entries + fsbao_entries + sn_entries
     }
     used_entries = [entry for entry in entries if entry.key in used_keys]
     # Each executable BAO entry contributes its own measurement vector (DESI DR1
@@ -3077,6 +3288,7 @@ def _run_sampling_likelihood_chain(
         sum(len(_BAO_DATA[entry.key][0]) for entry in bao_entries)
         + sum(_cc_entry_point_count(entry) for entry in cc_entries)
         + len(EBOSS_DR16_FSIGMA8) * len(rsd_entries)
+        + sum(len(_FSBAO_DATA[entry.key][0]) for entry in fsbao_entries)
         + sum(
             len(entry.compressed_likelihood.parameters)
             for entry in compressed_entries
@@ -3118,7 +3330,7 @@ def _run_sampling_likelihood_chain(
         )
 
     cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
-        bao_entries + cc_entries + rsd_entries + sn_entries + compressed_entries, warnings
+        bao_entries + cc_entries + rsd_entries + fsbao_entries + sn_entries + compressed_entries, warnings
     )
     # Off-anchor safety guard: a converged extended-model chain whose novel frontier
     # parameters (w/w0/wa) have no reproduced published anchor is NOT publication-
@@ -3150,10 +3362,18 @@ def _run_sampling_likelihood_chain(
     # Importance-sampler three-tier (mirrors fit_cosmology_emcee, 2026-05-21):
     #   publication: ESS ≥ 400 and no invalid specs
     #   exploratory: 100 ≤ ESS < 400 — posterior discussable but not citeable
-    #   blocked:     ESS < 100 or invalid specs or a double-count conflict
+    #   blocked:     ESS < 100, invalid specs, a double-count conflict, OR data that
+    #                failed sha256 verification (unverified/unstamped fidelity must
+    #                never be discussable, not even as exploratory — anti-fabrication).
     if publication_ready:
         chain_tier = "publication"
-    elif not invalid_specs and not skipped_entries and not combination_conflict and proposal_ess >= 100.0:
+    elif (
+        fidelity_ok
+        and not invalid_specs
+        and not skipped_entries
+        and not combination_conflict
+        and proposal_ess >= 100.0
+    ):
         chain_tier = "exploratory"
     else:
         chain_tier = "blocked"
@@ -3281,10 +3501,17 @@ def _sampling_parameter_order(
     model_key: str = "lcdm",
     cc_entries: list[CosmologyDatasetEntry] | None = None,
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
+    fsbao_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> list[str]:
     order: list[str] = []
     if bao_entries:
         order.extend(["H0", "omegam", "rd"])
+    if fsbao_entries:
+        # FSBAO measures joint (D_M/r_s, D_H/r_s, fσ8): distance ratios need
+        # (H0, Ωm, r_d), the fσ8 growth term adds σ8.
+        for param in ("H0", "omegam", "rd", "sigma8"):
+            if param not in order:
+                order.append(param)
     if cc_entries:
         # Cosmic chronometers measure H(z) = H0·E(z), constraining (H0, Ωm).
         for param in ("H0", "omegam"):
@@ -3639,6 +3866,7 @@ def _run_emcee_chain(
     target_sample_count: int,
     cc_entries: list[CosmologyDatasetEntry] | None = None,
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
+    fsbao_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
     """emcee MCMC over any BAO + compressed + SN likelihood product.
 
@@ -3655,6 +3883,7 @@ def _run_emcee_chain(
     """
     cc_entries = cc_entries or []
     rsd_entries = rsd_entries or []
+    fsbao_entries = fsbao_entries or []
     import emcee
 
     rng = np.random.default_rng(seed)
@@ -3720,6 +3949,8 @@ def _run_emcee_chain(
         for entry in rsd_entries:
             if entry.key == "eboss_dr16_rsd":
                 chi2 += _eboss_fsigma8_chi2_samples(valid, parameter_order)
+        for entry in fsbao_entries:
+            chi2 += _fsbao_chi2_samples(valid, parameter_order, entry.key)
         for entry in sn_entries:
             if entry.key == "pantheon_plus":
                 chi2 += _pantheon_plus_chi2_samples(valid, parameter_order)
@@ -3789,9 +4020,11 @@ def _draw_importance_posterior(
     sn_entries: list[CosmologyDatasetEntry] | None = None,
     cc_entries: list[CosmologyDatasetEntry] | None = None,
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
+    fsbao_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
     cc_entries = cc_entries or []
     rsd_entries = rsd_entries or []
+    fsbao_entries = fsbao_entries or []
     # SN paths bypass importance sampling — Pantheon+'s 1701-SN χ² is too
     # tight for any proposal Gaussian to cover efficiently.  Use emcee MCMC.
     if sn_entries and any(e.key == "pantheon_plus" for e in sn_entries):
@@ -3807,6 +4040,7 @@ def _draw_importance_posterior(
             sample_count,
             cc_entries=cc_entries,
             rsd_entries=rsd_entries,
+            fsbao_entries=fsbao_entries,
         )
 
     proposal_count = min(max(sample_count * 25, 80_000), 300_000)
@@ -3838,6 +4072,8 @@ def _draw_importance_posterior(
     for entry in rsd_entries:
         if entry.key == "eboss_dr16_rsd":
             chi2 += _eboss_fsigma8_chi2_samples(samples, parameter_order)
+    for entry in fsbao_entries:
+        chi2 += _fsbao_chi2_samples(samples, parameter_order, entry.key)
     for entry in (sn_entries or []):
         if entry.key == "pantheon_plus":
             chi2 += _pantheon_plus_chi2_samples(samples, parameter_order)
@@ -3919,6 +4155,59 @@ def _bao_predictions(
         else:
             raise ValueError(f"unsupported BAO quantity {quantity!r}")
     return predictions
+
+
+def _fsbao_predictions(
+    samples: np.ndarray,
+    parameter_order: list[str],
+    mean_vector: tuple[tuple[float, float, str], ...],
+) -> np.ndarray:
+    """Predicted joint (D_M/r_s, D_H/r_s, fσ8) vector for the eBOSS DR16 FSBAO
+    likelihoods.  Distance ratios reuse the flat-w0waCDM BAO kernel (/r_d, where
+    r_s≡r_d); fσ8 reuses the RSD growth kernel (f(z)·σ8·D(z)/D(0))."""
+    h0 = samples[:, parameter_order.index("H0")]
+    omegam = samples[:, parameter_order.index("omegam")]
+    rd = samples[:, parameter_order.index("rd")]
+    sigma8 = samples[:, parameter_order.index("sigma8")]
+    n_samples = samples.shape[0]
+    if "w0" in parameter_order:
+        w0 = samples[:, parameter_order.index("w0")]
+    elif "w" in parameter_order:
+        w0 = samples[:, parameter_order.index("w")]
+    else:
+        w0 = np.full(n_samples, -1.0, dtype=float)
+    wa = samples[:, parameter_order.index("wa")] if "wa" in parameter_order else np.zeros(n_samples)
+    predictions = np.empty((n_samples, len(mean_vector)), dtype=float)
+    distance_cache: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    for col, (z, _value, quantity) in enumerate(mean_vector):
+        if quantity in {"DM_over_rs", "DM_over_rd", "DH_over_rs", "DH_over_rd", "DV_over_rs", "DV_over_rd"}:
+            if z not in distance_cache:
+                distance_cache[z] = _flat_de_distances_at_z(z, h0, omegam, w0=w0, wa=wa)
+            dm, dh, dv = distance_cache[z]
+            if quantity.startswith("DM"):
+                predictions[:, col] = dm / rd
+            elif quantity.startswith("DH"):
+                predictions[:, col] = dh / rd
+            else:
+                predictions[:, col] = dv / rd
+        elif quantity in {"f_sigma8", "fsigma8"}:
+            f_z = _growth_rate_f(z, omegam, w0, wa)
+            d_ratio = _growth_factor_ratio(z, omegam, w0, wa)
+            predictions[:, col] = f_z * sigma8 * d_ratio
+        else:
+            raise ValueError(f"unsupported FSBAO quantity {quantity!r}")
+    return predictions
+
+
+def _fsbao_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str], key: str
+) -> np.ndarray:
+    """Full-covariance χ² = rᵀ C⁻¹ r of an eBOSS DR16 FSBAO joint vector."""
+    mean_vector, cov = _FSBAO_DATA[key]
+    observed = np.asarray([row[1] for row in mean_vector], dtype=float)
+    predictions = _fsbao_predictions(samples, parameter_order, mean_vector)
+    residual = predictions - observed
+    return np.einsum("ni,ij,nj->n", residual, np.linalg.inv(np.asarray(cov, dtype=float)), residual)
 
 
 def _hz_predictions_for(
@@ -4527,6 +4816,13 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 "dataset_key": entry.key,
                 "source_locator": "Alam et al. 2021 (arXiv:2007.08991) Table III RSD-only column — 6 eBOSS DR16 fσ8(z)",
                 "approximation": "Diagonal-covariance fσ8=f(z)·σ8·D(z)/D(0) χ² with Linder γ growth index; per-tracer Gaussian (correlations ignored, per Table III note a)",
+            })
+        elif entry.key in EBOSS_DR16_FSBAO_EXECUTABLE_KEYS:
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": f"SDSS DR16 BAO+RSD consensus (CobayaSampler/bao_data, {entry.key}) — joint (D_M/r_s, D_H/r_s, fσ8) + full covariance",
+                "approximation": "Full-covariance rᵀC⁻¹r χ² (flat w0waCDM): D_M/r_s, D_H/r_s distance ratios + Linder-γ fσ8 growth, with the released joint distance+growth covariance",
+                "data_products": [product.to_dict() for product in entry.data_products],
             })
         elif entry.compressed_likelihood is not None:
             records.append({

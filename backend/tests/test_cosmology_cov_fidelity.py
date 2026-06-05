@@ -293,3 +293,74 @@ def test_co_selecting_both_cc_entries_blocks_publication():
     )
     assert r["publication_ready"] is False
     assert r["chain_tier"] == "blocked"
+
+
+# ── eBOSS DR16 FSBAO joint (D_M/r_s, D_H/r_s, fσ8) full covariance (2026-06-05) ──
+
+def test_fsbao_entries_certify_full_fidelity():
+    for key in ("eboss_dr16_lrg_fsbao", "eboss_dr16_qso_fsbao"):
+        fidelity, sha = cl._entry_verification(cl.get_cosmology_dataset(key))
+        assert fidelity == "full", key
+        assert sha, key
+
+
+def test_fsbao_only_chain_is_full_fidelity():
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["eboss_dr16_lrg_fsbao", "eboss_dr16_qso_fsbao"],
+        n_samples=4000, random_seed=42,
+    )
+    prov = r["provenance"]["cosmology_likelihood"]
+    assert prov["cov_fidelity"] == "full"
+    assert set(prov["artifact_sha256"]) == {"eboss_dr16_lrg_fsbao", "eboss_dr16_qso_fsbao"}
+    # 9 LRG + 3 QSO joint (D_M/r_s, D_H/r_s, fσ8) points
+    assert r["fit_statistics"]["n_constraints"] == 12
+
+
+def test_fsbao_covariance_is_real_full_matrix():
+    for key, n in (("eboss_dr16_lrg_fsbao", 9), ("eboss_dr16_qso_fsbao", 3)):
+        raw = cl.load_verified_fsbao_data(key)
+        cov = raw["covariance"]
+        assert cov.shape == (n, n), key
+        assert np.allclose(cov, cov.T), key
+        assert np.linalg.eigvalsh(cov).min() > 0, key
+        # quantities present: distance ratios AND growth
+        quantities = {row[2] for row in raw["mean_vector"]}
+        assert "f_sigma8" in quantities and "DM_over_rs" in quantities and "DH_over_rs" in quantities, key
+
+
+def test_fsbao_co_selected_with_diagonal_rsd_blocks_publication():
+    # The FSBAO entries share tracers with the fσ8-only eboss_dr16_rsd entry;
+    # co-adding double-counts, so publication must be blocked.
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["eboss_dr16_lrg_fsbao", "eboss_dr16_rsd"],
+        n_samples=2000, random_seed=42,
+    )
+    assert r["publication_ready"] is False
+    assert r["chain_tier"] == "blocked"
+    assert any("overlap" in w and "co-added" in w for w in r["warnings"])
+
+
+def test_fsbao_missing_file_degrades_unverified(tmp_path, monkeypatch):
+    cl.load_verified_fsbao_data.cache_clear()
+    try:
+        monkeypatch.setattr(cl, "_VENDORED_COSMO_DATA_DIR", tmp_path)
+        out = cl.load_verified_fsbao_data("eboss_dr16_lrg_fsbao")
+        assert out["covariance"] is None and out["cov_fidelity"] == "unverified"
+    finally:
+        cl.load_verified_fsbao_data.cache_clear()
+
+
+def test_unverified_data_is_blocked_not_exploratory(monkeypatch):
+    # Gate hardening: a sha256-failed (unverified) probe must be BLOCKED, never
+    # surfaced even as exploratory — unverified numbers are not discussable.
+    monkeypatch.setattr(
+        cl, "load_verified_cc_data",
+        lambda key: {
+            "hz_vector": cl.COSMIC_CHRONOMETER_HZ, "sha256": None,
+            "hash_verified": False, "cov_fidelity": "unverified",
+        },
+    )
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["cosmic_chronometers"], n_samples=2000, random_seed=42)
+    assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] == "unverified"
+    assert r["publication_ready"] is False
+    assert r["chain_tier"] == "blocked"
