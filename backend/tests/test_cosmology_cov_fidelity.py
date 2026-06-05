@@ -364,3 +364,88 @@ def test_unverified_data_is_blocked_not_exploratory(monkeypatch):
     assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] == "unverified"
     assert r["publication_ready"] is False
     assert r["chain_tier"] == "blocked"
+
+
+# ── DES-SN5YR full distance-modulus likelihood (2026-06-05) ──────────────────
+
+def test_des_sn5yr_default_is_compressed_literature_typed():
+    # Flag off (default): des_sn5yr stays the compressed Ωm summary, unchanged.
+    assert cl.DES_SN5YR_EXECUTABLE_KEYS == set()
+    assert cl._entry_verification(cl.get_cosmology_dataset("des_sn5yr")) == ("literature_typed", None)
+
+
+def test_des_sn5yr_full_path_entry_verifies_as_full(monkeypatch):
+    # With the full χ² enabled, the npz-backed entry verifies as 'full' via the
+    # sha256-pinned bundle — entry-level check, no 40s fit needed.
+    monkeypatch.setattr(cl, "DES_SN5YR_EXECUTABLE_KEYS", {"des_sn5yr"})
+    fidelity, sha = cl._entry_verification(cl.get_cosmology_dataset("des_sn5yr"))
+    assert fidelity == "full" and sha
+
+
+def test_des_sn5yr_npz_is_real_full_covariance():
+    data = cl.load_verified_des_sn5yr_data("des_sn5yr")
+    assert data["cov_fidelity"] == "full" and data["hash_verified"] is True
+    cov = data["cov"]
+    assert cov.shape == (1829, 1829)
+    assert np.allclose(cov, cov.T)
+    assert np.linalg.eigvalsh(cov).min() > 0
+    # STAT+SYS: the diagonal includes the stat term, so diag(cov) >= MUERR² everywhere
+    assert np.all(np.diag(cov) >= data["mu_err_diag"] ** 2 - 1e-9)
+
+
+def test_des_sn5yr_chi2_recovers_published_omegam():
+    # The offset-marginalized χ² over an Ωm grid (no MCMC) must minimize near the
+    # DES-SN5YR published Ωm=0.352 with χ²/dof≈0.9.
+    grid = np.linspace(0.20, 0.50, 61)
+    samples = grid.reshape(-1, 1)
+    chi2 = cl._des_sn5yr_chi2_samples(samples, ["omegam"])
+    best_om = float(grid[int(np.argmin(chi2))])
+    assert 0.33 <= best_om <= 0.37, best_om
+    assert 0.7 <= chi2.min() / (1829 - 1) <= 1.1
+
+
+def test_des_sn5yr_chi2_invariant_to_h0_fiducial():
+    # The analytic offset marginalization makes the χ² independent of any constant
+    # μ shift, i.e. of the fiducial H0 — a core property of this likelihood.
+    samples = np.array([[0.35]])
+    base = cl._des_sn5yr_chi2_samples(samples, ["omegam"])[0]
+    # shift every μ_obs by a constant (≡ changing H0/M offset) → χ² unchanged
+    data = cl._load_des_sn5yr_data()
+    orig = data["mu"].copy()
+    try:
+        data["mu"] = orig + 0.137  # arbitrary constant offset
+        shifted = cl._des_sn5yr_chi2_samples(samples, ["omegam"])[0]
+        assert abs(base - shifted) < 1e-6
+    finally:
+        data["mu"] = orig
+
+
+def test_des_sn5yr_missing_file_degrades_unverified(tmp_path, monkeypatch):
+    cl.load_verified_des_sn5yr_data.cache_clear()
+    try:
+        monkeypatch.setattr(cl, "_DES_SN5YR_DATA_DIR", tmp_path)
+        out = cl.load_verified_des_sn5yr_data("des_sn5yr")
+        assert out["cov"] is None and out["cov_fidelity"] == "unverified"
+    finally:
+        cl.load_verified_des_sn5yr_data.cache_clear()
+
+
+def test_des_sn5yr_co_selected_with_union3_blocks_publication():
+    # DES-SN and Union3 are overlapping SN compilations — co-adding double-counts,
+    # so do_not_combine_with must block publication.
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["des_sn5yr", "union3"], n_samples=2000, random_seed=42,
+    )
+    assert r["publication_ready"] is False
+    assert r["chain_tier"] == "blocked"
+    assert any("overlap" in w and "co-added" in w for w in r["warnings"])
+
+
+def test_des_sn5yr_full_path_labels_emcee_sampler(monkeypatch):
+    # The full SN χ² takes the emcee bypass, so the runner provenance must say emcee
+    # (not the stale 'importance' label).
+    monkeypatch.setattr(cl, "DES_SN5YR_EXECUTABLE_KEYS", {"des_sn5yr"})
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["des_sn5yr"], n_samples=2000, random_seed=42)
+    assert r["sampler"] == "sn_emcee"
+    assert r["chain_diagnostics"]["overall_status"] == "emcee_sampled"
+    assert r["provenance"]["cosmology_likelihood"]["runner"] == "sn_emcee"

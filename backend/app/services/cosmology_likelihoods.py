@@ -824,16 +824,19 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         notes=(
             "Photometrically classified DES SN sample; robustness partner for "
-            "Pantheon+/Union3. Executable in-process as a compressed SN-only "
-            "flat-ΛCDM Ωm Gaussian (Ωm=0.352±0.017). The 1D Ωm summary supports a "
-            "ΛCDM Ωm cross-comparison and a mild prior, but carries NO distance-"
-            "modulus shape, so it cannot reproduce a w0/wa dark-energy-EoS "
-            "constraint — that needs the released 1829-SN distance vector + "
-            "covariance (external data product)."
+            "Pantheon+/Union3. Default fast path is a compressed SN-only flat-ΛCDM Ωm "
+            "Gaussian (Ωm=0.352±0.017). The FULL 1829-SN distance-modulus vector + "
+            "stat+sys covariance is vendored (sha256-pinned data.npz, built by "
+            "scripts/fetch_des_sn5yr.py from the github tag-1.3 Vincenzi+2024 Legacy "
+            "release) and runs in-process as a full-covariance χ² when "
+            "DES_SN5YR_FULL_CHI2_ENABLED is set — that path can constrain the w0/wa "
+            "dark-energy EoS. The χ² analytically marginalizes the SN absolute "
+            "magnitude (no M_B/H0 nuisance), so it constrains Ωm (+w0/wa) only."
         ),
         cobaya_likelihood="external:sn.des_sn5yr",
         cosmosis_module="external:DES-SN5YR",
         nuisance_parameters=("M_B",),
+        do_not_combine_with=("pantheon_plus", "union3"),
         execution_mode="compressed_gaussian",
         compressed_likelihood=CompressedLikelihoodSpec(
             parameters=("omegam",),
@@ -842,6 +845,24 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             units={"omegam": "dimensionless"},
             source_locator="DES Collaboration (Abbott et al.) 2024 (arXiv:2401.02929) Table 2, Flat-ΛCDM SN-only / no external priors: Ωm = 0.352 ± 0.017.",
             approximation="1D SN-only flat-ΛCDM Ωm Gaussian; NOT the full 1829-SN distance-modulus + covariance likelihood (external).",
+        ),
+        data_products=(
+            DataProductSpec(
+                product_type="sn_full_data_npz",
+                role="sn_full_data_npz",
+                url="https://github.com/des-science/DES-SN5YR",
+                format="npz",
+                description=(
+                    "Vendored DES-SN5YR 1829-SN bundle (z_hd, z_hel, mu, mu_err_diag, "
+                    "full stat+sys covariance C_sys+diag(MUERR²)) the in-process χ² reads. "
+                    "Built from the github tag-1.3 Vincenzi+2024 Legacy release by "
+                    "scripts/fetch_des_sn5yr.py."
+                ),
+                columns=("z_hd", "z_hel", "mu", "mu_err_diag", "cov"),
+                rows=1829,
+                sha256="8f01090ecd8a1ce719c3d892781d9031972eddd97e3f75ca40d3090b9676a529",
+                local_path="data/des_sn5yr/data.npz",
+            ),
         ),
     ),
     "union3": CosmologyDatasetEntry(
@@ -2214,6 +2235,8 @@ def _entry_verification(entry: CosmologyDatasetEntry) -> tuple[str | None, str |
         verified = load_verified_rsd_data(entry.key)
     elif _is_executable_sn_entry(entry):
         verified = load_verified_pantheon_plus_data(entry.key)
+    elif _is_executable_des_sn_entry(entry):
+        verified = load_verified_des_sn5yr_data(entry.key)
     elif entry.compressed_likelihood is not None:
         # Hand-typed published Gaussian summary — honest 'literature_typed'; there
         # is no released, vendored file to sha256-verify, so never 'full'/'diagonal'.
@@ -2467,6 +2490,7 @@ def _executable_probe_keys() -> set[str]:
         | set(EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS)
         | set(EBOSS_DR16_FSBAO_EXECUTABLE_KEYS)
         | {"pantheon_plus"}
+        | {"des_sn5yr"}
     )
 
 
@@ -2493,6 +2517,8 @@ def audit_executable_pins() -> list[str]:
             verified = load_verified_cc_data(key)
         elif key in EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS:
             verified = load_verified_rsd_data(key)
+        elif key == "des_sn5yr":
+            verified = load_verified_des_sn5yr_data(key)
         else:
             verified = load_verified_pantheon_plus_data(key)
 
@@ -2591,6 +2617,7 @@ def run_likelihood_chain(
         or _is_executable_rsd_entry(entry)
         or _is_executable_fsbao_entry(entry)
         or _is_executable_sn_entry(entry)
+        or _is_executable_des_sn_entry(entry)
         for entry in entries
     ):
         return _run_sampling_likelihood_chain(
@@ -3074,6 +3101,17 @@ PANTHEON_PLUS_FULL_CHI2_ENABLED = os.getenv("PANTHEON_PLUS_FULL_CHI2_ENABLED", "
 }
 PANTHEON_PLUS_EXECUTABLE_KEYS = {"pantheon_plus"} if PANTHEON_PLUS_FULL_CHI2_ENABLED else set()
 
+# DES-SN5YR full distance-modulus χ² is opt-in for the same reason as Pantheon+:
+# the 1829×1829 covariance is slow per-sample, and the default research path uses
+# the fast compressed Ωm summary. Off -> des_sn5yr stays the compressed Ωm entry.
+DES_SN5YR_FULL_CHI2_ENABLED = os.getenv("DES_SN5YR_FULL_CHI2_ENABLED", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+DES_SN5YR_EXECUTABLE_KEYS = {"des_sn5yr"} if DES_SN5YR_FULL_CHI2_ENABLED else set()
+
 # ESS floor below which a single-cell chain auto-upgrades from importance
 # sampling to compressed-emcee.  Multi-probe products (3+ likelihoods) push the
 # joint posterior far narrower than any proposal Gaussian, so importance ESS
@@ -3085,6 +3123,10 @@ _EMCEE_FALLBACK_ESS_FLOOR = 400.0
 
 def _is_executable_sn_entry(entry: CosmologyDatasetEntry) -> bool:
     return entry.key in PANTHEON_PLUS_EXECUTABLE_KEYS
+
+
+def _is_executable_des_sn_entry(entry: CosmologyDatasetEntry) -> bool:
+    return entry.key in DES_SN5YR_EXECUTABLE_KEYS
 
 
 def _run_sampling_likelihood_chain(
@@ -3123,11 +3165,14 @@ def _run_sampling_likelihood_chain(
     rsd_entries = [entry for entry in entries if _is_executable_rsd_entry(entry)]
     fsbao_entries = [entry for entry in entries if _is_executable_fsbao_entry(entry)]
     sn_entries = [entry for entry in entries if _is_executable_sn_entry(entry)]
-    sn_entry_keys = {entry.key for entry in sn_entries}
+    des_sn_entries = [entry for entry in entries if _is_executable_des_sn_entry(entry)]
+    # des_sn5yr, when its full χ² is enabled, runs the executable path — exclude it
+    # from the compressed-summary set just like the other executable SN entries.
+    executable_sn_keys = {entry.key for entry in sn_entries} | {entry.key for entry in des_sn_entries}
     compressed_entries = [
         entry
         for entry in entries
-        if entry.compressed_likelihood is not None and entry.key not in sn_entry_keys
+        if entry.compressed_likelihood is not None and entry.key not in executable_sn_keys
     ]
     executable_keys = (
         {e.key for e in bao_entries}
@@ -3135,6 +3180,7 @@ def _run_sampling_likelihood_chain(
         | {e.key for e in cc_entries}
         | {e.key for e in rsd_entries}
         | {e.key for e in fsbao_entries}
+        | {e.key for e in des_sn_entries}
     )
     skipped_entries = [
         entry
@@ -3145,6 +3191,7 @@ def _run_sampling_likelihood_chain(
     parameter_order = _sampling_parameter_order(
         bao_entries, compressed_entries, sn_entries, model_key=model_key,
         cc_entries=cc_entries, rsd_entries=rsd_entries, fsbao_entries=fsbao_entries,
+        des_sn_entries=des_sn_entries,
     )
     if not parameter_order:
         return _compressed_runner_unavailable(
@@ -3157,7 +3204,13 @@ def _run_sampling_likelihood_chain(
     prior_bounds = _sanitize_runner_priors(parameter_order, priors)
     rng = np.random.default_rng(seed)
     invalid_specs: list[str] = []
-    sampler_used = "bao_gaussian_importance"
+    # The full-covariance SN χ² (Pantheon+, DES-SN5YR) takes the emcee bypass inside
+    # _draw_importance_posterior rather than importance sampling, so label the runner
+    # accordingly (this condition must mirror the bypass in _draw_importance_posterior).
+    _sn_emcee_bypass = bool(
+        (sn_entries and any(e.key == "pantheon_plus" for e in sn_entries)) or des_sn_entries
+    )
+    sampler_used = "sn_emcee" if _sn_emcee_bypass else "bao_gaussian_importance"
 
     try:
         # Fast analytic-grid BAO-only path is calibrated for flat ΛCDM in the
@@ -3202,6 +3255,7 @@ def _run_sampling_likelihood_chain(
                 cc_entries=cc_entries,
                 rsd_entries=rsd_entries,
                 fsbao_entries=fsbao_entries,
+                des_sn_entries=des_sn_entries,
             )
             invalid_specs.extend(compressed_errors)
             # ESS-floor emcee upgrade (single-cell deep runs only).  Importance
@@ -3213,6 +3267,7 @@ def _run_sampling_likelihood_chain(
             n_components = (
                 len(bao_entries) + len(compressed_entries) + len(sn_entries)
                 + len(cc_entries) + len(rsd_entries) + len(fsbao_entries)
+                + len(des_sn_entries)
             )
             if (
                 allow_emcee_fallback
@@ -3238,6 +3293,7 @@ def _run_sampling_likelihood_chain(
                         cc_entries=cc_entries,
                         rsd_entries=rsd_entries,
                         fsbao_entries=fsbao_entries,
+                        des_sn_entries=des_sn_entries,
                     )
                     invalid_specs.extend(emcee_errors)
                     sampler_used = "compressed_emcee"
@@ -3277,7 +3333,7 @@ def _run_sampling_likelihood_chain(
 
     used_keys = {
         entry.key
-        for entry in bao_entries + compressed_entries + cc_entries + rsd_entries + fsbao_entries + sn_entries
+        for entry in bao_entries + compressed_entries + cc_entries + rsd_entries + fsbao_entries + sn_entries + des_sn_entries
     }
     used_entries = [entry for entry in entries if entry.key in used_keys]
     # Each executable BAO entry contributes its own measurement vector (DESI DR1
@@ -3289,6 +3345,8 @@ def _run_sampling_likelihood_chain(
         + sum(_cc_entry_point_count(entry) for entry in cc_entries)
         + len(EBOSS_DR16_FSIGMA8) * len(rsd_entries)
         + sum(len(_FSBAO_DATA[entry.key][0]) for entry in fsbao_entries)
+        + sum(len(_load_pantheon_plus_data()["mu"]) for entry in sn_entries if entry.key == "pantheon_plus")
+        + sum(len(_load_des_sn5yr_data()["mu"]) for entry in des_sn_entries)
         + sum(
             len(entry.compressed_likelihood.parameters)
             for entry in compressed_entries
@@ -3330,7 +3388,7 @@ def _run_sampling_likelihood_chain(
         )
 
     cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
-        bao_entries + cc_entries + rsd_entries + fsbao_entries + sn_entries + compressed_entries, warnings
+        bao_entries + cc_entries + rsd_entries + fsbao_entries + sn_entries + des_sn_entries + compressed_entries, warnings
     )
     # Off-anchor safety guard: a converged extended-model chain whose novel frontier
     # parameters (w/w0/wa) have no reproduced published anchor is NOT publication-
@@ -3417,7 +3475,7 @@ def _run_sampling_likelihood_chain(
         },
         "chain_diagnostics": {
             "overall_status": (
-                "emcee_sampled" if sampler_used == "compressed_emcee"
+                "emcee_sampled" if sampler_used in ("compressed_emcee", "sn_emcee")
                 else "importance_resampled"
             ),
             "publication_ready": publication_ready,
@@ -3502,10 +3560,16 @@ def _sampling_parameter_order(
     cc_entries: list[CosmologyDatasetEntry] | None = None,
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
     fsbao_entries: list[CosmologyDatasetEntry] | None = None,
+    des_sn_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> list[str]:
     order: list[str] = []
     if bao_entries:
         order.extend(["H0", "omegam", "rd"])
+    if des_sn_entries:
+        # DES-SN5YR analytically marginalizes the SN offset (and H0), so it
+        # constrains Ωm (+ the w0/wa DE shape) only — no H0, no M_B.
+        if "omegam" not in order:
+            order.append("omegam")
     if fsbao_entries:
         # FSBAO measures joint (D_M/r_s, D_H/r_s, fσ8): distance ratios need
         # (H0, Ωm, r_d), the fσ8 growth term adds σ8.
@@ -3867,6 +3931,7 @@ def _run_emcee_chain(
     cc_entries: list[CosmologyDatasetEntry] | None = None,
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
     fsbao_entries: list[CosmologyDatasetEntry] | None = None,
+    des_sn_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
     """emcee MCMC over any BAO + compressed + SN likelihood product.
 
@@ -3884,6 +3949,7 @@ def _run_emcee_chain(
     cc_entries = cc_entries or []
     rsd_entries = rsd_entries or []
     fsbao_entries = fsbao_entries or []
+    des_sn_entries = des_sn_entries or []
     import emcee
 
     rng = np.random.default_rng(seed)
@@ -3954,6 +4020,8 @@ def _run_emcee_chain(
         for entry in sn_entries:
             if entry.key == "pantheon_plus":
                 chi2 += _pantheon_plus_chi2_samples(valid, parameter_order)
+        for entry in des_sn_entries:
+            chi2 += _des_sn5yr_chi2_samples(valid, parameter_order)
         extra_chi2, errs = _compressed_chi2_samples(
             valid, parameter_order, compressed_entries
         )
@@ -4021,13 +4089,17 @@ def _draw_importance_posterior(
     cc_entries: list[CosmologyDatasetEntry] | None = None,
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
     fsbao_entries: list[CosmologyDatasetEntry] | None = None,
+    des_sn_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
+    sn_entries = sn_entries or []
     cc_entries = cc_entries or []
     rsd_entries = rsd_entries or []
     fsbao_entries = fsbao_entries or []
-    # SN paths bypass importance sampling — Pantheon+'s 1701-SN χ² is too
-    # tight for any proposal Gaussian to cover efficiently.  Use emcee MCMC.
-    if sn_entries and any(e.key == "pantheon_plus" for e in sn_entries):
+    des_sn_entries = des_sn_entries or []
+    # SN paths bypass importance sampling — the full-covariance SN χ² (Pantheon+
+    # 1701, DES-SN5YR 1829) is too tight for any proposal Gaussian to cover
+    # efficiently AND too expensive per importance draw.  Use emcee MCMC.
+    if (sn_entries and any(e.key == "pantheon_plus" for e in sn_entries)) or des_sn_entries:
         # Use the rng's bit-state to seed emcee deterministically.
         emcee_seed = int(rng.integers(0, 2**31 - 1))
         return _run_emcee_chain(
@@ -4041,6 +4113,7 @@ def _draw_importance_posterior(
             cc_entries=cc_entries,
             rsd_entries=rsd_entries,
             fsbao_entries=fsbao_entries,
+            des_sn_entries=des_sn_entries,
         )
 
     proposal_count = min(max(sample_count * 25, 80_000), 300_000)
@@ -4077,6 +4150,8 @@ def _draw_importance_posterior(
     for entry in (sn_entries or []):
         if entry.key == "pantheon_plus":
             chi2 += _pantheon_plus_chi2_samples(samples, parameter_order)
+    for entry in (des_sn_entries or []):
+        chi2 += _des_sn5yr_chi2_samples(samples, parameter_order)
     extra_chi2, compressed_errors = _compressed_chi2_samples(
         samples,
         parameter_order,
@@ -4423,6 +4498,84 @@ def _pantheon_plus_cov_inv() -> np.ndarray:
     return np.linalg.inv(load_verified_pantheon_plus_data("pantheon_plus")["cov"])
 
 
+# ── DES-SN5YR full distance-modulus likelihood (2026-06-05) ─────────────────
+# 1829-SN Vincenzi+2024 Legacy Hubble diagram + full stat+sys covariance,
+# vendored as a sha256-pinned npz (built by scripts/fetch_des_sn5yr.py from the
+# github tag-1.3 release: C_total = STAT+SYS systematic cov + diag(MUERR_FINAL²)).
+# Mirrors the Pantheon+ full-cov machinery, but the χ² analytically marginalizes
+# the SN absolute-magnitude offset (no M_B nuisance, and H0 drops out too), so it
+# constrains Ωm (+ the w0/wa DE shape) only.
+_DES_SN5YR_DATA_DIR = (
+    pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "des_sn5yr"
+)
+
+
+@lru_cache(maxsize=None)
+def load_verified_des_sn5yr_data(dataset_key: str = "des_sn5yr") -> dict[str, Any]:
+    """Load the DES-SN5YR 1829-SN bundle from the vendored, sha256-pinned data.npz
+    and verify its digest against the registry (so the covariance the χ² inverts IS
+    the checksummed array). cov_fidelity is 'full' on a digest match, 'unverified'
+    on a present-but-mismatched/corrupt or missing-but-pinned file (blocks
+    publication). The 1829×1829 inverse is derived lazily on the fit path."""
+    pinned = _registry_product_sha256(dataset_key, "sn_full_data_npz")
+    npz_path = _DES_SN5YR_DATA_DIR / "data.npz"
+
+    def _fallback(fidelity: str) -> dict[str, Any]:
+        return {
+            "z_hd": None, "z_hel": None, "mu": None, "mu_err_diag": None, "cov": None,
+            "sha256": None, "hash_verified": False, "cov_fidelity": fidelity,
+        }
+
+    if not npz_path.exists():
+        return _fallback("unverified" if pinned else "literature_typed")
+    try:
+        raw = npz_path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        npz = np.load(io.BytesIO(raw))
+        verified = digest == pinned
+        return {
+            "z_hd": np.asarray(npz["z_hd"], dtype=np.float64),
+            "z_hel": np.asarray(npz["z_hel"], dtype=np.float64),
+            "mu": np.asarray(npz["mu"], dtype=np.float64),
+            "mu_err_diag": np.asarray(npz["mu_err_diag"], dtype=np.float64),
+            "cov": np.asarray(npz["cov"], dtype=np.float64),
+            "sha256": digest,
+            "hash_verified": bool(verified),
+            "cov_fidelity": "full" if verified else "unverified",
+        }
+    except Exception as exc:  # malformed/truncated npz — degrade, never crash import
+        logger.warning("DES-SN5YR data product failed to load (%s); marking unverified", exc)
+        return _fallback("unverified")
+
+
+@lru_cache(maxsize=None)
+def _des_sn5yr_cov_inv() -> np.ndarray:
+    """Inverse of the verified 1829×1829 DES-SN5YR covariance — computed once, only
+    on the fit path."""
+    return np.linalg.inv(load_verified_des_sn5yr_data("des_sn5yr")["cov"])
+
+
+@lru_cache(maxsize=None)
+def _load_des_sn5yr_data() -> dict[str, np.ndarray]:
+    """Arrays the DES-SN5YR χ² fits, sourced from the sha256-verified loader (cov IS
+    the checksummed object) with cov_inv derived lazily. Refuses unverified data."""
+    verified = load_verified_des_sn5yr_data("des_sn5yr")
+    if verified["cov"] is None:
+        raise FileNotFoundError(
+            f"DES-SN5YR data file missing: {_DES_SN5YR_DATA_DIR / 'data.npz'}. "
+            "Run `python scripts/fetch_des_sn5yr.py` to build it (~26 MB)."
+        )
+    if verified.get("cov_fidelity") == "unverified":
+        raise ValueError(
+            "DES-SN5YR covariance failed sha256 verification (digest mismatch); "
+            "refusing to compute chi2 from unverified data — re-fetch the release."
+        )
+    return {
+        "z_hd": verified["z_hd"], "z_hel": verified["z_hel"], "mu": verified["mu"],
+        "cov_inv": _des_sn5yr_cov_inv(),
+    }
+
+
 def _load_pantheon_plus_data() -> dict[str, np.ndarray]:
     """Arrays the Pantheon+ χ² fits, sourced from the sha256-verified loader (cov
     IS the checksummed object) with cov_inv derived lazily.  No separate module
@@ -4668,6 +4821,44 @@ def _pantheon_plus_chi2_samples(
     return np.einsum("in,ij,jn->n", residual, cov_inv, residual)
 
 
+def _des_sn5yr_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """χ² from the DES-SN5YR 1829 SNe Ia under flat w0waCDM, with the SN
+    absolute-magnitude offset M analytically marginalized (per the official
+    DES-SN5YR likelihood):
+
+        δ = μ_model − μ_obs ,  χ² = δᵀC⁻¹δ − (Σ C⁻¹δ)² / (Σ C⁻¹)
+
+    The marginalized χ² is invariant to a constant shift of μ_model, so H0 (and
+    M_B) drop out entirely — DES-SN constrains Ωm (+ the w0/wa DE shape) only.
+    parameter_order must contain "omegam"; optionally "w"/"w0"/"wa"."""
+    data = _load_des_sn5yr_data()
+    z_hd = data["z_hd"]
+    z_hel = data["z_hel"]
+    mu_obs = data["mu"]
+    cov_inv = data["cov_inv"]
+    n_samples = samples.shape[0]
+    omegam = samples[:, parameter_order.index("omegam")]
+    h0_fid = np.full(n_samples, 70.0, dtype=float)  # absolute H0 is marginalized away
+    if "w0" in parameter_order:
+        w0 = samples[:, parameter_order.index("w0")]
+    elif "w" in parameter_order:
+        w0 = samples[:, parameter_order.index("w")]
+    else:
+        w0 = np.full(n_samples, -1.0, dtype=float)
+    wa = samples[:, parameter_order.index("wa")] if "wa" in parameter_order else np.zeros(n_samples)
+    dm_grid = _flat_de_dm_grid_vectorized(z_hd, h0_fid, omegam, w0, wa)  # (n_sn, n_samples)
+    dl_grid = (1.0 + z_hel[:, None]) * dm_grid
+    mu_model = 5.0 * np.log10(dl_grid) + 25.0
+    delta = mu_model - mu_obs[:, None]                      # (n_sn, n_samples)
+    cinv_delta = cov_inv @ delta                            # (n_sn, n_samples)
+    chit2 = np.einsum("in,in->n", delta, cinv_delta)
+    b = cinv_delta.sum(axis=0)                              # Σ_i (C⁻¹δ)_i per sample
+    c_norm = float(cov_inv.sum())                           # Σ_ij C⁻¹_ij
+    return chit2 - b ** 2 / c_norm
+
+
 def _de_energy_density(a: np.ndarray, w0: np.ndarray, wa: np.ndarray) -> np.ndarray:
     """Flat-DE ρ_DE(a) / ρ_DE,0 for the CPL w(a) = w0 + wa(1-a) parameterization.
 
@@ -4822,6 +5013,13 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 "dataset_key": entry.key,
                 "source_locator": f"SDSS DR16 BAO+RSD consensus (CobayaSampler/bao_data, {entry.key}) — joint (D_M/r_s, D_H/r_s, fσ8) + full covariance",
                 "approximation": "Full-covariance rᵀC⁻¹r χ² (flat w0waCDM): D_M/r_s, D_H/r_s distance ratios + Linder-γ fσ8 growth, with the released joint distance+growth covariance",
+                "data_products": [product.to_dict() for product in entry.data_products],
+            })
+        elif _is_executable_des_sn_entry(entry):
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": "DES-SN5YR Vincenzi+2024 Legacy (github tag 1.3) — 1829-SN distance-modulus vector + full stat+sys covariance",
+                "approximation": "Full-covariance SN χ² = δᵀC⁻¹δ − (ΣC⁻¹δ)²/(ΣC⁻¹) (flat w0waCDM), analytically marginalizing the SN absolute-magnitude offset (no M_B/H0); constrains Ωm (+w0/wa)",
                 "data_products": [product.to_dict() for product in entry.data_products],
             })
         elif entry.compressed_likelihood is not None:
