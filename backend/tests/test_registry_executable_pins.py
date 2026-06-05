@@ -24,6 +24,8 @@ def test_every_non_allowlisted_executable_probe_certifies_a_file_backed_fidelity
     for k in cl._executable_probe_keys() - cl._NO_RELEASED_FILE_OK:
         if k in cl._BAO_DATA:
             v = cl.load_verified_bao_data(k)
+        elif k in cl.COSMIC_CHRONOMETER_FULL_COV_KEYS:
+            v = cl.load_verified_cc_full_cov_data(k)
         elif k in cl.COSMIC_CHRONOMETER_EXECUTABLE_KEYS:
             v = cl.load_verified_cc_data(k)
         elif k in cl.EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS:

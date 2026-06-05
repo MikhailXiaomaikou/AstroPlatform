@@ -87,6 +87,9 @@ ADAPTER_TO_COBAYA: Final[dict[str, str | None]] = {
     # `act_dr6_lenslike` third-party package. Candidate import path:
     # `act_dr6_lenslike.ACTDR6LensLike`.
     "external:act_dr6_lenslike.ACTDR6LensLike": None,
+    # TODO(step3): Planck PR4/NPIPE lensing (Carron+ 2022, arXiv:2206.07773).
+    # Package: github.com/carronj/planck_PR4_lensing.
+    "external:planck_PR4_lensing": None,
     # TODO(step3): SPT-3G 2018 CMB. Likely third-party
     # `cobaya-likelihood-spt3g` package. Candidate: `spt3g_2018`.
     "external:cmb.spt3g_2018": None,
@@ -102,6 +105,10 @@ ADAPTER_TO_COBAYA: Final[dict[str, str | None]] = {
     # likelihood; typically users wrap as a Gaussian likelihood on the
     # H(z) datapoints. Until then, keep None.
     "external:cosmic_chronometers": None,
+    # TODO(step3): cosmic chronometers with the full Moresco+2020 systematic
+    # covariance (arXiv:2003.07362; gitlab.com/mmoresco/CCcovariance). Same
+    # Gaussian-on-H(z) wrap, but with the full NxN covariance. Until then, None.
+    "external:cosmic_chronometers_moresco20": None,
     # TODO(step3): SPT-SZ cluster counts (Bocquet+ 2019). No standard
     # Cobaya module; likely custom class.
     "external:cluster.spt_sz_bocquet19": None,

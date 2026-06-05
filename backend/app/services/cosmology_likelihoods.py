@@ -901,6 +901,45 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             ),
         ),
     ),
+    "planck_pr4_lensing": CosmologyDatasetEntry(
+        key="planck_pr4_lensing",
+        display_name="Planck PR4 (NPIPE) CMB lensing",
+        version="Planck PR4/NPIPE lensing likelihood (Carron+ 2022)",
+        probe="cmb_lensing",
+        status="external_likelihood",
+        observables=("C_L_kappakappa",),
+        units={"C_L": "dimensionless"},
+        applicable_models=CMB_MODELS,
+        likelihood_family="cmb_lensing",
+        covariance=CovarianceSpec(
+            kind="bandpower covariance",
+            provided=True,
+            description=(
+                "Planck PR4 (NPIPE) CMB-lensing bandpower likelihood. Headline base-LCDM "
+                "constraint sigma8 * Omega_m^0.25 = 0.599 +/- 0.016 (CMB lensing + weak BAO/BBN priors)."
+            ),
+            url="https://github.com/carronj/planck_PR4_lensing",
+            format="planck_PR4_lensing likelihood package",
+        ),
+        source_url="https://arxiv.org/abs/2206.07773",
+        citations=(
+            DatasetCitation(
+                label="Carron, Mirmelstein & Lewis CMB lensing from Planck PR4",
+                year=2022,
+                arxiv="2206.07773",
+            ),
+        ),
+        notes=(
+            "Planck PR4/NPIPE lensing reconstruction (~slightly more data and tighter "
+            "than 2018 PR3 lensing). Complementary to act_dr6_lensing but NOT statistically "
+            "independent of it; do not co-add naively. Full bandpower evaluation needs the "
+            "external planck_PR4_lensing package (translation pending); the published "
+            "sigma8*Omega_m^0.25 = 0.599 +/- 0.016 summary is recorded in the covariance description."
+        ),
+        cobaya_likelihood="external:planck_PR4_lensing",
+        cosmosis_module="external:planck_PR4_lensing",
+        execution_mode="external_cobaya",
+    ),
     "kids1000_wl": CosmologyDatasetEntry(
         key="kids1000_wl",
         display_name="KiDS-1000 cosmic shear",
@@ -1079,8 +1118,113 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 local_path="data/cosmology/cosmic_chronometers/hz.txt",
             ),
         ),
+        do_not_combine_with=("cosmic_chronometers_moresco20",),
         cobaya_likelihood="external:cosmic_chronometers",
         cosmosis_module="external:hz/cosmic_chronometers",
+        execution_mode="compressed_gaussian",
+    ),
+    "cosmic_chronometers_moresco20": CosmologyDatasetEntry(
+        key="cosmic_chronometers_moresco20",
+        display_name="Cosmic chronometers H(z) — Moresco 2020 full covariance",
+        version="Moresco et al. 2012/2015/2016 BC03 H(z) (15 pts) with the Moresco et al. 2020 full systematic covariance",
+        probe="hz",
+        z_coverage=(0.1791, 1.965),
+        # Executable in-process via the dedicated full-covariance H(z) χ² path.
+        # Distinct from the GA2018 31-point diagonal compilation
+        # ("cosmic_chronometers"); this is the smaller Moresco-team BC03 subset
+        # for which the Moresco+2020 systematic covariance is actually defined.
+        status="external_likelihood",
+        observables=("z", "H_z", "H_z_covariance"),
+        units={"z": "dimensionless", "H_z": "km s^-1 Mpc^-1"},
+        applicable_models=ALL_MODELS,
+        likelihood_family="hz_gaussian",
+        covariance=CovarianceSpec(
+            kind="full covariance",
+            provided=True,
+            description=(
+                "15 BC03 cosmic-chronometer H(z) points (Moresco 2012/2015/2016) with the "
+                "FULL Moresco et al. 2020 covariance: diagonal statistical+metallicity plus "
+                "fully-correlated IMF and SPS-model ('one-of-others') systematic terms. "
+                "Reproduced from the vendored, sha256-pinned raw source files by "
+                "scripts/gen_moresco20_cc_covariance.py (faithful port of the official "
+                "gitlab.com/mmoresco/CCcovariance recipe), NOT hand-typed."
+            ),
+            url="https://gitlab.com/mmoresco/CCcovariance",
+            format="z, H, sigma_H raw tables + reproduced NxN covariance",
+        ),
+        source_url="https://gitlab.com/mmoresco/CCcovariance",
+        citations=(
+            DatasetCitation(
+                label="Moresco et al. cosmic-chronometer full covariance",
+                year=2020, arxiv="2003.07362", doi="10.3847/1538-4357/ab9eb0",
+            ),
+            DatasetCitation(label="Moresco et al. H(z) at z<1.1", year=2012, arxiv="1201.3609"),
+            DatasetCitation(label="Moresco H(z) at z~2", year=2015, arxiv="1503.01116"),
+            DatasetCitation(label="Moresco et al. 6% H(z) measurement", year=2016, arxiv="1601.01701"),
+        ),
+        notes=(
+            "15 differential-age H(z) measurements from the Moresco team's BC03 analysis "
+            "(z 0.179–1.965), executed in-process as a flat w0waCDM H(z)=H0·E(z) χ² with the "
+            "FULL Moresco+2020 systematic covariance (cov_fidelity='full'). This is the "
+            "higher-fidelity, narrower companion to the GA2018 31-point diagonal entry "
+            "'cosmic_chronometers'. Do NOT co-add with that entry: the 15 BC03 points are a "
+            "subset of the 31, so combining them double-counts. Covariance is reproduced "
+            "deterministically from the sha256-pinned raw files via the committed generator "
+            "script; only diag+IMF+model('one-of-others') are summed, matching the upstream "
+            "notebook's final covariance (avoids double-counting the model systematic)."
+        ),
+        data_products=(
+            DataProductSpec(
+                product_type="hz_measurement_vector",
+                role="hz_measurement_vector",
+                url="https://gitlab.com/mmoresco/CCcovariance/-/raw/master/data/HzTable_MM_BC03.dat",
+                format="ASCII table (z, H, sigma_H)",
+                description="15-point BC03 H(z) vector reproduced into mean.txt (z, H, quantity).",
+                columns=("z", "H_z", "quantity"),
+                rows=15,
+                sha256="95fa695ac256527d2ddb35ff72059dd38a3ccb59af18d54b549c67c05379acc8",
+                local_path="data/cosmology/cosmic_chronometers_moresco20/mean.txt",
+            ),
+            DataProductSpec(
+                product_type="hz_covariance",
+                role="covariance",
+                url="https://gitlab.com/mmoresco/CCcovariance",
+                format="ASCII 15x15 matrix",
+                description=(
+                    "Full 15x15 Moresco+2020 systematic covariance, reproduced from the "
+                    "pinned raw source files by scripts/gen_moresco20_cc_covariance.py."
+                ),
+                columns=("cov_ij",),
+                rows=15,
+                sha256="f6315a93531477601a6165aac9f875380f1a2737d23e16fd05563853717c1f68",
+                local_path="data/cosmology/cosmic_chronometers_moresco20/cov.txt",
+            ),
+            DataProductSpec(
+                product_type="hz_raw_source",
+                role="raw_hz_table",
+                url="https://gitlab.com/mmoresco/CCcovariance/-/raw/master/data/HzTable_MM_BC03.dat",
+                format="ASCII (z, Hz, errHz, stat, met, reference)",
+                description="Raw upstream BC03 H(z) table (provenance source for mean.txt).",
+                columns=("z", "Hz", "errHz", "stat_contr", "met_contr", "reference"),
+                rows=15,
+                sha256="32ce92caf251cb60a7a837c71f1856bea2b44fa5c1041f85410d11cb8164da98",
+                local_path="data/cosmology/cosmic_chronometers_moresco20/HzTable_MM_BC03.dat",
+            ),
+            DataProductSpec(
+                product_type="hz_systematics_source",
+                role="raw_systematics_table",
+                url="https://gitlab.com/mmoresco/CCcovariance/-/raw/master/data/data_MM20.dat",
+                format="ASCII (z, IMF, stlib, mod, mod_ooo per-cent contributions)",
+                description="Raw upstream per-cent systematic contributions (provenance source for cov.txt).",
+                columns=("z", "IMF", "stlib", "mod", "mod_ooo"),
+                rows=29,
+                sha256="577ac2f346e346fe7cf94daa7b7000c05d04ebc8a029cda31e0d8643b956a485",
+                local_path="data/cosmology/cosmic_chronometers_moresco20/data_MM20.dat",
+            ),
+        ),
+        do_not_combine_with=("cosmic_chronometers",),
+        cobaya_likelihood="external:cosmic_chronometers_moresco20",
+        cosmosis_module="external:hz/cosmic_chronometers_moresco20",
         execution_mode="compressed_gaussian",
     ),
     "shoes_h0_riess22": CosmologyDatasetEntry(
@@ -1863,6 +2007,8 @@ def _entry_verification(entry: CosmologyDatasetEntry) -> tuple[str | None, str |
     summary, so no executed probe slips through the publication gate unstamped."""
     if entry.key in _BAO_DATA:
         verified = load_verified_bao_data(entry.key)
+    elif _is_executable_cc_full_cov_entry(entry):
+        verified = load_verified_cc_full_cov_data(entry.key)
     elif _is_executable_cc_entry(entry):
         verified = load_verified_cc_data(entry.key)
     elif _is_executable_rsd_entry(entry):
@@ -1977,6 +2123,82 @@ COSMIC_CHRONOMETER_HZ: tuple[tuple[float, float, float], ...] = load_verified_cc
 )["hz_vector"]
 
 
+# ── Moresco 2020 cosmic-chronometer FULL systematic covariance (2026-06-05) ──
+# 15-point BC03 H(z) sample (Moresco 2012/2015/2016) with the full Moresco et al.
+# 2020 (arXiv:2003.07362) systematic covariance, reproduced from the vendored,
+# sha256-pinned raw source files by scripts/gen_moresco20_cc_covariance.py
+# (faithful port of gitlab.com/mmoresco/CCcovariance). Distinct from the GA2018
+# 31-point diagonal compilation (key "cosmic_chronometers"), which is unchanged.
+COSMIC_CHRONOMETER_FULL_COV_KEYS = {"cosmic_chronometers_moresco20"}
+
+
+@lru_cache(maxsize=None)
+def load_verified_cc_full_cov_data(dataset_key: str) -> dict[str, Any]:
+    """Load a CC (z, H(z)) vector + FULL covariance from the vendored, sha256-pinned
+    mean.txt / cov.txt so the fitted covariance IS the checksum-verified array.
+    cov_fidelity is 'full' on success, 'unverified' on a missing-but-pinned or
+    corrupt file (which blocks publication).  A full covariance has no honest
+    hand-typed substitute, so there is no literature_typed fallback."""
+    mean_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "mean.txt"
+    cov_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "cov.txt"
+    pinned_cov = _registry_product_sha256(dataset_key, "covariance")
+    pinned_mean = _registry_product_sha256(dataset_key, "hz_measurement_vector")
+    unverified = {
+        "hz_vector": None, "covariance": None, "sha256": None,
+        "hash_verified": False, "cov_fidelity": "unverified",
+    }
+    if not (mean_path.exists() and cov_path.exists()):
+        return unverified
+    try:
+        mean_digest = hashlib.sha256(mean_path.read_bytes()).hexdigest()
+        cov_digest = hashlib.sha256(cov_path.read_bytes()).hexdigest()
+        rows: list[tuple[float, float, float]] = []
+        for line in mean_path.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            z_str, value_str, _quantity = stripped.split()
+            rows.append((float(z_str), float(value_str), 0.0))
+        covariance = np.loadtxt(cov_path)
+        n = len(rows)
+        if n == 0 or covariance.shape != (n, n):
+            raise ValueError(f"mean/cov shape mismatch: {n} points vs cov {covariance.shape}")
+        verified = (mean_digest == pinned_mean) and (cov_digest == pinned_cov)
+        return {
+            "hz_vector": tuple(rows),
+            "covariance": covariance,
+            "sha256": cov_digest,
+            "mean_sha256": mean_digest,
+            "hash_verified": bool(verified),
+            "cov_fidelity": "full" if verified else "unverified",
+        }
+    except Exception as exc:  # malformed/truncated file — degrade, never crash import
+        logger.warning("CC full-cov product %s failed to load (%s); marking unverified", dataset_key, exc)
+        return unverified
+
+
+# (z, H(z)) the moresco20 χ² fits + its inverse covariance — sourced from the
+# verified loader so the fit reads the sha256-pinned committed artifacts.
+_MORESCO20_RAW = load_verified_cc_full_cov_data("cosmic_chronometers_moresco20")
+COSMIC_CHRONOMETER_MORESCO20_HZ: tuple[tuple[float, float, float], ...] = (
+    _MORESCO20_RAW["hz_vector"] if _MORESCO20_RAW["hz_vector"] is not None else ()
+)
+_MORESCO20_COV_INV: np.ndarray | None = (
+    np.linalg.inv(_MORESCO20_RAW["covariance"])
+    if _MORESCO20_RAW["covariance"] is not None
+    else None
+)
+
+
+def _cc_entry_point_count(entry: CosmologyDatasetEntry) -> int:
+    """Number of H(z) data points an executable CC entry contributes — the
+    GA2018 31-point vector vs the Moresco-2020 15-point vector — so the BIC
+    sample size is the real per-entry length, not a single hard-coded constant."""
+    if entry.key in COSMIC_CHRONOMETER_FULL_COV_KEYS:
+        return len(COSMIC_CHRONOMETER_MORESCO20_HZ)
+    return len(COSMIC_CHRONOMETER_HZ)
+
+
 # ── eBOSS DR16 RSD fσ8 executable likelihood (2026-05-29) ───────────────────
 # 6 RSD-only growth-rate measurements fσ8(z_eff) [dimensionless] from the SDSS
 # lineage, read directly from Alam et al. 2021 (eBOSS DR16 cosmological
@@ -2042,6 +2264,7 @@ def _executable_probe_keys() -> set[str]:
     return (
         set(_BAO_DATA)
         | set(COSMIC_CHRONOMETER_EXECUTABLE_KEYS)
+        | set(COSMIC_CHRONOMETER_FULL_COV_KEYS)
         | set(EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS)
         | {"pantheon_plus"}
     )
@@ -2062,6 +2285,8 @@ def audit_executable_pins() -> list[str]:
     for key in sorted(_executable_probe_keys()):
         if key in _BAO_DATA:
             verified = load_verified_bao_data(key)
+        elif key in COSMIC_CHRONOMETER_FULL_COV_KEYS:
+            verified = load_verified_cc_full_cov_data(key)
         elif key in COSMIC_CHRONOMETER_EXECUTABLE_KEYS:
             verified = load_verified_cc_data(key)
         elif key in EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS:
@@ -2322,6 +2547,7 @@ def run_likelihood_chain(
     warnings = [
         "Compressed Gaussian summary likelihood; use as preliminary consistency check, not full external likelihood.",
     ]
+    warnings.extend(_combination_warnings(entries))
     if skipped_entries:
         warnings.append(
             "Datasets not run in compressed phase: "
@@ -2352,6 +2578,9 @@ def run_likelihood_chain(
     # that removes the latent asymmetry if that upstream guard is ever relaxed.
     from app.services.cosmology_oracle import chain_is_off_anchor
     off_anchor = chain_is_off_anchor(model_key, [entry.key for entry in compressed_entries])
+    # do_not_combine_with violation double-counts shared measurements -> never
+    # publication-ready (mirrors the sampling path).
+    combination_conflict = bool(_combination_warnings(entries))
     publication_ready = (
         not invalid_specs
         and not prior_violations
@@ -2359,6 +2588,7 @@ def run_likelihood_chain(
         and not s8_underpowered
         and fidelity_ok
         and not off_anchor
+        and not combination_conflict
     )
     # Compressed-Gaussian analytic path is otherwise binary by construction: the
     # posterior is closed-form so there is no "exploratory" intermediate (the
@@ -2608,8 +2838,15 @@ def _is_executable_bao_entry(entry: CosmologyDatasetEntry) -> bool:
     return entry.key in _BAO_DATA
 
 
+def _is_executable_cc_full_cov_entry(entry: CosmologyDatasetEntry) -> bool:
+    return entry.key in COSMIC_CHRONOMETER_FULL_COV_KEYS
+
+
 def _is_executable_cc_entry(entry: CosmologyDatasetEntry) -> bool:
-    return entry.key in COSMIC_CHRONOMETER_EXECUTABLE_KEYS
+    return (
+        entry.key in COSMIC_CHRONOMETER_EXECUTABLE_KEYS
+        or entry.key in COSMIC_CHRONOMETER_FULL_COV_KEYS
+    )
 
 
 def _is_executable_rsd_entry(entry: CosmologyDatasetEntry) -> bool:
@@ -2838,7 +3075,7 @@ def _run_sampling_likelihood_chain(
     # dataset with a different length doesn't silently feed a wrong BIC penalty.
     n_constraints = (
         sum(len(_BAO_DATA[entry.key][0]) for entry in bao_entries)
-        + len(COSMIC_CHRONOMETER_HZ) * len(cc_entries)
+        + sum(_cc_entry_point_count(entry) for entry in cc_entries)
         + len(EBOSS_DR16_FSIGMA8) * len(rsd_entries)
         + sum(
             len(entry.compressed_likelihood.parameters)
@@ -2861,6 +3098,7 @@ def _run_sampling_likelihood_chain(
             "preliminary, not a full external desilike/Cobaya likelihood."
         ),
     ]
+    warnings.extend(_combination_warnings(entries))
     if bao_entries and not any(entry.probe == "cmb" for entry in used_entries):
         warnings.append(
             "BAO-only H0 and rd constraints are prior/calibration dependent; "
@@ -2896,20 +3134,26 @@ def _run_sampling_likelihood_chain(
             "anchor; result is exploratory and routed to human review, not "
             "publication-ready."
         )
+    # do_not_combine_with violation (e.g. the GA2018 31-pt CC compilation co-added
+    # with its Moresco-2020 15-pt subset): the joint likelihood double-counts shared
+    # measurements, so the posterior is methodologically invalid — block it outright
+    # (not even exploratory), beyond the advisory _combination_warnings already added.
+    combination_conflict = bool(_combination_warnings(entries))
     publication_ready = (
         not invalid_specs
         and not skipped_entries
         and proposal_ess >= 400.0
         and fidelity_ok
         and not off_anchor
+        and not combination_conflict
     )
     # Importance-sampler three-tier (mirrors fit_cosmology_emcee, 2026-05-21):
     #   publication: ESS ≥ 400 and no invalid specs
     #   exploratory: 100 ≤ ESS < 400 — posterior discussable but not citeable
-    #   blocked:     ESS < 100 or invalid specs — do not claim numbers
+    #   blocked:     ESS < 100 or invalid specs or a double-count conflict
     if publication_ready:
         chain_tier = "publication"
-    elif not invalid_specs and not skipped_entries and proposal_ess >= 100.0:
+    elif not invalid_specs and not skipped_entries and not combination_conflict and proposal_ess >= 100.0:
         chain_tier = "exploratory"
     else:
         chain_tier = "blocked"
@@ -3471,6 +3715,8 @@ def _run_emcee_chain(
         for entry in cc_entries:
             if entry.key == "cosmic_chronometers":
                 chi2 += _cosmic_chronometer_chi2_samples(valid, parameter_order)
+            elif entry.key == "cosmic_chronometers_moresco20":
+                chi2 += _cosmic_chronometer_moresco20_chi2_samples(valid, parameter_order)
         for entry in rsd_entries:
             if entry.key == "eboss_dr16_rsd":
                 chi2 += _eboss_fsigma8_chi2_samples(valid, parameter_order)
@@ -3587,6 +3833,8 @@ def _draw_importance_posterior(
     for entry in cc_entries:
         if entry.key == "cosmic_chronometers":
             chi2 += _cosmic_chronometer_chi2_samples(samples, parameter_order)
+        elif entry.key == "cosmic_chronometers_moresco20":
+            chi2 += _cosmic_chronometer_moresco20_chi2_samples(samples, parameter_order)
     for entry in rsd_entries:
         if entry.key == "eboss_dr16_rsd":
             chi2 += _eboss_fsigma8_chi2_samples(samples, parameter_order)
@@ -3673,12 +3921,13 @@ def _bao_predictions(
     return predictions
 
 
-def _cosmic_chronometer_hz_predictions(
-    samples: np.ndarray, parameter_order: list[str]
+def _hz_predictions_for(
+    samples: np.ndarray, parameter_order: list[str],
+    vector: tuple[tuple[float, float, float], ...],
 ) -> np.ndarray:
-    """Predicted H(z) [km/s/Mpc] for each posterior sample at the 31 cosmic-
-    chronometer redshifts.  H(z) = c / D_H(z) where D_H = c / H(z) is the Hubble
-    distance from the same flat w0waCDM kernel used for BAO."""
+    """Predicted H(z) [km/s/Mpc] for each posterior sample at the redshifts of
+    ``vector`` (rows ``(z, H_obs, σ)``).  H(z) = H0·E(z) is closed-form for the
+    flat w0waCDM kernel — no comoving-distance integral needed."""
     h0 = samples[:, parameter_order.index("H0")]
     omegam = samples[:, parameter_order.index("omegam")]
     n_samples = samples.shape[0]
@@ -3689,13 +3938,19 @@ def _cosmic_chronometer_hz_predictions(
     else:
         w0 = np.full(n_samples, -1.0, dtype=float)
     wa = samples[:, parameter_order.index("wa")] if "wa" in parameter_order else np.zeros(n_samples)
-    predictions = np.empty((n_samples, len(COSMIC_CHRONOMETER_HZ)), dtype=float)
-    for col, (z, _h_obs, _sigma) in enumerate(COSMIC_CHRONOMETER_HZ):
-        # H(z) = H0·E(z) is closed-form — no comoving-distance integral needed.
+    predictions = np.empty((n_samples, len(vector)), dtype=float)
+    for col, (z, _h_obs, _sigma) in enumerate(vector):
         rho_de = _de_energy_density(1.0 / (1.0 + z), w0, wa)
         ez = np.sqrt(omegam * (1.0 + z) ** 3 + (1.0 - omegam) * rho_de)
         predictions[:, col] = h0 * ez
     return predictions
+
+
+def _cosmic_chronometer_hz_predictions(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """Predicted H(z) at the 31 GA2018 cosmic-chronometer redshifts."""
+    return _hz_predictions_for(samples, parameter_order, COSMIC_CHRONOMETER_HZ)
 
 
 def _cosmic_chronometer_chi2_samples(
@@ -3710,6 +3965,19 @@ def _cosmic_chronometer_chi2_samples(
     predictions = _cosmic_chronometer_hz_predictions(samples, parameter_order)
     residual = predictions - observed
     return np.sum((residual / sigma) ** 2, axis=1)
+
+
+def _cosmic_chronometer_moresco20_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """Full-covariance χ² of the 15-point Moresco 2020 cosmic-chronometer H(z)
+    vector: χ² = rᵀ C⁻¹ r with the reproduced systematic covariance C."""
+    if _MORESCO20_COV_INV is None or not COSMIC_CHRONOMETER_MORESCO20_HZ:
+        return np.zeros(samples.shape[0], dtype=float)
+    observed = np.asarray([row[1] for row in COSMIC_CHRONOMETER_MORESCO20_HZ], dtype=float)
+    predictions = _hz_predictions_for(samples, parameter_order, COSMIC_CHRONOMETER_MORESCO20_HZ)
+    residual = predictions - observed
+    return np.einsum("ni,ij,nj->n", residual, _MORESCO20_COV_INV, residual)
 
 
 # ── Structure-growth kernel for RSD fσ8 (Linder γ-parametrisation) ──────────
@@ -4246,6 +4514,13 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 "dataset_key": entry.key,
                 "source_locator": "Gómez-Valent & Amendola 2018 (arXiv:1802.01505) Table 1 — 31 cosmic-chronometer H(z)",
                 "approximation": "Diagonal-covariance H(z)=H0·E(z) χ² (flat w0waCDM); full Moresco+2020 systematic covariance not applied",
+            })
+        elif entry.key == "cosmic_chronometers_moresco20":
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": "Moresco et al. 2020 (arXiv:2003.07362) CCcovariance — 15 BC03 H(z) + full systematic covariance",
+                "approximation": "Full-covariance H(z)=H0·E(z) χ² = rᵀC⁻¹r (flat w0waCDM); covariance reproduced from sha256-pinned raw files via scripts/gen_moresco20_cc_covariance.py",
+                "data_products": [product.to_dict() for product in entry.data_products],
             })
         elif entry.key == "eboss_dr16_rsd":
             records.append({
@@ -4837,6 +5112,30 @@ def _model_theory_args(model: str) -> dict[str, Any]:
     return args
 
 
+def _combination_warnings(entries: list[CosmologyDatasetEntry]) -> list[str]:
+    """Warn when two co-selected datasets declare each other in do_not_combine_with
+    — overlapping/subset data products that would double-count if their likelihoods
+    are co-added in one fit (e.g. the GA2018 31-point CC compilation and its
+    Moresco-2020 15-point subset)."""
+    keys = {entry.key for entry in entries}
+    seen: set[frozenset[str]] = set()
+    msgs: list[str] = []
+    for entry in entries:
+        for other in entry.do_not_combine_with:
+            if other not in keys:
+                continue
+            pair = frozenset({entry.key, other})
+            if pair in seen:
+                continue
+            seen.add(pair)
+            msgs.append(
+                f"Datasets '{entry.key}' and '{other}' overlap and must not be co-added "
+                "in one likelihood (double-counts shared measurements); use them as "
+                "robustness alternatives, not a joint fit."
+            )
+    return msgs
+
+
 def _selection_warnings(entries: list[CosmologyDatasetEntry]) -> list[str]:
     warnings: list[str] = []
     if any(entry.status != "ready" for entry in entries):
@@ -4852,6 +5151,7 @@ def _selection_warnings(entries: list[CosmologyDatasetEntry]) -> list[str]:
         )
     if "h0_prior" in probes and not any(probe == "sn" for probe in probes):
         warnings.append("H0 prior selected without SN distances; check whether this is intended.")
+    warnings.extend(_combination_warnings(entries))
     return warnings
 
 

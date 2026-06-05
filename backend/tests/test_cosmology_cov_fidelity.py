@@ -192,3 +192,104 @@ def test_none_cov_fidelity_blocks_publication_inline_path(monkeypatch):
     assert prov["cov_fidelity"] is None
     assert r["publication_ready"] is False
     assert r["chain_tier"] != "publication"
+
+
+# ── Moresco 2020 CC full covariance (2026-06-05): a NEW 'full' hz entry, the
+# GA2018 diagonal entry untouched ──
+
+import numpy as np  # noqa: E402
+
+
+def test_moresco20_entry_certifies_full_fidelity():
+    entry = cl.get_cosmology_dataset("cosmic_chronometers_moresco20")
+    fidelity, sha = cl._entry_verification(entry)
+    assert fidelity == "full"
+    assert sha  # the cov.txt sha256
+
+
+def test_moresco20_only_chain_is_full_and_publication_ready():
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["cosmic_chronometers_moresco20"],
+        n_samples=2000, random_seed=42,
+    )
+    prov = r["provenance"]["cosmology_likelihood"]
+    assert prov["cov_fidelity"] == "full"
+    assert prov["artifact_sha256"]["cosmic_chronometers_moresco20"]
+    assert r["publication_ready"] is True
+    assert r["chain_tier"] == "publication"
+
+
+def test_moresco20_is_distinct_from_ga2018_diagonal():
+    # The two CC entries are independent: different fidelity grade and different
+    # point counts. Adding the full-cov entry must not change the GA2018 entry.
+    full = cl._entry_verification(cl.get_cosmology_dataset("cosmic_chronometers_moresco20"))[0]
+    diag = cl._entry_verification(cl.get_cosmology_dataset("cosmic_chronometers"))[0]
+    assert full == "full" and diag == "diagonal"
+    assert len(cl.COSMIC_CHRONOMETER_MORESCO20_HZ) == 15
+    assert len(cl.COSMIC_CHRONOMETER_HZ) == 31
+
+
+def test_moresco20_mixed_with_diagonal_reports_weakest():
+    # A chain combining the full-cov entry with a diagonal probe reports the
+    # WEAKEST fidelity ('diagonal'), never 'full'.
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["cosmic_chronometers_moresco20", "eboss_dr16_rsd"],
+        n_samples=2000, random_seed=42,
+    )
+    assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] == "diagonal"
+
+
+def test_moresco20_covariance_is_real_full_matrix():
+    # The committed cov.txt is a genuine full covariance: 15x15, symmetric,
+    # positive-definite, with non-zero off-diagonal (systematic) terms.
+    raw = cl.load_verified_cc_full_cov_data("cosmic_chronometers_moresco20")
+    cov = raw["covariance"]
+    assert cov.shape == (15, 15)
+    assert np.allclose(cov, cov.T)
+    assert np.linalg.eigvalsh(cov).min() > 0
+    off = cov - np.diag(np.diag(cov))
+    assert np.any(np.abs(off) > 0)  # correlated systematics -> not diagonal
+
+
+def test_moresco20_missing_file_degrades_unverified(tmp_path, monkeypatch):
+    # Loader robustness: registry pins the files; if they are absent the loader
+    # degrades to 'unverified' (blocks publication), never crashes.
+    cl.load_verified_cc_full_cov_data.cache_clear()
+    try:
+        monkeypatch.setattr(cl, "_VENDORED_COSMO_DATA_DIR", tmp_path)
+        out = cl.load_verified_cc_full_cov_data("cosmic_chronometers_moresco20")
+        assert out["covariance"] is None
+        assert out["cov_fidelity"] == "unverified"
+    finally:
+        cl.load_verified_cc_full_cov_data.cache_clear()
+
+
+def test_moresco20_only_bic_uses_15_points_not_31():
+    # Regression fix: n_constraints must reflect the real per-entry vector length
+    # (15 for moresco20), not the hard-coded GA2018 31.
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["cosmic_chronometers_moresco20"],
+        n_samples=2000, random_seed=42,
+    )
+    assert r["fit_statistics"]["n_constraints"] == 15
+
+
+def test_co_selecting_both_cc_entries_warns_overlap():
+    # Regression fix: co-adding the GA2018 compilation and its Moresco-2020 subset
+    # double-counts; the runner must emit an explicit overlap warning.
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["cosmic_chronometers", "cosmic_chronometers_moresco20"],
+        n_samples=2000, random_seed=42,
+    )
+    assert any("overlap" in w and "co-added" in w for w in r["warnings"])
+
+
+def test_co_selecting_both_cc_entries_blocks_publication():
+    # Hard guard: a do_not_combine_with violation double-counts shared points, so
+    # the chain must NOT be publication-ready and must be 'blocked' (not exploratory).
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["cosmic_chronometers", "cosmic_chronometers_moresco20"],
+        n_samples=2000, random_seed=42,
+    )
+    assert r["publication_ready"] is False
+    assert r["chain_tier"] == "blocked"
