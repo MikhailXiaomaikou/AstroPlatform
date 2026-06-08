@@ -1696,8 +1696,11 @@ def _claimable_params_for_entry(entry: dict[str, Any]) -> list[str]:
         "cosmic_chronometers": ["H0", "omegam"],
         "cosmic_chronometers_moresco20": ["H0", "omegam"],
         "eboss_dr16_rsd": ["omegam", "sigma8"],
-        "eboss_dr16_lrg_fsbao": ["H0", "omegam", "rd", "sigma8", "H0_rd"],
-        "eboss_dr16_qso_fsbao": ["H0", "omegam", "rd", "sigma8", "H0_rd"],
+        # FSBAO measures distance RATIOS D_M/r_s, D_H/r_s + fσ8: constrains Ωm,
+        # σ8 and the H0·r_d combination — NOT standalone H0 or r_d (degenerate
+        # without a sound-horizon/r_d prior).
+        "eboss_dr16_lrg_fsbao": ["omegam", "sigma8", "H0_rd"],
+        "eboss_dr16_qso_fsbao": ["omegam", "sigma8", "H0_rd"],
     }
     return executable_claimables.get(str(entry.get("key")), [])
 

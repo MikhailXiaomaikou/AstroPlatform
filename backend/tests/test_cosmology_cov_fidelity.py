@@ -472,3 +472,20 @@ def test_cchp_h0_not_combined_with_2019_trgb():
     assert r["publication_ready"] is False
     assert r["chain_tier"] == "blocked"
     assert any("overlap" in w and "co-added" in w for w in r["warnings"])
+
+
+def test_des_sn5yr_not_dropped_by_desi_bao_fast_path(monkeypatch):
+    # Regression for the blocker: the DESI-BAO-only analytic fast path must NOT
+    # fire when des_sn5yr is also selected, or the 1829-SN likelihood is silently
+    # dropped while the chain still claims it in datasets_used / n_constraints.
+    monkeypatch.setattr(cl, "DES_SN5YR_EXECUTABLE_KEYS", {"des_sn5yr"})
+    bao = run_likelihood_chain(model="lcdm", dataset_keys=["desi_dr1_bao"], n_samples=2000, random_seed=42)
+    joint = run_likelihood_chain(
+        model="lcdm", dataset_keys=["desi_dr1_bao", "des_sn5yr"], n_samples=2000, random_seed=42,
+    )
+    om_bao = bao["posterior_summary"]["omegam"]["median"]
+    om_joint = joint["posterior_summary"]["omegam"]["median"]
+    # DES-SN (Ωm≈0.352) must actually move the joint posterior away from BAO-only (≈0.295)
+    assert abs(om_joint - om_bao) > 1e-3, (om_bao, om_joint)
+    # the joint χ² must include the ~1640 SN term, not just the ~12-point BAO χ²
+    assert joint["fit_statistics"]["chi2"] > 1000

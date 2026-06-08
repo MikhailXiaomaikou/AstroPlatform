@@ -3285,6 +3285,8 @@ def _run_sampling_likelihood_chain(
             and not sn_entries
             and not cc_entries
             and not rsd_entries
+            and not fsbao_entries
+            and not des_sn_entries
             and parameter_order == ["H0", "omegam", "rd"]
         ):
             (
@@ -3430,7 +3432,7 @@ def _run_sampling_likelihood_chain(
         ),
     ]
     warnings.extend(_combination_warnings(entries))
-    if bao_entries and not any(entry.probe == "cmb" for entry in used_entries):
+    if (bao_entries or fsbao_entries) and not any(entry.probe == "cmb" for entry in used_entries):
         warnings.append(
             "BAO-only H0 and rd constraints are prior/calibration dependent; "
             "quote Omega_m or H0*rd more strongly than H0 alone."
@@ -4073,9 +4075,13 @@ def _run_emcee_chain(
                 chi2 += _cosmic_chronometer_chi2_samples(valid, parameter_order)
             elif entry.key == "cosmic_chronometers_moresco20":
                 chi2 += _cosmic_chronometer_moresco20_chi2_samples(valid, parameter_order)
+            else:
+                raise ValueError(f"executable CC entry {entry.key!r} has no chi2 dispatch")
         for entry in rsd_entries:
             if entry.key == "eboss_dr16_rsd":
                 chi2 += _eboss_fsigma8_chi2_samples(valid, parameter_order)
+            else:
+                raise ValueError(f"executable RSD entry {entry.key!r} has no chi2 dispatch")
         for entry in fsbao_entries:
             chi2 += _fsbao_chi2_samples(valid, parameter_order, entry.key)
         for entry in sn_entries:
@@ -4203,9 +4209,13 @@ def _draw_importance_posterior(
             chi2 += _cosmic_chronometer_chi2_samples(samples, parameter_order)
         elif entry.key == "cosmic_chronometers_moresco20":
             chi2 += _cosmic_chronometer_moresco20_chi2_samples(samples, parameter_order)
+        else:
+            raise ValueError(f"executable CC entry {entry.key!r} has no chi2 dispatch")
     for entry in rsd_entries:
         if entry.key == "eboss_dr16_rsd":
             chi2 += _eboss_fsigma8_chi2_samples(samples, parameter_order)
+        else:
+            raise ValueError(f"executable RSD entry {entry.key!r} has no chi2 dispatch")
     for entry in fsbao_entries:
         chi2 += _fsbao_chi2_samples(samples, parameter_order, entry.key)
     for entry in (sn_entries or []):
@@ -4339,7 +4349,13 @@ def _fsbao_chi2_samples(
     samples: np.ndarray, parameter_order: list[str], key: str
 ) -> np.ndarray:
     """Full-covariance χ² = rᵀ C⁻¹ r of an eBOSS DR16 FSBAO joint vector."""
-    mean_vector, cov = _FSBAO_DATA[key]
+    verified = load_verified_fsbao_data(key)
+    if verified["cov_fidelity"] == "unverified" or verified["covariance"] is None:
+        raise ValueError(
+            f"FSBAO {key} covariance failed sha256 verification (or its vendored "
+            "file is missing); refusing to compute chi2 from unverified data."
+        )
+    mean_vector, cov = verified["mean_vector"], verified["covariance"]
     observed = np.asarray([row[1] for row in mean_vector], dtype=float)
     predictions = _fsbao_predictions(samples, parameter_order, mean_vector)
     residual = predictions - observed
@@ -4397,8 +4413,15 @@ def _cosmic_chronometer_moresco20_chi2_samples(
 ) -> np.ndarray:
     """Full-covariance χ² of the 15-point Moresco 2020 cosmic-chronometer H(z)
     vector: χ² = rᵀ C⁻¹ r with the reproduced systematic covariance C."""
-    if _MORESCO20_COV_INV is None or not COSMIC_CHRONOMETER_MORESCO20_HZ:
-        return np.zeros(samples.shape[0], dtype=float)
+    if (
+        load_verified_cc_full_cov_data("cosmic_chronometers_moresco20")["cov_fidelity"] == "unverified"
+        or _MORESCO20_COV_INV is None
+        or not COSMIC_CHRONOMETER_MORESCO20_HZ
+    ):
+        raise ValueError(
+            "Moresco-2020 CC covariance failed sha256 verification (or its vendored "
+            "file is missing); refusing to compute chi2 from unverified data."
+        )
     observed = np.asarray([row[1] for row in COSMIC_CHRONOMETER_MORESCO20_HZ], dtype=float)
     predictions = _hz_predictions_for(samples, parameter_order, COSMIC_CHRONOMETER_MORESCO20_HZ)
     residual = predictions - observed
