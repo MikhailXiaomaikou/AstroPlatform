@@ -1116,7 +1116,12 @@ async def dispatch_cosmology(
     elif tool_name == "build_cosmology_likelihood":
         return _exec_build_cosmology_likelihood(tool_input)
     elif tool_name == "run_cosmology_likelihood_chain":
-        return _exec_run_cosmology_likelihood_chain(tool_input)
+        # Run OFF the event loop: with EXTERNAL_COBAYA_ENABLED on, this can spawn a
+        # minutes-long cobaya MCMC subprocess. A plain sync call would freeze the
+        # whole async worker (all chats / SSE heartbeats) and starve the per-tool
+        # deadline, which can only fire at an await point. Mirror the siblings
+        # (fit_cosmology_emcee / compute_theory_cmb_spectrum) that use to_thread.
+        return await asyncio.to_thread(_exec_run_cosmology_likelihood_chain, tool_input)
     elif tool_name == "run_cmb_rotation_likelihood":
         return _exec_run_cmb_rotation_likelihood(tool_input)
     elif tool_name == "run_nested_sampler":

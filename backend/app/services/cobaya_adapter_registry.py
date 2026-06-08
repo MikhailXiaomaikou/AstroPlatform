@@ -88,6 +88,12 @@ ADAPTER_TO_COBAYA: Final[dict[str, str | None]] = {
     # thin class inline. Until then, keep None and let the runner fall back
     # to the platform's existing compressed-Gaussian path.
     "external:planck_2018_distance_prior": None,
+    # Planck 2018 high-l plik_lite TT/TE/EE — cobaya's PURE-PYTHON native
+    # likelihood (no clik / no Planck Likelihood Code). Foreground-marginalized
+    # binned bandpowers + covariance; one calibration nuisance (A_planck). Data
+    # vendored + sha256-pinned under data/cobaya_packages (COBAYA_PACKAGES_PATH).
+    # First filled step-3 mapping (2026-06-09).
+    "external:planck_2018_highl_plik.TTTEEE_lite_native": "planck_2018_highl_plik.TTTEEE_lite_native",
     # TODO(step3): ACT DR6 lensing. Class `ACTDR6LensLike` lives in the
     # `act_dr6_lenslike` third-party package. Candidate import path:
     # `act_dr6_lenslike.ACTDR6LensLike`.

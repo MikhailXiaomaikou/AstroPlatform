@@ -42,10 +42,11 @@ holds either way.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
-import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -62,8 +63,75 @@ logger = logging.getLogger(__name__)
 EXTERNAL_COBAYA_ENV = "EXTERNAL_COBAYA_ENABLED"
 PACKAGES_PATH_ENV = "COBAYA_PACKAGES_PATH"
 
+# Committed, sha256-pinned cobaya packages dir (e.g. the Planck plik_lite native
+# data). The subprocess reads THIS unless COBAYA_PACKAGES_PATH is set, so a CMB
+# run is reproducible with no runtime network. (parents[2] = backend/.)
+VENDORED_COBAYA_PACKAGES = Path(__file__).resolve().parents[2] / "data" / "cobaya_packages"
+
+# Params sampled with a narrow GAUSSIAN prior (not flat min/max) in the cobaya YAML:
+# the Planck plik_lite calibration nuisance A_planck, and the reionization optical
+# depth tau (high-l TT/TE/EE alone cannot constrain it — pin it with the Planck
+# 2018 lowE posterior). Mean/sigma per Planck 2018 V (arXiv:1907.12875).
+COBAYA_GAUSSIAN_PRIORS: dict[str, tuple[float, float]] = {
+    "A_planck": (1.0, 0.0025),
+    "tau": (0.0544, 0.0073),
+}
+
 DEFAULT_EVALUATE_TIMEOUT_S = 180.0
 DEFAULT_MCMC_TIMEOUT_S = 1800.0
+
+# CMB external-cobaya likelihoods whose vendored data files MUST sha256-verify at
+# runtime before the subprocess runs. The cobaya native likelihood reads these from
+# the resolved COBAYA_PACKAGES_PATH, which an env override (or a post-deploy edit)
+# could point at a different/tampered copy — every in-process probe carries
+# hash_verified, so the CMB path must too. Maps entry.key -> {relpath under
+# packages_path: registry data_product role whose sha256 pins it}.
+_CMB_PINNED_DATA: dict[str, dict[str, str]] = {
+    "planck_2018_highl_TTTEEE_lite": {
+        "data/planck_2018_pliklite_native/cl_cmb_plik_v22.dat": "measurement_vector",
+        "data/planck_2018_pliklite_native/c_matrix_plik_v22.dat": "covariance",
+    },
+}
+
+
+def _resolve_packages_path() -> str | None:
+    """The cobaya packages_path the subprocess will read — an explicit
+    COBAYA_PACKAGES_PATH override, else the committed sha256-pinned vendored dir.
+    Single source so the YAML and the runtime hash check never drift."""
+    return os.environ.get(PACKAGES_PATH_ENV) or (
+        str(VENDORED_COBAYA_PACKAGES) if VENDORED_COBAYA_PACKAGES.is_dir() else None
+    )
+
+
+def _verify_pinned_cmb_data(entries: list["CosmologyDatasetEntry"]) -> dict[str, Any] | None:
+    """Recompute the on-disk sha256 of every pinned CMB data file at the RESOLVED
+    packages_path and compare to the registry pins. Returns a verification record
+    (None when no pinned CMB entry is selected). hash_verified is False on any
+    missing file or digest mismatch, so a redirected/edited covariance cannot drive
+    a result stamped with the official Planck pins."""
+    pinned = [(e, _CMB_PINNED_DATA[e.key]) for e in entries if e.key in _CMB_PINNED_DATA]
+    if not pinned:
+        return None
+    packages_path = _resolve_packages_path()
+    files_sha256: dict[str, str] = {}
+    mismatches: list[str] = []
+    for entry, spec in pinned:
+        pins = {p.role: p.sha256 for p in entry.data_products}
+        for relpath, role in spec.items():
+            f = Path(packages_path) / relpath if packages_path else None
+            if f is None or not f.is_file():
+                mismatches.append(f"{relpath}: file missing")
+                continue
+            digest = hashlib.sha256(f.read_bytes()).hexdigest()
+            files_sha256[relpath] = digest
+            if digest != pins.get(role):
+                mismatches.append(f"{relpath}: sha256 mismatch")
+    return {
+        "packages_path": packages_path,
+        "hash_verified": not mismatches,
+        "files_sha256": files_sha256,
+        "mismatches": mismatches,
+    }
 
 
 class CobayaRunError(RuntimeError):
@@ -203,6 +271,26 @@ def dispatch_external_cobaya(
     # _run_cobaya_subprocess from ever being called in production. The
     # remainder of this function is exercised by mocked tests so that the
     # subprocess + parse machinery is in place when step 3 lands.
+
+    # Runtime data-fidelity gate: a pinned CMB likelihood must read sha256-verified
+    # data at the resolved packages_path — otherwise BLOCK, so a redirected
+    # COBAYA_PACKAGES_PATH or an edited vendored file can never drive a CMB fit that
+    # is then stamped with the official Planck pins/citations.
+    cmb_verification = _verify_pinned_cmb_data(entries)
+    if cmb_verification is not None and not cmb_verification["hash_verified"]:
+        return _runner_failure(
+            model_key=model_key,
+            entries=entries,
+            seed=seed,
+            error_class="cobaya_data_sha256_mismatch",
+            message=(
+                "CMB likelihood data failed sha256 verification at the resolved "
+                f"COBAYA_PACKAGES_PATH={cmb_verification['packages_path']!r}: "
+                + "; ".join(cmb_verification["mismatches"])
+                + " — refusing to run a CMB fit on unverified data."
+            ),
+        )
+
     try:
         with tempfile.TemporaryDirectory(prefix="cobaya_run_") as tmpdir:
             tmp_path = Path(tmpdir)
@@ -241,6 +329,7 @@ def dispatch_external_cobaya(
                 diagnostics=diagnostics,
                 chain_meta=chain_meta,
                 stdout_tail=_tail(completed.stdout),
+                data_verification=cmb_verification,
             )
     except CobayaRunError as exc:
         return _runner_failure(
@@ -282,7 +371,7 @@ def _build_cobaya_yaml(
     lines.append("# Generated by app.services.cobaya_runner")
     lines.append(f"output: {output_prefix}")
 
-    packages_path = os.environ.get(PACKAGES_PATH_ENV)
+    packages_path = _resolve_packages_path()
     if packages_path:
         lines.append(f"packages_path: {packages_path}")
 
@@ -301,11 +390,23 @@ def _build_cobaya_yaml(
     for name in parameter_order:
         low, high = prior_bounds[name]
         lines.append(f"  {name}:")
-        lines.append("    prior:")
-        lines.append(f"      min: {float(low)}")
-        lines.append(f"      max: {float(high)}")
-        proposal = max((float(high) - float(low)) / 50.0, 1e-4)
-        lines.append(f"    proposal: {proposal}")
+        if name in COBAYA_GAUSSIAN_PRIORS:
+            loc, scale = COBAYA_GAUSSIAN_PRIORS[name]
+            lines.append("    prior:")
+            lines.append("      dist: norm")
+            lines.append(f"      loc: {float(loc)}")
+            lines.append(f"      scale: {float(scale)}")
+            lines.append(f"    ref: {float(loc)}")
+            lines.append(f"    proposal: {float(scale)}")
+        else:
+            lines.append("    prior:")
+            lines.append(f"      min: {float(low)}")
+            lines.append(f"      max: {float(high)}")
+            lines.append(f"    ref: {0.5 * (float(low) + float(high))}")
+            # Floor must be tiny enough not to wreck small-scale params (As~2e-9);
+            # every O(1)+ param's (high-low)/50 already dominates it.
+            proposal = max((float(high) - float(low)) / 50.0, 1e-12)
+            lines.append(f"    proposal: {proposal}")
 
     lines.append("sampler:")
     if sampler == "evaluate":
@@ -392,15 +493,13 @@ def _cobaya_likelihood_translatable(cobaya_likelihood: str | None) -> bool:
 
 
 def _run_cobaya_subprocess(yaml_path: Path, *, timeout_s: float) -> subprocess.CompletedProcess:
-    cobaya_run = shutil.which("cobaya-run")
-    if cobaya_run is None:
-        raise CobayaImportError(
-            "cobaya-run executable not found on PATH; "
-            "install cobaya>=3.5 and ensure the Python venv bin/ is on PATH."
-        )
+    # Invoke via the SAME interpreter (`python -m cobaya run`) rather than a bare
+    # `cobaya-run` on PATH: the web worker / CI venv often does not have venv/bin/
+    # on PATH, but sys.executable always resolves the cobaya in this environment.
+    # dispatch_external_cobaya has already confirmed cobaya is importable.
     try:
         completed = subprocess.run(
-            [cobaya_run, str(yaml_path)],
+            [sys.executable, "-m", "cobaya", "run", str(yaml_path)],
             capture_output=True,
             text=True,
             timeout=timeout_s,
@@ -411,9 +510,11 @@ def _run_cobaya_subprocess(yaml_path: Path, *, timeout_s: float) -> subprocess.C
             f"cobaya-run timed out after {timeout_s:.0f} s on {yaml_path}"
         ) from exc
     if completed.returncode != 0:
+        # Cobaya prints its traceback to stdout, so surface BOTH tails — a
+        # stderr-only message was empty on real failures.
         raise CobayaSubprocessFailure(
             f"cobaya-run exited with code {completed.returncode}; "
-            f"stderr tail: {_tail(completed.stderr)}"
+            f"stderr tail: {_tail(completed.stderr) or _tail(completed.stdout)}"
         )
     return completed
 
@@ -626,6 +727,7 @@ def _runner_success(
     diagnostics: dict[str, Any],
     chain_meta: dict[str, Any],
     stdout_tail: str,
+    data_verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from app.services.cosmology_likelihoods import (
         MODEL_LABELS,
@@ -644,6 +746,8 @@ def _runner_success(
         and (diagnostics.get("rhat") or 0.0) <= 1.05
         and (diagnostics.get("ess_bulk") or 0.0) >= 400
         and not off_anchor
+        # a pinned CMB run is publication-ready only if its data sha256-verified
+        and not (data_verification is not None and not data_verification.get("hash_verified"))
     )
     return {
         "success": True,
@@ -679,6 +783,7 @@ def _runner_success(
                 "publication_ready": publication_ready,
                 "chain_meta": chain_meta,
                 "stdout_tail": stdout_tail,
+                "data_verification": data_verification,
             }
         },
     }

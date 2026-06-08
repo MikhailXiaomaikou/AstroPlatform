@@ -1008,6 +1008,77 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             ),
         ),
     ),
+    "planck_2018_highl_TTTEEE_lite": CosmologyDatasetEntry(
+        key="planck_2018_highl_TTTEEE_lite",
+        display_name="Planck 2018 high-l plik_lite TT/TE/EE",
+        version="Planck 2018 plik_lite_v22 (foreground-marginalized, native)",
+        probe="cmb",
+        status="external_likelihood",
+        observables=("C_ell_TT", "C_ell_TE", "C_ell_EE"),
+        units={"C_ell": "muK^2"},
+        applicable_models=CMB_MODELS,
+        likelihood_family="cmb_primary",
+        covariance=CovarianceSpec(
+            kind="binned bandpower covariance",
+            provided=True,
+            description=(
+                "Planck 2018 plik_lite high-l (l~30-2508) foreground-marginalized "
+                "TT/TE/EE binned bandpowers (613) + their full 613x613 covariance. "
+                "One calibration nuisance, A_planck. Evaluated in-process via "
+                "cobaya's PURE-PYTHON native likelihood (no clik) over a CAMB "
+                "theory spectrum."
+            ),
+            url="https://pla.esac.esa.int/pla/#cosmology",
+            format="cobaya planck_native_data plik_lite_2018_AL (cl_cmb + c_matrix)",
+        ),
+        source_url="https://arxiv.org/abs/1907.12875",
+        citations=(
+            DatasetCitation(
+                label="Aghanim et al. Planck 2018 V. CMB power spectra and likelihoods",
+                year=2020,
+                arxiv="1907.12875",
+            ),
+            DatasetCitation(
+                label="Aghanim et al. Planck 2018 VI. Cosmological parameters",
+                year=2020,
+                arxiv="1807.06209",
+            ),
+        ),
+        notes=(
+            "Primary high-l CMB TT/TE/EE — the first non-compressed CMB likelihood "
+            "in the registry (planck2018_compressed keeps only the R/l_A/ombh2 "
+            "distance priors). Runs as a real cobaya MCMC over a CAMB spectrum "
+            "(minutes), gated behind EXTERNAL_COBAYA_ENABLED; the data is vendored "
+            "+ sha256-pinned under data/cobaya_packages (clik-free native plik_lite, "
+            "~3 MB). High-l alone does not constrain tau, so it is sampled with the "
+            "Planck lowE Gaussian prior tau=0.0544+/-0.0073 (A_planck=1.0+/-0.0025). "
+            "Low-l (Commander TT + SimAll EE) is a separate follow-on. Reproduces "
+            "chi2~584.5 / dof~0.96 at the Planck 2018 base-LCDM best fit."
+        ),
+        cobaya_likelihood="external:planck_2018_highl_plik.TTTEEE_lite_native",
+        cosmosis_module="external:planck_2018_highl_plik.TTTEEE_lite_native",
+        execution_mode="external_cobaya",
+        data_products=(
+            DataProductSpec(
+                product_type="cmb_binned_bandpowers",
+                role="measurement_vector",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="plik_lite_v22 cl_cmb_plik_v22.dat (613 binned TT/TE/EE bandpowers)",
+                description="Foreground-marginalized binned CMB bandpowers (the data vector).",
+                rows=613,
+                sha256="dac0d9d493213e77c940a10a968cf0da3c5730bae60e1356c4cd8bcff96377ff",
+            ),
+            DataProductSpec(
+                product_type="cmb_bandpower_covariance",
+                role="covariance",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="plik_lite_v22 c_matrix_plik_v22.dat (613x613)",
+                description="Full plik_lite bandpower covariance matrix.",
+                rows=613,
+                sha256="ad90378c50bd67841764179c90ae6711fa4317c649966ab2b0712143b31e0a32",
+            ),
+        ),
+    ),
     "act_dr6_lensing": CosmologyDatasetEntry(
         key="act_dr6_lensing",
         display_name="ACT DR6 CMB lensing",
@@ -1983,6 +2054,23 @@ RUNNER_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
     "wa": (-3.0, 2.0),
 }
 
+# Primary-CMB sampled parameters for the external-cobaya plik_lite path ONLY.
+# Kept SEPARATE from RUNNER_PARAMETER_PRIORS so they never leak into the in-process
+# compressed/geometric parameter order: _compressed_parameter_order reads only
+# RUNNER_PARAMETER_PRIORS, and putting ombh2 there silently un-blocked the BBN-only
+# compressed selection (bbn_ombh2_schoeneberg24, whose spec is just ('ombh2',)).
+# _sanitize_runner_priors merges both dicts for the cobaya path. Flat OUTER bounds;
+# the narrow Gaussian priors on tau / A_planck (COBAYA_GAUSSIAN_PRIORS) live inside
+# these. H0 is shared and stays in RUNNER_PARAMETER_PRIORS.
+CMB_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
+    "ombh2": (0.019, 0.025),
+    "omch2": (0.10, 0.14),
+    "ns": (0.92, 1.00),
+    "As": (1.8e-9, 2.4e-9),
+    "tau": (0.02, 0.10),
+    "A_planck": (0.98, 1.02),
+}
+
 
 # ── S8 as a derived quantity (1B, 2026-05-29) ────────────────────────────────
 # S8 ≡ σ8 · √(Ωm / 0.3) is *defined* by σ8 and Ωm; it is NOT an independent
@@ -2729,6 +2817,10 @@ def run_likelihood_chain(
             parameter_order=cobaya_param_order,
             seed=seed,
             sample_count=sample_count,
+            # A real posterior, not a single evaluate-at-reference point. This is
+            # the minutes-long heavy fit the EXTERNAL_COBAYA_ENABLED gate exists
+            # for (it never runs on the interactive deadline path by default).
+            sampler="mcmc",
         )
 
     compressed_entries = [entry for entry in entries if entry.compressed_likelihood is not None]
@@ -5365,17 +5457,30 @@ def _all_external_cobaya(entries: list[CosmologyDatasetEntry]) -> bool:
     )
 
 
+# Primary-CMB external-cobaya likelihoods that sample the full CMB parameter set
+# (ombh2, omch2, H0, ns, As, tau) + the A_planck calibration nuisance, rather than
+# the geometric (H0, Omega_m, rd) set the compressed/in-process probes use.
+CMB_COBAYA_EXECUTABLE_KEYS = frozenset({"planck_2018_highl_TTTEEE_lite"})
+
+
 def _cobaya_parameter_order(
     model_key: str,
     entries: list[CosmologyDatasetEntry],
 ) -> list[str]:
     """Pick the parameter ordering passed to cobaya_runner.
 
-    Prefers any compressed-likelihood parameter spec the registered
-    entries expose; falls back to the intersection of
-    SUPPORTED_MODELS[model_key] with RUNNER_PARAMETER_PRIORS so that the
-    YAML cobaya_runner emits always declares params it has prior bounds for.
+    A primary-CMB plik_lite entry samples the full CMB set (ombh2, omch2, H0, ns,
+    As, tau) + A_planck.  Otherwise: prefers any compressed-likelihood parameter
+    spec the registered entries expose; falls back to the intersection of
+    SUPPORTED_MODELS[model_key] with RUNNER_PARAMETER_PRIORS so that the YAML
+    cobaya_runner emits always declares params it has prior bounds for.
     """
+    if any(entry.key in CMB_COBAYA_EXECUTABLE_KEYS for entry in entries):
+        order = ["ombh2", "omch2", "H0", "ns", "As", "tau", "A_planck"]
+        for param in SUPPORTED_MODELS.get(model_key, ()):
+            if param in {"w", "w0", "wa"} and param not in order:
+                order.append(param)
+        return order
     compressed_order = _compressed_parameter_order(entries)
     if compressed_order:
         return compressed_order
@@ -5393,9 +5498,12 @@ def _sanitize_runner_priors(
     unknown = set(user) - set(parameters)
     if unknown:
         raise ValueError(f"priors include unsupported compressed-runner parameters: {sorted(unknown)}")
+    # Geometric + CMB-cobaya params share this validator; the CMB-only params live
+    # in a separate dict so they don't leak into _compressed_parameter_order.
+    bounds = {**RUNNER_PARAMETER_PRIORS, **CMB_PARAMETER_PRIORS}
     out: dict[str, tuple[float, float]] = {}
     for name in parameters:
-        default_low, default_high = RUNNER_PARAMETER_PRIORS[name]
+        default_low, default_high = bounds[name]
         raw = user.get(name, (default_low, default_high))
         if isinstance(raw, dict):
             low_raw, high_raw = raw.get("min"), raw.get("max")
@@ -5713,12 +5821,18 @@ def _build_cosmosis_config(
 
 
 def _model_theory_args(model: str) -> dict[str, Any]:
-    args: dict[str, Any] = {"dark_energy_model": "lambda"}
+    # lens_potential_accuracy=1 makes CAMB compute the lensed TT/TE/EE the plik_lite
+    # high-l likelihood reads; CAMB ignores it when no lensed Cl is requested (the
+    # geometric BAO/SN cobaya runs), so it is harmless there.
+    # ΛCDM uses CAMB's DEFAULT dark energy (a cosmological constant) — DO NOT pass
+    # dark_energy_model="lambda" (no such CAMB class; it raises CAMBValueError).
+    # Only the dynamical-DE extensions name a real class (fluid / ppf).
+    args: dict[str, Any] = {"lens_potential_accuracy": 1}
     if "w0wa" in model:
         # CPL w(a)=w0+wa(1-a): PPF lets w cross -1.  The substring "wcdm" is NOT
         # contained in "w0wa_cdm", so the CPL keys must be matched explicitly and
-        # FIRST — otherwise every w0waCDM model silently fell through to "lambda"
-        # (a pure cosmological constant) while w0/wa were still being sampled.
+        # FIRST — otherwise every w0waCDM model silently fell through to the
+        # cosmological-constant default while w0/wa were still being sampled.
         args["dark_energy_model"] = "ppf"
     elif "wcdm" in model:
         args["dark_energy_model"] = "fluid"

@@ -26,18 +26,26 @@ def test_resolve_unknown_external_adapter_returns_none():
     assert resolve("external:not_a_real_adapter") is None
 
 
-def test_every_registered_adapter_is_a_todo_today():
-    """Every adapter in ADAPTER_TO_COBAYA is a TODO placeholder today.
+# Adapters whose real Cobaya import path has been filled (step 3). Each MUST have
+# a dedicated resolve test (e.g. test_planck_pliklite.py for plik_lite).
+FILLED_ADAPTERS = {"external:planck_2018_highl_plik.TTTEEE_lite_native"}
 
-    When a future PR fills in a real Cobaya import path for one of these,
-    this test will fail. The fix is to (a) add a dedicated per-adapter
-    test asserting the new mapping, and (b) remove that adapter from the
-    all-None lock here.
+
+def test_every_unfilled_adapter_is_a_todo_today():
+    """Every adapter in ADAPTER_TO_COBAYA EXCEPT the explicitly FILLED ones is a
+    TODO placeholder (None).
+
+    When a future PR fills in a real Cobaya import path for another, this test
+    fails until you (a) add a dedicated per-adapter resolve test and (b) add the
+    adapter to FILLED_ADAPTERS above.
     """
     for adapter, target in ADAPTER_TO_COBAYA.items():
+        if adapter in FILLED_ADAPTERS:
+            assert target is not None, f"{adapter!r} is FILLED but maps to None"
+            continue
         assert target is None, (
             f"Adapter {adapter!r} now resolves to {target!r}. Add a dedicated "
-            "resolve test for it and exclude it from this all-None lock."
+            "resolve test for it and add it to FILLED_ADAPTERS."
         )
         assert resolve(adapter) is None
 
