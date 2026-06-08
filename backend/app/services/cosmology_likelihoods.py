@@ -4087,6 +4087,8 @@ def _run_emcee_chain(
         for entry in sn_entries:
             if entry.key == "pantheon_plus":
                 chi2 += _pantheon_plus_chi2_samples(valid, parameter_order)
+            else:
+                raise ValueError(f"executable SN entry {entry.key!r} has no chi2 dispatch")
         for entry in des_sn_entries:
             chi2 += _des_sn5yr_chi2_samples(valid, parameter_order)
         extra_chi2, errs = _compressed_chi2_samples(
@@ -4221,6 +4223,8 @@ def _draw_importance_posterior(
     for entry in (sn_entries or []):
         if entry.key == "pantheon_plus":
             chi2 += _pantheon_plus_chi2_samples(samples, parameter_order)
+        else:
+            raise ValueError(f"executable SN entry {entry.key!r} has no chi2 dispatch")
     for entry in (des_sn_entries or []):
         chi2 += _des_sn5yr_chi2_samples(samples, parameter_order)
     extra_chi2, compressed_errors = _compressed_chi2_samples(
