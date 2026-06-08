@@ -254,6 +254,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             ),
         ),
         notes="Use as BAO-only or combined late-universe distance anchor; requires rd prior or CMB calibration.",
+        do_not_combine_with=("desi_dr2_bao",),
         cobaya_likelihood="external:desilike.desi_dr1_bao",
         cosmosis_module="likelihood/bao/desi1-dr1/desi1_dr1.py",
         execution_mode="compressed_gaussian",
@@ -339,6 +340,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "distance anchor; it drove the w0waCDM dark-energy preference. Use as "
             "BAO-only or combined; requires an rd prior or CMB calibration."
         ),
+        do_not_combine_with=("desi_dr1_bao",),
         cobaya_likelihood="external:desilike.desi_dr2_bao",
         cosmosis_module="likelihood/bao/desi-dr2/desi_dr2.py",
         execution_mode="compressed_gaussian",
@@ -2150,6 +2152,13 @@ def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
     pinned = _registry_product_sha256(dataset_key, "covariance")
 
     def _fallback(fidelity: str) -> dict[str, Any]:
+        if dataset_key not in _HARDCODED_BAO:
+            # A released full-file BAO (e.g. DESI DR2) has no honest hand-typed
+            # substitute; a missing/corrupt file is 'unverified', never faked.
+            return {
+                "mean_vector": None, "covariance": None, "sha256": None,
+                "hash_verified": False, "cov_fidelity": "unverified",
+            }
         mean_vector, cov = _HARDCODED_BAO[dataset_key]
         return {
             "mean_vector": tuple(mean_vector),
@@ -2190,6 +2199,12 @@ def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
         return _fallback("unverified")
 
 
+# Released full-file BAO likelihoods with NO hand-typed _HARDCODED_BAO fallback —
+# the fitted data IS the sha256-pinned vendored file (load_verified_bao_data
+# returns 'unverified' None if the file is missing/corrupt). DESI DR2 (2025)
+# supersedes DR1 as the primary late-universe BAO distance anchor.
+_RELEASED_ONLY_BAO_KEYS = ("desi_dr2_bao",)
+
 # What the chi² fits — sourced from the verified loader so the fitted covariance
 # and the registry checksum are the SAME array object.
 _BAO_DATA: dict[str, tuple[Any, Any]] = {
@@ -2197,8 +2212,13 @@ _BAO_DATA: dict[str, tuple[Any, Any]] = {
         load_verified_bao_data(key)["mean_vector"],
         load_verified_bao_data(key)["covariance"],
     )
-    for key in _HARDCODED_BAO
+    for key in (*_HARDCODED_BAO, *_RELEASED_ONLY_BAO_KEYS)
 }
+
+# Single-dataset BAO keys the analytic (Ωm, H0·rd)-plane fast path can sample
+# directly — a clean publication-tier ΛCDM posterior with no importance-sampler
+# collapse. Both are DESI combined distance-ratio vectors of the same form.
+_BAO_FAST_PATH_KEYS = frozenset({"desi_dr1_bao", "desi_dr2_bao"})
 
 
 # ── eBOSS DR16 FSBAO joint (D_M/r_s, D_H/r_s, fσ8) full-covariance (2026-06-05) ──
@@ -3275,12 +3295,14 @@ def _run_sampling_likelihood_chain(
 
     try:
         # Fast analytic-grid BAO-only path is calibrated for flat ΛCDM in the
-        # natural (H0, omegam, rd) plane against the DESI DR1 vector specifically;
-        # wCDM / w0waCDM add extra dimensions and other BAO datasets have their own
-        # vectors, so anything else falls through to the importance sampler.
+        # natural (H0, omegam, rd) plane against a single DESI BAO vector (DR1 or
+        # DR2); wCDM / w0waCDM add extra dimensions and other BAO datasets have
+        # their own vectors, so anything else falls through to the importance
+        # sampler. Requires EXACTLY ONE bao entry so a DR1+DR2 (overlapping) mix
+        # never fires it (which would silently fit only one of the two).
         if (
-            bao_entries
-            and all(entry.key == "desi_dr1_bao" for entry in bao_entries)
+            len(bao_entries) == 1
+            and bao_entries[0].key in _BAO_FAST_PATH_KEYS
             and not compressed_entries
             and not sn_entries
             and not cc_entries
@@ -3299,6 +3321,7 @@ def _run_sampling_likelihood_chain(
                 parameter_order,
                 prior_bounds,
                 sample_count,
+                key=bao_entries[0].key,
             )
         else:
             (
@@ -3427,8 +3450,9 @@ def _run_sampling_likelihood_chain(
     )
     warnings = [
         (
-            "DESI DR1 Gaussian BAO mean/covariance runner; compressed-likelihood "
-            "preliminary, not a full external desilike/Cobaya likelihood."
+            "In-process Gaussian mean/covariance runner (compressed-likelihood "
+            "preliminary), not a full external desilike/Cobaya likelihood. See "
+            "datasets_used for the exact release(s) fit."
         ),
     ]
     warnings.extend(_combination_warnings(entries))
@@ -3689,8 +3713,10 @@ def _draw_desi_bao_only_posterior(
     parameter_order: list[str],
     prior_bounds: dict[str, tuple[float, float]],
     sample_count: int,
+    key: str = "desi_dr1_bao",
 ) -> tuple[np.ndarray, float, float, int]:
-    """Sample DESI BAO-only posterior in the natural H0*rd degeneracy plane."""
+    """Sample a single DESI BAO-only posterior (DR1 or DR2) in the natural H0*rd
+    degeneracy plane."""
     if parameter_order != ["H0", "omegam", "rd"]:
         raise ValueError("DESI BAO-only runner expects H0, omegam, rd parameters")
     h0_low, h0_high = prior_bounds["H0"]
@@ -3698,8 +3724,12 @@ def _draw_desi_bao_only_posterior(
     rd_low, rd_high = prior_bounds["rd"]
     q_low = h0_low * rd_low
     q_high = h0_high * rd_high
-    om_values = np.linspace(om_low, om_high, 360)
-    q_values = np.linspace(q_low, q_high, 720)
+    # Grid resolution sets how faithfully the (Ωm, H0·rd) posterior is represented;
+    # DESI DR2's tighter 13-point likelihood needs a denser grid than DR1's to keep
+    # the effective sample size above the publication floor (the superseding, more
+    # constraining dataset must not land in a weaker chain tier than DR1).
+    om_values = np.linspace(om_low, om_high, 600)
+    q_values = np.linspace(q_low, q_high, 1200)
     om_grid, q_grid = np.meshgrid(om_values, q_values, indexing="ij")
     flat_om = om_grid.ravel()
     flat_q = q_grid.ravel()
@@ -3715,7 +3745,7 @@ def _draw_desi_bao_only_posterior(
         flat_om[valid],
         flat_q[valid],
     ])
-    chi2 = _bao_chi2_samples(grid_samples, parameter_order, "desi_dr1_bao")
+    chi2 = _bao_chi2_samples(grid_samples, parameter_order, key)
     best_chi2 = float(np.min(chi2))
     marginal_h0_prior = np.log(h0_cond_high[valid] / h0_cond_low[valid])
     log_weights = -0.5 * (chi2 - best_chi2) + np.log(marginal_h0_prior)
@@ -4259,6 +4289,11 @@ def _draw_importance_posterior(
 def _bao_chi2_samples(
     samples: np.ndarray, parameter_order: list[str], key: str = "desi_dr1_bao"
 ) -> np.ndarray:
+    if load_verified_bao_data(key)["cov_fidelity"] == "unverified":
+        raise ValueError(
+            f"BAO {key} covariance failed sha256 verification (or its vendored "
+            "file is missing); refusing to compute chi2 from unverified data."
+        )
     mean_vector, cov = _BAO_DATA[key]
     observed = np.asarray([row[1] for row in mean_vector], dtype=float)
     covariance = np.asarray(cov, dtype=float)

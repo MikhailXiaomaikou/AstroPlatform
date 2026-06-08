@@ -489,3 +489,77 @@ def test_des_sn5yr_not_dropped_by_desi_bao_fast_path(monkeypatch):
     assert abs(om_joint - om_bao) > 1e-3, (om_bao, om_joint)
     # the joint χ² must include the ~1640 SN term, not just the ~12-point BAO χ²
     assert joint["fit_statistics"]["chi2"] > 1000
+
+
+# ── DESI DR2 BAO wired in-process (2026-06-08) ──────────────────────────────
+# DR2 (2025) supersedes DR1 as the primary late-universe BAO anchor. It is now
+# fit in-process from the sha256-pinned vendored file (was external_cobaya-only,
+# silently landing in datasets_not_run) and combines with the DES-SN5YR full
+# likelihood to reproduce the evolving-dark-energy w0waCDM preference.
+
+def test_desi_dr2_bao_loads_verified_full():
+    raw = cl.load_verified_bao_data("desi_dr2_bao")
+    assert raw["cov_fidelity"] == "full" and raw["hash_verified"] is True
+    assert raw["sha256"] is not None
+    assert len(raw["mean_vector"]) == 13
+    cov = raw["covariance"]
+    assert cov.shape == (13, 13)
+    assert np.allclose(cov, cov.T) and np.linalg.eigvalsh(cov).min() > 0
+    quantities = {row[2] for row in raw["mean_vector"]}
+    assert quantities and quantities <= {"DM_over_rs", "DH_over_rs", "DV_over_rs"}
+
+
+def test_desi_dr2_bao_only_recovers_omegam_publication():
+    # DESI DR2 2025 ΛCDM Ωm ≈ 0.297 (arXiv:2503.14738), fit off the sha256-verified
+    # full covariance; the analytic fast path keeps it at publication tier (the
+    # superseding, tighter dataset must not rank below DR1).
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["desi_dr2_bao"], n_samples=4000, random_seed=42)
+    om = r["parameters"]["omegam"]["median"]
+    assert 0.29 <= om <= 0.31, f"Om={om} not near DESI DR2 0.297"
+    assert r["chain_tier"] == "publication"
+    assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] == "full"
+
+
+def test_desi_dr1_and_dr2_overlap_blocks_publication():
+    # DR2 supersedes DR1 — same survey, overlapping measurements; co-adding
+    # double-counts, so publication must be blocked and the overlap warned.
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["desi_dr1_bao", "desi_dr2_bao"],
+        n_samples=2000, random_seed=42,
+    )
+    assert r["publication_ready"] is False
+    assert r["chain_tier"] == "blocked"
+    assert any("overlap" in w and "co-added" in w for w in r["warnings"])
+
+
+def test_desi_dr2_unverified_refuses_chi2(monkeypatch):
+    # A sha256-failed / missing DR2 file must make the χ² REFUSE to fit (no silent
+    # contribution), mirroring the FSBAO/Moresco hardening. Monkeypatch the loader
+    # (do NOT cache_clear load_verified_bao_data — the DR1 provenance-binding test
+    # relies on its import-time cached identity).
+    import pytest
+    monkeypatch.setattr(
+        cl, "load_verified_bao_data",
+        lambda key: {"cov_fidelity": "unverified", "covariance": None, "mean_vector": None,
+                     "hash_verified": False, "sha256": None},
+    )
+    with pytest.raises(ValueError, match="unverified"):
+        cl._bao_chi2_samples(np.zeros((2, 3)), ["H0", "omegam", "rd"], "desi_dr2_bao")
+
+
+def test_desi_dr2_with_des_sn5yr_recovers_evolving_dark_energy(monkeypatch):
+    # The headline: DESI DR2 BAO + DES-SN5YR full likelihood + BBN ωb prior under
+    # w0waCDM recovers the evolving-dark-energy preference (w0 > -1 AND wa < 0),
+    # near DESI DR2 + SN published w0≈-0.75 / wa≈-0.7 (arXiv:2503.14738).
+    monkeypatch.setattr(cl, "DES_SN5YR_EXECUTABLE_KEYS", {"des_sn5yr"})
+    r = run_likelihood_chain(
+        model="w0wa_cdm",
+        dataset_keys=["desi_dr2_bao", "des_sn5yr", "bbn_ombh2_schoeneberg24"],
+        n_samples=4000, random_seed=42, allow_emcee_fallback=True,
+    )
+    w0 = r["parameters"]["w0"]["median"]
+    wa = r["parameters"]["wa"]["median"]
+    assert -1.0 < w0 < -0.5, f"w0={w0} not in the evolving-DE (>-1) regime"
+    assert wa < 0.0, f"wa={wa} not negative (no evolving-DE preference)"
+    # the SN term is actually in the joint fit, not dropped
+    assert r["fit_statistics"]["chi2"] > 1000
