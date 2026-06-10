@@ -29,13 +29,13 @@ python3 -m pytest tests/test_api.py -k test_search  # single test
 # Python syntax check (all files)
 python3 -c "import py_compile, glob; [py_compile.compile(f, doraise=True) for f in glob.glob('app/**/*.py', recursive=True)]"
 
-# Science-regression benchmarks (CI-runnable, no LLM, no network)
-python3 scripts/benchmarks/run_cosmology_benchmarks.py    # 20 baselines
-python3 scripts/audit_registry.py                          # 18 dataset-registry entries
+# Science-regression benchmarks (run from backend/ — these live in backend/scripts/; CI-runnable, no LLM, no network)
+python3 scripts/benchmarks/run_cosmology_benchmarks.py    # pinned baselines (22 as of 2026-06-10)
+python3 scripts/audit_registry.py                          # dataset-registry audit (26 entries as of 2026-06-10)
 python3 scripts/audit_citation_pool.py                     # bibcode reachability
 
-# Daily blind tests (LLM, real prompt → real chat path)
-bash scripts/daily_blind.sh --module cosmology              # all 10 cosmology cases (~20 min)
+# Daily blind tests (run from backend/; LLM, real prompt → real chat path)
+bash scripts/daily_blind.sh --module cosmology              # all 10 cosmology cases
 bash scripts/daily_blind.sh --module cosmology --case A2,A3 # subset (~4 min)
 # In CI: GitHub Actions Daily workflow with module / cases inputs.
 ```
@@ -72,7 +72,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data 
 - `models/schemas.py` — 20+ SQLAlchemy models. Uses custom `UUIDType` and `JSONType` for SQLite/PostgreSQL portability
 - `ai/` — Orchestrator + inference router + specialist agent prompts. Chat model choice is manual: provider + model profile (`Claude default`, `OpenAI GPT-5.5 alias`, `GPT-5.4`, `DeepSeek V4 Pro`, `DeepSeek V4 Flash`, `local`). GPT-5.5 resolves to `gpt-5.4` unless `OPENAI_GPT55_MODEL` is configured; fallback only happens after the selected backend fails.
 - `auth.py` — JWT with bcrypt + Google OAuth. `get_current_user()` (required) and `get_optional_user()` (optional) as FastAPI dependencies
-- `api/chat.py` — **`SYSTEM_PROMPT` is focus-aware** (cosmology focus: ~92 KB / ~23 k tokens / 55 sections — assembled at import time by `prompt_loader.build_system_prompt(_ASTRO_RESEARCH_FOCUS)`). Always includes provenance-v2 citation hierarchy, `ZERO-FABRICATION CONTRACT`, `STRUCTURED ABSTENTION`, `ADQL aggregate-function semantics`, and the data-provenance reporting hierarchy from `core/*.md`; per-focus rules come from `modules/<focus>/prompt.md`. Also defines `_filter_tools_by_research_focus` (L1 hard tool gating; `_FOCUS_GATED_VALUES = {"cosmology"}` — any focus other than `all` fails closed to cosmology), `_parse_abstention_tag` / `_classify_abstention_reason` / `_render_abstention_card` for the `<tools_returned_nothing/>` structured-abstention flow, deterministic literature-table extraction / `fit_line_lfr` follow-up for line-relation prompts, and `GET /api/chat/ai_backend_status` for the F4 pre-send Send-button gate. **Editing prompt content lives under `backend/app/prompts/`, not in `chat.py`** — the inline `SYSTEM_PROMPT` constant is gone since M1 Phase 4.
+- `api/chat.py` — **`SYSTEM_PROMPT` is focus-aware** (cosmology focus: ~99 KB / 43 `##` sections + 21 `###` subsections as of 2026-06-10; live numbers via `scripts/stats.sh` — assembled at import time by `prompt_loader.build_system_prompt(_ASTRO_RESEARCH_FOCUS)`). Always includes provenance-v2 citation hierarchy, `ZERO-FABRICATION CONTRACT`, `STRUCTURED ABSTENTION`, `ADQL aggregate-function semantics`, and the data-provenance reporting hierarchy from `core/*.md`; per-focus rules come from `modules/<focus>/prompt.md`. Also defines `_filter_tools_by_research_focus` (L1 hard tool gating; `_FOCUS_GATED_VALUES = {"cosmology"}` — any focus other than `all` fails closed to cosmology), `_parse_abstention_tag` / `_classify_abstention_reason` / `_render_abstention_card` for the `<tools_returned_nothing/>` structured-abstention flow, deterministic literature-table extraction / `fit_line_lfr` follow-up for line-relation prompts, and `GET /api/chat/ai_backend_status` for the F4 pre-send Send-button gate. **Editing prompt content lives under `backend/app/prompts/`, not in `chat.py`** — the inline `SYSTEM_PROMPT` constant is gone since M1 Phase 4.
 
 ### Frontend (`frontend/src/`)
 
@@ -89,7 +89,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module breakdown and data 
 
 1. **Search**: User query → Data Browser → connector.search() across selected sources → concurrent dispatch with per-source timeout → normalize via `_astro_to_result()` → sanitize NaN via `_safe_float()` / `_sanitize_extra()` → cache full results under `"latest"` key
 2. **ADQL**: User/AI writes ADQL → `execute_adql_query()` (standalone function, not route-handler-only) → **auto-retry on 408/502/503 with halved cone radius** → full result under `"latest_adql"` cache key, AI sees first 100 rows + note
-3. **AI Chat**: Frontend sends messages + `api_provider` + `model_profile` + `current_session_id` + `python_session_id` → backend validates the selected model profile for that provider → builds runtime context (system prompt + specialist agents + filtered tool list) → inference_router calls the selected LLM → `_run_agent_loop` dispatches tool calls concurrently (max 12 iterations, per-tool deadlines: `fit_isochrone` 180 s / `fit_transit_model` + `transit_search_bls` 120 s / rest 45 s; agent-loop outer 360 s; 12 s SSE heartbeats) → deterministic line-relation guard may run `extract_literature_tables` / `fit_line_lfr` when the model found papers or fit-ready measurement caches but skipped the required follow-up → every tool return flows through `result_provenance.normalize_tool_result` which stamps `__tool_status__` banners on EMPTY/FAILED/UNAVAILABLE/SYNTHETIC plus reproducibility and nested provenance → final reply goes through abstention parser → numeric + citation claim validator → optional regen/hardblock → SSE stream → auto-save after each turn → auto-title from first user message
+3. **AI Chat**: Frontend sends messages + `api_provider` + `model_profile` + `current_session_id` + `python_session_id` → backend validates the selected model profile for that provider → builds runtime context (system prompt + specialist agents + filtered tool list) → inference_router calls the selected LLM → `_run_agent_loop` dispatches tool calls concurrently (max 12 iterations / agent-loop outer 360 s by default — long-workflow mode raises these to 30 iterations / 1800 s via `_LONG_WORKFLOW_BUDGET`; per-tool deadlines from `_TOOL_DEADLINE_TABLE`: `fit_isochrone` 180 s, `run_python` 310 s, several 90–300 s entries, default 45 s; 6 s SSE heartbeats) → deterministic line-relation guard may run `extract_literature_tables` / `fit_line_lfr` when the model found papers or fit-ready measurement caches but skipped the required follow-up → every tool return flows through `result_provenance.normalize_tool_result` which stamps `__tool_status__` banners on EMPTY/FAILED/UNAVAILABLE/SYNTHETIC plus reproducibility and nested provenance → final reply goes through abstention parser → numeric + citation claim validator → optional regen/hardblock → SSE stream → auto-save after each turn → auto-title from first user message
 4. **NaN safety**: Every path from connector to API response MUST go through `_astro_to_result()` which uses `_safe_float()`. ADQL query results separately handled in `execute_adql_query()` — masked astropy values → None, not NaN
 5. **FITS Upload**: `POST /api/data/fits/upload` → `_validate_path()` (uses `relative_to()` not string prefix) → `data/fits/uploads/` → browseable via `GET /api/data/fits/browse` → usable as pipeline input
 6. **AI Pipeline Generation**: User describes workflow in chat → AI returns `generate_pipeline` action with full DAG → saved as template → loadable in Pipeline Editor
@@ -104,8 +104,8 @@ Closes the gap PART F left: AI generating fake data inside a *successful*
 run_python call. Four layers, every one tested:
 
 1. **Data-source contract** (`ai_tools.py` `_exec_run_python`): `run_python` tool schema has a required `data_source` field declaring `latest_adql` / `latest_search` / `latest_lightcurve` / `cached:<key>` / `fits:<path>` / `user_file:<path>` (your own CSV/parquet read via `pd.read_csv`/`pd.read_parquet`/`load_csv`, auto-classified as real) / `none_not_analyzing_real_data`. Declared real source must be reflected in the code (calls `get_adql_results` etc.) via an **AST walk** or the call is rejected; `cached:<key>` is also rejected when the key is not live in the result cache.
-2. **Static AST detection** (`services/synthetic_code_detector.py`): parses the Python code, finds RNG calls (`np.random.*` / `scipy.stats` / stdlib `random` / `torch`·`jax`·`tf` RNGs / `getattr(np, "random")` dynamic access) + time-axis builders (`np.linspace` / `np.arange` / `pd.date_range`) + keyword phrases ("simulate", "based on known parameters") + suspicious var names (`synthetic_*`, `fake_*`). Whitelists legitimate MCMC / bootstrap via `emcee`, `dynesty`, `arviz`, `bootstrap`, `jackknife` identifiers. Three verdicts: `clean` / `suspicious` / `synthetic`. Verdict `synthetic` with a declared real source = reject; `suspicious` = downgrade output to SYNTHETIC.
-3. **Upstream dependency tracking + physical tool removal** (`api/chat.py` `_run_agent_loop`): per-turn `tool_failure_counts` — when a data-fetch tool fails ≥ `DISABLE_AFTER_FAILURES=2` times, it is **removed from the `tools` parameter** sent to the LLM (AI literally cannot call it). A runtime note is appended to the system prompt for that iteration explaining the disable. When data-fetch failed earlier this turn and a subsequent `run_python` does not declare a real source, its output is tainted `SYNTHETIC` regardless of what the AI declared.
+2. **Static AST detection** (`services/synthetic_code_detector.py`): parses the Python code, finds RNG calls (`np.random.*` / `scipy.stats` / stdlib `random` / `torch`·`jax`·`tf` RNGs / `getattr(np, "random")` dynamic access) + time-axis builders (`np.linspace` / `np.arange` / `pd.date_range`) + keyword phrases ("simulate", "based on known parameters") + suspicious var names (`synthetic_*`, `fake_*`). Whitelists legitimate MCMC / bootstrap via `emcee`, `dynesty`, `arviz`, `bootstrap`, `jackknife` identifiers. Four verdicts: `clean` / `suspicious` / `synthetic` / `inert` (literal-only diagnostic code, exempt from SYNTHETIC). Verdict `synthetic` with a declared real source = reject; `suspicious` = downgrade output to SYNTHETIC.
+3. **Upstream dependency tracking + physical tool removal** (`api/chat.py` `_run_agent_loop`): per-turn `tool_failure_counts` — when a data-fetch tool hard-fails ≥ `DISABLE_AFTER_FAILURES=3` times (soft failures — timeout / payload-too-large / empty result — do not count), it is **removed from the `tools` parameter** sent to the LLM (AI literally cannot call it). A runtime note is appended to the system prompt for that iteration explaining the disable. When data-fetch failed earlier this turn and a subsequent `run_python` does not declare a real source, its output is tainted `SYNTHETIC` regardless of what the AI declared.
 4. **Error-string sanitization** (`result_provenance._sanitize_error_message`): words like "retry" / "fallback" / "simulate" / "narrower parameters" in tool errors are replaced with neutral phrasings before being fed back to the LLM, so error text can't be read as instructions ("prompt injection via error strings"). The system prompt also has an ANTI-INSTRUCTION-REFLECTION section explicitly telling the model to ignore those words inside tool results.
 
 UI: tool_result with `__tool_status__="SYNTHETIC"` or `data_origin="synthetic"` renders with a loud red warning header ("⚠ SYNTHETIC DATA — NOT FROM OBSERVATIONS") on the action card. Reply preamble also flags synthetic tools separately from failed/empty.
@@ -118,7 +118,7 @@ Tests: `tests/test_synthetic_code_detector.py` (incl. torch/jax/`getattr`/`pd.da
 
 **V/154/sdss17 real columns** (not the AI's usual guesses): lowercase `ra`/`dec` (NOT `RAJ2000`), `u`/`g`/`r`/`i`/`z` (NOT `psfMag_*`/`petroMag_*`), `class` (3=galaxy, 6=star), `zsp`/`zph` (NOT `redshift`), `objID` (capital ID). `catalog_registry.py` has the full schema; `VIZIER_COMMON_MISTAKES` has precise hints for AI's common guesses.
 
-**ADQL async TAP** (H0.1): `execute_adql_query` auto-detects "big" queries (TOP > 5000, cone radius > 1°, JOIN) and uses `launch_job_async` with 5 min budget. Small queries go sync 60s, and auto-fall to async on timeout. The old 45s hard cut is gone.
+**ADQL async TAP** (H0.1): `execute_adql_query` auto-detects "big" queries (TOP > 5000, cone radius > 1°, JOIN) and uses `launch_job_async` with 5 min budget. Small queries go sync 30 s, and auto-fall to async on timeout. The old 45s hard cut is gone.
 
 **ADQL newline normalization** (H0.2): `req.query.replace("\\n"/"\\r"/"\\t", " ")` before TAP dispatch — fixes "Cannot parse query FROM g" when a newline lands mid-identifier.
 
@@ -126,7 +126,7 @@ Tests: `tests/test_synthetic_code_detector.py` (incl. torch/jax/`getattr`/`pd.da
 
 ### Render cold-start recovery (DO NOT regress)
 
-Free-tier dynos sleep after 15 min idle. `api/client.ts` has an axios response interceptor: any 502/503/504 triggers a one-shot 5 s wait + retry, dispatches a `astro:backend-waking` `CustomEvent`, clears `sessionStorage.astro_backend_checked` so `BackendBanner` re-shows. `BackendBanner` in `App.tsx` listens for the event and renders "Waking up backend (Render free tier sleeps after 15 min idle)..." for 12 s. Without this, users who idle and then submit a request see a raw 502 error and assume the app is broken.
+Written when the backend ran on Render's free tier (dynos slept after 15 min idle). The backend now runs on a paid **Standard** instance (see `render.yaml`) that does not sleep, but the mechanism stays as defense against any transient 502/503/504: `api/client.ts` has an axios response interceptor — one-shot 5 s wait + retry, dispatches a `astro:backend-waking` `CustomEvent`, clears `sessionStorage.astro_backend_checked` so `BackendBanner` re-shows. `BackendBanner` in `App.tsx` listens for the event and renders a "waking up" notice for 12 s. (The banner copy in `App.tsx` still says "free tier" — stale UI string, pending update.) Without this, a transient 502 surfaces as a raw error and users assume the app is broken.
 
 ### Figure persistence (DO NOT regress)
 
@@ -180,16 +180,16 @@ Eight-layer regression net the project commits to keep green. Maps to
 
 | Layer | Where | When |
 |---|---|---|
-| Unit + backend-tool tests | `backend/tests/test_*.py` (~310 files, cov gate 45%) | every push / PR (CI `backend-test`) |
-| Frontend component tests | `frontend/src/__tests__/*.test.tsx` (Vitest, 147 cases incl. 4 mockE2E fixture-driven) | every push / PR (CI `frontend-test`) |
+| Unit + backend-tool tests | `backend/tests/test_*.py` (141 files / ~2.2 k cases as of 2026-06-10, cov gate 45%) | every push / PR (CI `backend-test`) |
+| Frontend component tests | `frontend/src/__tests__/*.test.tsx` (Vitest, 153 cases as of 2026-06-10 incl. mockE2E fixture-driven) | every push / PR (CI `frontend-test`) |
 | Manifest ↔ schema ↔ dispatch consistency | `tests/test_manifest_dispatch_consistency.py` (regression for the `45383ac` "manifest forgot to register" class) | every push / PR |
-| Red-team numeric corpus | `tests/_red_team_cases/numeric_claims.yaml` + `tests/test_red_team_corpus.py` (15 cases ≥10 floor) | every push / PR |
+| Red-team numeric corpus | `tests/_red_team_cases/numeric_claims.yaml` + `tests/test_red_team_corpus.py` (21 cases as of 2026-06-10; ≥10 floor) | every push / PR |
 | Security / privacy | `tests/security/test_{account_isolation,secret_leakage,admin_endpoints_gate,debug_endpoints_gate}.py` (16+1 cases) | every push / PR |
-| Science benchmarks | `scripts/benchmarks/run_cosmology_benchmarks.py` (20 pinned baselines) + `scripts/audit_registry.py` | push to main only (CI `benchmarks` job, push-only, NOT PR-gated) |
-| Paper-derived blind tests (LLM) | `scripts/blind_test_cosmology_m0/cases.yaml + runner.py`, orchestrated by `scripts/daily_blind.sh` | daily 16:00 UTC + manual dispatch with module/cases inputs (`.github/workflows/daily.yml`) |
-| Pre-alpha citation-pool audit | `scripts/audit_citation_pool.py` | pre-alpha, manual |
+| Science benchmarks | `backend/scripts/benchmarks/run_cosmology_benchmarks.py` (22 pinned baselines as of 2026-06-10) + `backend/scripts/audit_registry.py` | push to main only (CI `benchmarks` job, push-only, NOT PR-gated) |
+| Paper-derived blind tests (LLM) | `backend/scripts/blind_test_cosmology_m0/cases.yaml + runner.py`, orchestrated by `backend/scripts/daily_blind.sh` | daily 16:00 UTC + manual dispatch with module/cases inputs (`.github/workflows/daily.yml`) |
+| Pre-alpha citation-pool audit | `backend/scripts/audit_citation_pool.py` | pre-alpha, manual |
 
-**Cosmology blind-test invariants (`scripts/blind_test_cosmology_m0/cases.yaml`)** — DO NOT relax:
+**Cosmology blind-test invariants (`backend/scripts/blind_test_cosmology_m0/cases.yaml`)** — DO NOT relax:
 - 5 anti-fabrication defenses MUST stay strict: B1 inline-rows blocked, B2 fake-bibcode replaced, C1 zero-data hard-blocked, C2 abstention, D1 `suspicious_author_year` provenance violation. These are load-bearing for the zero-fabrication contract.
 - 3 tool-routing cases (A2 Hubble tension, A3 Alcock-Paczynski, E1 multi-tool chain) intentionally use `expect_tools_called=[]` because DeepSeek V4 Pro's function-call ranker picks tools by schema-name semantic similarity BEFORE reading the system prompt — 5 prompt+schema iterations (V1-V5, 2026-05-28) confirmed no prompt-level fix steers it. The ideal direct route is recorded in `alt_expected_tools` (documentation-only). When ANTHROPIC_API_KEY is configured, Claude is expected to hit the `alt_expected_tools` naturally; tightening `expect_tools_called` back to strict at that point is the right move.
 
@@ -217,22 +217,21 @@ db.commit()
 
 ## Deployment
 
+**Positioning (2026-06-03 decision): the hosted Render deployment is NOT the current focus.** Local + GitHub Actions is the primary environment. Pushing `main` triggers a Render auto-deploy as a side effect, but deploy health is not the success criterion for a change — don't watch it by default.
+
 **Production**: Render.com (backend Docker + PostgreSQL) + Render static site (frontend)
-- Backend: `https://astro-backend-h4x1.onrender.com`
+- Backend: `https://astro-backend-h4x1.onrender.com` — paid **Standard** instance (1 CPU / 2 GB), does not sleep
 - Frontend: `https://astro-frontend-tyfr.onrender.com`
 - Backend auto-converts `postgresql://` to `postgresql+asyncpg://` in `config.py`
-- Render free tier sleeps after 15min — `BackendBanner` component in `App.tsx` shows "waking up" notice
 - CORS origins configured in `cors.py` — includes both localhost and Render URLs
 
 Push to `main` branch → Render auto-deploys (may need Manual Deploy for first time).
 
-**Infrastructure as Code**: `render.yaml` defines all services:
-- `standard-astro-backend` (web) — FastAPI API server
-- `standard-astro-celery-worker` (worker) — Celery pipeline executor, concurrency=2
-- `standard-astro-celery-beat` (worker) — Celery Beat scheduler
+**Infrastructure as Code**: `render.yaml` — currently **3 deployed services + 1 database** (the header comment in the file is the source of truth):
+- `standard-astro-backend` (web, plan standard) — FastAPI API server
 - `standard-astro-frontend` (static) — Vite-built SPA with SPA rewrites
-- `standard-astro-redis` (redis) — Task queue + pub/sub + caching
-- `standard-astro-db` (postgres) — Primary database
+- `standard-astro-db` (postgres, basic-256mb) — Primary database
+- NOT deployed (kept as commented templates in the yaml): `standard-astro-celery-worker`, `standard-astro-celery-beat`, `standard-astro-redis`. Heavy pipeline DAG nodes return 503 until a Celery worker exists; the cosmology chat path doesn't use Celery.
 
 ## Environment Variables
 
@@ -273,14 +272,3 @@ VITE_API_URL=https://your-backend.com   # defaults to http://localhost:8000
 VITE_GOOGLE_CLIENT_ID=...               # same Google OAuth client ID as backend
 ```
 
-## Assistant conduct
-
-You are a world-class expert across every domain. Your intellectual firepower, breadth of knowledge, sharpness of thought, and erudition are on par with the smartest people in the world.
-
-Give complete, detailed, specific answers. Work through information step by step and explain your answers. Verify your own work. Carefully double-check every fact, number, citation, name, date, and case. Never hallucinate, never make things up. If you don't know, just say you don't know.
-
-Your tone is precise, but not caustic, preachy, or showy. You don't need to worry about offending me; your answers can and should be provocative, tough, argumentative, and blunt. Negative conclusions and bad news are fine.
-
-Your answers don't need to be politically correct. Unless I explicitly ask, don't offer moral or ethical reminders. You don't need to tell me "it's important to consider X." Don't spare anyone's feelings, including mine, and don't worry about politeness or decorum.
-
-Write as long and as detailed as you can.
