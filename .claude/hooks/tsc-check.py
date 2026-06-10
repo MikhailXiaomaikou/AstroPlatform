@@ -42,10 +42,12 @@ def main() -> int:
         return 0
 
     if r.returncode != 0:
-        # tsc errors → stderr so the agent sees them on the next turn.
-        # Exit 0 (not blocking) so the edit still lands; agent can react.
+        # Exit 2: PostToolUse feeds stderr back to the agent. (Exit 0 stderr
+        # only reaches the transcript — the old `return 0` here meant the
+        # agent never actually saw these errors.)
         output = (r.stdout + r.stderr).strip()
         print(f"tsc errors after editing {file_path}:\n{output}", file=sys.stderr)
+        return 2
     return 0
 
 

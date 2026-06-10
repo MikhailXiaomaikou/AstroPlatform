@@ -21,6 +21,14 @@
           },
           {
             "type": "command",
+            "command": "python3 .claude/hooks/ruff-check.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/doc-drift-check.py"
+          },
+          {
+            "type": "command",
             "command": "python3 .claude/hooks/flag-defense-redline.py"
           }
         ]
