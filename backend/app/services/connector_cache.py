@@ -1,8 +1,8 @@
 """Raw connector response cache.
 
-Caches normalized connector search results (lists of AstroObject) keyed
-by sha256(connector_name + sorted params). Saves upstream bandwidth and
-hides transient failures behind a warm cache.
+Caches connector payloads under caller-supplied keys (currently the arXiv
+literature-table extraction path, keyed `arxiv_tables:<id>`). Saves upstream
+bandwidth and hides transient failures behind a warm cache.
 
 Backends (auto-select in this order):
 1. Redis — when settings.redis_url is reachable
@@ -19,9 +19,7 @@ upstream call instead of stampeding the data source.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import io
-import json
 import logging
 import pickle
 import sqlite3
@@ -133,18 +131,6 @@ def _lock() -> asyncio.Lock:
     if _inflight_lock is None:
         _inflight_lock = asyncio.Lock()
     return _inflight_lock
-
-
-def build_key(connector: str, endpoint: str, params: dict[str, Any]) -> str:
-    """Content-addressed key for a connector call."""
-    try:
-        payload = json.dumps(params, sort_keys=True, default=str)
-    except (TypeError, ValueError):
-        payload = repr(params)
-    digest = hashlib.sha256(
-        f"{connector}|{endpoint}|{payload}".encode("utf-8")
-    ).hexdigest()
-    return f"conncache:{connector}:{endpoint}:{digest}"
 
 
 # ---------------------------------------------------------------------------

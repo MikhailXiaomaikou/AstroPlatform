@@ -19,23 +19,6 @@ def _reset_backend(tmp_path, monkeypatch):
     cc._inflight.clear()
 
 
-class TestBuildKey:
-    def test_key_is_deterministic(self):
-        k1 = cc.build_key("gaia", "cone", {"ra": 10.0, "dec": 20.0, "radius": 0.1})
-        k2 = cc.build_key("gaia", "cone", {"radius": 0.1, "dec": 20.0, "ra": 10.0})
-        assert k1 == k2
-
-    def test_different_params_yield_different_keys(self):
-        k1 = cc.build_key("gaia", "cone", {"ra": 10.0})
-        k2 = cc.build_key("gaia", "cone", {"ra": 10.1})
-        assert k1 != k2
-
-    def test_different_connectors_yield_different_keys(self):
-        k1 = cc.build_key("gaia", "cone", {"ra": 10.0})
-        k2 = cc.build_key("sdss", "cone", {"ra": 10.0})
-        assert k1 != k2
-
-
 class TestCacheRoundTrip:
     @pytest.mark.asyncio
     async def test_miss_then_hit(self):
@@ -46,7 +29,7 @@ class TestCacheRoundTrip:
             calls += 1
             return [{"name": "NGC 1647", "ra": 71.5, "dec": 19.1}]
 
-        key = cc.build_key("gaia", "cone", {"ra": 71.5, "dec": 19.1})
+        key = "test:miss_then_hit"
         r1 = await cc.get_or_compute(key, compute, ttl=60)
         r2 = await cc.get_or_compute(key, compute, ttl=60)
 
@@ -63,7 +46,7 @@ class TestCacheRoundTrip:
             calls += 1
             return calls
 
-        key = cc.build_key("gaia", "cone", {"ra": 0.0})
+        key = "test:force_refresh"
         v1 = await cc.get_or_compute(key, compute, ttl=60)
         v2 = await cc.get_or_compute(key, compute, ttl=60, force_refresh=True)
 
@@ -84,7 +67,7 @@ class TestCacheRoundTrip:
             await release.wait()
             return "result"
 
-        key = cc.build_key("gaia", "cone", {"ra": 1.23})
+        key = "test:singleflight"
 
         t1 = asyncio.create_task(cc.get_or_compute(key, slow_compute, ttl=60))
         await started.wait()
@@ -101,7 +84,7 @@ class TestCacheRoundTrip:
         async def fail():
             raise RuntimeError("upstream down")
 
-        key = cc.build_key("gaia", "cone", {"err": True})
+        key = "test:exception_retry"
         with pytest.raises(RuntimeError, match="upstream down"):
             await cc.get_or_compute(key, fail, ttl=60)
 

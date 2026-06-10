@@ -8,7 +8,7 @@
 
 Standard Astro is a full-stack astronomy research platform with four runtime layers:
 
-1. **Frontend SPA** — React 19 + TypeScript (strict) served by Vite. 15 pages: AI Chat (assistant), Papers, Observations, Team, Account, Billing, Settings, Research History, Alert Dashboard, Anomaly Explorer, User Tools, Landing, Help, Auth, Shared Session. (The Data Browser, Pipeline Studio, ADQL, and Workspace pages were removed in the M3 frontend trim — the cosmology copilot drives everything through chat; the pipeline DAG engine still exists backend-side via the `pipeline` API.)
+1. **Frontend SPA** — React 19 + TypeScript (strict) served by Vite. 14 pages: AI Chat (assistant), Papers, Observations, Team, Account, Settings, Research History, Alert Dashboard, Anomaly Explorer, User Tools, Landing, Help, Auth, Shared Session. (The Data Browser, Pipeline Studio, ADQL, and Workspace pages were removed in the M3 frontend trim — the cosmology copilot drives everything through chat; the pipeline DAG engine still exists backend-side via the `pipeline` API.)
 
 2. **FastAPI backend** — Single process, 33 domain routers (`scripts/stats.sh` for live count). SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
 
@@ -73,7 +73,7 @@ numeric validation, citation validation, rate limits, and UI status chips.
 
 1. UI or AI tool selects a connector key.
 2. `connectors.availability` blocks non-v2 keys before importing legacy code.
-3. Active connectors query the upstream archive through throttle/retry/cache
+3. Active connectors query the upstream archive through retry/cache
    wrappers.
 4. Connector output is normalized into table-like rows plus provenance fields.
 5. Empty, failed, unavailable, and synthetic states are represented explicitly
@@ -174,7 +174,7 @@ keys, and no debug endpoints unless explicitly enabled.
 
 Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; the two-row **journal-masthead** holds the primary nav (Home / AI Assistant / Papers / Account, with Observations / Team in the footer) plus a chip-style 4-language switcher (EN / 中文 / FR / ES), theme toggle, and user menu. The M3 trim (2026-05-18) removed the Data Browser / Pipeline / ADQL / Workspace pages and their nav tabs; `/research`, `/settings`, `/alerts`, `/anomalies` now redirect to their surviving parents.
 
-### Pages (15)
+### Pages (14)
 
 | Page | Purpose |
 |---|---|
@@ -183,7 +183,7 @@ Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; t
 | `Papers` | Account-scoped LaTeX manuscript drafts; drafts are private by default and can be explicitly published as read-only links |
 | `Observations` | Transient feed, alerts, anomalies, follow-up recommendations |
 | `Team` | Friends, shared datasets, activity feed, comments |
-| `Account` / `Settings` / `Billing` / `ResearchHistory` | Profile, keys (Fernet-encrypted), subscription, opt-in memory |
+| `Account` / `Settings` / `ResearchHistory` | Profile, keys (Fernet-encrypted), opt-in memory |
 | `UserTools` | User-defined / mined tool registry view |
 | `AlertDashboard`, `AnomalyExplorer` | Dedicated alerts + anomaly triage views |
 | `SharedSession` | Tokenized read / comment / fork view of any saved chat session |
@@ -193,7 +193,7 @@ Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; t
 
 - [`src/api/client.ts`](./frontend/src/api/client.ts) — Axios + typed SSE streaming. `ThinkingEvent` union covers `agent_text` / `tool_call` / `tool_result` / `status` / **`honest_abstention`** / `error`. `getAIBackendStatus()` feeds the F4 pre-send gate.
 - [`src/context/AuthContext.tsx`](./frontend/src/context/AuthContext.tsx) — JWT lifecycle; logout only on 401/403, not transient errors.
-- [`src/components/viz/*`](./frontend/src/components/viz) — PlotBuilder (Plotly publication-grade; Fit checkbox now shows ✓ / "(not supported)" per chart type), SpectrumViewer, LightCurveViewer (both auto-promote to `scattergl` at N > 5000), ImageCutoutViewer, MCMCDiagnostics, AladinViewer, ProvenanceGraph.
+- [`src/components/viz/*`](./frontend/src/components/viz) — PlotBuilder (Plotly publication-grade; Fit checkbox now shows ✓ / "(not supported)" per chart type), SpectrumViewer, LightCurveViewer (both auto-promote to `scattergl` at N > 5000), ImageCutoutViewer, MCMCDiagnostics, AladinViewer.
 - [`src/components/chat/*`](./frontend/src/components/chat) — MarkdownText, chat sidebar, figure-expand modal, DataSourcesPanel, AckButton, CosmologyMCMCPanel, and CosmologyLikelihoodPanel.
 - [`src/i18n/index.tsx`](./frontend/src/i18n/index.tsx) — 4-language flat dictionary; ~200+ keys.
 - [`src/styles/journal.css`](./frontend/src/styles/journal.css) — 2 k-line Journal-Edition stylesheet overriding chat / pipeline / browse / ADQL / sessions / account to the newspaper palette; loaded **after** `App.css` so same-specificity rules win the cascade.
@@ -392,9 +392,8 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 - [`app/api/arxiv.py`](./backend/app/api/arxiv.py) + `extract_literature_tables` — arXiv/ar5iv/LaTeX table extraction path. Raw tables carry table/caption/row provenance, and normalized line-measurement rows carry citation metadata so downstream `fit_line_lfr` can support relation statistics without relying on model memory.
 - [`app/services/spectral_measurement_workbench.py`](./backend/app/services/spectral_measurement_workbench.py) — generic spectral-line measurement validator/inventory for `[CII]`, CO, Halpha, Lyalpha, [OIII], and future line tables. The `prepare_spectral_measurements` tool reports fit-ready rows, missing fields, line inventory, citation counts, and value ranges before relation fitting.
 - [`app/services/cosmology_likelihoods.py`](./backend/app/services/cosmology_likelihoods.py) — Observational-cosmology dataset registry plus controlled Cobaya/CosmoSIS-style config builder and phase-1 compressed Gaussian runner. Current registry covers DESI DR1 BAO, SDSS+6dF/SDSS-BOSS/eBOSS BAO, Pantheon+, DES-SN5YR, Union3, Planck compressed priors, ACT DR6 lensing, KiDS-1000/DES Y3/HSC weak-lensing comparison branches, cosmic chronometers, and SH0ES H0 prior. DESI, Pantheon+, and Planck entries expose explicit `data_products` for public mean vectors, covariance matrices, likelihood code, or compressed-prior tables. Config outputs remain non-citeable; compressed posterior/tension numbers are citeable only when `run_cosmology_likelihood_chain` or `run_cosmology_robustness_matrix` returns `publication_ready=true`, and must be labeled as compressed-likelihood preliminary rather than full external likelihood results.
-- [`app/connectors/throttle.py`](./backend/app/connectors/throttle.py) — Per-connector `asyncio.Semaphore` + stdlib token bucket; per-archive ToS defaults (Gaia 5 req/s & 2 concurrent, SDSS 2 req/s, VizieR 10 req/s, SIMBAD 10 req/s, MAST 5 req/s & 2 concurrent, …). Raises `ThrottleTimeout` on sustained overflow.
 - [`app/connectors/retry.py`](./backend/app/connectors/retry.py) — Transient-only retry set (`httpx.TimeoutException`, `httpx.ConnectError`, `ConnectionError`, `TimeoutError`) + circuit breaker with closed/half-open/open states; `circuit_breaker_open_total` + `connector_error_total` counters.
-- [`app/services/connector_cache.py`](./backend/app/services/connector_cache.py) — Content-addressed cache keyed on `sha256(connector + endpoint + sorted(params))`. Backends: `RedisBackend` → `SQLiteBackend` → `NullBackend` (auto-select). Tiered TTLs: 24 h metadata, 1 h cones, 15 min ADQL. Singleflight dedup via a module-level `set[asyncio.Task]` with `task.add_done_callback(_tasks.discard)` so GC can't drop the shared future.
+- [`app/services/connector_cache.py`](./backend/app/services/connector_cache.py) — Connector-payload cache under caller-supplied keys (wired on the arXiv table-extraction path). Backends: `RedisBackend` → `SQLiteBackend` → `NullBackend` (auto-select). Tiered TTLs: 24 h metadata, 1 h cones, 15 min ADQL. Singleflight dedup via a module-level `set[asyncio.Task]` with `task.add_done_callback(_tasks.discard)` so GC can't drop the shared future.
 
 ### Analysis layer
 
@@ -577,7 +576,7 @@ Push to `main` → Render auto-deploy. Render free tier sleeps after 15 min idle
 ## 9. Current constraints
 
 - Python sandbox is **stability-hardened**, not adversarial-grade. `seccomp` / `gVisor` / `Firecracker` are out of scope.
-- Connector cache + upstream throttle are opt-in at the call site; migration to every connector is incremental.
+- Connector cache is opt-in at the call site; migration to every connector is incremental.
 - Orchestrator still runs one tool-loop per turn; multi-agent execution is prepared but not yet the production path.
 - Opt-in research memory uses hashed embeddings, not a vector DB.
 - ADQL cache stores full result sets; the AI sees 100 rows; Python gets the rest via the cache key.
@@ -590,8 +589,8 @@ Push to `main` → Render auto-deploy. Render free tier sleeps after 15 min idle
 
 ## 10. Testing
 
-- **Backend**: pytest suite under `backend/tests/`. Major modules include `test_api`, `test_claim_validator`, `test_citation_validation`, `test_b7_regression`, `test_cosmology_mcmc`, `test_abstention_parser`, `test_sandbox_crash_paths`, `test_sandbox_isolation`, `test_result_provenance`, `test_connector_availability_gate`, `test_provenance_registry_loader`, `test_provenance_v2_connectors`, `test_connector_cache`, `test_connector_throttle`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, and e2e smoke tests. Golden-path fixtures live under `backend/tests/golden/`.
-- **Frontend**: Vitest suite (`npm run test` for the live count). Coverage includes ChatPage, DataSourcesPanel, CosmologyMCMCPanel, AckButton, ActionCard, PlotBuilder, FITSBrowser, ProvenanceGraph, and common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
+- **Backend**: pytest suite under `backend/tests/`. Major modules include `test_api`, `test_claim_validator`, `test_citation_validation`, `test_b7_regression`, `test_cosmology_mcmc`, `test_abstention_parser`, `test_sandbox_crash_paths`, `test_sandbox_isolation`, `test_result_provenance`, `test_connector_availability_gate`, `test_provenance_registry_loader`, `test_provenance_v2_connectors`, `test_connector_cache`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, and e2e smoke tests. Golden-path fixtures live under `backend/tests/golden/`.
+- **Frontend**: Vitest suite (`npm run test` for the live count). Coverage includes ChatPage, DataSourcesPanel, CosmologyMCMCPanel, AckButton, ActionCard, PlotBuilder, FITSBrowser, and common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
 - **CI**: GitHub Actions runs backend pytest + frontend `tsc + vite build + vitest` + ruff lint on every push.
 - **Physical-regression targets** (manual): NGC 1647 (open cluster, Frasca+2026), M53 (globular + RR Lyrae), Tom 2 blue stragglers (Rain+2021), Vel OB1, white dwarf LF, Pleiades IMF, NGC 752 isochrone age ∈ [1.2, 2.0] Gyr.
 
