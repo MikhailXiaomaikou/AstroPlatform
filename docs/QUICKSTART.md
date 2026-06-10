@@ -1,23 +1,8 @@
 # Standard Astro Quick Start Guide
 
-Welcome to Standard Astro, an AI-native astronomy research platform. This guide walks you through 5 common tasks in under 20 minutes.
+Welcome to Standard Astro, an AI-native observational-cosmology research platform. The primary surface is the **AI Assistant** (Chat). This guide walks you through common tasks in under 20 minutes.
 
-## 1. Search for an Astronomical Object (2 min)
-
-1. Open **Data Browser** from the navigation bar
-2. Type an object name in the search box: `M31`, `NGC 1068`, `Sirius`, or `Crab Nebula`
-3. Select which active databases to query. During the provenance-v2 rollout the active sources are SIMBAD, Gaia DR3, VizieR, NED, 2MASS, ALMA Science Archive observation metadata, JPL Horizons, the IAU Minor Planet Center, and the NASA Exoplanet Archive; other source chips are shown as under maintenance until their `archive_version` provenance is upgraded. JPL Horizons and MPC are surfaced when `ASTRO_RESEARCH_FOCUS=solar_system`; the NASA Exoplanet Archive is surfaced when `ASTRO_RESEARCH_FOCUS=exoplanet`.
-4. Click **Search**
-5. Results appear in a merged table with coordinates, magnitudes, redshifts, and object types
-
-**Quick actions** appear above the results table:
-- **Quick Plot** -- instantly visualize the results (HR diagram, sky distribution)
-- **Dossier** -- get a comprehensive report on the top result
-- **Cross-match** -- match with another catalog
-
-**Batch mode**: Toggle "Batch Mode" to search multiple targets at once (one per line).
-
-## 2. Use the AI Assistant (5 min)
+## 1. Use the AI Assistant (5 min)
 
 1. Open **AI Assistant** from the navigation bar (or press `Cmd+K` then select "AI Assistant")
 2. Try these example prompts:
@@ -28,12 +13,11 @@ Welcome to Standard Astro, an AI-native astronomy research platform. This guide 
 | "Plot an HR diagram of stars within 50 pc" | Searches Gaia, plots color-magnitude diagram |
 | "Analyze the spectrum of Vega" | Identifies spectral lines, measures equivalent widths |
 | "Find recent papers about Type Ia supernovae" | Searches NASA ADS, returns abstracts and citations |
-| "Estimate the photo-z for this galaxy: g=22.1, r=21.5, i=20.8" | Runs 30-template SED fitting with dust and IGM |
-| "What transients were discovered this week?" | Queries TNS/ZTF for recent alerts |
-| "Fit a trapezoidal transit to TESS data for TOI-700 d" | Pulls the light curve via `fetch_tess_lightcurve` and runs `fit_transit` |
-| "What's the equilibrium temperature of HD 189733 b?" | Looks the planet/host up in `pscomppars` and runs `compute_equilibrium_temperature` |
+| "List the cosmology datasets available for likelihood building" | Runs `list_cosmology_datasets` over the dataset registry |
+| "Build a DESI DR2 BAO + BBN likelihood and report the constraints" | Runs `build_cosmology_likelihood` then `fit_cosmology_mcmc` |
+| "Fit the [CII] luminosity vs FWHM relation from these cited tables" | Runs `extract_literature_tables` then `fit_line_lfr` |
 
-The AI has access to a tool catalog of **91 tools** covering search, spectroscopy, photometry, time-domain analysis, image processing, statistics, literature, observational cosmology likelihood building, solar-system small-body workflows, and exoplanet transit / RV workflows. The active research module (`ASTRO_RESEARCH_FOCUS`) narrows the per-turn surface — currently 35 tools under cosmology focus, 12 tools under solar-system focus, and 9 tools under exoplanet focus, as declared in each `backend/app/prompts/modules/<focus>/manifest.yaml`. The AI selects the right tool from the visible set based on your request.
+The AI has access to a global tool catalog of **77 tools** covering search, literature, statistics, and observational-cosmology likelihood building. The active research module (`ASTRO_RESEARCH_FOCUS`, which fails closed to `cosmology`) narrows the per-turn surface — currently **57 tools** are visible under cosmology focus, as declared in `backend/app/prompts/modules/cosmology/manifest.yaml`. The AI selects the right tool from the visible set based on your request.
 
 When a tool result includes provenance, the chat card shows a **Data Sources** panel with `archive_version`, bibcodes, and source authority. The **Copy Acknowledgement** button assembles acknowledgement text from the conversation's provenance. If the AI tries a gated source such as SDSS or Chandra, the card appears as **Maintenance** rather than a generic error and suggests the active alternatives.
 
@@ -41,62 +25,23 @@ Literature-only searches support context and citations, not measurement claims. 
 
 **After each analysis**, the AI suggests 2-3 next steps. You can also use the **Next Steps panel** below the chat for quick actions: generate a paper draft, export a notebook, or run sensitivity analysis.
 
-## 3. Build a Pipeline (5 min)
+## 2. Export and Publish (2 min)
 
-1. Open **Pipeline Studio** from the navigation bar
-2. Choose a **Quick Template** from the dropdown:
-
-| Template | Workflow |
-|----------|----------|
-| Spectrum Analysis | LoadData -> Denoise -> SpectralFit -> RedshiftEstimate -> Plot |
-| CCD Photometry | BiasSubtract -> DarkCorrect -> FlatField -> CosmicRayReject -> SourceExtract -> PSFPhotometry -> Plot |
-| Transient Triage | LoadData -> Denoise -> TimeSeriesAnalysis -> Plot |
-| Photo-z Estimation | QueryData -> CrossMatch -> PhotoZPro -> Plot |
-| Transit Search | LoadData -> GPDetrend -> TransitFit -> Plot |
-
-3. Or build from scratch: drag nodes from the **Node Palette** on the left
-4. Connect nodes by dragging from output (right) to input (left) handles
-5. Click each node to configure parameters
-6. Click **Run** to execute the pipeline
-7. Results appear in specialized viewers (spectrum viewer, light curve viewer, MCMC diagnostics, etc.)
-
-The platform has **35 node types** covering data I/O, CCD reduction, spectroscopy, photometry, time-domain, image processing, statistical inference, and visualization.
-
-## 4. Upload and Analyze FITS Files (3 min)
-
-1. Open **Workspace** from the navigation bar
-2. Open the **FITS Manager** tab
-3. Drag and drop `.fits` files into the upload area (or click to browse)
-4. The platform **automatically detects** the file type:
-   - **Image** -> suggests CCD reduction + photometry
-   - **Spectrum** -> suggests spectral analysis + line fitting
-   - **Light curve** -> suggests time-domain analysis
-   - **Catalog/Table** -> suggests cross-matching
-5. Click **Auto-analyze** to send the file to the AI assistant for instant analysis
-6. Or use the file as input to a Pipeline node
-
-Supported: FITS images, binary tables, multi-extension files, IFU data cubes.
-
-## 5. Export and Publish (2 min)
-
-After completing an analysis, you have several export options:
+After completing an analysis in the AI Assistant, you have several export options:
 
 **From the AI Assistant:**
 - Ask: "Export this session as a Jupyter notebook"
 - Ask: "Generate a paper draft in AASTeX format"
 - Use the **Next Steps panel** buttons
 
-**From Pipeline Studio:**
-- After a run completes, click **Publication Package** for a one-click download containing:
-  - Jupyter Notebook (reproducible code)
-  - CSV data tables
-  - VOTable (VO-standard format)
-  - FITS output files
-  - Provenance record (data lineage)
-  - Pinned requirements.txt (for reproducibility)
+A research-report export bundles, where applicable:
+- Jupyter Notebook (reproducible code)
+- CSV data tables
+- VOTable (VO-standard format)
+- Provenance record (data lineage)
+- Pinned requirements.txt (for reproducibility)
 
-**From Data Browser:**
-- Export search results as CSV or VOTable
+> **Note:** The standalone Data Browser, Pipeline Studio, and Workspace pages were removed in the M3 trim (2026-05-18). The pipeline DAG engine still runs backend-side, but the current product surface is the AI Assistant (Chat). Data search, FITS handling, pipeline runs, and exports are all driven from the chat by asking the AI.
 
 ---
 
@@ -105,8 +50,6 @@ After completing an analysis, you have several export options:
 | Shortcut | Action |
 |----------|--------|
 | `Cmd/Ctrl + K` | Open Command Palette |
-| `Cmd/Ctrl + Z` | Undo (Pipeline) |
-| `Cmd/Ctrl + Shift + Z` | Redo (Pipeline) |
 | `Escape` | Close dialogs |
 
 ## Getting Help

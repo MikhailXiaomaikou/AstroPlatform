@@ -140,11 +140,16 @@ class NEDConnector(BaseConnector):
 
         try:
             data = resp.json()
-            return self._parse_search_response(data)
-        except (ValueError, TypeError, KeyError) as e:
-            # NED may return non-JSON for some queries; return empty
-            logger.debug("NED coord search response parsing failed: %s", e)
-            return []
+        except ValueError as e:
+            # The classic objsearch CGI returns an HTML results page, not JSON,
+            # so resp.json() fails. Swallowing this as [] would report NED as
+            # authoritatively empty for the region (a false EMPTY result that
+            # the abstention/banner machinery would trust). Surface it as a
+            # parse failure instead so callers route it to the FAILED path.
+            raise ValueError(
+                f"NED cone search returned a non-JSON response that could not be parsed: {e}"
+            ) from e
+        return self._parse_search_response(data)
 
     def _parse_lookup_response(self, data: dict) -> list[AstroObject]:
         """Parse NED ObjectLookup JSON response."""
@@ -252,7 +257,7 @@ class NEDConnector(BaseConnector):
         for key in ("Redshift", "redshift", "z"):
             if key in preferred:
                 try:
-                    redshift = float(preferred[key])
+                    redshift = float(_ned_str(preferred[key]))
                     break
                 except (ValueError, TypeError):
                     pass
@@ -261,7 +266,7 @@ class NEDConnector(BaseConnector):
         for key in ("Magnitude", "magnitude", "Bmag"):
             if key in preferred:
                 try:
-                    magnitude = float(preferred[key])
+                    magnitude = float(_ned_str(preferred[key]))
                     break
                 except (ValueError, TypeError):
                     pass
@@ -275,7 +280,7 @@ class NEDConnector(BaseConnector):
         for key in ("Velocity", "velocity"):
             if key in preferred:
                 try:
-                    extra["velocity"] = float(preferred[key])
+                    extra["velocity"] = float(_ned_str(preferred[key]))
                     break
                 except (ValueError, TypeError):
                     pass

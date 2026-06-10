@@ -40,7 +40,7 @@ jobs:
       - name: Type check
         run: |
           cd frontend
-          npx tsc --noEmit
+          npx tsc -b --noEmit
       - name: Run tests
         run: |
           cd frontend

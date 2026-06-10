@@ -566,6 +566,89 @@ def _normalize_sci_notation(text: str) -> str:
     return text
 
 
+def _apply_regex_with_map(
+    text: str, bmap: list[int], pattern: re.Pattern, repl_fn: Any
+) -> tuple[str, list[int]]:
+    """Apply one regex substitution while maintaining a boundary index map.
+
+    `bmap` has length ``len(text) + 1``; ``bmap[i]`` is the offset in the
+    ORIGINAL reply that boundary ``i`` of the current `text` corresponds to.
+    We return the new text and an updated boundary map so a span found in the
+    fully-transformed text can be translated back to the original reply's
+    character offsets (which the redaction / line-number helpers slice).
+
+    Each replaced span collapses to its replacement string: the replacement's
+    left boundary keeps the match-start original offset and its right boundary
+    keeps the match-end original offset, so redacting ``[orig_start, orig_end)``
+    covers exactly the original characters the claim was extracted from.
+    """
+    out_chars: list[str] = []
+    out_map: list[int] = []
+    pos = 0
+    for m in pattern.finditer(text):
+        # Copy the untouched run before this match (identity boundaries).
+        for i in range(pos, m.start()):
+            out_map.append(bmap[i])
+            out_chars.append(text[i])
+        replacement = repl_fn(m)
+        if replacement:
+            # Left boundary → original match-start; any interior boundaries
+            # also pin to match-start; the trailing char's right boundary is
+            # supplied by the next appended boundary (match-end) below.
+            for _ in replacement:
+                out_map.append(bmap[m.start()])
+            out_chars.append(replacement)
+        pos = m.end()
+    for i in range(pos, len(text)):
+        out_map.append(bmap[i])
+        out_chars.append(text[i])
+    out_map.append(bmap[len(text)])  # final right boundary
+    return "".join(out_chars), out_map
+
+
+def _transform_for_claims(text: str) -> tuple[str, list[int]]:
+    """Run the claim-extraction text transforms, tracking original offsets.
+
+    Returns ``(transformed_text, bmap)`` where ``bmap[i]`` maps a boundary in
+    the transformed text back to the corresponding offset in the input `text`.
+    Mirrors the transform pipeline previously inlined in ``extract_claims``
+    (``−``→``-``, strip code blocks/spans, strip thousands separators, then the
+    three sci-notation rewrites) so matching behaviour is unchanged, but lets a
+    matched span be mapped to the original reply for redaction / line numbers.
+    """
+    # B15: U+2212 → ASCII '-' is length-preserving (single code point each),
+    # so it maps 1:1 and needs no map adjustment.
+    text = text.replace("−", "-")
+    bmap = list(range(len(text) + 1))
+    # _strip_markdown_code: code blocks then inline code spans → single space.
+    text, bmap = _apply_regex_with_map(
+        text, bmap, re.compile(r"```.*?```", re.DOTALL), lambda m: " "
+    )
+    text, bmap = _apply_regex_with_map(
+        text, bmap, re.compile(r"`[^`\n]*`"), lambda m: " "
+    )
+    # _strip_thousands_separators: "1,234" → "1234" (repeat to chain groups).
+    prev = None
+    while prev != text:
+        prev = text
+        text, bmap = _apply_regex_with_map(
+            text, bmap, re.compile(r"(\d),(\d{3})(?=\D|$)"),
+            lambda m: m.group(1) + m.group(2),
+        )
+    # _normalize_sci_notation steps 1-3.
+    text, bmap = _apply_regex_with_map(
+        text, bmap, _SCI_SUPERSCRIPT,
+        lambda m: "10^" + m.group(1).translate(_SUPERSCRIPT_DIGITS),
+    )
+    text, bmap = _apply_regex_with_map(
+        text, bmap, _SCI_MANTISSA_POWER, lambda m: f"{m.group(1)}e{m.group(2)}"
+    )
+    text, bmap = _apply_regex_with_map(
+        text, bmap, _SCI_BARE_POWER, lambda m: f"1e{m.group(1)}"
+    )
+    return text, bmap
+
+
 def extract_claims(text: str) -> list[Claim]:
     """Scan a reply for astronomical numeric claims.
 
@@ -583,12 +666,14 @@ def extract_claims(text: str) -> list[Claim]:
     # B15: LLMs routinely emit the typographic Unicode minus U+2212 in
     # scientific prose ("w0 = −0.84"). `_NUM` only accepts ASCII -/+, so an
     # un-normalised minus made the whole numeric claim invisible to the gate.
-    # U+2212 and '-' are both single code points, so this is length-preserving
-    # and does not shift the claim offsets used for redaction.
-    text = text.replace("−", "-")
-    text = _strip_markdown_code(text)
-    text = _strip_thousands_separators(text)
-    text = _normalize_sci_notation(text)
+    #
+    # The code-strip / thousands-separator / sci-notation transforms are
+    # length-CHANGING, so matched spans live in transformed coordinates. We
+    # keep a boundary map (`bmap`) back to the ORIGINAL reply and store each
+    # claim's start/end in original coordinates, because downstream redaction
+    # (`_redact_uncited_phrases`) and line-number helpers slice the original
+    # reply with these offsets.
+    text, bmap = _transform_for_claims(text)
     claims: list[Claim] = []
     seen: set[tuple[int, int, float]] = set()
     for label, pattern in _PATTERNS:
@@ -621,8 +706,8 @@ def extract_claims(text: str) -> list[Claim]:
                     label=claim_label,
                     raw=match.group(0).strip(),
                     value=value,
-                    start=span[0],
-                    end=span[1],
+                    start=bmap[span[0]],
+                    end=bmap[span[1]],
                 ))
     for match in _SPELLED_NUMBER_PATTERN.finditer(text):
         value = _spelled_number_to_float(match.group(1))
@@ -632,8 +717,8 @@ def extract_claims(text: str) -> list[Claim]:
             label="spelled_number",
             raw=match.group(0).strip(),
             value=value,
-            start=match.start(),
-            end=match.end(),
+            start=bmap[match.start()],
+            end=bmap[match.end()],
         ))
 
     # L1: span-overlap dedup.  Two patterns may both match the same numeric
@@ -2289,7 +2374,12 @@ def _author_year_is_suspicious(
         if bibcode and bibcode[-1] == author_initial:
             return False
 
-    return len(matches) < 2
+    # Same-year bibcodes exist in the pool but NONE matches this author's
+    # initial and there is no author_year_support entry — the citation is not
+    # vindicated by provenance. The count of unrelated same-year bibcodes is
+    # irrelevant: a year that happens to be well-represented in the tool pool
+    # must not whitelist an arbitrary invented author for that year.
+    return True
 
 
 # Tokens that legitimately precede a 4-digit number without forming an

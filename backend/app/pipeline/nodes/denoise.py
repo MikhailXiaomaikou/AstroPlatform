@@ -56,9 +56,15 @@ def _denoise_wavelet(arr: np.ndarray, wavelet: str, level: int | None, threshold
     """Discrete wavelet transform with soft thresholding — multi-scale denoising."""
     try:
         import pywt
-    except ImportError:
-        # Fallback: use scipy's basic wavelet (less capable but always available)
-        return _denoise_savgol(arr, window_length=11, polyorder=3)
+    except ImportError as exc:
+        # Do NOT silently substitute a different algorithm: returning savgol output
+        # while denoise_stats still records method="wavelet" would attribute one
+        # algorithm's numbers to another, violating the provenance contract.
+        raise ValueError(
+            "Denoise (wavelet): the PyWavelets ('pywt') package is not installed, "
+            "so wavelet denoising is unavailable — use a different method like "
+            "savgol, gaussian, or median."
+        ) from exc
 
     # M25: refuse to operate on arrays shorter than the minimum wavelet
     # decomposition window — otherwise `pywt.dwt_max_level` returns 0 and we

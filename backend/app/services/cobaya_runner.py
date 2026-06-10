@@ -302,6 +302,7 @@ def dispatch_external_cobaya(
                 parameter_order=parameter_order,
                 sampler=sampler,
                 output_prefix=output_prefix,
+                seed=seed,
             )
             yaml_path = tmp_path / "config.yaml"
             yaml_path.write_text(yaml_text, encoding="utf-8")
@@ -363,6 +364,7 @@ def _build_cobaya_yaml(
     parameter_order: list[str],
     sampler: str,
     output_prefix: Path,
+    seed: int,
 ) -> str:
     """Render the Cobaya YAML config that step 3's resolver will hand off."""
     # NOTE: avoid pulling in pyyaml just for this; Cobaya is happy with the
@@ -415,6 +417,10 @@ def _build_cobaya_yaml(
         lines.append("  mcmc:")
         lines.append("    Rminus1_stop: 0.05")
         lines.append("    max_samples: 200000")
+        # Pin the sampler seed so the run is reproducible — the result envelope
+        # and provenance stamp this exact value as random_seed; without it the
+        # chain would draw from an unseeded RNG and the provenance claim is false.
+        lines.append(f"    seed: {int(seed)}")
     else:
         raise CobayaConfigError(
             f"unsupported cobaya sampler {sampler!r}; allowed: evaluate / mcmc"
@@ -537,12 +543,21 @@ def _parse_chain_files(
 ) -> tuple[list[np.ndarray], dict[str, Any]]:
     """Locate and parse cobaya chain files at ``output_prefix.{n}.txt``.
 
-    Each chain file is whitespace-delimited with columns::
+    Each chain file is whitespace-delimited; cobaya writes the columns in the
+    order (see ``cobaya.collection.BaseCollection``)::
 
-        weight  -log(post)  -log(prior)  param_1  param_2  ...
+        weight  -log(post)  sampled_param_1  sampled_param_2  ...  -log(prior) ...
 
-    We return one ``ndarray`` per chain shaped ``(n_draws, n_params)``
-    aligned to ``parameter_order``.
+    i.e. the sampled parameters start at column index 2 (right after weight and
+    -log(post)); -log(prior) and the chi2 columns follow *after* the parameters,
+    not before them.
+
+    We return one ``ndarray`` per chain shaped ``(n_draws, n_params)`` aligned
+    to ``parameter_order``. The first column (the Metropolis-Hastings
+    multiplicity weight) is expanded via ``np.repeat`` so each posterior draw
+    appears with its true multiplicity — every downstream summary / diagnostic
+    then operates on weight-correct draws without carrying a separate weight
+    array. (The default mcmc sampler emits temperature-1 integer weights.)
     """
     chain_paths = sorted(output_prefix.parent.glob(f"{output_prefix.name}.*.txt"))
     if not chain_paths:
@@ -558,13 +573,13 @@ def _parse_chain_files(
             arr = np.loadtxt(path)
         except Exception as exc:
             raise CobayaParseError(f"failed to parse chain file {path}: {exc}") from exc
-        if arr.ndim != 2 or arr.shape[1] < 3 + len(parameter_order):
+        if arr.ndim != 2 or arr.shape[1] < 2 + len(parameter_order):
             raise CobayaParseError(
                 f"chain file {path} has unexpected shape {arr.shape}; "
-                f"expected at least {3 + len(parameter_order)} columns "
-                "(weight, -logpost, -logprior, params...)."
+                f"expected at least {2 + len(parameter_order)} columns "
+                "(weight, -logpost, params...)."
             )
-        if column_names is not None and len(column_names) >= 3 + len(parameter_order):
+        if column_names is not None and len(column_names) >= 2 + len(parameter_order):
             indices: list[int] = []
             for name in parameter_order:
                 try:
@@ -575,7 +590,8 @@ def _parse_chain_files(
                     ) from exc
             samples = arr[:, indices]
         else:
-            samples = arr[:, 3 : 3 + len(parameter_order)]
+            samples = arr[:, 2 : 2 + len(parameter_order)]
+        samples = _expand_by_weight(samples, arr[:, 0])
         samples_per_chain.append(samples)
 
     chain_meta = {
@@ -586,19 +602,42 @@ def _parse_chain_files(
     return samples_per_chain, chain_meta
 
 
+def _expand_by_weight(samples: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """Replicate each row of ``samples`` by its integer Metropolis weight.
+
+    Cobaya's first chain column is the multiplicity weight (how many proposed
+    steps were rejected while the chain sat on that point). Summarising the
+    unweighted unique points biases every posterior median/quantile and makes
+    R̂/ESS treat a weight-N point as a single draw. Expanding by the rounded
+    integer weight reconstructs the true draw sequence so the existing
+    unweighted summary/diagnostic code is correct as-is. Rows with a zero or
+    negative weight (cobaya discards the burn-in seed point with weight 0) are
+    dropped."""
+    counts = np.rint(weights).astype(int)
+    counts = np.clip(counts, 0, None)
+    if counts.sum() == 0:
+        # Degenerate (e.g. an ``evaluate`` run with a single weight-0 row) —
+        # fall back to the raw rows so we never return an empty chain.
+        return samples
+    return np.repeat(samples, counts, axis=0)
+
+
 def _read_chain_column_names(info_path: Path) -> list[str] | None:
     """Best-effort extraction of column names from cobaya's ``.input.yaml``.
 
     cobaya does not actually emit a column header in the chain ``.txt`` file;
     the canonical mapping is encoded in the ``params:`` block of the dumped
     info YAML. Returning ``None`` falls back to positional indexing
-    (weight, -logpost, -logprior, params in order).
+    (weight, -logpost, then the sampled params in order). The sampled
+    parameters start at column index 2 in cobaya's layout — the -log(prior)
+    and chi2 columns come *after* the parameters, so no placeholder column
+    precedes them here.
     """
     try:
         text = info_path.read_text(encoding="utf-8")
     except Exception:
         return None
-    names: list[str] = ["weight", "-logpost", "-logprior"]
+    names: list[str] = ["weight", "-logpost"]
     in_params = False
     indent_param = None
     for line in text.splitlines():
@@ -617,7 +656,7 @@ def _read_chain_column_names(info_path: Path) -> list[str] | None:
             if stripped.endswith(":") and (indent_param is None or indent == indent_param):
                 indent_param = indent
                 names.append(stripped[:-1].strip())
-    return names if len(names) > 3 else None
+    return names if len(names) > 2 else None
 
 
 # ---------------------------------------------------------------------------

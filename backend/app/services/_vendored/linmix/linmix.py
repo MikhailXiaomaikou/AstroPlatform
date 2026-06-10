@@ -552,7 +552,7 @@ class LinMix(object):
                 print ("Rhat values for alpha, beta, log(sigma^2)"
                        ", mean(xi), log(var(xi)), atanh(corr(xi, eta)):")
                 print(Rhat)
-                i += checkiter
+            i += checkiter
 
         # Throw away first half of each chain
         self._build_chain(int(i/2))

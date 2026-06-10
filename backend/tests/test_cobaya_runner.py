@@ -130,6 +130,7 @@ def test_build_cobaya_yaml_has_required_sections(tmp_path: Path) -> None:
         parameter_order=["H0", "omegam"],
         sampler="evaluate",
         output_prefix=tmp_path / "chain",
+        seed=12345,
     )
     # Must contain registered cobaya_likelihood adapter name (step 2 emits
     # the original string; step 3 will translate it).
@@ -155,6 +156,7 @@ def test_build_cobaya_yaml_packages_path_when_env_set(
         parameter_order=["H0"],
         sampler="evaluate",
         output_prefix=tmp_path / "chain",
+        seed=12345,
     )
     assert "packages_path: /app/cobaya_packages" in yaml
 
@@ -169,6 +171,7 @@ def test_build_cobaya_yaml_unsupported_sampler_raises(tmp_path: Path) -> None:
             parameter_order=["H0"],
             sampler="nuts",  # unsupported
             output_prefix=tmp_path / "chain",
+            seed=12345,
         )
 
 
@@ -181,8 +184,12 @@ def test_build_cobaya_yaml_mcmc_sampler_includes_rminus1(tmp_path: Path) -> None
         parameter_order=["H0"],
         sampler="mcmc",
         output_prefix=tmp_path / "chain",
+        seed=12345,
     )
     assert "mcmc:" in yaml and "Rminus1_stop" in yaml
+    # M12: the sampler seed must be written into the YAML so the run is
+    # reproducible (the provenance envelope stamps this exact value).
+    assert "seed: 12345" in yaml
 
 
 # ---------------------------------------------------------------------------

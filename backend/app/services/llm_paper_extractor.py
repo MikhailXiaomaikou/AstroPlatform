@@ -427,8 +427,14 @@ def verify_record(
     ):
         if value is None:
             continue
-        cell_text = provenance.get(field_name) or row_text
-        ok, note = verify_value_against_text(value, cell_text)
+        # B8 anti-fabrication fix: verify the extracted value against the ACTUAL
+        # re-parsed HTML row text, NEVER the LLM's self-reported cell_provenance
+        # string. The old code matched against `provenance.get(field_name) or
+        # row_text`, so a fabricated value paired with a fabricated provenance
+        # string validated itself. cell_provenance is now used only to LOCATE the
+        # row (above); missing provenance still falls back to the real row text,
+        # where the value must genuinely appear to pass.
+        ok, note = verify_value_against_text(value, row_text)
         if not ok:
             all_passed = False
             notes.append(f"{field_name}: {note}")

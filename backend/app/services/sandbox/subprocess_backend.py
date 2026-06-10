@@ -64,6 +64,21 @@ def _child_set_limits(memory_bytes: int, cpu_seconds: int) -> None:
         if _k not in _SANDBOX_ENV_KEEP:
             os.environ.pop(_k, None)
 
+    # The os.environ scrub above is not sufficient on its own: app.config's
+    # Settings has `model_config = {"env_file": ".env"}`, so user code that
+    # does `import app.config` would have pydantic-settings re-read the on-disk
+    # .env (resolved against the child CWD) and reconstruct every stripped
+    # secret (JWT_SECRET / FERNET_KEY / API keys) despite the scrub. Disable
+    # pydantic-settings' dotenv-file reading in the child so a re-import cannot
+    # recover the secrets from disk. Best-effort: if pydantic-settings is not
+    # importable, the scrub above is still in force.
+    try:
+        from pydantic_settings.sources import DotEnvSettingsSource
+
+        DotEnvSettingsSource._read_env_files = lambda self: {}
+    except Exception:
+        pass
+
     try:
         resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
     except (ValueError, OSError):

@@ -1726,9 +1726,24 @@ def _prime_adql_context_cache(context: dict | None, python_session_id: str) -> N
         return
     from app.services.ai_tools import build_adql_result_set, replace_adql_result_sets, store_adql_result_set
 
+    # These rows come straight from the client request body (session restore),
+    # NOT from an archive query that actually ran this turn.  Stamp them so the
+    # cached payload is honestly labelled at the trust boundary and a dishonest
+    # client cannot have injected rows wear live-archive provenance.  (Consumers
+    # of latest_adql that enforce the data-source contract must honour this
+    # marker to fully downgrade the provenance — see cross-file note.)
+    def _mark_client_restored(item: dict) -> dict:
+        marked = dict(item)
+        marked["data_origin"] = "client_restored"
+        marked["restored_from_client"] = True
+        return marked
+
     last_adql_result_sets = context.get("last_adql_result_sets")
     if isinstance(last_adql_result_sets, list) and last_adql_result_sets:
-        replace_adql_result_sets(python_session_id, [item for item in last_adql_result_sets if isinstance(item, dict)])
+        replace_adql_result_sets(
+            python_session_id,
+            [_mark_client_restored(item) for item in last_adql_result_sets if isinstance(item, dict)],
+        )
         return
 
     last_adql_rows = context.get("last_adql_rows")
@@ -1766,7 +1781,7 @@ def _prime_adql_context_cache(context: dict | None, python_session_id: str) -> N
         row_count=row_count,
         limit=len(last_adql_rows),
     )
-    store_adql_result_set(python_session_id, result_set)
+    store_adql_result_set(python_session_id, _mark_client_restored(result_set))
 
 
 def _extract_successful_python_history(messages: list[ChatMessage]) -> list[str]:
@@ -3550,7 +3565,7 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
             keys.append("sdss_6df_bao")
         else:
             keys.append("desi_dr1_bao")
-    if any(tok in prompt for tok in ("pantheon", "supernova", "sn ia", "sn")):
+    if any(tok in prompt for tok in ("pantheon", "supernova", "sn ia")) or re.search(r"\bsn\b", prompt):
         keys.append("pantheon_plus")
     if any(tok in prompt for tok in ("des-sn", "des sn", "des-5yr", "des 5yr", "desy5")):
         keys.append("des_sn5yr")
@@ -3585,7 +3600,7 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
     if _cosmology_prompt_mentions_weak_lensing(prompt) and not specific_wl_requested:
         for key in ("kids1000_wl", "des_y3_3x2pt", "hsc_y1_cosmic_shear"):
             keys.append(key)
-    if "chronometer" in prompt or "cc" in prompt:
+    if "chronometer" in prompt or re.search(r"\bcc\b", prompt):
         keys.append("cosmic_chronometers")
     explicit_h0_prior_selected = False
     if "trgb" in prompt or "freedman" in prompt:
@@ -3633,7 +3648,7 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
 def _cosmology_supernova_sets_from_prompt(text: str) -> list[str]:
     prompt = str(text or "").lower()
     keys: list[str] = []
-    if any(tok in prompt for tok in ("pantheon", "supernova", "sn ia", "sn")):
+    if any(tok in prompt for tok in ("pantheon", "supernova", "sn ia")) or re.search(r"\bsn\b", prompt):
         keys.append("pantheon_plus")
     if any(tok in prompt for tok in ("des-sn", "des sn", "des-5yr", "des 5yr", "desy5")):
         keys.append("des_sn5yr")
@@ -5049,6 +5064,12 @@ async def _run_agent_loop(
         if tool_calls_in_turn and abstention_text_in_prose:
             break
         if not tool_calls_in_turn:
+            # C-X1 path 1: this is the common truncation case — the model's
+            # final text turn was cut off by max_tokens / length with no
+            # tool_use blocks.  Record the stop_reason here so the truncation
+            # gate below can detect it; the assignment further down only runs
+            # when tool calls were present.
+            last_stop_reason = response.get("stop_reason")
             break
 
         assistant_content = []
@@ -5535,7 +5556,27 @@ async def _run_agent_loop(
     # against the tool_results collected this turn; if any claim can't be
     # cited, push the LLM to regenerate.  After two failures, block.
     fabrication_stats = {"pass": 0, "blocked": False, "regenerations": 0}
-    if clean_reply.strip() and not skip_claim_gate_for_meta:
+    # The tool-inventory bypass exists so describing the real tool schema
+    # (tool names, parameter defaults, counts) is not false-flagged by the
+    # numeric/citation gate.  But it must NOT become a phrasing-conditioned
+    # escape hatch: a prompt like "what tools are available, and what is the
+    # Planck H0?" matches the inventory markers yet the reply can still ship
+    # a fabricated scientific number / citation.  So only honor the skip when
+    # the reply does not trip the load-bearing hard gates (zero-data
+    # quantitative block + blocking citation violations); otherwise run the
+    # full gate regardless of how the prompt was phrased.
+    skip_gate = skip_claim_gate_for_meta
+    if skip_gate and clean_reply.strip():
+        from app.services.claim_validator import (
+            zero_data_but_quantitative as _zdq_meta,
+            provenance_citation_violations as _pcv_meta,
+            citation_violations_should_block as _cvsb_meta,
+        )
+        if _zdq_meta(clean_reply, all_tool_results) or _cvsb_meta(
+            _pcv_meta(clean_reply, all_tool_results)
+        ):
+            skip_gate = False
+    if clean_reply.strip() and not skip_gate:
         from app.services.claim_validator import (
             validate_claims,
             build_regeneration_prompt,

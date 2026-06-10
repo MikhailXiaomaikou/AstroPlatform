@@ -67,6 +67,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      ENV: production
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
       MINIO_ENDPOINT: minio:9000
@@ -94,6 +95,7 @@ services:
       dockerfile: Dockerfile
     command: celery -A celery_worker worker --loglevel=info --concurrency=4
     environment:
+      ENV: production
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
       MINIO_ENDPOINT: minio:9000

@@ -6,6 +6,11 @@ import astropy.units as u
 
 SUPPORTED_FRAMES = ["icrs", "galactic", "ecliptic", "fk5", "fk4"]
 
+# Map user-facing frame names onto valid astropy frame names. astropy has no
+# plain "ecliptic" frame; "ecliptic" denotes barycentric true ecliptic
+# coordinates (lon/lat). Names not in this table pass through unchanged.
+_ASTROPY_FRAME_ALIASES = {"ecliptic": "barycentrictrueecliptic"}
+
 
 def coord_transform(input_data: dict, params: dict) -> dict:
     """Transform coordinates from one frame to another.
@@ -48,8 +53,13 @@ def coord_transform(input_data: dict, params: dict) -> dict:
             f"[{float(_np.nanmin(_dec_arr)):.3f}, {float(_np.nanmax(_dec_arr)):.3f}]."
         )
 
-    coords = SkyCoord(ra=ra_vals, dec=dec_vals, unit=(u.degree, u.degree), frame=from_frame)
-    transformed = coords.transform_to(to_frame)
+    coords = SkyCoord(
+        ra=ra_vals,
+        dec=dec_vals,
+        unit=(u.degree, u.degree),
+        frame=_ASTROPY_FRAME_ALIASES.get(from_frame, from_frame),
+    )
+    transformed = coords.transform_to(_ASTROPY_FRAME_ALIASES.get(to_frame, to_frame))
 
     output_data = dict(data)
 

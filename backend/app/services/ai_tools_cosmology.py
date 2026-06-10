@@ -14,6 +14,7 @@ imported here to avoid an import cycle, consistent with the sibling modules.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -612,9 +613,11 @@ async def _cosmology_rows_from_input(
     if not cache_key:
         raise ValueError("fit_cosmology_mcmc requires rows or cache_key")
     session_key = _session_cache_key(cache_key, python_session_id)
+    # Read ONLY the session-scoped key when a session exists. The bare global key
+    # (e.g. "latest" / "latest_adql") is written by every user's search in the
+    # shared single-worker result cache; falling back to it would silently feed
+    # one user's session another user's cached rows and stamp them cached_real.
     payload = get_cached_results(session_key or cache_key)
-    if payload is None and session_key:
-        payload = get_cached_results(cache_key)
     if payload is None:
         raise ValueError(f"No cached rows found for cache_key={cache_key!r}")
     if isinstance(payload, list):
@@ -750,7 +753,28 @@ async def _exec_compute_theory_cmb_spectrum(inp: dict) -> dict:
 
     try:
         async with _CAMB_LOCK:
-            return await asyncio.to_thread(compute_theory_cmb_spectrum, inp)
+            # asyncio.to_thread cannot interrupt the worker thread: if this
+            # coroutine is cancelled (per-tool deadline, endpoint timeout, SSE
+            # disconnect) the CAMB Fortran kernel keeps running in the thread.
+            # Releasing _CAMB_LOCK now would let the next call start get_results()
+            # concurrently with the orphan — the exact condition measured to
+            # segfault 8/8. So on cancellation we shield the thread to completion
+            # (it cannot be stopped anyway) BEFORE releasing the lock, then
+            # re-raise so the cancellation still propagates to the caller.
+            compute_task = asyncio.ensure_future(
+                asyncio.to_thread(compute_theory_cmb_spectrum, inp)
+            )
+            try:
+                return await asyncio.shield(compute_task)
+            except asyncio.CancelledError:
+                # Drain the (uninterruptible) thread to completion before the
+                # lock releases, swallowing any re-delivered cancellation so a
+                # double-cancel cannot release the lock with the thread still in
+                # camb.get_results().
+                while not compute_task.done():
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await asyncio.shield(compute_task)
+                raise
     except TheorySpectrumError as exc:
         return {
             "success": False,
@@ -1123,19 +1147,30 @@ async def dispatch_cosmology(
         # (fit_cosmology_emcee / compute_theory_cmb_spectrum) that use to_thread.
         return await asyncio.to_thread(_exec_run_cosmology_likelihood_chain, tool_input)
     elif tool_name == "run_cmb_rotation_likelihood":
-        return _exec_run_cmb_rotation_likelihood(tool_input)
+        # Off the event loop (mirror run_cosmology_likelihood_chain): this runs a
+        # blocking sampler that can take seconds-to-minutes; a sync call would
+        # freeze the async worker (all chats / SSE heartbeats) and starve the
+        # per-tool deadline, which can only fire at an await point.
+        return await asyncio.to_thread(_exec_run_cmb_rotation_likelihood, tool_input)
     elif tool_name == "run_nested_sampler":
-        return _exec_run_nested_sampler(tool_input)
+        # Off the event loop: dynesty run_nested() blocks for tens of seconds to
+        # minutes (nlive/maxiter/dlogz driven). See run_cosmology_likelihood_chain.
+        return await asyncio.to_thread(_exec_run_nested_sampler, tool_input)
     elif tool_name == "evaluate_chain_diagnostics":
         return _exec_evaluate_chain_diagnostics(tool_input)
     elif tool_name == "build_cosmology_robustness_matrix":
         return _exec_build_cosmology_robustness_matrix(tool_input)
     elif tool_name == "run_cosmology_robustness_matrix":
-        return _exec_run_cosmology_robustness_matrix(tool_input)
+        # Off the event loop: runs a sampler per matrix cell (~11 s/cell), so a
+        # multi-cell matrix blocks for ~1 min. See run_cosmology_likelihood_chain.
+        return await asyncio.to_thread(_exec_run_cosmology_robustness_matrix, tool_input)
     elif tool_name == "assess_bao_bin_anomaly":
         return _exec_assess_bao_bin_anomaly(tool_input)
     elif tool_name == "audit_published_constraint":
-        return _exec_audit_published_constraint(tool_input)
+        # Off the event loop: calls run_likelihood_chain, which with
+        # EXTERNAL_COBAYA_ENABLED spawns a minutes-long blocking subprocess. See
+        # run_cosmology_likelihood_chain.
+        return await asyncio.to_thread(_exec_audit_published_constraint, tool_input)
     elif tool_name == "compute_theory_cmb_spectrum":
         return await _exec_compute_theory_cmb_spectrum(tool_input)
     return None

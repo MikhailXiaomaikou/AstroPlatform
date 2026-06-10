@@ -281,10 +281,15 @@ def fit_template_enhanced(
     obs_mags = np.array([magnitudes[b] for b in bands])
     obs_errs = np.array([mag_errors.get(b, 0.1) for b in bands])
 
-    # Filter out invalid measurements
-    valid = np.isfinite(obs_mags) & (obs_mags < 90) & (obs_errs > 0)
+    # Filter out invalid measurements.  Bands with no synthetic-photometry filter
+    # in _FILTER_PARAMS yield NaN model magnitudes (_synthetic_mag), which would be
+    # silently dropped from chi2 by nansum while still inflating the offset
+    # denominator, n_bands, and ndof.  Exclude them up front so "data used" equals
+    # "data contributing chi2".  Filter membership is z-independent.
+    known_filter = np.array([b in _FILTER_PARAMS for b in bands])
+    valid = np.isfinite(obs_mags) & (obs_mags < 90) & (obs_errs > 0) & known_filter
     if np.sum(valid) < 2:
-        return {"error": "Need at least 2 valid photometric bands"}
+        return {"error": "Need at least 2 valid photometric bands with a known filter"}
 
     templates = _generate_sed_templates()
     z_grid = np.arange(z_range[0], z_range[1] + z_step, z_step)
@@ -294,7 +299,7 @@ def fit_template_enhanced(
     best_z = 0.0
     best_template_name = ""
     best_ebv = 0.0
-    pz = np.zeros(len(z_grid))
+    chi2_grids: list[np.ndarray] = []
 
     for tmpl in templates:
         for ebv in ebv_grid:
@@ -320,12 +325,14 @@ def fit_template_enhanced(
                 # Compute synthetic magnitudes
                 model_mags = np.array([_synthetic_mag(wave_obs, flux, b) for b in bands])
 
-                # Analytical amplitude/offset marginalization
-                offset = np.nansum((obs_mags[valid] - model_mags[valid]) / obs_errs[valid]**2) / \
-                         np.nansum(1.0 / obs_errs[valid]**2)
+                # Analytical amplitude/offset marginalization.  The `valid` mask
+                # already excludes bands with NaN model magnitudes, so numerator,
+                # denominator, and chi2 sum over an identical band set.
+                offset = np.sum((obs_mags[valid] - model_mags[valid]) / obs_errs[valid]**2) / \
+                         np.sum(1.0 / obs_errs[valid]**2)
                 model_mags_shifted = model_mags + offset
 
-                chi2 = np.nansum(((obs_mags[valid] - model_mags_shifted[valid]) / obs_errs[valid]) ** 2)
+                chi2 = np.sum(((obs_mags[valid] - model_mags_shifted[valid]) / obs_errs[valid]) ** 2)
                 chi2_z[iz] = chi2
 
                 if chi2 < best_chi2:
@@ -334,8 +341,16 @@ def fit_template_enhanced(
                     best_template_name = tmpl["name"]
                     best_ebv = ebv
 
-            # Accumulate P(z)
-            pz += np.exp(-0.5 * (chi2_z - np.min(chi2_z)))
+            chi2_grids.append(chi2_z)
+
+    # Accumulate P(z) = sum over (template, E(B-V)) of exp(-0.5 * chi2), with the
+    # GLOBAL minimum chi2 subtracted for numerical stability.  Subtracting each
+    # combo's own per-z minimum would make every template peak at 1.0 regardless
+    # of absolute fit quality, turning P(z) into a template head-count instead of
+    # a likelihood (see photo_z.py for the same convention).
+    pz = np.zeros(len(z_grid))
+    for chi2_z in chi2_grids:
+        pz += np.exp(-0.5 * (chi2_z - best_chi2))
 
     # Apply prior
     if prior == "magnitude" and "i" in magnitudes:

@@ -177,7 +177,8 @@ function buildPlot(
   const ra = (data.ra || []) as number[];
   const dec = (data.dec || []) as number[];
   const names = (data.names || []) as string[];
-  const redshift = ((data.redshift || []) as (number | null)[]).filter((v): v is number => v != null && v === v);
+  const redshiftRaw = (data.redshift || []) as (number | null)[];
+  const redshift = redshiftRaw.filter((v): v is number => v != null && v === v);
   const magnitude = ((data.magnitude || []) as (number | null)[]).filter((v): v is number => v != null && v === v);
 
   if (chartType === "sky_coverage") {
@@ -283,14 +284,21 @@ function buildPlot(
   }
 
   if (chartType === "ra_dec_redshift") {
-    const n = Math.min(ra.length, dec.length, redshift.length);
+    const m = Math.min(ra.length, dec.length, redshiftRaw.length);
+    const xd: number[] = [], yd: number[] = [], zd: number[] = [], td: string[] = [];
+    for (let i = 0; i < m; i++) {
+      const z = redshiftRaw[i];
+      if (z == null || z !== z || !Number.isFinite(ra[i]) || !Number.isFinite(dec[i])) continue;
+      xd.push(ra[i]); yd.push(dec[i]); zd.push(z); td.push(names[i]);
+    }
+    const n = xd.length;
     if (n === 0) return { data: [], layout: mkLayout("Insufficient data", mkAxis(""), mkAxis("")) };
     return {
       data: [{
         type: "scattergl", mode: "markers",
-        x: ra.slice(0, n), y: dec.slice(0, n), text: names.slice(0, n),
+        x: xd, y: yd, text: td,
         marker: {
-          size: 6, symbol: "circle", color: redshift.slice(0, n),
+          size: 6, symbol: "circle", color: zd,
           colorscale: "Turbo", showscale: true,
           colorbar: mkColorbar("<i>z</i>"),
           line: { width: 0.5, color: "rgba(0,0,0,0.12)" },
@@ -306,12 +314,18 @@ function buildPlot(
   }
 
   if (chartType === "redshift_ra") {
-    const n = Math.min(ra.length, redshift.length);
+    const m = Math.min(ra.length, redshiftRaw.length);
+    const xd: number[] = [], yd: number[] = [], nd: string[] = [];
+    for (let i = 0; i < m; i++) {
+      const z = redshiftRaw[i];
+      if (z == null || z !== z || !Number.isFinite(ra[i])) continue;
+      xd.push(ra[i]); yd.push(z); nd.push(names[i]);
+    }
+    const n = xd.length;
     if (n === 0) return { data: [], layout: mkLayout("No data", mkAxis(""), mkAxis("")) };
-    const xd = ra.slice(0, n), yd = redshift.slice(0, n);
     const traces: Record<string, unknown>[] = [{
       type: "scattergl", mode: "markers",
-      x: xd, y: yd, text: names.slice(0, n),
+      x: xd, y: yd, text: nd,
       marker: { size: 5, color: COLORS.green, symbol: "circle", line: { width: 0.5, color: "rgba(0,0,0,0.12)" }, opacity: 0.82 },
       hovertemplate: "<b>%{text}</b><br>RA = %{x:.5f} deg<br><i>z</i> = %{y:.4f}<extra></extra>",
     }];
@@ -337,12 +351,18 @@ function buildPlot(
   }
 
   if (chartType === "redshift_dec") {
-    const n = Math.min(dec.length, redshift.length);
+    const m = Math.min(dec.length, redshiftRaw.length);
+    const xd: number[] = [], yd: number[] = [], nd: string[] = [];
+    for (let i = 0; i < m; i++) {
+      const z = redshiftRaw[i];
+      if (z == null || z !== z || !Number.isFinite(dec[i])) continue;
+      xd.push(dec[i]); yd.push(z); nd.push(names[i]);
+    }
+    const n = xd.length;
     if (n === 0) return { data: [], layout: mkLayout("No data", mkAxis(""), mkAxis("")) };
-    const xd = dec.slice(0, n), yd = redshift.slice(0, n);
     const traces: Record<string, unknown>[] = [{
       type: "scattergl", mode: "markers",
-      x: xd, y: yd, text: names.slice(0, n),
+      x: xd, y: yd, text: nd,
       marker: { size: 5, color: COLORS.purple, symbol: "circle", line: { width: 0.5, color: "rgba(0,0,0,0.12)" }, opacity: 0.82 },
       hovertemplate: "<b>%{text}</b><br>Dec = %{x:.5f} deg<br><i>z</i> = %{y:.4f}<extra></extra>",
     }];
@@ -400,7 +420,7 @@ function buildPlot(
     } else if (hasColCI("phot_bp_mean_mag") && hasColCI("phot_rp_mean_mag")) {
       const bp = numCol("phot_bp_mean_mag");
       const rp = numCol("phot_rp_mean_mag");
-      bpRp = bp.map((v, i) => v - (rp[i] ?? 0));
+      bpRp = bp.map((v, i) => (Number.isFinite(v) && Number.isFinite(rp[i]) ? v - rp[i] : NaN));
     }
     // Auto-detect Y: abs_g_mag directly, or compute from phot_g_mean_mag + 5*log10(parallax/1000)+5
     let absG: number[] | null = null;
@@ -411,7 +431,7 @@ function buildPlot(
       const plx = numCol("parallax");
       absG = gMag.map((g, i) => {
         const p = plx[i];
-        if (!p || p <= 0) return NaN;
+        if (!Number.isFinite(g) || !p || p <= 0) return NaN;
         return g + 5 * Math.log10(p / 1000) + 5;
       });
     }

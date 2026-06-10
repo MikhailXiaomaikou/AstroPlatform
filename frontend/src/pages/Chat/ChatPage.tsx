@@ -2686,7 +2686,19 @@ function serializeStored(messages: DisplayMessage[]): StoredMessage[] {
     id: m.id,
     role: m.role,
     content: m.content,
-    actions: m.actions,
+    // _pruneToolResults mutates tool_result objects in place (delete heavy
+    // fields, replace figures with a marker).  Clone the actions array and
+    // each action's tool_result so the pruner never touches the live React
+    // state objects we are still rendering — otherwise an over-cap save
+    // would blank out tool cards mid-session.
+    actions: m.actions?.map((a) => {
+      const rec = a as Record<string, unknown>;
+      const tr = rec.tool_result;
+      if (tr && typeof tr === "object") {
+        return { ...rec, tool_result: { ...(tr as Record<string, unknown>) } } as unknown as ChatAction;
+      }
+      return { ...rec } as unknown as ChatAction;
+    }),
     actionResults: m.actionResults ? Array.from(m.actionResults.entries()) : undefined,
     _pending: m._pending,
   }));
@@ -2741,6 +2753,12 @@ function _pruneToolResults(stored: StoredMessage[]): boolean {
               }
             } else if (trObj[key] !== undefined) {
               delete trObj[key];
+              // Mark that a heavy non-figure field was offloaded so the
+              // boot-time server rehydrate fires (it gates on __offloaded__
+              // / __figures_offloaded__ / __fields_offloaded__).  Without
+              // this marker, rows/data/results stripped here would render as
+              // empty after reload and never be refetched from the server.
+              trObj.__fields_offloaded__ = true;
               changed = true;
             }
           }
@@ -3556,11 +3574,16 @@ export default function ChatPage() {
       initialMessages = loadChatHistory(storageScope);
     }
 
-    const draft = localStorage.getItem(draftKey);
+    // The scoped draft key is written by ChatPage itself; the legacy unscoped
+    // key (CHAT_DRAFT_STORAGE_KEY) is what cross-page "Send to AI Assistant"
+    // writers (AlertDashboard, AnomalyExplorer, FITSBrowser) still use.  Read
+    // the scoped key first, fall back to the unscoped one so those prefills are
+    // not silently discarded, then clear both.
+    const draft = localStorage.getItem(draftKey) ?? localStorage.getItem(CHAT_DRAFT_STORAGE_KEY);
     if (draft) {
       setInput(draft);
-      localStorage.removeItem(draftKey);
     }
+    localStorage.removeItem(draftKey);
     localStorage.removeItem(CHAT_DRAFT_STORAGE_KEY);
 
     // One-time migration: legacy `astro_chat_autosave_draft` is retired; fold
@@ -3593,7 +3616,9 @@ export default function ChatPage() {
       (m.actions || []).some((a) => {
         const tr = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
         if (!tr || typeof tr !== "object") return false;
-        return tr.__offloaded__ === true || tr.__figures_offloaded__ !== undefined;
+        return tr.__offloaded__ === true
+          || tr.__figures_offloaded__ !== undefined
+          || tr.__fields_offloaded__ === true;
       }),
     );
     if (!needRefreshResume && !needFigureRehydrate) return;
@@ -3637,7 +3662,9 @@ export default function ChatPage() {
               const locallyOffloaded = m.actions.some((a) => {
                 const tr = (a as Record<string, unknown>).tool_result as Record<string, unknown> | undefined;
                 return tr && typeof tr === "object" && (
-                  tr.__offloaded__ === true || tr.__figures_offloaded__ !== undefined
+                  tr.__offloaded__ === true
+                  || tr.__figures_offloaded__ !== undefined
+                  || tr.__fields_offloaded__ === true
                 );
               });
               if (!locallyOffloaded) return m;

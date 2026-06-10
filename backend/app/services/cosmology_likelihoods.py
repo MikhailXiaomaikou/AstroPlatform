@@ -794,7 +794,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         independence_group="pantheon_plus_sn",
         claimable_parameters=("H0", "omegam", "M_B"),
         recommended_combinations=("desi_dr1_bao", "planck2018_compressed"),
-        do_not_combine_with=("des_sn5yr", "union3"),
+        # The compressed Pantheon+ spec IS the SH0ES-calibrated branch (its H0 mean
+        # 73.04 ± 1.04 is the Riess+2022 SH0ES value), so co-adding the standalone
+        # SH0ES H0 prior double-counts the identical measurement and halves the H0
+        # variance. Keep them as robustness alternatives, never a joint fit.
+        do_not_combine_with=("des_sn5yr", "union3", "shoes_h0_riess22"),
     ),
     "des_sn5yr": CosmologyDatasetEntry(
         key="des_sn5yr",
@@ -1981,6 +1985,17 @@ def build_robustness_matrix(
         ("CMB only", ["planck2018_compressed"]),
         ("BAO + CMB", ["desi_dr1_bao", "planck2018_compressed"]),
     ]
+    if include_weak_lensing:
+        base_combos.append((
+            "BAO + CMB + weak lensing",
+            [
+                "desi_dr1_bao",
+                "planck2018_compressed",
+                "kids1000_wl",
+                "des_y3_3x2pt",
+                "hsc_y1_cosmic_shear",
+            ],
+        ))
     for sn_key in sn_keys:
         label = get_cosmology_dataset(sn_key).display_name
         if sn_key != sn_keys[0]:
@@ -3812,6 +3827,20 @@ def _sampling_parameter_order(
     for param in _compressed_parameter_order(compressed_entries):
         if param not in order:
             order.append(param)
+    # The planck2018_compressed de_flat branch in _compressed_chi2_samples swaps the
+    # geometric Planck spec for the (R, l_A, ombh2) distance prior on extended FLAT
+    # dark-energy chains, and that prior reads an ombh2 column. ombh2 is deliberately
+    # kept out of RUNNER_PARAMETER_PRIORS / _compressed_parameter_order, so add it here
+    # only when that exact branch will fire — otherwise the prior is unreachable and
+    # Planck silently contributes zero chi2. Keep this predicate in lockstep with the
+    # de_flat gate in _compressed_chi2_samples.
+    planck_de_flat = (
+        any(e.key == "planck2018_compressed" for e in compressed_entries)
+        and any(p in order for p in ("w", "w0", "wa"))
+        and "omegak" not in order
+    )
+    if planck_de_flat and "ombh2" not in order:
+        order.append("ombh2")
     preferred = ["H0", "omegam", "rd", "w", "w0", "wa", "sigma8", "S8", "M_B"]
     ordered = [param for param in preferred if param in order] + [
         param for param in order if param not in preferred

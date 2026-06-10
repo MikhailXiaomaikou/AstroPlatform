@@ -285,7 +285,10 @@ class CrossMatchEngine:
         u_module,
     ) -> pd.DataFrame:
         """Find all pairs within radius using search_around_sky."""
-        idx1, idx2, sep, _ = c1.search_around_sky(
+        # c1.search_around_sky(c2) returns indices in argument-then-caller
+        # order: (idx_into_c2, idx_into_c1, ...). Bind them so idx1 indexes
+        # t1/c1 and idx2 indexes t2/c2, matching how they are used below.
+        idx2, idx1, sep, _ = c1.search_around_sky(
             c2, radius_arcsec * u_module.arcsec
         )
 

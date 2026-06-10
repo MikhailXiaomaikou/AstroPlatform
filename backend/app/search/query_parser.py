@@ -258,8 +258,10 @@ _RE_Z_LT = re.compile(
     r"\bz\s*(?:<|<=|≤|less\s+than)\s*(\d+(?:\.\d+)?)", re.IGNORECASE
 )
 # Matches: z = 2-3, z=2..3, z 2-3, redshift 2-3
+# Separator is a dash/en-dash, the word "to", or two-or-more dots — never a
+# single "." (which would split a decimal redshift like z=2.5 into a fake range).
 _RE_Z_RANGE = re.compile(
-    r"\b(?:z|redshift)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*[-–\.\.to]+\s*(\d+(?:\.\d+)?)",
+    r"\b(?:z|redshift)\s*[=:]?\s*(\d+(?:\.\d+)?)\s*(?:[-–]+|\.{2,}|to)\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 # Matches: z = 6, z=6.5, z ~ 7

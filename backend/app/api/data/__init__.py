@@ -145,8 +145,6 @@ def _astro_to_result(obj: AstroObject) -> SearchResult:
     extra = _sanitize_extra(obj.extra) if obj.extra else {}
     raw_z_source = extra.get("z_source")
     z_source = raw_z_source if raw_z_source in {"spectroscopic", "photometric"} else None
-    if z_source is None and redshift is not None:
-        z_source = "spectroscopic"
     photo_z = _safe_float(extra.get("photo_z"))
     if z_source == "photometric" and photo_z is None:
         photo_z = redshift

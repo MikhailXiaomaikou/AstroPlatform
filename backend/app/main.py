@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.alerts import router as alerts_router
 from app.api.anomalies import router as anomalies_router
@@ -471,6 +472,10 @@ async def monitor_requests(request, call_next):
 # Rate limiting
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# SlowAPIMiddleware must be installed for the limiter's default_limits
+# ("100/minute") to be enforced on undecorated routes. Without it, only
+# routes explicitly decorated with @limiter.limit(...) are throttled.
+app.add_middleware(SlowAPIMiddleware)
 
 # CORS
 app.add_middleware(

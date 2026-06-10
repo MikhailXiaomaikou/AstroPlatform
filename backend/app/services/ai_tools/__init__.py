@@ -3003,8 +3003,8 @@ async def _exec_query_gaia_cluster(inp: dict, python_session_id: str) -> dict:
         try:
             from app.services.name_resolver import resolve_name
             resolved = await resolve_name(str(center_name))
-            if resolved is not None:
-                ra, dec = resolved
+            if resolved.resolved:
+                ra, dec = resolved.ra, resolved.dec
         except Exception as e:
             logger.info("query_gaia_cluster: name resolver failed: %s", e)
 
@@ -3154,6 +3154,13 @@ async def _exec_get_extinction(inp: dict) -> dict:
             "r_v": r_v,
             "method": method,
         }
+        if method == "analytic_fallback":
+            # Toy formula, not an archive/checksummed lookup — must NOT enter
+            # the claimable numeric universe wearing real-archive provenance.
+            # Stamp SYNTHETIC so normalize_tool_result preserves it and
+            # claim_validator excludes it from claimable success.
+            out["data_origin"] = "synthetic"
+            out["analysis_status"] = "simulated_demo"
         if note:
             out["note"] = note
             out["warnings"] = [note]

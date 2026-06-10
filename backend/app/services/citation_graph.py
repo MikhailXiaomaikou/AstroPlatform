@@ -1,5 +1,6 @@
 """Citation graph builder — constructs a network of references and citations via NASA ADS."""
 
+import asyncio
 import os
 import logging
 
@@ -53,20 +54,8 @@ def _doc_to_node(doc: dict, in_original_set: bool) -> dict:
     }
 
 
-async def build_citation_graph(bibcodes: list[str], depth: int = 1) -> dict:
-    """Build a citation graph for a set of bibcodes.
-
-    Returns a graph dict with nodes, edges, and stats.
-    If ADS_API_KEY is not set, returns an empty graph with an info message.
-    """
-    if not ADS_API_KEY:
-        return {
-            "nodes": [],
-            "edges": [],
-            "stats": {"total_nodes": 0, "total_edges": 0},
-            "info": "ADS_API_KEY not configured. Set ADS_API_KEY environment variable to enable citation graph.",
-        }
-
+def _build_citation_graph_sync(bibcodes: list[str], depth: int = 1) -> dict:
+    """Synchronous BFS graph builder (runs off the event loop via asyncio.to_thread)."""
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
     seen_edges: set[tuple[str, str]] = set()
@@ -144,3 +133,23 @@ async def build_citation_graph(bibcodes: list[str], depth: int = 1) -> dict:
         "edges": edges,
         "stats": {"total_nodes": len(node_list), "total_edges": len(edges)},
     }
+
+
+async def build_citation_graph(bibcodes: list[str], depth: int = 1) -> dict:
+    """Build a citation graph for a set of bibcodes.
+
+    Returns a graph dict with nodes, edges, and stats.
+    If ADS_API_KEY is not set, returns an empty graph with an info message.
+
+    The BFS issues many sequential blocking ADS HTTP queries, so it runs in a
+    worker thread (asyncio.to_thread) to avoid stalling the event loop.
+    """
+    if not ADS_API_KEY:
+        return {
+            "nodes": [],
+            "edges": [],
+            "stats": {"total_nodes": 0, "total_edges": 0},
+            "info": "ADS_API_KEY not configured. Set ADS_API_KEY environment variable to enable citation graph.",
+        }
+
+    return await asyncio.to_thread(_build_citation_graph_sync, bibcodes, depth)

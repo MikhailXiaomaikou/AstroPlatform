@@ -206,16 +206,30 @@ class VizierConnector(BaseConnector):
         for row in table:
             ra = 0.0
             dec = 0.0
+            ra_ok = False
+            dec_ok = False
             if ra_col:
                 try:
                     ra = float(row[ra_col])
+                    ra_ok = True
                 except (ValueError, TypeError):
                     pass
             if dec_col:
                 try:
                     dec = float(row[dec_col])
+                    dec_ok = True
                 except (ValueError, TypeError):
                     pass
+            # When a coordinate could not be parsed (missing column or
+            # non-numeric value, e.g. sexagesimal "00 42 44.3"), the 0.0
+            # default is NOT a real position. Flag it via _validation_warnings
+            # so the fabricated (0,0) never reaches the user wearing a clean
+            # badge instead of passing silently through downstream validation.
+            coord_warnings: list[str] = []
+            if not ra_ok:
+                coord_warnings.append("ra unresolved (no numeric RA column); 0.0 is a placeholder")
+            if not dec_ok:
+                coord_warnings.append("dec unresolved (no numeric Dec column); 0.0 is a placeholder")
 
             # Try to find an identifier column
             name = ""
@@ -239,6 +253,10 @@ class VizierConnector(BaseConnector):
                     except (ValueError, TypeError):
                         pass
 
+            extra: dict = {"_provenance_dataset": provenance_dataset} if provenance_dataset else {}
+            if coord_warnings:
+                extra["_validation_warnings"] = coord_warnings
+
             objects.append(
                 AstroObject(
                     source="vizier",
@@ -247,7 +265,7 @@ class VizierConnector(BaseConnector):
                     ra=ra,
                     dec=dec,
                     magnitude=mag,
-                    extra={"_provenance_dataset": provenance_dataset} if provenance_dataset else {},
+                    extra=extra,
                 )
             )
         return objects

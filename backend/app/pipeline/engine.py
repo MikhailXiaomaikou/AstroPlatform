@@ -257,9 +257,22 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
                     node_results[node_id] = {"error": f"Skipped: upstream node(s) failed — {err_msgs}", "node_id": node_id}
                     continue
                 input_data = {}
+                merged_data: dict = {}
                 for pid in parents:
                     if pid in node_results:
-                        input_data.update(node_results[pid])
+                        parent_result = node_results[pid]
+                        # Column dicts from every parent must survive: a shallow
+                        # update would let the last edge's "data" clobber earlier
+                        # parents' columns (e.g. CrossMatch losing catalog 1).
+                        # Only DICT `data` (column tables) is merged; list `data`
+                        # (image arrays from CCD-reduction nodes, plot traces)
+                        # passes through unchanged via the top-level update below.
+                        pdata = parent_result.get("data")
+                        if isinstance(pdata, dict):
+                            merged_data.update(pdata)
+                        input_data.update(parent_result)
+                if merged_data:
+                    input_data["data"] = merged_data
 
                 # Propagate uncertainties from parent nodes
                 parent_uncertainties = {}
@@ -512,9 +525,22 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                         })
                         continue
                     input_data = {}
+                    merged_data: dict = {}
                     for pid in parents:
                         if pid in node_results:
-                            input_data.update(node_results[pid])
+                            parent_result = node_results[pid]
+                            # Column dicts from every parent must survive: a shallow
+                            # update would let the last edge's "data" clobber earlier
+                            # parents' columns (e.g. CrossMatch losing catalog 1).
+                            # Only DICT `data` (column tables) is merged; list
+                            # `data` (image arrays, plot traces) passes through
+                            # unchanged via the top-level update below.
+                            pdata = parent_result.get("data")
+                            if isinstance(pdata, dict):
+                                merged_data.update(pdata)
+                            input_data.update(parent_result)
+                    if merged_data:
+                        input_data["data"] = merged_data
 
                     # Propagate uncertainties from parent nodes
                     parent_uncertainties = {}

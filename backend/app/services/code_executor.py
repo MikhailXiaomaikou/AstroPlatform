@@ -493,6 +493,44 @@ BLOCKED_MODULES = {
     "socket", "http", "urllib", "requests", "httpx",
 }
 
+# Dunder attributes that turn an injected, fully-privileged library object
+# (np, curve_fit, Table, …) into a sandbox escape: any of them reaches the
+# real, unrestricted builtins via the object's own module __globals__ /
+# class hierarchy, never the restricted sandbox dict. AI-generated code (the
+# untrusted surface) has no legitimate reason to touch these, so any
+# reference — whether `f.__globals__` or `getattr(f, "__globals__")` — is
+# rejected before exec on the in-process path.
+BLOCKED_DUNDER_ATTRS = {
+    "__globals__", "__subclasses__", "__bases__", "__mro__",
+    "__class__", "__builtins__", "__import__", "__base__",
+    "__getattribute__", "__code__", "__closure__", "__func__",
+    "__self__",
+}
+
+
+def _screen_dunder_access(code: str) -> str | None:
+    """Return the name of a blocked dunder used in `code`, or None if clean.
+
+    Screens the in-process sandbox against the __globals__/__class__ escape
+    that recovers the unrestricted builtins from injected library objects.
+    Catches both attribute access (``f.__globals__``) and string-literal
+    indirection (``getattr(f, "__globals__")`` / ``f.__dict__["__globals__"]``).
+    Syntax errors are left for exec to report normally.
+    """
+    import ast as _ast
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return None
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Attribute) and node.attr in BLOCKED_DUNDER_ATTRS:
+            return node.attr
+        if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+            if node.value in BLOCKED_DUNDER_ATTRS:
+                return node.value
+    return None
+
+
 # Hard memory limit (1 GB) — raises MemoryError if exceeded
 MEMORY_HARD_LIMIT = 1024 * 1024 * 1024
 
@@ -1237,6 +1275,14 @@ def execute_python(
         sys.stdout = stdout_capture
         sys.stderr = stderr_capture
 
+        blocked_dunder = _screen_dunder_access(code)
+        if blocked_dunder is not None:
+            raise PermissionError(
+                f"Access to '{blocked_dunder}' is blocked for security. "
+                "Sandbox-escape attribute access (e.g. __globals__, __class__) "
+                "is not permitted."
+            )
+
         with _timeout(int(timeout_seconds or MAX_EXEC_TIME)):
             exec(code, exec_globals)  # noqa: S102
 
@@ -1254,8 +1300,20 @@ def execute_python(
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
-    # Check memory usage and append warning if needed
-    _check_memory(stderr_capture)
+    # Check memory usage and append warning if needed. _check_memory can raise
+    # MemoryError when the hard limit is exceeded; catch it here so it lands in
+    # the result envelope instead of propagating out of execute_python uncaught
+    # (the caller only catches asyncio.TimeoutError). Because the underlying
+    # gauge is the process's peak RSS (it never decreases for the life of the
+    # worker), only fail the current run when the run actually succeeded —
+    # otherwise a single >1GB peak would brick every later run with a stale
+    # high-water mark.
+    try:
+        _check_memory(stderr_capture)
+    except MemoryError as e:
+        if result.success:
+            result.error = f"{type(e).__name__}: {e}"
+            result.success = False
 
     # Capture output
     result.stdout = stdout_capture.getvalue()[:MAX_OUTPUT_SIZE]

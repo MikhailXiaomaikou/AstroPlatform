@@ -135,8 +135,11 @@ async def _rehydrate_messages_from_db(
     from the frontend version since they may have been updated)."""
     if not session_id or user is None:
         return messages
-    if not _actions_need_rehydrate(messages) and _figures_already_present(
-        [a for m in messages for a in (m.get("actions") or []) if isinstance(m, dict)]
+    all_actions = [
+        a for m in messages if isinstance(m, dict) for a in (m.get("actions") or [])
+    ]
+    if not _actions_need_rehydrate(all_actions) and _figures_already_present(
+        all_actions
     ):
         return messages
 
@@ -1243,40 +1246,46 @@ async def export_report_bibtex(req: BibTeXRequest):
         # stub only when ADS is unreachable / ADS_API_KEY is unset.
         import os as _os
         ads_key = _os.getenv("ADS_API_KEY", "").strip()
-        for bib in unique_bibcodes:
-            safe_key = bib.replace("&", "_").replace(".", "_")
-            entry = None
-            if ads_key:
-                try:
-                    import httpx as _httpx
-                    resp = _httpx.get(
-                        f"https://api.adsabs.harvard.edu/v1/export/bibtex/{bib}",
-                        headers={"Authorization": f"Bearer {ads_key}"},
-                        timeout=10.0,
-                    )
-                    if resp.status_code == 200:
-                        body = resp.json().get("export") or ""
-                        # ADS returns the @ARTICLE block already; strip
-                        # surrounding newlines so our joined output stays
-                        # clean.  Keep the original citekey from ADS (it
-                        # follows the author+year convention that
-                        # \\citet expects).
-                        entry = body.strip()
-                except Exception:
-                    entry = None
-            if entry:
-                bib_entries.append(entry)
+        ads_client = None
+        if ads_key:
+            import httpx as _httpx
+            ads_client = _httpx.AsyncClient(timeout=10.0)
+        try:
+            for bib in unique_bibcodes:
+                safe_key = bib.replace("&", "_").replace(".", "_")
+                entry = None
+                if ads_client is not None:
+                    try:
+                        resp = await ads_client.get(
+                            f"https://api.adsabs.harvard.edu/v1/export/bibtex/{bib}",
+                            headers={"Authorization": f"Bearer {ads_key}"},
+                        )
+                        if resp.status_code == 200:
+                            body = resp.json().get("export") or ""
+                            # ADS returns the @ARTICLE block already; strip
+                            # surrounding newlines so our joined output stays
+                            # clean.  Keep the original citekey from ADS (it
+                            # follows the author+year convention that
+                            # \\citet expects).
+                            entry = body.strip()
+                    except Exception:
+                        entry = None
+                if entry:
+                    bib_entries.append(entry)
+                    bib_entries.append("")
+                    continue
+                bib_entries.append(f"@ARTICLE{{{safe_key},")
+                bib_entries.append("  author = {},")
+                bib_entries.append("  title = {},")
+                bib_entries.append("  journal = {},")
+                bib_entries.append(f"  year = {{{bib[:4]}}},")
+                bib_entries.append(f"  adsurl = {{https://ui.adsabs.harvard.edu/abs/{bib}}},")
+                bib_entries.append(f"  note = {{ADS metadata unavailable; set ADS_API_KEY to auto-populate. Bibcode: {bib}}}")
+                bib_entries.append("}")
                 bib_entries.append("")
-                continue
-            bib_entries.append(f"@ARTICLE{{{safe_key},")
-            bib_entries.append("  author = {},")
-            bib_entries.append("  title = {},")
-            bib_entries.append("  journal = {},")
-            bib_entries.append(f"  year = {{{bib[:4]}}},")
-            bib_entries.append(f"  adsurl = {{https://ui.adsabs.harvard.edu/abs/{bib}}},")
-            bib_entries.append(f"  note = {{ADS metadata unavailable; set ADS_API_KEY to auto-populate. Bibcode: {bib}}}")
-            bib_entries.append("}")
-            bib_entries.append("")
+        finally:
+            if ads_client is not None:
+                await ads_client.aclose()
 
     bib_text = "\n".join(bib_entries)
     return StreamingResponse(

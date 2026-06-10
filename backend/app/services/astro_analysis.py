@@ -1142,10 +1142,12 @@ def bpt_classify(log_nii_ha, log_oiii_hb):
     y = np.asarray(log_oiii_hb, dtype=float)
     result = np.full(len(x), "Unknown", dtype="U10")
 
-    # Kauffmann+03 line: below this = pure star-forming
-    kau_y = np.where(x < 0.05, 0.61 / (x - 0.05) + 1.3, np.inf)
-    # Kewley+01 line: above this = AGN
-    kew_y = np.where(x < 0.47, 0.61 / (x - 0.47) + 1.19, np.inf)
+    # Kauffmann+03 line: below this = pure star-forming. Past the x=0.05
+    # asymptote no SF is possible, so use -inf (y < -inf is never True).
+    kau_y = np.where(x < 0.05, 0.61 / (x - 0.05) + 1.3, -np.inf)
+    # Kewley+01 line: above this = AGN. Past the x=0.47 asymptote everything
+    # is AGN, so use -inf (y > -inf is always True).
+    kew_y = np.where(x < 0.47, 0.61 / (x - 0.47) + 1.19, -np.inf)
 
     sf = y < kau_y
     agn = y > kew_y

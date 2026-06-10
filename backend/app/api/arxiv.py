@@ -352,8 +352,14 @@ def _parse_latex_rows(tabular_content: str) -> list[list[str]]:
         if not row:
             continue
         cells = [_strip_latex(cell) for cell in row.split("&")]
-        cells = [cell for cell in cells if cell != ""]
-        if len(cells) > 1:
+        # Preserve INTERIOR empty cells: their column position carries the
+        # scientific meaning (which quantity each value maps to). Dropping an
+        # empty error/nodata cell would shift every later value one column left
+        # and attribute it to the wrong header (e.g. FWHM read as e_logL). Only
+        # trim trailing empties, which are the common `... & val \\` artifact.
+        while cells and cells[-1] == "":
+            cells.pop()
+        if len([cell for cell in cells if cell != ""]) > 1:
             parsed_rows.append(cells)
     return parsed_rows
 

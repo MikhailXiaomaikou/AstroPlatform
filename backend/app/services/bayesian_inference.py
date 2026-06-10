@@ -55,7 +55,7 @@ def nested_sampling(
                 "samples": samples.tolist(),
                 "n_samples": len(samples),
                 "n_iterations": results.niter,
-                "n_likelihood_calls": int(results.ncall),
+                "n_likelihood_calls": int(np.sum(results.ncall)),
                 "method": "dynesty",
             }
         except ImportError:

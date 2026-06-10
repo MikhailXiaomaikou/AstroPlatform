@@ -14,6 +14,8 @@ Dispatch mirrors the other sibling modules: ai_tools/__init__ routes
 """
 from __future__ import annotations
 
+import asyncio
+
 RESEARCH_TOOL_NAMES = frozenset(
     {
         "plan_research_program",
@@ -258,7 +260,12 @@ async def dispatch_research(tool_name: str, tool_input: dict) -> dict | None:
     if tool_name == "plan_research_program":
         return _exec_plan_research_program(tool_input)
     elif tool_name == "run_research_matrix":
-        return _exec_run_research_matrix(tool_input)
+        # Run OFF the event loop: this calls run_likelihood_chain per
+        # dataset×model cell (n_samples=4000), so a multi-cell matrix blocks
+        # the worker for the full wall-clock duration — no SSE heartbeats for
+        # any chat, and the per-tool deadline can only fire at an await point.
+        # Mirror dispatch_cosmology's run_cosmology_likelihood_chain branch.
+        return await asyncio.to_thread(_exec_run_research_matrix, tool_input)
     elif tool_name == "build_evidence_graph":
         return _exec_build_evidence_graph(tool_input)
     elif tool_name == "verify_research_facts":

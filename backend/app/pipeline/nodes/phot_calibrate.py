@@ -93,9 +93,14 @@ def phot_calibrate(input_data: dict, params: dict) -> dict:
         # mag_err = 2.5 / ln(10) * flux_err / flux  (for positive flux)
         mag_errors[valid] = (2.5 / np.log(10.0)) * flux_err[valid] / flux[valid]
 
+    # NaN/inf are not JSON-compliant (Starlette serializes with allow_nan=False),
+    # so map non-finite magnitudes/errors to None (JSON null) like _safe_float does.
+    def _json_safe(arr: np.ndarray) -> list:
+        return [float(x) if np.isfinite(x) else None for x in arr]
+
     output_data = dict(data)
-    output_data["calibrated_mag"] = magnitudes.tolist()
-    output_data["mag_error"] = mag_errors.tolist()
+    output_data["calibrated_mag"] = _json_safe(magnitudes)
+    output_data["mag_error"] = _json_safe(mag_errors)
 
     n_valid = int(np.sum(valid))
     n_invalid = int(np.sum(~valid))

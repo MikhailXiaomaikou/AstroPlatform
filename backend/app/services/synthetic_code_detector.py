@@ -76,6 +76,21 @@ _REAL_DATA_READERS = {
     "transit_search", "astro.transit_search",
 }
 
+# RNG function names and the modules that expose them.  Used both by the
+# getattr dynamic-access matcher and by visit_ImportFrom, so that a plain
+# `from numpy.random import normal` (then a bare `normal(...)` call) is caught
+# the same way `np.random.normal(...)` is — the most ordinary import form was
+# the one gap left after the getattr/torch/jax/tf evasions were closed.
+_RNG_FUNCTION_NAMES = {
+    "random", "randn", "rand", "normal", "uniform", "gauss",
+    "choice", "poisson", "randint", "standard_normal", "rvs",
+    "normalvariate", "multivariate_normal", "lognormal",
+}
+_RNG_MODULE_NAMES = {
+    "numpy.random", "numpy", "scipy.stats", "random",
+    "torch", "jax.random", "tensorflow",
+}
+
 # Keyword / phrase blacklist.  Matched in comments, docstrings, and string
 # literals.  Each ~doubles suspicion.
 _SUSPICIOUS_KEYWORDS = [
@@ -365,9 +380,19 @@ class _CodeVisitor(ast.NodeVisitor):
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.module and node.module in _LEGIT_RANDOM_IDENTIFIERS:
             self.legit_random_refs.append(node.module)
+        # `from numpy.random import normal` / `from scipy.stats import norm` /
+        # `from numpy import random` — RNG pulled in via a from-import (possibly
+        # aliased) is invisible to visit_Call, which only matches dotted chains.
+        # Record it here as an np_random signal so the bare call still flags.
+        module = node.module or ""
         for alias in node.names:
             if alias.name in _LEGIT_RANDOM_IDENTIFIERS:
                 self.legit_random_refs.append(alias.name)
+            if module in _RNG_MODULE_NAMES and (
+                alias.name in _RNG_FUNCTION_NAMES
+                or (module == "numpy" and alias.name == "random")
+            ):
+                self.np_random_calls.append(f"{module}.{alias.name}")
         self.generic_visit(node)
 
 

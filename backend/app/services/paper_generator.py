@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -894,7 +895,7 @@ async def generate_paper_draft(session_id: str, journal_format: str, db: AsyncSe
     bibtex_entries: list[str] = []
     for bibcode in artifacts.bibcodes[:30]:
         try:
-            bibtex_entries.append(_get_bibtex_sync(bibcode))
+            bibtex_entries.append(await asyncio.to_thread(_get_bibtex_sync, bibcode))
         except Exception:
             bibtex_entries.append(f"% BibTeX lookup failed for {bibcode}")
     bibtex = "\n\n".join(entry for entry in bibtex_entries if entry.strip()) or "% No citations were found in this session."

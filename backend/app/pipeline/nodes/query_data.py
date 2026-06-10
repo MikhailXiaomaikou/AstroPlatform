@@ -19,9 +19,14 @@ def _coerce_float(value) -> float | None:
 
 def _rows_to_columns(rows: list[dict]) -> dict[str, list]:
     columns: dict[str, list] = {}
-    for row in rows:
+    for index, row in enumerate(rows):
         for key, value in row.items():
-            columns.setdefault(key, []).append(value)
+            column = columns.get(key)
+            if column is None:
+                # Key first seen at this row: backfill None for all earlier rows.
+                column = [None] * index
+                columns[key] = column
+            column.append(value)
         for key in columns.keys() - row.keys():
             columns[key].append(None)
     return columns

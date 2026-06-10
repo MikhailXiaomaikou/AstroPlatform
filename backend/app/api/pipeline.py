@@ -366,14 +366,21 @@ async def run_pipeline(
         await db.commit()
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {type(e).__name__}: {e}")
 
-    # Store full results to DB; trim only for API response
-    run.status = "completed"
+    # Store full results to DB; trim only for API response.
+    # Mirror the Celery path: any node that failed (or was skipped because an
+    # upstream node failed) carries an "error" key, so a run with such nodes is
+    # reported as "failed", not "completed".
+    has_errors = any(
+        isinstance(res, dict) and "error" in res for res in node_results.values()
+    )
+    run_status = "failed" if has_errors else "completed"
+    run.status = run_status
     run.results = node_results
     run.completed_at = datetime.now(timezone.utc)
     await db.commit()
 
     api_results = _trim_for_api(node_results)
-    return RunResponse(run_id=run_id_str, status="completed", results=api_results, warnings=dag_warnings)
+    return RunResponse(run_id=run_id_str, status=run_status, results=api_results, warnings=dag_warnings)
 
 
 class BatchRunRequest(BaseModel):
@@ -422,8 +429,17 @@ async def batch_run_pipeline(
                 None, execute_dag, req.dag, input_id, run_id
             )
             safe = _trim_for_api(node_results)
-            results.append({"input": input_id, "run_id": run_id, "status": "completed", "results": safe})
-            succeeded += 1
+            # In-band node errors don't raise; a run with any errored/skipped
+            # node is "failed", not a success.
+            has_errors = any(
+                isinstance(res, dict) and "error" in res for res in node_results.values()
+            )
+            if has_errors:
+                results.append({"input": input_id, "run_id": run_id, "status": "failed", "results": safe})
+                failed += 1
+            else:
+                results.append({"input": input_id, "run_id": run_id, "status": "completed", "results": safe})
+                succeeded += 1
         except Exception as e:
             results.append({"input": input_id, "run_id": run_id, "status": "failed", "error": str(e)})
             failed += 1

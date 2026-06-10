@@ -120,7 +120,7 @@ type StepTone = "ok" | "partial" | "failed";
 function stepTone(r: Record<string, unknown> | undefined): StepTone {
   if (!r) return "ok";
   const status = String(r.__tool_status__ || r.analysis_status || "").toUpperCase();
-  if (status === "FAILED" || status === "SYNTHETIC" || r.success === false) return "failed";
+  if (status === "FAILED" || status === "SYNTHETIC" || status === "BLOCKED" || r.success === false) return "failed";
   if (status === "EMPTY" || status === "PARTIAL" || status === "UNAVAILABLE" || status === "EXPLORATORY") return "partial";
   return "ok";
 }
