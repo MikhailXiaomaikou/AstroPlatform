@@ -29,7 +29,9 @@ FIRST: plik_lite was 1.47 MB (vendorable); full Planck clik is ~GB (not).
    released files.
 2. **Fetch script** `backend/scripts/fetch_<name>.py`: download VERBATIM bytes,
    abort unless sha256 matches the pins, vendor the file under `data/`
-   (committed, like Pantheon+).
+   (committed). Copy `backend/scripts/fetch_des_sn5yr.py` or
+   `fetch_desi_dr2_bao.py` as the template (the older Pantheon+ script lives
+   at repo-root `scripts/fetch_pantheon_plus.py`, not backend/scripts/).
 3. **Registry entry** in `_REGISTRY`: data_products with pinned sha256,
    citations, honest fidelity grade. Set reciprocal `do_not_combine_with` for
    any overlapping sample (DR1↔DR2, CCHP↔TRGB-2019, DES↔Pantheon+/Union3).
@@ -53,9 +55,15 @@ FIRST: plik_lite was 1.47 MB (vendorable); full Planck clik is ~GB (not).
 7. **Publication gate**: `hash_verified` + `cov_fidelity` must feed
    `publication_ready`; an unverified file blocks the publication tier.
 8. **Verify** (all of these, in order):
-   - **FULL backend suite** — `python3 -m pytest tests/` from `backend/`.
-     A targeted subset is NOT enough: `test_cobaya_adapter_registry` and the
-     manifest-consistency tests only fail on full runs.
+   - **FULL backend suite** — `./venv/bin/python3 -m pytest tests/` from
+     `backend/` (the venv python — system python lacks the deps and dies in
+     collection). Iterate with targeted runs **adding `--no-cov`**
+     (pytest.ini carries `--cov-fail-under=45`, so any small selection exits
+     1 with a coverage FAIL even when every test passes), but gate on one
+     full run before commit: cross-cutting tests like
+     `test_cobaya_adapter_registry` and the manifest-consistency suite fail
+     fine when run directly — the trap is that a targeted selection won't
+     think to include them.
    - `backend/scripts/audit_registry.py` and
      `backend/scripts/audit_citation_pool.py` both clean.
    - Smoke fit recovering the published values (e.g. the dataset paper's

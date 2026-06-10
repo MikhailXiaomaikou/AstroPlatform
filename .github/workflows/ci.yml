@@ -54,7 +54,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install ruff
-        run: pip install ruff
+        # Pinned to the backend venv's version so the edit-time hook
+        # (.claude/hooks/ruff-check.py) and this gate report identically.
+        run: pip install ruff==0.15.13
       - name: Lint backend
         run: cd backend && ruff check app/ --select E,W,F --ignore E501
 

@@ -1,56 +1,61 @@
 #!/usr/bin/env python3
-"""PostToolUse hook: run ruff check after editing a .py file under backend/.
+"""PostToolUse hook: run ruff check after editing a .py file under backend/app/.
 
-Backend symmetry for tsc-check.py — CI gates on the same ruff check, but a
-push can be days after the edit; this surfaces lint findings at edit time.
+Mirrors the CI gate exactly (.github/workflows/ci.yml: `ruff check app/
+--select E,W,F --ignore E501`) — same flags, same scope. CI does not lint
+tests/ or scripts/, so findings there would be noise the gate never enforces;
+the hook stays out of them too.
 """
 from __future__ import annotations
-import json
 import subprocess
-import sys
-from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent.parent / "backend"
+from _common import REPO_ROOT, edited_path, feedback, notice_debounced, read_hook_input, under
+
+BACKEND_DIR = REPO_ROOT / "backend"
+APP_DIR = BACKEND_DIR / "app"
 RUFF = BACKEND_DIR / "venv" / "bin" / "ruff"
+CI_FLAGS = ["--select", "E,W,F", "--ignore", "E501"]  # keep in sync with .github/workflows/ci.yml
 TIMEOUT_S = 30
 
 
 def main() -> int:
-    try:
-        data = json.load(sys.stdin)
-    except Exception:
+    data = read_hook_input()
+    path = edited_path(data)
+    if path is None or path.suffix != ".py" or not under(path, APP_DIR):
         return 0
 
-    file_path = (data.get("tool_input") or {}).get("file_path") or ""
-    if not file_path.endswith(".py"):
-        return 0
-    if "backend/" not in file_path or "venv/" in file_path:
-        return 0
+    if not RUFF.exists():
+        # A silent no-op would be indistinguishable from "all clean" — say
+        # so, but at most once an hour PER SESSION (feedback delivery is
+        # session-local, so the stamp must be too). No PATH fallback: a
+        # different ruff version would report findings CI does not gate on.
+        if notice_debounced(f"ruff-missing:{data.get('session_id') or ''}", 3600):
+            return 0
+        return feedback(
+            "ruff-check: backend/venv/bin/ruff not found — the backend lint "
+            "hook is inactive until ruff is installed in the venv."
+        )
 
-    ruff = str(RUFF) if RUFF.exists() else "ruff"
     try:
         r = subprocess.run(
-            [ruff, "check", file_path],
+            [str(RUFF), "check", *CI_FLAGS, str(path)],
             cwd=BACKEND_DIR,
             capture_output=True,
             text=True,
             timeout=TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
-        print(f"ruff-check: timed out after {TIMEOUT_S}s — skipping", file=sys.stderr)
-        return 0
-    except FileNotFoundError:
-        # ruff missing — skip silently
-        return 0
+        return feedback(
+            f"ruff-check: timed out after {TIMEOUT_S}s — lint result unknown for {path.name}"
+        )
 
     if r.returncode != 0:
-        # Exit 2: PostToolUse feeds stderr back to the agent (exit 0 stderr
-        # only reaches the transcript, not the model).
         output = (r.stdout + r.stderr).strip()
-        print(f"ruff findings after editing {file_path}:\n{output}", file=sys.stderr)
-        return 2
+        return feedback(f"ruff findings (CI gates on these) after editing {path}:\n{output}")
     return 0
 
 
 if __name__ == "__main__":
+    import sys
+
     sys.exit(main())

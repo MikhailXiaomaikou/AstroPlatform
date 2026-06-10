@@ -1,37 +1,41 @@
 #!/usr/bin/env python3
-"""PostToolUse hook: after editing CLAUDE.md or ARCHITECTURE.md, feed the live
-repo stats (scripts/stats.sh) back to the agent so freshly written counts can
-be cross-checked on the spot.
+"""PostToolUse hook: after an edit to CLAUDE.md or ARCHITECTURE.md that writes
+digits, feed the live repo stats (scripts/stats.sh) back to the agent so
+freshly written counts can be cross-checked on the spot.
 
-Motivation: the 2026-06-10 audit found a dozen stale facts (tool counts,
-prompt size, test counts) in these two files — they are loaded as overriding
-instructions, so stale numbers actively mislead agents. This only catches the
-countable subset; facts like env-flag defaults still need manual care.
+Known limit (by design): this catches "agent writes a stale number while
+editing the doc". The other drift vector — code changes while the docs sit
+untouched — needs a CI-side comparison and is not covered here.
 """
 from __future__ import annotations
-import json
 import subprocess
-import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-WATCHED = {REPO_ROOT / "CLAUDE.md", REPO_ROOT / "ARCHITECTURE.md"}
-TIMEOUT_S = 120
+from _common import REPO_ROOT, edited_path, feedback, read_hook_input, recently, stamp
+
+WATCHED_NAMES = {"claude.md", "architecture.md"}
+TIMEOUT_S = 45  # must stay under the harness's 60s default hook timeout
+DEBOUNCE_S = 600  # one stats dump per 10 min is plenty for cross-checking
 
 
 def main() -> int:
-    try:
-        data = json.load(sys.stdin)
-    except Exception:
+    data = read_hook_input()
+    path = edited_path(data)
+    # APFS is case-insensitive: compare case-folded so a wrong-case path
+    # (which still edits the real file on disk) can't bypass the check.
+    if path is None or path.name.lower() not in WATCHED_NAMES:
+        return 0
+    if str(path.parent).lower() != str(REPO_ROOT).lower():
         return 0
 
-    file_path = (data.get("tool_input") or {}).get("file_path") or ""
-    if not file_path:
-        return 0
-    try:
-        if Path(file_path).resolve() not in WATCHED:
-            return 0
-    except OSError:
+    tool_input = data.get("tool_input") or {}
+    written = tool_input.get("new_string") or tool_input.get("content") or ""
+    if not any(ch.isdigit() for ch in written):
+        return 0  # prose-only edit — nothing countable to cross-check
+
+    # Session-scoped debounce: exit-2 feedback lands in ONE session's context,
+    # so another concurrent session must not be suppressed by this one's stamp.
+    debounce_key = f"doc-drift-stats:{data.get('session_id') or ''}"
+    if recently(debounce_key, DEBOUNCE_S):
         return 0
 
     try:
@@ -42,20 +46,20 @@ def main() -> int:
             text=True,
             timeout=TIMEOUT_S,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except subprocess.TimeoutExpired:
         return 0
+    if r.returncode != 0 or not r.stdout.strip():
+        return 0  # never present a failed/partial run as authoritative stats
 
-    # Exit 2: PostToolUse feeds stderr back to the agent. This is
-    # informational, not an error — compare the numbers you just wrote
-    # against the live ones below and fix any mismatch.
-    print(
+    stamp(debounce_key)
+    return feedback(
         "doc-drift-check (informational, not an error): you just edited "
-        f"{Path(file_path).name}. Live repo stats for cross-checking any "
-        "counts/sizes you wrote:\n" + r.stdout.strip(),
-        file=sys.stderr,
+        f"{path.name}. Live repo stats for cross-checking any counts/sizes "
+        "you wrote:\n" + r.stdout.strip()
     )
-    return 2
 
 
 if __name__ == "__main__":
+    import sys
+
     sys.exit(main())
