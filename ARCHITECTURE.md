@@ -193,7 +193,7 @@ Entrypoint: [`src/App.tsx`](./frontend/src/App.tsx). Routes are declared here; t
 
 - [`src/api/client.ts`](./frontend/src/api/client.ts) — Axios + typed SSE streaming. `ThinkingEvent` union covers `agent_text` / `tool_call` / `tool_result` / `status` / **`honest_abstention`** / `error`. `getAIBackendStatus()` feeds the F4 pre-send gate.
 - [`src/context/AuthContext.tsx`](./frontend/src/context/AuthContext.tsx) — JWT lifecycle; logout only on 401/403, not transient errors.
-- [`src/components/viz/*`](./frontend/src/components/viz) — PlotBuilder (Plotly publication-grade; Fit checkbox now shows ✓ / "(not supported)" per chart type), SpectrumViewer, LightCurveViewer (both auto-promote to `scattergl` at N > 5000), ImageCutoutViewer, MCMCDiagnostics, AladinViewer.
+- [`src/components/viz/*`](./frontend/src/components/viz) — PlotBuilder (Plotly publication-grade; Fit checkbox now shows ✓ / "(not supported)" per chart type) and AladinViewer. (SpectrumViewer / LightCurveViewer / ImageCutoutViewer / MCMCDiagnostics were removed 2026-06-11 — dead code orphaned from every route by the M3 page trim.)
 - [`src/components/chat/*`](./frontend/src/components/chat) — MarkdownText, chat sidebar, figure-expand modal, DataSourcesPanel, AckButton, CosmologyMCMCPanel, and CosmologyLikelihoodPanel.
 - [`src/i18n/index.tsx`](./frontend/src/i18n/index.tsx) — 4-language flat dictionary; ~200+ keys.
 - [`src/styles/journal.css`](./frontend/src/styles/journal.css) — 2 k-line Journal-Edition stylesheet overriding chat / pipeline / browse / ADQL / sessions / account to the newspaper palette; loaded **after** `App.css` so same-specificity rules win the cascade.
@@ -590,7 +590,7 @@ Push to `main` → Render auto-deploy. Render free tier sleeps after 15 min idle
 ## 10. Testing
 
 - **Backend**: pytest suite under `backend/tests/`. Major modules include `test_api`, `test_claim_validator`, `test_citation_validation`, `test_b7_regression`, `test_cosmology_mcmc`, `test_abstention_parser`, `test_sandbox_crash_paths`, `test_sandbox_isolation`, `test_result_provenance`, `test_connector_availability_gate`, `test_provenance_registry_loader`, `test_provenance_v2_connectors`, `test_connector_cache`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, and e2e smoke tests. Golden-path fixtures live under `backend/tests/golden/`.
-- **Frontend**: Vitest suite (`npm run test` for the live count). Coverage includes ChatPage, DataSourcesPanel, CosmologyMCMCPanel, AckButton, ActionCard, PlotBuilder, FITSBrowser, and common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
+- **Frontend**: Vitest suite (`npm run test` for the live count). Coverage includes ChatPage, DataSourcesPanel, CosmologyMCMCPanel, AckButton, ActionCard, PlotBuilder, and common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
 - **CI**: GitHub Actions runs backend pytest + frontend `tsc + vite build + vitest` + ruff lint on every push.
 - **Physical-regression targets** (manual): NGC 1647 (open cluster, Frasca+2026), M53 (globular + RR Lyrae), Tom 2 blue stragglers (Rain+2021), Vel OB1, white dwarf LF, Pleiades IMF, NGC 752 isochrone age ∈ [1.2, 2.0] Gyr.
 
