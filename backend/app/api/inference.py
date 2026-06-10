@@ -52,7 +52,7 @@ def _shared_deepseek_available() -> bool:
 
 def _require_admin(user: User) -> None:
     admin_usernames = {name.strip() for name in os.getenv("ADMIN_USERNAMES", "").split(",") if name.strip()}
-    if user.username in admin_usernames or user.subscription_tier in {"admin", "institution"}:
+    if user.username in admin_usernames or user.subscription_tier == "admin":
         return
     raise HTTPException(status_code=403, detail="Admin access required")
 

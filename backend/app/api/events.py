@@ -38,7 +38,7 @@ def _require_admin(user: User) -> User:
         for username in os.getenv("ADMIN_USERNAMES", "").split(",")
         if username.strip()
     }
-    if user.username in admin_usernames or user.subscription_tier in {"admin", "institution"}:
+    if user.username in admin_usernames or user.subscription_tier == "admin":
         return user
     raise HTTPException(status_code=403, detail="Admin access required")
 

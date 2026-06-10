@@ -36,6 +36,76 @@ def test_bibcode_not_in_tool_result_is_violation():
     assert violations[0].match_text == "1995IBVS.4148....1F"
 
 
+def test_b4_fabricated_arxiv_in_tool_input_is_still_a_violation():
+    """B4: an arXiv id passed only as a tool ARGUMENT (never returned by a
+    successful result) must not enter the valid citation pool. Catches the
+    invent-id -> fetch-fails -> cite-anyway laundering path."""
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "read_arxiv_paper",
+            "input": {"arxiv_id": "2406.99999"},
+            "result": {
+                "success": False,
+                "error": "paper not found",
+                "__tool_status__": "FAILED",
+                "__do_not_claim__": True,
+            },
+        }
+    ]
+    violations = provenance_citation_violations(
+        "According to arXiv:2406.99999, the Hubble tension is 5.2 sigma.", tool_results
+    )
+    assert any(
+        v.kind == "invalid_arxiv_id" and "2406.99999" in v.match_text for v in violations
+    )
+
+
+def test_b4_fabricated_bibcode_in_failed_result_is_still_a_violation():
+    """B4: a bibcode that appears only inside a FAILED / do-not-claim result
+    must not become valid provenance."""
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "classify_literature_relevance",
+            "input": {"bibcode": "2099ApJ...999..999X"},
+            "result": {
+                "success": False,
+                "__tool_status__": "FAILED",
+                "__do_not_claim__": True,
+                "echo_bibcode": "2099ApJ...999..999X",
+            },
+        }
+    ]
+    violations = provenance_citation_violations(
+        "The growth index follows 2099ApJ...999..999X.", tool_results
+    )
+    assert any(
+        v.kind == "invalid_bibcode" and v.match_text == "2099ApJ...999..999X"
+        for v in violations
+    )
+
+
+def test_b4_bibcode_in_successful_result_still_supports_citation():
+    """B4 guard against over-tightening: a bibcode returned by a genuine
+    SUCCESSFUL result must still support its citation (no false positive)."""
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "search_literature",
+            "input": {"query": "DESI BAO"},
+            "result": {
+                "success": True,
+                "results": [{"bibcode": "2023A&A...674A...1G"}],
+            },
+        }
+    ]
+    assert provenance_citation_violations("See 2023A&A...674A...1G.", tool_results) == []
+
+
 def test_author_year_with_supporting_bibcode_has_no_violations():
     from app.services.claim_validator import provenance_citation_violations
 

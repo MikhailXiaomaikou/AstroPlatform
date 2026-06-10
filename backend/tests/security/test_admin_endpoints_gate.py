@@ -51,3 +51,24 @@ async def test_admin_endpoint_with_wrong_secret_rejected(app_client):
         headers={"X-Admin-Secret": "not-the-real-admin-secret"},
     )
     assert resp.status_code in (401, 403)
+
+
+async def test_subscribe_to_institution_does_not_grant_admin(app_client, test_user):
+    """B14: self-serving POST /api/auth/subscribe to the 'institution' billing
+    tier must NOT confer admin. A normal user can pick any billing tier, but
+    the admin surface stays gated (admin tier / ADMIN_USERNAMES / X-Admin-Secret
+    only). Before the fix, require_admin_any treated subscription_tier in
+    {admin, institution} as admin, so a normal user could self-escalate."""
+    _user, token = test_user
+    auth = {"Authorization": f"Bearer {token}"}
+
+    sub = await app_client.post(
+        "/api/auth/subscribe", headers=auth, json={"tier": "institution"}
+    )
+    assert sub.status_code == 200, f"subscribe failed: {sub.status_code} {sub.text[:200]}"
+
+    resp = await app_client.get(ADMIN_GET_ENDPOINTS[0], headers=auth)
+    assert resp.status_code in (401, 403), (
+        "subscribing to the 'institution' billing tier escalated to admin "
+        f"(status {resp.status_code}) — vertical privilege escalation."
+    )

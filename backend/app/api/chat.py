@@ -4226,7 +4226,18 @@ async def _run_agent_loop(
     for _iteration in range(max_iterations):
         if _time.monotonic() > _loop_deadline:
             hit_deadline = True
-            summary = " ".join(text_parts) if text_parts else "AI workflow timed out."
+            # B1: do NOT ship accumulated LLM prose here. This early return
+            # skips the entire post-loop validation block (claim validator,
+            # zero-data hard block, citation gate, abstention parser), so a
+            # fabricated number the model wrote in `text_parts` before the
+            # deadline would reach the user unchecked. Emit only a deterministic
+            # tool-grounded summary (numbers sourced from tool_results, not free
+            # text) — matching the synthesis-failure fallback below and the
+            # endpoint-timeout path in the SSE generator.
+            grounded = _tool_grounded_summary(all_tool_results, latest_user_text) or ""
+            summary = grounded.strip() or (
+                "The agent loop timed out before any tool produced a citable result."
+            )
             return {
                 "reply": (
                     summary

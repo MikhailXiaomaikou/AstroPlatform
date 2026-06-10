@@ -2873,6 +2873,23 @@ def run_likelihood_chain(
             idx = [parameter_order.index(param) for param in params if param in parameter_order]
             local_idx = [params.index(param) for param in params if param in parameter_order]
             if not idx:
+                # B2: this dataset has no LINEAR (sampled) parameter, so the
+                # precision matrix can't take it. A pure derived-S8 dataset
+                # (e.g. WL S8) is EXPECTED here — it is folded in below via the
+                # S8 importance-reweighting (_s8_gaussian_constraints), so it
+                # must NOT be flagged. Only a dataset that NO path applies — a
+                # BBN ombh2 prior, whose parameter is neither sampled nor
+                # reweighted — would otherwise contribute χ²=0 silently while
+                # still appearing in datasets_used as publication-ready; flag
+                # that one so the publication gate demotes the run.
+                applied_via_s8 = "S8" in params and _s8_is_derived(parameter_order)
+                if not applied_via_s8:
+                    invalid_specs.append(
+                        f"{entry.key}: none of its parameters {params} are in the "
+                        f"sampled parameter set {list(parameter_order)} and it has "
+                        f"no S8 row to reweight, so it contributed no constraint — "
+                        f"not applied as run."
+                    )
                 continue
             sub_inv = cov_inv[np.ix_(local_idx, local_idx)]
             sub_mean = mean[local_idx]
@@ -5192,6 +5209,18 @@ def _compressed_chi2_samples(
                 or (name == "S8" and derived_s8 is not None)
             ]
             if not names:
+                # B2: none of this dataset's parameters are in the sampled set,
+                # so it can contribute no chi2. Record it as an invalid spec —
+                # which flips publication_ready off and surfaces a blocked
+                # reason — instead of silently dropping it to chi2=0 while it
+                # still appears in datasets_used as if it had constrained the
+                # fit (e.g. a BBN ombh2 prior selected alongside a chain that
+                # samples only H0/omegam/rd, where ombh2 is never sampled).
+                invalid_specs.append(
+                    f"{entry.key}: none of its parameters {params} are in the "
+                    f"sampled parameter set {list(parameter_order)}, so it "
+                    f"contributed no constraint — not applied as run."
+                )
                 continue
             local_idx = [params.index(name) for name in names]
             mean = np.asarray(spec.mean, dtype=float)[local_idx]

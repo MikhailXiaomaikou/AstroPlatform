@@ -174,6 +174,33 @@ async def _find_team_owner(user: User, db: AsyncSession) -> uuid.UUID:
     return user.id
 
 
+async def _require_team_access(db: AsyncSession, team_id: str, user: User) -> uuid.UUID:
+    """B13: authorize the caller for a team-scoped resource and return the team UUID.
+
+    A team is identified by its owner's user id (team_id == owner user id). The
+    caller must be the owner or a TeamMember of that team; otherwise 403. Without
+    this, any authenticated user could read or write another team's shared
+    notebooks / results / activity by passing the victim owner's UUID (which
+    leaks throughout the app). Mirrors ws.py:_authorize_team_member, which guards
+    the identical threat on the collab websocket.
+    """
+    try:
+        tid = uuid.UUID(str(team_id))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Team not found")
+    if tid == user.id:  # owner fast-path
+        return tid
+    membership = await db.execute(
+        select(TeamMember.id).where(
+            TeamMember.owner_id == tid,
+            TeamMember.member_id == user.id,
+        )
+    )
+    if membership.scalar_one_or_none() is None:
+        raise HTTPException(status_code=403, detail="Not a member of this team")
+    return tid
+
+
 async def _record_activity(
     db: AsyncSession, team_id: uuid.UUID, user_id: uuid.UUID, action: str, summary: str
 ):
@@ -810,7 +837,7 @@ async def share_results(
     user: User = Depends(get_current_user),
 ):
     """Share search results (object list) with the team."""
-    tid = uuid.UUID(team_id)
+    tid = await _require_team_access(db, team_id, user)
 
     if not req.objects:
         raise HTTPException(status_code=400, detail="Objects list must not be empty")
@@ -847,7 +874,7 @@ async def list_shared_results(
     user: User = Depends(get_current_user),
 ):
     """List search results shared with the team."""
-    tid = uuid.UUID(team_id)
+    tid = await _require_team_access(db, team_id, user)
 
     result = await db.execute(
         select(SharedResult, User)
@@ -884,7 +911,7 @@ async def share_notebook(
     user: User = Depends(get_current_user),
 ):
     """Share a chat session notebook export with the team."""
-    tid = uuid.UUID(team_id)
+    tid = await _require_team_access(db, team_id, user)
 
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="Notebook content must not be empty")
@@ -921,7 +948,7 @@ async def list_shared_notebooks(
     user: User = Depends(get_current_user),
 ):
     """List notebooks shared with the team."""
-    tid = uuid.UUID(team_id)
+    tid = await _require_team_access(db, team_id, user)
 
     result = await db.execute(
         select(SharedNotebook, User)
@@ -957,7 +984,7 @@ async def get_team_activity(
     user: User = Depends(get_current_user),
 ):
     """Return the recent activity feed for a team."""
-    tid = uuid.UUID(team_id)
+    tid = await _require_team_access(db, team_id, user)
 
     result = await db.execute(
         select(TeamActivity, User)

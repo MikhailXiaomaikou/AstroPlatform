@@ -599,6 +599,32 @@ def test_fact_verifier_does_not_block_full_likelihood_limitations() -> None:
     assert not any(claim["status"] == "contradicted" for claim in report["claims"])
 
 
+def test_b9_fabricated_source_in_tool_input_is_not_verified() -> None:
+    """B9: a fabricated arXiv id appearing only in a tool INPUT (on a failed
+    call) must NOT be laundered into a Fact-Check 'verified' source — the
+    payload text used for source cross-checking must exclude tool inputs and
+    failed/do-not-claim results."""
+    from app.services.research_program import verify_research_facts
+
+    report = verify_research_facts(
+        tool_results=[
+            {
+                "tool": "mine_paper_tools",
+                "input": {"arxiv_id": "2512.34567"},
+                "result": {
+                    "success": False,
+                    "__tool_status__": "FAILED",
+                    "__do_not_claim__": True,
+                },
+            }
+        ],
+        final_reply="This analysis builds on arXiv:2512.34567.",
+    )
+    source_claims = [c for c in report["claims"] if c["kind"] == "source"]
+    assert source_claims, "the arXiv id should be picked up as a source claim"
+    assert all(c["status"] != "verified" for c in source_claims)
+
+
 def test_fact_verifier_skips_weak_lensing_scope_caveat() -> None:
     from app.services.research_program import (
         build_evidence_graph,

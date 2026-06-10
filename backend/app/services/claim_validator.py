@@ -580,6 +580,12 @@ def extract_claims(text: str) -> list[Claim]:
     value_bare_unit (span 16-24); only the former is kept. This avoids missing
     spectral-unit claims while preventing double-counting.
     """
+    # B15: LLMs routinely emit the typographic Unicode minus U+2212 in
+    # scientific prose ("w0 = −0.84"). `_NUM` only accepts ASCII -/+, so an
+    # un-normalised minus made the whole numeric claim invisible to the gate.
+    # U+2212 and '-' are both single code points, so this is length-preserving
+    # and does not shift the claim offsets used for redaction.
+    text = text.replace("−", "-")
     text = _strip_markdown_code(text)
     text = _strip_thousands_separators(text)
     text = _normalize_sci_notation(text)
@@ -811,13 +817,17 @@ def _matches_any(value: float, universe: set[float], tolerance: float) -> bool:
     if value == 0.0:
         # Tolerance-0 is impossible; accept any existing 0.
         return 0.0 in universe
-    target = abs(value)
-    lo, hi = target * (1 - tolerance), target * (1 + tolerance)
+    # B5: compare with SIGN preserved. The previous abs()-based match let a
+    # sign-flipped claim (e.g. "w0 = 0.84") validate against the tool's
+    # opposite-sign value (w0 = -0.84) — but for w0/wa and similar the sign IS
+    # the physical conclusion (phantom vs quintessence). Build the tolerance
+    # band around the signed value (sorted, since a negative value flips
+    # lo/hi) and require the candidate to fall inside it with its own sign.
+    lo, hi = sorted((value * (1 - tolerance), value * (1 + tolerance)))
     for candidate in universe:
         if candidate == 0.0:
             continue
-        c = abs(candidate)
-        if lo <= c <= hi:
+        if lo <= candidate <= hi:
             return True
     return False
 
@@ -1035,7 +1045,7 @@ def citation_violations_should_block(violations: list[CitationViolation]) -> boo
 def _build_valid_bibcode_pool(tool_results: Any) -> set[str]:
     """Collect every tool-sourced bibcode that may support a reply citation."""
     pool: set[str] = set()
-    for node in _iter_dict_nodes(tool_results):
+    for node in _citation_pool_nodes(tool_results):
         for key, value in node.items():
             if not value:
                 continue
@@ -1064,7 +1074,7 @@ def _build_valid_bibcode_pool(tool_results: Any) -> set[str]:
 
 def _build_valid_arxiv_pool(tool_results: Any) -> set[str]:
     pool: set[str] = set()
-    for node in _iter_dict_nodes(tool_results):
+    for node in _citation_pool_nodes(tool_results):
         for key in ("arxiv", "arxiv_id", "bibcode", "article", "source_url", "reference_url"):
             value = node.get(key)
             if not value:
@@ -1096,7 +1106,7 @@ def _build_attempted_arxiv_pool(tool_results: Any) -> set[str]:
 
 def _build_valid_doi_pool(tool_results: Any) -> set[str]:
     pool: set[str] = set()
-    for node in _iter_dict_nodes(tool_results):
+    for node in _citation_pool_nodes(tool_results):
         for key in ("doi", "source_url", "reference_url"):
             value = node.get(key)
             if not value:
@@ -1903,6 +1913,56 @@ def _entry_tool_and_result(entry: Any) -> tuple[str | None, dict[str, Any] | Non
     tool_name = str(entry.get("tool") or entry.get("name") or "").strip() or None
     result = entry.get("result") if isinstance(entry.get("result"), dict) else entry
     return tool_name, result if isinstance(result, dict) else None
+
+
+def _result_may_support_citation(result: Any) -> bool:
+    """B4: whether a tool RESULT can seed the valid-citation pool.
+
+    Deliberately lighter than _payload_is_claimable_success (which gates
+    NUMERIC claims and requires a positive data/rows payload): a successful
+    literature lookup may legitimately carry citeable bibcodes without a
+    `data` row. It excludes only results that failed, were withheld
+    (__do_not_claim__), or are synthetic/empty/unavailable — exactly the
+    states whose identifiers must never become "valid provenance".
+    """
+    if not isinstance(result, dict):
+        return False
+    if _is_tainted_synthetic_payload(result):  # __do_not_claim__ / SYNTHETIC / SIMULATED_DEMO
+        return False
+    if result.get("success") is False or bool(result.get("error")):
+        return False
+    status_values = [
+        str(result.get(key) or "").strip().upper()
+        for key in ("analysis_status", "__tool_status__", "status")
+        if result.get(key) is not None
+    ]
+    if any(s in {"EMPTY", "FAILED", "UNAVAILABLE"} for s in status_values):
+        return False
+    return True
+
+
+def _citation_pool_nodes(tool_results: Any) -> Iterable[dict[str, Any]]:
+    """B4: dict nodes eligible to seed the valid-citation pools.
+
+    Only the `result` subtree of each non-tainted tool entry is yielded —
+    never the tool `input` payload. This closes the laundering path where a
+    fabricated arXiv id / bibcode becomes "valid provenance" merely by being
+    passed as a tool argument or returned by a FAILED fetch. The separate
+    _build_attempted_arxiv_pool still reads inputs, but only to permit honest
+    "could not be fetched" failure lines, never to support a science claim.
+    """
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        result = entry.get("result")
+        if not isinstance(result, dict):
+            # Already-unwrapped result dict (no {tool,input,result} envelope):
+            # drop any nested `input` so an argument id never seeds the pool.
+            result = {k: v for k, v in entry.items() if k != "input"}
+        if not _result_may_support_citation(result):
+            continue
+        yield from _iter_dict_nodes(result)
 
 
 def _payload_is_claimable_success(tool_name: str | None, result: dict[str, Any] | None) -> bool:

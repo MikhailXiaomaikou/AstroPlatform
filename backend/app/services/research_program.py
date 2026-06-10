@@ -2476,10 +2476,38 @@ def _latest_evidence_graph(tool_results: list[dict[str, Any]]) -> dict[str, Any]
 
 
 def _tool_payload_text(tool_results: list[dict[str, Any]]) -> str:
+    """Serialise tool RESULTS for source-citation cross-checking.
+
+    B9: only the `result` subtree of each non-withheld entry is included —
+    never the tool `input` payload, and never a FAILED / do-not-claim result.
+    Otherwise a fabricated arXiv id / DOI / bibcode passed as a tool argument
+    (e.g. ``mine_paper_tools(arxiv_id="2512.34567")``) — even on a failed call
+    — would be found in this text and laundered into a Fact-Check "verified"
+    source at verify_research_facts.
+    """
+    safe: list[Any] = []
+    for item in tool_results or []:
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else None
+        if result is None:
+            result = {k: v for k, v in item.items() if k != "input"}
+        if (
+            result.get("__do_not_claim__") is True
+            or result.get("success") is False
+            or bool(result.get("error"))
+        ):
+            continue
+        status = str(
+            result.get("__tool_status__") or result.get("analysis_status") or ""
+        ).strip().upper()
+        if status in {"FAILED", "EMPTY", "UNAVAILABLE", "SYNTHETIC", "SIMULATED_DEMO"}:
+            continue
+        safe.append(result)
     try:
-        return json.dumps(tool_results, default=str, sort_keys=True).lower()
+        return json.dumps(safe, default=str, sort_keys=True).lower()
     except Exception:
-        return str(tool_results).lower()
+        return str(safe).lower()
 
 
 def _dataset_index_from_tool_results(tool_results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

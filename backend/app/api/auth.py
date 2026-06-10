@@ -457,7 +457,7 @@ async def require_admin_any(
                     for u in os.getenv("ADMIN_USERNAMES", "").split(",")
                     if u.strip()
                 }
-                if user.username in admin_usernames or user.subscription_tier in {"admin", "institution"}:
+                if user.username in admin_usernames or user.subscription_tier == "admin":
                     return None
         except Exception as e:
             # Bearer-token admin check is best-effort fallback to the

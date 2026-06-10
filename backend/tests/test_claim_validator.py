@@ -55,6 +55,40 @@ def test_extract_cosmology_parameter_claims():
     assert {"cosmology_h0", "cosmology_om0", "cosmology_w0", "cosmology_wa"} <= labels
 
 
+def test_b15_unicode_minus_claim_is_extracted():
+    """B15: a value written with the Unicode minus U+2212 ('w0 = −0.84') must
+    still be extracted as a claim; otherwise it bypasses the whole gate."""
+    claims = extract_claims("The chain prefers w0 = −0.84 for this dataset.")
+    assert any(
+        c.label == "cosmology_w0" and c.value == pytest.approx(-0.84) for c in claims
+    )
+
+
+def test_b15_unicode_minus_fabrication_is_flagged():
+    """B15: a fabricated negative value typed with U+2212 must NOT pass the
+    gate when the tool returned a different number."""
+    tool_results = [{"tool": "run_cosmology_likelihood_chain", "result": {"w0": -0.55}}]
+    r = validate_claims("The chain prefers w0 = −0.84.", tool_results)
+    assert r.ok is False
+    assert any(c.value == pytest.approx(-0.84) for c in r.uncited)
+
+
+def test_b5_sign_flipped_claim_is_flagged():
+    """B5: a sign-flipped value (claim +0.84 vs tool -0.84) must be flagged —
+    for w0/wa the sign is the physical conclusion, so abs()-matching is wrong."""
+    tool_results = [{"tool": "run_cosmology_likelihood_chain", "result": {"w0": -0.84}}]
+    r = validate_claims("The fit gives w0 = 0.84 for this dataset.", tool_results)
+    assert r.ok is False
+
+
+def test_b5_correct_sign_still_matches():
+    """B5 guard against over-tightening: the correctly-signed value still
+    validates against the tool's value (no false positive)."""
+    tool_results = [{"tool": "run_cosmology_likelihood_chain", "result": {"w0": -0.84}}]
+    r = validate_claims("The fit gives w0 = -0.84 for this dataset.", tool_results)
+    assert r.ok is True
+
+
 # -------------------- validate_claims --------------------
 
 
