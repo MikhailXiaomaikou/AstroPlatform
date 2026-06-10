@@ -3614,8 +3614,23 @@ def _run_sampling_likelihood_chain(
         chain_tier = "exploratory"
     else:
         chain_tier = "blocked"
+    # Reason-aware exploratory warning: a chain lands in the exploratory tier
+    # either because the importance-sampler ESS is below 400 OR because the
+    # off-anchor frontier guard fired (w/w0/wa with no reproduced published
+    # anchor) — and these are independent. The old string hard-coded
+    # "ESS below 400" for every exploratory chain, which is literally false
+    # when ESS >= 400 and the off-anchor guard is what demoted it.
+    exploratory_reasons: list[str] = []
+    if proposal_ess < 400.0:
+        exploratory_reasons.append(
+            f"importance-sampler ESS={proposal_ess:.0f} is below the publication threshold of 400"
+        )
+    if off_anchor:
+        exploratory_reasons.append(
+            "off-anchor frontier parameters (w/w0/wa) have no reproduced published anchor"
+        )
     exploratory_warning = (
-        f"Importance sampler ESS={proposal_ess:.0f} below publication threshold 400. "
+        "Exploratory chain (" + "; ".join(exploratory_reasons) + "). "
         "Posterior median and 1-sigma range may be discussed as exploratory, but MUST "
         "NOT be cited as a published constraint and MUST NOT be added to the bibcode pool."
         if chain_tier == "exploratory" else None
