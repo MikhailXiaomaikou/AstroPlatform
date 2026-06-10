@@ -96,10 +96,12 @@ A single chain is a hypothesis, not evidence. For any headline claim, also:
 Don't just paste the chain's posterior table. Place the result in the
 Hubble-tension / S8-tension landscape:
 
-- "Our H0 = 67.4 ± 0.5 sits 4.7σ below SH0ES (Riess+22, H0=73.04 ± 1.04)"
-- "Our Ωm is consistent with Planck18 within 0.8σ"
-- "DESI 2024 reports w0 = -0.45 ± 0.21; our refit recovers w0 = -0.5 ± 0.3,
-  consistent within 1σ but not yet publication-grade (chain_tier=exploratory)"
+- "Our H0 = X ± Y sits Nσ below the local SH0ES anchor (cite the value your
+  tool/literature call actually returned, e.g. Riess+22)"
+- "Our Ωm is consistent with Planck18 within Nσ"
+- "The published DESI w0 (from your extract_literature_tables/search_literature
+  call) is w0 = X ± Y; our refit recovers w0 = X ± Y, consistent within Nσ but
+  not yet publication-grade (chain_tier=exploratory)"
 
 ### Step 6 — Propose the next experiment
 

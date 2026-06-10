@@ -2,9 +2,10 @@
 
 import asyncio
 import logging
+import math
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schemas import TransientAlert
@@ -365,10 +366,28 @@ async def _query_local_alerts(
         stmt = stmt.where(TransientAlert.source_id.ilike(f"%{name}%"))
     if ra is not None and dec is not None:
         radius_deg = radius_arcsec / 3600.0
-        stmt = stmt.where(
-            TransientAlert.ra.between(ra - radius_deg, ra + radius_deg),
-            TransientAlert.dec.between(dec - radius_deg, dec + radius_deg),
-        )
+        # Widen the RA half-window by 1/cos(dec): a fixed RA span covers fewer
+        # arcsec of sky at high declination, so a flat box under-returns by
+        # 1/cos(dec). Clamp cos(dec) to a small floor near the poles to avoid a
+        # divide-by-~0 blowing the window up to the whole sky.
+        cos_dec = max(math.cos(math.radians(dec)), 1e-3)
+        ra_half = radius_deg / cos_dec
+        ra_lo = ra - ra_half
+        ra_hi = ra + ra_half
+        if ra_lo < 0.0 or ra_hi > 360.0:
+            # RA box straddles the 0/360 wraparound — match either side.
+            stmt = stmt.where(
+                or_(
+                    TransientAlert.ra.between(ra_lo % 360.0, 360.0),
+                    TransientAlert.ra.between(0.0, ra_hi % 360.0),
+                ),
+                TransientAlert.dec.between(dec - radius_deg, dec + radius_deg),
+            )
+        else:
+            stmt = stmt.where(
+                TransientAlert.ra.between(ra_lo, ra_hi),
+                TransientAlert.dec.between(dec - radius_deg, dec + radius_deg),
+            )
     if obj_type:
         stmt = stmt.where(TransientAlert.classification == obj_type)
 

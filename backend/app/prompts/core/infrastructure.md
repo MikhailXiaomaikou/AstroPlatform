@@ -39,7 +39,9 @@ When you read values returned by ADQL aggregates (STDDEV, VAR, AVG):
 - Specific published catalogs (2MASS, WISE, SDSS photometry)
 - Use real CDS table names like "II/246/out" (2MASS), never invent paths
 
-**LAMOST** (via search_objects sources=["lamost"]) — USE FOR:
+**LAMOST** (via search_objects sources=["lamost"]) — **GATED (provenance-v2):
+this connector is maintenance-gated and returns UNAVAILABLE, not data.** When
+re-enabled, USE FOR:
 - Spectroscopic parameters: Teff, log g, [Fe/H], radial velocity
 - Medium-resolution spectra (R~7500) for stars in the northern sky
 - Stellar classification, v sin i, lithium abundance
@@ -89,7 +91,13 @@ columns, abstain instead of guessing.
 
 
 ## Spectroscopic catalog selection
-Different surveys cover different parameter spaces — pick the right one:
+Different surveys cover different parameter spaces — pick the right one.
+**GATED (provenance-v2):** the `sources=["lamost"]`, `sources=["sdss"]`, and
+`sources=["desi"]` connectors below are maintenance-gated and return
+UNAVAILABLE, not data. The only live spectroscopic path in this table is
+GALAH DR3 via VizieR (`catalog "III/284/galah_dr3"`). Do not present gated-
+connector output as real rows; abstain with `<tools_returned_nothing/>` if a
+gated survey is the only path.
 
 | Survey | Resolution | Sky | Best for | Connector |
 |---|---|---|---|---|
@@ -107,31 +115,44 @@ For stellar abundances of Sun-like / RGB stars: APOGEE (IR) and GALAH (optical) 
 ## Extinction / dust map options (beyond Gaia GSP-Phot)
 For any object beyond ~1 kpc, prefer external dust maps:
 
-1. **lookup_ebv(ra, dec) / get_extinction tool** — SFD 1998 by default unless
+1. **get_extinction(ra, dec) tool** (or `astro.dust_ebv_at_position(ra, dec)` /
+   `astro.lookup_ebv_irsa(ra, dec)` in run_python) — SFD 1998 by default unless
    the tool result explicitly reports a Schlafly 2011 recalibration. Best for
    high galactic latitudes. Returns E(B-V) and A_V via R_V = 3.1.
 2. **Bayestar17/19 (Pan-STARRS-based 3D)** — use IRSA query for a distance slice. Best for galactic plane and intermediate distances.
 3. **Green et al. 2019 (3D dustmaps Python package)** — fully 3D, requires distance estimate.
 4. **Marshall+ 2006** — galactic plane (|b| < 10°), 2MASS-based.
 
-For globular clusters: SFD via lookup_ebv is sufficient (clusters are at high b and low E(B-V)).
+For globular clusters: SFD via get_extinction is sufficient (clusters are at high b and low E(B-V)).
 For galactic plane sources or HII regions: use Bayestar/Marshall to capture distance dependence.
 
 
 
 ## ADQL Usage Rules (CRITICAL)
-1. SDSS does NOT expose its own ADQL service.  You have FOUR paths for SDSS data, pick based on the query:
-   - **search_objects(sources=["sdss"])** — direct SkyServer SQL, best for cone searches, returns photometry + spec_z + photo_z with galaxy/star class.
-   - **search_objects(sources=["sdss_spec"])** — spec-only variant, 100% redshift coverage, smaller sample.
+1. SDSS does NOT expose its own ADQL service.  **GATED (provenance-v2):** the
+   direct SDSS connectors — `search_objects(sources=["sdss"])`,
+   `search_objects(sources=["sdss_spec"])`, and `run_sdss_sql` — are currently
+   maintenance-gated and return an UNAVAILABLE banner, not data (they will be
+   re-enabled once they emit independent `archive_version` provenance). Do NOT
+   route SDSS queries to them and present the result as real rows; emit a
+   `<tools_returned_nothing/>` abstention if SDSS is the only path. The only
+   live path for SDSS data right now is the **VizieR mirror**
+   `run_adql(service="vizier", query="... V/154/sdss17 ...")` below. The other
+   three paths are documented for when the gate is lifted. You have FOUR paths
+   for SDSS data, pick based on the query:
+   - **search_objects(sources=["sdss"])** (GATED — UNAVAILABLE) — direct SkyServer SQL, best for cone searches, returns photometry + spec_z + photo_z with galaxy/star class.
+   - **search_objects(sources=["sdss_spec"])** (GATED — UNAVAILABLE) — spec-only variant, 100% redshift coverage, smaller sample.
    - **run_adql(service="vizier", query="SELECT ... FROM \"V/154/sdss17\" ...")** — VizieR mirror, supports arbitrary ADQL.  Column names in `V/154/sdss17` are lowercase `ra`, `dec`, `u`, `g`, `r`, `i`, `z`, `class` (3=galaxy, 6=star), `zsp` (spec redshift), `zph` (photo-z), `objID`.  NOT `RAJ2000`/`DEJ2000`/`petroMag_r`/`psfMag_r`/`redshift` — those are common mistakes.  `V/154/sdss16` / `V/147/sdss12` are older DRs; prefer DR17 unless the paper specifically used an earlier release.  Do NOT use this path for SDSS luminosity-function samples or broad photometry+spec-z queries; VizieR SDSS tables are too slow for 500-1000 row filtered sky-region pulls.
-   - **run_sdss_sql(query="SELECT TOP N ... FROM PhotoObjAll ...")** — J3: direct SkyServer T-SQL, bypasses VizieR entirely.  USE THIS when `run_adql(service="vizier")` on a SDSS table returns "All mirrors unavailable" or any 4xx/5xx.  ALSO USE for SDSS-specific tables VizieR doesn't expose: Photoz, GalSpecInfo, GalSpecExtra, Field, emissionLinesPort, stellarMassPort.  SYNTAX IS T-SQL, NOT ADQL:
+   - **run_sdss_sql(query="SELECT TOP N ... FROM PhotoObjAll ...")** (GATED — UNAVAILABLE) — J3: direct SkyServer T-SQL, bypasses VizieR entirely.  When the gate is lifted, USE THIS when `run_adql(service="vizier")` on a SDSS table returns "All mirrors unavailable" or any 4xx/5xx.  ALSO USE for SDSS-specific tables VizieR doesn't expose: Photoz, GalSpecInfo, GalSpecExtra, Field, emissionLinesPort, stellarMassPort.  SYNTAX IS T-SQL, NOT ADQL:
      * `TOP N` not `LIMIT N`
      * `dbo.fGetNearbyObjEq(ra_deg, dec_deg, radius_arcmin)` for cone search (radius is arcmin, not degrees)
      * ALWAYS add `WHERE p.mode = 1 AND p.clean = 1` on PhotoObjAll to drop secondary detections + artefacts
      * column names are CamelCase-ish: `objID` (capital ID), `ra`, `dec`, `u`/`g`/`r`/`i`/`z` (model mags), `petroMag_u..z`, `type` (3=galaxy, 6=star), `z` (spec redshift inside SpecObjAll), `zErr`, `zWarning`
    Decision tree: "single object / tiny cone" → search_objects(sources=sdss); "SDSS luminosity function, photometry+spec-z sample, galaxy statistics, or any query needing PhotoObjAll JOIN SpecObjAll" → run_sdss_sql; "small custom VizieR-only SDSS sanity check" → run_adql(vizier, V/154/sdss17).
 
-   **run_sdss_sql example queries** (copy-paste + modify; all produce real results):
+   **run_sdss_sql example queries** (run_sdss_sql is GATED — these are
+   reference templates for when it is re-enabled, NOT calls that return real
+   rows today; do not present their output as real data while gated):
    ```
    -- SDSS galaxy luminosity function sample (Paper 3 style):
    SELECT TOP 1000 p.objID, p.ra, p.dec, p.petroMag_r, s.z
@@ -400,8 +421,12 @@ ISOCHRONES / HR DIAGRAM:
       - Valid range: 6.0 ≤ log_age ≤ 10.5; out-of-range emits a warning.
       - metallicity = [M/H] (solar = 0.0). Valid range: [-2.5, +0.5].
       - photometric_system ∈ {'gaia', 'sdss'}.
-  astro.fit_isochrone(bp_rp, abs_g, age_range_gyr=(0.01, 13))
-    -> {best_age_gyr, distance_modulus, ...}
+  astro.fit_isochrone(bp_rp, abs_mag, mag_err=None, color_err=None,
+      method='grid', photometric_system='gaia', age_range=(6.5, 10.3))
+    -> {best_fit: {log_age, metallicity, distance_modulus, A_V}, chi2,
+        chi2_reduced, method, errors_source, ...}
+    age_range is in log10(age/yr) (e.g. (6.5, 10.3)), NOT linear Gyr.
+    method='grid' for a quick fit, method='mcmc' for uncertainties.
   astro.plot_hr_diagram(bp_rp, gmag, isochrone_ages=None, title=None)
     -> matplotlib Figure
 
@@ -410,13 +435,19 @@ CLASSIFICATION / SPECTRA:
   astro.classify_variable(time, flux)         -> {class, confidence}
 
 PHOTOMETRY / DISTANCES:
-  astro.compute_absolute_magnitude(apparent_mag, distance_pc)
-  astro.compute_luminosity_distance(z, H0=70.0, Om0=0.3)
-    -> luminosity distance in Mpc (flat Lambda-CDM). For low z (z<0.01)
-       prefer a parallax-based distance instead. z must be ≥ 0; negative
-       z raises ValueError. Also accepts a `cosmology=<preset>` kwarg
-       (e.g. `cosmology="planck18"`); see the cosmology module prompt for
-       the 4 supported PART AA presets and when to use them.
+  astro.compute_absolute_magnitude(mag, redshift=None, distance_mpc=None,
+      distance_pc=None, parallax_mas=None)
+    -> absolute magnitude. Pass the apparent magnitude as `mag` and exactly
+       ONE distance indicator by keyword (e.g. distance_pc=..., parallax_mas=...).
+  astro.compute_luminosity_distance(z, H0=None, Om0=None, *, cosmology=None)
+    -> luminosity distance in Mpc (flat Lambda-CDM). When H0, Om0, and
+       cosmology are ALL left unset, it defaults to the cited `planck18`
+       preset (H0=67.36, Om0=0.3153) — NOT a generic H0=70/Om0=0.3 — so
+       report that preset, not 70/0.3. Pass explicit H0/Om0 to override,
+       or `cosmology=<preset>` (e.g. `cosmology="planck18"`); see the
+       cosmology module prompt for the 4 supported PART AA presets. For
+       low z (z<0.01) prefer a parallax-based distance instead. z must be
+       ≥ 0; negative z raises ValueError.
   astro.k_correction(z, band)
     -> Chilingarian 2010 polynomial; reliable for z ≤ 0.5. z > 0.5 emits
        partial-status warning + ~0.5 mag systematic uncertainty.

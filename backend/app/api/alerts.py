@@ -1,10 +1,11 @@
 """API endpoints for ZTF transient alert ingestion and queries."""
 
 import logging
+import math
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_db
@@ -105,12 +106,33 @@ async def cone_search(
     # Convert radius from arcsec to degrees for the SQL query
     radius_deg = radius_arcsec / 3600.0
 
-    # Query local DB (simple bounding-box filter, sufficient for small radii)
+    # Bounding-box pre-filter (coarse; may over-return a few rows, never under-return).
+    # RA half-window is widened by 1/cos(dec) so the box still spans `radius_deg`
+    # on-sky at high |dec|; cos(dec) is floored so it never blows up at the poles.
+    cos_dec = max(math.cos(math.radians(dec)), 1e-3)
+    ra_half = radius_deg / cos_dec
+    dec_lo = dec - radius_deg
+    dec_hi = dec + radius_deg
+
+    ra_lo = ra - ra_half
+    ra_hi = ra + ra_half
+    if ra_half >= 180.0:
+        # Window covers the full RA range; no RA constraint.
+        ra_pred = TransientAlert.ra.between(0.0, 360.0)
+    elif ra_lo < 0.0 or ra_hi > 360.0:
+        # Window crosses the RA=0/360 seam: match either wrapped sub-range.
+        ra_pred = or_(
+            TransientAlert.ra.between(ra_lo % 360.0, 360.0),
+            TransientAlert.ra.between(0.0, ra_hi % 360.0),
+        )
+    else:
+        ra_pred = TransientAlert.ra.between(ra_lo, ra_hi)
+
     local_stmt = (
         select(TransientAlert)
         .where(
-            TransientAlert.ra.between(ra - radius_deg, ra + radius_deg),
-            TransientAlert.dec.between(dec - radius_deg, dec + radius_deg),
+            ra_pred,
+            TransientAlert.dec.between(dec_lo, dec_hi),
         )
         .limit(200)
     )

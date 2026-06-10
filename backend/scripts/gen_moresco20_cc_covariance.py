@@ -16,7 +16,12 @@ where, exactly as in the upstream notebook's final `cov_mat`:
   * Cov_modooo[i,j] = Hz[i]*ooo_i  * Hz[j]*ooo_j      (SPS-model "one-of-others"
                                                        systematic, fully correlated)
 with imf_i, ooo_i the per-cent contributions from data_MM20.dat interpolated onto
-the 15 BC03 redshifts and divided by 100.  The notebook deliberately combines only
+the 15 BC03 redshifts and divided by 100.  data_MM20.dat tabulates the systematic
+fractions only out to z=1.475, while the H(z) table reaches z=1.965, so np.interp
+flat-clamps the IMF/OOO fractions of the highest-z point to the z=1.475 endpoint
+values (imf=0.20%, ooo=2.34%) rather than extrapolating.  This matches the upstream
+notebook, which also relies on np.interp's default constant extrapolation.  The
+notebook deliberately combines only
 diag + imf + mod_ooo (not the separate st.lib / sps columns) to avoid double-counting
 the model systematic; we reproduce that choice verbatim.
 

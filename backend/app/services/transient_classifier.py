@@ -818,9 +818,20 @@ def enrich_with_host_galaxy(ra: float, dec: float, search_radius: float = 0.02) 
             host_info["host_name"] = host.name
             host_info["host_type"] = host.object_type
             host_info["host_redshift"] = host.redshift
-            host_info["separation_arcsec"] = round(
-                ((ra - host.ra)**2 + (dec - host.dec)**2)**0.5 * 3600, 2
+            # Great-circle (haversine) separation — a flat (ra-host.ra)**2
+            # Euclidean distance overstates the RA arm by 1/cos(dec) and
+            # mishandles the 0/360 RA wrap, both of which corrupt a displayed
+            # provenance number.
+            ra1, dec1 = np.radians(ra), np.radians(dec)
+            ra2, dec2 = np.radians(host.ra), np.radians(host.dec)
+            d_ra = ra2 - ra1
+            d_dec = dec2 - dec1
+            hav = (
+                np.sin(d_dec / 2.0) ** 2
+                + np.cos(dec1) * np.cos(dec2) * np.sin(d_ra / 2.0) ** 2
             )
+            sep_deg = np.degrees(2.0 * np.arcsin(np.sqrt(hav)))
+            host_info["separation_arcsec"] = round(float(sep_deg) * 3600, 2)
             host_info["host_found"] = True
         else:
             host_info["host_found"] = False

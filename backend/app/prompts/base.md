@@ -663,8 +663,8 @@ with the listed packages + references as starting points for user-specific analy
 - When data_origin="unavailable", tell the user explicitly. Do NOT fabricate replacement data.
 - When using run_python for scientific analysis, ALL input data must come from prior tool calls (get_search_results / get_adql_results). NEVER hardcode astronomical values in Python code.
 - For star cluster analysis: use run_adql with Gaia DR3 to get real photometry and astrometry. Use fit_isochrone (which uses real PARSEC CMD 3.9 isochrones) for age determination.
-- For extinction on NEARBY objects (<1 kpc): query Gaia's ag_gspphot/ebpminrp_gspphot columns OR use lookup_ebv.
-- For extinction on DISTANT objects (>5 kpc) or LOW-METALLICITY objects ([Fe/H] < -1.5): NEVER trust ag_gspphot/mh_gspphot from Gaia. Use lookup_ebv (SFD/IRSA) for E(B-V), and SIMBAD/Harris literature values for [Fe/H].
+- For extinction on NEARBY objects (<1 kpc): query Gaia's ag_gspphot/ebpminrp_gspphot columns OR use the `get_extinction(ra, dec)` tool (`astro.dust_ebv_at_position` / `astro.lookup_ebv_irsa` in run_python).
+- For extinction on DISTANT objects (>5 kpc) or LOW-METALLICITY objects ([Fe/H] < -1.5): NEVER trust ag_gspphot/mh_gspphot from Gaia. Use `get_extinction(ra, dec)` (SFD/IRSA) for E(B-V), and SIMBAD/Harris literature values for [Fe/H].
 - For DISTANCES beyond ~3 kpc: do NOT use 1/parallax. Use literature distance modulus, Bailer-Jones geometric distance, or standard candles (RR Lyrae P-L, Cepheid P-L, red clump, TRGB).
 - For VARIABLE STAR analysis: ALWAYS query the dedicated `gaiadr3.vari_*` tables (vari_rrlyrae, vari_cepheid, vari_eclipsing_binary) for periods and classifications. Never re-derive periods from photometry alone if Gaia has already classified them.
 - If a variable-star period comes from a catalog column such as Gaia DR3

@@ -64,8 +64,18 @@ class FRBStatsConnector(BaseConnector):
                 dec_val = float(r.get("dec_j2000", r.get("dec", 0.0)) or 0.0)
                 # Filter by position cone if specified
                 if ra is not None and dec is not None:
-                    # Simple box filter (not great-circle)
-                    if abs(ra_val - ra) > radius or abs(dec_val - dec) > radius:
+                    import math
+
+                    # Dec window is unscaled; RA window widens by 1/cos(dec)
+                    # so the box covers the intended on-sky extent at high dec.
+                    if abs(dec_val - dec) > radius:
+                        continue
+                    cos_dec = max(math.cos(math.radians(dec)), 1e-3)
+                    # RA difference wrapped into [0, 180] to handle the 0/360 seam.
+                    ra_diff = abs(ra_val - ra) % 360.0
+                    if ra_diff > 180.0:
+                        ra_diff = 360.0 - ra_diff
+                    if ra_diff > radius / cos_dec:
                         continue
                 results.append(AstroObject(
                     source=self.source_name,

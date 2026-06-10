@@ -563,12 +563,17 @@ class RadioAnalysis:
                 if objs:
                     best = objs[0]
                     flux = best.extra.get("flux_1.4ghz") or best.extra.get("Fint")
+                    target = SkyCoord(ra=ra, dec=dec, unit=(u.degree, u.degree), frame="icrs")
+                    match = SkyCoord(
+                        ra=best.ra, dec=best.dec, unit=(u.degree, u.degree), frame="icrs"
+                    )
+                    separation_arcsec = target.separation(match).arcsec
                     results[survey_name] = {
                         "detected": True,
                         "flux_mJy": float(flux) if flux else None,
                         "freq_MHz": freq,
                         "name": best.name,
-                        "separation_arcsec": round(((ra - best.ra)**2 + (dec - best.dec)**2)**0.5 * 3600, 2),
+                        "separation_arcsec": round(float(separation_arcsec), 2),
                     }
                 else:
                     results[survey_name] = {"detected": False, "freq_MHz": freq}

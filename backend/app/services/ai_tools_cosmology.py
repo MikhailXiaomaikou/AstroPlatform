@@ -128,6 +128,24 @@ COSMOLOGY_TOOL_SCHEMAS = [
                     "description": "Inline distance-modulus rows with z, mu, sigma_mu.",
                 },
                 "cache_key": {"type": "string", "description": "Optional cache key containing rows."},
+                "manual_attestation": {
+                    "type": "object",
+                    "description": (
+                        "Declare the published source of inline rows so the fit becomes citeable. "
+                        "Require fields: source (free-text description, e.g. 'Riess+2022 Table 2') "
+                        "and at least one of bibcode, arxiv, doi. Optional: note. "
+                        "When provided, inline rows are upgraded from audit-only to citeable and the "
+                        "attestation is recorded in result.citations + provenance.manual_attestation."
+                    ),
+                    "properties": {
+                        "source": {"type": "string"},
+                        "bibcode": {"type": "string"},
+                        "arxiv": {"type": "string"},
+                        "doi": {"type": "string"},
+                        "note": {"type": "string"},
+                    },
+                    "required": ["source"],
+                },
                 "model": {
                     "type": "string",
                     "enum": ["flat_lcdm", "flat_wcdm", "flat_w0wa_cdm"],

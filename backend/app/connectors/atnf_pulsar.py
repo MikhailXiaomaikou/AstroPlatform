@@ -48,9 +48,25 @@ class ATNFPulsarConnector(BaseConnector):
                 if query:
                     q = QueryATNF(params=params, psrs=[query])
                 elif ra is not None and dec is not None:
+                    # Use psrqpy's native cone search (coord1/coord2/radius),
+                    # which filters via astropy SkyCoord.separation() — a true
+                    # great-circle angular distance with correct cos(dec)
+                    # weighting and RA wraparound at 0/360 built in. The old
+                    # flat (RAJD-ra)^2+(DECJD-dec)^2 disc condition under-returned
+                    # at high |dec| (the RA term was not scaled by cos(dec)) and
+                    # missed targets straddling the RA=0/360 seam.
+                    from astropy.coordinates import SkyCoord
+
+                    center = SkyCoord(ra, dec, unit="deg")
+                    coord1 = str(
+                        center.ra.to_string(unit="hourangle", sep=":", pad=True),
+                    )
+                    coord2 = str(
+                        center.dec.to_string(sep=":", pad=True, alwayssign=True),
+                    )
                     q = QueryATNF(
                         params=params,
-                        condition=f"(RAJD-{ra})*(RAJD-{ra}) + (DECJD-{dec})*(DECJD-{dec}) < {radius*radius}",
+                        coord1=coord1, coord2=coord2, radius=float(radius),
                     )
                 else:
                     return []

@@ -655,6 +655,7 @@ TOOLS = [
             "properties": {
                 "arxiv_id": {"type": "string", "description": "arXiv ID, arXiv:ID, or arxiv.org URL"},
                 "arxiv_url": {"type": "string", "description": "Optional arXiv abs/pdf URL"},
+                "url": {"type": "string", "description": "Optional arXiv URL alias (same effect as arxiv_url)."},
                 "paper": {
                     "type": "object",
                     "description": "Optional paper object from search_literature containing bibcode/arxiv_url/title/authors/year.",
@@ -790,6 +791,14 @@ TOOLS = [
                 "subsample_n_boot": {
                     "type": "integer",
                     "description": "Bootstrap iterations per subsample (default 2000).",
+                },
+                "seed": {
+                    "type": "integer",
+                    "description": (
+                        "Seed for the bootstrap RNG that drives the Bayesian fit and the "
+                        "subsample Δβ / p-value significance. Default 20260426 (deterministic); "
+                        "set it to reproduce or vary the quoted significance."
+                    ),
                 },
                 "cosmology": {
                     "type": "string",
@@ -1015,6 +1024,29 @@ TOOLS = [
                         "sdss_u, sdss_g, sdss_r, sdss_i, sdss_z, twomass_j, twomass_h, "
                         "twomass_ks, wise_w1, wise_w2. "
                         "Example: {\"sdss_g\": 20.1, \"sdss_r\": 19.5, \"sdss_i\": 19.2}"
+                    ),
+                },
+                "mag_errors": {
+                    "type": "object",
+                    "description": (
+                        "Optional dict mapping the same filter band names to 1-sigma "
+                        "magnitude uncertainties, used to weight the SED fit. "
+                        "Example: {\"sdss_g\": 0.05, \"sdss_r\": 0.04}"
+                    ),
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["enhanced_template", "template", "ml", "hybrid"],
+                    "description": (
+                        "Estimator path. Default 'enhanced_template' (research-grade). "
+                        "The 7-template demo path requires allow_demo=true."
+                    ),
+                },
+                "allow_demo": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true to permit the 7-template demo path (not "
+                        "publication-grade); otherwise demo mode is blocked. Default false."
                     ),
                 },
             },
@@ -1259,8 +1291,7 @@ TOOLS = [
         "name": "fit_rv_orbit",
         "description": (
             "Fit a Keplerian radial velocity orbit (exoplanet or spectroscopic binary). "
-            "Uses radvel (Fulton+ 2018 PASP 130, 044504) for well-sampled data or "
-            "the-joker (Price-Whelan+ 2017 ApJ 837, 20) for sparse binary sampling. "
+            "Uses radvel (Fulton+ 2018 PASP 130, 044504) for well-sampled data. "
             "Returns best-fit Keplerian parameters (P, K, e, ω, t_p) plus mass function."
         ),
         "input_schema": {
@@ -1271,7 +1302,12 @@ TOOLS = [
                 "rv_errs": {"type": "array", "items": {"type": "number"}, "description": "RV uncertainties in m/s"},
                 "period_min": {"type": "number", "description": "Minimum search period in days"},
                 "period_max": {"type": "number", "description": "Maximum search period in days"},
-                "method": {"type": "string", "enum": ["radvel", "thejoker"], "description": "radvel for dense sampling, thejoker for sparse"},
+                "method": {"type": "string", "enum": ["radvel"], "description": "Keplerian fitter. Only radvel is implemented."},
+                "use_mcmc": {"type": "boolean", "description": "Run an emcee MCMC stage for parameter uncertainties after the optimizer. Default true."},
+                "n_walkers": {"type": "integer", "description": "Number of emcee walkers when use_mcmc is true. Default 32."},
+                "n_steps": {"type": "integer", "description": "Number of emcee steps when use_mcmc is true. Default 1500."},
+                "n_burn": {"type": "integer", "description": "Number of emcee burn-in steps to discard. Default 500."},
+                "random_seed": {"type": "integer", "description": "Optional seed for the MCMC RNG so the reported uncertainties are reproducible."},
             },
             "required": ["times", "rvs", "rv_errs"],
         },
@@ -1286,12 +1322,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "fits_path": {"type": "string", "description": "Path to FITS image"},
-                "segmap": {"type": "string", "description": "Optional segmentation map FITS path"},
-                "psf": {"type": "string", "description": "Optional PSF FITS path for convolution"},
-                "ra": {"type": "number", "description": "Source RA (if extracting cutout)"},
-                "dec": {"type": "number", "description": "Source Dec"},
-                "size_arcsec": {"type": "number", "description": "Cutout size in arcsec"},
+                "fits_path": {"type": "string", "description": "Path to FITS image. The tool runs its own internal 1.5-sigma threshold segmentation on the full frame (no external segmap/PSF/cutout)."},
             },
             "required": ["fits_path"],
         },
@@ -1431,10 +1462,11 @@ TOOLS = [
     {
         "name": "get_extinction",
         "description": (
-            "Look up interstellar extinction A_V (and E(B-V)) at a sky "
-            "position using the Schlegel-Finkbeiner-Davis 1998 2-D dust map "
-            "(or a 3-D map if dist_pc is provided and a 3-D map is installed).  "
-            "Use this before comparing photometry to an isochrone or a model SED."
+            "Look up the total line-of-sight interstellar extinction A_V (and "
+            "E(B-V)) at a sky position using the Schlegel-Finkbeiner-Davis 1998 "
+            "2-D dust map.  Returns the integrated column (not a distance-resolved "
+            "value).  Use this before comparing photometry to an isochrone or a "
+            "model SED."
         ),
         "input_schema": {
             "type": "object",
@@ -1444,10 +1476,6 @@ TOOLS = [
                 "band": {
                     "type": "string",
                     "description": "Return extinction in this band (G, V, B, R, J, H, K) in addition to A_V.",
-                },
-                "distance_pc": {
-                    "type": "number",
-                    "description": "Optional distance in pc; triggers a 3-D dust lookup if available.",
                 },
                 "r_v": {"type": "number", "description": "R_V for the extinction curve.  Default 3.1."},
             },
