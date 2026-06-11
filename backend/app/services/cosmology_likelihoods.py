@@ -394,17 +394,21 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         observables=("DV_over_rd",),
         units={"distance_ratios": "dimensionless", "redshift": "dimensionless"},
         applicable_models=BAO_MODELS,
-        likelihood_family="gaussian_bao",
+        likelihood_family="bao_mixed_gaussian_table",
         covariance=CovarianceSpec(
-            kind="diagonal covariance",
+            kind="mixed: Gaussian (6dFGS) + full non-Gaussian chi2(alpha) table (MGS)",
             provided=True,
             description=(
-                "Two independent low-redshift D_V/r_d anchors (6dFGS z=0.106, "
-                "SDSS MGS z=0.15) as compiled in Aubourg et al. 2015 Table II; "
-                "treated as uncorrelated (different surveys / volumes)."
+                "6dFGS z=0.106 stays the Aubourg+2015 compilation Gaussian "
+                "(D_V/r_d = 3.047 +/- 0.137). SDSS MGS z=0.15 is evaluated from "
+                "the FULL released chi2(alpha) table (Ross+2015; the same "
+                "399-point sdss_MGS_prob.txt cobaya's bao.sdss_dr7_mgs uses, "
+                "alpha = (D_V/r_d)/4.29720761315 over [0.8005, 1.1985]) — the "
+                "previous 4.470 +/- 0.17 Gaussian was an approximation of this "
+                "non-Gaussian likelihood (2026-06-12 upgrade)."
             ),
-            url="https://arxiv.org/abs/1411.1074",
-            format="Compressed Gaussian D_V/r_d measurements",
+            url="https://github.com/CobayaSampler/bao_data",
+            format="Gaussian point + chi2(alpha) lookup table",
         ),
         source_url="https://arxiv.org/abs/1411.1074",
         citations=(
@@ -413,13 +417,34 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             DatasetCitation(label="Aubourg et al. cosmological implications compilation", year=2015, arxiv="1411.1074"),
         ),
         notes=(
-            "Pre-DESI low-z BAO anchor: only the two D_V/r_d points (6dFGS z=0.106, "
-            "SDSS MGS z=0.15) are sourced and executed in-process. Does NOT include "
-            "the BOSS/eBOSS DR16 intermediate-z bins — use desi_dr1_bao for z>0.15 BAO."
+            "Pre-DESI low-z BAO anchor: only the two points (6dFGS z=0.106, "
+            "SDSS MGS z=0.15) are sourced and executed in-process. MGS runs on "
+            "the released non-Gaussian chi2(alpha) table (sha256-pinned, "
+            "numerically identical spline convention to cobaya); 6dFGS remains "
+            "a literature-typed Gaussian — its release IS a single number. "
+            "execution_mode 'compressed_gaussian' names the in-process "
+            "compressed channel, not the MGS half's statistics (which are "
+            "non-Gaussian). Does NOT include the BOSS/eBOSS DR16 "
+            "intermediate-z bins — use desi_dr1_bao for z>0.15 BAO."
         ),
         cobaya_likelihood="external:bao.sdss_6df_legacy",
         cosmosis_module="likelihood/bao/sdss_dr16_6df/sdss_6df_bao.py",
         execution_mode="compressed_gaussian",
+        data_products=(
+            DataProductSpec(
+                product_type="bao_alpha_chi2_table",
+                role="mgs_alpha_chi2_table",
+                url="https://github.com/CobayaSampler/bao_data",
+                format="sdss_MGS_prob.txt (399 chi2 values over alpha in [0.8005, 1.1985])",
+                description=(
+                    "SDSS DR7 MGS full BAO likelihood: chi2 as a function of the "
+                    "dilation parameter alpha = (D_V/r_d)/4.29720761315."
+                ),
+                rows=399,
+                local_path="data/cosmology/sdss_6df_bao/sdss_MGS_prob.txt",
+                sha256="c252e18fefc69b76e5918852944739b440c8fbbedffd4477cb72f532627de4db",
+            ),
+        ),
     ),
     # ── PART AI Phase 5: RSD f·σ8 multi-z compilation (Alam+ 2021) ──
     # eBOSS DR16 cosmology paper (arXiv:2007.08991) reports growth-rate
@@ -2571,6 +2596,116 @@ def _load_verified_diagonal_vector(
         return {"vector": None, "sha256": None, "hash_verified": False, "cov_fidelity": "unverified"}
 
 
+# ── SDSS MGS full non-Gaussian alpha likelihood (2026-06-12) ────────────────
+# cobaya's bao.sdss_dr7_mgs convention: the released product is a 399-point
+# chi2(alpha) table over alpha = (D_V(0.15)/r_d) / MGS_ALPHA_RESCALE, where
+# MGS_ALPHA_RESCALE = D_V_fid/r_s_fid = 638.9518/148.69 (Ross+2015 fiducial).
+# cobaya splines -chi2/2 (UnivariateSpline, s=0) and returns logp=-inf outside
+# the tabulated range; we use the SAME spline construction (numerical parity)
+# and a large finite chi2 outside bounds so importance weights vanish.
+MGS_ALPHA_RESCALE = 4.29720761315
+MGS_ALPHA_BOUNDS = (0.8005, 1.1985)
+MGS_OUT_OF_BOUNDS_CHI2 = 1.0e10
+
+
+@lru_cache(maxsize=1)
+def load_verified_mgs_prob_table() -> dict[str, Any]:
+    """Load + sha256-verify the vendored MGS chi2(alpha) table.
+
+    Returns {alpha, chi2, sha256, hash_verified=True} or raises ValueError
+    (message always contains 'unverified') on missing/unreadable/tampered/
+    malformed — the chi2 path REFUSES to run on an unverified table, never a
+    silent fallback to the retired Gaussian approximation.  Raising instead of
+    returning an unverified record matters for the cache: lru_cache never
+    caches exceptions, so one transient I/O failure cannot poison the process
+    until restart the way a cached failure record would.
+    """
+    pinned = _registry_product_sha256("sdss_6df_bao", "mgs_alpha_chi2_table")
+    path = _VENDORED_COSMO_DATA_DIR / "sdss_6df_bao" / "sdss_MGS_prob.txt"
+    if not path.exists():
+        raise ValueError(
+            f"SDSS MGS chi2(alpha) table is unverified: vendored file missing at {path}."
+        )
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(
+            f"SDSS MGS chi2(alpha) table is unverified: vendored file unreadable ({exc})."
+        ) from exc
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != pinned:
+        raise ValueError(
+            "SDSS MGS chi2(alpha) table is unverified: vendored file bytes do not "
+            "match the registry sha256 pin; refusing to compute chi2 from tampered "
+            "or stale data."
+        )
+    # Parse the SAME bytes the digest certified (no second read between hash
+    # and parse).
+    chi2 = np.loadtxt(io.StringIO(raw.decode("utf-8")), comments="#")
+    if chi2.ndim != 1 or chi2.size < 10:
+        raise ValueError(
+            f"SDSS MGS chi2(alpha) table is unverified: expected a 1-column chi2 "
+            f"table, got shape {chi2.shape}."
+        )
+    alpha = np.linspace(MGS_ALPHA_BOUNDS[0], MGS_ALPHA_BOUNDS[1], chi2.size)
+    return {
+        "alpha": alpha,
+        "chi2": np.asarray(chi2, dtype=float),
+        "sha256": digest,
+        "hash_verified": True,
+    }
+
+
+@lru_cache(maxsize=1)
+def _mgs_chi2_spline():
+    """Interpolating spline of -chi2/2 over alpha — cobaya's exact construction.
+
+    Raises ValueError (via the loader) on an unverified table; the exception is
+    not cached, so a later call retries the load.  NOTE: like cobaya, the cubic
+    interpolant can overshoot slightly below the table minimum (chi2 marginally
+    negative near the best fit) — accepted, because numerical parity with
+    cobaya's construction is the spec here.
+    """
+    from scipy.interpolate import UnivariateSpline
+
+    table = load_verified_mgs_prob_table()
+    return UnivariateSpline(table["alpha"], -table["chi2"] / 2.0, s=0, ext=2)
+
+
+def _sdss_6df_mgs_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """6dFGS Gaussian point + SDSS MGS full chi2(alpha) table.
+
+    The 2-row mean vector still supplies the (z, quantity) prediction
+    scaffold and the 6dFGS Gaussian; the MGS row's Gaussian sigma is retired
+    in favour of the released non-Gaussian table.
+    """
+    spline = _mgs_chi2_spline()  # raises ValueError ('unverified') on a bad table
+    mean_vector, cov = _BAO_DATA["sdss_6df_bao"]
+    # The table lookup below is positional (row 1 = MGS); refuse loudly if the
+    # mean vector's row order ever changes, instead of silently feeding the
+    # 6dFGS prediction into the MGS table.
+    if not (
+        abs(mean_vector[0][0] - 0.106) < 1e-9 and abs(mean_vector[1][0] - 0.150) < 1e-9
+    ):
+        raise ValueError(
+            "sdss_6df_bao mean-vector row order changed (expected row 0 = 6dFGS "
+            f"z=0.106, row 1 = MGS z=0.15, got z={mean_vector[0][0]}, "
+            f"{mean_vector[1][0]}); MGS chi2(alpha) table mapping is positional."
+        )
+    predictions = _bao_predictions(samples, parameter_order, mean_vector)
+    # 6dFGS z=0.106 — Gaussian as before.
+    chi2 = ((predictions[:, 0] - mean_vector[0][1]) ** 2) / float(cov[0][0])
+    # SDSS MGS z=0.15 — alpha lookup in the released table.
+    alpha = predictions[:, 1] / MGS_ALPHA_RESCALE
+    mgs_chi2 = np.full(alpha.shape, MGS_OUT_OF_BOUNDS_CHI2, dtype=float)
+    in_bounds = (alpha >= MGS_ALPHA_BOUNDS[0]) & (alpha <= MGS_ALPHA_BOUNDS[1])
+    if np.any(in_bounds):
+        mgs_chi2[in_bounds] = -2.0 * spline(alpha[in_bounds])
+    return chi2 + mgs_chi2
+
+
 @lru_cache(maxsize=None)
 def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
     """Load a BAO (mean, covariance) from the vendored, sha256-pinned data-product
@@ -2599,9 +2734,24 @@ def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
             "sha256": None, "hash_verified": False, "cov_fidelity": fidelity,
         }
 
+    if dataset_key == "sdss_6df_bao":
+        # Mixed probe (2026-06-12): the 6dFGS half is a hand-typed literature
+        # Gaussian, but the MGS half reads the sha256-pinned released
+        # chi2(alpha) table — so the stamp must carry the table's verification.
+        # Verified -> 'literature_typed' (the weakest half — the hand-typed
+        # 6dFGS Gaussian — sets the fidelity grade) + the table digest;
+        # tampered/missing -> 'unverified' (audit-dirty, publication-blocked).
+        base = _fallback("literature_typed")
+        try:
+            table = load_verified_mgs_prob_table()
+        except ValueError as exc:
+            logger.warning("sdss_6df_bao MGS table stamp: %s", exc)
+            return {**base, "cov_fidelity": "unverified"}
+        return {**base, "sha256": table["sha256"], "hash_verified": True}
+
     if not (mean_path.exists() and cov_path.exists()):
         # expected pinned product missing -> unverified (blocks publication);
-        # no released product (e.g. 6dFGS+MGS) -> honest literature_typed.
+        # no released product -> honest literature_typed.
         return _fallback("unverified" if pinned else "literature_typed")
     try:
         mean_digest = hashlib.sha256(mean_path.read_bytes()).hexdigest()
@@ -2989,9 +3139,13 @@ EBOSS_DR16_FSIGMA8: tuple[tuple[float, float, float], ...] = load_verified_rsd_d
 # ── T1-U7: self-policing pin enforcement ────────────────────────────────────
 # Single source of truth: every in-process-executable probe must read a
 # sha256-verified vendored file for the role its loader checks.  Honest
-# exception: a probe with no released data file (a hand-typed literature
-# compilation) is allowlisted and must certify 'literature_typed' instead.
-_NO_RELEASED_FILE_OK = frozenset({"sdss_6df_bao"})
+# exception: a MIXED probe whose Gaussian half is a hand-typed literature
+# compilation with no released file (6dFGS) while its other half reads a
+# sha256-pinned released file (the MGS chi2(alpha) table, 2026-06-12).  It is
+# allowlisted to certify 'literature_typed' (the weakest half sets the grade)
+# but its pinned half MUST still verify — tampering the table makes the audit
+# dirty, not just the runtime loud.
+_MIXED_LITERATURE_PLUS_PINNED_OK = frozenset({"sdss_6df_bao"})
 
 
 def _executable_probe_keys() -> set[str]:
@@ -3011,8 +3165,9 @@ def _executable_probe_keys() -> set[str]:
 def audit_executable_pins() -> list[str]:
     """Issues (empty == clean): every in-process-executable probe must read a
     sha256-verified vendored file (hash_verified True, fidelity full/diagonal),
-    EXCEPT allowlisted no-released-file probes, which must certify
-    'literature_typed'.  Used by tests and scripts/audit_registry.py so a future
+    EXCEPT allowlisted mixed probes (hand-typed Gaussian half + pinned-file
+    half), which must certify 'literature_typed' AND verify their pinned half.
+    Used by tests and scripts/audit_registry.py so a future
     executable probe cannot ship without a pinned, verified data product.
 
     The check relies on each loader's own hash_verified/cov_fidelity — which can
@@ -3036,11 +3191,15 @@ def audit_executable_pins() -> list[str]:
         else:
             verified = load_verified_pantheon_plus_data(key)
 
-        if key in _NO_RELEASED_FILE_OK:
-            if verified["cov_fidelity"] != "literature_typed":
+        if key in _MIXED_LITERATURE_PLUS_PINNED_OK:
+            if verified["cov_fidelity"] != "literature_typed" or not verified.get(
+                "hash_verified"
+            ):
                 issues.append(
-                    f"{key}: allowlisted no-released-file probe must certify "
-                    f"'literature_typed', got {verified['cov_fidelity']!r}"
+                    f"{key}: mixed literature+pinned probe must certify "
+                    f"'literature_typed' with its pinned half sha256-verified, got "
+                    f"cov_fidelity={verified['cov_fidelity']!r}, "
+                    f"hash_verified={verified.get('hash_verified')!r}"
                 )
             continue
 
@@ -4647,6 +4806,20 @@ def _draw_importance_posterior(
     chi2 = chi2[finite]
     log_proposal_pdf = log_proposal_pdf[finite]
     best_chi2 = float(np.min(chi2))
+    if best_chi2 >= 0.5 * MGS_OUT_OF_BOUNDS_CHI2:
+        # Every proposal sample carries an out-of-bounds likelihood penalty
+        # (e.g. the whole prior volume maps outside the MGS chi2(alpha) table
+        # range).  A CONSTANT penalty cancels in the normalized weights below,
+        # so continuing would silently drop that constraint and report a
+        # posterior shaped only by the remaining data — refuse loudly instead
+        # (cobaya's equivalent is logp = -inf everywhere).
+        raise ValueError(
+            "no importance-sampling proposal has likelihood support: every "
+            "sample hit an out-of-bounds penalty (best chi2 = "
+            f"{best_chi2:.3g}); refusing to report a posterior that would "
+            "silently drop that dataset's constraint. Check the prior ranges "
+            "against the dataset's tabulated support."
+        )
     # Importance weight: w = p(theta|data) / q(theta).  The numerator is
     # exp(-0.5 chi²); the denominator is the proposal pdf q.  Working in log-
     # space and subtracting the max keeps the exp() inside float range.
@@ -4666,6 +4839,10 @@ def _draw_importance_posterior(
 def _bao_chi2_samples(
     samples: np.ndarray, parameter_order: list[str], key: str = "desi_dr1_bao"
 ) -> np.ndarray:
+    if key == "sdss_6df_bao":
+        # MGS half runs on the released non-Gaussian chi2(alpha) table
+        # (2026-06-12 fidelity upgrade); 6dFGS half stays Gaussian.
+        return _sdss_6df_mgs_chi2_samples(samples, parameter_order)
     if load_verified_bao_data(key)["cov_fidelity"] == "unverified":
         raise ValueError(
             f"BAO {key} covariance failed sha256 verification (or its vendored "
@@ -5499,6 +5676,13 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 "dataset_key": entry.key,
                 "source_locator": "DESI DR1 BAO ALL_GCcomb mean/covariance files",
                 "approximation": "Gaussian BAO mean/covariance evaluated against flat LCDM distances",
+                "data_products": [product.to_dict() for product in entry.data_products],
+            })
+        elif entry.key == "sdss_6df_bao":
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": "Aubourg+2015 Table II (6dFGS Gaussian) + CobayaSampler/bao_data sdss_MGS_prob.txt (Ross+2015 MGS chi2(alpha) table)",
+                "approximation": "Mixed: 6dFGS z=0.106 hand-typed Gaussian (D_V/r_d = 3.047 ± 0.137) + SDSS MGS z=0.15 full non-Gaussian chi2(alpha) lookup (cobaya's spline convention, alpha = (D_V/r_d)/4.29720761315)",
                 "data_products": [product.to_dict() for product in entry.data_products],
             })
         elif entry.key == "cosmic_chronometers":

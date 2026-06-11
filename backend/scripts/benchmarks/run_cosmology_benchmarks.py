@@ -649,20 +649,25 @@ def bench_eboss_fsigma8_growth() -> dict[str, Any]:
 
 
 def bench_sdss_6df_bao_executable() -> dict[str, Any]:
-    """6dFGS + SDSS MGS low-z BAO executable (2B, 2026-05-29).
+    """6dFGS + SDSS MGS low-z BAO executable (2B, 2026-05-29; MGS table 2026-06-12).
 
     Pins (1) the D_V/r_d predictions at the Planck 2018 fiducial (H0=67.36,
     Ωm=0.3153, r_d=147.09) against the two sourced anchors — 6dFGS z=0.106 →
-    3.047±0.137 and SDSS MGS z=0.15 → 4.47±0.17 (Aubourg+2015 Table II) — both
-    within ~1σ; (2) the fixed-cosmology χ²/2 is order-unity; (3) that
-    run_likelihood_chain now executes sdss_6df_bao in-process via the generalized
-    per-dataset BAO registry instead of the external-Cobaya stub.
+    3.047±0.137 and SDSS MGS z=0.15 → 4.47±0.17 (Aubourg+2015 Table II; the
+    MGS Gaussian is documentation-only since the table upgrade) — both within
+    ~1.5σ; (2) the total χ² decomposes EXACTLY into the 6dFGS Gaussian term +
+    the MGS non-Gaussian chi2(alpha) table lookup at the fiducial alpha (the
+    2026-06-12 fidelity upgrade: the hand-typed 4.47±0.17 Gaussian is retired
+    from the fit); (3) that run_likelihood_chain executes sdss_6df_bao
+    in-process via the generalized per-dataset BAO registry.
     """
     from app.services.cosmology_likelihoods import (
         run_likelihood_chain,
+        MGS_ALPHA_RESCALE,
         SDSS_6DF_BAO_MEAN_VECTOR,
         _bao_predictions,
         _bao_chi2_samples,
+        _mgs_chi2_spline,
     )
     order = ["H0", "omegam", "rd"]
     theta = np.array([[67.36, 0.3153, 147.09]])
@@ -671,6 +676,9 @@ def bench_sdss_6df_bao_executable() -> dict[str, Any]:
     sigma = (0.137, 0.17)
     obs = (3.047, 4.470)
     pulls = [abs(float(pred[i]) - obs[i]) / sigma[i] for i in range(2)]
+    gauss_6df = ((float(pred[0]) - obs[0]) ** 2) / sigma[0] ** 2
+    mgs_table = -2.0 * float(_mgs_chi2_spline()(float(pred[1]) / MGS_ALPHA_RESCALE))
+    decomposition_err = abs(chi2 - (gauss_6df + mgs_table))
     r = run_likelihood_chain(
         model="lcdm", dataset_keys=["sdss_6df_bao"], n_samples=2000, random_seed=42
     )
@@ -681,16 +689,20 @@ def bench_sdss_6df_bao_executable() -> dict[str, Any]:
     return {
         "pass": (
             max(pulls) < 1.5
+            and decomposition_err < 1e-9
             and 0.1 < chi2 / 2 < 2.0
             and executed
         ),
         "pred_dv_rd_z0106": round(float(pred[0]), 4),
         "pred_dv_rd_z015": round(float(pred[1]), 4),
         "pulls_sigma": [round(p, 2) for p in pulls],
+        "chi2_6df_gaussian": round(gauss_6df, 4),
+        "chi2_mgs_table": round(mgs_table, 4),
+        "chi2_decomposition_err": decomposition_err,
         "reduced_chi2_planck": round(chi2 / 2, 4),
         "chain_tier": r["chain_tier"],
         "executed_in_process": executed,
-        "target": "D_V/r_d within 1.5σ of 6dFGS/MGS, χ²/2 order-unity, sdss_6df runs in-process",
+        "target": "pulls<1.5σ, χ² = 6dF Gaussian + MGS table exactly, χ²/2 order-unity, runs in-process",
     }
 
 

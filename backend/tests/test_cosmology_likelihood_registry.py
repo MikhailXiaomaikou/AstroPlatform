@@ -787,8 +787,9 @@ def test_eboss_dr16_rsd_complements_sdss_6df_bao_independently() -> None:
     # Different probes
     assert bao.probe == "bao"
     assert rsd.probe == "rsd"
-    # Different likelihood families
-    assert bao.likelihood_family == "gaussian_bao"
+    # Different likelihood families (sdss_6df_bao: mixed since the 2026-06-12
+    # MGS chi2(alpha)-table upgrade — 6dFGS Gaussian + MGS non-Gaussian table)
+    assert bao.likelihood_family == "bao_mixed_gaussian_table"
     assert rsd.likelihood_family == "gaussian_rsd"
     # Different observables (BAO uses distance ratios, RSD uses f·sigma8)
     assert "f_sigma8" not in bao.observables
