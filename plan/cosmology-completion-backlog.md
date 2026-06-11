@@ -20,7 +20,8 @@
 - [ ] **in-process 压缩路径的扩展模型名不副实(2026-06-12 新发现,设计决策——等用户拍板)**:in-process 路径从不采样 mnu(压缩核不响应)也从不采样 omegak(距离核 flat-only)——选 lcdm_mnu / ok_lcdm 跑压缩链得到与 lcdm 相同的结果但带着扩展模型名。该硬拦(扩展模型 + 纯压缩数据集 → 明确拒绝并指引 CMB 路径)还是软警告,定了再做。
 
 ## P2 — 数据/likelihood 保真度(模板成熟,性价比高)
-- [ ] **注册表"external-only 但可廉价转 in-process"巡查**:按 ce1245f 的教训(DR2 = vendor-2-files 级),扫一遍 28 个 entry 里 execution_mode=external/config-only 的,凡 CobayaSampler 有现成钉得住的数据文件且 in-process 预测器已覆盖其 observables 的,列出来逐个接;没有的注明原因划掉。
+- [ ] **SDSS MGS 非高斯 likelihood 升级**(2026-06-12 普查产物):cobaya 的 sdss_dr7_mgs 用完整 prob(alpha) 分布文件(bao_data/sdss_MGS_prob.txt,样条查表),我们 sdss_6df_bao 条目里的 MGS 半边只是手打高斯近似。升级 = vendor prob 文件 + 钉死 + in-process 实现 alpha 概率查表 chi2 + 锚点测试。中型工程,真保真收益。
+- [ ] **Union3 完整 binned 距离模数向量**(2026-06-12 普查产物):cobaya 有 sn.union3 官方 likelihood(数据在 CobayaSampler/sn_data);现 union3 条目是压缩高斯。照 des_sn5yr 先例(npz vendor + 偏移边缘化 chi2 + 新 SN key 全部 dispatch 点加 else-raise)。中型工程。
 
 ## P3 — 防线与测试纵深
 - [ ] **盲测 F 组扩容**:F1 只覆盖 LFR 链;给 A1(likelihood chain)和 abstention 路径各加一条特异度用例(干净回合不许被扣/降级),沿用 hard:true。
@@ -28,6 +29,7 @@
 - [ ] **gate 事件首份周报**:积累一周事件后跑 triage,把 (gate, action) 分布和疑似误杀清单写进本文件,作为后续闸门调优依据。
 
 ## 已完成
+- [x] **注册表 external-only 巡查** (2026-06-12): 29 条全扫。结论:**vendor-2-files 级的便宜转换已清零**。逐类判定——4 条 Planck (plik_lite/lowl×2/lensing) 已是真 cobaya 执行体;planck_pr4_lensing/spt3g_cmb/act_dr6_lensing 需外部包(重,维持 pending,PR4 与 2018 lensing 互斥已设);6 条 H0/BBN 标量先验本来就是单数字,literature-typed 合法终态(6dF 同理:cobaya yaml 里就一个元组);WL 三条 = 红线;planck2018_compressed 的"完整版"即 plik_lite(已有)。真发现两条新保真项(MGS 非高斯 prob 分布、Union3 完整向量)已入 P2。另:盲测 06-11 班实为延迟 2.6h 后成功(非丢弃),修正前判;错峰 cron 仍是对症药。
 - [x] **fit_line_lfr censoring/上限** (2026-06-12): opt-in `include_upper_limits`(默认关,全部既有基线不动)。物理纪律:真非探测没有线宽,x 绝不发明——只收 '<' 方向且表格真给 FWHM(+err) 的行(Kelly 2007 delta,仅贝叶斯;OLS 配上限/采样器失败都响亮拒绝)。**对抗审查抓 1 blocker + 2 major 全修**:censored 行原本跳过 L′ 单位转换与宇宙学重算(混参考系 likelihood,live-repro)→ 现走与探测完全相同的三段后处理(宇宙学/单位/透镜守卫);透镜上限绕过 mu 守卫 → 同门拦截;censored 行引用未入池 → citation_keys 并集。bare limit 的 ysig=中位探测误差(计数申报),零误差中位数响亮拒绝,<5 探测有专属 error_class。9 个回归测试。验证: benchmarks 22/22 + audit 净 + 全量 2323 绿。
 - [x] **Planck 2018 lensing native 接入** (2026-06-12): CMBlikes native(smica consext8,9 bins)。vendor 最小集 1.3MB(5 文件 + 2 个窗口目录);窗口是 χ²-load-bearing(plik_lite bweight 教训),为此给 `_verify_pinned_cmb_data` 加了**目录聚合摘要**机制(sorted 文件名+字节,改/增/删/重命名任一窗口都翻红,机制本身有单测)。lensing 经 planck_calib 消费 A_planck → 进 CMB_APLANCK_KEYS;与 planck_pr4_lensing 互斥(同源 Planck 图)。锚点:−2lnL=8.82 / 9 bins(χ²/dof≈0.98,合发表值)。至此 clik-free Planck 2018 全套到齐:TT/TE/EE + lowE/lowT + lensing。验证: 56 目标测试 + smoke 4/4 + benchmarks 22/22 + audit 29 净 + 全量 2314 绿。
 - [x] **ok_* 曲率模型在 CMB 路径** (2026-06-12): 双重实锤——`curved` 不是 CAMB 参数(CAMBUnknownArgumentError,所有 ok_* CMB 链在启动即死)且 omegak 从未进采样。修复 = 删伪参数 + omegak 进 CMB 参数序(先验 ±0.3)+ 把 w0→w 的别名机制泛化为 COBAYA_PARAM_ALIASES 表(omegak→omk)。物理判据:omegak=0 回 Λ 锚点 584.45,omegak=0.02 → 10992(声学峰对曲率极敏感),锁进回归测试。验证: smoke 4/4 + benchmarks 22/22 + audit 净 + 全量 2307 绿。
