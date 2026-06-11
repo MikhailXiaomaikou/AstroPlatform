@@ -31,7 +31,7 @@ python3 -c "import py_compile, glob; [py_compile.compile(f, doraise=True) for f 
 
 # Science-regression benchmarks (run from backend/ — these live in backend/scripts/; CI-runnable, no LLM, no network)
 python3 scripts/benchmarks/run_cosmology_benchmarks.py    # pinned baselines (22 as of 2026-06-10)
-python3 scripts/audit_registry.py                          # dataset-registry audit (26 entries as of 2026-06-10)
+python3 scripts/audit_registry.py                          # dataset-registry audit (28 entries as of 2026-06-11)
 python3 scripts/audit_citation_pool.py                     # bibcode reachability
 
 # Daily blind tests (run from backend/; LLM, real prompt → real chat path)

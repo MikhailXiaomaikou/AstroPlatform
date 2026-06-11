@@ -143,6 +143,39 @@ def test_build_cobaya_yaml_has_required_sections(tmp_path: Path) -> None:
     assert "output:" in yaml
 
 
+def test_build_cobaya_yaml_w0_is_dropped_and_aliased_to_w(tmp_path: Path) -> None:
+    # cobaya/CAMB name the CPL pair (w, wa) — sampling "w0" directly dies at
+    # model build ("Could not find anything to use input parameter(s) {'w0'}").
+    # The builder must emit drop: true on w0 plus a dynamic `w` alias, keeping
+    # the platform's "w0" name in the chain columns.
+    entries = _validate_dataset_selection("w0wa_cdm", ["spt3g_cmb"])
+    yaml = _build_cobaya_yaml(
+        model_key="w0wa_cdm",
+        entries=entries,
+        prior_bounds={"H0": (60.0, 80.0), "w0": (-2.0, -0.3), "wa": (-3.0, 2.0)},
+        parameter_order=["H0", "w0", "wa"],
+        sampler="evaluate",
+        output_prefix=tmp_path / "chain",
+        seed=12345,
+    )
+    w0_block = yaml.split("  w0:\n", 1)[1].split("\n  wa:", 1)[0]
+    assert "drop: true" in w0_block
+    assert 'value: "lambda w0: w0"' in yaml
+    assert "derived: false" in yaml
+    # wcdm samples plain "w" — no drop/alias machinery there.
+    yaml_wcdm = _build_cobaya_yaml(
+        model_key="wcdm",
+        entries=entries,
+        prior_bounds={"H0": (60.0, 80.0), "w": (-2.0, -0.3)},
+        parameter_order=["H0", "w"],
+        sampler="evaluate",
+        output_prefix=tmp_path / "chain",
+        seed=12345,
+    )
+    assert "drop: true" not in yaml_wcdm
+    assert "lambda" not in yaml_wcdm
+
+
 def test_build_cobaya_yaml_packages_path_when_env_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

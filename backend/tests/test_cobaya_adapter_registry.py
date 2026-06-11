@@ -27,8 +27,13 @@ def test_resolve_unknown_external_adapter_returns_none():
 
 
 # Adapters whose real Cobaya import path has been filled (step 3). Each MUST have
-# a dedicated resolve test (e.g. test_planck_pliklite.py for plik_lite).
-FILLED_ADAPTERS = {"external:planck_2018_highl_plik.TTTEEE_lite_native"}
+# a dedicated resolve test (e.g. test_planck_pliklite.py for plik_lite,
+# test_planck_lowl.py for the low-l pair).
+FILLED_ADAPTERS = {
+    "external:planck_2018_highl_plik.TTTEEE_lite_native",
+    "external:planck_2018_lowl.TT",
+    "external:planck_2018_lowl.EE",
+}
 
 
 def test_every_unfilled_adapter_is_a_todo_today():

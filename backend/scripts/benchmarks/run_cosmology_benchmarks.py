@@ -473,15 +473,24 @@ def bench_oracle_genuine_reproductions() -> dict[str, Any]:
 
 
 def bench_model_comparison_delta() -> dict[str, Any]:
-    """Real model comparison Δχ²/ΔAIC/ΔBIC (3.2, 2026-05-29).
+    """Real model comparison Δχ²/ΔAIC/ΔBIC (3.2, 2026-05-29; dataset switched
+    2026-06-11).
 
-    compute_model_comparison(lcdm, wcdm) on DESI BAO + Planck compressed must
-    return finite deltas, exactly 1 extra parameter (w), and NOT prefer wCDM —
-    w≈-1 there, so the extra freedom buys no fit improvement and AIC favors the
-    simpler ΛCDM. Guards the formerly-hardcoded delta_chi²=0.0 placeholder."""
+    compute_model_comparison(lcdm, wcdm) on DESI BAO must return finite deltas,
+    exactly 1 extra parameter (w), and NOT prefer wCDM — w≈-1 there, so the
+    extra freedom buys no fit improvement and AIC favors the simpler ΛCDM.
+    Guards the formerly-hardcoded delta_chi²=0.0 placeholder.
+
+    DESI BAO only (NOT + planck2018_compressed): the Planck compressed entry is
+    a model-DEPENDENT representation — extended flat-DE chains swap its diagonal
+    ΛCDM summary for the (R, l_A, ombh2) distance prior, adding an ombh2 axis —
+    so an lcdm-vs-wcdm pair on it compares different likelihoods. That case now
+    comes back comparison_valid=False / preferred=undetermined (locked by
+    tests/test_model_comparison_validity.py); the benchmark pins the VALID
+    same-likelihood comparison."""
     from app.services.cosmology_likelihoods import run_likelihood_chain, compute_model_comparison
 
-    ds = ["desi_dr1_bao", "planck2018_compressed"]
+    ds = ["desi_dr1_bao"]
     lcdm = run_likelihood_chain(model="lcdm", dataset_keys=ds, n_samples=4000, random_seed=42)
     wcdm = run_likelihood_chain(model="wcdm", dataset_keys=ds, n_samples=4000, random_seed=42)
     cmp = compute_model_comparison(lcdm, wcdm)
@@ -489,6 +498,7 @@ def bench_model_comparison_delta() -> dict[str, Any]:
     return {
         "pass": (
             finite
+            and cmp["comparison_valid"] is True
             and cmp["n_extra_params"] == 1
             and cmp["preferred"] in {"lcdm", "inconclusive"}
         ),
@@ -496,7 +506,7 @@ def bench_model_comparison_delta() -> dict[str, Any]:
         "delta_aic": cmp["delta_aic"],
         "n_extra_params": cmp["n_extra_params"],
         "preferred": cmp["preferred"],
-        "target": "finite Δχ²/ΔAIC/ΔBIC, 1 extra param, wCDM NOT preferred over ΛCDM (w≈-1)",
+        "target": "finite Δχ²/ΔAIC/ΔBIC on a model-invariant likelihood, 1 extra param (w), wCDM NOT preferred over ΛCDM (w≈-1)",
     }
 
 

@@ -1055,9 +1055,12 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "(minutes), gated behind EXTERNAL_COBAYA_ENABLED; the data is vendored "
             "+ sha256-pinned under data/cobaya_packages (clik-free native plik_lite, "
             "~3 MB). High-l alone does not constrain tau, so it is sampled with the "
-            "Planck lowE Gaussian prior tau=0.0544+/-0.0073 (A_planck=1.0+/-0.0025). "
-            "Low-l (Commander TT + SimAll EE) is a separate follow-on. Reproduces "
-            "chi2~584.5 / dof~0.96 at the Planck 2018 base-LCDM best fit."
+            "Planck lowE Gaussian prior tau=0.0544+/-0.0073 (A_planck=1.0+/-0.0025) "
+            "UNLESS planck_2018_lowl_EE is also selected — then tau is a flat-prior "
+            "sampled parameter constrained by the real low-l EE likelihood. Combine "
+            "with planck_2018_lowl_TT + planck_2018_lowl_EE for the full clik-free "
+            "Planck 2018 primary stack. Reproduces chi2~584.5 / dof~0.96 at the "
+            "Planck 2018 base-LCDM best fit."
         ),
         cobaya_likelihood="external:planck_2018_highl_plik.TTTEEE_lite_native",
         cosmosis_module="external:planck_2018_highl_plik.TTTEEE_lite_native",
@@ -1080,6 +1083,197 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 description="Full plik_lite bandpower covariance matrix.",
                 rows=613,
                 sha256="ad90378c50bd67841764179c90ae6711fa4317c649966ab2b0712143b31e0a32",
+            ),
+            # The likelihood also reads the binning definition + the .dataset
+            # ini at init (cobaya planck_pliklite.py) — editing any of these
+            # silently changes chi2, so they are pinned like the data vector.
+            DataProductSpec(
+                product_type="cmb_binning_definition",
+                role="binning_blmin",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="plik_lite_v22 blmin.dat",
+                description="Per-bin lower multipole edges of the bandpower binning.",
+                sha256="325b351cbf8f694556bb13e98f285344e8d66811bb8eef18bcdcf1626518719d",
+            ),
+            DataProductSpec(
+                product_type="cmb_binning_definition",
+                role="binning_blmax",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="plik_lite_v22 blmax.dat",
+                description="Per-bin upper multipole edges of the bandpower binning.",
+                sha256="c28ade0fa5270c7e87ba07bdcb68aef8783b132b352bfaa36c04d17694ab4014",
+            ),
+            DataProductSpec(
+                product_type="cmb_binning_definition",
+                role="binning_weights",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="plik_lite_v22 bweight.dat",
+                description="Per-l weights used to bin the theory spectrum.",
+                sha256="8afcbd8bad769e2de96bacd80177e6543f96b2b406e6c2da1fd0d26718c9e415",
+            ),
+            DataProductSpec(
+                product_type="cmb_dataset_ini",
+                role="dataset_ini",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="plik_lite_v22.dataset",
+                description=(
+                    "Dataset ini controlling use_cl/nbintt/nbinte/nbinee/lmax/"
+                    "bin_lmin_offset/calibration_param."
+                ),
+                sha256="0dc7318de1b1b8fe0ad79e6bdb13135eae0190c9678e52a0a4f5120ceafa64ca",
+            ),
+        ),
+    ),
+    "planck_2018_lowl_TT": CosmologyDatasetEntry(
+        key="planck_2018_lowl_TT",
+        display_name="Planck 2018 low-l Commander TT",
+        version="Planck 2018 Commander low-l TT (gaussianized Blackwell-Rao, native)",
+        probe="cmb",
+        status="external_likelihood",
+        observables=("C_ell_TT",),
+        units={"C_ell": "muK^2"},
+        applicable_models=CMB_MODELS,
+        likelihood_family="cmb_primary",
+        covariance=CovarianceSpec(
+            kind="gaussianized Blackwell-Rao",
+            provided=True,
+            description=(
+                "Planck 2018 Commander low-l TT (l=2-29): gaussianized "
+                "Blackwell-Rao likelihood — mean vector + covariance + two cl2x "
+                "spline tables mapping C_l to the gaussianized variable. Evaluated "
+                "via cobaya's PURE-PYTHON native likelihood (no clik) over a CAMB "
+                "theory spectrum."
+            ),
+            url="https://pla.esac.esa.int/pla/#cosmology",
+            format="cobaya planck_native_data planck_2018_lowT_native (mu/cov/cl2x)",
+        ),
+        source_url="https://arxiv.org/abs/1907.12875",
+        citations=(
+            DatasetCitation(
+                label="Aghanim et al. Planck 2018 V. CMB power spectra and likelihoods",
+                year=2020,
+                arxiv="1907.12875",
+            ),
+            DatasetCitation(
+                label="Aghanim et al. Planck 2018 VI. Cosmological parameters",
+                year=2020,
+                arxiv="1807.06209",
+            ),
+        ),
+        notes=(
+            "Low-l temperature (Commander, l=2-29) — together with "
+            "planck_2018_highl_TTTEEE_lite and planck_2018_lowl_EE this completes "
+            "the clik-free Planck 2018 primary likelihood stack. Gated behind "
+            "EXTERNAL_COBAYA_ENABLED; data vendored + sha256-pinned under "
+            "data/cobaya_packages (~14 MB). Reproduces -2lnL = 23.44 at the "
+            "Planck 2018 base-LCDM best fit (paper value 23.4, arXiv:1907.12875)."
+        ),
+        cobaya_likelihood="external:planck_2018_lowl.TT",
+        cosmosis_module="external:planck_2018_lowl.TT",
+        execution_mode="external_cobaya",
+        recommended_combinations=("planck_2018_highl_TTTEEE_lite", "planck_2018_lowl_EE"),
+        data_products=(
+            DataProductSpec(
+                product_type="cmb_lowl_gaussianized_mean",
+                role="measurement_vector",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="planck_2018_lowT_native mu.txt",
+                description="Commander gaussianized Blackwell-Rao mean vector (l=2-29).",
+                sha256="aa2ffbcb2d26c2881553de428aba729422390f3bb04a20b7ee9ea3865aee579f",
+            ),
+            DataProductSpec(
+                product_type="cmb_lowl_gaussianized_sigma",
+                role="sigma_vector",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="planck_2018_lowT_native mu_sigma.txt",
+                description="Per-l sigma of the gaussianized variable.",
+                sha256="3c396bb6997c2746f5da0736c3d95eb6c748887e10613e37c481851a4fed6996",
+            ),
+            DataProductSpec(
+                product_type="cmb_lowl_gaussianized_covariance",
+                role="covariance",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="planck_2018_lowT_native cov.txt",
+                description="Covariance of the gaussianized variable (l=2-29).",
+                sha256="f3bedefd70c80388a4bda13faffc2cd803e59437216ca842e9df85aaa8c119d4",
+            ),
+            DataProductSpec(
+                product_type="cmb_lowl_br_spline_table",
+                role="br_spline_table_1",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="planck_2018_lowT_native cl2x_1.txt",
+                description="Blackwell-Rao gaussianization spline table (part 1).",
+                sha256="9c681e02595b14a3a934a32d3cfa93be7fba1968083a59326828834e37ac83b5",
+            ),
+            DataProductSpec(
+                product_type="cmb_lowl_br_spline_table",
+                role="br_spline_table_2",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="planck_2018_lowT_native cl2x_2.txt",
+                description="Blackwell-Rao gaussianization spline table (part 2).",
+                sha256="46714e527337832604f42eade620277910e7cc8d62af0150d2eb2873676ebb05",
+            ),
+        ),
+    ),
+    "planck_2018_lowl_EE": CosmologyDatasetEntry(
+        key="planck_2018_lowl_EE",
+        display_name="Planck 2018 low-l SimAll EE",
+        version="Planck 2018 SimAll low-l EE (probability table, native)",
+        probe="cmb",
+        status="external_likelihood",
+        observables=("C_ell_EE",),
+        units={"C_ell": "muK^2"},
+        applicable_models=CMB_MODELS,
+        likelihood_family="cmb_primary",
+        covariance=CovarianceSpec(
+            kind="non-Gaussian probability table",
+            provided=True,
+            description=(
+                "Planck 2018 SimAll low-l EE (l=2-29): tabulated per-l probability "
+                "P(C_l) lookup, converted from the public clik "
+                "simall_100x143_offlike5_EE_Aplanck_B. No Gaussian covariance — "
+                "the full non-Gaussian likelihood surface IS the data product."
+            ),
+            url="https://pla.esac.esa.int/pla/#cosmology",
+            format="cobaya planck_native_data planck_2018_lowE_native (prob_table)",
+        ),
+        source_url="https://arxiv.org/abs/1907.12875",
+        citations=(
+            DatasetCitation(
+                label="Aghanim et al. Planck 2018 V. CMB power spectra and likelihoods",
+                year=2020,
+                arxiv="1907.12875",
+            ),
+            DatasetCitation(
+                label="Aghanim et al. Planck 2018 VI. Cosmological parameters",
+                year=2020,
+                arxiv="1807.06209",
+            ),
+        ),
+        notes=(
+            "Low-l EE polarization (SimAll, l=2-29) — the measurement that "
+            "actually constrains the reionization optical depth tau. When this "
+            "entry is selected the runner samples tau with its FLAT prior instead "
+            "of the lowE Gaussian pin tau=0.0544+/-0.0073 (using both would count "
+            "the same data twice). Gated behind EXTERNAL_COBAYA_ENABLED; data "
+            "vendored + sha256-pinned (~2 MB). Reproduces -2lnL = 395.52 at the "
+            "Planck 2018 base-LCDM best fit (paper value 395.7, arXiv:1907.12875)."
+        ),
+        cobaya_likelihood="external:planck_2018_lowl.EE",
+        cosmosis_module="external:planck_2018_lowl.EE",
+        execution_mode="external_cobaya",
+        recommended_combinations=("planck_2018_highl_TTTEEE_lite", "planck_2018_lowl_TT"),
+        data_products=(
+            DataProductSpec(
+                product_type="cmb_lowl_probability_table",
+                role="probability_table",
+                url="https://github.com/CobayaSampler/planck_native_data",
+                format="planck_2018_lowE_native prob_table.txt",
+                description=(
+                    "SimAll EE per-l tabulated probability P(C_l) — the full "
+                    "non-Gaussian low-l EE likelihood surface."
+                ),
+                sha256="7efa150e762313f7920b7ae2b4f3cf3c7d3fdaaa6b1ae257b60b2c75279fe7b3",
             ),
         ),
     ),
@@ -2754,7 +2948,31 @@ def compute_model_comparison(
     ext_model = str(extended_result.get("model") or "")
     delta_aic = _delta("aic")
     k_b, k_e = _num(bf, "n_parameters"), _num(ef, "n_parameters")
-    if delta_aic is None:
+
+    # Δχ²/ΔAIC only mean anything when both fits used the SAME likelihood. Some
+    # compressed datasets are model-DEPENDENT representations (planck2018_compressed
+    # swaps its diagonal ΛCDM summary for the Chen-Huang-Wang distance prior on
+    # extended flat-DE chains, which adds an ombh2 axis) — then the two chi2 are
+    # computed against different data vectors and the comparison is invalid. Detect
+    # it from the sampled axes: any difference beyond the extended model's own
+    # DE/extension parameters means the representation changed underneath.
+    model_extension_params = {"w", "w0", "wa", "omegak", "mnu"}
+    base_axes = baseline_result.get("parameters")
+    ext_axes = extended_result.get("parameters")
+    comparison_warning = None
+    if isinstance(base_axes, dict) and isinstance(ext_axes, dict):
+        extra_beyond_model = (set(ext_axes) - set(base_axes)) - model_extension_params
+        missing_from_ext = set(base_axes) - set(ext_axes)
+        if extra_beyond_model or missing_from_ext:
+            comparison_warning = (
+                "sampled axes differ beyond the extended model's own parameters "
+                f"(extra: {sorted(extra_beyond_model)}, missing: {sorted(missing_from_ext)}): "
+                "a selected dataset uses a model-dependent compressed representation, "
+                "so the two chi2 are computed against different likelihoods and "
+                "delta_chi2/delta_aic are not a valid model comparison."
+            )
+
+    if comparison_warning is not None or delta_aic is None:
         preferred = "undetermined"
     elif delta_aic < -2.0:
         preferred = ext_model
@@ -2762,7 +2980,7 @@ def compute_model_comparison(
         preferred = base_model
     else:
         preferred = "inconclusive"
-    return {
+    out = {
         "baseline_model": base_model,
         "extended_model": ext_model,
         "delta_chi2": _delta("chi2"),
@@ -2770,8 +2988,12 @@ def compute_model_comparison(
         "delta_bic": _delta("bic"),
         "n_extra_params": int(k_e - k_b) if (k_b is not None and k_e is not None) else None,
         "preferred": preferred,
+        "comparison_valid": comparison_warning is None,
         "convention": "delta = extended - baseline; negative favors the extended model; |delta_aic|<2 is inconclusive",
     }
+    if comparison_warning is not None:
+        out["comparison_warning"] = comparison_warning
+    return out
 
 
 def run_likelihood_chain(
@@ -5398,9 +5620,21 @@ def _all_external_cobaya(entries: list[CosmologyDatasetEntry]) -> bool:
 
 
 # Primary-CMB external-cobaya likelihoods that sample the full CMB parameter set
-# (ombh2, omch2, H0, ns, As, tau) + the A_planck calibration nuisance, rather than
-# the geometric (H0, Omega_m, rd) set the compressed/in-process probes use.
-CMB_COBAYA_EXECUTABLE_KEYS = frozenset({"planck_2018_highl_TTTEEE_lite"})
+# (ombh2, omch2, H0, ns, As, tau), rather than the geometric (H0, Omega_m, rd)
+# set the compressed/in-process probes use.
+CMB_COBAYA_EXECUTABLE_KEYS = frozenset({
+    "planck_2018_highl_TTTEEE_lite",
+    "planck_2018_lowl_TT",
+    "planck_2018_lowl_EE",
+})
+
+# A_planck is sampled only when plik_lite is selected. The native low-l
+# likelihoods CAN consume it (cobaya get_can_support_params), but their default
+# is calib=1 and a 0.25% calibration uncertainty is negligible against l<=29
+# cosmic variance — so a lowl-only run deliberately fixes it. In the full stack
+# cobaya shares the one sampled A_planck across all three likelihoods, matching
+# official Planck practice.
+CMB_APLANCK_KEYS = frozenset({"planck_2018_highl_TTTEEE_lite"})
 
 
 def _cobaya_parameter_order(
@@ -5409,14 +5643,18 @@ def _cobaya_parameter_order(
 ) -> list[str]:
     """Pick the parameter ordering passed to cobaya_runner.
 
-    A primary-CMB plik_lite entry samples the full CMB set (ombh2, omch2, H0, ns,
-    As, tau) + A_planck.  Otherwise: prefers any compressed-likelihood parameter
-    spec the registered entries expose; falls back to the intersection of
-    SUPPORTED_MODELS[model_key] with RUNNER_PARAMETER_PRIORS so that the YAML
-    cobaya_runner emits always declares params it has prior bounds for.
+    A primary-CMB entry (plik_lite / low-l TT / low-l EE) samples the full CMB
+    set (ombh2, omch2, H0, ns, As, tau), plus A_planck when plik_lite is among
+    the entries (see CMB_APLANCK_KEYS).  Otherwise: prefers any
+    compressed-likelihood parameter spec the registered entries expose; falls
+    back to the intersection of SUPPORTED_MODELS[model_key] with
+    RUNNER_PARAMETER_PRIORS so that the YAML cobaya_runner emits always declares
+    params it has prior bounds for.
     """
     if any(entry.key in CMB_COBAYA_EXECUTABLE_KEYS for entry in entries):
-        order = ["ombh2", "omch2", "H0", "ns", "As", "tau", "A_planck"]
+        order = ["ombh2", "omch2", "H0", "ns", "As", "tau"]
+        if any(entry.key in CMB_APLANCK_KEYS for entry in entries):
+            order.append("A_planck")
         for param in SUPPORTED_MODELS.get(model_key, ()):
             if param in {"w", "w0", "wa"} and param not in order:
                 order.append(param)

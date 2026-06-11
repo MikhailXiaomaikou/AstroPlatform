@@ -77,6 +77,12 @@ COBAYA_GAUSSIAN_PRIORS: dict[str, tuple[float, float]] = {
     "tau": (0.0544, 0.0073),
 }
 
+# The 2018 SimAll low-l EE likelihood IS the measurement behind the lowE tau
+# posterior. When one of these entries is selected, tau keeps its FLAT prior
+# (the likelihood constrains it) — applying the Gaussian pin on top would count
+# the same data twice.
+TAU_CONSTRAINING_KEYS = frozenset({"planck_2018_lowl_EE"})
+
 DEFAULT_EVALUATE_TIMEOUT_S = 180.0
 DEFAULT_MCMC_TIMEOUT_S = 1800.0
 
@@ -90,6 +96,20 @@ _CMB_PINNED_DATA: dict[str, dict[str, str]] = {
     "planck_2018_highl_TTTEEE_lite": {
         "data/planck_2018_pliklite_native/cl_cmb_plik_v22.dat": "measurement_vector",
         "data/planck_2018_pliklite_native/c_matrix_plik_v22.dat": "covariance",
+        "data/planck_2018_pliklite_native/blmin.dat": "binning_blmin",
+        "data/planck_2018_pliklite_native/blmax.dat": "binning_blmax",
+        "data/planck_2018_pliklite_native/bweight.dat": "binning_weights",
+        "data/planck_2018_pliklite_native/plik_lite_v22.dataset": "dataset_ini",
+    },
+    "planck_2018_lowl_TT": {
+        "data/planck_2018_lowT_native/mu.txt": "measurement_vector",
+        "data/planck_2018_lowT_native/mu_sigma.txt": "sigma_vector",
+        "data/planck_2018_lowT_native/cov.txt": "covariance",
+        "data/planck_2018_lowT_native/cl2x_1.txt": "br_spline_table_1",
+        "data/planck_2018_lowT_native/cl2x_2.txt": "br_spline_table_2",
+    },
+    "planck_2018_lowl_EE": {
+        "data/planck_2018_lowE_native/prob_table.txt": "probability_table",
     },
 }
 
@@ -388,12 +408,19 @@ def _build_cobaya_yaml(
         translated = _translate_likelihood_id(entry.cobaya_likelihood)
         lines.append(f"  {translated}: null")
 
+    # tau's Gaussian pin is a stand-in for the low-l EE data; drop it when the
+    # real likelihood is in the run (TAU_CONSTRAINING_KEYS) so tau is sampled
+    # flat and constrained by the measurement instead.
+    gaussian_pins = dict(COBAYA_GAUSSIAN_PRIORS)
+    if any(entry.key in TAU_CONSTRAINING_KEYS for entry in entries):
+        gaussian_pins.pop("tau", None)
+
     lines.append("params:")
     for name in parameter_order:
         low, high = prior_bounds[name]
         lines.append(f"  {name}:")
-        if name in COBAYA_GAUSSIAN_PRIORS:
-            loc, scale = COBAYA_GAUSSIAN_PRIORS[name]
+        if name in gaussian_pins:
+            loc, scale = gaussian_pins[name]
             lines.append("    prior:")
             lines.append("      dist: norm")
             lines.append(f"      loc: {float(loc)}")
@@ -409,6 +436,18 @@ def _build_cobaya_yaml(
             # every O(1)+ param's (high-low)/50 already dominates it.
             proposal = max((float(high) - float(low)) / 50.0, 1e-12)
             lines.append(f"    proposal: {proposal}")
+        if name == "w0":
+            # cobaya/CAMB name the CPL pair (w, wa); the platform samples "w0".
+            # Without this, every w0wa chain dies at model build with "Could not
+            # find anything to use input parameter(s) {'w0'}". drop excludes w0
+            # from the theory input; the dynamic `w` below hands CAMB the same
+            # value under the name it consumes. Chain columns keep "w0".
+            lines.append("    drop: true")
+
+    if "w0" in parameter_order:
+        lines.append("  w:")
+        lines.append("    value: \"lambda w0: w0\"")
+        lines.append("    derived: false")
 
     lines.append("sampler:")
     if sampler == "evaluate":

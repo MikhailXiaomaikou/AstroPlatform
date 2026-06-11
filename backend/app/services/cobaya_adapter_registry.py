@@ -94,6 +94,12 @@ ADAPTER_TO_COBAYA: Final[dict[str, str | None]] = {
     # vendored + sha256-pinned under data/cobaya_packages (COBAYA_PACKAGES_PATH).
     # First filled step-3 mapping (2026-06-09).
     "external:planck_2018_highl_plik.TTTEEE_lite_native": "planck_2018_highl_plik.TTTEEE_lite_native",
+    # Planck 2018 low-l Commander TT + SimAll EE — cobaya's PURE-PYTHON native
+    # likelihoods (no clik), data from CobayaSampler/planck_native_data, vendored
+    # + sha256-pinned under data/cobaya_packages. Completes the clik-free Planck
+    # 2018 primary stack together with plik_lite (2026-06-11).
+    "external:planck_2018_lowl.TT": "planck_2018_lowl.TT",
+    "external:planck_2018_lowl.EE": "planck_2018_lowl.EE",
     # TODO(step3): ACT DR6 lensing. Class `ACTDR6LensLike` lives in the
     # `act_dr6_lenslike` third-party package. Candidate import path:
     # `act_dr6_lenslike.ACTDR6LensLike`.
