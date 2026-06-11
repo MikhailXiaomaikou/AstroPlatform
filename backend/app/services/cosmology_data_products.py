@@ -202,6 +202,13 @@ def _select_product(
         for product in products:
             if product.product_type == product_type:
                 return product
+    # A requested role/product_type that matches nothing must NOT silently fall
+    # back to a different product (e.g. returning a measurement vector when
+    # covariance was asked for). Only default to products[0] when the caller
+    # specified no selector; otherwise return None so the caller emits the
+    # explicit "no matching product" branch (which echoes requested_role).
+    if role or product_type:
+        return None
     return products[0] if products else None
 
 

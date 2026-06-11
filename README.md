@@ -57,7 +57,7 @@ provenance — they are gated, not faked.
 | Backend | FastAPI, SQLAlchemy async, Pydantic v2, SSE streaming |
 | AI | Manual provider/model choice across Claude, OpenAI, DeepSeek, and local OpenAI-compatible backends |
 | Science | astropy, astroquery, emcee, dynesty, cobaya, CAMB, ArviZ |
-| Storage | PostgreSQL (prod) / SQLite (dev); filesystem or S3 for FITS; Redis cache |
+| Storage | PostgreSQL (prod) / SQLite (dev); local filesystem for FITS; Redis cache |
 
 ## Run it
 
@@ -83,4 +83,4 @@ See [docs/QUICKSTART.md](./docs/QUICKSTART.md) for first-run setup.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Licensing is not yet finalized; no license file is published in this repository at present.

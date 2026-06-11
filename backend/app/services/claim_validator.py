@@ -2531,16 +2531,13 @@ def _record_citation_violation_metric(kind: str) -> None:
     try:
         from app.observability.metrics import record_counter
 
-        if kind in {
-            "invalid_bibcode",
-            "suspicious_author_year",
-            "unsupported_literature_narrative",
-            "paper_numeric_missing_citation",
-        }:
-            reason = kind
-        else:
-            reason = "suspicious_author_year"
-        record_counter("fabrication_blocked_total", 1.0, reason=reason)
+        # Use the violation's own kind as the per-reason label so each class
+        # (invalid_doi, method_mismatch, fit_line_lfr_bypass, …) increments its
+        # OWN fabrication_blocked_total{reason} series. The previous code
+        # collapsed every kind outside a 4-entry allowlist into
+        # "suspicious_author_year", which misattributed the counter and hid
+        # per-class validator regressions.
+        record_counter("fabrication_blocked_total", 1.0, reason=kind)
     except Exception:
         pass
 

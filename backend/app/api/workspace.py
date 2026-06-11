@@ -85,6 +85,11 @@ async def add_tag(
     user: User = Depends(get_current_user),
 ):
     fid = uuid.UUID(file_id)
+    owned = await db.execute(
+        select(DataFile.id).where(DataFile.id == fid, DataFile.user_id == user.id)
+    )
+    if owned.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="File not found")
     tag = DataTag(user_id=user.id, data_file_id=fid, tag=req.tag)
     db.add(tag)
     await db.commit()
@@ -130,6 +135,11 @@ async def add_note(
     user: User = Depends(get_current_user),
 ):
     fid = uuid.UUID(file_id)
+    owned = await db.execute(
+        select(DataFile.id).where(DataFile.id == fid, DataFile.user_id == user.id)
+    )
+    if owned.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="File not found")
     note = DataNote(user_id=user.id, data_file_id=fid, content=req.content)
     db.add(note)
     await db.commit()

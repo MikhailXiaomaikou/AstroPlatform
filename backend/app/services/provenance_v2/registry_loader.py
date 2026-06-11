@@ -161,8 +161,14 @@ def check_freshness(
     reg = registry or load_registry()
     current = today or date.today()
     warnings: list[str] = []
-    services = reg.get("services") or {}
-    if not isinstance(services, dict):
+    services = reg.get("services")
+    if not isinstance(services, dict) or not services:
+        # Total registry loss (missing/unparseable file -> empty services) is
+        # the most severe provenance failure, yet it produces no per-entry
+        # staleness warning. Surface it explicitly so the startup freshness
+        # gate fails closed instead of silently serving traffic with no
+        # registry-backed dataset provenance.
+        warnings.append("registry has no service entries (missing or unparseable fallback_registry.yaml)")
         return warnings
 
     for service_key, entry in services.items():

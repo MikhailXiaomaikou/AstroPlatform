@@ -367,9 +367,15 @@ async def share_pipeline(
     tid = uuid.UUID(template_id)
     target_uid = uuid.UUID(req.user_id)
 
-    # Verify the template exists
+    # Verify the template exists and the caller may share it (own or built-in)
     result = await db.execute(
-        select(PipelineTemplateDB).where(PipelineTemplateDB.id == tid)
+        select(PipelineTemplateDB).where(
+            PipelineTemplateDB.id == tid,
+            or_(
+                PipelineTemplateDB.user_id == user.id,
+                PipelineTemplateDB.is_builtin.is_(True),
+            ),
+        )
     )
     template = result.scalar_one_or_none()
     if not template:
@@ -433,6 +439,34 @@ async def list_shared_pipelines(
 
 # ── Pipeline Comments ──
 
+async def _require_template_access(db: AsyncSession, tid: uuid.UUID, user: User):
+    """Raise 404 unless the caller may access this template.
+
+    Accessible when the caller owns it, it is built-in, or it has been shared
+    with the caller (mirrors the SharedPipeline.shared_with predicate used by
+    list_shared_pipelines). Without this, any authenticated user could read or
+    post comments on another user's private template by id.
+    """
+    result = await db.execute(
+        select(PipelineTemplateDB.id)
+        .outerjoin(
+            SharedPipeline,
+            (SharedPipeline.template_id == PipelineTemplateDB.id)
+            & (SharedPipeline.shared_with == user.id),
+        )
+        .where(
+            PipelineTemplateDB.id == tid,
+            or_(
+                PipelineTemplateDB.user_id == user.id,
+                PipelineTemplateDB.is_builtin.is_(True),
+                SharedPipeline.id.isnot(None),
+            ),
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Pipeline template not found")
+
+
 @router.post("/pipelines/{template_id}/comments", response_model=CommentResponse)
 async def add_comment(
     template_id: str,
@@ -443,12 +477,7 @@ async def add_comment(
     """Add a comment to a pipeline template."""
     tid = uuid.UUID(template_id)
 
-    # Verify the template exists
-    result = await db.execute(
-        select(PipelineTemplateDB).where(PipelineTemplateDB.id == tid)
-    )
-    if not result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Pipeline template not found")
+    await _require_template_access(db, tid, user)
 
     comment = PipelineComment(
         template_id=tid,
@@ -476,6 +505,8 @@ async def list_comments(
 ):
     """List comments on a pipeline template."""
     tid = uuid.UUID(template_id)
+
+    await _require_template_access(db, tid, user)
 
     result = await db.execute(
         select(PipelineComment, User)
@@ -510,9 +541,9 @@ async def share_dataset(
     fid = uuid.UUID(file_id)
     target_uid = uuid.UUID(req.user_id)
 
-    # Verify the data file exists
+    # Verify the data file exists and is owned by the caller
     result = await db.execute(
-        select(DataFile).where(DataFile.id == fid)
+        select(DataFile).where(DataFile.id == fid, DataFile.user_id == user.id)
     )
     data_file = result.scalar_one_or_none()
     if not data_file:

@@ -1724,21 +1724,51 @@ class TestCodeExecutor:
         assert r.figures == []
         assert r.variables == {}
 
-    def test_get_memory_usage(self):
-        from app.services.code_executor import _get_memory_usage_bytes
+    def test_get_memory_usage(self, monkeypatch):
+        from app.services import code_executor
 
-        usage = _get_memory_usage_bytes()
+        # The autouse stable_code_executor_memory fixture pins the probe to a
+        # constant; undo it so we exercise the real resource.getrusage path.
+        monkeypatch.undo()
+        usage = code_executor._get_memory_usage_bytes()
         assert isinstance(usage, int)
         assert usage >= 0
 
-    def test_check_memory_no_warning(self):
+    def test_check_memory_no_warning(self, monkeypatch):
         import io as _io
         from app.services import code_executor
 
+        # Drive the real _check_memory branch logic with a usage below the
+        # warning threshold; it must not write a warning and must echo usage.
+        below = code_executor.MEMORY_WARN_THRESHOLD - 1
+        monkeypatch.setattr(code_executor, "_get_memory_usage_bytes", lambda: below)
         stream = _io.StringIO()
         usage = code_executor._check_memory(stream)
-        assert isinstance(usage, int)
+        assert usage == below
         assert stream.getvalue() == ""
+
+    def test_check_memory_writes_warning(self, monkeypatch):
+        import io as _io
+        from app.services import code_executor
+
+        # Usage above the warn threshold (but below the hard limit) must write
+        # a warning into the stream — the production memory-warning path.
+        between = (code_executor.MEMORY_WARN_THRESHOLD + code_executor.MEMORY_HARD_LIMIT) // 2
+        monkeypatch.setattr(code_executor, "_get_memory_usage_bytes", lambda: between)
+        stream = _io.StringIO()
+        usage = code_executor._check_memory(stream)
+        assert usage == between
+        assert "Memory warning" in stream.getvalue()
+
+    def test_check_memory_hard_limit_raises(self, monkeypatch):
+        import io as _io
+        from app.services import code_executor
+
+        # Usage above the hard limit must raise MemoryError.
+        over = code_executor.MEMORY_HARD_LIMIT + 1
+        monkeypatch.setattr(code_executor, "_get_memory_usage_bytes", lambda: over)
+        with pytest.raises(MemoryError, match="hard limit"):
+            code_executor._check_memory(_io.StringIO())
 
     def test_execute_python_simple(self):
         from app.services.code_executor import execute_python

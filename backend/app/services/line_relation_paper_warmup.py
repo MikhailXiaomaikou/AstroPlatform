@@ -9,12 +9,18 @@ already carries the rest frequencies. The remaining gap is paper-level
 metadata: which arXiv IDs are worth pre-warming, what lensing default
 applies per paper, and a short workflow note for the SYSTEM_PROMPT.
 
-This file is **data**, not logic. It is consumed by:
+This file is **data**, not logic. It is NOT yet wired into any live
+path — no module under `app/api` or `app/services` imports it, so its
+registry and helpers are currently exercised only by
+`tests/test_line_relation_paper_warmup.py`. The intended (not-yet-built)
+integration points are:
 - `admin_literature.preload_*_caches` admin endpoints (extend with
   generic line-id parameter)
 - `arxiv.py _normalize_line_measurements` indirectly via
   `is_paper_lensed_by_default` lookup once that helper is generalized
-- `chat.py` SYSTEM_PROMPT line-relation idiom section (future)
+- `chat.py` SYSTEM_PROMPT line-relation idiom section
+Until those land, adding a paper here has no effect on extraction,
+normalization, or the prompt.
 
 Adding a new paper to the registry requires running
 `POST /api/admin/literature/preload_caches` with the candidate arxiv

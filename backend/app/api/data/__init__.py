@@ -398,9 +398,12 @@ async def search_data(
         if s not in CONNECTORS_KEYS:
             raise HTTPException(status_code=400, detail=f"Unknown source: {s}")
 
-    # Check Redis cache
+    # Check Redis cache. compute_photo_z mutates result.redshift/z_source, so it
+    # must be part of the key — otherwise photo-z-estimated results leak to
+    # requests that asked for spec-z only (and vice versa).
     ck = cache_key(
         "search", q=q, sources=sorted(source_list), ra=ra, dec=dec, radius=radius,
+        compute_photo_z=compute_photo_z,
     )
     cached = await cache_get(ck)
     if cached is not None:
@@ -968,7 +971,7 @@ async def get_fits_header(
 @router.get("/fits-spectrum")
 async def get_fits_spectrum(
     fits_path: str = Query(..., description="Storage path to FITS file"),
-    max_points: int = Query(2000, description="Max data points to return"),
+    max_points: int = Query(2000, ge=1, description="Max data points to return"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1727,66 +1730,6 @@ async def delete_fits_file(
     return {"deleted": True}
 
 
-@router.get("/{source}/{object_id}", response_model=FetchResult)
-async def fetch_object(
-    source: str,
-    object_id: str,
-    db: AsyncSession = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
-):
-    """Fetch FITS data for a specific object and store."""
-    try:
-        connector = get_connector(source)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    try:
-        fits_file = await asyncio.wait_for(connector.fetch(object_id), timeout=30.0)
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail=f"Timeout fetching from {source} — the external service took too long")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Fetch from %s failed for %s", source, object_id)
-        raise HTTPException(status_code=502, detail=f"Failed to fetch from {source}: {type(e).__name__}: {e}")
-
-    fits_path = f"{source}/{object_id.replace('/', '_')}/{uuid.uuid4().hex}.fits"
-    try:
-        upload_fits(fits_path, fits_file.data)
-    except Exception as e:
-        logger.warning("Failed to store FITS locally (%s): %s", fits_path, e)
-        # Still return success — the data was fetched even if storage failed
-        return FetchResult(
-            source=source,
-            object_id=object_id,
-            fits_path="",
-            filename=fits_file.filename,
-            file_id=None,
-        )
-
-    # Save to database if user is authenticated
-    file_id = None
-    if user:
-        data_file = DataFile(
-            user_id=user.id,
-            source=source,
-            object_id=object_id,
-            fits_path=fits_path,
-        )
-        db.add(data_file)
-        await db.commit()
-        await db.refresh(data_file)
-        file_id = str(data_file.id)
-
-    return FetchResult(
-        source=source,
-        object_id=object_id,
-        fits_path=fits_path,
-        filename=fits_file.filename,
-        file_id=file_id,
-    )
-
-
 # ── Saved Objects / Bookmarks ──
 
 
@@ -1938,3 +1881,69 @@ async def batch_object_lookup(
         "total": len(req.names),
         "found": sum(1 for r in results if not isinstance(r, Exception) and r.get("found")),
     }
+
+
+# ── Object Fetch (catch-all) ──
+# This route matches any two-segment path under /api/data, so it MUST be
+# registered last — otherwise it shadows concrete two-segment GET routes such
+# as /saved-objects/projects (Starlette matches in registration order).
+
+
+@router.get("/{source}/{object_id}", response_model=FetchResult)
+async def fetch_object(
+    source: str,
+    object_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
+    """Fetch FITS data for a specific object and store."""
+    try:
+        connector = get_connector(source)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        fits_file = await asyncio.wait_for(connector.fetch(object_id), timeout=30.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail=f"Timeout fetching from {source} — the external service took too long")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Fetch from %s failed for %s", source, object_id)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch from {source}: {type(e).__name__}: {e}")
+
+    fits_path = f"{source}/{object_id.replace('/', '_')}/{uuid.uuid4().hex}.fits"
+    try:
+        upload_fits(fits_path, fits_file.data)
+    except Exception as e:
+        logger.warning("Failed to store FITS locally (%s): %s", fits_path, e)
+        # Still return success — the data was fetched even if storage failed
+        return FetchResult(
+            source=source,
+            object_id=object_id,
+            fits_path="",
+            filename=fits_file.filename,
+            file_id=None,
+        )
+
+    # Save to database if user is authenticated
+    file_id = None
+    if user:
+        data_file = DataFile(
+            user_id=user.id,
+            source=source,
+            object_id=object_id,
+            fits_path=fits_path,
+        )
+        db.add(data_file)
+        await db.commit()
+        await db.refresh(data_file)
+        file_id = str(data_file.id)
+
+    return FetchResult(
+        source=source,
+        object_id=object_id,
+        fits_path=fits_path,
+        filename=fits_file.filename,
+        file_id=file_id,
+    )

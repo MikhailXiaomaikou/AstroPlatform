@@ -4,14 +4,15 @@ Current production deploys use the Render blueprint in `render.yaml`.
 
 ## Production Services
 
+Currently deployed on Render: **3 services + 1 database** (`render.yaml`'s header comment is the source of truth).
+
 | Service | Type | Purpose |
 |---|---|---|
 | `standard-astro-backend` | Web service | FastAPI API server |
 | `standard-astro-frontend` | Static site | Vite SPA with rewrite-to-index routing |
-| `standard-astro-celery-worker` | Worker | Heavy pipeline execution |
-| `standard-astro-celery-beat` | Worker | Scheduled jobs |
-| `standard-astro-redis` | Redis | Celery queue, pub/sub, cache |
 | `standard-astro-db` | PostgreSQL | Primary database |
+
+**Not deployed** (kept as commented templates at the bottom of `render.yaml`): `standard-astro-celery-worker`, `standard-astro-celery-beat`, `standard-astro-redis`. `PIPELINE_MODE` stays `celery` by code default but no worker is deployed, so heavy pipeline DAG runs (BayesianFit / ImageStack / etc.) return `503` until a Celery worker is brought up. The cosmology chat path does not go through Celery and is unaffected.
 
 Live URLs used by the current docs:
 

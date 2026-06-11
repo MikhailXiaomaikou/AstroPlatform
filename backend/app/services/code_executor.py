@@ -1366,15 +1366,20 @@ def execute_python(
     finally:
         restore_savefig()
 
-    # Save user-defined variables back to session for persistence
-    for name, val in exec_globals.items():
-        if name.startswith("_") or name in pre_existing_keys:
-            continue
-        try:
-            if _should_persist_value(val):
-                session_vars[name] = val
-        except Exception:
-            pass
+    # Save user-defined variables back to session for persistence.
+    # Skip the shared 'default' namespace: clients that omit python_session_id
+    # all land in _session_vars['default'], so persisting there bleeds one
+    # client's variables into another. Every other path (replay, code-history
+    # recording, ADQL cache scoping) already treats 'default' as ephemeral.
+    if session_id != "default":
+        for name, val in exec_globals.items():
+            if name.startswith("_") or name in pre_existing_keys:
+                continue
+            try:
+                if _should_persist_value(val):
+                    session_vars[name] = val
+            except Exception:
+                pass
 
     # Extract key result variables (allow larger representations)
     for name, val in exec_globals.items():

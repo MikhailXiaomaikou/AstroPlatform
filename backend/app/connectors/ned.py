@@ -3,6 +3,7 @@
 import io
 import logging
 
+import httpx
 import numpy as np
 from astropy.table import Table
 
@@ -40,12 +41,10 @@ class NEDConnector(BaseConnector):
 
     source_name = "ned"
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, httpx.TransportError))
     async def search(
         self, query: str, ra: float | None = None, dec: float | None = None, radius: float = 0.1
     ) -> list[AstroObject]:
-        import httpx
-
         if ra is not None and dec is not None:
             return await self._search_by_coords(ra, dec, radius)
 
@@ -61,14 +60,12 @@ class NEDConnector(BaseConnector):
         data = resp.json()
         return self._parse_lookup_response(data)
 
-    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
+    @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError, httpx.TransportError))
     async def fetch(self, object_id: str) -> FITSFile:
         """Fetch NED summary data for an object and return as FITS table.
 
         object_id should be the NED object name (e.g. 'NGC 224', 'M 31').
         """
-        import httpx
-
         params = {
             "name": object_id,
         }

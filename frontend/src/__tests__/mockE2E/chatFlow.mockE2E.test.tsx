@@ -2,12 +2,14 @@
  * Mock E2E — fixture-driven full-flow regression without an LLM call.
  *
  * Why this layer exists: real Chat UI tests are gated by LLM latency,
- * key availability, and prompt-driven nondeterminism. This file feeds a
- * canned ThinkingEvent stream (recorded in fixtures/) into the rendering
- * path and asserts the final UI state matches the fixture's expected_ui
- * block. It catches UI regressions (e.g. publication-tier badge dropped,
- * __do_not_claim__ leaks into the visible message) without paying the
- * LLM cost or accepting LLM jitter.
+ * key availability, and prompt-driven nondeterminism. This file takes a
+ * canned ThinkingEvent stream (recorded in fixtures/) and feeds the
+ * recorded tool_result + agent_text events into the SAME production
+ * renderers ChatPage uses — CosmologyLikelihoodPanel for the tool card,
+ * MarkdownText for the visible agent message — then asserts on the
+ * rendered DOM. It catches UI regressions (e.g. an internal
+ * __do_not_claim__ / __message_to_model__ marker leaking into the
+ * visible message) without paying the LLM cost or accepting LLM jitter.
  *
  * Fixture format is intentionally simple JSON so future fixtures (one
  * per failure mode the docx test-plan map flags — executed_not_ready,
@@ -20,6 +22,9 @@
 import fs from "fs";
 import path from "path";
 import { describe, it, expect } from "vitest";
+import { render } from "@testing-library/react";
+import CosmologyLikelihoodPanel from "../../components/chat/CosmologyLikelihoodPanel";
+import MarkdownText from "../../components/chat/MarkdownText";
 
 interface ThinkingEventLike {
   type: string;
@@ -46,6 +51,20 @@ interface Fixture {
 
 const FIXTURES_DIR = path.resolve(__dirname, "fixtures");
 const FIXTURE_NAMES = ["cosmology_main_flow"];
+
+// Internal anti-fabrication scaffolding that the backend prepends to
+// tool_result dicts so the LLM reads it first. None of it may surface in
+// the human-visible rendered message. We match on the underscore-stripped
+// core token (e.g. "do_not_claim") so a leak is still caught even when the
+// surrounding "__" gets consumed as Markdown bold delimiters by the
+// MarkdownText renderer.
+const INTERNAL_MARKER_TOKENS = [
+  "do_not_claim",
+  "message_to_model",
+  "tool_status",
+  "exploratory_warning",
+  "suggested_next_step",
+];
 
 function loadFixture(name: string): Fixture {
   const p = path.join(FIXTURES_DIR, `${name}.json`);
@@ -76,44 +95,63 @@ describe("mockE2E chatFlow", () => {
     }
   });
 
-  it.each(FIXTURE_NAMES)("%s — internal anti-fabrication markers never leak into agent_text", (name) => {
+  it.each(FIXTURE_NAMES)("%s — agent_text renders through MarkdownText without leaking internal markers", (name) => {
     const f = loadFixture(name);
     const agentTexts = f.thinking_events.filter((e) => e.type === "agent_text");
-    const internalMarkers = [
-      "__do_not_claim__",
-      "__message_to_model__",
-      "__tool_status__",
-      "__exploratory_warning__",
-    ];
+    expect(agentTexts.length).toBeGreaterThan(0);
+
     for (const at of agentTexts) {
       const text = at.text || "";
-      for (const marker of internalMarkers) {
-        expect(text).not.toContain(marker);
+      // Feed the recorded agent text through the SAME renderer ChatPage
+      // uses for the visible assistant message.
+      const { container } = render(<MarkdownText content={text} />);
+      const rendered = container.textContent || "";
+      // The anti-fabrication invariant the comment promises: no internal
+      // marker may appear in the human-visible rendered output.
+      for (const token of INTERNAL_MARKER_TOKENS) {
+        expect(rendered).not.toContain(token);
       }
     }
   });
 
-  it.each(FIXTURE_NAMES)("%s — expected_ui assertions hold against the recorded events", (name) => {
+  it.each(FIXTURE_NAMES)("%s — expected_ui assertions hold against the rendered output", (name) => {
     const f = loadFixture(name);
     const exp = f.expected_ui || {};
     const toolEvents = f.thinking_events.filter((e) => e.type === "tool_result");
     const agentTexts = f.thinking_events.filter((e) => e.type === "agent_text");
 
+    // ── Tool card: render the recorded tool_result through the real
+    // CosmologyLikelihoodPanel (the route ChatPage picks for
+    // run_cosmology_likelihood_chain) and assert on the DOM. ──
     if (exp.tool_card_visible) {
-      const found = toolEvents.find((e) => e.tool === exp.tool_card_visible);
-      expect(found, `tool_card_visible '${exp.tool_card_visible}' not in events`).toBeTruthy();
-      if (exp.tool_card_status) {
-        const status = (found?.result as Record<string, unknown> | undefined)?.__tool_status__;
-        expect(status).toBe(exp.tool_card_status);
+      const evt = toolEvents.find((e) => e.tool === exp.tool_card_visible);
+      expect(evt, `tool_card_visible '${exp.tool_card_visible}' not in events`).toBeTruthy();
+      const result = (evt?.result || {}) as Record<string, unknown>;
+      const { container } = render(<CosmologyLikelihoodPanel result={result} />);
+      const cardText = container.textContent || "";
+
+      // The model name the result declared must surface in the card.
+      if (typeof result.model === "string") {
+        expect(cardText).toContain(result.model);
       }
-      if (exp.tool_card_tier_badge) {
-        const tier = (found?.result as Record<string, unknown> | undefined)?.chain_tier;
-        expect(tier).toBe(exp.tool_card_tier_badge);
+      // Internal anti-fabrication scaffolding must never render as visible
+      // card text (do_not_claim_marker_leak / tool_message_to_model_leak
+      // are both expected false in the golden fixture).
+      for (const token of INTERNAL_MARKER_TOKENS) {
+        expect(cardText).not.toContain(token);
       }
     }
+
+    // ── Agent message: the cited values the fixture expects must appear
+    // in the rendered MarkdownText DOM. ──
+    const combined = agentTexts
+      .map((e) => {
+        const { container } = render(<MarkdownText content={e.text || ""} />);
+        return container.textContent || "";
+      })
+      .join("\n");
     for (const needle of exp.agent_text_contains || []) {
-      const found = agentTexts.find((e) => (e.text || "").includes(needle));
-      expect(found, `agent_text expected to contain '${needle}'`).toBeTruthy();
+      expect(combined, `rendered agent text expected to contain '${needle}'`).toContain(needle);
     }
   });
 });

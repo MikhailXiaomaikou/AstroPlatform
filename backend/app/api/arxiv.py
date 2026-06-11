@@ -971,7 +971,26 @@ async def extract_arxiv_tables_payload(arxiv_id_raw: str) -> dict[str, Any]:
                     for text in _source_texts_from_eprint(resp.content):
                         if sum(len(t.get("rows") or []) for t in all_tables) > _MAX_TABLE_ROWS * 10:
                             break
-                        all_tables.extend(_parse_latex_tables(text[:_MAX_TEX_CHARS]))
+                        # Each _parse_latex_tables call restarts its index at 0,
+                        # so tables from different .tex files would otherwise share
+                        # table_id ("latex_1") and synthetic "Table 1" labels —
+                        # collapsing distinct tables onto one provenance trace.
+                        # Re-index against the running total so each table keeps a
+                        # unique id; real \label values from the source are left
+                        # untouched (only the synthetic per-file placeholders are
+                        # rewritten to the global position).
+                        base = len(all_tables)
+                        for offset, table in enumerate(
+                            _parse_latex_tables(text[:_MAX_TEX_CHARS])
+                        ):
+                            global_idx = base + offset
+                            placeholder = f"Table {offset + 1}"
+                            table["table_id"] = _table_id("latex", global_idx)
+                            if table.get("label") == placeholder:
+                                table["label"] = f"Table {global_idx + 1}"
+                            if table.get("name") == placeholder:
+                                table["name"] = f"Table {global_idx + 1}"
+                            all_tables.append(table)
             except Exception as exc:
                 logger.warning("arXiv source fetch failed for %s: %s", arxiv_id, exc)
 

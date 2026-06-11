@@ -78,10 +78,16 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
             return -0.5 * np.sum(((y - model) / y_err) ** 2)
 
         def prior_transform(u):
-            a = u[0] * np.max(y) * 2
-            mu = x.min() + u[1] * (x.max() - x.min())
-            sig = 0.1 + u[2] * (x.max() - x.min()) / 2
-            return np.array([a, mu, sig])
+            # Index the LAST axis so this works for both a single 1-D unit-cube
+            # point (nested sampling passes shape (3,)) and a (n_walkers, 3)
+            # matrix (the MCMC path passes one row per walker). Indexing u[0]
+            # directly would mistake the first WALKER for the amplitude axis and
+            # return shape (3, 3) instead of (n_walkers, 3).
+            u = np.asarray(u)
+            a = u[..., 0] * np.max(y) * 2
+            mu = x.min() + u[..., 1] * (x.max() - x.min())
+            sig = 0.1 + u[..., 2] * (x.max() - x.min()) / 2
+            return np.stack([a, mu, sig], axis=-1)
     else:
         return {**input_data, "error": f"Unknown model: {model_type}", "node_type": "BayesianFit"}
 

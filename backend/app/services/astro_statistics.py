@@ -91,9 +91,13 @@ def linear_regression(
             from scipy import stats
 
             slope, intercept, lo_slope, hi_slope = stats.theilslopes(y_arr, x_arr)
+            # theilslopes default alpha=0.95 returns a two-sided 95% CI, so the
+            # half-width is ~1.96*sigma. Divide by the 95% normal critical value
+            # to report a 1-sigma slope_stderr consistent with the other methods.
+            z95 = float(stats.norm.ppf(0.975))
             return _linear_result(
                 selected, x_arr, y_arr, float(slope), float(intercept),
-                slope_err=(float(hi_slope) - float(lo_slope)) / 2.0,
+                slope_err=(float(hi_slope) - float(lo_slope)) / 2.0 / z95,
                 intercept_err=None,
                 extra={"slope_ci_95": [round(float(lo_slope), 6), round(float(hi_slope), 6)]},
             )

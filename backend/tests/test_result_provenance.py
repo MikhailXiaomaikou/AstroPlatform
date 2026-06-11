@@ -194,7 +194,7 @@ def test_adql_zero_rows_stamped_as_empty():
     assert r["__tool_status__"] == "EMPTY"
     assert r["__do_not_claim__"] is True
     assert "MUST NOT claim" in r["__message_to_model__"]
-    assert "next step" in r["__suggested_next_step__"].lower() or r["__suggested_next_step__"]
+    assert "cone radius" in r["__suggested_next_step__"].lower()
 
 
 def test_search_objects_empty_results_stamped_as_empty():

@@ -1655,7 +1655,7 @@ async def _execute_tool_inner(
         elif tool_name == "run_python":
             return await _exec_run_python(tool_input, python_session_id)
         elif tool_name == "get_last_search_results":
-            return _exec_get_cached_results(tool_input)
+            return _exec_get_cached_results(tool_input, python_session_id)
         elif tool_name == "validate_analysis":
             return await _exec_validate_analysis(tool_input, chat_session_id or python_session_id, user_id=user_id)
         elif tool_name == "generate_paper_draft":
@@ -7068,10 +7068,16 @@ async def _exec_sensitivity_analysis(inp: dict, python_session_id: str = "defaul
     return {"parameter": param, "base_value": base, "results": results}
 
 
-def _exec_get_cached_results(inp: dict) -> dict:
+def _exec_get_cached_results(inp: dict, python_session_id: str = "default") -> dict:
     """Return full cached search results."""
     max_n = inp.get("max_results", 50)
-    results = get_cached_results("latest")
+    # Prefer the session-scoped cache so concurrent sessions don't read each
+    # other's "latest" results; fall back to the global key for the default
+    # (unscoped) session, mirroring code_executor.get_search_results_for_session.
+    scoped_key = _session_cache_key("latest", python_session_id)
+    results = (get_cached_results(scoped_key) if scoped_key else None)
+    if results is None:
+        results = get_cached_results("latest")
     if results is None:
         return {"results": [], "message": "No recent search results cached. Run a search first."}
     return {"results": results[:max_n], "total": len(results)}

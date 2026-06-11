@@ -570,7 +570,10 @@ def _parse_chain_files(
     samples_per_chain: list[np.ndarray] = []
     for path in chain_paths:
         try:
-            arr = np.loadtxt(path)
+            # ndmin=2 so a single-row chain file (the `evaluate` sampler writes
+            # exactly one sample) parses as (1, ncols) rather than a 1-D (ncols,)
+            # array that would fail the arr.ndim != 2 check below.
+            arr = np.loadtxt(path, ndmin=2)
         except Exception as exc:
             raise CobayaParseError(f"failed to parse chain file {path}: {exc}") from exc
         if arr.ndim != 2 or arr.shape[1] < 2 + len(parameter_order):

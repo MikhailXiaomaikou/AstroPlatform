@@ -370,6 +370,21 @@ def verify_record(
             validation_notes=["LLM did not supply integer table_idx/row_idx"],
         )
 
+    if not 0 <= table_idx < len(tables):
+        return ExtractedMeasurement(
+            source_name=source_name,
+            fwhm_km_s=fwhm,
+            log_luminosity=log_lum,
+            z=z_val,
+            table_idx=table_idx,
+            row_idx=row_idx,
+            cell_provenance={},
+            validation_status="failed_no_cell",
+            validation_notes=[
+                f"table_idx {table_idx} out of range (paper has {len(tables)} tables)"
+            ],
+        )
+
     provenance_raw = record.get("cell_provenance")
     provenance: dict[str, str] = {}
     if isinstance(provenance_raw, dict):

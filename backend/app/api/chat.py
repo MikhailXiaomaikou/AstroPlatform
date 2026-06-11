@@ -5407,6 +5407,13 @@ async def _run_agent_loop(
         ):
             last_stop_reason = response.get("stop_reason")
             break
+    else:
+        # The for-loop ran all `max_iterations` iterations without hitting any
+        # break — i.e. the model still wanted to continue when the budget ran
+        # out.  This is the only true "hit iteration cap" case.  Any clean
+        # completion (no tool calls, abstention, synthesis failure, non-tool
+        # stop_reason) leaves the loop via `break` and skips this `else`.
+        hit_iteration_cap = True
 
     full_reply = "\n\n".join(text_parts)
 
@@ -6394,9 +6401,9 @@ async def _run_agent_loop(
 
     # M7: telemetry so the UI can surface "hit iteration cap" to the user
     # (previously silent — a 13-step workflow just got truncated with no
-    # indication why).
-    if _iteration + 1 >= max_iterations:
-        hit_iteration_cap = True
+    # indication why).  `hit_iteration_cap` is set in the agent loop's `else`
+    # clause, which fires only when the loop exhausts its iteration budget
+    # without breaking — a clean final-answer break is not flagged.
 
     return {
         "reply": clean_reply,

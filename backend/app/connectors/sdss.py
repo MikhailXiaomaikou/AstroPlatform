@@ -88,9 +88,9 @@ class SDSSConnector(BaseConnector):
         # propagate the information.
         requested_radius = float(radius)
         effective_radius = min(max(requested_radius, 0.001), 0.05)
-        self._last_radius_clamp: dict | None = None
+        radius_clamp: dict | None = None
         if abs(effective_radius - requested_radius) > 1e-9:
-            self._last_radius_clamp = {
+            radius_clamp = {
                 "radius_clamped": True,
                 "radius_requested_deg": requested_radius,
                 "radius_actual_deg": effective_radius,
@@ -130,7 +130,7 @@ class SDSSConnector(BaseConnector):
         except (ValueError, TimeoutError, ConnectionError, OSError, httpx.HTTPStatusError) as e:
             logger.debug("SkyServer SQL query failed, falling back to astroquery: %s", e)
             table = await self._query_region_fallback(ra, dec, effective_radius)
-        return self._table_to_objects(table)
+        return self._table_to_objects(table, radius_clamp=radius_clamp)
 
     @with_retry(max_retries=3, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
@@ -244,7 +244,9 @@ class SDSSConnector(BaseConnector):
                         columns[key].append(val)
         return Table(columns)
 
-    def _table_to_objects(self, table: Table) -> list[AstroObject]:
+    def _table_to_objects(
+        self, table: Table, radius_clamp: dict | None = None
+    ) -> list[AstroObject]:
         objects = []
         for row in table:
             ra = float(row["ra"]) if "ra" in row.colnames else 0.0
@@ -332,6 +334,10 @@ class SDSSConnector(BaseConnector):
 
             # PART Y Batch 4: stamp archive_version (SDSS DR18 PhotoObj path).
             extra["archive_version"] = "SDSS DR18"
+            # L18: propagate the radius-clamp record (if any) so callers/UI can
+            # see the requested cone was silently shrunk to SkyServer's limit.
+            if radius_clamp is not None:
+                extra.update(radius_clamp)
             objects.append(
                 AstroObject(
                     source="sdss",

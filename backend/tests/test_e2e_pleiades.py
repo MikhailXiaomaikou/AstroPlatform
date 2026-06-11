@@ -98,8 +98,11 @@ class TestPleiadesE2E:
         assert 80 <= age_myr <= 150, (
             f"Age {age_myr} Myr outside expected range [80, 150]"
         )
-        assert 130 <= distance_pc <= 140 or 100 <= distance_pc <= 200, (
-            f"Distance {distance_pc} pc outside plausible range"
+        # True DM=5.67 -> 136 pc; tight single bound so a poor recovery
+        # (e.g. 185 pc) actually fails instead of slipping through a
+        # loose disjunction that subsumed the tight 130-140 target.
+        assert 120 <= distance_pc <= 160, (
+            f"Distance {distance_pc} pc outside expected range [120, 160] (true 136 pc)"
         )
 
         # Check fit quality

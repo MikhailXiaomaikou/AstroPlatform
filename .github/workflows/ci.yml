@@ -41,6 +41,10 @@ jobs:
         run: |
           cd frontend
           npx tsc -b --noEmit
+      - name: Lint
+        run: |
+          cd frontend
+          npm run lint
       - name: Run tests
         run: |
           cd frontend

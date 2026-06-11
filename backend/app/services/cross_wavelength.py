@@ -306,8 +306,10 @@ def _check_xray_optical(dossier: dict) -> dict[str, Any]:
         }
 
     # Optical flux from r-band or g-band
+    opt_band = "r"
     r_mag = _get_phot(dossier, "optical", "r")
     if r_mag is None:
+        opt_band = "g"
         r_mag = _get_phot(dossier, "optical", "g")
     if r_mag is None:
         return {
@@ -320,8 +322,11 @@ def _check_xray_optical(dossier: dict) -> dict[str, Any]:
             "recommended_followup": None,
         }
 
-    # Convert optical mag to flux (erg/s/cm^2 approx)
-    f_opt = 3.631e-20 * 10 ** (-0.4 * r_mag) * 1e23  # rough erg/s/cm^2/Hz
+    # Convert optical AB mag to an integrated energy flux nu*f_nu in erg/s/cm^2,
+    # matching the X-ray flux units so log10(Fx/Fopt) lands on the Maccacaro scale.
+    # f_nu = 3.631e-20 * 10^(-0.4 mag) erg/s/cm^2/Hz; multiply by nu to get erg/s/cm^2.
+    nu_opt = 3.0e8 / (_BAND_WAVELENGTH_UM[opt_band] * 1.0e-6)  # band frequency in Hz
+    f_opt = 3.631e-20 * 10 ** (-0.4 * r_mag) * nu_opt  # erg/s/cm^2
     if f_opt <= 0:
         return {
             "check": "xray_optical_ratio",

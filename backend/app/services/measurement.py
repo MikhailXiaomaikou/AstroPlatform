@@ -55,7 +55,11 @@ _COLUMN_UNITS: dict[str, str] = {
     "w1mpro": "mag", "w2mpro": "mag", "w3mpro": "mag", "w4mpro": "mag",
     # Kinematics / spectroscopy
     "radial_velocity": "km/s", "rv": "km/s", "rvz_radvel": "km/s",
-    "redshift": "dimensionless", "z": "dimensionless", "rvz_redshift": "dimensionless",
+    # NB: bare `z` is intentionally NOT mapped — on the documented SDSS path
+    # (VizieR V/154/sdss17) `z` is the z-band magnitude, not a redshift; the
+    # unambiguous redshift columns are `zsp`/`zph`.
+    "redshift": "dimensionless", "rvz_redshift": "dimensionless",
+    "zsp": "dimensionless", "zph": "dimensionless",
     # Stellar params
     "teff": "K", "t_eff": "K",
     "log_g": "dex", "logg": "dex",

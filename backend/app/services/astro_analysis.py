@@ -2940,8 +2940,8 @@ def airmass_plot(ra, dec, observatory="paranal", date=None):
     # Compute airmass (Pickering 2002 formula, valid closer to horizon)
     airmass = np.full_like(altitudes, np.nan)
     above_horizon = altitudes > 1.0
-    alt_rad = np.radians(altitudes[above_horizon])
-    airmass[above_horizon] = 1.0 / np.sin(alt_rad + 0.0014 * np.degrees(alt_rad))
+    h = altitudes[above_horizon]
+    airmass[above_horizon] = 1.0 / np.sin(np.radians(h + 244.0 / (165.0 + 47.0 * h ** 1.1)))
 
     # Sun altitude for twilight shading
     sun_altaz = get_sun(times).transform_to(altaz_frame)

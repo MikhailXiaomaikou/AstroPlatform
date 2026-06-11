@@ -10,7 +10,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           plotly: ['plotly.js-dist-min'],
-          reactflow: ['reactflow'],
         },
       },
     },

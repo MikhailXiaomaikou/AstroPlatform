@@ -47,8 +47,12 @@ class SessionArtifacts:
 
 
 def _escape_latex(text: str) -> str:
+    # Backslash is mapped to a brace-free sentinel first so the later
+    # "{"/"}" passes can't corrupt the "\textbackslash{}" braces into
+    # "\textbackslash\{\}". The sentinel is expanded at the very end.
+    _BACKSLASH_SENTINEL = "\x00TEXTBACKSLASH\x00"
     replacements = {
-        "\\": r"\textbackslash{}",
+        "\\": _BACKSLASH_SENTINEL,
         "&": r"\&",
         "%": r"\%",
         "$": r"\$",
@@ -61,7 +65,7 @@ def _escape_latex(text: str) -> str:
     }
     for key, value in replacements.items():
         text = text.replace(key, value)
-    return text
+    return text.replace(_BACKSLASH_SENTINEL, r"\textbackslash{}")
 
 
 def _format_table_cell(value: object) -> str:

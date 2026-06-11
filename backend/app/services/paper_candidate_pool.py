@@ -122,11 +122,12 @@ async def build_paper_mining_candidate_pool(
                 break
             attempted_queries.append(query)
             try:
+                page_size = min(25, limit)
                 for page in range(max(1, min(int(max_pages_per_query or 2), 8))):
                     live = await _search_arxiv(
                         query,
-                        max_results=min(25, limit),
-                        start=page * 25,
+                        max_results=page_size,
+                        start=page * page_size,
                         sort_by=arxiv_sort_by,
                         sort_order=arxiv_sort_order,
                     )

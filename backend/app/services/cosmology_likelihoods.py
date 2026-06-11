@@ -1551,6 +1551,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             source_locator="Freedman et al. 2019 TRGB H0 prior.",
             approximation="Scalar Gaussian H0 prior; mid-rung distance ladder anchor.",
         ),
+        do_not_combine_with=("shoes_h0_riess22",),
     ),
     "cchp_h0_freedman24": CosmologyDatasetEntry(
         key="cchp_h0_freedman24",
@@ -1600,7 +1601,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "trgb_h0_freedman19 (same CCHP program / TRGB sample) — that "
             "double-counts."
         ),
-        do_not_combine_with=("trgb_h0_freedman19",),
+        do_not_combine_with=("trgb_h0_freedman19", "shoes_h0_riess22"),
         cobaya_likelihood="gaussian:H0=70.39,sigma=1.936",
         cosmosis_module="prior H0 = gaussian 70.39 1.936",
         execution_mode="compressed_gaussian",
@@ -4032,140 +4033,6 @@ def _draw_gaussian_centered_proposal(
     return samples, log_q
 
 
-# The full Pantheon+ χ² proposal reuses the registered compressed preliminary
-# Gaussian as its mixture component.  The χ² itself still uses the full 1701-SN
-# covariance via _pantheon_plus_chi2_samples when explicitly enabled.
-_PANTHEON_PLUS_PROPOSAL_MEAN = _PANTHEON_PLUS_COMPRESSED_MEAN
-_PANTHEON_PLUS_PROPOSAL_COV = _PANTHEON_PLUS_COMPRESSED_COV
-_PANTHEON_PLUS_PROPOSAL_NAMES = _PANTHEON_PLUS_COMPRESSED_NAMES
-
-
-def _draw_mixture_gaussian_proposal(
-    rng: np.random.Generator,
-    parameter_order: list[str],
-    prior_bounds: dict[str, tuple[float, float]],
-    compressed_entries: list[CosmologyDatasetEntry],
-    proposal_count: int,
-    *,
-    inflation: float = 2.5,
-    include_pantheon_plus: bool = False,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Mixture-Gaussian importance proposal — covers multiple posterior modes.
-
-    Builds N Gaussian components and draws ``proposal_count/N`` samples from
-    each.  Importance log-pdf is the proper mixture log-pdf
-    ``log[(1/N) Σᵢ q_i(θ)]`` so the importance ratio remains unbiased.
-
-    Components:
-      1. Every compressed-likelihood Gaussian from ``compressed_entries`` that
-         overlaps the current parameter space.  Keeping all components matters
-         for tension cases such as Planck+Pantheon+, where a single "best"
-         anchor undersamples the other posterior mode.
-      2. If ``include_pantheon_plus``, the registered Pantheon+SH0ES
-         compressed preliminary Gaussian centered on the SN calibration branch.
-
-    Returns ``(samples, log_q)`` or ``None`` if no component fits the
-    requested parameter_order (caller falls back to uniform).
-    """
-    components: list[tuple[np.ndarray, np.ndarray, list[int], list[str]]] = []
-
-    # Component 1: registered compressed-likelihood Gaussians.
-    for entry in compressed_entries:
-        spec = entry.compressed_likelihood
-        if spec is None:
-            continue
-        params = list(spec.parameters)
-        names = [n for n in params if n in parameter_order]
-        if not names:
-            continue
-        local_idx = [params.index(name) for name in names]
-        sample_idx = [parameter_order.index(name) for name in names]
-        mean = np.asarray(spec.mean, dtype=float)[local_idx]
-        cov = np.asarray(spec.covariance, dtype=float)[
-            np.ix_(local_idx, local_idx)
-        ]
-        components.append((mean, cov, sample_idx, names))
-
-    # Component 2: Pantheon+SH0ES compressed preliminary Gaussian.
-    if include_pantheon_plus:
-        names = [n for n in _PANTHEON_PLUS_PROPOSAL_NAMES if n in parameter_order]
-        if names:
-            local_idx = [
-                _PANTHEON_PLUS_PROPOSAL_NAMES.index(n) for n in names
-            ]
-            sample_idx = [parameter_order.index(n) for n in names]
-            mean = np.asarray(_PANTHEON_PLUS_PROPOSAL_MEAN, dtype=float)[local_idx]
-            cov_full = np.asarray(_PANTHEON_PLUS_PROPOSAL_COV, dtype=float)
-            cov = cov_full[np.ix_(local_idx, local_idx)]
-            components.append((mean, cov, sample_idx, names))
-
-    n_components = len(components)
-    if n_components == 0:
-        return None
-
-    # Per-component sample budget — generously oversample to survive box rejection.
-    per_comp = max(1, proposal_count // n_components)
-    over_per_comp = max(int(per_comp * 1.5), per_comp + 1)
-
-    # Per-component inflation factor — Pantheon+SH0ES proposal Gaussian
-    # is narrower (σ_H0=1.04) than Planck18 (σ_H0=0.54) but the *joint*
-    # BAO+SN+CMB posterior is much wider in H0 than either component alone
-    # because of the H0 tension.  Inflate Pantheon+ more aggressively so its
-    # proposal covers the joint posterior tail near Planck H0.
-    def _per_component_inflation(names: list[str]) -> float:
-        # SN-component Gaussian identifies itself by having "M_B" in its names.
-        if "M_B" in names:
-            return max(inflation * 2.0, 5.0)
-        return inflation
-
-    all_samples_list: list[np.ndarray] = []
-    for mean, cov, sample_idx, names in components:
-        infl = _per_component_inflation(names)
-        cov_inflated = cov * (infl ** 2) + np.eye(len(names)) * 1e-12
-        sign, _ = np.linalg.slogdet(cov_inflated)
-        if sign <= 0:
-            return None
-        samples_block = np.empty(
-            (over_per_comp, len(parameter_order)), dtype=float
-        )
-        draws = rng.multivariate_normal(mean, cov_inflated, size=over_per_comp)
-        for k, idx in enumerate(sample_idx):
-            samples_block[:, idx] = draws[:, k]
-        for i, name in enumerate(parameter_order):
-            if i not in sample_idx:
-                low, high = prior_bounds[name]
-                samples_block[:, i] = rng.uniform(low, high, size=over_per_comp)
-        in_box = np.ones(over_per_comp, dtype=bool)
-        for i, name in enumerate(parameter_order):
-            low, high = prior_bounds[name]
-            in_box &= (samples_block[:, i] >= low) & (samples_block[:, i] <= high)
-        samples_block = samples_block[in_box]
-        if samples_block.shape[0] < per_comp:
-            return None
-        all_samples_list.append(samples_block[:per_comp])
-
-    samples = np.concatenate(all_samples_list, axis=0)
-    n_total = samples.shape[0]
-
-    # Mixture log-pdf: log[(1/N) Σᵢ qᵢ(θ)].
-    log_qs = np.empty((n_total, n_components), dtype=float)
-    for i, (mean, cov, sample_idx, names) in enumerate(components):
-        infl = _per_component_inflation(names)
-        cov_inflated = cov * (infl ** 2) + np.eye(len(names)) * 1e-12
-        sign, logdet = np.linalg.slogdet(cov_inflated)
-        if sign <= 0 or not math.isfinite(logdet):
-            return None
-        inv_cov = np.linalg.inv(cov_inflated)
-        diffs = samples[:, sample_idx] - mean
-        log_qs[:, i] = (
-            -0.5 * np.einsum("ni,ij,nj->n", diffs, inv_cov, diffs)
-            - 0.5 * logdet
-            - 0.5 * len(names) * np.log(2.0 * np.pi)
-        )
-    log_q_total = -math.log(n_components) + np.logaddexp.reduce(log_qs, axis=1)
-    return samples, log_q_total
-
-
 def _run_emcee_chain(
     seed: int,
     parameter_order: list[str],
@@ -5773,7 +5640,7 @@ def _validate_model(model: str) -> str:
     aliases = {
         "lambda_cdm": "lcdm",
         "lambdacdm": "lcdm",
-        "Λcdm": "lcdm",
+        "λcdm": "lcdm",
         "flat_lcdm": "lcdm",
         "flat_wcdm": "wcdm",
         "flat_w0wa_cdm": "w0wa_cdm",

@@ -522,7 +522,7 @@ def synthesize_bibliography(topic: str, findings: str = "", max_papers: int = 10
             f"and contextualizing the user's findings within the existing literature."
         ),
         "suggested_citations": [
-            {"bibcode": p.get("bibcode", ""), "citation": f"{p.get('authors', [''])[0].split(',')[0]} et al. ({p.get('year', '')})"}
+            {"bibcode": p.get("bibcode", ""), "citation": f"{(p.get('authors') or ['Unknown'])[0].split(',')[0]} et al. ({p.get('year', '')})"}
             for p in papers[:max_papers] if p.get("bibcode")
         ],
     }
