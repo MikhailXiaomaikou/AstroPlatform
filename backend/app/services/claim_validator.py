@@ -2823,6 +2823,52 @@ def dump_tool_universe(tool_results: Any, limit: int = 50) -> str:
     return json.dumps(vals[:limit])
 
 
+_DECLARED_COSMOLOGY_KEYS = frozenset({"cosmology_manifest", "source_cosmology"})
+
+
+def _iter_declared_cosmology_subtrees(node: Any) -> Iterable[dict]:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _DECLARED_COSMOLOGY_KEYS and isinstance(value, dict):
+                yield value
+            else:
+                yield from _iter_declared_cosmology_subtrees(value)
+    elif isinstance(node, (list, tuple)):
+        for item in node:
+            yield from _iter_declared_cosmology_subtrees(item)
+
+
+def value_supported_by_cosmology_manifest(
+    value: float,
+    tool_results: Any,
+    tolerance: float = DEFAULT_TOLERANCE,
+) -> bool:
+    """True when ``value`` matches a number inside a cosmology a tool DECLARED
+    this turn (cosmology_manifest / source_cosmology subtrees only; signed
+    ±tolerance band, same matching as validate_claims).
+
+    Used by chat.py's cosmology-anchor comparison gate: fit_line_lfr's
+    cosmology_manifest carries the Planck18 preset (H0=67.36, Om0=0.3153,
+    sigma8=0.8111) the fit assumed, and citing those values in prose is
+    provenance-correct. Deliberately NOT matched against the full tool
+    universe — with ~10^3 numeric leaves (FWHM errors, S/N, fluxes) a ±1%
+    band around any O(10-100) fabricated anchor would almost always hit a
+    coincidental match and launder it.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(v):
+        return False
+    pool: set[float] = set()
+    for subtree in _iter_declared_cosmology_subtrees(tool_results):
+        pool.update(_iter_numeric_values(subtree))
+    if not pool:
+        return False
+    return _matches_any(v, pool, tolerance)
+
+
 # W1 (PART W): literature-prior hard blacklist — age/mass/distance citations are
 # only allowed in a reply if the corresponding measurement/lookup tool appeared
 # in tool_results. Independent of the ±1% universe match: even if 100 happens

@@ -2970,18 +2970,60 @@ _COSMOLOGY_ANCHOR_NUMERIC_PATTERNS: tuple[tuple[set[str], re.Pattern[str]], ...]
 )
 
 
+# Lookarounds keep the token from matching INSIDE a word — "SH0ES" and
+# "H0LiCOW" both contain "H0", and a token hit there makes the
+# number-after-token read the "0" of the next "H0" instead of the anchor value.
+_ANCHOR_PARAM_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:H_?0|H₀|S_?8|sigma_?8|σ_?8)(?![A-Za-z0-9])", re.I
+)
+_ANCHOR_NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+
+
 def _unsupported_cosmology_anchor_numeric_comparison(
     reply: str,
     tool_results: list[dict],
 ) -> bool:
-    """Catch H0/S8 comparison anchors that were not selected this turn."""
+    """Catch H0/S8 comparison anchors that were not selected this turn.
+
+    A tool may itself declare the anchor value — fit_line_lfr's
+    cosmology_manifest carries the Planck18 preset (H0=67.36, Om=0.3153,
+    sigma8=0.8111) the fit assumed, and the system prompt REQUIRES declaring
+    the assumed cosmology. So a match only blocks when the number attached to
+    the anchor parameter is NOT in a tool-declared cosmology subtree
+    (cosmology_manifest / source_cosmology; ±1%, signed). "Planck18
+    (H0 = 67.36)" over a fit result passes; "Planck measured H0 = 70" still
+    blocks (matching the full tool universe instead would launder any anchor
+    near a coincidental FWHM/flux value).
+    """
     text = str(reply or "")
     if not text:
         return False
+    from app.services.claim_validator import value_supported_by_cosmology_manifest
+
     dataset_keys = _cosmology_dataset_keys_present(tool_results)
     for required_keys, pattern in _COSMOLOGY_ANCHOR_NUMERIC_PATTERNS:
-        if pattern.search(text) and not (required_keys & dataset_keys):
-            return True
+        if required_keys & dataset_keys:
+            continue
+        for match in pattern.finditer(text):
+            # The pattern ends at a digit; widen the window so the trailing
+            # number is complete, then read the FIRST number after the
+            # parameter token (H0/S8/sigma8) — that is the anchor value.
+            window = text[match.start(): match.end() + 24]
+            token = _ANCHOR_PARAM_TOKEN_RE.search(window)
+            if token is None:
+                return True  # cannot locate the parameter — keep the conservative block
+            number = _ANCHOR_NUMBER_RE.search(window, token.end())
+            if number is None:
+                # The pattern's trailing \d was satisfied by a digit inside a
+                # name ("SH0ES", "H0LiCOW"), not by a value attached to the
+                # parameter — qualitative tension prose, not a numeric claim.
+                continue
+            try:
+                value = float(number.group(0))
+            except ValueError:
+                return True
+            if not value_supported_by_cosmology_manifest(value, tool_results):
+                return True
     return False
 
 
@@ -5945,6 +5987,7 @@ async def _run_agent_loop(
             )
             tool_grounded_summary = (
                 _research_tool_grounded_summary(all_tool_results)
+                or _line_lfr_tool_grounded_summary(all_tool_results)
                 or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
             )
             if tool_grounded_summary:
