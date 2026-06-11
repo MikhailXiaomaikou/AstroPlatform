@@ -139,7 +139,7 @@ vi.mock("../api/userTools", () => ({
 
 // ── Import component under test (after mocks) ──
 import ChatPage from "../pages/Chat/ChatPage";
-import { getAIBackendStatus, getStoredApiKeys, sendChatMessage } from "../api/client";
+import { getAIBackendStatus, getStoredApiKeys, sendChatMessage, uploadGeneralFile } from "../api/client";
 import { listUserTools } from "../api/userTools";
 
 /* ── Helper to render with providers ── */
@@ -1123,5 +1123,75 @@ describe("NextStepsPanel (W6 PART W) next-step actions", () => {
     expect(labels).toContain("Export as notebook");
     expect(labels).toContain("Run sensitivity analysis");
     expect(labels).toContain("Search related literature");
+  });
+});
+
+/* ── 3B (2026-06-11): chat attachment button — user CSV → fit_line_lfr ── */
+
+describe("ChatPage attachment button", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authState.user = null;
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  function signIn() {
+    authState.user = {
+      id: "u1",
+      username: "tester",
+      email: "t@example.com",
+      subscription_tier: "free",
+      stripe_customer_id: null,
+      display_name: null,
+      avatar_url: null,
+      google_linked: false,
+    };
+  }
+
+  it("renders the attach button disabled when signed out", () => {
+    renderChatPage();
+    const btn = screen.getByRole("button", { name: "chat.attach_file" });
+    expect(btn).toBeTruthy();
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    expect(btn.getAttribute("title")).toBe("chat.attach_sign_in");
+  });
+
+  it("uploads a selected CSV and steers the composer to fit_line_lfr user_file", async () => {
+    signIn();
+    vi.mocked(uploadGeneralFile).mockResolvedValue({
+      id: "f1",
+      filename: "mine.csv",
+      path: "uploads/u1/abc_mine.csv",
+      size_bytes: 64,
+    });
+    renderChatPage();
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).toBeTruthy();
+    const file = new File(["source_name,redshift\nA,4.5\n"], "mine.csv", { type: "text/csv" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    await waitFor(() => expect(uploadGeneralFile).toHaveBeenCalledTimes(1));
+    // The composer message must reference the stored path and the user_file
+    // entry — the auto-send then forwards it (sendChatMessage is mocked).
+    await waitFor(() => {
+      const sent = vi.mocked(sendChatMessage).mock.calls.length > 0
+        ? JSON.stringify(vi.mocked(sendChatMessage).mock.calls[0])
+        : (document.querySelector(".chat-input") as HTMLTextAreaElement | null)?.value ?? "";
+      expect(sent).toContain("uploads/u1/abc_mine.csv");
+      expect(sent).toContain("user_file");
+    });
+  });
+
+  it("shows an error toast when the CSV upload fails", async () => {
+    signIn();
+    vi.mocked(uploadGeneralFile).mockRejectedValue(new Error("boom"));
+    renderChatPage();
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["x"], "mine.csv", { type: "text/csv" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    await waitFor(() => expect(uploadGeneralFile).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("chat.csv_upload_failed");
+    });
   });
 });

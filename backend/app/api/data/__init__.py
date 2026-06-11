@@ -1631,7 +1631,11 @@ async def upload_general_file(
         raise HTTPException(status_code=413, detail=f"File too large. Max {max_size // (1024*1024)} MB")
 
     file_uuid = uuid.uuid4().hex
-    safe_name = file.filename.replace("/", "_").replace("\\", "_")
+    # Quotes/control chars also sanitized (2026-06-11): the chat composer
+    # embeds the returned path inside a quoted user_file="..." string, and a
+    # filename like my"data.csv would break that quoting.
+    safe_name = file.filename.replace("/", "_").replace("\\", "_").replace('"', "_").replace("'", "_")
+    safe_name = "".join(ch if ch.isprintable() else "_" for ch in safe_name)
     storage_path = f"uploads/{str(user.id)[:8]}/{file_uuid}_{safe_name}"
     upload_fits(storage_path, contents)  # reuse storage function (works for any file)
 

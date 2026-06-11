@@ -4061,6 +4061,7 @@ export default function ChatPage() {
 
   const [dragOver, setDragOver] = useState(false);
   const pendingSendRef = useRef(false);
+  const attachInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-send when input is set by FITS drop
   useEffect(() => {
@@ -4071,9 +4072,24 @@ export default function ChatPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [input]);
 
-  const handleFitsDrop = async (files: FileList) => {
+  const handleFileDrop = async (files: FileList) => {
     for (const file of Array.from(files)) {
-      if (!file.name.toLowerCase().match(/\.(fits|fit|fts)$/)) continue;
+      const lower = file.name.toLowerCase();
+      // 3B (2026-06-11): CSV = the user's OWN measurement table → upload via
+      // the general-file endpoint, then steer the model to the fit_line_lfr
+      // user_file path (results are labeled user-provided, not literature).
+      if (lower.endsWith(".csv")) {
+        try {
+          const result = await uploadGeneralFile(file);
+          const msg = `I uploaded a CSV file with my own measurements: ${file.name} (stored at ${result.path}). Please fit the line luminosity-FWHM relation from it with fit_line_lfr (user_file="${result.path}").`;
+          pendingSendRef.current = true;
+          setInput(msg);
+        } catch {
+          showToast(t("chat.csv_upload_failed"), "error");
+        }
+        break;
+      }
+      if (!lower.match(/\.(fits|fit|fts)$/)) continue;
       try {
         const result = await uploadFITS(file);
         const msg = `I uploaded a FITS file: ${file.name} (stored at ${result.fits_path}). Please analyze this spectrum.`;
@@ -5448,16 +5464,40 @@ export default function ChatPage() {
         className={`chat-input-area${dragOver ? " drag-over" : ""}`}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFitsDrop(e.dataTransfer.files); }}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFileDrop(e.dataTransfer.files); }}
       >
         <div className="chat-input-wrapper">
+          <input
+            ref={attachInputRef}
+            type="file"
+            accept=".csv,.fits,.fit,.fts"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                void handleFileDrop(e.target.files);
+              }
+              e.target.value = "";
+            }}
+            tabIndex={-1}
+            aria-hidden="true"
+          />
+          <button
+            className="btn-secondary chat-attach-btn"
+            onClick={() => attachInputRef.current?.click()}
+            disabled={loading || !user}
+            title={user ? t("chat.attach_file") : t("chat.attach_sign_in")}
+            aria-label={t("chat.attach_file")}
+            style={{ marginRight: 4 }}
+          >
+            &#x1F4CE;
+          </button>
           <textarea
             ref={inputRef}
             className="chat-input"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={dragOver ? "Drop FITS file here..." : t("chat.placeholder")}
+            placeholder={dragOver ? "Drop FITS or CSV file here..." : t("chat.placeholder")}
             rows={1}
             disabled={loading}
             aria-label="Message input"

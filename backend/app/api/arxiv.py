@@ -600,6 +600,46 @@ def _find_column(columns: list[str], patterns: list[str]) -> int | None:
     return None
 
 
+# Fields a user-confirmed column mapping may pin (extract_literature_tables
+# `column_mapping` param, 2026-06-11). Keys are measurement-schema field
+# names; values resolve to a column via _resolve_mapped_column.
+COLUMN_MAPPING_FIELDS = (
+    "source_name", "redshift", "line", "log_luminosity",
+    "luminosity_err", "fwhm_km_s", "fwhm_err", "mu_lens",
+)
+
+
+def _resolve_mapped_column(columns: list[str], value: Any) -> int | None:
+    """Resolve a user-confirmed column reference to an index.
+
+    Accepts a 0-based positional index (int or digit string) or a header
+    name. Header matching is exact — case/whitespace-insensitive first,
+    then _column_key-normalized equality — NEVER fuzzy: the whole point of
+    the mapping is that a human confirmed which column is which, so a loose
+    match would reintroduce the guessing this feature exists to remove.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 <= value < len(columns) else None
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        idx = int(text)
+        return idx if 0 <= idx < len(columns) else None
+    lowered = _normalize_ws(text).lower()
+    for idx, column in enumerate(columns):
+        if _normalize_ws(str(column)).lower() == lowered:
+            return idx
+    key = _column_key(text)
+    if key:
+        for idx, column in enumerate(columns):
+            if _column_key(str(column)) == key:
+                return idx
+    return None
+
+
 def _line_measurement_column_diagnostics(tables: list[dict[str, Any]]) -> list[str]:
     """Explain why raw tables did not normalize into line measurements.
 
@@ -718,7 +758,20 @@ def _is_paper_lensed_by_default_safe(bibcode: str | None) -> bool:
         return False
 
 
-def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_line_measurements(
+    tables: list[dict[str, Any]],
+    column_mapping: dict[str, Any] | None = None,
+    table_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Normalize raw paper tables into line-measurement rows.
+
+    ``column_mapping`` (2026-06-11, raw_only recovery): a USER-CONFIRMED
+    {field: header-or-index} dict (fields in COLUMN_MAPPING_FIELDS) that
+    overrides the pattern-based column detection. Applied to the table whose
+    table_id matches ``table_id`` (or, when table_id is None, to every table
+    where ALL mapped fields resolve). Values still come verbatim from the
+    table cells — the mapping only says which column is which.
+    """
     measurements: list[dict[str, Any]] = []
     for table in tables:
         columns = [str(c) for c in table.get("columns") or []]
@@ -799,6 +852,31 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
         # μ ≳ 1.05 is the conventional "lensed" threshold; anything <=1
         # or missing means the source is either unlensed or we don't know.
         mu_idx = _find_column(columns, [r"^mu$", r"magnif(ication)?", r"mu_?lens", r"μ"])
+        # User-confirmed column mapping overrides the pattern detection for
+        # this table (raw_only recovery). All mapped fields must resolve in
+        # this table's columns, else the mapping is ignored for the table.
+        resolved_mapping: dict[str, int] = {}
+        if column_mapping and (
+            table_id is None or str(table.get("table_id") or "") == str(table_id)
+        ):
+            candidate: dict[str, int] = {}
+            for field in COLUMN_MAPPING_FIELDS:
+                if field in column_mapping:
+                    mapped_idx = _resolve_mapped_column(columns, column_mapping[field])
+                    if mapped_idx is None:
+                        candidate = {}
+                        break
+                    candidate[field] = mapped_idx
+            resolved_mapping = candidate
+        if resolved_mapping:
+            source_idx = resolved_mapping.get("source_name", source_idx)
+            redshift_idx = resolved_mapping.get("redshift", redshift_idx)
+            line_idx = resolved_mapping.get("line", line_idx)
+            luminosity_idx = resolved_mapping.get("log_luminosity", luminosity_idx)
+            luminosity_err_idx = resolved_mapping.get("luminosity_err", luminosity_err_idx)
+            fwhm_idx = resolved_mapping.get("fwhm_km_s", fwhm_idx)
+            fwhm_err_idx = resolved_mapping.get("fwhm_err", fwhm_err_idx)
+            mu_idx = resolved_mapping.get("mu_lens", mu_idx)
         if source_idx is None or luminosity_idx is None or fwhm_idx is None:
             continue
 
@@ -837,6 +915,12 @@ def _normalize_line_measurements(tables: list[dict[str, Any]]) -> list[dict[str,
         else:
             log_inferred_from = None  # may be promoted to "value_range" per row
             luminosity_is_log = False
+        if "log_luminosity" in resolved_mapping:
+            # The user asserted this column IS log10 luminosity — that
+            # confirmation outranks the header/caption heuristics. Values
+            # still come verbatim from the cells.
+            luminosity_is_log = True
+            log_inferred_from = "user_column_mapping"
 
         # PART Z: infer line from headers + caption across multiple species.
         # Used to be hardcoded [CII] 158um, missing Hα / Lyα / [OIII] / etc.

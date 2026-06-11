@@ -660,6 +660,20 @@ TOOLS = [
                     "type": "object",
                     "description": "Optional paper object from search_literature containing bibcode/arxiv_url/title/authors/year.",
                 },
+                "column_mapping": {
+                    "type": "object",
+                    "description": (
+                        "raw_only recovery: {field: column-header-or-0-based-index} "
+                        "overriding the automatic column detection. Fields: source_name, "
+                        "redshift, line, log_luminosity, luminosity_err, fwhm_km_s, "
+                        "fwhm_err, mu_lens. Use ONLY after the user has confirmed which "
+                        "column is which — never guess the mapping yourself."
+                    ),
+                },
+                "table_id": {
+                    "type": "string",
+                    "description": "Optional table_id to apply column_mapping to one specific table.",
+                },
             },
         },
     },
@@ -742,6 +756,29 @@ TOOLS = [
                         "+ REBELS + Capak+2015 + Bothwell+13). Rows are "
                         "deduped by (source_name, bibcode). When set, "
                         "`cache_key` is ignored."
+                    ),
+                },
+                "user_file": {
+                    "type": "string",
+                    "description": (
+                        "Path of a USER-UPLOADED CSV (must start with 'uploads/'; "
+                        "the chat attachment button / POST /api/data/files/upload "
+                        "returns it). Fits the user's OWN measurements: values are "
+                        "read verbatim, the result is labeled "
+                        "input_data_origin='user_uploaded' / source_authority="
+                        "'user_provided', and the rows must NEVER be cited as "
+                        "literature. Wins over cache_key/cache_keys. Combine with "
+                        "column_mapping when the CSV headers are non-standard."
+                    ),
+                },
+                "column_mapping": {
+                    "type": "object",
+                    "description": (
+                        "With user_file: {field: column-header-or-0-based-index} "
+                        "pinning which CSV column holds source_name / redshift / "
+                        "log_luminosity / luminosity_err / fwhm_km_s / fwhm_err. "
+                        "Use when the headers defeat automatic detection; confirm "
+                        "the mapping with the user, never guess."
                     ),
                 },
                 "line_id": {
@@ -3907,6 +3944,13 @@ def _literature_table_cache_payload(payload: dict[str, Any], cache_key: str) -> 
             ),
             "supports_measurement_claims": bool(line_measurements),
         },
+        # Carried when the rows came from a user-confirmed column-mapping
+        # rerun (raw_only recovery) — a later fit-from-cache must not present
+        # user-asserted columns as auto-detected ones.
+        **({
+            "column_mapping_applied": payload.get("column_mapping_applied"),
+            "column_mapping_source": payload.get("column_mapping_source"),
+        } if payload.get("column_mapping_source") else {}),
     }
 
 
@@ -4073,6 +4117,71 @@ def _row_has_citation(row: dict[str, Any]) -> bool:
         or citation.get("bibcode") or citation.get("arxiv_id")
         or citation.get("doi")
     )
+
+
+def _load_user_csv_measurements(
+    path: str,
+    column_mapping: dict[str, Any] | None,
+    line_id: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Read a user-uploaded CSV into the line-measurement schema (3B, 2026-06-11).
+
+    The path must point inside the general-upload area ("uploads/...");
+    reading goes through app.storage.download_fits, whose _validate_path
+    resolve()+relative_to guard blocks traversal. Column resolution reuses
+    the extraction-side normalizer (incl. the user-confirmed column_mapping
+    from 3A), so values come verbatim from the CSV cells. Rows carry
+    citation={"type": "user_upload", ...} which deliberately does NOT
+    satisfy _row_has_citation — user data is claimable as USER data
+    (input_data_origin "user_uploaded", mirroring cosmology_mcmc's
+    CLAIMABLE_INPUT_ORIGINS), never as a literature measurement.
+    """
+    import csv
+    import io
+
+    if not path.startswith("uploads/"):
+        return [], (
+            "user_file must reference an uploaded file path beginning with "
+            "'uploads/' (upload via POST /api/data/files/upload first)."
+        )
+    if not path.lower().endswith(".csv"):
+        return [], "user_file must be a .csv file."
+    try:
+        from app.storage import download_fits
+
+        raw = download_fits(path)
+    except Exception as exc:
+        return [], f"could not read user_file {path!r}: {exc}"
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    table_rows = [r for r in csv.reader(io.StringIO(text)) if any(str(c).strip() for c in r)]
+    if len(table_rows) < 2:
+        return [], "user_file CSV needs a header row plus at least one data row."
+    columns = [str(c).strip() for c in table_rows[0]]
+    table = {
+        "table_id": "user_csv",
+        "name": path,
+        "caption": "",
+        "columns": columns,
+        "rows": [[str(c) for c in r] for r in table_rows[1:]],
+        "row_citations": [],
+    }
+    from app.api.arxiv import _normalize_line_measurements
+
+    measurements = _normalize_line_measurements([table], column_mapping=column_mapping)
+    for measurement in measurements:
+        measurement["line_id"] = measurement.get("line_id") or line_id
+        measurement["citation"] = {"type": "user_upload", "source_file": path}
+    if not measurements:
+        return [], (
+            "no measurement rows could be normalized from the CSV — header "
+            f"columns were {columns}. Retry with column_mapping="
+            "{field: header-or-index} for source_name / redshift / "
+            "log_luminosity / fwhm_km_s."
+        )
+    return measurements, None
 
 
 # ── M4 helpers: subsample significance + demagnify_sample ──────────
@@ -4340,12 +4449,47 @@ async def _exec_fit_line_lfr_async(
         if not inp.get("cache_key") and not inp.get("cache_keys"):
             inp = {**inp, "cache_key": "latest_literature_tables"}
 
+    # 3B (2026-06-11): user-supplied CSV — the user's OWN measurements,
+    # uploaded via /api/data/files/upload. Wins over cache entries when
+    # passed. Rows are labeled user_uploaded end to end (claimable as user
+    # data, never citeable as literature).
+    user_file_in = str(inp.get("user_file") or "").strip()
+    rows_origin = "literature_cache"
+    if user_file_in:
+        user_line_id = str(inp.get("line_id") or "[CII]").strip() or "[CII]"
+        user_rows, user_csv_error = _load_user_csv_measurements(
+            user_file_in,
+            inp.get("column_mapping") if isinstance(inp.get("column_mapping"), dict) else None,
+            user_line_id,
+        )
+        if user_csv_error:
+            return {
+                "success": False,
+                "tool": "fit_line_lfr",
+                "__tool_status__": "FAILED",
+                "__do_not_claim__": True,
+                "error": user_csv_error,
+                "error_class": "user_csv_unreadable",
+                "user_file": user_file_in,
+                "__message_to_model__": (
+                    f"fit_line_lfr could not read the user CSV: {user_csv_error} "
+                    "Relay this to the user; do NOT substitute remembered or "
+                    "fabricated measurements."
+                ),
+            }
+
     # PART AF C2 — accept either a single cache_key OR a list of
     # cache_keys to union before fitting. Lists win when both are
     # passed (lets the AI strictly add a second survey without
     # accidentally falling back to the single-cache path).
     cache_keys_in = inp.get("cache_keys")
-    if isinstance(cache_keys_in, list) and any(
+    if user_file_in:
+        rows = user_rows
+        rows_origin = "user_uploaded"
+        cache_key = f"user_file:{user_file_in}"
+        resolved_cache_key = cache_key
+        all_resolved_cache_keys = [cache_key]
+    elif isinstance(cache_keys_in, list) and any(
         isinstance(k, str) and k.strip() for k in cache_keys_in
     ):
         rows, resolved_keys = _resolve_multiple_literature_caches(
@@ -4391,7 +4535,10 @@ async def _exec_fit_line_lfr_async(
             reason = "line_filter"
         elif any("limit" in str(flag).lower() for flag in flags):
             reason = "limit_flag"
-        elif not _row_has_citation(row):
+        elif rows_origin != "user_uploaded" and not _row_has_citation(row):
+            # User-uploaded rows have no literature citation BY DESIGN —
+            # they are the user's own data, gated via input_data_origin
+            # instead (mirrors cosmology_mcmc's user_uploaded handling).
             reason = "missing_citation"
         else:
             log_luminosity = _finite_float(row.get("log_luminosity"))
@@ -4738,7 +4885,10 @@ async def _exec_fit_line_lfr_async(
     has_confirmed_luminosity_units = value_range_inferred_rows == 0
     publication_ready = (
         n_used >= min_rows
-        and all(_row_has_citation(row) for row in accepted)
+        and (
+            rows_origin == "user_uploaded"
+            or all(_row_has_citation(row) for row in accepted)
+        )
         and has_confirmed_luminosity_units
     )
     citation_keys = sorted({
@@ -5319,6 +5469,44 @@ async def _exec_fit_line_lfr_async(
                 "(M5) before the fit is publication-ready."
             ),
         })
+
+    if rows_origin == "user_uploaded":
+        # 3B honest labeling: this fit ran on the USER'S OWN data. Numeric
+        # claims about the fit are allowed (user_uploaded is a claimable
+        # origin, mirroring cosmology_mcmc.CLAIMABLE_INPUT_ORIGINS), but the
+        # rows are NOT literature measurements: citation_keys is empty, so
+        # claim_validator's bibcode pool gets nothing from this result, and
+        # the provenance dataset says user_provided instead of paper_table.
+        result["input_data_origin"] = "user_uploaded"
+        result["claim_scope"] = "user_data"
+        result["user_file"] = user_file_in
+        result["provenance"]["datasets"][0] = {
+            "service_key": "user_uploaded_csv_fit",
+            "service_name": "User-uploaded measurement table fit",
+            "archive_version": "user CSV upload",
+            "source_authority": "user_provided",
+            "article": "",
+            "reference_url": "",
+            "source_urls": [],
+            "acknowledgement_template": (
+                "This fit used measurements supplied by the user "
+                f"({user_file_in}); the user vouches for their provenance."
+            ),
+        }
+        result.setdefault("warnings", []).append({
+            "code": "user_uploaded_inputs",
+            "message": (
+                "Fit inputs are user-supplied (not literature); publication "
+                "requires the user to vouch for the data provenance."
+            ),
+        })
+        result["__message_to_model__"] = (
+            (str(result.get("__message_to_model__") or "") + " ").strip() + " "
+            "These results describe the USER'S OWN uploaded data "
+            f"({user_file_in}). Report the fit numbers freely, but do NOT "
+            "present the rows as literature measurements and do NOT attach "
+            "any bibcode/arXiv citation to them."
+        ).strip()
     return result
 
 
@@ -5956,6 +6144,36 @@ async def _exec_extract_literature_tables(
             "error_class": "literature_table_extraction_failed",
         }
 
+    # raw_only recovery (2026-06-11): a USER-CONFIRMED column mapping re-runs
+    # the normalization over the already-extracted tables (no re-fetch). The
+    # mapping only says which column is which — every value still comes
+    # verbatim from the table cells.
+    column_mapping = inp.get("column_mapping") if isinstance(inp.get("column_mapping"), dict) else None
+    mapping_table_id = str(inp.get("table_id") or "").strip() or None
+    if column_mapping:
+        from app.api.arxiv import _normalize_line_measurements
+
+        payload = dict(payload)  # never mutate the shared cached payload
+        payload["line_measurements"] = _normalize_line_measurements(
+            payload.get("tables") or [],
+            column_mapping=column_mapping,
+            table_id=mapping_table_id,
+        )
+        # The fetch-time payload carries its own status fields (arxiv.py) —
+        # refresh them so a successful mapping rerun does not keep reporting
+        # the stale raw_only verdict.
+        payload["extraction_status"] = (
+            "measurement_ready" if payload["line_measurements"] else "raw_only"
+        )
+        payload["normalization_status"] = (
+            "line_measurements_detected" if payload["line_measurements"]
+            else "no_line_measurement_schema"
+        )
+        # Stamp the mapping provenance on the payload too, so the cache copy
+        # (read by a LATER fit_line_lfr) carries it — not just this result.
+        payload["column_mapping_applied"] = dict(column_mapping)
+        payload["column_mapping_source"] = "user_confirmed"
+
     line_measurements = payload.get("line_measurements") or []
     tables = payload.get("tables") or []
     latest_cache_key = _session_cache_key("latest_literature_tables", python_session_id) or "latest_literature_tables"
@@ -6050,6 +6268,14 @@ async def _exec_extract_literature_tables(
             "Tables were extracted, but no reliable line-measurement schema was detected. Do not fit L[CII]-FWHM until columns are mapped."
         ])),
     }
+    if column_mapping:
+        result["column_mapping_applied"] = dict(column_mapping)
+        result["column_mapping_source"] = "user_confirmed"
+        result["warnings"].append(
+            "Column mapping was user-supplied for fields: "
+            f"{sorted(column_mapping)} — values are verbatim table cells; "
+            "mapping provenance: user_confirmed."
+        )
     if not line_measurements and not tables:
         result["__message_to_model__"] = (
             f"No data tables were detected in arXiv:{payload.get('arxiv_id')}. "
@@ -6068,9 +6294,14 @@ async def _exec_extract_literature_tables(
             "(source name, redshift, log L<line>, FWHM) — for example: REBELS often puts the "
             "size measurements in one paper and the line measurements in a companion paper. "
             "Allowed next steps: "
-            "(a) call `search_literature` to find the companion / measurement-table paper for "
+            "(a) SHOW the user the detected columns of each table (the `tables[i].columns` "
+            "lists in this result) and ask THEM which column holds the source name / "
+            "redshift / log luminosity / FWHM; once the user confirms, retry "
+            "extract_literature_tables with column_mapping={field: header-or-index} "
+            "(and table_id to target one table). NEVER guess the mapping yourself. OR "
+            "(b) call `search_literature` to find the companion / measurement-table paper for "
             "this object class, OR "
-            "(b) emit `<tools_returned_nothing failed_tools=\"extract_literature_tables\" "
+            "(c) emit `<tools_returned_nothing failed_tools=\"extract_literature_tables\" "
             "rationale=\"this paper's tables do not contain line measurements\"/>` if the user "
             "asked specifically about THIS paper. "
             "Do NOT quote L[CII] / Hα / FWHM / line widths or fit a relation unless a "

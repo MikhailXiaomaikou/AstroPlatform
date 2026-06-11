@@ -82,8 +82,11 @@ const translations: Record<string, Record<Lang, string>> = {
   "pipeline.save":     { en: "Save Template",    zh: "保存模板",      fr: "Sauvegarder",      es: "Guardar" },
 
   // AI Chat
-  "chat.placeholder":  { en: "Ask about astronomical data, or drop a FITS file...", zh: "询问天文数据相关问题，或拖入 FITS 文件...", fr: "Posez une question ou déposez un fichier FITS...", es: "Pregunte sobre datos astronómicos o suelte un FITS..." },
-  "chat.hint":         { en: "Enter to send, Shift+Enter for new line. Drop a FITS file to analyze.", zh: "回车发送，Shift+回车换行。拖入 FITS 文件自动分析。", fr: "Entrée pour envoyer. Déposez un FITS pour analyser.", es: "Enter para enviar. Suelte un FITS para analizar." },
+  "chat.placeholder":  { en: "Ask about astronomical data, or drop a FITS/CSV file...", zh: "询问天文数据相关问题，或拖入 FITS/CSV 文件...", fr: "Posez une question ou déposez un fichier FITS/CSV...", es: "Pregunte sobre datos astronómicos o suelte un FITS/CSV..." },
+  "chat.hint":         { en: "Enter to send, Shift+Enter for new line. Drop a FITS file to analyze, or a CSV of your own measurements to fit.", zh: "回车发送，Shift+回车换行。拖入 FITS 文件自动分析，或拖入自己的测量 CSV 直接拟合。", fr: "Entrée pour envoyer. Déposez un FITS pour analyser, ou un CSV de vos mesures pour ajuster.", es: "Enter para enviar. Suelte un FITS para analizar, o un CSV de sus medidas para ajustar." },
+  "chat.attach_file":  { en: "Attach a FITS or CSV file", zh: "附加 FITS 或 CSV 文件", fr: "Joindre un fichier FITS ou CSV", es: "Adjuntar un archivo FITS o CSV" },
+  "chat.attach_sign_in": { en: "Sign in to upload files", zh: "登录后才能上传文件", fr: "Connectez-vous pour téléverser", es: "Inicie sesión para subir archivos" },
+  "chat.csv_upload_failed": { en: "CSV upload failed — please try again.", zh: "CSV 上传失败，请重试。", fr: "Échec du téléversement CSV — réessayez.", es: "Error al subir el CSV — inténtelo de nuevo." },
   "chat.analyzing":    { en: "Analyzing spectrum (this may take 10-15 seconds)...", zh: "正在分析光谱（可能需要 10-15 秒）...", fr: "Analyse du spectre (10-15 secondes)...", es: "Analizando espectro (10-15 segundos)..." },
   "chat.analyze_btn":  { en: "Analyze with AI",  zh: "AI 分析",       fr: "Analyser avec IA", es: "Analizar con IA" },
   "chat.history":      { en: "History",           zh: "历史",          fr: "Historique",       es: "Historial" },

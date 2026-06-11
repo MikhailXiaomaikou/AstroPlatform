@@ -250,6 +250,29 @@ row_idx, cell_provenance) → backend 用 ±1% 容差反查原 cell 文本 → p
 `extract_literature_tables` 再 `fit_line_lfr(cache_key=...)` 走两步. 旧的两步
 路径只在用户明确说 "先抽测量表给我看再决定拟合" 或需要做跨 paper UNION 时才用.
 
+### raw_only 恢复: 用户确认的列映射 (2026-06-11)
+
+extract_literature_tables 返回 raw_only (抽到表但认不出测量列) 时, 不是死路:
+把检测到的列名 (`tables[i].columns`) 展示给用户, 请用户确认哪列是源名 / 红移 /
+log 光度 / FWHM, 然后带映射重试:
+
+    extract_literature_tables(arxiv_id=..., table_id="html_26",
+        column_mapping={"source_name": "Obj", "log_luminosity": 2, "fwhm_km_s": "Width"})
+
+映射值可以是表头名或 0 起的列序号. **绝不自己猜映射** — 必须是用户确认过的;
+数值仍逐字来自表格单元, 结果会带 column_mapping_source="user_confirmed" 标注.
+
+### 用户自带 CSV 拟合 (2026-06-11)
+
+用户上传了自己的测量表 (聊天附件给出 `uploads/...` 路径) 时, 直接:
+
+    fit_line_lfr(user_file="uploads/<uid>/<file>.csv", column_mapping={...如表头非标准})
+
+结果标 input_data_origin="user_uploaded" / source_authority="user_provided" —
+这是**用户自己的数据**, 可以报告拟合数字, 但绝不能当文献测量引用, 也不要给它
+编 bibcode. 不要把用户粘贴在聊天里的行内数据直接喂 fit (inline 永远 audit-only);
+让用户走上传路径.
+
 
 
 ## Variable star workflow (RR Lyrae / Cepheids / EB)
