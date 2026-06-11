@@ -5605,6 +5605,59 @@ async def _run_agent_loop(
     # against the tool_results collected this turn; if any claim can't be
     # cited, push the LLM to regenerate.  After two failures, block.
     fabrication_stats = {"pass": 0, "blocked": False, "regenerations": 0}
+
+    async def _gate_event(
+        gate: str,
+        action: str,
+        *,
+        reason: str = "",
+        details: dict | None = None,
+        claims=None,
+        violations=None,
+        universe_size: int | None = None,
+        draft: str = "",
+        final: str = "",
+    ) -> None:
+        # Structured gate-intervention record — the false-positive triage
+        # layer (app/observability/gate_events.py). One event per gate
+        # intervention: JSONL append + gate_event_total counter + SSE emit.
+        # Must NEVER affect the reply; everything is wrapped.
+        try:
+            from app.observability.gate_events import (
+                append_gate_event_jsonl,
+                build_gate_event,
+                claims_to_dicts,
+                violations_to_dicts,
+            )
+            from app.observability.metrics import record_counter
+
+            det = dict(details or {})
+            if claims:
+                det["claims"] = claims_to_dicts(claims)
+            if violations:
+                det["violations"] = violations_to_dicts(violations)
+            evt = build_gate_event(
+                gate=gate,
+                action=action,
+                reason=reason,
+                agent=agent_name,
+                details=det,
+                tools_run=[
+                    str(r.get("tool")) for r in all_tool_results
+                    if isinstance(r, dict) and r.get("tool")
+                ],
+                universe_size=universe_size,
+                regenerations=int(fabrication_stats.get("regenerations", 0)),
+                draft=draft,
+                final=final,
+                chat_session_id=str(chat_session_id) if chat_session_id else None,
+                python_session_id=str(python_session_id) if python_session_id else None,
+            )
+            append_gate_event_jsonl(evt)
+            record_counter("gate_event_total", 1.0, gate=gate, action=action)
+            await _emit(evt)
+        except Exception as exc:
+            logger.debug("gate_event emission failed: %s", exc)
     # The tool-inventory bypass exists so describing the real tool schema
     # (tool names, parameter defaults, counts) is not false-flagged by the
     # numeric/citation gate.  But it must NOT become a phrasing-conditioned
@@ -5663,6 +5716,7 @@ async def _run_agent_loop(
         # the AI that "reply must be English"; this is the hard-constraint safety net.
         cjk_detected = reply_contains_cjk(clean_reply)
         if cjk_detected:
+            _cjk_draft = clean_reply
             try:
                 from app.observability.metrics import record_counter
                 record_counter(
@@ -5706,6 +5760,10 @@ async def _run_agent_loop(
                     "regeneration",
                     agent_name,
                 )
+                await _gate_event(
+                    "cjk_filter", "regenerated", reason="non_english_reply",
+                    draft=_cjk_draft, final=clean_reply,
+                )
             else:
                 logger.error(
                     "Non-English reply from %s — hard-blocking after failed "
@@ -5726,9 +5784,14 @@ async def _run_agent_loop(
                     "numeric-claim gate only ships English regex patterns)."
                 )
                 fabrication_stats["blocked"] = True
+                await _gate_event(
+                    "cjk_filter", "blocked", reason="non_english_reply",
+                    draft=_cjk_draft, final=clean_reply,
+                )
 
         zero_data_claims = [] if cjk_detected else zero_data_but_quantitative(clean_reply, all_tool_results)
         if zero_data_claims:
+            _zd_draft = clean_reply
             try:
                 from app.observability.metrics import record_counter
                 record_counter(
@@ -5801,6 +5864,11 @@ async def _run_agent_loop(
                         )
                     except Exception:
                         pass
+                    await _gate_event(
+                        "zero_data", "regenerated", reason="qualitative_rewrite",
+                        claims=zero_data_claims, universe_size=validation.universe_size,
+                        draft=_zd_draft, final=clean_reply,
+                    )
                 elif rewrite_citation_violations and citation_violations_should_block(rewrite_citation_violations):
                     # Stage 6 P0a follow-up: preserve AI's rewrite narrative
                     # (banner-only behavior dropped the draft entirely)
@@ -5809,6 +5877,12 @@ async def _run_agent_loop(
                         qualitative_rewrite,
                     )
                     fabrication_stats["blocked"] = True
+                    await _gate_event(
+                        "zero_data", "blocked", reason="rewrite_citation",
+                        claims=zero_data_claims, violations=rewrite_citation_violations,
+                        universe_size=validation.universe_size,
+                        draft=_zd_draft, final=clean_reply,
+                    )
                 elif rewrite_unsupported_narrative:
                     # Stage 6 P0a follow-up: preserve AI's rewrite narrative
                     clean_reply = attach_draft_to_banner(
@@ -5816,16 +5890,34 @@ async def _run_agent_loop(
                         qualitative_rewrite,
                     )
                     fabrication_stats["blocked"] = True
+                    await _gate_event(
+                        "zero_data", "blocked", reason="rewrite_narrative",
+                        claims=zero_data_claims, violations=rewrite_unsupported_narrative,
+                        universe_size=validation.universe_size,
+                        draft=_zd_draft, final=clean_reply,
+                    )
                 else:
                     # Stage 6 P0: preserve AI's qualitative rewrite narrative
                     clean_reply = blocked_reply_with_narrative(
                         rewrite_validation, qualitative_rewrite,
                     )
                     fabrication_stats["blocked"] = True
+                    await _gate_event(
+                        "zero_data", "blocked", reason="rewrite_residual",
+                        claims=(rewrite_validation.uncited or rewrite_zero_data_claims or zero_data_claims),
+                        universe_size=rewrite_validation.universe_size,
+                        draft=_zd_draft, final=clean_reply,
+                    )
             else:
                 # Stage 6 P0: preserve AI's original reply narrative
                 clean_reply = blocked_reply_with_narrative(validation, clean_reply)
                 fabrication_stats["blocked"] = True
+                await _gate_event(
+                    "zero_data", "blocked", reason="no_rewrite",
+                    claims=(validation.uncited or zero_data_claims),
+                    universe_size=validation.universe_size,
+                    draft=_zd_draft, final=clean_reply,
+                )
             try:
                 from app.observability.metrics import record_counter
                 if fabrication_stats["blocked"]:
@@ -5848,6 +5940,7 @@ async def _run_agent_loop(
                 agent_name,
                 len(unsupported_narrative_claims),
             )
+            _un_draft = clean_reply
             tool_grounded_summary = (
                 _research_tool_grounded_summary(all_tool_results)
                 or _line_lfr_tool_grounded_summary(all_tool_results)
@@ -5879,6 +5972,11 @@ async def _run_agent_loop(
                         )
                     except Exception:
                         pass
+                    await _gate_event(
+                        "unsupported_narrative", "downgraded_summary",
+                        violations=unsupported_narrative_claims,
+                        draft=_un_draft, final=clean_reply,
+                    )
                 else:
                     # Stage 6 P0a follow-up: preserve AI's reply narrative
                     clean_reply = attach_draft_to_banner(
@@ -5886,6 +5984,11 @@ async def _run_agent_loop(
                         clean_reply,
                     )
                     fabrication_stats["blocked"] = True
+                    await _gate_event(
+                        "unsupported_narrative", "blocked", reason="summary_failed",
+                        violations=unsupported_narrative_claims,
+                        draft=_un_draft, final=clean_reply,
+                    )
             else:
                 # Stage 6 P0a follow-up: preserve AI's reply narrative
                 clean_reply = attach_draft_to_banner(
@@ -5893,6 +5996,11 @@ async def _run_agent_loop(
                     clean_reply,
                 )
                 fabrication_stats["blocked"] = True
+                await _gate_event(
+                    "unsupported_narrative", "blocked", reason="no_summary",
+                    violations=unsupported_narrative_claims,
+                    draft=_un_draft, final=clean_reply,
+                )
 
         elif (
             unclassified_claims := unclassified_literature_violations(
@@ -5907,6 +6015,7 @@ async def _run_agent_loop(
                 "Unclassified literature gate BLOCKED reply from %s (%d violations)",
                 agent_name, len(unclassified_claims),
             )
+            _uc_draft = clean_reply
             clean_reply = attach_draft_to_banner(
                 blocked_unclassified_literature_reply_text(unclassified_claims),
                 clean_reply,
@@ -5922,6 +6031,11 @@ async def _run_agent_loop(
                 )
             except Exception:
                 pass
+            await _gate_event(
+                "unclassified_literature", "blocked",
+                violations=unclassified_claims,
+                draft=_uc_draft, final=clean_reply,
+            )
 
         elif literature_prior_violations(clean_reply, all_tool_results):
             # W1 (PART W): hard literature-prior block. Looser than
@@ -5979,12 +6093,18 @@ async def _run_agent_loop(
             else:
                 clean_reply = clean_reply + _additional_note
             fabrication_stats["blocked"] = True
+            await _gate_event(
+                "literature_prior", "blocked",
+                claims=lit_prior_claims, universe_size=validation.universe_size,
+                draft=_original_reply_lit_anchor, final=clean_reply,
+            )
 
         elif _unsupported_cosmology_anchor_numeric_comparison(clean_reply, all_tool_results):
             logger.error(
                 "Unsupported cosmology anchor comparison from %s — replacing with grounded summary",
                 agent_name,
             )
+            _ca_draft = clean_reply
             tool_grounded_summary = (
                 _research_tool_grounded_summary(all_tool_results)
                 or _line_lfr_tool_grounded_summary(all_tool_results)
@@ -6016,17 +6136,32 @@ async def _run_agent_loop(
                         )
                     except Exception:
                         pass
+                    await _gate_event(
+                        "cosmology_anchor", "downgraded_summary",
+                        draft=_ca_draft, final=clean_reply,
+                    )
                 else:
                     # Stage 6 P0: preserve tool_grounded_summary narrative
                     clean_reply = blocked_reply_with_narrative(
                         summary_validation, tool_grounded_summary,
                     )
                     fabrication_stats["blocked"] = True
+                    await _gate_event(
+                        "cosmology_anchor", "blocked", reason="summary_failed",
+                        claims=summary_validation.uncited,
+                        universe_size=summary_validation.universe_size,
+                        draft=_ca_draft, final=clean_reply,
+                    )
             else:
                 validation = validate_claims(clean_reply, all_tool_results)
                 # Stage 6 P0: preserve AI's original reply narrative
                 clean_reply = blocked_reply_with_narrative(validation, clean_reply)
                 fabrication_stats["blocked"] = True
+                await _gate_event(
+                    "cosmology_anchor", "blocked", reason="no_summary",
+                    claims=validation.uncited, universe_size=validation.universe_size,
+                    draft=_ca_draft, final=clean_reply,
+                )
 
         elif True:
             citation_violations = provenance_citation_violations(clean_reply, all_tool_results)
@@ -6051,6 +6186,7 @@ async def _run_agent_loop(
                     len(citation_violations),
                     len(method_violations),
                 )
+                _cm_draft = clean_reply
                 tool_grounded_summary = (
                     _research_tool_grounded_summary(all_tool_results)
                     or _line_lfr_tool_grounded_summary(all_tool_results)
@@ -6086,6 +6222,11 @@ async def _run_agent_loop(
                             )
                         except Exception:
                             pass
+                        await _gate_event(
+                            "citation_methodology", "downgraded_summary",
+                            violations=all_violations,
+                            draft=_cm_draft, final=clean_reply,
+                        )
 
                 if not recovered_with_summary:
                     annotations: list[str] = []
@@ -6131,8 +6272,16 @@ async def _run_agent_loop(
                         # something to read.
                         clean_reply = "\n\n---\n\n".join(annotations)
                     fabrication_stats["blocked"] = True
+                    await _gate_event(
+                        "citation_methodology", "annotated_blocked",
+                        violations=all_violations,
+                        draft=_cm_draft, final=clean_reply,
+                    )
 
             if not fabrication_stats["blocked"]:
+                _nc_draft = clean_reply
+                _nc_regen_before = fabrication_stats["regenerations"]
+                _nc_summary_used = False
                 for attempt in range(2):
                     validation = validate_claims(clean_reply, all_tool_results)
                     if validation.ok:
@@ -6199,6 +6348,7 @@ async def _run_agent_loop(
                                 clean_reply = tool_grounded_summary
                                 validation = summary_validation
                                 fabrication_stats["regenerations"] += 1
+                                _nc_summary_used = True
                                 try:
                                     from app.observability.metrics import record_counter
                                     record_counter(
@@ -6226,6 +6376,30 @@ async def _run_agent_loop(
                                 validation, clean_reply,
                             )
                             fabrication_stats["blocked"] = True
+                if fabrication_stats["blocked"]:
+                    await _gate_event(
+                        "numeric_claims", "blocked", reason="regen_exhausted",
+                        claims=validation.uncited, universe_size=validation.universe_size,
+                        draft=_nc_draft, final=clean_reply,
+                    )
+                elif _nc_summary_used:
+                    await _gate_event(
+                        "numeric_claims", "downgraded_summary", reason="regen_exhausted",
+                        draft=_nc_draft, final=clean_reply,
+                    )
+                elif fabrication_stats["regenerations"] > _nc_regen_before:
+                    # `validation` holds the LAST validate_claims result: ok
+                    # means the loop broke clean after a rewrite; not-ok means
+                    # the regen call failed/returned empty and the unvalidated
+                    # draft shipped (pre-existing gate semantics) — the single
+                    # most interesting triage case, so label it distinctly.
+                    await _gate_event(
+                        "numeric_claims",
+                        "regenerated_clean" if validation.ok else "regen_failed_shipped",
+                        claims=None if validation.ok else validation.uncited,
+                        universe_size=validation.universe_size,
+                        draft=_nc_draft, final=clean_reply,
+                    )
                 if fabrication_stats["regenerations"]:
                     try:
                         from app.observability.metrics import record_counter
@@ -6279,6 +6453,7 @@ async def _run_agent_loop(
                 # deterministic core (now incl. the cosmology/AP summary) and
                 # surface the un-grounded claims as a held footer — the verified
                 # result is no longer lost just because the model embellished.
+                _fv_draft = clean_reply
                 safe_summary = (
                     _research_tool_grounded_summary(all_tool_results)
                     or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
@@ -6304,12 +6479,22 @@ async def _run_agent_loop(
                             "ground it (e.g. run the corresponding tool)."
                         )
                     held_reply_produced = True
+                    await _gate_event(
+                        "fact_verification", "downgraded_summary", reason="fact_check_held",
+                        details={"held_claims": held_claims[:5], "held_count": len(held_claims)},
+                        draft=_fv_draft, final=clean_reply,
+                    )
                 else:
                     clean_reply = (
                         "The research run completed, but fact verification found "
                         "a contradicted claim in the draft. Please review the Fact "
                         "Check card and rerun the missing evidence path before "
                         "using the result."
+                    )
+                    await _gate_event(
+                        "fact_verification", "blocked", reason="fact_check_no_summary",
+                        details={"held_count": len(held_claims)},
+                        draft=_fv_draft, final=clean_reply,
                     )
                 try:
                     from app.observability.metrics import record_counter
@@ -6331,12 +6516,18 @@ async def _run_agent_loop(
         # cannot introduce unsupported paper facts, citations, or background
         # claims after the tools have completed. (Skipped when a held reply was
         # already produced above, so the held footer is not clobbered.)
+        _rs_draft = clean_reply
         tool_grounded_research_summary = (
             _research_tool_grounded_summary(all_tool_results)
             or _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
         )
         if tool_grounded_research_summary:
             clean_reply = tool_grounded_research_summary
+            await _gate_event(
+                "research_deterministic_summary", "downgraded_summary",
+                reason="research_mode_deterministic",
+                draft=_rs_draft, final=clean_reply,
+            )
 
     if research_mode_result_present and not any(
         tr.get("tool") == "export_research_report"
@@ -6372,21 +6563,26 @@ async def _run_agent_loop(
     # never sees a blank AI bubble. Root cause of the empty-response bug
     # observed in the WD LF test (first attempt).
     if not clean_reply.strip():
+        _fb_kind = "none"
         research_summary = _research_tool_grounded_summary(all_tool_results)
         if research_summary:
             clean_reply = research_summary
+            _fb_kind = "research"
         else:
             line_lfr_summary = _line_lfr_tool_grounded_summary(all_tool_results)
             if line_lfr_summary:
                 clean_reply = line_lfr_summary
+                _fb_kind = "line_lfr"
             else:
                 stats_summary = _statistics_tool_grounded_summary(all_tool_results)
                 if stats_summary:
                     clean_reply = stats_summary
+                    _fb_kind = "statistics"
         if not clean_reply.strip():
             cosmology_summary = _cosmology_tool_grounded_summary(all_tool_results, latest_user_text)
             if cosmology_summary:
                 clean_reply = cosmology_summary
+                _fb_kind = "cosmology"
         if not clean_reply.strip():
             if all_tool_results:
                 tool_names = ", ".join({tr["tool"] for tr in all_tool_results})
@@ -6396,16 +6592,22 @@ async def _run_agent_loop(
                     f"(Note: the language model did not return a written summary — "
                     f"please review the tool outputs directly or ask me to explain them.)"
                 )
+                _fb_kind = "tool_names"
             else:
                 clean_reply = (
                     "The language model returned an empty response. This may be a "
                     "transient API issue or a prompt length problem. Please try "
                     "again with a shorter prompt, or contact support if it persists."
                 )
+                _fb_kind = "no_tools"
         logger.warning(
             "Empty AI reply detected in %s agent loop; synthesised fallback. "
             "tool_results=%d iterations=%d",
             agent_name, len(all_tool_results), _iteration + 1,
+        )
+        await _gate_event(
+            "empty_reply_fallback", "synthesized", reason=_fb_kind,
+            final=clean_reply,
         )
 
         # F1.2: even the synthesised fallback must not smuggle numbers past
@@ -6435,10 +6637,17 @@ async def _run_agent_loop(
                 except Exception:
                     pass
                 # Stage 6 P0: preserve fallback-synthesis narrative
+                _fb_draft = clean_reply
                 clean_reply = blocked_reply_with_narrative(
                     fallback_validation, clean_reply,
                 )
                 fabrication_stats["blocked"] = True
+                await _gate_event(
+                    "empty_reply_fallback", "blocked", reason="fallback_synthesis",
+                    claims=fallback_validation.uncited,
+                    universe_size=fallback_validation.universe_size,
+                    draft=_fb_draft, final=clean_reply,
+                )
         except Exception as e:
             logger.debug("Fallback synthesis validation skipped: %s", e)
 
@@ -7067,13 +7276,17 @@ async def execute_action(
         return {"type": "search_results", "data": [r.model_dump() for r in all_results]}
 
     elif action_type == "adql":
-        # Call the integration endpoint directly (no rate limiter on this one)
-        from app.api.integration import adql_query, ADQLRequest
+        # Call the ADQL executor function directly. (2026-06-11: the public
+        # /adql/query route wrapper was removed as a dead unauthenticated
+        # endpoint; this arm was ALREADY broken before that — the route
+        # wrapper's rate-limiter signature mis-bound `adql_query(req)` —
+        # so calling execute_adql_query is both the fix and the survivor.)
+        from app.api.integration import ADQLRequest, execute_adql_query
 
         req = ADQLRequest(
             query=action.get("query", ""), service=action.get("service", "gaia")
         )
-        result = await adql_query(req)
+        result = await execute_adql_query(req)
         return {"type": "adql_results", "data": result}
 
     elif action_type == "plot":

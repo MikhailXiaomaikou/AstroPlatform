@@ -245,7 +245,7 @@ function BackendBanner() {
     // event when a 502/503/504 is caught and a transparent retry is
     // in-flight.  Show a "waking up" notice for ~10s.
     const onWaking = () => {
-      setMessage("Waking up backend (Render free tier sleeps after 15 min idle)...");
+      setMessage("Reconnecting to backend (temporary deploy or network hiccup)...");
       setShow(true);
       // Hide after 12s — covers the 5s interceptor wait + up to 7s
       // cold-start response time.
@@ -263,7 +263,7 @@ function BackendBanner() {
   // second always-on listener here via a companion effect).
   useEffect(() => {
     const onWaking = () => {
-      setMessage("Waking up backend (Render free tier sleeps after 15 min idle)...");
+      setMessage("Reconnecting to backend (temporary deploy or network hiccup)...");
       setShow(true);
       setTimeout(() => setShow(false), 12000);
     };

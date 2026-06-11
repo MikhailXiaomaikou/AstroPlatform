@@ -104,6 +104,13 @@ describe("Auth helper functions", () => {
     expect(isAuthenticated()).toBe(true);
   });
 
+  it("isAuthenticated returns true in local no-auth mode", async () => {
+    store["astro_local_no_auth"] = "1";
+    const { isAuthenticated, isLocalNoAuthEnabled } = await import("../api/client");
+    expect(isLocalNoAuthEnabled()).toBe(true);
+    expect(isAuthenticated()).toBe(true);
+  });
+
   it("logout removes the token", async () => {
     store["astro_token"] = "some-token";
     const { logout } = await import("../api/client");
@@ -303,6 +310,14 @@ describe("Auth helper functions", () => {
 
     expect(getPreferredAiModelProfile("deepseek")).toBe("deepseek:v4-pro");
     expect(getPreferredAiModelProfile("openai")).toBe("openai:gpt-5.5");
+    expect(getPreferredAiModelProfile("local")).toBe("local:default");
+  });
+
+  it("defaults chat provider to DeepSeek when the user has not selected one", async () => {
+    const { getPreferredAiProvider, getPreferredAiModelProfile } = await import("../api/client");
+
+    expect(getPreferredAiProvider()).toBe("deepseek");
+    expect(getPreferredAiModelProfile()).toBe("deepseek:v4-pro");
   });
 
   it("sendChatMessage streams live tool_result actions before final response", async () => {
@@ -599,7 +614,6 @@ describe("API function exports", () => {
       "deleteSchedule",
       "batchSearch",
       "sampStatus",
-      "adqlQuery",
     ] as const;
 
     for (const fnName of expectedFunctions) {

@@ -30,10 +30,11 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Render free-tier sleep recovery.  After 15 min idle the backend dyno
-// sleeps and the first request wakes it — during that ~30-60s window
-// requests come back as 502 / 503 / 504.  We retry the request once
-// after a short wait, and expose a browser-level "waking up" signal
+// Transient-5xx recovery.  Written for Render's free tier (dynos slept
+// after 15 min idle); the backend now runs on a paid Standard instance
+// that does not sleep, but deploys / proxy hiccups can still surface as
+// brief 502 / 503 / 504 windows.  We retry the request once after a
+// short wait, and expose a browser-level "waking up" signal
 // (CustomEvent) so any on-screen banner can re-appear.
 //
 // Matches the symptom Bug 12 reviewer hit: "backend returning 502 —
@@ -942,30 +943,10 @@ export async function exportJupyter(
   return data;
 }
 
-export interface ADQLResult {
-  columns: string[];
-  data: Record<string, (number | string | null)[]>;
-  row_count: number;
-  service: string;
-}
-
-export async function adqlQuery(
-  query: string,
-  service = "gaia"
-): Promise<ADQLResult> {
-  const { data } = await api.post<ADQLResult>("/api/integration/adql/query", {
-    query,
-    service,
-  });
-  return data;
-}
-
-export async function listADQLServices(): Promise<
-  Array<{ id: string; name: string; url: string; description: string }>
-> {
-  const { data } = await api.get("/api/integration/adql/services");
-  return data;
-}
+// adqlQuery / listADQLServices were removed 2026-06-11 along with their
+// backend routes — dead since the M3 ADQL-page trim (the query route was
+// also unauthenticated). The chat path runs ADQL server-side via the
+// run_adql tool, not through these endpoints.
 
 // ── WCS Grid API ──
 

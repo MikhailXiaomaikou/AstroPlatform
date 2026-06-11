@@ -10,12 +10,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.requests import Request
 
 from app.auth import get_current_user, get_optional_user
 from app.models.database import get_db
 from app.models.schemas import PipelineRun, PipelineTemplateDB, User
-from app.rate_limit import limiter
 from app.services.ai_tools import augment_adql_payload, build_adql_result_set, store_adql_result_set
 from app.storage import download_fits, upload_fits
 
@@ -910,18 +908,9 @@ async def execute_adql_query(
         raise HTTPException(status_code=502, detail=f"ADQL service error: {err_msg}")
 
 
-@router.post("/adql/query")
-@limiter.limit("20/minute")
-async def adql_query(request: Request, req: ADQLRequest):
-    """Execute an ADQL query against a TAP service (HTTP endpoint)."""
-    return await execute_adql_query(req)
-
-
-@router.get("/adql/services")
-async def list_adql_services():
-    """List available ADQL/TAP services."""
-    return [
-        {"id": "gaia", "name": "Gaia Archive", "url": ADQL_SERVICES["gaia"], "description": "ESA Gaia mission data"},
-        {"id": "vizier", "name": "VizieR TAP", "url": ADQL_SERVICES["vizier"], "description": "CDS VizieR catalog service"},
-        {"id": "cadc", "name": "CADC", "url": ADQL_SERVICES["cadc"], "description": "Canadian Astronomy Data Centre"},
-    ]
+# The public POST /adql/query and GET /adql/services routes were REMOVED
+# 2026-06-11: their frontend (the ADQL page) was cut in the M3 trim, leaving
+# the query route an unauthenticated dead endpoint (audit-deferred item).
+# `execute_adql_query` above stays — the chat tools import and call it
+# directly; its DDL/DML guard is covered at function level in
+# tests/test_security.py::TestInputValidation.

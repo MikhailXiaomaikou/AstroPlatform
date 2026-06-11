@@ -23,6 +23,8 @@ dist/
 data/uploads/
 data/cache/
 data/fits/
+# Validation-gate event triage sink (local-only; see backend/app/observability/gate_events.py)
+data/gate_events.jsonl
 data/tmp/
 data/sandbox/
 data/sessions/

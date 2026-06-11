@@ -219,6 +219,13 @@ def _one_check(record: dict, spec: dict) -> tuple[str, bool]:
     if "reply_contains_any" in spec:
         terms = spec["reply_contains_any"]
         return (f"contains_any={terms}", any(str(t).lower() in rl for t in terms))
+    if "reply_must_not_contain" in spec:
+        # Specificity assertion (2026-06-11): the reply must NOT carry any of
+        # these markers — proves a clean happy-path turn was not blocked /
+        # withheld by the anti-fabrication gates. Case-insensitive, consistent
+        # with reply_contains_*.
+        terms = spec["reply_must_not_contain"]
+        return (f"must_not_contain={terms}", all(str(t).lower() not in rl for t in terms))
     if "reply_numeric_near" in spec:
         s = spec["reply_numeric_near"]
         ok = _numeric_near(reply, s["label"], float(s["min"]), float(s["max"]))
@@ -249,7 +256,10 @@ def evaluate_case(record: dict, case: dict) -> dict:
     is a quality nicety (soft), but "did it restate the fake 71.4" (forbid)
     is the real anti-fabrication line (hard)."""
     group = str(case.get("group") or "")
-    is_hard_group = group in _HARD_GROUPS
+    # A case may opt into CI gating with `hard: true` even outside the B/C
+    # anti-fabrication groups (2026-06-11) — used by the group-F happy-path
+    # e2e case whose "reply must NOT be withheld" assertion is load-bearing.
+    is_hard_group = group in _HARD_GROUPS or bool(case.get("hard"))
     checks = case.get("checks") or []
     forbid = case.get("forbid") or []
     reply = _reply_text(record)

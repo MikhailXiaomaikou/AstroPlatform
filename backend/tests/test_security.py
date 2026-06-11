@@ -86,98 +86,44 @@ class TestAuthSecurity:
 
 
 class TestInputValidation:
-    """Verify that dangerous input is rejected before reaching external services."""
+    """Verify that dangerous input is rejected before reaching external services.
 
-    async def test_adql_drop_blocked(self, app_client):
-        """DROP TABLE attempt via ADQL endpoint is blocked."""
-        resp = await app_client.post(
-            "/api/integration/adql/query",
-            json={"query": "DROP TABLE gaiadr3.gaia_source", "service": "gaia"},
-        )
-        assert resp.status_code == 400
-        assert "Forbidden" in resp.json()["detail"] or "DROP" in resp.json()["detail"]
+    2026-06-11: the public /api/integration/adql/query and /adql/services
+    routes were removed (dead since the M3 ADQL-page trim; the query route was
+    also unauthenticated — an audit-deferred hole). The DDL/DML guard lives in
+    execute_adql_query itself, the function the chat tools call directly, so
+    these tests now exercise the guard at function level.
+    """
 
-    async def test_adql_delete_blocked(self, app_client):
-        """DELETE via ADQL is blocked."""
-        resp = await app_client.post(
-            "/api/integration/adql/query",
-            json={
-                "query": "DELETE FROM gaiadr3.gaia_source WHERE 1=1",
-                "service": "gaia",
-            },
-        )
-        assert resp.status_code == 400
+    @pytest.mark.parametrize("query", [
+        "DROP TABLE gaiadr3.gaia_source",
+        "DELETE FROM gaiadr3.gaia_source WHERE 1=1",
+        "INSERT INTO gaiadr3.gaia_source VALUES (1)",
+        "UPDATE gaiadr3.gaia_source SET ra=0",
+        "CREATE TABLE evil (id INT)",
+        "ALTER TABLE gaiadr3.gaia_source ADD COLUMN evil TEXT",
+        "SELECT 1; DROP TABLE users; --",
+    ])
+    async def test_adql_ddl_dml_blocked(self, query):
+        """DDL/DML attempts are rejected by execute_adql_query's guard."""
+        from fastapi import HTTPException
 
-    async def test_adql_insert_blocked(self, app_client):
-        """INSERT via ADQL is blocked."""
-        resp = await app_client.post(
-            "/api/integration/adql/query",
-            json={
-                "query": "INSERT INTO gaiadr3.gaia_source VALUES (1)",
-                "service": "gaia",
-            },
-        )
-        assert resp.status_code == 400
+        from app.api.integration import ADQLRequest, execute_adql_query
 
-    async def test_adql_update_blocked(self, app_client):
-        """UPDATE via ADQL is blocked."""
-        resp = await app_client.post(
-            "/api/integration/adql/query",
-            json={
-                "query": "UPDATE gaiadr3.gaia_source SET ra=0",
-                "service": "gaia",
-            },
-        )
-        assert resp.status_code == 400
+        with pytest.raises(HTTPException) as exc_info:
+            await execute_adql_query(ADQLRequest(query=query, service="gaia"))
+        assert exc_info.value.status_code == 400
 
-    async def test_adql_create_blocked(self, app_client):
-        """CREATE TABLE via ADQL is blocked."""
-        resp = await app_client.post(
-            "/api/integration/adql/query",
-            json={
-                "query": "CREATE TABLE evil (id INT)",
-                "service": "gaia",
-            },
-        )
-        assert resp.status_code == 400
+    async def test_unknown_adql_service_rejected(self):
+        """Unknown ADQL service is rejected before any network dispatch."""
+        from fastapi import HTTPException
 
-    async def test_adql_alter_blocked(self, app_client):
-        """ALTER TABLE via ADQL is blocked."""
-        resp = await app_client.post(
-            "/api/integration/adql/query",
-            json={
-                "query": "ALTER TABLE gaiadr3.gaia_source ADD COLUMN evil TEXT",
-                "service": "gaia",
-            },
-        )
-        assert resp.status_code == 400
+        from app.api.integration import ADQLRequest, execute_adql_query
 
-    async def test_adql_injection_with_comment(self, app_client):
-        """SQL injection via comment suffix with DROP must be blocked."""
-        resp = await app_client.post(
-            "/api/integration/adql/query",
-            json={"query": "SELECT 1; DROP TABLE users; --", "service": "gaia"},
-        )
-        assert resp.status_code == 400
-
-    async def test_unknown_adql_service_rejected(self, app_client):
-        """Unknown ADQL service returns 400."""
-        resp = await app_client.post(
-            "/api/integration/adql/query",
-            json={"query": "SELECT 1", "service": "malicious_service"},
-        )
-        assert resp.status_code == 400
-        assert "Unknown service" in resp.json()["detail"]
-
-    async def test_adql_services_listing(self, app_client):
-        """GET /api/integration/adql/services should list known TAP services."""
-        resp = await app_client.get("/api/integration/adql/services")
-        assert resp.status_code == 200
-        services = resp.json()
-        service_ids = {s["id"] for s in services}
-        assert "gaia" in service_ids
-        assert "vizier" in service_ids
-        assert "cadc" in service_ids
+        with pytest.raises(HTTPException) as exc_info:
+            await execute_adql_query(ADQLRequest(query="SELECT 1", service="malicious_service"))
+        assert exc_info.value.status_code == 400
+        assert "Unknown service" in str(exc_info.value.detail)
 
     async def test_register_short_password_rejected(self, app_client):
         """Registration with a too-short password is rejected."""

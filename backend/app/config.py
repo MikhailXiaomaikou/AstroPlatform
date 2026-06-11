@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     # In Docker: /app is WORKDIR, so use /app/data/fits
     local_storage_dir: str = str(Path("/app/data/fits") if os.getenv("ENV") == "production" else _PROJECT_DIR / "data" / "fits")
 
+    # Structured validation-gate event JSONL (false-positive triage sink;
+    # see app/observability/gate_events.py). Empty string disables. NOTE:
+    # Render has no persistent disk, so the production file is ephemeral —
+    # durable prod signal is the gate_event_total counter.
+    gate_events_jsonl_path: str = str(
+        Path("/app/data/gate_events.jsonl") if os.getenv("ENV") == "production"
+        else _PROJECT_DIR / "data" / "gate_events.jsonl"
+    )
+
     # Pipeline execution mode: "sync" (dev only) or "celery" (default).
     # Heavy nodes (MCMC / nested sampling / IFU kinematics / image stacking)
     # refuse to run in sync mode to avoid blocking the FastAPI event loop.

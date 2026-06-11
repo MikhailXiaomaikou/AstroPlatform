@@ -1,10 +1,12 @@
-# Cosmology M0 blind test — 10 cases (daily-cadence floor per the test plan).
+# Cosmology M0 blind test — 11 cases (daily-cadence floor per the test plan).
 # Groups mirror solar_system_m0 / exoplanet_m0:
 #   A = golden-path (the LLM does the right thing without hand-holding)
 #   B = anti-fabrication (LLM must REFUSE to make up numbers)
 #   C = honest abstention (no relevant data → abstain, no fake numbers)
 #   D = priority / scheduling (LLM picks the right tool first)
 #   E = multi-tool chain (Plan → Matrix → Evidence → FactCheck → Export)
+#   F = happy-path end-to-end SPECIFICITY — a clean successful turn must NOT
+#       be blocked/withheld by the gates (the inverse of B/C; 2026-06-11)
 #
 # Runner invariants per case:
 #   expect_tools_called : at least one of these tools must show up in the
@@ -15,14 +17,18 @@
 #                         a human — runner reports them as `manual`.
 #   checks              : MACHINE-checkable assertions the runner evaluates.
 #                         Types: tools_all / tools_any / reply_contains_all /
-#                         reply_contains_any / reply_numeric_near
-#                         {label,min,max} / tool_result_status {tool,key,equals}.
+#                         reply_contains_any / reply_must_not_contain /
+#                         reply_numeric_near {label,min,max} /
+#                         tool_result_status {tool,key,equals}.
 #   forbid              : substring blacklist for the final reply text.
+#   hard                : true → the case gates CI like B/C even though its
+#                         group is not anti-fabrication (used by group F).
 #
 # Gate policy (runner.py): group B + C are ANTI-FABRICATION = HARD — a forbid
 # hit or a failed `checks` entry makes the runner exit non-zero (CI red).
 # Groups A + D + E are routing/quality = SOFT — failures are reported in
 # summary.md but do not fail the job (LLM routing is allowed to drift).
+# Group F gates CI via per-case `hard: true`.
 #
 # This file is read by ./runner.py — same shape as
 # blind_test_m0/cases.yaml so reviewers can diff side-by-side.
@@ -43,6 +49,7 @@
     - reply_numeric_near: { label: ["H0", "H₀"], min: 66.5, max: 68.5 }
     - reply_contains_any: ["publication"]
     - reply_contains_any: ["2020A&A...641A...6P", "Planck Collaboration VI"]
+    - reply_must_not_contain: ["Reply withheld", "Reply blocked"]
   forbid: ["__do_not_claim__", "__tool_status__", "__exploratory_warning__"]
 
 - id: A2_hubble_tension_quoted
@@ -64,6 +71,7 @@
   checks:
     - tools_all: [compare_luminosity_distances]
     - reply_contains_any: ["67.36"]
+    - reply_must_not_contain: ["Reply withheld", "Reply blocked"]
   forbid: ["__do_not_claim__"]
 
 - id: A3_alcock_paczynski_omega_m
@@ -99,6 +107,7 @@
     - tools_all: [assess_bao_bin_anomaly]
     - reply_numeric_near: { label: ["Ωm", "Ω_m", "Omega_m", "omega_m"], min: 0.27, max: 0.36 }
     - reply_contains_any: ["Paczynski", "Paczyński"]
+    - reply_must_not_contain: ["Reply withheld", "Reply blocked"]
   forbid: []
 
 - id: B1_inline_rows_must_block
@@ -236,3 +245,40 @@
     - tools_all: [plan_research_program, run_research_matrix, build_evidence_graph, verify_research_facts, export_research_report]
     - reply_contains_any: ["publication_ready", "executed_not_ready"]
   forbid: []
+
+- id: F1_lfr_demo_end_to_end
+  group: F
+  hard: true
+  # 2026-06-11: the flagship happy-path SPECIFICITY case. The LFR demo
+  # (extract ALPINE tables → bayesian linmix fit) is what the Wu test guide
+  # promises; this case proves the anti-fabrication gates do NOT withhold a
+  # clean successful turn (the inverse of B/C — sensitivity without
+  # specificity trains users to distrust the banner). The live anchor-gate
+  # false positive (fixed 9f2667e) would have been caught by this case.
+  # The deterministic line-relation seeding in _run_agent_loop auto-runs
+  # extract+fit even when the LLM skips them, and beta comes from the
+  # deterministic fit (seeded) — provider-stable. The reply may be either
+  # model prose OR the deterministic "Tool-grounded summary"; both must pass.
+  prompt: |
+    Extract the [CII] line measurement table from arXiv:2002.00962 (the
+    ALPINE-ALMA [CII] survey data paper) and fit the L[CII]-FWHM scaling
+    relation with fit_line_lfr. Report the slope (beta), the intercept
+    (alpha), and the number of rows used.
+  expect_tools_called: [extract_literature_tables, fit_line_lfr]
+  alt_expected_tools: [search_literature]
+  expect_pass:
+    - "extract_literature_tables parses arXiv:2002.00962 (74 fit-ready rows)"
+    - "fit_line_lfr runs bayesian_xyerr_linmix on the cached rows"
+    - "beta reported near 0.80, alpha near 8.35"
+    - "reply is NOT withheld/blocked by the validation gates"
+  checks:
+    - tools_all: [extract_literature_tables, fit_line_lfr]
+    - reply_numeric_near: { label: ["beta", "β", "slope"], min: 0.7, max: 0.9 }
+    - reply_contains_any: ["74"]
+      soft: true   # prose phrasing varies; guaranteed in the deterministic summary
+    # "provenance check failed" covers the annotated_blocked path too — that
+    # gate PRESERVES the prose (beta survives numeric_near) and only appends a
+    # "⚠ Citation / methodology provenance check failed" footer, so without
+    # this marker a clean-turn false positive of that class would ship green.
+    - reply_must_not_contain: ["Reply withheld", "Reply blocked", "__do_not_claim__", "provenance check failed"]
+  forbid: ["__do_not_claim__"]
