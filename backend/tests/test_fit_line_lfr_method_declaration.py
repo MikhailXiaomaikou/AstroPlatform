@@ -575,7 +575,8 @@ def test_default_luminosity_kind_is_l_solar_no_conversion():
 
 def test_explicit_l_prime_converts_all_rows_and_relabels_units():
     """Explicitly passing luminosity_kind="L_prime" converts all ALPINE z=5 rows,
-    and the alpha unit becomes log L_prime, numerically offset from L_solar by ~+2.2 dex."""
+    and the alpha unit becomes log L_prime, numerically offset from L_solar by the
+    redshift-independent [CII] offset (+0.658 dex)."""
     rows = _make_rows(6)  # z=5.0..5.5, [CII], log_L=9.0..9.25
     with _patch_cache(rows):
         out_solar = _exec_fit_line_lfr({"cache_key": "x"})
@@ -587,18 +588,15 @@ def test_explicit_l_prime_converts_all_rows_and_relabels_units():
     assert "K km/s pc^2" in out_prime["model"]
     assert out_prime["n_unit_converted"] == 6
     assert out_prime["unit_conversion_failures"] == []
-    # alpha under L_prime should be ~+2 dex larger than L_solar (z=5 [CII] single-point offset
-    # is +2.215, but the OLS fit across z=5.0..5.5 means the intercept is not a strict rigid shift)
+    # alpha (intercept) shifts by the +0.658 dex [CII] offset (Solomon & Vanden
+    # Bout 2005; redshift-independent, so it is the same constant for every row).
     delta_alpha = out_prime["alpha"] - out_solar["alpha"]
-    assert 1.9 < delta_alpha < 2.4, f"expected alpha shift ~+2.0 dex, got {delta_alpha:.3f}"
-    # beta (slope) WILL change across L_solar/L_prime, because the 2*log(1+z) term is
-    # a per-row z-dependent shift, not a rigid translation. For the z=5.0..5.5 sample,
-    # each row shifts by a different amount, so the OLS slope naturally changes. This is
-    # physical, not a bug. Sign must stay positive (LFR remains a positive correlation)
-    # and magnitude should be in the ~0-10 range.
-    assert out_prime["beta"] > 0
+    assert 0.6 < delta_alpha < 0.72, f"expected the +0.658 dex [CII] offset, got {delta_alpha:.3f}"
+    # Because the offset is a CONSTANT (all rows are [CII], same ν_rest), the
+    # conversion is a rigid translation of every y-value — the OLS slope (beta) is
+    # therefore UNCHANGED between L_solar and L_prime.
+    assert abs(out_prime["beta"] - out_solar["beta"]) < 1e-6
     assert 0 < out_prime["beta"] < 10
-    assert 0 < out_solar["beta"] < 10
 
 
 def test_l_prime_rejects_rows_missing_redshift():

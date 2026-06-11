@@ -1,11 +1,12 @@
-"""PART AI #2 — luminosity_units L_solar <-> L_prime conversion correctness.
+"""luminosity_units L_solar <-> L_prime conversion correctness.
 
-Physical expectation (Carilli & Walter 2013 Eq. 1, Eq. 3):
-    log10(L'/L_solar) = 10.495 - 3·log10(ν_rest_GHz) + 2·log10(1+z)
+Physical expectation (Solomon & Vanden Bout 2005 Eqs. 1 & 3 — the (1+z)
+factors cancel, so the conversion is REDSHIFT-INDEPENDENT):
+    log10(L'/L_solar) = 10.495 - 3·log10(ν_rest_GHz)
 
 Locks three things:
-1. [CII] @ z=5: L_prime - L_solar ≈ +2.215 dex (key scenario for user's paper)
-2. Formula scales correctly with (1+z)², and correctly with ν_rest⁻³
+1. [CII]: L_prime - L_solar ≈ +0.658 dex, the SAME at any z
+2. The offset is redshift-INDEPENDENT and scales as ν_rest⁻³
 3. Conversion is reversible (L_solar → L_prime → L_solar round-trips cleanly)
 """
 
@@ -56,24 +57,28 @@ def test_unknown_line_returns_none() -> None:
 # ---------- L_solar → L_prime 物理预期 ----------
 
 
-def test_cii_at_z5_offset_is_about_plus_2_2_dex() -> None:
-    """[CII] @ z=5 conversion offset should be ≈ +2.215 dex (derived in comment).
+def test_cii_offset_is_about_plus_0_66_dex() -> None:
+    """[CII] conversion offset is ≈ +0.658 dex, redshift-independent.
 
-    User's paper reports ALPINE log L_CII/Lsun ~ 8.5; converted to L_prime should be ~ 10.7.
-    Bothwell SPT reports log L'[CII] ~ 9.5-10 (low z, ~3-4 dex lower sample).
+    Solomon & Vanden Bout 2005 Eqs. 1 & 3: L'/L = 3.125e10 · ν_rest⁻³ with the
+    (1+z) factors cancelled. For [CII] (ν_rest=1900.5369 GHz):
+    10.495 - 3·log10(1900.5369) = +0.658 dex. An ALPINE log(L_CII/L_sun)=8.5
+    source therefore has log L' ≈ 9.16.
     """
     log_l_prime = convert_log_l_solar_to_l_prime(8.5, "[CII]", redshift=5.0)
     assert log_l_prime is not None
-    # expected ≈ 8.5 + 2.215 = 10.715
-    assert log_l_prime == pytest.approx(10.715, abs=0.01)
+    assert log_l_prime == pytest.approx(9.158, abs=0.01)
 
 
-def test_cii_z_dependence_quadratic_in_one_plus_z() -> None:
-    """Offset scales with (1+z)². z=1 to z=5: (1+z) goes from 2 to 6, 2·log(6/2) = 2·log(3) ≈ +0.954 dex."""
+def test_cii_offset_is_redshift_independent() -> None:
+    """The offset is the SAME at any z (the (1+z) factors cancel). The old code
+    carried a spurious +2·log10(1+z) term; this locks that it is gone."""
     delta_z1 = convert_log_l_solar_to_l_prime(0.0, "[CII]", redshift=1.0)
     delta_z5 = convert_log_l_solar_to_l_prime(0.0, "[CII]", redshift=5.0)
-    expected_diff = 2.0 * math.log10(6.0 / 2.0)  # 2 log(3) ≈ 0.954
-    assert (delta_z5 - delta_z1) == pytest.approx(expected_diff, abs=1e-6)
+    delta_z10 = convert_log_l_solar_to_l_prime(0.0, "[CII]", redshift=10.0)
+    assert delta_z1 == pytest.approx(delta_z5, abs=1e-9)
+    assert delta_z5 == pytest.approx(delta_z10, abs=1e-9)
+    assert delta_z5 == pytest.approx(0.658, abs=0.01)
 
 
 def test_co10_at_z2_smaller_offset_than_cii_at_z2() -> None:
@@ -139,7 +144,7 @@ def test_convert_row_l_solar_to_l_prime_records_audit_fields() -> None:
     }
     out = convert_row_luminosity_inplace(row, "L_prime")
     assert out["luminosity_kind"] == "L_prime"
-    assert out["log_luminosity"] == pytest.approx(10.715, abs=0.01)
+    assert out["log_luminosity"] == pytest.approx(9.158, abs=0.01)
     assert out["log_luminosity_transformed_from"] == 8.5
     assert out["log_luminosity_transformed_to"] == "L_prime"
     # original row must not be modified (immutable style preserved)
@@ -161,7 +166,7 @@ def test_convert_row_legacy_default_is_l_solar() -> None:
     # No luminosity_kind set
     out = convert_row_luminosity_inplace(row, "L_prime")
     assert out["luminosity_kind"] == "L_prime"
-    assert out["log_luminosity"] == pytest.approx(10.715, abs=0.01)
+    assert out["log_luminosity"] == pytest.approx(9.158, abs=0.01)
 
 
 def test_convert_row_missing_redshift_records_unit_error() -> None:

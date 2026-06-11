@@ -213,10 +213,11 @@ def test_paper1_l_prime_unit_label_in_envelope(mixed_paper1_sample):
     assert "K km/s pc^2" in out["model"]
 
 
-def test_paper1_l_prime_alpha_shift_above_2_dex(mixed_paper1_sample):
-    """ALPINE z=4.4-5.8 sample: L_prime fit alpha should exceed L_solar fit
-    by approximately +2 dex (single-source +2.215 dex at z=5, OLS intercept spread
-    1.9-2.3 dex range)."""
+def test_paper1_l_prime_alpha_shift_is_cii_offset(mixed_paper1_sample):
+    """ALPINE [CII] sample: the L_solar→L_prime fit alpha shift equals the
+    redshift-INDEPENDENT [CII] offset (+0.658 dex = 10.495 - 3·log10(1900.5369);
+    Solomon & Vanden Bout 2005). The offset is the same constant for every
+    source (no per-source (1+z) term), so the OLS intercept shifts by exactly it."""
     from app.services.ai_tools import _exec_fit_line_lfr
 
     with _patch_cache(mixed_paper1_sample):
@@ -227,10 +228,9 @@ def test_paper1_l_prime_alpha_shift_above_2_dex(mixed_paper1_sample):
         })
 
     delta_alpha = out_prime["alpha"] - out_solar["alpha"]
-    # Note: ALPINE z=4.4-5.8 sample mean (1+z)^2 term is not exactly the z=5 single-point +2.215;
-    # OLS intercept spread 1.7-2.3 dex is normal — what matters is sign + order of magnitude.
-    assert 1.7 < delta_alpha < 2.4, (
-        f"expected +1.7~2.4 dex shift, got {delta_alpha:.3f}"
+    # A constant per-source offset shifts the OLS intercept by that same constant.
+    assert 0.6 < delta_alpha < 0.72, (
+        f"expected the +0.658 dex [CII] offset, got {delta_alpha:.3f}"
     )
     # beta also changes (unit conversion is not a rigid translation), but the sign stays positive
     assert out_prime["beta"] > 0

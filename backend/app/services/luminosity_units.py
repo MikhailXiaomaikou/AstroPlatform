@@ -1,72 +1,39 @@
-"""PART AI #2 -- Line luminosity unit conversion (L_solar <-> L_prime).
+"""Line luminosity unit conversion (L_solar <-> L_prime).
 
-CO LFR / Solomon 1992 / most high-z line luminosity papers use the
-brightness-temperature line luminosity L' in units of K km/s pc². Some [CII]
-papers (e.g. ALPINE) report L_line/L_sun (bolometric luminosity). The
-conversion between the two is an overall intercept shift that **depends on the
-line rest frequency and redshift** -- it is not a single constant.
+CO LFR / most high-z line luminosity papers use the brightness-temperature
+line luminosity L' in units of K km/s pc². Some [CII] papers (e.g. ALPINE)
+report L_line/L_sun (bolometric luminosity). The conversion between the two
+is an intercept shift that depends ONLY on the line rest frequency — it is
+**redshift-independent** (a common pitfall is to carry a spurious (1+z) term;
+this module previously did, inflating z~5 [CII] offsets by ~1.5 dex).
 
-Formulae (Solomon 1992 / Carilli & Walter 2013):
+Derivation — Solomon & Vanden Bout 2005 (ARA&A 43, 677), Eqs. 1 & 3
+(ν in GHz, D_L in Mpc, S·dV in Jy km/s):
 
-    L'_line [K km/s pc^2]
-        = (c^2 / 2 k_B) * S*dV * D_L^2 / [(1+z) * nu_obs^2]
-        ~ S*dV * D_L^2 / nu_obs^2 * (1+z)^-1
+    L'_line [K km/s pc^2] = 3.25e7 * S*dV * nu_obs^-2 * D_L^2 * (1+z)^-3
+    L_line  [L_sun]       = 1.04e-3 * S*dV * nu_obs    * D_L^2
 
-    L_line  [L_sun]
-        ~ S*dV * D_L^2 * nu_obs
+(L uses nu_obs: the observed frequency converts the velocity-integrated flux
+density to an energy flux; D_L carries the cosmological factors.)
 
-Taking the ratio cancels D_L^2 and S*dV:
+Ratio — S*dV and D_L^2 cancel:
 
-    L_line / L'_line ~ nu_obs^3 * (1+z)
-    nu_obs = nu_rest / (1+z)
-    => L_line / L'_line ~ (1+z)^-2 * nu_rest^3
+    L'/L = (3.25e7 / 1.04e-3) * nu_obs^-3 * (1+z)^-3
+         = 3.125e10 * nu_obs^-3 * (1+z)^-3
+    nu_obs = nu_rest / (1+z)   =>   nu_obs^-3 = nu_rest^-3 * (1+z)^3
+    => L'/L = 3.125e10 * nu_rest^-3        # (1+z) cancels — redshift-independent
 
-Taking log10 and absorbing all constants (L_sun erg/s, k_B, c) into C:
+In log10:
 
-    log10(L'_line) = log10(L_line/L_sun)
-                     - 3*log10(nu_rest_GHz)
-                     + 2*log10(1+z)
-                     + C
+    log10(L'/L) = log10(3.125e10) - 3*log10(nu_rest_GHz)
+                = 10.495 - 3*log10(nu_rest_GHz)
 
-where C ~ 5.604 dex, consistent for **all lines** (purely a unit conversion
-erg/s <-> L_sun + the Solomon constant). Numerically for [CII]
-(nu_rest=1900.5374 GHz) at z=5:
-    -3*log10(1900.5374) = -9.836
-    +2*log10(6.0)        = +1.556
-    +5.604               = +5.604
-    => L_prime - L_solar  ~ -2.676 dex
+[CII] nu_rest = 1900.5369 GHz:
+    10.495 - 3*log10(1900.5369) = 10.495 - 9.837 = +0.658 dex   (at any z)
 
-WAIT -- is the +0.66 dex estimate above for z=5, [CII] actually
-**L_solar - L_prime ~ -2.7 dex**? Re-checking against Carilli & Walter 2013
-Eq. 1+3:
-    L'/L_line[L_sun] = const * 1/(nu_obs * (1+z))
-                     = (1+z) / nu_rest
-
-Explicitly:
-    L'_line[K km/s pc^2] = 3.25e7 * S*dV[Jy km/s] * D_L^2[Mpc^2] / [(1+z)*nu_obs^2[GHz^2]]
-    L_line[L_sun]        = 1.04e-3 * S*dV[Jy km/s] * nu_obs[GHz] * D_L^2[Mpc^2]
-
-ratio:  L'/L = 3.25e7 / 1.04e-3 / [(1+z) * nu_obs^3]
-            = 3.125e10 * 1 / [(1+z) * nu_obs^3]
-            = 3.125e10 * (1+z)^2 / nu_rest^3
-
-log10: log10(L'/L) = 10.495 - 3*log10(nu_rest_GHz) + 2*log10(1+z)
-
-[CII] nu_rest=1900.5374, z=5:
-    10.495 - 3*3.2787 + 2*0.7782
-    = 10.495 - 9.836 + 1.556
-    = +2.215 dex
-
-So **L'_prime - L_solar ~ +2.2 dex** at z=5.
-
-Carilli & Walter 2013 Table 1 gives [CII] L' ~ L_solar +/- a few dex:
-Bothwell SPT reports log L'[CII] ~ 9.6, ALPINE reports log L_CII/Lsun ~ 8.5.
-Difference ~1.1 dex; adding the (1+z) term (~1 dex) gives ~2 dex total,
-consistent with the formula above.
-
-The +0.66 dex figure given elsewhere is **in the right direction but too small**.
-For real z=4-6 [CII] samples the conversion offset is approximately +2 to +2.4 dex.
-
+So for an ALPINE-style [CII] source with log(L_CII/L_sun)=8.5, the brightness-
+temperature luminosity is log L' ~ 9.16 (offset +0.66 dex), independent of
+redshift.
 """
 
 from __future__ import annotations
@@ -98,9 +65,9 @@ LINE_REST_FREQ_GHZ: dict[str, float] = {
 }
 
 
-# Unit conversion constant (log term from the ratio of Carilli & Walter 2013 Eq. 1 and Eq. 3):
-#   L'_line / L_line[L_sun] = 3.125e10 * (1+z)^2 / nu_rest_GHz^3
-#   log10(L'/L) = log10(3.125e10) - 3*log10(nu_rest_GHz) + 2*log10(1+z)
+# Unit conversion constant (ratio of Solomon & Vanden Bout 2005 Eqs. 1 & 3):
+#   L'_line / L_line[L_sun] = 3.125e10 / nu_rest_GHz^3   (redshift-independent)
+#   log10(L'/L) = log10(3.125e10) - 3*log10(nu_rest_GHz)
 _LOG_UNIT_CONSTANT = math.log10(3.125e10)  # ≈ 10.495
 
 
@@ -126,13 +93,19 @@ def convert_log_l_solar_to_l_prime(
 ) -> float | None:
     """L_line[L_sun] → L'_line[K km/s pc²] in log10 space.
 
-    Returns None when ν_rest cannot be resolved or redshift is missing
-    (z required because (1+z)² term is per-source, not a global shift).
+    The conversion is REDSHIFT-INDEPENDENT: L'/L = 3.125e10 · ν_rest⁻³ (the
+    (1+z) factors cancel between L' ∝ ν_obs⁻²(1+z)⁻³ and L ∝ ν_obs — Solomon &
+    Vanden Bout 2005, ARA&A 43, 677, Eqs. 1 & 3). `redshift` is still required
+    and validated (a non-negative number) as a sanity input, but it does not
+    enter the conversion.
+
+    Returns None when ν_rest cannot be resolved or redshift is missing/invalid.
 
     Args:
         log_l_solar: log10(L_line / L_sun).
         line_id: line label for ν_rest lookup ("[CII]", "CO(1-0)", ...).
-        redshift: source redshift (>= 0).
+        redshift: source redshift (>= 0). Validated but not used in the
+            (redshift-independent) conversion.
         nu_rest_ghz: explicit ν_rest override; takes priority over line_id
             lookup.  Use when line_id is unknown or has multiple aliases.
     """
@@ -145,12 +118,9 @@ def convert_log_l_solar_to_l_prime(
     if not nu or nu <= 0:
         return None
 
-    # log10(L'/L_solar) = 10.495 - 3·log10(ν_rest_GHz) + 2·log10(1+z)
-    delta = (
-        _LOG_UNIT_CONSTANT
-        - 3.0 * math.log10(nu)
-        + 2.0 * math.log10(1.0 + redshift)
-    )
+    # log10(L'/L_solar) = 10.495 - 3·log10(ν_rest_GHz)  — redshift-independent
+    # (the (1+z) factors cancel; Solomon & Vanden Bout 2005, Eqs. 1 & 3).
+    delta = _LOG_UNIT_CONSTANT - 3.0 * math.log10(nu)
     return log_l_solar + delta
 
 
@@ -161,7 +131,11 @@ def convert_log_l_prime_to_l_solar(
     *,
     nu_rest_ghz: float | None = None,
 ) -> float | None:
-    """L'_line[K km/s pc²] → L_line[L_sun] in log10 space (inverse of above)."""
+    """L'_line[K km/s pc²] → L_line[L_sun] in log10 space (inverse of above).
+
+    Redshift-independent (see convert_log_l_solar_to_l_prime); `redshift` is
+    validated but not used in the conversion.
+    """
     if not isinstance(log_l_prime, (int, float)) or not math.isfinite(log_l_prime):
         return None
     if not isinstance(redshift, (int, float)) or not math.isfinite(redshift) or redshift < 0:
@@ -171,11 +145,7 @@ def convert_log_l_prime_to_l_solar(
     if not nu or nu <= 0:
         return None
 
-    delta = (
-        _LOG_UNIT_CONSTANT
-        - 3.0 * math.log10(nu)
-        + 2.0 * math.log10(1.0 + redshift)
-    )
+    delta = _LOG_UNIT_CONSTANT - 3.0 * math.log10(nu)
     return log_l_prime - delta
 
 
