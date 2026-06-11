@@ -15,7 +15,7 @@ name: Daily
 
 on:
   schedule:
-    - cron: "0 16 * * *"      # 16:00 UTC daily
+    - cron: "17 16 * * *"     # 16:17 UTC daily (off the top-of-hour: GitHub silently drops congested whole-hour crons — 2026-06-11's run was skipped, and actual starts had drifted to +2.4h)
   workflow_dispatch:           # manual button in the Actions UI
     inputs:
       module:
