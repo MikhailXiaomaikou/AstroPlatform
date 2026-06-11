@@ -83,6 +83,15 @@ COBAYA_GAUSSIAN_PRIORS: dict[str, tuple[float, float]] = {
 # the same data twice.
 TAU_CONSTRAINING_KEYS = frozenset({"planck_2018_lowl_EE"})
 
+# Platform parameter name -> the name cobaya/CAMB actually consume. Sampled
+# under the platform name (chain columns keep it) with drop: true, plus a
+# dynamically-computed alias param handed to the theory. Without this, the
+# model build dies with "Could not find anything to use input parameter(s)".
+COBAYA_PARAM_ALIASES: dict[str, str] = {
+    "w0": "w",        # CPL pair is (w, wa) in cobaya/CAMB
+    "omegak": "omk",  # curvature density is omk in CAMB
+}
+
 DEFAULT_EVALUATE_TIMEOUT_S = 180.0
 DEFAULT_MCMC_TIMEOUT_S = 1800.0
 
@@ -436,18 +445,17 @@ def _build_cobaya_yaml(
             # every O(1)+ param's (high-low)/50 already dominates it.
             proposal = max((float(high) - float(low)) / 50.0, 1e-12)
             lines.append(f"    proposal: {proposal}")
-        if name == "w0":
-            # cobaya/CAMB name the CPL pair (w, wa); the platform samples "w0".
-            # Without this, every w0wa chain dies at model build with "Could not
-            # find anything to use input parameter(s) {'w0'}". drop excludes w0
-            # from the theory input; the dynamic `w` below hands CAMB the same
-            # value under the name it consumes. Chain columns keep "w0".
+        if name in COBAYA_PARAM_ALIASES:
+            # Sampled under the platform name (chain columns keep it); drop
+            # excludes it from the theory input — the dynamic alias param
+            # below hands CAMB the same value under the name it consumes.
             lines.append("    drop: true")
 
-    if "w0" in parameter_order:
-        lines.append("  w:")
-        lines.append("    value: \"lambda w0: w0\"")
-        lines.append("    derived: false")
+    for platform_name, cobaya_name in COBAYA_PARAM_ALIASES.items():
+        if platform_name in parameter_order:
+            lines.append(f"  {cobaya_name}:")
+            lines.append(f"    value: \"lambda {platform_name}: {platform_name}\"")
+            lines.append("    derived: false")
 
     lines.append("sampler:")
     if sampler == "evaluate":

@@ -2285,6 +2285,11 @@ CMB_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
     # here (NOT in RUNNER_PARAMETER_PRIORS) so the in-process compressed
     # path cannot silently pick it up — its kernels do not respond to mnu.
     "mnu": (0.0, 5.0),
+    # Curvature density Omega_k, flat prior — the standard curved-CMB range
+    # (Planck-style omk extensions). Same placement rationale as mnu: the
+    # in-process distance kernels are flat-only, so omegak must not leak
+    # into the compressed path's sampled axes.
+    "omegak": (-0.3, 0.3),
 }
 
 
@@ -5667,7 +5672,10 @@ def _cobaya_parameter_order(
             # mnu model name (same class as the w0 orphan, but silent).
             # cobaya/CAMB consume a sampled "mnu" directly; live-verified the
             # plik_lite likelihood responds (-2lnL 584->2044 at mnu 0.06->0.5).
-            if param in {"w", "w0", "wa", "mnu"} and param not in order:
+            # omegak joined the same day: ok_* chains died at CAMB setup on
+            # the bogus "curved" extra_arg and never sampled curvature at all;
+            # CAMB consumes it as "omk" via the YAML builder's alias table.
+            if param in {"w", "w0", "wa", "mnu", "omegak"} and param not in order:
                 order.append(param)
         return order
     compressed_order = _compressed_parameter_order(entries)
@@ -6027,8 +6035,11 @@ def _model_theory_args(model: str) -> dict[str, Any]:
         args["dark_energy_model"] = "fluid"
     if "mnu" in model:
         args["num_massive_neutrinos"] = 1
-    if model.startswith("ok_"):
-        args["curved"] = True
+    # ok_* curvature: NO extra theory arg. "curved" is not a CAMB parameter
+    # (live-verified: CAMBUnknownArgumentError) — it killed every ok_* CMB
+    # chain at CAMB setup. CAMB infers curvature from the sampled omk input
+    # (the omegak->omk alias in cobaya_runner's YAML builder), so nothing is
+    # needed here. (2026-06-12)
     return args
 
 

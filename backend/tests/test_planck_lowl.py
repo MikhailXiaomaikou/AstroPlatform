@@ -229,6 +229,53 @@ def test_mnu_cmb_chain_builds_and_likelihood_responds(tmp_path):
     assert chi2_high > chi2_low + 100.0, (chi2_low, chi2_high)
 
 
+def test_ok_models_sample_omegak_on_cmb_path():
+    # Regression for the ok_* double fault (2026-06-12): "curved" is not a
+    # CAMB parameter (every ok_* CMB chain died at setup) AND omegak was
+    # never sampled. Now: no bogus theory arg, omegak in the order with the
+    # curved-CMB flat prior, consumed by CAMB via the omegak->omk alias.
+    entries = [cl.get_cosmology_dataset(_PLIK_KEY)]
+    order = cl._cobaya_parameter_order("ok_lcdm", entries)
+    assert order[-1] == "omegak"
+    priors = cl._sanitize_runner_priors(order, None)
+    assert priors["omegak"] == (-0.3, 0.3)
+    assert "curved" not in cl._model_theory_args("ok_lcdm")
+    assert "omegak" not in cl.RUNNER_PARAMETER_PRIORS  # compressed path is flat-only
+
+
+def test_ok_cmb_chain_builds_and_recovers_lcdm_at_flat(tmp_path):
+    # Physics lock: at omegak=0 the curved model IS the flat one (chi2~584.5
+    # anchor); a small omegak moves the acoustic peaks and the chi2 explodes
+    # (live-measured -2lnL~10992 at omegak=0.02). A regression that drops the
+    # omk alias would either fail the build or make both points identical.
+    pytest.importorskip("cobaya")
+    pytest.importorskip("camb")
+    from cobaya.model import get_model
+    from cobaya.yaml import yaml_load
+
+    entries = [cl.get_cosmology_dataset(_PLIK_KEY)]
+    order = cl._cobaya_parameter_order("ok_lcdm", entries)
+    priors = cl._sanitize_runner_priors(order, None)
+    yaml_text = cobaya_runner._build_cobaya_yaml(
+        model_key="ok_lcdm", entries=entries, prior_bounds=priors,
+        parameter_order=order, sampler="evaluate",
+        output_prefix=tmp_path / "run", seed=42,
+    )
+    info = yaml_load(yaml_text)
+    info.pop("output", None)
+    info.pop("sampler", None)
+    info["packages_path"] = str(_PACKAGES)
+    model = get_model(info)  # old code died here (CAMBUnknownArgumentError)
+    base = {
+        "ombh2": 0.02237, "omch2": 0.1200, "H0": 67.36, "ns": 0.9649,
+        "As": 2.1e-9, "tau": 0.0544, "A_planck": 1.0,
+    }
+    chi2_flat = -2.0 * float(model.loglikes({**base, "omegak": 0.0})[0][0])
+    chi2_curved = -2.0 * float(model.loglikes({**base, "omegak": 0.02})[0][0])
+    assert 560.0 < chi2_flat < 610.0, chi2_flat
+    assert chi2_curved > chi2_flat + 1000.0, (chi2_flat, chi2_curved)
+
+
 def test_lowl_reproduces_planck_2018_bestfit_loglikes():
     # The real proof: the vendored, sha256-pinned low-l data + cobaya's native
     # likelihoods + a CAMB spectrum reproduce the Planck 2018 base-LCDM best-fit
