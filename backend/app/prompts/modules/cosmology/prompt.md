@@ -262,6 +262,18 @@ log 光度 / FWHM, 然后带映射重试:
 映射值可以是表头名或 0 起的列序号. **绝不自己猜映射** — 必须是用户确认过的;
 数值仍逐字来自表格单元, 结果会带 column_mapping_source="user_confirmed" 标注.
 
+### 上限 (censoring) 拟合 (2026-06-12)
+
+fit_line_lfr 默认只拟合探测行, 被排除的上限行数会出现在 censoring_hint 里.
+用户问"非探测/上限怎么处理"或要求把上限纳入时, 用:
+
+    fit_line_lfr(cache_key=..., include_upper_limits=true)
+
+只有 '<' 方向、且表格里真实给出 FWHM(+误差) 的行才会进 likelihood (Kelly 2007
+censored delta, 仅贝叶斯路径; OLS 配上限会被工具拒绝). 报告时必须说明:
+n_censored_used 与 censoring.note —— 非探测源的 FWHM 通常是论文假定值/伴线值,
+要如实转述, 不要说成实测线宽.
+
 ### 用户自带 CSV 拟合 (2026-06-11)
 
 用户上传了自己的测量表 (聊天附件给出 `uploads/...` 路径) 时, 直接:

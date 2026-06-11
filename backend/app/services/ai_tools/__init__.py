@@ -785,6 +785,19 @@ TOOLS = [
                     "type": "string",
                     "description": "Line filter, e.g. '[CII]' or 'CII'. Default: [CII].",
                 },
+                "include_upper_limits": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false (limit rows excluded, declared in "
+                        "censoring_hint). True admits '<'-luminosity rows that "
+                        "carry a tabulated FWHM(+err) as Kelly 2007 censored "
+                        "points in the Bayesian likelihood; requires the "
+                        "bayesian path (OLS cannot censor — the tool refuses "
+                        "rather than silently dropping limits). Lower limits "
+                        "('>') and rows without a real tabulated FWHM stay "
+                        "excluded — x is never invented."
+                    ),
+                },
                 "min_rows": {
                     "type": "integer",
                     "description": "Minimum citeable rows required for a publication-ready fit. Default: 5.",
@@ -4119,6 +4132,75 @@ def _row_has_citation(row: dict[str, Any]) -> bool:
     )
 
 
+def _build_censored_upper_limit_row(
+    row: dict[str, Any],
+    flags: list,
+    idx: int,
+    *,
+    require_citation: bool,
+) -> tuple[dict[str, Any] | None, str]:
+    """Qualify a limit-flagged row as a Kelly 2007 censored (upper-limit) point.
+
+    Physics discipline (2026-06-12): linmix censors y ONLY — x must be a
+    genuine observation. A true line NON-detection has no measured FWHM, so
+    a censorable row must carry a tabulated FWHM **and** its error verbatim
+    from the paper (for non-detections that width is typically an assumed /
+    companion-line value — the fit result declares this; we never invent x).
+    Lower limits ('>') and FWHM-limited rows are not supported by the
+    formalism and stay rejected. Returns (row_dict, "") or (None, reason).
+    """
+    flag_text = " ".join(str(f).lower() for f in flags)
+    if "fwhm_limit" in flag_text:
+        return None, "censored_fwhm_limited"
+    raw_values = row.get("raw_values") if isinstance(row.get("raw_values"), dict) else {}
+    raw_luminosity = str(raw_values.get("luminosity") or "")
+    if ">" in raw_luminosity:
+        return None, "censored_lower_limit_unsupported"
+    if "<" not in raw_luminosity:
+        # Cannot verify the limit DIRECTION from the verbatim cell — do not
+        # guess which way the inequality points.
+        return None, "censored_direction_unverifiable"
+    if require_citation and not _row_has_citation(row):
+        return None, "missing_citation"
+    log_luminosity = _finite_float(row.get("log_luminosity"))
+    if log_luminosity is None:
+        lin_value = _finite_float(row.get("luminosity"))
+        if lin_value is not None and 3.0 <= lin_value <= 13.0:
+            log_luminosity = lin_value  # same legacy-cache fallback as detections
+    fwhm = _finite_float(row.get("fwhm_km_s"))
+    fwhm_err = _finite_float(row.get("fwhm_err_km_s"))
+    if log_luminosity is None:
+        return None, "censored_missing_limit_value"
+    if fwhm is None or fwhm <= 0:
+        return None, "censored_missing_fwhm"
+    if fwhm_err is None or fwhm_err <= 0:
+        return None, "censored_missing_fwhm_err"
+    citation = row.get("citation") if isinstance(row.get("citation"), dict) else {}
+    return {
+        "source_name": row.get("source_name"),
+        "redshift": row.get("redshift"),
+        "line_id": row.get("line_id"),
+        "log_luminosity": log_luminosity,          # the upper-limit value
+        "log_luminosity_err": _finite_float(row.get("log_luminosity_err")),  # often None
+        "fwhm_km_s": fwhm,
+        "fwhm_err_km_s": fwhm_err,
+        "is_upper_limit": True,
+        # Carried so censored rows pass through the SAME post-acceptance
+        # stages as detections (cosmology recompute, unit conversion,
+        # lensing guard, cosmology-mismatch scan) — a censored row must
+        # never dodge a transform or a guard the detections obey.
+        "is_lensed": row.get("is_lensed"),
+        "mu_lens": row.get("mu_lens"),
+        "_demagnified": row.get("_demagnified"),
+        "source_cosmology": row.get("source_cosmology"),
+        "table_label": row.get("table_label") or citation.get("table_label"),
+        "bibcode": row.get("bibcode") or citation.get("bibcode"),
+        "arxiv_id": row.get("arxiv_id") or citation.get("arxiv_id"),
+        "row_index": row.get("row_index", idx),
+        "citation": citation,
+    }, ""
+
+
 def _load_user_csv_measurements(
     path: str,
     column_mapping: dict[str, Any] | None,
@@ -4512,6 +4594,10 @@ async def _exec_fit_line_lfr_async(
 
     line_id = str(inp.get("line_id") or "[CII]").strip() or "[CII]"
     min_rows = int(inp.get("min_rows") or 5)
+    # Censoring (2026-06-12, opt-in so every existing baseline is unchanged):
+    # when True, '<'-luminosity rows with a GENUINELY tabulated FWHM (+err)
+    # enter the Bayesian likelihood as Kelly 2007 §5.3 censored points.
+    include_upper_limits = bool(inp.get("include_upper_limits"))
     if not rows:
         return {
             "success": False,
@@ -4528,6 +4614,7 @@ async def _exec_fit_line_lfr_async(
 
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
+    censored_rows: list[dict[str, Any]] = []
     for idx, row in enumerate(rows):
         reason = ""
         flags = row.get("quality_flags") if isinstance(row.get("quality_flags"), list) else []
@@ -4535,6 +4622,16 @@ async def _exec_fit_line_lfr_async(
             reason = "line_filter"
         elif any("limit" in str(flag).lower() for flag in flags):
             reason = "limit_flag"
+            if include_upper_limits:
+                censored_candidate, censored_reject = _build_censored_upper_limit_row(
+                    row, flags, idx,
+                    require_citation=(rows_origin != "user_uploaded"),
+                )
+                if censored_candidate is not None:
+                    censored_rows.append(censored_candidate)
+                    reason = ""  # consumed as a censored point, not rejected
+                else:
+                    reason = censored_reject
         elif rows_origin != "user_uploaded" and not _row_has_citation(row):
             # User-uploaded rows have no literature citation BY DESIGN —
             # they are the user's own data, gated via input_data_origin
@@ -4639,9 +4736,18 @@ async def _exec_fit_line_lfr_async(
                 "blocking_reasons": ["fewer_than_two_citeable_rows", "below_min_rows"],
             },
             "__do_not_claim__": True,
+            # Censored rows (if any were admitted) are NOT silently invisible
+            # on this early exit — no fit ran, nothing consumed them.
+            "n_censored_used": 0,
+            "n_censored_admitted": len(censored_rows),
             "__message_to_model__": (
                 "Fewer than two citeable line-measurement rows survived filtering. "
                 "Do not claim a fitted luminosity-FWHM relation."
+                + (
+                    f" ({len(censored_rows)} upper-limit row(s) were admitted but "
+                    "cannot be fit without a detected population.)"
+                    if censored_rows else ""
+                )
             ),
         }
 
@@ -4711,6 +4817,23 @@ async def _exec_fit_line_lfr_async(
             # downstream subsample / variant code sees the shifted value.
             for row, new_log_l in zip(accepted, adjusted_log_luminosity, strict=True):
                 row["log_luminosity"] = new_log_l
+            # Censored rows shift IDENTICALLY (an upper limit on L scales
+            # with d_L^2 exactly like a detection) — skipping them would
+            # mix two cosmologies inside one likelihood.
+            for row in censored_rows:
+                z = _finite_float(row.get("redshift"))
+                if z is None or z <= 0:
+                    continue
+                try:
+                    dl_old = float(baseline_cosmo.luminosity_distance(z).to(u.Mpc).value)
+                    dl_new = float(target_cosmo.luminosity_distance(z).to(u.Mpc).value)
+                except Exception:
+                    continue
+                if dl_old <= 0 or dl_new <= 0:
+                    continue
+                row["log_luminosity"] = float(row["log_luminosity"]) + 2.0 * (
+                    math.log10(dl_new) - math.log10(dl_old)
+                )
             cosmology_recomputed = True
             if log_luminosity_shifts:
                 shifts_arr = np.array(log_luminosity_shifts, dtype=float)
@@ -4770,6 +4893,32 @@ async def _exec_fit_line_lfr_async(
             n_unit_converted += 1
         accepted = kept_after_units
         n_used = len(accepted)
+        # Censored rows convert under the SAME unit transform — the limit
+        # value is a luminosity like any other. Failures are rejected, never
+        # silently kept in the old frame (the mixed-frame likelihood trap).
+        kept_censored_units: list[dict[str, Any]] = []
+        for row in censored_rows:
+            converted = convert_row_luminosity_inplace(
+                row, "L_prime", line_id_fallback=line_id,
+            )
+            if converted.get("_unit_error"):
+                unit_conversion_failures.append({
+                    "source_name": row.get("source_name"),
+                    "row_index": row.get("row_index"),
+                    "reason": converted["_unit_error"],
+                })
+                rejected.append({
+                    "source_name": row.get("source_name"),
+                    "reason": "unit_conversion_failed",
+                    "row_index": row.get("row_index"),
+                    "detail": converted["_unit_error"],
+                })
+                continue
+            row["log_luminosity"] = converted["log_luminosity"]
+            row["luminosity_kind"] = "L_prime"
+            kept_censored_units.append(row)
+            n_unit_converted += 1
+        censored_rows = kept_censored_units
     else:
         # 'L_solar' path: tag the field so the downstream result envelope is explicit,
         # but do not change the log_luminosity values (cache is already in L_solar).
@@ -4825,6 +4974,25 @@ async def _exec_fit_line_lfr_async(
         accepted_after_lensing.append(row)
     accepted = accepted_after_lensing
     n_used = len(accepted)
+    # The lensing guard applies to censored rows too — a magnified upper
+    # limit biases the likelihood exactly like a magnified detection.
+    censored_after_lensing: list[dict[str, Any]] = []
+    for row in censored_rows:
+        if row.get("is_lensed") is True and row.get("mu_lens") is None and not bool(row.get("_demagnified")):
+            n_lensed_skipped_no_mu += 1
+            rejected.append({
+                "source_name": row.get("source_name"),
+                "reason": "lensed_no_mu_correction",
+                "row_index": row.get("row_index"),
+                "detail": (
+                    "Censored (upper-limit) row flagged is_lensed=True with no "
+                    "mu_lens — demagnify before it can enter the likelihood."
+                ),
+                "bibcode": row.get("bibcode"),
+            })
+            continue
+        censored_after_lensing.append(row)
+    censored_rows = censored_after_lensing
 
     if n_used == 0 and n_lensed_skipped_no_mu > 0:
         return {
@@ -4891,14 +5059,18 @@ async def _exec_fit_line_lfr_async(
         )
         and has_confirmed_luminosity_units
     )
+    # Citations cover EVERY row that feeds the likelihood — detections AND
+    # censored upper limits (a censored row's source paper must be in the
+    # citation summary and the claim-validator bibcode pool, or correctly
+    # citing it in prose would be flagged as suspicious).
     citation_keys = sorted({
         str(row.get("bibcode") or row.get("arxiv_id") or row.get("doi") or "").strip()
-        for row in accepted
+        for row in (accepted + censored_rows)
         if str(row.get("bibcode") or row.get("arxiv_id") or row.get("doi") or "").strip()
     })
     table_labels = sorted({
         str(row.get("table_label") or "").strip()
-        for row in accepted
+        for row in (accepted + censored_rows)
         if str(row.get("table_label") or "").strip()
     })
 
@@ -4919,6 +5091,57 @@ async def _exec_fit_line_lfr_async(
     n_x_err = sum(1 for r in accepted if r.get("fwhm_err_km_s") is not None)
     n_y_err = sum(1 for r in accepted if r.get("log_luminosity_err") is not None)
     both_errs_available = n_x_err == n_used and n_y_err == n_used and n_used > 0
+
+    # Censoring can only be honored by the Bayesian likelihood (Kelly 2007
+    # delta); OLS has no censored-data concept. Promising upper limits and
+    # then silently dropping them would misrepresent the sample — fail loud.
+    if censored_rows and requested == "ols":
+        return {
+            "success": False,
+            "tool": "fit_line_lfr",
+            "__tool_status__": "FAILED",
+            "__do_not_claim__": True,
+            "error": (
+                f"include_upper_limits=true admitted {len(censored_rows)} censored "
+                "row(s), but fit_method_requested='ols' cannot model censored data. "
+                "Use fit_method_requested='bayesian_xyerr' (or 'auto')."
+            ),
+            "error_class": "censoring_requires_bayesian",
+            "n_censored_candidates": len(censored_rows),
+        }
+    if censored_rows and not both_errs_available:
+        return {
+            "success": False,
+            "tool": "fit_line_lfr",
+            "__tool_status__": "FAILED",
+            "__do_not_claim__": True,
+            "error": (
+                "include_upper_limits=true requires the Bayesian path, which needs "
+                f"two-axis errors on every detected row (have fwhm_err on {n_x_err}/{n_used}, "
+                f"log_luminosity_err on {n_y_err}/{n_used}). Censored rows cannot be "
+                "honored — refusing rather than silently dropping them."
+            ),
+            "error_class": "censoring_needs_two_axis_errors",
+            "n_censored_candidates": len(censored_rows),
+        }
+    if censored_rows and n_used < 5:
+        # Pre-flight, not a sampler crash: the Kelly likelihood needs a real
+        # detected population to anchor the regression before limits can
+        # constrain anything. Distinct error_class so remediation is "get
+        # more detections", not "retry the sampler".
+        return {
+            "success": False,
+            "tool": "fit_line_lfr",
+            "__tool_status__": "FAILED",
+            "__do_not_claim__": True,
+            "error": (
+                f"include_upper_limits=true needs at least 5 DETECTED rows to "
+                f"anchor the censored fit; have {n_used} detections + "
+                f"{len(censored_rows)} limits."
+            ),
+            "error_class": "censoring_needs_min_detections",
+            "n_censored_candidates": len(censored_rows),
+        }
 
     fit_method = "ols"
     fit_method_downgrade_reason: str | None = None
@@ -4948,12 +5171,66 @@ async def _exec_fit_line_lfr_async(
             yerr_log = np.array(
                 [r["log_luminosity_err"] for r in accepted], dtype=float,
             )
+            # Kelly 2007 censoring: append the qualified upper-limit rows
+            # with delta=0. y = the limit value (verbatim cell); x/xerr from
+            # the tabulated FWHM (verbatim — see _build_censored_upper_limit_row
+            # for the physics discipline); ysig = the row's own error when the
+            # paper quoted one, else the median detected yerr (a standard,
+            # DECLARED pragmatic choice — limits are usually quoted bare).
+            x_fit, y_fit, xerr_fit, yerr_fit = x, y, xerr_log, yerr_log
+            delta_fit = None
+            censored_ysig_policy = {"own_err": 0, "median_detected_err": 0}
+            if censored_rows:
+                x_c = np.array(
+                    [math.log10(r["fwhm_km_s"] / 100.0) for r in censored_rows], dtype=float,
+                )
+                y_c = np.array([r["log_luminosity"] for r in censored_rows], dtype=float)
+                xerr_c = (
+                    np.array([r["fwhm_err_km_s"] for r in censored_rows], dtype=float)
+                    / np.array([r["fwhm_km_s"] for r in censored_rows], dtype=float)
+                ) / math.log(10.0)
+                median_detected_yerr = float(np.median(yerr_log))
+                if median_detected_yerr <= 0:
+                    # ysig=0 makes linmix treat a "limit" as an exact
+                    # detection AT the limit (wyerr=False short-circuits the
+                    # censored resampling) — a silent semantic flip. Refuse.
+                    return {
+                        "success": False,
+                        "tool": "fit_line_lfr",
+                        "__tool_status__": "FAILED",
+                        "__do_not_claim__": True,
+                        "error": (
+                            "censored fit needs a positive median detected "
+                            "log_luminosity_err to assign ysig to bare limits; "
+                            "the detected rows tabulate zero errors."
+                        ),
+                        "error_class": "censoring_needs_two_axis_errors",
+                        "n_censored_candidates": len(censored_rows),
+                    }
+                yerr_c_list: list[float] = []
+                for r in censored_rows:
+                    own = _finite_float(r.get("log_luminosity_err"))
+                    if own is not None and own > 0:
+                        yerr_c_list.append(own)
+                        censored_ysig_policy["own_err"] += 1
+                    else:
+                        yerr_c_list.append(median_detected_yerr)
+                        censored_ysig_policy["median_detected_err"] += 1
+                x_fit = np.concatenate([x, x_c])
+                y_fit = np.concatenate([y, y_c])
+                xerr_fit = np.concatenate([xerr_log, xerr_c])
+                yerr_fit = np.concatenate([yerr_log, np.array(yerr_c_list, dtype=float)])
+                delta_fit = np.concatenate([
+                    np.ones(len(accepted), dtype=bool),
+                    np.zeros(len(censored_rows), dtype=bool),
+                ])
             # Pick miniter modestly so a typical N≈70 cluster sample
             # finishes in 30-60 s; linmix extends to maxiter when its
             # internal R-hat hasn't converged yet.
             bayes_result = kelly07_linmix_fit(
-                x=x, y=y,
-                xerr=xerr_log, yerr=yerr_log,
+                x=x_fit, y=y_fit,
+                xerr=xerr_fit, yerr=yerr_fit,
+                delta=delta_fit,
                 K=2, nchains=4,
                 miniter=4000, maxiter=20000,
                 seed=int(inp.get("seed") or 20260426),
@@ -4974,6 +5251,21 @@ async def _exec_fit_line_lfr_async(
             beta_stderr = (beta_hdi[1] - beta_hdi[0]) / 1.88 / 2.0
         except Exception as exc:
             bayes_error = f"{type(exc).__name__}: {exc}"
+            if censored_rows:
+                # OLS cannot honor the admitted censored rows — refusing
+                # beats silently shipping a fit that dropped them.
+                return {
+                    "success": False,
+                    "tool": "fit_line_lfr",
+                    "__tool_status__": "FAILED",
+                    "__do_not_claim__": True,
+                    "error": (
+                        f"censored fit failed in the linmix sampler ({bayes_error}); "
+                        "no OLS fallback exists for censored data."
+                    ),
+                    "error_class": "censoring_sampler_failed",
+                    "n_censored_candidates": len(censored_rows),
+                }
             fit_method_downgrade_reason = (
                 "bayesian_xyerr requested and error columns are present, "
                 f"but the linmix sampler failed ({bayes_error}). Fell back to OLS."
@@ -5062,7 +5354,7 @@ async def _exec_fit_line_lfr_async(
     except Exception:
         _current_cosmo = {"name": "unknown"}
     sample_cosmo_names: set[str] = set()
-    for r in accepted:
+    for r in accepted + censored_rows:  # censored rows obey the same mismatch scan
         sc = r.get("source_cosmology")
         if isinstance(sc, dict):
             nm = str(sc.get("name") or "").strip()
@@ -5469,6 +5761,41 @@ async def _exec_fit_line_lfr_async(
                 "(M5) before the fit is publication-ready."
             ),
         })
+
+    # Censoring declaration (2026-06-12). Always present so consumers can
+    # tell "no limits involved" from "limits excluded" from "limits used".
+    n_censored_used = len(censored_rows) if fit_method == "bayesian_xyerr_linmix" else 0
+    result["n_censored_used"] = n_censored_used
+    result["censoring"] = {
+        "include_upper_limits": include_upper_limits,
+        "n_censored_used": n_censored_used,
+        "method": "kelly2007_linmix_delta" if n_censored_used else None,
+        "censored_ysig_policy": (
+            censored_ysig_policy if n_censored_used else None
+        ),
+        "note": (
+            "Censored rows enter ONLY the Bayesian likelihood (Kelly 2007 "
+            "delta). Their FWHM (x) is the verbatim tabulated value — for "
+            "non-detections that is typically an assumed or companion-line "
+            "width, never invented here — and the likelihood treats that "
+            "width as an unbiased measurement with the quoted error (linmix "
+            "has no x-censoring; a survey-wide assumed constant width piles "
+            "censored rows at one x). Censored rows pass the same cosmology/"
+            "unit/lensing transforms as detections. Correlations, residual "
+            "RMS, subsample splits, fit_inputs_preview, plot_data points, "
+            "and lensing_summary counts remain detections-only."
+            if n_censored_used else None
+        ),
+    }
+    if not include_upper_limits:
+        n_limit_rejected = sum(1 for r in rejected if r.get("reason") == "limit_flag")
+        if n_limit_rejected:
+            result["censoring_hint"] = (
+                f"{n_limit_rejected} limit-flagged row(s) were excluded. Rerun "
+                "with include_upper_limits=true to admit '<'-luminosity rows "
+                "that carry a tabulated FWHM(+err) as Kelly (2007) censored "
+                "points in the Bayesian fit."
+            )
 
     if rows_origin == "user_uploaded":
         # 3B honest labeling: this fit ran on the USER'S OWN data. Numeric

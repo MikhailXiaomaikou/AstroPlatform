@@ -488,6 +488,7 @@ def kelly07_linmix_fit(
     maxiter: int = 50000,
     seed: int | None = None,
     parallelize: bool = False,
+    delta: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Bayesian linear regression with errors in both axes (Kelly 2007).
 
@@ -511,6 +512,10 @@ def kelly07_linmix_fit(
         parallelize: linmix internal multiprocessing.  Default False
             so we do not spawn extra processes inside an already-async
             FastAPI worker; set True only for offline / test runs.
+        delta: optional bool/int array — Kelly 2007 §5.3 censoring flags.
+            delta[i]=1 detected; delta[i]=0 means y[i] is an UPPER LIMIT
+            (left-censored y). x must be genuinely observed for censored
+            rows; linmix has no x-censoring. None = all detected.
 
     Returns:
         dict with keys:
@@ -535,6 +540,17 @@ def kelly07_linmix_fit(
     n = int(x.size)
     if n < 5:
         raise ValueError(f"kelly07_linmix_fit needs at least 5 rows, got {n}")
+    n_censored = 0
+    if delta is not None:
+        delta = np.asarray(delta, dtype=bool)
+        if delta.shape != x.shape:
+            raise ValueError("delta must share x's shape")
+        n_censored = int(np.sum(~delta))
+        if int(np.sum(delta)) < 5:
+            raise ValueError(
+                "kelly07_linmix_fit needs at least 5 DETECTED rows; got "
+                f"{int(np.sum(delta))} detected + {n_censored} censored"
+            )
 
     # Vendored linmix has a known reproducibility gap: with
     # parallelize=False the Chain ctor does not receive the seed
@@ -550,6 +566,7 @@ def kelly07_linmix_fit(
     try:
         lm = LinMix(
             x=x, y=y, xsig=xerr, ysig=yerr,
+            delta=delta,
             K=K, nchains=nchains,
             parallelize=parallelize, seed=seed,
         )
@@ -640,6 +657,7 @@ def kelly07_linmix_fit(
         ],
         "n_draws_total": n_draws_total,
         "n_chains": int(nchains),
+        "n_censored": n_censored,
         "miniter": int(miniter),
         "maxiter": int(maxiter),
         "K": int(K),
