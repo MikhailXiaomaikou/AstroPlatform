@@ -2279,6 +2279,12 @@ CMB_PARAMETER_PRIORS: dict[str, tuple[float, float]] = {
     "As": (1.8e-9, 2.4e-9),
     "tau": (0.02, 0.10),
     "A_planck": (0.98, 1.02),
+    # Sum of neutrino masses [eV], flat — the standard wide prior of
+    # Planck-style mnu extensions (oscillation floor ~0.06 eV is left to the
+    # data; CAMB runs with num_massive_neutrinos=1 for *_mnu models). Lives
+    # here (NOT in RUNNER_PARAMETER_PRIORS) so the in-process compressed
+    # path cannot silently pick it up — its kernels do not respond to mnu.
+    "mnu": (0.0, 5.0),
 }
 
 
@@ -5656,7 +5662,12 @@ def _cobaya_parameter_order(
         if any(entry.key in CMB_APLANCK_KEYS for entry in entries):
             order.append("A_planck")
         for param in SUPPORTED_MODELS.get(model_key, ()):
-            if param in {"w", "w0", "wa"} and param not in order:
+            # mnu joined 2026-06-12: without it a *_mnu chain silently ran
+            # CAMB's fixed default neutrino mass while the result carried the
+            # mnu model name (same class as the w0 orphan, but silent).
+            # cobaya/CAMB consume a sampled "mnu" directly; live-verified the
+            # plik_lite likelihood responds (-2lnL 584->2044 at mnu 0.06->0.5).
+            if param in {"w", "w0", "wa", "mnu"} and param not in order:
                 order.append(param)
         return order
     compressed_order = _compressed_parameter_order(entries)

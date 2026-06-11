@@ -17,7 +17,7 @@
 - 任何新垂直 / 平台架构级改动 / 推送 origin
 
 ## P1 — 科学正确性缺口(先核实再修,核实结果写回这里)
-- [ ] **mnu 在 cobaya CMB 路径缺失(疑似)**:`_cobaya_parameter_order` 的 CMB 分支只追加 w/w0/wa;`lcdm_mnu`/`w0wa_cdm_mnu` 选 CMB entry 时 mnu 疑似根本不进采样(与已修的 w0 孤儿同类)。先活体复现(get_model 探针,照 test_planck_lowl 的 w0wa 测试模式),真则修+回归测试。
+- [ ] **in-process 压缩路径的 *_mnu 名不副实(2026-06-12 新发现,设计决策)**:核实 mnu 缺口时发现 in-process 路径同样从不采样 mnu(压缩核不响应中微子质量,采了也没意义)——选 lcdm_mnu 跑压缩链得到与 lcdm 完全相同的结果但带着 mnu 模型名。该拦(*_mnu + 纯压缩数据集 → 明确拒绝并指引 CMB 路径)还是该警告,需要用户拍板后实现。
 - [ ] **ok_* 曲率模型在 CMB 路径(疑似)**:`_model_theory_args` 对 ok_* 设 `args["curved"]=True` —— "curved" 疑似不是合法 CAMB extra_arg(对照 camb.set_params 签名),且 omegak 不在 CMB 参数序里。活体探针核实,真则修。
 
 ## P2 — 数据/likelihood 保真度(模板成熟,性价比高)
@@ -31,4 +31,5 @@
 - [ ] **gate 事件首份周报**:积累一周事件后跑 triage,把 (gate, action) 分布和疑似误杀清单写进本文件,作为后续闸门调优依据。
 
 ## 已完成
-(loop 划账区)
+- [x] **mnu 在 cobaya CMB 路径缺失** (2026-06-12, commit 见下): 活体实锤——*_mnu 模型的 CMB 参数序无 mnu,链静默跑 CAMB 默认固定质量却标 mnu 模型名(比 w0 孤儿更险:静默冒名)。修复 = 参数序追加 mnu + CMB_PARAMETER_PRIORS 加 (0.0, 5.0) eV 平先验(放 CMB 表防 in-process 误拾)。物理判据:plik_lite 对 mnu 强响应(-2lnL 584→2044 @ 0.06→0.5 eV),已锁进回归测试。验证: smoke 4/4 + benchmarks 22/22 + audit 28/28 + 全量 2305 绿。
+- [x] **Daily cron 失班处置** (2026-06-12): 11 日 16:00 UTC 班次被 GitHub 调度器丢弃(整点 cron 拥挤的已知行为,历史实跑已漂到 +2.4h);已手动补跑(run 27360552699,兼 F1 的 CI 首秀)并把 cron 错峰到 16:17 UTC(commit 8dc7987,**需推送生效**)。

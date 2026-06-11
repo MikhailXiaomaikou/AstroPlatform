@@ -179,6 +179,56 @@ def test_w0wa_cmb_stack_builds_and_recovers_lcdm_at_w0_minus_one(tmp_path):
     assert 390.0 < -2.0 * by_name["planck_2018_lowl.EE"] < 401.0
 
 
+def test_mnu_models_sample_mnu_on_cmb_path():
+    # Regression for the silent-mnu gap (2026-06-12): *_mnu chains over CMB
+    # entries ran CAMB's fixed default neutrino mass while the result carried
+    # the mnu model name — same class as the w0 orphan, but silent.
+    entries = [cl.get_cosmology_dataset(_PLIK_KEY)]
+    order = cl._cobaya_parameter_order("lcdm_mnu", entries)
+    assert order == ["ombh2", "omch2", "H0", "ns", "As", "tau", "A_planck", "mnu"]
+    order_w = cl._cobaya_parameter_order("w0wa_cdm_mnu", entries)
+    assert order_w[-3:] == ["w0", "wa", "mnu"]
+    priors = cl._sanitize_runner_priors(order, None)
+    assert priors["mnu"] == (0.0, 5.0)
+    # The compressed in-process path must NOT pick mnu up (its kernels do not
+    # respond to neutrino mass) — guarded by keeping mnu out of the shared dict.
+    assert "mnu" not in cl.RUNNER_PARAMETER_PRIORS
+
+
+def test_mnu_cmb_chain_builds_and_likelihood_responds(tmp_path):
+    # Physics lock: cobaya accepts the sampled mnu and plik_lite RESPONDS to
+    # it — at the Planck best fit, mnu=0.06 eV sits on the chi2~584.5 anchor
+    # while mnu=0.5 eV is catastrophically worse (live-measured -2lnL~2044).
+    # A regression that silently drops mnu from the theory input would make
+    # both points identical.
+    pytest.importorskip("cobaya")
+    pytest.importorskip("camb")
+    from cobaya.model import get_model
+    from cobaya.yaml import yaml_load
+
+    entries = [cl.get_cosmology_dataset(_PLIK_KEY)]
+    order = cl._cobaya_parameter_order("lcdm_mnu", entries)
+    priors = cl._sanitize_runner_priors(order, None)
+    yaml_text = cobaya_runner._build_cobaya_yaml(
+        model_key="lcdm_mnu", entries=entries, prior_bounds=priors,
+        parameter_order=order, sampler="evaluate",
+        output_prefix=tmp_path / "run", seed=42,
+    )
+    info = yaml_load(yaml_text)
+    info.pop("output", None)
+    info.pop("sampler", None)
+    info["packages_path"] = str(_PACKAGES)
+    model = get_model(info)
+    base_point = {
+        "ombh2": 0.02237, "omch2": 0.1200, "H0": 67.36, "ns": 0.9649,
+        "As": 2.1e-9, "tau": 0.0544, "A_planck": 1.0,
+    }
+    chi2_low = -2.0 * float(model.loglikes({**base_point, "mnu": 0.06})[0][0])
+    chi2_high = -2.0 * float(model.loglikes({**base_point, "mnu": 0.5})[0][0])
+    assert 560.0 < chi2_low < 610.0, chi2_low
+    assert chi2_high > chi2_low + 100.0, (chi2_low, chi2_high)
+
+
 def test_lowl_reproduces_planck_2018_bestfit_loglikes():
     # The real proof: the vendored, sha256-pinned low-l data + cobaya's native
     # likelihoods + a CAMB spectrum reproduce the Planck 2018 base-LCDM best-fit
