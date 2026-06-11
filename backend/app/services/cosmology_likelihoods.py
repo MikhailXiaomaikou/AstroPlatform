@@ -1277,6 +1277,128 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             ),
         ),
     ),
+    "planck_2018_lensing": CosmologyDatasetEntry(
+        key="planck_2018_lensing",
+        display_name="Planck 2018 CMB lensing (native)",
+        version="Planck 2018 smica consext8 lensing bandpowers (CMBlikes native)",
+        probe="cmb_lensing",
+        status="external_likelihood",
+        observables=("C_L_phiphi",),
+        units={"C_L": "dimensionless"},
+        applicable_models=CMB_MODELS,
+        likelihood_family="cmb_lensing",
+        covariance=CovarianceSpec(
+            kind="binned bandpower covariance",
+            provided=True,
+            description=(
+                "Planck 2018 lensing reconstruction (smica T+P, conservative "
+                "consext8 range): 9 binned C_L^phiphi bandpowers + 9x9 "
+                "covariance + per-bin window functions + linear fiducial "
+                "correction. Evaluated via cobaya's PURE-PYTHON CMBlikes "
+                "native likelihood (no clik) over a CAMB lensed spectrum."
+            ),
+            url="https://pla.esac.esa.int/pla/#cosmology",
+            format="cobaya planck_supp_data_and_covmats lensing/2018 (.dataset + bandpowers + cov + windows)",
+        ),
+        source_url="https://arxiv.org/abs/1807.06210",
+        citations=(
+            DatasetCitation(
+                label="Aghanim et al. Planck 2018 VIII. Gravitational lensing",
+                year=2020,
+                arxiv="1807.06210",
+            ),
+            DatasetCitation(
+                label="Aghanim et al. Planck 2018 VI. Cosmological parameters",
+                year=2020,
+                arxiv="1807.06209",
+            ),
+        ),
+        notes=(
+            "Completes the clik-free Planck 2018 stack: TT/TE/EE (plik_lite) + "
+            "low-l TT/EE + this lensing likelihood. Consumes the shared "
+            "A_planck calibration (planck_calib defaults). Data vendored + "
+            "sha256-pinned (~1.3 MB incl. both window sets — bin windows are "
+            "chi2-load-bearing, pinned via directory aggregate digests). "
+            "Reproduces -2lnL = 8.82 over 9 bins at the Planck 2018 base-LCDM "
+            "best fit (chi2/dof ~ 0.98, matching the published goodness of "
+            "fit). NOT independent of planck_pr4_lensing (same Planck maps; "
+            "PR4 is the NPIPE reprocessing) — do not co-add."
+        ),
+        cobaya_likelihood="external:planck_2018_lensing.native",
+        cosmosis_module="external:planck_2018_lensing.native",
+        execution_mode="external_cobaya",
+        recommended_combinations=(
+            "planck_2018_highl_TTTEEE_lite", "planck_2018_lowl_TT", "planck_2018_lowl_EE",
+        ),
+        do_not_combine_with=("planck_pr4_lensing",),
+        data_products=(
+            DataProductSpec(
+                product_type="cmb_lensing_dataset_ini",
+                role="dataset_ini",
+                url="https://github.com/CobayaSampler/planck_supp_data_and_covmats",
+                format="smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8.dataset",
+                description="CMBlikes dataset ini (bins, ranges, window wiring, calibration).",
+                sha256="7bc37c8c17191c857425c0b1213c2df66cc99360a831009e8be765da4fe8d51c",
+            ),
+            DataProductSpec(
+                product_type="cmb_lensing_bandpowers",
+                role="measurement_vector",
+                url="https://github.com/CobayaSampler/planck_supp_data_and_covmats",
+                format="..._consext8_bandpowers.dat (9 C_L^phiphi bandpowers)",
+                description="Binned lensing-potential bandpowers (the data vector).",
+                rows=9,
+                sha256="0113871c95b026dbf544c21f3c0cd667bea25ad146dddb93db4189cff660a6f0",
+            ),
+            DataProductSpec(
+                product_type="cmb_lensing_covariance",
+                role="covariance",
+                url="https://github.com/CobayaSampler/planck_supp_data_and_covmats",
+                format="..._consext8_cov.dat (9x9)",
+                description="Bandpower covariance matrix.",
+                rows=9,
+                sha256="fdd19b43dacd3c65a3d092442c291401a3497cc4fddf9ce08bb098d5a428efc0",
+            ),
+            DataProductSpec(
+                product_type="cmb_lensing_linear_correction",
+                role="fiducial_correction",
+                url="https://github.com/CobayaSampler/planck_supp_data_and_covmats",
+                format="..._consext8_lensing_fiducial_correction.dat",
+                description="Fiducial linear correction for the N1/normalization dependence.",
+                sha256="d186f5cc43556f8a4178a275fc73142b69b7ba1976fea383bfb5763f4e133cd6",
+            ),
+            DataProductSpec(
+                product_type="cmb_calibration_paramnames",
+                role="calibration_paramnames",
+                url="https://github.com/CobayaSampler/planck_supp_data_and_covmats",
+                format="planck_calib.paramnames",
+                description="Declares the shared A_planck calibration nuisance.",
+                sha256="bc0155dd4026afff8e100a84ff3b3aae3c121b57071312a5cf19c47b79c6489b",
+            ),
+            # Window sets: per-bin window functions mapping the theory C_L onto
+            # the binned bandpowers — chi2-load-bearing (the plik_lite bweight
+            # lesson). Pinned as DIRECTORY AGGREGATE digests: sha256 over the
+            # sorted (filename + bytes) of every file in the directory; the
+            # runner's _verify_pinned_cmb_data recomputes the same aggregate.
+            DataProductSpec(
+                product_type="cmb_lensing_bin_windows",
+                role="bin_windows_dir",
+                url="https://github.com/CobayaSampler/planck_supp_data_and_covmats",
+                format="..._consext8_window/window1..9.dat (directory aggregate)",
+                description="Per-bin bandpower window functions (9 files).",
+                rows=9,
+                sha256="caaac4cb1fd1d24e5a968333e70449df1662ba347a6c90fd836d3f64a82cfc1b",
+            ),
+            DataProductSpec(
+                product_type="cmb_lensing_linear_correction_windows",
+                role="lin_windows_dir",
+                url="https://github.com/CobayaSampler/planck_supp_data_and_covmats",
+                format="..._consext8_lens_delta_window/window1..9.dat (directory aggregate)",
+                description="Per-bin linear-correction window functions (9 files).",
+                rows=9,
+                sha256="d7bffafc35d460df1fe964017e61d9f59152741ecfb662e10c54ebb6c2391a61",
+            ),
+        ),
+    ),
     "act_dr6_lensing": CosmologyDatasetEntry(
         key="act_dr6_lensing",
         display_name="ACT DR6 CMB lensing",
@@ -1361,6 +1483,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cobaya_likelihood="external:planck_PR4_lensing",
         cosmosis_module="external:planck_PR4_lensing",
         execution_mode="external_cobaya",
+        # Same Planck maps as planck_2018_lensing (PR4 = NPIPE reprocessing).
+        do_not_combine_with=("planck_2018_lensing",),
     ),
     "kids1000_wl": CosmologyDatasetEntry(
         key="kids1000_wl",
@@ -5637,15 +5761,20 @@ CMB_COBAYA_EXECUTABLE_KEYS = frozenset({
     "planck_2018_highl_TTTEEE_lite",
     "planck_2018_lowl_TT",
     "planck_2018_lowl_EE",
+    "planck_2018_lensing",
 })
 
-# A_planck is sampled only when plik_lite is selected. The native low-l
-# likelihoods CAN consume it (cobaya get_can_support_params), but their default
-# is calib=1 and a 0.25% calibration uncertainty is negligible against l<=29
-# cosmic variance — so a lowl-only run deliberately fixes it. In the full stack
-# cobaya shares the one sampled A_planck across all three likelihoods, matching
-# official Planck practice.
-CMB_APLANCK_KEYS = frozenset({"planck_2018_highl_TTTEEE_lite"})
+# A_planck is sampled only when plik_lite or the 2018 lensing likelihood is
+# selected (lensing's params include the planck_calib defaults, so it consumes
+# the shared calibration). The native low-l likelihoods CAN consume it (cobaya
+# get_can_support_params), but their default is calib=1 and a 0.25%
+# calibration uncertainty is negligible against l<=29 cosmic variance — so a
+# lowl-only run deliberately fixes it. In the full stack cobaya shares the one
+# sampled A_planck across all likelihoods, matching official Planck practice.
+CMB_APLANCK_KEYS = frozenset({
+    "planck_2018_highl_TTTEEE_lite",
+    "planck_2018_lensing",
+})
 
 
 def _cobaya_parameter_order(

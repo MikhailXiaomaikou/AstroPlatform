@@ -33,6 +33,7 @@ FILLED_ADAPTERS = {
     "external:planck_2018_highl_plik.TTTEEE_lite_native",
     "external:planck_2018_lowl.TT",
     "external:planck_2018_lowl.EE",
+    "external:planck_2018_lensing.native",  # test_planck_lensing.py
 }
 
 

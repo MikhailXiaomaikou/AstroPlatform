@@ -100,6 +100,12 @@ ADAPTER_TO_COBAYA: Final[dict[str, str | None]] = {
     # 2018 primary stack together with plik_lite (2026-06-11).
     "external:planck_2018_lowl.TT": "planck_2018_lowl.TT",
     "external:planck_2018_lowl.EE": "planck_2018_lowl.EE",
+    # Planck 2018 lensing — cobaya's PURE-PYTHON CMBlikes native likelihood
+    # (no clik). smica consext8 bandpowers + windows from
+    # planck_supp_data_and_covmats, vendored + sha256-pinned (windows via
+    # directory aggregate digests). Completes the clik-free 2018 stack
+    # (TT/TE/EE + low-l TT/EE + lensing), 2026-06-12.
+    "external:planck_2018_lensing.native": "planck_2018_lensing.native",
     # TODO(step3): ACT DR6 lensing. Class `ACTDR6LensLike` lives in the
     # `act_dr6_lenslike` third-party package. Candidate import path:
     # `act_dr6_lenslike.ACTDR6LensLike`.

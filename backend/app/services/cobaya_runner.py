@@ -120,7 +120,32 @@ _CMB_PINNED_DATA: dict[str, dict[str, str]] = {
     "planck_2018_lowl_EE": {
         "data/planck_2018_lowE_native/prob_table.txt": "probability_table",
     },
+    # Lensing: 5 flat files + the two per-bin window SETS. Window directories
+    # (relpath ending "/") are pinned via an aggregate digest — sha256 over the
+    # sorted (filename + bytes) of every file inside — because each window is
+    # chi2-load-bearing (the plik_lite bweight lesson) and per-file pins for
+    # 18 windows would bloat the registry without adding protection.
+    "planck_2018_lensing": {
+        "data/planck_supp_data_and_covmats/lensing/2018/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8.dataset": "dataset_ini",
+        "data/planck_supp_data_and_covmats/lensing/2018/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8_bandpowers.dat": "measurement_vector",
+        "data/planck_supp_data_and_covmats/lensing/2018/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8_cov.dat": "covariance",
+        "data/planck_supp_data_and_covmats/lensing/2018/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8_lensing_fiducial_correction.dat": "fiducial_correction",
+        "data/planck_supp_data_and_covmats/lensing/2018/planck_calib.paramnames": "calibration_paramnames",
+        "data/planck_supp_data_and_covmats/lensing/2018/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8_window/": "bin_windows_dir",
+        "data/planck_supp_data_and_covmats/lensing/2018/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8_lens_delta_window/": "lin_windows_dir",
+    },
 }
+
+
+def _directory_aggregate_sha256(directory: Path) -> str:
+    """Aggregate digest of a pinned data DIRECTORY: sha256 over the sorted
+    (filename + bytes) of every regular file inside. Any added, removed,
+    renamed, or edited window file changes the digest."""
+    digest = hashlib.sha256()
+    for child in sorted(p for p in directory.iterdir() if p.is_file()):
+        digest.update(child.name.encode())
+        digest.update(child.read_bytes())
+    return digest.hexdigest()
 
 
 def _resolve_packages_path() -> str | None:
@@ -148,6 +173,16 @@ def _verify_pinned_cmb_data(entries: list["CosmologyDatasetEntry"]) -> dict[str,
         pins = {p.role: p.sha256 for p in entry.data_products}
         for relpath, role in spec.items():
             f = Path(packages_path) / relpath if packages_path else None
+            if relpath.endswith("/"):
+                # Directory aggregate pin (e.g. lensing bin-window sets).
+                if f is None or not f.is_dir():
+                    mismatches.append(f"{relpath}: directory missing")
+                    continue
+                digest = _directory_aggregate_sha256(f)
+                files_sha256[relpath] = digest
+                if digest != pins.get(role):
+                    mismatches.append(f"{relpath}: directory aggregate sha256 mismatch")
+                continue
             if f is None or not f.is_file():
                 mismatches.append(f"{relpath}: file missing")
                 continue
