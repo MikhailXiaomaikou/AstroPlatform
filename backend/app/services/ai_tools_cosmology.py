@@ -424,7 +424,7 @@ COSMOLOGY_TOOL_SCHEMAS = [
                 "supernova_sets": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "SN dataset alternatives. Default: Pantheon+; pass DES-SN5YR/Union3 explicitly for config-only comparison branches.",
+                    "description": "SN dataset alternatives. Default: Pantheon+; pass DES-SN5YR (compressed Omega_m Gaussian) / Union3 (full in-process 22-bin binned-distance likelihood) explicitly for comparison branches.",
                 },
                 "include_h0_prior": {
                     "type": "boolean",
@@ -464,7 +464,7 @@ COSMOLOGY_TOOL_SCHEMAS = [
                 "supernova_sets": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "SN dataset alternatives. Default: Pantheon+; pass DES-SN5YR/Union3 explicitly for config-only comparison branches.",
+                    "description": "SN dataset alternatives. Default: Pantheon+; pass DES-SN5YR (compressed Omega_m Gaussian) / Union3 (full in-process 22-bin binned-distance likelihood) explicitly for comparison branches.",
                 },
                 "include_h0_prior": {
                     "type": "boolean",

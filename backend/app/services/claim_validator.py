@@ -816,6 +816,14 @@ _CITATION_KEYS_BLACKLIST: frozenset[str] = frozenset({
     # which would otherwise leak the year as a numeric token.
     "citations", "manual_attestation", "references", "reference",
     "data_products",
+    # Hash/digest fields — hex strings whose digit runs and 'e'-separated
+    # fragments would otherwise enter the numeric universe (2026-06-12: the
+    # union3 chain's always-on artifact_sha256 digest validated a fabricated
+    # H0=64.3 — the same laundering class as bibcodes). data_hash
+    # (fit_cosmology_emcee) and files_sha256 (cobaya_runner) close the
+    # remaining emitters of the class.
+    "sha256", "mean_sha256", "artifact_sha256", "runner_hash", "result_hash",
+    "config_hash", "digest", "data_hash", "files_sha256",
 })
 
 
@@ -1500,6 +1508,10 @@ _FULL_EXTERNAL_LIKELIHOOD_READY_RE = re.compile(
     r"\bfull\s+(?:external\s+)?(?:likelihood|cobaya|cosmosis)\b.{0,90}\bready\b)",
     re.IGNORECASE | re.DOTALL,
 )
+_EXTERNAL_RUN_WORDING_RE = re.compile(
+    r"\b(?:external|cobaya|cosmosis|desilike)\b",
+    re.IGNORECASE,
+)
 _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE = re.compile(
     r"\b(?:not|no|without|requires?|required|require|would|future|pending|not\s+run|not\s+included|still\s+need|"
     r"config(?:uration)?|workflow)\b",
@@ -1653,20 +1665,30 @@ def methodology_consistency_violations(
     # ── Cosmology compressed-vs-full likelihood scope ────────────────
     # A compressed Gaussian chain can support preliminary posterior/tension
     # numbers, but it does not make the selected probes "ready for full
-    # likelihood analyses."  Require an actual full external likelihood run
-    # before that user-facing readiness claim is allowed.
+    # likelihood analyses."  The evidence required depends on the WORDING of
+    # the matched claim (2026-06-12): phrases asserting an external
+    # Cobaya/CosmoSIS/desilike run need an actual external run; plain
+    # "full likelihood ... ready" wording is also satisfied by an in-process
+    # chain that executed only released full-fidelity products (e.g. the
+    # union3 22-bin vector) — blocking that was a false positive of the same
+    # class as the anchor-gate bug (9f2667e).
     for full_match in _FULL_EXTERNAL_LIKELIHOOD_READY_RE.finditer(stripped):
         sentence = _sentence_text(reply, full_match.start())
         line = _line_text(reply, full_match.start())
         context = f"{line} {sentence}"
         if _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE.search(context):
             continue
-        if not _full_external_likelihood_ready_available(tool_results):
-            violations.append(CitationViolation(
-                kind="full_likelihood_overclaim",
-                match_text=full_match.group(0),
-                line_number=_line_number(reply, full_match.start()),
-            ))
+        if _full_external_likelihood_ready_available(tool_results):
+            continue
+        if not _EXTERNAL_RUN_WORDING_RE.search(
+            context
+        ) and _in_process_full_fidelity_chain_available(tool_results):
+            continue
+        violations.append(CitationViolation(
+            kind="full_likelihood_overclaim",
+            match_text=full_match.group(0),
+            line_number=_line_number(reply, full_match.start()),
+        ))
 
     # ── PART AI #3: fit_line_lfr bypass detection ────────────────────
     # Bundle e8d9 reproducer: the reply reports LFR numbers (slope/intercept/scatter)
@@ -1792,7 +1814,9 @@ def _cosmology_publication_ready_available(tool_results: Any) -> bool:
 
 
 def _full_external_likelihood_ready_available(tool_results: Any) -> bool:
-    """Whether a full external likelihood, not compressed Gaussian, finished."""
+    """Whether a full EXTERNAL (Cobaya/CosmoSIS) likelihood run finished.
+    In-process chains never satisfy this, whatever their fidelity — wording
+    that asserts an external run must be backed by an external run."""
     for entry in tool_results if isinstance(tool_results, list) else [tool_results]:
         tool_name, result = _entry_tool_and_result(entry)
         if tool_name not in {
@@ -1814,6 +1838,41 @@ def _full_external_likelihood_ready_available(tool_results: Any) -> bool:
         if execution_mode in {"external_cobaya", "external_cosmosis"}:
             return True
     return False
+
+
+def _in_process_full_fidelity_chain_available(tool_results: Any) -> bool:
+    """Whether an in-process chain that executed ONLY released, sha256-verified
+    full-fidelity likelihood products finished (claim_scope
+    'executable_full_fidelity_likelihoods', e.g. the union3 22-bin vector).
+    Supports plain 'full likelihood ... ready' wording — NOT wording that
+    asserts an external Cobaya/CosmoSIS run (2026-06-12 gate check: a broad
+    scope-based unlock let a false 'full external Cobaya' claim through).
+
+    Turn-level evidence cannot attribute a sentence to a specific chain, so
+    the unlock is conservative: if ANY compressed-scope chain also ran this
+    turn, return False — otherwise a 'ready for full likelihood' sentence
+    about the compressed chain would inherit the full-fidelity chain's
+    immunity (mixed-turn laundering, same gate check). The cost is that
+    honest full-likelihood wording in a mixed turn stays blocked; the common
+    clean single-chain turn is what the false-positive fix targets."""
+    found_full_fidelity = False
+    for entry in tool_results if isinstance(tool_results, list) else [tool_results]:
+        tool_name, result = _entry_tool_and_result(entry)
+        if tool_name not in {
+            "run_cosmology_likelihood_chain",
+            "run_cosmology_robustness_matrix",
+        }:
+            continue
+        scope = str(result.get("claim_scope") or "").lower()
+        if "compressed" in scope:
+            return False
+        if (
+            tool_name == "run_cosmology_likelihood_chain"
+            and scope == "executable_full_fidelity_likelihoods"
+            and _payload_is_claimable_success(tool_name, result)
+        ):
+            found_full_fidelity = True
+    return found_full_fidelity
 
 
 def blocked_unsupported_narrative_reply_text(violations: list[CitationViolation]) -> str:

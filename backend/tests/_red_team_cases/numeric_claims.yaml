@@ -313,3 +313,22 @@ cases:
                 parameters: ["S8"]
                 mean: [0.759]
     expect_ok: true
+
+  - name: numeric_in_sha256_digest_not_in_universe
+    description: |
+      2026-06-12 union3 review: hex digit runs inside sha256 digests
+      (artifact_sha256, runner_hash, ...) must NOT enter the numeric universe.
+      The union3 chain's always-on digest '64c79abd...146...' once validated a
+      fabricated H0 = 64.3 — the bibcode-laundering class applied to hashes.
+    reply: "The fit prefers H0 = 64.3 km/s/Mpc."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        result:
+          parameters:
+            omegam: {median: 0.356}
+          provenance:
+            cosmology_likelihood:
+              artifact_sha256:
+                union3: "64c79abd24bf5154bc1e38ad0c031e31dd6247cdcc5ca930829698169809a146"
+          result_hash: "9e3779b97f4a7c15f39cc0605cedc834"
+    expect_ok: false

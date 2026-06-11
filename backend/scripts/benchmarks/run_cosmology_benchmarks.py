@@ -309,12 +309,15 @@ def bench_dataset_z_coverage() -> dict[str, Any]:
 
 
 def bench_sn_omegam_compressed() -> dict[str, Any]:
-    """DES-SN5YR + Union3 compressed SN-only flat-ΛCDM Ωm (Tier 2A, 2026-05-29).
+    """DES-SN5YR compressed + Union3 full-vector SN-only flat-ΛCDM Ωm (Tier 2A,
+    2026-05-29; union3 leg upgraded 2026-06-12).
 
-    Both newly-executable SN datasets must recover their published flat-ΛCDM
-    SN-only Ωm as a 1D Gaussian and reach publication tier: DES-SN5YR Ωm=0.352
-    (Abbott+2024) and Union3 Ωm=0.356 (Rubin+2023). Pins the transcribed
-    compressed-likelihood means so a value typo is caught."""
+    Both SN datasets must recover their published flat-ΛCDM SN-only Ωm and
+    reach publication tier: DES-SN5YR Ωm=0.352 (Abbott+2024, via the 1D
+    compressed Gaussian) and Union3 Ωm=0.356 (Rubin+2023 — now via the FULL
+    22-bin binned-distance likelihood, whose chi2 minimum sits at Ωm=0.3560
+    exactly; the 0.005 window catches both a data/parsing regression and a
+    distance-integral drift)."""
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     out: dict[str, Any] = {}
@@ -341,27 +344,46 @@ def bench_sn_omegam_compressed() -> dict[str, Any]:
 
 
 def bench_sn_compressed_provenance() -> dict[str, Any]:
-    """T1-U8a: SN-only compressed chains certify honest provenance (2026-06-01).
+    """T1-U8a: SN-only chains certify honest provenance (2026-06-01; union3
+    full-vector 2026-06-12).
 
-    Every compressed SN-only chain must stamp cov_fidelity='literature_typed' (a
-    hand-typed Gaussian, no released file to checksum), reach publication tier,
-    and NEVER over-claim 'full'/'diagonal' or leave the fidelity unstamped (None).
-    Locks the T1-U6 fix so the 'fake receipt' SN hole cannot silently reopen."""
-    from app.services.cosmology_likelihoods import run_likelihood_chain
+    Compressed SN-only chains (pantheon_plus, des_sn5yr by default) must stamp
+    cov_fidelity='literature_typed' (a hand-typed Gaussian, no released file to
+    checksum), reach publication tier, and NEVER over-claim 'full'/'diagonal'
+    or leave the fidelity unstamped (None). union3 now ALWAYS runs the released
+    22-bin binned-distance vector, so its honest grade is 'full' WITH the
+    verified covariance digest in artifact_sha256. Locks the T1-U6 fix so the
+    'fake receipt' SN hole cannot silently reopen in either direction."""
+    from app.services.cosmology_likelihoods import (
+        load_verified_union3_data,
+        run_likelihood_chain,
+    )
 
     out: dict[str, Any] = {}
     ok = True
-    for key in ("pantheon_plus", "des_sn5yr", "union3"):
+    for key in ("pantheon_plus", "des_sn5yr"):
         r = run_likelihood_chain(model="lcdm", dataset_keys=[key], n_samples=4000, random_seed=42)
         prov = r.get("provenance", {}).get("cosmology_likelihood", {})
         fid = prov.get("cov_fidelity")
         good = fid == "literature_typed" and r.get("publication_ready") is True
         ok = ok and good
         out[key] = {"cov_fidelity": fid, "publication_ready": r.get("publication_ready")}
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["union3"], n_samples=4000, random_seed=42)
+    prov = r.get("provenance", {}).get("cosmology_likelihood", {})
+    sha_ok = (prov.get("artifact_sha256") or {}).get("union3") == load_verified_union3_data("union3")["sha256"]
+    union3_good = (
+        prov.get("cov_fidelity") == "full" and sha_ok and r.get("publication_ready") is True
+    )
+    ok = ok and union3_good
+    out["union3"] = {
+        "cov_fidelity": prov.get("cov_fidelity"),
+        "artifact_sha256_match": sha_ok,
+        "publication_ready": r.get("publication_ready"),
+    }
     return {
         "pass": ok,
         **out,
-        "target": "SN-only compressed chains certify literature_typed + publication, never None/full/diagonal",
+        "target": "compressed SN chains certify literature_typed; union3 full vector certifies full + verified sha256",
     }
 
 

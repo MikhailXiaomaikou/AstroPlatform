@@ -903,16 +903,23 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         probe="sn",
         z_coverage=(0.01, 2.26),
         status="external_likelihood",
-        observables=("z", "distance_modulus", "unity_covariance_or_posterior"),
+        observables=("z", "distance_modulus", "mag_covariance"),
         units={"z": "dimensionless", "mu": "mag"},
         applicable_models=SN_MODELS,
-        likelihood_family="sn_unity",
+        likelihood_family="sn_distance_modulus",
         covariance=CovarianceSpec(
-            kind="UNITY covariance/posterior products",
+            kind="full 22x22 binned-mag covariance",
             provided=True,
-            description="Union3/UNITY1.5 released distances, light-curve fits, and framework products.",
-            url="https://arxiv.org/abs/2311.12098",
-            format="Union3 / UNITY1.5 release products",
+            description=(
+                "Union3/UNITY1.5 22-bin binned distance moduli + full magnitude "
+                "covariance (the same Union3/lcparam_full.txt + mag_covmat.txt "
+                "cobaya's sn.union3 reads). The chi2 analytically marginalizes "
+                "the constant magnitude offset — identical to cobaya's "
+                "_marginalize_abs_mag projection — so H0 and M_B drop out "
+                "(2026-06-12 upgrade from the 1D compressed Omega_m Gaussian)."
+            ),
+            url="https://github.com/CobayaSampler/sn_data",
+            format="lcparam (zcmb zhel mb) + dense covariance matrix",
         ),
         source_url="https://arxiv.org/abs/2311.12098",
         citations=(
@@ -920,10 +927,14 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         notes=(
             "Independent SN robustness branch; do not mix with Pantheon+ as if "
-            "independent. Executable in-process as a compressed SN-only flat-ΛCDM "
-            "Ωm Gaussian (Ωm=0.356±0.027). Same caveat as DES-SN5YR: a 1D Ωm "
-            "summary for ΛCDM cross-comparison, NOT the full 22-bin binned-distance "
-            "vector needed for w0/wa dark-energy work (external, Zenodo)."
+            "independent. Runs in-process on the FULL 22-bin binned distance-"
+            "modulus vector + covariance (offset-marginalized chi2, constrains "
+            "Omega_m + the w0/wa DE shape; no M_B/H0 nuisance) — always on, "
+            "unlike DES-SN5YR's env-gated 1829-SN path, because 22x22 has no "
+            "per-sample cost worth gating. The compressed Omega_m Gaussian "
+            "below is retained as the published 1D anchor (oracle table), not "
+            "an execution path. execution_mode 'compressed_gaussian' names the "
+            "in-process channel, not the statistics."
         ),
         cobaya_likelihood="external:sn.union3",
         cosmosis_module="external:Union3/UNITY1.5",
@@ -935,7 +946,36 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             covariance=((0.027 ** 2,),),
             units={"omegam": "dimensionless"},
             source_locator="Rubin et al. 2023 (arXiv:2311.12098) Table 9, Flat-ΛCDM SN-only: Ωm = 0.356 (+0.028/-0.026); symmetrized σ = 0.027.",
-            approximation="1D SN-only flat-ΛCDM Ωm Gaussian; NOT the full 22-bin Union3 binned-distance + inverse-covariance likelihood (external, Zenodo).",
+            approximation="1D SN-only flat-ΛCDM Ωm Gaussian — published anchor for the in-process full 22-bin likelihood (which reproduces Ωm=0.356 at its chi2 minimum).",
+        ),
+        data_products=(
+            DataProductSpec(
+                product_type="sn_binned_distance_moduli",
+                role="measurement_vector",
+                url="https://github.com/CobayaSampler/sn_data",
+                format="lcparam text table (#name zcmb zhel dz mb ...)",
+                description=(
+                    "Union3 22-bin binned distance moduli (mb column; arbitrary "
+                    "constant normalization — the chi2 marginalizes the offset)."
+                ),
+                # Positional preview labels MUST match the file's leading
+                # tokens (name zcmb zhel dz mb ...) — a 3-name tuple here once
+                # served zhel under the label 'mb' (2026-06-12 review).
+                columns=("name", "zcmb", "zhel", "dz", "mb"),
+                rows=22,
+                sha256="a840fe71c606bda11b869dbfcacc21c0199a5dc393f3790d10a7b58de97deae7",
+                local_path="data/union3/lcparam_full.txt",
+            ),
+            DataProductSpec(
+                product_type="sn_mag_covariance",
+                role="covariance",
+                url="https://github.com/CobayaSampler/sn_data",
+                format="first line = n, then n*n values row-major",
+                description="Union3 22x22 binned-magnitude covariance matrix.",
+                rows=22,
+                sha256="64c79abd24bf5154bc1e38ad0c031e31dd6247cdcc5ca930829698169809a146",
+                local_path="data/union3/mag_covmat.txt",
+            ),
         ),
     ),
     "planck2018_compressed": CosmologyDatasetEntry(
@@ -2900,7 +2940,14 @@ def _entry_verification(entry: CosmologyDatasetEntry) -> tuple[str | None, str |
     elif _is_executable_sn_entry(entry):
         verified = load_verified_pantheon_plus_data(entry.key)
     elif _is_executable_des_sn_entry(entry):
-        verified = load_verified_des_sn5yr_data(entry.key)
+        if entry.key == "des_sn5yr":
+            verified = load_verified_des_sn5yr_data(entry.key)
+        elif entry.key == "union3":
+            verified = load_verified_union3_data(entry.key)
+        else:
+            raise ValueError(
+                f"executable offset-marginalized SN entry {entry.key!r} has no verifier"
+            )
     elif entry.compressed_likelihood is not None:
         # Hand-typed published Gaussian summary — honest 'literature_typed'; there
         # is no released, vendored file to sha256-verify, so never 'full'/'diagonal'.
@@ -3159,6 +3206,7 @@ def _executable_probe_keys() -> set[str]:
         | set(EBOSS_DR16_FSBAO_EXECUTABLE_KEYS)
         | {"pantheon_plus"}
         | {"des_sn5yr"}
+        | {"union3"}
     )
 
 
@@ -3188,6 +3236,8 @@ def audit_executable_pins() -> list[str]:
             verified = load_verified_rsd_data(key)
         elif key == "des_sn5yr":
             verified = load_verified_des_sn5yr_data(key)
+        elif key == "union3":
+            verified = load_verified_union3_data(key)
         else:
             verified = load_verified_pantheon_plus_data(key)
 
@@ -3834,6 +3884,12 @@ DES_SN5YR_FULL_CHI2_ENABLED = os.getenv("DES_SN5YR_FULL_CHI2_ENABLED", "").lower
 }
 DES_SN5YR_EXECUTABLE_KEYS = {"des_sn5yr"} if DES_SN5YR_FULL_CHI2_ENABLED else set()
 
+# Union3's full 22-bin binned-distance likelihood is ALWAYS on — no env flag.
+# The DES flag above exists purely for the 1829x1829 per-sample cost; a 22x22
+# covariance has no cost worth gating, and the default path SHOULD be the
+# released likelihood, not the 1D compressed approximation (2026-06-12).
+UNION3_EXECUTABLE_KEYS = frozenset({"union3"})
+
 # ESS floor below which a single-cell chain auto-upgrades from importance
 # sampling to compressed-emcee.  Multi-probe products (3+ likelihoods) push the
 # joint posterior far narrower than any proposal Gaussian, so importance ESS
@@ -3848,7 +3904,35 @@ def _is_executable_sn_entry(entry: CosmologyDatasetEntry) -> bool:
 
 
 def _is_executable_des_sn_entry(entry: CosmologyDatasetEntry) -> bool:
-    return entry.key in DES_SN5YR_EXECUTABLE_KEYS
+    # The "des_sn" family/plumbing name now means "offset-marginalized binned
+    # SN distance-modulus likelihood" — DES-SN5YR (env-gated) AND Union3
+    # (always on). Same parameter footprint (omegam + w0/wa; H0/M_B
+    # marginalized out), same chi2 form, per-key data dispatch.
+    return entry.key in DES_SN5YR_EXECUTABLE_KEYS or entry.key in UNION3_EXECUTABLE_KEYS
+
+
+def _sn_emcee_bypass_active(
+    sn_entries: list[CosmologyDatasetEntry] | None,
+    des_sn_entries: list[CosmologyDatasetEntry] | None,
+    allow_emcee_fallback: bool,
+) -> bool:
+    """Whether SN entries replace importance sampling with the emcee bypass.
+
+    Single source for the runner's sampler label AND the routing inside
+    _draw_importance_posterior, so the two cannot drift apart. Expensive
+    full-vector SN sets (Pantheon+ 1701, DES-SN5YR 1829 — both env-gated
+    opt-ins) ALWAYS take emcee: no proposal Gaussian covers their posteriors
+    and the per-draw cost is prohibitive. The cheap offset-marginalized set
+    (Union3, 22x22) takes emcee only when the caller allows it — robustness
+    matrices pass allow_emcee_fallback=False precisely so every cell stays
+    inside the chat tool deadline, and a 22-bin chi2 importance-samples fine
+    (2026-06-12 review: union3 cells were forcing 30-cell matrices to ~64 s,
+    past the 45 s default deadline)."""
+    if sn_entries and any(e.key == "pantheon_plus" for e in sn_entries):
+        return True
+    if any(e.key == "des_sn5yr" for e in (des_sn_entries or [])):
+        return True
+    return bool(des_sn_entries) and allow_emcee_fallback
 
 
 def _run_sampling_likelihood_chain(
@@ -3926,11 +4010,11 @@ def _run_sampling_likelihood_chain(
     prior_bounds = _sanitize_runner_priors(parameter_order, priors)
     rng = np.random.default_rng(seed)
     invalid_specs: list[str] = []
-    # The full-covariance SN χ² (Pantheon+, DES-SN5YR) takes the emcee bypass inside
-    # _draw_importance_posterior rather than importance sampling, so label the runner
-    # accordingly (this condition must mirror the bypass in _draw_importance_posterior).
-    _sn_emcee_bypass = bool(
-        (sn_entries and any(e.key == "pantheon_plus" for e in sn_entries)) or des_sn_entries
+    # SN entries may take the emcee bypass inside _draw_importance_posterior
+    # rather than importance sampling; the shared helper decides for BOTH the
+    # label here and the routing there.
+    _sn_emcee_bypass = _sn_emcee_bypass_active(
+        sn_entries, des_sn_entries, allow_emcee_fallback
     )
     sampler_used = "sn_emcee" if _sn_emcee_bypass else "bao_gaussian_importance"
 
@@ -3983,6 +4067,7 @@ def _run_sampling_likelihood_chain(
                 rsd_entries=rsd_entries,
                 fsbao_entries=fsbao_entries,
                 des_sn_entries=des_sn_entries,
+                allow_emcee_fallback=allow_emcee_fallback,
             )
             invalid_specs.extend(compressed_errors)
             # ESS-floor emcee upgrade (single-cell deep runs only).  Importance
@@ -4073,7 +4158,7 @@ def _run_sampling_likelihood_chain(
         + len(EBOSS_DR16_FSIGMA8) * len(rsd_entries)
         + sum(len(_FSBAO_DATA[entry.key][0]) for entry in fsbao_entries)
         + sum(len(_load_pantheon_plus_data()["mu"]) for entry in sn_entries if entry.key == "pantheon_plus")
-        + sum(len(_load_des_sn5yr_data()["mu"]) for entry in des_sn_entries)
+        + sum(_offset_sn_n_points(entry.key) for entry in des_sn_entries)
         + sum(
             len(entry.compressed_likelihood.parameters)
             for entry in compressed_entries
@@ -4118,6 +4203,18 @@ def _run_sampling_likelihood_chain(
     cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
         bao_entries + cc_entries + rsd_entries + fsbao_entries + sn_entries + des_sn_entries + compressed_entries, warnings
     )
+    _executable_full_fidelity = not compressed_entries and cov_fidelity == "full"
+    if _executable_full_fidelity:
+        # Keep the headline warning consistent with the executable scope —
+        # the generic text calls the run "compressed-likelihood preliminary",
+        # which is false for a chain that fit only released, sha256-verified
+        # full-fidelity products (2026-06-12 gate check).
+        warnings[0] = (
+            "In-process runner over released, sha256-verified full-fidelity "
+            "likelihood products (no compressed Gaussian participated); still "
+            "not an external desilike/Cobaya run. See datasets_used for the "
+            "exact release(s) fit."
+        )
     # Off-anchor safety guard: a converged extended-model chain whose novel frontier
     # parameters (w/w0/wa) have no reproduced published anchor is NOT publication-
     # ready — at most exploratory + routed to human review — so claim_validator
@@ -4184,6 +4281,21 @@ def _run_sampling_likelihood_chain(
         "NOT be cited as a published constraint and MUST NOT be added to the bibcode pool."
         if chain_tier == "exploratory" else None
     )
+    # Honest claim scope (2026-06-12): a chain where NO compressed Gaussian
+    # participated and the aggregate fidelity is sha256-verified 'full' ran the
+    # released likelihood products themselves — labeling it
+    # 'compressed_likelihood_preliminary' was a lie that made the
+    # full_likelihood_overclaim gate hard-block factually true replies (the
+    # union3 22-bin upgrade exposed it; same F1-specificity class as 9f2667e).
+    # (_executable_full_fidelity computed above, next to the headline warning.)
+    # Tension diagnostics compare each dataset's PUBLISHED 1D anchor; executed
+    # SN entries keep that anchor in compressed_likelihood even though it no
+    # longer runs, so include them — otherwise union3 silently vanishes from
+    # pairwise_tensions the moment it becomes executable.
+    _tension_entries = compressed_entries + [
+        e for e in (*sn_entries, *des_sn_entries)
+        if e.compressed_likelihood is not None
+    ]
     result: dict[str, Any] = {
         "success": True,
         "__tool_status__": (
@@ -4199,15 +4311,19 @@ def _run_sampling_likelihood_chain(
         "publication_ready": publication_ready,
         "chain_tier": chain_tier,
         "off_anchor_review_required": off_anchor,
-        "claim_scope": "compressed_likelihood_preliminary",
-        "compressed_likelihood_preliminary": True,
+        "claim_scope": (
+            "executable_full_fidelity_likelihoods"
+            if _executable_full_fidelity
+            else "compressed_likelihood_preliminary"
+        ),
+        "compressed_likelihood_preliminary": not _executable_full_fidelity,
         "model": model_key,
         "model_label": MODEL_LABELS[model_key],
         "sampler": sampler_used,
         "parameters": summaries,
         "posterior_summary": summaries,
         "derived_params": derived_summaries,
-        "pairwise_tensions": _pairwise_tensions(compressed_entries),
+        "pairwise_tensions": _pairwise_tensions(_tension_entries),
         "fit_statistics": {
             "chi2": round(best_chi2, 6),
             "delta_chi2": 0.0,
@@ -4309,8 +4425,9 @@ def _sampling_parameter_order(
     if bao_entries:
         order.extend(["H0", "omegam", "rd"])
     if des_sn_entries:
-        # DES-SN5YR analytically marginalizes the SN offset (and H0), so it
-        # constrains Ωm (+ the w0/wa DE shape) only — no H0, no M_B.
+        # Offset-marginalized SN family (DES-SN5YR, Union3): the χ² analytically
+        # marginalizes the SN offset (and H0), so it constrains Ωm (+ the w0/wa
+        # DE shape) only — no H0, no M_B.
         if "omegam" not in order:
             order.append("omegam")
     if fsbao_entries:
@@ -4656,7 +4773,7 @@ def _run_emcee_chain(
             else:
                 raise ValueError(f"executable SN entry {entry.key!r} has no chi2 dispatch")
         for entry in des_sn_entries:
-            chi2 += _des_sn5yr_chi2_samples(valid, parameter_order)
+            chi2 += _offset_sn_chi2_samples(valid, parameter_order, entry.key)
         extra_chi2, errs = _compressed_chi2_samples(
             valid, parameter_order, compressed_entries
         )
@@ -4725,16 +4842,17 @@ def _draw_importance_posterior(
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
     fsbao_entries: list[CosmologyDatasetEntry] | None = None,
     des_sn_entries: list[CosmologyDatasetEntry] | None = None,
+    allow_emcee_fallback: bool = True,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
     sn_entries = sn_entries or []
     cc_entries = cc_entries or []
     rsd_entries = rsd_entries or []
     fsbao_entries = fsbao_entries or []
     des_sn_entries = des_sn_entries or []
-    # SN paths bypass importance sampling — the full-covariance SN χ² (Pantheon+
-    # 1701, DES-SN5YR 1829) is too tight for any proposal Gaussian to cover
-    # efficiently AND too expensive per importance draw.  Use emcee MCMC.
-    if (sn_entries and any(e.key == "pantheon_plus" for e in sn_entries)) or des_sn_entries:
+    # SN paths may bypass importance sampling with emcee — see
+    # _sn_emcee_bypass_active for the policy (expensive full vectors always;
+    # the cheap union3 22-bin set only when the caller allows emcee).
+    if _sn_emcee_bypass_active(sn_entries, des_sn_entries, allow_emcee_fallback):
         # Use the rng's bit-state to seed emcee deterministically.
         emcee_seed = int(rng.integers(0, 2**31 - 1))
         return _run_emcee_chain(
@@ -4792,7 +4910,7 @@ def _draw_importance_posterior(
         else:
             raise ValueError(f"executable SN entry {entry.key!r} has no chi2 dispatch")
     for entry in (des_sn_entries or []):
-        chi2 += _des_sn5yr_chi2_samples(samples, parameter_order)
+        chi2 += _offset_sn_chi2_samples(samples, parameter_order, entry.key)
     extra_chi2, compressed_errors = _compressed_chi2_samples(
         samples,
         parameter_order,
@@ -5253,6 +5371,109 @@ def _load_des_sn5yr_data() -> dict[str, np.ndarray]:
     }
 
 
+# ── Union3 / UNITY1.5 full binned-distance likelihood (2026-06-12) ──────────
+# The same 22-bin lcparam_full.txt + mag_covmat.txt cobaya's sn.union3 reads
+# (CobayaSampler/sn_data), vendored + sha256-pinned. cobaya marginalizes the
+# constant magnitude offset by projecting it out of invcov
+# (_marginalize_abs_mag); our chi2 = δᵀC⁻¹δ − (ΣC⁻¹δ)²/(ΣC⁻¹) is the same
+# projection applied per-sample — algebraically identical, locked by test.
+_UNION3_DATA_DIR = (
+    pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "union3"
+)
+
+
+@lru_cache(maxsize=1)
+def _load_union3_raw() -> dict[str, Any]:
+    """Load + sha256-verify the vendored Union3 files; raises ValueError on ANY
+    failure (missing/unreadable/digest mismatch/malformed). lru_cache never
+    caches exceptions, so one transient failure cannot poison the process
+    until restart (the MGS-iteration lesson — a cached unverified record
+    would)."""
+    vec_path = _UNION3_DATA_DIR / "lcparam_full.txt"
+    cov_path = _UNION3_DATA_DIR / "mag_covmat.txt"
+    if not (vec_path.exists() and cov_path.exists()):
+        raise ValueError(
+            f"Union3 data unverified: vendored files missing under {_UNION3_DATA_DIR} "
+            "(lcparam_full.txt + mag_covmat.txt, from CobayaSampler/sn_data)."
+        )
+    try:
+        vec_raw = vec_path.read_bytes()
+        cov_raw = cov_path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"Union3 data unverified: vendored file unreadable ({exc}).") from exc
+    vec_ok = hashlib.sha256(vec_raw).hexdigest() == _registry_product_sha256(
+        "union3", "measurement_vector"
+    )
+    cov_digest = hashlib.sha256(cov_raw).hexdigest()
+    cov_ok = cov_digest == _registry_product_sha256("union3", "covariance")
+    if not (vec_ok and cov_ok):
+        raise ValueError(
+            "Union3 data unverified: vendored file bytes do not match the registry "
+            "sha256 pins; refusing to compute chi2 from tampered or stale data."
+        )
+    # Parse the SAME bytes the digests certified.
+    z_cmb_list: list[float] = []
+    z_hel_list: list[float] = []
+    mb_list: list[float] = []
+    for line in vec_raw.decode("utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        z_cmb_list.append(float(parts[1]))
+        z_hel_list.append(float(parts[2]))
+        mb_list.append(float(parts[4]))
+    cov_tokens = cov_raw.decode("utf-8").split()
+    n = int(cov_tokens[0])
+    cov = np.asarray(cov_tokens[1:], dtype=float).reshape(n, n)
+    if n != len(mb_list):
+        raise ValueError(
+            f"Union3 data unverified: vector/cov shape mismatch "
+            f"({len(mb_list)} bins vs cov {n}x{n})."
+        )
+    return {
+        "z_cmb": np.asarray(z_cmb_list, dtype=float),
+        "z_hel": np.asarray(z_hel_list, dtype=float),
+        "mb": np.asarray(mb_list, dtype=float),
+        "cov": cov,
+        "sha256": cov_digest,
+    }
+
+
+def load_verified_union3_data(dataset_key: str = "union3") -> dict[str, Any]:
+    """Verification record for audit/provenance — NEVER raises (audit and
+    import paths need a record, not an exception). Built fresh per call from
+    the cached raw load: success → 'full' + digest; any failure → 'unverified'
+    (blocks publication), recomputed next call so a transient failure heals
+    without a process restart. Never a silent fallback to the compressed
+    Gaussian."""
+    try:
+        raw = _load_union3_raw()
+    except ValueError as exc:
+        logger.warning("Union3 data product failed verification: %s", exc)
+        return {
+            "z_cmb": None, "z_hel": None, "mb": None, "cov": None,
+            "sha256": None, "hash_verified": False, "cov_fidelity": "unverified",
+        }
+    return {**raw, "hash_verified": True, "cov_fidelity": "full"}
+
+
+@lru_cache(maxsize=1)
+def _union3_cov_inv() -> np.ndarray:
+    """Inverse of the verified 22x22 Union3 covariance — computed on the fit path."""
+    return np.linalg.inv(_load_union3_raw()["cov"])
+
+
+def _load_union3_data() -> dict[str, np.ndarray]:
+    """Arrays the Union3 χ² fits — raises ValueError ('unverified') on
+    missing/tampered data via the raw loader."""
+    raw = _load_union3_raw()
+    return {
+        "z_hd": raw["z_cmb"], "z_hel": raw["z_hel"], "mu": raw["mb"],
+        "cov_inv": _union3_cov_inv(),
+    }
+
+
 def _load_pantheon_plus_data() -> dict[str, np.ndarray]:
     """Arrays the Pantheon+ χ² fits, sourced from the sha256-verified loader (cov
     IS the checksummed object) with cov_inv derived lazily.  No separate module
@@ -5498,23 +5719,26 @@ def _pantheon_plus_chi2_samples(
     return np.einsum("in,ij,jn->n", residual, cov_inv, residual)
 
 
-def _des_sn5yr_chi2_samples(
-    samples: np.ndarray, parameter_order: list[str]
+def _offset_marginalized_sn_chi2(
+    samples: np.ndarray,
+    parameter_order: list[str],
+    *,
+    z_hd: np.ndarray,
+    z_hel: np.ndarray,
+    mu_obs: np.ndarray,
+    cov_inv: np.ndarray,
 ) -> np.ndarray:
-    """χ² from the DES-SN5YR 1829 SNe Ia under flat w0waCDM, with the SN
-    absolute-magnitude offset M analytically marginalized (per the official
-    DES-SN5YR likelihood):
+    """Shared χ² core for binned/full SN distance-modulus likelihoods with the
+    absolute-magnitude offset M analytically marginalized:
 
         δ = μ_model − μ_obs ,  χ² = δᵀC⁻¹δ − (Σ C⁻¹δ)² / (Σ C⁻¹)
 
-    The marginalized χ² is invariant to a constant shift of μ_model, so H0 (and
-    M_B) drop out entirely — DES-SN constrains Ωm (+ the w0/wa DE shape) only.
-    parameter_order must contain "omegam"; optionally "w"/"w0"/"wa"."""
-    data = _load_des_sn5yr_data()
-    z_hd = data["z_hd"]
-    z_hel = data["z_hel"]
-    mu_obs = data["mu"]
-    cov_inv = data["cov_inv"]
+    Algebraically identical to cobaya's _marginalize_abs_mag projection of the
+    inverse covariance. The marginalized χ² is invariant to a constant shift of
+    μ_model, so H0 (and M_B) drop out entirely — these likelihoods constrain
+    Ωm (+ the w0/wa DE shape) only. parameter_order must contain "omegam";
+    optionally "w"/"w0"/"wa". μ_obs may carry an arbitrary constant
+    normalization (Union3's binned mb does)."""
     n_samples = samples.shape[0]
     omegam = samples[:, parameter_order.index("omegam")]
     h0_fid = np.full(n_samples, 70.0, dtype=float)  # absolute H0 is marginalized away
@@ -5534,6 +5758,53 @@ def _des_sn5yr_chi2_samples(
     b = cinv_delta.sum(axis=0)                              # Σ_i (C⁻¹δ)_i per sample
     c_norm = float(cov_inv.sum())                           # Σ_ij C⁻¹_ij
     return chit2 - b ** 2 / c_norm
+
+
+def _des_sn5yr_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """χ² from the DES-SN5YR 1829 SNe Ia (offset-marginalized, per the official
+    DES-SN5YR likelihood)."""
+    data = _load_des_sn5yr_data()
+    return _offset_marginalized_sn_chi2(
+        samples, parameter_order,
+        z_hd=data["z_hd"], z_hel=data["z_hel"],
+        mu_obs=data["mu"], cov_inv=data["cov_inv"],
+    )
+
+
+def _union3_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """χ² from the Union3/UNITY1.5 22-bin binned distance moduli
+    (offset-marginalized — cobaya sn.union3's use_abs_mag=False convention)."""
+    data = _load_union3_data()
+    return _offset_marginalized_sn_chi2(
+        samples, parameter_order,
+        z_hd=data["z_hd"], z_hel=data["z_hel"],
+        mu_obs=data["mu"], cov_inv=data["cov_inv"],
+    )
+
+
+def _offset_sn_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str], key: str
+) -> np.ndarray:
+    """Per-key dispatch for the offset-marginalized SN family — else-raise so a
+    future key cannot silently run on another dataset's data."""
+    if key == "des_sn5yr":
+        return _des_sn5yr_chi2_samples(samples, parameter_order)
+    if key == "union3":
+        return _union3_chi2_samples(samples, parameter_order)
+    raise ValueError(f"executable offset-marginalized SN entry {key!r} has no chi2 dispatch")
+
+
+def _offset_sn_n_points(key: str) -> int:
+    """Number of fitted data points for an offset-marginalized SN entry."""
+    if key == "des_sn5yr":
+        return int(len(_load_des_sn5yr_data()["mu"]))
+    if key == "union3":
+        return int(len(_load_union3_data()["mu"]))
+    raise ValueError(f"executable offset-marginalized SN entry {key!r} has no data loader")
 
 
 def _de_energy_density(a: np.ndarray, w0: np.ndarray, wa: np.ndarray) -> np.ndarray:
@@ -5709,6 +5980,13 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 "dataset_key": entry.key,
                 "source_locator": f"SDSS DR16 BAO+RSD consensus (CobayaSampler/bao_data, {entry.key}) — joint (D_M/r_s, D_H/r_s, fσ8) + full covariance",
                 "approximation": "Full-covariance rᵀC⁻¹r χ² (flat w0waCDM): D_M/r_s, D_H/r_s distance ratios + Linder-γ fσ8 growth, with the released joint distance+growth covariance",
+                "data_products": [product.to_dict() for product in entry.data_products],
+            })
+        elif entry.key == "union3":
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": "Union3/UNITY1.5 Rubin+2023 (arXiv:2311.12098; CobayaSampler/sn_data) — 22-bin binned distance moduli + full 22x22 mag covariance",
+                "approximation": "Full-covariance SN χ² = δᵀC⁻¹δ − (ΣC⁻¹δ)²/(ΣC⁻¹) (flat w0waCDM), analytically marginalizing the constant magnitude offset (no M_B/H0); constrains Ωm (+w0/wa)",
                 "data_products": [product.to_dict() for product in entry.data_products],
             })
         elif _is_executable_des_sn_entry(entry):

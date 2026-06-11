@@ -141,12 +141,24 @@ def test_sn_compressed_only_chain_is_literature_typed():
     assert r["publication_ready"] is True
 
 
-def test_des_and_union3_compressed_are_literature_typed():
-    for ds in ("des_sn5yr", "union3"):
-        r = run_likelihood_chain(model="lcdm", dataset_keys=[ds], n_samples=2000, random_seed=42)
-        prov = r["provenance"]["cosmology_likelihood"]
-        assert prov["cov_fidelity"] == "literature_typed", ds
-        assert r["chain_tier"] == "publication", ds
+def test_des_compressed_is_literature_typed():
+    # (union3 left this group 2026-06-12: its full 22-bin vector is always on
+    # and certifies 'full' — see test_union3_full_vector_certifies_full.)
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["des_sn5yr"], n_samples=2000, random_seed=42)
+    prov = r["provenance"]["cosmology_likelihood"]
+    assert prov["cov_fidelity"] == "literature_typed"
+    assert r["chain_tier"] == "publication"
+
+
+def test_union3_full_vector_certifies_full():
+    # Union3 runs the released 22-bin binned-distance likelihood by default
+    # (no env flag), so its chain must certify the sha256-verified covariance.
+    expected_sha = cl.load_verified_union3_data("union3")["sha256"]
+    r = run_likelihood_chain(model="lcdm", dataset_keys=["union3"], n_samples=2000, random_seed=42)
+    prov = r["provenance"]["cosmology_likelihood"]
+    assert prov["cov_fidelity"] == "full"
+    assert prov["artifact_sha256"]["union3"] == expected_sha
+    assert r["chain_tier"] == "publication"
 
 
 def test_cmb_compressed_is_literature_typed_not_none():
@@ -157,7 +169,9 @@ def test_cmb_compressed_is_literature_typed_not_none():
 
 
 def test_compressed_summary_never_labeled_full_or_diagonal():
-    for ds in ("pantheon_plus", "des_sn5yr", "union3", "planck2018_compressed"):
+    # union3 is no longer in this group (2026-06-12): it executes the full
+    # 22-bin vector by default, so 'full' is its honest grade.
+    for ds in ("pantheon_plus", "des_sn5yr", "planck2018_compressed"):
         r = run_likelihood_chain(model="lcdm", dataset_keys=[ds], n_samples=2000, random_seed=42)
         assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] not in ("full", "diagonal"), ds
 

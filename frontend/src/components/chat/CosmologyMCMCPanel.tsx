@@ -78,6 +78,7 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
   const usedCount = Array.isArray(result.datasets_used) ? result.datasets_used.length : undefined;
   const notRunCount = Array.isArray(result.datasets_not_run) ? result.datasets_not_run.length : undefined;
   const compressed = result.compressed_likelihood_preliminary === true || result.compressed_rotation_preliminary === true;
+  const fullFidelity = result.claim_scope === "executable_full_fidelity_likelihoods";
   const warnings = Array.isArray(result.warnings) ? result.warnings.filter((item): item is string => typeof item === "string") : [];
   const exploratoryWarning = typeof result.__exploratory_warning__ === "string" ? result.__exploratory_warning__ : "";
   const blockedReason = warnings[0] || String(result.__message_to_model__ || "");
@@ -98,6 +99,7 @@ export default function CosmologyMCMCPanel({ result }: { result: Record<string, 
         <strong style={{ color: "var(--color-text-primary)" }}>{panelTitle}</strong>
         <span>{String(result.model || "model?")} · {String(result.sampler || "sampler?")}</span>
         {compressed && <span style={{ fontSize: "0.72rem" }}>compressed likelihood</span>}
+        {fullFidelity && <span style={{ fontSize: "0.72rem" }}>full-fidelity likelihood</span>}
         <span
           style={{
             border: `1px solid ${tierStyle.border}`,

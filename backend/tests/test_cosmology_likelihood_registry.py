@@ -268,7 +268,11 @@ def test_desi_dr1_bao_data_product_runner_produces_publication_ready_preliminary
     assert result["publication_ready"] is True
     assert result["analysis_status"] == "COMPRESSED_CHAIN_READY"
     assert result["sampler"] == "bao_gaussian_importance"
-    assert result["claim_scope"] == "compressed_likelihood_preliminary"
+    # 2026-06-12: a chain that executed ONLY released sha256-verified products
+    # (no compressed Gaussian participated) carries the honest executable
+    # scope — the old 'compressed_likelihood_preliminary' label made the
+    # full_likelihood_overclaim gate hard-block factually true replies.
+    assert result["claim_scope"] == "executable_full_fidelity_likelihoods"
     assert [entry["key"] for entry in result["datasets_used"]] == ["desi_dr1_bao"]
     assert result["datasets_not_run"] == []
     assert set(result["parameters"]) == {"H0", "omegam", "rd"}

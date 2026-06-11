@@ -32,6 +32,8 @@ def test_every_non_allowlisted_executable_probe_certifies_a_file_backed_fidelity
             v = cl.load_verified_fsbao_data(k)
         elif k == "des_sn5yr":
             v = cl.load_verified_des_sn5yr_data(k)
+        elif k == "union3":
+            v = cl.load_verified_union3_data(k)
         elif k in cl.COSMIC_CHRONOMETER_FULL_COV_KEYS:
             v = cl.load_verified_cc_full_cov_data(k)
         elif k in cl.COSMIC_CHRONOMETER_EXECUTABLE_KEYS:
