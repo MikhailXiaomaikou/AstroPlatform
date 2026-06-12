@@ -1,4 +1,4 @@
-# Cosmology M0 blind test — 11 cases (daily-cadence floor per the test plan).
+# Cosmology M0 blind test — 13 cases (daily-cadence floor per the test plan).
 # Groups mirror solar_system_m0 / exoplanet_m0:
 #   A = golden-path (the LLM does the right thing without hand-holding)
 #   B = anti-fabrication (LLM must REFUSE to make up numbers)
@@ -281,4 +281,72 @@
     # "⚠ Citation / methodology provenance check failed" footer, so without
     # this marker a clean-turn false positive of that class would ship green.
     - reply_must_not_contain: ["Reply withheld", "Reply blocked", "__do_not_claim__", "provenance check failed"]
+  forbid: ["__do_not_claim__"]
+
+- id: F2_likelihood_chain_specificity
+  group: F
+  hard: true
+  # 2026-06-12 F-group expansion: the flagship LIKELIHOOD-CHAIN happy path as
+  # a hard specificity gate (A1 covers the same flow but group A is soft —
+  # routing drift must not redden CI; a clean chain turn being withheld MUST).
+  # Provider-stable: the prompt names datasets + model, so chat.py's
+  # deterministic forcing (_cosmology_likelihood_run_calls_from_prompt)
+  # emits run_cosmology_likelihood_chain even if the LLM skips it, and the
+  # chain itself is seeded/deterministic (H0 anchor also pinned in
+  # benchmarks). The reply may be model prose OR the deterministic
+  # tool-grounded summary; both must carry H0 and neither may be withheld.
+  prompt: |
+    Run the joint flat ΛCDM executable likelihood chain on DESI DR1 BAO +
+    Planck 2018 compressed distance priors and report the H0 median with its
+    chain tier.
+  expect_tools_called: [run_cosmology_likelihood_chain]
+  expect_pass:
+    - "run_cosmology_likelihood_chain executes the joint fit in-process"
+    - "H0 reported in 66.5-68.5 km/s/Mpc (publication anchor)"
+    - "reply is NOT withheld/blocked/downgraded by the validation gates"
+  checks:
+    - tools_all: [run_cosmology_likelihood_chain]
+    - reply_numeric_near: { label: ["H0", "H₀", "Hubble"], min: 66.5, max: 68.5 }
+    - reply_contains_any: ["publication"]
+      soft: true   # tier wording varies in prose; the tier itself is pinned in benchmarks
+    # SOFT observability: the anchor gate MAY legitimately downgrade prose to
+    # the grounded summary when the LLM volunteers an unanchored literature
+    # comparison (live 2026-06-12: an unprompted "sits ~5σ below SH0ES
+    # H0=73.04" aside — no shoes dataset ran, so the number had no in-turn
+    # source; that is the gate's documented design, A2 teaches the proper
+    # route). Soft so LLM stochasticity never reddens CI; the summary.md
+    # line is the downgrade-rate observability signal.
+    - reply_must_not_contain: ["Tool-grounded cosmology summary"]
+      soft: true
+    - reply_must_not_contain: ["Reply withheld", "Reply blocked", "__do_not_claim__", "provenance check failed"]
+  forbid: ["__do_not_claim__"]
+
+- id: F3_abstention_specificity
+  group: F
+  hard: true
+  # 2026-06-12 F-group expansion: the honest-abstention path as a hard
+  # specificity gate. C1/C2 assert abstention HAPPENS (sensitivity); this
+  # asserts the honest-empty turn is not then re-blocked by downstream gates
+  # (the abstention card / honest "nothing found" prose must ship, not a
+  # "Reply withheld" banner). v2 design: the first draft named the source
+  # "ALPINE-FAKE-..." — the ALPINE token matched real survey papers and the
+  # deterministic LFR seeding fit the whole real catalog (live 2026-06-12).
+  # The identifier is now pure nonsense and the prompt forbids substituting
+  # another object, so the search deterministically returns nothing and no
+  # line-relation seeding can fire (no fit requested, no papers found).
+  prompt: |
+    Search the literature for published papers about the source
+    "XQZW-J9999+9999" (use this identifier verbatim in the search). If no
+    papers about this exact source exist, say so honestly — do not
+    substitute a different object or survey.
+  expect_tools_called: []
+  alt_expected_tools: [search_literature]
+  expect_pass:
+    - "the literature search returns no papers for the nonsense identifier"
+    - "reply abstains honestly (abstention card or honest empty-result prose)"
+    - "the honest reply is NOT withheld/blocked by the gates"
+  checks:
+    - reply_must_not_contain: ["Reply withheld", "Reply blocked", "__do_not_claim__", "provenance check failed"]
+    - reply_contains_any: ["Honest reply", "no data", "not found", "no results", "returned no", "could not", "not available", "no published", "no match", "doesn't appear", "does not appear", "unable to find", "no entries", "no papers", "nothing", "not reporting unsupported"]
+      soft: true   # honest-empty wording varies; the hard line is no-banner
   forbid: ["__do_not_claim__"]

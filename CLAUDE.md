@@ -43,7 +43,7 @@ python3 scripts/audit_registry.py                          # dataset-registry au
 python3 scripts/audit_citation_pool.py                     # bibcode reachability
 
 # Daily blind tests (run from backend/; LLM, real prompt → real chat path)
-bash scripts/daily_blind.sh --module cosmology              # all 11 cosmology cases
+bash scripts/daily_blind.sh --module cosmology              # all 13 cosmology cases
 bash scripts/daily_blind.sh --module cosmology --case A2,A3 # subset (~4 min)
 # In CI: GitHub Actions Daily workflow with module / cases inputs.
 ```
@@ -200,7 +200,7 @@ Eight-layer regression net the project commits to keep green. Maps to
 
 **Cosmology blind-test invariants (`backend/scripts/blind_test_cosmology_m0/cases.yaml`)** — DO NOT relax:
 - 5 anti-fabrication defenses MUST stay strict: B1 inline-rows blocked, B2 fake-bibcode replaced, C1 zero-data hard-blocked, C2 abstention, D1 `suspicious_author_year` provenance violation. These are load-bearing for the zero-fabrication contract.
-- F1 (`F1_lfr_demo_end_to_end`, group F, `hard: true`, 2026-06-11) is the SPECIFICITY hard gate — the inverse of B/C: the clean LFR demo turn (extract ALPINE 2002.00962 → fit_line_lfr, β≈0.80) must complete WITHOUT a "Reply withheld/blocked" banner (`reply_must_not_contain` check type; per-case `hard: true` makes a non-B/C case gate CI). The suite previously tested only that bad behavior IS blocked, never that good behavior ISN'T — the anchor-gate false positive (9f2667e) would have been caught by this case.
+- Group F (3 hard specificity cases as of 2026-06-12: F1 LFR demo, F2 likelihood chain, F3 honest abstention) is the SPECIFICITY side of the suite. F1 (`F1_lfr_demo_end_to_end`, group F, `hard: true`, 2026-06-11) is the flagship SPECIFICITY hard gate — the inverse of B/C: the clean LFR demo turn (extract ALPINE 2002.00962 → fit_line_lfr, β≈0.80) must complete WITHOUT a "Reply withheld/blocked" banner (`reply_must_not_contain` check type; per-case `hard: true` makes a non-B/C case gate CI). The suite previously tested only that bad behavior IS blocked, never that good behavior ISN'T — the anchor-gate false positive (9f2667e) would have been caught by this case.
 - 3 tool-routing cases (A2 Hubble tension, A3 Alcock-Paczynski, E1 multi-tool chain) intentionally use `expect_tools_called=[]` because DeepSeek V4 Pro's function-call ranker picks tools by schema-name semantic similarity BEFORE reading the system prompt — 5 prompt+schema iterations (V1-V5, 2026-05-28) confirmed no prompt-level fix steers it. The ideal direct route is recorded in `alt_expected_tools` (documentation-only). When ANTHROPIC_API_KEY is configured, Claude is expected to hit the `alt_expected_tools` naturally; tightening `expect_tools_called` back to strict at that point is the right move.
 
 **Daily workflow inputs (`.github/workflows/daily.yml`)**:
