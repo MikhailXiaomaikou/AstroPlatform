@@ -125,3 +125,13 @@ jobs:
           # its coverage (~19%) trivially fails pytest.ini's 45% threshold,
           # which is calibrated for the unit-test suite in backend-test.
           python -m pytest tests/ -v --tb=short -m "integration and not slow" --no-cov
+      - name: Audit citation-pool reachability
+        # 2026-06-13 (P3b): audit_registry runs per-PR, but the citation-pool
+        # reachability audit (the SPECIFICITY side that guards against
+        # anchor-gate false kills of the 9f2667e class) never ran on a
+        # schedule — this campaign alone pinned 20+ new citations that had
+        # never passed an automated reachability check. Daily cadence here;
+        # a regression turns the Daily badge red without gating PRs.
+        run: |
+          cd backend
+          python scripts/audit_citation_pool.py
