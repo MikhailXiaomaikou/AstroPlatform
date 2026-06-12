@@ -269,8 +269,12 @@ COSMOLOGY_TOOL_SCHEMAS = [
             "Run the phase-1 compressed Gaussian observational-cosmology likelihood "
             "for registered datasets that include published mean/covariance summaries. "
             "This can produce citeable preliminary H0/Omega_m/sigma8/S8/tension results "
-            "only when publication_ready=true. It does not run full external ACT/Planck/"
-            "BAO/SN weak-lensing likelihood packages; datasets without compressed "
+            "only when publication_ready=true. It does not run full external ACT/"
+            "weak-lensing likelihood packages — EXCEPT the vendored Planck 2018 CMB "
+            "likelihoods (planck_2018_highl_TTTEEE_lite / planck_2018_lowl_TT / "
+            "planck_2018_lowl_EE / planck_2018_lensing), which dispatch to the "
+            "external Cobaya path when EXTERNAL_COBAYA_ENABLED=true (off by default; "
+            "that path genuinely samples omegak/mnu). Datasets without compressed "
             "summaries are reported as datasets_not_run."
         ),
         "input_schema": {

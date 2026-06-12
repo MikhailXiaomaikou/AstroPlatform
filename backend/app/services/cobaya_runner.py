@@ -865,19 +865,33 @@ def _runner_success(
     # otherwise claim_validator (which keys only on publication_ready) would let
     # its w0/wa be quoted as a published conclusion.
     off_anchor = chain_is_off_anchor(model_key, [entry.key for entry in entries])
+    data_unverified = data_verification is not None and not data_verification.get("hash_verified")
     publication_ready = (
         diagnostics.get("overall_status") == "ok"
         and (diagnostics.get("rhat") or 0.0) <= 1.05
         and (diagnostics.get("ess_bulk") or 0.0) >= 400
         and not off_anchor
         # a pinned CMB run is publication-ready only if its data sha256-verified
-        and not (data_verification is not None and not data_verification.get("hash_verified"))
+        and not data_unverified
+    )
+    # Three-tier verdict mirroring the in-process runners, so downstream
+    # consumers (compute_model_comparison's validity ladder) can vet external
+    # chains instead of refusing them as unvetted. Unverified data or a failed
+    # sampler status is 'blocked'; a converged-but-demoted chain (off-anchor,
+    # marginal R-hat/ESS) is 'exploratory'.
+    chain_tier = (
+        "publication"
+        if publication_ready
+        else "blocked"
+        if (diagnostics.get("overall_status") != "ok" or data_unverified)
+        else "exploratory"
     )
     return {
         "success": True,
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
         "analysis_status": "EXTERNAL_COBAYA_READY" if publication_ready else "PARTIAL",
         "publication_ready": publication_ready,
+        "chain_tier": chain_tier,
         "off_anchor_review_required": off_anchor,
         "model": model_key,
         "model_label": MODEL_LABELS.get(model_key, model_key),

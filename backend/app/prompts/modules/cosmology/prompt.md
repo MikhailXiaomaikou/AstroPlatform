@@ -420,10 +420,13 @@ Always end each step with what comes next."""
 
 ## Cosmology MCMC chain tiers (2026-05-20)
 
-`fit_cosmology_mcmc` / `run_cosmology_likelihood_chain` / `run_cobaya_cosmology`
-return a `chain_tier` field next to the existing `publication_ready` flag.
+`fit_cosmology_mcmc` / `run_cosmology_likelihood_chain` return a `chain_tier`
+field next to the existing `publication_ready` flag. (`run_cobaya_cosmology`
+is a phase-1-disabled placeholder that always returns an unavailable envelope
+— do not route work to it; the external Cobaya CMB path lives inside
+`run_cosmology_likelihood_chain` behind EXTERNAL_COBAYA_ENABLED.)
 The R-hat criteria below apply where R-hat is actually computed
-(`fit_cosmology_mcmc`, `run_cobaya_cosmology`); the in-process
+(`fit_cosmology_mcmc`, the external Cobaya path); the in-process
 `run_cosmology_likelihood_chain` reports `rhat: null` ("not computed" — it has
 no multi-chain sampling), gates on ESS alone, and a null R-hat there is NOT a
 deficiency. Trust the tool's own `chain_tier` verdict in all cases.

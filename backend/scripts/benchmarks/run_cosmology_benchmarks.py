@@ -496,25 +496,38 @@ def bench_oracle_genuine_reproductions() -> dict[str, Any]:
 
 def bench_model_comparison_delta() -> dict[str, Any]:
     """Real model comparison Δχ²/ΔAIC/ΔBIC (3.2, 2026-05-29; dataset switched
-    2026-06-11).
+    2026-06-11; pair switched to non-blocked chains 2026-06-12).
 
-    compute_model_comparison(lcdm, wcdm) on DESI BAO must return finite deltas,
-    exactly 1 extra parameter (w), and NOT prefer wCDM — w≈-1 there, so the
-    extra freedom buys no fit improvement and AIC favors the simpler ΛCDM.
-    Guards the formerly-hardcoded delta_chi²=0.0 placeholder.
+    compute_model_comparison(lcdm, wcdm) on a model-invariant likelihood must
+    return finite deltas, exactly 1 extra parameter (w), and NOT prefer wCDM —
+    w≈-1 there, so the extra freedom buys no fit improvement and AIC favors the
+    simpler ΛCDM. Guards the formerly-hardcoded delta_chi²=0.0 placeholder.
 
-    DESI BAO only (NOT + planck2018_compressed): the Planck compressed entry is
-    a model-DEPENDENT representation — extended flat-DE chains swap its diagonal
-    ΛCDM summary for the (R, l_A, ombh2) distance prior, adding an ombh2 axis —
-    so an lcdm-vs-wcdm pair on it compares different likelihoods. That case now
-    comes back comparison_valid=False / preferred=undetermined (locked by
-    tests/test_model_comparison_validity.py); the benchmark pins the VALID
+    NOT + planck2018_compressed: the Planck compressed entry is a model-
+    DEPENDENT representation — extended flat-DE chains swap its diagonal ΛCDM
+    summary for the (R, l_A, ombh2) distance prior, adding an ombh2 axis — so
+    an lcdm-vs-wcdm pair on it compares different likelihoods and comes back
+    comparison_valid=False / preferred=undetermined.
+
+    DESI + cosmic chronometers with the emcee upgrade (2026-06-12): the
+    chain-tier validity guard now also refuses blocked inputs, and a wcdm
+    importance fit on DESI-only collapses to ESS ~50 — the old version of this
+    benchmark was reading its verdict off exactly that one-effective-sample
+    chain. Both chains take allow_emcee_fallback=True so the pair is genuinely
+    non-blocked. All invalidity cases are locked by
+    tests/test_model_comparison_validity.py; the benchmark pins the VALID
     same-likelihood comparison."""
     from app.services.cosmology_likelihoods import run_likelihood_chain, compute_model_comparison
 
-    ds = ["desi_dr1_bao"]
-    lcdm = run_likelihood_chain(model="lcdm", dataset_keys=ds, n_samples=4000, random_seed=42)
-    wcdm = run_likelihood_chain(model="wcdm", dataset_keys=ds, n_samples=4000, random_seed=42)
+    ds = ["desi_dr1_bao", "cosmic_chronometers"]
+    lcdm = run_likelihood_chain(
+        model="lcdm", dataset_keys=ds, n_samples=1500, random_seed=42,
+        allow_emcee_fallback=True,
+    )
+    wcdm = run_likelihood_chain(
+        model="wcdm", dataset_keys=ds, n_samples=1500, random_seed=42,
+        allow_emcee_fallback=True,
+    )
     cmp = compute_model_comparison(lcdm, wcdm)
     finite = all(cmp[k] is not None for k in ("delta_chi2", "delta_aic", "delta_bic"))
     return {

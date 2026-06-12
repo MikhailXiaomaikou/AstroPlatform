@@ -1966,6 +1966,19 @@ async def _execute_tool_calls(
         # MAST / lightkurve cold starts are often >45s on Render.  Keep the
         # default mode bounded, then stretch it explicitly in long mode below.
         "search_lightcurve": 90.0,
+        # ── 2026-06-12: research matrix runs many chains ──
+        # ΛCDM baseline subset cells stay on the fast importance path (~26 s
+        # for a 30-cell matrix); the extended-model branch cells (wcdm /
+        # w0wa_cdm) AND the full-union ΛCDM comparison anchor take the emcee
+        # upgrade at ~13 s each (importance proposals collapse on extended-DE
+        # axes and multi-probe unions; ESS ~1). research_program caps
+        # emcee-eligible cells at 3 and numerically-run cells at 24, so the
+        # bound is ~26 s importance + 3 × ~13 s emcee ≈ 65 s; the observed
+        # worst case is 51.7 s. 120 s adds headroom for cold imports. NOTE:
+        # with the off-by-default PANTHEON_PLUS/DES_SN5YR_FULL_CHI2_ENABLED
+        # env flags, full-vector SN cells always take emcee (~minutes each)
+        # and were already over every deadline before this entry existed.
+        "run_research_matrix": 120.0,
         # ── M1-A (2026-05-31): CAMB theory CMB spectrum ──
         # A bounded lmax<=2500 CAMB call is a few seconds, but calls serialize
         # behind a process-global lock (CAMB's Fortran kernel is non-reentrant)
@@ -2846,6 +2859,64 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
         )
     if not executed_not_ready_summaries and not config_only_summaries:
         lines.append("- All planned matrix cells that were generated are runnable in the current compressed layer.")
+
+    # 2026-06-12: the phase-1 gate now runs flat-DE extension cells, so
+    # model_comparisons reaches the summary. Render verdicts ONLY from
+    # comparison_valid=true entries; invalid ones are counted, not quoted.
+    matrix_model_comparisons = (
+        matrix.get("model_comparisons")
+        if isinstance(matrix, dict) and isinstance(matrix.get("model_comparisons"), list)
+        else []
+    )
+    valid_comparison_lines: list[str] = []
+    invalid_comparison_count = 0
+    for comparison in matrix_model_comparisons:
+        if not isinstance(comparison, dict):
+            continue
+        comparison_tiers = {
+            comparison.get("baseline_chain_tier"),
+            comparison.get("extended_chain_tier"),
+        }
+        # Defense in depth: the producer never emits comparison_valid=true
+        # with a blocked/unknown tier, but the renderer re-checks instead of
+        # trusting the pair — a forged or stale entry must not render a
+        # verdict with a soft caveat.
+        renderable_tiers = comparison_tiers <= {None, "publication", "exploratory"}
+        if comparison.get("comparison_valid") is True and renderable_tiers:
+            datasets_txt = "+".join(str(k) for k in comparison.get("dataset_keys") or [])
+            comparison_parts = [
+                f"{comparison.get('extended_model')} vs {comparison.get('baseline_model')}"
+                + (f" on {datasets_txt}" if datasets_txt else "")
+            ]
+            if comparison.get("delta_aic") is not None:
+                comparison_parts.append(f"dAIC {_fmt_tool_number(comparison.get('delta_aic'))}")
+            comparison_parts.append(f"preferred: {comparison.get('preferred')}")
+            tier_flags = [
+                f"{side} fit {comparison.get(f'{side}_chain_tier')}-tier"
+                for side in ("baseline", "extended")
+                if comparison.get(f"{side}_chain_tier") not in (None, "publication")
+            ]
+            if tier_flags:
+                comparison_parts.append(
+                    ", ".join(tier_flags) + " — compressed preliminary, not a published-anchor result"
+                )
+            valid_comparison_lines.append(" · ".join(comparison_parts))
+        else:
+            invalid_comparison_count += 1
+    if valid_comparison_lines or invalid_comparison_count:
+        lines.extend(["", "Model comparison"])
+        if valid_comparison_lines:
+            lines.append(
+                "- " + "; ".join(valid_comparison_lines[:4])
+                + ("." if len(valid_comparison_lines) <= 4 else f"; +{len(valid_comparison_lines) - 4} more.")
+            )
+        if invalid_comparison_count:
+            lines.append(
+                f"- {invalid_comparison_count} comparison(s) withheld (comparison_valid=false: "
+                "a representation mismatch between the paired fits, or at least one "
+                "blocked, unvetted, or convergence-unverified fit) — their delta values "
+                "are not model-preference evidence."
+            )
 
     lines.extend(["", "What drives the result"])
     if claimable:

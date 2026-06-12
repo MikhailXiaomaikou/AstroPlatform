@@ -3276,13 +3276,29 @@ def compute_model_comparison(
     Sign convention: Δ = extended − baseline. Δχ² < 0 means the extra freedom
     fits the data better; ΔAIC/ΔBIC already penalise the extra parameters, so
     they answer 'is that improvement worth the added parameters'. Preference is
-    read off ΔAIC on a Jeffreys-like scale (|ΔAIC|<2 inconclusive)."""
+    read off ΔAIC on a Jeffreys-like scale (|ΔAIC|<2 inconclusive).
+
+    Validity guards (all fail closed to preferred='undetermined' while still
+    reporting the factual deltas, and stamp __do_not_claim__ on the output so
+    the deltas cannot support reply claims): a chain_tier='blocked' input —
+    its chi2 is not evidence (ESS collapse, no prior support, unverifiable
+    rows); an input whose chain tier or ESS cannot be established
+    (convergence unverified); and a representation mismatch — sampled axes
+    differing beyond the extended model's own parameters mean the two chi2
+    came from different likelihoods.
+
+    Valid verdicts additionally carry baseline/extended chain-tier fields and,
+    when either input is exploratory-tier (today every in-process extended
+    model is off-anchor, so this is the NORMAL case), a verdict_caveat that
+    consumers must render next to the verdict."""
     bf = baseline_result.get("fit_statistics") or {}
     ef = extended_result.get("fit_statistics") or {}
 
     def _num(d: dict[str, Any], key: str) -> float | None:
         v = d.get(key)
-        return float(v) if isinstance(v, (int, float)) else None
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        return float(v) if math.isfinite(float(v)) else None
 
     def _delta(key: str) -> float | None:
         b, e = _num(bf, key), _num(ef, key)
@@ -3304,7 +3320,75 @@ def compute_model_comparison(
     base_axes = baseline_result.get("parameters")
     ext_axes = extended_result.get("parameters")
     comparison_warning = None
-    if isinstance(base_axes, dict) and isinstance(ext_axes, dict):
+
+    def _input_quality(result: dict[str, Any]) -> dict[str, Any]:
+        tier = result.get("chain_tier")
+        diags = result.get("chain_diagnostics")
+        diags = diags if isinstance(diags, dict) else {}
+
+        def _finite(value: Any) -> float | None:
+            # bool is an int subclass and NaN passes isinstance — both must
+            # not count as a measured ESS.
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            return float(value) if math.isfinite(float(value)) else None
+
+        ess = _finite(diags.get("proposal_ess"))
+        if ess is None:
+            ess = _finite(diags.get("ess_bulk"))
+        return {
+            "tier": tier if isinstance(tier, str) else None,
+            "ess": ess,
+        }
+
+    quality = {
+        "baseline": _input_quality(baseline_result),
+        "extended": _input_quality(extended_result),
+    }
+    blocked_inputs = [label for label, q in quality.items() if q["tier"] == "blocked"]
+    unvetted_inputs = [
+        label for label, q in quality.items()
+        if q["tier"] not in {"publication", "exploratory", "blocked"}
+    ]
+    ess_unknown_inputs = [
+        label for label, q in quality.items()
+        if q["tier"] in {"publication", "exploratory"} and q["ess"] is None
+    ]
+    if blocked_inputs:
+        plural = len(blocked_inputs) > 1
+        comparison_warning = (
+            "the " + " and ".join(blocked_inputs)
+            + (" fits carry" if plural else " fit carries")
+            + " chain_tier='blocked' (ESS collapse, no prior support, or "
+            "unverifiable rows): "
+            + ("their" if plural else "its")
+            + " chi2/AIC values are not evidence, so no model-preference "
+            "verdict can be read from this pair."
+        )
+    elif unvetted_inputs:
+        comparison_warning = (
+            "no chain_tier could be established for the "
+            + " and ".join(unvetted_inputs)
+            + " fit(s); refusing a preference verdict from unvetted fits."
+        )
+    elif ess_unknown_inputs:
+        comparison_warning = (
+            "convergence is unverified (no measurable ESS) for the "
+            + " and ".join(ess_unknown_inputs)
+            + " fit(s): the best-fit chi2 has no numerical guarantee, so no "
+            "model-preference verdict can be read from this pair."
+        )
+    elif not (isinstance(base_axes, dict) and isinstance(ext_axes, dict)):
+        # Fail closed: without both sampled-axis summaries the representation
+        # check below cannot run, and that check is exactly what catches
+        # model-dependent compressed swaps. Every legitimate comparable result
+        # today carries the parameters dict.
+        comparison_warning = (
+            "sampled-axis summaries are missing on at least one side, so "
+            "representation comparability could not be established; no "
+            "model-preference verdict can be read from this pair."
+        )
+    if comparison_warning is None and isinstance(base_axes, dict) and isinstance(ext_axes, dict):
         extra_beyond_model = (set(ext_axes) - set(base_axes)) - model_extension_params
         missing_from_ext = set(base_axes) - set(ext_axes)
         if extra_beyond_model or missing_from_ext:
@@ -3333,10 +3417,30 @@ def compute_model_comparison(
         "n_extra_params": int(k_e - k_b) if (k_b is not None and k_e is not None) else None,
         "preferred": preferred,
         "comparison_valid": comparison_warning is None,
+        "baseline_chain_tier": quality["baseline"]["tier"],
+        "extended_chain_tier": quality["extended"]["tier"],
+        "baseline_ess": quality["baseline"]["ess"],
+        "extended_ess": quality["extended"]["ess"],
         "convention": "delta = extended - baseline; negative favors the extended model; |delta_aic|<2 is inconclusive",
     }
     if comparison_warning is not None:
         out["comparison_warning"] = comparison_warning
+        # The deltas stay visible for diagnostics, but they were computed from
+        # at least one fit whose chi2 is not evidence (or from two different
+        # likelihoods) — they must never support a reply claim.
+        out["__do_not_claim__"] = True
+    else:
+        exploratory_inputs = [
+            label for label, q in quality.items() if q["tier"] == "exploratory"
+        ]
+        if exploratory_inputs:
+            out["verdict_caveat"] = (
+                "the " + " and ".join(exploratory_inputs) + " fit is "
+                "exploratory-tier (off-anchor frontier model and/or ESS below "
+                "the publication floor): present the preference as "
+                "compressed-preliminary evidence with this caveat, never as a "
+                "published-anchor result."
+            )
     return out
 
 
@@ -3423,8 +3527,13 @@ def run_likelihood_chain(
             seed=seed,
             reason=(
                 "Phase-1 compressed likelihoods are calibrated as ΛCDM summary "
-                "constraints; extended-model parameters require the external "
-                "Cobaya/CosmoSIS likelihood packages."
+                "constraints; extended-model parameters are genuinely sampled "
+                "only on the external Cobaya CMB path: select the Planck 2018 "
+                "likelihood datasets (planck_2018_highl_TTTEEE_lite + "
+                "planck_2018_lowl_TT / planck_2018_lowl_EE, optionally "
+                "planck_2018_lensing) with this same tool (requires "
+                "EXTERNAL_COBAYA_ENABLED=true; off by default — a minutes-long "
+                "fit), or run external Cobaya/CosmoSIS packages."
             ),
         )
 
@@ -3970,8 +4079,17 @@ def _run_sampling_likelihood_chain(
             reason=(
                 "The phase-1 in-process runner (BAO distance ratios, cosmic-"
                 "chronometer H(z), RSD fσ8 growth) is flat-geometry, massless-"
-                "neutrino only. Curvature (ok_*) and neutrino-mass (*_mnu) "
-                "extensions need the external Cobaya/CosmoSIS likelihood."
+                f"neutrino only — it never samples omegak or mnu, so running "
+                f"'{model_key}' here would only relabel a ΛCDM-shaped chain. "
+                "Curvature (ok_*) and neutrino-mass (*_mnu) extensions are "
+                "genuinely sampled only on the external Cobaya CMB path: select "
+                "the Planck 2018 likelihood datasets "
+                "(planck_2018_highl_TTTEEE_lite + planck_2018_lowl_TT / "
+                "planck_2018_lowl_EE, optionally planck_2018_lensing) with this "
+                "same tool (requires EXTERNAL_COBAYA_ENABLED=true; off by "
+                "default — a minutes-long fit). Caveat for ok_* models: primary "
+                "CMB alone carries a geometric degeneracy in omegak, so treat "
+                "CMB-only curvature posteriors accordingly."
             ),
         )
 
@@ -4079,11 +4197,15 @@ def _run_sampling_likelihood_chain(
                 allow_emcee_fallback=allow_emcee_fallback,
             )
             invalid_specs.extend(compressed_errors)
-            # ESS-floor emcee upgrade (single-cell deep runs only).  Importance
-            # sampling collapses on 3+ probe products; emcee recovers a
+            # ESS-floor emcee upgrade.  Importance sampling collapses on 3+
+            # probe products and on extended-DE axes; emcee recovers a
             # quotable posterior in ~11 s.  Matrices pass
-            # allow_emcee_fallback=False so they stay inside their own
-            # deadline.  Requires every entry to have an executable chi²
+            # allow_emcee_fallback=False for ΛCDM baseline subset cells (they
+            # stay fast) and True for the extended-model branch cells AND the
+            # full-union ΛCDM comparison anchor (emcee-eligible cells are
+            # budget-capped at 3 per matrix), which is why run_research_matrix
+            # has its own 120 s tool deadline.
+            # Requires every entry to have an executable chi²
             # (no skipped_entries) and ≥2 likelihood components.
             n_components = (
                 len(bao_entries) + len(compressed_entries) + len(sn_entries)

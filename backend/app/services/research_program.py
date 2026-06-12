@@ -226,15 +226,60 @@ def run_research_matrix(
 
     base_seed = int(random_seed if random_seed is not None else 20260503)
     cells: list[dict[str, Any]] = []
+    # The matrix can come verbatim from a caller/LLM-supplied research_plan, so
+    # the execution loop enforces its own budgets instead of trusting the
+    # plan's shape: duplicate (model, datasets) cells are skipped, at most
+    # _MATRIX_MAX_RUN_CELLS cells run numerically, and at most
+    # _MATRIX_MAX_EMCEE_CELLS take the ~13 s emcee upgrade. Every cap that
+    # fires is reported in the top-level warnings — never silently.
+    seen_cell_keys: set[tuple[str, tuple[str, ...]]] = set()
+    skipped_duplicate_cells = 0
+    run_cell_count = 0
+    emcee_cell_count = 0
+    emcee_capped_cells = 0
+    budget_stub_cells = 0
+    # The anchor is DERIVED here, not just trusted from the plan: an lcdm cell
+    # whose datasets equal an extended branch cell's datasets is the baseline
+    # half of a comparison pair, and importance proposals collapse on those
+    # multi-probe unions (live: ESS 66 → blocked → every comparison
+    # invalidated). Caller/LLM-supplied matrices carry no comparison_anchor
+    # flag, so deriving it is what makes the guarantee hold for them too.
+    extended_cell_unions = {
+        tuple(sorted(_clean_dataset_keys(c.get("dataset_keys") or [])))
+        for c in matrix
+        if isinstance(c, dict)
+        and str(c.get("model") or "") in _PHASE1_RUNNABLE_MODELS
+        and str(c.get("model") or "") != "lcdm"
+    }
     for index, cell in enumerate(matrix):
         cell_datasets = _clean_dataset_keys(cell.get("dataset_keys") if isinstance(cell, dict) else [])
         if not cell_datasets:
             continue
         model = str(cell.get("model") if isinstance(cell, dict) else model_list[0])
         label = str(cell.get("label") if isinstance(cell, dict) else "Research cell")
+        cell_key = (model, tuple(sorted(cell_datasets)))
+        if cell_key in seen_cell_keys:
+            skipped_duplicate_cells += 1
+            continue
+        seen_cell_keys.add(cell_key)
         try:
             rotation_keys = [key for key in cell_datasets if cmb_rotation_dataset_exists(key)]
             if rotation_keys:
+                if run_cell_count >= _MATRIX_MAX_RUN_CELLS:
+                    budget_stub_cells += 1
+                    cells.append({
+                        "label": label,
+                        "model": "isotropic_beta",
+                        "dataset_keys": rotation_keys,
+                        "publication_ready": False,
+                        "runnable": False,
+                        "execution_level": "config_only",
+                        "warnings": [
+                            "Matrix execution budget reached; this cell was not numerically run.",
+                        ],
+                    })
+                    continue
+                run_cell_count += 1
                 run = run_cmb_rotation_likelihood(
                     dataset_keys=rotation_keys,
                     model="isotropic_beta",
@@ -259,7 +304,8 @@ def run_research_matrix(
                 dataset_keys=cell_datasets,
                 output_format="cobaya",
             )
-            if model != "lcdm":
+            if model not in _PHASE1_RUNNABLE_MODELS:
+                needs_cmb_path = model.startswith("ok_") or model.endswith("_mnu")
                 cells.append({
                     "label": label,
                     "model": model,
@@ -270,7 +316,20 @@ def run_research_matrix(
                     "config_hash": config.get("config_hash"),
                     "requested_model_branch": bool(cell.get("requested_model_branch")),
                     "warnings": [
-                        "Requested extended-model branch was not numerically run. Phase-1 research matrices only promote ΛCDM compressed baselines to claimable results.",
+                        (
+                            "Requested extended-model branch was not numerically run: the "
+                            "in-process runner never samples omegak/mnu, so running it here "
+                            "would only relabel a ΛCDM-shaped chain. Curvature (ok_*) and "
+                            "neutrino-mass (*_mnu) branches run only on the external Cobaya "
+                            "CMB path — the Planck 2018 likelihood datasets in "
+                            "run_cosmology_likelihood_chain (requires "
+                            "EXTERNAL_COBAYA_ENABLED=true; off by default)."
+                        )
+                        if needs_cmb_path
+                        else (
+                            "Requested model branch is not executable in the phase-1 "
+                            "in-process matrix."
+                        ),
                     ],
                 })
                 continue
@@ -290,11 +349,44 @@ def run_research_matrix(
                     ],
                 })
                 continue
+            if run_cell_count >= _MATRIX_MAX_RUN_CELLS:
+                budget_stub_cells += 1
+                cells.append({
+                    "label": label,
+                    "model": model,
+                    "dataset_keys": cell_datasets,
+                    "publication_ready": False,
+                    "runnable": False,
+                    "execution_level": "config_only",
+                    "config_hash": config.get("config_hash"),
+                    "warnings": [
+                        "Matrix execution budget reached; this cell was not numerically run.",
+                    ],
+                })
+                continue
+            run_cell_count += 1
+            # ΛCDM baseline subset cells keep the fast importance path; the
+            # extended-model branch cells and the full-union comparison anchor
+            # get the ESS-floor emcee upgrade (importance proposals collapse
+            # on extended-DE axes and on multi-probe unions), capped at
+            # _MATRIX_MAX_EMCEE_CELLS so a caller-supplied plan cannot stack
+            # unbounded ~13 s chains.
+            wants_emcee = (
+                model != "lcdm"
+                or bool(cell.get("comparison_anchor"))
+                or cell_key[1] in extended_cell_unions
+            )
+            emcee_budget_hit = wants_emcee and emcee_cell_count >= _MATRIX_MAX_EMCEE_CELLS
+            if emcee_budget_hit:
+                emcee_capped_cells += 1
+            if wants_emcee and not emcee_budget_hit:
+                emcee_cell_count += 1
             run = run_likelihood_chain(
                 model=model,
                 dataset_keys=cell_datasets,
                 random_seed=base_seed + index,
                 n_samples=n_samples,
+                allow_emcee_fallback=wants_emcee and not emcee_budget_hit,
             )
             not_run = run.get("datasets_not_run")
             all_requested_datasets_used = not isinstance(not_run, list) or len(not_run) == 0
@@ -318,10 +410,18 @@ def run_research_matrix(
                 "runnable": cell_ready,
                 "execution_level": execution_level,
                 "baseline_only": bool(cell.get("baseline_only")),
+                "requested_model_branch": bool(cell.get("requested_model_branch")),
                 "result_publication_ready": bool(run.get("publication_ready")),
                 "result": run,
                 "config_hash": config.get("config_hash"),
                 "warnings": [
+                    *(
+                        [
+                            "Matrix emcee budget reached; this cell ran importance-only and its diagnostics may be degraded."
+                        ]
+                        if emcee_budget_hit
+                        else []
+                    ),
                     *(
                         [
                             "ΛCDM baseline only; this cell does not test the requested extended model."
@@ -359,6 +459,9 @@ def run_research_matrix(
             continue
         cells_by_data.setdefault(tuple(sorted(cell.get("dataset_keys") or [])), []).append(cell)
     for data_key, group in cells_by_data.items():
+        # The (model, sorted datasets) dedupe above guarantees at most one
+        # lcdm cell per dataset tuple, so there is never a second candidate to
+        # arbitrate between here.
         baseline = next((c for c in group if str(c.get("model")) == "lcdm"), None)
         if baseline is None:
             continue
@@ -384,6 +487,41 @@ def run_research_matrix(
         "ready_cells": len(ready),
         "warnings": [
             "Research matrix uses executable compressed-likelihood cells where available; config-only cells are not numerical evidence.",
+            *(
+                [
+                    "Some model comparisons carry comparison_valid=false (a representation "
+                    "mismatch between the paired fits, or at least one blocked, unvetted, "
+                    "or convergence-unverified fit): their delta values are not "
+                    "model-preference evidence."
+                ]
+                if any(c.get("comparison_valid") is False for c in model_comparisons)
+                else []
+            ),
+            *(
+                [
+                    f"{skipped_duplicate_cells} duplicate matrix cell(s) (same model + "
+                    "datasets) were skipped."
+                ]
+                if skipped_duplicate_cells
+                else []
+            ),
+            *(
+                [
+                    f"{budget_stub_cells} cell(s) were not numerically run because the "
+                    f"{_MATRIX_MAX_RUN_CELLS}-cell execution budget was reached."
+                ]
+                if budget_stub_cells
+                else []
+            ),
+            *(
+                [
+                    f"{emcee_capped_cells} cell(s) ran importance-only (diagnostics may "
+                    f"be degraded) because the {_MATRIX_MAX_EMCEE_CELLS}-cell emcee "
+                    "budget was reached."
+                ]
+                if emcee_capped_cells
+                else []
+            ),
         ],
         "failure_categories": [
             "data unavailable",
@@ -399,6 +537,19 @@ def run_research_matrix(
         "__message_to_model__": (
             "Summarize only publication_ready cells as compressed-likelihood preliminary. "
             "For other cells, describe the missing runner/config gap."
+            + (
+                " Model comparisons: quote a model-preference verdict (preferred, "
+                "delta_aic, delta_bic) ONLY from entries with comparison_valid=true, "
+                "and ALWAYS carry the entry's verdict_caveat and chain-tier fields "
+                "next to the verdict (an exploratory-tier extended fit is "
+                "compressed-preliminary evidence, not a published-anchor result). "
+                "For comparison_valid=false entries the two chains were fit against "
+                "different likelihood representations or at least one fit is "
+                "blocked/unvetted — never present their delta values as evidence "
+                "that one model is preferred; report the comparison_warning instead."
+                if model_comparisons
+                else ""
+            )
         ),
     }
 
@@ -1639,13 +1790,49 @@ def _proposed_experiment_matrix(dataset_keys: list[str], models: list[str], text
             "baseline_only": bool(extended_models or special_model_gap),
         })
     if extended_models:
+        # Comparison anchor (2026-06-12): extended branch cells run on the FULL
+        # dataset union, but baseline combos are subsets — without an lcdm cell
+        # on the same union, compute_model_comparison never finds a matched
+        # pair and model_comparisons silently stays empty for 3+ probe
+        # selections. The anchor also takes the emcee upgrade: importance
+        # proposals collapse on multi-probe unions and a blocked baseline
+        # would invalidate every comparison. When the union coincides with a
+        # stock combo (2-probe selections), the anchor flag goes onto THAT
+        # cell — skipping the upgrade there left the canonical baseline at
+        # the mercy of the importance-ESS seed lottery (live: ESS 66 →
+        # blocked → every comparison invalidated).
+        union_marker = tuple(sorted(matrix_keys))
+        anchored_cell: dict[str, Any] | None = None
+        for cell in matrix:
+            if tuple(sorted(cell.get("dataset_keys") or [])) == union_marker:
+                cell["comparison_anchor"] = True
+                anchored_cell = cell
+                break
+        branch_cells: list[dict[str, Any]] = []
+        if anchored_cell is not None:
+            # Move the anchored stock combo to the front with the branch
+            # cells — the chart payloads truncate from the tail, and hiding
+            # exactly the comparison baseline defeats the anchor's purpose.
+            matrix.remove(anchored_cell)
+            branch_cells.append(anchored_cell)
+        else:
+            branch_cells.append({
+                "label": "ΛCDM baseline — all selected probes (comparison anchor)",
+                "dataset_keys": matrix_keys,
+                "model": baseline_model,
+                "baseline_only": True,
+                "comparison_anchor": True,
+            })
         for model in extended_models:
-                matrix.append({
-                    "label": f"Requested {model} branch",
-                    "dataset_keys": matrix_keys,
-                    "model": model,
-                    "requested_model_branch": True,
-                })
+            branch_cells.append({
+                "label": f"Requested {model} branch",
+                "dataset_keys": matrix_keys,
+                "model": model,
+                "requested_model_branch": True,
+            })
+        # Branch cells go FIRST: they answer the question being asked, and the
+        # frontend chart payloads truncate long matrices from the tail.
+        matrix = branch_cells + matrix
     if rotation_keys:
         matrix.append({
             "label": "CMB rotation — isotropic beta",
@@ -1729,8 +1916,21 @@ def _blocking_gaps(dataset_status: list[dict[str, Any]], models: list[str]) -> l
     for entry in dataset_status:
         if entry.get("execution_level") == "config_only":
             gaps.append(f"{entry.get('display_name') or entry.get('key')} requires external Cobaya/CosmoSIS or a future runner before posterior claims.")
-    if any(model != "lcdm" for model in models):
-        gaps.append("Extended models are planned/configurable, but phase-1 compressed execution is publication-ready for ΛCDM only.")
+    non_runnable = sorted({
+        model for model in models
+        if model not in _PHASE1_RUNNABLE_MODELS and model != "isotropic_beta"
+    })
+    if non_runnable:
+        gaps.append(
+            "Curvature/neutrino-mass model branches (" + ", ".join(non_runnable) + ") are "
+            "not executable in the phase-1 in-process matrix; they run only on the "
+            "external Cobaya CMB path (the Planck 2018 likelihood datasets in "
+            "run_cosmology_likelihood_chain, gated behind EXTERNAL_COBAYA_ENABLED) "
+            "or external Cobaya/CosmoSIS."
+        )
+    # Flat-DE extensions (wcdm/w0wa_cdm) are NOT a blocking gap since
+    # 2026-06-12: they run numerically in matrix cells via the emcee upgrade.
+    # Their (usually exploratory) tier is carried by the cell results.
     return gaps
 
 
@@ -1869,13 +2069,36 @@ def _capability_gap_matrix(
             _partial_capability("physical_dark_energy:distance_baseline", "baseline", "BAO/SN/CMB distance baselines are available only as compressed preliminary tests"),
         ])
 
-    if any(model != "lcdm" and model != "isotropic_beta" for model in models):
+    non_runnable_models = sorted({
+        model for model in models
+        if model not in _PHASE1_RUNNABLE_MODELS and model != "isotropic_beta"
+    })
+    if non_runnable_models:
         rows.append({
             "component": "extended_model_publication_runner",
             "category": "model",
             "status": "partial",
-            "details": "Extended models are planned/configurable; phase-1 claimable matrices promote ΛCDM compressed baselines.",
+            "details": (
+                "Curvature/neutrino-mass branches (" + ", ".join(non_runnable_models) + ") "
+                "never sample their extension axis in-process; they run only on the "
+                "external Cobaya CMB path (Planck 2018 likelihood datasets in "
+                "run_cosmology_likelihood_chain, gated behind EXTERNAL_COBAYA_ENABLED)."
+            ),
             "claim_support": "does not support headline extended-model posterior claims",
+        })
+    # NOT an elif: both rows render when both model classes were requested —
+    # suppressing the flat-DE row made the capability matrix contradict the
+    # executed wcdm/w0wa cells shipped in the same payload.
+    if any(model in {"wcdm", "w0wa_cdm"} for model in models):
+        rows.append({
+            "component": "extended_model_flat_de_runner",
+            "category": "model",
+            "status": "partial",
+            "details": (
+                "Flat dark-energy extensions (wCDM/w0waCDM) run numerically in phase-1 "
+                "matrices via the emcee upgrade, typically at exploratory tier."
+            ),
+            "claim_support": "supports exploratory extended-model results with caveats",
         })
 
     if blocking_gaps and not rows:
@@ -2587,6 +2810,25 @@ def _clean_dataset_keys(keys: list[Any]) -> list[str]:
         if text and text not in result and _dataset_exists(text):
             result.append(text)
     return result
+
+
+# Models the phase-1 in-process runner genuinely samples (flat geometry,
+# massless neutrinos; w0/wa respond through the distance kernels). Curvature
+# (ok_*) and neutrino-mass (*_mnu) branches never sample their extension axis
+# in-process — they run on the external Cobaya CMB path (the Planck 2018
+# likelihood datasets in run_cosmology_likelihood_chain, gated behind
+# EXTERNAL_COBAYA_ENABLED) — so matrix cells for them stay config_only
+# instead of relabeling ΛCDM chains.
+_PHASE1_RUNNABLE_MODELS = ("lcdm", "wcdm", "w0wa_cdm")
+
+# run_research_matrix execution budgets. The proposed_experiment_matrix can be
+# supplied verbatim by the caller (an LLM-authored research_plan), so the
+# runner bounds its own work: at most this many numerically-run cells, and at
+# most this many emcee-upgraded cells (~13 s each; the 120 s tool deadline in
+# chat.py is sized as ~26 s of importance baselines + 3 × ~13 s emcee + cold
+# import headroom).
+_MATRIX_MAX_RUN_CELLS = 24
+_MATRIX_MAX_EMCEE_CELLS = 3
 
 
 def _clean_models(models: list[Any]) -> list[str]:

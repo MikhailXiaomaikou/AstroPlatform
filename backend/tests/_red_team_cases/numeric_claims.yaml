@@ -436,3 +436,50 @@ cases:
           status: "COMPLETED"
           reproduced: [67.4]
     expect_ok: false
+
+  - name: invalid_model_comparison_delta_not_claimable
+    description: |
+      2026-06-12 matrix-gate review: opening the phase-1 matrix made
+      model_comparisons LLM-visible. A comparison whose input chain is
+      blocked (or whose representations differ) is stamped __do_not_claim__,
+      so its delta_chi2/delta_aic — computed from one-effective-sample noise —
+      must not ground a reply claim.
+    reply: "The fit gives chi-squared = 2.11, so wCDM is favored here."
+    tool_results:
+      - tool: run_research_matrix
+        input: {}
+        result:
+          analysis_status: "RESEARCH_MATRIX_PARTIAL"
+          model_comparisons:
+            - baseline_model: "lcdm"
+              extended_model: "wcdm"
+              delta_chi2: 0.115
+              delta_aic: 2.11
+              preferred: "undetermined"
+              comparison_valid: false
+              comparison_warning: "the extended fit carries chain_tier='blocked'"
+              __do_not_claim__: true
+    expect_ok: false
+
+  - name: valid_model_comparison_delta_stays_claimable
+    description: |
+      Control for invalid_model_comparison_delta_not_claimable: a
+      comparison_valid=true verdict from non-blocked chains is a real tool
+      result and its deltas remain quotable (with the tier caveat carried in
+      prose by the model).
+    reply: "The extended fit improves chi-squared: -4.58 in this exploratory comparison."
+    tool_results:
+      - tool: run_research_matrix
+        input: {}
+        result:
+          analysis_status: "RESEARCH_MATRIX_PARTIAL"
+          model_comparisons:
+            - baseline_model: "lcdm"
+              extended_model: "wcdm"
+              delta_chi2: -4.58
+              delta_aic: -2.58
+              preferred: "wcdm"
+              comparison_valid: true
+              baseline_chain_tier: "publication"
+              extended_chain_tier: "exploratory"
+    expect_ok: true
