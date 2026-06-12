@@ -909,6 +909,15 @@ _FREETEXT_KEYS: frozenset[str] = frozenset({
     # AND (via the input-subtraction) wrongly remove a genuine result that
     # numerically equals a code literal (e.g. bins=20 vs a real count of 20).
     "code", "script", "expression", "formula",
+    # Provenance methodology prose (2026-06-12 DR12 review BLOCKER): the
+    # compressed_sources records carry arXiv ids inside source_locator /
+    # approximation strings. "arXiv:1607.03155" tokenizes to 1607.03155 —
+    # IN-BAND for the DR12 dimensional convention (D_M·rs_fid/r_d ~ 1512-2307
+    # Mpc), so a fabricated "D_M = 1607 Mpc" validated while the true released
+    # value was blocked. These strings describe methodology; no measurement
+    # may ground on them. Legitimate constants they mention (rs_fid) are
+    # exposed as structured numeric fields instead.
+    "source_locator", "approximation",
 })
 
 

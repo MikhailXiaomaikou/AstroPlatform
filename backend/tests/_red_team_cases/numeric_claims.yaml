@@ -483,3 +483,44 @@ cases:
               baseline_chain_tier: "publication"
               extended_chain_tier: "exploratory"
     expect_ok: true
+
+  - name: arxiv_id_in_source_locator_prose_not_in_universe
+    description: |
+      2026-06-12 DR12 review BLOCKER: "arXiv:1607.03155" inside the
+      compressed_sources source_locator prose tokenizes to 1607.03155 —
+      IN-BAND for the DR12 dimensional convention (D_M·rs_fid/r_d ~
+      1512-2307 Mpc). A fabricated distance laundered off the citation id
+      must be blocked; source_locator/approximation are methodology prose,
+      never measurement evidence.
+    reply: "At z=0.51 the DR12 consensus gives a transverse distance of 1607 Mpc."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        input: {}
+        result:
+          analysis_status: "COMPLETED"
+          provenance:
+            cosmology_likelihood:
+              compressed_sources:
+                - dataset_key: "sdss_dr12_consensus_bao"
+                  source_locator: "BOSS DR12 consensus BAO (Alam et al. 2017, arXiv:1607.03155)"
+                  approximation: "rs_fid=147.78 Mpc storage convention"
+    expect_ok: false
+
+  - name: structured_rs_fid_field_stays_claimable
+    description: |
+      Control for arxiv_id_in_source_locator_prose_not_in_universe: the
+      release's published fiducial sound horizon is exposed as a structured
+      numeric field (rs_fid_mpc) and remains quotable.
+    reply: "The DR12 release stores values against rs_fid = 147.78 Mpc."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        input: {}
+        result:
+          analysis_status: "COMPLETED"
+          provenance:
+            cosmology_likelihood:
+              compressed_sources:
+                - dataset_key: "sdss_dr12_consensus_bao"
+                  source_locator: "BOSS DR12 consensus BAO (Alam et al. 2017, arXiv:1607.03155)"
+                  rs_fid_mpc: 147.78
+    expect_ok: true

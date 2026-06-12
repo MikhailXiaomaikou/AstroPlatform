@@ -741,6 +741,61 @@ def bench_sdss_6df_bao_executable() -> dict[str, Any]:
     }
 
 
+def bench_sdss_dr12_consensus_bao() -> dict[str, Any]:
+    """BOSS DR12 consensus BAO executable (P2b, 2026-06-12).
+
+    The BAO-only consensus of Alam et al. 2017 — the '+BAO' column behind the
+    Planck 2018 parameter tables. Pins (1) the DIMENSIONAL rs_fid=147.78
+    storage convention: at the Planck 2018 fiducial the predicted
+    D_M·(rs_fid/r_d) must land within 5% of the released values (~1512 Mpc at
+    z=0.38, NOT the dimensionless ~10 of the same-named eBOSS quantity);
+    (2) per-point pulls < 2σ and order-unity χ²/n at the fiducial (measured
+    5.615 for 6 points; cobaya parity within 0.1 is locked in
+    tests/test_sdss_dr12_consensus.py); (3) in-process execution to
+    publication tier with the full 6×6 covtot.
+    """
+    from app.services.cosmology_likelihoods import (
+        load_verified_dr12_consensus_data,
+        run_likelihood_chain,
+        _dr12_chi2_samples,
+        _dr12_consensus_predictions,
+    )
+    order = ["H0", "omegam", "rd"]
+    theta = np.array([[67.36, 0.3153, 147.09]])
+    v = load_verified_dr12_consensus_data()
+    pred = _dr12_consensus_predictions(theta, order, v["mean_vector"])[0]
+    observed = np.array([row[1] for row in v["mean_vector"]])
+    sigmas = np.sqrt(np.diag(v["covariance"]))
+    pulls = np.abs(pred - observed) / sigmas
+    rel = np.abs(pred - observed) / observed
+    chi2 = float(_dr12_chi2_samples(theta, order, "sdss_dr12_consensus_bao")[0])
+    r = run_likelihood_chain(
+        model="lcdm", dataset_keys=["sdss_dr12_consensus_bao"], n_samples=2000, random_seed=42
+    )
+    used = [d["key"] for d in r["datasets_used"]]
+    executed = (
+        bool(r["success"])
+        and "sdss_dr12_consensus_bao" in used
+        and r["chain_tier"] == "publication"
+        and v["hash_verified"] is True
+    )
+    return {
+        "pass": (
+            bool(np.all(pulls < 2.0))
+            and bool(np.all(rel < 0.05))
+            and 0.3 < chi2 / 6 < 2.0
+            and executed
+        ),
+        "chi2_planck_fiducial": round(chi2, 4),
+        "reduced_chi2_planck": round(chi2 / 6, 4),
+        "max_pull_sigma": round(float(pulls.max()), 2),
+        "pred_dm_z038_mpc": round(float(pred[0]), 2),
+        "chain_tier": r["chain_tier"],
+        "executed_in_process": executed,
+        "target": "dimensional rs_fid convention (~1512 Mpc), pulls<2σ, χ²/6 order-unity, publication in-process",
+    }
+
+
 def bench_s8_derived_consistency() -> dict[str, Any]:
     """S8 as a derived quantity, not a sampled column (1B, 2026-05-29).
 
@@ -828,6 +883,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("cosmic_chronometer_hz", bench_cosmic_chronometer_hz),
     ("eboss_fsigma8_growth", bench_eboss_fsigma8_growth),
     ("sdss_6df_bao_executable", bench_sdss_6df_bao_executable),
+    ("sdss_dr12_consensus_bao", bench_sdss_dr12_consensus_bao),
     ("s8_derived_consistency", bench_s8_derived_consistency),
     ("growth_kernel_vs_exact_lcdm", bench_growth_kernel_vs_exact_lcdm),
     ("model_comparison_delta", bench_model_comparison_delta),
