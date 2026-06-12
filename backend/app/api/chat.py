@@ -1897,6 +1897,7 @@ async def _execute_tool_calls(
     summary_reserve_s: float = 60.0,
     workflow_budget_mode: str = "default",
     tool_deadline_scale: float = 1.0,
+    turn_tool_results: list[dict] | None = None,
 ) -> list[dict]:
     """Execute one model turn's tool calls concurrently while preserving order.
 
@@ -2031,6 +2032,22 @@ async def _execute_tool_calls(
                 logger.debug("tool_progress event failed", exc_info=True)
 
         tool_input = dict(tc.get("input") or {})
+        # 2026-06-12 anti-laundering: the trusted turn record is ALWAYS
+        # server-controlled. Strip any model-supplied copy of the private key
+        # for EVERY tool, then attach the real accumulator only for the tools
+        # that render/verify tool results — without this, a model-authored
+        # tool_results payload becomes a user-facing report and re-grounds
+        # its own fabricated numbers (live-confirmed bypass).
+        tool_input.pop("_turn_tool_results", None)
+        if (
+            tool_name in {
+                "export_research_report",
+                "verify_research_facts",
+                "build_evidence_graph",
+            }
+            and turn_tool_results is not None
+        ):
+            tool_input["_turn_tool_results"] = list(turn_tool_results)
         if workflow_budget_mode == "long":
             tool_input.setdefault("_workflow_budget_mode", "long")
             if tool_name in {"run_adql", "run_sdss_sql", "query_high_velocity_stars"}:
@@ -5224,6 +5241,7 @@ async def _run_agent_loop(
             summary_reserve_s=summary_reserve_s,
             workflow_budget_mode=budget_mode,
             tool_deadline_scale=float(budget.get("tool_deadline_scale", 1.0)),
+            turn_tool_results=all_tool_results,
         ) if real_tool_calls else []
         real_by_id = {tc["id"]: tc for tc in real_executed_tools}
         executed_tools = [

@@ -7623,7 +7623,23 @@ async def _exec_sensitivity_analysis(inp: dict, python_session_id: str = "defaul
         except asyncio.TimeoutError:
             results.append({"perturbation": frac, "value": value, "error": "timeout", "success": False})
 
-    return {"parameter": param, "base_value": base, "results": results}
+    return {
+        "parameter": param,
+        "base_value": base,
+        "results": results,
+        # Every number here is a hypothetical: the perturbed `value` is
+        # base*(1+frac) (pure model arithmetic) and each `result` is computed
+        # with the parameter SET to that model-chosen value — none is a
+        # measurement of reality. Mark the payload non-claimable so a model
+        # cannot launder an arbitrary base_value*(1+frac) product into a cited
+        # number (2026-06-12 review: live derived-number bypass).
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            "Sensitivity/what-if output. Discuss the TREND (how results move with "
+            "the perturbation) qualitatively; do NOT cite any perturbed value or "
+            "result here as a measurement — re-run the real fit to quote a number."
+        ),
+    }
 
 
 def _exec_get_cached_results(inp: dict, python_session_id: str = "default") -> dict:

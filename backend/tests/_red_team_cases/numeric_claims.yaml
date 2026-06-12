@@ -332,3 +332,107 @@ cases:
                 union3: "64c79abd24bf5154bc1e38ad0c031e31dd6247cdcc5ca930829698169809a146"
           result_hash: "9e3779b97f4a7c15f39cc0605cedc834"
     expect_ok: false
+
+  - name: numeric_in_tool_input_not_in_universe
+    description: |
+      2026-06-12 P1b: a fabricated number echoed into a tool ARGUMENT (search
+      query string or structured input field) must not ground the claim — the
+      universe is built from tool RESULTS only (the numeric twin of the B4
+      citation-pool rule).
+    reply: "The fit prefers H0 = 71.4 km/s/Mpc."
+    tool_results:
+      - tool: search_literature
+        input:
+          query: "Hubble constant H0 = 71.4 km/s/Mpc local measurements"
+        result:
+          results: []
+          n_results: 0
+    expect_ok: false
+
+  - name: numeric_in_report_prose_not_in_universe
+    description: |
+      2026-06-12 P1b: rendered research deliverables (markdown /
+      paper_draft_markdown / bibtex) are a RENDERING of evidence, not
+      evidence — numbers inside them must not re-ground claims.
+    reply: "Our analysis finds H0 = 71.4 at publication tier."
+    tool_results:
+      - tool: export_research_report
+        input: {}
+        result:
+          markdown: "## Findings: H0 = 71.4 (publication-ready)"
+          paper_draft_markdown: "Abstract: we find H0 = 71.4."
+    expect_ok: false
+
+  - name: numeric_in_run_adql_query_echo_not_in_universe
+    description: |
+      2026-06-12 review: run_adql copies the model-authored SQL into
+      result["query"]; a fabricated number embedded there (or in a SQL
+      comment) must not ground a claim even though it sits in the RESULT.
+    reply: "The fit prefers H0 = 71.4 km/s/Mpc."
+    tool_results:
+      - tool: run_adql
+        input:
+          query: "SELECT TOP 5 ra, dec FROM gaia WHERE parallax > 71.4"
+        result:
+          query: "SELECT TOP 5 ra, dec FROM gaia WHERE parallax > 71.4"
+          row_count: 5
+          data:
+            ra: [10.1, 11.2, 12.3]
+    expect_ok: false
+
+  - name: numeric_in_tool_params_echo_not_in_universe
+    description: |
+      2026-06-12 review: query_high_velocity_stars echoes its numeric
+      arguments into result["params"]; those are model inputs, not
+      measurements, and must not ground a claim.
+    reply: "These stars move at v_tan = 713 km/s."
+    tool_results:
+      - tool: query_high_velocity_stars
+        input: {}
+        result:
+          params:
+            min_vtan_kms: 713
+            min_parallax_mas: 0.33
+          data:
+            vtan: [1590.18, 1602.4]
+    expect_ok: false
+
+  - name: numeric_in_legacy_cosmology_manifest_not_in_universe
+    description: |
+      2026-06-12 round-2 review: compare_luminosity_distances / fit_line_lfr
+      echo the ASSUMED cosmology into their result. A model-authored legacy
+      spec ("FlatLambdaCDM_H73p8_Om0p295") round-trips the model's own digits
+      with bibcode=None and must not ground a measurement claim; curated
+      presets (real bibcode) stay citeable separately.
+    reply: "We adopt the local distance ladder value H0 = 73.8 km/s/Mpc."
+    tool_results:
+      - tool: compare_luminosity_distances
+        input:
+          target_cosmology: "FlatLambdaCDM_H73p8_Om0p295"
+        result:
+          target_cosmology:
+            H0_km_s_Mpc: 73.8
+            Om0: 0.295
+            bibcode: null
+          data:
+            ratio: [1.02, 1.05]
+    expect_ok: false
+
+  - name: numeric_echoed_from_tool_input_subtracted_structurally
+    description: |
+      2026-06-12 round-3: the structural anti-echo subtracts every number the
+      model authored in a tool INPUT, so a fabricated value echoed into ANY
+      result key (here audit_published_constraint's `claimed`) is removed from
+      the universe regardless of the echo key.
+    reply: "The published Hubble constant is H0 = 71.4 km/s/Mpc."
+    tool_results:
+      - tool: audit_published_constraint
+        input:
+          param: "H0"
+          claimed: [71.4, 1.0]
+        result:
+          param: "H0"
+          claimed_value: 71.4
+          status: "COMPLETED"
+          reproduced: [67.4]
+    expect_ok: false

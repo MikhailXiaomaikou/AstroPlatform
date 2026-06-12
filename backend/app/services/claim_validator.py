@@ -789,6 +789,14 @@ _METADATA_KEYS_BLACKLIST: frozenset[str] = frozenset({
     # Result status flags (mostly strings or bools, but occasionally a code)
     "success", "error_class", "argument", "error_code",
     "analysis_status", "__tool_status__", "data_origin",
+    # Model-authored tool arguments (2026-06-12, the numeric twin of the B4
+    # citation-pool rule): numbers under any nested "input" key are what the
+    # model ASKED, not what a tool RETURNED — without this, echoing a
+    # fabricated value into any tool argument launders it into the claim
+    # universe (top-level accumulator inputs are also stripped structurally
+    # by _result_only_nodes; this catches nested copies, e.g. a tool result
+    # that embeds the turn's tool_calls).
+    "input", "tool_input", "_turn_tool_results",
     # Offset / pagination
     "offset", "limit", "per_page", "page", "total_pages",
     # Row-count metadata (same category as row_count)
@@ -824,6 +832,48 @@ _CITATION_KEYS_BLACKLIST: frozenset[str] = frozenset({
     # remaining emitters of the class.
     "sha256", "mean_sha256", "artifact_sha256", "runner_hash", "result_hash",
     "config_hash", "digest", "data_hash", "files_sha256",
+    # input_hash (build_evidence_graph node, _stable_hash of the model-supplied
+    # input) is the same hex-digit-run class — and it is derived from
+    # attacker-influenced input (2026-06-12 review #7/#11/#15).
+    "input_hash",
+})
+
+
+# 2026-06-12 (review of the input-echo fix): a fabricated number can re-enter
+# the claim universe even after the accumulator `input` field is stripped,
+# because several tools COPY the model's own arguments into their RESULT body
+# for UI/reproducibility (run_adql -> result["query"], query_high_velocity_stars
+# -> result["params"], query_gaia_cluster -> result["center_ra"]/["radius_deg"],
+# run_research_matrix -> result["research_plan"]). Those echoed values are what
+# the model ASKED, not what a tool MEASURED, so their entire subtree is skipped.
+# Real measured aggregates live under distinct keys (median_parallax_mas,
+# mean_pmra, …) and are unaffected. Rendered research deliverables
+# (markdown/paper draft/bibtex) are a RENDERING of evidence, not evidence —
+# skipped as whole subtrees so a list/dict-valued variant cannot leak (the
+# string-only _FREETEXT_KEYS skip was value-type fragile, review #3).
+_NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
+    # Input-alias / echoed-argument keys
+    "query", "params", "arguments", "kwargs", "research_plan",
+    "center_ra", "center_dec", "radius_deg", "parallax_center_mas",
+    "pmra_center", "pmdec_center", "ruwe_max",
+    "original_radius_deg", "final_radius_deg",
+    # Derived-from-unvalidated-input statistics (2026-06-12 review): a tension
+    # significance computed from a model-supplied (unvalidated) `claimed`
+    # published value is not a measurement — the model can solve the claim to
+    # make the tension any target. The real `reproduced` value stays claimable
+    # under its own key.
+    "tension_sigma", "claimed", "claimed_value", "claimed_sigma",
+    # Rendered deliverables (whole-subtree skip, not value-type dependent)
+    "markdown", "paper_draft_markdown", "report_markdown", "bibtex",
+})
+
+
+# Cosmology-manifest result keys that may echo a model-authored legacy
+# cosmology spec; their numbers are skipped UNLESS the manifest carries a
+# real bibcode (a curated preset, citeable as provenance). See _iter_numeric_values.
+_COSMOLOGY_MANIFEST_KEYS: frozenset[str] = frozenset({
+    "target_cosmology", "current_cosmology", "cosmology_manifest",
+    "source_cosmology", "assumed_cosmology",
 })
 
 
@@ -848,7 +898,91 @@ _FREETEXT_KEYS: frozenset[str] = frozenset({
     "suggestion", "suggestions", "description", "summary", "text",
     "markdown", "banner", "warning", "warnings", "hint", "hints",
     "comment", "comments", "title", "label", "caption", "guidance",
+    # Rendered research deliverables (2026-06-12): report/paper prose is a
+    # RENDERING of evidence, not evidence — numbers inside it must ground via
+    # the underlying tool results, never via the rendered text (an export of
+    # tainted text would otherwise re-ground its own numbers).
+    "paper_draft_markdown", "report_markdown", "bibtex",
+    # Computation source strings (2026-06-12 review): run_python `code` (and
+    # kin) carry initial guesses / grid sizes / fiducial constants that a fit
+    # legitimately recovers. Tokenizing them would both pollute the universe
+    # AND (via the input-subtraction) wrongly remove a genuine result that
+    # numerically equals a code literal (e.g. bins=20 vs a real count of 20).
+    "code", "script", "expression", "formula",
 })
+
+
+def _result_only_nodes(tool_results: Any) -> list[Any]:
+    """Strip tool INPUTS from accumulator-shaped entries before any numeric
+    harvest — the numeric twin of _citation_pool_nodes' B4 rule.
+
+    The agent-loop accumulator shape is [{"id", "tool", "input", "result"}].
+    The claim universe must be built from what tools RETURNED, never from
+    what the model ASKED: otherwise a fabricated number echoed into any tool
+    argument (a search query string, a parameter field) validates its own
+    claim in the same turn (live-confirmed 2026-06-12). Bare result dicts
+    (no envelope) pass through with any top-level "input" key dropped."""
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    nodes: list[Any] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            nodes.append(entry)
+            continue
+        # An accumulator envelope ({id, tool, input, result}) carries evidence
+        # ONLY in its result subtree — id/tool/input and any other top-level
+        # sibling are not measurements. So whenever a "result" key exists,
+        # take JUST that value (review #3: a stray sibling like {result:None,
+        # H0_guess:73.8} must not leak). Only a bare, already-unwrapped result
+        # dict (no "result" key) is walked directly, with "input" dropped.
+        if "result" in entry:
+            nodes.append(entry["result"])
+        else:
+            nodes.append({k: v for k, v in entry.items() if k != "input"})
+    return nodes
+
+
+def _model_input_numbers(tool_results: Any) -> set[float]:
+    """Union of every model-authored input number across this turn's tool
+    calls (accumulator entries shaped {id, tool, input, result}).
+
+    The source set for the structural anti-echo subtraction: a value the model
+    put in a DIRECT tool argument (audit_published_constraint `claimed`,
+    sensitivity_analysis `base_value`, an unforeseen scalar echo) is removed
+    from the claim universe wherever the tool echoes it, closing the per-key
+    whack-a-mole. Crucially we harvest with the SAME blacklists as the result
+    universe (_iter_numeric_values): computation source strings (`code`),
+    config (`priors`/`proposal`/`n_samples`), echoed query/params, and
+    citation identifiers are NOT harvested — so a genuine fit output that
+    coincides with a code literal or prior bound is not wrongly subtracted
+    (2026-06-12 review false-positive fix)."""
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    nums: set[float] = set()
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get("input"), (dict, list)):
+            nums |= set(_iter_numeric_values(entry["input"]))
+    return nums
+
+
+def _valid_bibcode_present(manifest: dict) -> bool:
+    """True only when the manifest carries a REAL bibcode — a curated preset
+    (planck18 -> 2020A&A...641A...6P). An ADS bibcode is exactly 19 characters,
+    so a truthy-but-fabricated marker ('2099XXXX...FAKE', 15 chars) does not
+    qualify even if it passes the loose extraction regex."""
+    bib = manifest.get("bibcode")
+    if not isinstance(bib, str):
+        return False
+    return any(len(b) == 19 for b in _bibcodes_from_text(bib))
+
+
+def _manifest_subtree_is_skippable(val: Any) -> bool:
+    """A cosmology-manifest value whose numbers must be skipped (model-authored
+    legacy spec). Dicts without a valid bibcode and lists containing any such
+    dict are skippable; a dict WITH a valid bibcode (curated preset) is kept."""
+    if isinstance(val, dict):
+        return not _valid_bibcode_present(val)
+    if isinstance(val, list):
+        return any(isinstance(v, dict) and not _valid_bibcode_present(v) for v in val)
+    return False
 
 
 def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Iterable[float]:
@@ -879,6 +1013,20 @@ def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Ite
             # fabricated claim must not legitimize itself by matching the
             # parsed-out volume / year / arxiv-id of a cited paper.
             if key_str in _CITATION_KEYS_BLACKLIST:
+                continue
+            # 2026-06-12: skip echoed-input + rendered-deliverable subtrees
+            # (the result-side twin of the accumulator-input strip).
+            if key_str in _NON_EVIDENCE_KEYS:
+                continue
+            # 2026-06-12 (review #0/#2): a cosmology manifest echoed into a
+            # tool result (compare_luminosity_distances -> target_cosmology,
+            # fit_line_lfr -> cosmology_manifest) is the ASSUMED cosmology, not
+            # a measurement. When it came from a model-authored legacy spec
+            # ("FlatLambdaCDM_H73p8_Om0p295" -> bibcode None) its H0/Om0 are
+            # the model's own input digits round-tripped — skip them. Curated
+            # presets carry a real bibcode (planck18 -> 2020A&A...641A...6P)
+            # and stay citeable as provenance.
+            if key_str in _COSMOLOGY_MANIFEST_KEYS and _manifest_subtree_is_skippable(val):
                 continue
             # P0-a: don't harvest prose digits from free-text field strings
             # (banner text, error messages, suggestions).  Nested structures
@@ -1025,7 +1173,11 @@ def _build_cosmology_labeled_universe(payload: Any, out: dict[str, set[float]] |
         ctx = _canonicalize_cosmology_param(named) if isinstance(named, str) else None
         for key, val in payload.items():
             key_str = str(key).lower()
-            if key_str in _METADATA_KEYS_BLACKLIST or key_str in _CITATION_KEYS_BLACKLIST:
+            if (
+                key_str in _METADATA_KEYS_BLACKLIST
+                or key_str in _CITATION_KEYS_BLACKLIST
+                or key_str in _NON_EVIDENCE_KEYS
+            ):
                 continue
             canon_key = _canonicalize_cosmology_param(key)
             if canon_key is not None:
@@ -1071,9 +1223,28 @@ def validate_claims(
     `STRICT_UNIVERSE_THRESHOLD` entries, tighten tolerance to
     `STRICT_TOLERANCE` (0.1 %) to prevent accidental matches against
     indices / row counts / offsets.
+
+    NOTE (2026-06-12): an earlier round tried admitting USER-prompt numbers so
+    honest restatements ("at z=1.5 ...") would validate. Adversarial review
+    showed that channel reopened bibcode/year/identifier laundering via prompt
+    text, let a user-typed number override a real tool-produced parameter, and
+    relaxed strict mode by padding the prompt — so it was reverted. Restating
+    an input value that no tool echoed into a result is a known specificity
+    cost (backlog P3b), NOT worth weakening the gate.
     """
     claims = extract_claims(reply)
-    universe: set[float] = set(_iter_numeric_values(tool_results))
+    # 2026-06-12: harvest from tool RESULTS only — model-authored inputs must
+    # never ground a claim (see _result_only_nodes).
+    claimable_nodes = _result_only_nodes(tool_results) if tool_results is not None else tool_results
+    universe: set[float] = set(_iter_numeric_values(claimable_nodes))
+    # STRUCTURAL anti-echo (2026-06-12): subtract every number the model
+    # authored in this turn's tool INPUTS. Many tools copy their arguments into
+    # their result (run_adql->query, audit_published_constraint->claimed,
+    # sensitivity_analysis->base_value, …), so a fabricated value echoed under
+    # ANY result key is removed here regardless of the key — closing the class
+    # the per-key _NON_EVIDENCE_KEYS list can only chase one name at a time.
+    input_numbers = _model_input_numbers(tool_results) if tool_results is not None else set()
+    universe -= input_numbers
     universe_size = len(universe)
     universe_sample = sorted(universe)[:50]
 
@@ -1099,7 +1270,9 @@ def validate_claims(
     # in the universe.  This closes the cross-label ±1% laundering surface (e.g.
     # an "σ8 = 0.315" claim being validated by an unrelated Ωm=0.3153).  Claims we
     # can't pin to a produced parameter keep the existing global-universe check.
-    labeled = _build_cosmology_labeled_universe(tool_results) if tool_results else {}
+    labeled = _build_cosmology_labeled_universe(claimable_nodes) if tool_results else {}
+    if input_numbers:  # same structural anti-echo for the per-parameter buckets
+        labeled = {param: (vals - input_numbers) for param, vals in labeled.items()}
     uncited: list[Claim] = []
     for c in claims:
         param = _claim_cosmology_param(c)
@@ -2889,7 +3062,12 @@ def _iter_declared_cosmology_subtrees(node: Any) -> Iterable[dict]:
     if isinstance(node, dict):
         for key, value in node.items():
             if key in _DECLARED_COSMOLOGY_KEYS and isinstance(value, dict):
-                yield value
+                # Only a curated preset (valid bibcode) is provenance-citeable;
+                # a model-authored legacy spec (bibcode None) is skipped so this
+                # anchor gate AGREES with the validate_claims universe skip
+                # (2026-06-12 review #1 — the two gates must not contradict).
+                if not _manifest_subtree_is_skippable(value):
+                    yield value
             else:
                 yield from _iter_declared_cosmology_subtrees(value)
     elif isinstance(node, (list, tuple)):
@@ -2920,9 +3098,13 @@ def value_supported_by_cosmology_manifest(
         return False
     if not math.isfinite(v):
         return False
+    # Read declared cosmologies from RESULTS only (a manifest in a tool INPUT
+    # is model-authored, 2026-06-12 review #1) and subtract model input numbers.
+    result_nodes = _result_only_nodes(tool_results) if tool_results is not None else tool_results
     pool: set[float] = set()
-    for subtree in _iter_declared_cosmology_subtrees(tool_results):
+    for subtree in _iter_declared_cosmology_subtrees(result_nodes):
         pool.update(_iter_numeric_values(subtree))
+    pool -= _model_input_numbers(tool_results) if tool_results is not None else set()
     if not pool:
         return False
     return _matches_any(v, pool, tolerance)

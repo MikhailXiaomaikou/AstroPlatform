@@ -192,7 +192,7 @@ Eight-layer regression net the project commits to keep green. Maps to
 | Unit + backend-tool tests | `backend/tests/test_*.py` (141 files / ~2.2 k cases as of 2026-06-10, cov gate 45%) | every push / PR (CI `backend-test`) |
 | Frontend component tests | `frontend/src/__tests__/*.test.tsx` (Vitest, 153 cases as of 2026-06-10 incl. mockE2E fixture-driven) | every push / PR (CI `frontend-test`) |
 | Manifest ↔ schema ↔ dispatch consistency | `tests/test_manifest_dispatch_consistency.py` (regression for the `45383ac` "manifest forgot to register" class) | every push / PR |
-| Red-team numeric corpus | `tests/_red_team_cases/numeric_claims.yaml` + `tests/test_red_team_corpus.py` (22 cases as of 2026-06-12; ≥10 floor) | every push / PR |
+| Red-team numeric corpus | `tests/_red_team_cases/numeric_claims.yaml` + `tests/test_red_team_corpus.py` (28 cases as of 2026-06-12; ≥10 floor) | every push / PR |
 | Security / privacy | `tests/security/test_{account_isolation,secret_leakage,admin_endpoints_gate,debug_endpoints_gate}.py` (16+1 cases) | every push / PR |
 | Science benchmarks | `backend/scripts/benchmarks/run_cosmology_benchmarks.py` (22 pinned baselines as of 2026-06-10) + `backend/scripts/audit_registry.py` | push to main only (CI `benchmarks` job, push-only, NOT PR-gated) |
 | Paper-derived blind tests (LLM) | `backend/scripts/blind_test_cosmology_m0/cases.yaml + runner.py`, orchestrated by `backend/scripts/daily_blind.sh` | daily 16:00 UTC + manual dispatch with module/cases inputs (`.github/workflows/daily.yml`) |

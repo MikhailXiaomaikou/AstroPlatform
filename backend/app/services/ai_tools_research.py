@@ -94,7 +94,7 @@ RESEARCH_TOOL_SCHEMAS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "tool_results": {"type": "array", "items": {"type": "object"}},
+                "tool_results": {"type": "array", "items": {"type": "object"}, "description": "Optional hint only: in chat, the server-side record of tools that actually ran this turn is authoritative and cannot be overridden by this parameter."},
                 "final_reply": {"type": "string"},
             },
         },
@@ -109,7 +109,7 @@ RESEARCH_TOOL_SCHEMAS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "tool_results": {"type": "array", "items": {"type": "object"}},
+                "tool_results": {"type": "array", "items": {"type": "object"}, "description": "Optional hint only: in chat, the server-side record of tools that actually ran this turn is authoritative and cannot be overridden by this parameter."},
                 "final_reply": {"type": "string"},
                 "evidence_graph": {"type": "object"},
             },
@@ -127,7 +127,7 @@ RESEARCH_TOOL_SCHEMAS = [
             "properties": {
                 "research_plan": {"type": "object"},
                 "evidence_graph": {"type": "object"},
-                "tool_results": {"type": "array", "items": {"type": "object"}},
+                "tool_results": {"type": "array", "items": {"type": "object"}, "description": "Optional hint only: in chat, the server-side record of tools that actually ran this turn is authoritative and cannot be overridden by this parameter."},
                 "title": {"type": "string"},
             },
         },
@@ -189,11 +189,12 @@ def _exec_build_evidence_graph(inp: dict) -> dict:
     from app.services.research_program import build_evidence_graph
 
     try:
-        tool_results = inp.get("tool_results")
-        return build_evidence_graph(
-            tool_results=tool_results if isinstance(tool_results, list) else None,
+        tool_results, source_warnings, source = _trusted_tool_results(inp)
+        out = build_evidence_graph(
+            tool_results=tool_results,
             final_reply=str(inp.get("final_reply") or "") or None,
         )
+        return _stamp_evidence_source(out, source_warnings, source)
     except Exception as exc:
         return {
             "success": False,
@@ -205,17 +206,162 @@ def _exec_build_evidence_graph(inp: dict) -> dict:
         }
 
 
+def _trusted_tool_results(inp: dict) -> tuple[list | None, list[str], str]:
+    """Resolve the tool_results evidence for the render/verify research tools.
+
+    When the chat agent loop dispatched this call, it ALWAYS injects the
+    turn's real accumulator as ``_turn_tool_results`` (the dispatcher strips
+    any model-supplied copy of that key, so the model cannot forge it). The
+    server record is then the ONLY admissible evidence — model-supplied
+    ``tool_results`` were previously rendered verbatim into the report /
+    fact-check, letting a fabricated ``{publication_ready: true, H0: ...}``
+    payload become a user-facing deliverable AND re-ground its own numbers
+    via the result text (live-confirmed bypass, 2026-06-12). Direct
+    library/test callers (no injection) keep their payload — trusted code.
+
+    Returns (tool_results, warnings, source_label). source_label is one of:
+      - "server_turn_record": a NON-EMPTY trusted accumulator was injected;
+        it is authoritative and any caller-supplied payload is ignored.
+      - "caller_supplied_unverified": the chat path injected an EMPTY record
+        (no tool produced results THIS turn) but the caller supplied a
+        payload — ambiguous between an honest cross-turn echo of prior real
+        results and a same-turn fabrication, which the server cannot tell
+        apart. The draft is rendered from the caller payload so a legitimate
+        "now export what we found" follow-up is not a blank report (review
+        #13), but the output is stamped __do_not_claim__ so its numbers
+        cannot ground claims (laundering stays closed).
+      - "caller_supplied": no injection at all (direct library/test caller —
+        trusted code, full passthrough)."""
+    server = inp.get("_turn_tool_results")
+    supplied = inp.get("tool_results")
+    supplied = supplied if isinstance(supplied, list) else None
+    warnings: list[str] = []
+    if isinstance(server, list):
+        if server:
+            if supplied:
+                server_ids = {e.get("id") for e in server if isinstance(e, dict)}
+                unknown = sum(
+                    1 for e in supplied
+                    if not (isinstance(e, dict) and e.get("id") in server_ids)
+                )
+                if unknown:
+                    warnings.append(
+                        f"{unknown} caller-supplied tool_results entries did not match "
+                        "this turn's server-side tool record and were IGNORED — the "
+                        "output is built exclusively from tools that actually ran."
+                    )
+            return server, warnings, "server_turn_record"
+        # Empty server record: no tool produced results this turn.
+        if supplied:
+            warnings.append(
+                "No tool produced results in this turn; this draft was assembled "
+                "from caller-supplied results that the server could NOT verify "
+                "this turn. Its numbers are not claimable — re-run the analyses "
+                "in this turn to cite them."
+            )
+            return supplied, warnings, "caller_supplied_unverified"
+        return [], warnings, "server_turn_record"
+    return supplied, warnings, "caller_supplied"
+
+
+def _stamp_evidence_source(out: dict, warnings: list[str], source: str) -> dict:
+    if not isinstance(out, dict):
+        return out
+    out["tool_results_source"] = source
+    if source == "caller_supplied_unverified":
+        # Numbers in an unverified draft must not ground reply claims: the
+        # taint check (claim_validator._is_tainted_synthetic_payload) skips
+        # any payload with __do_not_claim__, and publication_ready=False keeps
+        # it out of the claimable-success paths.
+        out["__do_not_claim__"] = True
+        out["publication_ready"] = False
+        # Review #5: the rendered draft may embed a model-supplied "verified"
+        # fact-check. Prepend an unmistakable banner so the rendered prose
+        # cannot be read as an authoritative result.
+        _banner = (
+            "> ⚠ UNVERIFIED DRAFT — no tool ran in this turn. Every number and "
+            "any \"verified\" status below comes from caller-supplied data the "
+            "server could not check this turn and must NOT be cited. Re-run the "
+            "analyses in this turn to verify.\n\n"
+        )
+        for _key in ("markdown", "report_markdown", "paper_draft_markdown"):
+            if isinstance(out.get(_key), str):
+                out[_key] = _banner + out[_key]
+    if warnings:
+        existing = out.get("warnings")
+        if isinstance(existing, list):
+            existing.extend(warnings)
+        else:
+            out["warnings"] = list(warnings)
+        note = " ".join(warnings)
+        prior = str(out.get("__message_to_model__") or "")
+        out["__message_to_model__"] = (prior + " " + note).strip()
+    return out
+
+
+def _trusted_evidence_graph(
+    inp: dict,
+    tool_results: list | None,
+    source: str,
+    warnings: list[str],
+) -> dict | None:
+    """Resolve the evidence_graph input under the same trust rule.
+
+    A model-echoed graph is a second-order channel for the same laundering
+    (fabricated node values render into the report and re-ground numbers).
+    Whenever the chat path supplied a turn record (trusted OR unverified
+    caller fallback), rebuild the graph from the resolved tool_results and
+    ignore any supplied graph; only a direct library caller (no injection)
+    may pass one through."""
+    supplied = inp.get("evidence_graph")
+    if source == "caller_supplied":
+        return supplied if isinstance(supplied, dict) else None
+    from app.services.research_program import build_evidence_graph
+
+    if isinstance(supplied, dict) and supplied:
+        warnings.append(
+            "Caller-supplied evidence_graph was IGNORED and rebuilt from this "
+            "turn's resolved tool record."
+        )
+    return build_evidence_graph(
+        tool_results=tool_results,
+        final_reply=str(inp.get("final_reply") or "") or None,
+    )
+
+
 def _exec_verify_research_facts(inp: dict) -> dict:
     from app.services.research_program import verify_research_facts
 
     try:
-        tool_results = inp.get("tool_results")
-        evidence_graph = inp.get("evidence_graph")
-        return verify_research_facts(
-            tool_results=tool_results if isinstance(tool_results, list) else None,
+        tool_results, source_warnings, source = _trusted_tool_results(inp)
+        if source == "caller_supplied_unverified":
+            # Review #5: no tool produced results this turn, so a "verified"
+            # verdict computed from caller-supplied data would mislead even
+            # though __do_not_claim__ blocks its numbers from grounding. Refuse
+            # to certify; route the model to re-run the analyses this turn.
+            out = {
+                "success": True,
+                "__tool_status__": "PARTIAL",
+                "analysis_status": "NOT_VERIFIABLE_THIS_TURN",
+                "status": "not_verifiable_this_turn",
+                "publication_ready": False,
+                "__do_not_claim__": True,
+                "claims": [],
+                "verified_claim_count": 0,
+                "note": (
+                    "No tool ran in this turn, so the supplied claims could not "
+                    "be verified against fresh tool evidence. Re-run the "
+                    "analyses in this turn to obtain a verdict."
+                ),
+            }
+            return _stamp_evidence_source(out, source_warnings, source)
+        evidence_graph = _trusted_evidence_graph(inp, tool_results, source, source_warnings)
+        out = verify_research_facts(
+            tool_results=tool_results,
             final_reply=str(inp.get("final_reply") or "") or None,
-            evidence_graph=evidence_graph if isinstance(evidence_graph, dict) else None,
+            evidence_graph=evidence_graph,
         )
+        return _stamp_evidence_source(out, source_warnings, source)
     except Exception as exc:
         return {
             "success": False,
@@ -232,14 +378,15 @@ def _exec_export_research_report(inp: dict) -> dict:
 
     try:
         plan = inp.get("research_plan")
-        graph = inp.get("evidence_graph")
-        tool_results = inp.get("tool_results")
-        return export_research_report(
+        tool_results, source_warnings, source = _trusted_tool_results(inp)
+        graph = _trusted_evidence_graph(inp, tool_results, source, source_warnings)
+        out = export_research_report(
             research_plan=plan if isinstance(plan, dict) else None,
-            evidence_graph=graph if isinstance(graph, dict) else None,
-            tool_results=tool_results if isinstance(tool_results, list) else None,
+            evidence_graph=graph,
+            tool_results=tool_results,
             title=str(inp.get("title") or "") or None,
         )
+        return _stamp_evidence_source(out, source_warnings, source)
     except Exception as exc:
         return {
             "success": False,
