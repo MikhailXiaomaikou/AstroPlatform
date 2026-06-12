@@ -1075,7 +1075,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         # 73.04 ± 1.04 is the Riess+2022 SH0ES value), so co-adding the standalone
         # SH0ES H0 prior double-counts the identical measurement and halves the H0
         # variance. Keep them as robustness alternatives, never a joint fit.
-        do_not_combine_with=("des_sn5yr", "union3", "shoes_h0_riess22"),
+        do_not_combine_with=("des_sn5yr", "union3", "shoes_h0_riess22", "pantheon18"),
     ),
     "des_sn5yr": CosmologyDatasetEntry(
         key="des_sn5yr",
@@ -1119,7 +1119,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cobaya_likelihood="external:sn.des_sn5yr",
         cosmosis_module="external:DES-SN5YR",
         nuisance_parameters=("M_B",),
-        do_not_combine_with=("pantheon_plus", "union3"),
+        do_not_combine_with=("pantheon_plus", "union3", "pantheon18"),
         execution_mode="compressed_gaussian",
         compressed_likelihood=CompressedLikelihoodSpec(
             parameters=("omegam",),
@@ -1145,6 +1145,82 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 rows=1829,
                 sha256="8f01090ecd8a1ce719c3d892781d9031972eddd97e3f75ca40d3090b9676a529",
                 local_path="data/des_sn5yr/data.npz",
+            ),
+        ),
+    ),
+    "pantheon18": CosmologyDatasetEntry(
+        key="pantheon18",
+        display_name="Pantheon (2018)",
+        version="Pantheon 2018 (Scolnic et al.) 1048-SN compilation",
+        probe="sn",
+        z_coverage=(0.0101, 2.26),
+        status="external_likelihood",
+        observables=("zcmb", "zhel", "mb", "mag_covariance"),
+        units={"z": "dimensionless", "mb": "mag"},
+        applicable_models=SN_MODELS,
+        likelihood_family="sn_distance_modulus",
+        covariance=CovarianceSpec(
+            kind="stat+sys covariance",
+            provided=True,
+            description=(
+                "Pantheon 2018 systematic covariance (sys_full_long, JLA format) plus "
+                "the diagonal dmb² statistical terms — the cobaya sn.pantheon "
+                "convention (pecz=0, intrinsicdisp=0)."
+            ),
+            url="https://github.com/CobayaSampler/sn_data",
+            format="lcparam + JLA-format covariance",
+        ),
+        source_url="https://github.com/CobayaSampler/sn_data",
+        citations=(
+            DatasetCitation(label="Scolnic et al. Pantheon SN compilation", year=2018, arxiv="1710.00845"),
+        ),
+        notes=(
+            "The SN anchor of the 2018-2022 literature era (quoted by Planck 2018 / "
+            "DES-Y1 / eBOSS companion analyses). Default fast path is a compressed "
+            "SN-only flat-ΛCDM Ωm Gaussian (Ωm=0.298±0.022, Scolnic+18). The FULL "
+            "1048-SN apparent-magnitude vector + stat+sys covariance is vendored "
+            "(sha256-pinned text files, scripts/fetch_pantheon18.py from "
+            "CobayaSampler/sn_data) and runs in-process as an offset-marginalized "
+            "full-covariance χ² when PANTHEON18_FULL_CHI2_ENABLED is set (always via "
+            "emcee — importance proposals cannot cover a 1048-SN ridge). The χ² "
+            "analytically marginalizes M, so it constrains Ωm (+w0/wa), never H0. Do "
+            "NOT co-add with Pantheon+/DES-SN5YR/Union3 — overlapping supernovae."
+        ),
+        cobaya_likelihood="sn.pantheon",
+        cosmosis_module="likelihood/pantheon/pantheon.py",
+        nuisance_parameters=("M_B",),
+        do_not_combine_with=("pantheon_plus", "des_sn5yr", "union3"),
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=CompressedLikelihoodSpec(
+            parameters=("omegam",),
+            mean=(0.298,),
+            covariance=((0.022 ** 2,),),
+            units={"omegam": "dimensionless"},
+            source_locator="Scolnic et al. 2018 (arXiv:1710.00845) Table 8, SN-only flat-ΛCDM with systematics: Ωm = 0.298 ± 0.022.",
+            approximation="1D SN-only flat-ΛCDM Ωm Gaussian; NOT the full 1048-SN magnitude + covariance likelihood (env-gated).",
+        ),
+        data_products=(
+            DataProductSpec(
+                product_type="sn_lcparam_vector",
+                role="measurement_vector",
+                url="https://raw.githubusercontent.com/CobayaSampler/sn_data/master/Pantheon/lcparam_full_long_zhel.txt",
+                format="ASCII lcparam (name zcmb zhel dz mb dmb …)",
+                description="Pantheon 2018 1048-SN light-curve parameter table, vendored verbatim.",
+                columns=("name", "zcmb", "zhel", "dz", "mb", "dmb"),
+                rows=1048,
+                sha256="4e865e819eda499530b04da6965ab7aac0407878789b105732cb1f9b99a64323",
+                local_path="data/cosmology/pantheon18/lcparam_full_long_zhel.txt",
+            ),
+            DataProductSpec(
+                product_type="sn_mag_covariance",
+                role="covariance",
+                url="https://raw.githubusercontent.com/CobayaSampler/sn_data/master/Pantheon/sys_full_long.txt",
+                format="JLA-format ASCII (N then N² values)",
+                description="Pantheon 2018 systematic magnitude covariance, vendored verbatim.",
+                columns=("cov_ij",),
+                rows=1048,
+                sha256="0ec3388b984a708f27bcedf7171c8a3e74621aca73dabb41a21246e9ae3fb53d",
+                local_path="data/cosmology/pantheon18/sys_full_long.txt",
             ),
         ),
     ),
@@ -3313,6 +3389,8 @@ def _entry_verification(entry: CosmologyDatasetEntry) -> tuple[str | None, str |
             verified = load_verified_des_sn5yr_data(entry.key)
         elif entry.key == "union3":
             verified = load_verified_union3_data(entry.key)
+        elif entry.key == "pantheon18":
+            verified = load_verified_pantheon18_data(entry.key)
         else:
             raise ValueError(
                 f"executable offset-marginalized SN entry {entry.key!r} has no verifier"
@@ -3578,6 +3656,7 @@ def _executable_probe_keys() -> set[str]:
         | {"pantheon_plus"}
         | {"des_sn5yr"}
         | {"union3"}
+        | {"pantheon18"}
     )
 
 
@@ -3613,6 +3692,8 @@ def audit_executable_pins() -> list[str]:
             verified = load_verified_des_sn5yr_data(key)
         elif key == "union3":
             verified = load_verified_union3_data(key)
+        elif key == "pantheon18":
+            verified = load_verified_pantheon18_data(key)
         else:
             verified = load_verified_pantheon_plus_data(key)
 
@@ -4387,6 +4468,18 @@ DES_SN5YR_FULL_CHI2_ENABLED = os.getenv("DES_SN5YR_FULL_CHI2_ENABLED", "").lower
 }
 DES_SN5YR_EXECUTABLE_KEYS = {"des_sn5yr"} if DES_SN5YR_FULL_CHI2_ENABLED else set()
 
+# Pantheon (2018, Scolnic et al.) 1048-SN full vector — env-gated like DES
+# (the 1048x1048 per-sample cost is prohibitive for importance sampling; the
+# enabled path always takes emcee). Default fast path is the compressed
+# SN-only Omega_m Gaussian on the registry entry.
+PANTHEON18_FULL_CHI2_ENABLED = os.getenv("PANTHEON18_FULL_CHI2_ENABLED", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+PANTHEON18_EXECUTABLE_KEYS = {"pantheon18"} if PANTHEON18_FULL_CHI2_ENABLED else set()
+
 # Union3's full 22-bin binned-distance likelihood is ALWAYS on — no env flag.
 # The DES flag above exists purely for the 1829x1829 per-sample cost; a 22x22
 # covariance has no cost worth gating, and the default path SHOULD be the
@@ -4408,10 +4501,14 @@ def _is_executable_sn_entry(entry: CosmologyDatasetEntry) -> bool:
 
 def _is_executable_des_sn_entry(entry: CosmologyDatasetEntry) -> bool:
     # The "des_sn" family/plumbing name now means "offset-marginalized binned
-    # SN distance-modulus likelihood" — DES-SN5YR (env-gated) AND Union3
-    # (always on). Same parameter footprint (omegam + w0/wa; H0/M_B
-    # marginalized out), same chi2 form, per-key data dispatch.
-    return entry.key in DES_SN5YR_EXECUTABLE_KEYS or entry.key in UNION3_EXECUTABLE_KEYS
+    # SN distance-modulus likelihood" — DES-SN5YR and Pantheon18 (both
+    # env-gated) AND Union3 (always on). Same parameter footprint (omegam +
+    # w0/wa; H0/M_B marginalized out), same chi2 form, per-key data dispatch.
+    return (
+        entry.key in DES_SN5YR_EXECUTABLE_KEYS
+        or entry.key in UNION3_EXECUTABLE_KEYS
+        or entry.key in PANTHEON18_EXECUTABLE_KEYS
+    )
 
 
 def _sn_emcee_bypass_active(
@@ -4433,7 +4530,7 @@ def _sn_emcee_bypass_active(
     past the 45 s default deadline)."""
     if sn_entries and any(e.key == "pantheon_plus" for e in sn_entries):
         return True
-    if any(e.key == "des_sn5yr" for e in (des_sn_entries or [])):
+    if any(e.key in ("des_sn5yr", "pantheon18") for e in (des_sn_entries or [])):
         return True
     return bool(des_sn_entries) and allow_emcee_fallback
 
@@ -6226,6 +6323,127 @@ def _union3_cov_inv() -> np.ndarray:
     return np.linalg.inv(_load_union3_raw()["cov"])
 
 
+# ── Pantheon (2018) full 1048-SN likelihood (2026-06-13, env-gated) ─────────
+# The same lcparam_full_long_zhel.txt + sys_full_long.txt cobaya's sn.pantheon
+# reads (CobayaSampler/sn_data), vendored + sha256-pinned. Convention
+# (use_abs_mag=False, pecz=0, intrinsicdisp=0): C_total = C_sys + diag(dmb²),
+# absolute magnitude analytically marginalized.
+_PANTHEON18_DATA_DIR = (
+    pathlib.Path(__file__).resolve().parent.parent.parent
+    / "data"
+    / "cosmology"
+    / "pantheon18"
+)
+
+
+@lru_cache(maxsize=1)
+def _load_pantheon18_raw() -> dict[str, Any]:
+    """Load + sha256-verify the vendored Pantheon 2018 files; raises ValueError
+    on ANY failure (missing/unreadable/digest mismatch/malformed). lru_cache
+    never caches exceptions, so one transient failure cannot poison the
+    process until restart (the union3 pattern)."""
+    vec_path = _PANTHEON18_DATA_DIR / "lcparam_full_long_zhel.txt"
+    cov_path = _PANTHEON18_DATA_DIR / "sys_full_long.txt"
+    if not (vec_path.exists() and cov_path.exists()):
+        raise ValueError(
+            f"Pantheon18 data unverified: vendored files missing under "
+            f"{_PANTHEON18_DATA_DIR} (lcparam_full_long_zhel.txt + sys_full_long.txt, "
+            "from CobayaSampler/sn_data). Run scripts/fetch_pantheon18.py."
+        )
+    vec_raw = vec_path.read_bytes()
+    cov_raw = cov_path.read_bytes()
+    vec_ok = (
+        hashlib.sha256(vec_raw).hexdigest()
+        == _registry_product_sha256("pantheon18", "measurement_vector")
+    )
+    cov_digest = hashlib.sha256(cov_raw).hexdigest()
+    cov_ok = cov_digest == _registry_product_sha256("pantheon18", "covariance")
+    if not (vec_ok and cov_ok):
+        raise ValueError(
+            "Pantheon18 data unverified: vendored file bytes do not match the "
+            "registry sha256 pins; refusing to compute chi2 from tampered or stale data."
+        )
+    z_cmb_list: list[float] = []
+    z_hel_list: list[float] = []
+    mb_list: list[float] = []
+    dmb_list: list[float] = []
+    for line in vec_raw.decode("utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        z_cmb_list.append(float(parts[1]))
+        z_hel_list.append(float(parts[2]))
+        mb_list.append(float(parts[4]))
+        dmb_list.append(float(parts[5]))
+    cov_tokens = cov_raw.decode("utf-8").split()
+    n = int(float(cov_tokens[0]))
+    cov_sys = np.asarray(cov_tokens[1:], dtype=float).reshape(n, n)
+    if n != len(mb_list):
+        raise ValueError(
+            f"Pantheon18 data unverified: vector/cov shape mismatch "
+            f"({len(mb_list)} SNe vs cov {n}x{n})."
+        )
+    # cobaya sn.pantheon convention (pecz=0, intrinsicdisp=0):
+    # C_total = C_sys + diag(dmb²).
+    cov = cov_sys + np.diag(np.asarray(dmb_list, dtype=float) ** 2)
+    return {
+        "z_cmb": np.asarray(z_cmb_list, dtype=float),
+        "z_hel": np.asarray(z_hel_list, dtype=float),
+        "mb": np.asarray(mb_list, dtype=float),
+        "cov": cov,
+        "sha256": cov_digest,
+    }
+
+
+def load_verified_pantheon18_data(dataset_key: str = "pantheon18") -> dict[str, Any]:
+    """Verification record for audit/provenance — NEVER raises (audit and
+    import paths need a record, not an exception). Success → 'full' + digest;
+    any failure → 'unverified' (blocks publication), recomputed next call so
+    a transient failure heals without a restart."""
+    try:
+        raw = _load_pantheon18_raw()
+    except ValueError as exc:
+        logger.warning("Pantheon18 data product failed verification: %s", exc)
+        return {
+            "z_cmb": None, "z_hel": None, "mb": None, "cov": None,
+            "sha256": None, "hash_verified": False, "cov_fidelity": "unverified",
+        }
+    return {**raw, "hash_verified": True, "cov_fidelity": "full"}
+
+
+@lru_cache(maxsize=1)
+def _pantheon18_cov_inv() -> np.ndarray:
+    """Inverse of the verified 1048x1048 Pantheon18 covariance (fit path only)."""
+    return np.linalg.inv(_load_pantheon18_raw()["cov"])
+
+
+def _load_pantheon18_data() -> dict[str, np.ndarray]:
+    """Arrays the Pantheon18 χ² fits — raises ValueError ('unverified') on
+    missing/tampered data via the raw loader."""
+    raw = _load_pantheon18_raw()
+    return {
+        "z_hd": raw["z_cmb"], "z_hel": raw["z_hel"], "mu": raw["mb"],
+        "cov_inv": _pantheon18_cov_inv(),
+    }
+
+
+def _pantheon18_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str]
+) -> np.ndarray:
+    """χ² from the full Pantheon 2018 1048-SN apparent-magnitude vector
+    (offset-marginalized — cobaya sn.pantheon's use_abs_mag=False convention,
+    whose analytic M-marginalization lives in alpha_beta_logp's amarg terms;
+    mb = μ + M, and the constant M is projected out, so mb works directly as
+    an offset-normalized μ_obs)."""
+    data = _load_pantheon18_data()
+    return _offset_marginalized_sn_chi2(
+        samples, parameter_order,
+        z_hd=data["z_hd"], z_hel=data["z_hel"],
+        mu_obs=data["mu"], cov_inv=data["cov_inv"],
+    )
+
+
 def _load_union3_data() -> dict[str, np.ndarray]:
     """Arrays the Union3 χ² fits — raises ValueError ('unverified') on
     missing/tampered data via the raw loader."""
@@ -6557,6 +6775,8 @@ def _offset_sn_chi2_samples(
         return _des_sn5yr_chi2_samples(samples, parameter_order)
     if key == "union3":
         return _union3_chi2_samples(samples, parameter_order)
+    if key == "pantheon18":
+        return _pantheon18_chi2_samples(samples, parameter_order)
     raise ValueError(f"executable offset-marginalized SN entry {key!r} has no chi2 dispatch")
 
 
@@ -6566,6 +6786,8 @@ def _offset_sn_n_points(key: str) -> int:
         return int(len(_load_des_sn5yr_data()["mu"]))
     if key == "union3":
         return int(len(_load_union3_data()["mu"]))
+    if key == "pantheon18":
+        return int(len(_load_pantheon18_data()["mu"]))
     raise ValueError(f"executable offset-marginalized SN entry {key!r} has no data loader")
 
 
@@ -6769,6 +6991,17 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 # constant of the release and must stay claimable now that the
                 # prose strings above are free-text-skipped by claim_validator.
                 "rs_fid_mpc": SDSS_DR12_RS_FID_MPC,
+                "data_products": [product.to_dict() for product in entry.data_products],
+            })
+        elif entry.key in PANTHEON18_EXECUTABLE_KEYS:
+            # Key-in-set, NOT key==: with the env flag OFF this entry runs the
+            # compressed Ωm Gaussian and must fall through to the honest
+            # compressed record below — a full-covariance attestation for a
+            # computation that never ran was a 2026-06-13 review MAJOR.
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": "Pantheon 2018 Scolnic+2018 (arXiv:1710.00845; CobayaSampler/sn_data) — 1048-SN apparent magnitudes + stat+sys covariance",
+                "approximation": "Full-covariance SN χ² = δᵀC⁻¹δ − (ΣC⁻¹δ)²/(ΣC⁻¹) (flat w0waCDM), C = C_sys + diag(dmb²), analytically marginalizing the constant magnitude offset (no M_B/H0); constrains Ωm (+w0/wa)",
                 "data_products": [product.to_dict() for product in entry.data_products],
             })
         elif entry.key == "union3":

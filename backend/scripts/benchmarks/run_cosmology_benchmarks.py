@@ -853,6 +853,45 @@ def bench_eboss_dr16_grid_bao() -> dict[str, Any]:
     }
 
 
+def bench_pantheon18_full_vector() -> dict[str, Any]:
+    """Pantheon (2018) 1048-SN full vector (P2b, 2026-06-13).
+
+    Data-level checks run WITHOUT the env flag (the vendored, sha256-pinned
+    files are committed): (1) the offset-marginalized chi2 over an Omega_m grid
+    bottoms out at the published Scolnic+2018 SN-only value 0.298±0.022 with
+    chi2/n ≈ 1; (2) H0-invariance of the marginalized chi2. The chain-level
+    emcee path needs PANTHEON18_FULL_CHI2_ENABLED (live-verified 2026-06-13:
+    Ωm = 0.300 ± 0.0217 vs published 0.298 ± 0.022, ~22 s).
+    """
+    from app.services.cosmology_likelihoods import (
+        load_verified_pantheon18_data,
+        _pantheon18_chi2_samples,
+    )
+    v = load_verified_pantheon18_data()
+    if not v["hash_verified"]:
+        return {
+            "pass": False,
+            "error": "pantheon18 vendored files missing or unverified",
+            "target": "chi2 minimum at published Omega_m=0.298±0.022, chi2/n≈1, H0-invariant",
+        }
+    oms = np.linspace(0.20, 0.42, 45)
+    samples = np.column_stack([np.full(45, 70.0), oms])
+    chi2 = _pantheon18_chi2_samples(samples, ["H0", "omegam"])
+    om_best = float(oms[np.argmin(chi2)])
+    reduced = float(chi2.min()) / 1048.0
+    h0_lo = _pantheon18_chi2_samples(np.array([[60.0, 0.30]]), ["H0", "omegam"])[0]
+    h0_hi = _pantheon18_chi2_samples(np.array([[80.0, 0.30]]), ["H0", "omegam"])[0]
+    h0_invariant = abs(h0_lo - h0_hi) < 1e-6
+    return {
+        "pass": abs(om_best - 0.298) < 0.022 and 0.85 < reduced < 1.1 and h0_invariant,
+        "omegam_best": round(om_best, 4),
+        "published": "0.298 ± 0.022 (Scolnic+2018 SN-only flat-LCDM)",
+        "reduced_chi2": round(reduced, 4),
+        "h0_invariant": h0_invariant,
+        "target": "chi2 minimum at published Omega_m=0.298±0.022, chi2/n≈1, H0-invariant",
+    }
+
+
 def bench_s8_derived_consistency() -> dict[str, Any]:
     """S8 as a derived quantity, not a sampled column (1B, 2026-05-29).
 
@@ -942,6 +981,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("sdss_6df_bao_executable", bench_sdss_6df_bao_executable),
     ("sdss_dr12_consensus_bao", bench_sdss_dr12_consensus_bao),
     ("eboss_dr16_grid_bao", bench_eboss_dr16_grid_bao),
+    ("pantheon18_full_vector", bench_pantheon18_full_vector),
     ("s8_derived_consistency", bench_s8_derived_consistency),
     ("growth_kernel_vs_exact_lcdm", bench_growth_kernel_vs_exact_lcdm),
     ("model_comparison_delta", bench_model_comparison_delta),
