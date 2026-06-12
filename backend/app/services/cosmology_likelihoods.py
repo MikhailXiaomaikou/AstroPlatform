@@ -254,7 +254,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             ),
         ),
         notes="Use as BAO-only or combined late-universe distance anchor; requires rd prior or CMB calibration.",
-        do_not_combine_with=("desi_dr2_bao", "sdss_dr12_consensus_bao"),
+        do_not_combine_with=(
+            "desi_dr2_bao", "sdss_dr12_consensus_bao",
+            "eboss_dr16_elg_bao", "eboss_dr16_lyauto_bao", "eboss_dr16_lyxqso_bao",
+        ),
         cobaya_likelihood="external:desilike.desi_dr1_bao",
         cosmosis_module="likelihood/bao/desi1-dr1/desi1_dr1.py",
         execution_mode="compressed_gaussian",
@@ -340,7 +343,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "distance anchor; it drove the w0waCDM dark-energy preference. Use as "
             "BAO-only or combined; requires an rd prior or CMB calibration."
         ),
-        do_not_combine_with=("desi_dr1_bao", "sdss_dr12_consensus_bao"),
+        do_not_combine_with=(
+            "desi_dr1_bao", "sdss_dr12_consensus_bao",
+            "eboss_dr16_elg_bao", "eboss_dr16_lyauto_bao", "eboss_dr16_lyxqso_bao",
+        ),
         cobaya_likelihood="external:desilike.desi_dr2_bao",
         cosmosis_module="likelihood/bao/desi-dr2/desi_dr2.py",
         execution_mode="compressed_gaussian",
@@ -548,7 +554,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 local_path="data/cosmology/eboss_dr16_rsd/fsigma8.txt",
             ),
         ),
-        do_not_combine_with=("eboss_dr16_lrg_fsbao", "eboss_dr16_qso_fsbao", "sdss_dr12_consensus_bao"),
+        do_not_combine_with=(
+            "eboss_dr16_lrg_fsbao", "eboss_dr16_qso_fsbao",
+            "sdss_dr12_consensus_bao", "eboss_dr16_elg_bao",
+        ),
         cobaya_likelihood="external:rsd.eboss_dr16_alam21",
         cosmosis_module="likelihood/rsd/eboss_dr16/eboss_dr16_rsd.py",
         nuisance_parameters=(
@@ -763,6 +772,171 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         ),
         cobaya_likelihood="bao.sdss_dr12_consensus_bao",
         cosmosis_module="likelihood/bao/sdss_dr12/sdss_dr12.py",
+        execution_mode="compressed_gaussian",
+    ),
+    "eboss_dr16_elg_bao": CosmologyDatasetEntry(
+        key="eboss_dr16_elg_bao",
+        display_name="eBOSS DR16 ELG BAO (non-Gaussian D_V/r_d table)",
+        version="SDSS DR16 ELG BAO-only: released 399-point probability table for D_V/r_d at z=0.845",
+        probe="bao",
+        z_coverage=(0.845, 0.845),
+        status="external_likelihood",
+        observables=("DV_over_rs",),
+        units={"DV_over_rs": "dimensionless"},
+        applicable_models=BAO_MODELS,
+        likelihood_family="bao_prob_grid",
+        covariance=CovarianceSpec(
+            kind="non-Gaussian probability table",
+            provided=True,
+            description=(
+                "Released 1D probability density for D_V/r_d at the ELG effective "
+                "redshift z=0.845 — the ELG posterior is visibly skewed, which is why "
+                "the DR16 release ships a table instead of a Gaussian. Peak at "
+                "D_V/r_d=18.33 (de Mattia et al. 2021)."
+            ),
+            url="https://github.com/CobayaSampler/bao_data",
+            format="(D_V/r_d, probability) ASCII table",
+        ),
+        source_url="https://github.com/CobayaSampler/bao_data",
+        citations=(
+            DatasetCitation(label="Alam et al. eBOSS DR16 cosmological implications", year=2021, arxiv="2007.08991"),
+            DatasetCitation(label="de Mattia et al. eBOSS DR16 ELG clustering", year=2021, arxiv="2007.09008"),
+        ),
+        notes=(
+            "Executed in-process as chi2 = -2*ln P from the cubic log-probability "
+            "spline over the released table (cobaya bao.sdss_dr16_bao_elg parity), "
+            "predicting flat-w0waCDM D_V/r_d. Non-Gaussian table, not a Gaussian "
+            "summary, despite the registry-wide execution_mode literal. Constrains "
+            "(H0, Omega_m, r_d). Do NOT co-add with 'eboss_dr16_rsd' (same ELG "
+            "galaxies feed its fsigma8 point) or DESI BAO (overlapping sky/structure)."
+        ),
+        data_products=(
+            DataProductSpec(
+                product_type="bao_probability_table",
+                role="likelihood_grid",
+                url="https://raw.githubusercontent.com/CobayaSampler/bao_data/master/sdss_DR16_ELG_BAO_DVtable.txt",
+                format="ASCII 399x2 (D_V/r_d, probability)",
+                description="eBOSS DR16 ELG BAO D_V/r_d probability table, vendored verbatim.",
+                columns=("dv_over_rd", "probability"),
+                rows=399,
+                sha256="ebbd6b7a2946cf1903bac9e699702e6aa57a631799bb70421c8e7a55cb3d2c1f",
+                local_path="data/cosmology/eboss_dr16_elg_bao/grid.txt",
+            ),
+        ),
+        do_not_combine_with=("eboss_dr16_rsd", "desi_dr1_bao", "desi_dr2_bao"),
+        cobaya_likelihood="bao.sdss_dr16_bao_elg",
+        cosmosis_module="likelihood/bao/eboss_dr16/eboss_dr16_elg.py",
+        execution_mode="compressed_gaussian",
+    ),
+    "eboss_dr16_lyauto_bao": CosmologyDatasetEntry(
+        key="eboss_dr16_lyauto_bao",
+        display_name="eBOSS DR16 Lyα auto BAO (2D likelihood grid)",
+        version="SDSS DR16 Lyα forest auto-correlation BAO: 50×50 (D_M/r_d, D_H/r_d) likelihood grid at z=2.334",
+        probe="bao",
+        z_coverage=(2.334, 2.334),
+        status="external_likelihood",
+        observables=("DM_over_rs", "DH_over_rs"),
+        units={"DM_over_rs": "dimensionless", "DH_over_rs": "dimensionless"},
+        applicable_models=BAO_MODELS,
+        likelihood_family="bao_prob_grid",
+        covariance=CovarianceSpec(
+            kind="non-Gaussian 2D likelihood grid",
+            provided=True,
+            description=(
+                "Released 50×50 likelihood-ratio surface over (D_M/r_d, D_H/r_d) at "
+                "z=2.334 from the Lyα forest auto-correlation — the only z>2 BAO "
+                "anchor outside DESI. Peak at (37.76, 8.92) "
+                "(du Mas des Bourboux et al. 2020)."
+            ),
+            url="https://github.com/CobayaSampler/bao_data",
+            format="(D_M/r_d, D_H/r_d, likelihood) ASCII grid",
+        ),
+        source_url="https://github.com/CobayaSampler/bao_data",
+        citations=(
+            DatasetCitation(label="Alam et al. eBOSS DR16 cosmological implications", year=2021, arxiv="2007.08991"),
+            DatasetCitation(label="du Mas des Bourboux et al. eBOSS DR16 Lyα BAO", year=2020, arxiv="2007.08995"),
+        ),
+        notes=(
+            "Executed in-process as chi2 = -2*ln L from a bicubic spline of the "
+            "released log-likelihood grid (cobaya bao.sdss_dr16_baoplus_lyauto "
+            "parity; out-of-grid samples are REFUSED rather than extrapolated — a "
+            "deliberate fail-safe deviation from cobaya). Non-Gaussian grid despite "
+            "the registry-wide execution_mode literal. Constrains (H0, Omega_m, r_d). "
+            "Combinable with the LYxQSO cross grid (the official suite multiplies "
+            "them; their estimator cross-covariance is neglected by the release "
+            "itself). Do NOT co-add with DESI BAO — DESI re-measures the same "
+            "quasars/forest at z=2.33."
+        ),
+        data_products=(
+            DataProductSpec(
+                product_type="bao_likelihood_grid",
+                role="likelihood_grid",
+                url="https://raw.githubusercontent.com/CobayaSampler/bao_data/master/sdss_DR16_LYAUTO_BAO_DMDHgrid.txt",
+                format="ASCII 2500x3 (D_M/r_d, D_H/r_d, likelihood)",
+                description="eBOSS DR16 Lyα auto-correlation BAO likelihood grid, vendored verbatim.",
+                columns=("dm_over_rd", "dh_over_rd", "likelihood"),
+                rows=2500,
+                sha256="40cee3a1c9dc58616ba7151ab9d020b0014238249409cd1ace71af14674e37e0",
+                local_path="data/cosmology/eboss_dr16_lyauto_bao/grid.txt",
+            ),
+        ),
+        do_not_combine_with=("desi_dr1_bao", "desi_dr2_bao"),
+        cobaya_likelihood="bao.sdss_dr16_baoplus_lyauto",
+        cosmosis_module="likelihood/bao/eboss_dr16/eboss_dr16_lyauto.py",
+        execution_mode="compressed_gaussian",
+    ),
+    "eboss_dr16_lyxqso_bao": CosmologyDatasetEntry(
+        key="eboss_dr16_lyxqso_bao",
+        display_name="eBOSS DR16 Lyα×QSO cross BAO (2D likelihood grid)",
+        version="SDSS DR16 Lyα×quasar cross-correlation BAO: 50×50 (D_M/r_d, D_H/r_d) likelihood grid at z=2.334",
+        probe="bao",
+        z_coverage=(2.334, 2.334),
+        status="external_likelihood",
+        observables=("DM_over_rs", "DH_over_rs"),
+        units={"DM_over_rs": "dimensionless", "DH_over_rs": "dimensionless"},
+        applicable_models=BAO_MODELS,
+        likelihood_family="bao_prob_grid",
+        covariance=CovarianceSpec(
+            kind="non-Gaussian 2D likelihood grid",
+            provided=True,
+            description=(
+                "Released 50×50 likelihood-ratio surface over (D_M/r_d, D_H/r_d) at "
+                "z=2.334 from the Lyα×QSO cross-correlation. Peak at (37.44, 9.06) "
+                "(du Mas des Bourboux et al. 2020)."
+            ),
+            url="https://github.com/CobayaSampler/bao_data",
+            format="(D_M/r_d, D_H/r_d, likelihood) ASCII grid",
+        ),
+        source_url="https://github.com/CobayaSampler/bao_data",
+        citations=(
+            DatasetCitation(label="Alam et al. eBOSS DR16 cosmological implications", year=2021, arxiv="2007.08991"),
+            DatasetCitation(label="du Mas des Bourboux et al. eBOSS DR16 Lyα BAO", year=2020, arxiv="2007.08995"),
+        ),
+        notes=(
+            "Executed in-process as chi2 = -2*ln L from a bicubic spline of the "
+            "released log-likelihood grid (cobaya bao.sdss_dr16_baoplus_lyxqso "
+            "parity; out-of-grid samples are REFUSED rather than extrapolated). "
+            "Non-Gaussian grid despite the registry-wide execution_mode literal. "
+            "Constrains (H0, Omega_m, r_d). Combinable with the Lyα auto grid (the "
+            "official suite multiplies them). Do NOT co-add with DESI BAO — DESI "
+            "re-measures the same quasars/forest at z=2.33."
+        ),
+        data_products=(
+            DataProductSpec(
+                product_type="bao_likelihood_grid",
+                role="likelihood_grid",
+                url="https://raw.githubusercontent.com/CobayaSampler/bao_data/master/sdss_DR16_LYxQSO_BAO_DMDHgrid.txt",
+                format="ASCII 2500x3 (D_M/r_d, D_H/r_d, likelihood)",
+                description="eBOSS DR16 Lyα×QSO cross-correlation BAO likelihood grid, vendored verbatim.",
+                columns=("dm_over_rd", "dh_over_rd", "likelihood"),
+                rows=2500,
+                sha256="653e2cea43a742d12090e9b7eacaf74dc7af7d7f6153a1a4c696d6303a7fb952",
+                local_path="data/cosmology/eboss_dr16_lyxqso_bao/grid.txt",
+            ),
+        ),
+        do_not_combine_with=("desi_dr1_bao", "desi_dr2_bao"),
+        cobaya_likelihood="bao.sdss_dr16_baoplus_lyxqso",
+        cosmosis_module="likelihood/bao/eboss_dr16/eboss_dr16_lyxqso.py",
         execution_mode="compressed_gaussian",
     ),
     "pantheon_plus": CosmologyDatasetEntry(
@@ -2939,6 +3113,16 @@ EBOSS_DR16_FSBAO_EXECUTABLE_KEYS = {"eboss_dr16_lrg_fsbao", "eboss_dr16_qso_fsba
 SDSS_DR12_CONSENSUS_EXECUTABLE_KEYS = {"sdss_dr12_consensus_bao"}
 SDSS_DR12_RS_FID_MPC = 147.78
 
+# eBOSS DR16 released non-Gaussian BAO likelihood surfaces (Alam et al. 2021):
+# the ELG 1D D_V/r_d probability table and the two 50×50 Lyα (D_M/r_d, D_H/r_d)
+# likelihood grids — all DIMENSIONLESS ratios, executed as chi2 = -2·ln L from
+# splines of the released surfaces (cobaya bao.sdss_dr16_* parity).
+EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS = {
+    "eboss_dr16_elg_bao",
+    "eboss_dr16_lyauto_bao",
+    "eboss_dr16_lyxqso_bao",
+}
+
 
 @lru_cache(maxsize=None)
 def load_verified_fsbao_data(dataset_key: str) -> dict[str, Any]:
@@ -3015,6 +3199,83 @@ def load_verified_dr12_consensus_data(dataset_key: str = "sdss_dr12_consensus_ba
     return load_verified_fsbao_data(dataset_key)
 
 
+@lru_cache(maxsize=None)
+def load_verified_grid_bao_data(dataset_key: str) -> dict[str, Any]:
+    """Load a released eBOSS DR16 non-Gaussian BAO likelihood surface from the
+    vendored, sha256-pinned grid.txt: the ELG (D_V/r_d, probability) table or
+    a Lyα 50×50 (D_M/r_d, D_H/r_d, likelihood) grid. cov_fidelity is 'full'
+    on a digest match — the surface IS the released full (non-Gaussian)
+    likelihood — and 'unverified' on a missing/corrupt/tampered file (blocks
+    publication; chi2 refuses loudly). Same cached-failure residual as the
+    fsbao loader (fail-closed; documented in the backlog)."""
+    grid_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "grid.txt"
+    pinned = _registry_product_sha256(dataset_key, "likelihood_grid")
+    unverified = {
+        "grid": None, "sha256": None,
+        "hash_verified": False, "cov_fidelity": "unverified",
+    }
+    if not grid_path.exists():
+        return unverified
+    try:
+        raw = grid_path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        grid = np.loadtxt(io.BytesIO(raw))
+        if dataset_key == "eboss_dr16_elg_bao":
+            if grid.shape != (399, 2) or grid[:, 1].min() <= 0:
+                raise ValueError(f"malformed ELG table: shape {grid.shape}")
+        else:
+            if grid.shape != (2500, 3) or grid[:, 2].min() <= 0:
+                raise ValueError(f"malformed Lya grid: shape {grid.shape}")
+        verified = digest == pinned
+        return {
+            "grid": grid,
+            "sha256": digest,
+            "hash_verified": bool(verified),
+            "cov_fidelity": "full" if verified else "unverified",
+        }
+    except Exception as exc:  # malformed/truncated file — degrade, never crash import
+        logger.warning("grid BAO data product %s failed to load (%s); marking unverified", dataset_key, exc)
+        return unverified
+
+
+@lru_cache(maxsize=None)
+def _elg_logprob_spline():
+    """Cubic spline of ln(probability) over the released ELG D_V/r_d table —
+    exactly cobaya's construction (UnivariateSpline(x, log(p), s=0))."""
+    from scipy.interpolate import UnivariateSpline
+
+    verified = load_verified_grid_bao_data("eboss_dr16_elg_bao")
+    if verified["cov_fidelity"] == "unverified" or verified["grid"] is None:
+        raise ValueError(
+            "eboss_dr16_elg_bao table failed sha256 verification (or its vendored "
+            "file is missing); refusing to build the likelihood spline."
+        )
+    grid = verified["grid"]
+    spline = UnivariateSpline(grid[:, 0], np.log(grid[:, 1]), s=0)
+    return spline, float(grid[0, 0]), float(grid[-1, 0])
+
+
+@lru_cache(maxsize=None)
+def _lya_loglike_spline(dataset_key: str):
+    """Bicubic spline of ln(likelihood) over a released Lyα 50×50 grid —
+    exactly cobaya's construction (RectBivariateSpline(x, y, log(L), kx=3,
+    ky=3); x = D_M/r_d is the slow file axis)."""
+    from scipy.interpolate import RectBivariateSpline
+
+    verified = load_verified_grid_bao_data(dataset_key)
+    if verified["cov_fidelity"] == "unverified" or verified["grid"] is None:
+        raise ValueError(
+            f"{dataset_key} grid failed sha256 verification (or its vendored "
+            "file is missing); refusing to build the likelihood spline."
+        )
+    grid = verified["grid"]
+    x = np.unique(grid[:, 0])
+    y = np.unique(grid[:, 1])
+    loglike = np.log(grid[:, 2]).reshape(len(x), len(y))
+    spline = RectBivariateSpline(x, y, loglike, kx=3, ky=3)
+    return spline, (float(x[0]), float(x[-1])), (float(y[0]), float(y[-1]))
+
+
 # Weakest -> strongest covariance fidelity. 'unverified' = vendored file present
 # but its digest mismatched the registry pin (tampering/corruption — must block
 # publication); 'literature_typed' = honest hand-typed compilation (no released
@@ -3035,6 +3296,8 @@ def _entry_verification(entry: CosmologyDatasetEntry) -> tuple[str | None, str |
         verified = load_verified_bao_data(entry.key)
     elif _is_executable_dr12_entry(entry):
         verified = load_verified_dr12_consensus_data(entry.key)
+    elif _is_executable_grid_bao_entry(entry):
+        verified = load_verified_grid_bao_data(entry.key)
     elif _is_executable_fsbao_entry(entry):
         verified = load_verified_fsbao_data(entry.key)
     elif _is_executable_cc_full_cov_entry(entry):
@@ -3311,6 +3574,7 @@ def _executable_probe_keys() -> set[str]:
         | set(EBOSS_DR16_FSIGMA8_EXECUTABLE_KEYS)
         | set(EBOSS_DR16_FSBAO_EXECUTABLE_KEYS)
         | set(SDSS_DR12_CONSENSUS_EXECUTABLE_KEYS)
+        | set(EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS)
         | {"pantheon_plus"}
         | {"des_sn5yr"}
         | {"union3"}
@@ -3335,6 +3599,8 @@ def audit_executable_pins() -> list[str]:
             verified = load_verified_bao_data(key)
         elif key in SDSS_DR12_CONSENSUS_EXECUTABLE_KEYS:
             verified = load_verified_dr12_consensus_data(key)
+        elif key in EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS:
+            verified = load_verified_grid_bao_data(key)
         elif key in EBOSS_DR16_FSBAO_EXECUTABLE_KEYS:
             verified = load_verified_fsbao_data(key)
         elif key in COSMIC_CHRONOMETER_FULL_COV_KEYS:
@@ -3581,6 +3847,7 @@ def run_likelihood_chain(
         or _is_executable_rsd_entry(entry)
         or _is_executable_fsbao_entry(entry)
         or _is_executable_dr12_entry(entry)
+        or _is_executable_grid_bao_entry(entry)
         or _is_executable_sn_entry(entry)
         or _is_executable_des_sn_entry(entry)
         for entry in entries
@@ -4091,6 +4358,10 @@ def _is_executable_dr12_entry(entry: CosmologyDatasetEntry) -> bool:
     return entry.key in SDSS_DR12_CONSENSUS_EXECUTABLE_KEYS
 
 
+def _is_executable_grid_bao_entry(entry: CosmologyDatasetEntry) -> bool:
+    return entry.key in EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS
+
+
 # M6 (2026-05-18): Pantheon+SH0ES Python chi² runner — bypasses external
 # Cobaya for the SN-distance-modulus likelihood.  1701 SNe + full
 # stat+sys covariance from the 2022 data release, loaded lazily from
@@ -4212,6 +4483,7 @@ def _run_sampling_likelihood_chain(
     rsd_entries = [entry for entry in entries if _is_executable_rsd_entry(entry)]
     fsbao_entries = [entry for entry in entries if _is_executable_fsbao_entry(entry)]
     dr12_entries = [entry for entry in entries if _is_executable_dr12_entry(entry)]
+    grid_bao_entries = [entry for entry in entries if _is_executable_grid_bao_entry(entry)]
     sn_entries = [entry for entry in entries if _is_executable_sn_entry(entry)]
     des_sn_entries = [entry for entry in entries if _is_executable_des_sn_entry(entry)]
     # des_sn5yr, when its full χ² is enabled, runs the executable path — exclude it
@@ -4229,6 +4501,7 @@ def _run_sampling_likelihood_chain(
         | {e.key for e in rsd_entries}
         | {e.key for e in fsbao_entries}
         | {e.key for e in dr12_entries}
+        | {e.key for e in grid_bao_entries}
         | {e.key for e in des_sn_entries}
     )
     skipped_entries = [
@@ -4240,7 +4513,8 @@ def _run_sampling_likelihood_chain(
     parameter_order = _sampling_parameter_order(
         bao_entries, compressed_entries, sn_entries, model_key=model_key,
         cc_entries=cc_entries, rsd_entries=rsd_entries, fsbao_entries=fsbao_entries,
-        dr12_entries=dr12_entries, des_sn_entries=des_sn_entries,
+        dr12_entries=dr12_entries, grid_bao_entries=grid_bao_entries,
+        des_sn_entries=des_sn_entries,
     )
     if not parameter_order:
         return _compressed_runner_unavailable(
@@ -4277,6 +4551,7 @@ def _run_sampling_likelihood_chain(
             and not rsd_entries
             and not fsbao_entries
             and not dr12_entries
+            and not grid_bao_entries
             and not des_sn_entries
             and parameter_order == ["H0", "omegam", "rd"]
         ):
@@ -4311,6 +4586,7 @@ def _run_sampling_likelihood_chain(
                 rsd_entries=rsd_entries,
                 fsbao_entries=fsbao_entries,
                 dr12_entries=dr12_entries,
+                grid_bao_entries=grid_bao_entries,
                 des_sn_entries=des_sn_entries,
                 allow_emcee_fallback=allow_emcee_fallback,
             )
@@ -4328,7 +4604,7 @@ def _run_sampling_likelihood_chain(
             n_components = (
                 len(bao_entries) + len(compressed_entries) + len(sn_entries)
                 + len(cc_entries) + len(rsd_entries) + len(fsbao_entries)
-                + len(dr12_entries)
+                + len(dr12_entries) + len(grid_bao_entries)
                 + len(des_sn_entries)
             )
             if (
@@ -4356,6 +4632,7 @@ def _run_sampling_likelihood_chain(
                         rsd_entries=rsd_entries,
                         fsbao_entries=fsbao_entries,
                         dr12_entries=dr12_entries,
+                        grid_bao_entries=grid_bao_entries,
                         des_sn_entries=des_sn_entries,
                     )
                     # 2026-06-12 review: only adopt the emcee upgrade when its
@@ -4411,7 +4688,7 @@ def _run_sampling_likelihood_chain(
 
     used_keys = {
         entry.key
-        for entry in bao_entries + compressed_entries + cc_entries + rsd_entries + fsbao_entries + dr12_entries + sn_entries + des_sn_entries
+        for entry in bao_entries + compressed_entries + cc_entries + rsd_entries + fsbao_entries + dr12_entries + grid_bao_entries + sn_entries + des_sn_entries
     }
     used_entries = [entry for entry in entries if entry.key in used_keys]
     # Each executable BAO entry contributes its own measurement vector (DESI DR1
@@ -4424,6 +4701,7 @@ def _run_sampling_likelihood_chain(
         + len(EBOSS_DR16_FSIGMA8) * len(rsd_entries)
         + sum(len(_FSBAO_DATA[entry.key][0]) for entry in fsbao_entries)
         + sum(len(load_verified_dr12_consensus_data(entry.key)["mean_vector"] or ()) for entry in dr12_entries)
+        + sum(1 if entry.key == "eboss_dr16_elg_bao" else 2 for entry in grid_bao_entries)
         + sum(len(_load_pantheon_plus_data()["mu"]) for entry in sn_entries if entry.key == "pantheon_plus")
         + sum(_offset_sn_n_points(entry.key) for entry in des_sn_entries)
         + sum(
@@ -4449,7 +4727,8 @@ def _run_sampling_likelihood_chain(
         ),
     ]
     warnings.extend(_combination_warnings(entries))
-    if (bao_entries or fsbao_entries or dr12_entries) and not any(entry.probe == "cmb" for entry in used_entries):
+    warnings.extend(_grid_support_warnings(grid_bao_entries, parameter_order, prior_bounds, seed))
+    if (bao_entries or fsbao_entries or dr12_entries or grid_bao_entries) and not any(entry.probe == "cmb" for entry in used_entries):
         warnings.append(
             "BAO-only H0 and rd constraints are prior/calibration dependent; "
             "quote Omega_m or H0*rd more strongly than H0 alone."
@@ -4479,7 +4758,7 @@ def _run_sampling_likelihood_chain(
         )
 
     cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
-        bao_entries + cc_entries + rsd_entries + fsbao_entries + dr12_entries + sn_entries + des_sn_entries + compressed_entries, warnings
+        bao_entries + cc_entries + rsd_entries + fsbao_entries + dr12_entries + grid_bao_entries + sn_entries + des_sn_entries + compressed_entries, warnings
     )
     _executable_full_fidelity = not compressed_entries and cov_fidelity == "full"
     if _executable_full_fidelity:
@@ -4725,6 +5004,7 @@ def _sampling_parameter_order(
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
     fsbao_entries: list[CosmologyDatasetEntry] | None = None,
     dr12_entries: list[CosmologyDatasetEntry] | None = None,
+    grid_bao_entries: list[CosmologyDatasetEntry] | None = None,
     des_sn_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> list[str]:
     order: list[str] = []
@@ -4745,6 +5025,12 @@ def _sampling_parameter_order(
     if dr12_entries:
         # DR12 consensus BAO measures (D_M·rs_fid/r_d, H·r_d/rs_fid) — pure
         # distance/expansion, same parameter set as BAO, no growth term.
+        for param in ("H0", "omegam", "rd"):
+            if param not in order:
+                order.append(param)
+    if grid_bao_entries:
+        # eBOSS DR16 grid surfaces measure dimensionless distance ratios
+        # (D_V/r_d or D_M/r_d + D_H/r_d) — same parameter set as BAO.
         for param in ("H0", "omegam", "rd"):
             if param not in order:
                 order.append(param)
@@ -4990,6 +5276,7 @@ def _run_emcee_chain(
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
     fsbao_entries: list[CosmologyDatasetEntry] | None = None,
     dr12_entries: list[CosmologyDatasetEntry] | None = None,
+    grid_bao_entries: list[CosmologyDatasetEntry] | None = None,
     des_sn_entries: list[CosmologyDatasetEntry] | None = None,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
     """emcee MCMC over any BAO + compressed + SN likelihood product.
@@ -5082,6 +5369,8 @@ def _run_emcee_chain(
             chi2 += _fsbao_chi2_samples(valid, parameter_order, entry.key)
         for entry in dr12_entries:
             chi2 += _dr12_chi2_samples(valid, parameter_order, entry.key)
+        for entry in grid_bao_entries:
+            chi2 += _grid_bao_chi2_samples(valid, parameter_order, entry.key)
         for entry in sn_entries:
             if entry.key == "pantheon_plus":
                 chi2 += _pantheon_plus_chi2_samples(valid, parameter_order)
@@ -5161,6 +5450,7 @@ def _draw_importance_posterior(
     rsd_entries: list[CosmologyDatasetEntry] | None = None,
     fsbao_entries: list[CosmologyDatasetEntry] | None = None,
     dr12_entries: list[CosmologyDatasetEntry] | None = None,
+    grid_bao_entries: list[CosmologyDatasetEntry] | None = None,
     des_sn_entries: list[CosmologyDatasetEntry] | None = None,
     allow_emcee_fallback: bool = True,
 ) -> tuple[np.ndarray, float, float, int, list[str]]:
@@ -5169,6 +5459,7 @@ def _draw_importance_posterior(
     rsd_entries = rsd_entries or []
     fsbao_entries = fsbao_entries or []
     dr12_entries = dr12_entries or []
+    grid_bao_entries = grid_bao_entries or []
     des_sn_entries = des_sn_entries or []
     # SN paths may bypass importance sampling with emcee — see
     # _sn_emcee_bypass_active for the policy (expensive full vectors always;
@@ -5188,6 +5479,7 @@ def _draw_importance_posterior(
             rsd_entries=rsd_entries,
             fsbao_entries=fsbao_entries,
             dr12_entries=dr12_entries,
+            grid_bao_entries=grid_bao_entries,
             des_sn_entries=des_sn_entries,
         )
 
@@ -5228,6 +5520,8 @@ def _draw_importance_posterior(
         chi2 += _fsbao_chi2_samples(samples, parameter_order, entry.key)
     for entry in (dr12_entries or []):
         chi2 += _dr12_chi2_samples(samples, parameter_order, entry.key)
+    for entry in (grid_bao_entries or []):
+        chi2 += _grid_bao_chi2_samples(samples, parameter_order, entry.key)
     for entry in (sn_entries or []):
         if entry.key == "pantheon_plus":
             chi2 += _pantheon_plus_chi2_samples(samples, parameter_order)
@@ -5451,6 +5745,94 @@ def _dr12_chi2_samples(
     predictions = _dr12_consensus_predictions(samples, parameter_order, mean_vector)
     residual = predictions - observed
     return np.einsum("ni,ij,nj->n", residual, np.linalg.inv(np.asarray(cov, dtype=float)), residual)
+
+
+# Effective redshifts of the eBOSS DR16 released likelihood surfaces (from the
+# cobaya bao.sdss_dr16_* yamls).
+_EBOSS_ELG_GRID_Z = 0.845
+_EBOSS_LYA_GRID_Z = 2.334
+
+
+def _grid_bao_chi2_samples(
+    samples: np.ndarray, parameter_order: list[str], key: str
+) -> np.ndarray:
+    """chi2 = -2·ln L from a released eBOSS DR16 non-Gaussian BAO surface.
+
+    Out-of-grid samples get chi2 = +inf, zeroing their importance weights —
+    NOTE this deliberately deviates from cobaya in BOTH directions, each time
+    fail-safe: cobaya's Lyα RectBivariateSpline silently EXTRAPOLATES the
+    log-likelihood out-of-grid (live-verified pathology: a far-outside point
+    scores HIGHER than the in-grid minimum), and cobaya's ELG 1D spline
+    (ext=2) CRASHES with a ValueError out-of-bounds. We refuse support
+    instead; the refused prior-volume fraction is reported per dataset by
+    _grid_support_warnings (parity tests stay in-grid)."""
+    h0 = samples[:, parameter_order.index("H0")]
+    omegam = samples[:, parameter_order.index("omegam")]
+    rd = samples[:, parameter_order.index("rd")]
+    n_samples = samples.shape[0]
+    if "w0" in parameter_order:
+        w0 = samples[:, parameter_order.index("w0")]
+    elif "w" in parameter_order:
+        w0 = samples[:, parameter_order.index("w")]
+    else:
+        w0 = np.full(n_samples, -1.0, dtype=float)
+    wa = samples[:, parameter_order.index("wa")] if "wa" in parameter_order else np.zeros(n_samples)
+    if key == "eboss_dr16_elg_bao":
+        _dm, _dh, dv = _flat_de_distances_at_z(_EBOSS_ELG_GRID_Z, h0, omegam, w0=w0, wa=wa)
+        x = dv / rd
+        spline, lo, hi = _elg_logprob_spline()
+        chi2 = np.full(x.shape, np.inf, dtype=float)
+        in_bounds = (x >= lo) & (x <= hi)
+        if np.any(in_bounds):
+            chi2[in_bounds] = -2.0 * spline(x[in_bounds])
+        return chi2
+    if key in ("eboss_dr16_lyauto_bao", "eboss_dr16_lyxqso_bao"):
+        dm, dh, _dv = _flat_de_distances_at_z(_EBOSS_LYA_GRID_Z, h0, omegam, w0=w0, wa=wa)
+        xm = dm / rd
+        yh = dh / rd
+        spline, (xlo, xhi), (ylo, yhi) = _lya_loglike_spline(key)
+        chi2 = np.full(xm.shape, np.inf, dtype=float)
+        in_bounds = (xm >= xlo) & (xm <= xhi) & (yh >= ylo) & (yh <= yhi)
+        if np.any(in_bounds):
+            chi2[in_bounds] = -2.0 * spline.ev(xm[in_bounds], yh[in_bounds])
+        return chi2
+    raise ValueError(f"executable grid BAO entry {key!r} has no chi2 dispatch")
+
+
+def _grid_support_warnings(
+    grid_bao_entries: list[CosmologyDatasetEntry],
+    parameter_order: list[str],
+    prior_bounds: dict[str, tuple[float, float]],
+    seed: int,
+) -> list[str]:
+    """Per-dataset accounting of how much PRIOR volume a released grid surface
+    refuses (2026-06-12 review: an ELG-only chain silently hard-zeroed ~38% of
+    the default prior at a <2σ-equivalent table edge while reporting
+    publication tier). The truncation is faithful — it IS the release's own
+    support — but it must be observable, not silent."""
+    if not grid_bao_entries:
+        return []
+    rng = np.random.default_rng((int(seed) ^ 0x5EED) & 0x7FFFFFFF)
+    n_probe = 2000
+    samples = np.column_stack([
+        rng.uniform(prior_bounds[name][0], prior_bounds[name][1], n_probe)
+        for name in parameter_order
+    ])
+    notes: list[str] = []
+    for entry in grid_bao_entries:
+        try:
+            chi2 = _grid_bao_chi2_samples(samples, parameter_order, entry.key)
+        except ValueError:
+            continue  # unverified data refuses elsewhere, loudly
+        refused = float(np.mean(~np.isfinite(chi2)))
+        if refused > 0.2:
+            notes.append(
+                f"{refused:.1%} of the prior volume falls outside the released "
+                f"{entry.key} grid support and was refused (chi2=+inf, never "
+                "extrapolated) — the posterior is truncated at the release's "
+                "own support."
+            )
+    return notes
 
 
 def _hz_predictions_for(
@@ -6360,6 +6742,22 @@ def _sampling_source_records(entries: list[CosmologyDatasetEntry]) -> list[dict[
                 "dataset_key": entry.key,
                 "source_locator": f"SDSS DR16 BAO+RSD consensus (CobayaSampler/bao_data, {entry.key}) — joint (D_M/r_s, D_H/r_s, fσ8) + full covariance",
                 "approximation": "Full-covariance rᵀC⁻¹r χ² (flat w0waCDM): D_M/r_s, D_H/r_s distance ratios + Linder-γ fσ8 growth, with the released joint distance+growth covariance",
+                "data_products": [product.to_dict() for product in entry.data_products],
+            })
+        elif entry.key in EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS:
+            records.append({
+                "dataset_key": entry.key,
+                "source_locator": (
+                    "eBOSS DR16 released non-Gaussian BAO surface (Alam et al. 2021; "
+                    "CobayaSampler/bao_data, " + entry.key + ") — "
+                    + ("D_V/r_d probability table at z=0.845" if entry.key == "eboss_dr16_elg_bao"
+                       else "(D_M/r_d, D_H/r_d) likelihood grid at z=2.334")
+                ),
+                "approximation": (
+                    "chi2 = -2·ln L from a cubic spline of the released log-surface "
+                    "(cobaya bao.sdss_dr16_* parity); out-of-grid samples refused "
+                    "(fail-safe), never extrapolated"
+                ),
                 "data_products": [product.to_dict() for product in entry.data_products],
             })
         elif entry.key in SDSS_DR12_CONSENSUS_EXECUTABLE_KEYS:

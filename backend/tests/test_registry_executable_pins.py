@@ -30,6 +30,8 @@ def test_every_non_allowlisted_executable_probe_certifies_a_file_backed_fidelity
             v = cl.load_verified_bao_data(k)
         elif k in cl.SDSS_DR12_CONSENSUS_EXECUTABLE_KEYS:
             v = cl.load_verified_dr12_consensus_data(k)
+        elif k in cl.EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS:
+            v = cl.load_verified_grid_bao_data(k)
         elif k in cl.EBOSS_DR16_FSBAO_EXECUTABLE_KEYS:
             v = cl.load_verified_fsbao_data(k)
         elif k == "des_sn5yr":

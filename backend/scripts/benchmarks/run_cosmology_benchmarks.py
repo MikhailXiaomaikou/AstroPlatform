@@ -796,6 +796,63 @@ def bench_sdss_dr12_consensus_bao() -> dict[str, Any]:
     }
 
 
+def bench_eboss_dr16_grid_bao() -> dict[str, Any]:
+    """eBOSS DR16 non-Gaussian BAO surfaces (P2b, 2026-06-12).
+
+    Pins (1) the released surfaces still peak at the published best fits
+    (ELG D_V/r_d=18.33 de Mattia+2021; Lyα auto 37.76/8.92 and cross
+    37.44/9.06 du Mas des Bourboux 2020) — a transposed reshape or axis swap
+    would move the apparent peak; (2) chi2 at the Planck 2018 fiducial: ELG
+    agrees (~0.4), the Lyα grids sit at the known mild DR16 Lyα offset
+    (chi2 2-4 for 2 dof — NOT a failure; cobaya parity is locked in
+    tests/test_eboss_dr16_grid_bao.py); (3) the 3-grid joint chain executes
+    in-process to publication tier.
+    """
+    from app.services.cosmology_likelihoods import (
+        EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS,
+        load_verified_grid_bao_data,
+        run_likelihood_chain,
+        _grid_bao_chi2_samples,
+    )
+    order = ["H0", "omegam", "rd"]
+    theta = np.array([[67.36, 0.3153, 147.09]])
+    elg = load_verified_grid_bao_data("eboss_dr16_elg_bao")["grid"]
+    elg_peak = float(elg[np.argmax(elg[:, 1]), 0])
+    lya_peaks = {}
+    for key, expected in (("eboss_dr16_lyauto_bao", (37.76, 8.92)),
+                          ("eboss_dr16_lyxqso_bao", (37.44, 9.06))):
+        g = load_verified_grid_bao_data(key)["grid"]
+        peak = g[np.argmax(g[:, 2])]
+        lya_peaks[key] = (round(float(peak[0]), 3), round(float(peak[1]), 3), expected)
+    chi2 = {
+        key: round(float(_grid_bao_chi2_samples(theta, order, key)[0]), 4)
+        for key in sorted(EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS)
+    }
+    r = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=sorted(EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS),
+        n_samples=3000,
+        random_seed=42,
+    )
+    peaks_ok = (
+        abs(elg_peak - 18.33) < 0.05
+        and all(abs(v[0] - v[2][0]) < 0.2 and abs(v[1] - v[2][1]) < 0.2 for v in lya_peaks.values())
+    )
+    chi2_ok = (
+        0.05 < chi2["eboss_dr16_elg_bao"] < 4.0
+        and 0.3 < chi2["eboss_dr16_lyauto_bao"] < 6.0
+        and 0.5 < chi2["eboss_dr16_lyxqso_bao"] < 8.0
+    )
+    return {
+        "pass": peaks_ok and chi2_ok and r["chain_tier"] == "publication",
+        "elg_peak_dv_rd": elg_peak,
+        "lya_peaks": {k: v[:2] for k, v in lya_peaks.items()},
+        "chi2_planck_fiducial": chi2,
+        "chain_tier": r["chain_tier"],
+        "target": "surface peaks at published best fits, fiducial chi2 in known bands, 3-grid joint publication in-process",
+    }
+
+
 def bench_s8_derived_consistency() -> dict[str, Any]:
     """S8 as a derived quantity, not a sampled column (1B, 2026-05-29).
 
@@ -884,6 +941,7 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("eboss_fsigma8_growth", bench_eboss_fsigma8_growth),
     ("sdss_6df_bao_executable", bench_sdss_6df_bao_executable),
     ("sdss_dr12_consensus_bao", bench_sdss_dr12_consensus_bao),
+    ("eboss_dr16_grid_bao", bench_eboss_dr16_grid_bao),
     ("s8_derived_consistency", bench_s8_derived_consistency),
     ("growth_kernel_vs_exact_lcdm", bench_growth_kernel_vs_exact_lcdm),
     ("model_comparison_delta", bench_model_comparison_delta),

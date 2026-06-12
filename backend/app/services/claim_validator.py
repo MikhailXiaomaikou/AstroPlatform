@@ -918,6 +918,13 @@ _FREETEXT_KEYS: frozenset[str] = frozenset({
     # may ground on them. Legitimate constants they mention (rs_fid) are
     # exposed as structured numeric fields instead.
     "source_locator", "approximation",
+    # Registry naming prose (2026-06-12 eBOSS-grid review, same laundering
+    # family): dataset version/display_name strings carry table dimensions and
+    # grid shapes ("released 399-point probability table", "50×50") that
+    # validated fabricated count claims ("the fit used 399 quasars"). The
+    # honest structured siblings (z_coverage, rows fields outside blacklists)
+    # remain harvested.
+    "version", "display_name", "dataset_version", "dataset_display_name",
 })
 
 
@@ -1043,7 +1050,11 @@ def _iter_numeric_values(payload: Any, _in_blacklisted_key: bool = False) -> Ite
             if key_str in _FREETEXT_KEYS and isinstance(val, str):
                 continue
             yield from _iter_numeric_values(val)
-    elif isinstance(payload, list):
+    elif isinstance(payload, (list, tuple)):
+        # tuple included (2026-06-12 eBOSS-grid review): raw (non-JSON-round-
+        # tripped) tool results carry tuples like z_coverage=(2.334, 2.334);
+        # without this branch the honest "at z=2.334" claim grounded ONLY via
+        # launderable registry prose.
         for val in payload:
             yield from _iter_numeric_values(val)
     elif isinstance(payload, str):

@@ -524,3 +524,40 @@ cases:
                   source_locator: "BOSS DR12 consensus BAO (Alam et al. 2017, arXiv:1607.03155)"
                   rs_fid_mpc: 147.78
     expect_ok: true
+
+  - name: registry_version_prose_digits_not_in_universe
+    description: |
+      2026-06-12 eBOSS-grid review (DR12-BLOCKER family): dataset
+      version/display_name strings carry table dimensions ("released
+      399-point probability table", "50x50 grid") that validated fabricated
+      count claims. Naming prose is never measurement evidence.
+    reply: "The fit used 399 quasars across the sample."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        input: {}
+        result:
+          analysis_status: "COMPLETED"
+          datasets_used:
+            - key: "eboss_dr16_elg_bao"
+              display_name: "eBOSS DR16 ELG BAO (non-Gaussian D_V/r_d table)"
+              version: "SDSS DR16 ELG BAO-only: released 399-point probability table for D_V/r_d at z=0.845"
+    expect_ok: false
+
+  - name: structured_z_coverage_keeps_honest_redshift_claimable
+    description: |
+      Control + tuple-branch pin: with the naming prose skipped, the honest
+      "at z=0.845" claim must still ground via the structured z_coverage
+      field (raw tool results carry tuples; the validator walks them like
+      lists since 2026-06-12).
+    reply: "The ELG sample sits at z = 0.845."
+    tool_results:
+      - tool: run_cosmology_likelihood_chain
+        input: {}
+        result:
+          analysis_status: "COMPLETED"
+          datasets_used:
+            - key: "eboss_dr16_elg_bao"
+              display_name: "eBOSS DR16 ELG BAO (non-Gaussian D_V/r_d table)"
+              version: "SDSS DR16 ELG BAO-only: released 399-point probability table for D_V/r_d at z=0.845"
+              z_coverage: [0.845, 0.845]
+    expect_ok: true
