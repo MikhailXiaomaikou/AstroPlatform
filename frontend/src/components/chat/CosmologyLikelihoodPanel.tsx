@@ -45,6 +45,10 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function fmtNumber(value: unknown, digits = 3): string {
+  // Number(null) === 0, so a JSON null (e.g. rhat: not computed on the
+  // in-process runner) must be caught BEFORE coercion — otherwise the UI
+  // renders a fabricated "0.000" for a diagnostic that was never computed.
+  if (value === null || value === undefined) return "—";
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return "—";
   return Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(digits);

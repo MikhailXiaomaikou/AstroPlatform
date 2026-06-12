@@ -97,7 +97,8 @@ def demo_1a() -> None:
     print("  output:")
     print(f"        H0      = {p['H0']['median']:.3f} km/s/Mpc")
     print(f"        Omega_m = {p['omegam']['median']:.4f}")
-    print(f"        chain_tier        = {r['chain_tier']!r}   (ESS = {ess:.1f})")
+    _ess_txt = f"{ess:.1f}" if isinstance(ess, (int, float)) else "unavailable (convergence unverified)"
+    print(f"        chain_tier        = {r['chain_tier']!r}   (ESS = {_ess_txt})")
     print(f"        publication_ready = {r['publication_ready']}")
     print(f"        claim_scope       = {r['claim_scope']!r}")
     print(f"        cov_fidelity      = {cov_fidelity!r}   "
@@ -137,7 +138,8 @@ def demo_1b() -> None:
     print(f"        wa      = {p['wa']['median']:.3f}")
     print(f"        Omega_m = {p['omegam']['median']:.4f}")
     print(f"        H0      = {p['H0']['median']:.3f} km/s/Mpc")
-    print(f"        chain_tier               = {r['chain_tier']!r}   (ESS = {ess:.1f}, above the 400 floor)")
+    _ess_txt = f"{ess:.1f}" if isinstance(ess, (int, float)) else "unavailable (convergence unverified)"
+    print(f"        chain_tier               = {r['chain_tier']!r}   (ESS = {_ess_txt}; publication floor is 400)")
     print(f"        publication_ready        = {r['publication_ready']}")
     print(f"        off_anchor_review_required = {r['off_anchor_review_required']}")
     print(f"        reason: {r.get('__exploratory_warning__')}")
@@ -213,7 +215,8 @@ def demo_3() -> None:
 def main() -> None:
     sel = _SELECTED
     if sel in {"quick", ""}:
-        demo_1a(); demo_3()
+        demo_1a()
+        demo_3()
         print("\n(quick set done. For the w0wa reproduction run `... run_demos.py 1b`; "
               "for the Planck CMB chi2 run `... run_demos.py 2`; for all, `... run_demos.py all`.)")
     elif sel == "1a":
@@ -225,7 +228,10 @@ def main() -> None:
     elif sel == "3":
         demo_3()
     elif sel == "all":
-        demo_1a(); demo_1b(); demo_2(); demo_3()
+        demo_1a()
+        demo_1b()
+        demo_2()
+        demo_3()
     else:
         print(f"unknown selection {sel!r}. use one of: quick | 1a | 1b | 2 | 3 | all")
         sys.exit(2)

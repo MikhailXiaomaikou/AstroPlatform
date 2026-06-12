@@ -769,7 +769,7 @@ def bench_s8_derived_consistency() -> dict[str, Any]:
             and derived_ok(bao_planck)
             and prod_order == ["H0", "omegam", "rd", "sigma8"]
             and planck_kids["publication_ready"]
-            and planck_kids["chain_diagnostics"]["ess_bulk"] >= 400
+            and (planck_kids["chain_diagnostics"]["ess_bulk"] or 0) >= 400
             and s8_kids < s8_planck
         ),
         "prod_bao_planck_order": prod_order,

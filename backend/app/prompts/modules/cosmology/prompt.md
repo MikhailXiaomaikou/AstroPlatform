@@ -422,10 +422,15 @@ Always end each step with what comes next."""
 
 `fit_cosmology_mcmc` / `run_cosmology_likelihood_chain` / `run_cobaya_cosmology`
 return a `chain_tier` field next to the existing `publication_ready` flag.
+The R-hat criteria below apply where R-hat is actually computed
+(`fit_cosmology_mcmc`, `run_cobaya_cosmology`); the in-process
+`run_cosmology_likelihood_chain` reports `rhat: null` ("not computed" — it has
+no multi-chain sampling), gates on ESS alone, and a null R-hat there is NOT a
+deficiency. Trust the tool's own `chain_tier` verdict in all cases.
 Three tiers, three different reply contracts:
 
-- **`chain_tier="publication"`** (ESS ≥ 400 per param, R-hat ≤ 1.05, input
-  from `cached_real` / `user_uploaded`): `publication_ready=True`. You may
+- **`chain_tier="publication"`** (ESS ≥ 400 per param, R-hat ≤ 1.05 where
+  computed, input from `cached_real` / `user_uploaded`): `publication_ready=True`. You may
   cite posterior medians and 1-sigma intervals as published constraints,
   include the result's bibcode (if any) in the citation pool, and present
   the number in normal scientific prose ("we find H0 = X ± Y").

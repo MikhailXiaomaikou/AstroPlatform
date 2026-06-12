@@ -187,7 +187,9 @@ def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints(
     assert result["claim_scope"] == "compressed_likelihood_preliminary"
     assert set(result["parameters"]) >= {"H0", "omegam", "sigma8", "S8"}
     assert result["parameters"]["S8"]["median"] == pytest.approx(0.804, abs=0.02)
-    assert result["chain_diagnostics"]["rhat"] == 1.0
+    # 2026-06-12: rhat is honestly None on the in-process runner (no MCMC
+    # chains exist; the old hard-coded 1.0 was a never-computed statistic).
+    assert result["chain_diagnostics"]["rhat"] is None
     assert result["fit_statistics"]["aic"] > 0
     assert any(item["parameter"] == "S8" for item in result["pairwise_tensions"])
     assert len(result["datasets_used"]) == 5

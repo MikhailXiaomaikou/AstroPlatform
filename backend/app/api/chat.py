@@ -2725,6 +2725,13 @@ def _research_tool_grounded_summary(tool_results: list[dict]) -> str | None:
                             )
                         else:
                             detail_parts.append(f"ESS {_fmt_tool_number(ess)}")
+                    elif diagnostics.get("ess_source") == "autocorr_failed":
+                        # 2026-06-12: the ess_unknown path reports ess=None —
+                        # without this branch the cell collapses to a bare
+                        # "not claimable" with no reason at all.
+                        detail_parts.append(
+                            "ESS unavailable (autocorrelation failed; convergence unverified)"
+                        )
                     if rhat is not None:
                         detail_parts.append(f"Rhat {_fmt_tool_number(rhat)}")
                     detail_parts.append("not claimable")

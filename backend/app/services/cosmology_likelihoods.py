@@ -3618,7 +3618,8 @@ def run_likelihood_chain(
         "pairwise_tensions": tensions,
         "fit_statistics": {
             "chi2": round(float(chi2), 6),
-            "delta_chi2": 0.0,
+            # delta_chi2 placeholder removed (2026-06-12) — see the sampling
+            # runner's fit_statistics note; use compute_model_comparison.
             "aic": round(float(aic), 6),
             "bic": round(float(bic), 6),
             "n_constraints": int(n_constraints),
@@ -3631,11 +3632,19 @@ def run_likelihood_chain(
                 else "analytic_gaussian_s8_reweighted"
             ),
             "publication_ready": publication_ready,
-            "rhat": 1.0,
+            # No sampling chains exist on the analytic path — R-hat is
+            # undefined, not 1.0 (2026-06-12 review: the hard-coded value was
+            # a never-computed statistic in the provenance envelope). The
+            # exact-Gaussian draws ARE independent, so ess = n_draws is real.
+            "rhat": None,
+            "rhat_note": "not applicable (analytic Gaussian, no sampling chains)",
             "ess_bulk": int(round(s8_ess)) if s8_ess is not None else sample_count,
+            "ess_source": (
+                "importance_weights" if s8_ess is not None else "exact_gaussian_draws"
+            ),
             "n_draws": sample_count,
             "n_chains": 1,
-            "thresholds": {"ess_min": 400, "rhat_max": 1.05},
+            "thresholds": {"ess_min": 400},
         },
         "datasets_used": [entry.to_dict() for entry in compressed_entries],
         "datasets_not_run": [entry.to_dict() for entry in skipped_entries],
@@ -4089,10 +4098,10 @@ def _run_sampling_likelihood_chain(
             ):
                 try:
                     (
-                        posterior_samples,
-                        best_chi2,
-                        proposal_ess,
-                        proposal_draws,
+                        _em_samples,
+                        _em_best_chi2,
+                        _em_ess,
+                        _em_draws,
                         emcee_errors,
                     ) = _run_emcee_chain(
                         seed,
@@ -4107,8 +4116,23 @@ def _run_sampling_likelihood_chain(
                         fsbao_entries=fsbao_entries,
                         des_sn_entries=des_sn_entries,
                     )
-                    invalid_specs.extend(emcee_errors)
-                    sampler_used = "compressed_emcee"
+                    # 2026-06-12 review: only adopt the emcee upgrade when its
+                    # ESS estimate is finite AND an actual improvement. If the
+                    # emcee autocorrelation estimate failed (NaN), a measured
+                    # importance ESS — even a low one — is strictly more honest
+                    # than an unverifiable chain.
+                    if math.isfinite(_em_ess) and _em_ess > proposal_ess:
+                        posterior_samples = _em_samples
+                        best_chi2 = _em_best_chi2
+                        proposal_ess = _em_ess
+                        proposal_draws = _em_draws
+                        invalid_specs.extend(emcee_errors)
+                        sampler_used = "compressed_emcee"
+                    else:
+                        logger.warning(
+                            "compressed-emcee fallback did not improve diagnostics "
+                            "(ess=%s); keeping importance result", _em_ess,
+                        )
                 except Exception as exc:
                     logger.warning(
                         "compressed-emcee fallback failed (%s); keeping importance result",
@@ -4195,9 +4219,20 @@ def _run_sampling_likelihood_chain(
         )
     if invalid_specs:
         warnings.extend(invalid_specs)
-    if proposal_ess < 400.0:
+    # ess_unknown: the emcee autocorrelation estimate failed (NaN channel from
+    # _run_emcee_chain) — convergence is UNVERIFIED, which is different from
+    # "low": it blocks publication and caps the tier at exploratory below.
+    ess_unknown = not math.isfinite(proposal_ess)
+    if ess_unknown:
         warnings.append(
-            f"Importance sampler ESS={proposal_ess:.1f} below publication threshold 400."
+            f"{sampler_used} effective-sample-size estimate unavailable "
+            "(autocorrelation time could not be estimated — pathological or "
+            "too-short chain). Convergence is UNVERIFIED; result capped at "
+            "exploratory."
+        )
+    elif proposal_ess < 400.0:
+        warnings.append(
+            f"{sampler_used} ESS={proposal_ess:.1f} below publication threshold 400."
         )
 
     cov_fidelity, artifact_sha256, fidelity_ok = _finalize_cov_fidelity(
@@ -4255,7 +4290,10 @@ def _run_sampling_likelihood_chain(
         and not invalid_specs
         and not skipped_entries
         and not combination_conflict
-        and proposal_ess >= 100.0
+        # ess_unknown (diagnostics failed) lands here, NOT in blocked: the
+        # chain may be fine — only its convergence certificate is missing —
+        # so the numbers stay discussable with the exploratory caveat.
+        and (proposal_ess >= 100.0 or ess_unknown)
     ):
         chain_tier = "exploratory"
     else:
@@ -4267,9 +4305,14 @@ def _run_sampling_likelihood_chain(
     # "ESS below 400" for every exploratory chain, which is literally false
     # when ESS >= 400 and the off-anchor guard is what demoted it.
     exploratory_reasons: list[str] = []
-    if proposal_ess < 400.0:
+    if ess_unknown:
         exploratory_reasons.append(
-            f"importance-sampler ESS={proposal_ess:.0f} is below the publication threshold of 400"
+            "the effective-sample-size estimate failed (autocorrelation time "
+            "not estimable), so convergence is unverified"
+        )
+    elif proposal_ess < 400.0:
+        exploratory_reasons.append(
+            f"{sampler_used} ESS={proposal_ess:.0f} is below the publication threshold of 400"
         )
     if off_anchor:
         exploratory_reasons.append(
@@ -4326,7 +4369,11 @@ def _run_sampling_likelihood_chain(
         "pairwise_tensions": _pairwise_tensions(_tension_entries),
         "fit_statistics": {
             "chi2": round(best_chi2, 6),
-            "delta_chi2": 0.0,
+            # delta_chi2 was a hard-coded 0.0 placeholder here for years — a
+            # meaningless number masquerading as a computed statistic ("wCDM
+            # gives delta_chi2=0, no improvement"). Model comparison lives in
+            # compute_model_comparison, which fits BOTH models on the SAME
+            # datasets; a single run has no baseline to difference against.
             "aic": round(float(aic), 6),
             "bic": round(float(bic), 6),
             "n_constraints": int(n_constraints),
@@ -4338,14 +4385,29 @@ def _run_sampling_likelihood_chain(
                 else "importance_resampled"
             ),
             "publication_ready": publication_ready,
-            "rhat": 1.0,
-            "ess_bulk": int(min(round(proposal_ess), sample_count)),
-            "ess_tail": int(min(round(proposal_ess), sample_count)),
-            "proposal_ess": round(proposal_ess, 3),
+            # R-hat is NOT computed on this runner (importance resampling has
+            # no MCMC chains; the emcee bypass returns one flattened ensemble).
+            # It was hard-coded 1.0 for years — a never-computed convergence
+            # statistic inside the provenance envelope (2026-06-12 review).
+            # Per-parameter R-hat lives on the external cobaya path.
+            "rhat": None,
+            "rhat_note": "not computed on the in-process runner",
+            "ess_bulk": (
+                None if ess_unknown else int(min(round(proposal_ess), sample_count))
+            ),
+            "ess_source": (
+                "autocorr_failed" if ess_unknown
+                else (
+                    "emcee_autocorr"
+                    if sampler_used in ("compressed_emcee", "sn_emcee")
+                    else "importance_weights"
+                )
+            ),
+            "proposal_ess": None if ess_unknown else round(proposal_ess, 3),
             "proposal_draws": int(proposal_draws),
             "n_draws": sample_count,
             "n_chains": 1,
-            "thresholds": {"ess_min": 400, "rhat_max": 1.05},
+            "thresholds": {"ess_min": 400},
         },
         "datasets_used": [entry.to_dict() for entry in used_entries],
         "datasets_not_run": [entry.to_dict() for entry in skipped_entries],
@@ -4823,9 +4885,13 @@ def _run_emcee_chain(
             raise ValueError("non-finite autocorrelation time")
         ess_estimate = float(n_draws_total / max(max_tau, 1.0))
     except Exception:
-        ess_estimate = float(chain.shape[0] / 10.0)  # conservative
-    if not math.isfinite(ess_estimate):
-        ess_estimate = float(chain.shape[0] / 10.0)
+        # 2026-06-12 review: the old n/10 fallback (~4800 for a default chain)
+        # sailed OVER the 400 publication floor at the exact moment the ESS
+        # measurement FAILED — promoting an unverifiable chain to the highest
+        # confidence tier. The honest value is "unknown": NaN propagates to the
+        # runner, which reports ess=None, warns, and caps the tier at
+        # exploratory (never publication).
+        ess_estimate = float("nan")
     return chain_out, best_chi2, ess_estimate, int(chain.shape[0]), list(set(compressed_errors))
 
 
@@ -6069,12 +6135,34 @@ def run_alcock_paczynski_test(
     Returns a dict with Ωm best-fit, 1σ band, per-z observed ratios,
     chi² at minimum, and degrees of freedom.
     """
+    # Provenance binding (2026-06-12 review): fit the sha256-VERIFIED vendored
+    # arrays, not the legacy hand-typed constants — the constants are
+    # byte-identical to the vendored file (documented at _HARDCODED_BAO), so
+    # this shifts no number, but it puts the array this tool actually fits
+    # under the registry pin audit and makes publication_ready conditional on
+    # verification instead of unconditional ("decorative provenance" class).
+    verified = load_verified_bao_data("desi_dr1_bao")
+    if not verified.get("hash_verified") or verified.get("mean_vector") is None:
+        return {
+            "tool": "alcock_paczynski_test",
+            "success": False,
+            "error": (
+                "DESI DR1 BAO vendored data failed sha256 verification (or is "
+                "missing); refusing to run the AP test on unverified data."
+            ),
+            "error_class": "unverified_data",
+            "__tool_status__": "FAILED",
+            "analysis_status": "FAILED",
+            "publication_ready": False,
+            "__do_not_claim__": True,
+        }
+    mean_vector = verified["mean_vector"]
     pairs: list[tuple[float, float, float]] = []
-    cov = DESI_DR1_BAO_COVARIANCE
-    for i, (z_dm, val_dm, qty_dm) in enumerate(DESI_DR1_BAO_MEAN_VECTOR):
+    cov = verified["covariance"]
+    for i, (z_dm, val_dm, qty_dm) in enumerate(mean_vector):
         if qty_dm != "DM_over_rs":
             continue
-        for j, (z_dh, val_dh, qty_dh) in enumerate(DESI_DR1_BAO_MEAN_VECTOR):
+        for j, (z_dh, val_dh, qty_dh) in enumerate(mean_vector):
             if qty_dh != "DH_over_rs" or abs(z_dh - z_dm) > 1e-6:
                 continue
             sigma_dm_sq = cov[i][i]
@@ -6149,7 +6237,9 @@ def run_alcock_paczynski_test(
         "chi2_min": round(chi2_min, 4),
         "chi2_per_dof": round(chi2_min / n_dof, 4),
         "z_pairs": z_pairs_payload,
-        "publication_ready": True,
+        # Conditional on the sha256 verification above — an unverified file
+        # already returned a loud refusal before reaching this point.
+        "publication_ready": bool(verified.get("hash_verified")),
         "claim_scope": "alcock_paczynski_geometric_omega_m",
         "data_origin": "real_archive",
         "analysis_status": "ALCOCK_PACZYNSKI_READY",
@@ -6169,6 +6259,8 @@ def run_alcock_paczynski_test(
         "provenance": {
             "alcock_paczynski": {
                 "input_dataset": "desi_dr1_bao",
+                "artifact_sha256": verified.get("sha256"),
+                "cov_fidelity": verified.get("cov_fidelity"),
                 "n_pairs_used": len(pairs),
                 "omega_m_grid_min_max": [float(omega_m.min()), float(omega_m.max())],
                 "omega_m_grid_resolution": int(omega_m_n),

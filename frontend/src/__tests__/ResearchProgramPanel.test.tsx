@@ -69,7 +69,15 @@ describe("ResearchProgramPanel", () => {
               execution_level: "compressed_preliminary",
               result: {
                 parameters: { H0: { median: 67.31 } },
-                chain_diagnostics: { proposal_ess: 471.3, rhat: 1.0 },
+                // 2026-06-12 payload shape: rhat is null on the in-process
+                // runner (not computed) — the panel must render a dash, never
+                // coerce null to a fabricated "0.000".
+                chain_diagnostics: {
+                  proposal_ess: 471.3,
+                  rhat: null,
+                  rhat_note: "not computed on the in-process runner",
+                  ess_source: "importance_weights",
+                },
               },
             },
             { label: "BAO + SN", model: "lcdm", dataset_keys: ["desi_dr1_bao", "pantheon_plus"], execution_level: "config_only" },
@@ -87,7 +95,9 @@ describe("ResearchProgramPanel", () => {
     expect(screen.getByText("runnable cells ready")).toBeInTheDocument();
     expect(screen.getByText(/2 \/ 3 ready/)).toBeInTheDocument();
     expect(screen.getAllByText(/BAO only/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/H0 median 67.310 · ESS 471 · Rhat 1.000/)).toBeInTheDocument();
+    // rhat:null renders as a dash — the honest "not computed", never a
+    // coerced 0.000 (and never the old fabricated 1.000).
+    expect(screen.getByText(/H0 median 67.310 · ESS 471 · Rhat —/)).toBeInTheDocument();
     expect(screen.getByText(/configuration only, no posterior run yet/)).toBeInTheDocument();
   });
 

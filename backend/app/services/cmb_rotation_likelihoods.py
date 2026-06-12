@@ -248,7 +248,9 @@ def run_cmb_rotation_likelihood(
                 "std": 0.0,
                 "hdi_low_94": round(float(significance), 6),
                 "hdi_high_94": round(float(significance), 6),
-                "rhat": 1.0,
+                # No sampling chains exist on this analytic runner — R-hat is
+                # undefined, not 1.0 (2026-06-12: never-computed-statistic class).
+                "rhat": None,
                 "ess_bulk": sample_count,
                 "status": "analytic_gaussian",
             },
@@ -256,7 +258,7 @@ def run_cmb_rotation_likelihood(
         "posterior_summary": {"beta_deg": summary},
         "fit_statistics": {
             "chi2": round(chi2, 6),
-            "delta_chi2": 0.0,
+            # delta_chi2 placeholder removed (2026-06-12): a single run has no baseline to difference against.
             "aic": round(chi2 + 2.0, 6),
             "bic": round(chi2 + math.log(max(len(ready_entries), 1)), 6),
             "n_constraints": len(ready_entries),
@@ -265,11 +267,13 @@ def run_cmb_rotation_likelihood(
         "chain_diagnostics": {
             "overall_status": "analytic_gaussian",
             "publication_ready": True,
-            "rhat": 1.0,
+            "rhat": None,
+            "rhat_note": "not applicable (analytic Gaussian, no sampling chains)",
             "ess_bulk": sample_count,
+            "ess_source": "exact_gaussian_draws",
             "n_draws": sample_count,
             "n_chains": 1,
-            "thresholds": {"ess_min": 400, "rhat_max": 1.05},
+            "thresholds": {"ess_min": 400},
         },
         "datasets_used": [entry.to_dict() for entry in ready_entries],
         "datasets_not_run": [entry.to_dict() for entry in skipped_entries],
@@ -343,7 +347,7 @@ def _summary(samples: np.ndarray) -> dict[str, Any]:
         "hdi_low_94": round(float(low), 8),
         "hdi_high_94": round(float(high), 8),
         "hdi_94": [round(float(low), 8), round(float(high), 8)],
-        "rhat": 1.0,
+        "rhat": None,
         "ess_bulk": int(samples.size),
         "status": "analytic_gaussian",
     }

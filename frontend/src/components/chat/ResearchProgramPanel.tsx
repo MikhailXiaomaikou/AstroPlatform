@@ -72,12 +72,17 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function fmtNumber(value: unknown, digits = 3): string {
+  // Number(null) === 0, so a JSON null (e.g. rhat: not computed on the
+  // in-process runner) must be caught BEFORE coercion — otherwise the UI
+  // renders a fabricated "0.000" for a diagnostic that was never computed.
+  if (value === null || value === undefined) return "—";
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return "—";
   return Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(digits);
 }
 
 function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -400,7 +405,7 @@ function MatrixView({ result }: { result: Record<string, unknown> }) {
                   <div style={{ color: "var(--color-text-secondary)", fontSize: "0.74rem", marginTop: 2 }}>
                     H0 median {fmtNumber(h0.median)} · ESS {fmtNumber(diagnostics.proposal_ess ?? diagnostics.ess_bulk, 1)}
                     {" · "}Rhat {fmtNumber(diagnostics.rhat, 3)}
-                    {diagnostics.thresholds ? " · threshold ESS≥400/Rhat≤1.05" : ""}
+                    {diagnostics.thresholds ? " · threshold ESS≥400" : ""}
                   </div>
                 ) : null}
                 {notRun.length ? (
