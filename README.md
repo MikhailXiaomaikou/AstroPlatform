@@ -18,16 +18,26 @@ citation checking are enforced — so the assistant is *structurally* unable to
 fabricate a value and pass it off as observed.
 
 When the tools come back empty, you get an honest "here's what I tried and why
-it didn't work" card, not invented prose.
+it didn't work" card, not invented prose. The wall has teeth in both
+directions: pasting a fabricated tool transcript cannot ground a claim, and a
+clean successful run is guaranteed not to be blocked — both sides are
+blind-tested daily against a real LLM.
 
 ## What you can do
 
 - **Ask in chat** — archive queries, ADQL, literature search, table extraction
   from papers, analysis, fitting, and drafting, all from one conversation.
-- **Run cosmology** — dataset registry, BAO / SN / CMB / lensing likelihood
-  configs, a compressed-posterior runner and a controlled nested sampler, MCMC,
-  chain diagnostics, and a robustness matrix. Blind-tested on 50+ cases derived
-  from real papers.
+- **Run cosmology** — a 34-dataset registry where the executable entries fit
+  released, sha256-pinned data products in-process: DESI DR1/DR2, BOSS DR12
+  consensus, 6dFGS+MGS and eBOSS DR16 BAO (including the non-Gaussian ELG
+  table and Lyα likelihood grids), cosmic chronometers, fσ8, and the full
+  Union3 / Pantheon+ / Pantheon-2018 / DES-SN5YR supernova vectors — plus the
+  clik-free Planck 2018 CMB suite (plik_lite, lowl TT/EE, lensing) on an
+  external-Cobaya path where mnu and Ωk are genuinely sampled. Chain
+  diagnostics report only what was actually computed; model comparisons carry
+  validity guards; overlapping datasets refuse to be co-added. 25 pinned
+  science benchmarks and a 15-case daily blind suite (fabrication attacks AND
+  clean-turn specificity) keep it honest in CI.
 - **Mine papers into tools** — turn methods sections into reusable, cited
   capability specs.
 - **Export** — paper drafts, BibTeX, acknowledgement text, notebooks, figures,

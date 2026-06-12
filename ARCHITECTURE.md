@@ -337,7 +337,13 @@ Reviewer cycle on 5 reproduction papers surfaced ~20 real issues. PART H fixes c
 
 ### Render cold-start recovery (post-G fix)
 
-Render free-tier dynos sleep after 15 minutes idle. A user who idled and then fired a request (e.g. Advanced Search) would get a 502/503/504 back from the Render edge while the dyno woke, and the existing `BackendBanner` only checked backend health once at App mount — so mid-session sleeps went unflagged. Fixed:
+Historical context (written when the backend ran on Render's free tier,
+whose dynos slept after 15 minutes idle; the backend now runs on a paid
+Standard instance that does not sleep, and the mechanism is kept as defense
+against any transient 502/503/504): a user who idled and then fired a request
+would get a 502/503/504 back from the Render edge, and the existing
+`BackendBanner` only checked backend health once at App mount — so mid-session
+errors went unflagged. Fixed:
 
 1. **Axios response interceptor** (`src/api/client.ts`). On any 502/503/504, clears the `astro_backend_checked` sessionStorage flag, dispatches a `window` `CustomEvent('astro:backend-waking')`, waits 5 s, and retries the original request exactly once. Retry loop is guarded by an `__cold_start_retried__` flag on the config so it can't spiral.
 2. **BackendBanner listens for the event** (`src/App.tsx`). A second `useEffect` subscribes to `astro:backend-waking` and shows "Waking up backend (Render free tier sleeps after 15 min idle)..." for 12 s regardless of whether the initial boot-time health check had already completed.
@@ -391,7 +397,7 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 - [`app/services/provenance_v2/*`](./backend/app/services/provenance_v2) — Fallback registry, freshness checks, field-level schema/extractor, and DataOrigin/PARAM/INFO resolver helpers. Startup blocks on stale registry entries.
 - [`app/api/arxiv.py`](./backend/app/api/arxiv.py) + `extract_literature_tables` — arXiv/ar5iv/LaTeX table extraction path. Raw tables carry table/caption/row provenance, and normalized line-measurement rows carry citation metadata so downstream `fit_line_lfr` can support relation statistics without relying on model memory.
 - [`app/services/spectral_measurement_workbench.py`](./backend/app/services/spectral_measurement_workbench.py) — generic spectral-line measurement validator/inventory for `[CII]`, CO, Halpha, Lyalpha, [OIII], and future line tables. The `prepare_spectral_measurements` tool reports fit-ready rows, missing fields, line inventory, citation counts, and value ranges before relation fitting.
-- [`app/services/cosmology_likelihoods.py`](./backend/app/services/cosmology_likelihoods.py) — Observational-cosmology dataset registry plus controlled Cobaya/CosmoSIS-style config builder and phase-1 compressed Gaussian runner. Current registry covers DESI DR1 BAO, SDSS+6dF/SDSS-BOSS/eBOSS BAO, Pantheon+, DES-SN5YR, Union3, Planck compressed priors, ACT DR6 lensing, KiDS-1000/DES Y3/HSC weak-lensing comparison branches, cosmic chronometers, and SH0ES H0 prior. DESI, Pantheon+, and Planck entries expose explicit `data_products` for public mean vectors, covariance matrices, likelihood code, or compressed-prior tables. Config outputs remain non-citeable; compressed posterior/tension numbers are citeable only when `run_cosmology_likelihood_chain` or `run_cosmology_robustness_matrix` returns `publication_ready=true`, and must be labeled as compressed-likelihood preliminary rather than full external likelihood results.
+- [`app/services/cosmology_likelihoods.py`](./backend/app/services/cosmology_likelihoods.py) — Observational-cosmology dataset registry (34 entries as of 2026-06-13; live count via `scripts/audit_registry.py`) plus controlled Cobaya/CosmoSIS-style config builder and the in-process likelihood runners. Far past the original phase-1 compressed description: released, sha256-pinned data products now execute in-process for DESI DR1/DR2 BAO, 6dFGS+MGS (non-Gaussian table), BOSS DR12 consensus, eBOSS DR16 LRG/QSO FSBAO + ELG/Lya non-Gaussian grids, cosmic chronometers (incl. Moresco-2020 full covariance), eBOSS fsigma8, Union3's full 22-bin vector, and the env-gated full SN vectors (Pantheon+ 1701, DES-SN5YR 1829, Pantheon 2018 1048 — offset-marginalized); the clik-free Planck 2018 CMB suite (plik_lite/lowl TT/lowl EE/lensing) dispatches to external Cobaya behind `EXTERNAL_COBAYA_ENABLED`, where mnu/omegak are genuinely sampled (the in-process path hard-refuses ok_*/*_mnu names). Config outputs remain non-citeable; chain numbers are citeable only with `publication_ready=true` and the matching `claim_scope` (compressed participation → compressed-likelihood preliminary; exclusively full-fidelity products → `executable_full_fidelity_likelihoods`). Overlapping samples carry reciprocal `do_not_combine_with` pairs and violating combinations block.
 - [`app/connectors/retry.py`](./backend/app/connectors/retry.py) — Transient-only retry set (`httpx.TimeoutException`, `httpx.ConnectError`, `ConnectionError`, `TimeoutError`) + circuit breaker with closed/half-open/open states; `circuit_breaker_open_total` + `connector_error_total` counters.
 - [`app/services/connector_cache.py`](./backend/app/services/connector_cache.py) — Connector-payload cache under caller-supplied keys (wired on the arXiv table-extraction path). Backends: `RedisBackend` → `SQLiteBackend` → `NullBackend` (auto-select). Tiered TTLs: 24 h metadata, 1 h cones, 15 min ADQL. Singleflight dedup via a module-level `set[asyncio.Task]` with `task.add_done_callback(_tasks.discard)` so GC can't drop the shared future.
 
@@ -402,7 +408,7 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 - [`app/services/photo_z_pro.py`](./backend/app/services/photo_z_pro.py) — 30 SED templates + Calzetti dust + Madau IGM + Bayesian priors.
 - [`app/services/bayesian_inference.py`](./backend/app/services/bayesian_inference.py) — ArviZ-based ESS / R-hat / HDI / WAIC / LOO; `mcmc_insufficient_sampling_total` counter flags `ess_bulk<400` or `rhat>1.05`.
 - [`app/services/astro_statistics.py`](./backend/app/services/astro_statistics.py) — deterministic statistics toolbox for robust summaries, OLS/weighted/ODR/Theil-Sen regression, bootstrap intervals, and descriptive upper-limit/censored-data summaries. This gives the agent a named statistics path before falling back to custom `run_python`.
-- [`app/services/cosmology_mcmc.py`](./backend/app/services/cosmology_mcmc.py) — typed distance-modulus cosmology MCMC for `flat_lcdm`, `flat_wcdm`, and `flat_w0wa_cdm`; emcee runs synchronously for small cached-data jobs, inline rows are audit-only, Cobaya is a controlled UNAVAILABLE phase-1 interface until posterior summarization lands, and posterior numbers are citeable only when `publication_ready=true`.
+- [`app/services/cosmology_mcmc.py`](./backend/app/services/cosmology_mcmc.py) — typed distance-modulus cosmology MCMC for `flat_lcdm`, `flat_wcdm`, and `flat_w0wa_cdm`; emcee runs synchronously for small cached-data jobs, inline rows are audit-only, the standalone `run_cobaya_cosmology` tool remains a controlled UNAVAILABLE placeholder (the real external-Cobaya path lives inside `run_cosmology_likelihood_chain` behind `EXTERNAL_COBAYA_ENABLED`, see cosmology_likelihoods), curvature uses the exact FLRW sinn distance and massive neutrinos the non-relativistic fold-in (ok_*/*_mnu models), and posterior numbers are citeable only when `publication_ready=true`.
 - [`app/services/time_domain_pro.py`](./backend/app/services/time_domain_pro.py) — GP detrending, `BoxLeastSquares` + bootstrap FAP, flare detection, transit fitting with covariance matrix.
 - [`app/services/image_processing_pro.py`](./backend/app/services/image_processing_pro.py) — Reproject, mosaic, PSF match, deblend, cutouts.
 - [`app/services/transient_classifier.py`](./backend/app/services/transient_classifier.py) — Random-forest light-curve classifier + template spectral matching.
@@ -558,20 +564,25 @@ Uvicorn `--reload` + Vite dev server + SQLite + local files + no Redis (sync pip
 
 ### Prod (Render blueprint `render.yaml`)
 
-Six services:
+Three deployed services + one database (the celery worker/beat and Redis
+remain as commented templates in the yaml — heavy pipeline DAG nodes return
+503 until a worker exists; the cosmology chat path does not use Celery):
 
-1. `standard-astro-backend` — FastAPI, `/health/deep` healthcheck.
-2. `standard-astro-celery-worker` — concurrency=2.
-3. `standard-astro-celery-beat` — scheduler.
-4. `standard-astro-frontend` — Vite build, SPA rewrites.
-5. `standard-astro-redis` — cache + queue + pub/sub (allkeys-lru).
-6. `standard-astro-db` — PostgreSQL.
+1. `standard-astro-backend` — FastAPI, `/health/deep` healthcheck, paid
+   **Standard** instance (1 CPU / 2 GB, does not sleep).
+2. `standard-astro-frontend` — Vite build, SPA rewrites.
+3. `standard-astro-db` — PostgreSQL (basic-256mb).
 
 `backend/Dockerfile` is Python 3.11-slim; installs gfortran, libpq, fontconfig, fonts-noto-cjk (CJK matplotlib). Non-root `app:app` user. Live URLs: `astro-backend-h4x1.onrender.com`, `astro-frontend-tyfr.onrender.com`.
 
 ### Auto-deploy
 
-Push to `main` → Render auto-deploy. Render free tier sleeps after 15 min idle — the frontend `BackendBanner` component shows a "waking up" notice on first load.
+Push to `main` → Render auto-deploy as a side effect (2026-06-03 positioning:
+the hosted deployment is NOT the current focus; local + GitHub Actions is the
+primary environment, and deploy health is not the success criterion for a
+change). The backend runs on a paid Standard instance that does not sleep;
+the `BackendBanner` cold-start recovery path remains as defense against
+transient 502/503s.
 
 ## 9. Current constraints
 

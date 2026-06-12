@@ -8,6 +8,80 @@ need entries unless they change user-visible behavior or research validity.
 
 ## Unreleased
 
+### Campaign backfill (2026-05-28 → 2026-06-13)
+
+The observational-cosmology completion campaign. Product- and science-facing
+highlights (122 commits; per-change detail lives in the git log and
+`plan/cosmology-completion-backlog.md`):
+
+#### Added — executable likelihoods over released, sha256-pinned data
+- Planck 2018 clik-free CMB suite (plik_lite TTTEEE, lowl TT, lowl EE,
+  lensing) vendored natively and dispatched to external Cobaya behind
+  `EXTERNAL_COBAYA_ENABLED`; mnu and omegak are genuinely sampled there
+  (with priors and CAMB parameter aliases fixed: `*_mnu` chains actually
+  sample mnu, `ok_*` chains actually run and sample curvature).
+- SDSS MGS non-Gaussian chi2(alpha) table (cobaya parity ≤1e-12) replacing
+  the hand-typed Gaussian; 6dFGS half unchanged.
+- Union3/UNITY1.5 full 22-bin binned-distance likelihood (always on;
+  offset-marginalized, cobaya-identical projection algebra).
+- BOSS DR12 consensus BAO (the Planck 2018 "+BAO" likelihood; dimensional
+  rs_fid=147.78 convention, real-cobaya instantiation parity).
+- eBOSS DR16 ELG probability table + Lyα auto/cross 50×50 likelihood grids
+  (non-Gaussian released surfaces at z=2.334 — the only z>2 BAO anchor
+  outside DESI; out-of-grid samples are refused, never extrapolated, with
+  per-dataset refused-prior-volume accounting).
+- Pantheon (2018) full 1048-SN vector behind `PANTHEON18_FULL_CHI2_ENABLED`
+  (offset-marginalized; reproduces the published Ωm = 0.298 ± 0.022
+  including the error bar).
+- Kelly-2007 upper-limit censoring in `fit_line_lfr` (opt-in, Bayesian-only).
+- Registry now 34 entries; every executable probe reads a sha256-verified
+  vendored file, enforced by `audit_executable_pins` and a self-policing
+  test.
+
+#### Changed — research matrix and model comparison
+- The phase-1 research-matrix gate opened for flat dark-energy extensions:
+  wcdm/w0wa_cdm cells run numerically (emcee upgrade) alongside a full-union
+  ΛCDM comparison anchor; curvature/neutrino-mass cells stay config_only and
+  point to the CMB path. Matrix execution is budgeted (≤24 run cells,
+  ≤3 emcee cells, duplicates skipped — all loudly warned).
+- `compute_model_comparison` gained a four-rung validity ladder (blocked
+  tier, unknown tier, unmeasurable ESS, representation mismatch); invalid
+  comparisons fail closed to `preferred=undetermined` AND carry
+  `__do_not_claim__` so their deltas can never support a reply claim; valid
+  verdicts carry chain tiers and an exploratory caveat.
+
+#### Fixed — diagnostics honesty
+- Removed five hard-coded `rhat=1.0` sites (importance/analytic paths have
+  no MCMC chains; R-hat is now honestly `null` with a note) and the
+  `delta_chi2=0.0` placeholders; ESS now carries an explicit source label,
+  and an autocorrelation failure caps the chain at exploratory instead of
+  silently promoting it to publication via an n/10 fallback.
+- The Alcock-Paczynski tool now fits the sha256-verified vendored arrays
+  (byte-identical values) and refuses loudly on unverified data.
+
+#### Security/honesty — same-turn laundering wall
+- The claim universe is built from tool RESULTS only, with every number the
+  model authored in tool INPUTS structurally subtracted (closes query/params
+  echo channels); `export_research_report` / `verify_research_facts` /
+  `build_evidence_graph` receive the server's own turn record as the only
+  trusted evidence — model-supplied transcripts render at most an UNVERIFIED
+  draft and verification refuses.
+- Citation/identifier strings (sha256 digests, arXiv ids in provenance
+  prose, registry naming prose) and tool-input echoes are excluded from the
+  claimable numeric universe; structured siblings (z_coverage tuples,
+  rs_fid_mpc) keep honest claims grounded. Red-team corpus 21 → 34 cases.
+- Blind-test suite 10 → 15 cases: hard specificity gates (the clean LFR
+  demo, the likelihood chain, honest abstention) and hard fake-transcript /
+  self-supplied-evidence sentinels, all live-verified.
+- Structured gate events (JSONL + SSE + Prometheus counter) make every
+  reply-gate intervention observable — the false-positive measurement layer.
+
+#### Operations
+- Daily blind cron moved off the congested top-of-hour (16:00 → 16:17 UTC);
+  `audit_citation_pool` joined the daily workflow.
+- Benchmarks 18 → 25 pinned baselines; backend suite ~1.9k → ~2.5k cases.
+
+
 ### Fixed
 
 - **Cosmology research-matrix + fact-check regression (2026-05-27).**

@@ -7,12 +7,16 @@ mapping exists, `cobaya_runner` returns the structured
 `cobaya_likelihood_id_translation_pending` envelope rather than attempting to
 import a non-existent module.
 
-This module owns that mapping. The dict is **intentionally all-None today**:
-filling a real Cobaya import path is per-dataset research (which Cobaya core
-likelihood vs which third-party `cobaya-likelihood-*` package, exact class
-name, packages_path requirement, etc.). Each entry has a TODO comment with
-the candidate path so a future PR can fill them one at a time without
-guessing.
+This module owns that mapping. Most entries are still None — filling a real
+Cobaya import path is per-dataset research (which Cobaya core likelihood vs
+which third-party `cobaya-likelihood-*` package, exact class name,
+packages_path requirement, etc.) — but the four Planck 2018 native adapters
+(plik_lite TTTEEE, lowl TT, lowl EE, lensing) are FILLED and live behind
+EXTERNAL_COBAYA_ENABLED since 2026-06. Each remaining None entry has a TODO
+comment with the candidate path so a future PR can fill them one at a time
+without guessing. (The earlier "intentionally all-None today" wording
+outlived reality and misled a doc audit — keep this paragraph in sync with
+the dict.)
 
 When `resolve(adapter_name)` returns a non-None string, `cobaya_runner` will
 forward that import path to the `cobaya-run` subprocess. Until then, the
