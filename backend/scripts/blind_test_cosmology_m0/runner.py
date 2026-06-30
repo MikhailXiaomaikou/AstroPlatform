@@ -18,6 +18,8 @@
 全跑结束后还会输出 summary.md。
 """
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -39,15 +41,15 @@ os.environ.setdefault("ASTRO_RESEARCH_FOCUS", "cosmology")
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-import yaml  # type: ignore
+import yaml  # type: ignore  # noqa: E402
 
-from app.ai.model_profiles import resolve_model_profile
+from app.ai.model_profiles import resolve_model_profile  # noqa: E402
 from app.api.chat import (
     SYSTEM_PROMPT,
     _filter_tools_by_research_focus,
     _run_agent_loop,
-)
-from app.services.ai_tools import TOOLS
+)  # noqa: E402
+from app.services.ai_tools import TOOLS  # noqa: E402
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -59,7 +61,7 @@ def _check_env(provider: str) -> str | None:
     if focus != "cosmology":
         raise SystemExit(f"ASTRO_RESEARCH_FOCUS 必须是 'cosmology', 现在是 {focus!r}")
     if provider == "local":
-        if not os.environ.get("OPENAI_CLI_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        if os.environ.get("OPENAI_CLI_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on"}:
             raise SystemExit(
                 "local provider 需要 OPENAI_CLI_ENABLED=1。\n"
                 "    export OPENAI_CLI_ENABLED=1\n"
@@ -90,17 +92,40 @@ def load_cases() -> list[dict]:
         return yaml.safe_load(f)
 
 
+def _case_turn_prompts(case: dict) -> list[str]:
+    """Return the user prompts for a case.
+
+    Legacy cases use a single ``prompt`` string. New laundering/regression cases
+    may define ``turns`` to exercise same-session reuse of unsupported claims.
+    """
+    turns = case.get("turns")
+    if not turns:
+        return [str(case["prompt"])]
+
+    prompts: list[str] = []
+    for turn in turns:
+        if isinstance(turn, dict):
+            prompts.append(str(turn["prompt"]))
+        else:
+            prompts.append(str(turn))
+    if not prompts:
+        raise ValueError(f"case {case.get('id')} has empty turns")
+    return prompts
+
+
 async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provider: str) -> dict:
     """跑一个 case, 返回 result summary dict."""
     case_id = case["id"]
     print(f"[{case_id}] starting...", flush=True)
 
     events: list[dict] = []
+    current_turn_index = 0
 
     async def collect(evt: dict) -> None:
         # 浅拷贝 + ts; 不写入磁盘期间的全部 mutable state
         rec = dict(evt)
         rec["_ts"] = time.time()
+        rec["turn_index"] = current_turn_index
         events.append(rec)
 
     tools = _filter_tools_by_research_focus(TOOLS)
@@ -111,27 +136,47 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
     else:
         profile = resolve_model_profile("anthropic", "anthropic:default")
 
-    messages = [{"role": "user", "content": case["prompt"]}]
+    prompts = _case_turn_prompts(case)
+    messages: list[dict] = []
     python_session_id = f"blindtest-{uuid.uuid4().hex[:12]}"
 
     t0 = time.time()
     error: str | None = None
     loop_result: dict | None = None
+    last_reply: str | None = None
+    turn_records: list[dict] = []
     try:
-        loop_result = await _run_agent_loop(
-            system=SYSTEM_PROMPT,
-            messages=messages,
-            tools=tools,
-            provider_api_keys={provider: api_key} if api_key else {},
-            agent_name="blind_test",
-            python_session_id=python_session_id,
-            preferred_backend=provider,
-            model_profile=profile,
-            user_id=None,
-            chat_session_id=None,
-            on_event=collect,
-            workflow_budget=None,
-        )
+        for turn_idx, prompt in enumerate(prompts):
+            current_turn_index = turn_idx
+            messages.append({"role": "user", "content": prompt})
+            turn_start_events = len(events)
+            loop_result = await _run_agent_loop(
+                system=SYSTEM_PROMPT,
+                messages=messages,
+                tools=tools,
+                provider_api_keys={provider: api_key} if api_key else {},
+                agent_name="blind_test",
+                python_session_id=python_session_id,
+                preferred_backend=provider,
+                model_profile=profile,
+                user_id=None,
+                chat_session_id=None,
+                on_event=collect,
+                workflow_budget=None,
+            )
+            last_reply = (loop_result or {}).get("reply")
+            messages.append({"role": "assistant", "content": last_reply or ""})
+            turn_events = events[turn_start_events:]
+            turn_records.append({
+                "turn_index": turn_idx,
+                "prompt": prompt,
+                "reply": last_reply,
+                "n_events": len(turn_events),
+                "n_tool_calls": sum(1 for e in turn_events if e.get("type") == "tool_call"),
+                "tools_called": [e.get("tool") for e in turn_events if e.get("type") == "tool_call"],
+                "hit_iteration_cap": (loop_result or {}).get("hit_iteration_cap"),
+                "hit_deadline": (loop_result or {}).get("hit_deadline"),
+            })
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
 
@@ -140,7 +185,9 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
     record = {
         "case_id": case_id,
         "group": case.get("group"),
-        "prompt": case["prompt"],
+        "prompt": case.get("prompt") or "\n\n--- next turn ---\n\n".join(prompts),
+        "n_turns": len(prompts),
+        "turns": turn_records,
         "expect_tools_called": case.get("expect_tools_called", []),
         "expect_pass": case.get("expect_pass", []),
         "elapsed_seconds": round(elapsed, 1),
@@ -150,7 +197,7 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
         "tools_called": [e.get("tool") for e in events if e.get("type") == "tool_call"],
         "hit_iteration_cap": (loop_result or {}).get("hit_iteration_cap"),
         "hit_deadline": (loop_result or {}).get("hit_deadline"),
-        "reply": (loop_result or {}).get("reply"),
+        "reply": last_reply,
         "error": error,
         "events": events,
     }
@@ -160,8 +207,9 @@ async def run_one_case(case: dict, api_key: str | None, out_dir: Path, *, provid
         json.dump(record, f, ensure_ascii=False, indent=2, default=str)
 
     status = "ERROR" if error else "DONE"
+    turn_note = f", turns={record['n_turns']}" if record["n_turns"] > 1 else ""
     print(
-        f"[{case_id}] {status} in {elapsed:.1f}s, "
+        f"[{case_id}] {status} in {elapsed:.1f}s{turn_note}, "
         f"n_tools={record['n_tool_calls']}, tools={record['tools_called']}",
         flush=True,
     )

@@ -19,11 +19,15 @@ _RUNNER_DIR = Path(__file__).resolve().parents[1] / "scripts" / "blind_test_cosm
 sys.path.insert(0, str(_RUNNER_DIR))
 
 import yaml  # noqa: E402
-from runner import _one_check, evaluate_case  # noqa: E402
+from runner import _case_turn_prompts, _one_check, evaluate_case  # noqa: E402
 
 
 def _record(reply: str, tools: list[str]) -> dict:
     return {"reply": reply, "tools_called": tools, "events": []}
+
+
+def _load_cases() -> list[dict]:
+    return yaml.safe_load((_RUNNER_DIR / "cases.yaml").read_text(encoding="utf-8"))
 
 
 # ---------- reply_must_not_contain ----------
@@ -101,12 +105,55 @@ def test_group_a_without_hard_flag_stays_soft():
     assert verdict["hard_failed"] is False
 
 
+# ---------- multi-turn case shape / laundering regression ----------
+
+
+def test_case_turn_prompts_preserves_legacy_prompt_shape():
+    case = {"id": "legacy", "prompt": "Run the chain."}
+    assert _case_turn_prompts(case) == ["Run the chain."]
+
+
+def test_case_turn_prompts_supports_turn_dicts():
+    case = {"id": "multi", "turns": [{"prompt": "first"}, {"prompt": "second"}]}
+    assert _case_turn_prompts(case) == ["first", "second"]
+
+
+def _load_b5() -> dict:
+    return next(c for c in _load_cases() if c["id"] == "B5_multiturn_rejected_number_stays_unverified")
+
+
+def test_b5_multiturn_case_has_two_turns():
+    b5 = _load_b5()
+    prompts = _case_turn_prompts(b5)
+    assert len(prompts) == 2
+    assert "71.43" in prompts[0]
+    assert "verified" in prompts[1]
+
+
+def test_b5_passes_on_refusal_without_verified_claim():
+    b5 = _load_b5()
+    rec = _record(
+        "I cannot verify the pasted value from this turn's actual tool results; "
+        "rerun the likelihood chain before using it.",
+        [],
+    )
+    verdict = evaluate_case(rec, b5)
+    assert verdict["verdict"] == "PASS", verdict["check_results"]
+
+
+def test_b5_hard_fails_on_laundered_previous_turn_number():
+    b5 = _load_b5()
+    rec = _record("For the paper draft: H0 = 71.43 ± 0.31 km/s/Mpc.", [])
+    verdict = evaluate_case(rec, b5)
+    assert verdict["hard_failed"] is True
+    assert verdict["verdict"] == "HARD-FAIL"
+
+
 # ---------- the real F1 case from cases.yaml ----------
 
 
 def _load_f1() -> dict:
-    cases = yaml.safe_load((_RUNNER_DIR / "cases.yaml").read_text(encoding="utf-8"))
-    return next(c for c in cases if c["id"] == "F1_lfr_demo_end_to_end")
+    return next(c for c in _load_cases() if c["id"] == "F1_lfr_demo_end_to_end")
 
 
 def test_f1_passes_on_deterministic_summary_form():
