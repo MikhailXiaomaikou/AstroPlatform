@@ -2,33 +2,46 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
+  createResearchUpdateRecord,
+  deleteResearchUpdateRecord,
   deleteResearchMemory,
   getResearchProfile,
   listResearchHistory,
+  listResearchUpdateRecords,
   refreshResearchProfile,
+  updateResearchUpdateRecord,
   updateResearchProfile,
   type ResearchHistoryItem,
   type ResearchProfile,
+  type ResearchUpdateRecord,
 } from "../../api/client";
 
 export default function ResearchHistoryPage() {
   const navigate = useNavigate();
   const [profile, setProfile] = useState<ResearchProfile | null>(null);
   const [history, setHistory] = useState<ResearchHistoryItem[]>([]);
+  const [updates, setUpdates] = useState<ResearchUpdateRecord[]>([]);
   const [query, setQuery] = useState("");
+  const [updateQuery, setUpdateQuery] = useState("");
+  const [newUpdateTitle, setNewUpdateTitle] = useState("");
+  const [newUpdateBody, setNewUpdateBody] = useState("");
+  const [newUpdateTags, setNewUpdateTags] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingUpdate, setSavingUpdate] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadAll = async (search?: string) => {
+  const loadAll = async (search?: string, updateSearch?: string) => {
     setLoading(true);
     try {
-      const [nextProfile, nextHistory] = await Promise.all([
+      const [nextProfile, nextHistory, nextUpdates] = await Promise.all([
         getResearchProfile(),
         listResearchHistory(search),
+        listResearchUpdateRecords(updateSearch),
       ]);
       setProfile(nextProfile);
       setHistory(nextHistory);
+      setUpdates(nextUpdates);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load research history");
@@ -58,7 +71,7 @@ export default function ResearchHistoryPage() {
           .map((item) => item.trim())
           .filter(Boolean),
       });
-      await loadAll(query || undefined);
+      await loadAll(query || undefined, updateQuery || undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save profile");
     } finally {
@@ -75,9 +88,57 @@ export default function ResearchHistoryPage() {
     if (!confirm("Delete all stored research memory for this account?")) return;
     try {
       await deleteResearchMemory();
-      await loadAll(query || undefined);
+      await loadAll(query || undefined, updateQuery || undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete memory");
+    }
+  };
+
+  const updateTags = (raw: string) => raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const handleCreateUpdate = async () => {
+    if (!newUpdateTitle.trim()) {
+      setError("Update title is required");
+      return;
+    }
+    setSavingUpdate(true);
+    try {
+      await createResearchUpdateRecord({
+        title: newUpdateTitle.trim(),
+        body: newUpdateBody.trim(),
+        tags: updateTags(newUpdateTags),
+        status: "active",
+      });
+      setNewUpdateTitle("");
+      setNewUpdateBody("");
+      setNewUpdateTags("");
+      await loadAll(query || undefined, updateQuery || undefined);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save update record");
+    } finally {
+      setSavingUpdate(false);
+    }
+  };
+
+  const handleStatusChange = async (record: ResearchUpdateRecord, status: string) => {
+    try {
+      const updated = await updateResearchUpdateRecord(record.id, { status });
+      setUpdates((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update record");
+    }
+  };
+
+  const handleDeleteUpdate = async (recordId: string) => {
+    if (!confirm("Delete this private update record?")) return;
+    try {
+      await deleteResearchUpdateRecord(recordId);
+      setUpdates((current) => current.filter((item) => item.id !== recordId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete update record");
     }
   };
 
@@ -91,7 +152,7 @@ export default function ResearchHistoryPage() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn-secondary" onClick={() => { void refreshResearchProfile(); void loadAll(query || undefined); }}>
+          <button className="btn-secondary" onClick={() => { void refreshResearchProfile(); void loadAll(query || undefined, updateQuery || undefined); }}>
             Refresh Memory
           </button>
           <button className="btn-secondary" onClick={() => { void handleDeleteMemory(); }}>
@@ -160,9 +221,93 @@ export default function ResearchHistoryPage() {
               </button>
             </div>
           )}
+
+          <div className="detail-section" style={{ display: "grid", gap: 10, marginTop: 16 }}>
+            <h3>Private Update Record</h3>
+            <input
+              className="search-input"
+              value={newUpdateTitle}
+              onChange={(event) => setNewUpdateTitle(event.target.value)}
+              placeholder="Short update title"
+            />
+            <textarea
+              className="note-textarea"
+              rows={4}
+              value={newUpdateBody}
+              onChange={(event) => setNewUpdateBody(event.target.value)}
+              placeholder="What changed, what was tested, or what needs attention"
+            />
+            <input
+              className="search-input"
+              value={newUpdateTags}
+              onChange={(event) => setNewUpdateTags(event.target.value)}
+              placeholder="tags, comma separated"
+            />
+            <button className="btn-primary" onClick={() => { void handleCreateUpdate(); }} disabled={savingUpdate}>
+              {savingUpdate ? "Saving..." : "Add Private Update"}
+            </button>
+          </div>
         </div>
 
         <div className="workspace-detail" style={{ display: "block" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+            <h3>Private Update Log</h3>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                className="search-input"
+                value={updateQuery}
+                onChange={(event) => setUpdateQuery(event.target.value)}
+                placeholder="Search updates..."
+                style={{ minWidth: 220 }}
+              />
+              <button className="btn-secondary" onClick={() => { void loadAll(query || undefined, updateQuery || undefined); }}>
+                Search
+              </button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="fits-loading">Loading updates...</div>
+          ) : updates.length === 0 ? (
+            <div className="fits-hint" style={{ marginBottom: 20 }}>
+              No private update records yet.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 12, marginBottom: 24 }}>
+              {updates.map((item) => (
+                <div key={item.id} className="note-card">
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>{item.body || "No details."}</p>
+                      <div style={{ color: "var(--color-text-secondary)", fontSize: "0.88rem" }}>
+                        {item.created_at ? new Date(item.created_at).toLocaleString() : "Just now"}
+                        {" · "}
+                        {item.owner_locked ? "locked to your account" : "unlocked"}
+                        {item.tags.length > 0 ? ` · ${item.tags.join(", ")}` : ""}
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gap: 8, minWidth: 120 }}>
+                      <select
+                        className="search-input"
+                        value={item.status}
+                        onChange={(event) => { void handleStatusChange(item, event.target.value); }}
+                      >
+                        <option value="active">Active</option>
+                        <option value="resolved">Resolved</option>
+                        <option value="blocked">Blocked</option>
+                        <option value="note">Note</option>
+                      </select>
+                      <button className="btn-secondary btn-small" onClick={() => { void handleDeleteUpdate(item.id); }}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
             <h3>Session Timeline</h3>
             <div style={{ display: "flex", gap: 8 }}>

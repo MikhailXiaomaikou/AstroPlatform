@@ -124,6 +124,69 @@ class TestChatSessionPrivacy:
         assert other_delete.status_code == 404
 
 
+class TestResearchUpdateRecordPrivacy:
+    async def _register_headers(self, app_client, username: str) -> dict[str, str]:
+        resp = await app_client.post(
+            "/api/auth/register",
+            json={"username": username, "password": "longpassword123"},
+        )
+        assert resp.status_code == 201
+        return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    async def test_update_records_are_scoped_to_current_account(self, app_client):
+        owner_headers = await self._register_headers(app_client, "updateowner")
+        other_headers = await self._register_headers(app_client, "updateother")
+
+        create_resp = await app_client.post(
+            "/api/research/updates",
+            json={
+                "title": "Runner fix",
+                "body": "Added a multi-turn regression check.",
+                "tags": ["cosmology", "blind-test", "cosmology"],
+                "status": "active",
+            },
+            headers=owner_headers,
+        )
+        assert create_resp.status_code == 200
+        created = create_resp.json()
+        record_id = created["id"]
+        assert created["owner_locked"] is True
+        assert created["tags"] == ["cosmology", "blind-test"]
+
+        owner_list = await app_client.get("/api/research/updates", headers=owner_headers)
+        assert owner_list.status_code == 200
+        assert [item["id"] for item in owner_list.json()] == [record_id]
+
+        other_list = await app_client.get("/api/research/updates", headers=other_headers)
+        assert other_list.status_code == 200
+        assert other_list.json() == []
+
+        other_patch = await app_client.patch(
+            f"/api/research/updates/{record_id}",
+            json={"status": "resolved"},
+            headers=other_headers,
+        )
+        assert other_patch.status_code == 404
+
+        other_delete = await app_client.delete(f"/api/research/updates/{record_id}", headers=other_headers)
+        assert other_delete.status_code == 404
+
+        owner_patch = await app_client.patch(
+            f"/api/research/updates/{record_id}",
+            json={"status": "resolved"},
+            headers=owner_headers,
+        )
+        assert owner_patch.status_code == 200
+        assert owner_patch.json()["status"] == "resolved"
+
+        owner_delete = await app_client.delete(f"/api/research/updates/{record_id}", headers=owner_headers)
+        assert owner_delete.status_code == 200
+
+        empty_again = await app_client.get("/api/research/updates", headers=owner_headers)
+        assert empty_again.status_code == 200
+        assert empty_again.json() == []
+
+
 class TestPaperDraftPrivacy:
     async def _register_headers(self, app_client, username: str) -> tuple[dict[str, str], str]:
         resp = await app_client.post(
