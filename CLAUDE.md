@@ -47,18 +47,20 @@ npm run build
 Backend, from `backend/`:
 
 ```bash
-./.venv/bin/ruff check app tests
-./.venv/bin/pytest tests -q --no-cov
+./venv/bin/ruff check app tests
+./venv/bin/pytest tests -q --no-cov
 ```
 
-Use `venv/` instead of `.venv/` if that is the environment present.
+Use `.venv/` instead of `venv/` if that is the environment present.
+`--no-cov` skips the coverage floor configured in `backend/pytest.ini`;
+CI still enforces it, so a full run before commit should drop the flag.
 
 Science checks, from `backend/`:
 
 ```bash
-./.venv/bin/python scripts/benchmarks/run_cosmology_benchmarks.py
-./.venv/bin/python scripts/audit_registry.py
-./.venv/bin/python scripts/audit_citation_pool.py
+./venv/bin/python scripts/benchmarks/run_cosmology_benchmarks.py
+./venv/bin/python scripts/audit_registry.py
+./venv/bin/python scripts/audit_citation_pool.py
 bash scripts/daily_blind.sh --module cosmology --case A2,A3
 ```
 
@@ -68,7 +70,8 @@ tool schemas, prompts, registries, runners, or frontend result rendering.
 ## Editing Rules
 
 - Use `rg` / `rg --files` first.
-- Use `apply_patch` for manual edits.
+- Codex only: use `apply_patch` for manual edits. Other agents use their
+  native edit tools.
 - Never revert user changes unless explicitly asked.
 - Never commit secrets, API keys, hidden-answer records, or `.local/`
   diagnostics.
@@ -105,6 +108,34 @@ Do not relax these to make a demo pass:
 - Low-ESS, failed, exploratory, or config-only cells must remain visible but not
   claimable.
 - Overlapping cosmology datasets must respect `do_not_combine_with`.
+
+### Named regression invariants — DO NOT relax
+
+These are enforced by tests and blind cases, but the tests themselves are
+load-bearing: do not weaken a forbid string, delete a case, or shrink a
+blacklist "while updating the matching test".
+
+- Blind-suite anti-fabrication defenses
+  (`backend/scripts/blind_test_cosmology_m0/cases.yaml`) must stay strict:
+  B1 inline-rows blocked, B2 fake-bibcode replaced, B3 fake-tool-transcript
+  never grounds a claim, B4 self-supplied export evidence stays unverified,
+  B5 a rejected number stays unverified across turns, C1 zero-data
+  hard-blocked, C2 abstention, D1 `suspicious_author_year` provenance
+  violation. Groups B/C are hard CI gates. Group F is the SPECIFICITY side
+  (clean runs must NOT be falsely blocked — the 9f2667e bug class); its
+  `hard: true` cases gate CI too.
+- `claim_validator._CITATION_KEYS_BLACKLIST` subtree-skips citation-string
+  keys (bibcode/DOI/arXiv-id/...) so scattered digits in identifiers never
+  enter the claimable numeric universe. Do not remove the regression case
+  `numeric_in_bibcode_string_not_in_universe` in
+  `tests/_red_team_cases/numeric_claims.yaml` or shrink the blacklist.
+- `app/services/cosmology.py` `PRESETS["planck18"]["astropy_alias"]` MUST
+  be `None`. Aliasing to astropy's built-in Planck18 silently swaps the
+  cited CMB-only column (H0=67.36) for the +BAO best fit (H0=67.66) — the
+  exact cross-release value mixing the module promises to prevent (bug
+  commit `45383ac`). Pinned by
+  `tests/test_astro_fundamentals.py::test_planck18_preset_matches_cited_cmb_only_values`
+  and the `planck18_preset_matches_cited` benchmark.
 
 ## Guardrail Files
 
