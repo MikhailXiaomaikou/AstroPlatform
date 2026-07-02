@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user
 from app.models.database import get_db
-from app.models.schemas import ChatSession, User, UserEvent
+from app.models.schemas import ChatSession, User
 from app.services.memory_service import memory_service
 
 router = APIRouter(prefix="/api/research", tags=["research"])
-
-UPDATE_RECORD_EVENT = "research.update_record"
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -25,51 +22,6 @@ class ProfileUpdateRequest(BaseModel):
     expertise_level: str | None = None
     preferred_plotting_style: dict | None = None
     memory_enabled: bool | None = None
-
-
-class UpdateRecordCreateRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=160)
-    body: str = Field(default="", max_length=5000)
-    tags: list[str] | None = None
-    status: str = Field(default="note", max_length=40)
-
-
-class UpdateRecordPatchRequest(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=160)
-    body: str | None = Field(default=None, max_length=5000)
-    tags: list[str] | None = None
-    status: str | None = Field(default=None, max_length=40)
-
-
-def _clean_update_tags(tags: list[str] | None) -> list[str]:
-    if not tags:
-        return []
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for raw in tags:
-        tag = str(raw).strip()[:40]
-        key = tag.lower()
-        if tag and key not in seen:
-            cleaned.append(tag)
-            seen.add(key)
-        if len(cleaned) >= 12:
-            break
-    return cleaned
-
-
-def _serialize_update_record(row: UserEvent, user: User) -> dict:
-    data = row.event_data if isinstance(row.event_data, dict) else {}
-    return {
-        "id": str(row.id),
-        "title": str(data.get("title") or "Untitled update"),
-        "body": str(data.get("body") or ""),
-        "tags": data.get("tags") if isinstance(data.get("tags"), list) else [],
-        "status": str(data.get("status") or "note"),
-        "created_at": row.timestamp.isoformat() if row.timestamp else None,
-        "updated_at": data.get("updated_at") if isinstance(data.get("updated_at"), str) else None,
-        "owner_locked": True,
-        "locked_user_id": str(user.id),
-    }
 
 
 @router.get("/profile")
@@ -153,120 +105,11 @@ async def list_research_history(
     return items
 
 
-@router.get("/updates")
-async def list_update_records(
-    q: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """List update records locked to the current account."""
-    rows = (
-        await db.execute(
-            select(UserEvent)
-            .where(UserEvent.user_id == user.id, UserEvent.event_type == UPDATE_RECORD_EVENT)
-            .order_by(UserEvent.timestamp.desc())
-            .limit(100)
-        )
-    ).scalars().all()
-    items = [_serialize_update_record(row, user) for row in rows]
-    if q:
-        needle = q.lower()
-        items = [
-            item for item in items
-            if needle in item["title"].lower()
-            or needle in item["body"].lower()
-            or any(needle in str(tag).lower() for tag in item["tags"])
-        ]
-    return items
-
-
-@router.post("/updates")
-async def create_update_record(
-    req: UpdateRecordCreateRequest,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Create a private update record for the current account only."""
-    now = datetime.now(timezone.utc).isoformat()
-    record = UserEvent(
-        user_id=user.id,
-        event_type=UPDATE_RECORD_EVENT,
-        event_data={
-            "title": req.title.strip(),
-            "body": req.body.strip(),
-            "tags": _clean_update_tags(req.tags),
-            "status": req.status.strip() or "note",
-            "updated_at": now,
-        },
-        page="research-updates",
-    )
-    db.add(record)
-    await db.commit()
-    await db.refresh(record)
-    return _serialize_update_record(record, user)
-
-
-async def _require_owned_update_record(record_id: str, user: User, db: AsyncSession) -> UserEvent:
-    try:
-        rid = uuid.UUID(record_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid update record ID") from exc
-    record = (
-        await db.execute(
-            select(UserEvent).where(
-                UserEvent.id == rid,
-                UserEvent.user_id == user.id,
-                UserEvent.event_type == UPDATE_RECORD_EVENT,
-            )
-        )
-    ).scalar_one_or_none()
-    if record is None:
-        raise HTTPException(status_code=404, detail="Update record not found")
-    return record
-
-
-@router.patch("/updates/{record_id}")
-async def update_update_record(
-    record_id: str,
-    req: UpdateRecordPatchRequest,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    record = await _require_owned_update_record(record_id, user, db)
-    data = dict(record.event_data) if isinstance(record.event_data, dict) else {}
-    if req.title is not None:
-        data["title"] = req.title.strip()
-    if req.body is not None:
-        data["body"] = req.body.strip()
-    if req.tags is not None:
-        data["tags"] = _clean_update_tags(req.tags)
-    if req.status is not None:
-        data["status"] = req.status.strip() or "note"
-    data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    record.event_data = data
-    await db.commit()
-    await db.refresh(record)
-    return _serialize_update_record(record, user)
-
-
-@router.delete("/updates/{record_id}")
-async def delete_update_record(
-    record_id: str,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    record = await _require_owned_update_record(record_id, user, db)
-    await db.delete(record)
-    await db.commit()
-    return {"deleted": True}
-
-
 @router.delete("/memory")
 async def delete_research_memory(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     await memory_service.delete_all_memory(user.id, db)
-    await db.execute(delete(UserEvent).where(UserEvent.user_id == user.id, UserEvent.event_type == UPDATE_RECORD_EVENT))
     await db.commit()
     return {"deleted": True}

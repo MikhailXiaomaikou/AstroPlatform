@@ -1625,18 +1625,6 @@ export interface ResearchHistoryItem {
   created_at: string | null;
 }
 
-export interface ResearchUpdateRecord {
-  id: string;
-  title: string;
-  body: string;
-  tags: string[];
-  status: string;
-  created_at: string | null;
-  updated_at: string | null;
-  owner_locked: boolean;
-  locked_user_id: string;
-}
-
 export async function getResearchProfile(): Promise<ResearchProfile> {
   const { data } = await api.get<ResearchProfile>("/api/research/profile");
   return data;
@@ -1663,36 +1651,6 @@ export async function listResearchHistory(query?: string): Promise<ResearchHisto
 
 export async function deleteResearchMemory(): Promise<{ deleted: boolean }> {
   const { data } = await api.delete("/api/research/memory");
-  return data;
-}
-
-export async function listResearchUpdateRecords(query?: string): Promise<ResearchUpdateRecord[]> {
-  const { data } = await api.get<ResearchUpdateRecord[]>("/api/research/updates", {
-    params: query ? { q: query } : undefined,
-  });
-  return data;
-}
-
-export async function createResearchUpdateRecord(payload: {
-  title: string;
-  body?: string;
-  tags?: string[];
-  status?: string;
-}): Promise<ResearchUpdateRecord> {
-  const { data } = await api.post<ResearchUpdateRecord>("/api/research/updates", payload);
-  return data;
-}
-
-export async function updateResearchUpdateRecord(
-  recordId: string,
-  payload: Partial<Pick<ResearchUpdateRecord, "title" | "body" | "tags" | "status">>,
-): Promise<ResearchUpdateRecord> {
-  const { data } = await api.patch<ResearchUpdateRecord>(`/api/research/updates/${recordId}`, payload);
-  return data;
-}
-
-export async function deleteResearchUpdateRecord(recordId: string): Promise<{ deleted: boolean }> {
-  const { data } = await api.delete(`/api/research/updates/${recordId}`);
   return data;
 }
 
