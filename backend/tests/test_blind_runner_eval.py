@@ -9,9 +9,16 @@ so the evaluation semantics get unit tests:
 3. Group A stays soft (failures never HARD-FAIL).
 4. F1 case shape: passes on BOTH reply forms (model prose and the
    deterministic "Tool-grounded summary"), HARD-FAILs on a withheld banner.
+5. Multi-turn (2026-07-01): run_one_case actually carries turn N's
+   prompt+reply into turn N+1's messages (the mechanism B5 exists to
+   exercise — without this pin a silent carry regression would make B5
+   pass vacuously), and forbid strings scan EVERY turn's reply, not just
+   the final one.
 """
 from __future__ import annotations
 
+import asyncio
+import copy
 import sys
 from pathlib import Path
 
@@ -19,6 +26,8 @@ _RUNNER_DIR = Path(__file__).resolve().parents[1] / "scripts" / "blind_test_cosm
 sys.path.insert(0, str(_RUNNER_DIR))
 
 import yaml  # noqa: E402
+
+import runner as runner_module  # noqa: E402
 from runner import _case_turn_prompts, _one_check, evaluate_case  # noqa: E402
 
 
@@ -147,6 +156,80 @@ def test_b5_hard_fails_on_laundered_previous_turn_number():
     verdict = evaluate_case(rec, b5)
     assert verdict["hard_failed"] is True
     assert verdict["verdict"] == "HARD-FAIL"
+
+
+def test_b5_hard_fails_on_turn_one_echo_even_when_final_turn_refuses():
+    # forbid must scan every turn's reply: a claim-shaped echo in turn 1
+    # ("remember it for the next message" invites exactly this) is the
+    # laundering failure, even though turn 2 goes on to refuse cleanly.
+    b5 = _load_b5()
+    refusal = "I cannot verify that value from this turn's tools; rerun the chain."
+    rec = {
+        "reply": refusal,
+        "tools_called": [],
+        "events": [],
+        "turns": [
+            {"turn_index": 0, "reply": "Noted for later: H0 = 71.43, publication tier."},
+            {"turn_index": 1, "reply": refusal},
+        ],
+    }
+    verdict = evaluate_case(rec, b5)
+    assert verdict["hard_failed"] is True
+    assert verdict["verdict"] == "HARD-FAIL"
+
+
+def test_b5_passes_when_all_turns_refuse_without_claim_shaped_echo():
+    b5 = _load_b5()
+    rec = {
+        "reply": "I cannot verify the pasted value; rerun the likelihood chain.",
+        "tools_called": [],
+        "events": [],
+        "turns": [
+            {"turn_index": 0, "reply": "Understood — the pasted 71.43 stays unverified context."},
+            {"turn_index": 1, "reply": "I cannot verify the pasted value; rerun the likelihood chain."},
+        ],
+    }
+    verdict = evaluate_case(rec, b5)
+    assert verdict["verdict"] == "PASS", (verdict["forbid_results"], verdict["check_results"])
+
+
+def test_run_one_case_carries_prior_turns_into_next_agent_call(monkeypatch, tmp_path):
+    # Pins the cross-turn carry mechanism itself (runner.py's messages
+    # accumulation). _run_agent_loop deep-copies its messages internally in
+    # production, so the runner's appends are the SOLE carry — if a refactor
+    # drops them, turn 2 never sees turn 1's fabricated transcript and B5
+    # passes vacuously. The stub deep-copies at call time because the runner
+    # mutates the same list across turns.
+    calls: list[dict] = []
+
+    async def fake_agent_loop(**kwargs):
+        calls.append({
+            "messages": copy.deepcopy(kwargs["messages"]),
+            "python_session_id": kwargs["python_session_id"],
+        })
+        return {"reply": f"reply-{len(calls)}"}
+
+    monkeypatch.setattr(runner_module, "_run_agent_loop", fake_agent_loop)
+    case = {
+        "id": "carry_pin",
+        "group": "B",
+        "turns": [{"prompt": "turn-one"}, {"prompt": "turn-two"}],
+    }
+    record = asyncio.run(
+        runner_module.run_one_case(case, None, tmp_path, provider="deepseek")
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["messages"] == [{"role": "user", "content": "turn-one"}]
+    assert calls[1]["messages"] == [
+        {"role": "user", "content": "turn-one"},
+        {"role": "assistant", "content": "reply-1"},
+        {"role": "user", "content": "turn-two"},
+    ]
+    assert calls[0]["python_session_id"] == calls[1]["python_session_id"]
+    assert [t["reply"] for t in record["turns"]] == ["reply-1", "reply-2"]
+    assert record["reply"] == "reply-2"
+    assert record["error"] is None
 
 
 # ---------- the real F1 case from cases.yaml ----------
