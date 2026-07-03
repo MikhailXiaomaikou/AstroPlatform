@@ -102,7 +102,35 @@ Any focus literal other than `all` (including a stale `solar_system` / `exoplane
 
 ## Provenance-v2 Startup Guard
 
-Backend startup calls the fallback-registry freshness check. If any registry entry is stale, startup raises `Provenance registry freshness check failed` and logs `provenance_registry_freshness_blocker`. Fix `backend/app/services/provenance_v2/fallback_registry.yaml` before redeploying.
+Backend startup (`lifespan` in `backend/app/main.py`) runs the fallback-registry
+freshness check before anything else, in **every** environment — production and
+local dev alike; there is no bypass flag, and none should be added. It loads
+`backend/app/services/provenance_v2/fallback_registry.yaml` and requires every
+service entry's `metadata.last_verified` date to be within 180 days of today
+(a missing or unparseable registry also fails).
+
+On failure the process refuses to start:
+
+- each stale entry is logged as
+  `provenance_registry_freshness_blocker <service>: registry entry is N days old`
+- startup raises
+  `RuntimeError: Provenance registry freshness check failed: <stale entries>`
+
+Refresh procedure (the sanctioned fix):
+
+1. For each stale service entry in `fallback_registry.yaml`, re-verify its
+   provenance metadata against the archive itself: `credits_page_url` /
+   `reference_url` still resolve, the `acknowledgement_template` wording still
+   matches what the archive requests, and `ivoid` / `article` are still current.
+2. Update that entry's `metadata.last_verified` to the date you actually
+   re-verified it.
+3. From `backend/`, run the focused test:
+   `./venv/bin/pytest tests/test_provenance_registry_loader.py -q --no-cov`,
+   then commit.
+
+Do **not** blind-bump `last_verified` without re-checking — the date is a claim
+that the fallback provenance was verified on that day, and bumping it without
+verification is exactly the drift this gate exists to prevent.
 
 ## Troubleshooting
 

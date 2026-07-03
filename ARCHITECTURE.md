@@ -12,7 +12,7 @@ Standard Astro is a full-stack astronomy research platform with four runtime lay
 
 2. **FastAPI backend** — Single process, 33 domain routers (`scripts/stats.sh` for live count). SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
 
-3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem or S3 for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines.
+3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines.
 
 4. **External services** — 23 astronomy connector keys, with 6 provenance-v2 active sources (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`) and 17 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local). ALMA is active for Science Archive observation metadata, not derived line luminosity/FWHM measurements.
 
@@ -23,7 +23,7 @@ Users move between chat → analysis → export → paper without losing context
 ```text
 Browser SPA (React/Vite)
   ├─ REST: auth, workspace, data, papers, admin, settings
-  ├─ SSE: /api/chat/message streaming assistant turns
+  ├─ SSE: /api/chat/message/stream streaming assistant turns
   └─ WebSocket: collaboration, presence, long-running progress
 
 FastAPI web process
@@ -31,7 +31,7 @@ FastAPI web process
   ├─ AI layer: orchestrator → inference_router → selected model backend
   ├─ Tool layer: ai_tools dispatcher → connectors / analysis services / sandbox
   ├─ Guardrail layer: provenance normalizer → claim validator → citation gate
-  └─ Persistence layer: SQLAlchemy metadata + filesystem/S3 artifacts + cache
+  └─ Persistence layer: SQLAlchemy metadata + filesystem artifacts + cache
 
 Background / external services
   ├─ Celery worker + beat for heavy pipeline nodes
@@ -261,7 +261,7 @@ Standard Astro ships as a focus-gated prompt + tool catalog. After the 2026-06-0
 - `app/ai/agents/*` — Specialist prompt fragments (data, analysis, literature, observation, visualization, spectrum).
 - [`app/services/ai_tools/`](./backend/app/services/ai_tools) — **77-tool catalog + executor dispatcher**, organised as a package (`__init__.py` re-exports the public `TOOLS` list, `execute_tool`, and helper imports so call sites are unchanged). Each tool has a literature-cited description and JSON-schema input. Per-turn the focus gate (`_filter_tools_by_research_focus` in `api/chat.py`) narrows this to the active module's manifest allowlist: **57 tools under cosmology focus**; the other ~20 entries are dormant-vertical implementations retained in code but never exposed under this build.
 - [`app/services/prompt_loader.py`](./backend/app/services/prompt_loader.py) — Three-layer SYSTEM_PROMPT assembler (`base.md` + `core/*.md` + `modules/<focus>/prompt.md`) plus per-focus tool allowlist builder; cached via `lru_cache`.
-- [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), focus-aware `SYSTEM_PROMPT` built via `prompt_loader.build_system_prompt(_ASTRO_RESEARCH_FOCUS)` (cosmology focus: ~92 KB / ~23 k tokens / 55 sections — run `scripts/stats.sh` for the live number), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser, and deterministic literature-table / `fit_line_lfr` follow-up for line-relation prompts when the model has found papers or fit-ready measurement caches but skipped the required tool.
+- [`app/api/chat.py`](./backend/app/api/chat.py) — Agent loop (max 12 iterations), focus-aware `SYSTEM_PROMPT` built via `prompt_loader.build_system_prompt(_ASTRO_RESEARCH_FOCUS)` (cosmology focus: ~100 KB / ~26 k tokens as of 2026-07-03 — run `scripts/stats.sh` for the live numbers), SSE stream with heartbeats, empty-reply fallback synthesis, zero-fabrication gate, structured-abstention parser, and deterministic literature-table / `fit_line_lfr` follow-up for line-relation prompts when the model has found papers or fit-ready measurement caches but skipped the required tool.
 
 #### Tool catalogue (77 — live count via `scripts/stats.sh`; 57 visible under cosmology focus)
 
@@ -488,7 +488,7 @@ SQLite (dev) portability via custom `UUIDType` + `JSONType`. Alembic-managed mig
 ### AI chat
 
 1. SSE POST `/api/chat/message/stream` with messages + context (`python_session_id`, `current_session_id`, last search / ADQL result set / uploaded FITS, etc.).
-2. Runtime = focus-aware `SYSTEM_PROMPT` (cosmology focus: ~92 KB / 55 sections) + specialist-agent fragments + filtered tool list (focus gate narrows the 77-tool catalog to the cosmology manifest's 57 visible tools).
+2. Runtime = focus-aware `SYSTEM_PROMPT` (size and section count: see §6) + specialist-agent fragments + filtered tool list (focus gate narrows the 77-tool catalog to the cosmology manifest's 57 visible tools).
 3. `inference_router.route(...)` receives the validated manual `model_profile` from chat context, then enters the tool loop (max 12 iterations). Per-tool deadlines: `fit_isochrone` 180 s, `fit_transit_model`/`transit_search_bls` 120 s, `estimate_photo_z_pro` 90 s, rest 45 s. Agent-loop outer 360 s; connection heartbeats every 12 s to defeat proxy idle-kill.
 4. Tool returns flow through `normalize_tool_result` → `__tool_status__` banner + reproducibility envelope + nested provenance + sanity warnings.
 5. Final reply goes through:
@@ -512,7 +512,7 @@ Session share tokens → read / comment / fork URLs. Snapshots serialise current
 
 ## 6. AI knowledge base (`SYSTEM_PROMPT`)
 
-Focus-aware. Cosmology focus assembles to **~92 KB / ~23 k tokens / 55 sections**. The prompt is built per request from `backend/app/prompts/` by `services/prompt_loader.build_system_prompt(focus)`:
+Focus-aware. Cosmology focus assembles to **~100 KB / ~26 k tokens** (as of 2026-07-03; run `scripts/stats.sh` for the live size and section count — precise numbers here rot). The prompt is built per request from `backend/app/prompts/` by `services/prompt_loader.build_system_prompt(focus)`:
 
 ```
 prompts/
@@ -591,7 +591,7 @@ transient 502/503s.
 - Orchestrator still runs one tool-loop per turn; multi-agent execution is prepared but not yet the production path.
 - Opt-in research memory uses hashed embeddings, not a vector DB.
 - ADQL cache stores full result sets; the AI sees 100 rows; Python gets the rest via the cache key.
-- System prompt is ~21–23 k tokens (focus-dependent). Further per-module growth will require a jump-to section index.
+- System prompt is ~26 k tokens under cosmology focus (`scripts/stats.sh` for the live number). Further per-module growth will require a jump-to section index.
 - Exactly 1 prompt module (`cosmology`) is active and it is the only module directory in the repo. Re-introducing a vertical means adding its module directory back (from `standard-astro-verticals`), populating its manifest tools list, and adding the focus literal to `_FOCUS_GATED_VALUES` in `api/chat.py`. The ~20 retained dormant-tool implementations under `services/` stay hidden until a manifest allowlists them.
 - `backend/app/services/source_mapping.py` is hand-maintained alongside `connectors/availability.py`. Both are synchronized on the same 6 active / 17 gated keys; the consistency is enforced by `backend/tests/test_source_mapping.py`, which asserts `set(ACTIVE_ARCHIVE_MAPPINGS keys) == V2_AVAILABLE_CONNECTORS` and that the gated set equals `CONNECTORS_KEYS - V2_AVAILABLE_CONNECTORS`. When promoting a new connector to v2 you must edit both files in the same change.
 - API keys live in browser `localStorage` in beta mode; F4 gates the Send button but a full per-user session-storage migration is still backlog (PART C M9).
@@ -602,7 +602,7 @@ transient 502/503s.
 
 - **Backend**: pytest suite under `backend/tests/`. Major modules include `test_api`, `test_claim_validator`, `test_citation_validation`, `test_b7_regression`, `test_cosmology_mcmc`, `test_abstention_parser`, `test_sandbox_crash_paths`, `test_sandbox_isolation`, `test_result_provenance`, `test_connector_availability_gate`, `test_provenance_registry_loader`, `test_provenance_v2_connectors`, `test_connector_cache`, `test_router_golden`, `test_workflow_checkpoint`, `test_environment_manifest`, `test_metrics`, and e2e smoke tests. Golden-path fixtures live under `backend/tests/golden/`.
 - **Frontend**: Vitest suite (`npm run test` for the live count). Coverage includes ChatPage, DataSourcesPanel, CosmologyMCMCPanel, AckButton, ActionCard, PlotBuilder, and common utilities. TypeScript strict `tsc -b` is a required pre-push gate.
-- **CI**: GitHub Actions runs backend pytest + frontend `tsc + vite build + vitest` + ruff lint on every push.
+- **CI**: GitHub Actions (`.github/workflows/ci.yml`) runs backend pytest + frontend `tsc` / `eslint` / `vitest` / `vite build` + backend ruff lint on every push and PR.
 - **Physical-regression targets** (manual): NGC 1647 (open cluster, Frasca+2026), M53 (globular + RR Lyrae), Tom 2 blue stragglers (Rain+2021), Vel OB1, white dwarf LF, Pleiades IMF, NGC 752 isochrone age ∈ [1.2, 2.0] Gyr.
 
 ## 11. Physics formula provenance

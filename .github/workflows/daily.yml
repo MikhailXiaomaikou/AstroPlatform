@@ -103,9 +103,14 @@ jobs:
           if-no-files-found: ignore
 
   integration:
-    # API-integration tests are pytest cases marked @pytest.mark.integration;
-    # they exercise the Research Plan → Matrix → Evidence → FactCheck → Export
-    # chain with fixed inputs and no LLM. Pure pytest (no key needed).
+    # Integration tests are the pytest cases marked `integration and not slow`
+    # (~44 cases): tests/test_e2e_full.py end-to-end execute_tool() coverage
+    # (data-query / science / sandbox / literature+export / spectrum-image-VO /
+    # pipeline / session / collaboration tools) plus three live-connector
+    # checks in tests/test_connectors.py (SIMBAD, SDSS, Gaia). Many are
+    # @pytest.mark.network and hit live archive TAP services, so an upstream
+    # outage (e.g. SIMBAD 503) can redden this job without any code
+    # regression. Pure pytest, no LLM key needed.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

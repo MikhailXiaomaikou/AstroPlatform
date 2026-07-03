@@ -283,6 +283,11 @@ def _enforce_provenance_registry_freshness(*, warn_days: int = 180) -> None:
         logger.error("provenance_registry_freshness_blocker %s", warning)
     raise RuntimeError(
         "Provenance registry freshness check failed: " + "; ".join(warnings)
+        + ". Re-verify each stale entry against its archive and update "
+        "metadata.last_verified in "
+        "backend/app/services/provenance_v2/fallback_registry.yaml "
+        "(procedure: DEPLOYMENT.md, 'Provenance-v2 Startup Guard'). "
+        "Do not bump dates without re-checking."
     )
 
 

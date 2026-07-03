@@ -43,4 +43,4 @@ When `VITE_API_URL` is omitted, the API client defaults to `http://localhost:800
 
 ## Tests
 
-The current frontend suite is 150 Vitest cases, including ChatPage, DataSourcesPanel, CosmologyMCMCPanel, AckButton, SearchBar maintenance-gating, visualization components, and common utilities.
+The frontend Vitest suite (run `npm test` for the live count) covers ChatPage, DataSourcesPanel, CosmologyMCMCPanel, AckButton, SearchBar maintenance-gating, visualization components, and common utilities.

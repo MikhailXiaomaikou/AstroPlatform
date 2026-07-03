@@ -30,22 +30,25 @@ Obtain a token via:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Service status + version |
-| GET | `/health/stats` | Uptime, request counts, error rate, top endpoints |
+| GET | `/health/stats` | Uptime, request counts, error rate, top endpoints (admin only) |
 | GET | `/health/detailed` | External service probe results (SIMBAD, Gaia, VizieR) |
 | GET | `/metrics` | Prometheus text metrics, including provenance-v2 connector and citation counters |
-| GET | `/api/inference/stats` | AI model usage statistics (tokens, latency, cost) |
-| GET | `/api/inference/health` | AI backend connection status |
+| GET | `/api/admin/inference/stats` | AI model usage statistics (tokens, latency, cost) (admin only) |
+| GET | `/api/admin/inference/health` | AI backend connection status (admin only) |
 
 ### Data Access
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/data/search` | Multi-source astronomical search |
+| GET | `/api/data/search` | Multi-source astronomical search |
 | GET | `/api/data/workspace` | List workspace files |
 | POST | `/api/data/fits/upload` | Upload FITS file (returns type detection) |
-| GET | `/api/data/fits/header/{path}` | Read FITS headers + HDU structure |
-| POST | `/api/integration/adql/query` | Execute ADQL on TAP services |
+| GET | `/api/data/fits-header?fits_path=...` | Read FITS headers + HDU structure |
 | POST | `/api/integration/votable/upload` | Upload + convert VOTable to FITS |
+
+There is no public ADQL HTTP endpoint: `POST /api/integration/adql/query` was
+removed on 2026-06-11 with the M3 frontend trim. ADQL execution now happens
+only through the chat assistant's `run_adql` tool.
 
 The source registry currently exposes 23 connector keys. The active provenance-v2 sources are `vizier`, `gaia`, `simbad`, `ned`, `2mass`, and `alma`; the other 17 keys return an `UNAVAILABLE` maintenance payload instead of executing legacy connector code. ALMA is active for Science Archive observation metadata only, not derived line luminosity or FWHM measurements. Direct SDSS SQL (`run_sdss_sql`) is gated the same way until it emits independent `archive_version` provenance. The solar-system (`jpl`/`mpc`) and exoplanet (`nasa_exoplanet_archive`) connectors — which backed the `fetch_horizons_ephemeris`, `query_mpc_orbit`, and exoplanet-archive tools — were extracted to the sibling standard-astro-verticals repo on 2026-06-03, so they are no longer registered here. `ASTRO_RESEARCH_FOCUS` now fails closed to cosmology for any value other than `all` (see DEPLOYMENT.md), so `solar_system` / `exoplanet` no longer surface a distinct allowlist in this repo.
 
@@ -53,11 +56,11 @@ The source registry currently exposes 23 connector keys. The active provenance-v
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/chat/message` | Send message (SSE streaming response) |
-| POST | `/api/chat/message/stream` | Streaming chat endpoint used by the frontend agent loop |
+| POST | `/api/chat/message` | Send message (single JSON response) |
+| POST | `/api/chat/message/stream` | SSE streaming chat endpoint used by the frontend agent loop |
 | GET | `/api/chat/ai_backend_status` | Reports whether server-side or browser-provided AI backends are available |
 | GET | `/api/chat/sessions` | List chat sessions |
-| GET | `/api/chat/session/{id}` | Get session messages |
+| GET | `/api/chat/sessions/{session_id}` | Get session messages |
 
 ### Pipeline
 
@@ -65,7 +68,7 @@ The source registry currently exposes 23 connector keys. The active provenance-v
 |--------|----------|-------------|
 | POST | `/api/pipeline/run` | Execute a pipeline DAG |
 | POST | `/api/pipeline/batch-run` | Batch execute on multiple inputs (up to 200) |
-| GET | `/api/pipeline/run/{id}` | Get run status + results |
+| GET | `/api/pipeline/{run_id}` | Get run status + results |
 | GET | `/api/pipeline/templates` | List saved pipeline templates |
 
 ### Export
@@ -82,9 +85,9 @@ The source registry currently exposes 23 connector keys. The active provenance-v
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/citations/ads?object=M31` | Search NASA ADS by object |
+| GET | `/api/citations/ads?object_name=M31` | Search NASA ADS by object |
 | GET | `/api/citations/search?q=...` | Free-text literature search |
-| GET | `/api/citations/bibtex/{bibcode}` | Export BibTeX |
+| GET | `/api/citations/bibtex?bibcode=...` | Export BibTeX |
 
 ### Provenance
 
@@ -105,8 +108,8 @@ For literature-derived measurement workflows, `search_literature` is paper/abstr
 |--------|----------|-------------|
 | GET | `/api/team/members` | List team members |
 | POST | `/api/team/invite` | Invite member |
-| POST | `/api/team/share/pipeline` | Share pipeline |
-| POST | `/api/team/share/dataset` | Share dataset |
+| POST | `/api/team/pipelines/{template_id}/share` | Share pipeline template |
+| POST | `/api/team/datasets/{file_id}/share` | Share dataset |
 
 ### VO Interoperability
 

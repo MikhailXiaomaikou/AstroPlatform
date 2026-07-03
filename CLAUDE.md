@@ -153,7 +153,8 @@ blacklist "while updating the matching test".
 
 - Backend entrypoint: `backend/app/main.py`
 - Chat loop: `backend/app/api/chat.py`
-- Tool dispatcher: `backend/app/services/ai_tools.py`
+- Tool dispatcher: `backend/app/services/ai_tools/` (package; `__init__.py`
+  re-exports `TOOLS` and `execute_tool`)
 - Prompt loader: `backend/app/services/prompt_loader.py`
 - Frontend chat: `frontend/src/pages/Chat/ChatPage.tsx`
 - Chat components: `frontend/src/components/chat/`

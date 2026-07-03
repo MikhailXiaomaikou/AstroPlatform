@@ -106,16 +106,40 @@ current registry classes, execution modes, and claim scopes.
 
 ## Run it
 
+Prerequisites: Python 3.11 (the version CI and the Docker image use) and Node 20+.
+
 ```bash
-# Backend (from backend/)
+# Backend (from backend/) — create the venv on first run; it is gitignored
+python3.11 -m venv venv
 source venv/bin/activate
+pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 
-# Frontend (from frontend/)
-npm run dev        # http://localhost:5173
+# Frontend (from frontend/, separate terminal)
+npm install
+npm run dev        # http://localhost:5173, talks to the backend on :8000 by default
 ```
 
-See [docs/QUICKSTART.md](./docs/QUICKSTART.md) for first-run setup.
+No `.env` file is required for local development: `ENV` defaults to `dev`, the
+database defaults to a local SQLite file under `data/` at the repo root, and
+dev-safe random `JWT_SECRET` / `FERNET_KEY` values are generated at startup
+(with a logged warning — tokens and stored API keys do not survive restarts).
+Production environment variables are documented in
+[DEPLOYMENT.md](./DEPLOYMENT.md). To actually chat with the AI assistant you
+need a model-provider API key: register, then add a key on the Account page
+(BYOK), or set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` in
+the backend environment.
+
+**If startup fails with `Provenance registry freshness check failed`:** the
+backend intentionally refuses to boot — in every environment, local dev
+included — when any entry in
+`backend/app/services/provenance_v2/fallback_registry.yaml` has a
+`metadata.last_verified` date older than 180 days. Re-verify the stale entries
+and update their dates; see the "Provenance-v2 Startup Guard" section of
+[DEPLOYMENT.md](./DEPLOYMENT.md) for the procedure. Do not weaken the gate.
+
+See [docs/QUICKSTART.md](./docs/QUICKSTART.md) for a product usage tour (what
+to try once the app is running — it is not a development-setup guide).
 
 ## Documentation
 
