@@ -1,6 +1,6 @@
 // Chat display/storage types and localStorage persistence helpers.
 // Moved verbatim from ChatPage.tsx (behavior-preserving split).
-import type { ChatAction, ChatSessionSummary } from "../../api/client";
+import type { ChatAction, ChatSessionSummary, ValidationSummary } from "../../api/client";
 
 export interface ThinkingStep {
   kind: "agent_text" | "tool_call" | "tool_progress" | "tool_result" | "status" | "tools_disabled" | "workflow_budget" | "workflow_checkpoint";
@@ -47,6 +47,13 @@ export interface DisplayMessage {
   // (e.g. payload_too_large prompting a "Start new chat"). The UI renders the
   // corresponding CTA based on the value. Leaving it undefined has no effect on regular bubbles.
   _action_hint?: "new_chat";
+  // 2026-07-03 honesty surfacing: per-reply validation summary from the
+  // backend gate stack. Optional — old messages lack it and render
+  // unchanged (no badge).
+  _validation?: ValidationSummary;
+  // True when the agent loop hit its iteration cap — the reply is a
+  // truncated workflow, not a complete answer.
+  _truncated?: boolean;
 }
 
 export interface StoredMessage {
@@ -60,6 +67,8 @@ export interface StoredMessage {
   // refreshed mid-stream, loadChatHistory reconciles against the server copy
   // or surfaces a "retry" CTA instead of a blank bubble.
   _pending?: { started_at: number };
+  _validation?: ValidationSummary;
+  _truncated?: boolean;
 }
 
 const ANON_CHAT_SCOPE = "anon";
@@ -143,6 +152,8 @@ function serializeStored(messages: DisplayMessage[]): StoredMessage[] {
     }),
     actionResults: m.actionResults ? Array.from(m.actionResults.entries()) : undefined,
     _pending: m._pending,
+    _validation: m._validation,
+    _truncated: m._truncated,
   }));
 }
 

@@ -221,6 +221,10 @@ export default function ChatPage() {
       role: message.role,
       content: message.content,
       actions: message.actions,
+      // Persist the validation badge state so shared/read-only views of
+      // this session can render the same honesty signal.
+      _validation: message._validation,
+      _truncated: message._truncated,
     }));
     const saved = await saveChatSession(data, currentSessionId || undefined);
     setCurrentSessionId(saved.id);
@@ -496,7 +500,13 @@ export default function ChatPage() {
     const wasLoading = prevLoadingRef.current;
     prevLoadingRef.current = loading;
     if (wasLoading && !loading && messages.length >= 2) {
-      const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+      const data = messages.map(m => ({
+        role: m.role,
+        content: m.content,
+        actions: m.actions,
+        _validation: m._validation,
+        _truncated: m._truncated,
+      }));
       pendingSavePayloadRef.current = { data, sessionId: currentSessionId };
       setSaveStatus("saving");
       if (serverSaveTimerRef.current) clearTimeout(serverSaveTimerRef.current);
@@ -536,6 +546,10 @@ export default function ChatPage() {
         role: m.role as "user" | "assistant",
         content: m.content as string,
         actions: m.actions as ChatAction[] | undefined,
+        _validation: (m._validation && typeof m._validation === "object")
+          ? m._validation as DisplayMessage["_validation"]
+          : undefined,
+        _truncated: m._truncated === true || undefined,
       }));
       setMessages(loaded);
       setCurrentSessionId(id);
@@ -892,6 +906,10 @@ export default function ChatPage() {
           actions: response.actions.length > 0 ? response.actions : undefined,
           actionResults: new Map(),
           _abstention: m._abstention,
+          // 2026-07-03 honesty surfacing: per-reply validation summary +
+          // iteration-cap truncation flag from the final SSE text frame.
+          _validation: response.validation_summary,
+          _truncated: response.hit_iteration_cap || undefined,
         };
       }));
     } catch (err: unknown) {

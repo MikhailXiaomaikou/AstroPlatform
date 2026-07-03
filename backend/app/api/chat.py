@@ -326,6 +326,12 @@ class ChatResponse(BaseModel):
     # its iteration budget while the model still wanted to continue — the
     # reply is a truncated multi-step workflow, not a complete answer.
     hit_iteration_cap: bool = False
+    # 2026-07-03 honesty surfacing: compact per-reply summary of what the
+    # validation gate stack did (numeric_gate / citation_gate /
+    # regen_count / interventions), derived in the agent loop from state
+    # the gates already computed.  Optional and backward compatible —
+    # old clients ignore it, old replies simply lack it.
+    validation_summary: dict | None = None
 
 
 def _normalize_messages(messages: list[ChatMessage]) -> list[dict]:
@@ -886,7 +892,10 @@ async def chat_message_stream(
                 # computed "so the UI can surface it" and then dropped at this
                 # boundary — thread it onto the final text frame so a truncated
                 # multi-step workflow is distinguishable from a complete answer.
-                yield f"data: {json.dumps({'type': 'text', 'content': response['reply'], 'hit_iteration_cap': bool(response.get('hit_iteration_cap', False))})}\n\n"
+                # Same pattern for validation_summary (2026-07-03 honesty
+                # surfacing): the gate stack's per-reply outcome rides the
+                # final text frame so the UI can render a validation badge.
+                yield f"data: {json.dumps({'type': 'text', 'content': response['reply'], 'hit_iteration_cap': bool(response.get('hit_iteration_cap', False)), 'validation_summary': response.get('validation_summary')})}\n\n"
             # Keep emitting the final consolidated tool_result events too —
             # downstream clients that only know the old protocol still work,
             # and the live-stream tool_result events above carry a __preview__
@@ -1154,6 +1163,7 @@ async def _run_orchestrated_chat(
             "tool_results": single.get("tool_results", []),
             "hit_deadline": single.get("hit_deadline", False),
             "hit_iteration_cap": single.get("hit_iteration_cap", False),
+            "validation_summary": single.get("validation_summary"),
         }
 
     agent_results: list[dict] = []
@@ -1191,6 +1201,7 @@ async def _run_orchestrated_chat(
                 "tool_results": result.get("tool_results", []),
                 "hit_deadline": result.get("hit_deadline", False),
                 "hit_iteration_cap": result.get("hit_iteration_cap", False),
+                "validation_summary": result.get("validation_summary"),
             }
         )
         if index < len(agent_names) - 1:
@@ -1240,6 +1251,16 @@ async def _run_orchestrated_chat(
                 len(merged_tool_results),
                 len(agent_results),
             )
+    # 2026-07-03 honesty surfacing: merged-reply validation summary.  The
+    # merged prose is a NEW assistant reply (R21), so its gate states start
+    # at "not_run" and are only upgraded by checks that actually ran below.
+    _merged_numeric_state = "not_run"
+    _merged_citation_state = "not_run"
+    _merged_blocked = False
+    _merged_summary_reason: str | None = (
+        None if merged_reply.strip() else "empty_merged_reply"
+    )
+
     if merged_reply.strip():
         try:
             from app.services.claim_validator import (
@@ -1248,6 +1269,7 @@ async def _run_orchestrated_chat(
                 blocked_citation_reply_text,
                 blocked_unsupported_narrative_reply_text,
                 citation_violations_should_block,
+                is_empty_turn,
                 provenance_citation_violations,
                 unsupported_literature_narrative_violations,
                 validate_claims,
@@ -1265,6 +1287,12 @@ async def _run_orchestrated_chat(
             )
             citation_violations = provenance_citation_violations(merged_reply, merged_tool_results)
             validation = validate_claims(merged_reply, merged_tool_results)
+            # The merge-time gates ran — default both states to their
+            # passing values, then downgrade in the blocking branches.
+            _merged_citation_state = "passed"
+            _merged_numeric_state = (
+                "skipped_no_data" if is_empty_turn(merged_tool_results) else "passed"
+            )
             if unsupported_narrative:
                 logger.error(
                     "Unsupported narrative gate BLOCKED merged reply (%d violations)",
@@ -1275,6 +1303,8 @@ async def _run_orchestrated_chat(
                     blocked_unsupported_narrative_reply_text(unsupported_narrative),
                     merged_reply,
                 )
+                _merged_citation_state = "blocked"
+                _merged_blocked = True
             elif citation_violations and citation_violations_should_block(citation_violations):
                 logger.error(
                     "Citation provenance gate BLOCKED merged reply (%d violations)",
@@ -1301,6 +1331,8 @@ async def _run_orchestrated_chat(
                     )
                 else:
                     merged_reply = blocked_citation_reply_text(citation_violations)
+                _merged_citation_state = "blocked"
+                _merged_blocked = True
             elif zero_data_claims or not validation.ok:
                 try:
                     from app.observability.metrics import record_counter
@@ -1319,7 +1351,13 @@ async def _run_orchestrated_chat(
                 )
                 # Stage 6 P0: preserve merged-reply narrative
                 merged_reply = blocked_reply_with_narrative(validation, merged_reply)
+                _merged_numeric_state = "blocked"
+                _merged_blocked = True
         except Exception as exc:
+            # Merge-time validation did not complete — never report a pass.
+            _merged_numeric_state = "not_run"
+            _merged_citation_state = "not_run"
+            _merged_summary_reason = "merge_validation_error"
             if merged_research_workflow:
                 logger.exception(
                     "Merged-reply claim validation failed closed for research workflow"
@@ -1381,6 +1419,10 @@ async def _run_orchestrated_chat(
                             "above. See the Fact Check panel for each held claim and how to "
                             "ground it."
                         )
+                    # Shipped prose was downgraded to a tool-grounded summary
+                    # (mirrors the single-agent fact_verification mapping).
+                    if _merged_numeric_state != "blocked":
+                        _merged_numeric_state = "regenerated"
                 else:
                     merged_reply = (
                         "The research run completed, but fact verification found "
@@ -1388,6 +1430,8 @@ async def _run_orchestrated_chat(
                         "the Fact Check card and rerun the missing evidence path "
                         "before using the result."
                     )
+                    _merged_numeric_state = "blocked"
+                    _merged_blocked = True
         except Exception as exc:
             logger.warning("Merged research fact verification skipped: %s", exc)
 
@@ -1419,12 +1463,55 @@ async def _run_orchestrated_chat(
             merged_actions.extend(_tool_results_to_actions([report_tool_result]))
         except Exception as exc:
             logger.warning("Merged research report export skipped: %s", exc)
+    # Assemble the merged validation summary.  Top-level states describe the
+    # SHIPPED merged prose (validated above against the union of tool
+    # results); per-agent interventions are folded in so a member reply
+    # that was regenerated/blocked upstream stays visible.  A "passed"
+    # state is upgraded to "regenerated" when any member intervention
+    # touched that gate family — understate rather than overstate.
+    from app.services.agent_runtime.loop import (
+        _CITATION_GATE_FAMILY,
+        _NUMERIC_GATE_FAMILY,
+        _VALIDATION_SUMMARY_MAX_INTERVENTIONS,
+    )
+
+    _member_summaries = [
+        r.get("validation_summary") for r in agent_results
+        if isinstance(r.get("validation_summary"), dict)
+    ]
+    _member_interventions: list[dict] = []
+    for s in _member_summaries:
+        for item in s.get("interventions") or []:
+            if isinstance(item, dict):
+                _member_interventions.append(item)
+    if _merged_numeric_state == "passed" and any(
+        i.get("gate") in _NUMERIC_GATE_FAMILY for i in _member_interventions
+    ):
+        _merged_numeric_state = "regenerated"
+    if _merged_citation_state == "passed" and any(
+        i.get("gate") in _CITATION_GATE_FAMILY for i in _member_interventions
+    ):
+        _merged_citation_state = "regenerated"
+    merged_validation_summary: dict = {
+        "schema_version": 1,
+        "numeric_gate": _merged_numeric_state,
+        "citation_gate": _merged_citation_state,
+        "regen_count": sum(
+            int(s.get("regen_count", 0) or 0) for s in _member_summaries
+        ),
+        "blocked": _merged_blocked,
+        "interventions": _member_interventions[:_VALIDATION_SUMMARY_MAX_INTERVENTIONS],
+    }
+    if _merged_summary_reason:
+        merged_validation_summary["reason"] = _merged_summary_reason
+
     return {
         "reply": merged_reply,
         "actions": merged_actions,
         "tool_results": merged_tool_results,
         "hit_deadline": any(bool(r.get("hit_deadline")) for r in agent_results),
         "hit_iteration_cap": any(bool(r.get("hit_iteration_cap")) for r in agent_results),
+        "validation_summary": merged_validation_summary,
     }
 
 
@@ -1555,6 +1642,11 @@ async def chat_message(
             reply=response["reply"],
             actions=response["actions"],
             hit_iteration_cap=bool(response.get("hit_iteration_cap", False)),
+            validation_summary=(
+                response.get("validation_summary")
+                if isinstance(response.get("validation_summary"), dict)
+                else None
+            ),
         )
 
     except InferenceError as e:

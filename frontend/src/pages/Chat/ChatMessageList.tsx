@@ -8,6 +8,7 @@ import ResearchStepsCard, { isResearchTurn } from "../../components/chat/Researc
 import type { ConversationProvenance } from "../../hooks/useConversationProvenance";
 import { ActionCard, ToolTurnSummary, VisibleResearchDiagnostics } from "./ActionCard";
 import { HonestAbstentionCard } from "./ChatPanels";
+import { ValidationBadge } from "./ValidationBadge";
 import type { DisplayMessage } from "./chatStorage";
 import type { ToastState } from "./chatHelpers";
 
@@ -207,6 +208,11 @@ export function ChatMessageList({
                   msg.content.split("\n").map((line, i) => (
                     <p key={i}>{line || "\u00A0"}</p>
                   ))
+                )}
+                {/* 2026-07-03 honesty surfacing: per-reply validation badge.
+                    Old messages without _validation render nothing here. */}
+                {msg.role === "assistant" && !msg._pending && (
+                  <ValidationBadge summary={msg._validation} truncated={msg._truncated} />
                 )}
                 {/* eslint-disable-next-line react-hooks/purity -- pre-split behavior kept verbatim: ChatPage.tsx used Date.now() here; the old god component was too complex for this lint pass to analyze, so the call was never flagged. */}
                 {msg._pending && Date.now() - msg._pending.started_at > 60_000 && (

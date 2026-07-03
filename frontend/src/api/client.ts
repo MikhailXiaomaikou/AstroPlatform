@@ -912,9 +912,36 @@ export interface ChatAction {
   [key: string]: unknown;
 }
 
+// Per-reply validation summary computed by the backend gate stack
+// (app/services/agent_runtime/loop.py) and threaded onto the final SSE
+// text frame / ChatResponse. Optional forever — old replies lack it and
+// must render unchanged.
+export type ValidationGateState =
+  | "passed"
+  | "regenerated"
+  | "blocked"
+  | "skipped_no_data"
+  | "skipped"
+  | "not_run";
+
+export interface ValidationSummary {
+  schema_version?: number;
+  numeric_gate?: ValidationGateState | string;
+  citation_gate?: ValidationGateState | string;
+  regen_count?: number;
+  blocked?: boolean;
+  reason?: string;
+  interventions?: Array<{ gate?: string; action?: string; reason?: string }>;
+}
+
 export interface ChatResponse {
   reply: string;
   actions: ChatAction[];
+  // Optional: true when the agent loop exhausted its iteration budget —
+  // the reply is a truncated workflow, not a complete answer.
+  hit_iteration_cap?: boolean;
+  // Optional: what the validation gate stack did for this reply.
+  validation_summary?: ValidationSummary;
 }
 
 // Real-time "thinking process" events emitted by the backend during the
@@ -1097,7 +1124,16 @@ export interface SharedSessionPayload {
     schema_version?: number;
     id: string;
     title: string;
-    messages: Array<{ role: string; content: string; actions?: unknown[] }>;
+    // Messages are stored verbatim from /api/chat/sessions/save — assistant
+    // entries may carry auto-executed tool actions (tool evidence) and the
+    // optional validation summary. Old shares lack both and render unchanged.
+    messages: Array<{
+      role: string;
+      content: string;
+      actions?: unknown[];
+      _validation?: ValidationSummary;
+      _truncated?: boolean;
+    }>;
     created_at: string | null;
     updated_at: string | null;
     paper_drafts?: Array<{
@@ -1674,6 +1710,10 @@ async function _sendChatMessageOnce(
     let sawAnySseEvent = false;
     let sawDoneEvent = false;
     let sawToolActivity = false;
+    // Optional flags riding the final text frame (backward compatible —
+    // older backends simply never set them).
+    let hitIterationCap: boolean | undefined;
+    let validationSummary: ValidationSummary | undefined;
 
     const actionKey = (action: ChatAction, fallbackIndex: number) => {
       const toolCallId = action._tool_call_id;
@@ -1732,6 +1772,16 @@ async function _sendChatMessageOnce(
 
           if (evt.type === "text" && typeof evt.content === "string") {
             replyParts.push(evt.content);
+            if (typeof evt.hit_iteration_cap === "boolean") {
+              hitIterationCap = evt.hit_iteration_cap;
+            }
+            if (
+              evt.validation_summary
+              && typeof evt.validation_summary === "object"
+              && !Array.isArray(evt.validation_summary)
+            ) {
+              validationSummary = evt.validation_summary as ValidationSummary;
+            }
           } else if (evt.type === "tool_result") {
             sawToolActivity = true;
             const action = {
@@ -1911,6 +1961,8 @@ async function _sendChatMessageOnce(
     return {
       reply: replyParts.join("\n\n"),
       actions: actions.length > 0 ? actions : streamedActions,
+      ...(hitIterationCap !== undefined ? { hit_iteration_cap: hitIterationCap } : {}),
+      ...(validationSummary !== undefined ? { validation_summary: validationSummary } : {}),
     };
   } catch (err: unknown) {
     if (err instanceof TypeError && (err.message === "Failed to fetch" || err.message === "NetworkError when attempting to fetch resource.")) {

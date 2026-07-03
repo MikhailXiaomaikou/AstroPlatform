@@ -6,10 +6,18 @@ import {
   deleteSharedSessionComment,
   forkSharedSession,
   getSharedSession,
+  type ChatAction,
   type SessionCommentItem,
   type SharedSessionPayload,
 } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
+import MarkdownText from "../../components/chat/MarkdownText";
+// Reuse the Chat page's extracted tool-evidence components (2026-07-03):
+// shared read-only links must show the same tool cards + validation badge
+// as the owner's chat, not bare AI prose.
+import { ActionCard, ToolTurnSummary } from "../Chat/ActionCard";
+import { ValidationBadge } from "../Chat/ValidationBadge";
+import { validateActions } from "../Chat/chatHelpers";
 
 export default function SharedSessionPage() {
   const { token = "" } = useParams();
@@ -133,18 +141,49 @@ export default function SharedSessionPage() {
         <div className="workspace-detail" style={{ display: "block" }}>
           <h3>Session Replay</h3>
           <div className="chat-messages" style={{ minHeight: 320 }}>
-            {payload.session.messages.map((message, index) => (
-              <div key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
-                <div className="chat-message-avatar">{message.role === "user" ? "U" : "AI"}</div>
-                <div className="chat-message-body">
-                  <div className="chat-message-content">
-                    {String(message.content || "").split("\n").map((line, i) => (
-                      <p key={i}>{line || "\u00A0"}</p>
-                    ))}
+            {payload.session.messages.map((message, index) => {
+              const isAssistant = message.role === "assistant";
+              // Server-stored actions are unknown[]; keep only well-shaped
+              // entries. Old shares without actions render as before.
+              const actions = isAssistant ? validateActions(message.actions) : [];
+              return (
+                <div key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
+                  <div className="chat-message-avatar">{message.role === "user" ? "U" : "AI"}</div>
+                  <div className="chat-message-body">
+                    <div className="chat-message-content">
+                      {isAssistant ? (
+                        <>
+                          <ToolTurnSummary actions={actions.length > 0 ? actions : undefined} />
+                          <MarkdownText content={String(message.content || "")} />
+                          <ValidationBadge
+                            summary={message._validation}
+                            truncated={message._truncated}
+                          />
+                        </>
+                      ) : (
+                        String(message.content || "").split("\n").map((line, i) => (
+                          <p key={i}>{line || "\u00A0"}</p>
+                        ))
+                      )}
+                    </div>
+                    {actions.length > 0 && (
+                      <div className="chat-actions-list">
+                        {actions.map((action: ChatAction, idx: number) => (
+                          <ActionCard
+                            key={idx}
+                            action={action}
+                            index={idx}
+                            executing={false}
+                            readOnly
+                            onExecute={() => { /* read-only share view */ }}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           {payload.session.paper_drafts && payload.session.paper_drafts.length > 0 && (
             <div style={{ marginTop: 18 }}>

@@ -462,6 +462,9 @@ async def _execute_tool_calls(
                 "error": f"Tool {tc.get('name', '?')} raised {type(result).__name__}: {result}",
                 "success": False,
             }
+        _record_tool_provenance_activity(
+            str(tc.get("name") or ""), result, chat_session_id=chat_session_id,
+        )
         executed.append({
             "id": tc["id"],
             "name": tc["name"],
@@ -469,6 +472,60 @@ async def _execute_tool_calls(
             "result": result,
         })
     return executed
+
+
+def _record_tool_provenance_activity(
+    tool_name: str,
+    result: Any,
+    *,
+    chat_session_id: str | None = None,
+) -> None:
+    """Register a tool result's reproducibility envelope in the provenance
+    ledger (``app.services.provenance``).
+
+    2026-07-03 surfacing fix: the ledger's only writer used to be the
+    pipeline engine, and it recorded ``{run_id}:{node_id}`` entity ids — so
+    ``/api/provenance/{entity_id}/*`` could never answer for the run_ids
+    users actually see (the reproducibility envelopes stamped on every chat
+    tool result).  Recording the envelope here makes those endpoints answer
+    honestly for chat tool runs made by the live backend process.  The
+    ledger is in-memory per process — records do not survive a restart, and
+    the API returns an empty graph for unknown ids (the UI must say so).
+
+    Read-only with respect to the tool result; never raises.
+    """
+    try:
+        if not isinstance(result, dict):
+            return
+        envelope = result.get("reproducibility")
+        if not isinstance(envelope, dict):
+            return
+        run_id = str(envelope.get("run_id") or "").strip()
+        if not run_id:
+            return
+        from app.services.provenance import record_activity
+
+        params = {
+            key: envelope[key]
+            for key in (
+                "query_hash", "tool_version", "timestamp_utc",
+                "random_seed", "random_seed_source",
+            )
+            if key in envelope
+        }
+        if chat_session_id:
+            params["chat_session_id"] = str(chat_session_id)
+        archive_version = envelope.get("archive_version")
+        record_activity(
+            entity_type="chat_tool_result",
+            entity_id=run_id,
+            activity=str(tool_name or "unknown_tool"),
+            params=params,
+            agent="chat_agent",
+            data_release=str(archive_version) if archive_version else None,
+        )
+    except Exception:
+        logger.debug("provenance ledger registration failed", exc_info=True)
 
 
 def _tool_results_to_actions(all_tool_results: list[dict]) -> list[dict]:

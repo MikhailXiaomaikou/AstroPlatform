@@ -10,6 +10,7 @@ import ErrorBoundary from "../../components/ErrorBoundary";
 import { useConversationProvenance, type ConversationProvenance } from "../../hooks/useConversationProvenance";
 import { ActionResult, PlotBuilder } from "./ActionResultViews";
 import { AutoToolResult } from "./AutoToolResult";
+import { ProvenanceLink } from "./ProvenanceLink";
 
 function isNumericSanityWarning(message: string): boolean {
   const text = message.toLowerCase();
@@ -197,6 +198,7 @@ function ActionCardInner({
   executing,
   conversationProvenance,
   onCopyAcknowledgement,
+  readOnly = false,
 }: {
   action: ChatAction;
   index: number;
@@ -205,6 +207,10 @@ function ActionCardInner({
   executing: boolean;
   conversationProvenance?: ConversationProvenance;
   onCopyAcknowledgement?: () => void;
+  // Read-only rendering (shared session pages): tool evidence is shown,
+  // but nothing is executable and the per-process provenance link (which
+  // needs the owner's live backend session) is hidden.
+  readOnly?: boolean;
 }) {
   const labels: Record<string, string> = {
     search: "Search databases",
@@ -401,7 +407,7 @@ function ActionCardInner({
             </span>
           )}
         </span>
-        {!isAutoExecuted && action.action !== "explain" && action.action !== "comment_pipeline" && !result && (
+        {!readOnly && !isAutoExecuted && action.action !== "explain" && action.action !== "comment_pipeline" && !result && (
           <button
             className="btn-chat-action"
             onClick={() => onExecute(index, action)}
@@ -503,6 +509,11 @@ function ActionCardInner({
             onCopied={onCopyAcknowledgement}
           />
           <AutoToolResult toolName={action.action} result={autoResult} />
+          {/* 2026-07-03: provenance-ledger entry point for the run_id shown
+              in this result's reproducibility envelope. Hidden in read-only
+              (shared) views — the ledger is per-process on the owner's
+              backend and would only ever answer for the live session. */}
+          {!readOnly && <ProvenanceLink result={autoResult} />}
         </div>
       )}
     </div>

@@ -121,6 +121,109 @@ def _active_research_focus() -> str:
     return _chat._ASTRO_RESEARCH_FOCUS
 
 
+# ── Per-reply validation summary (2026-07-03, honesty surfacing) ────────
+#
+# Derived ONLY from what the gate stack already computed this turn:
+# fabrication_stats, the structured gate-intervention records collected by
+# _gate_event, and whether the claim-gate block ran at all.  No new
+# validation logic lives here — this is a read-only surfacing layer so the
+# UI can distinguish "the gates ran and passed" from "the gates never ran".
+
+# Gates whose interventions concern numeric / quantitative claims.
+_NUMERIC_GATE_FAMILY = frozenset({
+    "numeric_claims", "zero_data", "cjk_filter", "fact_verification",
+    "empty_reply_fallback",
+})
+# Gates whose interventions concern citations / literature narrative.
+_CITATION_GATE_FAMILY = frozenset({
+    "citation_methodology", "literature_prior", "unclassified_literature",
+    "unsupported_narrative", "cosmology_anchor",
+})
+_BLOCKING_GATE_ACTIONS = frozenset({"blocked", "annotated_blocked"})
+_VALIDATION_SUMMARY_MAX_INTERVENTIONS = 10
+
+
+def _derive_validation_summary(
+    *,
+    claim_gate_ran: bool,
+    gate_skip_reason: str | None,
+    fabrication_stats: dict,
+    interventions: list[dict],
+    tool_results: list[dict],
+) -> dict:
+    """Compact, honest per-reply summary of what the gate stack did.
+
+    Per-gate vocabulary:
+      passed           gate ran, no intervention
+      regenerated      gate intervened; the shipped reply was rewritten or
+                       downgraded to a tool-grounded form that then passed
+      blocked          gate blocked the reply / annotated it as unverified
+      skipped_no_data  gate ran but the turn produced no claimable tool
+                       data — "passed" would overstate what was checked
+      skipped          gate stack intentionally skipped (see ``reason``)
+
+    HONESTY RULE: this must never claim more than the gates actually
+    verified.  "passed" means "validated against this turn's tool data",
+    NOT "guaranteed true".
+    """
+
+    def _family_state(family: frozenset) -> str:
+        acts = [i for i in interventions if i.get("gate") in family]
+        if any(i.get("action") in _BLOCKING_GATE_ACTIONS for i in acts):
+            return "blocked"
+        if acts:
+            return "regenerated"
+        if not claim_gate_ran:
+            return "skipped"
+        return "passed"
+
+    numeric_state = _family_state(_NUMERIC_GATE_FAMILY)
+    citation_state = _family_state(_CITATION_GATE_FAMILY)
+    if numeric_state == "passed":
+        try:
+            from app.services.claim_validator import is_empty_turn
+
+            if is_empty_turn(tool_results):
+                numeric_state = "skipped_no_data"
+        except Exception:
+            pass
+    summary: dict[str, Any] = {
+        "schema_version": 1,
+        "numeric_gate": numeric_state,
+        "citation_gate": citation_state,
+        "regen_count": int(fabrication_stats.get("regenerations", 0) or 0),
+        "blocked": bool(fabrication_stats.get("blocked", False)),
+        "interventions": [
+            {
+                "gate": str(i.get("gate", "")),
+                "action": str(i.get("action", "")),
+                "reason": str(i.get("reason", "")),
+            }
+            for i in interventions[:_VALIDATION_SUMMARY_MAX_INTERVENTIONS]
+        ],
+    }
+    if not claim_gate_ran and gate_skip_reason:
+        summary["reason"] = str(gate_skip_reason)
+    return summary
+
+
+def _not_run_validation_summary(reason: str) -> dict:
+    """Summary for early-return paths where the gate stack never ran.
+
+    Distinct from "passed" by construction — the UI must render these as
+    "not validated (<reason>)", never as a pass.
+    """
+    return {
+        "schema_version": 1,
+        "numeric_gate": "not_run",
+        "citation_gate": "not_run",
+        "regen_count": 0,
+        "blocked": False,
+        "reason": str(reason),
+        "interventions": [],
+    }
+
+
 async def _run_agent_loop(
     *,
     system: str,
@@ -284,6 +387,9 @@ async def _run_agent_loop(
                 "actions": _tool_results_to_actions(all_tool_results),
                 "hit_deadline": True,
                 "hit_iteration_cap": False,
+                # This early return skips the entire gate stack — say so
+                # instead of letting the reply look validated.
+                "validation_summary": _not_run_validation_summary("loop_deadline"),
             }
 
         # G3.4: filter tools that have failed too many times this turn.
@@ -1596,6 +1702,9 @@ async def _run_agent_loop(
             "hit_deadline": hit_deadline,
             "honest_abstention": True,
             "abstention_reason": reason,
+            # The abstention card path skips the claim validator by design
+            # (its prose is platform-written and claim-scrubbed above).
+            "validation_summary": _not_run_validation_summary("honest_abstention"),
         }
     if "<tools_returned_nothing" in clean_reply or "<toolsreturnednothing" in clean_reply:
         clean_reply = _sanitize_tools_returned_nothing(clean_reply)
@@ -1604,6 +1713,11 @@ async def _run_agent_loop(
     # against the tool_results collected this turn; if any claim can't be
     # cited, push the LLM to regenerate.  After two failures, block.
     fabrication_stats = {"pass": 0, "blocked": False, "regenerations": 0}
+    # 2026-07-03 honesty surfacing: compact record of every gate
+    # intervention this turn.  Feeds the per-reply validation_summary in
+    # the final payload; read-only, derived from the same _gate_event
+    # calls the observability layer already makes.
+    gate_interventions: list[dict] = []
 
     async def _gate_event(
         gate: str,
@@ -1621,6 +1735,14 @@ async def _run_agent_loop(
         # layer (app/observability/gate_events.py). One event per gate
         # intervention: JSONL append + gate_event_total counter + SSE emit.
         # Must NEVER affect the reply; everything is wrapped.
+        try:
+            gate_interventions.append({
+                "gate": str(gate),
+                "action": str(action),
+                "reason": str(reason or ""),
+            })
+        except Exception:
+            pass
         try:
             from app.observability.gate_events import (
                 append_gate_event_jsonl,
@@ -2433,8 +2555,16 @@ async def _run_agent_loop(
         # F1.2: track whether this turn ran the claim gate so the
         # fallback-synthesis branch below knows to apply it too.
         _claim_gate_ran = True
+        _gate_skip_reason: str | None = None
     else:
         _claim_gate_ran = False
+        # Honest label for the validation_summary: the gate stack was
+        # skipped either because the reply was a pure tool-inventory meta
+        # answer, or because the model returned no text at all (the
+        # fallback-synthesis branch below still validates what it ships).
+        _gate_skip_reason = (
+            "tool_inventory_meta" if clean_reply.strip() else "empty_model_reply"
+        )
         # Still need is_empty_turn for the fallback branch below.
         from app.services.claim_validator import is_empty_turn  # noqa: F401
 
@@ -2684,4 +2814,14 @@ async def _run_agent_loop(
         "tool_results": all_tool_results,
         "hit_iteration_cap": hit_iteration_cap,
         "hit_deadline": hit_deadline,
+        # 2026-07-03 honesty surfacing: compact summary of what the gate
+        # stack actually did this turn, derived from state the gates
+        # already computed (fabrication_stats + gate_interventions).
+        "validation_summary": _derive_validation_summary(
+            claim_gate_ran=_claim_gate_ran,
+            gate_skip_reason=_gate_skip_reason,
+            fabrication_stats=fabrication_stats,
+            interventions=gate_interventions,
+            tool_results=all_tool_results,
+        ),
     }

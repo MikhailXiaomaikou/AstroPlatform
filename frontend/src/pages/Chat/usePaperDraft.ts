@@ -69,6 +69,11 @@ export function usePaperDraft({
         role: m.role,
         content: m.content,
         actions: m.actions,
+        // Keep the per-reply validation summary in the server session copy —
+        // this save path must not silently strip the honesty signal that the
+        // auto-save / share paths persist.
+        _validation: m._validation,
+        _truncated: m._truncated,
       }));
       const saved = await saveChatSession(sessionData, currentSessionId || undefined);
       setCurrentSessionId(saved.id);
