@@ -8,9 +8,10 @@ on:
 jobs:
   backend-test:
     runs-on: ubuntu-latest
-    # Backstop against a hung test: pytest.mark.timeout marks are currently
-    # no-ops (pytest-timeout is not installed), so without this a deadlock
-    # would burn the 360-minute GitHub default. Normal runs take ~35 minutes.
+    # Backstop against a hung test: pytest-timeout enforces the per-test
+    # @pytest.mark.timeout marks, but unmarked tests can still deadlock, and
+    # without this the job would burn the 360-minute GitHub default. Normal
+    # runs take ~35 minutes.
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +30,7 @@ jobs:
         # the whole suite is cosmology + shared/core infrastructure.
         run: |
           cd backend
-          pip install pytest-cov==5.0.0
+          pip install pytest-cov==5.0.0 pytest-timeout==2.4.0
           python -m pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
 
   frontend-test:

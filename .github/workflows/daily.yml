@@ -140,3 +140,55 @@ jobs:
         run: |
           cd backend
           python scripts/audit_citation_pool.py
+
+  cobaya-parity:
+    # The 4 cobaya-parity honesty locks: our reimplemented BAO likelihoods
+    # checked for -2·logp parity against the REAL cobaya likelihoods
+    # instantiated on the same released files —
+    #   tests/test_eboss_dr16_grid_bao.py::test_parity_against_real_cobaya_likelihood
+    #     (3 grids: eboss_dr16_elg_bao, eboss_dr16_lyauto_bao, eboss_dr16_lyxqso_bao)
+    #   tests/test_sdss_dr12_consensus.py::test_parity_against_real_cobaya_likelihood
+    # These skipif on the cobaya bao_data checkout under backend/packages/,
+    # which is gitignored — so they silently SKIP in every ci.yml job and
+    # this is the only place in CI where they actually execute. They are
+    # honesty locks: no continue-on-error, parity drift must be loud red.
+    # Kept out of ci.yml on purpose (PR gate stays light).
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          # Exact pins on top of requirements.txt's permissive ranges: these
+          # are the versions the parity tests were validated against in the
+          # local venv (2026-07-03). Both ship manylinux wheels, no compile.
+          pip install cobaya==3.6.2 camb==1.6.6
+      - name: Fetch cobaya bao_data checkout
+        # backend/packages/ is gitignored (backend/.gitignore), so CI must
+        # download the released BAO data files that the real cobaya
+        # likelihoods are instantiated on. Same command as the local
+        # provisioning documented in scripts/cobaya/.
+        run: |
+          cd backend
+          cobaya-install bao.sdss_dr12_consensus_bao bao.sdss_dr16_bao_elg bao.sdss_dr16_baoplus_lyauto bao.sdss_dr16_baoplus_lyxqso -p packages
+      - name: Verify parity data present (anti-silent-skip guard)
+        # The parity tests skipif on these exact files. If the download step
+        # ever silently changes layout or fails soft, this step fails loud
+        # instead of letting the honesty locks quietly go back to SKIPPED.
+        run: |
+          cd backend
+          test -f packages/data/bao_data/sdss_DR16_ELG_BAO_DVtable.txt
+          test -f packages/data/bao_data/sdss_DR16_LYAUTO_BAO_DMDHgrid.txt
+          test -f packages/data/bao_data/sdss_DR16_LYxQSO_BAO_DMDHgrid.txt
+          test -f packages/data/bao_data/sdss_DR12Consensus_bao.dat
+      - name: Run cobaya parity tests
+        run: |
+          cd backend
+          python -m pytest "tests/test_eboss_dr16_grid_bao.py::test_parity_against_real_cobaya_likelihood" "tests/test_sdss_dr12_consensus.py::test_parity_against_real_cobaya_likelihood" -v --no-cov
