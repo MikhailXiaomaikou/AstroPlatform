@@ -8,11 +8,17 @@ on:
 jobs:
   backend-test:
     runs-on: ubuntu-latest
+    # Backstop against a hung test: pytest.mark.timeout marks are currently
+    # no-ops (pytest-timeout is not installed), so without this a deadlock
+    # would burn the 360-minute GitHub default. Normal runs take ~35 minutes.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
       - name: Install dependencies
         run: |
           cd backend
@@ -23,7 +29,7 @@ jobs:
         # the whole suite is cosmology + shared/core infrastructure.
         run: |
           cd backend
-          pip install pytest-cov
+          pip install pytest-cov==5.0.0
           python -m pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
 
   frontend-test:
@@ -49,6 +55,13 @@ jobs:
         run: |
           cd frontend
           npx vitest run
+      - name: Build
+        # CLAUDE.md: "npm run build is the final frontend gate" — the vite
+        # build half (rollup resolution, manualChunks, assets) is not covered
+        # by tsc/vitest, so build-only breakage must fail here, not at deploy.
+        run: |
+          cd frontend
+          npm run build
 
   lint:
     runs-on: ubuntu-latest
@@ -76,6 +89,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
       - name: Install dependencies
         run: |
           cd backend

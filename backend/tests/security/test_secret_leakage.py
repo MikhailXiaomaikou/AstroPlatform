@@ -6,51 +6,40 @@ The contract: BYOK API keys arrive on the chat path inside
 echoed back, before the system prompt is rendered to the LLM, and
 before any log line includes the request payload.
 
-This is a structural test (uses the auth_strip_api_key helper directly
-where one exists, plus a request-roundtrip sniff against the chat
-endpoint to confirm a key-looking string in ``context.api_key`` does
-not appear in the response body verbatim).
+This is a structural test (exercises ``_safe_context`` — the helper
+chat.py actually uses to strip key material out of the request context —
+plus a request-roundtrip sniff against the chat endpoint to confirm a
+key-looking string in ``context.api_key`` does not appear in the
+response body verbatim).
 """
 from __future__ import annotations
-
-import pytest
 
 LOOKS_LIKE_AN_API_KEY = "sk-ant-FAKE0123456789-DO-NOT-LEAK-ABCDEFG"
 
 
-def _strip_api_key_helper():
-    """Locate the centralized 'strip api_key' helper. The codebase has
-    historically kept this in chat.py / auth.py; the test resolves it
-    dynamically so it doesn't break if the helper moves."""
-    try:
-        from app.api.chat import _strip_user_api_key  # type: ignore
-        return _strip_user_api_key
-    except Exception:
-        pass
-    try:
-        from app.auth import strip_api_key  # type: ignore
-        return strip_api_key
-    except Exception:
-        pass
-    return None
-
-
 def test_api_key_strip_helper_removes_keylike_values():
-    """If the helper exists, it must strip a key-looking value out of a
-    chat-request-shaped dict. If the helper is missing, the test SKIPS
-    so we don't pin its name, but does so loudly so reviewers notice."""
-    helper = _strip_api_key_helper()
-    if helper is None:
-        pytest.skip(
-            "No _strip_user_api_key / strip_api_key helper exposed; "
-            "the leak guard relies on inline stripping inside chat.py."
-        )
-    payload = {"context": {"api_key": LOOKS_LIKE_AN_API_KEY, "other": "keep"}}
-    cleaned = helper(payload)
+    """``_safe_context`` must strip every key-material field out of a
+    chat-request context while keeping the rest. This test used to hunt
+    for a ``_strip_user_api_key`` helper that never existed and skip —
+    it now pins the real guard, so if ``_safe_context`` is renamed or
+    deleted this FAILS (ImportError) instead of silently skipping."""
+    from app.api.chat import _safe_context
+
+    context = {
+        "api_key": LOOKS_LIKE_AN_API_KEY,
+        "api_keys": {"anthropic": LOOKS_LIKE_AN_API_KEY},
+        "api_provider": "anthropic",
+        "other": "keep",
+    }
+    cleaned = _safe_context(context)
     serialized = repr(cleaned)
     assert LOOKS_LIKE_AN_API_KEY not in serialized, (
-        f"strip helper leaked the key into the cleaned payload: {serialized!r}"
+        f"_safe_context leaked the key into the cleaned payload: {serialized!r}"
     )
+    assert "api_key" not in cleaned
+    assert "api_keys" not in cleaned
+    assert "api_provider" not in cleaned
+    assert cleaned["other"] == "keep"
 
 
 async def test_chat_response_does_not_echo_api_key(app_client, test_user):

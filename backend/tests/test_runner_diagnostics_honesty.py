@@ -143,19 +143,45 @@ def test_emcee_fallback_with_failed_diagnostics_keeps_importance_result(monkeypa
     assert r["chain_tier"] == "exploratory"
 
 
-def test_cmb_rotation_rhat_no_longer_fabricated():
-    from app.services.cmb_rotation_likelihoods import run_cmb_rotation_likelihood
+def test_cmb_rotation_rhat_no_longer_fabricated(monkeypatch):
+    # All registered rotation datasets are config_only by design, so running
+    # against the real registry always returns the _blocked() envelope (no
+    # chain_diagnostics) — the old version of this test skipped on that and
+    # therefore never executed its assertions anywhere. Use the same
+    # executable fixture as test_research_program.py so the success path
+    # actually runs; any runner error now FAILS instead of skipping.
+    from app.services import cmb_rotation_likelihoods as cr
 
-    from app.services.cmb_rotation_likelihoods import default_cmb_rotation_dataset_keys
+    fixture = cr.CMBRotationDatasetEntry(
+        key="unit_test_cmb_rotation_honesty",
+        display_name="Unit-test EB/TB rotation likelihood",
+        version="test fixture",
+        observables=("EB", "TB", "beta_deg"),
+        source_url="https://example.invalid/cmb-rotation-fixture",
+        citations=(cr.CMBRotationCitation(label="Unit Test Rotation Fixture", year=2026),),
+        covariance_provided=True,
+        calibration_prior={"type": "gaussian", "sigma_deg": 0.05},
+        execution_mode="compressed_gaussian",
+        compressed_likelihood=cr.CMBRotationCompressedSpec(
+            parameter="beta_deg",
+            mean=0.35,
+            sigma=0.10,
+            source_locator="unit test compressed EB/TB beta likelihood",
+            approximation="one-dimensional Gaussian beta posterior",
+        ),
+    )
+    monkeypatch.setitem(cr.CMB_ROTATION_DATASETS, fixture.key, fixture)
 
-    r = run_cmb_rotation_likelihood(
-        dataset_keys=default_cmb_rotation_dataset_keys(),
+    r = cr.run_cmb_rotation_likelihood(
+        dataset_keys=[fixture.key],
         model="isotropic_beta", random_seed=42, n_samples=1000,
     )
-    if not r.get("success", True) or "chain_diagnostics" not in r:
-        import pytest as _pytest
-        _pytest.skip("rotation runner unavailable in this environment")
+    assert r["success"] is True
+    assert r["analysis_status"] == "CMB_ROTATION_CHAIN_READY"
     d = r["chain_diagnostics"]
     assert d["rhat"] is None
+    assert "not applicable" in d["rhat_note"]
     assert d["ess_source"] == "exact_gaussian_draws"
     assert "rhat_max" not in d.get("thresholds", {})
+    # The fabricated rhat=1.0 also used to live inside the significance block.
+    assert r["parameters"]["rotation_significance"]["rhat"] is None
