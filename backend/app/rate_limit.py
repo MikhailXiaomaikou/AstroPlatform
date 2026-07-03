@@ -29,25 +29,71 @@ def get_rate_limit_key(request: Request) -> str:
                 return f"user:{user_id}"
         except Exception:
             pass
-    # Fallback to client IP. Behind Render / nginx / Cloudflare,
-    # request.client.host is often the proxy address, which would make all
-    # guests share one bucket. Prefer standard forwarded headers here.
+    # Fallback to client IP, derived through the TRUSTED_PROXY_MODE trust
+    # chain (see get_client_ip). Behind Render's proxy, TRUSTED_PROXY_MODE=1
+    # (the ENV=production default) yields the real client instead of the
+    # proxy address, without honoring spoofable headers on direct hits.
     return f"ip:{get_client_ip(request) or 'unknown'}"
 
 
+def _parse_trusted_proxy_mode(raw: str) -> int | str:
+    """Normalize TRUSTED_PROXY_MODE to "none", "cloudflare", or a hop count.
+
+    Anything unrecognized fails closed to "none" (trust no headers).
+    """
+    value = (raw or "").strip().lower()
+    if value in ("", "none", "0"):
+        return "none"
+    if value == "cloudflare":
+        return "cloudflare"
+    try:
+        hops = int(value)
+    except ValueError:
+        hops = 0
+    if hops >= 1:
+        return hops
+    _quota_logger.warning(
+        "Invalid TRUSTED_PROXY_MODE %r; trusting only the socket peer", raw
+    )
+    return "none"
+
+
 def get_client_ip(request: Request) -> str | None:
-    """Best-effort public client IP for anonymous limits and audit fields."""
-    for header in ("CF-Connecting-IP", "X-Real-IP"):
-        value = request.headers.get(header, "").strip()
+    """Client IP for anonymous rate limits and audit fields.
+
+    Forwarded headers are attacker-controlled on a direct connection, so
+    which one (if any) to believe is decided by settings.trusted_proxy_mode
+    (env TRUSTED_PROXY_MODE, documented in app/config.py):
+
+    - "none": trust only the transport peer (request.client.host).
+    - N >= 1 trusted reverse proxies: each trusted proxy appends the peer it
+      accepted to X-Forwarded-For, so the last N entries are trusted and the
+      real client is the Nth from the right. Render is N=1 (its proxy appends
+      the connecting client as the final hop); the leftmost entries are
+      whatever the client chose to send and are never used.
+    - "cloudflare": trust CF-Connecting-IP, which Cloudflare sets on every
+      proxied request.
+
+    When the expected trusted header is missing (or the X-Forwarded-For chain
+    is shorter than the trusted hop count), fall back to the socket peer —
+    never to another header.
+    """
+    from app.config import settings
+
+    mode = _parse_trusted_proxy_mode(settings.trusted_proxy_mode)
+
+    if mode == "cloudflare":
+        value = request.headers.get("CF-Connecting-IP", "").strip()
         if value:
             return value[:64]
-
-    forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
-        for part in forwarded_for.split(","):
-            value = part.strip()
-            if value:
-                return value[:64]
+    elif isinstance(mode, int):
+        hops = [
+            part.strip()
+            for part in request.headers.get("X-Forwarded-For", "").split(",")
+            if part.strip()
+        ]
+        if len(hops) >= mode:
+            return hops[-mode][:64]
 
     if request.client:
         return request.client.host[:64]

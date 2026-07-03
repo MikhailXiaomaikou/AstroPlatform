@@ -76,6 +76,22 @@ class Settings(BaseSettings):
     # "null" disables the cache entirely.
     connector_cache_backend: str = "auto"
 
+    # Client-IP trust chain for rate limiting and audit logs
+    # (app/rate_limit.py get_client_ip). Forwarded headers are attacker-
+    # controlled unless a trusted reverse proxy sets them, so:
+    #   "none"        trust only the transport peer (request.client.host);
+    #                 ignore every forwarded header. Use when clients reach
+    #                 uvicorn directly (bare local dev, docker-compose
+    #                 without a proxy in front).
+    #   "1".."9"      that many trusted reverse proxies in front; the real
+    #                 client is the Nth-from-the-right X-Forwarded-For entry
+    #                 (each trusted proxy appends the peer it accepted).
+    #                 Render terminates traffic with exactly one proxy, so
+    #                 production defaults to "1".
+    #   "cloudflare"  Cloudflare in front; trust CF-Connecting-IP.
+    # Any other value fails closed to "none".
+    trusted_proxy_mode: str = "1" if _ENV == "production" else "none"
+
     # Max FITS upload size in bytes (default 100 MB)
     max_upload_size: int = 100 * 1024 * 1024
 

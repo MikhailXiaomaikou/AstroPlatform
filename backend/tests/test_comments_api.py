@@ -181,7 +181,15 @@ async def test_ip_not_exposed_in_public_view(app_client):
         assert "client_ip" not in c
 
 
-def test_guest_rate_limit_key_prefers_forwarded_ip():
+def test_guest_rate_limit_key_ignores_forwarded_ip_by_default(monkeypatch):
+    """Default trust mode: X-Forwarded-For is spoofable, use the socket peer.
+
+    Full trust-chain coverage (proxy hop counts, cloudflare, audit log)
+    lives in tests/test_client_ip_trust.py.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "trusted_proxy_mode", "none")
     request = SimpleNamespace(
         headers={
             "X-Forwarded-For": "203.0.113.10, 10.0.0.1",
@@ -189,7 +197,23 @@ def test_guest_rate_limit_key_prefers_forwarded_ip():
         client=SimpleNamespace(host="10.0.0.99"),
     )
 
-    assert get_rate_limit_key(request) == "ip:203.0.113.10"
+    assert get_rate_limit_key(request) == "ip:10.0.0.99"
+
+
+def test_guest_rate_limit_key_render_mode_uses_rightmost_forwarded_hop(monkeypatch):
+    """TRUSTED_PROXY_MODE=1 (Render/production default): the trusted proxy
+    appended the real client as the last X-Forwarded-For hop."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "trusted_proxy_mode", "1")
+    request = SimpleNamespace(
+        headers={
+            "X-Forwarded-For": "203.0.113.10, 10.0.0.1",
+        },
+        client=SimpleNamespace(host="10.0.0.99"),
+    )
+
+    assert get_rate_limit_key(request) == "ip:10.0.0.1"
 
 
 def test_authenticated_rate_limit_key_still_uses_user_id():

@@ -48,11 +48,14 @@ GOOGLE_CLIENT_SECRET=...
 ADMIN_SECRET=<random-hex-32>
 PROVENANCE_VALIDATOR_HARDBLOCK=false
 ASTRO_RESEARCH_FOCUS=cosmology          # cosmology | all  (any other value fails closed to cosmology)
+TRUSTED_PROXY_MODE=1                    # none | <hop count> | cloudflare  (see paragraph below)
 ```
 
 `PROVENANCE_VALIDATOR_HARDBLOCK` defaults to warning mode. When set to `true`, citation violations from the provenance-v2 validator block replies.
 
 `ASTRO_RESEARCH_FOCUS` selects which active research module the process serves. This repository is cosmology-only, so `cosmology` (the `render.yaml` default) is the only active focus. See [Research module focus](#research-module-focus) below.
+
+`TRUSTED_PROXY_MODE` controls which client IP the backend believes for per-IP rate limiting and comment audit logs (`backend/app/rate_limit.py`). Forwarded headers are attacker-controlled unless a trusted reverse proxy sets them, so the default with `ENV=production` is `1`: exactly one trusted proxy (Render's) in front, whose appended rightmost `X-Forwarded-For` hop is the real client — the current Render deployment therefore needs no explicit setting. Outside production the default is `none` (trust only the socket peer, ignore all forwarded headers); set `TRUSTED_PROXY_MODE=none` explicitly if clients ever reach uvicorn directly under `ENV=production` (e.g. docker-compose with the backend port published and no proxy), `2`..`N` if you chain additional proxies, or `cloudflare` only if Cloudflare actually fronts the service (`CF-Connecting-IP` is honored in that mode alone). Unrecognized values fail closed to `none`.
 
 ## Frontend Environment
 
