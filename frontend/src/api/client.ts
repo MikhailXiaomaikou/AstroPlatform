@@ -271,60 +271,9 @@ export async function searchData(
   }
 }
 
-// ── Advanced Search ──
-
-export interface AdvancedSearchRequest {
-  ra?: number;
-  dec?: number;
-  radius?: number;
-  redshift_min?: number;
-  redshift_max?: number;
-  spectral_line?: string;
-  wavelength_min?: number;
-  wavelength_max?: number;
-  observation_type?: string;
-  object_type?: string;
-  instrument?: string;
-  sources?: string[];
-  natural_query?: string;
-}
-
-export interface AdvancedSearchMeta {
-  parsed_filters: Record<string, unknown>;
-  suggested_sources: string[];
-  matched_keywords: string[];
-  observed_freq_min_ghz: number | null;
-  observed_freq_max_ghz: number | null;
-  observed_wavelength_min_um: number | null;
-  observed_wavelength_max_um: number | null;
-}
-
-export interface AdvancedSearchResponse {
-  results: SearchResult[];
-  meta: AdvancedSearchMeta;
-}
-
-export interface SpectralLineInfo {
-  key: string;
-  name: string;
-  rest_wavelength_um: number;
-  rest_freq_ghz?: number;
-}
-
-export async function advancedSearch(
-  req: AdvancedSearchRequest
-): Promise<AdvancedSearchResponse> {
-  const { data } = await api.post<AdvancedSearchResponse>(
-    "/api/data/advanced-search",
-    req
-  );
-  return data;
-}
-
-export async function getSpectralLines(): Promise<SpectralLineInfo[]> {
-  const { data } = await api.get<SpectralLineInfo[]>("/api/data/spectral-lines");
-  return data;
-}
+// advancedSearch / getSpectralLines (Advanced Search) were removed
+// 2026-07-03 with their request/response interfaces — dead since the M3
+// Data-Browser trim (zero callers outside this file).
 
 export async function fetchObject(
   source: string,
@@ -384,28 +333,8 @@ export async function getObjectDetail(name: string, ra?: number, dec?: number): 
   return data;
 }
 
-// ── Spectrum Analysis API ──
-
-export interface SpectrumAnalysis {
-  peaks: Array<{ wavelength: number; flux: number; snr: number; is_emission: boolean }>;
-  redshift_auto: { best_z: number; z_error: number; confidence: number; matched_lines: Array<{ line: string; rest_wavelength: number; observed_wavelength: number }> } | null;
-  continuum_shape: string;
-  ai_classification: string;
-  ai_confidence: string;
-  ai_redshift: { value: number; uncertainty: number } | null;
-  ai_lines: Array<{ name: string; rest_wavelength: number; observed_wavelength: number; type: string; strength: string; ew: number | null }>;
-  ai_special_features: string[];
-  ai_summary: string;
-  ai_narrative: string;
-  ai_next_steps: string[];
-}
-
-export async function analyzeSpectrum(fitsPath: string, apiKey?: string): Promise<SpectrumAnalysis> {
-  const body: Record<string, unknown> = { fits_path: fitsPath };
-  if (apiKey) body.api_key = apiKey;
-  const { data } = await api.post<SpectrumAnalysis>("/api/data/fits/analyze", body);
-  return data;
-}
+// analyzeSpectrum (Spectrum Analysis) was removed 2026-07-03 with its
+// SpectrumAnalysis interface — dead since the M3 page trim (zero callers).
 
 // ── FITS Upload & Browse API ──
 
@@ -466,217 +395,19 @@ export function downloadFileUrl(path: string): string {
   return `${base}/api/data/files/download?path=${encodeURIComponent(path)}`;
 }
 
-// ── Pipeline API ──
-
-export interface NodeType {
-  type: string;
-  label: string;
-  description: string;
-  inputs: number;
-  outputs: number;
-}
-
-export interface PipelineTemplate {
-  id: string;
-  name: string;
-  description: string;
-  dag: { nodes: DagNode[]; edges: DagEdge[] };
-}
-
-export interface DagNode {
-  id: string;
-  type: string;
-  position: { x: number; y: number };
-  data: Record<string, unknown>;
-}
-
-export interface DagEdge {
-  id: string;
-  source: string;
-  target: string;
-  sourceHandle?: string;
-}
-
-export interface RunResponse {
-  run_id: string;
-  status: string;
-  results?: Record<string, unknown>;
-}
-
-export async function getNodeTypes(): Promise<NodeType[]> {
-  const { data } = await api.get<NodeType[]>("/api/pipeline/nodes/types");
-  return data;
-}
-
-export async function getTemplates(): Promise<PipelineTemplate[]> {
-  const { data } = await api.get<PipelineTemplate[]>("/api/pipeline/templates");
-  return data;
-}
-
-export async function runPipeline(
-  dag: { nodes: DagNode[]; edges: DagEdge[] },
-  inputDataId: string,
-  asyncMode = true
-): Promise<RunResponse> {
-  const { data } = await api.post<RunResponse>("/api/pipeline/run", {
-    dag,
-    input_data_id: inputDataId,
-  }, {
-    params: { async_mode: asyncMode },
-  });
-  return data;
-}
-
-// ── Pipeline Version API ──
-
-export interface VersionSummary {
-  id: string;
-  version: number;
-  change_note: string;
-  created_at: string;
-}
-
-export interface VersionDetail {
-  id: string;
-  version: number;
-  change_note: string;
-  dag: { nodes: DagNode[]; edges: DagEdge[] };
-  created_at: string;
-}
-
-export interface DagDiffResult {
-  added_nodes: DagNode[];
-  removed_nodes: DagNode[];
-  modified_nodes: Array<{ id: string; old: DagNode; new: DagNode }>;
-  added_edges: DagEdge[];
-  removed_edges: DagEdge[];
-}
-
-export async function saveTemplateVersion(
-  templateId: string,
-  dag: { nodes: DagNode[]; edges: DagEdge[] },
-  changeNote: string
-): Promise<VersionSummary> {
-  const { data } = await api.post<VersionSummary>(
-    `/api/pipeline/templates/${templateId}/versions`,
-    { dag, change_note: changeNote }
-  );
-  return data;
-}
-
-export async function getTemplateVersions(
-  templateId: string
-): Promise<VersionSummary[]> {
-  const { data } = await api.get<VersionSummary[]>(
-    `/api/pipeline/templates/${templateId}/versions`
-  );
-  return data;
-}
-
-export async function getTemplateVersion(
-  templateId: string,
-  versionId: string
-): Promise<VersionDetail> {
-  const { data } = await api.get<VersionDetail>(
-    `/api/pipeline/templates/${templateId}/versions/${versionId}`
-  );
-  return data;
-}
-
-export async function getTemplateDiff(
-  templateId: string,
-  v1: string,
-  v2: string
-): Promise<DagDiffResult> {
-  const { data } = await api.get<DagDiffResult>(
-    `/api/pipeline/templates/${templateId}/diff`,
-    { params: { v1, v2 } }
-  );
-  return data;
-}
-
-export async function batchRunPipeline(
-  dag: { nodes: DagNode[]; edges: DagEdge[] },
-  inputDataIds: string[],
-): Promise<{ results: Array<Record<string, unknown>>; total: number; succeeded: number; failed: number }> {
-  const { data } = await api.post("/api/pipeline/batch-run", { dag, input_data_ids: inputDataIds });
-  return data;
-}
-
-export async function getPipelineRun(runId: string): Promise<Record<string, unknown>> {
-  const { data } = await api.get(`/api/pipeline/${runId}`);
-  return data;
-}
-
-export async function getNodeResult(runId: string, nodeId: string): Promise<Record<string, unknown>> {
-  const { data } = await api.get(`/api/pipeline/runs/${runId}/nodes/${nodeId}`);
-  return data;
-}
-
-// ── WebSocket ──
-
-export function connectPipelineWS(
-  runId: string,
-  onMessage: (data: Record<string, unknown>) => void,
-  onClose?: () => void
-): WebSocket {
-  const baseUrl = API_BASE_URL;
-  const wsUrl = baseUrl.replace(/^http/, "ws");
-  const ws = new WebSocket(`${wsUrl}/ws/pipeline/${runId}`);
-
-  ws.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      onMessage(data);
-    } catch {
-      // ignore parse errors
-    }
-  };
-
-  // Keep alive with pings
-  const pingInterval = setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send("ping");
-    } else {
-      clearInterval(pingInterval);
-    }
-  }, 30000);
-
-  ws.onclose = () => {
-    clearInterval(pingInterval);
-    onClose?.();
-  };
-
-  return ws;
-}
+// The Pipeline API, Pipeline Version API, and pipeline WebSocket sections
+// (getNodeTypes / getTemplates / runPipeline / saveTemplateVersion /
+// getTemplateVersions / getTemplateVersion / getTemplateDiff /
+// batchRunPipeline / getPipelineRun / getNodeResult / connectPipelineWS
+// and the NodeType / PipelineTemplate / DagNode / DagEdge / RunResponse /
+// VersionSummary / VersionDetail / DagDiffResult interfaces) were removed
+// 2026-07-03 — dead since the M3 Pipeline-page deletion (zero callers
+// outside this file).
 
 // ── Workspace / Data Management API ──
-
-export interface BatchTarget {
-  name: string;
-  ra?: number;
-  dec?: number;
-}
-
-export async function batchSearch(
-  targets: BatchTarget[],
-  sources = ["sdss", "gaia", "simbad"],
-  radius = 0.1
-): Promise<Record<string, SearchResult[]>> {
-  const { data } = await api.post("/api/workspace/batch-search", {
-    targets,
-    sources,
-    radius,
-  });
-  return data.results;
-}
-
-export async function uploadBatchTargets(file: File): Promise<BatchTarget[]> {
-  const form = new FormData();
-  form.append("file", file);
-  const { data } = await api.post("/api/workspace/batch-upload", form);
-  return data.targets;
-}
+// batchSearch / uploadBatchTargets (and the BatchTarget interface) plus
+// exportData were removed 2026-07-03 — dead since the M3 Workspace-page
+// deletion (zero callers outside this file).
 
 export async function addTag(fileId: string, tag: string): Promise<{ id: string; tag: string }> {
   const { data } = await api.post(`/api/workspace/files/${fileId}/tags`, { tag });
@@ -704,39 +435,9 @@ export async function getNotes(
   return data;
 }
 
-export async function exportData(
-  fileId: string,
-  format: "csv" | "votable" | "latex" = "csv"
-): Promise<Blob> {
-  const { data } = await api.get(`/api/workspace/export/${fileId}`, {
-    params: { format },
-    responseType: "blob",
-  });
-  return data;
-}
-
-// ── Pipeline Export API ──
-
-export async function exportRunCSV(runId: string): Promise<Blob> {
-  const { data } = await api.get(`/api/export/run/${runId}/csv`, {
-    responseType: "blob",
-  });
-  return data;
-}
-
-export async function exportRunVOTable(runId: string): Promise<Blob> {
-  const { data } = await api.get(`/api/export/run/${runId}/votable`, {
-    responseType: "blob",
-  });
-  return data;
-}
-
-export async function exportRunPDF(runId: string): Promise<Blob> {
-  const { data } = await api.get(`/api/export/run/${runId}/pdf`, {
-    responseType: "blob",
-  });
-  return data;
-}
+// The Pipeline Export API (exportRunCSV / exportRunVOTable / exportRunPDF)
+// was removed 2026-07-03 — dead since the M3 Pipeline-page deletion
+// (zero callers outside this file).
 
 // ── Saved Objects / Bookmarks ──
 
@@ -901,124 +602,16 @@ export async function exportWorkflowPython(
   return data;
 }
 
-// ── Integration API ──
-
-export async function sampStatus(): Promise<{
-  connected: boolean;
-  hub_url: string | null;
-  registered_clients: string[];
-}> {
-  const { data } = await api.get("/api/integration/samp/status");
-  return data;
-}
-
-export async function sampSend(
-  fitsPath: string,
-  messageType = "table.load.fits"
-): Promise<{ sent: boolean }> {
-  const { data } = await api.post("/api/integration/samp/send", {
-    fits_path: fitsPath,
-    message_type: messageType,
-  });
-  return data;
-}
-
-export async function convertToVOTable(fitsPath: string): Promise<Blob> {
-  const { data } = await api.get("/api/integration/votable/convert", {
-    params: { fits_path: fitsPath },
-    responseType: "blob",
-  });
-  return data;
-}
-
-export async function exportJupyter(
-  templateId?: string,
-  runId?: string
-): Promise<Blob> {
-  const { data } = await api.post(
-    "/api/integration/jupyter/export",
-    { template_id: templateId, run_id: runId },
-    { responseType: "blob" }
-  );
-  return data;
-}
-
+// ── Integration API (removed) ──
 // adqlQuery / listADQLServices were removed 2026-06-11 along with their
 // backend routes — dead since the M3 ADQL-page trim (the query route was
 // also unauthenticated). The chat path runs ADQL server-side via the
 // run_adql tool, not through these endpoints.
-
-// ── WCS Grid API ──
-
-export interface WCSGridLine {
-  type: "ra" | "dec";
-  value: number;
-  points: [number, number][];
-}
-
-export interface WCSGridLabel {
-  text: string;
-  x: number;
-  y: number;
-  type: "ra" | "dec";
-}
-
-export interface WCSGridData {
-  has_wcs: boolean;
-  ra_range?: [number, number];
-  dec_range?: [number, number];
-  image_shape?: [number, number];
-  grid_lines: WCSGridLine[];
-  labels: WCSGridLabel[];
-}
-
-export async function getFITSWCS(fitsPath: string, gridSteps = 10): Promise<WCSGridData> {
-  const { data } = await api.get<WCSGridData>("/api/data/fits-wcs", {
-    params: { fits_path: fitsPath, grid_steps: gridSteps },
-  });
-  return data;
-}
-
-// ── Scheduler API ──
-
-export interface ScheduleItem {
-  id: string;
-  name: string;
-  cron_expr: string;
-  enabled: boolean;
-  last_run_at: string | null;
-  next_run_at: string | null;
-  created_at: string | null;
-}
-
-export async function createSchedule(
-  name: string,
-  dag: { nodes: DagNode[]; edges: DagEdge[] },
-  inputDataId: string,
-  cronExpr: string
-): Promise<ScheduleItem> {
-  const { data } = await api.post<ScheduleItem>("/api/scheduler/schedules", {
-    name,
-    dag,
-    input_data_id: inputDataId,
-    cron_expr: cronExpr,
-  });
-  return data;
-}
-
-export async function listSchedules(): Promise<ScheduleItem[]> {
-  const { data } = await api.get<ScheduleItem[]>("/api/scheduler/schedules");
-  return data;
-}
-
-export async function toggleSchedule(scheduleId: string): Promise<{ id: string; enabled: boolean }> {
-  const { data } = await api.patch(`/api/scheduler/schedules/${scheduleId}`);
-  return data;
-}
-
-export async function deleteSchedule(scheduleId: string): Promise<void> {
-  await api.delete(`/api/scheduler/schedules/${scheduleId}`);
-}
+// sampStatus / sampSend / convertToVOTable / exportJupyter, the WCS Grid
+// API (getFITSWCS + WCSGrid* interfaces) and the Scheduler API
+// (createSchedule / listSchedules / toggleSchedule / deleteSchedule +
+// ScheduleItem) were removed 2026-07-03 — dead since the M3 page
+// deletions (zero callers outside this file).
 
 // ── Team API ──
 
@@ -1960,10 +1553,12 @@ export function getPreferredAiProvider(): string | null {
 // untouched.
 function _isResumableStreamDrop(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  // The streamer raises localised "AI 回复中断 …" errors for every
-  // mid-flight drop variant (covered by the if-block at lines 2247-2260).
-  // Anything else is a deliberate failure (auth, model error, etc).
-  return err.message.startsWith("AI 回复中断");
+  // The streamer tags every mid-flight drop variant with
+  // error_class = "stream_drop" (see the empty-stream guard in
+  // _sendChatMessageOnce). Anything else is a deliberate failure (auth,
+  // model error, etc). Keying on the structured flag — not the localized
+  // display text — keeps checkpoint resume working in every locale.
+  return (err as Error & { error_class?: string }).error_class === "stream_drop";
 }
 
 export async function sendChatMessage(
@@ -2297,18 +1892,20 @@ async function _sendChatMessageOnce(
     // so the browser sees `done` without any payload.  Without this guard
     // the caller would render a blank assistant bubble with no explanation.
     if (replyParts.length === 0 && actions.length === 0 && streamedActions.length === 0) {
-      if (sawAnySseEvent) {
-        throw new Error(
-          sawDoneEvent
-            ? "AI 回复中断 — 后端流已结束，但没有返回最终回答或工具结果。请重试；如果反复出现，请开始一个新聊天或缩短问题。"
-            : sawToolActivity
-              ? "AI 回复中断 — 响应流在工具执行过程中被关闭，尚未收到最终回答。请重试；如果工具已经很慢，请缩小查询范围。"
-              : "AI 回复中断 — 响应流只返回了状态更新，尚未进入工具调用或最终回答就被关闭。请重试；如果反复出现，请开始一个新聊天或稍后再试。"
-        );
-      }
-      throw new Error(
-        "AI 回复中断 — 响应流在收到任何内容前被关闭（可能是上游代理超时或网络问题）。请重试；若反复出现，改用更简短的问题或稍后再试。"
-      );
+      // Every drop variant is localized via i18n and tagged with
+      // error_class = "stream_drop" so _isResumableStreamDrop (and any
+      // UI classification) keys on the structured flag, never on the
+      // display text.
+      const dropKey = sawAnySseEvent
+        ? (sawDoneEvent
+          ? "error.stream_drop_done_no_reply"
+          : sawToolActivity
+            ? "error.stream_drop_during_tools"
+            : "error.stream_drop_status_only")
+        : "error.stream_drop_no_bytes";
+      const dropErr = new Error(t(dropKey)) as Error & { error_class?: string };
+      dropErr.error_class = "stream_drop";
+      throw dropErr;
     }
 
     return {
@@ -2327,7 +1924,11 @@ async function _sendChatMessageOnce(
       if (backendReachable) {
         throw new Error(t("error.ai_connection_interrupted"));
       }
-      throw new Error(t("error.backend_unreachable"));
+      // Tag genuine outages with a machine-readable class so the UI can
+      // show outage guidance without matching locale-dependent text.
+      const outageErr = new Error(t("error.backend_unreachable")) as Error & { error_class?: string };
+      outageErr.error_class = "backend_unreachable";
+      throw outageErr;
     }
     throw err;
   }
@@ -2432,71 +2033,9 @@ export async function getBibTeX(bibcode: string): Promise<string> {
   return data.bibtex;
 }
 
-// ── Citation Graph API ──
-
-export interface CitationGraphNode {
-  id: string;
-  title: string;
-  authors: string;
-  year: number;
-  citations: number;
-  in_original_set: boolean;
-}
-
-export interface CitationGraphEdge {
-  source: string;
-  target: string;
-  type: string;
-}
-
-export interface CitationGraphResponse {
-  nodes: CitationGraphNode[];
-  edges: CitationGraphEdge[];
-  stats: { total_nodes: number; total_edges: number };
-  info?: string;
-}
-
-export async function fetchCitationGraph(
-  bibcodes: string[],
-  depth = 1
-): Promise<CitationGraphResponse> {
-  const { data } = await api.post<CitationGraphResponse>(
-    "/api/literature/citation-graph",
-    { bibcodes, depth }
-  );
-  return data;
-}
-
-// ── Cross-match API ──
-
-export interface CrossMatchItem {
-  ra: number;
-  dec: number;
-  name: string;
-}
-
-export interface CrossMatchResult {
-  a_name: string;
-  b_name: string;
-  a_ra: number;
-  a_dec: number;
-  b_ra: number;
-  b_dec: number;
-  separation_arcsec: number;
-}
-
-export async function crossMatch(
-  listA: CrossMatchItem[],
-  listB: CrossMatchItem[],
-  radiusArcsec = 3.0
-): Promise<CrossMatchResult[]> {
-  const { data } = await api.post<CrossMatchResult[]>("/api/crossmatch", {
-    list_a: listA,
-    list_b: listB,
-    radius_arcsec: radiusArcsec,
-  });
-  return data;
-}
+// fetchCitationGraph (Citation Graph API) and crossMatch (Cross-match API)
+// were removed 2026-07-03 with their interfaces — dead since the M3 page
+// deletions (zero callers outside this file).
 
 // ── Operation Log (Feature 6) ──
 
@@ -2604,16 +2143,8 @@ export async function getAlertStats(): Promise<AlertStats> {
   }
 }
 
-export async function searchAlertsCone(ra: number, dec: number, radius_arcsec: number): Promise<TransientAlert[]> {
-  try {
-    const { data } = await api.get<{ alerts?: TransientAlert[] }>("/api/alerts/cone", {
-      params: { ra, dec, radius_arcsec },
-    });
-    return data.alerts ?? [];
-  } catch (err: unknown) {
-    return await normalizeAlertApiError(err, "Failed to search alerts by cone");
-  }
-}
+// searchAlertsCone was removed 2026-07-03 — dead since the M3 page
+// deletions (zero callers outside this file).
 
 // ── Anomaly Explorer API ──
 

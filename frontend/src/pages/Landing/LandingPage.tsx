@@ -7,16 +7,22 @@ import CommentSection from "./CommentSection";
  * 1:1 port of journal-site/index.html #page-home:
  *   hero (eyebrow + title + italic subtitle + lead + 2 CTAs)
  *   5-stat strip
- *   "In this issue" TOC grid (6 cards)
+ *   "In this issue" TOC grid
  *   "Editorial principles" rail (4 numbered principles).
  */
 
-const STATS: { value: string; labelKey: string }[] = [
-  { value: "6",     labelKey: "home.stat.archives" },
-  { value: "1",     labelKey: "home.stat.modules" },
-  { value: "57",    labelKey: "home.stat.tools" },
-  { value: "0",     labelKey: "home.stat.fabricated" },
-  { value: "2,207", labelKey: "home.stat.tests" },
+// 2026-07-03: hand-maintained exact counts ("2,207 automated tests",
+// "57 tools") kept drifting stale on a homepage whose subtitle is
+// "refuses to fabricate". Values are now worded to stay true without
+// per-release maintenance: floors ("1,000+") and design commitments
+// ("0 tolerance") instead of live counts. `valueKey` entries are
+// translated words; `value` entries are locale-neutral figures.
+const STATS: { value?: string; valueKey?: string; labelKey: string }[] = [
+  { valueKey: "home.stat.archives_v", labelKey: "home.stat.archives" },
+  { value: "1",      labelKey: "home.stat.modules" },
+  { valueKey: "home.stat.tools_v", labelKey: "home.stat.tools" },
+  { value: "0",      labelKey: "home.stat.fabricated" },
+  { value: "1,000+", labelKey: "home.stat.tests" },
 ];
 
 interface TocEntry {
@@ -27,7 +33,10 @@ interface TocEntry {
   to?: string;
 }
 
-const TOC: TocEntry[] = [
+// Exported so tests can assert every clickable card targets a live route
+// (M3 deleted /search, /pipeline, /adql, /workspace — see src/routes.ts).
+// eslint-disable-next-line react-refresh/only-export-components -- data constant exported only for the route-liveness regression test; HMR trade-off accepted per eslint.config.js Q3 note
+export const TOC: TocEntry[] = [
   {
     catKey: "home.cat.method",
     title: "A turnoff-based age for NGC 752 from Gaia DR3",
@@ -35,13 +44,9 @@ const TOC: TocEntry[] = [
     meta: "Open-cluster photometry · p. 1",
     to: "/chat",
   },
-  {
-    catKey: "home.cat.instrument",
-    title: "Bidirectional SAMP with TOPCAT and Aladin",
-    body: "Highlight a row in the data browser; TOPCAT scrolls to it. Point at a sky position in Aladin; chat picks up the coordinates.",
-    meta: "VO interoperability · p. 7",
-    to: "/search",
-  },
+  // M3 note (2026-07-03): the "Bidirectional SAMP with TOPCAT and Aladin"
+  // card was removed — it described the deleted data-browser page and no
+  // SAMP surface remains in the UI. Cards must only claim live capabilities.
   {
     catKey: "home.cat.statistics",
     title: "Every MCMC report carries ESS, R̂, HDI, WAIC and LOO",
@@ -52,9 +57,9 @@ const TOC: TocEntry[] = [
   {
     catKey: "home.cat.pipeline",
     title: "Async TAP for heavy cone searches",
-    body: "A 45 s sync fallback triggers pyvo launch_job_async; the job URL is returned so a user can poll it.",
+    body: "Broad ADQL queries (large TOP, wide cones, JOINs) are routed to async TAP automatically, with progress streamed to the chat while the job runs.",
     meta: "Gaia DR3 · p. 19",
-    to: "/adql",
+    to: "/chat",
   },
   {
     catKey: "home.cat.reproducibility",
@@ -100,7 +105,7 @@ export default function LandingPage() {
       <div className="stats-strip">
         {STATS.map((s) => (
           <div key={s.labelKey} className="stat">
-            <div className="stat-n">{s.value}</div>
+            <div className="stat-n">{s.valueKey ? t(s.valueKey) : s.value}</div>
             <div className="stat-l">{t(s.labelKey)}</div>
           </div>
         ))}

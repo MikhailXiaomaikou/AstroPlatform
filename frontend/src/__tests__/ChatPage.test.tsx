@@ -558,6 +558,29 @@ describe("ChatPage", () => {
     expect(screen.getByText(/run_cosmology_likelihood_chain/)).toBeInTheDocument();
   });
 
+  it("surfaces a genuine backend outage as an outage, not payload-too-large advice", async () => {
+    // Regression: ChatPage used to substring-match the English
+    // "Could not reach the backend server" text and rewrite real outages
+    // into "payload too large — start a new chat (clears history)".
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    const outage = new Error(
+      "Could not reach the backend server. Check whether the API service is up.",
+    ) as Error & { error_class?: string };
+    outage.error_class = "backend_unreachable";
+    vi.mocked(sendChatMessage).mockRejectedValueOnce(outage);
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "hello" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText(/Could not reach the backend server/);
+    expect(screen.queryByText(/payload was likely rejected/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/开始新聊天/)).not.toBeInTheDocument();
+  });
+
   it("does not expose provider internals when synthesis fails before tools stream", async () => {
     vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
     vi.mocked(sendChatMessage).mockRejectedValueOnce(

@@ -234,6 +234,67 @@ describe("Auth helper functions", () => {
     getSpy.mockRestore();
   });
 
+  it("sendChatMessage tags genuine outages with error_class backend_unreachable", async () => {
+    // Regression: the backend-down error must carry a machine-readable
+    // error_class so the UI never has to substring-match display text
+    // (which broke on non-English locales and misclassified real outages
+    // as payload-too-large).
+    const { default: api, sendChatMessage } = await import("../api/client");
+
+    const mockFetch = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", mockFetch);
+    // Health probe also fails → the backend is truly down.
+    const getSpy = vi.spyOn(api, "get").mockRejectedValueOnce(new Error("health down"));
+
+    const err = await sendChatMessage([{ role: "user", content: "hello" }])
+      .then(() => null, (e: unknown) => e as Error & { error_class?: string });
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err?.message).toContain("Could not reach the backend server");
+    expect(err?.error_class).toBe("backend_unreachable");
+
+    vi.unstubAllGlobals();
+    getSpy.mockRestore();
+  });
+
+  it("sendChatMessage raises localized stream-drop errors with error_class stream_drop and still resumes once", async () => {
+    // Regression: stream-drop errors were hardcoded Chinese for every
+    // locale, and the checkpoint-resume retry pattern-matched the Chinese
+    // prefix "AI 回复中断". The retry must key on error_class instead, and
+    // the default (en) locale must see an English message.
+    const { sendChatMessage } = await import("../api/client");
+
+    const statusOnlyBody = 'data: {"type":"status","message":"Thinking..."}\n\n';
+    const encoder = new TextEncoder();
+    const makeStream = () =>
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(statusOnlyBody));
+          controller.close();
+        },
+      });
+
+    // Both the first attempt and the resume retry drop.
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, body: makeStream() })
+      .mockResolvedValueOnce({ ok: true, body: makeStream() });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const err = await sendChatMessage([{ role: "user", content: "hello" }])
+      .then(() => null, (e: unknown) => e as Error & { error_class?: string });
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err?.error_class).toBe("stream_drop");
+    // jsdom default locale is en — the user-facing text must be English.
+    expect(err?.message).toMatch(/AI reply interrupted/);
+    // The single resume retry still fires, with the resume hint attached.
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const retryBody = JSON.parse(String(mockFetch.mock.calls[1][1]?.body || "{}"));
+    expect(retryBody.context.resume_from_session).toBe(true);
+
+    vi.unstubAllGlobals();
+  });
+
   it("sendChatMessage distinguishes status-only stream breaks from no-byte breaks", async () => {
     const { sendChatMessage } = await import("../api/client");
 
@@ -256,7 +317,7 @@ describe("Auth helper functions", () => {
 
     await expect(
       sendChatMessage([{ role: "user", content: "status-only stream regression" }])
-    ).rejects.toThrow("响应流只返回了状态更新");
+    ).rejects.toThrow("only returned status updates");
 
     vi.unstubAllGlobals();
   });
@@ -588,32 +649,19 @@ describe("API function exports", () => {
   it("exports all expected API functions", async () => {
     const client = await import("../api/client");
 
+    // 2026-07-03: the M3-dead exports (pipeline / scheduler / SAMP /
+    // batch-search / WCS-grid...) were deleted from client.ts; only
+    // functions with live callers are pinned here.
     const expectedFunctions = [
       "searchData",
       "fetchObject",
       "getFITSHeader",
       "getFITSSpectrum",
-      "getFITSWCS",
-      "getNodeTypes",
-      "getTemplates",
-      "runPipeline",
-      "saveTemplateVersion",
-      "getTemplateVersions",
-      "getTemplateDiff",
-      "exportRunCSV",
-      "exportRunVOTable",
-      "exportRunPDF",
       "inviteTeamMember",
       "getTeamMembers",
       "sharePipeline",
       "getSharedPipelines",
       "addPipelineComment",
-      "createSchedule",
-      "listSchedules",
-      "toggleSchedule",
-      "deleteSchedule",
-      "batchSearch",
-      "sampStatus",
     ] as const;
 
     for (const fnName of expectedFunctions) {

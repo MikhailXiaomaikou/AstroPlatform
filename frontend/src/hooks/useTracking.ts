@@ -1,11 +1,12 @@
 import { useCallback, useMemo } from "react";
+// Single source of truth for the backend base URL — do not re-implement
+// the fallback here, or tracking silently posts to a stale host when the
+// backend moves (fetch errors below are swallowed by design).
+import { API_BASE_URL } from "../api/client";
 
 const SESSION_KEY = "astro_tracking_session_id";
 const PAGE_KEY = "astro_current_page";
 const EVENT_COUNT_KEY = "astro_tracking_event_count";
-const API_BASE =
-  import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV || import.meta.env.MODE === "test" ? "http://localhost:8000" : "https://astro-backend-h4x1.onrender.com");
 
 function getOrCreateSessionId(): string {
   const existing = sessionStorage.getItem(SESSION_KEY);
@@ -43,7 +44,7 @@ export function useTracking() {
     const payload = buildPayload(eventType, data, sessionId);
     incrementEventCount();
 
-    fetch(`${API_BASE}/api/events/track`, {
+    fetch(`${API_BASE_URL}/api/events/track`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

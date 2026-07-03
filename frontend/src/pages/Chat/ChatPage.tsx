@@ -4276,15 +4276,16 @@ export default function ChatPage() {
         // R11-NEW-1: error_class is propagated from the 'error' SSE event in the stream (client.ts attaches it to the Error instance).
         errorClass = (err as Error & { error_class?: string }).error_class;
       }
-      if (errorDetail.includes("Could not reach the backend server")) {
-        errorDetail = "The request payload was likely rejected before the app server handled it. This usually happens when the previous tool results made the second-round chat request too large.";
-        errorClass = errorClass || "payload_too_large";
-      }
+      // Classification is by structured error_class ONLY (backend SSE
+      // error events set e.g. "payload_too_large"; client.ts tags genuine
+      // outages "backend_unreachable"). Never match on display text — it
+      // is locale-dependent, and rewriting a real outage into payload
+      // advice told users to clear their history during downtime.
       // R11-NEW-1: When the payload is too large, add a "Start new chat" button to the
       // error bubble. Lightweight approach: append guidance text to the error message tail
       // and surface the button via DisplayMessage._action_hint, letting the UI render it.
       const hint = errorClass === "payload_too_large"
-        ? "\n\n👉 点下方按钮开始新聊天 (会清空当前会话的历史):"
+        ? `\n\n${t("chat.new_chat_hint")}`
         : "";
       const hasStreamedToolResults = streamedActions.length > 0;
       const errorMsg: DisplayMessage = {

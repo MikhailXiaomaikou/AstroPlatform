@@ -61,12 +61,12 @@ const FAQ_DATA: FaqItem[] = [
   },
   {
     q: {
-      en: "What's the difference between Quick Search and Advanced Search?",
-      zh: "快速搜索和高级搜索有什么区别？",
+      en: "How do I search for objects?",
+      zh: "如何搜索天体？",
     },
     a: {
-      en: "Quick Search resolves object names (e.g. \"M31\") or coordinates across all connected databases. Advanced Search lets you filter by scientific criteria like redshift range, spectral type, object type, and magnitude limits.",
-      zh: "快速搜索通过天体名称（如 \"M31\"）或坐标在所有数据库中搜索。高级搜索允许按红移范围、光谱型、天体类型和星等限制等科学条件筛选。",
+      en: "Ask the AI Assistant in plain language. It resolves object names (e.g. \"M31\") or coordinates across the connected databases and returns provenance-tagged result cards that you can download as CSV or VOTable.",
+      zh: "用自然语言问 AI 助手即可。它可以按天体名称（如 \"M31\"）或坐标在已接入的数据库中检索，返回带溯源标记的结果卡片，并可下载为 CSV 或 VOTable。",
     },
   },
   {
@@ -85,8 +85,8 @@ const FAQ_DATA: FaqItem[] = [
       zh: "如何上传自己的 FITS 文件？",
     },
     a: {
-      en: "Drag and drop a FITS file into the AI chat or use the Data Browser's \"My Files\" tab. Uploaded files can be analyzed by the AI or used as pipeline inputs.",
-      zh: "将 FITS 文件拖放到 AI 聊天窗口中，或使用数据浏览器的「我的文件」选项卡。上传的文件可以由 AI 分析或用作流水线输入。",
+      en: "Drag and drop a FITS or CSV file into the AI chat. Uploaded files can be analyzed by the AI in the sandboxed Python environment.",
+      zh: "将 FITS 或 CSV 文件拖放到 AI 聊天窗口中。上传的文件可以由 AI 在沙盒 Python 环境中分析。",
     },
   },
   {
@@ -95,8 +95,8 @@ const FAQ_DATA: FaqItem[] = [
       zh: "什么是 ADQL，什么时候应该使用它？",
     },
     a: {
-      en: "ADQL (Astronomical Data Query Language) is an SQL-like language for querying astronomical databases via TAP services. Use it when you need complex queries with joins, filters, or aggregations that go beyond simple name/coordinate searches.",
-      zh: "ADQL（天文数据查询语言）是一种类似 SQL 的语言，用于通过 TAP 服务查询天文数据库。当您需要超越简单名称/坐标搜索的复杂查询（如联接、筛选或聚合）时使用。",
+      en: "ADQL (Astronomical Data Query Language) is an SQL-like language for querying astronomical databases via TAP services. Use it when you need complex queries with joins, filters, or aggregations that go beyond simple name/coordinate searches — just ask the AI Assistant to write and run the query for you.",
+      zh: "ADQL（天文数据查询语言）是一种类似 SQL 的语言，用于通过 TAP 服务查询天文数据库。当您需要超越简单名称/坐标搜索的复杂查询（如联接、筛选或聚合）时使用——直接让 AI 助手为您编写并运行查询即可。",
     },
   },
   {
@@ -261,8 +261,8 @@ function QuickStartTab({ lang }: { lang: Lang }) {
   const steps: { icon: string; en: string; zh: string }[] = [
     {
       icon: "1",
-      en: "Search for any astronomical object by name or coordinates in the Data Browser. Try \"M31\" or \"10.68 41.27\".",
-      zh: "在数据浏览器中通过名称或坐标搜索任何天体。试试 \"M31\" 或 \"10.68 41.27\"。",
+      en: "Ask the AI Assistant to look up any astronomical object by name or coordinates. Try \"M31\" or \"10.68 41.27\" — results come back as tool cards with provenance.",
+      zh: "让 AI 助手按名称或坐标查询任何天体。试试 \"M31\" 或 \"10.68 41.27\"——结果会以带溯源信息的工具卡片返回。",
     },
     {
       icon: "2",
@@ -331,27 +331,29 @@ function QuickStartTab({ lang }: { lang: Lang }) {
           gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
         }}
       >
+        {/* M3 (2026-05-18) removed the Data Browser / ADQL / Pipeline pages;
+            these cards describe the chat-driven workflows that replaced them. */}
         <FeatureCard
-          title={tx("Data Browser", "数据浏览", lang)}
+          title={tx("Archive Search", "档案库检索", lang)}
           desc={tx(
-            "Quick Search for object names or coordinates. Use Sky View for Aladin Lite, Fetch FITS for archive data, or Open in Pipeline to build workflows from selected rows.",
-            "通过天体名称或坐标快速搜索。使用天空视图打开 Aladin Lite，获取 FITS 获取存档数据，或在流水线中打开以从选定行构建工作流。",
+            "Ask the AI Assistant to search the connected archives by object name or coordinates. Results return as tool cards with provenance, and can be downloaded as CSV or VOTable.",
+            "让 AI 助手按天体名称或坐标检索已接入的档案库。结果以带溯源信息的工具卡片返回，可下载为 CSV 或 VOTable。",
             lang,
           )}
         />
         <FeatureCard
           title="ADQL"
           desc={tx(
-            "Run TAP queries, export CSV or Notebook, or send queries and results to the AI Assistant. In Python, use get_adql_results() for the latest rows or get_adql_result_sets() for multi-query history.",
-            "运行 TAP 查询，导出 CSV 或 Notebook，或将查询和结果发送到 AI 助手。在 Python 中，最新结果用 get_adql_results()，多次查询历史用 get_adql_result_sets()。",
+            "Ask the assistant to write and run ADQL/TAP queries; broad queries fall back to async TAP automatically. In Python, use get_adql_results() for the latest rows or get_adql_result_sets() for multi-query history.",
+            "让助手编写并运行 ADQL/TAP 查询；较大的查询会自动转入异步 TAP。在 Python 中，最新结果用 get_adql_results()，多次查询历史用 get_adql_result_sets()。",
             lang,
           )}
         />
         <FeatureCard
-          title={tx("Pipeline", "流水线", lang)}
+          title={tx("Papers", "论文草稿", lang)}
           desc={tx(
-            "Build processing graphs visually, run them asynchronously, and export as CSV, VOTable, or PDF. Ask AI About This Pipeline opens the assistant with graph context.",
-            "可视化构建处理图，异步运行，导出为 CSV、VOTable 或 PDF。「询问 AI」功能会带上图上下文打开助手。",
+            "Turn a chat session into a paper draft: the session's analysis is validated first, then a LaTeX draft with citations is generated and managed on the Papers page.",
+            "把聊天会话变成论文草稿：先对会话中的分析做校验，然后生成带引用的 LaTeX 草稿，在论文页面管理。",
             lang,
           )}
         />
@@ -648,13 +650,10 @@ interface Shortcut {
   desc: { en: string; zh: string };
 }
 
+// M3 (2026-05-18): the Pipeline-editor Undo/Redo rows were removed together
+// with the Pipeline page — do not document shortcuts for deleted surfaces.
 const SHORTCUTS: Shortcut[] = [
   { keys: "Cmd/Ctrl + K", desc: { en: "Open command palette", zh: "打开命令面板" } },
-  { keys: "Cmd/Ctrl + Z", desc: { en: "Undo (Pipeline editor)", zh: "撤销（流水线编辑器）" } },
-  {
-    keys: "Cmd/Ctrl + Shift + Z / Cmd/Ctrl + Y",
-    desc: { en: "Redo (Pipeline editor)", zh: "重做（流水线编辑器）" },
-  },
   { keys: "Escape", desc: { en: "Close dialogs, panels, and command palette", zh: "关闭对话框、面板和命令面板" } },
   {
     keys: "Enter",
