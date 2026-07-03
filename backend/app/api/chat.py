@@ -196,6 +196,10 @@ class ChatAction(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     actions: list[dict] = []
+    # M7 follow-through (audit 2026-07-03): true when the agent loop exhausted
+    # its iteration budget while the model still wanted to continue — the
+    # reply is a truncated multi-step workflow, not a complete answer.
+    hit_iteration_cap: bool = False
 
 
 def _normalize_messages(messages: list[ChatMessage]) -> list[dict]:
@@ -606,6 +610,51 @@ def _is_tool_inventory_request(message: str) -> bool:
     return any(marker in msg for marker in zh_markers + en_markers)
 
 
+_SSE_FIELD_BIBCODES_PER_COLUMN = 50
+
+
+def _bounded_provenance_for_sse(provenance: Any) -> Any:
+    """Bound the provenance block for the SSE wire WITHOUT dropping lineage.
+
+    Audit 2026-07-03: slimming used to drop the entire provenance block
+    (datasets, field bibcodes, reproducibility envelope) from any tool result
+    over the SSE size cap — exactly the large archive queries a cosmologist
+    needs lineage for, and the loss was persisted via /sessions/save.  The
+    only piece that scales with row count is `field_bibcodes.columns` (one
+    entry per row), so dedupe each column's list (order-preserving) and cap
+    it; everything else (datasets are already deduped, the reproducibility
+    envelope and coverage are small fixed dicts) passes through unchanged.
+    Never mutates the input — the same dict is shared with the actions list
+    and session persistence.
+    """
+    if not isinstance(provenance, dict):
+        return provenance
+    slim_prov = dict(provenance)
+    fb = slim_prov.get("field_bibcodes")
+    if isinstance(fb, dict) and isinstance(fb.get("columns"), dict):
+        fb = dict(fb)
+        bounded_columns: dict[str, Any] = {}
+        truncated: dict[str, int] = {}
+        for column, values in fb["columns"].items():
+            if not isinstance(values, list):
+                bounded_columns[column] = values
+                continue
+            deduped = list(dict.fromkeys(str(v) for v in values))
+            if len(deduped) > _SSE_FIELD_BIBCODES_PER_COLUMN:
+                truncated[str(column)] = (
+                    len(deduped) - _SSE_FIELD_BIBCODES_PER_COLUMN
+                )
+                deduped = deduped[:_SSE_FIELD_BIBCODES_PER_COLUMN]
+            bounded_columns[column] = deduped
+        fb["columns"] = bounded_columns
+        if truncated:
+            # Honest marker: N distinct bibcodes were cut from the wire copy
+            # (the full list stays in the server-side tool result).
+            fb["columns_truncated_for_stream"] = truncated
+        slim_prov["field_bibcodes"] = fb
+    return slim_prov
+
+
 def _slim_tool_result_for_sse(result: Any, *, max_bytes: int = 8000) -> Any:
     """Shrink large tool results before putting them on the live SSE wire.
 
@@ -632,8 +681,18 @@ def _slim_tool_result_for_sse(result: Any, *, max_bytes: int = 8000) -> Any:
         "__tool_status__", "__do_not_claim__",
         "__message_to_model__",
         "row_count", "columns", "meta",
+        # Audit 2026-07-03: the reproducibility envelope (run_id / query_hash
+        # / archive_version / seed) is small and load-bearing for the
+        # provenance UI — it must survive slimming.
+        "reproducibility",
     }
     slim = {k: src[k] for k in keep if k in src}
+    # Audit 2026-07-03: preserve the data-lineage block (datasets, field
+    # bibcodes, reproducibility, coverage); only its per-row bibcode lists
+    # are bounded.  Dropping it blanked the Data Sources panel for exactly
+    # the >8 KB archive results that most need lineage.
+    if isinstance(src.get("provenance"), dict):
+        slim["provenance"] = _bounded_provenance_for_sse(src["provenance"])
     status = str(src.get("analysis_status") or "")
 
     if status == "RESEARCH_PLAN_READY" and isinstance(src.get("research_plan"), dict):
@@ -1117,114 +1176,19 @@ async def chat_message_stream(
                 # success / exit_code / backend / duration_ms). The UI fell back to
                 # the "subprocess crashed" placeholder. When a final tool_result was
                 # rejected upstream as payload-too-large, there was no diagnostic
-                # information at all. Now we preserve diagnostic fields unchanged and
-                # only replace the large-volume fields (rows / data / figures /
-                # variables / stdout) with preview/offloaded markers.
+                # information at all. Diagnostic fields are preserved and only the
+                # large-volume fields (rows / data / figures / variables / stdout)
+                # are replaced with preview/offloaded markers.
+                #
+                # Audit 2026-07-03: this block used to be an inline COPY of
+                # _slim_tool_result_for_sse; the copies drifted (this one
+                # dropped the provenance block).  Both wire paths now share
+                # the module-level function.
                 if evt.get("type") == "tool_result":
-                    try:
-                        raw = json.dumps(evt.get("result"), default=str)
-                        if len(raw) > 8000 and isinstance(evt.get("result"), dict):
-                            src = dict(evt["result"])
-                            # Diagnostic keys that must always be preserved (even when total size exceeds 8 KB).
-                            _KEEP = {
-                                "success", "error", "error_class",
-                                "stderr", "stderr_note", "traceback",
-                                "exit_code", "backend", "duration_ms",
-                                "mode", "auto_escalated_mode", "note",
-                                "analysis_status", "data_origin",
-                                "__tool_status__", "__do_not_claim__",
-                                "__message_to_model__",
-                                "row_count", "columns", "meta",
-                            }
-                            slim = {k: src[k] for k in _KEEP if k in src}
-                            # Research-mode cards are intentionally user-visible:
-                            # plan/matrix/evidence previews must keep the fields
-                            # their frontend panels need, even when the complete
-                            # tool payload is too large for a live SSE frame.
-                            # The final consolidated event may arrive later with
-                            # the full result, but local CLI/browser streams should
-                            # still show useful numbers immediately.
-                            status = str(src.get("analysis_status") or "")
-                            if status == "RESEARCH_PLAN_READY" and isinstance(src.get("research_plan"), dict):
-                                slim["research_plan"] = src["research_plan"]
-                                for key in ("plan_id", "dataset_count", "matrix_size", "publication_ready"):
-                                    if key in src:
-                                        slim[key] = src[key]
-                            if status.startswith("RESEARCH_MATRIX") and isinstance(src.get("matrix"), list):
-                                compact_cells = []
-                                for cell in src.get("matrix", [])[:10]:
-                                    if not isinstance(cell, dict):
-                                        continue
-                                    result_obj = cell.get("result") if isinstance(cell.get("result"), dict) else {}
-                                    params = result_obj.get("parameters") if isinstance(result_obj, dict) and isinstance(result_obj.get("parameters"), dict) else {}
-                                    diagnostics = (
-                                        result_obj.get("chain_diagnostics")
-                                        if isinstance(result_obj, dict) and isinstance(result_obj.get("chain_diagnostics"), dict)
-                                        else {}
-                                    )
-                                    compact_cells.append({
-                                        "label": cell.get("label"),
-                                        "model": cell.get("model"),
-                                        "dataset_keys": cell.get("dataset_keys"),
-                                        "publication_ready": cell.get("publication_ready"),
-                                        "runnable": cell.get("runnable"),
-                                        "execution_level": cell.get("execution_level"),
-                                        "warnings": cell.get("warnings"),
-                                        "result": {
-                                            "publication_ready": result_obj.get("publication_ready") if isinstance(result_obj, dict) else None,
-                                            "parameters": {
-                                                name: params.get(name)
-                                                for name in ("H0", "omegam", "sigma8", "S8", "rd", "H0_rd")
-                                                if isinstance(params, dict) and name in params
-                                            },
-                                            "chain_diagnostics": diagnostics,
-                                            "datasets_not_run": result_obj.get("datasets_not_run") if isinstance(result_obj, dict) else None,
-                                        },
-                                    })
-                                slim["matrix"] = compact_cells
-                                for key in ("matrix_size", "ready_cells", "publication_ready", "claim_scope"):
-                                    if key in src:
-                                        slim[key] = src[key]
-                            if status == "EVIDENCE_GRAPH_READY" and isinstance(src.get("evidence_graph"), dict):
-                                graph = src["evidence_graph"]
-                                slim["evidence_graph"] = {
-                                    "claimable_parameters": graph.get("claimable_parameters"),
-                                    "supported_claims": graph.get("supported_claims"),
-                                    "unsupported_claims": graph.get("unsupported_claims"),
-                                }
-                                if "claimable_parameters" in src:
-                                    slim["claimable_parameters"] = src["claimable_parameters"]
-                            # Large-volume fields: rows / data / figures / variables /
-                            # stdout are replaced with a marker + first 2000-char preview.
-                            for big_key in (
-                                "rows", "data", "figures",
-                                "variables", "variable_types", "stdout",
-                            ):
-                                if big_key in src:
-                                    try:
-                                        v = src[big_key]
-                                        if isinstance(v, (list, tuple)):
-                                            slim[big_key + "__preview__"] = {
-                                                "n_items": len(v),
-                                                "truncated": True,
-                                            }
-                                        elif isinstance(v, dict):
-                                            slim[big_key + "__preview__"] = {
-                                                "n_keys": len(v),
-                                                "truncated": True,
-                                            }
-                                        elif isinstance(v, str) and len(v) > 2000:
-                                            slim[big_key] = v[:2000] + "…[truncated]"
-                                        else:
-                                            slim[big_key] = v
-                                    except Exception:
-                                        pass
-                            slim["__preview__"] = True
-                            slim["__original_size__"] = len(raw)
-                            evt = dict(evt)
-                            evt["result"] = slim
-                    except (TypeError, ValueError):
-                        pass
+                    slimmed_result = _slim_tool_result_for_sse(evt.get("result"))
+                    if slimmed_result is not evt.get("result"):
+                        evt = dict(evt)
+                        evt["result"] = slimmed_result
                 await event_queue.put(evt)
 
             work_task = asyncio.create_task(
@@ -1282,7 +1246,11 @@ async def chat_message_stream(
             response = work_task.result()
 
             if response["reply"]:
-                yield f"data: {json.dumps({'type': 'text', 'content': response['reply']})}\n\n"
+                # M7 follow-through (audit 2026-07-03): hit_iteration_cap was
+                # computed "so the UI can surface it" and then dropped at this
+                # boundary — thread it onto the final text frame so a truncated
+                # multi-step workflow is distinguishable from a complete answer.
+                yield f"data: {json.dumps({'type': 'text', 'content': response['reply'], 'hit_iteration_cap': bool(response.get('hit_iteration_cap', False))})}\n\n"
             # Keep emitting the final consolidated tool_result events too —
             # downstream clients that only know the old protocol still work,
             # and the live-stream tool_result events above carry a __preview__
@@ -1682,11 +1650,40 @@ def _user_requested_synthetic_demo(messages: list[dict] | None) -> bool:
     )
 
 
+def _abstention_attrs_without_numeric_claims(attrs: dict) -> tuple[dict, list[str]]:
+    """R2 hard line for the abstention path (audit 2026-07-03).
+
+    The <tools_returned_nothing/> card path skips the claim validator by
+    design, but the tag's `rationale` / `suggested_next_step` (and any other
+    attribute) are MODEL-authored free text — a fabricated number there would
+    ship under the '✓ Honest reply' banner on a zero-data turn (Pleiades
+    F1.1 class: rationale="...the distance is 136.2 pc...").  Drop every
+    attribute that contains a numeric claim; the platform-authored card prose
+    renders without it.  extract_claims is deterministic (no LLM call).
+
+    Returns (scrubbed copy, dropped attribute names).
+    """
+    from app.services.claim_validator import extract_claims
+
+    clean: dict = {}
+    dropped: list[str] = []
+    for key, value in (attrs or {}).items():
+        if isinstance(value, str) and value.strip() and extract_claims(value):
+            dropped.append(key)
+            continue
+        clean[key] = value
+    return clean, dropped
+
+
 def _render_abstention_card(attrs: dict, reason: str) -> str:
     """F2.3: canonical Markdown card rendered from the abstention tag.
     The model does NOT write this prose — we do, so we control the
     quality and tone.
     """
+    # Enforce the docstring at the choke point: attribute text is
+    # model-authored, so numeric claims must never reach the card
+    # (audit 2026-07-03; callers may pass raw parsed attrs).
+    attrs, numeric_attrs_dropped = _abstention_attrs_without_numeric_claims(attrs)
     failed = (attrs.get("failed_tools") or "").strip()
     empty = (attrs.get("empty_tools") or "").strip()
     rationale = (attrs.get("rationale") or "").strip()
@@ -1717,6 +1714,12 @@ def _render_abstention_card(attrs: dict, reason: str) -> str:
             "No numerical claims are made because no tool produced data "
             "this turn.  Please rephrase your question, provide target "
             "values explicitly, or try the suggested next step above."
+        )
+    if numeric_attrs_dropped:
+        lines.append("")
+        lines.append(
+            "_Model-supplied details were withheld: they contained numeric "
+            "claims that no tool produced this turn._"
         )
     return "\n".join(lines)
 
@@ -5654,6 +5657,19 @@ async def _run_agent_loop(
     # and render a canonical abstention card.
     abstention_payload = _parse_abstention_tag(clean_reply)
     if abstention_payload is not None:
+        # R2 hard line (audit 2026-07-03): this branch skips the claim
+        # validator, so scrub model-authored numeric claims out of the
+        # attributes BEFORE they reach the card and the honest_abstention
+        # SSE payload (the frontend renders both).
+        abstention_payload, _abst_dropped_attrs = (
+            _abstention_attrs_without_numeric_claims(abstention_payload)
+        )
+        if _abst_dropped_attrs:
+            logger.warning(
+                "Abstention tag from %s carried numeric claims in %s — "
+                "attribute(s) withheld from the honest-abstention card",
+                agent_name, _abst_dropped_attrs,
+            )
         reason = _classify_abstention_reason(all_tool_results)
         try:
             from app.observability.metrics import record_counter
@@ -5662,6 +5678,11 @@ async def _run_agent_loop(
                 agent=agent_name, reason=reason,
             )
             record_counter("structured_abstention_emitted_total", 1.0, agent=agent_name)
+            if _abst_dropped_attrs:
+                record_counter(
+                    "abstention_numeric_attrs_withheld_total", 1.0,
+                    agent=agent_name,
+                )
         except Exception:
             pass
         logger.info(
@@ -5763,15 +5784,26 @@ async def _run_agent_loop(
     # the reply does not trip the load-bearing hard gates (zero-data
     # quantitative block + blocking citation violations); otherwise run the
     # full gate regardless of how the prompt was phrased.
+    #
+    # Audit 2026-07-03: the re-check above was ASYMMETRIC — on a data-bearing
+    # turn zero_data_but_quantitative returns [] (the turn is not empty) and
+    # the citation check ignores bare numbers, so "which tools ... also run
+    # the chain and report the constraints" skipped validate_claims entirely
+    # and a fabricated number could ship.  The skip is now only honored on
+    # turns with NO claimable tool data (pure inventory answers); any turn
+    # where a tool produced real payload runs the full gate stack.
     skip_gate = skip_claim_gate_for_meta
     if skip_gate and clean_reply.strip():
         from app.services.claim_validator import (
+            is_empty_turn as _iet_meta,
             zero_data_but_quantitative as _zdq_meta,
             provenance_citation_violations as _pcv_meta,
             citation_violations_should_block as _cvsb_meta,
         )
-        if _zdq_meta(clean_reply, all_tool_results) or _cvsb_meta(
-            _pcv_meta(clean_reply, all_tool_results)
+        if (
+            not _iet_meta(all_tool_results)
+            or _zdq_meta(clean_reply, all_tool_results)
+            or _cvsb_meta(_pcv_meta(clean_reply, all_tool_results))
         ):
             skip_gate = False
     if clean_reply.strip() and not skip_gate:
@@ -6378,6 +6410,8 @@ async def _run_agent_loop(
                 _nc_draft = clean_reply
                 _nc_regen_before = fabrication_stats["regenerations"]
                 _nc_summary_used = False
+                _nc_regen_call_failed = False
+                _nc_block_reason = "regen_exhausted"
                 for attempt in range(2):
                     validation = validate_claims(clean_reply, all_tool_results)
                     if validation.ok:
@@ -6421,13 +6455,25 @@ async def _run_agent_loop(
                         regenerated = str(regen.get("content", "") or "").strip()
                     except Exception as exc:
                         logger.warning("Regeneration call failed: %s", exc)
+                        _nc_regen_call_failed = True
                         break
                     if not regenerated:
+                        _nc_regen_call_failed = True
                         break
                     clean_reply = regenerated
                     text_parts.append("\n[regenerated]\n" + regenerated)
-                else:
-                    # Two attempts did not cure it — block the reply entirely.
+                # Fail CLOSED (audit 2026-07-03).  Reaching here with a not-ok
+                # last validation means either the two regen attempts did not
+                # cure it (loop exhausted; the second rewrite was never
+                # validated in-loop) or the regen call raised / returned empty
+                # (`break` above).  The break paths previously shipped the
+                # KNOWN-uncited draft unmarked, with only a telemetry event
+                # (`regen_failed_shipped`) — a transient provider 429/timeout
+                # turned the flagship gate off.  Now every exit re-validates
+                # and blocks exactly like the regen-exhausted case.
+                if not validation.ok:
+                    if _nc_regen_call_failed:
+                        _nc_block_reason = "regen_call_failed"
                     validation = validate_claims(clean_reply, all_tool_results)
                     if not validation.ok:
                         tool_grounded_summary = (
@@ -6451,19 +6497,19 @@ async def _run_agent_loop(
                                         "tool_grounded_regeneration_total",
                                         1.0,
                                         agent=agent_name,
-                                        reason="regen_exhausted",
+                                        reason=_nc_block_reason,
                                     )
                                 except Exception:
                                     pass
                         if not validation.ok:
                             try:
                                 from app.observability.metrics import record_counter
-                                record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason="regen_exhausted")
+                                record_counter("fabrication_blocked_total", 1.0, agent=agent_name, reason=_nc_block_reason)
                             except Exception:
                                 pass
                             logger.error(
-                                "Fabrication gate BLOCKED reply from %s (%d uncited)",
-                                agent_name, len(validation.uncited),
+                                "Fabrication gate BLOCKED reply from %s (%d uncited, %s)",
+                                agent_name, len(validation.uncited), _nc_block_reason,
                             )
                             # Stage 6 P0: keep AI's regen-exhausted narrative
                             # so the user sees methodology / caveats, not just
@@ -6474,25 +6520,22 @@ async def _run_agent_loop(
                             fabrication_stats["blocked"] = True
                 if fabrication_stats["blocked"]:
                     await _gate_event(
-                        "numeric_claims", "blocked", reason="regen_exhausted",
+                        "numeric_claims", "blocked", reason=_nc_block_reason,
                         claims=validation.uncited, universe_size=validation.universe_size,
                         draft=_nc_draft, final=clean_reply,
                     )
                 elif _nc_summary_used:
                     await _gate_event(
-                        "numeric_claims", "downgraded_summary", reason="regen_exhausted",
+                        "numeric_claims", "downgraded_summary", reason=_nc_block_reason,
                         draft=_nc_draft, final=clean_reply,
                     )
                 elif fabrication_stats["regenerations"] > _nc_regen_before:
-                    # `validation` holds the LAST validate_claims result: ok
-                    # means the loop broke clean after a rewrite; not-ok means
-                    # the regen call failed/returned empty and the unvalidated
-                    # draft shipped (pre-existing gate semantics) — the single
-                    # most interesting triage case, so label it distinctly.
+                    # `validation` is ok on every path that reaches here
+                    # un-blocked (the fail-closed re-validation above blocks
+                    # all not-ok exits, including regen call failures that
+                    # previously shipped the draft as `regen_failed_shipped`).
                     await _gate_event(
-                        "numeric_claims",
-                        "regenerated_clean" if validation.ok else "regen_failed_shipped",
-                        claims=None if validation.ok else validation.uncited,
+                        "numeric_claims", "regenerated_clean",
                         universe_size=validation.universe_size,
                         draft=_nc_draft, final=clean_reply,
                     )
@@ -7237,7 +7280,11 @@ async def chat_message(
             chat_session_id=chat_session_id,
             workflow_budget=workflow_budget,
         )
-        return ChatResponse(reply=response["reply"], actions=response["actions"])
+        return ChatResponse(
+            reply=response["reply"],
+            actions=response["actions"],
+            hit_iteration_cap=bool(response.get("hit_iteration_cap", False)),
+        )
 
     except InferenceError as e:
         logger.error("Inference router error: %s", e)
