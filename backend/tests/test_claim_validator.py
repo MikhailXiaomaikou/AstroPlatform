@@ -15,7 +15,6 @@ from app.services.claim_validator import (
     build_regeneration_prompt,
     build_zero_data_qualitative_regeneration_prompt,
     extract_claims,
-    literature_prior_violations,
     validate_claims,
 )
 
@@ -1036,6 +1035,95 @@ def test_unclassified_literature_violations_blocks_cited_off_topic_paper():
     assert len(violations) == 1
     assert violations[0].kind == "cited_off_topic_paper"
     assert violations[0].match_text == "2024A&A...678A.123S"
+
+
+def test_unclassified_literature_violations_blocks_uncited_arxiv_fallback_paper():
+    """2026-07-03: the arXiv fallback of search_literature identifies papers
+    as "arXiv:<id>" in the bibcode field (api/citations.py) instead of an ADS
+    bibcode. Citing such a paper by arXiv id must hit the same Stage 6
+    classification barrier as the bibcode form — previously it bypassed the
+    gate entirely (BIBCODE_RE never matches the arXiv form)."""
+    from app.services.claim_validator import unclassified_literature_violations
+
+    tool_results = [
+        {
+            "tool": "search_literature",
+            "result": {
+                "results": [
+                    {
+                        "bibcode": "arXiv:2404.03002",
+                        "title": "DESI DR1 BAO cosmology",
+                        "arxiv_url": "http://arxiv.org/abs/2404.03002",
+                    },
+                ],
+            },
+        },
+        # no classify_literature_relevance
+    ]
+    reply = "Based on arXiv:2404.03002, the BAO measurement gives H0 = 67."
+    violations = unclassified_literature_violations(reply, tool_results)
+    assert len(violations) == 1
+    assert violations[0].kind == "unclassified_literature"
+    assert violations[0].match_text == "arXiv:2404.03002"
+
+
+def test_unclassified_literature_violations_passes_arxiv_fallback_after_classify():
+    """Classified Direct under the same "arXiv:<id>" identifier -> citable."""
+    from app.services.claim_validator import unclassified_literature_violations
+
+    tool_results = [
+        {
+            "tool": "search_literature",
+            "result": {
+                "results": [{"bibcode": "arXiv:2404.03002", "title": "DESI DR1 BAO"}],
+            },
+        },
+        {
+            "tool": "classify_literature_relevance",
+            "result": {
+                "classifications": [
+                    {
+                        "bibcode": "arXiv:2404.03002",
+                        "relevance": "Direct",
+                        "reason": "DESI DR1 BAO directly answers the question",
+                    },
+                ],
+            },
+        },
+    ]
+    reply = "Based on arXiv:2404.03002, the BAO measurement gives H0 = 67."
+    assert unclassified_literature_violations(reply, tool_results) == []
+
+
+def test_unclassified_literature_violations_blocks_off_topic_arxiv_fallback():
+    """Off-topic classification must also bind to the arXiv-id citation form."""
+    from app.services.claim_validator import unclassified_literature_violations
+
+    tool_results = [
+        {
+            "tool": "search_literature",
+            "result": {
+                "results": [{"bibcode": "arXiv:2404.03002", "title": "DESI DR1 BAO"}],
+            },
+        },
+        {
+            "tool": "classify_literature_relevance",
+            "result": {
+                "classifications": [
+                    {
+                        "bibcode": "arXiv:2404.03002",
+                        "relevance": "Off-topic",
+                        "reason": "not relevant to this question",
+                    },
+                ],
+            },
+        },
+    ]
+    reply = "Based on arXiv:2404.03002, the BAO measurement gives H0 = 67."
+    violations = unclassified_literature_violations(reply, tool_results)
+    assert len(violations) == 1
+    assert violations[0].kind == "cited_off_topic_paper"
+    assert violations[0].match_text == "arXiv:2404.03002"
 
 
 def test_blocked_unclassified_literature_reply_text_groups_unclassified_and_off_topic():

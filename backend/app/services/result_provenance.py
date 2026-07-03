@@ -76,6 +76,14 @@ _VALID_STATUS = {
     "COMPRESSED_ROBUSTNESS_READY",
     "NO_COMPRESSED_LIKELIHOOD",
     "CONFIG_READY",
+    # external Cobaya backend statuses (cobaya_runner.py): publication-ready
+    # external chain / structured not-run failure envelope. Without these the
+    # flagship EXTERNAL_COBAYA_ENABLED full-likelihood result was rewritten to
+    # "partial", contradicting __tool_status__=COMPLETED / publication_ready=True
+    # and erasing the machine-readable READY vs NOT_RUN distinction. Also the
+    # marker claim_validator._full_external_likelihood_ready_available keys on.
+    "EXTERNAL_COBAYA_READY",
+    "EXTERNAL_COBAYA_NOT_RUN",
     # data product loader statuses (cosmology_data_products.py)
     "COSMOLOGY_DATA_PRODUCT_READY",
     "COSMOLOGY_DATA_PRODUCT_PARTIAL",

@@ -369,3 +369,159 @@ def test_lfr_bypass_alternate_lfr_keywords_also_trigger():
         assert any(v.kind == "fit_line_lfr_bypass" for v in violations), (
             f"bypass detector missed LFR context: {ctx_phrase!r}"
         )
+
+
+# ── 2026-07-03: code blocks must not shift gate offsets ──────────────────
+# The gates regex over the code-stripped reply; sentence/line context and
+# "(line N)" pointers must be derived via the boundary map (or from the
+# stripped text itself), never by slicing the ORIGINAL reply with a stripped
+# offset. A preceding multi-line code block used to (a) disarm
+# full_likelihood_overclaim entirely — the misaligned context landed inside
+# the code block, whose not/requires/config tokens satisfied the non-claim
+# qualifier — and (b) false-block honest "NOT ready" wording whose real
+# qualifier became invisible (the 9f2667e specificity class).
+
+_CODE_BLOCK = (
+    "```python\n"
+    + "\n".join(
+        [
+            "import os",
+            "if not os.path.exists('chains'):",
+            "    raise SystemExit('requires config')",
+        ]
+        + [f"x{i} = {i}" for i in range(16)]
+    )
+    + "\n```\n"
+)
+
+
+def _compressed_chain_result() -> list[dict]:
+    return [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "claim_scope": "compressed_likelihood_preliminary",
+            "sampler": "compressed_gaussian_analytic",
+        },
+    }]
+
+
+def test_full_likelihood_overclaim_still_fires_after_code_block():
+    reply = (
+        _CODE_BLOCK
+        + "The selected probes are ready for a full external Cobaya likelihood run."
+    )
+    violations = methodology_consistency_violations(reply, _compressed_chain_result())
+    assert any(v.kind == "full_likelihood_overclaim" for v in violations)
+
+
+def test_full_likelihood_overclaim_line_number_correct_after_code_block():
+    reply = (
+        _CODE_BLOCK
+        + "The selected probes are ready for a full external Cobaya likelihood run."
+    )
+    expected_line = reply.count("\n") + 1  # the overclaim is the last line
+    violations = [
+        v
+        for v in methodology_consistency_violations(reply, _compressed_chain_result())
+        if v.kind == "full_likelihood_overclaim"
+    ]
+    assert violations, "overclaim must fire (see previous test)"
+    assert violations[0].line_number == expected_line
+
+
+def test_honest_not_ready_wording_after_code_block_is_not_overclaim():
+    plain_code = "```python\n" + "\n".join(f"y{i} = {i}" for i in range(20)) + "\n```\n"
+    reply = plain_code + (
+        "No full external Cobaya likelihood run was performed; the probes are "
+        "NOT ready for full external Cobaya likelihood analyses yet."
+    )
+    assert methodology_consistency_violations(reply, _compressed_chain_result()) == []
+
+
+# ── 2026-07-03: a genuine external Cobaya success must unlock external wording ──
+# cobaya_runner._runner_success emits NO top-level execution_mode/claim_scope,
+# so the unlock used to be unreachable for run_cosmology_likelihood_chain and
+# honest wording after a real EXTERNAL_COBAYA_ENABLED run was always blocked.
+# The unlock now keys on the actual contract: analysis_status
+# "EXTERNAL_COBAYA_READY" (only emitted by the external backend when
+# publication_ready) AND datasets_used[*].execution_mode all external.
+
+
+def _external_chain_success_payload() -> dict:
+    from app.services import cobaya_runner
+    from app.services.cosmology_likelihoods import _validate_dataset_selection
+
+    entries = _validate_dataset_selection("lcdm", ["spt3g_cmb"])
+    payload = cobaya_runner._runner_success(  # noqa: SLF001 — contract under test
+        model_key="lcdm",
+        entries=entries,
+        seed=42,
+        sampler="mcmc",
+        summaries={"H0": {"mean": 67.4, "std": 0.5}},
+        diagnostics={"overall_status": "ok", "rhat": 1.01, "ess_bulk": 900.0},
+        chain_meta={},
+        stdout_tail="",
+    )
+    assert payload["publication_ready"] is True
+    assert payload["analysis_status"] == "EXTERNAL_COBAYA_READY"
+    return payload
+
+
+def test_external_cobaya_success_unlocks_external_run_wording():
+    from app.services.claim_validator import _full_external_likelihood_ready_available
+    from app.services.result_provenance import normalize_tool_result
+
+    normalized = normalize_tool_result(
+        "run_cosmology_likelihood_chain",
+        _external_chain_success_payload(),
+        tool_input={},
+    )
+    # normalize_tool_result must not downgrade the external status (see
+    # test_result_provenance.py) or the unlock below can never fire.
+    assert normalized["analysis_status"] == "EXTERNAL_COBAYA_READY"
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "input": {},
+        "result": normalized,
+    }]
+    assert _full_external_likelihood_ready_available(tool_results) is True
+    reply = "The selected probes are ready for a full external Cobaya likelihood run."
+    assert methodology_consistency_violations(reply, tool_results) == []
+
+
+def test_external_unlock_stays_locked_without_both_markers():
+    """Non-loosening controls: compressed chains, a READY status without
+    external datasets, and an external dataset list without the READY status
+    all keep external-run wording blocked."""
+    from app.services.claim_validator import _full_external_likelihood_ready_available
+
+    # In-process compressed chain: status quo, stays locked.
+    assert _full_external_likelihood_ready_available(_compressed_chain_result()) is False
+
+    # READY status but datasets_used not external-only.
+    ready_wrong_datasets = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "analysis_status": "EXTERNAL_COBAYA_READY",
+            "sampler": "cobaya:mcmc",
+            "datasets_used": [{"execution_mode": "compressed_gaussian"}],
+        },
+    }]
+    assert _full_external_likelihood_ready_available(ready_wrong_datasets) is False
+
+    # External datasets but not the publication-ready external status.
+    external_datasets_no_ready = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "analysis_status": "PARTIAL",
+            "sampler": "cobaya:mcmc",
+            "datasets_used": [{"execution_mode": "external_cobaya"}],
+        },
+    }]
+    assert _full_external_likelihood_ready_available(external_datasets_no_ready) is False

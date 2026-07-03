@@ -1000,3 +1000,92 @@ def test_bundle_e8d9_fit_lfr_bypass_must_be_blocked():
 
     violations = methodology_consistency_violations(reply, tool_results)
     assert any(v.kind == "fit_line_lfr_bypass" for v in violations)
+
+
+def test_b4_author_year_in_tool_input_is_still_a_violation():
+    """B4: an author-year label passed only as a tool ARGUMENT (never returned
+    by a successful result) must not seed author-year support. Catches the
+    invent-citation -> echo into paper_ref -> tool fails -> cite-anyway
+    laundering path, mirroring the arXiv/bibcode input tests above."""
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "audit_published_constraint",
+            "input": {"paper_ref": {"label": "Riess+ 2099", "year": "2099"}},
+            "result": {
+                "success": False,
+                "error": "no such paper",
+                "__tool_status__": "FAILED",
+                "__do_not_claim__": True,
+            },
+        }
+    ]
+    violations = provenance_citation_violations(
+        "As shown by Riess et al. (2099), the expansion rate is anomalous.",
+        tool_results,
+    )
+    assert any(v.kind == "suspicious_author_year" for v in violations)
+
+
+def test_b4_author_year_in_failed_result_is_still_a_violation():
+    """B4: author-year metadata echoed back inside a FAILED / do-not-claim
+    result payload must not become valid provenance."""
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "audit_published_constraint",
+            "input": {},
+            "result": {
+                "success": False,
+                "__tool_status__": "FAILED",
+                "__do_not_claim__": True,
+                "paper_ref": {"label": "Riess+ 2099", "year": "2099"},
+            },
+        }
+    ]
+    violations = provenance_citation_violations(
+        "As shown by Riess et al. (2099), the expansion rate is anomalous.",
+        tool_results,
+    )
+    assert any(v.kind == "suspicious_author_year" for v in violations)
+
+
+def test_b4_author_year_in_successful_result_still_supports_citation():
+    """B4 guard against over-tightening: author-year metadata returned in a
+    genuine SUCCESSFUL result subtree must still support the shorthand."""
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "audit_published_constraint",
+            "input": {"paper_ref": {"label": "Riess+ 2022", "year": "2022"}},
+            "result": {
+                "success": True,
+                "paper_ref": {"label": "Riess+ 2022", "year": "2022"},
+                "n_sigma": 1.2,
+            },
+        }
+    ]
+    assert provenance_citation_violations(
+        "The anchor follows Riess et al. (2022).", tool_results
+    ) == []
+
+
+def test_b4_author_year_in_successful_tool_input_alone_does_not_support():
+    """Even on a successful call, author-year support must come from the
+    RESULT subtree — a model-authored input echo alone is not provenance."""
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [
+        {
+            "tool": "audit_published_constraint",
+            "input": {"paper_ref": {"label": "Aghanim+ 2018", "year": "2018"}},
+            "result": {"success": True, "n_sigma": 1.2},
+        }
+    ]
+    violations = provenance_citation_violations(
+        "The prior follows Aghanim et al. (2018).", tool_results
+    )
+    assert any(v.kind == "suspicious_author_year" for v in violations)

@@ -298,3 +298,53 @@ def test_is_empty_payload_detects_common_shapes():
     # Non-empty payloads must NOT be flagged
     assert not _is_empty_payload("run_adql", {"row_count": 5})
     assert not _is_empty_payload("run_python", {"success": True, "stdout": "hi"})
+
+
+# ── 2026-07-03: external Cobaya backend statuses must survive normalization ──
+# cobaya_runner.py emits analysis_status="EXTERNAL_COBAYA_READY" on a
+# publication-ready external chain (_runner_success) and
+# "EXTERNAL_COBAYA_NOT_RUN" on its structured failure envelope
+# (_runner_failure). Before these literals were listed in _VALID_STATUS,
+# result_contract silently rewrote both to "partial" — producing an
+# internally inconsistent envelope (__tool_status__=COMPLETED /
+# publication_ready=True / analysis_status="partial") for the flagship
+# EXTERNAL_COBAYA_ENABLED full-likelihood path and erasing the
+# machine-readable READY vs NOT_RUN distinction.
+
+
+def test_external_cobaya_ready_status_survives_normalize():
+    result = normalize_tool_result(
+        "run_cosmology_likelihood_chain",
+        {
+            "success": True,
+            "__tool_status__": "COMPLETED",
+            "analysis_status": "EXTERNAL_COBAYA_READY",
+            "publication_ready": True,
+            "sampler": "cobaya:mcmc",
+            "datasets_used": [{"key": "spt3g_cmb", "execution_mode": "external_cobaya"}],
+        },
+        tool_input={},
+    )
+    assert result["analysis_status"] == "EXTERNAL_COBAYA_READY"
+    assert result["__tool_status__"] == "COMPLETED"
+    assert result["publication_ready"] is True
+
+
+def test_external_cobaya_not_run_status_survives_normalize():
+    result = normalize_tool_result(
+        "run_cosmology_likelihood_chain",
+        {
+            "success": True,
+            "__tool_status__": "PARTIAL",
+            "analysis_status": "EXTERNAL_COBAYA_NOT_RUN",
+            "publication_ready": False,
+            "__do_not_claim__": True,
+            "sampler": "cobaya:not_run",
+            "error_class": "cobaya_subprocess_timeout",
+        },
+        tool_input={},
+    )
+    assert result["analysis_status"] == "EXTERNAL_COBAYA_NOT_RUN"
+    # The failure envelope's do-not-claim marker must survive untouched.
+    assert result["__do_not_claim__"] is True
+    assert result["publication_ready"] is False

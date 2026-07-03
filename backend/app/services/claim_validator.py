@@ -509,10 +509,16 @@ def _strip_markdown_code(text: str) -> str:
     Tool schema / help replies often contain parameter defaults like ``limit: 24``
     or SQL examples. These are interface metadata, not astronomical conclusions,
     and must not enter the zero-fabrication gate.
+
+    2026-07-03: delegates to ``_strip_markdown_code_with_map`` so the two can
+    never drift. Gates that report line numbers or slice sentence/line context
+    must call the ``_with_map`` variant directly and translate match offsets
+    back to the original reply — slicing the original text with a stripped
+    offset was the code-block offset bug that disarmed the
+    full_likelihood_overclaim gate.
     """
-    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
-    text = re.sub(r"`[^`\n]*`", " ", text)
-    return text
+    stripped, _ = _strip_markdown_code_with_map(text)
+    return stripped
 
 
 def _strip_thousands_separators(text: str) -> str:
@@ -645,6 +651,29 @@ def _transform_for_claims(text: str) -> tuple[str, list[int]]:
     )
     text, bmap = _apply_regex_with_map(
         text, bmap, _SCI_BARE_POWER, lambda m: f"1e{m.group(1)}"
+    )
+    return text, bmap
+
+
+def _strip_markdown_code_with_map(text: str) -> tuple[str, list[int]]:
+    """``_strip_markdown_code`` plus a boundary map back to the input text.
+
+    Gates that regex over the code-stripped reply but report user-facing line
+    numbers (or slice sentence/line context) must translate match offsets back
+    to the original reply: a multi-line code block collapses to one space, so
+    a raw stripped offset points EARLIER in the reply — context slices can
+    land inside the code block (feeding code tokens like ``not``/``requires``
+    to a non-claim qualifier check and disarming the gate) and "(line N)"
+    pointers drift. Reuses the B15 boundary-map machinery; the two regexes and
+    replacements mirror ``_strip_markdown_code`` exactly so matching behaviour
+    is unchanged.
+    """
+    bmap = list(range(len(text) + 1))
+    text, bmap = _apply_regex_with_map(
+        text, bmap, re.compile(r"```.*?```", re.DOTALL), lambda m: " "
+    )
+    text, bmap = _apply_regex_with_map(
+        text, bmap, re.compile(r"`[^`\n]*`"), lambda m: " "
     )
     return text, bmap
 
@@ -1402,8 +1431,15 @@ def _build_valid_doi_pool(tool_results: Any) -> set[str]:
 
 
 def _build_author_year_support(tool_results: Any) -> set[tuple[str, str]]:
+    # B4 (2026-07-03): iterate _citation_pool_nodes, not _iter_dict_nodes, so
+    # only non-tainted RESULT subtrees seed author-year support — never the
+    # model-authored tool `input` payload and never FAILED/withheld results.
+    # Otherwise "Riess et al. (2099)" becomes valid provenance merely by being
+    # echoed into a tool argument (e.g. audit_published_constraint's paper_ref)
+    # even when that call fails — the same laundering path already closed for
+    # the bibcode/arXiv/DOI pools.
     support: set[tuple[str, str]] = set()
-    for node in _iter_dict_nodes(tool_results):
+    for node in _citation_pool_nodes(tool_results):
         year = str(node.get("year") or "").strip()[:4]
         authors = node.get("authors") or node.get("author")
         label = node.get("label")
@@ -1477,7 +1513,7 @@ def provenance_citation_violations(
                 line_number=_line_number(reply, match.start()),
             ))
 
-    citation_text = _strip_markdown_code(reply)
+    citation_text, citation_map = _strip_markdown_code_with_map(reply)
     for match in AUTHOR_YEAR_RE.finditer(citation_text):
         author, year = match.group(1), match.group(2)
         match_text = match.group(0).strip()
@@ -1494,7 +1530,7 @@ def provenance_citation_violations(
             violations.append(CitationViolation(
                 kind="suspicious_author_year",
                 match_text=match_text,
-                line_number=_line_number(reply, match.start()),
+                line_number=_line_number(reply, citation_map[match.start()]),
             ))
 
     violations.extend(_paper_level_numeric_claim_violations(
@@ -1532,7 +1568,7 @@ def unsupported_literature_narrative_violations(
     if not reply:
         return []
 
-    stripped_reply = _strip_markdown_code(reply)
+    stripped_reply, stripped_map = _strip_markdown_code_with_map(reply)
     supported_payload_text = _claimable_tool_text(tool_results)
     violations: list[CitationViolation] = []
     seen: set[tuple[str, str, int]] = set()
@@ -1553,7 +1589,7 @@ def unsupported_literature_narrative_violations(
             violations.append(CitationViolation(
                 kind="unsupported_literature_narrative",
                 match_text=match_text,
-                line_number=_line_number(reply, match.start()),
+                line_number=_line_number(reply, stripped_map[match.start()]),
             ))
 
     for violation in violations:
@@ -1595,7 +1631,14 @@ def unclassified_literature_violations(
         return []
 
     search_pool: set[str] = set()
+    # 2026-07-03: the arXiv fallback of search_literature identifies papers by
+    # "arXiv:<id>" in the bibcode field instead of an ADS bibcode. Those never
+    # match BIBCODE_RE, so citing them by arXiv id used to skip this barrier
+    # entirely while the bibcode form was hard-blocked. Track the arXiv-shaped
+    # identifiers through the same search-pool / classified pipeline.
+    search_pool_arxiv: set[str] = set()
     classified_relevance: dict[str, str] = {}
+    classified_arxiv: dict[str, str] = {}
 
     if isinstance(tool_results, list):
         for tr in tool_results:
@@ -1611,9 +1654,11 @@ def unclassified_literature_violations(
                 for p in papers:
                     if not isinstance(p, dict):
                         continue
-                    bc = _normalize_bibcode(str(p.get("bibcode") or ""))
+                    raw_id = str(p.get("bibcode") or "")
+                    bc = _normalize_bibcode(raw_id)
                     if bc:
                         search_pool.add(bc)
+                    search_pool_arxiv.update(_arxiv_ids_from_text(raw_id))
             elif tool_name == "classify_literature_relevance":
                 classes = payload.get("classifications") if isinstance(payload, dict) else None
                 if not isinstance(classes, list):
@@ -1621,12 +1666,17 @@ def unclassified_literature_violations(
                 for c in classes:
                     if not isinstance(c, dict):
                         continue
-                    bc = _normalize_bibcode(str(c.get("bibcode") or ""))
+                    raw_id = str(c.get("bibcode") or "")
+                    bc = _normalize_bibcode(raw_id)
                     rel = str(c.get("relevance") or "").strip()
-                    if bc and rel:
+                    if not rel:
+                        continue
+                    if bc:
                         classified_relevance[bc] = rel
+                    for classified_id in _arxiv_ids_from_text(raw_id):
+                        classified_arxiv[classified_id] = rel
 
-    if not search_pool:
+    if not search_pool and not search_pool_arxiv:
         # search_literature was not called this turn; skip this check
         return []
 
@@ -1649,6 +1699,24 @@ def unclassified_literature_violations(
             violations.append(CitationViolation(
                 kind="cited_off_topic_paper",
                 match_text=bibcode,
+                line_number=_line_number(reply, match.start()),
+            ))
+
+    for match in ARXIV_ID_RE.finditer(reply):
+        arxiv_id = _normalize_arxiv_id(match.group(1))
+        if not arxiv_id or arxiv_id in seen:
+            continue
+        seen.add(arxiv_id)
+        if arxiv_id in search_pool_arxiv and arxiv_id not in classified_arxiv:
+            violations.append(CitationViolation(
+                kind="unclassified_literature",
+                match_text=f"arXiv:{arxiv_id}",
+                line_number=_line_number(reply, match.start()),
+            ))
+        elif classified_arxiv.get(arxiv_id) == "Off-topic":
+            violations.append(CitationViolation(
+                kind="cited_off_topic_paper",
+                match_text=f"arXiv:{arxiv_id}",
                 line_number=_line_number(reply, match.start()),
             ))
 
@@ -1796,7 +1864,10 @@ def methodology_consistency_violations(
     """
     if not reply:
         return []
-    stripped = _strip_markdown_code(reply)
+    # Match against the code-stripped text, but translate every match offset
+    # back to the original reply via the boundary map before slicing context
+    # or computing line numbers — see _strip_markdown_code_with_map.
+    stripped, stripped_map = _strip_markdown_code_with_map(reply)
     fit_results = _collect_tool_results_for(tool_results, "fit_line_lfr")
     raw_fit_results = _collect_raw_tool_results_for(tool_results, "fit_line_lfr")
     demag_results = _collect_tool_results_for(tool_results, "demagnify_sample")
@@ -1814,7 +1885,7 @@ def methodology_consistency_violations(
             violations.append(CitationViolation(
                 kind="method_mismatch",
                 match_text=bayesian_match.group(0),
-                line_number=_line_number(reply, bayesian_match.start()),
+                line_number=_line_number(reply, stripped_map[bayesian_match.start()]),
             ))
 
     # ── Publication-ready / exploratory status ───────────────────────
@@ -1840,7 +1911,7 @@ def methodology_consistency_violations(
             violations.append(CitationViolation(
                 kind="publication_ready_mismatch",
                 match_text=ready_match.group(0),
-                line_number=_line_number(reply, ready_match.start()),
+                line_number=_line_number(reply, stripped_map[ready_match.start()]),
             ))
         stat_match = _LINE_RELATION_QUANT_RE.search(stripped)
         if (
@@ -1852,7 +1923,7 @@ def methodology_consistency_violations(
             violations.append(CitationViolation(
                 kind="line_relation_exploratory_label_missing",
                 match_text=stat_match.group(0),
-                line_number=_line_number(reply, stat_match.start()),
+                line_number=_line_number(reply, stripped_map[stat_match.start()]),
             ))
 
     # ── Cosmology compressed-vs-full likelihood scope ────────────────
@@ -1866,8 +1937,13 @@ def methodology_consistency_violations(
     # union3 22-bin vector) — blocking that was a false positive of the same
     # class as the anchor-gate bug (9f2667e).
     for full_match in _FULL_EXTERNAL_LIKELIHOOD_READY_RE.finditer(stripped):
-        sentence = _sentence_text(reply, full_match.start())
-        line = _line_text(reply, full_match.start())
+        # Context must come from the SAME text the regex matched (`stripped`):
+        # slicing the original reply with a stripped offset lands earlier —
+        # typically inside a preceding code block, whose tokens (not/requires/
+        # config/...) then satisfy the non-claim qualifier and disarm the gate,
+        # while honest "NOT ready" qualifiers become invisible and get blocked.
+        sentence = _sentence_text(stripped, full_match.start())
+        line = _line_text(stripped, full_match.start())
         context = f"{line} {sentence}"
         if _FULL_EXTERNAL_LIKELIHOOD_NONCLAIM_RE.search(context):
             continue
@@ -1880,7 +1956,7 @@ def methodology_consistency_violations(
         violations.append(CitationViolation(
             kind="full_likelihood_overclaim",
             match_text=full_match.group(0),
-            line_number=_line_number(reply, full_match.start()),
+            line_number=_line_number(reply, stripped_map[full_match.start()]),
         ))
 
     # ── PART AI #3: fit_line_lfr bypass detection ────────────────────
@@ -1899,7 +1975,7 @@ def methodology_consistency_violations(
             violations.append(CitationViolation(
                 kind="fit_line_lfr_bypass",
                 match_text=bypass_stat_match.group(0),
-                line_number=_line_number(reply, bypass_stat_match.start()),
+                line_number=_line_number(reply, stripped_map[bypass_stat_match.start()]),
             ))
 
     # ── Demagnify count ───────────────────────────────────────────
@@ -1923,7 +1999,7 @@ def methodology_consistency_violations(
             violations.append(CitationViolation(
                 kind="demagnify_count_mismatch",
                 match_text=m.group(0),
-                line_number=_line_number(reply, m.start()),
+                line_number=_line_number(reply, stripped_map[m.start()]),
             ))
 
     for v in violations:
@@ -2030,6 +2106,32 @@ def _full_external_likelihood_ready_available(tool_results: Any) -> bool:
             return True
         if execution_mode in {"external_cobaya", "external_cosmosis"}:
             return True
+        # 2026-07-03: cobaya_runner._runner_success never emits a top-level
+        # execution_mode or claim_scope, so the check above could never fire
+        # for a genuine EXTERNAL_COBAYA_ENABLED chain — honest "ready for a
+        # full external Cobaya run" wording stayed blocked (the 9f2667e
+        # false-positive class). The external markers it DOES emit are the
+        # analysis_status literal "EXTERNAL_COBAYA_READY" (only produced by
+        # the external backend, only when publication_ready) and the
+        # per-dataset registry attribute inside datasets_used — the dispatch
+        # precondition (_all_external_cobaya) requires EVERY selected entry
+        # to be external. Require both markers so no in-process chain can
+        # ever inherit this unlock.
+        if tool_name == "run_cosmology_likelihood_chain":
+            status = str(result.get("analysis_status") or "").strip().upper()
+            datasets_used = result.get("datasets_used")
+            if (
+                status == "EXTERNAL_COBAYA_READY"
+                and isinstance(datasets_used, list)
+                and datasets_used
+                and all(
+                    isinstance(dataset, dict)
+                    and str(dataset.get("execution_mode") or "").lower()
+                    in {"external_cobaya", "external_cosmosis"}
+                    for dataset in datasets_used
+                )
+            ):
+                return True
     return False
 
 
