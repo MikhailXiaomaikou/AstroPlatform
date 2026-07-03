@@ -1,9 +1,19 @@
 ---
 name: add-dataset
-description: Checklist for integrating a new cosmology dataset (or upgrading a compressed entry to a full likelihood) into backend/app/services/cosmology_likelihoods.py. Use whenever the task is "add/integrate/wire dataset X", "upgrade X to full covariance", or "make X executable in-process". Every step below exists because skipping it produced a real bug — do not skim.
+description: Checklist for integrating a new cosmology dataset (or upgrading a compressed entry to a full likelihood) into the backend/app/services/cosmology_likelihoods/ package. Use whenever the task is "add/integrate/wire dataset X", "upgrade X to full covariance", or "make X executable in-process". Every step below exists because skipping it produced a real bug — do not skim.
 ---
 
 # Add a cosmology dataset
+
+File layout (2026-07-03 split): `cosmology_likelihoods` is a package, not a
+single file. `registry.py` holds `_REGISTRY`; each probe family keeps its
+loaders + data dicts + chi² together (`bao.py`, `sn.py`, `cc.py`, `rsd.py`,
+`cmb.py`); `_is_executable_*` gates + cov-fidelity + `audit_executable_pins`
+live in `verification.py`; runners in `runners.py`; samplers in `sampling.py`.
+`__init__.py` re-exports every pre-split name, so
+`from app.services.cosmology_likelihoods import X` keeps working — and it fans
+package-level monkeypatches out to the submodules (one-namespace semantics),
+so tests keep patching `cl.<name>` as before.
 
 The platform's bet is provenance + zero fabrication, not fitting power. A dataset
 integration is correct when every number it can ever emit is traceable to a
@@ -14,7 +24,7 @@ being reported in `datasets_used`.
 
 | Shape | Template entry | Pattern |
 |---|---|---|
-| Full mean+cov vector (BAO-like) | `desi_dr2_bao` | fetch script + sha256 pins + `_BAO_DATA` |
+| Full mean+cov vector (BAO-like) | `desi_dr2_bao` | fetch script + sha256 pins + `_BAO_DATA` (cosmology_likelihoods/bao.py) |
 | Scalar Gaussian prior | `cchp_h0_freedman24` | one registry entry, no data file (literature_typed) |
 | Big SN vector behind env flag | `des_sn5yr` / `pantheon_plus` | vendored npz + opt-in `*_FULL_CHI2_ENABLED` |
 | External cobaya native likelihood | plik_lite (`planck_2018_highl_plik.TTTEEE_lite_native`) | vendored cobaya packages + adapter registry + runtime sha256 gate |
@@ -32,16 +42,19 @@ FIRST: plik_lite was 1.47 MB (vendorable); full Planck clik is ~GB (not).
    (committed). Copy `backend/scripts/fetch_des_sn5yr.py` or
    `fetch_desi_dr2_bao.py` as the template (the older Pantheon+ script lives
    at repo-root `scripts/fetch_pantheon_plus.py`, not backend/scripts/).
-3. **Registry entry** in `_REGISTRY`: data_products with pinned sha256,
+3. **Registry entry** in `_REGISTRY`
+   (backend/app/services/cosmology_likelihoods/registry.py): data_products with pinned sha256,
    citations, honest fidelity grade. Set reciprocal `do_not_combine_with` for
    any overlapping sample (DR1↔DR2, CCHP↔TRGB-2019, DES↔Pantheon+/Union3).
 4. **Adapter registry**: any `external:*` likelihood must be registered in
    `cobaya_adapter_registry.ADAPTER_TO_COBAYA` (real import path, or `None`
    placeholder — `test_cobaya_adapter_registry` enforces presence).
-5. **Threading**: check the `_is_executable_*` gate first — it is often just
+5. **Threading**: check the `_is_executable_*` gate first
+   (cosmology_likelihoods/verification.py) — it is often just
    `key in _DATA`, and if the in-process predictor already handles the
-   observables, wiring = vendor files + add to the data dict (a ~2-file job,
-   not an external-package integration).
+   observables, wiring = vendor files + add to the data dict in the probe's
+   family module (bao.py / sn.py / cc.py / rsd.py) — a ~2-file job,
+   not an external-package integration.
 6. **Silent-drop audit** (both lessons were publication-grade bugs):
    - Every analytic **fast-path opt-out guard** must exclude the new probe
      category. Commit `20f6274`: the BAO-only fast path silently dropped the
