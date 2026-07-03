@@ -2,3 +2,6 @@
 # Cobaya-installed Planck/CMB likelihood data (large; install locally)
 packages/
 cobaya_runs/
+
+# One-off local debug/repro scratch — never commit (use .local/ for diagnostics)
+tmp/

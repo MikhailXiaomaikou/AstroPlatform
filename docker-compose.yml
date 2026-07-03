@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -38,28 +36,6 @@ services:
           memory: 256M
           cpus: "0.5"
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - miniodata:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: "0.5"
-
   backend:
     build:
       context: ./backend
@@ -70,11 +46,9 @@ services:
       ENV: production
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-      MINIO_BUCKET: astro-fits
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      # 生产密钥必须显式提供, 不给弱默认值 (render.yaml 用 generateValue, 这里同理 fail-fast)
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
+      FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
       PIPELINE_MODE: celery
     depends_on:
       postgres:
@@ -98,9 +72,9 @@ services:
       ENV: production
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       REDIS_URL: redis://redis:6379/0
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      # app.config 在 ENV=production 下没有这两个密钥会直接拒绝启动
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
+      FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
       PIPELINE_MODE: celery
     depends_on:
       postgres:
@@ -129,5 +103,4 @@ services:
 
 volumes:
   pgdata:
-  miniodata:
   fitsdata:

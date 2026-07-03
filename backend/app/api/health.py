@@ -1,7 +1,6 @@
 """Enhanced health-check endpoints for the Astro Research Platform."""
 
 import logging
-import os
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,7 +32,7 @@ async def _probe_url(url: str, timeout: float = 2.0) -> tuple[str, int]:
 
 @router.get("/health/detailed")
 async def health_detailed(_user: User = Depends(get_current_user)):
-    """Return granular health status for database, Redis, object storage, and external services.
+    """Return granular health status for database, Redis, file storage, and external services.
 
     M31: auth-gated.  Previous behaviour leaked internal URL / credential
     prefixes via error messages to any unauthenticated caller probing
@@ -69,15 +68,17 @@ async def health_detailed(_user: User = Depends(get_current_user)):
         checks["redis"] = {"status": f"error: {exc}", "response_time_ms": int((time.monotonic() - t0) * 1000)}
         overall = "degraded"
 
-    # --- MinIO / Object Storage ---
+    # --- Storage (local filesystem — see app/storage.py; MinIO was removed) ---
     t0 = time.monotonic()
     try:
-        from minio import Minio
-        endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-        access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-        secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-        client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=False)
-        client.list_buckets()
+        from pathlib import Path
+
+        from app.config import settings
+        root = Path(settings.local_storage_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".health_probe"
+        probe.write_bytes(b"ok")
+        probe.unlink()
         checks["storage"] = {"status": "ok", "response_time_ms": int((time.monotonic() - t0) * 1000)}
     except Exception as exc:
         checks["storage"] = {"status": f"error: {exc}", "response_time_ms": int((time.monotonic() - t0) * 1000)}

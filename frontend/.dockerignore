@@ -1,0 +1,4 @@
+# Dockerfile runs `npm ci` then `COPY . .` — the local node_modules and
+# stale dist/ must not be copied over the fresh install / build output.
+node_modules/
+dist/

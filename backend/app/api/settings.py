@@ -87,9 +87,10 @@ async def save_api_key(
     keys = _get_keys(user)
     keys[req.provider] = key
     user.api_keys = keys
-    # Also keep legacy field in sync
-    if req.provider == "anthropic":
-        user.anthropic_api_key = key
+    # Security: keys live ONLY in the Fernet-encrypted api_keys blob. The
+    # legacy anthropic_api_key column is plain TEXT; _get_keys() above already
+    # migrated any legacy value into `keys`, so null the cleartext copy here.
+    user.anthropic_api_key = None
     await db.commit()
     return {"saved": True, "provider": req.provider, "masked_key": _mask_key(key)}
 
@@ -134,7 +135,8 @@ async def save_api_key_legacy(
     keys = _get_keys(user)
     keys["anthropic"] = key
     user.api_keys = keys
-    user.anthropic_api_key = key
+    # Never write the cleartext legacy column (see save_api_key above).
+    user.anthropic_api_key = None
     await db.commit()
     return {"saved": True, "masked_key": _mask_key(key)}
 
