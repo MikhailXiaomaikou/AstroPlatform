@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -640,6 +641,12 @@ def _parse_chain_files(
     appears with its true multiplicity — every downstream summary / diagnostic
     then operates on weight-correct draws without carrying a separate weight
     array. (The default mcmc sampler emits temperature-1 integer weights.)
+
+    ``chain_meta`` additionally carries ``best_chi2`` — the minimum of the
+    total ``chi2`` column (== -2 ln L) over posterior draws across all chains,
+    located via the '#' header cobaya writes in each chain file — or ``None``
+    with the reason in ``best_chi2_note`` when it cannot be read from the real
+    products (never guessed positionally).
     """
     chain_paths = sorted(output_prefix.parent.glob(f"{output_prefix.name}.*.txt"))
     if not chain_paths:
@@ -650,6 +657,8 @@ def _parse_chain_files(
     column_names = _read_chain_column_names(info_path) if info_path.exists() else None
 
     samples_per_chain: list[np.ndarray] = []
+    chi2_minima: list[float] = []
+    chi2_unavailable: list[str] = []
     for path in chain_paths:
         try:
             # ndmin=2 so a single-row chain file (the `evaluate` sampler writes
@@ -676,13 +685,56 @@ def _parse_chain_files(
             samples = arr[:, indices]
         else:
             samples = arr[:, 2 : 2 + len(parameter_order)]
+        # P3b (2026-07-07): best-fit chi2 from the run's REAL products, for the
+        # fit_statistics the model-comparison pairing consumes. cobaya (>= the
+        # pinned 3.6.2; verified against collection._dump_slice__txt AND a live
+        # toy-likelihood run) writes a "#"-prefixed header naming every column
+        # of the chain .txt, including the total ``chi2`` column (== -2 ln L,
+        # summed over likelihoods; per-component values live in chi2__<name>).
+        # Minimum is taken over posterior draws only (rounded weight > 0 — the
+        # weight-0 burn-in seed point cobaya discards is not a posterior draw;
+        # if NO row has positive weight, fall back to all rows, mirroring
+        # _expand_by_weight). No header / no chi2 column / a header that does
+        # not describe this file's columns -> that chain contributes nothing
+        # and the whole-run best_chi2 stays honestly None (a minimum over a
+        # subset of chains is not the run's best fit).
+        header_columns = _chain_file_header_columns(path)
+        if (
+            header_columns is not None
+            and "chi2" in header_columns
+            and len(header_columns) == arr.shape[1]
+        ):
+            chi2_column = arr[:, header_columns.index("chi2")]
+            positive_weight = np.rint(arr[:, 0]) > 0
+            chi2_draws = (
+                chi2_column[positive_weight] if positive_weight.any() else chi2_column
+            )
+            chi2_minima.append(float(np.min(chi2_draws)))
+        else:
+            chi2_unavailable.append(path.name)
         samples = _expand_by_weight(samples, arr[:, 0])
         samples_per_chain.append(samples)
+
+    if chi2_minima and not chi2_unavailable:
+        best_chi2: float | None = float(min(chi2_minima))
+        best_chi2_note = (
+            "minimum of the total chi2 column (-2 ln L) over posterior draws "
+            "(weight > 0) across all chains, read from the chain-file header"
+        )
+    else:
+        best_chi2 = None
+        best_chi2_note = (
+            "total chi2 column not extractable from chain file(s) "
+            f"{', '.join(chi2_unavailable)}: no '#' header naming a 'chi2' "
+            "column that matches the file's column count"
+        )
 
     chain_meta = {
         "chain_paths": [str(p) for p in chain_paths],
         "n_chains": len(samples_per_chain),
         "n_draws_total": int(sum(s.shape[0] for s in samples_per_chain)),
+        "best_chi2": best_chi2,
+        "best_chi2_note": best_chi2_note,
     }
     return samples_per_chain, chain_meta
 
@@ -705,6 +757,29 @@ def _expand_by_weight(samples: np.ndarray, weights: np.ndarray) -> np.ndarray:
         # fall back to the raw rows so we never return an empty chain.
         return samples
     return np.repeat(samples, counts, axis=0)
+
+
+def _chain_file_header_columns(path: Path) -> list[str] | None:
+    """Column names from the '#'-prefixed header line of a cobaya chain .txt.
+
+    cobaya (pinned 3.6.2, ``collection._dump_slice__txt``) writes the full
+    column list — ``weight minuslogpost <params...> minuslogprior[...] chi2
+    chi2__<like>...`` — as the first line of every chain file; verified against
+    a live toy-likelihood run (2026-07-07). Returns ``None`` when the first
+    line is not a '#' header (e.g. hand-rolled or truncated files), in which
+    case callers must treat header-dependent columns as unavailable rather
+    than guess positions. (The .input.yaml-based ``_read_chain_column_names``
+    below only knows the sampled params — it cannot locate the chi2 column.)
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            first_line = fh.readline()
+    except Exception:
+        return None
+    if not first_line.startswith("#"):
+        return None
+    names = first_line.lstrip("#").split()
+    return names or None
 
 
 def _read_chain_column_names(info_path: Path) -> list[str] | None:
@@ -886,7 +961,53 @@ def _runner_success(
         if (diagnostics.get("overall_status") != "ok" or data_unverified)
         else "exploratory"
     )
-    return {
+    # P3b (2026-07-07): fit_statistics from the run's real chain products, so
+    # external chains can enter model-comparison pairing (research_program.py
+    # gates on isinstance(result.get("fit_statistics"), dict); before this the
+    # ok_*/mnu models — reachable only via this external CMB path — had no
+    # model comparison at all). Semantics mirror the in-process runners:
+    # chi2 = minimum chi2 among the actual posterior draws (the chain's total
+    # chi2 column, == -2 ln L), aic = chi2 + 2k with k = sampled parameters
+    # (nuisance included, as on the in-process path). BIC and n_constraints
+    # are honestly ABSENT: the chain products do not record the likelihood
+    # data-vector length N and this runner refuses to guess it. When the chi2
+    # column could not be read, fit_statistics is omitted entirely (with the
+    # reason in warnings) — an envelope without it simply stays out of the
+    # pairing, exactly the pre-fix behaviour. NOTE: fit_statistics never
+    # upgrades chain_tier/publication_ready — compute_model_comparison's
+    # validity ladder still refuses verdicts from blocked/unvetted chains and
+    # caveats exploratory ones.
+    best_chi2 = chain_meta.get("best_chi2")
+    fit_statistics: dict[str, Any] | None = None
+    if (
+        isinstance(best_chi2, (int, float))
+        and not isinstance(best_chi2, bool)
+        and math.isfinite(float(best_chi2))
+    ):
+        n_parameters = len(summaries)
+        fit_statistics = {
+            "chi2": round(float(best_chi2), 6),
+            "aic": round(float(best_chi2) + 2.0 * n_parameters, 6),
+            "n_parameters": int(n_parameters),
+            "chi2_source": chain_meta.get("best_chi2_note"),
+            "note": (
+                "bic and n_constraints are not reported: the cobaya chain "
+                "products do not record the likelihood data-vector length "
+                "(N); computing them would require re-instantiating each "
+                "likelihood, so they are honestly absent rather than guessed."
+            ),
+        }
+    warnings = [
+        "External Cobaya backend run; verify likelihood data versions match the registered citations."
+    ]
+    if fit_statistics is None:
+        warnings.append(
+            "fit_statistics omitted: "
+            + str(chain_meta.get("best_chi2_note"))
+            + " — without a chain-derived chi2 this run cannot enter "
+            "model-comparison pairing."
+        )
+    envelope = {
         "success": True,
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
         "analysis_status": "EXTERNAL_COBAYA_READY" if publication_ready else "PARTIAL",
@@ -903,9 +1024,7 @@ def _runner_success(
         "datasets_not_run": [],
         "dataset_keys": [entry.key for entry in entries],
         "random_seed": seed,
-        "warnings": [
-            "External Cobaya backend run; verify likelihood data versions match the registered citations."
-        ],
+        "warnings": warnings,
         "__message_to_model__": (
             "External Cobaya MCMC produced this posterior. "
             "publication_ready is the union of R̂ <= 1.05, ess_bulk >= 400, and overall_status == 'ok'."
@@ -925,6 +1044,9 @@ def _runner_success(
             }
         },
     }
+    if fit_statistics is not None:
+        envelope["fit_statistics"] = fit_statistics
+    return envelope
 
 
 def _runner_failure(

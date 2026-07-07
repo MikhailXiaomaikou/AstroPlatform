@@ -398,4 +398,281 @@ def test_cobaya_run_error_subclasses_carry_error_class() -> None:
         CobayaLikelihoodTranslationPending("x").error_class
         == "cobaya_likelihood_id_translation_pending"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. fit_statistics on the external envelope (backlog P3b, 2026-07-07)
+#
+# Gap: _runner_success returned chain_tier but NO fit_statistics, so an
+# external-cobaya chain could never enter model-comparison pairing —
+# research_program.py gates on isinstance(result.get("fit_statistics"), dict)
+# and compute_model_comparison differences fit_statistics["chi2"/"aic"].
+# Models reachable only via the external CMB path (ok_lcdm, lcdm_mnu, ...)
+# therefore had NO model comparison at all.
+#
+# The statistics must come from the run's real products: cobaya 3.6.2 writes
+# a "#"-prefixed header naming every column in each chain .txt, including the
+# total "chi2" column (verified == -2 ln L against a live toy-likelihood
+# cobaya run on 2026-07-07). chi2 here is the minimum of that column over
+# posterior draws (weight > 0), mirroring the in-process runner's
+# min-over-samples semantics. BIC / n_constraints are honestly absent: the
+# chain products do not record the likelihood data-vector length N.
+# ---------------------------------------------------------------------------
+
+
+_FIXTURE_PARAM_STATS = {
+    # center, scale for the deterministic fixture chains
+    "H0": (67.4, 0.5),
+    "omegam": (0.315, 0.008),
+    "omegak": (0.001, 0.002),
+}
+
+
+def _write_cobaya_format_chain(
+    path: Path,
+    param_names: list[str],
+    rows: np.ndarray,
+    *,
+    with_header: bool = True,
+) -> None:
+    """Write a chain .txt in the exact cobaya 3.6.2 layout (verified against a
+    live `python -m cobaya run`): '#'-prefixed header naming every column,
+    then whitespace-separated rows: weight, minuslogpost, params...,
+    minuslogprior, minuslogprior__0, chi2, chi2__<like>."""
+    columns = [
+        "weight",
+        "minuslogpost",
+        *param_names,
+        "minuslogprior",
+        "minuslogprior__0",
+        "chi2",
+        "chi2__spt3g",
+    ]
+    assert rows.shape[1] == len(columns)
+    with open(path, "w", encoding="utf-8") as fh:
+        if with_header:
+            fh.write("#" + " ".join(f"{c:>17s}" for c in columns)[1:] + "\n")
+        np.savetxt(fh, rows)
+
+
+def _fixture_rows(
+    param_names: list[str],
+    planted_min_chi2: float | None,
+    *,
+    n_draws: int,
+    seed: int,
+) -> np.ndarray:
+    """Deterministic draws; chi2 column uniform in [20, 40] with an optional
+    planted exact minimum at row 0, so the expected best-fit chi2 is known by
+    construction (hand-computable, not re-derived from the code under test)."""
+    rng = np.random.default_rng(seed)
+    params = np.column_stack(
+        [
+            rng.normal(*_FIXTURE_PARAM_STATS[name], size=n_draws)
+            for name in param_names
+        ]
+    )
+    chi2 = rng.uniform(20.0, 40.0, n_draws)
+    if planted_min_chi2 is not None:
+        chi2[0] = planted_min_chi2
+    weight = np.ones(n_draws)
+    minuslogpost = 0.5 * chi2 + 2.0
+    minuslogprior = np.full(n_draws, 2.0)
+    return np.column_stack(
+        [weight, minuslogpost, params, minuslogprior, minuslogprior, chi2, chi2]
+    )
+
+
+def test_parse_chain_files_best_chi2_hand_computed(tmp_path: Path) -> None:
+    """best_chi2 = min of the real chi2 column over weight>0 rows, across all
+    chains; a weight-0 row (cobaya's discarded burn-in seed point) must NOT
+    win the minimum even when its chi2 is smaller."""
+    params = ["H0", "omegam"]
+    chain1 = np.array(
+        [
+            # weight, -logpost, H0, omegam, -logprior, -logprior__0, chi2, chi2__spt3g
+            [0.0, 3.5, 67.0, 0.310, 2.0, 2.0, 3.0, 3.0],  # weight-0 seed point
+            [2.0, 8.25, 67.4, 0.315, 2.0, 2.0, 12.5, 12.5],
+            [1.0, 9.0, 68.0, 0.320, 2.0, 2.0, 14.0, 14.0],
+        ]
+    )
+    chain2 = np.array(
+        [
+            [1.0, 7.875, 67.2, 0.313, 2.0, 2.0, 11.75, 11.75],
+            [3.0, 8.625, 67.9, 0.318, 2.0, 2.0, 13.25, 13.25],
+        ]
+    )
+    _write_cobaya_format_chain(tmp_path / "chain.1.txt", params, chain1)
+    _write_cobaya_format_chain(tmp_path / "chain.2.txt", params, chain2)
+
+    _, meta = _parse_chain_files(
+        output_prefix=tmp_path / "chain", parameter_order=params
+    )
+    # Hand computation: weight>0 chi2 values are {12.5, 14.0} ∪ {11.75, 13.25};
+    # the weight-0 chi2=3.0 seed point is excluded. min = 11.75.
+    assert meta["best_chi2"] == 11.75
+    assert "weight > 0" in meta["best_chi2_note"]
+
+
+def test_parse_chain_files_without_chi2_column_reports_absent(tmp_path: Path) -> None:
+    """Headerless chain files (no way to locate the chi2 column) must yield an
+    honest best_chi2=None with a reason — never a guessed column."""
+    params = ["H0", "omegam"]
+    rows = _fixture_rows(params, 10.0, n_draws=50, seed=3)
+    _write_cobaya_format_chain(
+        tmp_path / "chain.1.txt", params, rows, with_header=False
+    )
+    _, meta = _parse_chain_files(
+        output_prefix=tmp_path / "chain", parameter_order=params
+    )
+    assert meta["best_chi2"] is None
+    assert "chain.1.txt" in meta["best_chi2_note"]
+
+    # Mixed availability (one chain with a header, one without) is also not a
+    # full-run minimum — must stay honestly absent.
+    rows2 = _fixture_rows(params, 9.0, n_draws=50, seed=4)
+    _write_cobaya_format_chain(tmp_path / "chain.2.txt", params, rows2)
+    _, meta = _parse_chain_files(
+        output_prefix=tmp_path / "chain", parameter_order=params
+    )
+    assert meta["best_chi2"] is None
+
+
+def _dispatch_with_fixture_chains(
+    *,
+    model_key: str,
+    param_names: list[str],
+    planted_min_chi2: float,
+    n_chains: int = 2,
+    seed: int = 11,
+) -> dict:
+    """Run the REAL dispatch_external_cobaya path with the subprocess mocked to
+    write deterministic cobaya-format chain files (the exact channel the bug
+    lived on: subprocess -> _parse_chain_files -> _runner_success)."""
+    import subprocess as sp
+
+    entries = _validate_dataset_selection("lcdm", ["spt3g_cmb"])
+    prior_bounds = {
+        "H0": (55.0, 80.0),
+        "omegam": (0.1, 0.5),
+        "omegak": (-0.3, 0.3),
+    }
+
+    def fake_run(yaml_path: Path, *, timeout_s: float) -> sp.CompletedProcess:
+        for chain_id in range(1, n_chains + 1):
+            rows = _fixture_rows(
+                param_names,
+                planted_min_chi2 if chain_id == 1 else None,
+                n_draws=800,
+                seed=seed + chain_id,
+            )
+            _write_cobaya_format_chain(
+                yaml_path.parent / f"chain.{chain_id}.txt", param_names, rows
+            )
+        return sp.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+
+    with patch(
+        "app.services.cobaya_runner._cobaya_likelihood_translatable",
+        return_value=True,
+    ), patch(
+        "app.services.cobaya_runner._run_cobaya_subprocess", side_effect=fake_run
+    ):
+        return dispatch_external_cobaya(
+            model_key=model_key,
+            entries=entries,
+            prior_bounds={k: prior_bounds[k] for k in param_names},
+            parameter_order=param_names,
+            seed=seed,
+            sample_count=800,
+            sampler="mcmc",
+        )
+
+
+def test_external_envelope_enters_model_comparison_pairing() -> None:
+    """fail-before / pass-after for the P3b gap.
+
+    Before the fix: the external envelope had NO fit_statistics, so
+    (a) research_program's pairing gate isinstance(result.get("fit_statistics"),
+        dict) excluded every external cell, and
+    (b) compute_model_comparison produced all-None deltas even for two
+        converged external chains.
+    After: fit_statistics comes from the chain's real chi2 column and the pair
+    yields hand-checkable deltas."""
+    from app.services.cosmology_likelihoods import compute_model_comparison
+
+    lcdm = _dispatch_with_fixture_chains(
+        model_key="lcdm", param_names=["H0", "omegam"], planted_min_chi2=10.25
+    )
+    ok_lcdm = _dispatch_with_fixture_chains(
+        model_key="ok_lcdm",
+        param_names=["H0", "omegam", "omegak"],
+        planted_min_chi2=8.0,
+    )
+
+    # (a) the exact research_program.py pairing gate condition
+    assert isinstance(lcdm.get("fit_statistics"), dict)
+    assert isinstance(ok_lcdm.get("fit_statistics"), dict)
+
+    # Hand computation: chi2 = planted minimum of the chain chi2 column;
+    # aic = chi2 + 2k (k = sampled parameters).
+    fs = lcdm["fit_statistics"]
+    assert fs["chi2"] == 10.25
+    assert fs["aic"] == 10.25 + 2.0 * 2  # 14.25
+    assert fs["n_parameters"] == 2
+    fs_ext = ok_lcdm["fit_statistics"]
+    assert fs_ext["chi2"] == 8.0
+    assert fs_ext["aic"] == 8.0 + 2.0 * 3  # 14.0
+    assert fs_ext["n_parameters"] == 3
+    # BIC / n_constraints are honestly ABSENT (chain products do not record
+    # the data-vector length N) — with the reason on the envelope, and no
+    # resurrected delta_chi2 placeholder (2026-06-12 regression).
+    for stats in (fs, fs_ext):
+        assert "bic" not in stats
+        assert "n_constraints" not in stats
+        assert "delta_chi2" not in stats
+        assert "data-vector length" in stats["note"]
+
+    # (b) the pair now yields a real comparison with hand-checkable deltas:
+    # delta_chi2 = 8.0 - 10.25 = -2.25; delta_aic = 14.0 - 14.25 = -0.25.
+    cmp = compute_model_comparison(lcdm, ok_lcdm)
+    assert cmp["delta_chi2"] == -2.25
+    assert cmp["delta_aic"] == -0.25
+    assert cmp["delta_bic"] is None  # no N -> no BIC, honestly None
+    assert cmp["n_extra_params"] == 1
+    assert cmp["comparison_valid"] is True
+    assert cmp["preferred"] == "inconclusive"  # |delta_aic| < 2
+
+    # Tier semantics preserved (do NOT relax): fit_statistics must not upgrade
+    # the chain. ok_lcdm is off-anchor -> exploratory, not claimable, and the
+    # comparison must carry the rendered caveat.
+    assert lcdm["chain_tier"] == "publication"
+    assert ok_lcdm["chain_tier"] == "exploratory"
+    assert ok_lcdm["publication_ready"] is False
+    assert "exploratory-tier" in cmp["verdict_caveat"]
+
+
+def test_blocked_external_chain_keeps_fit_statistics_but_no_verdict() -> None:
+    """chain_tier semantics with fit_statistics present: a single-chain run
+    (overall_status='single_chain_only' != 'ok') is blocked-tier; its factual
+    chi2 is reported but compute_model_comparison must fail closed — having
+    fit_statistics must never promote a blocked chain into a verdict."""
+    from app.services.cosmology_likelihoods import compute_model_comparison
+
+    lcdm = _dispatch_with_fixture_chains(
+        model_key="lcdm", param_names=["H0", "omegam"], planted_min_chi2=10.25
+    )
+    blocked = _dispatch_with_fixture_chains(
+        model_key="ok_lcdm",
+        param_names=["H0", "omegam", "omegak"],
+        planted_min_chi2=8.0,
+        n_chains=1,
+    )
+    assert blocked["chain_tier"] == "blocked"
+    assert blocked["publication_ready"] is False
+    assert blocked["fit_statistics"]["chi2"] == 8.0  # factual, still reported
+
+    cmp = compute_model_comparison(lcdm, blocked)
+    assert cmp["comparison_valid"] is False
+    assert cmp["preferred"] == "undetermined"
+    assert cmp["__do_not_claim__"] is True
     assert CobayaRunError("x", error_class="custom").error_class == "custom"
