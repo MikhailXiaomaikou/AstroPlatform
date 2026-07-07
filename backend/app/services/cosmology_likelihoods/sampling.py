@@ -72,7 +72,9 @@ from app.services.cosmology_likelihoods.sn import (
 from app.services.cosmology_likelihoods.cmb import (
     CMB_APLANCK_KEYS,
     CMB_COBAYA_EXECUTABLE_KEYS,
+    PLANCK18_DP_PROPOSAL_MOMENTS,
     _compressed_chi2_samples,
+    _planck_dp_lcdm_proposal_moments,
 )
 
 from app.services.cosmology_likelihoods.verification import (
@@ -742,20 +744,22 @@ def _sampling_parameter_order(
     for param in _compressed_parameter_order(compressed_entries):
         if param not in order:
             order.append(param)
-    # The planck2018_compressed de_flat branch in _compressed_chi2_samples swaps the
-    # geometric Planck spec for the (R, l_A, ombh2) distance prior on extended FLAT
-    # dark-energy chains, and that prior reads an ombh2 column. ombh2 is deliberately
-    # kept out of RUNNER_PARAMETER_PRIORS / _compressed_parameter_order, so add it here
-    # only when that exact branch will fire — otherwise the prior is unreachable and
-    # Planck silently contributes zero chi2. Keep this predicate in lockstep with the
-    # de_flat gate in _compressed_chi2_samples.
-    planck_de_flat = (
+    # The planck2018_compressed dp_flat branch in _compressed_chi2_samples executes
+    # the correlated CHW2019 (R, l_A, ombh2, ns) distance priors on EVERY flat model
+    # (2026-07-07; previously extended-DE only), and that prior reads sampled ombh2
+    # and ns columns. Both are deliberately kept out of RUNNER_PARAMETER_PRIORS /
+    # _compressed_parameter_order, so add them here exactly when that branch will
+    # fire — otherwise the prior is unreachable and Planck silently contributes zero
+    # chi2. Keep this predicate in lockstep with the dp_flat gate in
+    # _compressed_chi2_samples.
+    planck_dp_flat = (
         any(e.key == "planck2018_compressed" for e in compressed_entries)
-        and any(p in order for p in ("w", "w0", "wa"))
         and "omegak" not in order
     )
-    if planck_de_flat and "ombh2" not in order:
-        order.append("ombh2")
+    if planck_dp_flat:
+        for param in ("ombh2", "ns"):
+            if param not in order:
+                order.append(param)
     preferred = ["H0", "omegam", "rd", "w", "w0", "wa", "sigma8", "S8", "M_B"]
     ordered = [param for param in preferred if param in order] + [
         param for param in order if param not in preferred
@@ -864,12 +868,23 @@ def _draw_gaussian_centered_proposal(
     proposal.  Inflation=5 collapsed to 0.04% / ESS≈30 because
     (1/5)⁴ ≈ 1.6e-3.  BAO+Planck combined σ_H0 ≈ 0.5 (Planck-dominated),
     so 2.5σ_Planck = 1.35 still covers the joint posterior comfortably.
+
+    planck2018_compressed (2026-07-07, correlated distance-prior upgrade):
+    the executed CMB term is the nonlinear CHW2019 (R, l_A, ombh2, ns) prior,
+    whose ΛCDM parameter-space image is a strongly correlated ridge an
+    axis-independent proposal cannot cover (measured ESS 21 vs the 400
+    publication floor).  For flat ΛCDM the (H0, omegam, ombh2, ns) block is
+    therefore proposed jointly from the linearized prior
+    (``_planck_dp_lcdm_proposal_moments``); for flat extended-DE models the
+    ombh2/ns axes get independent Table-I-anchored Gaussians (the DE target
+    is degeneracy-widened anyway and relies on the emcee upgrade).  Proposal
+    densities are subtracted exactly, so these anchors can never bias the
+    posterior — a bad anchor only costs ESS.
     """
     best_entry: CosmologyDatasetEntry | None = None
     best_trace = math.inf
     best_local_idx: list[int] = []
     best_sample_idx: list[int] = []
-    best_names: list[str] = []
 
     for entry in compressed_entries:
         spec = entry.compressed_likelihood
@@ -893,39 +908,131 @@ def _draw_gaussian_centered_proposal(
             best_trace = trace_norm
             best_local_idx = local_idx
             best_sample_idx = [parameter_order.index(n) for n in names]
-            best_names = names
 
-    if best_entry is None:
-        return None
+    # Assemble independent proposal blocks; every axis not covered by a block
+    # draws uniform from the prior box.  A block is (indices, mean,
+    # [(weight, covariance), ...]) — a Gaussian mixture sharing one mean.
+    # Each covariance below is ALREADY inflation-scaled.
+    planck_selected = any(e.key == "planck2018_compressed" for e in compressed_entries)
+    blocks: list[tuple[list[int], np.ndarray, list[tuple[float, np.ndarray]]]] = []
 
-    spec = best_entry.compressed_likelihood
-    assert spec is not None  # narrowed by the search above
-    gaussian_mean = np.asarray(spec.mean, dtype=float)[best_local_idx]
-    gaussian_cov = np.asarray(spec.covariance, dtype=float)[
-        np.ix_(best_local_idx, best_local_idx)
-    ] * (inflation ** 2)
-    # Numerical jitter so multivariate_normal doesn't refuse near-singular
-    # covariance for one-parameter (1×1) Gaussians.
-    gaussian_cov = gaussian_cov + np.eye(len(best_names)) * 1e-12
+    dp_moments = _planck_dp_lcdm_proposal_moments() if planck_selected else None
+    dp_lcdm = (
+        dp_moments is not None
+        and all(name in parameter_order for name in dp_moments[0])
+        and not any(p in parameter_order for p in ("w", "w0", "wa", "omegak"))
+    )
+    if dp_lcdm and dp_moments is not None:
+        # Flat ΛCDM: propose (H0, omegam, ombh2, ns) jointly from the
+        # linearized distance prior (see docstring).  Two extra tight axes
+        # (ombh2, ns) mean the flat 2.5x inflation cannot reach the 400 ESS
+        # publication floor even with perfect shape matching (0.54^6), so the
+        # DP block runs a tighter 1.8x core carrying 90% of the mass plus a
+        # 4x defensive tail (10%) that keeps the weights bounded when a
+        # co-selected probe (BAO) shifts the joint posterior off the
+        # DP-only center.  Mixture density is exact below — never a bias.
+        dp_names, dp_mean, dp_cov = dp_moments
+        blocks.append((
+            [parameter_order.index(n) for n in dp_names],
+            dp_mean,
+            [(0.9, dp_cov * (1.8 ** 2)), (0.1, dp_cov * (4.0 ** 2))],
+        ))
+        planck_spec = next(
+            e.compressed_likelihood
+            for e in compressed_entries
+            if e.key == "planck2018_compressed" and e.compressed_likelihood is not None
+        )
+        spec_params = list(planck_spec.parameters)
+        if "sigma8" in parameter_order and "sigma8" in spec_params:
+            # sigma8 is constrained only through the derived-S8 growth row
+            # (S8 = sigma8*sqrt(omegam/0.3)), so its posterior width is the
+            # S8 row width propagated back — wider than the spec's direct
+            # sigma8 row.  Anchor the mean on the sigma8 row but take the
+            # LARGER of the two widths so the proposal never under-covers.
+            spec_mean = np.asarray(planck_spec.mean, dtype=float)
+            spec_cov = np.asarray(planck_spec.covariance, dtype=float)
+            k = spec_params.index("sigma8")
+            s8_sigma = math.sqrt(float(spec_cov[k][k]))
+            if "S8" in spec_params and "omegam" in spec_params:
+                ks8 = spec_params.index("S8")
+                kom = spec_params.index("omegam")
+                propagated = math.sqrt(float(spec_cov[ks8][ks8])) / math.sqrt(
+                    float(spec_mean[kom]) / S8_PIVOT_OMEGAM
+                )
+                s8_sigma = max(s8_sigma, propagated)
+            blocks.append((
+                [parameter_order.index("sigma8")],
+                np.array([float(spec_mean[k])]),
+                [(1.0, np.array([[(inflation * s8_sigma) ** 2]]))],
+            ))
+    else:
+        if best_entry is None:
+            return None
+        spec = best_entry.compressed_likelihood
+        assert spec is not None  # narrowed by the search above
+        blocks.append((
+            best_sample_idx,
+            np.asarray(spec.mean, dtype=float)[best_local_idx],
+            [(1.0, np.asarray(spec.covariance, dtype=float)[
+                np.ix_(best_local_idx, best_local_idx)
+            ] * (inflation ** 2))],
+        ))
+        # Flat extended-DE models: the distance-prior axes (ombh2, ns) carry
+        # no Gaussian row in any spec — their constraint lives only in the
+        # nonlinear CHW2019 prior — and a uniform proposal over the full
+        # prior box collapses the importance ESS (sigma_ombh2 = 1.5e-4
+        # against a 6e-3-wide box).  Anchor them independently on the same
+        # paper-verified Table-I moments the target chi2 uses.
+        if planck_selected:
+            for name, (dp_mean, dp_sigma) in PLANCK18_DP_PROPOSAL_MOMENTS.items():
+                if name in parameter_order:
+                    idx = parameter_order.index(name)
+                    if not any(idx in blk_idx for blk_idx, _, _ in blocks):
+                        blocks.append((
+                            [idx],
+                            np.array([dp_mean]),
+                            [(1.0, np.array([[(inflation * dp_sigma) ** 2]]))],
+                        ))
 
-    sign, logdet = np.linalg.slogdet(gaussian_cov)
-    if sign <= 0 or not math.isfinite(logdet):
-        return None
-    inv_cov = np.linalg.inv(gaussian_cov)
+    prepared: list[tuple[list[int], np.ndarray, list[tuple[float, np.ndarray, np.ndarray, float]]]] = []
+    for blk_idx, blk_mean, components in blocks:
+        comps: list[tuple[float, np.ndarray, np.ndarray, float]] = []
+        for weight, comp_cov in components:
+            # Numerical jitter so multivariate_normal doesn't refuse
+            # near-singular covariance for one-parameter (1×1) Gaussians.
+            comp_cov = comp_cov + np.eye(len(blk_idx)) * 1e-12
+            sign, logdet = np.linalg.slogdet(comp_cov)
+            if sign <= 0 or not math.isfinite(logdet):
+                return None
+            comps.append((weight, comp_cov, np.linalg.inv(comp_cov), logdet))
+        prepared.append((blk_idx, blk_mean, comps))
 
-    # Reject anything outside the prior box.  A 5σ-inflated Gaussian centered
+    # Reject anything outside the prior box.  An inflated Gaussian centered
     # well inside the box should keep ≥80% of draws; if it does not (e.g.
     # Gaussian mean near the edge), bail and let the caller use uniform.
     over = max(int(proposal_count * 1.5), proposal_count + 1)
     samples = np.empty((over, len(parameter_order)), dtype=float)
-    gaussian_draws = rng.multivariate_normal(gaussian_mean, gaussian_cov, size=over)
-    for k, idx in enumerate(best_sample_idx):
-        samples[:, idx] = gaussian_draws[:, k]
+    covered = {idx for blk_idx, *_ in prepared for idx in blk_idx}
     for i, name in enumerate(parameter_order):
-        if i in best_sample_idx:
+        if i in covered:
             continue
         low, high = prior_bounds[name]
         samples[:, i] = rng.uniform(low, high, size=over)
+    for blk_idx, blk_mean, comps in prepared:
+        if len(comps) == 1:
+            draws = rng.multivariate_normal(blk_mean, comps[0][1], size=over)
+        else:
+            weights = np.array([w for w, *_ in comps], dtype=float)
+            choice = rng.choice(len(comps), size=over, p=weights / weights.sum())
+            draws = np.empty((over, len(blk_idx)), dtype=float)
+            for c, (_, comp_cov, _, _) in enumerate(comps):
+                mask = choice == c
+                if np.any(mask):
+                    draws[mask] = rng.multivariate_normal(
+                        blk_mean, comp_cov, size=int(mask.sum())
+                    )
+        for k, idx in enumerate(blk_idx):
+            samples[:, idx] = draws[:, k]
 
     in_box = np.ones(over, dtype=bool)
     for i, name in enumerate(parameter_order):
@@ -936,12 +1043,18 @@ def _draw_gaussian_centered_proposal(
         return None
     samples = samples[:proposal_count]
 
-    diffs = samples[:, best_sample_idx] - gaussian_mean
-    log_q = (
-        -0.5 * np.einsum("ni,ij,nj->n", diffs, inv_cov, diffs)
-        - 0.5 * logdet
-        - 0.5 * len(best_names) * np.log(2.0 * np.pi)
-    )
+    log_q = np.zeros(samples.shape[0], dtype=float)
+    for blk_idx, blk_mean, comps in prepared:
+        diffs = samples[:, blk_idx] - blk_mean
+        comp_logpdfs = np.stack([
+            -0.5 * np.einsum("ni,ij,nj->n", diffs, comp_inv, diffs)
+            - 0.5 * comp_logdet
+            - 0.5 * len(blk_idx) * np.log(2.0 * np.pi)
+            + math.log(weight)
+            for weight, _, comp_inv, comp_logdet in comps
+        ])
+        peak = np.max(comp_logpdfs, axis=0)
+        log_q += peak + np.log(np.sum(np.exp(comp_logpdfs - peak), axis=0))
     # Uniform-prior dimensions contribute a constant log(1/(high-low)) which
     # cancels out of the importance ratio; intentionally omitted.
     return samples, log_q
@@ -1004,6 +1117,11 @@ def _run_emcee_chain(
         "M_B": -19.4,
         "sigma8": 0.81,
         "S8": 0.83,
+        # Distance-prior axes (CHW2019 Table-I means): the targets are far
+        # tighter than the prior box, so starting walkers at the box middle
+        # wastes most of the burn-in walking to the mode.
+        "ombh2": PLANCK18_DP_PROPOSAL_MOMENTS["ombh2"][0],
+        "ns": PLANCK18_DP_PROPOSAL_MOMENTS["ns"][0],
     }
     center = np.empty(ndim, dtype=float)
     for i, name in enumerate(parameter_order):

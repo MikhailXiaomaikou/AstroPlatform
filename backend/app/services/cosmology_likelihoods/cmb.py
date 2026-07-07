@@ -9,6 +9,10 @@ and keeps the original one-namespace monkeypatch semantics.
 from __future__ import annotations
 
 
+import hashlib
+import pathlib
+from typing import Any
+
 import numpy as np
 
 from app.services.cosmology_likelihoods.core import (
@@ -84,27 +88,118 @@ def _cmb_distance_priors(omegam, h0, ombh2, w0=-1.0, wa=0.0):
 
 
 # Planck 2018 TT,TE,EE+lowE distance priors, base-LCDM block (the paper validates
-# this block for wCDM/CPL too).  Chen-Huang-Wang 2019, arXiv:1808.05724, Table I:
-# R=1.7502+-0.0046, l_A=301.471+-0.090, ombh2=0.02236+-0.00015, with the listed
-# correlation matrix.  Used as the CMB term for extended FLAT dark-energy fits.
-_PLANCK18_DP_MEAN = np.array([1.7502, 301.471, 0.02236])
-_PLANCK18_DP_SIGMA = np.array([0.0046, 0.090, 0.00015])
+# this block for wCDM/CPL too).  Chen-Huang-Wang 2019, arXiv:1808.05724, Table I
+# (visually verified against the published PDF, 2026-07-07):
+#   R      = 1.7502  +- 0.0046
+#   l_A    = 301.471 +0.089/-0.090  (symmetrized to 0.090, the conservative side)
+#   ombh2  = 0.02236 +- 0.00015
+#   n_s    = 0.9649  +- 0.0043
+# with the printed 4x4 correlation matrix.  Self-check: inverting the
+# (R, l_A, ombh2) sub-covariance reproduces the paper's appendix
+# Distance_invcov.txt to table-rounding precision (pinned by
+# tests/test_planck_distance_prior.py).  Used as the executed CMB term for ALL
+# flat models — LCDM included (2026-07-07; previously extended-DE only, while
+# LCDM ran a diagonal (H0, Om, sigma8, S8) parameter Gaussian that did not
+# match the entry's claimed observables).
+_PLANCK18_DP_MEAN = np.array([1.7502, 301.471, 0.02236, 0.9649])
+_PLANCK18_DP_SIGMA = np.array([0.0046, 0.090, 0.00015, 0.0043])
 _PLANCK18_DP_CORR = np.array([
-    [1.00, 0.46, -0.66],
-    [0.46, 1.00, -0.33],
-    [-0.66, -0.33, 1.00],
+    [1.00, 0.46, -0.66, -0.74],
+    [0.46, 1.00, -0.33, -0.35],
+    [-0.66, -0.33, 1.00, 0.46],
+    [-0.74, -0.35, 0.46, 1.00],
 ])
 _PLANCK18_DP_INVCOV = np.linalg.inv(
     _PLANCK18_DP_SIGMA[:, None] * _PLANCK18_DP_SIGMA[None, :] * _PLANCK18_DP_CORR
 )
 
+# Proposal-anchor moments for the distance-prior axes that carry no Gaussian
+# row in any CompressedLikelihoodSpec (their constraint lives only in the
+# nonlinear prior above).  Consumed by the importance sampler's proposal
+# builder; the proposal density is exactly divided back out, so target
+# correctness never depends on these — they only keep the ESS from collapsing
+# against a tight target inside a wide uniform prior box.
+PLANCK18_DP_PROPOSAL_MOMENTS: dict[str, tuple[float, float]] = {
+    "ombh2": (float(_PLANCK18_DP_MEAN[2]), float(_PLANCK18_DP_SIGMA[2])),
+    "ns": (float(_PLANCK18_DP_MEAN[3]), float(_PLANCK18_DP_SIGMA[3])),
+}
+
+
+def _planck_dp_lcdm_proposal_moments() -> tuple[tuple[str, ...], np.ndarray, np.ndarray] | None:
+    """Linearized ΛCDM importance-proposal moments implied by the CHW2019
+    distance priors: names ("H0", "omegam", "ombh2", "ns"), the parameter
+    point mapping onto the Table-I means, and the implied parameter-space
+    covariance J^-1 C J^-T.
+
+    PROPOSAL ONLY: the importance sampler divides this density back out
+    exactly, so posterior correctness never depends on it — it exists because
+    an axis-independent proposal cannot cover the strongly correlated
+    (R, l_A) ridge (measured ESS 21 vs the 400 publication floor).  Returns
+    None if the solve/linearization fails; callers must fall back to the
+    generic proposal.  Cached after the first call (deterministic).
+    """
+    global _PLANCK18_DP_LCDM_PROPOSAL_CACHE
+    if _PLANCK18_DP_LCDM_PROPOSAL_CACHE is not None:
+        return _PLANCK18_DP_LCDM_PROPOSAL_CACHE
+
+    r_mean, la_mean, obh2_mean, ns_mean = (float(x) for x in _PLANCK18_DP_MEAN)
+
+    def _rl(om: float, h0: float, obh2: float) -> np.ndarray:
+        big_r, l_a, _ = _cmb_distance_priors(om, h0, obh2)
+        return np.array([big_r, l_a])
+
+    try:
+        # 2-dim Newton for (omegam, H0) matching the (R, l_A) means at the
+        # ombh2 mean (LCDM, w0=-1, wa=0). Start at the Planck 2018 baseline.
+        om, h0 = 0.3153, 67.36
+        target = np.array([r_mean, la_mean])
+        for _ in range(20):
+            f = _rl(om, h0, obh2_mean) - target
+            if float(np.max(np.abs(f / target))) < 1e-10:
+                break
+            d_om, d_h0 = 1e-5, 1e-3
+            j = np.column_stack([
+                (_rl(om + d_om, h0, obh2_mean) - _rl(om - d_om, h0, obh2_mean)) / (2 * d_om),
+                (_rl(om, h0 + d_h0, obh2_mean) - _rl(om, h0 - d_h0, obh2_mean)) / (2 * d_h0),
+            ])
+            om, h0 = np.array([om, h0]) - np.linalg.solve(j, f)
+        # Jacobian of v=(R, l_A, ombh2, ns) wrt u=(H0, omegam, ombh2, ns).
+        d_h0, d_om, d_ob = 1e-3, 1e-5, 1e-7
+        jac = np.zeros((4, 4))
+        jac[0:2, 0] = (_rl(om, h0 + d_h0, obh2_mean) - _rl(om, h0 - d_h0, obh2_mean)) / (2 * d_h0)
+        jac[0:2, 1] = (_rl(om + d_om, h0, obh2_mean) - _rl(om - d_om, h0, obh2_mean)) / (2 * d_om)
+        jac[0:2, 2] = (_rl(om, h0, obh2_mean + d_ob) - _rl(om, h0, obh2_mean - d_ob)) / (2 * d_ob)
+        jac[2, 2] = 1.0
+        jac[3, 3] = 1.0
+        dp_cov = _PLANCK18_DP_SIGMA[:, None] * _PLANCK18_DP_SIGMA[None, :] * _PLANCK18_DP_CORR
+        jac_inv = np.linalg.inv(jac)
+        implied_cov = jac_inv @ dp_cov @ jac_inv.T
+        np.linalg.cholesky(implied_cov)  # must be positive definite
+        mean = np.array([h0, om, obh2_mean, ns_mean])
+    except Exception:  # pragma: no cover - defensive; callers fall back
+        return None
+    _PLANCK18_DP_LCDM_PROPOSAL_CACHE = (("H0", "omegam", "ombh2", "ns"), mean, implied_cov)
+    return _PLANCK18_DP_LCDM_PROPOSAL_CACHE
+
+
+_PLANCK18_DP_LCDM_PROPOSAL_CACHE: tuple[tuple[str, ...], np.ndarray, np.ndarray] | None = None
+
 
 def _planck_distance_prior_chi2(samples: np.ndarray, parameter_order: list[str]) -> np.ndarray:
-    """Per-sample chi2 of the Planck 2018 CMB distance prior (R, l_A, ombh2) for an
-    extended FLAT dark-energy chain (Chen-Huang-Wang 2019)."""
+    """Per-sample chi2 of the Planck 2018 compressed CMB distance priors
+    (R, l_A, ombh2, ns) with the full CHW2019 Table-I correlation matrix, for
+    any FLAT (w0,wa)CDM-family chain."""
+    required = ("omegam", "H0", "ombh2", "ns")
+    missing = [name for name in required if name not in parameter_order]
+    if missing:
+        raise ValueError(
+            "Planck 2018 distance prior needs sampled axes "
+            f"{list(required)}; missing {missing} from {list(parameter_order)}"
+        )
     om = samples[:, parameter_order.index("omegam")]
     h0 = samples[:, parameter_order.index("H0")]
     obh2 = samples[:, parameter_order.index("ombh2")]
+    ns = samples[:, parameter_order.index("ns")]
     if "w0" in parameter_order:
         w0 = samples[:, parameter_order.index("w0")]
     elif "w" in parameter_order:
@@ -113,7 +208,7 @@ def _planck_distance_prior_chi2(samples: np.ndarray, parameter_order: list[str])
         w0 = -1.0
     wa = samples[:, parameter_order.index("wa")] if "wa" in parameter_order else 0.0
     big_r, l_a, _ = _cmb_distance_priors(om, h0, obh2, w0=w0, wa=wa)
-    resid = np.column_stack([big_r, l_a, obh2]) - _PLANCK18_DP_MEAN
+    resid = np.column_stack([big_r, l_a, obh2, ns]) - _PLANCK18_DP_MEAN
     return np.einsum("ni,ij,nj->n", resid, _PLANCK18_DP_INVCOV, resid)
 
 
@@ -135,19 +230,24 @@ def _compressed_chi2_samples(
         spec = entry.compressed_likelihood
         if spec is None:
             continue
-        # Extended FLAT dark-energy models: the compressed Planck spec pins
-        # H0/omegam at their LCDM projection, which forbids the geometric slide
-        # along theta*=const that IS the w0/wa signal.  Use the model-valid
-        # acoustic-scale distance prior (R, l_A, ombh2) instead (Chen-Huang-Wang
-        # 2019), keeping any derived-S8 growth row.  Curved (ok_*) models keep the
-        # old path (a FLAT distance prior would be wrong; the curved prior is
-        # deferred).  LCDM has no DE param -> untouched, byte-for-byte unchanged.
-        de_flat = (
+        # Every FLAT model (LCDM included, 2026-07-07): execute the entry's
+        # CLAIMED observables — the correlated CHW2019 (R, l_A, ombh2, ns)
+        # compressed CMB distance priors — plus the Planck-2018 S8
+        # growth-amplitude row applied on the derived S8 (the distance priors
+        # carry no clustering-amplitude information; the S8 row keeps sigma8
+        # anchored and is declared in the registry approximation text).
+        # Rationale unchanged from the extended-DE-only version this
+        # generalizes: a hard H0/omegam parameter Gaussian pins the LCDM
+        # projection and (for DE models) forbids the geometric slide along
+        # theta*=const that IS the w0/wa signal.  Curved (ok_*) models keep
+        # the parameter-summary path (a FLAT distance prior would be wrong;
+        # the curved prior is deferred) — defensively only: the in-process
+        # runner refuses ok_* models upstream.
+        dp_flat = (
             entry.key == "planck2018_compressed"
-            and any(p in parameter_order for p in ("w", "w0", "wa"))
             and "omegak" not in parameter_order
         )
-        if de_flat:
+        if dp_flat:
             try:
                 total += _planck_distance_prior_chi2(samples, parameter_order)
                 if derived_s8 is not None and "S8" in spec.parameters:
@@ -217,3 +317,70 @@ CMB_APLANCK_KEYS = frozenset({
     "planck_2018_highl_TTTEEE_lite",
     "planck_2018_lensing",
 })
+
+
+# ── ACT DR6 lensing (act_dr6_lenslike) vendored-data verification gate ──────
+# The act_baseline lens_only file set act_dr6_lenslike.load_data() reads,
+# vendored under the InstallableLikelihood get_path convention
+# (packages_path/data/ACT_dr6_likelihood/<version>/) by
+# scripts/fetch_act_dr6_lenslike.py and sha256-pinned in the registry entry's
+# data_products. covmat_act.txt is loaded UNCONDITIONALLY by load_data (an
+# internal consistency test), so it is pinned even though the lens_only
+# covariance is covmat_act_cmbmarg.txt.
+ACT_DR6_LENSLIKE_VERSION = "v1.2"
+ACT_DR6_LENSLIKE_DATA_DIR = (
+    pathlib.Path(__file__).resolve().parents[3]
+    / "data" / "cobaya_packages" / "data" / "ACT_dr6_likelihood"
+    / ACT_DR6_LENSLIKE_VERSION
+)
+# role (registry data_products) -> filename act_dr6_lenslike.load_data reads.
+ACT_DR6_LENSLIKE_FILES: dict[str, str] = {
+    "measurement_vector": "clkk_bandpowers_act.txt",
+    "binning_matrix": "binning_matrix_act.txt",
+    "covariance_cmbmarg": "covmat_act_cmbmarg.txt",
+    "covariance": "covmat_act.txt",
+}
+
+
+def load_verified_act_dr6_lenslike_data() -> dict[str, Any]:
+    """Verify the vendored ACT DR6 lensing data subset against the registry
+    sha256 pins.  Returns {data_directory, files_sha256, hash_verified,
+    cov_fidelity, issues}: cov_fidelity is 'full' only when EVERY pinned file
+    is present and byte-identical to its pin; any missing/tampered file →
+    'unverified' with the issue listed (blocks publication; a future
+    cobaya_runner wiring must refuse to run on hash_verified=False).  Never
+    raises."""
+    from app.services.cosmology_likelihoods.registry import get_cosmology_dataset
+
+    entry = get_cosmology_dataset("act_dr6_lensing")
+    pins = {p.role: p.sha256 for p in entry.data_products if p.sha256}
+    files_sha256: dict[str, str] = {}
+    issues: list[str] = []
+    for role, filename in ACT_DR6_LENSLIKE_FILES.items():
+        pin = pins.get(role)
+        if not pin:
+            issues.append(f"{role}: no sha256 pin registered for {filename}")
+            continue
+        path = ACT_DR6_LENSLIKE_DATA_DIR / filename
+        if not path.is_file():
+            issues.append(
+                f"{role}: vendored file missing ({filename}); run "
+                "scripts/fetch_act_dr6_lenslike.py"
+            )
+            continue
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except Exception as exc:  # unreadable file — degrade, never crash
+            issues.append(f"{role}: unreadable ({exc})")
+            continue
+        files_sha256[filename] = digest
+        if digest != pin:
+            issues.append(f"{role}: sha256 mismatch for {filename}")
+    verified = not issues
+    return {
+        "data_directory": str(ACT_DR6_LENSLIKE_DATA_DIR),
+        "files_sha256": files_sha256,
+        "hash_verified": verified,
+        "cov_fidelity": "full" if verified else "unverified",
+        "issues": issues,
+    }

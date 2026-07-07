@@ -78,6 +78,12 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         do_not_combine_with=(
             "desi_dr2_bao", "sdss_dr12_consensus_bao",
             "eboss_dr16_elg_bao", "eboss_dr16_lyauto_bao", "eboss_dr16_lyxqso_bao",
+            # BOSS z=0.38/0.51 + eBOSS z=0.698 LRGs overlap DESI sky/z coverage
+            # (same partition-at-z=0.6 rationale as sdss_dr12_consensus_bao).
+            "eboss_dr16_lrg_fsbao",
+            # eBOSS z=1.48 QSOs are re-observed by DESI (QSO bin z~1.49); the
+            # DESI key papers replace eBOSS QSO rather than co-add.
+            "eboss_dr16_qso_fsbao",
         ),
         cobaya_likelihood="external:desilike.desi_dr1_bao",
         cosmosis_module="likelihood/bao/desi1-dr1/desi1_dr1.py",
@@ -167,6 +173,12 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         do_not_combine_with=(
             "desi_dr1_bao", "sdss_dr12_consensus_bao",
             "eboss_dr16_elg_bao", "eboss_dr16_lyauto_bao", "eboss_dr16_lyxqso_bao",
+            # BOSS z=0.38/0.51 + eBOSS z=0.698 LRGs overlap DESI sky/z coverage
+            # (same partition-at-z=0.6 rationale as sdss_dr12_consensus_bao).
+            "eboss_dr16_lrg_fsbao",
+            # eBOSS z=1.48 QSOs are re-observed by DESI (QSO bin z~1.49); the
+            # DESI key papers replace eBOSS QSO rather than co-add.
+            "eboss_dr16_qso_fsbao",
         ),
         cobaya_likelihood="external:desilike.desi_dr2_bao",
         cosmosis_module="likelihood/bao/desi-dr2/desi_dr2.py",
@@ -422,8 +434,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "released full covariance, executed in-process as a flat w0waCDM rᵀC⁻¹r χ² that "
             "predicts both BAO distance ratios and the fσ8 growth rate. Constrains (H0, Ωm, "
             "r_d, σ8). Do NOT co-add with 'eboss_dr16_rsd' (same tracers' fσ8) — double-counts. "
-            "No survey overlap with DESI BAO. ELG (grid likelihood) and Lyα/MGS (BAO-only) are "
-            "not part of this Gaussian FSBAO entry."
+            "Do NOT co-add with DESI BAO either: the BOSS z=0.38/0.51 bins and the eBOSS "
+            "z=0.698 LRGs overlap DESI's sky/redshift coverage (DESI re-observes the same "
+            "LRGs; the DESI key papers partition SDSS vs DESI at z=0.6 rather than co-add, "
+            "and this 9-vector is indivisible). ELG (grid likelihood) and Lyα/MGS (BAO-only) "
+            "are not part of this Gaussian FSBAO entry."
         ),
         data_products=(
             DataProductSpec(
@@ -449,7 +464,16 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 local_path="data/cosmology/eboss_dr16_lrg_fsbao/cov.txt",
             ),
         ),
-        do_not_combine_with=("eboss_dr16_rsd", "sdss_dr12_consensus_bao"),
+        do_not_combine_with=(
+            "eboss_dr16_rsd",
+            "sdss_dr12_consensus_bao",
+            # Contains the BOSS z=0.38/0.51 galaxies plus eBOSS z=0.698 LRGs —
+            # both overlap DESI's sky/z coverage (same rationale as the
+            # sdss_dr12_consensus_bao ↔ DESI exclusion; the DESI key papers
+            # partition at z=0.6 instead of co-adding).
+            "desi_dr1_bao",
+            "desi_dr2_bao",
+        ),
         cobaya_likelihood="external:fsbao.sdss_dr16_lrg",
         cosmosis_module="external:fsbao/sdss_dr16_lrg",
         execution_mode="compressed_gaussian",
@@ -486,7 +510,9 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "3-element joint vector (D_M/r_s, D_H/r_s, fσ8 at z=1.48) with the released full "
             "3×3 covariance, executed in-process as a flat w0waCDM rᵀC⁻¹r χ² predicting BAO "
             "distance ratios and the fσ8 growth rate. Constrains (H0, Ωm, r_d, σ8). Do NOT "
-            "co-add with 'eboss_dr16_rsd' (same QSO fσ8) — double-counts. No DESI overlap."
+            "co-add with 'eboss_dr16_rsd' (same QSO fσ8) — double-counts. Do NOT co-add "
+            "with DESI BAO either: DESI re-observes the z~1.49 QSOs and the DESI key "
+            "papers replace eBOSS QSO rather than co-add."
         ),
         data_products=(
             DataProductSpec(
@@ -512,7 +538,13 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 local_path="data/cosmology/eboss_dr16_qso_fsbao/cov.txt",
             ),
         ),
-        do_not_combine_with=("eboss_dr16_rsd",),
+        do_not_combine_with=(
+            "eboss_dr16_rsd",
+            # DESI re-observes the z~1.49 QSOs; the DESI key papers replace
+            # eBOSS QSO rather than co-add.
+            "desi_dr1_bao",
+            "desi_dr2_bao",
+        ),
         cobaya_likelihood="external:fsbao.sdss_dr16_qso",
         cosmosis_module="external:fsbao/sdss_dr16_qso",
         execution_mode="compressed_gaussian",
@@ -1140,7 +1172,12 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         covariance=CovarianceSpec(
             kind="compressed covariance",
             provided=True,
-            description="Distance-prior mean vector and covariance from Planck final release literature.",
+            description=(
+                "Correlated compressed CMB distance priors (R, l_A, Omega_b h^2, "
+                "n_s) with the full 4x4 correlation matrix from Chen, Huang & "
+                "Wang 2019 (arXiv:1808.05724) Table I, Planck 2018 TT,TE,EE+lowE "
+                "base-LCDM."
+            ),
             url="https://arxiv.org/abs/1808.05724",
             format="paper table",
         ),
@@ -1162,20 +1199,41 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             DatasetCitation(label="Chen, Huang & Wang distance priors", year=2019, arxiv="1808.05724", doi="10.1088/1475-7516/2019/02/028"),
         ),
         notes=(
-            "Compressed CMB prior, not a replacement for the full Planck likelihood "
-            "in extended models. The (H0, Omega_m, sigma8, S8) summary uses a "
-            "diagonal covariance, but as of 1B (2026-05-29) the runner samples only "
-            "(H0, Omega_m, sigma8) and computes S8 == sigma8 * (Omega_m/0.3)^0.5 as "
-            "a derived quantity, applying the S8 row on that derived value, so the "
-            "joint posterior is internally consistent and the WL S8 likelihood pulls "
-            "on the sigma8/Omega_m combination as it should. A real non-diagonal "
-            "Planck covariance from the public chains remains a follow-up -- see "
-            "scripts/fetch_planck2018_compressed.py. Treat these as compressed-"
-            "preliminary, not full-likelihood, constraints."
+            "Compressed CMB prior, not a replacement for the full Planck likelihood. "
+            "EXECUTION (2026-07-07 upgrade): on the sampling path (any executable "
+            "probe co-selected; every flat model, LCDM included) the executed CMB "
+            "term is the CORRELATED Chen-Huang-Wang 2019 (arXiv:1808.05724, Table I) "
+            "4-dim (R, l_A, ombh2, ns) distance-prior Gaussian — the observables "
+            "this entry claims — plus the Planck-2018 S8 growth-amplitude row "
+            "applied on the derived S8 == sigma8 * (Omega_m/0.3)^0.5 (the distance "
+            "priors carry no clustering amplitude; without the S8 row sigma8 would "
+            "be unconstrained). The (H0, Omega_m, sigma8, S8) diagonal parameter "
+            "summary below (Planck VI Table 2 TT,TE,EE+lowE+lensing column) remains "
+            "in use ONLY for: the analytic no-probe path (CMB-alone selections, "
+            "where the nonlinear prior cannot run), the pairwise-tension table, and "
+            "importance-proposal anchoring. S8 stays a derived quantity everywhere "
+            "(1B, 2026-05-29). A chain-derived non-diagonal parameter covariance for "
+            "the analytic path remains a follow-up -- see "
+            "scripts/fetch_planck2018_compressed.py. Treat all of it as compressed-"
+            "preliminary, not full-likelihood, constraints. Do NOT co-add with the "
+            "native Planck 2018 stack entries (enforced via do_not_combine_with)."
         ),
         cobaya_likelihood="external:planck_2018_distance_prior",
         cosmosis_module="external:planck2018_distance_priors",
         execution_mode="compressed_gaussian",
+        # This entry is a COMPRESSION of the same Planck 2018 data the clik-free
+        # native stack fits directly (CHW2019 distance priors compress
+        # TT,TE,EE+lowE; the parameter-summary/S8 rows quote the Planck VI
+        # Table 2 TT,TE,EE+lowE+lensing column). Co-adding it with any part of
+        # the full stack — or with the PR4/NPIPE lensing reprocessing of the
+        # same maps — counts the same Planck data twice.
+        do_not_combine_with=(
+            "planck_2018_highl_TTTEEE_lite",
+            "planck_2018_lowl_TT",
+            "planck_2018_lowl_EE",
+            "planck_2018_lensing",
+            "planck_pr4_lensing",
+        ),
         data_products=(
             DataProductSpec(
                 product_type="planck_likelihood_archive",
@@ -1214,15 +1272,24 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 "sigma8": "dimensionless",
                 "S8": "dimensionless",
             },
-            source_locator="Planck Collaboration VI 2020 Table 2 baseline; S8 derived summary.",
+            source_locator=(
+                "Executed distance priors: Chen, Huang & Wang 2019 (arXiv:1808.05724) "
+                "Table I, Planck 2018 TT,TE,EE+lowE base-LCDM. Parameter summary rows "
+                "(analytic path / tensions / proposal): Planck Collaboration VI 2020 "
+                "Table 2 baseline; S8 derived summary."
+            ),
             approximation=(
-                "Diagonal compressed ΛCDM posterior summary; not the full Planck "
-                "likelihood. The S8 row is kept for its published 1σ but the runner "
-                "treats S8 == sigma8 * (Omega_m/0.3)^0.5 as a *derived* quantity "
-                "(1B, 2026-05-29): the sampler never explores an independent S8, so "
-                "the σ8/Ωm/S8 joint is now internally consistent. Real non-diagonal "
-                "chain covariance remains a follow-up "
-                "(scripts/fetch_planck2018_compressed.py produces the covariance)."
+                "Sampling path (flat models, any executable probe co-selected): the "
+                "executed CMB chi2 is the correlated CHW2019 4-dim (R, l_A, ombh2, "
+                "ns) distance-prior Gaussian plus the S8 row applied on derived "
+                "S8 == sigma8 * (Omega_m/0.3)^0.5 — NOT this diagonal parameter "
+                "summary. This (H0, Omega_m, sigma8, S8) diagonal ΛCDM posterior "
+                "summary is executed only on the analytic no-probe path (CMB-alone "
+                "selections) and otherwise feeds the tension table and proposal "
+                "anchoring. Neither is the full Planck likelihood. The sampler "
+                "never explores an independent S8 (derived, 1B 2026-05-29). Real "
+                "non-diagonal chain covariance for the analytic path remains a "
+                "follow-up (scripts/fetch_planck2018_compressed.py)."
             ),
         ),
     ),
@@ -1279,6 +1346,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cobaya_likelihood="external:planck_2018_highl_plik.TTTEEE_lite_native",
         cosmosis_module="external:planck_2018_highl_plik.TTTEEE_lite_native",
         execution_mode="external_cobaya",
+        # planck2018_compressed is a compression of this same Planck 2018 data.
+        do_not_combine_with=("planck2018_compressed",),
         data_products=(
             DataProductSpec(
                 product_type="cmb_binned_bandpowers",
@@ -1386,6 +1455,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cosmosis_module="external:planck_2018_lowl.TT",
         execution_mode="external_cobaya",
         recommended_combinations=("planck_2018_highl_TTTEEE_lite", "planck_2018_lowl_EE"),
+        # planck2018_compressed is a compression of this same Planck 2018 data.
+        do_not_combine_with=("planck2018_compressed",),
         data_products=(
             DataProductSpec(
                 product_type="cmb_lowl_gaussianized_mean",
@@ -1477,6 +1548,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cosmosis_module="external:planck_2018_lowl.EE",
         execution_mode="external_cobaya",
         recommended_combinations=("planck_2018_highl_TTTEEE_lite", "planck_2018_lowl_TT"),
+        # planck2018_compressed is a compression of this same Planck 2018 data.
+        do_not_combine_with=("planck2018_compressed",),
         data_products=(
             DataProductSpec(
                 product_type="cmb_lowl_probability_table",
@@ -1544,7 +1617,17 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         recommended_combinations=(
             "planck_2018_highl_TTTEEE_lite", "planck_2018_lowl_TT", "planck_2018_lowl_EE",
         ),
-        do_not_combine_with=("planck_pr4_lensing",),
+        do_not_combine_with=(
+            "planck_pr4_lensing",
+            # planck2018_compressed's S8 row quotes the Planck VI Table 2
+            # TT,TE,EE+lowE+lensing column — it already contains this lensing
+            # information (and the analytic no-probe path uses the full
+            # parameter-level summary).
+            "planck2018_compressed",
+            # act_dr6_lensing's executed compressed numbers are the ACT+Planck
+            # JOINT lensing summary — co-adding counts Planck lensing twice.
+            "act_dr6_lensing",
+        ),
         data_products=(
             DataProductSpec(
                 product_type="cmb_lensing_dataset_ini",
@@ -1626,7 +1709,13 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         covariance=CovarianceSpec(
             kind="bandpower covariance",
             provided=True,
-            description="ACT DR6 lensing likelihood data tarball and likelihood code.",
+            description=(
+                "ACT DR6 lensing likelihood data tarball and likelihood code "
+                "(the real standalone-ACT bandpower product, NASA LAMBDA). NOTE: "
+                "the registered compressed spec below does NOT use this tarball — "
+                "its numbers are hand-typed from the ACT+Planck joint summary "
+                "(see notes)."
+            ),
             url="https://lambda.gsfc.nasa.gov/product/act/actadv_dr6_lensing_lh_get.html",
             format="ACT_dr6_likelihood_v1.2.tgz",
         ),
@@ -1635,10 +1724,128 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             DatasetCitation(label="Madhavacheril et al. ACT DR6 lensing", year=2024, arxiv="2304.05203"),
             DatasetCitation(label="Carron, Mirmelstein & Lewis likelihood method", year=2022, arxiv="2206.07773"),
         ),
-        notes="Requires ACT likelihood data and external code; pair carefully with Planck CMB to avoid double-counting lensing.",
+        notes=(
+            "COMPRESSED NUMBERS ARE NOT ACT-ONLY: the executed (H0, sigma8, S8) "
+            "Gaussian is hand-typed from the ACT DR6 lensing paper's ACT+Planck "
+            "joint summary, so it is not statistically valid as a standalone ACT "
+            "constraint and must NOT be co-added with planck_2018_lensing / "
+            "planck_pr4_lensing (double-counts Planck lensing; enforced via "
+            "do_not_combine_with). The real standalone-ACT bandpower likelihood "
+            "is STAGED (2026-07-07): act_dr6_lenslike pip-installed, adapter "
+            "filled, act_baseline lens_only data vendored + sha256-pinned "
+            "(data_products below) and reproducing the package's reference "
+            "chi2 = 14.06 — but live cobaya execution still needs the "
+            "cobaya_runner runtime-hash gate + YAML wiring, so execution_mode "
+            "stays compressed_gaussian. Until that flips, treat this entry as "
+            "a preliminary ACT+Planck consistency check only."
+        ),
         cobaya_likelihood="external:act_dr6_lenslike.ACTDR6LensLike",
         cosmosis_module="external:act_dr6_lenslike",
         execution_mode="compressed_gaussian",
+        # The executed compressed numbers are the ACT+Planck JOINT lensing
+        # summary — co-adding with a Planck lensing likelihood counts Planck
+        # lensing twice.
+        do_not_combine_with=("planck_2018_lensing", "planck_pr4_lensing"),
+        # Real act_baseline lens_only likelihood inputs (2026-07-07): fetched
+        # from the official NASA LAMBDA tarball by
+        # scripts/fetch_act_dr6_lenslike.py, vendored under the cobaya
+        # InstallableLikelihood get_path convention, verified at load time by
+        # cosmology_likelihoods.cmb.load_verified_act_dr6_lenslike_data.
+        # Reproduces the package's own reference chi2 = 14.06 (act_baseline
+        # lens_only at the bundled fiducial spectra; act_dr6_lenslike
+        # tests/test_act.py) — pinned by tests/test_act_dr6_lenslike.py.
+        data_products=(
+            DataProductSpec(
+                product_type="lensing_likelihood_tarball",
+                role="source_tarball",
+                url=(
+                    "https://lambda.gsfc.nasa.gov/data/suborbital/ACT/ACT_dr6/"
+                    "likelihood/data/ACT_dr6_likelihood_v1.2.tgz"
+                ),
+                format="gzipped tar, 361,306,879 bytes (2024-02-01)",
+                description=(
+                    "Official NASA LAMBDA ACT DR6 lensing likelihood data tarball. "
+                    "NOT vendored whole (345 MB); the fetch script verifies this "
+                    "pin before extracting the subset below."
+                ),
+                sha256="bbcde3bcacd7c9a97138c4873c8a1217635a18504d15c4f86b1fba39d3601085",
+            ),
+            DataProductSpec(
+                product_type="cmb_lensing_bandpowers",
+                role="measurement_vector",
+                url="https://lambda.gsfc.nasa.gov/product/act/actadv_dr6_lensing_lh_get.html",
+                format="v1.2/clkk_bandpowers_act.txt (18 binned C_L^kappakappa bandpowers)",
+                description=(
+                    "ACT DR6 binned lensing bandpowers (the data vector; the "
+                    "act_baseline analysis range keeps bins [2:-6] of the 18)."
+                ),
+                rows=18,
+                sha256="7660d216c48aa639dd374a6284b927a2821427fca8e98a3a7845da47c16806ae",
+                local_path="data/cobaya_packages/data/ACT_dr6_likelihood/v1.2/clkk_bandpowers_act.txt",
+            ),
+            DataProductSpec(
+                product_type="cmb_lensing_binning_matrix",
+                role="binning_matrix",
+                url="https://lambda.gsfc.nasa.gov/product/act/actadv_dr6_lensing_lh_get.html",
+                format="v1.2/binning_matrix_act.txt (18x3000)",
+                description="Binning matrix applied to the theory C_L^kappakappa curve.",
+                rows=18,
+                sha256="a88fa3dc1ac5289e0580d8d0c1c3e9ee149f06cf62dad328cb5a248fd9985084",
+                local_path="data/cobaya_packages/data/ACT_dr6_likelihood/v1.2/binning_matrix_act.txt",
+            ),
+            DataProductSpec(
+                product_type="cmb_lensing_covariance",
+                role="covariance_cmbmarg",
+                url="https://lambda.gsfc.nasa.gov/product/act/actadv_dr6_lensing_lh_get.html",
+                format="v1.2/covmat_act_cmbmarg.txt (18x18)",
+                description=(
+                    "CMB-marginalized bandpower covariance — the one lens_only "
+                    "runs use (Hartlap-corrected at load time, nsims_act=792)."
+                ),
+                rows=18,
+                sha256="18ce4a7c542b7e23ecc17d492a8dbf748bf84a3bc30dc337a8999d9f4925c294",
+                local_path="data/cobaya_packages/data/ACT_dr6_likelihood/v1.2/covmat_act_cmbmarg.txt",
+            ),
+            DataProductSpec(
+                product_type="cmb_lensing_covariance",
+                role="covariance",
+                url="https://lambda.gsfc.nasa.gov/product/act/actadv_dr6_lensing_lh_get.html",
+                format="v1.2/covmat_act.txt (18x18)",
+                description=(
+                    "Non-marginalized bandpower covariance; loaded UNCONDITIONALLY "
+                    "by act_dr6_lenslike.load_data as an internal consistency test, "
+                    "so it is pinned alongside the executed covariance."
+                ),
+                rows=18,
+                sha256="e710817fc88e0321e6d2a8dc3805489ada0df3f3d930e6e341e4aa929a36f361",
+                local_path="data/cobaya_packages/data/ACT_dr6_likelihood/v1.2/covmat_act.txt",
+            ),
+            DataProductSpec(
+                product_type="cmb_fiducial_spectra",
+                role="fiducial_lensed_cls",
+                url="https://lambda.gsfc.nasa.gov/product/act/actadv_dr6_lensing_lh_get.html",
+                format="v1.2/like_corrs/cosmo2017_10K_acc3_lensedCls.dat",
+                description=(
+                    "Fiducial lensed CMB spectra shipped with the release — the "
+                    "theory input of the package's chi2=14.06 reference test "
+                    "(also read by load_data when like_corrections=True)."
+                ),
+                sha256="8ca800b013145473f837a7e96d19a2c14972146c29e63fe7966a33f2bfeff47c",
+                local_path="data/cobaya_packages/data/ACT_dr6_likelihood/v1.2/like_corrs/cosmo2017_10K_acc3_lensedCls.dat",
+            ),
+            DataProductSpec(
+                product_type="cmb_fiducial_spectra",
+                role="fiducial_lenspotential_cls",
+                url="https://lambda.gsfc.nasa.gov/product/act/actadv_dr6_lensing_lh_get.html",
+                format="v1.2/like_corrs/cosmo2017_10K_acc3_lenspotentialCls.dat",
+                description=(
+                    "Fiducial lensing-potential spectrum shipped with the release "
+                    "— the C_L^kappakappa theory input of the chi2=14.06 reference."
+                ),
+                sha256="53d01931defba4cadda8781f9d6049cc56fea075295f58405812096abc2da9ae",
+                local_path="data/cobaya_packages/data/ACT_dr6_likelihood/v1.2/like_corrs/cosmo2017_10K_acc3_lenspotentialCls.dat",
+            ),
+        ),
         compressed_likelihood=CompressedLikelihoodSpec(
             parameters=("H0", "sigma8", "S8"),
             mean=(68.1, 0.812, 0.831),
@@ -1654,8 +1861,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             },
             source_locator="Madhavacheril et al. ACT DR6 lensing abstract joint ACT+Planck-lensing summary.",
             approximation=(
-                "Diagonal ACT+Planck CMB-lensing compressed summary. Use for preliminary "
-                "consistency checks only; do not combine as statistically independent from Planck lensing."
+                "Diagonal compressed summary hand-typed from the ACT+Planck JOINT "
+                "lensing results (abstract level) — NOT a standalone ACT-only "
+                "constraint and NOT statistically independent of Planck lensing. "
+                "Use for preliminary consistency checks only."
             ),
         ),
     ),
@@ -1698,7 +1907,14 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cosmosis_module="external:planck_PR4_lensing",
         execution_mode="external_cobaya",
         # Same Planck maps as planck_2018_lensing (PR4 = NPIPE reprocessing).
-        do_not_combine_with=("planck_2018_lensing",),
+        # planck2018_compressed / act_dr6_lensing both carry Planck-lensing
+        # information in their executed compressed numbers (Table 2 +lensing
+        # column; ACT+Planck joint summary) — co-adding double-counts it.
+        do_not_combine_with=(
+            "planck_2018_lensing",
+            "planck2018_compressed",
+            "act_dr6_lensing",
+        ),
     ),
     "kids1000_wl": CosmologyDatasetEntry(
         key="kids1000_wl",

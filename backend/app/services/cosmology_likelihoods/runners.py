@@ -109,13 +109,16 @@ def compute_model_comparison(
     delta_aic = _delta("aic")
     k_b, k_e = _num(bf, "n_parameters"), _num(ef, "n_parameters")
 
-    # Δχ²/ΔAIC only mean anything when both fits used the SAME likelihood. Some
-    # compressed datasets are model-DEPENDENT representations (planck2018_compressed
-    # swaps its diagonal ΛCDM summary for the Chen-Huang-Wang distance prior on
-    # extended flat-DE chains, which adds an ombh2 axis) — then the two chi2 are
-    # computed against different data vectors and the comparison is invalid. Detect
-    # it from the sampled axes: any difference beyond the extended model's own
-    # DE/extension parameters means the representation changed underneath.
+    # Δχ²/ΔAIC only mean anything when both fits used the SAME likelihood. A
+    # compressed dataset with a model-DEPENDENT representation would compute the
+    # two chi2 against different data vectors, invalidating the comparison
+    # (planck2018_compressed used to be one: until 2026-07-07 its ΛCDM chains ran
+    # a diagonal parameter summary while extended flat-DE chains ran the
+    # Chen-Huang-Wang distance prior with an extra ombh2 axis; it now executes
+    # the correlated distance prior on every flat model, so its lcdm-vs-wcdm
+    # pairs compare against one likelihood). The guard stays: detect any future
+    # swap from the sampled axes — any difference beyond the extended model's
+    # own DE/extension parameters means the representation changed underneath.
     model_extension_params = {"w", "w0", "wa", "omegak", "mnu"}
     base_axes = baseline_result.get("parameters")
     ext_axes = extended_result.get("parameters")

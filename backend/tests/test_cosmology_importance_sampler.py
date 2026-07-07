@@ -21,9 +21,15 @@ History:
   the thousands while still covering BAO+Planck combined σ_H0 ≈ 0.5
   (Planck-dominated; 2.5σ_Planck=1.35 is comfortable).
 
-Tests below pin both the 3-D fixture (legacy) and the prod path. Since 1B
-(2026-05-29) the prod BAO+Planck order is 4-D [H0, Ωm, rd, σ8] — S8 is derived
-(σ8·√(Ωm/0.3)), not sampled — which also removes one inflated proposal dim.
+Tests below pin both the reduced fixture (legacy) and the prod path. Since 1B
+(2026-05-29) S8 is derived (σ8·√(Ωm/0.3)), not sampled. Since 2026-07-07
+planck2018_compressed executes the correlated CHW2019 (R, l_A, ombh2, ns)
+distance priors on EVERY flat model, so the prod BAO+Planck order is 6-D
+[H0, Ωm, rd, σ8, ombh2, ns] and ΛCDM proposals use the linearized
+distance-prior block (see _draw_gaussian_centered_proposal docstring).
+Parameter orders missing the distance-prior axes now FAIL LOUD (covered in
+test_planck_distance_prior.py) instead of silently running a different
+likelihood.
 """
 
 from __future__ import annotations
@@ -100,10 +106,19 @@ def test_gaussian_centered_proposal_returns_none_when_gaussian_does_not_intersec
 
 
 def test_importance_posterior_bao_plus_planck_recovers_ess():
-    """Workflow 2 BAO+CMB regression: ESS used to be ~1, must now exceed 400."""
+    """Workflow 2 BAO+CMB regression: ESS used to be ~1, must now exceed 400.
+
+    2026-07-07: the fixture gained the mandatory distance-prior axes
+    (ombh2, ns) — the old 3-D call now fails loud by design (pinned in
+    test_planck_distance_prior.py::test_missing_dp_axes_fail_loud_not_silent).
+    Without sigma8 in the order there is no derived S8, so the target here is
+    BAO chi2 + the pure 4-dim correlated distance prior."""
     rng = np.random.default_rng(42)
-    parameter_order = ["H0", "omegam", "rd"]
-    prior_bounds = {"H0": (50.0, 90.0), "omegam": (0.10, 0.50), "rd": (130.0, 165.0)}
+    parameter_order = ["H0", "omegam", "rd", "ombh2", "ns"]
+    prior_bounds = {
+        "H0": (50.0, 90.0), "omegam": (0.10, 0.50), "rd": (130.0, 165.0),
+        "ombh2": (0.019, 0.025), "ns": (0.92, 1.00),
+    }
     bao_entries = [_entry("desi_dr1_bao")]
     compressed_entries = [_entry("planck2018_compressed")]
 
@@ -114,7 +129,7 @@ def test_importance_posterior_bao_plus_planck_recovers_ess():
     assert errors == [], f"Compressed-likelihood errors: {errors}"
     assert proposal_ess > 400.0, (
         f"BAO+Planck ESS={proposal_ess:.1f} regressed below the 400 publication "
-        f"threshold; the Gaussian-centered proposal should keep ESS at thousands."
+        f"threshold; the distance-prior proposal should keep ESS in the hundreds."
     )
     # Posterior must concentrate near the Planck H0 (BAO is consistent and only
     # tightens). Allow a 2σ_Planck = ±1.08 tolerance.
@@ -122,26 +137,26 @@ def test_importance_posterior_bao_plus_planck_recovers_ess():
     assert 0.27 < float(np.median(posterior[:, 1])) < 0.33
 
 
-def test_importance_posterior_bao_plus_planck_4d_s8_derived():
+def test_importance_posterior_bao_plus_planck_6d_s8_derived():
     """Prod path regression: BAO+Planck.
 
-    Planck's compressed Gaussian advertises four parameters (H0, Ωm, σ8, S8),
-    but as of 1B (2026-05-29) S8 ≡ σ8·√(Ωm/0.3) is a *derived* quantity, not a
-    sampled column.  So the prod ``_sampling_parameter_order`` is 4-D
-    [H0, Ωm, rd, σ8] — one fewer inflated Gaussian dimension than the old 5-D
-    path, which also helps the proposal efficiency.
+    As of 1B (2026-05-29) S8 ≡ σ8·√(Ωm/0.3) is a *derived* quantity, not a
+    sampled column.  As of 2026-07-07 the executed Planck term is the
+    correlated CHW2019 distance prior, which adds the sampled ombh2 and ns
+    axes — so the prod ``_sampling_parameter_order`` is 6-D
+    [H0, Ωm, rd, σ8, ombh2, ns], still with NO sampled S8.
 
-    Locks: (a) the prod order really is 4-D with NO sampled S8; (b) ESS > 400;
-    (c) posterior centered on Planck-dominated H0 ≈ 67.4 / Ωm ≈ 0.31; (d) the
-    derived S8 is internally consistent with the σ8/Ωm posterior.
+    Locks: (a) the prod order really is 6-D with NO sampled S8; (b) ESS > 400;
+    (c) posterior centered on the BAO+distance-prior H0 ≈ 67.7 / Ωm ≈ 0.31;
+    (d) the derived S8 is internally consistent with the σ8/Ωm posterior.
     """
     rng = np.random.default_rng(42)
     bao_entries = [_entry("desi_dr1_bao")]
     compressed_entries = [_entry("planck2018_compressed")]
 
-    # The real prod order — must be 4-D and must NOT sample S8.
+    # The real prod order — must be 6-D and must NOT sample S8.
     parameter_order = _sampling_parameter_order(bao_entries, compressed_entries)
-    assert parameter_order == ["H0", "omegam", "rd", "sigma8"], parameter_order
+    assert parameter_order == ["H0", "omegam", "rd", "sigma8", "ombh2", "ns"], parameter_order
     assert "S8" not in parameter_order
     prior_bounds = _sanitize_runner_priors(parameter_order, None)
 
@@ -151,7 +166,7 @@ def test_importance_posterior_bao_plus_planck_4d_s8_derived():
     )
     assert errors == [], f"Compressed-likelihood errors: {errors}"
     assert proposal_ess > 400.0, (
-        f"4-D BAO+Planck ESS={proposal_ess:.1f} regressed below the 400 "
+        f"6-D BAO+Planck ESS={proposal_ess:.1f} regressed below the 400 "
         "publication threshold."
     )
     # H0 posterior must concentrate near Planck mean 67.36; 1σ_Planck = 0.54.
@@ -168,10 +183,14 @@ def test_importance_posterior_bao_plus_planck_4d_s8_derived():
 
 
 def test_importance_posterior_planck_only_has_high_ess():
-    """Pure Planck compressed (no BAO chi²) should give ESS close to sample_count."""
+    """Pure Planck distance prior (no BAO chi²) keeps ESS in the thousands —
+    the linearized distance-prior proposal block matches the target shape."""
     rng = np.random.default_rng(7)
-    parameter_order = ["H0", "omegam"]
-    prior_bounds = {"H0": (50.0, 90.0), "omegam": (0.10, 0.50)}
+    parameter_order = ["H0", "omegam", "ombh2", "ns"]
+    prior_bounds = {
+        "H0": (50.0, 90.0), "omegam": (0.10, 0.50),
+        "ombh2": (0.019, 0.025), "ns": (0.92, 1.00),
+    }
     bao_entries: list = []
     compressed_entries = [_entry("planck2018_compressed")]
 
@@ -216,8 +235,11 @@ def test_importance_correction_unbiased_with_gaussian_proposal():
     -log_proposal_pdf correction is wired correctly (without it the
     weights would skew toward proposal density and ESS would drop)."""
     rng = np.random.default_rng(99)
-    parameter_order = ["H0", "omegam"]
-    prior_bounds = {"H0": (50.0, 90.0), "omegam": (0.10, 0.50)}
+    parameter_order = ["H0", "omegam", "ombh2", "ns"]
+    prior_bounds = {
+        "H0": (50.0, 90.0), "omegam": (0.10, 0.50),
+        "ombh2": (0.019, 0.025), "ns": (0.92, 1.00),
+    }
     compressed_entries = [_entry("planck2018_compressed")]
 
     posterior, _, ess, n, errors = _draw_importance_posterior(
@@ -225,8 +247,11 @@ def test_importance_correction_unbiased_with_gaussian_proposal():
         sample_count=2000,
     )
     assert errors == []
-    # Posterior centroid sticks at the Planck mean (the target).
+    # Posterior centroid sticks at the distance-prior image of the Planck
+    # baseline (H0 ≈ 67.3, Ωm ≈ 0.316 — CHW2019 Fig. 2).
     assert abs(float(np.median(posterior[:, 0])) - 67.36) < 1.0
     assert abs(float(np.median(posterior[:, 1])) - 0.3153) < 0.02
+    assert abs(float(np.median(posterior[:, 2])) - 0.02236) < 0.0005
+    assert abs(float(np.median(posterior[:, 3])) - 0.9649) < 0.01
     assert ess > 1000.0
     assert n > 0

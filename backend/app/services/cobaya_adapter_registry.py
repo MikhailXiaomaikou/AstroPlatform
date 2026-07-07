@@ -110,10 +110,20 @@ ADAPTER_TO_COBAYA: Final[dict[str, str | None]] = {
     # directory aggregate digests). Completes the clik-free 2018 stack
     # (TT/TE/EE + low-l TT/EE + lensing), 2026-06-12.
     "external:planck_2018_lensing.native": "planck_2018_lensing.native",
-    # TODO(step3): ACT DR6 lensing. Class `ACTDR6LensLike` lives in the
-    # `act_dr6_lenslike` third-party package. Candidate import path:
-    # `act_dr6_lenslike.ACTDR6LensLike`.
-    "external:act_dr6_lenslike.ACTDR6LensLike": None,
+    # ACT DR6 lensing — third-party PURE-PYTHON `act_dr6_lenslike` package
+    # (pip-installed, requirements.txt), class `ACTDR6LensLike`. FILLED
+    # 2026-07-07: the import path is real and importable
+    # (test_act_dr6_lenslike.py pins it); the bandpower + covariance +
+    # binning data subset is vendored + sha256-pinned under
+    # data/cobaya_packages/data/ACT_dr6_likelihood/v1.2 by
+    # scripts/fetch_act_dr6_lenslike.py (matching the InstallableLikelihood
+    # get_path convention, so a future cobaya_runner wiring resolves it via
+    # the existing packages_path). NOTE the act_dr6_lensing registry entry
+    # still carries execution_mode="compressed_gaussian": the live cobaya
+    # dispatch additionally needs the cobaya_runner runtime-hash-gate entry
+    # (_CMB_PINNED_DATA) + YAML wiring (variant/lens_only) before the
+    # execution_mode flip — tracked in plan/cosmology-completion-backlog.md.
+    "external:act_dr6_lenslike.ACTDR6LensLike": "act_dr6_lenslike.ACTDR6LensLike",
     # TODO(step3): Planck PR4/NPIPE lensing (Carron+ 2022, arXiv:2206.07773).
     # Package: github.com/carronj/planck_PR4_lensing.
     "external:planck_PR4_lensing": None,

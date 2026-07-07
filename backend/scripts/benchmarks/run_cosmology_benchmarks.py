@@ -897,7 +897,8 @@ def bench_s8_derived_consistency() -> dict[str, Any]:
 
     Pins (1) S8 ≡ σ8·√(Ωm/0.3) holds at the reported medians for Planck (analytic
     path) and BAO+Planck (importance path) — i.e. the sampler no longer explores
-    an independent S8; (2) the prod BAO+Planck order is 4-D [H0,Ωm,rd,σ8] with no
+    an independent S8; (2) the prod BAO+Planck order is 6-D
+    [H0,Ωm,rd,σ8,ombh2,ns] (distance-prior axes added 2026-07-07) with no
     sampled S8; (3) Planck+KiDS still runs publication-ready (reweighted ESS≥400)
     and the KiDS S8 pulls the derived S8 below the Planck-only value.
     """
@@ -931,7 +932,7 @@ def bench_s8_derived_consistency() -> dict[str, Any]:
         "pass": (
             derived_ok(planck)
             and derived_ok(bao_planck)
-            and prod_order == ["H0", "omegam", "rd", "sigma8"]
+            and prod_order == ["H0", "omegam", "rd", "sigma8", "ombh2", "ns"]
             and planck_kids["publication_ready"]
             and (planck_kids["chain_diagnostics"]["ess_bulk"] or 0) >= 400
             and s8_kids < s8_planck
@@ -940,7 +941,7 @@ def bench_s8_derived_consistency() -> dict[str, Any]:
         "s8_planck": round(s8_planck, 4),
         "s8_planck_kids": round(s8_kids, 4),
         "planck_kids_ess": planck_kids["chain_diagnostics"]["ess_bulk"],
-        "target": "S8=σ8·√(Ωm/0.3) derived (not sampled); prod order 4-D; Planck+KiDS pub-ready, KiDS pulls S8 down",
+        "target": "S8=σ8·√(Ωm/0.3) derived (not sampled); prod order 6-D; Planck+KiDS pub-ready, KiDS pulls S8 down",
     }
 
 

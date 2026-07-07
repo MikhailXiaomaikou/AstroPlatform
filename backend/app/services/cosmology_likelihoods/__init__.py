@@ -214,9 +214,15 @@ from app.services.cosmology_likelihoods.cmb import (
     _PLANCK18_DP_CORR,  # noqa: F401
     _PLANCK18_DP_INVCOV,  # noqa: F401
     _planck_distance_prior_chi2,  # noqa: F401
+    _planck_dp_lcdm_proposal_moments,  # noqa: F401
     _compressed_chi2_samples,  # noqa: F401
     CMB_COBAYA_EXECUTABLE_KEYS,  # noqa: F401
     CMB_APLANCK_KEYS,  # noqa: F401
+    PLANCK18_DP_PROPOSAL_MOMENTS,  # noqa: F401
+    ACT_DR6_LENSLIKE_DATA_DIR,  # noqa: F401
+    ACT_DR6_LENSLIKE_FILES,  # noqa: F401
+    ACT_DR6_LENSLIKE_VERSION,  # noqa: F401
+    load_verified_act_dr6_lenslike_data,  # noqa: F401
 )
 
 from app.services.cosmology_likelihoods.verification import (

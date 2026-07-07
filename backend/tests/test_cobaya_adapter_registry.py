@@ -34,6 +34,7 @@ FILLED_ADAPTERS = {
     "external:planck_2018_lowl.TT",
     "external:planck_2018_lowl.EE",
     "external:planck_2018_lensing.native",  # test_planck_lensing.py
+    "external:act_dr6_lenslike.ACTDR6LensLike",  # test_act_dr6_lenslike.py
 }
 
 

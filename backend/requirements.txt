@@ -69,6 +69,12 @@ cobaya>=3.5,<4
 # CMB likelihoods + LCDM background integrals. Pinned <2 because the 1.x
 # series is API-stable; >=1.5 brings DR4 ACT-DR4 lite likelihood support.
 camb>=1.5,<2
+# ACT DR6 CMB-lensing likelihood (pure-Python, numpy/scipy only): the real
+# bandpower+covariance likelihood behind the act_dr6_lensing registry entry
+# (adapter external:act_dr6_lenslike.ACTDR6LensLike). Its data tarball is
+# NOT bundled by pip — vendored + sha256-pinned via
+# scripts/fetch_act_dr6_lenslike.py.
+act_dr6_lenslike>=1.2.1,<2
 dust_extinction>=1.3,<2
 # WHY: get_extinction (ai_tools) imports dustmaps.sfd.SFDQuery for SFD98
 # E(B-V); without it production permanently serves the ~factor-2 analytic

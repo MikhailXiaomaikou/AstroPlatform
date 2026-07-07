@@ -13,6 +13,11 @@ History:
   path. Opening the gate exposed a second validity hole: a chain_tier=
   'blocked' fit (ESS collapse) used to feed a confident preferred-model
   verdict. compute_model_comparison now fails closed on blocked inputs too.
+- 2026-07-07: planck2018_compressed now executes the SAME correlated CHW2019
+  distance-prior representation on every flat model (ΛCDM included), so the
+  lcdm-vs-wcdm pair on desi+planck is no longer cross-representation — it
+  became a genuinely valid comparison. The representation guard itself is
+  unchanged and stays covered by a synthetic mismatch fixture below.
 
 All guards keep the factual deltas reported (they are real numbers from real
 fits); only the preference verdict is withheld.
@@ -25,24 +30,29 @@ from app.services.cosmology_likelihoods import (
 )
 
 
-def test_cross_representation_pair_is_flagged_invalid():
+def test_representation_mismatch_pair_is_flagged_invalid():
+    """The representation guard must keep firing when sampled axes differ
+    beyond the extended model's own parameters. Since 2026-07-07 the live
+    desi+planck pair shares one representation, so the mismatch is
+    reconstructed via dict surgery (same style as the tier-guard tests):
+    strip the distance-prior axes from the baseline side, as any future
+    model-dependent compressed swap would."""
     ds = ["desi_dr1_bao", "planck2018_compressed"]
     lcdm = run_likelihood_chain(model="lcdm", dataset_keys=ds, n_samples=400, random_seed=42)
-    # The emcee upgrade keeps this fit out of blocked tier so the test
-    # exercises the REPRESENTATION guard, not the chain-tier guard.
     wcdm = run_likelihood_chain(
         model="wcdm", dataset_keys=ds, n_samples=1500, random_seed=42,
         allow_emcee_fallback=True,
     )
-    # Preconditions for the test to be meaningful: the wcdm chain really does
-    # sample the extra ombh2 axis (distance-prior representation) and is not
-    # blocked.
-    assert "ombh2" in (wcdm.get("parameters") or {})
-    assert "ombh2" not in (lcdm.get("parameters") or {})
     assert wcdm["chain_tier"] != "blocked"
     assert lcdm["chain_tier"] != "blocked"
+    stripped = dict(lcdm)
+    stripped["parameters"] = {
+        name: summary
+        for name, summary in lcdm["parameters"].items()
+        if name not in {"ombh2", "ns"}
+    }
 
-    cmp = compute_model_comparison(lcdm, wcdm)
+    cmp = compute_model_comparison(stripped, wcdm)
     assert cmp["comparison_valid"] is False
     assert cmp["preferred"] == "undetermined"
     assert "ombh2" in cmp["comparison_warning"]
@@ -50,6 +60,33 @@ def test_cross_representation_pair_is_flagged_invalid():
     # but the dict is tainted so they can never support a reply claim.
     assert cmp["delta_chi2"] is not None
     assert cmp["__do_not_claim__"] is True
+
+
+def test_same_representation_bao_planck_pair_is_now_valid():
+    """2026-07-07 upgrade contract: ΛCDM and wCDM both execute the correlated
+    CHW2019 distance priors on desi+planck, so the pair compares chi2 against
+    ONE likelihood and the verdict is no longer withheld. The wcdm fit is
+    exploratory (off-anchor frontier model), so the rendered verdict must
+    carry the exploratory caveat."""
+    ds = ["desi_dr1_bao", "planck2018_compressed"]
+    lcdm = run_likelihood_chain(model="lcdm", dataset_keys=ds, n_samples=400, random_seed=42)
+    wcdm = run_likelihood_chain(
+        model="wcdm", dataset_keys=ds, n_samples=1500, random_seed=42,
+        allow_emcee_fallback=True,
+    )
+    # Both sides now sample the distance-prior axes — same representation.
+    assert "ombh2" in (lcdm.get("parameters") or {})
+    assert "ombh2" in (wcdm.get("parameters") or {})
+    assert lcdm["chain_tier"] == "publication"
+    assert wcdm["chain_tier"] == "exploratory"
+
+    cmp = compute_model_comparison(lcdm, wcdm)
+    assert cmp["comparison_valid"] is True
+    assert "comparison_warning" not in cmp
+    assert "__do_not_claim__" not in cmp
+    assert cmp["preferred"] in {"lcdm", "wcdm", "inconclusive"}
+    assert cmp["n_extra_params"] == 1
+    assert "exploratory-tier" in cmp["verdict_caveat"]
 
 
 def test_same_likelihood_pair_is_valid_with_one_extra_param():
@@ -161,16 +198,28 @@ def test_research_matrix_runs_flat_de_cells_with_comparison_discipline():
         assert isinstance(cell.get("result"), dict)
         assert isinstance(cell["result"].get("fit_statistics"), dict)
     assert m["model_comparisons"], "comparisons must fire for the matched-dataset pair"
-    # desi+planck is the cross-representation (or blocked-tier, at low sample
-    # counts) pair — either validity guard must withhold the verdict AND taint
-    # the deltas out of the claimable universe.
+    # Since 2026-07-07 desi+planck shares ONE representation across flat
+    # models, so a comparison may legitimately be valid — but the rendering
+    # discipline is unconditional: a valid verdict from an exploratory-tier
+    # extended fit must carry the caveat, and any invalid comparison must be
+    # withheld AND tainted out of the claimable universe.
     for comparison in m["model_comparisons"]:
-        assert comparison["comparison_valid"] is False
-        assert comparison["preferred"] == "undetermined"
-        assert comparison["__do_not_claim__"] is True
+        if comparison["comparison_valid"]:
+            assert comparison["preferred"] in {"lcdm", "wcdm", "inconclusive"}
+            if "exploratory" in {
+                comparison.get("baseline_chain_tier"),
+                comparison.get("extended_chain_tier"),
+            }:
+                assert "exploratory-tier" in comparison["verdict_caveat"]
+        else:
+            assert comparison["preferred"] == "undetermined"
+            assert comparison["__do_not_claim__"] is True
     assert "comparison_valid=true" in m["__message_to_model__"]
     assert "verdict_caveat" in m["__message_to_model__"]
-    assert any("not" in w and "model-preference" in w for w in m["warnings"])
+    # The "deltas are not model-preference evidence" warning is conditional
+    # on an invalid comparison actually being present.
+    if any(c["comparison_valid"] is False for c in m["model_comparisons"]):
+        assert any("not" in w and "model-preference" in w for w in m["warnings"])
 
 
 def test_research_matrix_anchor_flag_lands_on_matching_combo():
