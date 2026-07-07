@@ -206,7 +206,7 @@ blacklist "while updating the matching test".
   `backend/app/services/research_program.py`,
   `backend/app/services/research_alpha_evaluator.py`
 - Cosmology likelihoods/runners:
-  `backend/app/services/cosmology_likelihoods.py` and related services
+  `backend/app/services/cosmology_likelihoods/` and related services
 
 ## Current Architecture Pointers
 

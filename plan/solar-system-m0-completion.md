@@ -1,5 +1,7 @@
 # Solar-system M0 Completion Report
 
+> **历史注记(2026-07-07)**:solar_system vertical 已于 2026-06-03 移出本仓库,迁往 `standard-astro-verticals`(commit `7872bd8`)。本文件为历史存档,不再随本仓库代码演进。
+
 仓库: `astro-platform`
 分支: `main`
 时间窗: 2026-05-18 启动 → 2026-05-20 完整收尾

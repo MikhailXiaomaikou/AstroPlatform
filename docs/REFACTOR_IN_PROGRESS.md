@@ -8,13 +8,23 @@ refactor that touches the same files.
 
 ## Active refactors
 
-(none — the ai_tools.py split landed on 2026-05-21; see Completed refactors below.)
+(none — the latest completed batch, the 2026-07-03 god-file splits, has landed; see Completed refactors below.)
 
 If you start another large refactor that touches multiple files / multiple agents, add a new "Active refactor: <name>" subsection here with owner, branch, worktree path, status, and a coordination contract similar to the completed entry below.
 
 ---
 
 ## Completed refactors
+
+### Completed: 2026-07-03 god-file splits (three splits + agent-runtime extraction)
+
+- **Merged on** 2026-07-03 (verified against `git log` 2026-07-07; all four commits pushed to `origin/main`).
+- **Outcome:**
+  - `499600b` — the 7,757-line `backend/app/services/cosmology_likelihoods.py` is now the package `backend/app/services/cosmology_likelihoods/` (14 modules + `__init__.py`; `__init__` re-exports keep every `from app.services.cosmology_likelihoods import X` call site resolving unchanged).
+  - `9908b02` — the 9,285-line `backend/app/services/ai_tools/__init__.py` is split into 11 domain modules inside the same package; `TOOLS` / `execute_tool` re-exports unchanged.
+  - `4ecb503` — the frontend `ChatPage` god component is split into hooks and leaf components (entry stays `frontend/src/pages/Chat/ChatPage.tsx`).
+  - `1e9da5c` (companion, same campaign) — the agent runtime is extracted from `backend/app/api/chat.py` into `backend/app/services/agent_runtime/`.
+- **Consequence for agents:** any pre-2026-07-03 notes that cite line numbers or single-file paths for `cosmology_likelihoods.py`, `ai_tools/__init__.py`, `chat.py`, or `ChatPage.tsx` internals are stale — re-locate symbols with `rg` before editing.
 
 ### Completed: `ai_tools.py` split (Phase 1)
 

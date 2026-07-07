@@ -3,7 +3,7 @@
 仓库: `astro-platform`
 分支: `main`
 重建于: 2026-05-29
-状态: 🔨 进行中(M0 核心已 ship,余项收尾中)
+状态: ✅ Roadmap 全部完成(2026-07-07 核实划账:最后两项 1B/M1-A 实际已分别于 05-29/05-31 上线,本文件此前漏翻状态)
 
 > ⚠️ **本文件 2026-05-29 重建。** cosmology 的能力补齐 roadmap 此前只存在于
 > 对话 + 任务列表(#33-36),**从未落成文件**(`solar_system` / `exoplanet`
@@ -31,8 +31,8 @@ cosmology 是平台第一个 active 研究模块。M0 的**已验证能力**(物
 | **M0-F** | 数据集 `z_coverage` 元数据 + 后端 surface + C2 后端锚 | ✅ Shipped | 见 §3;benchmark **10/10**(新 `dataset_z_coverage`)+ cosmology-smoke 4/4 + C2 锚离线验证(正例 PASS / 负例 SOFT-FAIL) |
 | **1A (=M0-E)** | 增长率 `f(z)`/`fσ8` Linder-γ kernel + eBOSS DR16 RSD executable | ✅ Shipped | 本轮提交;benchmark `eboss_fsigma8_growth`(f(0)=Ωm^0.55、D(0)/D(0)=1、Planck reduced χ²=1.59);6 点 RSD-only fσ8 读自 Alam+2021 Table III;σ8 进采样,DESI+eBOSS+Planck 复现 σ8=0.811 |
 | **1C** | 宇宙学钟 `H(z)` executable(31 点,Gómez-Valent & Amendola 2018) | ✅ Shipped | 本轮提交;benchmark `cosmic_chronometer_hz`(Planck reduced χ²=0.51);H(z)=H0·E(z) 对角 χ²;CC+DESI(emcee)publication ESS 1301 |
-| **1B** | S8 改逐样本派生量(σ8·√(Ωm/0.3)) | ⏸ 暂缓 | 高风险采样器重构(S8 织进 3 条评估路径 + ESS 调参 + 多个回归测试);对外 pairwise S8 张力已正确,错接仅在已标 preliminary 的联合后验;留单独一轮 |
-| **M1-A** | CAMB 理论功率谱工具(跨入 M1 里程碑) | ⬜ 待办 | — |
+| **1B** | S8 改逐样本派生量(σ8·√(Ωm/0.3)) | ✅ Shipped | commit `58cbb39`(2026-05-29);S8 不再作为采样列,改为逐样本派生;现居 `cosmology_likelihoods/sampling.py` 的 `derived_samples["S8"] = _derived_s8_from_samples(...)`(核心实现 `core.py`,CMB/runner 路径同用;2026-07-07 核实,07-03 拆包后路径已变) |
+| **M1-A** | CAMB 理论功率谱工具(跨入 M1 里程碑) | ✅ Shipped | commit `8a62678`(2026-05-31);`compute_theory_cmb_spectrum` in-process CAMB 工具,`backend/app/services/cosmology_theory_spectrum.py`;已接 cosmology manifest + ai_tools 调度器 + result_provenance(2026-07-07 核实) |
 
 > 任务 ID 从 C 跳到 E/F:更早的 M0 子项(基础 distance kernel、likelihood
 > 三档 chain_tier、AP/BAO、planck18 preset 不变式等)已在 baseline 记录的
@@ -71,7 +71,7 @@ reply 文字——**脆,换模型可能裸报数字当测量值**。M0-F 把数�
 
 ---
 
-## 4. M0-E / M1-A(待办,未拆细)
+## 4. M0-E / M1-A(历史存档:写下时为待办,两项均已 ship——M0-E 即 §2 表中 1A `b1e7460`,M1-A 即 `8a62678`)
 
 - **M0-E**:给 `cosmology_mcmc` / `cosmology_likelihoods` 加增长率
   `f(z) = Ωm(z)^γ` 与 `fσ8(z)` 观测量,benchmark 对 astropy / 已知值;接 RSD
