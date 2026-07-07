@@ -894,6 +894,17 @@ _NON_EVIDENCE_KEYS: frozenset[str] = frozenset({
     "tension_sigma", "claimed", "claimed_value", "claimed_sigma",
     # Rendered deliverables (whole-subtree skip, not value-type dependent)
     "markdown", "paper_draft_markdown", "report_markdown", "bibtex",
+    # Diagnostic warning lists (2026-07-07, backlog P3b): `warnings` is a
+    # LIST of prose strings on nearly every runner result, so the string-only
+    # _FREETEXT_KEYS skip never fired and numbers inside the prose ("w=-1
+    # held fixed", "fit 1042 supernovae", years) leaked into the claimable
+    # universe — the same value-type fragility review #3 fixed for markdown.
+    # Diagnostic numbers a model may honestly quote (ESS / R-hat) keep
+    # structured siblings (chain_diagnostics.*.ess_bulk, proposal_ess), so
+    # the prose-skip does not orphan them — pinned by the red-team cases
+    # numeric_in_warnings_list_not_in_universe /
+    # warnings_prose_with_structured_diagnostics_sibling_stays_claimable.
+    "warnings",
 })
 
 
