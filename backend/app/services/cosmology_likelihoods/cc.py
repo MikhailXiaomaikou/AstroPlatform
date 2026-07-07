@@ -57,6 +57,26 @@ _HARDCODED_CC_HZ: tuple[tuple[float, float, float], ...] = (
 
 
 @lru_cache(maxsize=None)
+def _load_cc_raw(dataset_key: str) -> dict[str, Any]:
+    """Cached verified (or honest literature_typed) CC H(z) record; raises
+    ValueError (message contains 'unverified') on any failed verification —
+    missing-but-pinned, tampered or malformed vendored file. lru_cache never
+    caches exceptions, so one transient failure cannot poison the process
+    until restart (the union3 pattern)."""
+    raw = _load_verified_diagonal_vector(dataset_key, "hz.txt", "hz_measurement_vector")
+    if raw["cov_fidelity"] == "unverified":
+        raise ValueError(
+            f"cosmic-chronometer H(z) data product {dataset_key} is unverified "
+            "(missing, tampered or malformed vendored file)."
+        )
+    return {
+        "hz_vector": raw["vector"] if raw["vector"] is not None else tuple(_HARDCODED_CC_HZ),
+        "sha256": raw["sha256"],
+        "hash_verified": raw["hash_verified"],
+        "cov_fidelity": raw["cov_fidelity"],
+    }
+
+
 def load_verified_cc_data(dataset_key: str) -> dict[str, Any]:
     """Load the cosmic-chronometer H(z) vector from the vendored, sha256-pinned
     file so the fitted vector IS the checksummed array (object identity).
@@ -64,14 +84,23 @@ def load_verified_cc_data(dataset_key: str) -> dict[str, Any]:
     systematic covariance is a separate offline upgrade, distinct from a released
     full covariance), 'unverified' on a missing-but-pinned or corrupt file.  The
     fitted vector falls back to the hand-typed values only to keep the fit
-    running; the 'unverified' fidelity then blocks publication."""
-    raw = _load_verified_diagonal_vector(dataset_key, "hz.txt", "hz_measurement_vector")
-    return {
-        "hz_vector": raw["vector"] if raw["vector"] is not None else tuple(_HARDCODED_CC_HZ),
-        "sha256": raw["sha256"],
-        "hash_verified": raw["hash_verified"],
-        "cov_fidelity": raw["cov_fidelity"],
-    }
+    running; the 'unverified' fidelity then blocks publication. NEVER raises;
+    the refusal record is rebuilt fresh per call — the cached inner loader
+    raises instead of caching a failure record, so a transient read failure
+    self-heals without a process restart (union3 raise-inside-cache pattern)."""
+    try:
+        return _load_cc_raw(dataset_key)
+    except ValueError as exc:
+        logger.warning("CC H(z) data product %s failed verification: %s", dataset_key, exc)
+        return {
+            "hz_vector": tuple(_HARDCODED_CC_HZ),
+            "sha256": None, "hash_verified": False, "cov_fidelity": "unverified",
+        }
+
+
+# Historical cache-management API (tests clear the loader by its public name);
+# the real cache lives on the raising inner loader.
+load_verified_cc_data.cache_clear = _load_cc_raw.cache_clear  # type: ignore[attr-defined]
 
 
 # The H(z) vector the chi² fits — sourced from the verified loader so the fit
@@ -91,22 +120,21 @@ COSMIC_CHRONOMETER_FULL_COV_KEYS = {"cosmic_chronometers_moresco20"}
 
 
 @lru_cache(maxsize=None)
-def load_verified_cc_full_cov_data(dataset_key: str) -> dict[str, Any]:
-    """Load a CC (z, H(z)) vector + FULL covariance from the vendored, sha256-pinned
-    mean.txt / cov.txt so the fitted covariance IS the checksum-verified array.
-    cov_fidelity is 'full' on success, 'unverified' on a missing-but-pinned or
-    corrupt file (which blocks publication).  A full covariance has no honest
-    hand-typed substitute, so there is no literature_typed fallback."""
+def _load_cc_full_cov_raw(dataset_key: str) -> dict[str, Any]:
+    """Load + sha256-verify a vendored CC mean.txt + full-cov cov.txt; raises
+    ValueError (message always contains 'unverified') on ANY failure —
+    missing, unreadable, digest mismatch, malformed. lru_cache never caches
+    exceptions, so one transient failure cannot poison the process until
+    restart (the union3 pattern)."""
     mean_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "mean.txt"
     cov_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "cov.txt"
     pinned_cov = _registry_product_sha256(dataset_key, "covariance")
     pinned_mean = _registry_product_sha256(dataset_key, "hz_measurement_vector")
-    unverified = {
-        "hz_vector": None, "covariance": None, "sha256": None,
-        "hash_verified": False, "cov_fidelity": "unverified",
-    }
     if not (mean_path.exists() and cov_path.exists()):
-        return unverified
+        raise ValueError(
+            f"CC full-cov data product {dataset_key} is unverified: vendored "
+            f"mean.txt/cov.txt missing under {_VENDORED_COSMO_DATA_DIR / dataset_key}."
+        )
     try:
         mean_digest = hashlib.sha256(mean_path.read_bytes()).hexdigest()
         cov_digest = hashlib.sha256(cov_path.read_bytes()).hexdigest()
@@ -121,18 +149,49 @@ def load_verified_cc_full_cov_data(dataset_key: str) -> dict[str, Any]:
         n = len(rows)
         if n == 0 or covariance.shape != (n, n):
             raise ValueError(f"mean/cov shape mismatch: {n} points vs cov {covariance.shape}")
-        verified = (mean_digest == pinned_mean) and (cov_digest == pinned_cov)
+    except Exception as exc:  # malformed/truncated/unreadable file
+        raise ValueError(
+            f"CC full-cov data product {dataset_key} is unverified: failed to load ({exc})."
+        ) from exc
+    if not ((mean_digest == pinned_mean) and (cov_digest == pinned_cov)):
+        raise ValueError(
+            f"CC full-cov data product {dataset_key} is unverified: vendored file "
+            "bytes do not match the registry sha256 pins; refusing to fit tampered "
+            "or stale data."
+        )
+    return {
+        "hz_vector": tuple(rows),
+        "covariance": covariance,
+        "sha256": cov_digest,
+        "mean_sha256": mean_digest,
+        "hash_verified": True,
+        "cov_fidelity": "full",
+    }
+
+
+def load_verified_cc_full_cov_data(dataset_key: str) -> dict[str, Any]:
+    """Load a CC (z, H(z)) vector + FULL covariance from the vendored, sha256-pinned
+    mean.txt / cov.txt so the fitted covariance IS the checksum-verified array.
+    cov_fidelity is 'full' on success, 'unverified' on a missing-but-pinned or
+    corrupt file (which blocks publication).  A full covariance has no honest
+    hand-typed substitute, so there is no literature_typed fallback. NEVER
+    raises; the 'unverified' refusal is rebuilt fresh per call — the cached
+    inner loader raises instead of caching a failure record, so a transient
+    read failure self-heals without a process restart (union3
+    raise-inside-cache pattern)."""
+    try:
+        return _load_cc_full_cov_raw(dataset_key)
+    except ValueError as exc:
+        logger.warning("CC full-cov data product %s failed verification: %s", dataset_key, exc)
         return {
-            "hz_vector": tuple(rows),
-            "covariance": covariance,
-            "sha256": cov_digest,
-            "mean_sha256": mean_digest,
-            "hash_verified": bool(verified),
-            "cov_fidelity": "full" if verified else "unverified",
+            "hz_vector": None, "covariance": None, "sha256": None,
+            "hash_verified": False, "cov_fidelity": "unverified",
         }
-    except Exception as exc:  # malformed/truncated file — degrade, never crash import
-        logger.warning("CC full-cov product %s failed to load (%s); marking unverified", dataset_key, exc)
-        return unverified
+
+
+# Historical cache-management API (tests clear the loader by its public name);
+# the real cache lives on the raising inner loader.
+load_verified_cc_full_cov_data.cache_clear = _load_cc_full_cov_raw.cache_clear  # type: ignore[attr-defined]
 
 
 # (z, H(z)) the moresco20 χ² fits + its inverse covariance — sourced from the

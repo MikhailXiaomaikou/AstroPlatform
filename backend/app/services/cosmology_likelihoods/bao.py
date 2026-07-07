@@ -203,53 +203,59 @@ def _sdss_6df_mgs_chi2_samples(
     return chi2 + mgs_chi2
 
 
+def _bao_fallback_record(dataset_key: str, fidelity: str) -> dict[str, Any]:
+    """Hand-typed literature record — or an all-None refusal for datasets with
+    no honest hand-typed substitute — the shapes load_verified_bao_data returns
+    when no vendored file backs the fit."""
+    if dataset_key not in _HARDCODED_BAO:
+        # A released full-file BAO (e.g. DESI DR2) has no honest hand-typed
+        # substitute; a missing/corrupt file is 'unverified', never faked.
+        return {
+            "mean_vector": None, "covariance": None, "sha256": None,
+            "hash_verified": False, "cov_fidelity": "unverified",
+        }
+    mean_vector, cov = _HARDCODED_BAO[dataset_key]
+    return {
+        "mean_vector": tuple(mean_vector),
+        "covariance": np.asarray(cov, dtype=float),
+        "sha256": None, "hash_verified": False, "cov_fidelity": fidelity,
+    }
+
+
 @lru_cache(maxsize=None)
-def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
-    """Load a BAO (mean, covariance) from the vendored, sha256-pinned data-product
-    files and verify the digests against the registry, so the fitted covariance IS
-    the checksum-verified array (``cov_fidelity='full'``).  Falls back to the
-    legacy hand-typed values with ``cov_fidelity='literature_typed'`` — an honest
-    downgrade, never a silent wrong-shape covariance — only when no vendored file
-    is present (e.g. the 6dFGS+MGS low-z compilation, which has no released file).
-    """
+def _load_bao_raw(dataset_key: str) -> dict[str, Any]:
+    """Load + sha256-verify a vendored BAO (mean, covariance); raises ValueError
+    (message always contains 'unverified') on ANY failure — missing-but-pinned,
+    unreadable, digest mismatch, malformed. lru_cache never caches exceptions,
+    so one transient failure cannot poison the process until restart (the
+    union3 pattern, sn.py). The no-released-file 'literature_typed' fallback
+    (e.g. the 6dFGS+MGS low-z compilation) is a deterministic success and is
+    cached like any verified record."""
     mean_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "mean.txt"
     cov_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "cov.txt"
     pinned = _registry_product_sha256(dataset_key, "covariance")
-
-    def _fallback(fidelity: str) -> dict[str, Any]:
-        if dataset_key not in _HARDCODED_BAO:
-            # A released full-file BAO (e.g. DESI DR2) has no honest hand-typed
-            # substitute; a missing/corrupt file is 'unverified', never faked.
-            return {
-                "mean_vector": None, "covariance": None, "sha256": None,
-                "hash_verified": False, "cov_fidelity": "unverified",
-            }
-        mean_vector, cov = _HARDCODED_BAO[dataset_key]
-        return {
-            "mean_vector": tuple(mean_vector),
-            "covariance": np.asarray(cov, dtype=float),
-            "sha256": None, "hash_verified": False, "cov_fidelity": fidelity,
-        }
 
     if dataset_key == "sdss_6df_bao":
         # Mixed probe (2026-06-12): the 6dFGS half is a hand-typed literature
         # Gaussian, but the MGS half reads the sha256-pinned released
         # chi2(alpha) table — so the stamp must carry the table's verification.
         # Verified -> 'literature_typed' (the weakest half — the hand-typed
-        # 6dFGS Gaussian — sets the fidelity grade) + the table digest;
-        # tampered/missing -> 'unverified' (audit-dirty, publication-blocked).
-        base = _fallback("literature_typed")
-        try:
-            table = load_verified_mgs_prob_table()
-        except ValueError as exc:
-            logger.warning("sdss_6df_bao MGS table stamp: %s", exc)
-            return {**base, "cov_fidelity": "unverified"}
+        # 6dFGS Gaussian — sets the fidelity grade) + the table digest; a
+        # missing/tampered table raises through the table loader (audit-dirty,
+        # publication-blocked, never cached).
+        table = load_verified_mgs_prob_table()
+        base = _bao_fallback_record(dataset_key, "literature_typed")
         return {**base, "sha256": table["sha256"], "hash_verified": True}
 
     if not (mean_path.exists() and cov_path.exists()):
-        # expected pinned product missing -> unverified (blocks publication);
-        # no released product -> honest literature_typed.
-        return _fallback("unverified" if pinned else "literature_typed")
+        if pinned:
+            # expected pinned product missing -> unverified (blocks publication).
+            raise ValueError(
+                f"BAO data product {dataset_key} is unverified: vendored "
+                f"mean.txt/cov.txt missing under {_VENDORED_COSMO_DATA_DIR / dataset_key}."
+            )
+        # no released product at all -> honest literature_typed.
+        return _bao_fallback_record(dataset_key, "literature_typed")
     try:
         mean_digest = hashlib.sha256(mean_path.read_bytes()).hexdigest()
         cov_digest = hashlib.sha256(cov_path.read_bytes()).hexdigest()
@@ -266,17 +272,44 @@ def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
         n = len(mean_vector_list)
         if n == 0 or covariance.shape != (n, n):
             raise ValueError(f"mean/cov shape mismatch: {n} points vs cov {covariance.shape}")
-        return {
-            "mean_vector": tuple(mean_vector_list),
-            "covariance": covariance,
-            "sha256": cov_digest,
-            "mean_sha256": mean_digest,
-            "hash_verified": bool(mean_ok and cov_ok),
-            "cov_fidelity": "full" if (mean_ok and cov_ok) else "unverified",
-        }
-    except Exception as exc:  # malformed/truncated file — degrade, never crash import
-        logger.warning("BAO data product %s failed to load (%s); marking unverified", dataset_key, exc)
-        return _fallback("unverified")
+    except Exception as exc:  # malformed/truncated/unreadable file
+        raise ValueError(
+            f"BAO data product {dataset_key} is unverified: failed to load ({exc})."
+        ) from exc
+    if not (mean_ok and cov_ok):
+        raise ValueError(
+            f"BAO data product {dataset_key} is unverified: vendored file bytes do "
+            "not match the registry sha256 pins; refusing to fit tampered or stale data."
+        )
+    return {
+        "mean_vector": tuple(mean_vector_list),
+        "covariance": covariance,
+        "sha256": cov_digest,
+        "mean_sha256": mean_digest,
+        "hash_verified": True,
+        "cov_fidelity": "full",
+    }
+
+
+def load_verified_bao_data(dataset_key: str) -> dict[str, Any]:
+    """Verification record for the fit/audit paths — NEVER raises (import-time
+    _BAO_DATA construction and the audit need a record, not an exception).
+    Success returns the cached verified record (object identity between the
+    fitted arrays and the checksummed load); any failure returns a fresh
+    'unverified' fallback — hand-typed values where an honest substitute
+    exists, Nones otherwise — which blocks publication and is recomputed per
+    call, so a transient read failure self-heals without a process restart
+    (union3 raise-inside-cache pattern)."""
+    try:
+        return _load_bao_raw(dataset_key)
+    except ValueError as exc:
+        logger.warning("BAO data product %s failed verification: %s", dataset_key, exc)
+        return _bao_fallback_record(dataset_key, "unverified")
+
+
+# Historical cache-management API (tests clear the loader by its public name);
+# the real cache lives on the raising inner loader.
+load_verified_bao_data.cache_clear = _load_bao_raw.cache_clear  # type: ignore[attr-defined]
 
 
 # Released full-file BAO likelihoods with NO hand-typed _HARDCODED_BAO fallback —
@@ -330,24 +363,21 @@ EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS = {
 
 
 @lru_cache(maxsize=None)
-def load_verified_fsbao_data(dataset_key: str) -> dict[str, Any]:
-    """Load an eBOSS DR16 FSBAO (z, value, quantity) measurement vector + FULL
-    covariance from the vendored, sha256-pinned mean.txt / cov.txt so the fitted
-    covariance IS the checksum-verified array. ``quantity`` is one of
-    {DM_over_rs, DH_over_rs, f_sigma8}. cov_fidelity is 'full' on a digest match,
-    'unverified' on a missing-but-pinned or corrupt file (blocks publication).
-    A released full covariance has no honest hand-typed substitute, so there is
-    no literature_typed fallback."""
+def _load_fsbao_raw(dataset_key: str) -> dict[str, Any]:
+    """Load + sha256-verify a vendored FSBAO/DR12 mean.txt + cov.txt; raises
+    ValueError (message always contains 'unverified') on ANY failure —
+    missing, unreadable, digest mismatch, malformed. lru_cache never caches
+    exceptions, so one transient failure cannot poison the process until
+    restart (the union3 pattern)."""
     mean_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "mean.txt"
     cov_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "cov.txt"
     pinned_cov = _registry_product_sha256(dataset_key, "covariance")
     pinned_mean = _registry_product_sha256(dataset_key, "measurement_vector")
-    unverified = {
-        "mean_vector": None, "covariance": None, "sha256": None,
-        "hash_verified": False, "cov_fidelity": "unverified",
-    }
     if not (mean_path.exists() and cov_path.exists()):
-        return unverified
+        raise ValueError(
+            f"FSBAO data product {dataset_key} is unverified: vendored "
+            f"mean.txt/cov.txt missing under {_VENDORED_COSMO_DATA_DIR / dataset_key}."
+        )
     try:
         mean_digest = hashlib.sha256(mean_path.read_bytes()).hexdigest()
         cov_digest = hashlib.sha256(cov_path.read_bytes()).hexdigest()
@@ -362,18 +392,49 @@ def load_verified_fsbao_data(dataset_key: str) -> dict[str, Any]:
         n = len(rows)
         if n == 0 or covariance.shape != (n, n):
             raise ValueError(f"mean/cov shape mismatch: {n} points vs cov {covariance.shape}")
-        verified = (mean_digest == pinned_mean) and (cov_digest == pinned_cov)
+    except Exception as exc:  # malformed/truncated/unreadable file
+        raise ValueError(
+            f"FSBAO data product {dataset_key} is unverified: failed to load ({exc})."
+        ) from exc
+    if not ((mean_digest == pinned_mean) and (cov_digest == pinned_cov)):
+        raise ValueError(
+            f"FSBAO data product {dataset_key} is unverified: vendored file bytes do "
+            "not match the registry sha256 pins; refusing to fit tampered or stale data."
+        )
+    return {
+        "mean_vector": tuple(rows),
+        "covariance": covariance,
+        "sha256": cov_digest,
+        "mean_sha256": mean_digest,
+        "hash_verified": True,
+        "cov_fidelity": "full",
+    }
+
+
+def load_verified_fsbao_data(dataset_key: str) -> dict[str, Any]:
+    """Load an eBOSS DR16 FSBAO (z, value, quantity) measurement vector + FULL
+    covariance from the vendored, sha256-pinned mean.txt / cov.txt so the fitted
+    covariance IS the checksum-verified array. ``quantity`` is one of
+    {DM_over_rs, DH_over_rs, f_sigma8}. cov_fidelity is 'full' on a digest match,
+    'unverified' on a missing-but-pinned or corrupt file (blocks publication).
+    A released full covariance has no honest hand-typed substitute, so there is
+    no literature_typed fallback. NEVER raises; the 'unverified' refusal is
+    rebuilt fresh per call — the cached inner loader raises instead of caching
+    a failure record, so a transient read failure self-heals without a process
+    restart (union3 raise-inside-cache pattern)."""
+    try:
+        return _load_fsbao_raw(dataset_key)
+    except ValueError as exc:
+        logger.warning("FSBAO data product %s failed verification: %s", dataset_key, exc)
         return {
-            "mean_vector": tuple(rows),
-            "covariance": covariance,
-            "sha256": cov_digest,
-            "mean_sha256": mean_digest,
-            "hash_verified": bool(verified),
-            "cov_fidelity": "full" if verified else "unverified",
+            "mean_vector": None, "covariance": None, "sha256": None,
+            "hash_verified": False, "cov_fidelity": "unverified",
         }
-    except Exception as exc:  # malformed/truncated file — degrade, never crash import
-        logger.warning("FSBAO data product %s failed to load (%s); marking unverified", dataset_key, exc)
-        return unverified
+
+
+# Historical cache-management API (tests clear the loader by its public name);
+# the real cache lives on the raising inner loader.
+load_verified_fsbao_data.cache_clear = _load_fsbao_raw.cache_clear  # type: ignore[attr-defined]
 
 
 # (mean_vector, covariance) the FSBAO χ² fits — sourced from the verified loader so
@@ -396,31 +457,27 @@ def load_verified_dr12_consensus_data(dataset_key: str = "sdss_dr12_consensus_ba
     only by _dr12_consensus_predictions — never by the dimensionless FSBAO
     kernel, whose identically-named 'DM_over_rs' rows mean D_M/r_d.
 
-    Known residual (inherited from the shared fsbao loader, documented in the
-    backlog): the lru_cache caches a returned unverified record, so one
-    transient read failure at first touch blocks the dataset until restart —
-    fail-closed (loud refusal, never wrong numbers), unlike the union3
-    raise-inside-cache pattern that self-heals."""
+    Shares the fsbao loader verbatim, including its union3 raise-inside-cache
+    self-healing: a transient read failure yields a loud 'unverified' record
+    that is never cached, so the next call re-reads and recovers without a
+    process restart."""
     return load_verified_fsbao_data(dataset_key)
 
 
 @lru_cache(maxsize=None)
-def load_verified_grid_bao_data(dataset_key: str) -> dict[str, Any]:
-    """Load a released eBOSS DR16 non-Gaussian BAO likelihood surface from the
-    vendored, sha256-pinned grid.txt: the ELG (D_V/r_d, probability) table or
-    a Lyα 50×50 (D_M/r_d, D_H/r_d, likelihood) grid. cov_fidelity is 'full'
-    on a digest match — the surface IS the released full (non-Gaussian)
-    likelihood — and 'unverified' on a missing/corrupt/tampered file (blocks
-    publication; chi2 refuses loudly). Same cached-failure residual as the
-    fsbao loader (fail-closed; documented in the backlog)."""
+def _load_grid_bao_raw(dataset_key: str) -> dict[str, Any]:
+    """Load + sha256-verify a vendored eBOSS DR16 likelihood-surface grid.txt;
+    raises ValueError (message always contains 'unverified') on ANY failure —
+    missing, unreadable, digest mismatch, malformed. lru_cache never caches
+    exceptions, so one transient failure cannot poison the process until
+    restart (the union3 pattern)."""
     grid_path = _VENDORED_COSMO_DATA_DIR / dataset_key / "grid.txt"
     pinned = _registry_product_sha256(dataset_key, "likelihood_grid")
-    unverified = {
-        "grid": None, "sha256": None,
-        "hash_verified": False, "cov_fidelity": "unverified",
-    }
     if not grid_path.exists():
-        return unverified
+        raise ValueError(
+            f"grid BAO data product {dataset_key} is unverified: vendored "
+            f"grid.txt missing under {_VENDORED_COSMO_DATA_DIR / dataset_key}."
+        )
     try:
         raw = grid_path.read_bytes()
         digest = hashlib.sha256(raw).hexdigest()
@@ -431,16 +488,46 @@ def load_verified_grid_bao_data(dataset_key: str) -> dict[str, Any]:
         else:
             if grid.shape != (2500, 3) or grid[:, 2].min() <= 0:
                 raise ValueError(f"malformed Lya grid: shape {grid.shape}")
-        verified = digest == pinned
+    except Exception as exc:  # malformed/truncated/unreadable file
+        raise ValueError(
+            f"grid BAO data product {dataset_key} is unverified: failed to load ({exc})."
+        ) from exc
+    if digest != pinned:
+        raise ValueError(
+            f"grid BAO data product {dataset_key} is unverified: vendored file bytes "
+            "do not match the registry sha256 pin; refusing to fit tampered or stale data."
+        )
+    return {
+        "grid": grid,
+        "sha256": digest,
+        "hash_verified": True,
+        "cov_fidelity": "full",
+    }
+
+
+def load_verified_grid_bao_data(dataset_key: str) -> dict[str, Any]:
+    """Load a released eBOSS DR16 non-Gaussian BAO likelihood surface from the
+    vendored, sha256-pinned grid.txt: the ELG (D_V/r_d, probability) table or
+    a Lyα 50×50 (D_M/r_d, D_H/r_d, likelihood) grid. cov_fidelity is 'full'
+    on a digest match — the surface IS the released full (non-Gaussian)
+    likelihood — and 'unverified' on a missing/corrupt/tampered file (blocks
+    publication; chi2 refuses loudly). NEVER raises; the 'unverified' refusal
+    is rebuilt fresh per call — the cached inner loader raises instead of
+    caching a failure record, so a transient read failure self-heals without
+    a process restart (union3 raise-inside-cache pattern)."""
+    try:
+        return _load_grid_bao_raw(dataset_key)
+    except ValueError as exc:
+        logger.warning("grid BAO data product %s failed verification: %s", dataset_key, exc)
         return {
-            "grid": grid,
-            "sha256": digest,
-            "hash_verified": bool(verified),
-            "cov_fidelity": "full" if verified else "unverified",
+            "grid": None, "sha256": None,
+            "hash_verified": False, "cov_fidelity": "unverified",
         }
-    except Exception as exc:  # malformed/truncated file — degrade, never crash import
-        logger.warning("grid BAO data product %s failed to load (%s); marking unverified", dataset_key, exc)
-        return unverified
+
+
+# Historical cache-management API (tests clear the loader by its public name);
+# the real cache lives on the raising inner loader.
+load_verified_grid_bao_data.cache_clear = _load_grid_bao_raw.cache_clear  # type: ignore[attr-defined]
 
 
 @lru_cache(maxsize=None)
