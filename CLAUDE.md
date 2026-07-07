@@ -9,6 +9,10 @@ The root `AGENTS.md` delegates here so agent instructions do not drift.
 - The goal is controlled, auditable research over registered datasets,
   likelihoods, evidence graphs, fact checks, and exports.
 - It is not a general "reproduce any paper" machine.
+- North star for direction decisions: serve real observational
+  cosmologists; the differentiator is provable non-fabrication and
+  provenance, not fitting power. "Put it in front of a real user" is
+  always one of the candidate next steps.
 - Unsupported scientific claims must become capability gaps, not guesses.
 - Local development + GitHub Actions are primary. Render deploy is a side
   effect unless the user explicitly asks about deployment.
@@ -284,6 +288,12 @@ Every rule here traces to a real incident in past agent sessions
   the user as a list.
 - Handoff prompts for other agents or sessions must be self-contained:
   absolute repo path, entry documents, acceptance commands, report format.
+- Describe anti-fabrication work in neutral terms in prompts and workflow
+  scripts (honesty gate, echo channel — not offensive-security
+  vocabulary): model safety filters have killed review sessions over
+  aggressive wording.
+- A reusable review harness is saved as the `adversarial-review` workflow
+  (`.claude/workflows/adversarial-review.js`, Claude Code only).
 
 ## Git, Push & CI Policy
 
@@ -319,6 +329,8 @@ Every rule here traces to a real incident in past agent sessions
   the production API-key path three rounds in a row).
 - Local no-auth and local Codex/OpenAI CLI modes are development-only.
 - Render auto-deploy can lag behind `main`; local verification comes first.
+- After a deploy lands, curl `/health` and `/health/deep` — the deep
+  check once caught an expired database nobody suspected.
 - Local diagnostics under `.local/` are ignored and should not be uploaded
   unless explicitly requested.
 
