@@ -9,15 +9,23 @@ Welcome to Standard Astro, an AI-native observational-cosmology research platfor
 
 | What you type | What the AI does |
 |---------------|-----------------|
-| "Search for the 10 brightest quasars with z > 2" | Queries SIMBAD with appropriate ADQL filters |
-| "Plot an HR diagram of stars within 50 pc" | Searches Gaia, plots color-magnitude diagram |
-| "Analyze the spectrum of Vega" | Identifies spectral lines, measures equivalent widths |
-| "Find recent papers about Type Ia supernovae" | Searches NASA ADS, returns abstracts and citations |
 | "List the cosmology datasets available for likelihood building" | Runs `list_cosmology_datasets` over the dataset registry |
 | "Build a DESI DR2 BAO + BBN likelihood and report the constraints" | Runs `build_cosmology_likelihood` then `fit_cosmology_mcmc` |
+| "Compute the Planck 2018 theory CMB TT power spectrum" | Runs `compute_theory_cmb_spectrum` (in-process CAMB) |
+| "Search for the 10 brightest quasars with z > 2" | Queries SIMBAD with appropriate ADQL filters |
+| "Plot an HR diagram of stars within 50 pc" | Searches Gaia, plots color-magnitude diagram |
+| "Find recent papers about Type Ia supernovae" | Searches NASA ADS — **requires `ADS_API_KEY`**, see note below |
 | "Fit the [CII] luminosity vs FWHM relation from these cited tables" | Runs `extract_literature_tables` then `fit_line_lfr` |
 
-The AI has access to a global tool catalog of **77 tools** covering search, literature, statistics, and observational-cosmology likelihood building. The active research module (`ASTRO_RESEARCH_FOCUS`, which fails closed to `cosmology`) narrows the per-turn surface — currently **57 tools** are visible under cosmology focus, as declared in `backend/app/prompts/modules/cosmology/manifest.yaml`. The AI selects the right tool from the visible set based on your request.
+The cosmology examples come first because that is the platform's focus, and they run on a fresh deployment with no extra setup beyond a model-provider key: the datasets are vendored and pinned in the repo, and CAMB runs in-process.
+
+> **ADS dependency note:** the literature-search example needs the `ADS_API_KEY` environment variable on the backend. It is **not** declared in `render.yaml`, so a stock Render deploy does not have it — set it in the Render dashboard (or your backend environment). Without it the tool fails closed: you get an explicit "ADS_API_KEY is not configured" error, not fabricated results.
+
+> Spectrum-analysis tools (`analyze_spectrum`) also exist, but they take a FITS file path on the backend filesystem — a fresh deployment has no FITS files, so that is not a first-run example.
+
+*(Example verification status, as of 2026-07-07: every tool named above was checked to be registered and visible under cosmology focus via `build_allowed_tools("cosmology")`. The prompts themselves were not each re-run end-to-end on a live deployment for this revision; actual routing also depends on the model provider you configure.)*
+
+The AI has access to a global tool catalog of **77 tools** (measured 2026-07-07) covering search, literature, statistics, and observational-cosmology likelihood building. The active research module (`ASTRO_RESEARCH_FOCUS`, which fails closed to `cosmology`) narrows the per-turn surface — currently **57 tools** are visible under cosmology focus (measured 2026-07-07), as declared in `backend/app/prompts/modules/cosmology/manifest.yaml` plus the core tool manifest. The AI selects the right tool from the visible set based on your request.
 
 When a tool result includes provenance, the chat card shows a **Data Sources** panel with `archive_version`, bibcodes, and source authority. The **Copy Acknowledgement** button assembles acknowledgement text from the conversation's provenance. If the AI tries a gated source such as SDSS or Chandra, the card appears as **Maintenance** rather than a generic error and suggests the active alternatives.
 

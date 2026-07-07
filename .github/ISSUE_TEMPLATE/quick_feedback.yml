@@ -1,0 +1,37 @@
+name: Quick Feedback
+description: 60-second feedback after trying Standard Astro — three fields, no structure required.
+title: "[Quick feedback]: "
+labels: ["beta-feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Three fields, done in a minute. For a detailed scientific report, use the
+        **Observational Cosmology Beta Feedback** template instead.
+
+        Please do not include private data, credentials, or unpublished collaboration material.
+
+  - type: input
+    id: who
+    attributes:
+      label: Who are you? (one line)
+      placeholder: "e.g. PhD student working on BAO; postdoc, weak lensing; curious software engineer"
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-you-tried
+    attributes:
+      label: What did you try?
+      description: The prompt, workflow, or feature you tested — a rough description is fine.
+      placeholder: "e.g. Asked it to build a DESI DR2 BAO + BBN likelihood and report constraints"
+    validations:
+      required: true
+
+  - type: textarea
+    id: stuck-or-impressed
+    attributes:
+      label: Where did it get stuck — or impress you?
+      description: Either one is valuable. Errors, confusing output, refusals, or something that worked better than expected.
+    validations:
+      required: true

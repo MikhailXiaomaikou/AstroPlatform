@@ -4,6 +4,10 @@
 
 Repository: https://github.com/MikhailXiaomaikou/Standard-Astro
 
+Try it without installing anything: https://astro-frontend-tyfr.onrender.com
+(free registration; Anthropic/OpenAI models are bring-your-own-key, added on
+the account page).
+
 ## Why this beta exists
 
 Standard Astro is an AI-native astronomy research platform for archive discovery, provenance tracking, research planning, evidence graphs, statistical inference helpers, cosmology likelihood workflows, and reproducible paper/report export.
@@ -15,6 +19,11 @@ controlled runners may support exploratory compressed-likelihood results;
 config-only entries, paper abstracts, old chat context, and user assumptions
 may support background or scope notes only. A useful failure is one that says
 which dataset, covariance, runner, or citation is missing.
+
+Note on likelihood fidelity: the heavy full-covariance SN likelihoods
+(Pantheon+, DES-SN5YR, Pantheon 2018) ship vendored but are switched off by
+default for performance; every result labels its covariance fidelity
+(`cov_fidelity`), so a compressed run is never presented as a full one.
 
 ## Who we hope will try it
 
@@ -38,6 +47,7 @@ Please try one or more of these workflows:
 4. Ask it to compare DESI / Pantheon+ / Planck / weak-lensing evidence without overclaiming unsupported results.
 5. Ask it to draft a short research summary and check whether unsupported claims are clearly marked.
 6. Ask it to produce a research plan, executed matrix, evidence graph, fact-check report, and local diagnostic bundle for a blind-test prompt.
+7. Read the [full-CMB DESI 2024 VI w0waCDM reproduction record](../backend/scripts/cobaya/README_full_cmb_reproduction.md) — a dedicated offline Cobaya+CAMB run that lands all four parameters within 0.3σ of the published DESI values (with honest caveats stated in the record) — then ask the platform to plan the same analysis and check that it clearly distinguishes what the autonomous compressed-likelihood path can and cannot claim.
 
 ## Feedback we need most
 
@@ -53,7 +63,9 @@ Critical feedback is more valuable than praise. Please tell us:
 
 ## How to send feedback
 
-Preferred: open a GitHub issue using the **Observational Cosmology Beta Feedback** template.
+Preferred: open a GitHub issue using the **Quick Feedback** template — three fields (who you are / what you tried / where it got stuck or impressed you), done in a minute.
+
+For a detailed scientific report, use the full **Observational Cosmology Beta Feedback** template instead — it has structured fields for claims, evidence, missing datasets, and refusal boundaries.
 
 You can also send informal notes, but GitHub issues are easiest to track and turn into concrete fixes.
 
@@ -73,6 +85,7 @@ Hi everyone,
 I’m looking for feedback from observational cosmology researchers on **Standard Astro**, an AI-native astronomy research platform.
 
 Repo: https://github.com/MikhailXiaomaikou/Standard-Astro
+Try it (hosted, no install): https://astro-frontend-tyfr.onrender.com
 
 The project focuses on archive discovery, provenance tracking, research planning, evidence graphs, statistical inference helpers, cosmology likelihood configs, compressed posterior experiments, and reproducible paper/report export.
 
@@ -88,7 +101,7 @@ I’m especially looking for critical feedback on:
 
 The goal is not endorsement — rough notes, issue comments, or a list of scientific concerns would be extremely helpful.
 
-If you try it, please open an issue using the Observational Cosmology Beta Feedback template, or leave notes in this discussion.
+If you try it, please open an issue using the Quick Feedback template (three fields, one minute) or the full Observational Cosmology Beta Feedback template, or leave notes in this discussion.
 
 Thanks!
 ```

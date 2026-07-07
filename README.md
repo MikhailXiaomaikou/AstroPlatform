@@ -2,6 +2,10 @@
 
 **A controlled AI workbench for auditable observational-cosmology research.**
 
+Hosted alpha (no local setup): <https://astro-frontend-tyfr.onrender.com> —
+registration is free; bring your own Anthropic/OpenAI key for those models
+(see the account page).
+
 Standard Astro is built around one practical research problem: letting an AI
 assistant help plan, run, check, and write up observational-cosmology workflows
 without letting model memory masquerade as data. You ask a research question in
@@ -64,6 +68,20 @@ This is not a claim of 95% paper reproduction. Strict A-level agreement is an
 offline hidden-answer evaluation that requires the correct data products,
 method, model family, diagnostics, evidence graph, and numerical scale.
 
+## Reproduction track record
+
+A dedicated full-CMB Cobaya+CAMB run (DESI DR1 BAO + Pantheon+ + a clik-free
+Planck 2018 stack, on free local compute) reproduced the **DESI 2024 VI
+w0waCDM evolving-dark-energy result** with all four parameters within 0.3σ of
+the published values and DESI-level error bars — see
+[backend/scripts/cobaya/README_full_cmb_reproduction.md](./backend/scripts/cobaya/README_full_cmb_reproduction.md)
+for the numbers, the reproduction commands, and the honest caveats (converged
+at R-1(means) < 0.05, not the stricter 0.01 gold standard; 2.09σ joint
+departure vs DESI's ~2.5σ, attributable to the close-proxy CMB stack). This is
+an offline scripted run, **not** the autonomous chat path: the in-process
+compressed-CMB path does not reproduce this result, so the platform correctly
+refuses to claim it autonomously.
+
 ## What it does not claim
 
 - It does not promise production-grade full-likelihood inference for every
@@ -105,6 +123,9 @@ current registry classes, execution modes, and claim scopes.
 | Storage | PostgreSQL (prod) / SQLite (dev); local filesystem for FITS; Redis cache |
 
 ## Run it
+
+No-install option: the hosted alpha at
+<https://astro-frontend-tyfr.onrender.com> runs the same code as `main`.
 
 Prerequisites: Python 3.11 (the version CI and the Docker image use) and Node 20+.
 
