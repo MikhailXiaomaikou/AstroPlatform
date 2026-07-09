@@ -2,9 +2,14 @@
 
 **A controlled AI workbench for auditable observational-cosmology research.**
 
-Hosted alpha (no local setup): <https://astro-frontend-tyfr.onrender.com> —
-registration is free; bring your own Anthropic/OpenAI key for those models
-(see the account page).
+To try it, clone this repository and run it locally — see
+[Run it](#run-it) below (backend + frontend on free local tooling; chatting
+with the AI assistant requires your own model-provider API key: DeepSeek,
+Anthropic, or OpenAI).
+
+Skeptical that an LLM research tool will fabricate numbers or citations? Start
+with [docs/HONESTY_EVIDENCE.md](./docs/HONESTY_EVIDENCE.md) — the verified
+anti-fabrication record, including its failures and open gaps.
 
 Standard Astro is built around one practical research problem: letting an AI
 assistant help plan, run, check, and write up observational-cosmology workflows
@@ -124,9 +129,6 @@ current registry classes, execution modes, and claim scopes.
 
 ## Run it
 
-No-install option: the hosted alpha at
-<https://astro-frontend-tyfr.onrender.com> runs the same code as `main`.
-
 Prerequisites: Python 3.11 (the version CI and the Docker image use) and Node 20+.
 
 ```bash
@@ -146,10 +148,10 @@ database defaults to a local SQLite file under `data/` at the repo root, and
 dev-safe random `JWT_SECRET` / `FERNET_KEY` values are generated at startup
 (with a logged warning — tokens and stored API keys do not survive restarts).
 Production environment variables are documented in
-[DEPLOYMENT.md](./DEPLOYMENT.md). To actually chat with the AI assistant you
-need a model-provider API key: register, then add a key on the Account page
-(BYOK), or set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` in
-the backend environment.
+[DEPLOYMENT.md](./DEPLOYMENT.md). To chat with the AI assistant you need a
+model-provider API key: register, then add a key on the Account page (BYOK),
+or set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` in the
+backend environment.
 
 **If startup fails with `Provenance registry freshness check failed`:** the
 backend intentionally refuses to boot — in every environment, local dev

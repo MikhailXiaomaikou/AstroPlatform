@@ -4,9 +4,13 @@
 
 Repository: https://github.com/MikhailXiaomaikou/Standard-Astro
 
-Try it without installing anything: https://astro-frontend-tyfr.onrender.com
-(free registration; Anthropic/OpenAI models are bring-your-own-key, added on
-the account page).
+To try it, clone the repository and run it locally — see the "Run it" section
+of the README (you will need your own model-provider API key — DeepSeek,
+Anthropic, or OpenAI — for the chat itself).
+
+If you read only one document, read
+[docs/HONESTY_EVIDENCE.md](./HONESTY_EVIDENCE.md) (~5 minutes) — the verified
+anti-fabrication record, including its failures and open gaps.
 
 ## Why this beta exists
 
@@ -85,7 +89,8 @@ Hi everyone,
 I’m looking for feedback from observational cosmology researchers on **Standard Astro**, an AI-native astronomy research platform.
 
 Repo: https://github.com/MikhailXiaomaikou/Standard-Astro
-Try it (hosted, no install): https://astro-frontend-tyfr.onrender.com
+(Clone and run locally — setup is in the README's "Run it" section; the chat
+needs your own model-provider API key.)
 
 The project focuses on archive discovery, provenance tracking, research planning, evidence graphs, statistical inference helpers, cosmology likelihood configs, compressed posterior experiments, and reproducible paper/report export.
 
