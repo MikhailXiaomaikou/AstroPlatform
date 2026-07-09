@@ -75,6 +75,7 @@ from app.services.cosmology_likelihoods.cmb import (
     PLANCK18_DP_PROPOSAL_MOMENTS,
     _compressed_chi2_samples,
     _planck_dp_lcdm_proposal_moments,
+    compressed_entry_row_count,
 )
 
 from app.services.cosmology_likelihoods.verification import (
@@ -390,9 +391,8 @@ def _run_sampling_likelihood_chain(
         + sum(len(_load_pantheon_plus_data()["mu"]) for entry in sn_entries if entry.key == "pantheon_plus")
         + sum(_offset_sn_n_points(entry.key) for entry in des_sn_entries)
         + sum(
-            len(entry.compressed_likelihood.parameters)
+            compressed_entry_row_count(entry, parameter_order)
             for entry in compressed_entries
-            if entry.compressed_likelihood is not None
         )
     )
     k = len(parameter_order)

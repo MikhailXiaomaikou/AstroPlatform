@@ -212,6 +212,24 @@ def _planck_distance_prior_chi2(samples: np.ndarray, parameter_order: list[str])
     return np.einsum("ni,ij,nj->n", resid, _PLANCK18_DP_INVCOV, resid)
 
 
+def compressed_entry_row_count(
+    entry: CosmologyDatasetEntry, parameter_order: list[str]
+) -> int:
+    """Executed Gaussian rows for a compressed entry in the SAMPLING path.
+
+    The dp_flat branch executes the 4 correlated CHW2019 distance-prior rows
+    plus (when S8 is derivable) the derived-S8 row — 5 rows, not the entry's
+    4 spec parameters. BIC's ln(N) must count what was actually executed;
+    keep this in lockstep with the branches of _compressed_chi2_samples."""
+    spec = entry.compressed_likelihood
+    if spec is None:
+        return 0
+    if entry.key == "planck2018_compressed" and "omegak" not in parameter_order:
+        s8_row = 1 if ("S8" in spec.parameters and _s8_is_derived(parameter_order)) else 0
+        return 4 + s8_row
+    return len(spec.parameters)
+
+
 def _compressed_chi2_samples(
     samples: np.ndarray,
     parameter_order: list[str],
@@ -339,6 +357,11 @@ ACT_DR6_LENSLIKE_FILES: dict[str, str] = {
     "binning_matrix": "binning_matrix_act.txt",
     "covariance_cmbmarg": "covmat_act_cmbmarg.txt",
     "covariance": "covmat_act.txt",
+    # The fiducial spectra are chi2 anchor inputs — tampering with them moves
+    # the likelihood just as surely as tampering with the bandpowers, so the
+    # gate's "EVERY pinned file" contract includes them.
+    "fiducial_lensed_cls": "like_corrs/cosmo2017_10K_acc3_lensedCls.dat",
+    "fiducial_lenspotential_cls": "like_corrs/cosmo2017_10K_acc3_lenspotentialCls.dat",
 }
 
 

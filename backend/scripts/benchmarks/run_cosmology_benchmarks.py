@@ -503,11 +503,13 @@ def bench_model_comparison_delta() -> dict[str, Any]:
     w≈-1 there, so the extra freedom buys no fit improvement and AIC favors the
     simpler ΛCDM. Guards the formerly-hardcoded delta_chi²=0.0 placeholder.
 
-    NOT + planck2018_compressed: the Planck compressed entry is a model-
-    DEPENDENT representation — extended flat-DE chains swap its diagonal ΛCDM
-    summary for the (R, l_A, ombh2) distance prior, adding an ombh2 axis — so
-    an lcdm-vs-wcdm pair on it compares different likelihoods and comes back
-    comparison_valid=False / preferred=undetermined.
+    planck2018_compressed note (contract changed 2026-07-07): every FLAT
+    model now executes the same CHW2019 correlated (R, l_A, ombh2, ns)
+    distance priors + derived-S8 row, so an lcdm-vs-wcdm pair on it IS
+    comparison_valid now. The representation-mismatch invalidity case is
+    covered by synthetic-mismatch fixtures in
+    tests/test_model_comparison_validity.py; this benchmark keeps the
+    BAO+CC pair as an independent same-likelihood check.
 
     DESI + cosmic chronometers with the emcee upgrade (2026-06-12): the
     chain-tier validity guard now also refuses blocked inputs, and a wcdm

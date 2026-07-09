@@ -575,12 +575,21 @@ def _bao_chi2_samples(
         # MGS half runs on the released non-Gaussian chi2(alpha) table
         # (2026-06-12 fidelity upgrade); 6dFGS half stays Gaussian.
         return _sdss_6df_mgs_chi2_samples(samples, parameter_order)
-    if load_verified_bao_data(key)["cov_fidelity"] == "unverified":
+    record = load_verified_bao_data(key)
+    if record["cov_fidelity"] == "unverified":
         raise ValueError(
             f"BAO {key} covariance failed sha256 verification (or its vendored "
             "file is missing); refusing to compute chi2 from unverified data."
         )
-    mean_vector, cov = _BAO_DATA[key]
+    # Fit the SAME record the gate just verified — the module-level _BAO_DATA
+    # snapshot is baked at import and can go stale if the file was unreadable
+    # at import and restored later (self-heal must heal the fitted bytes too).
+    mean_vector, cov = record["mean_vector"], record["covariance"]
+    if mean_vector is None or cov is None:
+        raise ValueError(
+            f"BAO {key} verified record carries no data arrays; refusing to "
+            "compute chi2."
+        )
     observed = np.asarray([row[1] for row in mean_vector], dtype=float)
     covariance = np.asarray(cov, dtype=float)
     predictions = _bao_predictions(samples, parameter_order, mean_vector)

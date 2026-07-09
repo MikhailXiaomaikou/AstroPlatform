@@ -333,6 +333,12 @@ Every rule here traces to a real incident in past agent sessions
   check once caught an expired database nobody suspected.
 - Local diagnostics under `.local/` are ignored and should not be uploaded
   unless explicitly requested.
+- cobaya keeps a machine-global packages path in
+  `~/Library/Application Support/cobaya/config.yaml` that can shadow the
+  repo checkout. If the cobaya-parity tests suddenly report "has not been
+  correctly installed", check that file first — it must point at
+  `backend/packages` (a cobaya-install run from a temp dir once left it
+  pointing at a deleted scratchpad and 4 parity tests went red).
 
 ## Shared Agent Note
 

@@ -1233,6 +1233,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "planck_2018_lowl_EE",
             "planck_2018_lensing",
             "planck_pr4_lensing",
+            # act_dr6_lensing's executed numbers are the ACT+Planck JOINT
+            # lensing summary, and this entry's S8 row quotes the
+            # lensing-included Planck VI column — co-adding counts Planck
+            # lensing twice.
+            "act_dr6_lensing",
         ),
         data_products=(
             DataProductSpec(
@@ -1743,14 +1748,22 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         cosmosis_module="external:act_dr6_lenslike",
         execution_mode="compressed_gaussian",
         # The executed compressed numbers are the ACT+Planck JOINT lensing
-        # summary — co-adding with a Planck lensing likelihood counts Planck
-        # lensing twice.
-        do_not_combine_with=("planck_2018_lensing", "planck_pr4_lensing"),
+        # summary — co-adding with a Planck lensing likelihood (or with
+        # planck2018_compressed, whose S8 row quotes the lensing-included
+        # Planck VI column) counts Planck lensing twice.
+        do_not_combine_with=(
+            "planck_2018_lensing",
+            "planck_pr4_lensing",
+            "planck2018_compressed",
+        ),
         # Real act_baseline lens_only likelihood inputs (2026-07-07): fetched
         # from the official NASA LAMBDA tarball by
         # scripts/fetch_act_dr6_lenslike.py, vendored under the cobaya
-        # InstallableLikelihood get_path convention, verified at load time by
-        # cosmology_likelihoods.cmb.load_verified_act_dr6_lenslike_data.
+        # InstallableLikelihood get_path convention. Hash-verification against
+        # these pins is provided by
+        # cosmology_likelihoods.cmb.load_verified_act_dr6_lenslike_data —
+        # enforced by the test suite today; live runner wiring must call it
+        # before execution (no runtime path executes these files yet).
         # Reproduces the package's own reference chi2 = 14.06 (act_baseline
         # lens_only at the bundled fiducial spectra; act_dr6_lenslike
         # tests/test_act.py) — pinned by tests/test_act_dr6_lenslike.py.
@@ -1800,7 +1813,7 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 format="v1.2/covmat_act_cmbmarg.txt (18x18)",
                 description=(
                     "CMB-marginalized bandpower covariance — the one lens_only "
-                    "runs use (Hartlap-corrected at load time, nsims_act=792)."
+                    "runs use (Hartlap-corrected at load time, nsims_act=796)."
                 ),
                 rows=18,
                 sha256="18ce4a7c542b7e23ecc17d492a8dbf748bf84a3bc30dc337a8999d9f4925c294",

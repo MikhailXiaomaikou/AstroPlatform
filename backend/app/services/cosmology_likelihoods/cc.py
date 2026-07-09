@@ -245,7 +245,8 @@ def _cosmic_chronometer_hz_predictions(
     samples: np.ndarray, parameter_order: list[str]
 ) -> np.ndarray:
     """Predicted H(z) at the 31 GA2018 cosmic-chronometer redshifts."""
-    return _hz_predictions_for(samples, parameter_order, COSMIC_CHRONOMETER_HZ)
+    hz_vector = load_verified_cc_data("cosmic_chronometers")["hz_vector"]
+    return _hz_predictions_for(samples, parameter_order, hz_vector)
 
 
 def _cosmic_chronometer_chi2_samples(
@@ -254,10 +255,14 @@ def _cosmic_chronometer_chi2_samples(
     """Diagonal-covariance χ² of the 31-point cosmic-chronometer H(z) vector.
 
     Gómez-Valent & Amendola 2018 use a diagonal covariance for this compilation,
-    so χ² = Σ_i ((H_pred(z_i) − H_obs_i) / σ_i)²."""
-    observed = np.asarray([row[1] for row in COSMIC_CHRONOMETER_HZ], dtype=float)
-    sigma = np.asarray([row[2] for row in COSMIC_CHRONOMETER_HZ], dtype=float)
-    predictions = _cosmic_chronometer_hz_predictions(samples, parameter_order)
+    so χ² = Σ_i ((H_pred(z_i) − H_obs_i) / σ_i)².
+
+    Reads the fresh verified record (not the import-time COSMIC_CHRONOMETER_HZ
+    snapshot) so a self-healed loader also heals the fitted bytes."""
+    hz_vector = load_verified_cc_data("cosmic_chronometers")["hz_vector"]
+    observed = np.asarray([row[1] for row in hz_vector], dtype=float)
+    sigma = np.asarray([row[2] for row in hz_vector], dtype=float)
+    predictions = _hz_predictions_for(samples, parameter_order, hz_vector)
     residual = predictions - observed
     return np.sum((residual / sigma) ** 2, axis=1)
 

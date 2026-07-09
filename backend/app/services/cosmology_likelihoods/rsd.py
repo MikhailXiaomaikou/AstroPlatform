@@ -124,8 +124,9 @@ def _eboss_fsigma8_predictions(
     else:
         w0 = np.full(n_samples, -1.0, dtype=float)
     wa = samples[:, parameter_order.index("wa")] if "wa" in parameter_order else np.zeros(n_samples)
-    predictions = np.empty((n_samples, len(EBOSS_DR16_FSIGMA8)), dtype=float)
-    for col, (z, _v, _s) in enumerate(EBOSS_DR16_FSIGMA8):
+    fsigma8_vector = load_verified_rsd_data("eboss_dr16_rsd")["fsigma8_vector"]
+    predictions = np.empty((n_samples, len(fsigma8_vector)), dtype=float)
+    for col, (z, _v, _s) in enumerate(fsigma8_vector):
         f_z = _growth_rate_f(z, omegam, w0, wa)
         d_ratio = _growth_factor_ratio(z, omegam, w0, wa)
         predictions[:, col] = f_z * sigma8 * d_ratio
@@ -136,9 +137,13 @@ def _eboss_fsigma8_chi2_samples(
     samples: np.ndarray, parameter_order: list[str]
 ) -> np.ndarray:
     """Diagonal-covariance χ² of the 6-point eBOSS DR16 RSD fσ8 vector
-    (Alam+2021 Table III footnote a: per-tracer Gaussian, correlations ignored)."""
-    observed = np.asarray([row[1] for row in EBOSS_DR16_FSIGMA8], dtype=float)
-    sigma = np.asarray([row[2] for row in EBOSS_DR16_FSIGMA8], dtype=float)
+    (Alam+2021 Table III footnote a: per-tracer Gaussian, correlations ignored).
+
+    Reads the fresh verified record (not the import-time EBOSS_DR16_FSIGMA8
+    snapshot) so a self-healed loader also heals the fitted bytes."""
+    fsigma8_vector = load_verified_rsd_data("eboss_dr16_rsd")["fsigma8_vector"]
+    observed = np.asarray([row[1] for row in fsigma8_vector], dtype=float)
+    sigma = np.asarray([row[2] for row in fsigma8_vector], dtype=float)
     predictions = _eboss_fsigma8_predictions(samples, parameter_order)
     residual = predictions - observed
     return np.sum((residual / sigma) ** 2, axis=1)

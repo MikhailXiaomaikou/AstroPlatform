@@ -199,10 +199,16 @@ def test_research_matrix_runs_flat_de_cells_with_comparison_discipline():
         assert isinstance(cell["result"].get("fit_statistics"), dict)
     assert m["model_comparisons"], "comparisons must fire for the matched-dataset pair"
     # Since 2026-07-07 desi+planck shares ONE representation across flat
-    # models, so a comparison may legitimately be valid — but the rendering
-    # discipline is unconditional: a valid verdict from an exploratory-tier
-    # extended fit must carry the caveat, and any invalid comparison must be
-    # withheld AND tainted out of the claimable universe.
+    # models, so the matched-pair comparison MUST come back valid — a
+    # regression to the pre-fix all-invalid state must fail here, not pass
+    # through a lenient either-way branch.
+    assert any(c["comparison_valid"] for c in m["model_comparisons"]), (
+        "flat lcdm-vs-wcdm on desi+planck shares one representation since "
+        "2026-07-07; the matched-pair comparison must be valid"
+    )
+    # Rendering discipline stays unconditional: a valid verdict from an
+    # exploratory-tier extended fit must carry the caveat, and any invalid
+    # comparison must be withheld AND tainted out of the claimable universe.
     for comparison in m["model_comparisons"]:
         if comparison["comparison_valid"]:
             assert comparison["preferred"] in {"lcdm", "wcdm", "inconclusive"}

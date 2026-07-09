@@ -94,7 +94,9 @@ def test_verification_gate_flags_tampered_file(tmp_path, monkeypatch):
     tampered = tmp_path / "v1.2"
     tampered.mkdir()
     for name in ACT_DR6_LENSLIKE_FILES.values():
-        shutil.copy(ACT_DR6_LENSLIKE_DATA_DIR / name, tampered / name)
+        dst = tampered / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ACT_DR6_LENSLIKE_DATA_DIR / name, dst)
     # Flip one byte in the covariance — the gate must go unverified, never
     # silently substitute or accept.
     cov_path = tampered / ACT_DR6_LENSLIKE_FILES["covariance_cmbmarg"]
@@ -181,3 +183,28 @@ def test_entry_still_executes_compressed_until_runner_gate_exists():
             "external_cobaya once the YAML wiring (variant/lens_only, "
             "packages_path) ships."
         )
+
+
+def test_gate_covers_every_registry_pinned_vendored_file():
+    """Adversarial-review follow-up (2026-07-07): the gate's 'EVERY pinned
+    file' contract must be mechanically true — the role->filename dict the
+    gate iterates has to match exactly the registry data_products that are
+    vendored (local_path) AND pinned (sha256). A new pinned product added to
+    the registry without a gate entry fails here instead of silently
+    shrinking the verification surface."""
+    entry = cl.get_cosmology_dataset(_KEY)
+    vendored_pinned_roles = {
+        p.role for p in entry.data_products if p.local_path and p.sha256
+    }
+    assert vendored_pinned_roles == set(ACT_DR6_LENSLIKE_FILES)
+
+
+@pytest.mark.skipif(not _DATA_PRESENT, reason="vendored ACT DR6 files absent")
+def test_gate_hashes_the_fiducial_spectra_too():
+    """The fiducial spectra are chi2 anchor inputs; the gate must include
+    them in files_sha256 (pre-fix it silently checked only 4 of 6 files)."""
+    record = load_verified_act_dr6_lenslike_data()
+    assert record["hash_verified"] is True, record["issues"]
+    hashed = set(record["files_sha256"])
+    assert "like_corrs/cosmo2017_10K_acc3_lensedCls.dat" in hashed
+    assert "like_corrs/cosmo2017_10K_acc3_lenspotentialCls.dat" in hashed

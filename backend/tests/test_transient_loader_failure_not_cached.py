@@ -117,3 +117,48 @@ def test_bao_chi2_path_refuses_then_recovers(monkeypatch):
     finally:
         monkeypatch.setattr(cl, "_VENDORED_COSMO_DATA_DIR", _REAL_DIR)
         _clear(loader)
+
+
+# ── chi2 must consume the FRESH verified record, not import snapshots ────────
+# Adversarial-review follow-up (2026-07-07): the self-heal fix healed the
+# per-call verification record, but _bao_chi2_samples still fitted the
+# module-import _BAO_DATA snapshot — gate fresh, data stale. These pin the
+# fix: poisoning the import snapshot must not change chi2, because the chi2
+# paths read the same record object the gate just verified. All three FAIL
+# on the pre-fix consumers (crash on None / fit garbage).
+
+def test_bao_chi2_ignores_stale_import_snapshot(monkeypatch):
+    from app.services.cosmology_likelihoods import bao as bao_mod
+
+    samples = np.array([[67.4, 0.31, 147.0]])
+    order = ["H0", "omegam", "rd"]
+    baseline = bao_mod._bao_chi2_samples(samples, order, key="desi_dr2_bao")
+    monkeypatch.setitem(bao_mod._BAO_DATA, "desi_dr2_bao", (None, None))
+    poisoned = bao_mod._bao_chi2_samples(samples, order, key="desi_dr2_bao")
+    np.testing.assert_allclose(poisoned, baseline)
+
+
+def test_cc_chi2_ignores_stale_import_snapshot(monkeypatch):
+    from app.services.cosmology_likelihoods import cc as cc_mod
+
+    samples = np.array([[67.4, 0.31]])
+    order = ["H0", "omegam"]
+    baseline = cc_mod._cosmic_chronometer_chi2_samples(samples, order)
+    monkeypatch.setattr(
+        cc_mod, "COSMIC_CHRONOMETER_HZ", ((0.5, 1.0e6, 1.0),)
+    )
+    poisoned = cc_mod._cosmic_chronometer_chi2_samples(samples, order)
+    np.testing.assert_allclose(poisoned, baseline)
+
+
+def test_rsd_chi2_ignores_stale_import_snapshot(monkeypatch):
+    from app.services.cosmology_likelihoods import rsd as rsd_mod
+
+    samples = np.array([[0.31, 0.81]])
+    order = ["omegam", "sigma8"]
+    baseline = rsd_mod._eboss_fsigma8_chi2_samples(samples, order)
+    monkeypatch.setattr(
+        rsd_mod, "EBOSS_DR16_FSIGMA8", ((0.7, 1.0e6, 1.0),)
+    )
+    poisoned = rsd_mod._eboss_fsigma8_chi2_samples(samples, order)
+    np.testing.assert_allclose(poisoned, baseline)

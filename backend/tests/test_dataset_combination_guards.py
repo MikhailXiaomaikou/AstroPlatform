@@ -175,3 +175,28 @@ def test_eboss_qso_fsbao_plus_desi_chain_is_not_publication_ready():
 )
 def test_previously_declared_overlaps_still_warn(key_a, key_b):
     assert _warns(key_a, key_b)
+
+
+# ── (e) planck2018_compressed vs act_dr6_lensing (both carry Planck lensing) ─
+# Adversarial-review find (2026-07-07): the compressed Planck entry's S8 row
+# quotes the lensing-included Planck VI column, and act_dr6_lensing's
+# executed numbers are the ACT+Planck JOINT summary — co-adding counts
+# Planck lensing twice, same class as pairs (a)-(d).
+
+def test_planck_compressed_and_act_dr6_lensing_mutually_excluded():
+    planck = cl.get_cosmology_dataset("planck2018_compressed")
+    assert "act_dr6_lensing" in planck.do_not_combine_with
+    act = cl.get_cosmology_dataset("act_dr6_lensing")
+    assert "planck2018_compressed" in act.do_not_combine_with
+    assert _warns("planck2018_compressed", "act_dr6_lensing")
+
+
+def test_planck_compressed_plus_act_lensing_chain_is_not_publication_ready():
+    result = run_likelihood_chain(
+        model="lcdm",
+        dataset_keys=["planck2018_compressed", "act_dr6_lensing"],
+        random_seed=123,
+        n_samples=1024,
+    )
+    assert result["publication_ready"] is False
+    assert result["chain_tier"] != "publication"
