@@ -149,3 +149,12 @@ paper-level scientific answers. Zero A grades means zero A grades.
 - Scheduled run history: the repository's GitHub Actions tab (`daily.yml`,
   `ci.yml` — CI also re-runs the cosmology benchmark suite against published
   anchor values on every push to main).
+- Live weekly literature runs — **self-run traffic, not organic users**:
+  [cosmo-second-order](https://github.com/MikhailXiaomaikou/cosmo-second-order)
+  mines fresh astro-ph.CO papers for cross-paper tensions each week and runs
+  the executable subset through this platform; its reports quote the
+  gate-validated replies verbatim with their covariance-fidelity labels. The
+  first run (2026-07-09) verified two honest-abstention probes live (an
+  unclaimable spectral index; a requested-but-unregistered dataset disclosed
+  rather than silently substituted) and surfaced two platform defects, both
+  filed for fixes.
