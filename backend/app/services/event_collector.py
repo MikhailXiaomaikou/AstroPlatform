@@ -101,7 +101,14 @@ class EventCollector:
             should_flush = len(self.buffer) >= self.FLUSH_SIZE
 
         if should_flush:
-            await self.flush()
+            # Analytics is best-effort: an inline flush failure (schema
+            # missing, DB down) must never take down the user request that
+            # happened to be the FLUSH_SIZE-th event — same defensive
+            # contract periodic_flush already has.
+            try:
+                await self.flush()
+            except Exception as exc:
+                logger.warning("Failed to flush user event buffer inline: %s", exc)
 
     async def flush(self) -> None:
         async with self.buffer_lock:
