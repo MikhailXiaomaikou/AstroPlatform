@@ -166,6 +166,12 @@ async def test_load_cosmology_data_product_reports_unavailable_without_network_o
 
 
 def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints():
+    """The runner still combines all five compressed entries mechanically,
+    but since 2026-07-07 planck2018_compressed x act_dr6_lensing is a
+    declared double-count pair (both carry Planck lensing), so this
+    selection must come back warned and NOT publication-ready — the
+    pre-fix version of this test pinned publication_ready=True on exactly
+    that double-count."""
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     result = run_likelihood_chain(
@@ -182,9 +188,12 @@ def test_compressed_likelihood_runner_combines_planck_act_and_wl_s8_constraints(
     )
 
     assert result["success"] is True
-    assert result["publication_ready"] is True
-    assert result["analysis_status"] == "COMPRESSED_CHAIN_READY"
-    assert result["claim_scope"] == "compressed_likelihood_preliminary"
+    assert result["publication_ready"] is False
+    assert result["chain_tier"] != "publication"
+    joined = " ".join(result["warnings"])
+    assert "must not be co-added" in joined
+    assert "planck2018_compressed" in joined and "act_dr6_lensing" in joined
+    # The combining machinery itself is unchanged:
     assert set(result["parameters"]) >= {"H0", "omegam", "sigma8", "S8"}
     assert result["parameters"]["S8"]["median"] == pytest.approx(0.804, abs=0.02)
     # 2026-06-12: rhat is honestly None on the in-process runner (no MCMC
