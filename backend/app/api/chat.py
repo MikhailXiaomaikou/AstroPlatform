@@ -29,7 +29,7 @@ from app.ai.model_profiles import (
 from app.ai.orchestrator import orchestrator
 from app.auth import get_current_user, get_optional_user
 from app.api.auth import require_admin_any
-from app.rate_limit import limiter
+from app.rate_limit import daily_quota, limiter
 from app.models.database import get_db
 from app.models.schemas import User
 from app.services.prompt_loader import build_allowed_tools, build_system_prompt
@@ -412,6 +412,73 @@ def _provider_api_keys(context: dict | None, user: User | None) -> dict[str, str
     return keys
 
 
+def _enforce_starter_daily_quota(
+    user: User | None,
+    context: dict | None,
+    provider_api_keys: dict[str, str],
+) -> None:
+    """Reject over-quota platform-funded chat calls for starter accounts.
+
+    Decision 2B (2026-07): self-service signups land on the "starter" tier
+    (app/rate_limit.py TIER_LIMITS) so a fresh registration cannot burn the
+    shared server DeepSeek key — the only platform-funded provider;
+    Anthropic/OpenAI stay BYOK (see _provider_api_keys). Only calls that
+    would run on the platform key count against the cap:
+
+    - The user's own DeepSeek key shadows the platform key entirely in
+      _provider_api_keys -> exempt, not counted.
+    - An explicitly selected provider backed by the user's own key runs on
+      their money -> exempt. (If that primary call errors, the inference
+      router may still fall back to the platform key; charging those rare
+      failure fallbacks pre-call is not worth the complexity.)
+    - Everything else counts (fail closed). In particular, a provider
+      preference WITHOUT a matching user key is counted, because the
+      router's fallback chain would route it straight back to the platform
+      DeepSeek key.
+
+    Pre-existing tiers (solo/lab/institution) are intentionally not
+    enforced here: this gate implements only the starter cap, so existing
+    accounts keep their current behavior.
+    """
+    if user is None:
+        # Anonymous traffic is throttled by the per-IP slowapi limits;
+        # decision 2B targets registered accounts.
+        return
+    if (user.subscription_tier or "solo") != "starter":
+        return
+    server_key = _server_deepseek_api_key()
+    if not server_key:
+        return  # no platform-funded key configured -> nothing to protect
+    if provider_api_keys.get("deepseek") != server_key:
+        return  # the user's own DeepSeek key is in effect
+    own_key_providers = {
+        provider
+        for provider, key in provider_api_keys.items()
+        if key and not (provider == "deepseek" and key == server_key)
+    }
+    preferred = str((context or {}).get("api_provider") or "").strip().lower()
+    if preferred and preferred in own_key_providers:
+        return
+    if preferred == "local" and (
+        os.getenv("LOCAL_MODEL_ENABLED", "") or os.getenv("OPENAI_CLI_ENABLED", "")
+    ):
+        return  # dev-only local backend spends no platform money
+    verdict = daily_quota.check_and_increment(str(user.id), "starter", "api_calls")
+    if not verdict.get("allowed", True):
+        limit = verdict.get("limit", 50)
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Daily limit reached: new accounts get {limit} platform-funded "
+                f"chat messages per day, and you have used all {limit}. The "
+                "counter resets at midnight UTC. To keep working now, add your "
+                "own API key (Anthropic, OpenAI, or DeepSeek) under Settings "
+                "-> API Keys — messages that run on your own key do not count "
+                "against this limit."
+            ),
+        )
+
+
 def _preferred_backend(context: dict | None) -> str | None:
     provider = str((context or {}).get("api_provider") or "").strip().lower()
     provider_to_backend = {
@@ -561,6 +628,11 @@ async def chat_message_stream(
 ):
     """Streaming version — sends SSE events as AI processes tools."""
     from starlette.responses import StreamingResponse
+
+    # Decision 2B: reject over-quota platform-funded starter calls before
+    # the stream opens, so the client gets a clean HTTP 429 instead of an
+    # in-stream error frame.
+    _enforce_starter_daily_quota(user, req.context, _provider_api_keys(req.context, user))
 
     async def generate():
         # ══════════════════════════════════════════════════════════════
@@ -1613,6 +1685,7 @@ async def chat_message(
     Falls back to single-turn with <actions> tags if tool_use is unavailable.
     """
     provider_api_keys = _provider_api_keys(req.context, user)
+    _enforce_starter_daily_quota(user, req.context, provider_api_keys)
     preferred_backend = _preferred_backend(req.context)
     preferred_model_profile = _preferred_model_profile(req.context)
     workflow_budget = _workflow_budget_config(_infer_workflow_budget_mode(req))

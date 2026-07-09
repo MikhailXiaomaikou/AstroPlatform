@@ -53,19 +53,23 @@ async def test_admin_endpoint_with_wrong_secret_rejected(app_client):
     assert resp.status_code in (401, 403)
 
 
-async def test_subscribe_to_institution_does_not_grant_admin(app_client, test_user):
-    """B14: self-serving POST /api/auth/subscribe to the 'institution' billing
-    tier must NOT confer admin. A normal user can pick any billing tier, but
-    the admin surface stays gated (admin tier / ADMIN_USERNAMES / X-Admin-Secret
-    only). Before the fix, require_admin_any treated subscription_tier in
-    {admin, institution} as admin, so a normal user could self-escalate."""
+async def test_subscribe_is_disabled_and_does_not_grant_admin(app_client, test_user):
+    """B14 (hardened 2026-07-07): self-service POST /api/auth/subscribe is
+    disabled outright while billing is not integrated. It used to let any
+    account self-assign a tier, which (a) once fed the require_admin_any
+    admin-escalation bug this test was born from, and (b) would let a
+    starter account bypass its daily quota (decision 2B) with one POST.
+    The admin surface must stay gated regardless."""
     _user, token = test_user
     auth = {"Authorization": f"Bearer {token}"}
 
     sub = await app_client.post(
         "/api/auth/subscribe", headers=auth, json={"tier": "institution"}
     )
-    assert sub.status_code == 200, f"subscribe failed: {sub.status_code} {sub.text[:200]}"
+    assert sub.status_code == 403, (
+        f"subscribe must be disabled while billing is not integrated: "
+        f"{sub.status_code} {sub.text[:200]}"
+    )
 
     resp = await app_client.get(ADMIN_GET_ENDPOINTS[0], headers=auth)
     assert resp.status_code in (401, 403), (

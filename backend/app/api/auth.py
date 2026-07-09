@@ -137,7 +137,10 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
         username=username,
         email=internal_email_for_username(username),
         password_hash=hash_password(req.password),
-        subscription_tier="solo",
+        # Decision 2B: self-service signups start on the tight "starter"
+        # tier (50 platform-funded chat calls/day, see app/rate_limit.py).
+        # Existing accounts keep their stored tier.
+        subscription_tier="starter",
         display_name=username,
     )
     db.add(user)
@@ -242,7 +245,9 @@ async def google_login(request: Request, req: GoogleLoginRequest, db: AsyncSessi
         google_id=google_id,
         display_name=display_name,
         avatar_url=avatar_url,
-        subscription_tier="solo",
+        # Decision 2B: self-service signups start on the tight "starter"
+        # tier (50 platform-funded chat calls/day, see app/rate_limit.py).
+        subscription_tier="starter",
     )
     db.add(user)
     try:
@@ -349,6 +354,9 @@ async def setup_key_login(request: Request, req: SetupKeyRequest, db: AsyncSessi
         username=username,
         email=internal_email_for_username(username),
         password_hash=hash_password(random_pw),
+        # Setup keys are admin-issued invitations, not open signup, so they
+        # keep the historical "solo" tier (decision 2B tightens only the
+        # self-service registration paths above).
         subscription_tier="solo",
         display_name=username,
     )
@@ -525,13 +533,21 @@ async def subscribe(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update subscription tier (billing not yet integrated)."""
-    valid_tiers = {"solo", "lab", "institution"}
-    if req.tier not in valid_tiers:
-        raise HTTPException(status_code=400, detail=f"Invalid tier. Choose from: {valid_tiers}")
-    user.subscription_tier = req.tier
-    await db.commit()
-    return {"status": "updated", "tier": req.tier}
+    """Tier changes are disabled until billing is integrated.
+
+    This endpoint used to let any logged-in account self-assign
+    solo/lab/institution, which would bypass the starter daily quota
+    (2026-07-07 decision 2B) with a single POST. It refuses until a real
+    billing flow exists; tier changes are an operator action for now.
+    """
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Self-service tier changes are disabled while billing is not "
+            "integrated. Bringing your own API key (Settings -> API Keys) "
+            "lifts the starter daily limit without a tier change."
+        ),
+    )
 
 
 @router.get("/usage")

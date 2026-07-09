@@ -127,6 +127,14 @@ class DailyQuota:
     """Per-user daily API quota tracking. Uses Redis when available, falls back to in-memory."""
 
     TIER_LIMITS = {
+        # "starter" is the default tier for new self-service signups
+        # (decision 2B, 2026-07): a tight daily cap on platform-funded chat
+        # calls so a fresh anonymous registration cannot burn the shared
+        # server DeepSeek key. Enforced at the chat endpoints via
+        # app/api/chat.py:_enforce_starter_daily_quota, which exempts BYOK
+        # calls. pipeline_runs / adql_queries spend no platform LLM money,
+        # so they keep the solo allowances.
+        "starter": {"api_calls": 50, "pipeline_runs": 50, "adql_queries": 200},
         "solo": {"api_calls": 1000, "pipeline_runs": 50, "adql_queries": 200},
         "lab": {"api_calls": 5000, "pipeline_runs": 200, "adql_queries": 1000},
         "institution": {"api_calls": 20000, "pipeline_runs": 1000, "adql_queries": 5000},
