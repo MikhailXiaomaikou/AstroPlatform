@@ -387,7 +387,7 @@ def _cosmology_forbidden_probe_families(text: str) -> set[str]:
 
 
 def _cosmology_probe_family_for_dataset(key: str) -> str:
-    if key in {"desi_dr1_bao", "sdss_6df_bao"}:
+    if key in {"desi_dr1_bao", "desi_dr2_bao", "sdss_6df_bao"}:
         return "bao"
     if key in {"pantheon_plus", "des_sn5yr", "union3"}:
         return "sn"
@@ -446,10 +446,20 @@ def _cosmology_dataset_keys_from_prompt(text: str) -> list[str]:
         "desi and pre-desi",
         "desi and pre desi",
     ))
+    # An explicit DR2 mention ("desi dr2", "desi-dr2", "desi_dr2_bao") selects
+    # the DR2 likelihood; bare "desi" keeps routing to DR1 for backward
+    # compatibility. Exactly one DESI release is ever selected — the registry
+    # marks desi_dr1_bao and desi_dr2_bao mutually do_not_combine_with, and
+    # DR2 supersedes DR1 when both releases are named.
+    desi_key = "desi_dr1_bao"
+    if "desi" in prompt and re.search(
+        r"\bdr\s*2\b", prompt.replace("_", " ").replace("-", " ")
+    ):
+        desi_key = "desi_dr2_bao"
     if desi_or_pre_desi:
-        keys.extend(["desi_dr1_bao", "sdss_6df_bao"])
+        keys.extend([desi_key, "sdss_6df_bao"])
     elif "desi" in prompt and not pre_desi_bao:
-        keys.append("desi_dr1_bao")
+        keys.append(desi_key)
     elif any(tok in prompt for tok in ("bao", "baryon acoustic")):
         if pre_desi_bao or any(tok in prompt for tok in ("act dr6", "act lens", "sdss", "6df", "6dfgs", "eboss", "boss")):
             keys.append("sdss_6df_bao")

@@ -743,6 +743,58 @@ def test_desi_bin_outlier_prompt_routes_to_cosmology_registry_not_python() -> No
     assert _cosmology_likelihood_build_calls_from_prompt(prompt)[0]["name"] == "build_cosmology_likelihood"
 
 
+def test_explicit_desi_dr2_prompt_routes_to_dr2_not_dr1() -> None:
+    """Regression: a prompt explicitly requesting desi_dr2_bao was silently
+    rerouted to desi_dr1_bao (verified live 2026-07-09; captured provenance
+    showed datasets_used=["desi_dr1_bao"])."""
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    # The exact failure channel: the registry key spelled out in the prompt.
+    assert _cosmology_dataset_keys_from_prompt(
+        "Build and run the executable likelihood with datasets desi_dr2_bao "
+        "under flat LCDM and report the posterior."
+    ) == ["desi_dr2_bao"]
+
+    # Natural phrasing.
+    assert _cosmology_dataset_keys_from_prompt(
+        "Fit flat LCDM to the DESI DR2 BAO distance measurements with a "
+        "Planck compressed prior; executable run please."
+    ) == ["desi_dr2_bao", "planck2018_compressed"]
+
+
+def test_bare_desi_prompt_still_routes_to_dr1() -> None:
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    assert _cosmology_dataset_keys_from_prompt(
+        "Run the executable DESI BAO likelihood under flat LCDM."
+    ) == ["desi_dr1_bao"]
+
+
+def test_desi_dr1_vs_dr2_prompt_never_selects_both() -> None:
+    """desi_dr1_bao and desi_dr2_bao are mutually do_not_combine_with in the
+    registry, so routing must pick exactly one; DR2 supersedes DR1 when both
+    releases are named."""
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    keys = _cosmology_dataset_keys_from_prompt(
+        "Compare DESI DR1 vs DESI DR2 BAO constraints under flat LCDM, "
+        "executable run."
+    )
+    assert "desi_dr2_bao" in keys
+    assert "desi_dr1_bao" not in keys
+
+
+def test_desi_dr2_respects_bao_family_exclusion() -> None:
+    """desi_dr2_bao must be classified as the BAO probe family so an explicit
+    'no BAO' prompt filters it like desi_dr1_bao."""
+    from app.api.chat import _cosmology_dataset_keys_from_prompt
+
+    assert _cosmology_dataset_keys_from_prompt(
+        "Fit flat LCDM with the Planck compressed prior only; do not include "
+        "BAO (desi_dr2_bao) in this run."
+    ) == ["planck2018_compressed"]
+
+
 def test_empty_cosmology_prose_fallback_summarizes_config_only_turn() -> None:
     from app.api.chat import _cosmology_tool_grounded_summary
 
