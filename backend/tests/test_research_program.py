@@ -29,6 +29,30 @@ def test_research_plan_routes_multiprobe_cosmology_to_dag() -> None:
     assert any(cell["label"] == "BAO + CMB" for cell in plan["proposed_experiment_matrix"])
 
 
+def test_research_plan_explicit_desi_dr2_selects_dr2_bao() -> None:
+    """Regression: research-matrix planning hard-coded the BAO probe member to
+    desi_dr1_bao, so a question explicitly about DESI DR2 silently planned DR1
+    (same bug class as the 2026-07-09 chat-routing DR2 reroute). Bare "DESI"
+    keeps planning DR1; the registry marks the two releases mutually
+    do_not_combine_with, so exactly one is ever selected."""
+    from app.services.research_program import plan_research_program
+
+    plan = plan_research_program(
+        question=(
+            "I want to research DESI DR2 BAO + Planck compressed dark-energy "
+            "robustness and identify which combinations are executable."
+        )
+    )["research_plan"]
+    assert plan["candidate_dataset_keys"] == ["desi_dr2_bao", "planck2018_compressed"]
+    assert plan["executable_level"] == "compressed_preliminary"
+    assert plan["blocking_gaps"] == []
+
+    bare = plan_research_program(
+        question="I want to research DESI BAO + Planck compressed dark-energy robustness."
+    )["research_plan"]
+    assert bare["candidate_dataset_keys"] == ["desi_dr1_bao", "planck2018_compressed"]
+
+
 def test_research_matrix_runs_executable_cells_and_marks_config_gaps() -> None:
     from app.services.research_program import plan_research_program, run_research_matrix
 

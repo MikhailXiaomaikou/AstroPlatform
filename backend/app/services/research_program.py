@@ -25,6 +25,7 @@ from app.services.cosmology_likelihoods import (
 
 COSMOLOGY_PROBE_DATASETS: dict[str, list[str]] = {
     "bao": ["desi_dr1_bao"],
+    "dr2_bao": ["desi_dr2_bao"],
     "pre_desi_bao": ["sdss_6df_bao"],
     "sn": ["pantheon_plus"],
     "sn_comparison": ["pantheon_plus", "des_sn5yr", "union3"],
@@ -1432,13 +1433,29 @@ def _required_probes(text: str) -> list[str]:
     return list(dict.fromkeys(probes))
 
 
+def _prompt_mentions_desi_dr2(prompt: str) -> bool:
+    """Explicit DESI DR2 request ("desi dr2", "desi-dr2", "desi_dr2_bao").
+
+    Bare "desi" stays on DR1, and the registry marks the two releases
+    mutually do_not_combine_with, so exactly one is ever selected. Mirrors
+    the chat-routing detector in agent_runtime/prompt_routing.py."""
+    return "desi" in prompt and bool(
+        re.search(r"\bdr\s*2\b", prompt.replace("_", " ").replace("-", " "))
+    )
+
+
 def _candidate_datasets(probes: list[str], text: str) -> list[str]:
     prompt = text.lower()
     keys: list[str] = []
     if "CMB_POLARIZATION_ROTATION" in probes:
         keys.extend(default_cmb_rotation_dataset_keys())
     if "BAO" in probes:
-        keys.extend(COSMOLOGY_PROBE_DATASETS["pre_desi_bao"] if "pre-desi" in prompt or "pre desi" in prompt else COSMOLOGY_PROBE_DATASETS["bao"])
+        if "pre-desi" in prompt or "pre desi" in prompt:
+            keys.extend(COSMOLOGY_PROBE_DATASETS["pre_desi_bao"])
+        elif _prompt_mentions_desi_dr2(prompt):
+            keys.extend(COSMOLOGY_PROBE_DATASETS["dr2_bao"])
+        else:
+            keys.extend(COSMOLOGY_PROBE_DATASETS["bao"])
     if "SN" in probes:
         if any(tok in prompt for tok in ("compare", "比较", "robust", "consistency", "union3", "des-sn")):
             keys.extend(COSMOLOGY_PROBE_DATASETS["sn_comparison"])
