@@ -124,7 +124,7 @@ current registry classes, execution modes, and claim scopes.
 |---|---|
 | Frontend | React 19, TypeScript (strict), Vite, Plotly |
 | Backend | FastAPI, SQLAlchemy async, Pydantic v2, SSE streaming |
-| AI | Manual provider/model choice across Claude, OpenAI, DeepSeek, and local OpenAI-compatible backends |
+| AI | Manual provider/model choice across Claude, OpenAI, DeepSeek, local OpenAI-compatible servers, and subscription CLIs (Claude Code / Codex) — no API key needed with a logged-in CLI |
 | Science | astropy, astroquery, emcee, dynesty, cobaya, CAMB, ArviZ |
 | Storage | PostgreSQL (prod) / SQLite (dev); SHA-256-verified local or S3-compatible object storage; durable Redis/Celery coordination |
 
@@ -158,6 +158,23 @@ Production environment variables are documented in
 model-provider API key: register, then add a key on the Account page (BYOK),
 or set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` in the
 backend environment.
+
+**No API key? Use a subscription CLI instead.** If the machine running the
+backend has the Claude Code CLI (`claude`) or the OpenAI Codex CLI (`codex`)
+installed and logged in, the chat can run on that subscription — no API key
+required:
+
+```bash
+CLAUDE_CLI_ENABLED=1 uvicorn app.main:app --reload --port 8000   # Claude subscription
+OPENAI_CLI_ENABLED=1 uvicorn app.main:app --reload --port 8000   # ChatGPT/Codex subscription
+```
+
+then pick provider **Local** -> "Claude CLI" or "OpenAI CLI" in the chat
+model picker. The CLI runs as a pure completion endpoint: its own tools,
+settings, and session persistence are disabled, and all platform tools
+(archives, likelihoods, validation gates) execute in the backend exactly as
+with API providers. Optional: `CLAUDE_CLI_MODEL` / `OPENAI_CLI_MODEL` pin a
+model; otherwise the CLI's configured default is used.
 
 **If startup fails with `Provenance registry freshness check failed`:** the
 backend intentionally refuses to boot — in every environment, local dev

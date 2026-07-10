@@ -327,7 +327,12 @@ Every rule here traces to a real incident in past agent sessions
 - Never guess deployment topology or env-var behavior — read
   `render.yaml` (and `docker-compose.yml`) first (guessing once broke
   the production API-key path three rounds in a row).
-- Local no-auth and local Codex/OpenAI CLI modes are development-only.
+- Local no-auth mode is development-only. The subscription-CLI backends
+  (`local:claude-cli` via CLAUDE_CLI_ENABLED, `local:openai-cli` via
+  OPENAI_CLI_ENABLED) are a supported self-hosting feature (2026-07-10):
+  they require the CLI installed and logged in on the same machine, run it
+  as a pure completion endpoint (no CLI tools/settings/session), and never
+  exist on the hosted deployment.
 - Render auto-deploy can lag behind `main`; local verification comes first.
 - After a deploy lands, curl `/health` and `/health/deep` — the deep
   check once caught an expired database nobody suspected.

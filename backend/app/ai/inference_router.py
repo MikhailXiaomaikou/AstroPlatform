@@ -607,6 +607,19 @@ class LocalBackend(OpenAICompatibleBackend):
                 request_timeout=request_timeout,
                 model_profile=profile,
             )
+        if (
+            profile
+            and profile.id == "local:claude-cli"
+            and os.getenv("CLAUDE_CLI_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        ):
+            return await self._complete_claude_cli(
+                messages,
+                system=system,
+                tools=tools,
+                max_tokens=max_tokens,
+                request_timeout=request_timeout,
+                model_profile=profile,
+            )
         if not os.getenv("LOCAL_MODEL_ENABLED", ""):
             raise InferenceError("Local model backend is not enabled. Set LOCAL_MODEL_ENABLED=1 and provide an OpenAI-compatible server.")
         return await super().complete(messages, system=system, tools=tools, max_tokens=max_tokens, temperature=temperature, api_key=api_key, provider_api_keys=provider_api_keys, request_timeout=request_timeout, model_profile=model_profile)
@@ -767,6 +780,115 @@ class LocalBackend(OpenAICompatibleBackend):
             "model_profile": model_profile.id,
         }
 
+    async def _complete_claude_cli(
+        self,
+        messages,
+        *,
+        system=None,
+        tools=None,
+        max_tokens=4096,
+        request_timeout=None,
+        model_profile: ModelProfile,
+    ):
+        """Complete via the local Claude Code CLI (subscription login).
+
+        Mirror of the Codex bridge with the Claude CLI's isolation flags:
+        the CLI is a pure completion endpoint — its own tools are disabled
+        (`--tools ""`, platform tools go through the JSON bridge), no user or
+        project settings are loaded (`--setting-sources ""`), no session is
+        persisted, and it runs from an empty temp directory. Anthropic
+        API-key variables are stripped from the child environment so the CLI
+        authenticates with its subscription login — that is the point of
+        this backend.
+        """
+        command = os.getenv("CLAUDE_CLI_COMMAND", "claude")
+        cli_path = shutil.which(command) or command
+        timeout = request_timeout or 120.0
+        attempts = 2
+        last_text = ""
+        retry_note: str | None = None
+        child_env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"}
+        }
+
+        for attempt in range(attempts):
+            with tempfile.TemporaryDirectory(prefix="standard-astro-claude-cli-") as tmp:
+                prompt = self._openai_cli_prompt(
+                    messages,
+                    system=system,
+                    tools=tools,
+                    retry_note=retry_note,
+                )
+                cmd = [
+                    cli_path,
+                    "--print",
+                    "--output-format",
+                    "text",
+                    "--tools",
+                    "",
+                    "--setting-sources",
+                    "",
+                    "--no-session-persistence",
+                ]
+                if model_profile.resolved_model_id and model_profile.resolved_model_id != "claude-config-default":
+                    cmd.extend(["--model", model_profile.resolved_model_id])
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=tmp,
+                        env=child_env,
+                    )
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(prompt.encode("utf-8")),
+                        timeout=timeout,
+                    )
+                except asyncio.TimeoutError:
+                    raise InferenceError(f"Claude CLI request timed out after {timeout}s")
+                except OSError as exc:
+                    raise InferenceError(f"Claude CLI could not be started: {exc}")
+                if proc.returncode != 0:
+                    err = stderr.decode("utf-8", errors="replace").strip()
+                    raise InferenceError(f"Claude CLI exited with {proc.returncode}: {err[:500]}")
+                last_text = stdout.decode("utf-8", errors="replace")
+                if (
+                    attempt == 0
+                    and tools
+                    and _cli_bridge_self_blocked(last_text)
+                ):
+                    retry_note = (
+                        "Your previous response refused tool use. In this bridge, "
+                        "you request tools by returning JSON tool_calls; the backend executes them."
+                    )
+                    continue
+                content, tool_calls = self._parse_openai_cli_result(last_text)
+                if not content and not tool_calls:
+                    raise InferenceError("Claude CLI returned an empty completion")
+                return {
+                    "content": content,
+                    "tool_calls": tool_calls,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "stop_reason": "tool_calls" if tool_calls else "stop",
+                    "backend_name": self.backend_label,
+                    "model_name": model_profile.resolved_model_id,
+                    "model_profile": model_profile.id,
+                }
+
+        content, tool_calls = self._parse_openai_cli_result(last_text)
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "stop_reason": "tool_calls" if tool_calls else "stop",
+            "backend_name": self.backend_label,
+            "model_name": model_profile.resolved_model_id,
+            "model_profile": model_profile.id,
+        }
+
 
 class DeepSeekBackend(OpenAICompatibleBackend):
     backend_label = "deepseek"
@@ -808,7 +930,11 @@ class InferenceRouter:
         if backend_name == "deepseek":
             return bool(keys.get("deepseek") or os.getenv("DEEPSEEK_API_KEY", ""))
         if backend_name == "local":
-            return bool(os.getenv("LOCAL_MODEL_ENABLED", "") or os.getenv("OPENAI_CLI_ENABLED", ""))
+            return bool(
+                os.getenv("LOCAL_MODEL_ENABLED", "")
+                or os.getenv("OPENAI_CLI_ENABLED", "")
+                or os.getenv("CLAUDE_CLI_ENABLED", "")
+            )
         return backend_name in self.backends
 
     def _provider_for_backend(self, backend_name: str) -> str:

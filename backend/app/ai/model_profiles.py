@@ -150,6 +150,22 @@ def _profiles() -> dict[str, ModelProfile]:
                 "backend-executed JSON bridge."
             ),
         ),
+        "local:claude-cli": ModelProfile(
+            id="local:claude-cli",
+            provider="local",
+            model_id="claude-cli",
+            display_name="Claude CLI (local subscription)",
+            api_ready=True,
+            resolved_model_id=os.getenv("CLAUDE_CLI_MODEL", "claude-config-default"),
+            supports_tools=True,
+            endpoint="chat_completions",
+            note=(
+                "Local-only backend. Uses the installed Claude Code CLI login "
+                "(subscription auth; Anthropic API-key variables are stripped "
+                "from the child process) and requests platform tools through "
+                "the same backend-executed JSON bridge as the OpenAI CLI."
+            ),
+        ),
     }
 
 
@@ -178,6 +194,8 @@ def normalize_model_profile_id(raw: str | None) -> str | None:
         "openai-cli": "local:openai-cli",
         "codex-cli": "local:openai-cli",
         "local:codex": "local:openai-cli",
+        "claude-cli": "local:claude-cli",
+        "local:claude": "local:claude-cli",
     }
     return aliases.get(value, value)
 

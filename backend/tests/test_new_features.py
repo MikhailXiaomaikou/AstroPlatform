@@ -1,7 +1,45 @@
 """Tests for new features: analysis toolkit, code executor, AI tools, pipeline batch."""
 
+from pathlib import Path
+
 import pytest
 import numpy as np
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_accepts_anonymous_local_backend(app_client, monkeypatch):
+    """Local browser chat can run with server-side local backend before sign-in."""
+
+    async def fake_build_runtime(req, user, db):
+        assert user is None
+        return {
+            "agent_names": ["orchestrator"],
+            "toolset": [],
+            "system": "test system",
+        }
+
+    async def fake_run_orchestrated_chat(**kwargs):
+        return {"reply": "anonymous stream ok", "actions": []}
+
+    monkeypatch.setattr("app.api.chat._build_runtime", fake_build_runtime)
+    monkeypatch.setattr("app.api.chat._run_orchestrated_chat", fake_run_orchestrated_chat)
+
+    resp = await app_client.post(
+        "/api/chat/message/stream",
+        json={
+            "messages": [{"role": "user", "content": "hello"}],
+            "context": {
+                "api_provider": "local",
+                "model_profile": "local:openai-cli",
+                "python_session_id": "anonymous-local-test",
+                "current_session_id": None,
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    assert "anonymous stream ok" in resp.text
+    assert '"type": "done"' in resp.text
 
 
 class TestAstroAnalysis:
@@ -364,6 +402,149 @@ class TestInferenceRouting:
         assert profile.api_ready is True
         assert profile.resolved_model_id == "gpt-5.5-real"
 
+    def test_local_openai_cli_profile_uses_tool_bridge(self, monkeypatch):
+        from app.ai.model_profiles import resolve_model_profile
+
+        monkeypatch.setenv("OPENAI_CLI_MODEL", "gpt-5.4")
+        profile = resolve_model_profile("local", "local:openai-cli")
+
+        assert profile.id == "local:openai-cli"
+        assert profile.provider == "local"
+        assert profile.resolved_model_id == "gpt-5.4"
+        assert profile.supports_tools is True
+
+    def test_local_claude_cli_profile_uses_tool_bridge(self, monkeypatch):
+        from app.ai.model_profiles import resolve_model_profile
+
+        monkeypatch.setenv("CLAUDE_CLI_MODEL", "claude-sonnet-5")
+        profile = resolve_model_profile("local", "claude-cli")
+
+        assert profile.id == "local:claude-cli"
+        assert profile.provider == "local"
+        assert profile.resolved_model_id == "claude-sonnet-5"
+        assert profile.supports_tools is True
+
+    @pytest.mark.asyncio
+    async def test_local_backend_can_call_claude_cli(self, monkeypatch):
+        from app.ai.inference_router import LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = LocalBackend()
+        profile = resolve_model_profile("local", "local:claude-cli")
+        captured: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            def __init__(self, cmd):
+                self.cmd = cmd
+
+            async def communicate(self, stdin):
+                captured["stdin"] = stdin.decode("utf-8")
+                return (
+                    b'{"tool_calls":[{"name":"search_objects","input":{"query":"M31"}}]}',
+                    b"",
+                )
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["kwargs"] = kwargs
+            return FakeProc(list(cmd))
+
+        monkeypatch.setenv("CLAUDE_CLI_ENABLED", "1")
+        monkeypatch.setenv("CLAUDE_CLI_COMMAND", "claude")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-leak")
+        monkeypatch.setattr("app.ai.inference_router.shutil.which", lambda name: "/usr/bin/claude")
+        monkeypatch.setattr("app.ai.inference_router.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+
+        result = await backend.complete(
+            [{"role": "user", "content": "hello"}],
+            system="You are local.",
+            tools=[{"name": "search_objects", "input_schema": {"type": "object"}}],
+            model_profile=profile,
+        )
+
+        assert result["content"] == ""
+        assert len(result["tool_calls"]) == 1
+        assert result["tool_calls"][0]["name"] == "search_objects"
+        assert result["model_profile"] == "local:claude-cli"
+        # Isolation contract: pure completion endpoint, no CLI tools, no
+        # settings, no persisted session, empty temp cwd.
+        cmd = captured["cmd"]
+        assert "--print" in cmd
+        assert cmd[cmd.index("--tools") + 1] == ""
+        assert cmd[cmd.index("--setting-sources") + 1] == ""
+        assert "--no-session-persistence" in cmd
+        assert captured["kwargs"]["cwd"]
+        # Subscription auth contract: API-key variables never reach the CLI.
+        child_env = captured["kwargs"]["env"]
+        assert "ANTHROPIC_API_KEY" not in child_env
+        assert "JSON bridge" in captured["stdin"]
+        assert "search_objects" in captured["stdin"]
+
+    @pytest.mark.asyncio
+    async def test_local_claude_cli_disabled_flag_falls_back_to_local_model_error(self, monkeypatch):
+        from app.ai.inference_router import InferenceError, LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = LocalBackend()
+        profile = resolve_model_profile("local", "local:claude-cli")
+        monkeypatch.delenv("CLAUDE_CLI_ENABLED", raising=False)
+        monkeypatch.delenv("LOCAL_MODEL_ENABLED", raising=False)
+
+        with pytest.raises(InferenceError):
+            await backend.complete(
+                [{"role": "user", "content": "hello"}],
+                model_profile=profile,
+            )
+
+    def test_local_openai_cli_prompt_prioritizes_paper_workflow_tools(self):
+        from app.ai.inference_router import _cli_tool_specs_for_prompt, _format_cli_prompt
+
+        tools = [
+            {"name": "generic_last", "input_schema": {"type": "object"}},
+            {"name": "run_adql", "input_schema": {"type": "object"}},
+            {"name": "fit_line_lfr", "input_schema": {"type": "object"}},
+            {"name": "search_literature", "input_schema": {"type": "object"}},
+            {"name": "extract_literature_tables", "input_schema": {"type": "object"}},
+            {"name": "compare_luminosity_distances", "input_schema": {"type": "object"}},
+            {"name": "demagnify_sample", "input_schema": {"type": "object"}},
+        ]
+
+        specs = _cli_tool_specs_for_prompt(tools)
+        names = [spec["name"] for spec in specs]
+
+        assert names[:5] == [
+            "search_literature",
+            "extract_literature_tables",
+            "fit_line_lfr",
+            "compare_luminosity_distances",
+            "demagnify_sample",
+        ]
+
+        prompt = _format_cli_prompt(
+            [{"role": "user", "content": "compile a [CII] LFR sample"}],
+            tools=tools,
+        )
+
+        assert "Available tool names include: search_literature, extract_literature_tables" in prompt
+        assert "already includes the paper/table/cosmology/LFR workflow tools" in prompt
+        assert "Do not tell the user to enable these listed tools" in prompt
+
+    def test_local_openai_cli_detects_backend_tool_list_self_block(self):
+        from app.ai.inference_router import _cli_bridge_self_blocked
+
+        content = (
+            "The required literature-compilation, table-extraction, "
+            "cosmology-comparison, demagnification, and Bayesian LFR-fitting "
+            "tools are not available in this backend tool list. "
+            "Suggested next step: Enable search_literature, "
+            "extract_literature_tables, compare_luminosity_distances, "
+            "demagnify_sample, and fit_line_lfr."
+        )
+
+        assert _cli_bridge_self_blocked(content)
+
     @pytest.mark.asyncio
     async def test_inference_router_skips_unavailable_local_backend(self, monkeypatch):
         from app.ai.inference_router import InferenceRouter
@@ -386,6 +567,8 @@ class TestInferenceRouting:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        monkeypatch.delenv("PLATFORM_DEEPSEEK_API_KEY", raising=False)
+        monkeypatch.delenv("SHARED_DEEPSEEK_API_KEY_ENABLED", raising=False)
         monkeypatch.delenv("LOCAL_MODEL_ENABLED", raising=False)
         monkeypatch.setattr(router.backends["openai"], "complete", fake_openai_complete)
         monkeypatch.setattr(router.backends["local"], "complete", fail_if_called)
@@ -401,6 +584,156 @@ class TestInferenceRouting:
 
         assert result["content"] == "ok"
         assert calls == ["openai"]
+
+    @pytest.mark.asyncio
+    async def test_local_backend_can_call_openai_cli(self, monkeypatch):
+        from app.ai.inference_router import LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = LocalBackend()
+        profile = resolve_model_profile("local", "local:openai-cli")
+        captured: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            def __init__(self, cmd):
+                self.cmd = cmd
+
+            async def communicate(self, stdin):
+                captured["stdin"] = stdin.decode("utf-8")
+                output_path = self.cmd[self.cmd.index("--output-last-message") + 1]
+                Path(output_path).write_text(
+                    '{"tool_calls":[{"name":"search_objects","input":{"query":"M31"}}]}',
+                    encoding="utf-8",
+                )
+                return b"ignored stdout", b""
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["kwargs"] = kwargs
+            return FakeProc(list(cmd))
+
+        monkeypatch.setenv("OPENAI_CLI_ENABLED", "1")
+        monkeypatch.setenv("OPENAI_CLI_COMMAND", "codex")
+        monkeypatch.setattr("app.ai.inference_router.shutil.which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr("app.ai.inference_router.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+
+        result = await backend.complete(
+            [{"role": "user", "content": "hello"}],
+            system="You are local.",
+            tools=[{"name": "search_objects", "input_schema": {"type": "object"}}],
+            model_profile=profile,
+        )
+
+        assert result["content"] == ""
+        assert len(result["tool_calls"]) == 1
+        assert result["tool_calls"][0]["name"] == "search_objects"
+        assert result["tool_calls"][0]["input"] == {"query": "M31"}
+        assert result["model_profile"] == "local:openai-cli"
+        assert "--ephemeral" in captured["cmd"]
+        assert "--sandbox" in captured["cmd"]
+        assert "read-only" in captured["cmd"]
+        assert "--ask-for-approval" not in captured["cmd"]
+        assert "JSON bridge" in captured["stdin"]
+        assert "ADQL/database access" in captured["stdin"]
+        assert "literature/network search" in captured["stdin"]
+        assert "search_objects" in captured["stdin"]
+
+    @pytest.mark.asyncio
+    async def test_local_openai_cli_bridge_accepts_database_tool_aliases(self, monkeypatch):
+        from app.ai.inference_router import LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = LocalBackend()
+        profile = resolve_model_profile("local", "local:openai-cli")
+
+        class FakeProc:
+            returncode = 0
+
+            def __init__(self, cmd):
+                self.cmd = cmd
+
+            async def communicate(self, stdin):
+                output_path = self.cmd[self.cmd.index("--output-last-message") + 1]
+                Path(output_path).write_text(
+                    '{"tool_calls":[{"tool":"run_adql","arguments":{"service":"gaia","query":"SELECT TOP 1 * FROM gaiadr3.gaia_source"}}]}',
+                    encoding="utf-8",
+                )
+                return b"", b""
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            return FakeProc(list(cmd))
+
+        monkeypatch.setenv("OPENAI_CLI_ENABLED", "1")
+        monkeypatch.setenv("OPENAI_CLI_MAX_TOOL_CALLS", "12")
+        monkeypatch.setattr("app.ai.inference_router.shutil.which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr("app.ai.inference_router.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+
+        result = await backend.complete(
+            [{"role": "user", "content": "query Gaia"}],
+            tools=[
+                {"name": "run_adql", "input_schema": {"type": "object"}},
+                {"name": "search_literature", "input_schema": {"type": "object"}},
+            ],
+            model_profile=profile,
+        )
+
+        assert result["content"] == ""
+        assert result["stop_reason"] == "tool_calls"
+        assert result["tool_calls"][0]["name"] == "run_adql"
+        assert result["tool_calls"][0]["input"]["service"] == "gaia"
+
+    @pytest.mark.asyncio
+    async def test_local_openai_cli_retries_self_blocked_tool_refusal(self, monkeypatch):
+        from app.ai.inference_router import LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = LocalBackend()
+        profile = resolve_model_profile("local", "local:openai-cli")
+        attempts = {"count": 0, "prompts": []}
+
+        class FakeProc:
+            returncode = 0
+
+            def __init__(self, cmd):
+                self.cmd = cmd
+
+            async def communicate(self, stdin):
+                attempts["count"] += 1
+                attempts["prompts"].append(stdin.decode("utf-8"))
+                output_path = self.cmd[self.cmd.index("--output-last-message") + 1]
+                if attempts["count"] == 1:
+                    Path(output_path).write_text(
+                        "I cannot use these tools from this chat environment.",
+                        encoding="utf-8",
+                    )
+                else:
+                    Path(output_path).write_text(
+                        '{"tool_calls":[{"name":"search_literature","input":{"query":"[CII] LFR sample"}}]}',
+                        encoding="utf-8",
+                    )
+                return b"", b""
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            return FakeProc(list(cmd))
+
+        monkeypatch.setenv("OPENAI_CLI_ENABLED", "1")
+        monkeypatch.setattr("app.ai.inference_router.shutil.which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr("app.ai.inference_router.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+
+        result = await backend.complete(
+            [{"role": "user", "content": "compile [CII] sample"}],
+            tools=[{"name": "search_literature", "input_schema": {"type": "object"}}],
+            model_profile=profile,
+        )
+
+        assert attempts["count"] == 2
+        assert "protocol_correction" in attempts["prompts"][1]
+        assert result["content"] == ""
+        assert result["stop_reason"] == "tool_calls"
+        assert result["tool_calls"][0]["name"] == "search_literature"
+        assert result["tool_calls"][0]["input"]["query"] == "[CII] LFR sample"
 
     @pytest.mark.asyncio
     async def test_openai_backend_extracts_content_array(self, monkeypatch):
@@ -762,6 +1095,8 @@ class TestAITools:
         assert "fit_cosmology_mcmc" in names
         assert "run_cobaya_cosmology" in names
         assert "get_cosmology_run_status" in names
+        assert "run_cosmology_likelihood_chain" in names
+        assert "run_cosmology_robustness_matrix" in names
 
     @pytest.mark.asyncio
     async def test_generate_pipeline(self):
@@ -876,7 +1211,9 @@ class TestPaperDraftHelpers:
         db_session.add(session)
         await db_session.commit()
 
-        validation = await validate_analysis(str(session.id), db_session)
+        validation = await validate_analysis(
+            str(session.id), db_session, owner_id=str(user.id)
+        )
         assert validation["overall_status"] in {"PASS", "WARN", "FAIL"}
 
         generated = await generate_paper_draft(str(session.id), "aastex", db_session)
@@ -937,3 +1274,30 @@ class TestDedup:
         r2 = SearchResult(source="b", object_id="2", name="y", ra=11.0, dec=21.0)
         deduped = _dedup_by_position([r1, r2])
         assert len(deduped) == 2
+
+
+class TestCosmologyDirectRouting:
+    """Regression tests for deterministic cosmology tool routing."""
+
+    def test_simple_hubble_tension_still_routes_to_preset_comparison(self):
+        from app.api.chat import _cosmology_direct_route_from_prompt
+
+        calls = _cosmology_direct_route_from_prompt(
+            "Compare Planck and SH0ES for the Hubble tension."
+        )
+
+        assert calls
+        assert calls[0]["name"] == "compare_luminosity_distances"
+        assert calls[0]["input"]["target_cosmology"] == "riess22_shoes"
+
+    def test_extended_fisher_hubble_tension_request_does_not_force_dl_tool(self):
+        from app.api.chat import _cosmology_direct_route_from_prompt
+
+        calls = _cosmology_direct_route_from_prompt(
+            "I want to analyze the Hubble tension geometrically in an extended "
+            "constant-w dark-energy model, separating parameter shifts from "
+            "constraint-direction curvature. Please identify whether Fisher/covariance "
+            "information from CMB, BAO, and H0-prior data is available."
+        )
+
+        assert calls is None

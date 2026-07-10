@@ -1419,7 +1419,8 @@ export const AI_MODEL_OPTIONS: Record<string, Array<{ id: string; label: string;
     { id: "deepseek:v4-flash", label: "DeepSeek V4 Flash" },
   ],
   local: [
-    { id: "local:openai-cli", label: "OpenAI CLI", detail: "Local only; uses your CLI subscription login with backend-executed network/database tools" },
+    { id: "local:claude-cli", label: "Claude CLI", detail: "Local only; uses your Claude Code subscription login with backend-executed network/database tools (CLAUDE_CLI_ENABLED=1)" },
+    { id: "local:openai-cli", label: "OpenAI CLI", detail: "Local only; uses your CLI subscription login with backend-executed network/database tools (OPENAI_CLI_ENABLED=1)" },
     { id: "local:default", label: "OpenAI-compatible local server", detail: "Requires LOCAL_MODEL_ENABLED=1" },
   ],
 };
