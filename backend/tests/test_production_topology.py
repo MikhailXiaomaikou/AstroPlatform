@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import ssl
 from pathlib import Path
 
@@ -16,13 +17,83 @@ def _yaml(name: str) -> dict:
     return yaml.safe_load((REPO_ROOT / name).read_text(encoding="utf-8"))
 
 
+def test_external_ci_and_container_inputs_are_immutable_and_updates_are_reviewed():
+    workflow_paths = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+    action_ref = re.compile(r"uses:\s*(actions/[^@\s]+)@([^\s#]+)")
+    refs: list[tuple[str, str, str]] = []
+    for path in workflow_paths:
+        for action, revision in action_ref.findall(path.read_text(encoding="utf-8")):
+            refs.append((path.name, action, revision))
+
+    assert refs
+    assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for _, _, revision in refs)
+
+    dockerfiles = (
+        REPO_ROOT / "backend" / "Dockerfile",
+        REPO_ROOT / "frontend" / "Dockerfile",
+    )
+    image_ref = re.compile(r"^FROM\s+([^\s]+)", re.MULTILINE)
+    images = [
+        image
+        for path in dockerfiles
+        for image in image_ref.findall(path.read_text(encoding="utf-8"))
+    ]
+    assert images
+    assert all(
+        re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image) for image in images
+    )
+
+    dependabot = _yaml(".github/dependabot.yml")
+    update_locations = {
+        (update["package-ecosystem"], update["directory"])
+        for update in dependabot["updates"]
+    }
+    assert update_locations == {
+        ("github-actions", "/"),
+        ("npm", "/frontend"),
+        ("docker", "/backend"),
+        ("docker", "/frontend"),
+    }
+
+
+def test_ci_exercises_real_postgresql_legacy_uuid_bridge():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "astro_uuid_drill_ci" in workflow
+    assert "run_legacy_uuid_migration_drill.sh" in workflow
+    assert "Exercise legacy VARCHAR UUID migration and dirty-data rollback" in workflow
+
+
+def test_ci_builds_the_images_used_by_production_and_compose():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "container-build:" in workflow
+    assert "docker build --pull -t standard-astro-backend:ci backend" in workflow
+    assert "-t standard-astro-frontend:ci frontend" in workflow
+
+
 def test_render_workers_wait_for_exact_schema_head():
     blueprint = _yaml("render.yaml")
     services = {service["name"]: service for service in blueprint["services"]}
+    databases = {database["name"]: database for database in blueprint["databases"]}
 
-    predeploy = services["standard-astro-backend"]["preDeployCommand"]
+    backend = services["standard-astro-backend"]
+    predeploy = backend["preDeployCommand"]
     assert "alembic upgrade head" in predeploy
     assert "alembic check" in predeploy
+    assert backend["healthCheckPath"] == "/health/ready"
+
+    database = databases["standard-astro-db"]
+    assert database["postgresMajorVersion"] == "16"
+    assert database["ipAllowList"] == []
+
+    worker = services["standard-astro-celery-worker"]
+    assert worker["maxShutdownDelaySeconds"] == 300
+    assert "--concurrency=1" in worker["dockerCommand"]
     for name in ("standard-astro-celery-worker", "standard-astro-celery-beat"):
         command = services[name]["dockerCommand"]
         assert "scripts/wait_for_schema_head.py" in command

@@ -18,6 +18,7 @@ router = APIRouter(tags=["health"])
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _CELERY_PING_TIMEOUT_SECONDS = 2.0
+_READINESS_DEADLINE_SECONDS = 4.0
 _STORAGE_PROBE_TIMEOUT_SECONDS = 8.0
 
 
@@ -48,7 +49,9 @@ async def _probe_schema_head() -> tuple[bool, str]:
     try:
         from app.models.database import async_session
 
-        expected = _expected_alembic_heads()
+        # Alembic walks migration files synchronously. Keep that disk work off
+        # the event loop so the public readiness deadline remains enforceable.
+        expected = await asyncio.to_thread(_expected_alembic_heads)
         async with async_session() as session:
             rows = await session.execute(text("SELECT version_num FROM alembic_version"))
             current = {str(row[0]) for row in rows}
@@ -65,6 +68,23 @@ async def _probe_schema_head() -> tuple[bool, str]:
         # health endpoint; the full exception remains in server logs.
         logger.warning("health/deep: schema probe failed: %s", exc)
         return False, "unversioned_or_unreachable"
+
+
+def _runtime_version() -> dict[str, str]:
+    """Return only non-secret deployment identifiers."""
+    return {
+        "commit": os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "unknown",
+        "branch": os.getenv("RENDER_GIT_BRANCH") or os.getenv("GIT_BRANCH") or "unknown",
+        "service": os.getenv("RENDER_SERVICE_NAME") or "unknown",
+    }
+
+
+def _consume_probe_result(task: asyncio.Task) -> None:
+    """Retrieve late probe results after a deadline without leaking exceptions."""
+    try:
+        task.result()
+    except (asyncio.CancelledError, Exception):
+        pass
 
 
 async def _probe_broker() -> bool:
@@ -251,13 +271,90 @@ async def health_detailed(_user: User = Depends(get_current_user)):
     return {"status": overall, "checks": checks}
 
 
+@router.get("/health/ready")
+async def health_ready():
+    """Fast, fail-closed readiness probe for high-frequency platform polling.
+
+    Database reachability and the exact Alembic head are checked concurrently.
+    Expensive storage round trips and Redis/Celery control calls intentionally
+    remain exclusive to ``/health/deep``.
+    """
+    tasks = {
+        "db": asyncio.create_task(_probe_database()),
+        "schema": asyncio.create_task(_probe_schema_head()),
+    }
+    try:
+        done, pending = await asyncio.wait(
+            set(tasks.values()),
+            timeout=_READINESS_DEADLINE_SECONDS,
+        )
+    except asyncio.CancelledError:
+        # Client disconnects and server shutdown cancel the request coroutine,
+        # not the child tasks created above. Explicitly cancel and consume both
+        # probes so repeated disconnects cannot accumulate DB work.
+        for task in tasks.values():
+            if not task.done():
+                task.add_done_callback(_consume_probe_result)
+                task.cancel()
+        raise
+
+    for task in pending:
+        task.add_done_callback(_consume_probe_result)
+        task.cancel()
+
+    components = {"db": "fail", "schema": "fail"}
+    db_ok = False
+    schema_ok = False
+
+    db_task = tasks["db"]
+    if db_task in pending:
+        components["db"] = "timeout"
+    elif db_task in done:
+        try:
+            db_ok = db_task.result() is True
+        except asyncio.CancelledError:
+            logger.warning("health/ready: db probe was cancelled")
+        except Exception as exc:
+            logger.warning("health/ready: db probe failed: %s", exc)
+        components["db"] = "ok" if db_ok else "fail"
+
+    schema_task = tasks["schema"]
+    if schema_task in pending:
+        components["schema"] = "timeout"
+    elif schema_task in done:
+        try:
+            schema_result = schema_task.result()
+            schema_ok = (
+                isinstance(schema_result, tuple)
+                and len(schema_result) == 2
+                and schema_result[0] is True
+            )
+            if schema_ok:
+                components["schema"] = "ok"
+        except asyncio.CancelledError:
+            logger.warning("health/ready: schema probe was cancelled")
+        except Exception as exc:
+            logger.warning("health/ready: schema probe failed: %s", exc)
+
+    ready = db_ok and schema_ok and not pending
+    result = {
+        "status": "ready" if ready else "not_ready",
+        "components": components,
+        "version": _runtime_version(),
+    }
+    if not ready:
+        raise HTTPException(status_code=503, detail=result)
+    return result
+
+
 @router.get("/health/deep")
 async def health_deep():
-    """Deployment readiness probe used by Render and Docker Compose.
+    """Full post-deploy infrastructure probe used by operators and Compose.
 
-    Production is ready only when its DB is migrated to the image's Alembic
-    head, durable storage is mounted and writable, and the configured Celery
-    broker has at least one live worker. The endpoint is unauthenticated, so it
+    Operational acceptance requires the DB at the image's Alembic head,
+    durable storage mounted and writable, and the configured Celery broker to
+    have at least one live worker. Render's high-frequency five-second traffic
+    gate uses ``/health/ready`` instead. This endpoint is unauthenticated, so it
     returns only short status labels; detailed failures stay in server logs.
     """
     from app.config import settings
@@ -266,11 +363,7 @@ async def health_deep():
     # G1 (PART AD): deploy version transparency. Render injects these git env
     # vars automatically; they read "unknown" locally. Lets a dashboard or a
     # deploy check reconcile which commit is actually serving traffic.
-    result["version"] = {
-        "commit": os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "unknown",
-        "branch": os.getenv("RENDER_GIT_BRANCH") or os.getenv("GIT_BRANCH") or "unknown",
-        "service": os.getenv("RENDER_SERVICE_NAME") or "unknown",
-    }
+    result["version"] = _runtime_version()
 
     db_ok = await _probe_database()
     result["components"]["db"] = "ok" if db_ok else "fail"

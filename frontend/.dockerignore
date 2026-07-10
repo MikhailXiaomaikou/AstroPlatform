@@ -2,3 +2,9 @@
 # stale dist/ must not be copied over the fresh install / build output.
 node_modules/
 dist/
+.vite/
+coverage/
+playwright-report/
+test-results/
+.env*
+!.env.example

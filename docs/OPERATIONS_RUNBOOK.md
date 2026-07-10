@@ -41,6 +41,12 @@ Production schema changes have exactly one writer: Alembic.
 
 1. CI creates an empty PostgreSQL 16 database and runs `alembic upgrade head`,
    `alembic check`, the readiness schema probe, and a backup/restore round trip.
+   A second disposable PostgreSQL 16 database reconstructs the complete
+   13-table revision-002 `VARCHAR(36)` schema, upgrades valid representative
+   rows through the current head, and proves that a deliberately late dirty
+   UUID rolls every earlier type conversion back without changing data,
+   constraints, tables, or revision. CI also builds the backend and frontend
+   images from source-pinned base-image digests.
 2. Render waits for required GitHub checks because every deployable service uses
    `autoDeployTrigger: checksPass`.
 3. The backend image runs `alembic upgrade head` as its
@@ -50,9 +56,10 @@ Production schema changes have exactly one writer: Alembic.
    `exec celery`. They are read-only schema consumers and wait up to 15 minutes
    for the backend's migration; they never race new task code against the old
    schema or become additional migration writers.
-5. Render admits the backend only after `/health/deep` confirms the database is
-   at the image's exact Alembic head, the persistent disk is mounted and
-   fsync-writable, Redis answers, and at least one Celery worker responds.
+5. Render admits the backend only after `/health/ready` confirms database
+   connectivity and the image's exact Alembic head within its five-second
+   deadline. Deployment acceptance is not complete until `/health/deep` also
+   confirms durable storage, Redis, and at least one Celery worker.
 
 Never add `create_all`, `ALTER TABLE`, or `Table.create` to production startup.
 Every production schema change needs a reviewed Alembic revision.
@@ -83,7 +90,12 @@ Use this one-time, fail-closed adoption process:
 
 ## 3. Readiness contract
 
-`GET /health` is process liveness. `GET /health/deep` is deployment readiness.
+`GET /health` is process liveness. `GET /health/ready` is Render's bounded
+traffic-readiness gate: it runs only the database and exact-schema checks in
+parallel and fails closed before Render's five-second limit. `GET /health/deep`
+is the full post-deploy infrastructure check; it is deliberately not called
+every few seconds because its storage round trip writes an object and its
+Redis/Celery checks are heavier.
 
 | Component | Ready condition | Failure action |
 |---|---|---|
@@ -94,8 +106,10 @@ Use this one-time, fail-closed adoption process:
 | `celery_worker` | at least one control-ping reply | Block deployment; inspect worker logs and broker |
 | `ai_backend` | server key or per-request BYOK is available | Informational; BYOK-only remains ready |
 
-The endpoint deliberately returns short labels only. Detailed exceptions remain
-in structured server logs.
+Both unauthenticated endpoints deliberately return short labels only. Detailed
+exceptions remain in structured server logs. A release is operationally
+accepted only when both `/health/ready` and `/health/deep` pass for the same
+reported commit.
 
 ### Long-job delivery and reconciliation
 
@@ -111,6 +125,11 @@ reconciliation is longer than both. Render and Compose currently use:
 | hard task limit | 45,000 |
 | Redis visibility timeout | 46,800 |
 | stale job threshold | 50,400 |
+| Render worker graceful shutdown | 300 |
+
+The Starter worker uses `--concurrency=1` to avoid two scientific child
+processes competing for 512 MB. Raising concurrency requires a measured memory
+and queue-latency run on the target instance type.
 
 Changing these values out of order fails worker startup. On worker startup and
 every five minutes thereafter, `queued`/`running` rows older than the stale

@@ -10,16 +10,18 @@
 #   - standard-astro-redis
 #
 # The backend pre-deploy command is the only production schema writer.
-# /health/deep remains unhealthy until schema, disk, broker and worker
-# readiness all pass. Redis uses noeviction so queued tasks are never
-# discarded to make room for cache entries.
+# /health/ready is the bounded Render traffic gate; /health/deep remains the
+# full post-deploy infrastructure check. Redis uses noeviction so queued tasks
+# are never discarded to make room for cache entries.
 # ─────────────────────────────────────────────────────────────────────
 
 databases:
   - name: standard-astro-db
     plan: basic-256mb           # 1 GB storage / 256 MB RAM / 0.1 CPU
+    postgresMajorVersion: "16"  # Must match CI and the UUID migration drill.
     databaseName: astro
     user: astro
+    ipAllowList: []             # Private-network access only.
 
 services:
   # ── Durable Celery broker / shared runtime cache ──
@@ -39,9 +41,10 @@ services:
     plan: standard              # 2 GB RAM / 1 CPU
     autoDeployTrigger: checksPass
     preDeployCommand: sh -c 'alembic upgrade head && alembic check'
-    # /health/deep verifies schema + durable storage + broker + worker so
-    # Render rejects a process that cannot execute the production workload.
-    healthCheckPath: /health/deep
+    # Render requires HTTP health checks to finish within five seconds. This
+    # bounded endpoint verifies DB connectivity + exact Alembic head; the
+    # heavier S3/Redis/Celery round trip remains at /health/deep.
+    healthCheckPath: /health/ready
     envVars:
       - key: ENV
         value: production
@@ -123,9 +126,12 @@ services:
     dockerContext: backend
     plan: starter
     autoDeployTrigger: checksPass
+    # Starter has 512 MB; one scientific child avoids memory overcommit. Give
+    # an acknowledged late task the maximum Render graceful-shutdown window.
+    maxShutdownDelaySeconds: 300
     # The backend owns migrations.  A worker deploy is independent on Render,
     # so it must wait for this image's exact Alembic head before consuming work.
-    dockerCommand: sh -c 'python scripts/wait_for_schema_head.py && exec celery -A celery_worker worker --loglevel=info --concurrency=2 --hostname=worker@%h'
+    dockerCommand: sh -c 'python scripts/wait_for_schema_head.py && exec celery -A celery_worker worker --loglevel=info --concurrency=1 --hostname=worker@%h'
     envVars:
       - key: ENV
         value: production
