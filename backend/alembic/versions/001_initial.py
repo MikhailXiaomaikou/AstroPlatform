@@ -1,5 +1,11 @@
 """Initial schema — all 13 tables.
 
+UUID keys use the models' UUIDType (String(36) on SQLite, native UUID on
+PostgreSQL) so a fresh PostgreSQL database is type-consistent with the
+model-metadata tables that revision 0c9293030537 creates later; a varchar
+users.id made chat_sessions' native-UUID FK fail with DatatypeMismatchError
+on fresh installs. Existing databases never re-run this revision.
+
 Revision ID: 001_initial
 Revises:
 Create Date: 2026-03-14
@@ -8,6 +14,8 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+
+from app.models.schemas import UUIDType
 
 revision: str = "001_initial"
 down_revision: Union[str, None] = None
@@ -19,7 +27,7 @@ def upgrade() -> None:
     # 1. users (no FK deps)
     op.create_table(
         "users",
-        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("id", UUIDType(), primary_key=True),
         sa.Column("email", sa.String(255), unique=True, nullable=False),
         sa.Column("password_hash", sa.String(255), nullable=False),
         sa.Column("subscription_tier", sa.String(50), server_default="solo"),
@@ -30,8 +38,8 @@ def upgrade() -> None:
     # 2. data_files (FK -> users)
     op.create_table(
         "data_files",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("source", sa.String(50), nullable=False),
         sa.Column("object_id", sa.String(255), nullable=False),
         sa.Column("fits_path", sa.Text, nullable=True),
@@ -42,8 +50,8 @@ def upgrade() -> None:
     # 3. pipeline_runs (FK -> users)
     op.create_table(
         "pipeline_runs",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("dag", sa.Text, nullable=False),
         sa.Column("status", sa.String(50), server_default="pending"),
         sa.Column("results", sa.Text, nullable=True),
@@ -54,8 +62,8 @@ def upgrade() -> None:
     # 4. run_results (FK -> pipeline_runs)
     op.create_table(
         "run_results",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("run_id", sa.String(36), sa.ForeignKey("pipeline_runs.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("run_id", UUIDType(), sa.ForeignKey("pipeline_runs.id"), nullable=False),
         sa.Column("node_id", sa.String(255), nullable=False),
         sa.Column("output_path", sa.Text, nullable=True),
         sa.Column("logs", sa.Text, nullable=True),
@@ -64,8 +72,8 @@ def upgrade() -> None:
     # 5. pipeline_templates (FK -> users, nullable)
     op.create_table(
         "pipeline_templates",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=True),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=True),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("description", sa.Text, server_default=""),
         sa.Column("dag", sa.Text, nullable=False),
@@ -76,9 +84,9 @@ def upgrade() -> None:
     # 6. data_tags (FK -> users, data_files)
     op.create_table(
         "data_tags",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("data_file_id", sa.String(36), sa.ForeignKey("data_files.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("data_file_id", UUIDType(), sa.ForeignKey("data_files.id"), nullable=False),
         sa.Column("tag", sa.String(100), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
@@ -86,9 +94,9 @@ def upgrade() -> None:
     # 7. data_notes (FK -> users, data_files)
     op.create_table(
         "data_notes",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("data_file_id", sa.String(36), sa.ForeignKey("data_files.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("data_file_id", UUIDType(), sa.ForeignKey("data_files.id"), nullable=False),
         sa.Column("content", sa.Text, nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
@@ -96,8 +104,8 @@ def upgrade() -> None:
     # 8. pipeline_versions (FK -> pipeline_templates)
     op.create_table(
         "pipeline_versions",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("template_id", sa.String(36), sa.ForeignKey("pipeline_templates.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("template_id", UUIDType(), sa.ForeignKey("pipeline_templates.id"), nullable=False),
         sa.Column("version", sa.Integer, server_default="1"),
         sa.Column("dag", sa.Text, nullable=False),
         sa.Column("change_note", sa.Text, server_default=""),
@@ -107,9 +115,9 @@ def upgrade() -> None:
     # 9. team_members (FK -> users x2)
     op.create_table(
         "team_members",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("owner_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("member_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("owner_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("member_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("role", sa.String(50), server_default="member"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
@@ -117,10 +125,10 @@ def upgrade() -> None:
     # 10. shared_pipelines (FK -> pipeline_templates, users x2)
     op.create_table(
         "shared_pipelines",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("template_id", sa.String(36), sa.ForeignKey("pipeline_templates.id"), nullable=False),
-        sa.Column("shared_by", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("shared_with", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("template_id", UUIDType(), sa.ForeignKey("pipeline_templates.id"), nullable=False),
+        sa.Column("shared_by", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("shared_with", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("permission", sa.String(20), server_default="view"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
@@ -128,9 +136,9 @@ def upgrade() -> None:
     # 11. pipeline_comments (FK -> pipeline_templates, users)
     op.create_table(
         "pipeline_comments",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("template_id", sa.String(36), sa.ForeignKey("pipeline_templates.id"), nullable=False),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("template_id", UUIDType(), sa.ForeignKey("pipeline_templates.id"), nullable=False),
+        sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("content", sa.Text, nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
@@ -138,18 +146,18 @@ def upgrade() -> None:
     # 12. shared_datasets (FK -> data_files, users x2)
     op.create_table(
         "shared_datasets",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("data_file_id", sa.String(36), sa.ForeignKey("data_files.id"), nullable=False),
-        sa.Column("shared_by", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("shared_with", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("data_file_id", UUIDType(), sa.ForeignKey("data_files.id"), nullable=False),
+        sa.Column("shared_by", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("shared_with", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
     # 13. scheduled_runs (FK -> users)
     op.create_table(
         "scheduled_runs",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("id", UUIDType(), primary_key=True),
+        sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("dag", sa.Text, nullable=False),
         sa.Column("input_data_id", sa.String(500), nullable=False),
