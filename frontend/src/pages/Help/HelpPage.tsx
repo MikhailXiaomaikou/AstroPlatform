@@ -76,7 +76,7 @@ const FAQ_DATA: FaqItem[] = [
     },
     a: {
       en: "Yes. The AI Assistant runs Python in a sandboxed environment with NumPy, SciPy, Astropy, and plotting libraries pre-installed. It can query databases, analyze spectra, fit models, and generate publication-quality plots — all from a natural language request.",
-      zh: "可以。AI 助手在预装了 NumPy、SciPy、Astropy 和绑图库的沙盒环境中运行 Python。它可以查询数据库、分析光谱、拟合模型和生成发表级图表——全部通过自然语言请求完成。",
+      zh: "可以。AI 助手在预装了 NumPy、SciPy、Astropy 和绘图库的沙盒环境中运行 Python。它可以查询数据库、分析光谱、拟合模型和生成发表级图表——全部通过自然语言请求完成。",
     },
   },
   {
@@ -135,7 +135,7 @@ const TUTORIALS: Tutorial[] = [
     title: { en: "Variable Star Light Curve Analysis", zh: "变星光变曲线分析" },
     desc: {
       en: "Retrieve time-series photometry, apply the Lomb-Scargle periodogram to find the period, and phase-fold the light curve.",
-      zh: "获取时间序列测光数据，使用 Lomb-Scargle 周期图找到周期，并对光变曲线进行相位折叠。",
+      zh: "获取时间序列测光数据，使用 Lomb-Scargle 周期图找到周期，并将光变曲线相位折叠。",
     },
     outcome: {
       en: "You'll detect periodic signals, classify the variable type (Cepheid, RR Lyrae, eclipsing binary), and measure the amplitude.",

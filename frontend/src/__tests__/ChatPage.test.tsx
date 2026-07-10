@@ -5,7 +5,7 @@
  * and basic UI elements. All API calls and context providers are mocked.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
 
 // ── Mock scrollIntoView (not available in jsdom) ──
@@ -579,6 +579,30 @@ describe("ChatPage", () => {
     await screen.findByText(/Could not reach the backend server/);
     expect(screen.queryByText(/payload was likely rejected/)).not.toBeInTheDocument();
     expect(screen.queryByText(/开始新聊天/)).not.toBeInTheDocument();
+  });
+
+  it("localizes the payload-too-large recovery button", async () => {
+    vi.mocked(getStoredApiKeys).mockReturnValue({ anthropic: "sk-ant-test" });
+    const payloadTooLarge = new Error("Request payload too large") as Error & {
+      error_class?: string;
+    };
+    payloadTooLarge.error_class = "payload_too_large";
+    vi.mocked(sendChatMessage).mockRejectedValueOnce(payloadTooLarge);
+
+    renderChatPage();
+
+    const textarea = document.querySelector("textarea.chat-input") as HTMLTextAreaElement;
+    const sendBtn = document.querySelector(".btn-chat-send") as HTMLButtonElement;
+    fireEvent.change(textarea, { target: { value: "hello" } });
+    fireEvent.click(sendBtn);
+
+    await screen.findByText(/chat.new_chat_hint/);
+    const assistantMessages = document.querySelectorAll(".chat-message.assistant");
+    const errorMessage = assistantMessages[assistantMessages.length - 1] as HTMLElement;
+    expect(
+      within(errorMessage).getByRole("button", { name: /chat.new_chat/ }),
+    ).toBeInTheDocument();
+    expect(within(errorMessage).queryByText(/开始新聊天/)).not.toBeInTheDocument();
   });
 
   it("does not expose provider internals when synthesis fails before tools stream", async () => {

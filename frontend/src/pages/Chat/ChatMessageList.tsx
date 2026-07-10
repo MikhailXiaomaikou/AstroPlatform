@@ -6,6 +6,7 @@ import type { ChatAction } from "../../api/client";
 import MarkdownText from "../../components/chat/MarkdownText";
 import ResearchStepsCard, { isResearchTurn } from "../../components/chat/ResearchStepsCard";
 import type { ConversationProvenance } from "../../hooks/useConversationProvenance";
+import { useI18n } from "../../i18n";
 import { ActionCard, ToolTurnSummary, VisibleResearchDiagnostics } from "./ActionCard";
 import { HonestAbstentionCard } from "./ChatPanels";
 import { ValidationBadge } from "./ValidationBadge";
@@ -37,6 +38,8 @@ export function ChatMessageList({
   handleNewChat: (event?: MouseEvent<HTMLAnchorElement | HTMLButtonElement>) => void;
   handleExecuteAction: (msgId: string, actionIndex: number, action: ChatAction) => Promise<void>;
 }) {
+  const { t } = useI18n();
+
   return (
     <>
         {messages.map((msg) => (
@@ -199,7 +202,7 @@ export function ChatMessageList({
                           style={{ marginTop: 10 }}
                           onClick={handleNewChat}
                         >
-                          🔄 开始新聊天 (Start fresh chat)
+                          🔄 {t("chat.new_chat")}
                         </button>
                       )}
                     </>

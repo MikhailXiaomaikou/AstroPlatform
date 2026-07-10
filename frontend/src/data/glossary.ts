@@ -24,7 +24,7 @@ export const GLOSSARY: GlossaryEntry[] = [
   {
     term: "Megaparsec / Mpc",
     en: "One million parsecs. Used to measure distances between galaxies and galaxy clusters.",
-    zh: "百万秒差距，等于一百万秒差距，用于星系和星系团之间的距离。",
+    zh: "百万秒差距，用于星系和星系团之间的距离。",
   },
 
   // ── Coordinate & Motion ──
@@ -115,7 +115,7 @@ export const GLOSSARY: GlossaryEntry[] = [
   {
     term: "Equivalent Width",
     en: "A measure of how strong a spectral line is, expressed as the width of a rectangle with the same area as the line profile.",
-    zh: "等值宽度，衡量谱线强度的量，等效为与谱线轮廓面积相同的矩形宽度。",
+    zh: "等值宽度，衡量谱线强度的量，用与谱线轮廓面积相等的矩形宽度来表示。",
   },
   {
     term: "Continuum",
