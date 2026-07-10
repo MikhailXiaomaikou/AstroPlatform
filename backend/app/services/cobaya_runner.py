@@ -191,9 +191,12 @@ def _verify_pinned_cmb_data(entries: list["CosmologyDatasetEntry"]) -> dict[str,
             files_sha256[relpath] = digest
             if digest != pins.get(role):
                 mismatches.append(f"{relpath}: sha256 mismatch")
+    selected_dataset_keys = list(dict.fromkeys(entry.key for entry, _ in pinned))
     return {
         "packages_path": packages_path,
         "hash_verified": not mismatches,
+        "selected_dataset_keys": selected_dataset_keys,
+        "verified_dataset_keys": selected_dataset_keys if not mismatches else [],
         "files_sha256": files_sha256,
         "mismatches": mismatches,
     }
@@ -498,7 +501,10 @@ def _build_cobaya_yaml(
         lines.append("  evaluate: null")
     elif sampler == "mcmc":
         lines.append("  mcmc:")
-        lines.append("    Rminus1_stop: 0.05")
+        # Match the platform publication threshold.  A looser 0.05 stop used
+        # to let the subprocess finish before the result could satisfy the
+        # advertised rank-normalized R-hat < 1.01 requirement.
+        lines.append("    Rminus1_stop: 0.01")
         lines.append("    max_samples: 200000")
         # Pin the sampler seed so the run is reproducible — the result envelope
         # and provenance stamp this exact value as random_seed; without it the
@@ -854,18 +860,49 @@ def _compute_diagnostics(
     samples_per_chain: list[np.ndarray],
     parameter_order: list[str],
 ) -> dict[str, Any]:
-    """Compute R̂ / ESS via arviz; fall back to a single-chain ``rhat=1.0``."""
+    """Compute rank-normalized R-hat and per-parameter bulk ESS.
+
+    Fewer than four independent chain files are always preliminary.  In
+    particular, a single chain has no defined R-hat; it must never receive the
+    historical synthetic value ``1.0``.
+    """
+    from app.services.cosmology_likelihoods.verification import (
+        PUBLICATION_ESS_MIN,
+        PUBLICATION_MIN_INDEPENDENT_CHAINS,
+        PUBLICATION_RHAT_MAX,
+    )
+
+    thresholds = {
+        "min_independent_chains": PUBLICATION_MIN_INDEPENDENT_CHAINS,
+        "rhat_method": "rank",
+        "rhat_max_exclusive": PUBLICATION_RHAT_MAX,
+        "ess_method": "bulk",
+        "ess_min": PUBLICATION_ESS_MIN,
+    }
     n_chains = len(samples_per_chain)
     if n_chains == 0:
-        return {"overall_status": "no_chains", "rhat": None, "ess_bulk": None}
+        return {
+            "overall_status": "no_chains",
+            "rhat": None,
+            "ess_bulk": None,
+            "n_chains": 0,
+            "n_independent_chains": 0,
+            "per_parameter": {},
+            "thresholds": thresholds,
+        }
     if n_chains < 2:
         return {
             "overall_status": "single_chain_only",
-            "rhat": 1.0,
-            "ess_bulk": int(samples_per_chain[0].shape[0]),
+            "rhat": None,
+            "ess_bulk": None,
             "n_chains": 1,
+            "n_independent_chains": 1,
             "n_draws": int(samples_per_chain[0].shape[0]),
-            "thresholds": {"ess_min": 400, "rhat_max": 1.05},
+            "per_parameter": {
+                name: {"rhat": None, "ess_bulk": None}
+                for name in parameter_order
+            },
+            "thresholds": thresholds,
         }
     try:
         import arviz as az  # type: ignore
@@ -880,8 +917,8 @@ def _compute_diagnostics(
                 for idx, name in enumerate(parameter_order)
             }
         )
-        rhat_ds = az.rhat(idata)
-        ess_ds = az.ess(idata)
+        rhat_ds = az.rhat(idata, method="rank")
+        ess_ds = az.ess(idata, method="bulk")
         per_param = {
             name: {
                 "rhat": float(rhat_ds[name].values.item()),
@@ -889,16 +926,28 @@ def _compute_diagnostics(
             }
             for name in parameter_order
         }
-        rhat_max = max(p["rhat"] for p in per_param.values())
-        ess_min = min(p["ess_bulk"] for p in per_param.values())
+        finite = all(
+            math.isfinite(p["rhat"]) and math.isfinite(p["ess_bulk"])
+            for p in per_param.values()
+        )
+        rhat_max = max(p["rhat"] for p in per_param.values()) if finite else None
+        ess_min = min(p["ess_bulk"] for p in per_param.values()) if finite else None
+        diagnostics_ok = bool(
+            n_chains >= PUBLICATION_MIN_INDEPENDENT_CHAINS
+            and rhat_max is not None
+            and rhat_max < PUBLICATION_RHAT_MAX
+            and ess_min is not None
+            and ess_min >= PUBLICATION_ESS_MIN
+        )
         return {
-            "overall_status": "ok" if rhat_max <= 1.05 and ess_min >= 400 else "insufficient",
+            "overall_status": "ok" if diagnostics_ok else "insufficient",
             "rhat": rhat_max,
             "ess_bulk": ess_min,
             "n_chains": n_chains,
+            "n_independent_chains": n_chains,
             "n_draws": int(n_draws),
             "per_parameter": per_param,
-            "thresholds": {"ess_min": 400, "rhat_max": 1.05},
+            "thresholds": thresholds,
         }
     except Exception as exc:
         logger.warning("arviz diagnostics failed: %s", exc)
@@ -907,6 +956,9 @@ def _compute_diagnostics(
             "rhat": None,
             "ess_bulk": None,
             "n_chains": n_chains,
+            "n_independent_chains": n_chains,
+            "per_parameter": {},
+            "thresholds": thresholds,
             "diagnostics_error": f"{type(exc).__name__}: {exc}",
         }
 
@@ -940,14 +992,57 @@ def _runner_success(
     # otherwise claim_validator (which keys only on publication_ready) would let
     # its w0/wa be quoted as a published conclusion.
     off_anchor = chain_is_off_anchor(model_key, [entry.key for entry in entries])
-    data_unverified = data_verification is not None and not data_verification.get("hash_verified")
-    publication_ready = (
-        diagnostics.get("overall_status") == "ok"
-        and (diagnostics.get("rhat") or 0.0) <= 1.05
-        and (diagnostics.get("ess_bulk") or 0.0) >= 400
-        and not off_anchor
-        # a pinned CMB run is publication-ready only if its data sha256-verified
-        and not data_unverified
+    from app.services.cosmology_likelihoods.verification import _assess_publication_gate
+
+    data_verified = bool(
+        data_verification is not None and data_verification.get("hash_verified")
+    )
+    selected_keys = {entry.key for entry in entries}
+    verified_dataset_keys = {
+        str(key)
+        for key in (data_verification or {}).get("verified_dataset_keys", [])
+    }
+    real_tau_likelihood_selected = bool(
+        selected_keys.intersection(TAU_CONSTRAINING_KEYS)
+    )
+    real_tau_likelihood_verified = bool(
+        real_tau_likelihood_selected
+        and verified_dataset_keys.intersection(TAU_CONSTRAINING_KEYS)
+    )
+    tau_is_sampled = "tau" in summaries
+    tau_standin_used = tau_is_sampled and not real_tau_likelihood_selected
+    tau_likelihood_unverified = (
+        tau_is_sampled
+        and real_tau_likelihood_selected
+        and not real_tau_likelihood_verified
+    )
+    publication_gate = _assess_publication_gate(
+        cov_fidelity="full" if data_verified else None,
+        # When the real low-l EE likelihood is absent, _build_cobaya_yaml uses
+        # the hand-entered Planck lowE posterior as a Gaussian tau stand-in.
+        # That is scientifically useful for a preliminary high-l/lensing run,
+        # but it is a compressed data substitution and cannot satisfy the same
+        # gate as the hash-verified lowE likelihood itself.
+        likelihood_is_compressed_or_approximate=tau_standin_used,
+        n_independent_chains=int(
+            diagnostics.get("n_independent_chains")
+            or diagnostics.get("n_chains")
+            or 0
+        ),
+        per_parameter=diagnostics.get("per_parameter"),
+        critical_parameters=list(summaries),
+    )
+    if off_anchor and "off_anchor_frontier" not in publication_gate["reasons"]:
+        publication_gate["reasons"].append("off_anchor_frontier")
+    if tau_likelihood_unverified:
+        publication_gate["reasons"].append("tau_constraining_likelihood_unverified")
+    publication_gate["eligible"] = not publication_gate["reasons"]
+    publication_ready = bool(publication_gate["eligible"])
+    preliminary_ready = bool(
+        summaries
+        and data_verified
+        and diagnostics.get("overall_status")
+        not in {"no_chains", "diagnostics_unavailable"}
     )
     # Three-tier verdict mirroring the in-process runners, so downstream
     # consumers (compute_model_comparison's validity ladder) can vet external
@@ -957,9 +1052,9 @@ def _runner_success(
     chain_tier = (
         "publication"
         if publication_ready
-        else "blocked"
-        if (diagnostics.get("overall_status") != "ok" or data_unverified)
         else "exploratory"
+        if preliminary_ready
+        else "blocked"
     )
     # P3b (2026-07-07): fit_statistics from the run's real chain products, so
     # external chains can enter model-comparison pairing (research_program.py
@@ -1000,6 +1095,24 @@ def _runner_success(
     warnings = [
         "External Cobaya backend run; verify likelihood data versions match the registered citations."
     ]
+    if tau_standin_used:
+        warnings.append(
+            "The real Planck low-l EE likelihood was not selected; tau used the "
+            "compressed Gaussian lowE stand-in (0.0544 +/- 0.0073). This run is "
+            "preliminary and cannot be publication-ready."
+        )
+    elif tau_likelihood_unverified:
+        warnings.append(
+            "The Planck low-l EE likelihood was selected but its pinned inputs "
+            "were not individually verified; the tau constraint is preliminary "
+            "and cannot be publication-ready."
+        )
+    if publication_gate["reasons"]:
+        warnings.append(
+            "Publication gate withheld: "
+            + ", ".join(publication_gate["reasons"])
+            + ". The posterior is preliminary only."
+        )
     if fit_statistics is None:
         warnings.append(
             "fit_statistics omitted: "
@@ -1012,6 +1125,12 @@ def _runner_success(
         "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
         "analysis_status": "EXTERNAL_COBAYA_READY" if publication_ready else "PARTIAL",
         "publication_ready": publication_ready,
+        "preliminary_ready": preliminary_ready,
+        "publication_gate": publication_gate,
+        "preliminary_reasons": list(publication_gate["reasons"]),
+        "approximate_likelihood_components": (
+            ["planck_lowE_tau_gaussian_standin"] if tau_standin_used else []
+        ),
         "chain_tier": chain_tier,
         "off_anchor_review_required": off_anchor,
         "model": model_key,
@@ -1027,7 +1146,11 @@ def _runner_success(
         "warnings": warnings,
         "__message_to_model__": (
             "External Cobaya MCMC produced this posterior. "
-            "publication_ready is the union of R̂ <= 1.05, ess_bulk >= 400, and overall_status == 'ok'."
+            "Publication requires at least four independent chains, rank-normalized "
+            "R-hat < 1.01, bulk ESS >= 400 for every critical parameter, and "
+            "hash-verified non-compressed likelihood inputs, including the real "
+            "low-l EE likelihood when tau is sampled. Otherwise report it only "
+            "as preliminary."
         ),
         "provenance": {
             "cosmology_likelihood": {
@@ -1038,9 +1161,23 @@ def _runner_success(
                 "datasets_not_run": [],
                 "citations": _collect_citations(entries),
                 "publication_ready": publication_ready,
+                "preliminary_ready": preliminary_ready,
+                "publication_gate": publication_gate,
                 "chain_meta": chain_meta,
                 "stdout_tail": stdout_tail,
                 "data_verification": data_verification,
+                "tau_constraint": {
+                    "mode": (
+                        "compressed_lowE_gaussian_standin"
+                        if tau_standin_used
+                        else "selected_lowE_likelihood_unverified"
+                        if tau_likelihood_unverified
+                        else "verified_lowE_likelihood_or_tau_not_sampled"
+                    ),
+                    "publication_eligible": not (
+                        tau_standin_used or tau_likelihood_unverified
+                    ),
+                },
             }
         },
     }

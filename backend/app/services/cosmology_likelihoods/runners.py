@@ -41,6 +41,7 @@ from app.services.cosmology_likelihoods.bao import (
 )
 
 from app.services.cosmology_likelihoods.verification import (
+    _assess_publication_gate,
     _finalize_cov_fidelity,
     _is_executable_bao_entry,
     _is_executable_cc_entry,
@@ -55,7 +56,6 @@ from app.services.cosmology_likelihoods.verification import (
 from app.services.cosmology_likelihoods.sampling import (
     _all_external_cobaya,
     _cobaya_parameter_order,
-    _combined_chi2,
     _compressed_parameter_order,
     _compressed_runner_unavailable,
     _pairwise_tensions,
@@ -63,6 +63,134 @@ from app.services.cosmology_likelihoods.sampling import (
     _run_sampling_likelihood_chain,
     _sanitize_runner_priors,
 )
+
+
+def _draw_box_truncated_gaussian(
+    *,
+    rng: np.random.Generator,
+    mean: np.ndarray,
+    covariance: np.ndarray,
+    parameter_order: list[str],
+    prior_bounds: dict[str, tuple[float, float]],
+    count: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Draw iid samples from a Gaussian truncated to the configured prior box.
+
+    Rejection sampling is exact for a box-truncated multivariate Gaussian and
+    preserves the analytic runner's independent-draw interpretation.  Extremely
+    low prior mass fails closed instead of silently returning out-of-prior draws
+    or pretending that checking only the untruncated posterior mean is enough.
+    """
+    lows = np.asarray([prior_bounds[name][0] for name in parameter_order], dtype=float)
+    highs = np.asarray([prior_bounds[name][1] for name in parameter_order], dtype=float)
+    target = int(count)
+    max_proposals = max(250_000, target * 250)
+    proposals = 0
+    accepted_count = 0
+    accepted: list[np.ndarray] = []
+
+    while accepted_count < target and proposals < max_proposals:
+        remaining_budget = max_proposals - proposals
+        needed = target - accepted_count
+        batch_size = min(max(needed, 4096), 50_000, remaining_budget)
+        batch = rng.multivariate_normal(mean, covariance, size=batch_size)
+        proposals += batch_size
+        keep = np.all((batch >= lows) & (batch <= highs), axis=1)
+        kept = batch[keep]
+        if kept.size:
+            accepted.append(kept)
+            accepted_count += int(kept.shape[0])
+
+    if accepted_count < target:
+        rate = accepted_count / max(proposals, 1)
+        raise ValueError(
+            "Configured hard-prior box has too little posterior mass for exact "
+            f"rejection sampling ({accepted_count}/{proposals} accepted, "
+            f"rate={rate:.3g}); no posterior summary was released."
+        )
+
+    samples = np.concatenate(accepted, axis=0)[:target]
+    # Defense in depth: every value used by summaries, chi2, or derived
+    # parameters must satisfy the declared prior, including boundary rounding.
+    if not np.all((samples >= lows) & (samples <= highs)):
+        raise RuntimeError("truncated Gaussian sampler emitted an out-of-prior draw")
+    return samples, {
+        "method": "exact_box_rejection",
+        "n_proposals": proposals,
+        "n_accepted": accepted_count,
+        "acceptance_rate": round(accepted_count / proposals, 8),
+    }
+
+
+def _analytic_s8_constraints(entries: list[Any]) -> list[tuple[float, float]]:
+    """Independent derived-S8 rows used by the analytic Gaussian runner.
+
+    Planck's registered S8 number is computed from the same Omega_m/sigma8
+    posterior summary already present in that compressed block.  Treating it as
+    an additional independent Gaussian narrows the CMB-only S8 posterior by
+    roughly 25 percent.  Keep it for derived reporting/tension tables and for
+    the separate distance-prior sampling path, but do not multiply it into the
+    analytic CMB-only posterior a second time.
+    """
+    independent_entries = [
+        entry for entry in entries if entry.key != "planck2018_compressed"
+    ]
+    return _s8_gaussian_constraints(independent_entries)
+
+
+def _analytic_combined_chi2(
+    entries: list[Any],
+    parameter_order: list[str],
+    point: np.ndarray,
+) -> float:
+    """Chi2 for exactly the rows executed by the analytic runner."""
+    params = {name: float(point[index]) for index, name in enumerate(parameter_order)}
+    derived_s8 = None
+    if _s8_is_derived(parameter_order):
+        derived_s8 = float(
+            _derived_s8_from_samples(np.asarray([point]), parameter_order)[0]
+        )
+    total = 0.0
+    for entry in entries:
+        spec = entry.compressed_likelihood
+        if spec is None:
+            continue
+        names = [
+            name
+            for name in spec.parameters
+            if (name in params or (name == "S8" and derived_s8 is not None))
+            and not (entry.key == "planck2018_compressed" and name == "S8")
+        ]
+        if not names:
+            continue
+        all_names = list(spec.parameters)
+        local_idx = [all_names.index(name) for name in names]
+        mean = np.asarray(spec.mean, dtype=float)[local_idx]
+        covariance = np.asarray(spec.covariance, dtype=float)[np.ix_(local_idx, local_idx)]
+        values = np.asarray(
+            [
+                derived_s8 if name == "S8" and name not in params else params[name]
+                for name in names
+            ],
+            dtype=float,
+        )
+        residual = values - mean
+        total += float(residual.T @ np.linalg.inv(covariance) @ residual)
+    return total
+
+
+def _analytic_constraint_count(entries: list[Any]) -> int:
+    return sum(
+        len(entry.compressed_likelihood.parameters)
+        - (
+            1
+            if entry.key == "planck2018_compressed"
+            and "S8" in entry.compressed_likelihood.parameters
+            else 0
+        )
+        for entry in entries
+        if entry.compressed_likelihood is not None
+    )
 
 
 
@@ -365,7 +493,6 @@ def run_likelihood_chain(
             cov = np.asarray(spec.covariance, dtype=float)
             if mean.shape != (len(params),) or cov.shape != (len(params), len(params)):
                 raise ValueError("mean/covariance dimensions do not match parameters")
-            cov_inv = np.linalg.inv(cov)
             idx = [parameter_order.index(param) for param in params if param in parameter_order]
             local_idx = [params.index(param) for param in params if param in parameter_order]
             if not idx:
@@ -387,7 +514,12 @@ def run_likelihood_chain(
                         f"not applied as run."
                     )
                 continue
-            sub_inv = cov_inv[np.ix_(local_idx, local_idx)]
+            # Parameters not represented by this analytic runner are
+            # marginalized, not conditioned to their registered means.  Invert
+            # the retained covariance block rather than taking a sub-block of
+            # the full precision matrix (the latter is a conditional Gaussian).
+            sub_cov = cov[np.ix_(local_idx, local_idx)]
+            sub_inv = np.linalg.inv(sub_cov)
             sub_mean = mean[local_idx]
             precision[np.ix_(idx, idx)] += sub_inv
             information[idx] += sub_inv @ sub_mean
@@ -405,36 +537,43 @@ def run_likelihood_chain(
             reason=f"Compressed likelihood precision matrix is singular ({exc}).",
         )
 
-    prior_violations = [
-        name
-        for name, value in zip(parameter_order, posterior_mean, strict=True)
-        if not (prior_bounds[name][0] <= float(value) <= prior_bounds[name][1])
-    ]
     rng = np.random.default_rng(seed)
     # Apply any derived-S8 (σ8·√(Ωm/0.3)) constraints by importance-reweighting
-    # the narrow closed-form proposal.  The linear precision matrix only saw the
-    # σ8/Ωm rows; the WL/Planck S8 rows are folded in here on the *derived* value
-    # so the sampler can never explore an S8 inconsistent with σ8/Ωm.
-    s8_constraints = _s8_gaussian_constraints(compressed_entries)
+    # the hard-prior-truncated Gaussian proposal.  Independent WL rows are
+    # folded in here on the derived value.  The Planck S8 summary is deliberately
+    # excluded because it is derived from the same Omega_m/sigma8 posterior rows
+    # already in the Planck block; multiplying it again double-counts CMB data.
+    s8_constraints = _analytic_s8_constraints(compressed_entries)
     s8_ess: float | None = None
-    if s8_constraints and _s8_is_derived(parameter_order):
-        # The proposal is closed-form (cheap), so oversample a fixed pool: the
-        # importance ESS then clears the 400 publication floor even for small
-        # requested clouds and several S8 datasets in tension (planck+5WL ESS≈1.8k
-        # at pool 8000 vs 233 at the bare sample_count of 1000).
-        pool = max(sample_count, 8000)
-        proposal = rng.multivariate_normal(posterior_mean, posterior_cov, size=pool)
-        derived = _derived_s8_from_samples(proposal, parameter_order)
-        log_w = np.zeros(pool, dtype=float)
-        for mean_s8, sigma_s8 in s8_constraints:
-            log_w += -0.5 * ((derived - mean_s8) / sigma_s8) ** 2
-        log_w -= log_w.max()
-        weights = np.exp(log_w)
-        weights /= weights.sum()
-        s8_ess = float(1.0 / np.sum(weights ** 2))
-        samples = proposal[rng.choice(pool, size=sample_count, p=weights)]
-    else:
-        samples = rng.multivariate_normal(posterior_mean, posterior_cov, size=sample_count)
+    try:
+        pool = max(sample_count, 8000) if s8_constraints and _s8_is_derived(parameter_order) else sample_count
+        proposal, prior_sampling = _draw_box_truncated_gaussian(
+            rng=rng,
+            mean=posterior_mean,
+            covariance=posterior_cov,
+            parameter_order=parameter_order,
+            prior_bounds=prior_bounds,
+            count=pool,
+        )
+        if s8_constraints and _s8_is_derived(parameter_order):
+            derived = _derived_s8_from_samples(proposal, parameter_order)
+            log_w = np.zeros(pool, dtype=float)
+            for mean_s8, sigma_s8 in s8_constraints:
+                log_w += -0.5 * ((derived - mean_s8) / sigma_s8) ** 2
+            log_w -= log_w.max()
+            weights = np.exp(log_w)
+            weights /= weights.sum()
+            s8_ess = float(1.0 / np.sum(weights ** 2))
+            samples = proposal[rng.choice(pool, size=sample_count, p=weights)]
+        else:
+            samples = proposal
+    except Exception as exc:
+        return _compressed_runner_unavailable(
+            model_key=model_key,
+            entries=entries,
+            seed=seed,
+            reason=f"Hard-prior truncated Gaussian sampling failed ({exc}).",
+        )
     summaries = {
         name: _posterior_summary(samples[:, index])
         for index, name in enumerate(parameter_order)
@@ -443,14 +582,10 @@ def run_likelihood_chain(
         summaries["S8"] = _posterior_summary(
             _derived_s8_from_samples(samples, parameter_order)
         )
-    chi2_point = samples.mean(axis=0) if s8_ess is not None else posterior_mean
-    chi2 = _combined_chi2(compressed_entries, parameter_order, chi2_point)
+    chi2_point = samples.mean(axis=0)
+    chi2 = _analytic_combined_chi2(compressed_entries, parameter_order, chi2_point)
     k = len(parameter_order)
-    n_constraints = sum(
-        len(entry.compressed_likelihood.parameters)
-        for entry in compressed_entries
-        if entry.compressed_likelihood is not None
-    )
+    n_constraints = _analytic_constraint_count(compressed_entries)
     aic = chi2 + 2.0 * k
     bic = chi2 + math.log(max(n_constraints, 1)) * k
     tensions = _pairwise_tensions(compressed_entries)
@@ -472,8 +607,15 @@ def run_likelihood_chain(
         )
     if invalid_specs:
         warnings.extend(invalid_specs)
-    if prior_violations:
-        warnings.append("Posterior mean outside configured prior bounds for: " + ", ".join(prior_violations))
+    warnings.append(
+        "Configured hard prior bounds were enforced by exact box-rejection sampling."
+    )
+    if any(entry.key == "planck2018_compressed" for entry in compressed_entries):
+        warnings.append(
+            "Planck S8 is reported only as sigma8*sqrt(Omega_m/0.3) on the "
+            "analytic path; its derived summary row was not multiplied in as "
+            "an independent CMB constraint."
+        )
     s8_underpowered = s8_ess is not None and s8_ess < 400.0
     if s8_underpowered:
         warnings.append(
@@ -497,24 +639,68 @@ def run_likelihood_chain(
     # do_not_combine_with violation double-counts shared measurements -> never
     # publication-ready (mirrors the sampling path).
     combination_conflict = bool(_combination_warnings(entries))
+    publication_gate = _assess_publication_gate(
+        cov_fidelity=cov_fidelity,
+        likelihood_is_compressed_or_approximate=True,
+        n_independent_chains=0,
+        per_parameter=None,
+        critical_parameters=parameter_order,
+    )
+    for reason in (
+        "invalid_likelihood_spec" if invalid_specs else None,
+        "requested_dataset_not_executed" if skipped_entries else None,
+        "derived_s8_importance_ess_below_400" if s8_underpowered else None,
+        "off_anchor_frontier" if off_anchor else None,
+        "overlapping_dataset_combination" if combination_conflict else None,
+        "analytic_draws_are_not_independent_chains",
+    ):
+        if reason and reason not in publication_gate["reasons"]:
+            publication_gate["reasons"].append(reason)
+    publication_gate["eligible"] = not publication_gate["reasons"]
+    warnings.append(
+        "Publication gate withheld: "
+        + ", ".join(publication_gate["reasons"])
+        + ". The compressed result is preliminary only."
+    )
     publication_ready = (
         not invalid_specs
-        and not prior_violations
         and not skipped_entries
         and not s8_underpowered
         and fidelity_ok
         and not off_anchor
         and not combination_conflict
+        and publication_gate["eligible"]
     )
-    # Compressed-Gaussian analytic path is otherwise binary by construction: the
-    # posterior is closed-form so there is no "exploratory" intermediate (the
-    # only soft gate is the derived-S8 reweighting ESS above).
-    chain_tier = "publication" if publication_ready else "blocked"
+    # The base posterior is an exact box-truncated Gaussian; the only
+    # importance-sampled layer is an independent derived-S8 likelihood.
+    preliminary_ready = (
+        cov_fidelity not in (None, "unverified")
+        and not invalid_specs
+        and not skipped_entries
+        and not combination_conflict
+        and (s8_ess is None or s8_ess >= 100.0)
+    )
+    chain_tier = (
+        "publication" if publication_ready
+        else "exploratory" if preliminary_ready
+        else "blocked"
+    )
     result: dict[str, Any] = {
         "success": True,
-        "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
-        "analysis_status": "COMPRESSED_CHAIN_READY" if publication_ready else "PARTIAL",
+        "__tool_status__": (
+            "COMPLETED" if publication_ready
+            else "EXPLORATORY" if preliminary_ready
+            else "PARTIAL"
+        ),
+        "analysis_status": (
+            "COMPRESSED_CHAIN_READY" if publication_ready
+            else "EXPLORATORY" if preliminary_ready
+            else "PARTIAL"
+        ),
         "publication_ready": publication_ready,
+        "preliminary_ready": preliminary_ready,
+        "publication_gate": publication_gate,
+        "preliminary_reasons": list(publication_gate["reasons"]),
         "chain_tier": chain_tier,
         "off_anchor_review_required": off_anchor,
         "claim_scope": "compressed_likelihood_preliminary",
@@ -541,24 +727,29 @@ def run_likelihood_chain(
         },
         "chain_diagnostics": {
             "overall_status": (
-                "analytic_gaussian"
+                "analytic_gaussian_truncated"
                 if s8_ess is None
-                else "analytic_gaussian_s8_reweighted"
+                else "analytic_gaussian_truncated_s8_reweighted"
             ),
             "publication_ready": publication_ready,
             # No sampling chains exist on the analytic path — R-hat is
             # undefined, not 1.0 (2026-06-12 review: the hard-coded value was
             # a never-computed statistic in the provenance envelope). The
-            # exact-Gaussian draws ARE independent, so ess = n_draws is real.
+            # Accepted box-truncated Gaussian draws are iid, so ess=n_draws.
             "rhat": None,
-            "rhat_note": "not applicable (analytic Gaussian, no sampling chains)",
+            "rhat_note": "not applicable (analytic truncated Gaussian, no chains)",
             "ess_bulk": int(round(s8_ess)) if s8_ess is not None else sample_count,
             "ess_source": (
-                "importance_weights" if s8_ess is not None else "exact_gaussian_draws"
+                "importance_weights"
+                if s8_ess is not None
+                else "exact_gaussian_draws"
             ),
+            "prior_sampling": prior_sampling,
             "n_draws": sample_count,
             "n_chains": 1,
-            "thresholds": {"ess_min": 400},
+            "n_independent_chains": 0,
+            "per_parameter": {},
+            "thresholds": publication_gate["thresholds"],
         },
         "datasets_used": [entry.to_dict() for entry in compressed_entries],
         "datasets_not_run": [entry.to_dict() for entry in skipped_entries],
@@ -596,10 +787,18 @@ def run_likelihood_chain(
                 "cov_fidelity": cov_fidelity,
                 "artifact_sha256": artifact_sha256,
                 "publication_ready": publication_ready,
+                "preliminary_ready": preliminary_ready,
+                "publication_gate": publication_gate,
             },
         },
     }
-    if not publication_ready:
+    if preliminary_ready and not publication_ready:
+        result["__message_to_model__"] = (
+            "This compressed/analytic result is preliminary only. Posterior "
+            "numbers may be discussed with an explicit preliminary caveat, but "
+            "must not be described as publication-ready or as a full likelihood."
+        )
+    elif not publication_ready:
         result["__do_not_claim__"] = True
         # bug_011 fix: per-tier rewrite of __message_to_model__ — the
         # publication-tier text ("you may quote posterior/tension numbers")
@@ -611,11 +810,6 @@ def run_likelihood_chain(
             blocked_reason = (
                 "Requested datasets were not numerically included: "
                 + ", ".join(entry.key for entry in skipped_entries)
-            )
-        elif prior_violations:
-            blocked_reason = (
-                "Posterior mean outside configured prior bounds for: "
-                + ", ".join(prior_violations)
             )
         else:
             blocked_reason = "Compressed-Gaussian analytic chain blocked"

@@ -234,9 +234,9 @@ def test_dp_lcdm_proposal_moments_match_planck_lcdm_shape():
     np.linalg.cholesky(cov)
 
 
-# ── 9. Integration: ΛCDM BAO+CMB anchor stays publication-grade ─────────────
+# ── 9. Integration: ΛCDM BAO+CMB anchor stays numerically correct/preliminary ─
 
-def test_lcdm_bao_cmb_recovers_h0_publication_tier():
+def test_lcdm_bao_cmb_recovers_h0_preliminary_tier():
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     r = run_likelihood_chain(
@@ -245,8 +245,10 @@ def test_lcdm_bao_cmb_recovers_h0_publication_tier():
         n_samples=4000,
         random_seed=42,
     )
-    assert r["chain_tier"] == "publication"
-    assert r["publication_ready"] is True
+    assert r["chain_tier"] == "exploratory"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
+    assert "compressed_or_approximate_likelihood" in r["preliminary_reasons"]
     ess = float(r["chain_diagnostics"]["proposal_ess"])
     assert ess >= 400.0, ess
     h0 = float(r["parameters"]["H0"]["median"])

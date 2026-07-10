@@ -32,12 +32,14 @@ from app.services.cobaya_runner import (
     CobayaSubprocessTimeout,
     _build_cobaya_yaml,
     _parse_chain_files,
+    _runner_success,
     _summarise_samples,
     dispatch_external_cobaya,
     is_external_enabled,
 )
 from app.services.cosmology_likelihoods import (
     _validate_dataset_selection,
+    get_cosmology_dataset,
     run_likelihood_chain,
 )
 
@@ -299,6 +301,125 @@ def test_summarise_samples_returns_q16_q84() -> None:
     assert diag.get("n_chains") == 2
 
 
+def test_low_e_tau_gaussian_standin_is_preliminary_even_with_good_chains() -> None:
+    names = ("ombh2", "omch2", "H0", "ns", "As", "tau", "A_planck")
+    diagnostics = {
+        "overall_status": "ok",
+        "n_chains": 4,
+        "n_independent_chains": 4,
+        "per_parameter": {
+            name: {"rhat": 1.001, "ess_bulk": 1200.0} for name in names
+        },
+    }
+    verified = {"hash_verified": True, "files_sha256": {}, "mismatches": []}
+    summaries = {name: {"median": 1.0} for name in names}
+
+    result = _runner_success(
+        model_key="lcdm",
+        entries=[get_cosmology_dataset("planck_2018_highl_TTTEEE_lite")],
+        seed=7,
+        sampler="mcmc",
+        summaries=summaries,
+        diagnostics=diagnostics,
+        chain_meta={},
+        stdout_tail="",
+        data_verification=verified,
+    )
+
+    assert result["publication_ready"] is False
+    assert result["preliminary_ready"] is True
+    assert result["chain_tier"] == "exploratory"
+    assert "compressed_or_approximate_likelihood" in result[
+        "preliminary_reasons"
+    ]
+    assert result["approximate_likelihood_components"] == [
+        "planck_lowE_tau_gaussian_standin"
+    ]
+    assert result["provenance"]["cosmology_likelihood"]["tau_constraint"] == {
+        "mode": "compressed_lowE_gaussian_standin",
+        "publication_eligible": False,
+    }
+
+
+def test_real_verified_low_e_likelihood_removes_tau_approximation_block() -> None:
+    names = ("ombh2", "omch2", "H0", "ns", "As", "tau", "A_planck")
+    diagnostics = {
+        "overall_status": "ok",
+        "n_chains": 4,
+        "n_independent_chains": 4,
+        "per_parameter": {
+            name: {"rhat": 1.001, "ess_bulk": 1200.0} for name in names
+        },
+    }
+    selected_but_unverified = {
+        "hash_verified": True,
+        "files_sha256": {},
+        "mismatches": [],
+    }
+
+    unverified_result = _runner_success(
+        model_key="lcdm",
+        entries=[
+            get_cosmology_dataset("planck_2018_highl_TTTEEE_lite"),
+            get_cosmology_dataset("planck_2018_lowl_EE"),
+        ],
+        seed=7,
+        sampler="mcmc",
+        summaries={name: {"median": 1.0} for name in names},
+        diagnostics=diagnostics,
+        chain_meta={},
+        stdout_tail="",
+        data_verification=selected_but_unverified,
+    )
+
+    assert unverified_result["publication_ready"] is False
+    assert unverified_result["approximate_likelihood_components"] == []
+    assert "tau_constraining_likelihood_unverified" in unverified_result[
+        "preliminary_reasons"
+    ]
+    assert unverified_result["provenance"]["cosmology_likelihood"][
+        "tau_constraint"
+    ] == {
+        "mode": "selected_lowE_likelihood_unverified",
+        "publication_eligible": False,
+    }
+
+    verified = {
+        "hash_verified": True,
+        "verified_dataset_keys": [
+            "planck_2018_highl_TTTEEE_lite",
+            "planck_2018_lowl_EE",
+        ],
+        "files_sha256": {},
+        "mismatches": [],
+    }
+
+    result = _runner_success(
+        model_key="lcdm",
+        entries=[
+            get_cosmology_dataset("planck_2018_highl_TTTEEE_lite"),
+            get_cosmology_dataset("planck_2018_lowl_EE"),
+        ],
+        seed=7,
+        sampler="mcmc",
+        summaries={name: {"median": 1.0} for name in names},
+        diagnostics=diagnostics,
+        chain_meta={},
+        stdout_tail="",
+        data_verification=verified,
+    )
+
+    assert result["publication_ready"] is True
+    assert result["approximate_likelihood_components"] == []
+    assert "compressed_or_approximate_likelihood" not in result[
+        "preliminary_reasons"
+    ]
+    assert result["provenance"]["cosmology_likelihood"]["tau_constraint"] == {
+        "mode": "verified_lowE_likelihood_or_tau_not_sampled",
+        "publication_eligible": True,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 6. run_likelihood_chain dispatch — default off, on path, mocked subprocess
 # ---------------------------------------------------------------------------
@@ -543,7 +664,7 @@ def _dispatch_with_fixture_chains(
     model_key: str,
     param_names: list[str],
     planted_min_chi2: float,
-    n_chains: int = 2,
+    n_chains: int = 4,
     seed: int = 11,
 ) -> dict:
     """Run the REAL dispatch_external_cobaya path with the subprocess mocked to
@@ -576,6 +697,9 @@ def _dispatch_with_fixture_chains(
         return_value=True,
     ), patch(
         "app.services.cobaya_runner._run_cobaya_subprocess", side_effect=fake_run
+    ), patch(
+        "app.services.cobaya_runner._verify_pinned_cmb_data",
+        return_value={"hash_verified": True, "files_sha256": {}, "mismatches": []},
     ):
         return dispatch_external_cobaya(
             model_key=model_key,
@@ -651,27 +775,30 @@ def test_external_envelope_enters_model_comparison_pairing() -> None:
     assert "exploratory-tier" in cmp["verdict_caveat"]
 
 
-def test_blocked_external_chain_keeps_fit_statistics_but_no_verdict() -> None:
-    """chain_tier semantics with fit_statistics present: a single-chain run
-    (overall_status='single_chain_only' != 'ok') is blocked-tier; its factual
-    chi2 is reported but compute_model_comparison must fail closed — having
-    fit_statistics must never promote a blocked chain into a verdict."""
+def test_single_external_chain_is_preliminary_and_has_no_verdict() -> None:
+    """A single chain keeps factual fit statistics but is preliminary only.
+
+    Model comparison still fails closed because rank-Rhat and per-parameter ESS
+    are unavailable; fit_statistics must never promote it into a verdict.
+    """
     from app.services.cosmology_likelihoods import compute_model_comparison
 
     lcdm = _dispatch_with_fixture_chains(
         model_key="lcdm", param_names=["H0", "omegam"], planted_min_chi2=10.25
     )
-    blocked = _dispatch_with_fixture_chains(
+    preliminary = _dispatch_with_fixture_chains(
         model_key="ok_lcdm",
         param_names=["H0", "omegam", "omegak"],
         planted_min_chi2=8.0,
         n_chains=1,
     )
-    assert blocked["chain_tier"] == "blocked"
-    assert blocked["publication_ready"] is False
-    assert blocked["fit_statistics"]["chi2"] == 8.0  # factual, still reported
+    assert preliminary["chain_tier"] == "exploratory"
+    assert preliminary["publication_ready"] is False
+    assert preliminary["preliminary_ready"] is True
+    assert "fewer_than_four_independent_chains" in preliminary["preliminary_reasons"]
+    assert preliminary["fit_statistics"]["chi2"] == 8.0  # factual, still reported
 
-    cmp = compute_model_comparison(lcdm, blocked)
+    cmp = compute_model_comparison(lcdm, preliminary)
     assert cmp["comparison_valid"] is False
     assert cmp["preferred"] == "undetermined"
     assert cmp["__do_not_claim__"] is True

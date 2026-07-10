@@ -60,7 +60,7 @@ def main():
 
     if failed:
         print(f"\n  {failed} package(s) missing. Install with:")
-        print("  pip install -r requirements.txt")
+        print("  pip install --require-hashes -r requirements.lock")
 
     return failed == 0
 

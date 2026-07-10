@@ -571,7 +571,14 @@ async def _build_runtime(
     user: User | None,
     db: AsyncSession,
 ):
+    from app.config import settings
     from app.services.ai_tools import TOOLS
+
+    available_tools = (
+        [tool for tool in TOOLS if tool.get("name") != "run_python"]
+        if settings.sandbox_backend == "disabled"
+        else TOOLS
+    )
 
     normalized_messages = _normalize_messages(req.messages)
     safe_context = _safe_context(req.context)
@@ -588,7 +595,7 @@ async def _build_runtime(
         (message.content for message in reversed(req.messages) if message.role == "user"),
         "",
     )
-    toolset = TOOLS
+    toolset = available_tools
     agent_names = ["orchestrator"]
     user_context = ""
     merged_system = system
@@ -602,7 +609,11 @@ async def _build_runtime(
         runtime_prompt = str(runtime.get("system_prompt", "") or "").strip()
         if runtime_prompt:
             merged_system += "\n\n" + runtime_prompt
-        toolset = TOOLS if _is_tool_inventory_request(latest_user_message) else _filter_tools(runtime.get("tool_names"), TOOLS)
+        toolset = (
+            available_tools
+            if _is_tool_inventory_request(latest_user_message)
+            else _filter_tools(runtime.get("tool_names"), available_tools)
+        )
         if runtime.get("agent_names"):
             agent_names = list(runtime["agent_names"])
         user_context = str(runtime.get("user_context", "") or "")
@@ -618,6 +629,55 @@ async def _build_runtime(
     }
 
 
+async def _validated_current_session_id(
+    context: dict[str, Any] | None,
+    user: User | None,
+    db: AsyncSession,
+) -> str | None:
+    """Resolve a client-supplied chat session inside the caller's account.
+
+    ``current_session_id`` controls durable checkpoints, tool provenance, and
+    the session's running/idle marker.  Treating it as an opaque client string
+    lets one account write another account's session state.  Resolve it once at
+    the HTTP boundary and pass only the owned database id downstream.
+
+    Anonymous chat remains available when no durable session is requested.  A
+    supplied session id, however, fails closed because there is no owner
+    identity against which it can be authorized.
+    """
+    if not isinstance(context, dict):
+        return None
+    raw_session_id = context.get("current_session_id")
+    if raw_session_id is None or not str(raw_session_id).strip():
+        return None
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication is required to use a saved chat session",
+        )
+    try:
+        session_id = uuid.UUID(str(raw_session_id).strip())
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid chat session ID") from exc
+
+    from sqlalchemy import select
+
+    from app.models.schemas import ChatSession
+
+    owned_id = (
+        await db.execute(
+            select(ChatSession.id).where(
+                ChatSession.id == session_id,
+                ChatSession.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if owned_id is None:
+        # Do not reveal whether the id exists in another account.
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return str(owned_id)
+
+
 @router.post("/message/stream")
 @limiter.limit("15/minute")
 async def chat_message_stream(
@@ -628,6 +688,10 @@ async def chat_message_stream(
 ):
     """Streaming version — sends SSE events as AI processes tools."""
     from starlette.responses import StreamingResponse
+
+    chat_session_id = await _validated_current_session_id(req.context, user, db)
+    owner_id = str(user.id) if user is not None else None
+    anonymous_job_scope = f"anonymous:{uuid.uuid4().hex}" if user is None else None
 
     # Decision 2B: reject over-quota platform-funded starter calls before
     # the stream opens, so the client gets a clean HTTP 429 instead of an
@@ -797,7 +861,6 @@ async def chat_message_stream(
         agent_names = list(runtime.get("agent_names") or ["orchestrator"])
 
         python_session_id = (req.context or {}).get("python_session_id", "default")
-        chat_session_id = (req.context or {}).get("current_session_id")
         _prime_adql_context_cache(req.context, python_session_id)
 
         # U1 (PART U): session-history replay can take 30-60 s in long sessions
@@ -838,7 +901,10 @@ async def chat_message_stream(
         _run_failed = False
         work_task: asyncio.Task | None = None
         await _update_chat_session_status(
-            chat_session_id, status="running", current_run_id=_agent_run_id
+            chat_session_id,
+            owner_id=owner_id,
+            status="running",
+            current_run_id=_agent_run_id,
         )
 
         try:
@@ -905,22 +971,30 @@ async def chat_message_stream(
                         evt["result"] = slimmed_result
                 await event_queue.put(evt)
 
-            work_task = asyncio.create_task(
-                asyncio.wait_for(
-                    _run_orchestrated_chat(
-                        runtime=runtime,
-                        messages=claude_messages,
-                        provider_api_keys=provider_api_keys,
-                        python_session_id=python_session_id,
-                        preferred_backend=preferred_backend,
-                        model_profile=preferred_model_profile,
-                        chat_session_id=chat_session_id,
-                        on_event=_emit,
-                        workflow_budget=workflow_budget,
-                    ),
-                    timeout=float(workflow_budget["endpoint_timeout_seconds"]),
+            from app.services.async_tool_runtime import anonymous_owner_scope
+
+            # create_task copies contextvars. Bind a request-unique anonymous
+            # scope only while creating the orchestrator task so every async
+            # submit/poll in this stream shares it, while another anonymous
+            # request cannot deduplicate or read these jobs.
+            with anonymous_owner_scope(anonymous_job_scope):
+                work_task = asyncio.create_task(
+                    asyncio.wait_for(
+                        _run_orchestrated_chat(
+                            runtime=runtime,
+                            messages=claude_messages,
+                            provider_api_keys=provider_api_keys,
+                            python_session_id=python_session_id,
+                            preferred_backend=preferred_backend,
+                            model_profile=preferred_model_profile,
+                            user_id=owner_id,
+                            chat_session_id=chat_session_id,
+                            on_event=_emit,
+                            workflow_budget=workflow_budget,
+                        ),
+                        timeout=float(workflow_budget["endpoint_timeout_seconds"]),
+                    )
                 )
-            )
             _hb_count = 0
             while not work_task.done():
                 try:
@@ -959,6 +1033,28 @@ async def chat_message_stream(
 
             response = work_task.result()
 
+            # Publication evidence is written by the server from the actual
+            # orchestrator result.  The browser transcript is display state
+            # and is never trusted as proof that a tool ran.
+            from app.services.server_evidence import append_server_evidence
+
+            await append_server_evidence(
+                session_id=chat_session_id,
+                owner_id=owner_id,
+                run_id=_agent_run_id,
+                assistant_reply=str(response.get("reply") or ""),
+                tool_results=(
+                    response.get("tool_results")
+                    if isinstance(response.get("tool_results"), list)
+                    else []
+                ),
+                validation_summary=(
+                    response.get("validation_summary")
+                    if isinstance(response.get("validation_summary"), dict)
+                    else None
+                ),
+            )
+
             if response["reply"]:
                 # M7 follow-through (audit 2026-07-03): hit_iteration_cap was
                 # computed "so the UI can surface it" and then dropped at this
@@ -982,6 +1078,22 @@ async def chat_message_stream(
             )
             timeout_summary = _tool_grounded_timeout_summary(timeout_tool_results, timeout_s)
             if timeout_summary.strip():
+                from app.services.server_evidence import append_server_evidence
+
+                await append_server_evidence(
+                    session_id=chat_session_id,
+                    owner_id=owner_id,
+                    run_id=_agent_run_id,
+                    assistant_reply=timeout_summary,
+                    tool_results=timeout_tool_results,
+                    validation_summary={
+                        "schema_version": 1,
+                        "numeric_gate": "not_run",
+                        "citation_gate": "not_run",
+                        "blocked": False,
+                        "reason": "workflow_timeout_tool_grounded_fallback",
+                    },
+                )
                 logger.warning(
                     "AI workflow timed out after %ss; emitting tool-grounded "
                     "timeout fallback from %d streamed tool result(s).",
@@ -1016,6 +1128,7 @@ async def chat_message_stream(
             # "running" forever, confusing resume/new-chat logic.
             await _update_chat_session_status(
                 chat_session_id,
+                owner_id=owner_id,
                 status="suspended" if _run_failed else "idle",
             )
 
@@ -1691,11 +1804,9 @@ async def chat_message(
     workflow_budget = _workflow_budget_config(_infer_workflow_budget_mode(req))
 
     claude_messages: list[dict] = _normalize_messages(req.messages)
+    chat_session_id = await _validated_current_session_id(req.context, user, db)
     runtime = await _build_runtime(req, user, db)
     python_session_id = (req.context or {}).get("python_session_id", "default")
-    chat_session_id = (req.context or {}).get("current_session_id")
-    if not chat_session_id and python_session_id and python_session_id != "default":
-        chat_session_id = str(python_session_id)
     _prime_adql_context_cache(req.context, python_session_id)
     await _prime_python_session_from_history(req.messages, python_session_id)
 
@@ -1710,6 +1821,24 @@ async def chat_message(
             user_id=str(user.id) if user else None,
             chat_session_id=chat_session_id,
             workflow_budget=workflow_budget,
+        )
+        from app.services.server_evidence import append_server_evidence
+
+        await append_server_evidence(
+            session_id=chat_session_id,
+            owner_id=str(user.id),
+            run_id=uuid.uuid4().hex,
+            assistant_reply=str(response.get("reply") or ""),
+            tool_results=(
+                response.get("tool_results")
+                if isinstance(response.get("tool_results"), list)
+                else []
+            ),
+            validation_summary=(
+                response.get("validation_summary")
+                if isinstance(response.get("validation_summary"), dict)
+                else None
+            ),
         )
         return ChatResponse(
             reply=response["reply"],
@@ -2026,9 +2155,9 @@ class SaveSessionRequest(BaseModel):
     session_id: str | None = None
     title: str | None = None
     messages: list[dict]
-    # R7: optional audit trail uploaded by the frontend.  Captures the
-    # thinking-stream events (agent_text / tool_call / tool_result) for
-    # the session so we can reconstruct "what did the AI actually do?"
+    # Deprecated compatibility field. It is deliberately ignored: audit_log
+    # is now server-owned publication evidence and clients may not overwrite
+    # or append to it.
     audit_log: list[dict] | None = None
 
 
@@ -2092,8 +2221,6 @@ async def save_chat_session(
         session = result.scalar_one_or_none()
         if session:
             session.messages = req.messages
-            if req.audit_log is not None:
-                session.audit_log = req.audit_log  # R7
             # Only update title if explicitly provided AND not empty.
             # Don't overwrite a meaningful title with "New Chat" on auto-save.
             if req.title and req.title.strip() and req.title != "New Chat":
@@ -2125,7 +2252,7 @@ async def save_chat_session(
         user_id=user.id,
         title=title,
         messages=req.messages,
-        audit_log=req.audit_log,
+        audit_log=None,
     )
     db.add(session)
     await db.flush()

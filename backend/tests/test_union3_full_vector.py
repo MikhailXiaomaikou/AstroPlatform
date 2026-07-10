@@ -89,7 +89,9 @@ def test_end_to_end_chain_recovers_published_anchor():
         model="lcdm", dataset_keys=["union3"], n_samples=4000, random_seed=42,
     )
     assert r.get("error") is None
-    assert r["chain_tier"] == "publication"
+    assert r["chain_tier"] == "exploratory"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
     assert r["parameters"]["omegam"]["median"] == pytest.approx(0.356, abs=0.01)
 
 
@@ -186,10 +188,10 @@ def test_pairwise_tensions_still_cover_union3():
     ) in pairs
 
 
-def test_full_likelihood_claim_not_overclaim_on_union3_chain():
-    # F1-specificity class: the union3 chain executes the released full
-    # likelihood, so an honest 'full likelihood ... publication-ready' reply
-    # must NOT be hard-blocked as full_likelihood_overclaim.
+def test_full_likelihood_scope_does_not_imply_publication_ready():
+    # Union3 executes the released full likelihood, but the single flattened
+    # ensemble has no four-chain convergence certificate.  Full-likelihood
+    # wording is factual; adding "publication-ready" must be blocked.
     from app.services.claim_validator import methodology_consistency_violations
 
     r = cl.run_likelihood_chain(
@@ -197,12 +199,20 @@ def test_full_likelihood_claim_not_overclaim_on_union3_chain():
     )
     assert r["claim_scope"] == "executable_full_fidelity_likelihoods"
     assert r["compressed_likelihood_preliminary"] is False
-    violations = methodology_consistency_violations(
-        "Union3 ran with the full likelihood and the chain is publication-ready "
-        "(Omega_m = 0.358).",
+    preliminary = methodology_consistency_violations(
+        "Union3 ran with the full likelihood, but this single-ensemble result "
+        "is preliminary and not publication-ready.",
         [{"tool": "run_cosmology_likelihood_chain", "result": r}],
     )
-    assert not [v for v in violations if v.kind == "full_likelihood_overclaim"], violations
+    assert not [
+        v for v in preliminary if v.kind == "full_likelihood_overclaim"
+    ], preliminary
+
+    overclaim = methodology_consistency_violations(
+        "Union3 ran with the full likelihood and the chain is publication-ready.",
+        [{"tool": "run_cosmology_likelihood_chain", "result": r}],
+    )
+    assert [v for v in overclaim if v.kind == "full_likelihood_overclaim"]
 
 
 def test_false_external_run_claim_still_blocked_on_union3_chain():

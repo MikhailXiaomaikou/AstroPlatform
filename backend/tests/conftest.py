@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 
 os.environ["RATE_LIMIT_ENABLED"] = "false"
+# Tests intentionally exercise the legacy local executor.  Runtime defaults
+# remain fail-closed; this opt-in is confined to the test process.
+os.environ.setdefault("SANDBOX_BACKEND", "inprocess")
 
 # Prod engine (app/models/database.py) is created at import time with
 # settings.database_url, default "sqlite+aiosqlite:///<repo>/data/astro.db"
@@ -72,8 +75,13 @@ def isolated_async_dispatcher():
     from app.services import async_tool_runtime as atr
 
     atr.set_dispatcher(lambda *args, **kwargs: None)
+    # Unit tests that are not explicitly persistence tests should not depend on
+    # the developer's on-disk DB revision. Production keeps the strict default;
+    # durable_research_records tests opt back into it explicitly.
+    atr.set_persister(lambda _job: None)
     yield
     atr.reset_dispatcher()
+    atr.reset_persister()
 
 
 # ── In-memory SQLite engine (per-test-session) ──

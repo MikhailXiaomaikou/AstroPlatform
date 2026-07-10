@@ -61,6 +61,31 @@ async def create_schedule(
     user: User = Depends(get_current_user),
 ):
     """Create a new scheduled pipeline run."""
+    from app.api.pipeline import _bind_owned_pipeline_inputs
+    from app.pipeline.engine import topological_sort
+    from app.pipeline.nodes import registry
+    from app.pipeline.validate import DAGValidationError, validate_dag
+
+    if "nodes" not in req.dag or "edges" not in req.dag:
+        raise HTTPException(status_code=400, detail="DAG must have 'nodes' and 'edges'")
+    try:
+        validate_dag(req.dag)
+        topological_sort(req.dag)
+    except (DAGValidationError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    for node in req.dag.get("nodes", []):
+        if node.get("type") not in registry:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown node type: {node.get('type')}",
+            )
+
+    bound_dag, bound_input_data_id = await _bind_owned_pipeline_inputs(
+        dag=req.dag,
+        input_data_id=req.input_data_id,
+        user=user,
+        db=db,
+    )
     cron = CRON_PRESETS.get(req.cron_expr, req.cron_expr)
 
     # Basic cron validation
@@ -73,8 +98,8 @@ async def create_schedule(
     schedule = ScheduledRun(
         user_id=user.id,
         name=req.name,
-        dag=req.dag,
-        input_data_id=req.input_data_id,
+        dag=bound_dag,
+        input_data_id=bound_input_data_id,
         cron_expr=cron,
         next_run_at=next_run,
     )

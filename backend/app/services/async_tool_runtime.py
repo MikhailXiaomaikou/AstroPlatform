@@ -20,13 +20,16 @@ import json
 import logging
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Any
 
 from app.services._kv_store import JsonKvStore
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TTL = 3600  # 1 hour, matches cosmology_mcmc._JOB_TTL_SECONDS
+# Redis/KV is the active-worker coordination layer, not the system of record.
+# Keep active state for one day; the database projection remains after expiry.
+DEFAULT_TTL = 24 * 3600
 CELERY_TASK_NAME = "ai_tools.run_long_tool"
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 MAX_STORED_JOBS = 64
@@ -45,6 +48,15 @@ _IN_ASYNC_WORKER: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "async_tool_runtime_in_worker", default=False
 )
 
+# Anonymous chat requests must not share the old implicit ``None`` owner.  The
+# HTTP stream installs a server-generated scope in this context variable before
+# it creates the orchestrator task.  Context propagation keeps that scope stable
+# for every submit/poll in the one stream without pretending the anonymous
+# caller is an authenticated database user.
+_ANONYMOUS_OWNER_SCOPE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "async_tool_runtime_anonymous_owner_scope", default=None
+)
+
 
 def in_async_worker() -> bool:
     """Return True iff the current context is running inside ``run_long_tool``."""
@@ -58,6 +70,33 @@ def enter_async_worker():
 
 def leave_async_worker(token) -> None:
     _IN_ASYNC_WORKER.reset(token)
+
+
+@contextmanager
+def anonymous_owner_scope(scope_id: str | None):
+    """Bind one server-generated anonymous owner scope to the current task.
+
+    The scope is hot-KV-only: ``user_id`` remains ``None`` on the job record,
+    so the durable database projection does not invent a user or violate its
+    foreign key.  Child asyncio tasks inherit the binding at creation time.
+    """
+    token = _ANONYMOUS_OWNER_SCOPE.set(str(scope_id) if scope_id else None)
+    try:
+        yield
+    finally:
+        _ANONYMOUS_OWNER_SCOPE.reset(token)
+
+
+def _effective_owner_scope(owner_id: str | None) -> str | None:
+    if owner_id is not None:
+        return str(owner_id)
+    return _ANONYMOUS_OWNER_SCOPE.get()
+
+
+def _job_owner_scope(job: dict[str, Any]) -> str:
+    # ``owner_scope`` was added after durable authenticated jobs already used
+    # user_id directly; fall back so those hot records remain readable.
+    return str(job.get("owner_scope") or job.get("user_id") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -76,12 +115,22 @@ def _default_dispatch(tool_name: str, args: dict[str, Any], job_id: str) -> None
         CELERY_TASK_NAME,
         args=[tool_name, args, job_id],
         kwargs={},
+        task_id=job_id,
     )
 
 
 # Tests / future in-process backends can swap this. Keep production code
 # free of conditional ``if testing:`` branches.
 _dispatcher = _default_dispatch
+
+
+def _default_persist(job: dict[str, Any]) -> None:
+    from app.services.durable_research_records import save_job
+
+    save_job(job)
+
+
+_persister = _default_persist
 
 
 def set_dispatcher(fn) -> None:
@@ -96,6 +145,18 @@ def reset_dispatcher() -> None:
     _dispatcher = _default_dispatch
 
 
+def set_persister(fn) -> None:
+    """Override lifecycle persistence for isolated tests."""
+    global _persister
+    _persister = fn
+
+
+def reset_persister() -> None:
+    """Restore strict PostgreSQL-backed lifecycle persistence."""
+    global _persister
+    _persister = _default_persist
+
+
 # ---------------------------------------------------------------------------
 # Hashing for singleflight dedup
 # ---------------------------------------------------------------------------
@@ -107,7 +168,44 @@ def _hash_args(tool_name: str, args: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _find_running_job_by_hash(tool_name: str, inputs_hash: str) -> dict | None:
+def _persist_job(job: dict[str, Any]) -> None:
+    """Persist critical lifecycle state; failures must reach the caller."""
+    _persister(job)
+
+
+def mark_persistence_failure(job_id: str, exc: BaseException) -> dict[str, Any]:
+    """Expose a terminal hot-state failure when durable persistence is unsafe.
+
+    This function deliberately does not call the database again.  The failing
+    transition already exhausted bounded retries; stale reconciliation will
+    terminalize any older durable queued/running record once the DB recovers.
+    """
+    raw = _JOBS_STORE.get(str(job_id))
+    job = dict(raw) if isinstance(raw, dict) else {"job_id": str(job_id)}
+    job["status"] = "failed"
+    job["error_class"] = "durable_persistence_failed"
+    job["error"] = (
+        "Critical research-job state could not be persisted after retries; "
+        "the computation is not claimable as a durable result."
+    )
+    job["durability_status"] = "failed"
+    job["completed_at"] = time.time()
+    _JOBS_STORE.set(job_id, job, ttl=int(job.get("ttl") or DEFAULT_TTL))
+    logger.critical(
+        "research job %s entered visible persistence failure: %s",
+        job_id,
+        exc,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return job
+
+
+def _find_running_job_by_hash(
+    tool_name: str,
+    inputs_hash: str,
+    *,
+    owner_id: str | None = None,
+) -> dict | None:
     try:
         keys = _JOBS_STORE.scan_keys()
     except Exception:
@@ -120,17 +218,24 @@ def _find_running_job_by_hash(tool_name: str, inputs_hash: str) -> dict | None:
             entry.get("tool_name") == tool_name
             and entry.get("inputs_hash") == inputs_hash
             and entry.get("status") in ("queued", "running")
+            and _job_owner_scope(entry) == str(owner_id or "")
         ):
             return entry
     return None
 
 
-def _enforce_job_cap(max_jobs: int | None = None) -> None:
+def _enforce_job_cap(
+    *,
+    owner_id: str | None,
+    max_jobs: int | None = None,
+) -> None:
     """Best-effort soft cap for stored async job records.
 
     TTL bounds job lifetime, but high-throughput submissions can still leave a
-    large number of completed/failed records for up to an hour. Keep only the
-    newest MAX_STORED_JOBS records so Redis/SQLite scans stay cheap.
+    large number of completed/failed records. Keep each owner's hot records
+    bounded without allowing one account to evict another's jobs. Queued and
+    running jobs are never deleted; if active work alone exceeds the cap this
+    deliberately remains a soft cap until those jobs become terminal.
     """
     limit = int(MAX_STORED_JOBS if max_jobs is None else max_jobs)
     if limit <= 0:
@@ -139,16 +244,29 @@ def _enforce_job_cap(max_jobs: int | None = None) -> None:
         keys = _JOBS_STORE.scan_keys()
     except Exception:
         return
-    if len(keys) <= limit:
-        return
-    jobs_with_age: list[tuple[str, float]] = []
+    owner_key = str(owner_id or "")
+    owner_jobs: list[tuple[str, float, str]] = []
     for key in keys:
         entry = _JOBS_STORE.get(key)
-        if isinstance(entry, dict):
-            jobs_with_age.append((key, float(entry.get("created_at") or 0)))
-    jobs_with_age.sort(key=lambda item: item[1])
-    over = len(jobs_with_age) - limit
-    for key, _created_at in jobs_with_age[:over]:
+        if (
+            isinstance(entry, dict)
+            and _job_owner_scope(entry) == owner_key
+        ):
+            owner_jobs.append(
+                (
+                    key,
+                    float(entry.get("created_at") or 0),
+                    str(entry.get("status") or ""),
+                )
+            )
+    over = len(owner_jobs) - limit
+    if over <= 0:
+        return
+    terminal_jobs = sorted(
+        (item for item in owner_jobs if item[2] in TERMINAL_STATUSES),
+        key=lambda item: item[1],
+    )
+    for key, _created_at, _status in terminal_jobs[:over]:
         _JOBS_STORE.delete(key)
 
 
@@ -162,6 +280,8 @@ def submit_async_job(
     ttl: int = DEFAULT_TTL,
     dedup: bool = True,
     description: str | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Schedule ``tool_name(args)`` on the Celery worker, return a PARTIAL banner.
 
@@ -170,9 +290,12 @@ def submit_async_job(
     """
     args = args or {}
     inputs_hash = _hash_args(tool_name, args)
+    effective_owner = _effective_owner_scope(user_id)
 
     if dedup:
-        existing = _find_running_job_by_hash(tool_name, inputs_hash)
+        existing = _find_running_job_by_hash(
+            tool_name, inputs_hash, owner_id=effective_owner,
+        )
         if existing:
             return _partial_banner(existing, deduplicated=True)
 
@@ -186,11 +309,20 @@ def submit_async_job(
         "status": "queued",
         "created_at": now,
         "description": description,
+        "user_id": str(user_id) if user_id else None,
+        "owner_scope": effective_owner,
+        "session_id": str(session_id) if session_id else None,
         "ttl": ttl,
         "background_backend": "celery",
     }
     _JOBS_STORE.set(job_id, job, ttl=ttl)
-    _enforce_job_cap()
+    try:
+        _persist_job(job)
+    except Exception as exc:
+        failed = mark_persistence_failure(job_id, exc)
+        _enforce_job_cap(owner_id=effective_owner)
+        return _failed_banner(failed)
+    _enforce_job_cap(owner_id=effective_owner)
 
     try:
         _dispatcher(tool_name, args, job_id)
@@ -201,25 +333,59 @@ def submit_async_job(
         job["error_class"] = "celery_unavailable"
         job["completed_at"] = time.time()
         _JOBS_STORE.set(job_id, job, ttl=ttl)
+        try:
+            _persist_job(job)
+        except Exception as persist_exc:
+            job = mark_persistence_failure(job_id, persist_exc)
+        _enforce_job_cap(owner_id=_job_owner_scope(job))
         return _failed_banner(job)
 
     return _partial_banner(job)
 
 
-def get_async_job(job_id: str) -> dict[str, Any] | None:
+def get_async_job(
+    job_id: str,
+    *,
+    owner_id: str | None = None,
+) -> dict[str, Any] | None:
     """Return the raw job record, or None if not found."""
+    effective_owner = _effective_owner_scope(owner_id)
     job = _JOBS_STORE.get(str(job_id))
-    return dict(job) if isinstance(job, dict) else None
+    if isinstance(job, dict):
+        if (
+            effective_owner is not None
+            and _job_owner_scope(job) != effective_owner
+        ):
+            return None
+        return dict(job)
+    try:
+        from app.services.durable_research_records import load_job
+
+        restored = load_job(str(job_id), owner_id=effective_owner)
+        if (
+            isinstance(restored, dict)
+            and restored.get("status") in {"queued", "running"}
+        ):
+            # Rehydrate Redis after restart/expiry so worker transitions do not
+            # silently no-op merely because the durable row outlived hot KV.
+            _JOBS_STORE.set(
+                str(job_id),
+                restored,
+                ttl=int(restored.get("ttl") or DEFAULT_TTL),
+            )
+        return restored
+    except Exception:
+        return None
 
 
-def cancel_async_job(job_id: str) -> dict[str, Any]:
+def cancel_async_job(job_id: str, *, owner_id: str | None = None) -> dict[str, Any]:
     """Mark a job cancelled so the Celery task self-aborts on its next checkpoint.
 
     Celery's hard revoke is unreliable for CPU-bound Python (the worker is
     inside a numpy call most of the time), so cooperative cancellation via
     ``is_cancelled`` is the contract.
     """
-    job = get_async_job(job_id)
+    job = get_async_job(job_id, owner_id=owner_id)
     if job is None:
         return {
             "success": False,
@@ -231,6 +397,11 @@ def cancel_async_job(job_id: str) -> dict[str, Any]:
     job["status"] = "cancelled"
     job["cancelled_at"] = time.time()
     _JOBS_STORE.set(job_id, job, ttl=int(job.get("ttl") or DEFAULT_TTL))
+    try:
+        _persist_job(job)
+    except Exception as exc:
+        job = mark_persistence_failure(job_id, exc)
+    _enforce_job_cap(owner_id=_job_owner_scope(job))
     return job
 
 
@@ -265,6 +436,9 @@ def update_progress(
     if progress_message is not None:
         job["progress_message"] = progress_message
     _JOBS_STORE.set(job_id, job, ttl=int(job.get("ttl") or DEFAULT_TTL))
+    _persist_job(job)
+    if job.get("status") in TERMINAL_STATUSES:
+        _enforce_job_cap(owner_id=_job_owner_scope(job))
 
 
 def write_result(job_id: str, result: Any) -> None:
@@ -276,6 +450,8 @@ def write_result(job_id: str, result: Any) -> None:
     job["result"] = result
     job["completed_at"] = time.time()
     _JOBS_STORE.set(job_id, job, ttl=int(job.get("ttl") or DEFAULT_TTL))
+    _persist_job(job)
+    _enforce_job_cap(owner_id=_job_owner_scope(job))
 
 
 def write_error(job_id: str, exc: BaseException | str, error_class: str | None = None) -> None:
@@ -292,6 +468,8 @@ def write_error(job_id: str, exc: BaseException | str, error_class: str | None =
         job["error_class"] = error_class or "task_error"
     job["completed_at"] = time.time()
     _JOBS_STORE.set(job_id, job, ttl=int(job.get("ttl") or DEFAULT_TTL))
+    _persist_job(job)
+    _enforce_job_cap(owner_id=_job_owner_scope(job))
 
 
 # ---------------------------------------------------------------------------

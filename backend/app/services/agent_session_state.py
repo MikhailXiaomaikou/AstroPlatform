@@ -44,6 +44,7 @@ def _coerce_uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
 async def update_session_status(
     session_id: str | uuid.UUID | None,
     *,
+    owner_id: str | uuid.UUID | None = None,
     status: str | None = None,
     current_run_id: str | None = None,
 ) -> None:
@@ -54,7 +55,10 @@ async def update_session_status(
     ``VALID_STATUSES``.
     """
     sid = _coerce_uuid(session_id)
-    if sid is None:
+    owner = _coerce_uuid(owner_id)
+    # A session id without an authenticated owner is never sufficient to
+    # mutate durable state. Anonymous chats intentionally have neither.
+    if sid is None or owner is None:
         return
     if status is not None and status not in VALID_STATUSES:
         logger.debug("ignoring unknown agent_status %r", status)
@@ -62,7 +66,10 @@ async def update_session_status(
     try:
         async with AsyncSessionLocal() as db:
             result = await db.execute(
-                select(ChatSession).where(ChatSession.id == sid)
+                select(ChatSession).where(
+                    ChatSession.id == sid,
+                    ChatSession.user_id == owner,
+                )
             )
             row = result.scalar_one_or_none()
             if row is None:
@@ -78,16 +85,20 @@ async def update_session_status(
 
 async def get_session_status(
     session_id: str | uuid.UUID | None,
+    *,
+    owner_id: str | uuid.UUID | None = None,
 ) -> dict[str, str | None]:
     """Return ``{agent_status, current_run_id}`` or ``{}`` on lookup failure."""
     sid = _coerce_uuid(session_id)
-    if sid is None:
+    owner = _coerce_uuid(owner_id)
+    if sid is None or owner is None:
         return {}
     try:
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(ChatSession.agent_status, ChatSession.current_run_id).where(
-                    ChatSession.id == sid
+                    ChatSession.id == sid,
+                    ChatSession.user_id == owner,
                 )
             )
             row = result.first()

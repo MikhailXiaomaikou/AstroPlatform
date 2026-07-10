@@ -83,6 +83,32 @@ export function validateActions(raw: unknown): ChatAction[] {
   );
 }
 
+/** One evidence-preserving decoder used by every session/snapshot/import path. */
+export function deserializeDisplayMessage(raw: Record<string, unknown>): DisplayMessage {
+  const actions = validateActions(raw.actions);
+  return {
+    id: typeof raw.id === "string" && raw.id ? raw.id : crypto.randomUUID(),
+    role: raw.role === "assistant" ? "assistant" : "user",
+    content: typeof raw.content === "string" ? raw.content : String(raw.content ?? ""),
+    actions: actions.length > 0 ? actions : undefined,
+    _validation: raw._validation && typeof raw._validation === "object"
+      ? raw._validation as DisplayMessage["_validation"]
+      : undefined,
+    _truncated: raw._truncated === true || undefined,
+  };
+}
+
+/** Keep validation evidence attached when saving, exporting, or snapshotting. */
+export function serializeDisplayMessage(message: DisplayMessage) {
+  return {
+    role: message.role,
+    content: message.content,
+    actions: message.actions,
+    _validation: message._validation,
+    _truncated: message._truncated,
+  };
+}
+
 export function hasStoredAiKey(): boolean {
   const keys = getStoredApiKeys();
   return Object.values(keys).some((v) => typeof v === "string" && v.trim().length > 0);

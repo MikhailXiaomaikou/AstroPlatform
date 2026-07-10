@@ -2,7 +2,7 @@
 
 Pantheon+SH0ES (Brout+ 2022, ApJ 938, 110; Scolnic+ 2022, ApJ 938, 113)
 provides:
-  - 1701-row distance-modulus table (zHD, zHEL, MU_SH0ES, errors, +)
+  - 1701-row table including m_b_corr, IS_CALIBRATOR, and CEPH_DIST
   - 1701x1701 stat+sys covariance matrix (ASCII packed)
 
 Source: https://github.com/PantheonPlusSH0ES/DataRelease
@@ -28,12 +28,14 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "backend" / "data" / "pantheon_plus_2022"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+DATA_RELEASE_COMMIT = "c447f0fea703fcd0fff57de5000947b5ca81286b"
+
 TABLE_URL = (
-    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+    f"https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/{DATA_RELEASE_COMMIT}/"
     "Pantheon%2B_Data/4_DISTANCES_AND_COVAR/Pantheon%2BSH0ES.dat"
 )
 COV_URL = (
-    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+    f"https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/{DATA_RELEASE_COMMIT}/"
     "Pantheon%2B_Data/4_DISTANCES_AND_COVAR/Pantheon%2BSH0ES_STAT%2BSYS.cov"
 )
 
@@ -46,11 +48,26 @@ def fetch(url: str) -> str:
         return r.text
 
 
-def parse_table(text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def parse_table(
+    text: str,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
     """Parse the Pantheon+SH0ES.dat table.
 
     First line is a space-separated header. Subsequent lines are SNe.
-    Returns (cid, zHD, zHEL, mu, mu_err_diag).
+    Returns ``(cid, zHD, zHEL, mu, mu_err_diag, m_b_corr,
+    is_calibrator, cepheid_distance)``.  The last three fields are required by
+    the official joint Pantheon+SH0ES likelihood: the selection is
+    ``(zHD > 0.01) | IS_CALIBRATOR`` and calibrators use ``CEPH_DIST`` as their
+    theory distance.  A MU_SH0ES-only bundle cannot identify H0 correctly.
 
     Stage 4 (2026-05-19): added `cid` (SN name, e.g. "2011fe") for the
     literature_spot_check module. Same SN can appear in multiple rows
@@ -66,7 +83,19 @@ def parse_table(text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarr
     z_hel = np.array([float(r[idx["zHEL"]]) for r in rows])
     mu = np.array([float(r[idx["MU_SH0ES"]]) for r in rows])
     mu_err = np.array([float(r[idx["MU_SH0ES_ERR_DIAG"]]) for r in rows])
-    return cid, z_hd, z_hel, mu, mu_err
+    m_b_corr = np.array([float(r[idx["m_b_corr"]]) for r in rows])
+    is_calibrator = np.array([int(r[idx["IS_CALIBRATOR"]]) for r in rows], dtype=bool)
+    cepheid_distance = np.array([float(r[idx["CEPH_DIST"]]) for r in rows])
+    return (
+        cid,
+        z_hd,
+        z_hel,
+        mu,
+        mu_err,
+        m_b_corr,
+        is_calibrator,
+        cepheid_distance,
+    )
 
 
 def parse_covariance(text: str, n: int) -> np.ndarray:
@@ -90,13 +119,30 @@ def main() -> None:
     table_text = fetch(TABLE_URL)
     cov_text = fetch(COV_URL)
 
-    cid, z_hd, z_hel, mu, mu_err = parse_table(table_text)
+    (
+        cid,
+        z_hd,
+        z_hel,
+        mu,
+        mu_err,
+        m_b_corr,
+        is_calibrator,
+        cepheid_distance,
+    ) = parse_table(table_text)
     n = z_hd.size
     print(f"  Parsed table: {n} SNe")
     if n != 1701:
         print(f"  WARNING: expected 1701 SNe, got {n}", file=sys.stderr)
     unique_cids = len(set(cid.tolist()))
     print(f"  Unique CIDs: {unique_cids} (some SNe appear in multiple surveys)")
+    selection = (z_hd > 0.01) | is_calibrator
+    print(
+        "  Official SH0ES selection: "
+        f"{int(np.count_nonzero(selection))} rows, "
+        f"{int(np.count_nonzero(is_calibrator & selection))} calibrators"
+    )
+    if not np.all(np.isfinite(cepheid_distance[is_calibrator & selection])):
+        raise ValueError("selected calibrator CEPH_DIST contains non-finite values")
 
     cov = parse_covariance(cov_text, n)
     print(f"  Parsed covariance: {cov.shape}")
@@ -116,6 +162,9 @@ def main() -> None:
         z_hel=z_hel,
         mu=mu,
         mu_err_diag=mu_err,
+        m_b_corr=m_b_corr,
+        is_calibrator=is_calibrator,
+        cepheid_distance=cepheid_distance,
         cov=cov,
     )
     size_mb = out_path.stat().st_size / 1024 / 1024

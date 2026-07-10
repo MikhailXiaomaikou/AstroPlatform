@@ -14,6 +14,7 @@ def test_complete_hidden_record_can_score_a_when_evidence_matches() -> None:
             "matrixVisible": True,
             "factCheckVisible": True,
             "publication_ready": True,
+            "numericClaimsVerified": True,
         },
         hidden_record={
             "full_paper_read_status": "complete",
@@ -78,6 +79,29 @@ def test_unsupported_numeric_risk_is_severe_failure() -> None:
     assert "unsupported_numeric_risk" in result["flags"]
 
 
+def test_numeric_claim_is_not_verified_by_prose_keywords() -> None:
+    from app.services.research_alpha_evaluator import evaluate_alpha_class
+
+    result = evaluate_alpha_class(
+        platform_record={
+            "visible_text": (
+                "Research plan and evidence graph complete. Citation verified. "
+                "H0 = 999 km/s/Mpc. Scope gap: one covariance is missing."
+            ),
+            "matrixVisible": True,
+            "factCheckVisible": True,
+        },
+        hidden_record={
+            "full_paper_read_status": "complete",
+            "expected_datasets": ["BAO"],
+            "expected_methods": ["likelihood"],
+        },
+    )
+
+    assert result["grade"] == "E"
+    assert "unsupported_numeric_risk" in result["flags"]
+
+
 def test_numeric_mismatch_blocks_a_but_keeps_route_reviewable() -> None:
     from app.services.research_alpha_evaluator import evaluate_alpha_class
 
@@ -92,6 +116,7 @@ def test_numeric_mismatch_blocks_a_but_keeps_route_reviewable() -> None:
             "matrixVisible": True,
             "factCheckVisible": True,
             "publication_ready": True,
+            "numericClaimsVerified": True,
         },
         hidden_record={
             "full_paper_read_status": "complete",
@@ -145,6 +170,7 @@ def test_a_requires_structured_result_expectations_not_only_a_number() -> None:
             "matrixVisible": True,
             "factCheckVisible": True,
             "publication_ready": True,
+            "numericClaimsVerified": True,
         },
         hidden_record={
             "full_paper_read_status": "complete",

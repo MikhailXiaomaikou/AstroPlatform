@@ -50,6 +50,8 @@ import {
   buildMinimalChatHistory,
   modelDisplayLabel,
   generateLatexFallback,
+  deserializeDisplayMessage,
+  serializeDisplayMessage,
   validateActions,
   type ToastState,
 } from "./chatHelpers";
@@ -79,13 +81,13 @@ export const NEXT_STEPS_PANEL_ACTIONS: Array<{ label: string; prompt: string }> 
     prompt:
       "Before we write up the results, please re-verify each of our " +
       "key assumptions using the tools we actually called this turn. " +
-      "List every numeric claim that would go into a report (age, " +
-      "distance, mass, period, class, membership count, ...) and for " +
+      "List every numeric claim that would go into a report (H0, " +
+      "Omega_m, w0, wa, sigma8, S8, chi-square, significance, ...) and for " +
       "each one state which tool_result supplied the value, or say " +
       "'not measured this turn'. If any assumption has no tool backing, " +
-      "propose the minimum extra tool calls needed (search_literature " +
-      "for a citation, fit_isochrone for a new fit, run_adql for a Gaia " +
-      "column).",
+      "propose the minimum extra tool calls needed (load the registered " +
+      "data product, run the likelihood, inspect independent-chain " +
+      "diagnostics, or search literature for an exact source identity).",
   },
   { label: "Export as notebook", prompt: "Export this session as a Jupyter notebook" },
   { label: "Run sensitivity analysis", prompt: "Run a sensitivity analysis on these results" },
@@ -217,15 +219,7 @@ export default function ChatPage() {
     if (!user) {
       throw new Error("Sign in to manage collaboration features");
     }
-    const data = messages.map((message) => ({
-      role: message.role,
-      content: message.content,
-      actions: message.actions,
-      // Persist the validation badge state so shared/read-only views of
-      // this session can render the same honesty signal.
-      _validation: message._validation,
-      _truncated: message._truncated,
-    }));
+    const data = messages.map(serializeDisplayMessage);
     const saved = await saveChatSession(data, currentSessionId || undefined);
     setCurrentSessionId(saved.id);
     refreshSessions();
@@ -500,13 +494,7 @@ export default function ChatPage() {
     const wasLoading = prevLoadingRef.current;
     prevLoadingRef.current = loading;
     if (wasLoading && !loading && messages.length >= 2) {
-      const data = messages.map(m => ({
-        role: m.role,
-        content: m.content,
-        actions: m.actions,
-        _validation: m._validation,
-        _truncated: m._truncated,
-      }));
+      const data = messages.map(serializeDisplayMessage);
       pendingSavePayloadRef.current = { data, sessionId: currentSessionId };
       setSaveStatus("saving");
       if (serverSaveTimerRef.current) clearTimeout(serverSaveTimerRef.current);
@@ -541,16 +529,7 @@ export default function ChatPage() {
     try {
       const session = user ? await loadChatSession(id) : loadLocalChatSession(id, storageScope);
       if (!session) return;
-      const loaded: DisplayMessage[] = session.messages.map((m: Record<string, unknown>) => ({
-        id: crypto.randomUUID(),
-        role: m.role as "user" | "assistant",
-        content: m.content as string,
-        actions: m.actions as ChatAction[] | undefined,
-        _validation: (m._validation && typeof m._validation === "object")
-          ? m._validation as DisplayMessage["_validation"]
-          : undefined,
-        _truncated: m._truncated === true || undefined,
-      }));
+      const loaded: DisplayMessage[] = session.messages.map(deserializeDisplayMessage);
       setMessages(loaded);
       setCurrentSessionId(id);
       setCurrentSessionTitle((session as { title?: string }).title || "");
@@ -656,12 +635,7 @@ export default function ChatPage() {
         const data = JSON.parse(text);
         const result = await importChatSession(data);
         const session = await loadChatSession(result.id);
-        const loaded: DisplayMessage[] = session.messages.map((m: Record<string, unknown>) => ({
-          id: crypto.randomUUID(),
-          role: m.role as "user" | "assistant",
-          content: m.content as string,
-          actions: m.actions as ChatAction[] | undefined,
-        }));
+        const loaded: DisplayMessage[] = session.messages.map(deserializeDisplayMessage);
         setMessages(loaded);
         setCurrentSessionId(result.id);
         pythonSessionIdRef.current = crypto.randomUUID();
@@ -682,12 +656,7 @@ export default function ChatPage() {
     localStorage.removeItem("astro_chat_open_session");
     loadChatSession(pendingSessionId)
       .then((session) => {
-        const loaded: DisplayMessage[] = session.messages.map((message: Record<string, unknown>) => ({
-          id: crypto.randomUUID(),
-          role: message.role as "user" | "assistant",
-          content: message.content as string,
-          actions: message.actions as ChatAction[] | undefined,
-        }));
+        const loaded: DisplayMessage[] = session.messages.map(deserializeDisplayMessage);
         setMessages(loaded);
         setCurrentSessionId(pendingSessionId);
         pythonSessionIdRef.current = crypto.randomUUID();
@@ -1168,7 +1137,7 @@ export default function ChatPage() {
                 className="btn-secondary btn-small"
                 disabled={exporting.markdown}
                 onClick={() => {
-                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  const data = messages.map(serializeDisplayMessage);
                   void handleExport(
                     "markdown",
                     "Markdown",
@@ -1185,7 +1154,7 @@ export default function ChatPage() {
                 disabled={exporting.html}
                 title="Self-contained HTML — opens in any browser, figures embedded, Ctrl+P to print as PDF"
                 onClick={() => {
-                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  const data = messages.map(serializeDisplayMessage);
                   void handleExport(
                     "html",
                     "HTML",
@@ -1201,7 +1170,7 @@ export default function ChatPage() {
                 className="btn-secondary btn-small"
                 disabled={exporting.notebook}
                 onClick={() => {
-                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  const data = messages.map(serializeDisplayMessage);
                   void handleExport(
                     "notebook",
                     "Notebook",
@@ -1217,7 +1186,7 @@ export default function ChatPage() {
                 className="btn-secondary btn-small"
                 disabled={exporting.latex}
                 onClick={() => {
-                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  const data = messages.map(serializeDisplayMessage);
                   void handleExport(
                     "latex",
                     "LaTeX",
@@ -1236,7 +1205,7 @@ export default function ChatPage() {
                 className="btn-secondary btn-small"
                 disabled={exporting.bibtex}
                 onClick={() => {
-                  const data = messages.map(m => ({ role: m.role, content: m.content, actions: m.actions }));
+                  const data = messages.map(serializeDisplayMessage);
                   void handleExport(
                     "bibtex",
                     "BibTeX",
@@ -1369,12 +1338,12 @@ export default function ChatPage() {
             <h3>How can I help with your research?</h3>
             <div className="chat-templates-grid">
               {[
-                { icon: "\u{1F31F}", title: t("template.hr_diagram"), prompt: t("template.hr_desc"), difficulty: "beginner" as const },
-                { icon: "\u{1F30C}", title: t("template.galaxy_redshift"), prompt: t("template.galaxy_desc"), difficulty: "beginner" as const },
-                { icon: "\u2B50", title: t("template.variable_star"), prompt: t("template.variable_desc"), difficulty: "intermediate" as const },
-                { icon: "\u{1F52D}", title: t("template.spectral"), prompt: t("template.spectral_desc"), difficulty: "intermediate" as const },
+                { icon: "\u{1F4CF}", title: t("template.hr_diagram"), prompt: t("template.hr_desc"), difficulty: "beginner" as const },
+                { icon: "\u{1F4A5}", title: t("template.galaxy_redshift"), prompt: t("template.galaxy_desc"), difficulty: "beginner" as const },
+                { icon: "\u{1F30C}", title: t("template.variable_star"), prompt: t("template.variable_desc"), difficulty: "intermediate" as const },
+                { icon: "\u{1F517}", title: t("template.spectral"), prompt: t("template.spectral_desc"), difficulty: "intermediate" as const },
                 { icon: "\u{1F4CA}", title: t("template.highz"), prompt: t("template.highz_desc"), difficulty: "advanced" as const },
-                { icon: "\u{1F4AB}", title: t("template.supernova"), prompt: t("template.supernova_desc"), difficulty: "advanced" as const },
+                { icon: "\u{1F4DD}", title: t("template.supernova"), prompt: t("template.supernova_desc"), difficulty: "advanced" as const },
               ].map((tmpl, i) => (
                 <button
                   key={i}

@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def test_evaluate_chain_diagnostics_reports_ready_for_iid_chains():
+def test_iid_chains_are_convergence_ready_but_never_standalone_publication_ready():
     from app.services.chain_diagnostics import evaluate_chain_diagnostics
 
     rng = np.random.default_rng(123)
@@ -14,10 +14,16 @@ def test_evaluate_chain_diagnostics_reports_ready_for_iid_chains():
 
     assert result["success"] is True
     assert result["analysis_status"] == "CHAIN_DIAGNOSTICS_READY"
-    assert result["publication_ready"] is True
-    assert result["parameters"]["S8"]["rhat"] < 1.05
+    assert result["convergence_ready"] is True
+    assert result["diagnostics_ready"] is True
+    assert result["publication_ready"] is False
+    assert result["parameters"]["S8"]["rhat"] < 1.01
     assert result["parameters"]["S8"]["ess_bulk"] >= 400
-    assert result["chain_diagnostics"]["thresholds"]["rhat_max"] == 1.05
+    assert result["chain_diagnostics"]["thresholds"]["rhat_method"] == "rank"
+    assert result["chain_diagnostics"]["thresholds"]["rhat_max"] == 1.01
+    assert result["chain_diagnostics"]["thresholds"]["ess_method"] == "bulk"
+    assert "missing_likelihood_provenance" in result["publication_reasons"]
+    assert result["scientific_claim_scope"] == "diagnostics_only"
 
 
 def test_evaluate_chain_diagnostics_marks_single_chain_partial():
@@ -29,6 +35,7 @@ def test_evaluate_chain_diagnostics_marks_single_chain_partial():
 
     assert result["success"] is True
     assert result["publication_ready"] is False
+    assert result["convergence_ready"] is False
     assert result["__tool_status__"] == "PARTIAL"
     assert result["parameters"]["H0"]["rhat"] is None
     assert result["__do_not_claim__"]
@@ -48,6 +55,48 @@ def test_ai_tool_wrapper_evaluates_chain_diagnostics():
 
     assert result["success"] is True
     assert result["parameters"]["x"]["draws_per_chain"] == 500
+    assert result["publication_ready"] is False  # three chains are diagnostic-only
+    assert result["convergence_ready"] is False
+
+
+def test_convergence_gate_uses_strict_rhat_and_bulk_ess_thresholds(monkeypatch):
+    import app.services.chain_diagnostics as diagnostics
+
+    chains = {"x": [[float(i) for i in range(100)] for _ in range(4)]}
+    monkeypatch.setattr(diagnostics, "_rhat", lambda _: 1.01)
+    monkeypatch.setattr(diagnostics, "_ess", lambda _: 500.0)
+
+    at_rhat_boundary = diagnostics.evaluate_chain_diagnostics(chains=chains)
+
+    assert at_rhat_boundary["convergence_ready"] is False
+    assert "rank_normalized_rhat_at_or_above_1.01" in at_rhat_boundary["publication_reasons"]
+
+    monkeypatch.setattr(diagnostics, "_rhat", lambda _: 1.0)
+    monkeypatch.setattr(diagnostics, "_ess", lambda _: 399.0)
+    below_ess_boundary = diagnostics.evaluate_chain_diagnostics(chains=chains)
+
+    assert below_ess_boundary["convergence_ready"] is False
+    assert "bulk_ess_below_400" in below_ess_boundary["publication_reasons"]
+
+
+def test_chains_stuck_at_different_constants_never_pass_publication_gate():
+    """Zero within-chain variance must not erase obvious between-chain conflict."""
+    from app.services.chain_diagnostics import evaluate_chain_diagnostics
+
+    chains = {
+        "x": [
+            ([0.0] * 40),
+            ([0.0] * 40),
+            ([1.0] * 40),
+            ([1.0] * 40),
+        ]
+    }
+    result = evaluate_chain_diagnostics(chains=chains)
+
+    assert result["success"] is True
+    assert result["publication_ready"] is False
+    assert result["parameters"]["x"]["status"] != "ok"
+    assert result["parameters"]["x"]["ess_bulk"] < 400.0
 
 
 def test_paper_tool_gap_matrix_knows_chain_diagnostics_is_available():

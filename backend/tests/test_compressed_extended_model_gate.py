@@ -102,12 +102,14 @@ def test_control_flat_de_extensions_still_run():
     assert "w" in (r.get("parameters") or {})
 
 
-def test_control_lcdm_still_reaches_publication():
+def test_control_lcdm_still_returns_preliminary_posterior():
     r = run_likelihood_chain(
         model="lcdm",
         dataset_keys=["desi_dr1_bao", "planck2018_compressed"],
         n_samples=2000,
         random_seed=42,
     )
-    assert r["chain_tier"] == "publication"
+    assert r["chain_tier"] == "exploratory"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
     assert "H0" in r["parameters"]

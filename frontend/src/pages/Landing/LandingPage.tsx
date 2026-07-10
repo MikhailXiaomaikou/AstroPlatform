@@ -39,9 +39,9 @@ interface TocEntry {
 export const TOC: TocEntry[] = [
   {
     catKey: "home.cat.method",
-    title: "A turnoff-based age for NGC 752 from Gaia DR3",
-    body: "Two-stage PARSEC grid with BP−RP binning recovers 1.56 Gyr, consistent with Twarog+97 and Agüeros+18.",
-    meta: "Open-cluster photometry · p. 1",
+    title: "DESI DR1 BAO with source-pinned vectors and covariance",
+    body: "Run a numerical regression against the registered DESI bytes, then inspect why the fast sampler remains preliminary rather than publication-ready.",
+    meta: "BAO likelihood · p. 1",
     to: "/chat",
   },
   // M3 note (2026-07-03): the "Bidirectional SAMP with TOPCAT and Aladin"
@@ -49,16 +49,16 @@ export const TOC: TocEntry[] = [
   // SAMP surface remains in the UI. Cards must only claim live capabilities.
   {
     catKey: "home.cat.statistics",
-    title: "Every MCMC report carries ESS, R̂, HDI, WAIC and LOO",
-    body: "arviz diagnostics are blocking. Chains with ESS < 400 or R̂ > 1.05 are labelled insufficient before they can cite.",
+    title: "Publication claims require independent-chain diagnostics",
+    body: "Four independent chains, rank-normalized R̂ < 1.01 and bulk ESS ≥ 400 are blocking requirements; a flattened walker ensemble cannot pass.",
     meta: "Rigor · p. 13",
     to: "/chat",
   },
   {
     catKey: "home.cat.pipeline",
-    title: "Async TAP for heavy cone searches",
-    body: "Broad ADQL queries (large TOP, wide cones, JOINs) are routed to async TAP automatically, with progress streamed to the chat while the job runs.",
-    meta: "Gaia DR3 · p. 19",
+    title: "Long likelihood jobs survive page refreshes",
+    body: "MCMC and robustness jobs run on a durable Celery queue with owner-scoped progress, cancellation, retry and recoverable result artifacts.",
+    meta: "Research jobs · p. 19",
     to: "/chat",
   },
   {
@@ -71,7 +71,7 @@ export const TOC: TocEntry[] = [
   {
     catKey: "home.cat.community",
     title: "Worked analyses for observational cosmology",
-    body: "Open-cluster HR + isochrone fits, SN Ia distance moduli, DESI BAO likelihood chains, and Planck-compressed CMB distance priors — each with a full reproducibility envelope.",
+    body: "DESI BAO, calibrated Pantheon+ supernovae, Planck CMB paths, overlap audits and strict chain diagnostics — each labelled by its real evidence tier.",
     meta: "Workflow library · p. 27",
     to: "/chat",
   },

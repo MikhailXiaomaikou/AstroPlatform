@@ -74,5 +74,9 @@ sampler:
   mcmc:
     drag: true
     oversample_power: 0.4
-    Rminus1_stop: 0.05      # COARSE first pass / preliminary read ONLY; analyze_w0wa_run.py refuses to call 0.05 a clean reproduction. Tighten to 0.01 and resume for the publication-grade final.
+    # Cobaya's native stopping checks are necessary but not sufficient. The
+    # evidence script independently requires rank-normalized R-hat < 1.01 and
+    # bulk ESS >= 400 for every sampled cosmological and nuisance parameter.
+    Rminus1_stop: 0.01
+    Rminus1_cl_stop: 0.10
     max_tries: 10000

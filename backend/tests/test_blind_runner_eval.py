@@ -114,6 +114,23 @@ def test_group_a_without_hard_flag_stays_soft():
     assert verdict["hard_failed"] is False
 
 
+def test_execution_error_is_always_a_hard_failure():
+    case = {
+        "id": "B_error",
+        "group": "B",
+        "checks": [{"reply_contains_any": ["refuse"], "soft": True}],
+        "forbid": [],
+    }
+    rec = _record("", [])
+    rec["error"] = "InferenceError: provider unavailable"
+
+    verdict = evaluate_case(rec, case)
+
+    assert verdict["verdict"] == "ERROR"
+    assert verdict["hard_failed"] is True
+    assert "InferenceError" in verdict["execution_error"]
+
+
 # ---------- multi-turn case shape / laundering regression ----------
 
 

@@ -183,7 +183,14 @@ def _collect_flags(platform_record: Mapping[str, Any], text: str) -> set[str]:
         flags.add("internal_marker_leak")
     if re.search(r"selected ai backend failed|all configured ai backends failed", text, re.I):
         flags.add("raw_backend_error")
-    if _unsupported_numeric_risk(text):
+    numeric_claims_verified = platform_record.get("numericClaimsVerified") is True
+    validation_summary = platform_record.get("validation_summary")
+    if isinstance(validation_summary, Mapping):
+        numeric_claims_verified = numeric_claims_verified or (
+            validation_summary.get("numeric_gate") == "passed"
+            and validation_summary.get("blocked") is False
+        )
+    if _unsupported_numeric_risk(text) and not numeric_claims_verified:
         flags.add("unsupported_numeric_risk")
     return flags
 
@@ -344,17 +351,14 @@ def _fallback_grade(
 
 
 def _unsupported_numeric_risk(text: str) -> bool:
-    if not re.search(
+    # Textual words such as "evidence", "verified", or "citation" are model
+    # prose, not machine evidence.  Any claim-shaped number is a risk unless
+    # _collect_flags receives an explicit successful numeric-gate record.
+    return bool(re.search(
         r"(H0|H₀|S8|σ8|Omega_m|Ωm|w0|wa|beta|β|f_EDE|nσ|sigma|tension|Δχ²)\s*[=:≈]\s*[-+]?\d",
         text,
         re.I,
-    ):
-        return False
-    return not re.search(
-        r"publication[-_ ]ready|compressed-likelihood preliminary|verified|tool[- ]run|evidence|fact check|citation",
-        text,
-        re.I,
-    )
+    ))
 
 
 def _find_number_near_name(text: str, name: str) -> float | None:

@@ -991,6 +991,13 @@ export interface AnalysisValidationResult {
   overall_status: "PASS" | "WARN" | "FAIL";
   score: number;
   checks: AnalysisValidationCheck[];
+  schema_version?: number;
+  artifact_type?: "paper_draft";
+  content_hash?: string;
+  validated_at?: string;
+  publishable?: boolean;
+  publication_status?: "publication_ready" | "unverified_private_draft";
+  watermark?: string | null;
 }
 
 export interface PaperDraftResponse {
@@ -1283,6 +1290,50 @@ export async function deleteResearchMemory(): Promise<{ deleted: boolean }> {
   return data;
 }
 
+export interface ResearchJobSummary {
+  job_id: string;
+  tool_name: string;
+  inputs_hash: string;
+  description: string | null;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  progress: number | null;
+  progress_message: string | null;
+  error: string | null;
+  error_class: string | null;
+  background_backend: string;
+  session_id: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  can_cancel: boolean;
+  can_retry: boolean;
+}
+
+export async function listResearchJobs(status?: string): Promise<{ items: ResearchJobSummary[]; total: number }> {
+  const { data } = await api.get<{ items: ResearchJobSummary[]; total: number }>("/api/jobs", {
+    params: status ? { status } : undefined,
+  });
+  return data;
+}
+
+export async function cancelResearchJob(jobId: string): Promise<Record<string, unknown>> {
+  const { data } = await api.post(`/api/jobs/${encodeURIComponent(jobId)}/cancel`);
+  return data;
+}
+
+export async function retryResearchJob(jobId: string): Promise<Record<string, unknown>> {
+  const { data } = await api.post(`/api/jobs/${encodeURIComponent(jobId)}/retry`);
+  return data;
+}
+
+export async function fetchResearchArtifact(path: string): Promise<Blob> {
+  const { data } = await api.get<Blob>("/api/data/files/download", {
+    params: { path },
+    responseType: "blob",
+  });
+  return data;
+}
+
 export async function validatePaperSession(sessionId: string): Promise<AnalysisValidationResult> {
   const { data } = await api.post<AnalysisValidationResult>(`/api/paper/validate/${sessionId}`);
   return data;
@@ -1291,12 +1342,10 @@ export async function validatePaperSession(sessionId: string): Promise<AnalysisV
 export async function generatePaperDraft(
   sessionId: string,
   journalFormat = "aastex",
-  overrideValidation = false,
 ): Promise<PaperDraftResponse> {
   const { data } = await api.post<PaperDraftResponse>("/api/paper/generate", {
     session_id: sessionId,
     journal_format: journalFormat,
-    override_validation: overrideValidation,
   });
   return data;
 }

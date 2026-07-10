@@ -125,15 +125,18 @@ def audit_published_constraint(
         "the published value is unsupported."
     )
 
-    # 1. Partition requested datasets into runnable (status == "ready") vs unavailable.
+    # 1. Partition requested datasets by actual execution mode.  Registry
+    # ``status`` describes product maturity, not whether the in-process runner
+    # can execute it (DESI is intentionally status=external_likelihood while its
+    # verified compressed path is runnable).
     runnable: list[str] = []
     unavailable: list[dict[str, str]] = []
     for key in requested:
         entry = _REGISTRY.get(key)
         if entry is None:
             unavailable.append({"key": key, "reason": "not in cosmology dataset registry"})
-        elif entry.status != "ready":
-            unavailable.append({"key": key, "reason": f"status={entry.status} (not directly runnable)"})
+        elif entry.execution_mode == "config_only":
+            unavailable.append({"key": key, "reason": "execution_mode=config_only"})
         else:
             runnable.append(key)
 
@@ -181,9 +184,31 @@ def audit_published_constraint(
         if isinstance(summary, dict) and summary.get("median") is not None:
             repro_canon[_canonical_param(actual_key)] = (actual_key, summary)
 
-    overlap = sorted(claimed_ds & set(runnable))
+    overlap_pairs: list[str] = []
+    unknown_claimed_datasets = sorted(key for key in claimed_ds if key not in _REGISTRY)
+    for claimed_key in sorted(claimed_ds):
+        claimed_entry = _REGISTRY.get(claimed_key)
+        for runnable_key in runnable:
+            runnable_entry = _REGISTRY.get(runnable_key)
+            if claimed_entry is None or runnable_entry is None:
+                continue
+            same_group = bool(
+                claimed_entry.independence_group
+                and claimed_entry.independence_group == runnable_entry.independence_group
+            )
+            declared_overlap = (
+                claimed_key == runnable_key
+                or claimed_key in runnable_entry.do_not_combine_with
+                or runnable_key in claimed_entry.do_not_combine_with
+                or claimed_key in runnable_entry.known_overlap
+                or runnable_key in claimed_entry.known_overlap
+            )
+            if same_group or declared_overlap:
+                overlap_pairs.append(f"{claimed_key}<->{runnable_key}")
+    overlap = sorted(set(overlap_pairs))
     independence = (
         "overlapping_data" if overlap
+        else "independence_unverified" if unknown_claimed_datasets
         else "assumed_independent" if claimed_ds
         else "independence_unverified"
     )
@@ -216,6 +241,23 @@ def audit_published_constraint(
         actual_key, summary = repro_canon[canon]
         repro_median = float(summary.get("median"))
         repro_std = float(summary.get("std") or 0.0)
+        if independence == "overlapping_data":
+            comparisons.append({
+                "param": raw_name,
+                "canonical": canon,
+                "reproduced_key": actual_key,
+                "claimed": [claimed_value, claimed_sig],
+                "reproduced": [repro_median, repro_std],
+                "tension_sigma": None,
+                "verdict": "OVERLAPPING_DATA_NOT_COMPARABLE",
+                "independence": independence,
+                "exploratory": True,
+                "note": (
+                    "The constraints share data/calibration. Independent-error "
+                    "quadrature is invalid without their cross-covariance."
+                ),
+            })
+            continue
         nsigma = tension_sigma(claimed_value, claimed_sig, repro_median, repro_std)
         comparisons.append({
             "param": raw_name,
@@ -235,7 +277,12 @@ def audit_published_constraint(
 
     # 5. Overall status.
     has_blocked_items = bool(unavailable) or any(
-        c.get("verdict") in {"NOT_REPRODUCED", "INVALID_INPUT"} for c in comparisons
+        c.get("verdict") in {
+            "NOT_REPRODUCED",
+            "INVALID_INPUT",
+            "OVERLAPPING_DATA_NOT_COMPARABLE",
+        }
+        for c in comparisons
     )
     if not any_reproduced:
         tool_status, analysis_status = "BLOCKED", "BLOCKED"
@@ -248,7 +295,7 @@ def audit_published_constraint(
     if independence == "overlapping_data":
         warnings.append(
             "Claimed datasets overlap the reproduction datasets (" + ", ".join(overlap) +
-            "); the n-sigma is NOT a clean independent comparison and may be misleading."
+            "); n-sigma is withheld because no cross-covariance was supplied."
         )
     elif independence == "independence_unverified":
         warnings.append(

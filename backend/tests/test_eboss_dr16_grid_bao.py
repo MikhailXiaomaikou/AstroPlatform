@@ -129,14 +129,15 @@ def test_unverified_data_refuses_spline(monkeypatch):
     cl._lya_loglike_spline.cache_clear()
 
 
-def test_chain_runs_in_process_to_publication():
+def test_chain_runs_in_process_as_preliminary_without_independent_chains():
     r = cl.run_likelihood_chain(
         model="lcdm",
         dataset_keys=["eboss_dr16_elg_bao", "eboss_dr16_lyauto_bao", "eboss_dr16_lyxqso_bao"],
         n_samples=3000,
         random_seed=42,
     )
-    assert r["chain_tier"] == "publication"
+    assert r["chain_tier"] == "exploratory"
+    assert r["preliminary_ready"] is True
     used = {d["key"] for d in r["datasets_used"]}
     assert used == set(GRID_KEYS)
     assert not r["datasets_not_run"]
@@ -180,7 +181,7 @@ def test_joint_with_cmb_anchor_recovers_planck_like_cosmology():
         n_samples=3000,
         random_seed=42,
     )
-    assert r["chain_tier"] == "publication"
+    assert r["chain_tier"] == "exploratory"
     assert 66.5 < r["parameters"]["H0"]["median"] < 68.5
     assert 0.29 < r["parameters"]["omegam"]["median"] < 0.34
 

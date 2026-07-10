@@ -24,6 +24,7 @@ from app.models.schemas import (
     SharedSession,
     User,
 )
+from app.services.analysis_validator import paper_validation_is_publishable
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 shared_router = APIRouter(prefix="/api/shared", tags=["shared-sessions"])
@@ -45,23 +46,47 @@ class SnapshotRequest(BaseModel):
     name: str
 
 
+def _paper_is_effectively_public(draft: PaperDraft) -> bool:
+    return bool(
+        draft.is_public
+        and draft.public_token
+        and paper_validation_is_publishable(
+            draft.validation,
+            session_id=str(draft.session_id),
+            owner_id=str(draft.user_id),
+            paper_json=draft.paper_json,
+            latex_source=draft.latex_source,
+            bibtex=draft.bibtex,
+            journal_format=draft.journal_format,
+        )
+    )
+
+
 def _paper_public_url(draft: PaperDraft) -> str | None:
-    if not draft.is_public or not draft.public_token:
+    if not _paper_is_effectively_public(draft):
         return None
     return f"/papers/public/{draft.public_token}"
 
 
 def _serialize_paper_draft(draft: PaperDraft) -> dict:
+    effectively_public = _paper_is_effectively_public(draft)
+    validation = deepcopy(draft.validation or {})
+    if validation.pop("evidence_snapshot", None) is not None:
+        validation["evidence_snapshot_redacted"] = True
     return {
         "id": str(draft.id),
         "journal_format": draft.journal_format,
         "paper_json": deepcopy(draft.paper_json or {}),
         "latex_source": draft.latex_source,
         "bibtex": draft.bibtex,
-        "validation": deepcopy(draft.validation or {}),
-        "is_public": bool(draft.is_public),
+        "validation": validation,
+        "is_public": effectively_public,
         "public_url": _paper_public_url(draft),
-        "published_at": draft.published_at.isoformat() if draft.published_at else None,
+        "published_at": (
+            draft.published_at.isoformat()
+            if effectively_public and draft.published_at
+            else None
+        ),
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
         "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
     }
@@ -108,13 +133,20 @@ async def _serialize_session(
     paper_query = select(PaperDraft).where(PaperDraft.session_id == session.id)
     if not include_private_papers:
         paper_query = paper_query.where(PaperDraft.is_public.is_(True))
+    paper_limit = 20 if include_private_papers else 100
     paper_drafts = (
         await db.execute(
             paper_query
             .order_by(PaperDraft.updated_at.desc(), PaperDraft.created_at.desc())
-            .limit(20)
+            .limit(paper_limit)
         )
     ).scalars().all()
+    if not include_private_papers:
+        # SQL can cheaply narrow by the legacy flag, but the content-hash
+        # comparison must happen against each materialized artifact.
+        paper_drafts = [
+            draft for draft in paper_drafts if _paper_is_effectively_public(draft)
+        ][:20]
     all_messages = session.messages or []
     total_messages = len(all_messages)
     if message_limit > 0 and total_messages > message_limit:
@@ -262,7 +294,10 @@ async def _restore_paper_drafts(session: ChatSession, snapshot_data: dict, db: A
                 paper_json=deepcopy(raw.get("paper_json") or {}),
                 latex_source=str(raw.get("latex_source") or ""),
                 bibtex=str(raw.get("bibtex") or ""),
-                validation=deepcopy(raw.get("validation") or {}),
+                # Restoring content revokes the old publication decision. The
+                # restored artifact must be validated again against current
+                # signed server evidence.
+                validation=None,
                 is_public=False,
                 public_token=None,
                 published_at=None,
@@ -469,7 +504,9 @@ async def fork_shared_session(
                 paper_json=deepcopy(raw.get("paper_json") or {}),
                 latex_source=str(raw.get("latex_source") or ""),
                 bibtex=str(raw.get("bibtex") or ""),
-                validation=deepcopy(raw.get("validation") or {}),
+                # The fork has a different owner and no signed server tool
+                # evidence of its own, so validation cannot be inherited.
+                validation=None,
                 is_public=False,
                 public_token=None,
                 published_at=None,

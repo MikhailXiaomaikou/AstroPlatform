@@ -103,6 +103,10 @@ def compute_theory_cmb_spectrum(raw_input: dict[str, Any]) -> dict[str, Any]:
     # 'total' is the lensed total D_l = l(l+1)C_l/2pi in muK^2, shape (lmax+1, 4)
     # with columns [TT, EE, BB, TE].
     total = results.get_cmb_power_spectra(pars, CMB_unit="muK")["total"]
+    # CAMB may return an internal high-ell margin (especially with lensing),
+    # sometimes 50 multipoles beyond the requested limit.  The public contract
+    # is exact: never expose multipoles the caller did not request.
+    total = total[: lmax + 1]
 
     ell = np.arange(total.shape[0])
     dl_tt = total[:, 0]

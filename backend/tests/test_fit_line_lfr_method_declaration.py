@@ -177,6 +177,53 @@ def test_bayesian_requested_errs_available_runs_bayesian_in_m3(monkeypatch):
     assert mp["bayesian_publication_ready"] is True
 
 
+def test_nonconverged_bayesian_fit_cannot_inherit_data_only_publication_ready(
+    monkeypatch,
+):
+    """A data-complete table cannot promote a failed LinMix convergence gate."""
+    rows = _make_rows(6, with_err=True)
+    fake_bayes = {
+        "method": "bayesian_xyerr_linmix",
+        "alpha_median": 8.5,
+        "alpha_hdi_94": [8.1, 8.9],
+        "beta_median": 1.2,
+        "beta_hdi_94": [0.6, 1.8],
+        "intrinsic_scatter_dex": 0.2,
+        "intrinsic_scatter_dex_hdi": [0.1, 0.4],
+        "parameters": {},
+        "n_draws_total": 400,
+        "n_chains": 4,
+        "converged": False,
+        "publication_ready": False,
+        "package": "linmix (test double)",
+        "reference": "Kelly 2007",
+    }
+    import app.services.bayesian_inference as bi
+
+    monkeypatch.setattr(bi, "kelly07_linmix_fit", lambda **kw: fake_bayes)
+
+    with _patch_cache(rows):
+        out = _exec_fit_line_lfr({"fit_method_requested": "bayesian_xyerr"})
+
+    assert out["publication_readiness"]["data_checks_publication_ready"] is True
+    assert out["publication_readiness"]["checks"]["bayesian_sampler"] == {
+        "passed": False,
+        "converged": False,
+        "publication_ready": False,
+        "error": None,
+    }
+    assert out["publication_ready"] is False
+    assert out["relation_claimability"]["can_claim_relation"] is False
+    assert "bayesian_sampler_not_converged" in out["relation_claimability"][
+        "blocking_reasons"
+    ]
+    assert "bayesian_sampler_not_publication_ready" in out[
+        "relation_claimability"
+    ]["blocking_reasons"]
+    assert out["__tool_status__"] == "PARTIAL"
+    assert out["__do_not_claim__"] is True
+
+
 def test_bayesian_linmix_path_attaches_kelly07_method_bibcode(monkeypatch):
     """PART AH C6 — After bayesian_xyerr_linmix runs successfully,
     provenance.datasets must carry the bibcode `2007ApJ...665.1489K` for
@@ -599,13 +646,13 @@ def test_explicit_l_prime_converts_all_rows_and_relabels_units():
     assert 0 < out_prime["beta"] < 10
 
 
-def test_l_prime_rejects_rows_missing_redshift():
-    """Rows that fail conversion must not be silently fit; they must be added to
-    rejected + unit_conversion_failures.
+def test_l_prime_conversion_does_not_require_redshift():
+    """The L_solar-to-L_prime ratio depends only on rest frequency.
 
-    Note: a bad line_id (e.g. "BogusLine") is rejected earlier at the _line_matches_filter
-    stage (reason="line_filter") and never reaches the unit conversion path, so only the
-    missing-redshift scenario is tested here."""
+    The observed-frequency and redshift factors in the two luminosity formulae
+    cancel exactly, so missing redshift must not discard an otherwise usable
+    luminosity row.
+    """
     rows = _make_rows(6)
     # Strip redshift from rows 2 and 4
     rows[2]["redshift"] = None
@@ -613,19 +660,18 @@ def test_l_prime_rejects_rows_missing_redshift():
     with _patch_cache(rows):
         out = _exec_fit_line_lfr({"cache_key": "x", "luminosity_kind": "L_prime"})
     assert out["luminosity_kind"] == "L_prime"
-    assert out["n_used"] == 4  # 6 - 2 reject
-    assert out["n_unit_converted"] == 4
-    assert len(out["unit_conversion_failures"]) == 2
-    # Failure reason must explicitly name the missing redshift
-    failure_reasons = " ".join(f["reason"] for f in out["unit_conversion_failures"])
-    assert "redshift" in failure_reasons.lower()
+    assert out["n_used"] == 6
+    assert out["n_unit_converted"] == 6
+    assert out["unit_conversion_failures"] == []
 
 
 def test_l_prime_all_rows_failing_returns_failed_status_not_panic():
     """When all row conversions fail, must not numpy-panic; instead exit early with a FAILED status and clear error."""
     rows = _make_rows(6)
     for r in rows:
-        r["redshift"] = None  # strip all redshifts
+        # Missing redshift is valid for this rest-frequency-only conversion;
+        # an explicitly nonphysical redshift must still fail closed.
+        r["redshift"] = -1.0
     with _patch_cache(rows):
         out = _exec_fit_line_lfr({"cache_key": "x", "luminosity_kind": "L_prime"})
     assert out["success"] is False
@@ -643,4 +689,3 @@ def test_invalid_luminosity_kind_falls_back_to_l_solar():
         out = _exec_fit_line_lfr({"cache_key": "x", "luminosity_kind": "L_brightness"})
     assert out["luminosity_kind"] == "L_solar"
     assert out["n_unit_converted"] == 0
-

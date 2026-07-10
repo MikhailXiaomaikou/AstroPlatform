@@ -134,7 +134,10 @@ def chain_diagnostics(
 
     Returns R-hat, ESS (effective sample size), MCSE for each parameter.
     """
-    samples = np.array(samples)
+    samples = np.asarray(samples, dtype=float)
+    if not isinstance(n_chains, (int, np.integer)) or int(n_chains) < 1:
+        raise ValueError("n_chains must be a positive integer")
+    n_chains = int(n_chains)
 
     if parameter_names is None:
         parameter_names = [f"p{i}" for i in range(samples.shape[1] if samples.ndim > 1 else 1)]
@@ -142,16 +145,31 @@ def chain_diagnostics(
     try:
         import arviz as az
 
-        # Ensure samples are float (newer arviz is strict about dtypes)
-        samples = np.asarray(samples, dtype=float)
-
-        if samples.ndim == 2:
+        # Preserve explicit chain boundaries when supplied.  A flattened
+        # (draw, parameter) matrix may be split only when the caller states the
+        # original number of independent chains.
+        if samples.ndim == 3:
+            samples_reshaped = samples
+            n_chains = int(samples.shape[0])
+        elif samples.ndim == 2:
             # Reshape to (n_chains, n_samples_per_chain, n_params)
             n_total = samples.shape[0]
             chain_len = n_total // n_chains
+            if chain_len < 4:
+                raise ValueError("each chain needs at least four draws for diagnostics")
             samples_reshaped = samples[:chain_len * n_chains].reshape(n_chains, chain_len, -1)
+        elif samples.ndim == 1:
+            chain_len = samples.size // n_chains
+            if chain_len < 4:
+                raise ValueError("each chain needs at least four draws for diagnostics")
+            samples_reshaped = samples[:chain_len * n_chains].reshape(n_chains, chain_len, 1)
         else:
-            samples_reshaped = samples.reshape(1, -1, 1)
+            raise ValueError("samples must have shape (draw,param) or (chain,draw,param)")
+
+        if not np.all(np.isfinite(samples_reshaped)):
+            raise ValueError("samples contain non-finite values")
+        if samples_reshaped.shape[2] != len(parameter_names):
+            raise ValueError("parameter_names length does not match sample columns")
 
         # arviz.from_dict expects {name: array of shape (chains, draws)}
         # i.e. each parameter is a 2D array, not 3D
@@ -166,12 +184,14 @@ def chain_diagnostics(
         ess_bulk = az.ess(idata, method="bulk")
         ess_tail = az.ess(idata, method="tail")
         mcse = az.mcse(idata)
-        # D1.1 publication gate thresholds (Gelman BDA3; Vehtari+ 2021):
-        #   ESS >= 400 per parameter, r-hat < 1.05.  Below these, the
+        # D1.1 publication gate thresholds (Vehtari+ 2021):
+        #   four independent chains, ESS >= 400 per parameter, rank-normalized
+        #   split-R-hat < 1.01.  Below these, the
         #   posterior cannot be trusted for quantitative inference and the
         #   zero-fabrication gate must refuse to cite the resulting values.
         ESS_PUBLICATION_THRESHOLD = 400.0
-        RHAT_PUBLICATION_THRESHOLD = 1.05
+        RHAT_PUBLICATION_THRESHOLD = 1.01
+        MIN_PUBLICATION_CHAINS = 4
 
         def _f(obj) -> float:
             return float(obj.values) if hasattr(obj, "values") else float(obj)
@@ -192,14 +212,23 @@ def chain_diagnostics(
             ess_tail_val = _f(ess_tail[name])
             mcse_val = _f(mcse[name])
 
-            if rhat_val < 1.01 and ess_bulk_val >= ESS_PUBLICATION_THRESHOLD:
+            finite_diagnostics = all(
+                np.isfinite(value)
+                for value in (rhat_val, ess_bulk_val, ess_tail_val, mcse_val)
+            )
+            if finite_diagnostics and rhat_val < RHAT_PUBLICATION_THRESHOLD and ess_bulk_val >= ESS_PUBLICATION_THRESHOLD:
                 status = "good"
-            elif rhat_val < RHAT_PUBLICATION_THRESHOLD and ess_bulk_val >= ESS_PUBLICATION_THRESHOLD / 2:
+            elif finite_diagnostics and rhat_val < 1.05 and ess_bulk_val >= ESS_PUBLICATION_THRESHOLD / 2:
                 status = "marginal"
             else:
                 status = "not_converged"
 
-            if (ess_bulk_val < ESS_PUBLICATION_THRESHOLD) or (rhat_val > RHAT_PUBLICATION_THRESHOLD):
+            if (
+                not finite_diagnostics
+                or ess_bulk_val < ESS_PUBLICATION_THRESHOLD
+                or rhat_val >= RHAT_PUBLICATION_THRESHOLD
+                or n_chains < MIN_PUBLICATION_CHAINS
+            ):
                 insufficient.append(name)
 
             diagnostics[name] = {
@@ -218,7 +247,7 @@ def chain_diagnostics(
         # below the ESS or r-hat threshold, the result is NOT safe to cite
         # in a paper — the claim validator uses this to require
         # regeneration before emitting the reply.
-        publication_ready = len(insufficient) == 0
+        publication_ready = n_chains >= MIN_PUBLICATION_CHAINS and len(insufficient) == 0
 
         if not publication_ready:
             try:
@@ -238,6 +267,7 @@ def chain_diagnostics(
             "thresholds": {
                 "ess_min": ESS_PUBLICATION_THRESHOLD,
                 "rhat_max": RHAT_PUBLICATION_THRESHOLD,
+                "min_chains": MIN_PUBLICATION_CHAINS,
             },
             "n_chains": n_chains,
         }
@@ -255,7 +285,23 @@ def chain_diagnostics(
                 "q84": float(np.percentile(col, 84)),
                 "status": "arviz_unavailable",
             }
-        return {"parameters": diagnostics, "overall_status": "arviz_unavailable", "n_chains": n_chains}
+        return {
+            "parameters": diagnostics,
+            "overall_status": "arviz_unavailable",
+            "publication_ready": False,
+            "insufficient_params": list(parameter_names),
+            "n_chains": n_chains,
+        }
+    except Exception as exc:
+        logger.warning("Chain diagnostics unavailable: %s", exc)
+        return {
+            "parameters": {},
+            "overall_status": "diagnostics_unavailable",
+            "publication_ready": False,
+            "insufficient_params": list(parameter_names),
+            "n_chains": n_chains,
+            "error": str(exc),
+        }
 
 
 def posterior_predictive_check(
@@ -264,8 +310,15 @@ def posterior_predictive_check(
     observed_data: np.ndarray | list,
     n_samples: int = 100,
     random_seed: int | None = None,
+    observation_sampler: Callable[[Any, np.random.Generator], Any] | None = None,
 ) -> dict:
     """Generate posterior predictive samples and compute Bayesian p-values.
+
+    ``model_func(theta)`` returns the conditional mean.  A genuine posterior
+    predictive check additionally requires ``observation_sampler(theta, rng)``
+    to draw a replicated observation including measurement noise and intrinsic
+    scatter.  Without that sampling model the function fails closed instead of
+    mislabelling a deterministic mean-curve comparison as a PPC.
 
     R5: ``random_seed`` makes the predictive draw reproducible.
 
@@ -282,13 +335,36 @@ def posterior_predictive_check(
     samples = np.array(posterior_samples)
     obs = np.array(observed_data)
 
+    if observation_sampler is None:
+        return {
+            "success": False,
+            "analysis_status": "UNAVAILABLE",
+            "publication_ready": False,
+            "error_class": "missing_observation_sampler",
+            "error": (
+                "A posterior predictive check requires observation_sampler(theta, rng) "
+                "that draws measurement noise/intrinsic scatter; model_func alone only "
+                "defines a conditional mean."
+            ),
+            "stat_pvalues": {},
+            "miscalibrated_statistics": [],
+            "calibration": "not_evaluated",
+        }
+
     rng = np.random.default_rng(random_seed)
     indices = rng.choice(len(samples), size=min(n_samples, len(samples)), replace=False)
 
     predictions = []
     for idx in indices:
         try:
-            pred = model_func(samples[idx])
+            # Evaluate the mean as a shape/contract check, but use only the
+            # stochastic observation model as y_rep.
+            mean_prediction = np.asarray(model_func(samples[idx]))
+            pred = np.asarray(observation_sampler(samples[idx], rng))
+            if pred.shape != mean_prediction.shape or pred.shape != obs.shape:
+                raise ValueError(
+                    "observation_sampler output must match model_func and observed_data shapes"
+                )
             predictions.append(np.array(pred))
         except Exception as e:
             logger.debug("Posterior prediction failed for sample %d: %s", idx, e)
@@ -341,6 +417,9 @@ def posterior_predictive_check(
     miscalibrated = [k for k, v in stat_pvalues.items() if v < 0.05 or v > 0.95]
 
     return {
+        "success": True,
+        "analysis_status": "POSTERIOR_PREDICTIVE_READY",
+        "publication_ready": True,
         "predicted_mean": pred_mean.tolist(),
         "predicted_std": pred_std.tolist(),
         "p_values": p_values.tolist(),
@@ -552,28 +631,13 @@ def kelly07_linmix_fit(
                 f"{int(np.sum(delta))} detected + {n_censored} censored"
             )
 
-    # Vendored linmix has a known reproducibility gap: with
-    # parallelize=False the Chain ctor does not receive the seed
-    # (only parallelize=True passes RandomState(seed+i) to Chain).
-    # We wrap np.random's global state so the fallback path inside
-    # Chain still uses a deterministic RNG, then restore it on exit
-    # so we don't pollute the rest of the process.
-    if seed is not None:
-        _rng_state = np.random.get_state()
-        np.random.seed(int(seed))
-    else:
-        _rng_state = None
-    try:
-        lm = LinMix(
-            x=x, y=y, xsig=xerr, ysig=yerr,
-            delta=delta,
-            K=K, nchains=nchains,
-            parallelize=parallelize, seed=seed,
-        )
-        lm.run_mcmc(miniter=miniter, maxiter=maxiter, silent=True)
-    finally:
-        if _rng_state is not None:
-            np.random.set_state(_rng_state)
+    lm = LinMix(
+        x=x, y=y, xsig=xerr, ysig=yerr,
+        delta=delta,
+        K=K, nchains=nchains,
+        parallelize=parallelize, seed=seed,
+    )
+    lm.run_mcmc(miniter=miniter, maxiter=maxiter, silent=True)
 
     alpha_chain = np.asarray(lm.chain["alpha"], dtype=float)
     beta_chain = np.asarray(lm.chain["beta"], dtype=float)
@@ -583,9 +647,23 @@ def kelly07_linmix_fit(
     sigma_int_chain = np.sqrt(np.clip(sigsqr_chain, a_min=0.0, a_max=None))
 
     n_draws_total = int(alpha_chain.size)
-    converged = n_draws_total < maxiter * nchains  # linmix stops early on R-hat<1.1
+    # The vendored sampler now records its actual stopping state.  Inferring
+    # convergence from the retained-chain length was wrong because it discards
+    # the first half of every chain; a maxiter stop therefore always looked early.
+    converged = bool(getattr(lm, "converged", False))
+    chain_list = list(getattr(lm, "chain_list", []))
+    alpha_by_chain = np.stack([np.asarray(c["alpha"], dtype=float) for c in chain_list])
+    beta_by_chain = np.stack([np.asarray(c["beta"], dtype=float) for c in chain_list])
+    sigma_by_chain = np.stack([
+        np.sqrt(np.clip(np.asarray(c["sigsqr"], dtype=float), a_min=0.0, a_max=None))
+        for c in chain_list
+    ])
 
-    def _summarize(samples: np.ndarray, name: str) -> dict[str, float | None | str]:
+    def _summarize(
+        samples: np.ndarray,
+        name: str,
+        per_chain: np.ndarray,
+    ) -> dict[str, float | None | str]:
         mean = float(np.mean(samples))
         std = float(np.std(samples))
         median = float(np.median(samples))
@@ -594,16 +672,18 @@ def kelly07_linmix_fit(
         hdi_low = float(np.percentile(samples, 3.0))
         hdi_high = float(np.percentile(samples, 97.0))
         ess: float | None = None
+        rhat: float | None = None
         try:
             import arviz as az
-            # Single concatenated chain (linmix already merged) — gives
-            # a lower-bound ESS that's still useful for "is the chain
-            # informative enough" checks.
-            idata = az.from_dict(posterior={name: samples[np.newaxis, :]})
+            idata = az.from_dict(posterior={name: per_chain})
             ess_val = az.ess(idata, method="bulk")[name]
             ess = float(ess_val.values) if hasattr(ess_val, "values") else float(ess_val)
             if not np.isfinite(ess):
                 ess = None
+            rhat_val = az.rhat(idata, method="rank")[name]
+            rhat = float(rhat_val.values) if hasattr(rhat_val, "values") else float(rhat_val)
+            if not np.isfinite(rhat):
+                rhat = None
             try:
                 hdi = az.hdi(samples, hdi_prob=0.94)
                 hdi_low = float(hdi[0])
@@ -619,12 +699,13 @@ def kelly07_linmix_fit(
             "hdi_low_94": round(hdi_low, 6),
             "hdi_high_94": round(hdi_high, 6),
             "ess": round(ess, 1) if ess is not None else None,
+            "rhat": round(rhat, 4) if rhat is not None else None,
         }
 
     parameters = {
-        "alpha": _summarize(alpha_chain, "alpha"),
-        "beta": _summarize(beta_chain, "beta"),
-        "sigma_int": _summarize(sigma_int_chain, "sigma_int"),
+        "alpha": _summarize(alpha_chain, "alpha", alpha_by_chain),
+        "beta": _summarize(beta_chain, "beta", beta_by_chain),
+        "sigma_int": _summarize(sigma_int_chain, "sigma_int", sigma_by_chain),
     }
 
     # publication_ready bar: all three parameters have ESS >= 400 and
@@ -635,7 +716,11 @@ def kelly07_linmix_fit(
         (params.get("ess") or 0.0) >= ess_threshold
         for params in parameters.values()
     )
-    publication_ready = converged and ess_ok
+    rhat_ok = all(
+        params.get("rhat") is not None and float(params["rhat"]) < 1.01
+        for params in parameters.values()
+    )
+    publication_ready = converged and nchains >= 4 and ess_ok and rhat_ok
 
     return {
         "method": "bayesian_xyerr_linmix",
@@ -660,9 +745,16 @@ def kelly07_linmix_fit(
         "n_censored": n_censored,
         "miniter": int(miniter),
         "maxiter": int(maxiter),
+        "iterations": int(getattr(lm, "iterations", maxiter)),
+        "sampler_rhat_max": (
+            float(np.max(getattr(lm, "last_rhat")))
+            if np.size(getattr(lm, "last_rhat", []))
+            else None
+        ),
         "K": int(K),
         "converged": bool(converged),
         "publication_ready": bool(publication_ready),
+        "random_seed": int(seed) if seed is not None else None,
         "package": "linmix (vendored, jmeyers314, BSD-2)",
         "reference": "Kelly 2007, ApJ 665, 1489 (arXiv:0705.2774)",
     }

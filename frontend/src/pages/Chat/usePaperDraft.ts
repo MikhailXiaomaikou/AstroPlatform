@@ -94,7 +94,7 @@ export function usePaperDraft({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSessionId, messages, refreshSessions, showToast, user]);
 
-  const handleGeneratePaper = useCallback(async (overrideValidation = false) => {
+  const handleGeneratePaper = useCallback(async () => {
     if (!paperSessionId) {
       showToast("Save the session before generating a paper draft", "error");
       return;
@@ -102,7 +102,7 @@ export function usePaperDraft({
 
     setPaperGenerating(true);
     try {
-      const draft = await generatePaperDraft(paperSessionId, paperFormat, overrideValidation);
+      const draft = await generatePaperDraft(paperSessionId, paperFormat);
       setPaperDraft(draft);
       setPaperEditorJson(draft.paper_json);
       setPaperValidation(draft.validation);
@@ -130,6 +130,7 @@ export function usePaperDraft({
       const updated = await updatePaperDraft(paperDraft.id, paperEditorJson);
       setPaperDraft(updated);
       setPaperEditorJson(updated.paper_json);
+      setPaperValidation(updated.validation);
       showToast("Paper draft saved", "success");
     } catch (err) {
       const detail = err instanceof Error ? err.message : "Saving paper draft failed";
@@ -148,6 +149,7 @@ export function usePaperDraft({
         : await publishPaperDraft(paperDraft.id);
       setPaperDraft(updated);
       setPaperEditorJson(updated.paper_json);
+      setPaperValidation(updated.validation);
       if (updated.is_public && updated.public_url) {
         const absolute = new URL(updated.public_url, window.location.origin).toString();
         if (navigator.clipboard?.writeText) {
@@ -172,7 +174,6 @@ export function usePaperDraft({
       const regenerated = await generatePaperDraft(
         paperSessionId,
         paperFormat,
-        paperValidation?.overall_status === "FAIL",
       );
       const nextPaperJson = setPaperSectionText(
         paperEditorJson,
@@ -184,6 +185,7 @@ export function usePaperDraft({
         const updated = await updatePaperDraft(paperDraft.id, nextPaperJson);
         setPaperDraft(updated);
         setPaperEditorJson(updated.paper_json);
+        setPaperValidation(updated.validation);
       }
       showToast(`Regenerated ${paperTab.replace(/_/g, " ")}`, "success");
     } catch (err) {
@@ -192,7 +194,7 @@ export function usePaperDraft({
     } finally {
       setPaperGenerating(false);
     }
-  }, [paperDraft, paperEditorJson, paperFormat, paperSessionId, paperTab, paperValidation?.overall_status, showToast]);
+  }, [paperDraft, paperEditorJson, paperFormat, paperSessionId, paperTab, showToast]);
 
   return {
     paperModalOpen,

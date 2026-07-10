@@ -60,11 +60,23 @@ def test_posterior_predictive_check_respects_random_seed():
     def model(theta):
         return np.array([theta[0] + theta[1]])
 
+    def observation_sampler(theta, rng):
+        return model(theta) + rng.normal(0.0, 0.2, size=1)
+
     obs = [1.5]
 
-    r1 = posterior_predictive_check(model, samples, obs, n_samples=30, random_seed=42)
-    r2 = posterior_predictive_check(model, samples, obs, n_samples=30, random_seed=42)
-    r3 = posterior_predictive_check(model, samples, obs, n_samples=30, random_seed=7)
+    r1 = posterior_predictive_check(
+        model, samples, obs, n_samples=30, random_seed=42,
+        observation_sampler=observation_sampler,
+    )
+    r2 = posterior_predictive_check(
+        model, samples, obs, n_samples=30, random_seed=42,
+        observation_sampler=observation_sampler,
+    )
+    r3 = posterior_predictive_check(
+        model, samples, obs, n_samples=30, random_seed=7,
+        observation_sampler=observation_sampler,
+    )
 
     # The function exposes summary stats, not raw predictions.  Same seed
     # must yield identical mean/std; a different seed must differ.

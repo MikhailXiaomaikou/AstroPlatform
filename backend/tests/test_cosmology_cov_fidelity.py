@@ -138,7 +138,10 @@ def test_sn_compressed_only_chain_is_literature_typed():
     r = run_likelihood_chain(model="lcdm", dataset_keys=["pantheon_plus"], n_samples=2000, random_seed=42)
     prov = r["provenance"]["cosmology_likelihood"]
     assert prov["cov_fidelity"] == "literature_typed"
-    assert r["publication_ready"] is True
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
+    assert r["chain_tier"] == "exploratory"
+    assert "literature_typed_input" in r["preliminary_reasons"]
 
 
 def test_des_compressed_is_literature_typed():
@@ -147,7 +150,9 @@ def test_des_compressed_is_literature_typed():
     r = run_likelihood_chain(model="lcdm", dataset_keys=["des_sn5yr"], n_samples=2000, random_seed=42)
     prov = r["provenance"]["cosmology_likelihood"]
     assert prov["cov_fidelity"] == "literature_typed"
-    assert r["chain_tier"] == "publication"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
+    assert r["chain_tier"] == "exploratory"
 
 
 def test_union3_full_vector_certifies_full():
@@ -158,7 +163,10 @@ def test_union3_full_vector_certifies_full():
     prov = r["provenance"]["cosmology_likelihood"]
     assert prov["cov_fidelity"] == "full"
     assert prov["artifact_sha256"]["union3"] == expected_sha
-    assert r["chain_tier"] == "publication"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
+    assert r["chain_tier"] == "exploratory"
+    assert "fewer_than_four_independent_chains" in r["preliminary_reasons"]
 
 
 def test_cmb_compressed_is_literature_typed_not_none():
@@ -221,7 +229,7 @@ def test_moresco20_entry_certifies_full_fidelity():
     assert sha  # the cov.txt sha256
 
 
-def test_moresco20_only_chain_is_full_and_publication_ready():
+def test_moresco20_only_chain_is_full_but_preliminary_without_independent_chains():
     r = run_likelihood_chain(
         model="lcdm", dataset_keys=["cosmic_chronometers_moresco20"],
         n_samples=2000, random_seed=42,
@@ -229,8 +237,9 @@ def test_moresco20_only_chain_is_full_and_publication_ready():
     prov = r["provenance"]["cosmology_likelihood"]
     assert prov["cov_fidelity"] == "full"
     assert prov["artifact_sha256"]["cosmic_chronometers_moresco20"]
-    assert r["publication_ready"] is True
-    assert r["chain_tier"] == "publication"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
+    assert r["chain_tier"] == "exploratory"
 
 
 def test_moresco20_is_distinct_from_ga2018_diagonal():
@@ -523,14 +532,16 @@ def test_desi_dr2_bao_loads_verified_full():
     assert quantities and quantities <= {"DM_over_rs", "DH_over_rs", "DV_over_rs"}
 
 
-def test_desi_dr2_bao_only_recovers_omegam_publication():
+def test_desi_dr2_bao_only_recovers_omegam_as_preliminary():
     # DESI DR2 2025 ΛCDM Ωm ≈ 0.297 (arXiv:2503.14738), fit off the sha256-verified
-    # full covariance; the analytic fast path keeps it at publication tier (the
-    # superseding, tighter dataset must not rank below DR1).
+    # full covariance. The fast importance path has no independent chains, so it
+    # remains preliminary even though the physical anchor must stay correct.
     r = run_likelihood_chain(model="lcdm", dataset_keys=["desi_dr2_bao"], n_samples=4000, random_seed=42)
     om = r["parameters"]["omegam"]["median"]
     assert 0.29 <= om <= 0.31, f"Om={om} not near DESI DR2 0.297"
-    assert r["chain_tier"] == "publication"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
+    assert r["chain_tier"] == "exploratory"
     assert r["provenance"]["cosmology_likelihood"]["cov_fidelity"] == "full"
 
 

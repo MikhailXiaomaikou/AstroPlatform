@@ -43,14 +43,24 @@ class Settings(BaseSettings):
     fernet_key: str = ""
     admin_secret: str = ""
 
-    # Local-mode: use filesystem instead of MinIO
-    # In Docker: /app is WORKDIR, so use /app/data/fits
+    # Durable research object storage.  Local is appropriate for development
+    # and Docker Compose with a mounted volume.  Hosted production should use
+    # an S3-compatible store so uploads and exported artifacts survive deploys.
+    storage_backend: str = "local"
+    storage_require_integrity: bool = _ENV == "production"
     local_storage_dir: str = str(Path("/app/data/fits") if os.getenv("ENV") == "production" else _PROJECT_DIR / "data" / "fits")
+    s3_endpoint_url: str = ""
+    s3_bucket: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_region: str = "us-east-1"
+    s3_addressing_style: str = "path"
 
     # Structured validation-gate event JSONL (false-positive triage sink;
     # see app/observability/gate_events.py). Empty string disables. NOTE:
-    # Render has no persistent disk, so the production file is ephemeral —
-    # durable prod signal is the gate_event_total counter.
+    # The production Blueprint mounts /app/data on a persistent disk. Hosted
+    # deployments without that mount must export these events to their log/
+    # metrics backend instead of assuming the container filesystem is durable.
     gate_events_jsonl_path: str = str(
         Path("/app/data/gate_events.jsonl") if os.getenv("ENV") == "production"
         else _PROJECT_DIR / "data" / "gate_events.jsonl"
@@ -61,13 +71,13 @@ class Settings(BaseSettings):
     # refuse to run in sync mode to avoid blocking the FastAPI event loop.
     pipeline_mode: str = "celery"
 
-    # Sandbox backend for run_python: "inprocess" (Jupyter-like session
-    # state) or "subprocess" (crash-isolated, no cross-call state).
-    # Keep local/dev on in-process for interactive state; production defaults
-    # to subprocess so OOM / infinite loops / SIGSEGV stay out of FastAPI.
-    # Subprocess mode contains OOM / infinite loops / SIGSEGV in user code
-    # so the FastAPI worker stays alive.
-    sandbox_backend: str = "subprocess" if _ENV == "production" else "inprocess"
+    # Dynamic Python is disabled by default.  Neither the legacy in-process
+    # executor nor the crash-isolated subprocess is an OS security boundary:
+    # Python object-graph tricks and native imports can reach host files.  A
+    # developer may explicitly opt into one of those backends on a trusted
+    # single-user machine, but hosted production must stay disabled until a
+    # separate no-secrets/no-mounts container or equivalent OS sandbox exists.
+    sandbox_backend: str = "disabled"
     sandbox_memory_bytes: int = 1024 * 1024 * 1024  # 1 GB per call
     sandbox_timeout_seconds: int = 75
 
@@ -157,6 +167,35 @@ class Settings(BaseSettings):
                     "Without a stable key, encrypted user API keys become unreadable "
                     "after every restart. Set ENV=dev to use the development fallback."
                 )
+        self.storage_backend = str(self.storage_backend or "local").strip().lower()
+        if self.storage_backend not in {"local", "s3"}:
+            raise ValueError("STORAGE_BACKEND must be 'local' or 's3'")
+        if self.storage_backend == "s3":
+            missing = [
+                name
+                for name, value in (
+                    ("S3_BUCKET", self.s3_bucket),
+                    ("S3_ACCESS_KEY_ID", self.s3_access_key_id),
+                    ("S3_SECRET_ACCESS_KEY", self.s3_secret_access_key),
+                )
+                if not str(value or "").strip()
+            ]
+            if missing:
+                raise ValueError(
+                    "STORAGE_BACKEND=s3 requires " + ", ".join(missing)
+                )
+        self.sandbox_backend = str(self.sandbox_backend or "disabled").strip().lower()
+        if self.sandbox_backend not in {"disabled", "inprocess", "subprocess"}:
+            raise ValueError(
+                "SANDBOX_BACKEND must be 'disabled', 'inprocess', or 'subprocess'"
+            )
+        if _ENV == "production" and self.sandbox_backend != "disabled":
+            raise ValueError(
+                "Production run_python is disabled: inprocess/subprocess provide "
+                "crash containment, not an OS security boundary. Use "
+                "SANDBOX_BACKEND=disabled until an external isolated runner is "
+                "implemented."
+            )
 
     @property
     def redis_ssl(self) -> bool:

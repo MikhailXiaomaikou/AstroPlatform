@@ -5,6 +5,7 @@ WORKDIR /app
 # Install system dependencies
 # - gcc / gfortran: scipy / camb Fortran extensions
 # - libpq-dev: psycopg2-binary backend
+# - postgresql-client: pre-deploy migrations and portable backup/restore tools
 # - libgsl-dev / libfftw3-dev / liblapack-dev / libblas-dev / make / g++ / wget:
 #   PART AI Phase 5 #2 Track 2 — cobaya/camb external_cobaya backend.
 #   CAMB compiles its Fortran kernel during pip install, and cobaya-install
@@ -15,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libpq-dev \
+    postgresql-client \
     gfortran \
     libgsl-dev \
     libfftw3-dev \
@@ -32,9 +34,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # RUN apt-get update && apt-get install -y --no-install-recommends openjdk-17-jre-headless && rm -rf /var/lib/apt/lists/*
 # ENV STILTS_JAR_PATH=/app/stilts.jar
 
-COPY requirements.txt .
-# v3: install with fallback, gfortran available for scipy
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements.lock ./
+# Refuse dependency drift or an artifact whose digest is absent from the lock.
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY . .
 

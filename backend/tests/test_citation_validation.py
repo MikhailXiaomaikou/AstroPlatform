@@ -106,12 +106,64 @@ def test_b4_bibcode_in_successful_result_still_supports_citation():
     assert provenance_citation_violations("See 2023A&A...674A...1G.", tool_results) == []
 
 
-def test_author_year_with_supporting_bibcode_has_no_violations():
+def test_bibcode_initial_alone_does_not_support_author_year():
     from app.services.claim_validator import provenance_citation_violations
 
+    # The final W in a bibcode only encodes an initial.  It cannot establish
+    # that the source was Wenger rather than any other W-surname author.
     tool_results = _tool_with_dataset("2000A&AS..143....9W")
+    violations = provenance_citation_violations(
+        "SIMBAD follows Wenger et al. (2000).", tool_results
+    )
+
+    assert any(v.kind == "suspicious_author_year" for v in violations)
+
+
+def test_structured_author_year_supports_author_year_citation():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "search_literature",
+        "result": {
+            "success": True,
+            "results": [{
+                "authors": ["Wenger, M."],
+                "year": "2000",
+                "bibcode": "2000A&AS..143....9W",
+            }],
+        },
+    }]
 
     assert provenance_citation_violations("SIMBAD follows Wenger et al. (2000).", tool_results) == []
+
+
+def test_same_initial_bibcode_cannot_authenticate_different_author():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = _tool_with_dataset("2020A&A...641A...6P")
+    violations = provenance_citation_violations(
+        "Parker et al. (2020) reported this result.", tool_results
+    )
+
+    assert any(v.kind == "suspicious_author_year" for v in violations)
+
+
+def test_compute_stdout_cannot_authenticate_author_year_phrase():
+    from app.services.claim_validator import provenance_citation_violations
+
+    tool_results = [{
+        "tool": "run_python",
+        "result": {
+            "success": True,
+            "stdout": "Parker et al. (2020)",
+            "bibcode": "2020A&A...641A...6P",
+        },
+    }]
+    violations = provenance_citation_violations(
+        "Parker et al. (2020) reported this result.", tool_results
+    )
+
+    assert any(v.kind == "suspicious_author_year" for v in violations)
 
 
 def test_author_year_without_year_match_is_violation():

@@ -93,8 +93,17 @@ def test_compute_spectrum_reproduces_planck_first_acoustic_peak():
     # Spectrum payload is present and self-consistent.
     spec = out["spectrum"]
     assert len(spec["ell"]) == len(spec["dl_tt_muK2"]) == out["n_spectrum_points"]
+    assert max(spec["ell"]) <= 2500
     assert "CAMB" in out["provenance"]["theory_code"]
     assert out["input_parameters"]["H0"] == pytest.approx(67.36)
+
+
+@pytest.mark.parametrize("lmax", [2, 100, 2500])
+def test_compute_spectrum_never_exposes_ell_above_requested(lmax):
+    pytest.importorskip("camb")
+    out = compute_theory_cmb_spectrum({"lmax": lmax})
+    assert out["lmax"] == lmax
+    assert not out["spectrum"]["ell"] or max(out["spectrum"]["ell"]) <= lmax
 
 
 def test_handler_concurrent_calls_are_serialized_not_crashing():

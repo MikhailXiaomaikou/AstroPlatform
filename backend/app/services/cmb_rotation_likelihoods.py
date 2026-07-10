@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from statistics import NormalDist
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -183,8 +184,51 @@ def run_cmb_rotation_likelihood(
             ),
         )
 
-    means = np.asarray([entry.compressed_likelihood.mean for entry in ready_entries if entry.compressed_likelihood], dtype=float)
-    sigmas = np.asarray([entry.compressed_likelihood.sigma for entry in ready_entries if entry.compressed_likelihood], dtype=float)
+    means_list: list[float] = []
+    sigmas_list: list[float] = []
+    calibration_models: list[dict[str, float | str]] = []
+    for entry in ready_entries:
+        spec = entry.compressed_likelihood
+        calibration = entry.calibration_prior or {}
+        if spec is None or str(calibration.get("type") or "").lower() != "gaussian":
+            return _blocked(
+                model="isotropic_beta",
+                entries=entries,
+                seed=seed,
+                reason=f"{entry.key}: a typed Gaussian instrument-angle prior is required.",
+            )
+        try:
+            alpha_mean = float(calibration.get("mean_deg", 0.0))
+            alpha_sigma = float(calibration["sigma_deg"])
+        except (KeyError, TypeError, ValueError):
+            return _blocked(
+                model="isotropic_beta",
+                entries=entries,
+                seed=seed,
+                reason=f"{entry.key}: invalid Gaussian instrument-angle prior.",
+            )
+        if not math.isfinite(alpha_mean) or not math.isfinite(alpha_sigma) or alpha_sigma <= 0:
+            return _blocked(
+                model="isotropic_beta",
+                entries=entries,
+                seed=seed,
+                reason=f"{entry.key}: instrument-angle prior mean/sigma must be finite and sigma > 0.",
+            )
+        # The measured EB/TB rotation is beta + alpha.  Marginalizing the
+        # Gaussian calibration angle alpha gives beta ~ N(m-alpha0,
+        # sigma_measurement^2 + sigma_alpha^2).  The old path merely checked
+        # that a prior dictionary existed and ignored its width entirely.
+        means_list.append(float(spec.mean) - alpha_mean)
+        sigmas_list.append(math.sqrt(float(spec.sigma) ** 2 + alpha_sigma ** 2))
+        calibration_models.append({
+            "dataset_key": entry.key,
+            "model": "observed_rotation_deg = beta_deg + alpha_deg",
+            "alpha_mean_deg": alpha_mean,
+            "alpha_sigma_deg": alpha_sigma,
+        })
+
+    means = np.asarray(means_list, dtype=float)
+    sigmas = np.asarray(sigmas_list, dtype=float)
     if np.any(~np.isfinite(sigmas)) or np.any(sigmas <= 0):
         return _blocked(
             model="isotropic_beta",
@@ -197,16 +241,33 @@ def run_cmb_rotation_likelihood(
     beta_mean = float(np.sum(means / np.square(sigmas)) / precision)
     beta_sigma = float(math.sqrt(1.0 / precision))
     prior_bounds = _sanitize_beta_prior(priors)
-    if not (prior_bounds[0] <= beta_mean <= prior_bounds[1]):
+    rng = np.random.default_rng(seed)
+    try:
+        lower = (prior_bounds[0] - beta_mean) / beta_sigma
+        upper = (prior_bounds[1] - beta_mean) / beta_sigma
+        standard_normal = NormalDist()
+        cdf_low = standard_normal.cdf(lower)
+        cdf_high = standard_normal.cdf(upper)
+        if not cdf_high > cdf_low or cdf_high - cdf_low < 1e-15:
+            raise ValueError("configured beta prior has negligible posterior mass")
+        uniforms = np.clip(
+            rng.uniform(cdf_low, cdf_high, size=sample_count),
+            np.finfo(float).eps,
+            1.0 - np.finfo(float).eps,
+        )
+        standardized = np.fromiter(
+            (standard_normal.inv_cdf(float(value)) for value in uniforms),
+            dtype=float,
+            count=sample_count,
+        )
+        samples = beta_mean + beta_sigma * standardized
+    except Exception as exc:
         return _blocked(
             model="isotropic_beta",
             entries=entries,
             seed=seed,
-            reason="Combined beta posterior mean lies outside the configured prior bounds.",
+            reason=f"Could not apply the bounded beta prior: {exc}",
         )
-
-    rng = np.random.default_rng(seed)
-    samples = rng.normal(beta_mean, beta_sigma, size=sample_count)
     summary = _summary(samples)
     chi2 = float(np.sum(np.square((means - beta_mean) / sigmas)))
     result_hash = _stable_hash({
@@ -228,13 +289,17 @@ def run_cmb_rotation_likelihood(
             + ". Register EB/TB data vector, covariance, and calibration prior before claiming them."
         )
 
-    significance = abs(beta_mean) / beta_sigma if beta_sigma > 0 else float("inf")
+    posterior_std = float(summary["std"])
+    significance = abs(float(summary["mean"])) / posterior_std if posterior_std > 0 else float("inf")
     return {
         "success": True,
         "__tool_status__": "COMPLETED",
         "analysis_status": "CMB_ROTATION_CHAIN_READY",
-        "publication_ready": True,
-        "chain_tier": "publication",
+        # A caller-supplied compressed Gaussian has no hash-bound EB/TB data
+        # vector/covariance in this service.  It is useful for exploration but
+        # cannot become publication-ready solely from analytic sampling.
+        "publication_ready": False,
+        "chain_tier": "exploratory",
         "claim_scope": "cmb_rotation_compressed_preliminary",
         "compressed_rotation_preliminary": True,
         "model": "isotropic_beta",
@@ -266,7 +331,7 @@ def run_cmb_rotation_likelihood(
         },
         "chain_diagnostics": {
             "overall_status": "analytic_gaussian",
-            "publication_ready": True,
+            "publication_ready": False,
             "rhat": None,
             "rhat_note": "not applicable (analytic Gaussian, no sampling chains)",
             "ess_bulk": sample_count,
@@ -279,14 +344,16 @@ def run_cmb_rotation_likelihood(
         "datasets_not_run": [entry.to_dict() for entry in skipped_entries],
         "dataset_keys": [entry.key for entry in entries],
         "priors": {"beta_deg": list(prior_bounds)},
+        "calibration_models": calibration_models,
         "random_seed": seed,
         "n_samples": sample_count,
         "runner_hash": result_hash,
         "warnings": warnings,
         "__message_to_model__": (
-            "This is a publication-ready compressed CMB-rotation preliminary result, "
-            "not a full external Planck/ACT/BICEP likelihood. You may quote beta_deg "
-            "only with that caveat and only for datasets_used."
+            "This is an exploratory compressed CMB-rotation result, not a "
+            "publication-ready external Planck/ACT/BICEP likelihood. The instrument "
+            "angle prior was marginalized, but beta_deg must be described as "
+            "compressed preliminary and only for datasets_used."
         ),
         "provenance": {
             "cmb_rotation_likelihood": {
@@ -306,7 +373,7 @@ def run_cmb_rotation_likelihood(
                     }
                     for entry in ready_entries
                 ],
-                "publication_ready": True,
+                "publication_ready": False,
             }
         },
     }

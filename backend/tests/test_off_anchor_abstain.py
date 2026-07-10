@@ -91,7 +91,18 @@ def test_external_cobaya_runner_applies_off_anchor_gate():
     from app.services.cobaya_runner import _runner_success
     from app.services.cosmology_likelihoods import get_cosmology_dataset
 
-    good_diag = {"overall_status": "ok", "rhat": 1.01, "ess_bulk": 1200}
+    good_diag = {
+        "overall_status": "ok",
+        "rhat": 1.001,
+        "ess_bulk": 1200,
+        "n_chains": 4,
+        "n_independent_chains": 4,
+        "per_parameter": {
+            name: {"rhat": 1.001, "ess_bulk": 1200}
+            for name in ("w0", "wa", "omegam")
+        },
+    }
+    verified = {"hash_verified": True, "files_sha256": {}, "mismatches": []}
     entries = [
         get_cosmology_dataset(k)
         for k in ("desi_dr1_bao", "pantheon_plus", "planck2018_compressed")
@@ -100,6 +111,7 @@ def test_external_cobaya_runner_applies_off_anchor_gate():
         model_key="w0wa_cdm", entries=entries, seed=42, sampler="mcmc",
         summaries={"w0": {"median": -0.83}, "wa": {"median": -0.75}},
         diagnostics=good_diag, chain_meta={}, stdout_tail="",
+        data_verification=verified,
     )
     assert r["publication_ready"] is False
     assert r["off_anchor_review_required"] is True
@@ -108,6 +120,7 @@ def test_external_cobaya_runner_applies_off_anchor_gate():
         model_key="lcdm", entries=[get_cosmology_dataset("desi_dr1_bao")], seed=42,
         sampler="mcmc", summaries={"omegam": {"median": 0.30}},
         diagnostics=good_diag, chain_meta={}, stdout_tail="",
+        data_verification=verified,
     )
     assert r2["publication_ready"] is True
     assert r2["off_anchor_review_required"] is False

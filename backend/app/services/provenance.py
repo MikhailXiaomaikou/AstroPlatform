@@ -6,12 +6,15 @@ lineage traversal, IVOA ProvDM-compatible export, and DOI metadata generation.
 
 import hashlib
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# In-memory provenance store (for environments without DB migration)
+# Hot in-process cache.  The database is authoritative; this list preserves
+# compatibility with local/offline execution and avoids a read-after-write
+# round trip in the current worker.
 _provenance_records: list[dict] = []
 
 # Cached environment manifest — computed once on first record_activity call
@@ -86,6 +89,9 @@ def record_activity(
     agent: str = "system",
     environment: dict | None = None,
     data_release: str | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    artifact_sha256: str | None = None,
 ) -> str:
     """Record a provenance activity.
 
@@ -96,6 +102,20 @@ def record_activity(
             reproduction even when the upstream archive rev-bumps.
     """
     record_id = str(uuid.uuid4())
+    # Older pipeline/tool call sites do not all carry the owner explicitly.
+    # Resolve it from a trusted session/run table instead of accepting an
+    # owner embedded in free-form params.
+    if not user_id and (session_id or entity_type == "pipeline_node"):
+        try:
+            from app.services.durable_research_records import resolve_record_owner
+
+            pipeline_run_id = entity_id.split(":", 1)[0] if entity_type == "pipeline_node" else None
+            user_id = resolve_record_owner(
+                session_id=session_id,
+                pipeline_run_id=pipeline_run_id,
+            )
+        except Exception:
+            logger.debug("provenance owner lookup failed", exc_info=True)
     # Merge caller-provided environment with the auto-captured manifest.
     # Caller-provided keys win (explicit override for edge cases).
     merged_env = dict(get_environment_manifest())
@@ -111,14 +131,45 @@ def record_activity(
         "agent": agent,
         "environment": merged_env,
         "data_release": data_release,
+        "user_id": str(user_id) if user_id else None,
+        "session_id": str(session_id) if session_id else None,
+        "artifact_sha256": artifact_sha256,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     _provenance_records.append(record)
+    try:
+        from app.services.durable_research_records import save_provenance
+
+        save_provenance(record)
+    except Exception:
+        logger.warning("provenance durable persistence unavailable", exc_info=True)
     logger.debug("Provenance recorded: %s [%s] %s", entity_id, activity, record_id)
     return record_id
 
 
-def get_lineage(entity_id: str) -> dict:
+def _records_for_entity(entity_id: str, owner_id: str | None = None) -> list[dict]:
+    memory_records = [
+        record
+        for record in _provenance_records
+        if record.get("entity_id") == entity_id
+        and (owner_id is None or str(record.get("user_id") or "") == str(owner_id))
+    ]
+    try:
+        from app.services.durable_research_records import load_provenance
+
+        durable_records = load_provenance(entity_id, owner_id=owner_id)
+    except Exception:
+        durable_records = []
+
+    # A freshly recorded activity is normally present in both the hot cache
+    # and database.  Preserve stable creation order while removing duplicates.
+    by_id: dict[str, dict] = {}
+    for record in [*durable_records, *memory_records]:
+        by_id[str(record.get("id") or uuid.uuid4())] = record
+    return sorted(by_id.values(), key=lambda record: str(record.get("timestamp") or ""))
+
+
+def get_lineage(entity_id: str, *, owner_id: str | None = None) -> dict:
     """Build a complete lineage graph for an entity."""
     nodes = []
     edges = []
@@ -129,7 +180,7 @@ def get_lineage(entity_id: str) -> dict:
             return
         visited.add(eid)
 
-        records = [r for r in _provenance_records if r["entity_id"] == eid]
+        records = _records_for_entity(eid, owner_id=owner_id)
         for r in records:
             nodes.append({
                 "id": r["entity_id"],
@@ -156,9 +207,9 @@ def get_lineage(entity_id: str) -> dict:
     return {"nodes": unique_nodes, "edges": edges, "entity_id": entity_id}
 
 
-def export_provenance_ivoa(entity_id: str) -> str:
+def export_provenance_ivoa(entity_id: str, *, owner_id: str | None = None) -> str:
     """Export provenance as IVOA ProvDM-compatible XML (W3C PROV serialization)."""
-    lineage = get_lineage(entity_id)
+    lineage = get_lineage(entity_id, owner_id=owner_id)
 
     xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>']
     xml_parts.append('<prov:document xmlns:prov="http://www.w3.org/ns/prov#"')
@@ -189,9 +240,10 @@ def _xml_escape(text: str) -> str:
 
 
 def generate_doi_metadata(entity_id: str, title: str = "",
-                          authors: list[str] | None = None) -> dict:
+                          authors: list[str] | None = None,
+                          *, owner_id: str | None = None) -> dict:
     """Generate DataCite-compatible metadata for DOI minting."""
-    lineage = get_lineage(entity_id)
+    lineage = get_lineage(entity_id, owner_id=owner_id)
 
     now = datetime.now(timezone.utc)
 
@@ -248,22 +300,98 @@ def capture_environment() -> dict:
     }
 
 
-def export_requirements_pinned(entity_id: str | None = None) -> str:
-    """Export current environment as pinned requirements.txt format."""
-    env = capture_environment()
-    lines = ["# Standard Astro environment snapshot"]
-    lines.append(f"# Python {env['python_version'].split()[0]}")
-    lines.append(f"# Generated: {env['timestamp']}")
-    for pkg, ver in sorted(env["packages"].items()):
-        lines.append(f"{pkg}=={ver}")
-    return "\n".join(lines)
+def export_requirements_pinned(
+    entity_id: str,
+    *,
+    owner_id: str,
+) -> str:
+    """Export the entity's persisted environment, never the live process.
+
+    A requirements file is only reproducible when it is bound to an owned
+    provenance record.  Unknown entities, another user's entities, and legacy
+    records without a package snapshot all fail closed via ``LookupError``.
+    """
+    records = _records_for_entity(entity_id, owner_id=owner_id)
+    if not records:
+        raise LookupError("No provenance record found for this entity")
+
+    aliases = {"sklearn": "scikit-learn"}
+    excluded = {
+        "python", "python_version", "platform", "timestamp", "fingerprint",
+        "system_prompt_hash",
+    }
+    selected_record: dict | None = None
+    packages: dict[str, str] = {}
+    python_version = ""
+
+    # Prefer the most recent usable snapshot if an entity contains multiple
+    # activities. Every candidate comes from the persisted record itself.
+    for record in reversed(records):
+        environment = record.get("environment")
+        if not isinstance(environment, dict):
+            continue
+        package_source = environment.get("packages")
+        versions = environment.get("versions")
+        if isinstance(package_source, dict) and package_source:
+            candidate = package_source
+            python_version = str(
+                environment.get("python_version")
+                or (versions.get("python") if isinstance(versions, dict) else "")
+                or ""
+            ).split()[0]
+        elif isinstance(versions, dict):
+            candidate = versions
+            python_version = str(versions.get("python") or "").split()[0]
+        else:
+            # Some pipeline records store the version mapping flat.
+            if not (environment.get("python") or environment.get("python_version")):
+                continue
+            candidate = environment
+            python_version = str(
+                environment.get("python") or environment.get("python_version") or ""
+            ).split()[0]
+
+        normalized: dict[str, str] = {}
+        for raw_name, raw_version in candidate.items():
+            name = str(raw_name or "").strip()
+            version = str(raw_version or "").strip()
+            if (
+                not name
+                or name.lower() in excluded
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) is None
+                or not version
+                or "\n" in version
+                or "\r" in version
+                or version.lower() in {"unknown", "missing", "none"}
+            ):
+                continue
+            normalized[aliases.get(name.lower(), name)] = version
+        if normalized:
+            selected_record = record
+            packages = normalized
+            break
+
+    if selected_record is None or not packages:
+        raise LookupError("No saved environment package snapshot for this entity")
+
+    lines = ["# Standard Astro entity-bound environment snapshot"]
+    lines.append(f"# Entity: {entity_id}")
+    if selected_record.get("id"):
+        lines.append(f"# Provenance record: {selected_record['id']}")
+    if python_version:
+        lines.append(f"# Python {python_version}")
+    if selected_record.get("timestamp"):
+        lines.append(f"# Captured: {selected_record['timestamp']}")
+    for package, version in sorted(packages.items(), key=lambda item: item[0].lower()):
+        lines.append(f"{package}=={version}")
+    return "\n".join(lines) + "\n"
 
 
-def get_reproducibility_package(entity_id: str) -> dict:
+def get_reproducibility_package(entity_id: str, *, owner_id: str | None = None) -> dict:
     """Generate a reproducibility package for a pipeline run."""
-    lineage = get_lineage(entity_id)
+    lineage = get_lineage(entity_id, owner_id=owner_id)
 
-    records = [r for r in _provenance_records if r["entity_id"] == entity_id]
+    records = _records_for_entity(entity_id, owner_id=owner_id)
 
     return {
         "entity_id": entity_id,

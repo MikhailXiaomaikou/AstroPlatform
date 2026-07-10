@@ -16,6 +16,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.alerts import router as alerts_router
 from app.api.anomalies import router as anomalies_router
+from app.api.automation import router as automation_router
 from app.api.auth import router as auth_router, require_admin_any
 from app.api.chat import router as chat_router
 from app.api.config import router as config_router
@@ -26,6 +27,7 @@ from app.api.export import router as export_router
 from app.api.followup import router as followup_router
 from app.api.health import router as health_router
 from app.api.integration import router as integration_router
+from app.api.jobs import router as jobs_router
 from app.api.isochrones import router as isochrones_router
 from app.api.inference import router as inference_router
 from app.api.arxiv import router as arxiv_router
@@ -309,20 +311,6 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Skipping create_all in production; use `alembic upgrade head`")
 
-    # Targeted micro-migration: new `comments` table. Under the production Alembic
-    # convention we still need to CREATE once when the table is absent (future new
-    # tables will follow this same path, avoiding a new Alembic migration every
-    # time we add a table). Only runs CREATE TABLE IF NOT EXISTS on Comment.__table__;
-    # all other tables are left untouched.
-    try:
-        from app.models.schemas import Comment, TrendingVisibility
-        async with engine.begin() as conn:
-            await conn.run_sync(lambda sync_conn: Comment.__table__.create(sync_conn, checkfirst=True))
-            await conn.run_sync(lambda sync_conn: TrendingVisibility.__table__.create(sync_conn, checkfirst=True))
-        logger.info("Ensured `comments` + `trending_visibility` tables exist")
-    except Exception as e:
-        logger.warning("Failed to ensure new tables (%s); evaluate Alembic migration", e)
-
     # R18: lightkurve/MAST occasionally leaves behind partial FITS cache files;
     # subsequent downloads of the same target keep hitting the corrupted file.
     # On startup, do one limited scan and delete only the FITS files that astropy
@@ -593,6 +581,7 @@ async def security_headers(request, call_next):
 # Routers
 app.include_router(alerts_router)
 app.include_router(anomalies_router)
+app.include_router(automation_router)
 app.include_router(arxiv_router)
 app.include_router(auth_router)
 app.include_router(citation_graph_router)
@@ -639,6 +628,7 @@ app.include_router(followup_router)
 app.include_router(health_router)
 app.include_router(inference_router)
 app.include_router(integration_router)
+app.include_router(jobs_router)
 app.include_router(isochrones_router)
 app.include_router(pipeline_router)
 app.include_router(paper_router)

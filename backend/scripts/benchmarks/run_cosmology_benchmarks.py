@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import math
 import pathlib
 import sys
 import traceback
@@ -29,19 +30,91 @@ _BACKEND_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-import numpy as np
+import numpy as np  # noqa: E402 -- path bootstrap above is intentional for CLI use
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Benchmark functions
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+def _preliminary_chain_gate_ok(result: dict[str, Any]) -> bool:
+    """True only when a useful chain is correctly withheld from publication."""
+    return bool(
+        result.get("publication_ready") is False
+        and result.get("preliminary_ready") is True
+        and result.get("chain_tier") == "exploratory"
+    )
+
+
+def _preliminary_benchmark_result(
+    *,
+    numerical_pass: bool,
+    chain_result: dict[str, Any],
+    target: str,
+    **details: Any,
+) -> dict[str, Any]:
+    """Separate numerical-regression success from scientific publication.
+
+    ``pass`` means the benchmark contract passed: the number stayed in its
+    physical window *and* the platform correctly labelled the importance/single-
+    ensemble result preliminary.  It never means a publication validation.
+    """
+    gate_ok = _preliminary_chain_gate_ok(chain_result)
+    return {
+        "pass": bool(numerical_pass and gate_ok),
+        "numerical_regression_pass": bool(numerical_pass),
+        "publication_gate_correct": gate_ok,
+        "scientific_publication_pass": False,
+        "validation_scope": "preliminary_numerical_regression",
+        "publication_ready": bool(chain_result.get("publication_ready")),
+        "preliminary_ready": bool(chain_result.get("preliminary_ready")),
+        "chain_tier": chain_result.get("chain_tier"),
+        "publication_gate_reasons": list(chain_result.get("preliminary_reasons") or []),
+        "target": target,
+        **details,
+    }
+
+
+def _preliminary_multi_benchmark_result(
+    *,
+    numerical_pass: bool,
+    chain_results: dict[str, dict[str, Any]],
+    target: str,
+    **details: Any,
+) -> dict[str, Any]:
+    """Apply the preliminary-only contract to every chain in a benchmark."""
+    gate_by_chain = {
+        name: _preliminary_chain_gate_ok(result)
+        for name, result in chain_results.items()
+    }
+    gate_ok = bool(gate_by_chain) and all(gate_by_chain.values())
+    return {
+        "pass": bool(numerical_pass and gate_ok),
+        "numerical_regression_pass": bool(numerical_pass),
+        "publication_gate_correct": gate_ok,
+        "publication_gate_by_chain": gate_by_chain,
+        "scientific_publication_pass": False,
+        "validation_scope": "preliminary_numerical_regression",
+        "chain_tiers": {
+            name: result.get("chain_tier")
+            for name, result in chain_results.items()
+        },
+        "publication_gate_reasons": {
+            name: list(result.get("preliminary_reasons") or [])
+            for name, result in chain_results.items()
+        },
+        "target": target,
+        **details,
+    }
+
+
 def bench_lcdm_h0_anchor() -> dict[str, Any]:
     """ΛCDM BAO+CMB → H0 anchor.
 
     DESI DR1 BAO + Planck 2018 compressed under flat ΛCDM should recover
-    H0 = 67.4 ± 0.5 km/s/Mpc (the Planck-anchored result), with publication
-    tier and ESS ≥ 400.
+    H0 = 67.4 ± 0.5 km/s/Mpc (the Planck-anchored result), with ESS ≥ 400.
+    The importance sample is a preliminary numerical regression only.
     """
     from app.services.cosmology_likelihoods import run_likelihood_chain
     r = run_likelihood_chain(
@@ -51,33 +124,41 @@ def bench_lcdm_h0_anchor() -> dict[str, Any]:
         random_seed=42,
     )
     h0 = float(r["parameters"]["H0"]["median"])
-    tier = str(r["chain_tier"])
     ess = float(r["chain_diagnostics"].get("proposal_ess") or 0.0)
-    return {
-        "pass": 66.5 < h0 < 68.5 and tier == "publication" and ess >= 400.0,
-        "h0_median": round(h0, 4),
-        "chain_tier": tier,
-        "proposal_ess": round(ess, 1),
-        "target": "H0 in [66.5, 68.5] + tier=publication + ESS >= 400",
-    }
+    return _preliminary_benchmark_result(
+        numerical_pass=66.5 < h0 < 68.5 and ess >= 400.0,
+        chain_result=r,
+        h0_median=round(h0, 4),
+        proposal_ess=round(ess, 1),
+        target="H0 in [66.5, 68.5] + ESS >= 400; chain must remain preliminary",
+    )
 
 
 def bench_wcdm_w_near_minus_one() -> dict[str, Any]:
-    """wCDM BAO+CMB → w near -1 (DESI 2024 reports w ≈ -0.95 ± 0.20)."""
+    """Diagnostic-only wCDM BAO+CMB check.
+
+    The in-process extended-DE result is deliberately off-anchor and therefore
+    cannot become a passed scientific benchmark.  A numerically implausible
+    value is still a hard regression failure; an in-range chain passes only
+    when it is explicitly labelled preliminary and non-publication.
+    """
     from app.services.cosmology_likelihoods import run_likelihood_chain
     r = run_likelihood_chain(
         model="wcdm",
         dataset_keys=["desi_dr1_bao", "planck2018_compressed"],
         n_samples=4000,
         random_seed=42,
+        allow_emcee_fallback=True,
     )
     w = float(r["parameters"].get("w", {}).get("median") or float("nan"))
-    return {
-        "pass": -1.5 < w < -0.5,
-        "w_median": round(w, 4),
-        "chain_tier": str(r["chain_tier"]),
-        "target": "w in [-1.5, -0.5]",
-    }
+    numeric_ok = bool(math.isfinite(w) and -1.5 < w < -0.5)
+    return _preliminary_benchmark_result(
+        numerical_pass=numeric_ok,
+        chain_result=r,
+        target="w in [-1.5, -0.5]; numerical sanity only, never publication",
+        w_median=round(w, 4),
+        reason="off-anchor extended-DE result is a preliminary numerical regression",
+    )
 
 
 def bench_hubble_tension_planck18_vs_riess22() -> dict[str, Any]:
@@ -131,8 +212,17 @@ def bench_chain_tier_blocked_on_inline() -> dict[str, Any]:
     rows = [{"z": float(zi), "mu": float(mi), "sigma_mu": 0.1}
             for zi, mi in zip(z, mu, strict=True)]
     r = fit_cosmology_emcee(rows, n_walkers=16, n_steps=200, n_burn=50)
+    gate_ok = (
+        r["chain_tier"] == "blocked"
+        and r.get("__do_not_claim__") is True
+        and r.get("publication_ready") is False
+    )
     return {
-        "pass": r["chain_tier"] == "blocked" and r.get("__do_not_claim__") is True,
+        "pass": gate_ok,
+        "numerical_regression_pass": None,
+        "publication_gate_correct": gate_ok,
+        "scientific_publication_pass": False,
+        "validation_scope": "safety_gate_regression",
         "chain_tier": r["chain_tier"],
         "do_not_claim": r.get("__do_not_claim__"),
         "target": "tier=blocked + __do_not_claim__=True on inline rows",
@@ -238,15 +328,7 @@ def bench_planck18_preset_matches_cited() -> dict[str, Any]:
 
 
 def bench_compressed_chain_exploratory_tier() -> dict[str, Any]:
-    """ESS-floor / exploratory tier path is reachable when the importance
-    sampler ESS lands in [100, 400). Confirms the three-tier gate
-    (publication / exploratory / blocked) is wired and ESS thresholds fire.
-
-    We accept either: the chain reaches publication (good — main path), OR
-    exploratory tier with the warning attached. We only fail on blocked
-    when inputs were claimable (a regression of the over-conservative
-    blanket-PARTIAL behavior).
-    """
+    """The importance sampler can validate numbers, never publication status."""
     from app.services.cosmology_likelihoods import run_likelihood_chain
     r = run_likelihood_chain(
         model="lcdm",
@@ -254,13 +336,13 @@ def bench_compressed_chain_exploratory_tier() -> dict[str, Any]:
         n_samples=2000,
         random_seed=42,
     )
-    tier = r["chain_tier"]
-    return {
-        "pass": tier in {"publication", "exploratory"},
-        "chain_tier": tier,
-        "proposal_ess": float(r["chain_diagnostics"].get("proposal_ess") or 0.0),
-        "target": "BAO-only single-cell deep run reaches publication or exploratory (not blocked)",
-    }
+    ess = float(r["chain_diagnostics"].get("proposal_ess") or 0.0)
+    return _preliminary_benchmark_result(
+        numerical_pass=bool(r.get("success")) and ess >= 100.0,
+        chain_result=r,
+        proposal_ess=ess,
+        target="BAO-only importance run has usable ESS and remains preliminary",
+    )
 
 
 def bench_dataset_z_coverage() -> dict[str, Any]:
@@ -312,8 +394,8 @@ def bench_sn_omegam_compressed() -> dict[str, Any]:
     """DES-SN5YR compressed + Union3 full-vector SN-only flat-ΛCDM Ωm (Tier 2A,
     2026-05-29; union3 leg upgraded 2026-06-12).
 
-    Both SN datasets must recover their published flat-ΛCDM SN-only Ωm and
-    reach publication tier: DES-SN5YR Ωm=0.352 (Abbott+2024, via the 1D
+    Both SN datasets must recover their published flat-ΛCDM SN-only Ωm while
+    remaining explicitly preliminary: DES-SN5YR Ωm=0.352 (Abbott+2024, via the 1D
     compressed Gaussian) and Union3 Ωm=0.356 (Rubin+2023 — now via the FULL
     22-bin binned-distance likelihood, whose chi2 minimum sits at Ωm=0.3560
     exactly; the 0.005 window catches both a data/parsing regression and a
@@ -321,26 +403,28 @@ def bench_sn_omegam_compressed() -> dict[str, Any]:
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     out: dict[str, Any] = {}
-    ok = True
+    chains: dict[str, dict[str, Any]] = {}
+    numerical_ok = True
     for key, expected in (("des_sn5yr", 0.352), ("union3", 0.356)):
         r = run_likelihood_chain(model="lcdm", dataset_keys=[key], n_samples=4000, random_seed=42)
+        chains[key] = r
         med = r.get("parameters", {}).get("omegam", {}).get("median")
         used = [d.get("key") for d in r.get("datasets_used", [])]
         good = (
             r.get("success") is True
-            and r.get("chain_tier") == "publication"
             and key in used
             and isinstance(med, (int, float))
             and abs(med - expected) < 0.005
         )
-        ok = ok and good
+        numerical_ok = numerical_ok and good
         out[key] = {"omegam_median": round(med, 4) if isinstance(med, (int, float)) else None,
                     "expected": expected, "tier": r.get("chain_tier")}
-    return {
-        "pass": ok,
+    return _preliminary_multi_benchmark_result(
+        numerical_pass=numerical_ok,
+        chain_results=chains,
+        target="des_sn5yr Ωm≈0.352 and union3 Ωm≈0.356; both preliminary in-process regressions",
         **out,
-        "target": "des_sn5yr Ωm≈0.352, union3 Ωm≈0.356, both publication, both executed in-process",
-    }
+    )
 
 
 def bench_sn_compressed_provenance() -> dict[str, Any]:
@@ -349,7 +433,7 @@ def bench_sn_compressed_provenance() -> dict[str, Any]:
 
     Compressed SN-only chains (pantheon_plus, des_sn5yr by default) must stamp
     cov_fidelity='literature_typed' (a hand-typed Gaussian, no released file to
-    checksum), reach publication tier, and NEVER over-claim 'full'/'diagonal'
+    checksum), remain preliminary, and NEVER over-claim 'full'/'diagonal'
     or leave the fidelity unstamped (None). union3 now ALWAYS runs the released
     22-bin binned-distance vector, so its honest grade is 'full' WITH the
     verified covariance digest in artifact_sha256. Locks the T1-U6 fix so the
@@ -360,41 +444,58 @@ def bench_sn_compressed_provenance() -> dict[str, Any]:
     )
 
     out: dict[str, Any] = {}
-    ok = True
+    chains: dict[str, dict[str, Any]] = {}
+    provenance_ok = True
     for key in ("pantheon_plus", "des_sn5yr"):
         r = run_likelihood_chain(model="lcdm", dataset_keys=[key], n_samples=4000, random_seed=42)
+        chains[key] = r
         prov = r.get("provenance", {}).get("cosmology_likelihood", {})
         fid = prov.get("cov_fidelity")
-        good = fid == "literature_typed" and r.get("publication_ready") is True
-        ok = ok and good
-        out[key] = {"cov_fidelity": fid, "publication_ready": r.get("publication_ready")}
+        provenance_ok = provenance_ok and fid == "literature_typed"
+        out[key] = {
+            "cov_fidelity": fid,
+            "publication_ready": r.get("publication_ready"),
+            "preliminary_ready": r.get("preliminary_ready"),
+        }
     r = run_likelihood_chain(model="lcdm", dataset_keys=["union3"], n_samples=4000, random_seed=42)
+    chains["union3"] = r
     prov = r.get("provenance", {}).get("cosmology_likelihood", {})
     sha_ok = (prov.get("artifact_sha256") or {}).get("union3") == load_verified_union3_data("union3")["sha256"]
-    union3_good = (
-        prov.get("cov_fidelity") == "full" and sha_ok and r.get("publication_ready") is True
-    )
-    ok = ok and union3_good
+    provenance_ok = provenance_ok and prov.get("cov_fidelity") == "full" and sha_ok
     out["union3"] = {
         "cov_fidelity": prov.get("cov_fidelity"),
         "artifact_sha256_match": sha_ok,
         "publication_ready": r.get("publication_ready"),
+        "preliminary_ready": r.get("preliminary_ready"),
     }
+    gate_by_chain = {
+        name: _preliminary_chain_gate_ok(result)
+        for name, result in chains.items()
+    }
+    gate_ok = all(gate_by_chain.values())
     return {
-        "pass": ok,
+        "pass": bool(provenance_ok and gate_ok),
+        "numerical_regression_pass": None,
+        "provenance_regression_pass": bool(provenance_ok),
+        "publication_gate_correct": gate_ok,
+        "publication_gate_by_chain": gate_by_chain,
+        "scientific_publication_pass": False,
+        "validation_scope": "preliminary_provenance_regression",
         **out,
-        "target": "compressed SN chains certify literature_typed; union3 full vector certifies full + verified sha256",
+        "target": "compressed SN chains certify literature_typed; union3 certifies full + sha256; all remain preliminary",
     }
 
 
 def bench_pantheon_full_cov_fidelity() -> dict[str, Any]:
-    """T1-U8b: the full 1701-SN path certifies a sha256-verified FULL covariance.
+    """T1-U8b: the official 1657-row selection certifies a verified full covariance.
 
-    SLOW OPT-IN — the full Pantheon+SH0ES χ² fit is ~208s, far past the 45s chat
+    The release contains 1701 rows; the likelihood applies the official
+    ``(zHD > 0.01) OR IS_CALIBRATOR`` selection before fitting 1657 rows.
+    SLOW OPT-IN — the full Pantheon+SH0ES χ² fit is minutes long, far past the chat
     deadline, so it is skipped unless PANTHEON_PLUS_FULL_CHI2_ENABLED is set
-    (running it routinely needs the paid background worker). When enabled, the
-    pantheon_plus chain must stamp cov_fidelity='full' with the verified npz
-    digest in artifact_sha256."""
+    (run it locally or on a background worker). When enabled, the pantheon_plus
+    chain must stamp cov_fidelity='full' with the verified npz digest in
+    artifact_sha256 and remain preliminary because it is one coupled ensemble."""
     from app.services.cosmology_likelihoods import (
         PANTHEON_PLUS_FULL_CHI2_ENABLED,
         load_verified_pantheon_plus_data,
@@ -403,8 +504,9 @@ def bench_pantheon_full_cov_fidelity() -> dict[str, Any]:
 
     if not PANTHEON_PLUS_FULL_CHI2_ENABLED:
         return {
-            "pass": True,
-            "skipped": "needs PANTHEON_PLUS_FULL_CHI2_ENABLED (~208s full 1701-SN fit; paid worker)",
+            "pass": None,
+            "status": "skipped",
+            "skipped": "needs PANTHEON_PLUS_FULL_CHI2_ENABLED (slow 1657-selected-row full-covariance fit)",
             "target": "full SN path certifies cov_fidelity='full' with verified npz sha256",
         }
     expected_sha = load_verified_pantheon_plus_data("pantheon_plus")["sha256"]
@@ -412,16 +514,17 @@ def bench_pantheon_full_cov_fidelity() -> dict[str, Any]:
     prov = r.get("provenance", {}).get("cosmology_likelihood", {})
     fid = prov.get("cov_fidelity")
     sha = (prov.get("artifact_sha256") or {}).get("pantheon_plus")
-    return {
-        "pass": fid == "full" and sha == expected_sha and r.get("publication_ready") is True,
-        "cov_fidelity": fid,
-        "artifact_sha256_match": sha == expected_sha,
-        "target": "full SN path certifies cov_fidelity='full' with verified npz sha256",
-    }
+    return _preliminary_benchmark_result(
+        numerical_pass=fid == "full" and sha == expected_sha,
+        chain_result=r,
+        cov_fidelity=fid,
+        artifact_sha256_match=sha == expected_sha,
+        target="full SN path certifies full covariance + sha256 and remains preliminary",
+    )
 
 
 def bench_w0wa_full_sn_w0_tight() -> dict[str, Any]:
-    """Dark-energy frontier: with the FULL 1701-SN covariance (not the compressed
+    """Dark-energy frontier: with the full 1657-selected-row covariance (not the compressed
     3-number SN summary), the w0waCDM DESI+SN+CMB fit tightens w0 to ~DESI's
     precision (σ_w0 ≈ 0.07 measured, vs ≈ 0.15 from the compressed summary; DESI
     2024 VI reports 0.063). This confirms the constraint gap is DATA COMPRESSION,
@@ -436,8 +539,9 @@ def bench_w0wa_full_sn_w0_tight() -> dict[str, Any]:
 
     if not PANTHEON_PLUS_FULL_CHI2_ENABLED:
         return {
-            "pass": True,
-            "skipped": "needs PANTHEON_PLUS_FULL_CHI2_ENABLED (~5 min full 1701-SN w0wa fit; local/Actions, free)",
+            "pass": None,
+            "status": "skipped",
+            "skipped": "needs PANTHEON_PLUS_FULL_CHI2_ENABLED (~5 min full 1657-selected-row w0wa fit; local/Actions)",
             "target": "full-SN w0waCDM tightens σ_w0 to ≤ 0.09 (~DESI 0.063); stays off-anchor exploratory",
         }
     r = run_likelihood_chain(
@@ -447,21 +551,22 @@ def bench_w0wa_full_sn_w0_tight() -> dict[str, Any]:
     )
     w0 = r.get("parameters", {}).get("w0", {})
     sig = w0.get("std")
-    return {
+    numeric_ok = (
+        isinstance(sig, (int, float))
+        and sig <= 0.09
+        and r.get("off_anchor_review_required") is True
+    )
+    return _preliminary_benchmark_result(
         # The benchmark's point is the DATA-COMPRESSION claim: the full 1701-SN
         # covariance tightens σ_w0 to ~DESI precision.  w0waCDM is off-anchor, so by
-        # the safety contract it MUST stay exploratory (publication_ready False +
-        # off_anchor_review_required True), never publication — assert that too.
-        "pass": (
-            isinstance(sig, (int, float)) and sig <= 0.09
-            and r.get("publication_ready") is False
-            and r.get("off_anchor_review_required") is True
-        ),
-        "w0_median": w0.get("median"),
-        "w0_sigma": sig,
-        "off_anchor_review_required": r.get("off_anchor_review_required"),
-        "target": "full-SN w0waCDM tightens σ_w0 to ≤ 0.09 (~DESI 0.063); stays off-anchor exploratory",
-    }
+        # the safety contract it MUST stay preliminary and never publication.
+        numerical_pass=numeric_ok,
+        chain_result=r,
+        w0_median=w0.get("median"),
+        w0_sigma=sig,
+        off_anchor_review_required=r.get("off_anchor_review_required"),
+        target="full-SN w0waCDM tightens σ_w0 to ≤ 0.09 and stays preliminary",
+    )
 
 
 def bench_oracle_genuine_reproductions() -> dict[str, Any]:
@@ -474,24 +579,29 @@ def bench_oracle_genuine_reproductions() -> dict[str, Any]:
     from app.services.cosmology_oracle import PUBLISHED_ANCHORS, reproduce_anchor
 
     out: dict[str, Any] = {}
-    ok = True
+    reproduced: dict[str, dict[str, Any]] = {}
+    numerical_ok = True
     for a in PUBLISHED_ANCHORS:
         if a.independence == "consistency":
             continue
         r = reproduce_anchor(a)
-        ok = ok and bool(r["within_tol"])
+        reproduced[a.goal_key] = r
+        numerical_ok = numerical_ok and bool(r["within_tol"])
         val = r["reproduced_value"]
         out[a.goal_key] = {
             "kind": a.independence,
             "reproduced": round(val, 4) if isinstance(val, (int, float)) else None,
             "published": a.value,
             "within_tol": r["within_tol"],
+            "publication_ready": r["publication_ready"],
+            "preliminary_ready": r["preliminary_ready"],
         }
-    return {
-        "pass": ok,
+    return _preliminary_multi_benchmark_result(
+        numerical_pass=numerical_ok,
+        chain_results=reproduced,
+        target="every oracle anchor reproduces within tolerance and remains preliminary",
         **out,
-        "target": "every independent + fit_quality oracle anchor reproduces within tol",
-    }
+    )
 
 
 def bench_model_comparison_delta() -> dict[str, Any]:
@@ -532,19 +642,21 @@ def bench_model_comparison_delta() -> dict[str, Any]:
     )
     cmp = compute_model_comparison(lcdm, wcdm)
     finite = all(cmp[k] is not None for k in ("delta_chi2", "delta_aic", "delta_bic"))
-    return {
-        "pass": (
-            finite
-            and cmp["comparison_valid"] is True
-            and cmp["n_extra_params"] == 1
-            and cmp["preferred"] in {"lcdm", "inconclusive"}
-        ),
-        "delta_chi2": cmp["delta_chi2"],
-        "delta_aic": cmp["delta_aic"],
-        "n_extra_params": cmp["n_extra_params"],
-        "preferred": cmp["preferred"],
-        "target": "finite Δχ²/ΔAIC/ΔBIC on a model-invariant likelihood, 1 extra param (w), wCDM NOT preferred over ΛCDM (w≈-1)",
-    }
+    numeric_ok = (
+        finite
+        and cmp["comparison_valid"] is True
+        and cmp["n_extra_params"] == 1
+        and cmp["preferred"] in {"lcdm", "inconclusive"}
+    )
+    return _preliminary_multi_benchmark_result(
+        numerical_pass=numeric_ok,
+        chain_results={"lcdm": lcdm, "wcdm": wcdm},
+        delta_chi2=cmp["delta_chi2"],
+        delta_aic=cmp["delta_aic"],
+        n_extra_params=cmp["n_extra_params"],
+        preferred=cmp["preferred"],
+        target="finite model-comparison deltas from preliminary chains; never a publication validation",
+    )
 
 
 def bench_growth_kernel_vs_exact_lcdm() -> dict[str, Any]:
@@ -618,17 +730,16 @@ def bench_cosmic_chronometer_hz() -> dict[str, Any]:
     executed = (
         bool(r["success"])
         and "cosmic_chronometers" in used
-        and r["chain_tier"] != "blocked"
     )
-    return {
-        "pass": 0.3 < reduced < 1.2 and executed,
-        "n_points": len(COSMIC_CHRONOMETER_HZ),
-        "chi2_planck_fiducial": round(chi2, 3),
-        "reduced_chi2": round(reduced, 4),
-        "chain_tier": r["chain_tier"],
-        "executed_in_process": executed,
-        "target": "reduced χ²(Planck fid) in [0.3, 1.2] + CC runs in-process (not skipped)",
-    }
+    return _preliminary_benchmark_result(
+        numerical_pass=0.3 < reduced < 1.2 and executed,
+        chain_result=r,
+        n_points=len(COSMIC_CHRONOMETER_HZ),
+        chi2_planck_fiducial=round(chi2, 3),
+        reduced_chi2=round(reduced, 4),
+        executed_in_process=executed,
+        target="CC reduced χ² in [0.3,1.2], executed in-process, preliminary only",
+    )
 
 
 def bench_eboss_fsigma8_growth() -> dict[str, Any]:
@@ -666,23 +777,22 @@ def bench_eboss_fsigma8_growth() -> dict[str, Any]:
     executed = (
         bool(r["success"])
         and "eboss_dr16_rsd" in used
-        and r["chain_tier"] != "blocked"
     )
-    return {
-        "pass": (
+    return _preliminary_benchmark_result(
+        numerical_pass=(
             abs(f0 - 0.3153 ** 0.55) < 1e-6
             and abs(d0 - 1.0) < 1e-9
             and 0.3 < reduced < 2.0
             and executed
         ),
-        "f0_growth_rate": round(f0, 4),
-        "d0_growth_factor": round(d0, 6),
-        "n_points": len(EBOSS_DR16_FSIGMA8),
-        "reduced_chi2_planck": round(reduced, 4),
-        "chain_tier": r["chain_tier"],
-        "executed_in_process": executed,
-        "target": "f(0)=Ωm^0.55, D(0)/D(0)=1, reduced χ²(Planck) in [0.3,2.0], eBOSS runs in-process",
-    }
+        chain_result=r,
+        f0_growth_rate=round(f0, 4),
+        d0_growth_factor=round(d0, 6),
+        n_points=len(EBOSS_DR16_FSIGMA8),
+        reduced_chi2_planck=round(reduced, 4),
+        executed_in_process=executed,
+        target="growth identities + eBOSS χ² regression; in-process chain remains preliminary",
+    )
 
 
 def bench_sdss_6df_bao_executable() -> dict[str, Any]:
@@ -721,26 +831,26 @@ def bench_sdss_6df_bao_executable() -> dict[str, Any]:
     )
     used = [d["key"] for d in r["datasets_used"]]
     executed = (
-        bool(r["success"]) and "sdss_6df_bao" in used and r["chain_tier"] != "blocked"
+        bool(r["success"]) and "sdss_6df_bao" in used
     )
-    return {
-        "pass": (
+    return _preliminary_benchmark_result(
+        numerical_pass=(
             max(pulls) < 1.5
             and decomposition_err < 1e-9
             and 0.1 < chi2 / 2 < 2.0
             and executed
         ),
-        "pred_dv_rd_z0106": round(float(pred[0]), 4),
-        "pred_dv_rd_z015": round(float(pred[1]), 4),
-        "pulls_sigma": [round(p, 2) for p in pulls],
-        "chi2_6df_gaussian": round(gauss_6df, 4),
-        "chi2_mgs_table": round(mgs_table, 4),
-        "chi2_decomposition_err": decomposition_err,
-        "reduced_chi2_planck": round(chi2 / 2, 4),
-        "chain_tier": r["chain_tier"],
-        "executed_in_process": executed,
-        "target": "pulls<1.5σ, χ² = 6dF Gaussian + MGS table exactly, χ²/2 order-unity, runs in-process",
-    }
+        chain_result=r,
+        pred_dv_rd_z0106=round(float(pred[0]), 4),
+        pred_dv_rd_z015=round(float(pred[1]), 4),
+        pulls_sigma=[round(p, 2) for p in pulls],
+        chi2_6df_gaussian=round(gauss_6df, 4),
+        chi2_mgs_table=round(mgs_table, 4),
+        chi2_decomposition_err=decomposition_err,
+        reduced_chi2_planck=round(chi2 / 2, 4),
+        executed_in_process=executed,
+        target="6dF/MGS pulls + exact χ² decomposition; in-process chain remains preliminary",
+    )
 
 
 def bench_sdss_dr12_consensus_bao() -> dict[str, Any]:
@@ -753,8 +863,8 @@ def bench_sdss_dr12_consensus_bao() -> dict[str, Any]:
     z=0.38, NOT the dimensionless ~10 of the same-named eBOSS quantity);
     (2) per-point pulls < 2σ and order-unity χ²/n at the fiducial (measured
     5.615 for 6 points; cobaya parity within 0.1 is locked in
-    tests/test_sdss_dr12_consensus.py); (3) in-process execution to
-    publication tier with the full 6×6 covtot.
+    tests/test_sdss_dr12_consensus.py); (3) in-process execution against the
+    full 6×6 covtot, with the single ensemble held at preliminary status.
     """
     from app.services.cosmology_likelihoods import (
         load_verified_dr12_consensus_data,
@@ -778,24 +888,23 @@ def bench_sdss_dr12_consensus_bao() -> dict[str, Any]:
     executed = (
         bool(r["success"])
         and "sdss_dr12_consensus_bao" in used
-        and r["chain_tier"] == "publication"
         and v["hash_verified"] is True
     )
-    return {
-        "pass": (
+    return _preliminary_benchmark_result(
+        numerical_pass=(
             bool(np.all(pulls < 2.0))
             and bool(np.all(rel < 0.05))
             and 0.3 < chi2 / 6 < 2.0
             and executed
         ),
-        "chi2_planck_fiducial": round(chi2, 4),
-        "reduced_chi2_planck": round(chi2 / 6, 4),
-        "max_pull_sigma": round(float(pulls.max()), 2),
-        "pred_dm_z038_mpc": round(float(pred[0]), 2),
-        "chain_tier": r["chain_tier"],
-        "executed_in_process": executed,
-        "target": "dimensional rs_fid convention (~1512 Mpc), pulls<2σ, χ²/6 order-unity, publication in-process",
-    }
+        chain_result=r,
+        chi2_planck_fiducial=round(chi2, 4),
+        reduced_chi2_planck=round(chi2 / 6, 4),
+        max_pull_sigma=round(float(pulls.max()), 2),
+        pred_dm_z038_mpc=round(float(pred[0]), 2),
+        executed_in_process=executed,
+        target="DR12 dimensional convention, pulls and χ² pass; ensemble remains preliminary",
+    )
 
 
 def bench_eboss_dr16_grid_bao() -> dict[str, Any]:
@@ -808,7 +917,7 @@ def bench_eboss_dr16_grid_bao() -> dict[str, Any]:
     agrees (~0.4), the Lyα grids sit at the known mild DR16 Lyα offset
     (chi2 2-4 for 2 dof — NOT a failure; cobaya parity is locked in
     tests/test_eboss_dr16_grid_bao.py); (3) the 3-grid joint chain executes
-    in-process to publication tier.
+    in-process but remains preliminary as one coupled ensemble.
     """
     from app.services.cosmology_likelihoods import (
         EBOSS_DR16_GRID_BAO_EXECUTABLE_KEYS,
@@ -845,14 +954,14 @@ def bench_eboss_dr16_grid_bao() -> dict[str, Any]:
         and 0.3 < chi2["eboss_dr16_lyauto_bao"] < 6.0
         and 0.5 < chi2["eboss_dr16_lyxqso_bao"] < 8.0
     )
-    return {
-        "pass": peaks_ok and chi2_ok and r["chain_tier"] == "publication",
-        "elg_peak_dv_rd": elg_peak,
-        "lya_peaks": {k: v[:2] for k, v in lya_peaks.items()},
-        "chi2_planck_fiducial": chi2,
-        "chain_tier": r["chain_tier"],
-        "target": "surface peaks at published best fits, fiducial chi2 in known bands, 3-grid joint publication in-process",
-    }
+    return _preliminary_benchmark_result(
+        numerical_pass=peaks_ok and chi2_ok and bool(r.get("success")),
+        chain_result=r,
+        elg_peak_dv_rd=elg_peak,
+        lya_peaks={k: v[:2] for k, v in lya_peaks.items()},
+        chi2_planck_fiducial=chi2,
+        target="surface peaks + fiducial χ² bands; 3-grid ensemble remains preliminary",
+    )
 
 
 def bench_pantheon18_full_vector() -> dict[str, Any]:
@@ -901,8 +1010,8 @@ def bench_s8_derived_consistency() -> dict[str, Any]:
     path) and BAO+Planck (importance path) — i.e. the sampler no longer explores
     an independent S8; (2) the prod BAO+Planck order is 6-D
     [H0,Ωm,rd,σ8,ombh2,ns] (distance-prior axes added 2026-07-07) with no
-    sampled S8; (3) Planck+KiDS still runs publication-ready (reweighted ESS≥400)
-    and the KiDS S8 pulls the derived S8 below the Planck-only value.
+    sampled S8; (3) Planck+KiDS has reweighted ESS≥400 and the KiDS S8 pulls
+    the derived S8 below the Planck-only value, while all paths stay preliminary.
     """
     from app.services.cosmology_likelihoods import (
         run_likelihood_chain,
@@ -930,21 +1039,26 @@ def bench_s8_derived_consistency() -> dict[str, Any]:
     )
     s8_planck = planck["parameters"]["S8"]["median"]
     s8_kids = planck_kids["parameters"]["S8"]["median"]
-    return {
-        "pass": (
+    numeric_ok = (
             derived_ok(planck)
             and derived_ok(bao_planck)
             and prod_order == ["H0", "omegam", "rd", "sigma8", "ombh2", "ns"]
-            and planck_kids["publication_ready"]
             and (planck_kids["chain_diagnostics"]["ess_bulk"] or 0) >= 400
             and s8_kids < s8_planck
-        ),
-        "prod_bao_planck_order": prod_order,
-        "s8_planck": round(s8_planck, 4),
-        "s8_planck_kids": round(s8_kids, 4),
-        "planck_kids_ess": planck_kids["chain_diagnostics"]["ess_bulk"],
-        "target": "S8=σ8·√(Ωm/0.3) derived (not sampled); prod order 6-D; Planck+KiDS pub-ready, KiDS pulls S8 down",
-    }
+    )
+    return _preliminary_multi_benchmark_result(
+        numerical_pass=numeric_ok,
+        chain_results={
+            "planck": planck,
+            "bao_planck": bao_planck,
+            "planck_kids": planck_kids,
+        },
+        prod_bao_planck_order=prod_order,
+        s8_planck=round(s8_planck, 4),
+        s8_planck_kids=round(s8_kids, 4),
+        planck_kids_ess=planck_kids["chain_diagnostics"]["ess_bulk"],
+        target="S8 identity + 6-D order + KiDS shift are numerical-only; all paths preliminary",
+    )
 
 
 def bench_cmb_distance_prior_reproduces_planck() -> dict[str, Any]:
@@ -1000,6 +1114,66 @@ BENCHMARKS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _normalize_benchmark_accounting(
+    name: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Give every benchmark explicit, non-overlapping validation semantics."""
+    outcome = result.get("pass")
+    if isinstance(outcome, np.bool_):
+        outcome = bool(outcome)
+        result["pass"] = outcome
+    elif outcome is not None and type(outcome) is not bool:
+        raise TypeError(
+            f"benchmark {name!r} returned non-boolean pass={outcome!r} "
+            f"({type(outcome).__name__})"
+        )
+
+    default_scope = "skipped" if outcome is None else "numerical_regression"
+    scope = result.setdefault("validation_scope", default_scope)
+    if not isinstance(scope, str) or not scope:
+        raise TypeError(f"benchmark {name!r} returned invalid validation_scope={scope!r}")
+
+    if "numerical_regression_pass" not in result:
+        result["numerical_regression_pass"] = (
+            outcome if scope == "numerical_regression" else None
+        )
+    result.setdefault("publication_gate_correct", None)
+    result.setdefault("scientific_publication_pass", None)
+    result["benchmark_contract_pass"] = outcome
+
+    for field in (
+        "numerical_regression_pass",
+        "publication_gate_correct",
+        "scientific_publication_pass",
+    ):
+        value = result[field]
+        if isinstance(value, np.bool_):
+            value = bool(value)
+            result[field] = value
+        if value is not None and type(value) is not bool:
+            raise TypeError(
+                f"benchmark {name!r} returned non-boolean {field}={value!r} "
+                f"({type(value).__name__})"
+            )
+
+    if scope.startswith("preliminary_"):
+        if result["scientific_publication_pass"] is not False:
+            raise ValueError(
+                f"preliminary benchmark {name!r} must set scientific_publication_pass=False"
+            )
+        if outcome is True and result["publication_gate_correct"] is not True:
+            raise ValueError(
+                f"preliminary benchmark {name!r} passed without a correct publication gate"
+            )
+    if result["scientific_publication_pass"] is True:
+        if result.get("publication_ready") is not True:
+            raise ValueError(
+                f"benchmark {name!r} claimed scientific publication success without publication_ready=True"
+            )
+    return result
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--json", type=str, default=None,
@@ -1013,21 +1187,99 @@ def main() -> int:
         if args.name and name != args.name:
             continue
         try:
-            results[name] = fn()
+            result = fn()
+            if not isinstance(result, dict):
+                raise TypeError(
+                    f"benchmark {name!r} returned {type(result).__name__}, expected dict"
+                )
+            # NumPy comparisons return np.bool_, which json(default=float)
+            # otherwise serializes as 1.0/0.0.  That used to make a benchmark
+            # disappear from pass/fail/skip accounting while the suite still
+            # exited zero.  Canonicalize only genuine boolean scalars; reject
+            # numeric/string lookalikes rather than guessing their meaning.
+            results[name] = _normalize_benchmark_accounting(name, result)
         except Exception as exc:
             results[name] = {
                 "pass": False,
+                "benchmark_contract_pass": False,
+                "numerical_regression_pass": False,
+                "publication_gate_correct": None,
+                "scientific_publication_pass": None,
+                "validation_scope": "benchmark_execution_error",
                 "error": str(exc),
                 "error_class": exc.__class__.__name__,
                 "traceback": traceback.format_exc(limit=4),
             }
 
+    n_pass = sum(1 for r in results.values() if r.get("pass") is True)
+    n_fail = sum(1 for r in results.values() if r.get("pass") is False)
+    n_skipped = sum(
+        1 for r in results.values()
+        if r.get("pass") is None or r.get("status") == "skipped"
+    )
+    if n_pass + n_fail + n_skipped != len(results):
+        # Defense in depth: no benchmark may vanish from the scientific
+        # accounting, even if result-shape validation changes later.
+        raise RuntimeError(
+            "benchmark outcome accounting is not exhaustive: "
+            f"pass={n_pass}, fail={n_fail}, skipped={n_skipped}, total={len(results)}"
+        )
+    n_numerical_pass = sum(
+        1 for r in results.values() if r.get("numerical_regression_pass") is True
+    )
+    n_numerical_fail = sum(
+        1 for r in results.values() if r.get("numerical_regression_pass") is False
+    )
+    n_numerical_not_applicable = len(results) - n_numerical_pass - n_numerical_fail
+    n_publication_gate_pass = sum(
+        1 for r in results.values() if r.get("publication_gate_correct") is True
+    )
+    n_publication_gate_fail = sum(
+        1 for r in results.values() if r.get("publication_gate_correct") is False
+    )
+    n_publication_gate_not_applicable = (
+        len(results) - n_publication_gate_pass - n_publication_gate_fail
+    )
+    n_scientific_publication_pass = sum(
+        1 for r in results.values() if r.get("scientific_publication_pass") is True
+    )
+    n_scientific_publication_withheld = sum(
+        1 for r in results.values() if r.get("scientific_publication_pass") is False
+    )
+    n_scientific_publication_not_applicable = (
+        len(results)
+        - n_scientific_publication_pass
+        - n_scientific_publication_withheld
+    )
+    n_preliminary_numerical_pass = sum(
+        1
+        for r in results.values()
+        if r.get("validation_scope") == "preliminary_numerical_regression"
+        and r.get("numerical_regression_pass") is True
+        and r.get("publication_gate_correct") is True
+        and r.get("scientific_publication_pass") is False
+        and r.get("pass") is True
+    )
     payload = {
         "suite": "cosmology_benchmarks",
+        "pass_semantics": "benchmark_contract_only_not_scientific_publication",
         "generated_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "n_benchmarks": len(results),
-        "n_pass": sum(1 for r in results.values() if r.get("pass")),
-        "n_fail": sum(1 for r in results.values() if not r.get("pass")),
+        "n_executed": n_pass + n_fail,
+        "n_pass": n_pass,
+        "n_fail": n_fail,
+        "n_skipped": n_skipped,
+        "n_numerical_regression_pass": n_numerical_pass,
+        "n_numerical_regression_fail": n_numerical_fail,
+        "n_numerical_regression_not_applicable": n_numerical_not_applicable,
+        "n_preliminary_numerical_pass": n_preliminary_numerical_pass,
+        "n_publication_gate_pass": n_publication_gate_pass,
+        "n_publication_gate_fail": n_publication_gate_fail,
+        "n_publication_gate_not_applicable": n_publication_gate_not_applicable,
+        "n_scientific_publication_pass": n_scientific_publication_pass,
+        "n_scientific_publication_withheld": n_scientific_publication_withheld,
+        "n_scientific_publication_not_applicable": n_scientific_publication_not_applicable,
+        "suite_status": "failed" if n_fail else ("passed_with_skips" if n_skipped else "passed"),
         "results": results,
     }
     print(json.dumps(payload, indent=2, default=float))
@@ -1035,7 +1287,10 @@ def main() -> int:
         with open(args.json, "w") as fp:
             json.dump(payload, fp, indent=2, default=float)
 
-    all_pass = all(r.get("pass") for r in results.values())
+    # Skips are reported separately and never counted as passes.  They do not
+    # fail the default smoke suite because the full-SN paths are explicit slow
+    # opt-ins; any executed failure still returns non-zero.
+    all_pass = n_fail == 0
     return 0 if all_pass else 1
 
 

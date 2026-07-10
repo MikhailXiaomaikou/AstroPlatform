@@ -15,11 +15,54 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.schemas import ScheduledRun
+from app.models.schemas import DataFile, ScheduledRun
+from app.storage import normalize_storage_key
 
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 60
+
+
+def _scheduled_storage_keys(schedule: ScheduledRun) -> set[str]:
+    """Return every storage key a scheduled DAG can open directly."""
+    keys: set[str] = set()
+    for node in (schedule.dag or {}).get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        node_type = str(node.get("type") or "")
+        params = ((node.get("data") or {}).get("params") or {})
+        if not isinstance(params, dict):
+            params = {}
+        if params.get("fits_path"):
+            keys.add(normalize_storage_key(str(params["fits_path"])))
+        elif node_type in {"LoadData", "PSFPhotometry"}:
+            keys.add(normalize_storage_key(str(schedule.input_data_id)))
+        if node_type == "ImportWorkspace":
+            keys.add(
+                normalize_storage_key(
+                    str(params.get("path") or schedule.input_data_id)
+                )
+            )
+    return keys
+
+
+def _scheduled_inputs_are_owned(session: Session, schedule: ScheduledRun) -> bool:
+    """Re-authorize persisted paths immediately before worker dispatch."""
+    try:
+        required = _scheduled_storage_keys(schedule)
+    except ValueError:
+        return False
+    if not required:
+        return True
+    owned = set(
+        session.execute(
+            select(DataFile.fits_path).where(
+                DataFile.user_id == schedule.user_id,
+                DataFile.fits_path.in_(required),
+            )
+        ).scalars().all()
+    )
+    return owned == required
 
 
 def _create_sync_engine():
@@ -82,6 +125,21 @@ def check_and_dispatch_due_schedules():
                 )
 
                 try:
+                    if not _scheduled_inputs_are_owned(session, schedule):
+                        # A deleted ownership row revokes future scheduled
+                        # access. Disable the schedule instead of repeatedly
+                        # probing an object that may now belong to another
+                        # tenant or be an untracked orphan.
+                        schedule.enabled = False
+                        schedule.next_run_at = None
+                        logger.error(
+                            "Disabled schedule %s because its storage input is "
+                            "missing or no longer owned by user %s",
+                            schedule_id,
+                            schedule.user_id,
+                        )
+                        continue
+
                     # Create a PipelineRun record for this scheduled execution
                     import uuid
                     from app.models.schemas import PipelineRun
@@ -96,12 +154,35 @@ def check_and_dispatch_due_schedules():
                     session.add(run)
                     session.flush()
 
-                    # Dispatch the Celery task
-                    execute_pipeline_task.delay(
-                        str(run_id),
-                        schedule.dag,
-                        schedule.input_data_id,
-                    )
+                    # Dispatch is outside the database transaction boundary. If
+                    # the broker rejects it, terminalize the already-flushed run
+                    # explicitly instead of committing a permanent `pending`
+                    # record that no worker can ever observe.
+                    try:
+                        execute_pipeline_task.delay(
+                            str(run_id),
+                            schedule.dag,
+                            schedule.input_data_id,
+                        )
+                    except Exception:
+                        run.status = "failed"
+                        run.completed_at = datetime.now(timezone.utc)
+                        run.results = {
+                            "success": False,
+                            "error_class": "celery_dispatch_failed",
+                            "error": "Scheduled pipeline could not be queued.",
+                        }
+                        schedule.last_run_at = now
+                        schedule.next_run_at = _compute_next_run(
+                            schedule.cron_expr
+                        )
+                        logger.exception(
+                            "Celery rejected scheduled run %s for schedule %s; "
+                            "recorded a terminal failed attempt",
+                            run_id,
+                            schedule_id,
+                        )
+                        continue
 
                     # Update schedule timestamps
                     schedule.last_run_at = now

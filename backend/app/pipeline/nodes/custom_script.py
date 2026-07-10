@@ -20,17 +20,10 @@ def custom_script(input_data: dict, params: dict) -> dict:
 
     The code should assign its output to a variable named by output_key.
 
-    Security note: runs inside services.code_executor.execute_python's in-process
-    sandbox (BLOCKED_BUILTINS + _safe_import + SIGALRM timeout + stdout/stderr
-    capture). BLOCKED_BUILTINS is no longer maintained per-node -- the isolation
-    logic is shared with the AI run_python tool so future hardening only needs
-    to change one place.
-
-    Trade-off: because input_data contains non-serialisable objects like ndarray /
-    Table, only the in-proc sandbox is viable here (not subprocess_backend). The
-    AI's run_python uses subprocess because it does not need context injection.
-    Pipeline nodes are more trusted than AI tools (edited by logged-in users), so
-    this trade-off is acceptable.
+    Security note: arbitrary Python is disabled by default and always disabled
+    in hosted production.  On a trusted single-user development machine an
+    operator may explicitly enable the legacy executor for crash/resource
+    containment, but filtered builtins are not an OS security boundary.
     """
     from app.services.code_executor import execute_python, get_session_vars
 

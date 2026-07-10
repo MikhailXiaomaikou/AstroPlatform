@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: astro
       POSTGRES_PASSWORD: astro
@@ -23,8 +24,14 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    # Celery is a delivery queue, not a disposable cache. Persist writes and
+    # fail producers when full instead of evicting queued tasks.
+    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 192mb --maxmemory-policy noeviction
     ports:
       - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -36,10 +43,26 @@ services:
           memory: 256M
           cpus: "0.5"
 
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: alembic upgrade head
+    restart: "no"
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
+      FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
@@ -50,13 +73,25 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
       FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
       PIPELINE_MODE: celery
+      STORAGE_BACKEND: local
+      PERSISTENT_STORAGE_MOUNT: /app/data
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      # Compose publishes uvicorn directly; there is no trusted Render proxy.
+      TRUSTED_PROXY_MODE: none
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     volumes:
+      - runtime-data:/app/data
       - fitsdata:/app/data/fits
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/deep', timeout=5).read()"]
+      interval: 15s
+      timeout: 8s
+      retries: 8
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -67,7 +102,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A celery_worker worker --loglevel=info --concurrency=4
+    command: celery -A celery_worker worker --loglevel=info --concurrency=4 --hostname=worker@%h
+    restart: unless-stopped
     environment:
       ENV: production
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
@@ -76,25 +112,74 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
       FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
       PIPELINE_MODE: celery
+      STORAGE_BACKEND: local
+      CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: "43200"
+      CELERY_TASK_TIME_LIMIT_SECONDS: "45000"
+      CELERY_VISIBILITY_TIMEOUT_SECONDS: "46800"
+      RESEARCH_JOB_STALE_SECONDS: "50400"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
+    volumes:
+      - runtime-data:/app/data
+      - fitsdata:/app/data/fits
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A celery_worker inspect ping -d worker@$$HOSTNAME --timeout 5 | grep -q pong"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     deploy:
       resources:
         limits:
           memory: 1G
           cpus: "2.0"
 
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A celery_worker beat --loglevel=info --pidfile=/tmp/celerybeat.pid
+    restart: unless-stopped
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
+      FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
+      PIPELINE_MODE: celery
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /tmp/celerybeat.pid && kill -0 $$(cat /tmp/celerybeat.pid)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # The Compose image must call the Compose backend, never the hosted API.
+        VITE_API_URL: http://localhost:8000
+    restart: unless-stopped
     ports:
       - "3000:8080"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -103,4 +188,6 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
+  runtime-data:
   fitsdata:

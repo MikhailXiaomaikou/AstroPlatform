@@ -189,6 +189,10 @@ def test_production_default_is_one_trusted_hop():
     )
     env = {**os.environ, "PYTHONPATH": str(_BACKEND_DIR)}
     env.pop("ENV", None)  # subprocess sets its own
+    # conftest exports SANDBOX_BACKEND=inprocess for run_python tests; a
+    # production-config subprocess inheriting it would trip the production
+    # sandbox guard before reaching the trusted-proxy assertion under test.
+    env.pop("SANDBOX_BACKEND", None)
     result = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,

@@ -14,6 +14,66 @@ from typing import Any
 import numpy as np
 
 
+MIN_PRELIMINARY_SAMPLE_SIZE = 20
+MIN_REGRESSION_UNIQUE_X = 5
+MIN_BOOTSTRAP_ITERATIONS = 1000
+MIN_CENSORED_DETECTIONS = 10
+
+
+def _finite_positive(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) > 0.0
+    )
+
+
+def _apply_inline_statistics_gate(
+    result: dict[str, Any],
+    *,
+    checks: dict[str, bool],
+    permanent_reasons: list[str] | None = None,
+) -> dict[str, Any]:
+    """Attach a fail-closed publication decision to supplied-array statistics.
+
+    These helpers receive bare arrays, not a hash-bound dataset, selection
+    function, or measurement model.  Passing numerical quality checks can make
+    the output useful as a preliminary calculation, but can never by itself
+    certify a publication-grade scientific result.
+    """
+
+    failed_checks = [name for name, passed in checks.items() if not passed]
+    numerical_quality_ready = not failed_checks
+    reasons = [*failed_checks, *(permanent_reasons or [])]
+    reasons.append("inline_array_source_provenance_unverified")
+    result.update(
+        {
+            "publication_ready": False,
+            "preliminary_ready": numerical_quality_ready,
+            "analysis_tier": (
+                "preliminary" if numerical_quality_ready else "exploratory"
+            ),
+            "supports_measurement_claims": numerical_quality_ready,
+            "claim_scope": "preliminary_inline_statistics",
+            "publication_gate": {
+                "eligible": False,
+                "reasons": list(dict.fromkeys(reasons)),
+                "checks": checks,
+                "numerical_quality_ready": numerical_quality_ready,
+            },
+            "__message_to_model__": (
+                "This supplied-array statistic is preliminary only. Quote the "
+                "computed value with its sample size, method, and uncertainty, "
+                "but do not describe it as publication-ready without a hash-bound "
+                "source dataset, documented selection, and domain-appropriate "
+                "independent validation."
+            ),
+        }
+    )
+    return result
+
+
 def _as_finite_array(values: Any) -> np.ndarray:
     arr = np.asarray(values or [], dtype=float)
     return arr[np.isfinite(arr)]
@@ -38,7 +98,7 @@ def robust_summary(values: list[float], *, n_bootstrap: int = 1000, seed: int | 
         for i in range(int(n_bootstrap)):
             boots[i] = float(np.median(rng.choice(data, size=data.size, replace=True)))
         boot_ci = [round(float(np.percentile(boots, 16)), 6), round(float(np.percentile(boots, 84)), 6)]
-    return {
+    result = {
         "success": True,
         "analysis_type": "robust_summary",
         "n": int(data.size),
@@ -49,8 +109,22 @@ def robust_summary(values: list[float], *, n_bootstrap: int = 1000, seed: int | 
         "p16": round(float(np.percentile(data, 16)), 6),
         "p84": round(float(np.percentile(data, 84)), 6),
         "median_bootstrap_ci_16_84": boot_ci,
-        "publication_ready": True,
     }
+    bootstrap_width = (
+        float(boot_ci[1] - boot_ci[0]) if boot_ci is not None else 0.0
+    )
+    return _apply_inline_statistics_gate(
+        result,
+        checks={
+            "sample_size_at_least_20": data.size >= MIN_PRELIMINARY_SAMPLE_SIZE,
+            "at_least_five_unique_values": np.unique(data).size >= 5,
+            "finite_nonzero_sample_spread": _finite_positive(std),
+            "bootstrap_iterations_at_least_1000": (
+                int(n_bootstrap) >= MIN_BOOTSTRAP_ITERATIONS
+            ),
+            "finite_nonzero_bootstrap_interval": _finite_positive(bootstrap_width),
+        },
+    )
 
 
 def linear_regression(
@@ -183,7 +257,23 @@ def bootstrap_linear_regression(
         "slope_ci_16_84": [round(float(np.percentile(slopes, 16)), 6), round(float(np.percentile(slopes, 84)), 6)],
         "intercept_ci_16_84": [round(float(np.percentile(intercepts, 16)), 6), round(float(np.percentile(intercepts, 84)), 6)],
     })
-    return point
+    base_checks = dict((point.get("publication_gate") or {}).get("checks") or {})
+    slope_interval = point["slope_ci_16_84"]
+    intercept_interval = point["intercept_ci_16_84"]
+    base_checks.update(
+        {
+            "bootstrap_iterations_at_least_1000": (
+                int(n_bootstrap) >= MIN_BOOTSTRAP_ITERATIONS
+            ),
+            "finite_nonzero_slope_bootstrap_interval": _finite_positive(
+                float(slope_interval[1] - slope_interval[0])
+            ),
+            "finite_nonzero_intercept_bootstrap_interval": _finite_positive(
+                float(intercept_interval[1] - intercept_interval[0])
+            ),
+        }
+    )
+    return _apply_inline_statistics_gate(point, checks=base_checks)
 
 
 def censored_summary(values: list[float], *, is_upper_limit: list[bool]) -> dict[str, Any]:
@@ -194,6 +284,12 @@ def censored_summary(values: list[float], *, is_upper_limit: list[bool]) -> dict
     finite = np.isfinite(vals)
     vals = vals[finite]
     flags = flags[finite]
+    if vals.size == 0:
+        return {
+            "success": False,
+            "error": "No finite censored-data values supplied.",
+            "error_class": "empty_data",
+        }
     detected = vals[~flags]
     limits = vals[flags]
     out = {
@@ -203,7 +299,6 @@ def censored_summary(values: list[float], *, is_upper_limit: list[bool]) -> dict
         "n_detections": int(detected.size),
         "n_upper_limits": int(limits.size),
         "upper_limit_fraction": round(float(limits.size / vals.size), 6) if vals.size else None,
-        "publication_ready": detected.size >= 3,
         "caveat": (
             "This is a descriptive censored-data summary. Use a dedicated "
             "survival-analysis likelihood before claiming distribution parameters."
@@ -214,7 +309,18 @@ def censored_summary(values: list[float], *, is_upper_limit: list[bool]) -> dict
         out["detected_range"] = [round(float(np.min(detected)), 6), round(float(np.max(detected)), 6)]
     if limits.size:
         out["upper_limit_range"] = [round(float(np.min(limits)), 6), round(float(np.max(limits)), 6)]
-    return out
+    return _apply_inline_statistics_gate(
+        out,
+        checks={
+            "sample_size_at_least_20": vals.size >= MIN_PRELIMINARY_SAMPLE_SIZE,
+            "at_least_ten_detections": detected.size >= MIN_CENSORED_DETECTIONS,
+            "contains_declared_limits": limits.size > 0,
+            "finite_nonzero_detected_spread": (
+                detected.size > 1 and _finite_positive(np.std(detected, ddof=1))
+            ),
+        },
+        permanent_reasons=["descriptive_only_no_survival_likelihood"],
+    )
 
 
 def run_statistics_toolbox(inp: dict[str, Any]) -> dict[str, Any]:
@@ -283,9 +389,22 @@ def _linear_result(
         "slope_stderr": round(float(slope_err), 6) if slope_err is not None else None,
         "intercept_stderr": round(float(intercept_err), 6) if intercept_err is not None else None,
         "residual_rms": round(float(np.sqrt(np.mean(residuals ** 2))), 6),
-        "publication_ready": bool(x.size >= 3),
-        "supports_measurement_claims": bool(x.size >= 3),
     }
     if extra:
         result.update(extra)
-    return result
+    return _apply_inline_statistics_gate(
+        result,
+        checks={
+            "sample_size_at_least_20": x.size >= MIN_PRELIMINARY_SAMPLE_SIZE,
+            "at_least_five_unique_x_values": (
+                np.unique(x).size >= MIN_REGRESSION_UNIQUE_X
+            ),
+            "finite_effect_estimates": (
+                math.isfinite(float(slope)) and math.isfinite(float(intercept))
+            ),
+            "finite_positive_slope_uncertainty": _finite_positive(slope_err),
+            "finite_nonzero_residual_spread": _finite_positive(
+                np.sqrt(np.mean(residuals**2))
+            ),
+        },
+    )

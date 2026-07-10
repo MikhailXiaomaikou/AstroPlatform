@@ -93,10 +93,11 @@ def test_parity_against_real_cobaya_likelihood():
         assert abs(p - theory) / abs(theory) < 5e-4, (z, quantity, p, theory)
 
 
-def test_chain_runs_in_process_to_publication():
+def test_chain_runs_in_process_as_preliminary():
     r = cl.run_likelihood_chain(model="lcdm", dataset_keys=[KEY], n_samples=2000, random_seed=42)
-    assert r["chain_tier"] == "publication"
-    assert r["publication_ready"] is True
+    assert r["chain_tier"] == "exploratory"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
     used = {d["key"] for d in r["datasets_used"]}
     assert KEY in used
     assert not r["datasets_not_run"]

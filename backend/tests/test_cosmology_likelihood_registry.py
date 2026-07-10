@@ -100,7 +100,8 @@ async def test_load_cosmology_data_product_parses_registered_table_and_covarianc
     assert table["parse"]["kind"] == "table"
     assert table["parse"]["row_count"] == 2
     assert table["parse"]["preview"][0]["z"] == pytest.approx(0.30)
-    assert table["publication_ready"] is True
+    # Caller-provided fixture bytes are parseable but never hash-bound evidence.
+    assert table["publication_ready"] is False
 
     cov = await load_cosmology_data_product(
         dataset_key="desi_dr1_bao",
@@ -131,6 +132,31 @@ async def test_load_cosmology_data_product_parses_dimension_prefixed_sn_covarian
     assert result["parse"]["format_detected"] == "dimension_prefixed_flat_covariance"
     assert result["parse"]["shape"] == [2, 2]
     assert result["parse"]["symmetric"] is True
+
+
+@pytest.mark.asyncio
+async def test_pantheon_table_header_maps_declared_columns_by_name():
+    from app.services.cosmology_data_products import load_cosmology_data_product
+
+    content = (
+        "CID IDSURVEY zHD zCMB m_b_corr IS_CALIBRATOR CEPH_DIST "
+        "MU_SH0ES MU_SH0ES_ERR_DIAG\n"
+        "2011fe 51 0.00122 0.00122 9.74571 1 28.9987 28.9987 1.51645\n"
+    )
+    result = await load_cosmology_data_product(
+        dataset_key="pantheon_plus",
+        role="data_table",
+        allow_network=False,
+        content_override=content,
+    )
+
+    preview = result["parse"]["preview"][0]
+    assert result["parse"]["header_detected"] is True
+    assert result["parse"]["row_count"] == 1
+    assert preview["CID"] == "2011fe"
+    assert preview["zHD"] == pytest.approx(0.00122)
+    assert preview["zCMB"] == pytest.approx(0.00122)
+    assert result["publication_ready"] is False  # override + row-count mismatch
 
 
 @pytest.mark.asyncio
@@ -265,7 +291,7 @@ def test_pairwise_tensions_compare_direct_s8_to_derived_sigma8_omegam():
     assert s8["sigma"] > 1.0
 
 
-def test_desi_dr1_bao_data_product_runner_produces_publication_ready_preliminary_chain():
+def test_desi_dr1_bao_data_product_runner_produces_preliminary_chain():
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     result = run_likelihood_chain(
@@ -276,8 +302,9 @@ def test_desi_dr1_bao_data_product_runner_produces_publication_ready_preliminary
     )
 
     assert result["success"] is True
-    assert result["publication_ready"] is True
-    assert result["analysis_status"] == "COMPRESSED_CHAIN_READY"
+    assert result["publication_ready"] is False
+    assert result["preliminary_ready"] is True
+    assert result["analysis_status"] == "EXPLORATORY"
     assert result["sampler"] == "bao_gaussian_importance"
     # 2026-06-12: a chain that executed ONLY released sha256-verified products
     # (no compressed Gaussian participated) carries the honest executable
@@ -290,6 +317,7 @@ def test_desi_dr1_bao_data_product_runner_produces_publication_ready_preliminary
     assert result["parameters"]["omegam"]["median"] == pytest.approx(0.294, abs=0.03)
     assert result["fit_statistics"]["n_constraints"] == 12
     assert result["chain_diagnostics"]["proposal_ess"] >= 400
+    assert result["chain_diagnostics"]["n_independent_chains"] == 0
     assert "desilike/Cobaya" in result["warnings"][0]
     assert "prior/calibration dependent" in " ".join(result["warnings"])
     sources = result["provenance"]["cosmology_likelihood"]["compressed_sources"]
@@ -535,7 +563,9 @@ async def test_ai_tool_wrappers_expose_registry_and_config_guardrails():
         python_session_id="test",
     )
     assert chain["success"] is True
-    assert chain["publication_ready"] is True
+    assert chain["publication_ready"] is False
+    assert chain["preliminary_ready"] is True
+    assert "literature_typed_input" in chain["preliminary_reasons"]
     assert set(chain["parameters"]) >= {"H0", "omegam", "sigma8", "S8"}
 
 
@@ -715,7 +745,8 @@ def test_spt_cluster_chain_runner_combines_with_weak_lensing() -> None:
         n_samples=600,
     )
     assert result["success"] is True
-    assert result["publication_ready"] is True
+    assert result["publication_ready"] is False
+    assert result["preliminary_ready"] is True
     # sigma8 must be in the fit parameters
     assert "sigma8" in result["parameters"]
     assert "S8" in result["parameters"]
@@ -828,8 +859,7 @@ def test_eboss_dr16_rsd_nuisance_parameters_cover_per_subsample_systematics() ->
 
 
 def test_single_cell_emcee_fallback_upgrades_collapsed_3probe() -> None:
-    """3-probe importance ESS collapses (~38); allow_emcee_fallback upgrades the
-    single-cell chain to compressed-emcee and recovers a quotable posterior."""
+    """The emcee fallback improves ESS but one flattened ensemble stays preliminary."""
     from app.services.cosmology_likelihoods import run_likelihood_chain
 
     keys = ["desi_dr1_bao", "pantheon_plus", "planck2018_compressed"]
@@ -842,7 +872,8 @@ def test_single_cell_emcee_fallback_upgrades_collapsed_3probe() -> None:
     assert fast["sampler"] == "bao_gaussian_importance"
     assert fast["publication_ready"] is False
 
-    # Single-cell deep run: emcee upgrade clears the ESS floor.
+    # Single-cell deep run: emcee upgrade clears the scalar ESS floor, but it
+    # still has no four independent chains or rank-Rhat certificate.
     deep = run_likelihood_chain(
         model="lcdm",
         dataset_keys=keys,
@@ -851,8 +882,10 @@ def test_single_cell_emcee_fallback_upgrades_collapsed_3probe() -> None:
         allow_emcee_fallback=True,
     )
     assert deep["sampler"] == "compressed_emcee"
-    assert deep["publication_ready"] is True
-    assert deep["chain_tier"] == "publication"
+    assert deep["publication_ready"] is False
+    assert deep["preliminary_ready"] is True
+    assert deep["chain_tier"] == "exploratory"
+    assert "flattened_coupled_emcee_ensemble" in deep["preliminary_reasons"]
     assert deep["chain_diagnostics"]["ess_bulk"] >= 400
     assert deep["chain_diagnostics"]["overall_status"] == "emcee_sampled"
 
@@ -870,4 +903,5 @@ def test_emcee_fallback_skips_when_importance_ess_sufficient() -> None:
         allow_emcee_fallback=True,
     )
     assert deep["sampler"] == "bao_gaussian_importance"
-    assert deep["publication_ready"] is True
+    assert deep["publication_ready"] is False
+    assert deep["preliminary_ready"] is True

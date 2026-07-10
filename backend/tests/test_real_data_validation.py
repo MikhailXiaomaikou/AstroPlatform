@@ -133,7 +133,15 @@ class TestBayesianInference:
         # Simple model: y = theta
         samples = np.random.normal(5, 0.1, (100, 1))
         observed = np.array([5.0, 5.1, 4.9, 5.05])
-        result = posterior_predictive_check(lambda t: np.full(4, t[0]), samples, observed)
+
+        def model(t):
+            return np.full(4, t[0])
+        result = posterior_predictive_check(
+            model,
+            samples,
+            observed,
+            observation_sampler=lambda t, rng: model(t) + rng.normal(0, 0.1, 4),
+        )
         assert "overall_p_value" in result
 
 

@@ -342,9 +342,13 @@ COSMOLOGY_TOOL_SCHEMAS = [
             "summaries. Use this for evidence/posterior diagnostics when a paper "
             "requires nested sampling but the likelihood can be represented as "
             "bounded parameters plus mean/covariance summaries. It never executes "
-            "user Python or raw Cobaya YAML. Results are citeable only when "
-            "publication_ready=true and must be described as controlled Gaussian "
-            "nested-sampling, not a full external likelihood."
+            "user Python or raw Cobaya YAML. Caller-supplied Gaussian values remain "
+            "non-citeable diagnostics: publication_ready can become true only when "
+            "each block includes a dataset_key and its parameter order, mean, and "
+            "full covariance exactly match that registered dataset, and dynesty "
+            "reaches its requested stopping criterion. Even then it must be "
+            "described as controlled Gaussian nested-sampling, not a full external "
+            "likelihood."
         ),
         "input_schema": {
             "type": "object",
@@ -361,13 +365,20 @@ COSMOLOGY_TOOL_SCHEMAS = [
                     "type": "object",
                     "description": (
                         "Single Gaussian likelihood with parameters, mean, "
-                        "covariance, and optional citation/source_url."
+                        "covariance, and optional dataset_key. Citation/source_url "
+                        "strings supplied by the caller are not trusted; dataset_key "
+                        "is verified against the registered numeric likelihood."
                     ),
                 },
                 "likelihoods": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "Optional list of Gaussian likelihood blocks to multiply.",
+                    "description": (
+                        "Optional list of Gaussian likelihood blocks to multiply; "
+                        "each needs an exact registered dataset_key match to be citeable. "
+                        "Duplicate blocks or blocks sharing a dataset/source/citation "
+                        "are rejected because independence is not established."
+                    ),
                 },
                 "sampler_config": {
                     "type": "object",
@@ -664,7 +675,13 @@ async def _cosmology_rows_from_input(
 # ── Tool executors (moved verbatim from ai_tools/__init__.py, H1 split) ──
 
 
-async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> dict:
+async def _exec_fit_cosmology_mcmc(
+    inp: dict,
+    python_session_id: str | None,
+    *,
+    user_id: str | None = None,
+    chat_session_id: str | None = None,
+) -> dict:
     from app.services.async_tool_runtime import in_async_worker
     from app.services.cosmology_mcmc import (
         fit_cosmology_emcee,
@@ -705,7 +722,11 @@ async def _exec_fit_cosmology_mcmc(inp: dict, python_session_id: str | None) -> 
         if in_async_worker():
             result = await asyncio.to_thread(fit_cosmology_emcee, **kwargs)
         elif should_run_background(n_walkers, n_steps, bool(inp.get("background", False))):
-            result = submit_emcee_job(**kwargs)
+            result = submit_emcee_job(
+                **kwargs,
+                user_id=user_id,
+                session_id=chat_session_id,
+            )
         else:
             result = await asyncio.to_thread(fit_cosmology_emcee, **kwargs)
         if attestation_rejected and isinstance(result, dict):
@@ -839,7 +860,11 @@ async def _exec_compute_theory_cmb_spectrum(inp: dict) -> dict:
         }
 
 
-def _exec_get_cosmology_run_status(inp: dict) -> dict:
+def _exec_get_cosmology_run_status(
+    inp: dict,
+    *,
+    user_id: str | None = None,
+) -> dict:
     from app.services.cosmology_mcmc import get_cosmology_job_status
 
     job_id = str(inp.get("job_id") or "").strip()
@@ -851,7 +876,7 @@ def _exec_get_cosmology_run_status(inp: dict) -> dict:
             "error": "job_id is required",
             "error_class": "missing_job_id",
         }
-    return get_cosmology_job_status(job_id)
+    return get_cosmology_job_status(job_id, owner_id=user_id)
 
 
 def _exec_list_cosmology_datasets(inp: dict) -> dict:
@@ -1142,7 +1167,12 @@ def _exec_audit_published_constraint(inp: dict) -> dict:
 
 
 async def dispatch_cosmology(
-    tool_name: str, tool_input: dict, python_session_id: str | None = None
+    tool_name: str,
+    tool_input: dict,
+    python_session_id: str | None = None,
+    *,
+    user_id: str | None = None,
+    chat_session_id: str | None = None,
 ) -> dict | None:
     """Unified entry point for ai_tools/__init__: routes the cosmology tools.
 
@@ -1150,11 +1180,16 @@ async def dispatch_cosmology(
     caller already guards with ``tool_name in COSMOLOGY_TOOL_NAMES``.
     """
     if tool_name == "fit_cosmology_mcmc":
-        return await _exec_fit_cosmology_mcmc(tool_input, python_session_id)
+        return await _exec_fit_cosmology_mcmc(
+            tool_input,
+            python_session_id,
+            user_id=user_id,
+            chat_session_id=chat_session_id,
+        )
     elif tool_name == "run_cobaya_cosmology":
         return await _exec_run_cobaya_cosmology(tool_input, python_session_id)
     elif tool_name == "get_cosmology_run_status":
-        return _exec_get_cosmology_run_status(tool_input)
+        return _exec_get_cosmology_run_status(tool_input, user_id=user_id)
     elif tool_name == "list_cosmology_datasets":
         return _exec_list_cosmology_datasets(tool_input)
     elif tool_name == "load_cosmology_data_product":

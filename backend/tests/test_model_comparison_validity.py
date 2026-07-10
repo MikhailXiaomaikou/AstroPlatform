@@ -77,7 +77,8 @@ def test_same_representation_bao_planck_pair_is_now_valid():
     # Both sides now sample the distance-prior axes — same representation.
     assert "ombh2" in (lcdm.get("parameters") or {})
     assert "ombh2" in (wcdm.get("parameters") or {})
-    assert lcdm["chain_tier"] == "publication"
+    assert lcdm["chain_tier"] == "exploratory"
+    assert lcdm["preliminary_ready"] is True
     assert wcdm["chain_tier"] == "exploratory"
 
     cmp = compute_model_comparison(lcdm, wcdm)
@@ -129,7 +130,7 @@ def test_blocked_tier_input_invalidates_comparison():
     ds = ["desi_dr1_bao"]
     lcdm = run_likelihood_chain(model="lcdm", dataset_keys=ds, n_samples=400, random_seed=42)
     wcdm = run_likelihood_chain(model="wcdm", dataset_keys=ds, n_samples=400, random_seed=42)
-    assert lcdm["chain_tier"] == "publication"
+    assert lcdm["chain_tier"] == "exploratory"
     assert wcdm["chain_tier"] == "blocked"  # precondition: ESS collapse is real
 
     cmp = compute_model_comparison(lcdm, wcdm)

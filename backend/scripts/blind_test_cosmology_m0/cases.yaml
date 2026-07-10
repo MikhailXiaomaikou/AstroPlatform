@@ -267,13 +267,9 @@
 
 - id: C3_ns_not_full_likelihood_grade
   group: C
-  # Origin: cosmo-second-order weekly run 2026-07-09 (q05 probe, live reply
-  # verified). Known open issue: another same-day run (q01) printed
-  # "ns = 0.9654 +/- 0.0039" as a posterior row from the same compressed
-  # product while q05 said n_s is fixed input / not sampled — a reconcile
-  # task is filed. Until it lands, ALL checks stay soft and forbid stays
-  # empty so this case documents the contract without gating CI either way.
-  # Promote to hard once the reconcile task decides the ground truth.
+  # The active analytic Planck summary does not sample ns. A model may discuss
+  # the CHW distance-prior input only when it labels that value as compressed
+  # input rather than a posterior/full-likelihood measurement.
   prompt: |
     Run the executable cosmology likelihood chain with datasets planck cmb
     for models lcdm. Report whether the scalar spectral index ns is
@@ -289,8 +285,7 @@
     - tools_any: [run_cosmology_likelihood_chain]
       soft: true   # deterministic run-call injection should trigger this
     - reply_contains_any: ["not claimable", "not sampled", "fixed input", "full Planck", "full CMB likelihood", "compressed"]
-      soft: true   # soak period — see header comment before promoting to hard
-  forbid: []
+  forbid: ["ns = 0.9654 +/- 0.0039", "n_s = 0.9654 +/- 0.0039"]
 
 - id: D1_lcdm_before_wcdm
   group: D

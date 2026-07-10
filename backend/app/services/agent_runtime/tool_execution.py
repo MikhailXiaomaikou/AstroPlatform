@@ -463,7 +463,9 @@ async def _execute_tool_calls(
                 "success": False,
             }
         _record_tool_provenance_activity(
-            str(tc.get("name") or ""), result, chat_session_id=chat_session_id,
+            str(tc.get("name") or ""), result,
+            user_id=user_id,
+            chat_session_id=chat_session_id,
         )
         executed.append({
             "id": tc["id"],
@@ -478,6 +480,7 @@ def _record_tool_provenance_activity(
     tool_name: str,
     result: Any,
     *,
+    user_id: str | None = None,
     chat_session_id: str | None = None,
 ) -> None:
     """Register a tool result's reproducibility envelope in the provenance
@@ -523,6 +526,12 @@ def _record_tool_provenance_activity(
             params=params,
             agent="chat_agent",
             data_release=str(archive_version) if archive_version else None,
+            user_id=user_id,
+            session_id=chat_session_id,
+            artifact_sha256=(
+                str(envelope.get("output_hash") or envelope.get("artifact_sha256") or "")
+                or None
+            ),
         )
     except Exception:
         logger.debug("provenance ledger registration failed", exc_info=True)

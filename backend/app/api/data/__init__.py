@@ -13,7 +13,6 @@ from starlette.requests import Request
 
 from app.auth import get_current_user, get_optional_user
 from app.cache import cache_get, cache_key, cache_set
-from app.config import settings as app_settings_mod
 from app.rate_limit import limiter
 from app.connectors.base import AstroObject
 from app.connectors.registry import CONNECTORS_KEYS, get_connector
@@ -25,7 +24,13 @@ from app.search.query_parser import (
     parse_natural_query,
     suggest_sources,
 )
-from app.storage import download_fits, upload_fits
+from app.storage import (
+    StorageOwnerRequired,
+    StorageOwnershipError,
+    download_fits,
+    resolve_owned_storage_key,
+    upload_fits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -309,14 +314,14 @@ def _build_source_error_name(source_name: str, error_type: str, result: Exceptio
 
 async def _require_owned_file_by_path(
     db: AsyncSession, user: User, path: str
-) -> DataFile:
-    result = await db.execute(
-        select(DataFile).where(DataFile.fits_path == path, DataFile.user_id == user.id)
-    )
-    data_file = result.scalar_one_or_none()
-    if data_file is None:
+) -> str:
+    """Return the canonical key after path validation + owner authorization."""
+    try:
+        return await resolve_owned_storage_key(path, owner_id=user.id, db=db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid file path") from exc
+    except (StorageOwnershipError, StorageOwnerRequired):
         raise HTTPException(status_code=404, detail="File not found")
-    return data_file
 
 
 def _dedup_by_position(results: list[SearchResult], sep_arcsec: float = 3.0) -> list[SearchResult]:
@@ -871,9 +876,7 @@ async def get_fits_header(
     user: User = Depends(get_current_user),
 ):
     """Read FITS file headers and HDU info for preview."""
-    if ".." in fits_path or fits_path.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-    await _require_owned_file_by_path(db, user, fits_path)
+    fits_path = await _require_owned_file_by_path(db, user, fits_path)
 
     from astropy.io import fits
 
@@ -976,9 +979,7 @@ async def get_fits_spectrum(
     user: User = Depends(get_current_user),
 ):
     """Extract spectrum data from FITS for interactive preview."""
-    if ".." in fits_path or fits_path.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-    await _require_owned_file_by_path(db, user, fits_path)
+    fits_path = await _require_owned_file_by_path(db, user, fits_path)
 
     from astropy.io import fits
     from astropy.table import Table
@@ -1062,9 +1063,7 @@ async def get_fits_wcs(
     user: User = Depends(get_current_user),
 ):
     """Extract WCS coordinate grid from FITS image for overlay."""
-    if ".." in fits_path or fits_path.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-    await _require_owned_file_by_path(db, user, fits_path)
+    fits_path = await _require_owned_file_by_path(db, user, fits_path)
 
     from astropy.io import fits
     from astropy.wcs import WCS
@@ -1400,6 +1399,8 @@ async def upload_fits_file(
     safe_name = file.filename.replace("/", "_").replace("\\", "_")
     fits_path = f"uploads/{str(user.id)[:8]}/{file_uuid}_{safe_name}"
     upload_fits(fits_path, contents)
+    from app.storage import get_storage_metadata
+    storage_meta = get_storage_metadata(fits_path)
 
     # Sanitize header for JSON storage
     meta: dict = {}
@@ -1421,6 +1422,9 @@ async def upload_fits_file(
             "n_hdus": n_hdus,
             "size_bytes": len(contents),
             "original_filename": safe_name,
+            "sha256": storage_meta.get("sha256"),
+            "storage_backend": storage_meta.get("backend"),
+            "storage_version_id": storage_meta.get("version_id"),
             **fits_type_info,
             **meta,
         },
@@ -1462,18 +1466,14 @@ async def analyze_fits_spectrum(
     )
     from app.pipeline.nodes.redshift import redshift_estimate
 
-    if ".." in req.fits_path or req.fits_path.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-
-    # IDOR protection: only allow the caller to analyze their own uploaded FITS files.
-    own_check = await db.execute(
-        select(DataFile).where(
-            DataFile.fits_path == req.fits_path,
-            DataFile.user_id == user.id,
-        )
-    )
-    if own_check.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="FITS file not found")
+    # IDOR protection: canonicalize the storage key and require its DataFile
+    # row to belong to the current user before any scientific parser sees it.
+    try:
+        req.fits_path = await _require_owned_file_by_path(db, user, req.fits_path)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            exc.detail = "FITS file not found"
+        raise
 
     # 1. Extract spectrum
     try:
@@ -1588,9 +1588,7 @@ async def download_fits_file(
     """Download a FITS file for local use."""
     from fastapi.responses import Response
 
-    if ".." in fits_path or fits_path.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-    await _require_owned_file_by_path(db, user, fits_path)
+    fits_path = await _require_owned_file_by_path(db, user, fits_path)
 
     try:
         raw = download_fits(fits_path)
@@ -1638,6 +1636,8 @@ async def upload_general_file(
     safe_name = "".join(ch if ch.isprintable() else "_" for ch in safe_name)
     storage_path = f"uploads/{str(user.id)[:8]}/{file_uuid}_{safe_name}"
     upload_fits(storage_path, contents)  # reuse storage function (works for any file)
+    from app.storage import get_storage_metadata
+    storage_meta = get_storage_metadata(storage_path)
 
     data_file = DataFile(
         user_id=user.id,
@@ -1648,6 +1648,9 @@ async def upload_general_file(
             "original_filename": safe_name,
             "size_bytes": len(contents),
             "content_type": file.content_type or "application/octet-stream",
+            "sha256": storage_meta.get("sha256"),
+            "storage_backend": storage_meta.get("backend"),
+            "storage_version_id": storage_meta.get("version_id"),
         },
     )
     db.add(data_file)
@@ -1671,9 +1674,7 @@ async def download_general_file(
     """Download any file from storage."""
     from fastapi.responses import Response
 
-    if ".." in path or path.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-    await _require_owned_file_by_path(db, user, path)
+    path = await _require_owned_file_by_path(db, user, path)
 
     try:
         raw = download_fits(path)
@@ -1722,11 +1723,11 @@ async def delete_fits_file(
     if data_file is None:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Delete from storage
-    from pathlib import Path
-    full_path = Path(app_settings_mod.local_storage_dir) / data_file.fits_path
-    if full_path.exists():
-        full_path.unlink()
+    # Delete through the configured backend (local volume or S3-compatible
+    # object store) so database and object lifecycle stay aligned.
+    from app.storage import delete_fits
+    if data_file.fits_path:
+        delete_fits(data_file.fits_path)
 
     await db.delete(data_file)
     await db.commit()
@@ -1919,6 +1920,8 @@ async def fetch_object(
     fits_path = f"{source}/{object_id.replace('/', '_')}/{uuid.uuid4().hex}.fits"
     try:
         upload_fits(fits_path, fits_file.data)
+        from app.storage import get_storage_metadata
+        storage_meta = get_storage_metadata(fits_path)
     except Exception as e:
         logger.warning("Failed to store FITS locally (%s): %s", fits_path, e)
         # Still return success — the data was fetched even if storage failed
@@ -1938,6 +1941,13 @@ async def fetch_object(
             source=source,
             object_id=object_id,
             fits_path=fits_path,
+            metadata_={
+                "original_filename": fits_file.filename,
+                "size_bytes": len(fits_file.data),
+                "sha256": storage_meta.get("sha256"),
+                "storage_backend": storage_meta.get("backend"),
+                "storage_version_id": storage_meta.get("version_id"),
+            },
         )
         db.add(data_file)
         await db.commit()

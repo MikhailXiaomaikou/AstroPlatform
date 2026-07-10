@@ -1011,6 +1011,17 @@ def _dispatch_subprocess(
     return result
 
 
+def _disabled_sandbox_result(reason: str) -> CodeExecutionResult:
+    """Return a fail-closed result when arbitrary Python cannot be isolated."""
+    result = CodeExecutionResult()
+    result.backend = "disabled"
+    result.success = False
+    result.error = reason
+    result.stderr = ""
+    result.exit_code = None
+    return result
+
+
 def _maybe_record_session_history(
     session_id: str, code: str, result: "CodeExecutionResult"
 ) -> None:
@@ -1045,12 +1056,30 @@ def execute_python(
     Returns:
         CodeExecutionResult with stdout, stderr, figures, and key variables
     """
+    # Arbitrary Python is not safe merely because builtins are filtered.  The
+    # only shipped execution backends share the application host/container, so
+    # production and default installs fail closed.  Local developers can opt
+    # in explicitly, accepting that the executor is a stability boundary only.
+    try:
+        from app.config import settings as _settings
+    except Exception as exc:
+        return _disabled_sandbox_result(
+            f"Python execution unavailable because sandbox configuration failed: {exc}"
+        )
+
+    if _settings.sandbox_backend == "disabled":
+        return _disabled_sandbox_result(
+            "run_python is disabled because no OS-isolated execution backend is "
+            "configured. Use the typed analysis tools, or configure an external "
+            "no-secrets/no-mounts runner. The legacy local backends are not safe "
+            "for hosted or multi-user execution."
+        )
+
     # Crash-isolated backend path: fresh subprocess per call, no session state.
     # Callers who need Jupyter-like persistence stay on the in-process path.
     # F0.4: log the chosen backend + fallback path so failed runs can be
     # triaged from Render logs without guessing which backend ran.
     try:
-        from app.config import settings as _settings
         if _settings.sandbox_backend == "subprocess" and not context:
             logger.info("sandbox: using backend=subprocess (no context)")
             _normalized_for_subprocess = _normalize_code(code)
@@ -1071,11 +1100,19 @@ def execute_python(
                     sub_result,
                 )
                 return sub_result
-            logger.warning(
-                "sandbox: subprocess dispatch returned None; falling back to in-process"
+            logger.error(
+                "sandbox: subprocess dispatch returned None; refusing unsafe fallback"
+            )
+            return _disabled_sandbox_result(
+                "The configured subprocess backend is unavailable; execution was "
+                "refused instead of falling back to the in-process executor."
             )
     except Exception as e:
-        logger.warning("sandbox: subprocess dispatch raised %s, using in-process", e)
+        logger.exception("sandbox: subprocess dispatch failed closed: %s", e)
+        return _disabled_sandbox_result(
+            "The configured subprocess backend failed; execution was refused "
+            "instead of falling back to the in-process executor."
+        )
 
     t0 = _session_time.monotonic()
     result = CodeExecutionResult()

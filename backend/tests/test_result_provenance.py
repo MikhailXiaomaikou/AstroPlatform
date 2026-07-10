@@ -82,6 +82,51 @@ def test_compute_tool_failure_is_unavailable_failed():
     assert result["analysis_status"] == FAILED
 
 
+def test_run_python_random_output_cannot_default_to_real_archive():
+    from app.services.claim_validator import validate_claims
+
+    code = """
+import numpy as np
+rows = get_adql_results()
+h0 = np.random.uniform(60, 80)
+print(f"H0 = {h0}")
+"""
+    result = normalize_tool_result(
+        "run_python",
+        {"success": True, "stdout": "H0 = 68.45"},
+        tool_input={"code": code, "data_source": "latest_adql"},
+    )
+    assert result["data_origin"] == "synthetic"
+    assert result["analysis_status"] == "simulated_demo"
+    assert result["__tool_status__"] == "SYNTHETIC"
+    assert result["__do_not_claim__"] is True
+    validation = validate_claims(
+        "The result is H0 = 68.45 km/s/Mpc.",
+        [{"tool": "run_python", "result": result}],
+    )
+    assert validation.ok is False
+
+
+def test_run_python_bootstrap_retains_real_data_provenance():
+    code = """
+import numpy as np
+rows = get_adql_results()
+means = []
+for _ in range(100):
+    idx = np.random.choice(len(rows), len(rows), replace=True)
+    means.append(np.mean([rows[i]["parallax"] for i in idx]))
+print(np.std(means))
+"""
+    result = normalize_tool_result(
+        "run_python",
+        {"success": True, "stdout": "0.03"},
+        tool_input={"code": code, "data_source": "latest_adql"},
+    )
+    assert result["data_origin"] == REAL_ARCHIVE
+    assert result["analysis_status"] == COMPLETED
+    assert result.get("__do_not_claim__") is not True
+
+
 def test_data_tool_success_is_real_archive_completed():
     result = normalize_tool_result("search_objects", {"results": [{"name": "M31"}]})
     assert result["data_origin"] == REAL_ARCHIVE

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Citation-pool reachability audit.
 
-For each active module (cosmology / solar_system / exoplanet), checks
-that every bibcode declared in the cosmology dataset registry's active
-entries is REACHABLE through a tool result — i.e., calling the
-machine-readable tool that loads that dataset would return a result
-whose ``provenance`` block carries the bibcode.
+For each active cosmology dataset entry, checks that every declared bibcode,
+arXiv identifier, and DOI is REACHABLE through the entry's actual tool-result
+shape — i.e., calling the machine-readable tool would return a result whose
+``provenance`` block carries that identifier.
 
 This catches the failure mode where a manifest cites a paper that the
 claim_validator's tool-result harvester can't actually surface, so the
@@ -34,35 +33,57 @@ if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
 
-def _bibcodes_of(entry: Any) -> set[str]:
-    out: set[str] = set()
+_IDENTIFIER_FIELDS = ("bibcode", "arxiv", "doi")
+
+
+def _normalize_identifier(kind: str, value: str) -> str:
+    text = value.strip()
+    if kind == "doi":
+        text = text.removeprefix("https://doi.org/").removeprefix("doi:").lower()
+    elif kind == "arxiv":
+        text = text.removeprefix("https://arxiv.org/abs/").removeprefix("arXiv:")
+    return text
+
+
+def _identifiers_of(entry: Any) -> dict[str, set[str]]:
+    out = {kind: set() for kind in _IDENTIFIER_FIELDS}
     for c in (entry.citations or ()):
-        b = getattr(c, "bibcode", None)
-        if isinstance(b, str) and b.strip():
-            out.add(b.strip())
+        for kind in _IDENTIFIER_FIELDS:
+            value = getattr(c, kind, None)
+            if isinstance(value, str) and value.strip():
+                out[kind].add(_normalize_identifier(kind, value))
     return out
 
 
-def _bibcodes_reachable_via_tool_result(entry: Any) -> set[str]:
-    """Return bibcodes the claim_validator would harvest from the
-    entry's machine-readable surface (its `to_dict()` shape plus the
-    citations list). Mirrors what _build_valid_bibcode_pool actually does."""
-    found: set[str] = set()
+def _identifiers_reachable_via_tool_result(entry: Any) -> dict[str, set[str]]:
+    """Return identifiers actually exposed by the entry's tool-result shape.
+
+    Do not inject ``entry.citations`` here: that was the object being audited
+    and made reachability a tautology even when ``to_dict()`` exposed nothing.
+    """
+    found = {kind: set() for kind in _IDENTIFIER_FIELDS}
 
     def walk(obj: Any) -> None:
         if isinstance(obj, dict):
             for k, v in obj.items():
-                if k == "bibcode" and isinstance(v, str) and v.strip():
-                    found.add(v.strip())
+                if k in found and isinstance(v, str) and v.strip():
+                    found[k].add(_normalize_identifier(k, v))
                 walk(v)
         elif isinstance(obj, (list, tuple)):
             for item in obj:
                 walk(item)
 
     walk(entry.to_dict())
-    for c in (entry.citations or ()):
-        walk({"bibcode": getattr(c, "bibcode", None)})
     return found
+
+
+def _bibcodes_of(entry: Any) -> set[str]:
+    """Backward-compatible helper used by older audit tests."""
+    return _identifiers_of(entry)["bibcode"]
+
+
+def _bibcodes_reachable_via_tool_result(entry: Any) -> set[str]:
+    return _identifiers_reachable_via_tool_result(entry)["bibcode"]
 
 
 def main() -> int:
@@ -72,22 +93,31 @@ def main() -> int:
 
     from app.services.cosmology_likelihoods import _REGISTRY as REGISTRY
 
-    unreachable: dict[str, list[str]] = {}
-    n_bibcodes = 0
+    unreachable: dict[str, dict[str, list[str]]] = {}
+    declared_counts = {kind: 0 for kind in _IDENTIFIER_FIELDS}
     for key, entry in sorted(REGISTRY.items()):
-        declared = _bibcodes_of(entry)
-        n_bibcodes += len(declared)
-        reachable = _bibcodes_reachable_via_tool_result(entry)
-        missing = sorted(declared - reachable)
-        if missing:
-            unreachable[key] = missing
+        declared = _identifiers_of(entry)
+        reachable = _identifiers_reachable_via_tool_result(entry)
+        missing_by_kind: dict[str, list[str]] = {}
+        for kind in _IDENTIFIER_FIELDS:
+            declared_counts[kind] += len(declared[kind])
+            missing = sorted(declared[kind] - reachable[kind])
+            if missing:
+                missing_by_kind[kind] = missing
+        if missing_by_kind:
+            unreachable[key] = missing_by_kind
 
     payload = {
         "suite": "citation_pool_audit",
         "generated_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "n_entries": len(REGISTRY),
-        "n_bibcodes_declared": n_bibcodes,
-        "n_entries_with_unreachable_bibcodes": len(unreachable),
+        "n_identifiers_declared": declared_counts,
+        "n_bibcodes_declared": declared_counts["bibcode"],
+        "n_entries_with_unreachable_identifiers": len(unreachable),
+        "n_entries_with_unreachable_bibcodes": sum(
+            1 for missing in unreachable.values() if missing.get("bibcode")
+        ),
+        "unreachable_by_entry_and_kind": unreachable,
         "unreachable_by_entry": unreachable,
     }
     print(json.dumps(payload, indent=2, default=str))

@@ -79,6 +79,7 @@ from app.services.cosmology_likelihoods.cmb import (
 )
 
 from app.services.cosmology_likelihoods.verification import (
+    _assess_publication_gate,
     _finalize_cov_fidelity,
     _is_executable_bao_entry,
     _is_executable_cc_entry,
@@ -476,6 +477,36 @@ def _run_sampling_likelihood_chain(
     # measurements, so the posterior is methodologically invalid — block it outright
     # (not even exploratory), beyond the advisory _combination_warnings already added.
     combination_conflict = bool(_combination_warnings(entries))
+    # Neither path represented here supplies four genuinely independent chains:
+    # importance sampling has no MCMC chains, while the emcee path flattens one
+    # coupled walker ensemble.  A scalar proposal/autocorrelation ESS is useful
+    # for preliminary quality control, but it is not a per-parameter convergence
+    # certificate and must never stand in for rank-Rhat + bulk ESS.
+    is_flattened_emcee = sampler_used in ("compressed_emcee", "sn_emcee")
+    publication_gate = _assess_publication_gate(
+        cov_fidelity=cov_fidelity,
+        likelihood_is_compressed_or_approximate=bool(compressed_entries),
+        n_independent_chains=0,
+        per_parameter=None,
+        critical_parameters=parameter_order,
+    )
+    for reason in (
+        "invalid_likelihood_spec" if invalid_specs else None,
+        "requested_dataset_not_executed" if skipped_entries else None,
+        "off_anchor_frontier" if off_anchor else None,
+        "overlapping_dataset_combination" if combination_conflict else None,
+        "flattened_coupled_emcee_ensemble" if is_flattened_emcee else None,
+        "importance_samples_are_not_independent_chains" if not is_flattened_emcee else None,
+    ):
+        if reason and reason not in publication_gate["reasons"]:
+            publication_gate["reasons"].append(reason)
+    publication_gate["eligible"] = not publication_gate["reasons"]
+    if publication_gate["reasons"]:
+        warnings.append(
+            "Publication gate withheld: "
+            + ", ".join(publication_gate["reasons"])
+            + ". The numerical result is preliminary only."
+        )
     publication_ready = (
         not invalid_specs
         and not skipped_entries
@@ -483,25 +514,23 @@ def _run_sampling_likelihood_chain(
         and fidelity_ok
         and not off_anchor
         and not combination_conflict
+        and publication_gate["eligible"]
     )
-    # Importance-sampler three-tier (mirrors fit_cosmology_emcee, 2026-05-21):
-    #   publication: ESS ≥ 400 and no invalid specs
-    #   exploratory: 100 ≤ ESS < 400 — posterior discussable but not citeable
-    #   blocked:     ESS < 100, invalid specs, a double-count conflict, OR data that
-    #                failed sha256 verification (unverified/unstamped fidelity must
-    #                never be discussable, not even as exploratory — anti-fabrication).
-    if publication_ready:
-        chain_tier = "publication"
-    elif (
-        fidelity_ok
+    # Three-tier semantics: publication requires the shared data + independent-
+    # chain gate; preliminary/exploratory retains a numerically usable posterior
+    # with explicit caveats; blocked is reserved for unverified data, invalid
+    # likelihoods, double counting, or a catastrophically underpowered sampler.
+    preliminary_data_safe = cov_fidelity not in (None, "unverified")
+    preliminary_ready = (
+        preliminary_data_safe
         and not invalid_specs
         and not skipped_entries
         and not combination_conflict
-        # ess_unknown (diagnostics failed) lands here, NOT in blocked: the
-        # chain may be fine — only its convergence certificate is missing —
-        # so the numbers stay discussable with the exploratory caveat.
         and (proposal_ess >= 100.0 or ess_unknown)
-    ):
+    )
+    if publication_ready:
+        chain_tier = "publication"
+    elif preliminary_ready:
         chain_tier = "exploratory"
     else:
         chain_tier = "blocked"
@@ -525,6 +554,10 @@ def _run_sampling_likelihood_chain(
         exploratory_reasons.append(
             "off-anchor frontier parameters (w/w0/wa) have no reproduced published anchor"
         )
+    for reason in publication_gate["reasons"]:
+        rendered = reason.replace("_", " ")
+        if rendered not in " ".join(exploratory_reasons):
+            exploratory_reasons.append("publication gate: " + rendered)
     exploratory_warning = (
         "Exploratory chain (" + "; ".join(exploratory_reasons) + "). "
         "Posterior median and 1-sigma range may be discussed as exploratory, but MUST "
@@ -559,6 +592,9 @@ def _run_sampling_likelihood_chain(
             else "PARTIAL"
         ),
         "publication_ready": publication_ready,
+        "preliminary_ready": preliminary_ready,
+        "publication_gate": publication_gate,
+        "preliminary_reasons": list(publication_gate["reasons"]),
         "chain_tier": chain_tier,
         "off_anchor_review_required": off_anchor,
         "claim_scope": (
@@ -614,7 +650,9 @@ def _run_sampling_likelihood_chain(
             "proposal_draws": int(proposal_draws),
             "n_draws": sample_count,
             "n_chains": 1,
-            "thresholds": {"ess_min": 400},
+            "n_independent_chains": 0,
+            "per_parameter": {},
+            "thresholds": publication_gate["thresholds"],
         },
         "datasets_used": [entry.to_dict() for entry in used_entries],
         "datasets_not_run": [entry.to_dict() for entry in skipped_entries],
@@ -643,6 +681,8 @@ def _run_sampling_likelihood_chain(
                 "cov_fidelity": cov_fidelity,
                 "artifact_sha256": artifact_sha256,
                 "publication_ready": publication_ready,
+                "preliminary_ready": preliminary_ready,
+                "publication_gate": publication_gate,
             },
         },
     }

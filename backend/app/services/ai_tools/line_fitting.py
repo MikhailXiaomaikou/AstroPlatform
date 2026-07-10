@@ -216,8 +216,10 @@ TOOL_SCHEMAS = [
                         "REQUIRED to be 'L_prime' when the user mentions CO "
                         "LFR / Solomon / brightness temperature / K km/s pc^2 "
                         "/ comparing slopes against CO(1-0). Conversion uses "
-                        "log10(L'/L) = 10.495 - 3*log10(nu_rest_GHz) + 2*log10(1+z); "
-                        "rows missing redshift or with unknown line_id are "
+                        "log10(L'/L) = 10.495 - 3*log10(nu_rest_GHz); the "
+                        "observed-frequency and (1+z) factors cancel, so this "
+                        "conversion is redshift-independent. Rows with an "
+                        "unknown line_id (or an explicitly invalid redshift) are "
                         "rejected (kind='unit_conversion_failed') rather than "
                         "silently fit on mixed units. The result envelope "
                         "carries `intercept_unit`/`slope_unit`/`luminosity_kind` "
@@ -629,8 +631,9 @@ async def _exec_fit_line_lfr_async(
     # PART AI #2: optional luminosity_kind conversion (L_solar <-> L_prime).
     # Defaults to "L_solar" to preserve existing behaviour. When a user/AI
     # explicitly passes "L_prime" for CO LFR comparison, all accepted rows are
-    # converted using (line_id, redshift). Rows that fail conversion (no z /
-    # no line_id / unknown line / NaN log_l) go to rejected with
+    # converted using the line rest frequency. Redshift is optional because the
+    # observed-frequency and (1+z) factors cancel. Rows that fail conversion
+    # (no/unknown line identity, explicitly invalid z, or NaN log_l) go to rejected with
     # kind="unit_conversion_failed" and are excluded from the fit.
     # This guarantees 100% consistent y-axis units and prevents the bundle e8d9
     # style of alpha drifting between L_solar (6.88) and L_prime (9.823) while
@@ -715,8 +718,9 @@ async def _exec_fit_line_lfr_async(
             "tool": "fit_line_lfr",
             "error": (
                 f"All {len(rows)} rows failed luminosity_kind={requested_lum_kind} "
-                f"conversion. Most common reason: missing redshift or unknown "
-                f"line_id for the [CII]/CO ν_rest lookup. See unit_conversion_failures."
+                f"conversion. Most common reason: unknown line_id for the "
+                f"[CII]/CO ν_rest lookup, invalid supplied redshift, or invalid "
+                f"luminosity. See unit_conversion_failures."
             ),
             "error_class": "unit_conversion_all_failed",
             "luminosity_kind": requested_lum_kind,
@@ -831,7 +835,7 @@ async def _exec_fit_line_lfr_async(
         or row.get("log_inferred_from_value_range") is True
     )
     has_confirmed_luminosity_units = value_range_inferred_rows == 0
-    publication_ready = (
+    data_checks_publication_ready = (
         n_used >= min_rows
         and (
             rows_origin == "user_uploaded"
@@ -1064,6 +1068,9 @@ async def _exec_fit_line_lfr_async(
     is_method_downgraded = fit_method_downgrade_reason is not None
 
     citation_ready_rows = sum(1 for row in accepted if _row_has_citation(row))
+    citation_requirement_passed = (
+        rows_origin == "user_uploaded" or citation_ready_rows == n_used
+    )
     readiness_checks: dict[str, Any] = {
         "minimum_rows": {
             "passed": n_used >= min_rows,
@@ -1071,9 +1078,10 @@ async def _exec_fit_line_lfr_async(
             "required": min_rows,
         },
         "citations": {
-            "passed": citation_ready_rows == n_used,
+            "passed": citation_requirement_passed,
             "rows_with_citations": citation_ready_rows,
             "n_used": n_used,
+            "required": rows_origin != "user_uploaded",
         },
         "confirmed_luminosity_units": {
             "passed": has_confirmed_luminosity_units,
@@ -1088,29 +1096,45 @@ async def _exec_fit_line_lfr_async(
         },
     }
     if fit_method == "bayesian_xyerr_linmix" or requested == "bayesian_xyerr":
+        bayesian_converged = bool(
+            bayes_result and bayes_result.get("converged") is True
+        )
+        bayesian_publication_ready = bool(
+            bayes_result and bayes_result.get("publication_ready") is True
+        )
         readiness_checks["bayesian_sampler"] = {
-            "passed": bool(bayes_result and bayes_result.get("publication_ready") is True),
-            "converged": bayes_result.get("converged") if bayes_result else False,
-            "publication_ready": bayes_result.get("publication_ready") if bayes_result else False,
+            "passed": bayesian_converged and bayesian_publication_ready,
+            "converged": bayesian_converged,
+            "publication_ready": bayesian_publication_ready,
             "error": bayes_error,
         }
 
     relation_blocking_reasons: list[str] = []
     if n_used < min_rows:
         relation_blocking_reasons.append("below_min_rows")
-    if citation_ready_rows < n_used:
+    if not citation_requirement_passed:
         relation_blocking_reasons.append("incomplete_citations")
     if not has_confirmed_luminosity_units:
         relation_blocking_reasons.append("unconfirmed_luminosity_units")
     if is_method_downgraded:
         relation_blocking_reasons.append("method_downgraded")
-    if fit_method == "bayesian_xyerr_linmix" and bayes_result and bayes_result.get("publication_ready") is False:
-        relation_blocking_reasons.append("bayesian_sampler_not_publication_ready")
+    if fit_method == "bayesian_xyerr_linmix":
+        if not bayes_result or bayes_result.get("converged") is not True:
+            relation_blocking_reasons.append("bayesian_sampler_not_converged")
+        if not bayes_result or bayes_result.get("publication_ready") is not True:
+            relation_blocking_reasons.append("bayesian_sampler_not_publication_ready")
 
     relation_can_claim = not relation_blocking_reasons
+    # The top-level flag is the value consumed by the claim validator, evidence
+    # graph, report export, and UI.  It must express the complete relation gate,
+    # not merely that enough cited rows with known units reached the fitter.
+    # In particular, a non-converged LinMix result must never leave a stale
+    # ``publication_ready=True`` inherited from the data-only checks above.
+    publication_ready = relation_can_claim
     relation_claim_scope = (
         "publication_ready_relation" if relation_can_claim
-        else "method_mismatch" if is_method_downgraded and publication_ready
+        else "method_mismatch"
+        if is_method_downgraded and data_checks_publication_ready
         else "exploratory_only"
     )
     relation_claimability = {
@@ -1120,7 +1144,7 @@ async def _exec_fit_line_lfr_async(
     }
     publication_readiness = {
         "status": relation_claim_scope,
-        "data_checks_publication_ready": publication_ready,
+        "data_checks_publication_ready": data_checks_publication_ready,
         "checks": readiness_checks,
     }
 
@@ -1502,23 +1526,11 @@ async def _exec_fit_line_lfr_async(
         },
     }
 
-    # ── M2: __tool_status__ priority.  PARTIAL (data insufficiency)
-    # outranks METHOD_DOWNGRADED (methodology mismatch) because a caller
-    # who can't trust the numbers at all also can't trust the method
-    # label.  When both are absent the reply returns without a status
-    # banner (tool_result_normalizer will mark it COMPLETED).
-    if not publication_ready:
-        result["__tool_status__"] = "PARTIAL"
-        result["analysis_status"] = "partial"
-        result["__do_not_claim__"] = True
-        blocking_reason_text = ", ".join(relation_blocking_reasons) or "unknown"
-        result["__message_to_model__"] = (
-            f"The line-relation fit used {n_used} rows. It is below min_rows={min_rows}, "
-            "has incomplete citations, or relies on value-range log-luminosity inference "
-            "instead of header/caption-confirmed units. Describe it as exploratory only; "
-            f"do not claim a publication-ready relation. Blocking reasons: {blocking_reason_text}."
-        )
-    elif is_method_downgraded:
+    # ── M2: __tool_status__ priority. A requested-method fallback keeps
+    # the specific METHOD_DOWNGRADED status so callers can explain what actually
+    # ran, while the independent publication_ready/__do_not_claim__ fields still
+    # fail closed. Other gate failures use PARTIAL.
+    if is_method_downgraded:
         result["__tool_status__"] = "METHOD_DOWNGRADED"
         result["analysis_status"] = "method_downgraded"
         result["__do_not_claim__"] = True
@@ -1526,7 +1538,20 @@ async def _exec_fit_line_lfr_async(
             f"fit_method_requested={requested!r} but the tool actually ran "
             f"{fit_method!r}: {fit_method_downgrade_reason} "
             "Do NOT describe this fit as Bayesian or two-axis-error regression "
-            "in the reply; state explicitly that it was an OLS fallback and why."
+            "in the reply; state explicitly that it was an OLS fallback and why. "
+            "The relation is exploratory and not publication-ready."
+        )
+    elif not publication_ready:
+        result["__tool_status__"] = "PARTIAL"
+        result["analysis_status"] = "partial"
+        result["__do_not_claim__"] = True
+        blocking_reason_text = ", ".join(relation_blocking_reasons) or "unknown"
+        result["__message_to_model__"] = (
+            f"The line-relation fit used {n_used} rows but did not pass the complete "
+            "publication gate (data provenance/units, requested-method fidelity, and "
+            "Bayesian convergence where applicable). Describe it as exploratory only; "
+            "do not claim a publication-ready relation or quote it as final evidence. "
+            f"Blocking reasons: {blocking_reason_text}."
         )
     if cosmology_mismatch:
         # Warning runs in parallel to the status.  We attach a non-fatal

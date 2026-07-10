@@ -19,11 +19,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements.lock
       - name: Install dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.lock
       - name: Run tests with coverage (cosmology + shared infra)
         # cosmology-only repo: solar_system / exoplanet / dormant modules and
         # their tests were extracted to the standard-astro-verticals repo, so
@@ -64,6 +66,24 @@ jobs:
           cd frontend
           npm run build
 
+  frontend-e2e:
+    needs: frontend-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+      - name: Install Playwright Chromium
+        run: cd frontend && npx playwright install --with-deps chromium
+      - name: Run isolated browser journeys
+        run: cd frontend && npm run test:e2e
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -78,12 +98,78 @@ jobs:
       - name: Lint backend
         run: cd backend && ruff check app/ --select E,W,F --ignore E501
 
+  migration-and-recovery:
+    # Production uses Alembic exclusively. Exercise a genuinely empty
+    # PostgreSQL database, reject model/migration drift, then prove that the
+    # portable backup can be restored into a second empty database.
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: astro
+          POSTGRES_PASSWORD: astro
+          POSTGRES_DB: astro
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U astro -d astro"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ENV: production
+      DATABASE_URL: postgresql+asyncpg://astro:astro@127.0.0.1:5432/astro
+      JWT_SECRET: ci-only-jwt-secret-not-for-production
+      FERNET_KEY: ci-only-fernet-secret-not-for-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements.lock
+      - name: Install backend and PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          cd backend
+          pip install --require-hashes -r requirements.lock
+      - name: Upgrade a fresh PostgreSQL database to Alembic head
+        run: |
+          cd backend
+          alembic upgrade head
+          alembic check
+          python - <<'PY'
+          import asyncio
+          from app.api.health import _probe_schema_head
+
+          assert asyncio.run(_probe_schema_head()) == (True, "ok")
+          PY
+      - name: Backup and restore smoke test
+        env:
+          PGPASSWORD: astro
+        run: |
+          mkdir -p /tmp/astro-storage
+          printf 'recovery-smoke\n' >/tmp/astro-storage/sentinel.txt
+          bundle="$(BACKUP_ROOT=/tmp/astro-backups STORAGE_DIR=/tmp/astro-storage FERNET_KEY_ID=ci-test-key backend/scripts/ops/backup.sh)"
+          backup_id="$(basename "$bundle" .tar.gz)"
+          createdb -h 127.0.0.1 -U astro astro_restore
+          DATABASE_URL=postgresql://astro:astro@127.0.0.1:5432/astro_restore \
+            RESTORE_CONFIRM="restore:$backup_id" \
+            RESTORE_STORAGE_DIR=/tmp/astro-restored-storage \
+            backend/scripts/ops/restore.sh "$bundle"
+          test -f /tmp/astro-restored-storage/sentinel.txt
+          test "$(psql postgresql://astro:astro@127.0.0.1:5432/astro_restore -Atc 'select count(*) from alembic_version')" = "1"
+
   benchmarks:
     # Science-regression smoke (cosmology benchmarks + registry audit).
-    # Push-only so a benchmark regression on main is loud, but PRs are NOT
-    # gated on it — keeps PR review velocity, surfaces regressions
-    # immediately after merge for follow-up.
-    if: github.event_name == 'push'
+    # This is PR-gating: scientific regressions must be caught before merge.
+    # Explicit slow-path skips remain visible as skips in the JSON summary and
+    # are not miscounted as passes.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,11 +177,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements.lock
       - name: Install dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.lock
       - name: Cosmology benchmarks
         run: |
           cd backend

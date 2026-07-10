@@ -12,7 +12,7 @@ Standard Astro is a full-stack astronomy research platform with four runtime lay
 
 2. **FastAPI backend** — Single process, 33 domain routers (`scripts/stats.sh` for live count). SSE streaming on the chat path, long-poll + WebSocket for collaboration, background workers for pipeline execution.
 
-3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines.
+3. **Execution + storage** — PostgreSQL (prod) / SQLite (dev) for metadata; local filesystem for FITS; Redis for content-addressed connector cache + Celery queue; Celery worker + beat for heavy pipelines. Arbitrary `run_python` execution is disabled by default and prohibited in hosted production until it runs in a separate OS-isolated environment with no application secrets or tenant mounts.
 
 4. **External services** — 23 astronomy connector keys, with 6 provenance-v2 active sources (`vizier`, `gaia`, `simbad`, `ned`, `2mass`, `alma`) and 17 maintenance-gated sources; NASA ADS / arXiv, astrometry.net, IRSA dust maps, PARSEC isochrones, and routed LLM backends (Claude / OpenAI / DeepSeek / local). ALMA is active for Science Archive observation metadata, not derived line luminosity/FWHM measurements.
 
@@ -250,7 +250,7 @@ Standard Astro ships as a focus-gated prompt + tool catalog. After the 2026-06-0
 | `isochrones` | Cached PARSEC isochrone delivery |
 | `inference` | Inference routing, model health, cost tracking |
 | `settings` | Encrypted API-key storage |
-| `health` | Liveness, `/health/deep` verifies DB + Redis + AI backend |
+| `health` | Liveness; `/health/deep` verifies Alembic head, durable storage, Redis and a live Celery worker |
 | `events` | Analytics event ingestion |
 
 ### AI layer
@@ -415,7 +415,7 @@ This is the load-bearing trust layer. Three layers of defence + one positive inc
 
 ### Python sandbox
 
-- [`app/services/sandbox/subprocess_backend.py`](./backend/app/services/sandbox/subprocess_backend.py) — `multiprocessing` spawn child, `resource.setrlimit` (RLIMIT_AS/CPU/NPROC), `os.setsid` + `os.killpg(SIGKILL)` on timeout. Blocked builtins: `exec`, `eval`, `compile`, `open`. Seg-faults, OOM, infinite loops cannot take down the FastAPI worker.
+- [`app/services/sandbox/subprocess_backend.py`](./backend/app/services/sandbox/subprocess_backend.py) — trusted-local opt-in for crash containment only: `multiprocessing` spawn child, `resource.setrlimit` (RLIMIT_AS/CPU/NPROC), `os.setsid` + `os.killpg(SIGKILL)` on timeout. Filtering `exec`, `eval`, `compile`, and `open` does not create a security boundary; Python imports/object graphs can still reach the shared host. The backend is disabled by default and production configuration rejects it until execution moves to a separate no-secrets/no-tenant-mounts OS sandbox.
 - **Phase F0 hardening** — payload-completeness guard: if the child dies mid-serialisation (`parent_conn.recv()` returns `None`, `{}`, non-dict, or `success=False` with no error), the backend now returns an explicit error message describing the failure mode + exit code; the child writes breadcrumbs (`conn.send success/failure`, `exit` line) to its stderr so Render logs can diagnose. `_exec_run_python` in `ai_tools.py` has an error-field tripwire: any failure carries both `error` and an `error_class` chip (`sandbox_crash`, `oom`, `timeout`, `name_error`, `import_error`, `syntax_error`, …). `sandbox_silent_failure_total` fires when the synthesized-error path is hit.
 - [`app/services/code_executor.py`](./backend/app/services/code_executor.py) — In-process fallback with session-scoped variables; TTL sweep evicts entries > 2 h old when the registry exceeds 64 sessions. `ALLOWED_MODULES` whitelist includes numpy / scipy / astropy / specutils / photutils / dynesty / arviz / celerite2 / batman / matplotlib / pandas / dask / pyvo / sklearn / sherpa / radvel / thejoker / galpy / pysme / statmorph / vorbin / ppxf / astroquery / dustmaps / healpy / lenstronomy / MulensModel / treecorr / yt / pint / psrqpy / skimage.
 
@@ -564,20 +564,21 @@ Uvicorn `--reload` + Vite dev server + SQLite + local files + no Redis (sync pip
 
 ### Prod (Render blueprint `render.yaml`)
 
-Three deployed services + one database (the celery worker/beat and Redis
-remain as commented templates in the yaml — heavy pipeline DAG nodes return
-503 until a worker exists; the cosmology chat path does not use Celery):
+Five deployed services plus one database:
 
 1. `standard-astro-backend` — FastAPI, `/health/deep` healthcheck, paid
-   **Standard** instance (1 CPU / 2 GB, does not sleep).
+   **Standard** instance, S3-compatible research storage and `/app/data` disk.
 2. `standard-astro-frontend` — Vite build, SPA rewrites.
 3. `standard-astro-db` — PostgreSQL (basic-256mb).
+4. `standard-astro-redis` — persistent Render Key Value Celery broker.
+5. `standard-astro-celery-worker` — heavy task execution.
+6. `standard-astro-celery-beat` — scheduled-task dispatch.
 
 `backend/Dockerfile` is Python 3.11-slim; installs gfortran, libpq, fontconfig, fonts-noto-cjk (CJK matplotlib). Non-root `app:app` user. Live URLs: `astro-backend-h4x1.onrender.com`, `astro-frontend-tyfr.onrender.com`.
 
 ### Auto-deploy
 
-Push to `main` → Render auto-deploy as a side effect (2026-06-03 positioning:
+Push to `main` → Render deploy after linked CI checks pass (2026-06-03 positioning:
 the hosted deployment is NOT the current focus; local + GitHub Actions is the
 primary environment, and deploy health is not the success criterion for a
 change). The backend runs on a paid Standard instance that does not sleep;

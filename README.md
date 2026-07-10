@@ -76,16 +76,17 @@ method, model family, diagnostics, evidence graph, and numerical scale.
 ## Reproduction track record
 
 A dedicated full-CMB Cobaya+CAMB run (DESI DR1 BAO + Pantheon+ + a clik-free
-Planck 2018 stack, on free local compute) reproduced the **DESI 2024 VI
-w0waCDM evolving-dark-energy result** with all four parameters within 0.3σ of
-the published values and DESI-level error bars — see
+Planck 2018 stack, on local compute) produced a useful **preliminary parameter
+cross-check** against DESI 2024 VI. It is not a validated reproduction or a
+detection-significance result: the chain reached only R-1(means)=0.047 and
+R-1(bounds)=0.13, and no matched, calibrated fixed-LambdaCDM comparison was run.
+The historical posterior-mean Mahalanobis displacement therefore must not be
+reported as DESI's model-comparison statistic. See
 [backend/scripts/cobaya/README_full_cmb_reproduction.md](./backend/scripts/cobaya/README_full_cmb_reproduction.md)
-for the numbers, the reproduction commands, and the honest caveats (converged
-at R-1(means) < 0.05, not the stricter 0.01 gold standard; 2.09σ joint
-departure vs DESI's ~2.5σ, attributable to the close-proxy CMB stack). This is
-an offline scripted run, **not** the autonomous chat path: the in-process
-compressed-CMB path does not reproduce this result, so the platform correctly
-refuses to claim it autonomously.
+for the archived numbers and limitations. This remains an offline scripted
+run, **not** the autonomous chat path; both paths stay preliminary until they
+pass the unified four-independent-chain, rank-normalized R-hat, ESS, data, and
+likelihood-fidelity gates.
 
 ## What it does not claim
 
@@ -125,7 +126,7 @@ current registry classes, execution modes, and claim scopes.
 | Backend | FastAPI, SQLAlchemy async, Pydantic v2, SSE streaming |
 | AI | Manual provider/model choice across Claude, OpenAI, DeepSeek, and local OpenAI-compatible backends |
 | Science | astropy, astroquery, emcee, dynesty, cobaya, CAMB, ArviZ |
-| Storage | PostgreSQL (prod) / SQLite (dev); local filesystem for FITS; Redis cache |
+| Storage | PostgreSQL (prod) / SQLite (dev); SHA-256-verified local or S3-compatible object storage; durable Redis/Celery coordination |
 
 ## Run it
 
@@ -135,7 +136,7 @@ Prerequisites: Python 3.11 (the version CI and the Docker image use) and Node 20
 # Backend (from backend/) — create the venv on first run; it is gitignored
 python3.11 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
 uvicorn app.main:app --reload --port 8000
 
 # Frontend (from frontend/, separate terminal)
@@ -147,6 +148,11 @@ No `.env` file is required for local development: `ENV` defaults to `dev`, the
 database defaults to a local SQLite file under `data/` at the repo root, and
 dev-safe random `JWT_SECRET` / `FERNET_KEY` values are generated at startup
 (with a logged warning — tokens and stored API keys do not survive restarts).
+Arbitrary `run_python` execution is disabled by default because the bundled
+in-process and subprocess executors are crash-containment mechanisms, not OS
+security boundaries. On a trusted single-user development machine only, set
+`SANDBOX_BACKEND=subprocess` to opt in; never enable either legacy executor in
+hosted or multi-user production. Typed scientific tools remain available.
 Production environment variables are documented in
 [DEPLOYMENT.md](./DEPLOYMENT.md). To chat with the AI assistant you need a
 model-provider API key: register, then add a key on the Account page (BYOK),
@@ -174,6 +180,7 @@ to try once the app is running — it is not a development-setup guide).
 - Source mapping: [docs/SOURCE_MAPPING.md](./docs/SOURCE_MAPPING.md)
 - Reference literature: [docs/REFERENCES.md](./docs/REFERENCES.md)
 - Deployment: [DEPLOYMENT.md](./DEPLOYMENT.md)
+- Production operations and recovery: [docs/OPERATIONS_RUNBOOK.md](./docs/OPERATIONS_RUNBOOK.md)
 - Agent / development notes: [CLAUDE.md](./CLAUDE.md)
 - Recent changes: [CHANGELOG.md](./CHANGELOG.md)
 

@@ -233,7 +233,11 @@ async def _exec_validate_analysis(
         if owner_error:
             return owner_error
         try:
-            validation = await validate_analysis(session_id, db)
+            validation = await validate_analysis(
+                session_id,
+                db,
+                owner_id=str(user_id),
+            )
         except Exception as exc:
             return {"error": str(exc)}
     return validation

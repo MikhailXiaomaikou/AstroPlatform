@@ -7,7 +7,7 @@
 # summary so the daily cron job has a single stdout to grep.
 #
 # Requirements:
-#   - backend/venv/ exists with requirements.txt installed.
+#   - backend/venv/ exists with requirements.lock installed.
 #   - One of ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / PLATFORM_DEEPSEEK_API_KEY
 #     in the environment (the runner uses inference_router).
 #   - Each runner accepts --provider local for the local Codex/OpenAI path

@@ -18,11 +18,17 @@ import numpy as np
 import pytest
 
 
-def test_fitted_desi_bao_covariance_is_the_checksummed_array():
-    """OBJECT IDENTITY: the covariance _bao_chi2_samples fits MUST be the exact
-    array parsed from the sha256-pinned DESI data product, byte-for-byte — not a
-    hand-typed tuple. RED until the loader is bound to the fit."""
+def test_fitted_desi_bao_covariance_is_the_checksummed_array(monkeypatch):
+    """The chi2 path must consume the current checksum-verified loader record.
+
+    Object identity with the import-time ``_BAO_DATA`` snapshot is intentionally
+    not required: the public loader cache can be cleared, after which a fresh
+    NumPy array is scientifically equivalent but cannot be the same Python
+    object.  Instead, instrument the live loader with a sentinel covariance and
+    prove that the fitted chi2 changes to exactly the value from that record.
+    """
     from app.services import cosmology_likelihoods as cl
+    import app.services.cosmology_likelihoods.bao as bao
 
     # Target API (Step 1): a sync loader that reads the VENDORED local DESI file,
     # verifies its sha256 against the registry DataProductSpec, and returns the
@@ -44,19 +50,41 @@ def test_fitted_desi_bao_covariance_is_the_checksummed_array():
     )
     assert verified["sha256"] == cov_spec.sha256
 
-    # The array the chi2 fits IS the verified array — object identity, not merely
-    # equal values. The hand-typed constant is byte-identical to the file, so a
-    # value-equality check would pass even if the fit still read a hand-typed
-    # copy; only `is` proves _BAO_DATA is sourced FROM the verified loader.
-    fitted_cov = cl._BAO_DATA["desi_dr1_bao"][1]
-    assert fitted_cov is verified["covariance"], (
-        "fitted covariance is a different object from the checksum-verified array; "
-        "provenance is decorative until _BAO_DATA is sourced from the loader."
+    samples = np.asarray(
+        [[67.36, 0.3153, 147.09], [72.0, 0.25, 150.0]],
+        dtype=float,
     )
-    np.testing.assert_array_equal(
-        np.asarray(fitted_cov, dtype=float),
-        np.asarray(verified["covariance"], dtype=float),
+    order = ["H0", "omegam", "rd"]
+    sentinel_covariance = np.asarray(verified["covariance"], dtype=float) * 2.0
+    sentinel_record = {**verified, "covariance": sentinel_covariance}
+    calls: list[str] = []
+
+    def _spy(dataset_key: str):
+        calls.append(dataset_key)
+        return sentinel_record
+
+    monkeypatch.setattr(bao, "load_verified_bao_data", _spy)
+    actual = cl._bao_chi2_samples(samples, order, "desi_dr1_bao")
+
+    predictions = bao._bao_predictions(samples, order, verified["mean_vector"])
+    observed = np.asarray([row[1] for row in verified["mean_vector"]], dtype=float)
+    residual = predictions - observed
+    expected = np.einsum(
+        "ni,ij,nj->n",
+        residual,
+        np.linalg.inv(sentinel_covariance),
+        residual,
     )
+    stale_snapshot_result = np.einsum(
+        "ni,ij,nj->n",
+        residual,
+        np.linalg.inv(np.asarray(cl._BAO_DATA["desi_dr1_bao"][1], dtype=float)),
+        residual,
+    )
+
+    assert calls == ["desi_dr1_bao"]
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+    assert not np.allclose(actual, stale_snapshot_result)
 
 
 def test_desi_bao_reproduces_omega_m_with_full_cov_fidelity():
@@ -75,7 +103,9 @@ def test_desi_bao_reproduces_omega_m_with_full_cov_fidelity():
     )
     om = r["parameters"]["omegam"]["median"]
     assert 0.28 <= om <= 0.31, f"Om={om} not within Adame 2024 0.295 +/- 0.015"
-    assert r["chain_tier"] == "publication"
+    assert r["chain_tier"] == "exploratory"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
 
     prov = r["provenance"]["cosmology_likelihood"]
     assert prov.get("cov_fidelity") == "full", (
@@ -85,25 +115,27 @@ def test_desi_bao_reproduces_omega_m_with_full_cov_fidelity():
     )
 
 
-@pytest.mark.slow
-def test_pantheon_plus_full_cov_reproduces_omega_m(monkeypatch):
-    """FLAG-FLIP reproduction target: with the Pantheon+ full 1701x1701 covariance
-    path enabled, LCDM recovers Om ~ 0.334 (Brout et al. 2022, arXiv:2202.04077)
-    from the real covariance — not the compressed H0=73 Gaussian. ~200s (slow).
+def test_pantheon_plus_full_path_blocks_any_incomplete_shoes_bundle(monkeypatch):
+    """A future incomplete/reverted bundle must fail before likelihood work."""
+    import app.services.cosmology_likelihoods.sn as sn
 
-    This demonstrates that flipping the full-cov flag yields a genuinely
-    re-derived constraint; the gate (_is_executable_sn_entry) and the full-cov
-    chi2 (_pantheon_plus_chi2_samples) already exist behind
-    PANTHEON_PLUS_FULL_CHI2_ENABLED."""
-    import app.services.cosmology_likelihoods as cl
-
-    monkeypatch.setattr(cl, "PANTHEON_PLUS_EXECUTABLE_KEYS", {"pantheon_plus"})
-    r = cl.run_likelihood_chain(
-        model="lcdm", dataset_keys=["pantheon_plus"],
-        n_samples=2000, random_seed=42, allow_emcee_fallback=True,
+    monkeypatch.setattr(
+        sn,
+        "load_verified_pantheon_plus_data",
+        lambda *_args, **_kwargs: {
+            "likelihood_ready": False,
+            "scientific_issues": (
+                "bundle is missing official fields: m_b_corr, is_calibrator, cepheid_distance",
+            ),
+        },
     )
-    assert r["sampler"] != "compressed_gaussian_analytic", (
-        "Pantheon+ fell through to the compressed Gaussian instead of the full-cov fit"
-    )
-    om = r["parameters"]["omegam"]["median"]
-    assert 0.30 <= om <= 0.37, f"Om={om} not near Brout 2022 0.334 +/- 0.018"
+    sn._load_pantheon_plus_data.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="official likelihood requires") as exc_info:
+            sn._load_pantheon_plus_data()
+        warning = str(exc_info.value)
+        assert "IS_CALIBRATOR" in warning
+        assert "CEPH_DIST" in warning
+        assert "full SH0ES/H0 claim" in warning
+    finally:
+        sn._load_pantheon_plus_data.cache_clear()

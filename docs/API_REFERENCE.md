@@ -30,8 +30,9 @@ Obtain a token via:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Service status + version |
+| GET | `/health/deep` | Deployment readiness: Alembic head, persistent mount/object storage, Redis broker, Celery worker |
 | GET | `/health/stats` | Uptime, request counts, error rate, top endpoints (admin only) |
-| GET | `/health/detailed` | External service probe results (SIMBAD, Gaia, VizieR) |
+| GET | `/health/detailed` | Authenticated DB, broker, storage and external-service probe results |
 | GET | `/metrics` | Prometheus text metrics, including provenance-v2 connector and citation counters |
 | GET | `/api/admin/inference/stats` | AI model usage statistics (tokens, latency, cost) (admin only) |
 | GET | `/api/admin/inference/health` | AI backend connection status (admin only) |
@@ -66,8 +67,8 @@ The source registry currently exposes 23 connector keys. The active provenance-v
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/pipeline/run` | Execute a pipeline DAG |
-| POST | `/api/pipeline/batch-run` | Batch execute on multiple inputs (up to 200) |
+| POST | `/api/pipeline/run` | Execute an authenticated pipeline DAG; every file input is owner-bound before dispatch |
+| POST | `/api/pipeline/batch-run` | Authenticated batch execution on owner-bound inputs (up to 200) |
 | GET | `/api/pipeline/{run_id}` | Get run status + results |
 | GET | `/api/pipeline/templates` | List saved pipeline templates |
 
@@ -115,9 +116,9 @@ For literature-derived measurement workflows, `search_literature` is paper/abstr
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/integration/samp/status` | SAMP hub connection status |
-| POST | `/api/integration/samp/send` | Send data to DS9/TOPCAT via SAMP |
-| POST | `/api/integration/samp/subscribe` | Subscribe to SAMP messages |
+| GET | `/api/integration/samp/status` | Authenticated local-desktop SAMP hub status; disabled in hosted production |
+| POST | `/api/integration/samp/send` | Send an owned local file to DS9/TOPCAT; disabled in hosted production |
+| POST | `/api/integration/samp/subscribe` | Subscribe an authenticated, user-scoped local SAMP receiver |
 
 ## Rate Limits
 

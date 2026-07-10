@@ -66,6 +66,33 @@ _NUM = r"([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?)"
 _UNIT = r"(?:\s*(?:±|\+/-)\s*[-+]?(?:\d+(?:\.\d+)?|\.\d+))?"  # optional ± err
 
 _PATTERNS: list[tuple[str, re.Pattern]] = [
+    # Cosmology results are often rendered as Markdown tables.  A cell
+    # separator may sit between the parameter (and its unit) and the numeric
+    # value, so the ordinary prose patterns below cannot see the claim.  Keep
+    # these parameter-specific: a generic "any table number" rule would turn
+    # row indices and sample counts into scientific measurements.
+    ("cosmology_h0", re.compile(
+        rf"^[ \t]*(?:\|[ \t]*)?[ \t*`$]*(?:H_?\{{?0\}}?|H₀)(?![A-Za-z0-9_])[^|\n]*\|[ \t*`$]*(?:[=≈~][ \t]*)?{_NUM}\b",
+        re.I | re.M,
+    )),
+    ("cosmology_om0", re.compile(
+        rf"^[ \t]*(?:\|[ \t]*)?[ \t*`$]*(?:Om0|(?:\\?Omega|Ω)_?\{{?m\}}?|OmegaM|Ωₘ|ΩM)(?![A-Za-z0-9_])[^|\n]*\|"
+        rf"[ \t*`$]*(?:[=≈~][ \t]*)?{_NUM}\b",
+        re.I | re.M,
+    )),
+    ("cosmology_ns", re.compile(
+        rf"^[ \t]*(?:\|[ \t]*)?[ \t*`$]*(?:n_?\{{?s\}}?|nₛ)(?![A-Za-z0-9_])[^|\n]*\|[ \t*`$]*(?:[=≈~][ \t]*)?{_NUM}\b",
+        re.I | re.M,
+    )),
+    ("cosmology_tau", re.compile(
+        rf"^[ \t]*(?:\|[ \t]*)?[ \t*`$]*(?:\\?tau(?:_?reio)?|τ)(?![A-Za-z0-9_])[^|\n]*\|[ \t*`$]*(?:[=≈~][ \t]*)?{_NUM}\b",
+        re.I | re.M,
+    )),
+    ("cosmology_ombh2", re.compile(
+        rf"^[ \t]*(?:\|[ \t]*)?[ \t*`$]*(?:ombh2|(?:\\?omega|\\?Omega|Ω)_?\{{?b\}}?[ \t*]*h(?:\^?\{{?2\}}?|²)|ω_?b)(?![A-Za-z0-9_])"
+        rf"[^|\n]*\|[ \t*`$]*(?:[=≈~][ \t]*)?{_NUM}\b",
+        re.I | re.M,
+    )),
     # R22: exoplanet transit fits often report dimensionless ratios without
     # units ("Rp/Rs ≈ 0.157").  The older unit-based catalogue missed these,
     # so multi-agent merged replies could launder an unsupported radius ratio.
@@ -90,12 +117,12 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         re.I,
     )),
     ("cosmology_h0", re.compile(
-        rf"\b(?:H_?0|H₀)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}"
+        rf"\b(?:H_?\{{?0\}}?|H₀)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}"
         rf"(?:[ \t]*km[ \t]*s(?:ec)?(?:ond)?[ \t]*[-/]?[ \t]*Mpc(?:\^-?1)?|[ \t]*km/?s/?Mpc)?\b",
         re.I,
     )),
     ("cosmology_om0", re.compile(
-        rf"\b(?:Om0|Omega_?m|OmegaM|Ω_?m|Ωₘ|ΩM)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
+        rf"\b(?:Om0|(?:Omega|Ω)_?\{{?m\}}?|OmegaM|Ωₘ|ΩM)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
         re.I,
     )),
     ("cosmology_w0", re.compile(rf"\b(?:w_?0|w₀)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b", re.I)),
@@ -106,6 +133,19 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     )),
     ("cosmology_s8", re.compile(
         rf"\b(?:S_?8)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
+        re.I,
+    )),
+    ("cosmology_ns", re.compile(
+        rf"\b(?:n_?\{{?s\}}?|nₛ)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
+        re.I,
+    )),
+    ("cosmology_tau", re.compile(
+        rf"\b(?:tau(?:_?reio)?|τ)[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
+        re.I,
+    )),
+    ("cosmology_ombh2", re.compile(
+        rf"\b(?:ombh2|(?:omega|Omega|Ω)_?\{{?b\}}?[ \t]*h(?:\^?\{{?2\}}?|²)|ω_?b)"
+        rf"[ \t]*(?:is|was|=|≈|~|:|about|approximately)?[ \t]*{_NUM}\b",
         re.I,
     )),
     ("cmb_rotation_beta", re.compile(
@@ -1145,12 +1185,15 @@ def _matches_any(value: float, universe: set[float], tolerance: float) -> bool:
 _COSMO_PARAM_EXACT: dict[str, str] = {
     "h0": "H0", "omegam": "omegam", "sigma8": "sigma8", "s8": "S8",
     "w0": "w0", "wa": "wa", "w": "w", "rd": "rd", "mb": "M_B", "h0rd": "H0_rd",
+    "ns": "ns", "tau": "tau", "ombh2": "ombh2", "omegabh2": "ombh2",
 }
 # Roots tried longest-first; a key resolves if it equals a root or is the root
 # followed by a known statistic suffix.
 _COSMO_PARAM_ROOTS: tuple[tuple[str, str], ...] = (
-    ("sigma8", "sigma8"), ("omegam", "omegam"), ("h0rd", "H0_rd"),
+    ("sigma8", "sigma8"), ("omegam", "omegam"), ("omegabh2", "ombh2"),
+    ("ombh2", "ombh2"), ("h0rd", "H0_rd"),
     ("h0", "H0"), ("s8", "S8"), ("w0", "w0"), ("wa", "wa"), ("rd", "rd"),
+    ("tau", "tau"), ("ns", "ns"),
 )
 _COSMO_STAT_SUFFIXES: frozenset[str] = frozenset({
     "", "median", "mean", "best", "low", "high", "value", "val",
@@ -1183,6 +1226,9 @@ _CLAIM_LABEL_TO_COSMO_PARAM: dict[str, str] = {
     "cosmology_wa": "wa",
     "cosmology_sigma8": "sigma8",
     "cosmology_s8": "S8",
+    "cosmology_ns": "ns",
+    "cosmology_tau": "tau",
+    "cosmology_ombh2": "ombh2",
 }
 
 
@@ -1529,9 +1575,16 @@ def provenance_citation_violations(
         author, year = match.group(1), match.group(2)
         match_text = match.group(0).strip()
         line_text = _line_text(citation_text, match.start())
+        original_offset = citation_map[match.start()]
+        original_line_text = _line_text(reply, original_offset)
         if _line_is_nonclaim_context(line_text):
             continue
-        if _line_has_valid_explicit_citation(line_text, valid_bibcodes, valid_arxiv_ids, valid_dois):
+        # Inline-code stripping prevents code-like identifiers from being
+        # mistaken for prose, but a validated DOI/arXiv ID/bibcode on the same
+        # original line is still an exact source for that citation.
+        if _line_has_valid_explicit_citation(
+            original_line_text, valid_bibcodes, valid_arxiv_ids, valid_dois
+        ):
             continue
         if _phrase_in_claimable_payload(match_text, claimable_payload_text):
             continue
@@ -1541,7 +1594,7 @@ def provenance_citation_violations(
             violations.append(CitationViolation(
                 kind="suspicious_author_year",
                 match_text=match_text,
-                line_number=_line_number(reply, citation_map[match.start()]),
+                line_number=_line_number(reply, original_offset),
             ))
 
     violations.extend(_paper_level_numeric_claim_violations(
@@ -2486,11 +2539,18 @@ def _tool_successfully_ran(tool_results: Any, tool_name: str) -> bool:
 
 
 def _claimable_tool_text(tool_results: Any) -> str:
-    """Lowercase JSON text for non-synthetic, claimable tool payloads only."""
+    """Lowercase text from dedicated paper-source payloads only.
+
+    Exact author-year prose in a returned abstract can support the same phrase
+    in a reply.  Generic compute stdout cannot: model-authored ``run_python``
+    code could simply print an invented citation and otherwise launder it.
+    """
     chunks: list[str] = []
     entries = tool_results if isinstance(tool_results, list) else [tool_results]
     for entry in entries or []:
         tool_name, result = _entry_tool_and_result(entry)
+        if tool_name not in _PAPER_LEVEL_TOOLS:
+            continue
         if not _payload_is_claimable_success(tool_name, result):
             continue
         try:
@@ -2730,20 +2790,12 @@ def _author_year_is_suspicious(
     if author_key and (author_key, year_prefix) in (author_year_support or set()):
         return False
 
-    matches = [bibcode for bibcode in valid_bibcodes if bibcode.startswith(year_prefix)]
-    if not matches:
-        return True
-
-    author_initial = author[0].upper() if author else ""
-    for bibcode in matches:
-        if bibcode and bibcode[-1] == author_initial:
-            return False
-
-    # Same-year bibcodes exist in the pool but NONE matches this author's
-    # initial and there is no author_year_support entry — the citation is not
-    # vindicated by provenance. The count of unrelated same-year bibcodes is
-    # irrelevant: a year that happens to be well-represented in the tool pool
-    # must not whitelist an arbitrary invented author for that year.
+    # A bibcode's final character is only the first-author initial.  It cannot
+    # distinguish, for example, Parker (2020) from Planck (2020), so it must
+    # never authenticate an author-year citation.  Bibcodes remain valid when
+    # cited explicitly; author-year prose needs structured author/year support
+    # (or an exact phrase/source identifier handled by the caller).
+    _ = valid_bibcodes
     return True
 
 

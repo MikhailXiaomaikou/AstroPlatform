@@ -95,23 +95,27 @@ def convert_log_l_solar_to_l_prime(
 
     The conversion is REDSHIFT-INDEPENDENT: L'/L = 3.125e10 · ν_rest⁻³ (the
     (1+z) factors cancel between L' ∝ ν_obs⁻²(1+z)⁻³ and L ∝ ν_obs — Solomon &
-    Vanden Bout 2005, ARA&A 43, 677, Eqs. 1 & 3). `redshift` is still required
-    and validated (a non-negative number) as a sanity input, but it does not
+    Vanden Bout 2005, ARA&A 43, 677, Eqs. 1 & 3). ``redshift`` is optional; if
+    supplied it is validated as a non-negative finite number, but it does not
     enter the conversion.
 
-    Returns None when ν_rest cannot be resolved or redshift is missing/invalid.
+    Returns None when ν_rest cannot be resolved or a supplied redshift is invalid.
 
     Args:
         log_l_solar: log10(L_line / L_sun).
         line_id: line label for ν_rest lookup ("[CII]", "CO(1-0)", ...).
-        redshift: source redshift (>= 0). Validated but not used in the
+        redshift: optional source redshift (>= 0). Validated but not used in the
             (redshift-independent) conversion.
         nu_rest_ghz: explicit ν_rest override; takes priority over line_id
             lookup.  Use when line_id is unknown or has multiple aliases.
     """
     if not isinstance(log_l_solar, (int, float)) or not math.isfinite(log_l_solar):
         return None
-    if not isinstance(redshift, (int, float)) or not math.isfinite(redshift) or redshift < 0:
+    if redshift is not None and (
+        not isinstance(redshift, (int, float))
+        or not math.isfinite(redshift)
+        or redshift < 0
+    ):
         return None
 
     nu = nu_rest_ghz if (nu_rest_ghz and nu_rest_ghz > 0) else lookup_line_rest_freq_ghz(line_id or "")
@@ -133,12 +137,16 @@ def convert_log_l_prime_to_l_solar(
 ) -> float | None:
     """L'_line[K km/s pc²] → L_line[L_sun] in log10 space (inverse of above).
 
-    Redshift-independent (see convert_log_l_solar_to_l_prime); `redshift` is
-    validated but not used in the conversion.
+    Redshift-independent (see convert_log_l_solar_to_l_prime); ``redshift`` is
+    optional and, when supplied, validated but not used in the conversion.
     """
     if not isinstance(log_l_prime, (int, float)) or not math.isfinite(log_l_prime):
         return None
-    if not isinstance(redshift, (int, float)) or not math.isfinite(redshift) or redshift < 0:
+    if redshift is not None and (
+        not isinstance(redshift, (int, float))
+        or not math.isfinite(redshift)
+        or redshift < 0
+    ):
         return None
 
     nu = nu_rest_ghz if (nu_rest_ghz and nu_rest_ghz > 0) else lookup_line_rest_freq_ghz(line_id or "")
@@ -163,9 +171,9 @@ def convert_row_luminosity_inplace(
     to the converted value, row['log_luminosity_transformed_from'] to the
     pre-conversion value (for audit).  Errors propagated to row['_unit_error'].
 
-    No-op when row already has the target kind, or when the row is missing
-    redshift / line_id (those rows should be flagged + rejected by the
-    caller, NOT silently fit on mixed units).
+    No-op when row already has the target kind. A missing/unknown line identity
+    is rejected; redshift is not required because the conversion is explicitly
+    rest-frequency-only.
     """
     out = dict(row)
     current = out.get("luminosity_kind") or "L_solar"  # default: legacy rows are L_solar
@@ -186,8 +194,8 @@ def convert_row_luminosity_inplace(
         return out
 
     if new_val is None:
-        # Conversion failed — typically missing z, missing line_id, or
-        # unknown line.  Caller should reject this row.
+        # Conversion failed — typically missing/unknown line identity or an
+        # explicitly supplied invalid redshift. Caller should reject this row.
         out["_unit_error"] = (
             f"could_not_convert {current} -> {target_kind} "
             f"(line_id={line_id!r}, redshift={z!r})"

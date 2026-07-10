@@ -8,6 +8,9 @@ and keeps the original one-namespace monkeypatch semantics.
 
 from __future__ import annotations
 
+import math
+from typing import Any
+
 
 from app.services.cosmology_likelihoods.core import (
     CosmologyDatasetEntry,
@@ -55,6 +58,123 @@ from app.services.cosmology_likelihoods.sn import (
 # file); 'diagonal' = sha256-pinned vector with diagonal covariance; 'full' =
 # sha256-verified released FULL covariance.
 _COV_FIDELITY_ORDER = ("unverified", "literature_typed", "diagonal", "full")
+
+# One publication policy for every cosmology sampler.  These constants are
+# intentionally owned next to the data-fidelity gate so in-process and external
+# runners cannot quietly evolve different meanings of ``publication_ready``.
+PUBLICATION_MIN_INDEPENDENT_CHAINS = 4
+PUBLICATION_RHAT_MAX = 1.01
+PUBLICATION_ESS_MIN = 400.0
+_PUBLICATION_COV_FIDELITIES = frozenset({"diagonal", "full"})
+
+
+def _assess_publication_gate(
+    *,
+    cov_fidelity: str | None,
+    likelihood_is_compressed_or_approximate: bool,
+    n_independent_chains: int,
+    per_parameter: dict[str, dict[str, Any]] | None,
+    critical_parameters: list[str] | tuple[str, ...],
+    assess_data_likelihood: bool = True,
+) -> dict[str, Any]:
+    """Return the shared, machine-readable cosmology publication decision.
+
+    ``publication_ready`` means substantially more than "a sampler returned
+    numbers": inputs must be machine-bound rather than hand typed; the executed
+    likelihood must not be a compressed/approximate substitute; and every
+    critical sampled parameter must pass rank-normalized R-hat and bulk-ESS on
+    at least four genuinely independent chains.
+
+    The returned reason codes are deliberately stable API fields.  Callers may
+    still expose a scientifically useful preliminary posterior when this gate is
+    false, but may not relabel it as publication-ready.
+    """
+    reasons: list[str] = []
+    parameter_failures: dict[str, list[str]] = {}
+    critical = [str(name) for name in critical_parameters]
+    diagnostics = per_parameter if isinstance(per_parameter, dict) else {}
+
+    if not critical:
+        reasons.append("no_critical_parameters")
+
+    if assess_data_likelihood:
+        if cov_fidelity == "literature_typed":
+            reasons.append("literature_typed_input")
+        elif cov_fidelity not in _PUBLICATION_COV_FIDELITIES:
+            reasons.append("unverified_or_unpinned_input")
+
+        if likelihood_is_compressed_or_approximate:
+            reasons.append("compressed_or_approximate_likelihood")
+
+    if int(n_independent_chains) < PUBLICATION_MIN_INDEPENDENT_CHAINS:
+        reasons.append("fewer_than_four_independent_chains")
+
+    for name in critical:
+        record = diagnostics.get(name)
+        failures: list[str] = []
+        if not isinstance(record, dict):
+            failures.extend(("rank_normalized_rhat_unavailable", "bulk_ess_unavailable"))
+        else:
+            raw_rhat = record.get("rhat")
+            raw_ess = record.get("ess_bulk")
+            rhat = (
+                float(raw_rhat)
+                if isinstance(raw_rhat, (int, float))
+                and not isinstance(raw_rhat, bool)
+                and math.isfinite(float(raw_rhat))
+                else None
+            )
+            ess = (
+                float(raw_ess)
+                if isinstance(raw_ess, (int, float))
+                and not isinstance(raw_ess, bool)
+                and math.isfinite(float(raw_ess))
+                else None
+            )
+            if rhat is None:
+                failures.append("rank_normalized_rhat_unavailable")
+            elif rhat >= PUBLICATION_RHAT_MAX:
+                failures.append("rank_normalized_rhat_at_or_above_1.01")
+            if ess is None:
+                failures.append("bulk_ess_unavailable")
+            elif ess < PUBLICATION_ESS_MIN:
+                failures.append("bulk_ess_below_400")
+        if failures:
+            parameter_failures[name] = failures
+
+    if parameter_failures:
+        for code in (
+            "rank_normalized_rhat_unavailable",
+            "rank_normalized_rhat_at_or_above_1.01",
+            "bulk_ess_unavailable",
+            "bulk_ess_below_400",
+        ):
+            if any(code in failures for failures in parameter_failures.values()):
+                reasons.append(code)
+
+    # Preserve order while protecting callers from duplicate reason codes.
+    reasons = list(dict.fromkeys(reasons))
+    return {
+        "eligible": not reasons,
+        "reasons": reasons,
+        "parameter_failures": parameter_failures,
+        "critical_parameters": critical,
+        "thresholds": {
+            "min_independent_chains": PUBLICATION_MIN_INDEPENDENT_CHAINS,
+            "rhat_method": "rank",
+            "rhat_max_exclusive": PUBLICATION_RHAT_MAX,
+            "ess_method": "bulk",
+            "ess_min": PUBLICATION_ESS_MIN,
+        },
+        "observed": {
+            "cov_fidelity": cov_fidelity,
+            "likelihood_is_compressed_or_approximate": bool(
+                likelihood_is_compressed_or_approximate
+            ),
+            "data_likelihood_assessed": bool(assess_data_likelihood),
+            "n_independent_chains": int(n_independent_chains),
+        },
+    }
 
 
 def _entry_verification(entry: CosmologyDatasetEntry) -> tuple[str | None, str | None]:
@@ -134,11 +254,19 @@ def _finalize_cov_fidelity(
 ) -> tuple[str | None, dict[str, str | None], bool]:
     """Aggregate cov_fidelity across executed probes, append the publication-block
     warning when it is unstamped (None) or unverified, and return whether it is
-    publication-eligible.  Single source for BOTH runners (inline analytic +
-    sampling) so the None/unverified gate and its warning cannot drift apart."""
+    publication-eligible.  ``literature_typed`` is safe to expose as a labelled
+    preliminary input, but is not machine-bound evidence and therefore cannot
+    satisfy the publication gate.  Single source for BOTH runners (inline
+    analytic + sampling) so this policy cannot drift apart."""
     cov_fidelity, artifact_sha256 = _aggregate_cov_fidelity(executed_entries)
-    fidelity_ok = cov_fidelity not in (None, "unverified")
-    if not fidelity_ok:
+    fidelity_ok = cov_fidelity in _PUBLICATION_COV_FIDELITIES
+    if cov_fidelity == "literature_typed":
+        warnings.append(
+            "At least one executed constraint is a hand-typed literature summary "
+            "with no hash-bound data vector/covariance; result is preliminary only "
+            "and cannot be publication-ready."
+        )
+    elif not fidelity_ok:
         warnings.append(
             "A fitted data product failed sha256 verification (vendored file "
             "missing or bytes do not match the registry pin) or is an unstamped "

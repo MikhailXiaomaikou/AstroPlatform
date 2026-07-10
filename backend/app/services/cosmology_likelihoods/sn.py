@@ -77,13 +77,35 @@ UNION3_EXECUTABLE_KEYS = frozenset({"union3"})
 
 # M6 (2026-05-18): Pantheon+SH0ES 2022 data loader.  Lazy-loaded from a
 # ~20 MB npz committed alongside the source code (see
-# scripts/fetch_pantheon_plus.py for the regeneration script).  Holds the
-# distance-modulus table + the full 1701x1701 stat+sys covariance + its
-# inverse.  Inverse is cached because Cholesky-once-solve-many beats
-# rebuilding it inside every chain.
+# scripts/fetch_pantheon_plus.py for the regeneration script).  A scientifically
+# usable SH0ES likelihood needs more than MU_SH0ES: it needs the released
+# corrected apparent magnitude, calibrator flag and Cepheid-host distance so
+# calibrators can be compared to CEPH_DIST instead of a cosmological distance.
+# Older bundles missing those columns remain hash-verifiable artifacts, but are
+# explicitly *not* executable SH0ES/H0 likelihoods.
 _PANTHEON_PLUS_DATA_DIR = (
     pathlib.Path(__file__).resolve().parent.parent.parent.parent / "data" / "pantheon_plus_2022"
 )
+_PANTHEON_PLUS_SHOES_REQUIRED_FIELDS = (
+    "m_b_corr",
+    "is_calibrator",
+    "cepheid_distance",
+)
+
+
+def _pantheon_plus_blocker(verified: dict[str, Any]) -> str:
+    """Return a stable, user-facing reason the SH0ES likelihood is unavailable."""
+    issues = verified.get("scientific_issues") or ()
+    details = "; ".join(str(issue) for issue in issues)
+    base = (
+        "Pantheon+SH0ES full likelihood is unavailable: the official likelihood "
+        "requires m_b_corr, IS_CALIBRATOR, and CEPH_DIST, applies "
+        "(zHD > 0.01) | IS_CALIBRATOR, and uses CEPH_DIST as the calibrator "
+        "theory distance. The current bundle cannot support a full SH0ES/H0 claim"
+    )
+    return f"{base} ({details})." if details else f"{base}."
+
+
 @lru_cache(maxsize=None)
 def load_verified_pantheon_plus_data(dataset_key: str = "pantheon_plus") -> dict[str, Any]:
     """Load the Pantheon+SH0ES 1701-SN bundle from the vendored, sha256-pinned
@@ -100,40 +122,165 @@ def load_verified_pantheon_plus_data(dataset_key: str = "pantheon_plus") -> dict
     pinned = _registry_product_sha256(dataset_key, "sn_full_data_npz")
     npz_path = _PANTHEON_PLUS_DATA_DIR / "data.npz"
 
-    def _fallback(fidelity: str) -> dict[str, Any]:
+    def _fallback(fidelity: str, issue: str) -> dict[str, Any]:
         return {
             "z_hd": None, "z_hel": None, "mu": None, "mu_err_diag": None, "cov": None,
+            "m_b_corr": None, "is_calibrator": None, "cepheid_distance": None,
+            "selection_mask": None, "n_selected": 0, "n_calibrators": 0,
             "sha256": None, "hash_verified": False, "cov_fidelity": fidelity,
+            "shoes_calibration_ready": False, "likelihood_ready": False,
+            "scientific_issues": (issue,),
         }
 
     if not npz_path.exists():
-        return _fallback("unverified" if pinned else "literature_typed")
+        return _fallback(
+            "unverified" if pinned else "literature_typed",
+            f"vendored bundle is missing at {npz_path}",
+        )
     try:
         raw = npz_path.read_bytes()  # read once: the hash and np.load share these bytes
         digest = hashlib.sha256(raw).hexdigest()
         npz = np.load(io.BytesIO(raw))
         verified = digest == pinned
+        z_hd = np.asarray(npz["z_hd"], dtype=np.float64)
+        z_hel = np.asarray(npz["z_hel"], dtype=np.float64)
+        mu = np.asarray(npz["mu"], dtype=np.float64)
+        mu_err_diag = np.asarray(npz["mu_err_diag"], dtype=np.float64)
+        cov = np.asarray(npz["cov"], dtype=np.float64)
+        missing = [name for name in _PANTHEON_PLUS_SHOES_REQUIRED_FIELDS if name not in npz]
+        m_b_corr = (
+            np.asarray(npz["m_b_corr"], dtype=np.float64) if "m_b_corr" in npz else None
+        )
+        raw_is_calibrator = (
+            np.asarray(npz["is_calibrator"])
+            if "is_calibrator" in npz
+            else None
+        )
+        is_calibrator = (
+            np.asarray(raw_is_calibrator, dtype=bool)
+            if raw_is_calibrator is not None
+            else None
+        )
+        cepheid_distance = (
+            np.asarray(npz["cepheid_distance"], dtype=np.float64)
+            if "cepheid_distance" in npz
+            else None
+        )
+
+        issues: list[str] = []
+        if not verified:
+            issues.append("sha256 does not match the registry pin")
+        if missing:
+            issues.append("bundle is missing official fields: " + ", ".join(missing))
+
+        n = z_hd.size
+        if z_hd.ndim != 1:
+            issues.append(f"z_hd must be one-dimensional, got shape {z_hd.shape}")
+        base_vectors = {
+            "z_hel": z_hel,
+            "mu": mu,
+            "mu_err_diag": mu_err_diag,
+        }
+        for name, values in base_vectors.items():
+            if values.shape != (n,):
+                issues.append(f"{name} shape {values.shape} does not match z_hd {(n,)}")
+        covariance_asymmetry = float("nan")
+        if cov.shape != (n, n):
+            issues.append(f"covariance shape {cov.shape} does not match {(n, n)}")
+        elif not np.all(np.isfinite(cov)):
+            issues.append("covariance contains non-finite values")
+        else:
+            covariance_asymmetry = float(np.max(np.abs(cov - cov.T)))
+            # The released ASCII matrix is rounded independently above/below
+            # the diagonal and differs by at most ~3e-8.  Accept only this tiny
+            # release-level roundoff, then symmetrize explicitly before any
+            # Cholesky/inversion. Larger asymmetry is a corrupt product.
+            if covariance_asymmetry > 5e-8:
+                issues.append(
+                    f"covariance asymmetry {covariance_asymmetry:.3g} exceeds 5e-8"
+                )
+            else:
+                cov = 0.5 * (cov + cov.T)
+            if np.any(np.diag(cov) <= 0.0):
+                issues.append("covariance has non-positive diagonal elements")
+        if not np.all(np.isfinite(z_hd)) or not np.all(np.isfinite(z_hel)):
+            issues.append("redshift vectors contain non-finite values")
+
+        for name, values in (
+            ("m_b_corr", m_b_corr),
+            ("is_calibrator", is_calibrator),
+            ("cepheid_distance", cepheid_distance),
+        ):
+            if values is not None and values.shape != (n,):
+                issues.append(f"{name} shape {values.shape} does not match z_hd {(n,)}")
+        if raw_is_calibrator is not None and raw_is_calibrator.shape == (n,):
+            if not np.all(np.isin(raw_is_calibrator, (0, 1, False, True))):
+                issues.append("is_calibrator contains values other than 0/1")
+
+        selection_mask: np.ndarray | None = None
+        if not missing and not issues:
+            assert m_b_corr is not None
+            assert is_calibrator is not None
+            assert cepheid_distance is not None
+            selection_mask = (z_hd > 0.01) | is_calibrator
+            if not np.any(selection_mask):
+                issues.append("official selection contains no supernovae")
+            if not np.any(is_calibrator & selection_mask):
+                issues.append("official selection contains no Cepheid calibrators")
+            if not np.all(np.isfinite(m_b_corr[selection_mask])):
+                issues.append("selected m_b_corr contains non-finite values")
+            calibrator_distances = cepheid_distance[is_calibrator & selection_mask]
+            if not np.all(np.isfinite(calibrator_distances)) or np.any(
+                calibrator_distances <= 0.0
+            ):
+                issues.append("selected calibrators have invalid CEPH_DIST values")
+
+        ready = bool(verified and selection_mask is not None and not issues)
         return {
-            "z_hd": np.asarray(npz["z_hd"], dtype=np.float64),
-            "z_hel": np.asarray(npz["z_hel"], dtype=np.float64),
-            "mu": np.asarray(npz["mu"], dtype=np.float64),
-            "mu_err_diag": np.asarray(npz["mu_err_diag"], dtype=np.float64),
-            "cov": np.asarray(npz["cov"], dtype=np.float64),
+            "z_hd": z_hd,
+            "z_hel": z_hel,
+            "mu": mu,
+            "mu_err_diag": mu_err_diag,
+            "cov": cov,
+            "covariance_symmetrized": bool(covariance_asymmetry > 0.0),
+            "covariance_max_asymmetry_raw": covariance_asymmetry,
+            "m_b_corr": m_b_corr,
+            "is_calibrator": is_calibrator,
+            "cepheid_distance": cepheid_distance,
+            "selection_mask": selection_mask,
+            "n_selected": int(np.count_nonzero(selection_mask)) if selection_mask is not None else 0,
+            "n_calibrators": (
+                int(np.count_nonzero(is_calibrator & selection_mask))
+                if is_calibrator is not None and selection_mask is not None
+                else 0
+            ),
             "sha256": digest,
             "hash_verified": bool(verified),
             "cov_fidelity": "full" if verified else "unverified",
+            "shoes_calibration_ready": ready,
+            "likelihood_ready": ready,
+            "scientific_issues": tuple(issues),
         }
     except Exception as exc:  # malformed/truncated npz — degrade, never crash import
         logger.warning("Pantheon+ data product failed to load (%s); marking unverified", exc)
-        return _fallback("unverified")
+        return _fallback("unverified", f"bundle failed to load: {exc}")
 
 
 @lru_cache(maxsize=None)
 def _pantheon_plus_cov_inv() -> np.ndarray:
-    """Inverse of the verified 1701x1701 SN covariance — computed once, ONLY on the
-    fit path (kept out of load_verified_pantheon_plus_data so verify-only callers
-    do not pay the inversion just to read a digest/fidelity)."""
-    return np.linalg.inv(load_verified_pantheon_plus_data("pantheon_plus")["cov"])
+    """Inverse of the officially selected, verified SN covariance.
+
+    The released covariance is 1701x1701, but the Pantheon+SH0ES likelihood uses
+    only rows satisfying ``(zHD > 0.01) | IS_CALIBRATOR``.  Subsetting before
+    inversion follows the release likelihood exactly and prevents excluded
+    low-redshift, non-calibrator rows from entering the fit.
+    """
+    verified = load_verified_pantheon_plus_data("pantheon_plus")
+    if not verified.get("likelihood_ready"):
+        raise ValueError(_pantheon_plus_blocker(verified))
+    selection = verified["selection_mask"]
+    covariance = verified["cov"][np.ix_(selection, selection)]
+    return np.linalg.inv(covariance)
 
 
 # ── DES-SN5YR full distance-modulus likelihood (2026-06-05) ─────────────────
@@ -438,52 +585,64 @@ def _load_union3_data() -> dict[str, np.ndarray]:
     }
 
 
+@lru_cache(maxsize=None)
 def _load_pantheon_plus_data() -> dict[str, np.ndarray]:
-    """Arrays the Pantheon+ χ² fits, sourced from the sha256-verified loader (cov
-    IS the checksummed object) with cov_inv derived lazily.  No separate module
-    cache: load_verified is lru-cached and _pantheon_plus_cov_inv memoizes the
-    inverse, so this returns coherent objects without a second invalidation surface
-    that could go stale or defeat a monkeypatch of the loader."""
+    """Return the officially selected Pantheon+SH0ES likelihood arrays.
+
+    Refuses old ``MU_SH0ES``-only bundles even when their bytes and covariance
+    are sha256-verified: those rows cannot reproduce the official calibrator
+    likelihood or identify H0.  The selected covariance is cached with the
+    inverse so repeated sampler calls do not copy a 1657x1657 matrix.
+    """
     verified = load_verified_pantheon_plus_data("pantheon_plus")
-    if verified["cov"] is None:
+    issues = tuple(str(issue) for issue in verified.get("scientific_issues") or ())
+    if verified.get("cov") is None and any(
+        "vendored bundle is missing at" in issue for issue in issues
+    ):
         raise FileNotFoundError(
             f"Pantheon+SH0ES data file missing: {_PANTHEON_PLUS_DATA_DIR / 'data.npz'}. "
             "Run `python scripts/fetch_pantheon_plus.py` to download "
             "the 2022 release (~20 MB)."
         )
-    if verified.get("cov_fidelity") == "unverified":
-        raise ValueError(
-            "Pantheon+ covariance failed sha256 verification (digest mismatch); "
-            "refusing to compute chi2 from unverified data — re-fetch the release."
-        )
+    if not verified.get("likelihood_ready"):
+        raise ValueError(_pantheon_plus_blocker(verified))
+    selection = verified["selection_mask"]
+    selected_covariance = verified["cov"][np.ix_(selection, selection)]
     return {
-        "z_hd": verified["z_hd"], "z_hel": verified["z_hel"], "mu": verified["mu"],
-        "mu_err_diag": verified["mu_err_diag"], "cov": verified["cov"],
+        "z_hd": verified["z_hd"][selection],
+        "z_hel": verified["z_hel"][selection],
+        # Keep the selected legacy MU_SH0ES vector only for compatibility with
+        # row-count/provenance code. It is never the observed vector in χ².
+        "mu": verified["mu"][selection],
+        "mu_err_diag": verified["mu_err_diag"][selection],
+        "m_b_corr": verified["m_b_corr"][selection],
+        "is_calibrator": verified["is_calibrator"][selection],
+        "cepheid_distance": verified["cepheid_distance"][selection],
+        "cov": selected_covariance,
         "cov_inv": _pantheon_plus_cov_inv(),
     }
 
 
-# Pantheon+SH0ES baseline absolute magnitude.  The MU_SH0ES column in the
-# data release is calibrated against the SH0ES Cepheid-SN distance ladder,
-# which has M_B = -19.253 (Riess+ 2022 ApJL 934 L7).  Our likelihood lets
-# the fit move M_B away from this baseline; the offset (M_B - M_B_REF) is
-# what actually appears in the model, so at (H0=73.04, Ωm=0.334, M_B=-19.253)
-# the residual collapses to zero and χ² ≈ dof (Pantheon+SH0ES best fit).
+# Kept as a compatibility export for callers that display the historical SH0ES
+# reference value.  The official likelihood below does not subtract a fixed
+# M_B reference: it fits corrected apparent magnitudes as m_b_corr = theory_mu
+# + M_B and uses CEPH_DIST + M_B for the calibrator rows.
 PANTHEON_PLUS_M_B_REF = -19.253
 
 
 def _pantheon_plus_chi2_samples(
     samples: np.ndarray, parameter_order: list[str]
 ) -> np.ndarray:
-    """χ² contribution from Pantheon+SH0ES 1701 SNe Ia under flat w0waCDM.
+    """Official-form Pantheon+SH0ES χ² under flat w0waCDM.
 
-    Model: μ_model(z) = 5·log10(D_L(z; H0, Ωm, w0, wa) [Mpc]) + 25 + (M_B - M_B_REF)
-       where D_L = (1+z_hel)·D_M(z_hd), M_B_REF = -19.253 is the SH0ES baseline, and
-       M_B is fit as a free nuisance.  At M_B = M_B_REF + 0 the model matches
-       the SH0ES-calibrated distance modulus; offsets let the SN data
-       constrain (H0, M_B) jointly, breaking the H0 degeneracy when combined
-       with BAO/CMB.
-    χ² = (μ_obs - μ_model)ᵀ · C⁻¹ · (μ_obs - μ_model)
+    The released likelihood first selects ``(zHD > 0.01) | IS_CALIBRATOR`` and
+    fits ``m_b_corr``.  Hubble-flow rows use
+    ``5 log10((1+zHEL) D_M(zHD)) + 25 + M_B``; calibrator rows instead use
+    ``CEPH_DIST + M_B``.  The latter anchors M_B and thereby makes H0
+    identifiable.  Applying cosmological distances to calibrators, or fitting
+    every released row, is not the Pantheon+SH0ES likelihood.
+
+    χ² = (m_b_corr - m_model)ᵀ · C_selected⁻¹ · (m_b_corr - m_model)
 
     parameter_order must contain "H0", "omegam", "M_B".  Optionally also
     "w"/"w0"/"wa": when present, those columns flow through the DE-aware
@@ -495,7 +654,9 @@ def _pantheon_plus_chi2_samples(
     data = _load_pantheon_plus_data()
     z_hd = data["z_hd"]    # cosmological redshift — drives the comoving-distance integral
     z_hel = data["z_hel"]  # heliocentric redshift — the (1+z) luminosity-distance factor
-    mu_obs = data["mu"]
+    m_obs = data["m_b_corr"]
+    is_calibrator = data["is_calibrator"].astype(bool, copy=False)
+    cepheid_distance = data["cepheid_distance"]
     cov_inv = data["cov_inv"]
     n_samples = samples.shape[0]
     h0 = samples[:, parameter_order.index("H0")]
@@ -517,10 +678,10 @@ def _pantheon_plus_chi2_samples(
     # D_L = (1 + z_hel) · D_M(z_hd).
     dm_grid = _flat_de_dm_grid_vectorized(z_hd, h0, omegam, w0, wa)  # (n_sn, n_samples)
     dl_grid = (1.0 + z_hel[:, None]) * dm_grid               # (n_sn, n_samples), Mpc
-    mu_model = (
-        5.0 * np.log10(dl_grid) + 25.0 + (m_b[None, :] - PANTHEON_PLUS_M_B_REF)
-    )
-    residual = mu_obs[:, None] - mu_model                    # (n_sn, n_samples)
+    theory_mu = 5.0 * np.log10(dl_grid) + 25.0
+    theory_mu[is_calibrator, :] = cepheid_distance[is_calibrator, None]
+    m_model = theory_mu + m_b[None, :]
+    residual = m_obs[:, None] - m_model                      # (n_sn, n_samples)
     return np.einsum("in,ij,jn->n", residual, cov_inv, residual)
 
 

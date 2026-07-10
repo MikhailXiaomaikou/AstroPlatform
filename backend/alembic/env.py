@@ -16,6 +16,17 @@ if config.config_file_name is not None:
 # Override sqlalchemy.url from DATABASE_URL env var if set
 database_url = os.environ.get("DATABASE_URL")
 if database_url:
+    # Render injects a conventional synchronous PostgreSQL URL, while this
+    # Alembic environment uses SQLAlchemy's async engine. Match app.config's
+    # normalization so pre-deploy migrations load asyncpg instead of psycopg2.
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace(
+            "postgresql://", "postgresql+asyncpg://", 1
+        )
+    elif database_url.startswith("postgres://"):
+        database_url = database_url.replace(
+            "postgres://", "postgresql+asyncpg://", 1
+        )
     config.set_main_option("sqlalchemy.url", database_url)
 
 # Import Base and all models so Alembic sees the metadata
@@ -35,6 +46,7 @@ from app.models.schemas import (  # noqa: E402, F401
     TeamMember,
     User,
 )
+from app.models.research_records import ProvenanceRecord, ResearchJob  # noqa: E402, F401
 
 target_metadata = Base.metadata
 

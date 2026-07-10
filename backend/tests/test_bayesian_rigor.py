@@ -32,7 +32,8 @@ def test_short_chain_is_flagged_insufficient():
     assert d["publication_ready"] is False
     assert set(d["insufficient_params"]) <= {"a", "b"}
     assert d["thresholds"]["ess_min"] == 400
-    assert d["thresholds"]["rhat_max"] == 1.05
+    assert d["thresholds"]["rhat_max"] == 1.01
+    assert d["thresholds"]["min_chains"] == 4
 
 
 def test_long_chain_passes_publication_gate():
@@ -46,6 +47,16 @@ def test_long_chain_passes_publication_gate():
         assert v["rhat"] < 1.05
         assert "hdi_low_94" in v and "hdi_high_94" in v
         assert v["hdi_low_94"] < v["hdi_high_94"]
+
+
+def test_single_chain_nonfinite_rhat_cannot_pass_publication_gate():
+    rng = np.random.default_rng(11)
+    samples = rng.normal(size=(5000, 2))
+    d = chain_diagnostics(samples, ["a", "b"], n_chains=1)
+
+    assert d["publication_ready"] is False
+    assert d["overall_status"] == "check_required"
+    assert set(d["insufficient_params"]) == {"a", "b"}
 
 
 def test_diagnostics_include_hdi_bounds():
@@ -110,7 +121,17 @@ def test_ppc_returns_per_statistic_pvalues():
         a, b = theta
         return a + b * x
 
-    out = posterior_predictive_check(model, posterior, y_obs, n_samples=100, random_seed=42)
+    def observation_sampler(theta, draw_rng):
+        return model(theta) + draw_rng.normal(0.0, 0.05, size=x.size)
+
+    out = posterior_predictive_check(
+        model,
+        posterior,
+        y_obs,
+        n_samples=100,
+        random_seed=42,
+        observation_sampler=observation_sampler,
+    )
 
     assert "stat_pvalues" in out
     # Keys we promise in the docstring.
@@ -129,12 +150,39 @@ def test_ppc_flags_misspecified_model():
     def model(theta):
         return np.full_like(y_obs, float(theta[0]))
 
-    out = posterior_predictive_check(model, posterior, y_obs, n_samples=200, random_seed=7)
+    def observation_sampler(theta, draw_rng):
+        return model(theta) + draw_rng.normal(0.0, 0.05, size=y_obs.size)
+
+    out = posterior_predictive_check(
+        model,
+        posterior,
+        y_obs,
+        n_samples=200,
+        random_seed=7,
+        observation_sampler=observation_sampler,
+    )
     # All replicates are ~5 but obs are ~0 → max(rep) >> max(obs) always.
     assert out["stat_pvalues"]["max"] >= 0.95
     # Miscalibrated list should flag at least one statistic.
     assert len(out["miscalibrated_statistics"]) >= 1
     assert out["calibration"] == "poor"
+
+
+def test_ppc_without_observation_model_fails_closed():
+    posterior = np.zeros((100, 1))
+    observed = np.random.default_rng(9).normal(size=20)
+
+    out = posterior_predictive_check(
+        lambda theta: np.zeros_like(observed),
+        posterior,
+        observed,
+        random_seed=3,
+    )
+
+    assert out["success"] is False
+    assert out["publication_ready"] is False
+    assert out["error_class"] == "missing_observation_sampler"
+    assert out["stat_pvalues"] == {}
 
 
 # --------------------------------------------------------------------

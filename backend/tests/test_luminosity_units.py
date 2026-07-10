@@ -112,9 +112,11 @@ def test_round_trip_is_identity(z: float) -> None:
 # ---------- 错误路径 ----------
 
 
-def test_missing_redshift_returns_none() -> None:
-    """Without redshift, conversion is impossible (depends on (1+z)² term)."""
-    assert convert_log_l_solar_to_l_prime(8.5, "[CII]", redshift=None) is None
+def test_redshift_is_optional_but_invalid_supplied_values_are_rejected() -> None:
+    """The rest-frequency conversion is redshift-independent."""
+    without_z = convert_log_l_solar_to_l_prime(8.5, "[CII]", redshift=None)
+    with_z = convert_log_l_solar_to_l_prime(8.5, "[CII]", redshift=5.0)
+    assert without_z == pytest.approx(with_z)
     assert convert_log_l_solar_to_l_prime(8.5, "[CII]", redshift=float("nan")) is None
     assert convert_log_l_solar_to_l_prime(8.5, "[CII]", redshift=-0.5) is None
 
@@ -169,14 +171,13 @@ def test_convert_row_legacy_default_is_l_solar() -> None:
     assert out["log_luminosity"] == pytest.approx(9.158, abs=0.01)
 
 
-def test_convert_row_missing_redshift_records_unit_error() -> None:
-    """No z → _unit_error field explains the reason, but log_luminosity is untouched so caller can reject."""
+def test_convert_row_missing_redshift_is_valid_for_rest_frequency_conversion() -> None:
+    """No z is needed because L_solar/L_prime depends only on rest frequency."""
     row = {"log_luminosity": 8.5, "line_id": "[CII]"}  # no redshift
     out = convert_row_luminosity_inplace(row, "L_prime")
-    assert "_unit_error" in out
-    assert "redshift" in out["_unit_error"].lower()
-    assert out["log_luminosity"] == 8.5  # untouched
-    assert out.get("luminosity_kind") != "L_prime"
+    assert "_unit_error" not in out
+    assert out["luminosity_kind"] == "L_prime"
+    assert out["log_luminosity"] == pytest.approx(9.158, abs=0.01)
 
 
 def test_convert_row_unknown_line_records_unit_error() -> None:

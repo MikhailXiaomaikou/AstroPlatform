@@ -96,6 +96,24 @@ print(len(rows))
     )
 
 
+def test_real_reader_plus_unrelated_rng_is_non_claimable():
+    """Reading one archive row must not launder an arbitrary random result."""
+    code = """
+import numpy as np
+rows = get_adql_results()
+h0 = np.random.uniform(60, 80)
+print(f"H0 = {h0:.6f}")
+"""
+    resp = asyncio.run(_exec_run_python({
+        "code": code,
+        "data_source": "latest_adql",
+    }))
+    assert resp.get("data_origin") == "synthetic"
+    assert resp.get("__do_not_claim__") is True
+    assert resp.get("__synthetic_detected__") is True
+    assert "latest_adql" in str(resp.get("__message_to_model__") or "")
+
+
 def test_data_source_mismatch_rejected():
     """Declared latest_adql but code doesn't actually call get_adql_results."""
     code = """

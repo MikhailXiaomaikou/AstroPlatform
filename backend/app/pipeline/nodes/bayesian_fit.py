@@ -188,7 +188,8 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
             sampler = emcee.EnsembleSampler(n_walkers, ndim, log_prob)
             sampler.run_mcmc(p0, n_steps, progress=False)
 
-            flat_samples = sampler.get_chain(discard=n_burn, flat=True)
+            raw_chain = np.asarray(sampler.get_chain(discard=n_burn), dtype=float)
+            flat_samples = raw_chain.reshape(-1, ndim)
 
             result = {
                 "samples": flat_samples.tolist(),
@@ -200,7 +201,25 @@ def bayesian_fit(input_data: dict, params: dict) -> dict:
             # Add chain diagnostics
             from app.services.bayesian_inference import chain_diagnostics
             param_names = params.get("param_names", [f"p{i}" for i in range(ndim)])
-            result["diagnostics"] = chain_diagnostics(flat_samples, param_names)
+            # Preserve walker boundaries for diagnostics.  Walkers in one emcee
+            # ensemble are coupled, however, and are not independent replicated
+            # chains; R-hat across them is useful for triage but is insufficient
+            # for a publication claim.  Fail closed until callers run genuinely
+            # independent ensembles.
+            walker_chains = np.transpose(raw_chain, (1, 0, 2))
+            diagnostics = chain_diagnostics(
+                walker_chains,
+                param_names,
+                n_chains=int(n_walkers),
+            )
+            diagnostics["independence_note"] = (
+                "R-hat was computed across coupled emcee walkers, not independent "
+                "ensemble runs; publication requires replicated independent chains."
+            )
+            diagnostics["publication_ready"] = False
+            diagnostics["overall_status"] = "independent_chains_required"
+            diagnostics["insufficient_params"] = list(param_names)
+            result["diagnostics"] = diagnostics
 
         except ImportError:
             return {**input_data, "error": "emcee not installed", "node_type": "BayesianFit"}

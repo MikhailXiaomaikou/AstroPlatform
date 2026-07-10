@@ -20,7 +20,10 @@ TOOL_SCHEMAS = [
     {
         "name": "run_python",
         "description": (
-            "Execute Python code for data analysis, statistical modeling, or visualization. "
+            "Execute Python code for data analysis, statistical modeling, or visualization "
+            "only when a trusted local operator has explicitly enabled a legacy executor. "
+            "Hosted production disables this tool until an external OS-isolated, no-secrets "
+            "runner exists. Prefer typed analysis tools whenever possible. "
             "Available libraries: numpy (as np), scipy, astropy (Table, SkyCoord, units as u), "
             "matplotlib.pyplot (as plt), pandas. "
             "The Standard Astro helper toolkit is preloaded as `astro` and may also be imported as `astro`. "
@@ -325,6 +328,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
             data_source = "none_not_analyzing_real_data"
 
     is_synthetic_declared = data_source == "none_not_analyzing_real_data"
+    ast_suspicious_taint = False
 
     # PART AD: cached:<key> declares an inline cache handle. The old code
     # trusted it blindly ("free-form, no static check"), so a non-existent
@@ -542,6 +546,7 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         elif detection.verdict == "suspicious" and not is_synthetic_declared:
             # Downgrade to synthetic at response time (below).  Record why.
             is_synthetic_declared = True
+            ast_suspicious_taint = True
             try:
                 from app.observability.metrics import record_counter
                 record_counter(
@@ -782,13 +787,25 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
     # is NOT analyzing real data, prepend a banner and mark data_origin so
     # the zero-fabrication gate refuses to cite numbers from this run.
     if is_synthetic_declared:
+        if ast_suspicious_taint:
+            provenance_message = (
+                f"This run_python call declared data_source={data_source!r}, "
+                "but static analysis found unverified random/synthetic "
+                "operations outside a recognised MCMC/bootstrap workflow. "
+                "Its numerical output is NOT a claimable observational result."
+            )
+        else:
+            provenance_message = (
+                "This run_python call was declared data_source="
+                "'none_not_analyzing_real_data'. Its numerical output is NOT "
+                "from real observations."
+            )
         banner = {
             "__tool_status__": "SYNTHETIC",
             "__do_not_claim__": True,
             "__message_to_model__": (
-                "This run_python call was declared data_source="
-                "'none_not_analyzing_real_data'. Its numerical output is NOT "
-                "from real observations. You MUST NOT use any facts, numbers, "
+                provenance_message
+                + " You MUST NOT use any facts, numbers, "
                 "historical context, literature priors, physical interpretations, "
                 "or conclusions from this call's stdout/variables/figures in "
                 "your final reply. "
@@ -810,7 +827,8 @@ async def _exec_run_python(inp: dict, python_session_id: str = "default") -> dic
         # have its own; this output remains non-citeable synthetic even when
         # the sandbox itself failed).
         combined["data_origin"] = "synthetic"
-        combined["__synthetic_declared__"] = True
+        combined["__synthetic_declared__"] = not ast_suspicious_taint
+        combined["__synthetic_detected__"] = ast_suspicious_taint
         error_class = str(combined.get("error_class") or "").lower()
         fatal_failure = (
             combined.get("success") is False

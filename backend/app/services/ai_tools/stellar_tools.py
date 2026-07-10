@@ -313,7 +313,7 @@ def _validate_manual_attestation(raw: Any) -> dict[str, Any]:
 
 
 
-def _exec_get_async_job_status(inp: dict) -> dict:
+def _exec_get_async_job_status(inp: dict, *, user_id: str | None = None) -> dict:
     """Poll a job submitted via async_tool_runtime.submit_async_job."""
     from app.services import async_tool_runtime as atr
 
@@ -326,7 +326,10 @@ def _exec_get_async_job_status(inp: dict) -> dict:
             "error": "job_id is required",
             "error_class": "missing_job_id",
         }
-    return atr.format_status_for_tool(atr.get_async_job(job_id), requested_job_id=job_id)
+    return atr.format_status_for_tool(
+        atr.get_async_job(job_id, owner_id=user_id),
+        requested_job_id=job_id,
+    )
 
 
 

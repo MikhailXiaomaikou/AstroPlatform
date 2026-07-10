@@ -118,9 +118,23 @@ for _ in range(n_boot):
 print(f"mean={np.mean(means):.3f}")
 """
     r = analyze(code)
-    # One np.random but reads real data → clean
-    assert r.verdict in ("clean", "suspicious")
+    assert r.verdict == "clean"
     assert r.reads_real_data is True
+    assert r.actual_mcmc_usage is True
+
+
+def test_real_data_reader_does_not_authenticate_unrelated_random_number():
+    code = """
+import numpy as np
+rows = get_adql_results()
+h0 = np.random.uniform(60, 80)
+print(f"H0 = {h0}")
+"""
+    r = analyze(code)
+    assert r.reads_real_data is True
+    assert r.has_np_random is True
+    assert r.actual_mcmc_usage is False
+    assert r.verdict == "suspicious"
 
 
 def test_plotting_real_data_is_clean():

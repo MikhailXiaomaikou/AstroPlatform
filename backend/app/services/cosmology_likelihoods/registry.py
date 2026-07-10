@@ -799,7 +799,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
         probe="sn",
         z_coverage=(0.001, 2.26),
         status="ready",
-        observables=("zHD", "zHEL", "mu", "mu_covariance"),
+        observables=(
+            "zHD", "zHEL", "m_b_corr", "IS_CALIBRATOR", "CEPH_DIST",
+            "mu", "mu_covariance",
+        ),
         units={"z": "dimensionless", "mu": "mag"},
         applicable_models=SN_MODELS,
         likelihood_family="sn_distance_modulus",
@@ -807,10 +810,10 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             kind="stat+sys covariance",
             provided=True,
             description="Pantheon+ distance-modulus covariance matrix.",
-            url="https://github.com/PantheonPlusSH0ES/DataRelease",
+            url="https://github.com/PantheonPlusSH0ES/DataRelease/tree/c447f0fea703fcd0fff57de5000947b5ca81286b",
             format="ASCII/FITS covariance in data release",
         ),
-        source_url="https://github.com/PantheonPlusSH0ES/DataRelease",
+        source_url="https://github.com/PantheonPlusSH0ES/DataRelease/tree/c447f0fea703fcd0fff57de5000947b5ca81286b",
         citations=(
             DatasetCitation(label="Scolnic et al. Pantheon+ sample", year=2022, arxiv="2112.03863"),
             DatasetCitation(label="Brout et al. Pantheon+ cosmology", year=2022, arxiv="2202.04077"),
@@ -821,7 +824,11 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 doi="10.3847/2041-8213/ac5c5b",
             ),
         ),
-        notes="Can be used with or without SH0ES calibration; keep H0 prior separate unless explicitly selected.",
+        notes=(
+            "This key is the SH0ES-calibrated branch. The full runner applies "
+            "the official calibrator selection and Cepheid distances; use a "
+            "separate Pantheon+-only key for an uncalibrated SN-only analysis."
+        ),
         cobaya_likelihood="external:sn.pantheon_plus",
         cosmosis_module="Pantheon+_Data/5_COSMOLOGY/cosmosis_likelihoods",
         nuisance_parameters=("M_B",),
@@ -831,19 +838,24 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 product_type="sn_distance_modulus_table",
                 role="data_table",
                 url=(
-                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/"
+                    "c447f0fea703fcd0fff57de5000947b5ca81286b/"
                     "Pantheon%2B_Data/4_DISTANCES_AND_COVAR/Pantheon%2BSH0ES.dat"
                 ),
                 format="ASCII table",
                 description="Pantheon+SH0ES supernova distance table.",
-                columns=("CID", "zHD", "zCMB", "MU_SH0ES", "MU_SH0ES_ERR_DIAG"),
+                columns=(
+                    "CID", "zHD", "zCMB", "m_b_corr", "IS_CALIBRATOR",
+                    "CEPH_DIST", "MU_SH0ES", "MU_SH0ES_ERR_DIAG",
+                ),
                 rows=1701,
             ),
             DataProductSpec(
                 product_type="sn_covariance_matrix",
                 role="covariance",
                 url=(
-                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/"
+                    "c447f0fea703fcd0fff57de5000947b5ca81286b/"
                     "Pantheon%2B_Data/4_DISTANCES_AND_COVAR/Pantheon%2BSH0ES_STAT%2BSYS.cov"
                 ),
                 format="ASCII packed covariance",
@@ -854,7 +866,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 product_type="sn_covariance_matrix",
                 role="statistical_covariance",
                 url=(
-                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/"
+                    "c447f0fea703fcd0fff57de5000947b5ca81286b/"
                     "Pantheon%2B_Data/4_DISTANCES_AND_COVAR/Pantheon%2BSH0ES_STATONLY.cov"
                 ),
                 format="ASCII packed covariance",
@@ -865,7 +878,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 product_type="cosmosis_likelihood_code",
                 role="likelihood_code",
                 url=(
-                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/"
+                    "c447f0fea703fcd0fff57de5000947b5ca81286b/"
                     "Pantheon%2B_Data/5_COSMOLOGY/cosmosis_likelihoods/"
                     "Pantheon%2B_only_cosmosis_likelihood.py"
                 ),
@@ -876,7 +890,8 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 product_type="cosmosis_likelihood_code",
                 role="likelihood_code",
                 url=(
-                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+                    "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/"
+                    "c447f0fea703fcd0fff57de5000947b5ca81286b/"
                     "Pantheon%2B_Data/5_COSMOLOGY/cosmosis_likelihoods/"
                     "Pantheon%2BSH0ES_cosmosis_likelihood.py"
                 ),
@@ -889,15 +904,19 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 # binary blob that must not be parsed as a text table (code-review #1).
                 product_type="sn_full_data_npz",
                 role="sn_full_data_npz",
-                url="https://github.com/PantheonPlusSH0ES/DataRelease",
+                url="https://github.com/PantheonPlusSH0ES/DataRelease/tree/c447f0fea703fcd0fff57de5000947b5ca81286b",
                 format="npz",
                 description=(
-                    "Vendored Pantheon+SH0ES 1701-SN bundle (z_hd, z_hel, mu, "
-                    "mu_err_diag, full stat+sys covariance) the in-process χ² reads."
+                    "Vendored Pantheon+SH0ES 1701-row bundle including m_b_corr, "
+                    "IS_CALIBRATOR, CEPH_DIST, and full stat+sys covariance; the "
+                    "in-process likelihood applies the official 1657-row selection."
                 ),
-                columns=("z_hd", "z_hel", "mu", "mu_err_diag", "cov"),
+                columns=(
+                    "z_hd", "z_hel", "mu", "mu_err_diag", "m_b_corr",
+                    "is_calibrator", "cepheid_distance", "cov",
+                ),
                 rows=1701,
-                sha256="d6b3ed124fa038c02bdc4457f4f7aff8bf6e9f6b41e1257f530c90d7bd1f8cca",
+                sha256="bf0daa4ba2c06347db286d35f9f43c6de7c4fb85634e9f3821008911c7728bad",
                 local_path="data/pantheon_plus_2022/data.npz",
             ),
         ),
@@ -1207,12 +1226,15 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
             "this entry claims — plus the Planck-2018 S8 growth-amplitude row "
             "applied on the derived S8 == sigma8 * (Omega_m/0.3)^0.5 (the distance "
             "priors carry no clustering amplitude; without the S8 row sigma8 would "
-            "be unconstrained). The (H0, Omega_m, sigma8, S8) diagonal parameter "
+            "be unconstrained). The (H0, Omega_m, sigma8) diagonal parameter "
             "summary below (Planck VI Table 2 TT,TE,EE+lowE+lensing column) remains "
-            "in use ONLY for: the analytic no-probe path (CMB-alone selections, "
-            "where the nonlinear prior cannot run), the pairwise-tension table, and "
-            "importance-proposal anchoring. S8 stays a derived quantity everywhere "
-            "(1B, 2026-05-29). A chain-derived non-diagonal parameter covariance for "
+            "in use for the analytic no-probe path (CMB-alone selections, where the "
+            "nonlinear prior cannot run). Its S8 row is NOT multiplied into that "
+            "analytic posterior: S8 is derived from the already-constrained "
+            "Omega_m/sigma8 samples, so treating the published derived summary as "
+            "independent would double-count the same Planck posterior. The S8 row "
+            "remains metadata for the sampling path, pairwise-tension table, and "
+            "importance-proposal anchoring. A chain-derived non-diagonal covariance for "
             "the analytic path remains a follow-up -- see "
             "scripts/fetch_planck2018_compressed.py. Treat all of it as compressed-"
             "preliminary, not full-likelihood, constraints. Do NOT co-add with the "
@@ -1281,18 +1303,20 @@ _REGISTRY: dict[str, CosmologyDatasetEntry] = {
                 "Executed distance priors: Chen, Huang & Wang 2019 (arXiv:1808.05724) "
                 "Table I, Planck 2018 TT,TE,EE+lowE base-LCDM. Parameter summary rows "
                 "(analytic path / tensions / proposal): Planck Collaboration VI 2020 "
-                "Table 2 baseline; S8 derived summary."
+                "Table 2 baseline. S8 is a derived summary and is excluded as an "
+                "independent row on the analytic path."
             ),
             approximation=(
                 "Sampling path (flat models, any executable probe co-selected): the "
                 "executed CMB chi2 is the correlated CHW2019 4-dim (R, l_A, ombh2, "
                 "ns) distance-prior Gaussian plus the S8 row applied on derived "
                 "S8 == sigma8 * (Omega_m/0.3)^0.5 — NOT this diagonal parameter "
-                "summary. This (H0, Omega_m, sigma8, S8) diagonal ΛCDM posterior "
-                "summary is executed only on the analytic no-probe path (CMB-alone "
-                "selections) and otherwise feeds the tension table and proposal "
-                "anchoring. Neither is the full Planck likelihood. The sampler "
-                "never explores an independent S8 (derived, 1B 2026-05-29). Real "
+                "summary. The analytic no-probe path executes only the H0, Omega_m, "
+                "and sigma8 marginal rows; it derives S8 for reporting but excludes "
+                "the registered S8 summary as an independent likelihood factor. The "
+                "full four-row summary otherwise feeds the tension table and proposal "
+                "anchoring. Neither route is the full Planck likelihood, and no route "
+                "samples an independent S8. Real "
                 "non-diagonal chain covariance for the analytic path remains a "
                 "follow-up (scripts/fetch_planck2018_compressed.py)."
             ),

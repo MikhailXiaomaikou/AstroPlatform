@@ -1,26 +1,18 @@
 # ─────────────────────────────────────────────────────────────────────
-# render.yaml — synced to actual Render deployment 2026-05-08.
+# render.yaml — production topology managed as a Render Blueprint.
 #
-# Currently deployed on Render: 3 services + 1 database.
+# Production topology: 5 services + 1 database.
 #   - standard-astro-db (Basic-256mb)
 #   - standard-astro-backend (Standard, 1 CPU / 2 GB)
 #   - standard-astro-frontend (Static)
-#
-# NOT deployed (yaml definitions kept commented at the bottom for the
-# day they're needed):
 #   - standard-astro-celery-worker
 #   - standard-astro-celery-beat
 #   - standard-astro-redis
 #
-# REDIS_URL on backend is `sync: false` — set it in the Render
-# dashboard if you want internal-cache via external Upstash/redis-cloud;
-# leaving it unset is also fine, connector_cache auto-falls back to
-# SQLite when Redis is unreachable.
-#
-# PIPELINE_MODE remains "celery" by code default but no worker is
-# deployed; heavy pipeline DAG runs (BayesianFit / ImageStack / etc.)
-# will return 503 until a Celery worker is brought up.  The cosmology
-# chat path does NOT go through Celery and is unaffected.
+# The backend pre-deploy command is the only production schema writer.
+# /health/deep remains unhealthy until schema, disk, broker and worker
+# readiness all pass. Redis uses noeviction so queued tasks are never
+# discarded to make room for cache entries.
 # ─────────────────────────────────────────────────────────────────────
 
 databases:
@@ -30,6 +22,14 @@ databases:
     user: astro
 
 services:
+  # ── Durable Celery broker / shared runtime cache ──
+  - type: keyvalue
+    name: standard-astro-redis
+    plan: starter
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot
+    ipAllowList: []
+
   # ── Backend API ──
   - type: web
     name: standard-astro-backend
@@ -37,9 +37,10 @@ services:
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
     plan: standard              # 2 GB RAM / 1 CPU
-    # /health/deep verifies DB + AI backend so Render's auto-rollback
-    # catches bad deploys that would break chat even when the process
-    # itself is up.
+    autoDeployTrigger: checksPass
+    preDeployCommand: alembic upgrade head
+    # /health/deep verifies schema + durable storage + broker + worker so
+    # Render rejects a process that cannot execute the production workload.
     healthCheckPath: /health/deep
     envVars:
       - key: ENV
@@ -48,21 +49,38 @@ services:
         fromDatabase:
           name: standard-astro-db
           property: connectionString
-      # REDIS_URL: internal redis service not deployed.  Set this in
-      # the Render dashboard (e.g. Upstash rediss://...) if you want
-      # Redis-backed connector_cache + Celery; otherwise the auto
-      # backend falls back to SQLite cache and the (currently absent)
-      # Celery worker stays unused.
       - key: REDIS_URL
-        sync: false
+        fromService:
+          name: standard-astro-redis
+          type: keyvalue
+          property: connectionString
       - key: JWT_SECRET
         generateValue: true
       - key: FERNET_KEY
         generateValue: true
       - key: PIPELINE_MODE
         value: celery
+      # Shared research-object storage. Set bucket + credentials (and endpoint
+      # for R2/MinIO) before syncing an existing Blueprint; startup fails closed
+      # when required S3 credentials are absent.
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_REGION
+        value: us-east-1
+      - key: S3_ADDRESSING_STYLE
+        value: path
+      - key: PERSISTENT_STORAGE_MOUNT
+        value: /app/data
       - key: SANDBOX_BACKEND
-        value: subprocess
+        value: disabled
       - key: CORS_ORIGINS
         value: https://astro-frontend-tyfr.onrender.com,https://standard-astro-frontend-tyfr.onrender.com
       - key: ANTHROPIC_API_KEY
@@ -82,11 +100,151 @@ services:
       # Master flag for the cobaya subprocess runner. Off by default.
       - key: EXTERNAL_COBAYA_ENABLED
         value: "false"
+    # Research objects use shared S3-compatible storage. This single-service
+    # disk preserves gate-event JSONL, local caches and portable export staging.
+    disk:
+      name: standard-astro-data
+      mountPath: /app/data
+      sizeGB: 10
+
+  # ── Celery worker ──
+  - type: worker
+    name: standard-astro-celery-worker
+    runtime: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: starter
+    autoDeployTrigger: checksPass
+    # The backend owns migrations.  A worker deploy is independent on Render,
+    # so it must wait for this image's exact Alembic head before consuming work.
+    dockerCommand: sh -c 'python scripts/wait_for_schema_head.py && exec celery -A celery_worker worker --loglevel=info --concurrency=2 --hostname=worker@%h'
+    envVars:
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: standard-astro-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: standard-astro-redis
+          type: keyvalue
+          property: connectionString
+      - key: JWT_SECRET
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: JWT_SECRET
+      - key: FERNET_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: FERNET_KEY
+      - key: ANTHROPIC_API_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: ANTHROPIC_API_KEY
+      - key: PIPELINE_MODE
+        value: celery
+      - key: SCHEMA_WAIT_TIMEOUT_SECONDS
+        value: "900"
+      - key: CELERY_TASK_SOFT_TIME_LIMIT_SECONDS
+        value: "43200"
+      - key: CELERY_TASK_TIME_LIMIT_SECONDS
+        value: "45000"
+      - key: CELERY_VISIBILITY_TIMEOUT_SECONDS
+        value: "46800"
+      - key: RESEARCH_JOB_STALE_SECONDS
+        value: "50400"
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: S3_ENDPOINT_URL
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: S3_ENDPOINT_URL
+      - key: S3_BUCKET
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: S3_BUCKET
+      - key: S3_ACCESS_KEY_ID
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: S3_ACCESS_KEY_ID
+      - key: S3_SECRET_ACCESS_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: S3_SECRET_ACCESS_KEY
+      - key: S3_REGION
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: S3_REGION
+      - key: S3_ADDRESSING_STYLE
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: S3_ADDRESSING_STYLE
+      - key: SANDBOX_BACKEND
+        value: disabled
+      - key: ASTRO_RESEARCH_FOCUS
+        value: cosmology
+      - key: COBAYA_PACKAGES_PATH
+        value: /app/cobaya_packages
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: EXTERNAL_COBAYA_ENABLED
+        value: "false"
+
+  # ── Celery scheduler ──
+  - type: worker
+    name: standard-astro-celery-beat
+    runtime: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: starter
+    autoDeployTrigger: checksPass
+    # Beat must not enqueue tasks from a new image until the backend migration
+    # for that same image has reached Alembic head.
+    dockerCommand: sh -c 'python scripts/wait_for_schema_head.py && exec celery -A celery_worker beat --loglevel=info --pidfile=/tmp/celerybeat.pid'
+    envVars:
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: standard-astro-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: standard-astro-redis
+          type: keyvalue
+          property: connectionString
+      - key: JWT_SECRET
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: JWT_SECRET
+      - key: FERNET_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: FERNET_KEY
+      - key: PIPELINE_MODE
+        value: celery
+      - key: SCHEMA_WAIT_TIMEOUT_SECONDS
+        value: "900"
+      - key: ASTRO_RESEARCH_FOCUS
+        value: cosmology
 
   # ── Frontend ──
   - type: web
     name: standard-astro-frontend
     runtime: static
+    autoDeployTrigger: checksPass
     buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/dist
     headers:
@@ -102,71 +260,3 @@ services:
         value: https://astro-backend-h4x1.onrender.com
       - key: VITE_GOOGLE_CLIENT_ID
         sync: false
-
-# ─────────────────────────────────────────────────────────────────────
-# NOT-DEPLOYED service templates (commented out 2026-05-08).
-#
-# Bring these back when the platform actually needs Celery async tasks
-# (heavy pipeline nodes / scheduled jobs / Redis pub-sub).  When you
-# uncomment, also flip backend REDIS_URL above from `sync: false` back
-# to `fromService standard-astro-redis`.
-# ─────────────────────────────────────────────────────────────────────
-#
-#   # ── Celery Worker ──
-#   - type: worker
-#     name: standard-astro-celery-worker
-#     runtime: docker
-#     dockerfilePath: backend/Dockerfile
-#     dockerContext: backend
-#     plan: free
-#     dockerCommand: celery -A celery_worker worker --loglevel=info --concurrency=2
-#     envVars:
-#       - key: ENV
-#         value: production
-#       - key: DATABASE_URL
-#         fromDatabase:
-#           name: standard-astro-db
-#           property: connectionString
-#       - key: REDIS_URL
-#         fromService:
-#           name: standard-astro-redis
-#           type: redis
-#           property: connectionString
-#       - key: JWT_SECRET
-#         sync: false
-#       - key: SANDBOX_BACKEND
-#         value: subprocess
-#       - key: COBAYA_PACKAGES_PATH
-#         value: /app/cobaya_packages
-#       - key: OMP_NUM_THREADS
-#         value: "1"
-#       - key: EXTERNAL_COBAYA_ENABLED
-#         value: "false"
-#
-#   # ── Celery Beat (scheduler) ──
-#   - type: worker
-#     name: standard-astro-celery-beat
-#     runtime: docker
-#     dockerfilePath: backend/Dockerfile
-#     dockerContext: backend
-#     plan: free
-#     dockerCommand: celery -A celery_worker beat --loglevel=info
-#     envVars:
-#       - key: ENV
-#         value: production
-#       - key: DATABASE_URL
-#         fromDatabase:
-#           name: standard-astro-db
-#           property: connectionString
-#       - key: REDIS_URL
-#         fromService:
-#           name: standard-astro-redis
-#           type: redis
-#           property: connectionString
-#
-#   # ── Redis ──
-#   - type: redis
-#     name: standard-astro-redis
-#     plan: free
-#     maxmemoryPolicy: allkeys-lru
-#     ipAllowList: []

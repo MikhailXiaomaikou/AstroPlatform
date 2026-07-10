@@ -14,10 +14,9 @@ import {
   type SessionSnapshotItem,
   type SessionSnapshotDiff,
   type UserProfile,
-  type ChatAction,
 } from "../../api/client";
 import { saveChatHistory, type DisplayMessage } from "./chatStorage";
-import type { ShareAccessLevel, ToastState } from "./chatHelpers";
+import { deserializeDisplayMessage, type ShareAccessLevel, type ToastState } from "./chatHelpers";
 
 export function useCollaboration({
   user,
@@ -126,12 +125,7 @@ export function useCollaboration({
     try {
       await restoreSessionSnapshot(currentSessionId, snapshotId);
       const session = await loadChatSession(currentSessionId);
-      const loaded: DisplayMessage[] = session.messages.map((m: Record<string, unknown>) => ({
-        id: crypto.randomUUID(),
-        role: m.role as "user" | "assistant",
-        content: m.content as string,
-        actions: m.actions as ChatAction[] | undefined,
-      }));
+      const loaded: DisplayMessage[] = session.messages.map(deserializeDisplayMessage);
       setMessages(loaded);
       saveChatHistory(loaded, storageScope);
       await loadCollaborationState(currentSessionId);

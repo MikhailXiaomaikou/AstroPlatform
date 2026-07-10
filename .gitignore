@@ -55,6 +55,8 @@ Thumbs.db
 
 # Build artifacts
 *.log
+frontend/playwright-report/
+frontend/test-results/
 
 # Local-only AI diagnostic bundles
 .local/
@@ -63,3 +65,7 @@ backend/.diagnostics/
 # Generated local blind-test result bundles
 backend/scripts/blind_test_cosmology_m0/results_*/
 backend/*_diagnostics.png
+
+# Portable operational backup bundles (must be copied to protected off-host storage)
+/backups/
+/backend/backups/

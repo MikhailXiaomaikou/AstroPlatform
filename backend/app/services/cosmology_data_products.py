@@ -160,7 +160,8 @@ async def load_cosmology_data_product(
     publication_ready = (
         bool(parsed.get("parse_success"))
         and parsed.get("positive_definite", True)
-        and (hash_verified or content_override is not None or not product.sha256)
+        and parsed.get("row_count_matches_declared", True)
+        and hash_verified
     )
     status = "COMPLETED" if parsed.get("parse_success") else "PARTIAL"
     return {
@@ -430,20 +431,47 @@ def _parse_table(
     max_preview_rows: int,
 ) -> dict[str, Any]:
     columns = list(product.columns)
+    data_rows = rows
+    column_indices: list[int] | None = None
+    header_detected = False
+    if columns and rows:
+        header = rows[0]
+        try:
+            column_indices = [header.index(column) for column in columns]
+            header_detected = True
+            data_rows = rows[1:]
+        except ValueError:
+            column_indices = None
+
     preview: list[dict[str, Any]] = []
-    for row in rows[:max_preview_rows]:
-        if columns and len(row) >= len(columns):
+    for row in data_rows[:max_preview_rows]:
+        if column_indices is not None and max(column_indices, default=-1) < len(row):
+            preview.append({
+                column: _coerce_token(row[index])
+                for column, index in zip(columns, column_indices, strict=True)
+            })
+        elif columns and len(row) >= len(columns):
             preview.append({columns[i]: _coerce_token(row[i]) for i in range(len(columns))})
         else:
             preview.append({f"col_{i + 1}": _coerce_token(value) for i, value in enumerate(row)})
+    declared_rows = int(product.rows) if product.rows is not None else None
+    row_count_matches = declared_rows is None or len(data_rows) == declared_rows
+    warnings: list[str] = []
+    if not row_count_matches:
+        warnings.append(
+            f"Parsed row count {len(data_rows)} does not match registry declaration {declared_rows}."
+        )
     return {
         "parse_success": True,
         "kind": "table",
-        "row_count": len(rows),
+        "row_count": len(data_rows),
+        "declared_row_count": declared_rows,
+        "row_count_matches_declared": row_count_matches,
+        "header_detected": header_detected,
         "declared_columns": columns,
         "numeric_shape": list(numeric_matrix.shape) if numeric_matrix is not None else None,
         "preview": preview,
-        "warnings": [],
+        "warnings": warnings,
     }
 
 

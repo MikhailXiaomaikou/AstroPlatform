@@ -90,7 +90,7 @@ TOOL_SCHEMAS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "pha_path": {"type": "string", "description": "Path to PHA (spectrum) file with linked RMF/ARF"},
+                "pha_path": {"type": "string", "description": "Owner-authorized storage key for a PHA spectrum file"},
                 "model": {
                     "type": "string",
                     "description": "Sherpa model expression, e.g. 'xsphabs.abs1 * xspowerlaw.pl' or 'xsphabs.abs1 * xsapec.thermal'",
@@ -432,13 +432,51 @@ async def _exec_x_ray_spectral_fit(inp: dict) -> dict:
         except ImportError:
             return {"error": "sherpa not available. Install via pip install sherpa"}
 
+        # The central dispatcher has already resolved ``pha_path`` against an
+        # owner-scoped DataFile row. Read it through object storage and give
+        # Sherpa a private temporary file, never a client-selected host path.
+        import io as _io
         import os as _os
-        base_dir = _os.path.join(_os.path.dirname(__file__), "..", "..", "data")
-        full_path = _os.path.normpath(_os.path.join(base_dir, pha_path))
-        if not _os.path.isfile(full_path):
-            full_path = pha_path
-        if not _os.path.isfile(full_path):
-            return {"error": f"PHA not found: {pha_path}"}
+        import tempfile as _tempfile
+
+        from astropy.io import fits as _fits
+        from app.storage import download_fits as _download_fits
+
+        try:
+            pha_bytes = _download_fits(str(pha_path))
+        except Exception:
+            return {"error": "PHA not found or failed integrity verification"}
+
+        # OGIP response headers are secondary file-read capabilities. Reject
+        # arbitrary linked files until the API supports an owner-authorized
+        # PHA/RMF/ARF bundle; otherwise a safe PHA key could point Sherpa at a
+        # host absolute path through RESPFILE/ANCRFILE/BACKFILE.
+        try:
+            with _fits.open(_io.BytesIO(pha_bytes), memmap=False) as hdul:
+                external_refs: list[str] = []
+                for hdu in hdul:
+                    for key in ("RESPFILE", "ANCRFILE", "BACKFILE", "CORRFILE"):
+                        raw_ref = str(hdu.header.get(key) or "").strip()
+                        if raw_ref and raw_ref.upper() not in {"NONE", "CALDB", "NULL"}:
+                            external_refs.append(f"{key}={raw_ref}")
+                if external_refs:
+                    return {
+                        "error": (
+                            "PHA references external response/background files; "
+                            "owner-authorized PHA bundles are not supported yet"
+                        ),
+                        "external_references": external_refs,
+                    }
+        except Exception:
+            return {"error": "PHA is not a readable FITS/OGIP spectrum"}
+
+        tmp = _tempfile.NamedTemporaryFile(suffix=".pha", delete=False)
+        try:
+            tmp.write(pha_bytes)
+            tmp.flush()
+            full_path = tmp.name
+        finally:
+            tmp.close()
 
         try:
             _sui.load_pha(full_path)
@@ -480,6 +518,11 @@ async def _exec_x_ray_spectral_fit(inp: dict) -> dict:
             }
         except Exception as e:
             return {"error": f"Sherpa fit failed: {type(e).__name__}: {str(e)[:200]}"}
+        finally:
+            try:
+                _os.unlink(full_path)
+            except OSError:
+                pass
 
     loop = _aio.get_running_loop()
     try:

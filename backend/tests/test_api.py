@@ -152,8 +152,39 @@ class TestPaperDraftPrivacy:
             id=uuid.uuid4(),
             user_id=owner.id,
             title="Private paper session",
-            messages=[{"role": "user", "content": "draft"}],
+            messages=[
+                {"role": "user", "content": "Draft a catalog result."},
+                {
+                    "role": "assistant",
+                    "content": "The interpretation follows 2020ApJ...900....1S.",
+                    "actions": [
+                        {
+                            "action": "search",
+                            "query": "M31",
+                            "sources": ["simbad"],
+                            "tool_result": [{"name": "M31"}],
+                        }
+                    ],
+                },
+            ],
         )
+        from app.services.server_evidence import build_server_evidence_record
+
+        session.audit_log = [
+            build_server_evidence_record(
+                session_id=session.id,
+                owner_id=owner.id,
+                run_id="private-paper-test-run",
+                assistant_reply="The interpretation follows 2020ApJ...900....1S.",
+                tool_results=[
+                    {
+                        "tool": "search_objects",
+                        "input": {"query": "M31"},
+                        "result": {"bibcode": "2020ApJ...900....1S"},
+                    }
+                ],
+            )
+        ]
         draft = PaperDraft(
             id=uuid.uuid4(),
             user_id=owner.id,
@@ -244,7 +275,9 @@ class TestPipelineEndpoints:
             assert "name" in tpl
             assert "dag" in tpl
 
-    async def test_sync_pipeline_mode_blocks_heavy_async_dispatch(self, app_client, monkeypatch):
+    async def test_sync_pipeline_mode_blocks_heavy_async_dispatch(
+        self, app_client, test_user, monkeypatch
+    ):
         from app.api import pipeline as pipeline_api
         from app.config import settings
 
@@ -259,9 +292,11 @@ class TestPipelineEndpoints:
             "edges": [],
         }
 
+        _user, token = test_user
         resp = await app_client.post(
             "/api/pipeline/run?async_mode=true",
             json={"dag": dag, "input_data_id": "test.fits"},
+            headers={"Authorization": f"Bearer {token}"},
         )
 
         assert resp.status_code == 503
@@ -278,7 +313,16 @@ class TestSchedulerEndpoints:
             "/api/scheduler/schedules",
             json={
                 "name": "Nightly M31 check",
-                "dag": {"nodes": [], "edges": []},
+                "dag": {
+                    "nodes": [
+                        {
+                            "id": "query",
+                            "type": "QueryData",
+                            "data": {"params": {}},
+                        }
+                    ],
+                    "edges": [],
+                },
                 "input_data_id": "test-data-123",
                 "cron_expr": "daily",
             },
@@ -1227,13 +1271,42 @@ class TestCollaborationAndMemoryEndpoints:
         db_session.add(user)
         await db_session.flush()
         session = ChatSession(
+            id=uuid.uuid4(),
             user_id=user.id,
             title="Shared M31 Session",
             messages=[
                 {"role": "user", "content": "Analyze M31"},
-                {"role": "assistant", "content": "Loaded Gaia and SDSS context."},
+                {
+                    "role": "assistant",
+                    "content": "Loaded archive context following 2020ApJ...900....1S.",
+                    "actions": [
+                        {
+                            "action": "search",
+                            "query": "M31",
+                            "sources": ["simbad"],
+                            "tool_result": [{"name": "M31"}],
+                        }
+                    ],
+                },
             ],
         )
+        from app.services.server_evidence import build_server_evidence_record
+
+        session.audit_log = [
+            build_server_evidence_record(
+                session_id=session.id,
+                owner_id=user.id,
+                run_id="shared-session-test-run",
+                assistant_reply="Loaded archive context following 2020ApJ...900....1S.",
+                tool_results=[
+                    {
+                        "tool": "search_objects",
+                        "input": {"query": "M31"},
+                        "result": {"bibcode": "2020ApJ...900....1S"},
+                    }
+                ],
+            )
+        ]
         db_session.add(session)
         await db_session.commit()
         await db_session.refresh(session)
@@ -1289,7 +1362,7 @@ class TestCollaborationAndMemoryEndpoints:
         assert shared_resp.json()["session"]["paper_drafts"] == []
 
         publish_resp = await app_client.post(f"/api/paper/{draft.id}/publish", headers=owner_headers)
-        assert publish_resp.status_code == 200
+        assert publish_resp.status_code == 200, publish_resp.text
         assert publish_resp.json()["is_public"] is True
         assert publish_resp.json()["public_url"].startswith("/papers/public/")
 
@@ -1297,6 +1370,9 @@ class TestCollaborationAndMemoryEndpoints:
         assert shared_resp.status_code == 200
         assert len(shared_resp.json()["session"]["paper_drafts"]) == 1
         assert shared_resp.json()["session"]["paper_drafts"][0]["paper_json"]["title"] == "Initial Draft"
+        shared_validation = shared_resp.json()["session"]["paper_drafts"][0]["validation"]
+        assert "evidence_snapshot" not in shared_validation
+        assert shared_validation["evidence_snapshot_redacted"] is True
 
         fork_resp = await app_client.post(f"/api/shared/{share_body['share_token']}/fork", headers=collab_headers)
         assert fork_resp.status_code == 200
@@ -1307,6 +1383,7 @@ class TestCollaborationAndMemoryEndpoints:
         ).scalars().all()
         assert len(forked_drafts) == 1
         assert forked_drafts[0].paper_json["title"] == "Initial Draft"
+        assert forked_drafts[0].validation is None
 
         snapshot_resp = await app_client.post(
             f"/api/sessions/{session.id}/snapshots",

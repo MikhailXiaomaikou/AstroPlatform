@@ -1,6 +1,9 @@
 """Enhanced health-check endpoints for the Astro Research Platform."""
 
+import asyncio
 import logging
+import os
+from pathlib import Path
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,6 +15,155 @@ from app.models.schemas import User
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_CELERY_PING_TIMEOUT_SECONDS = 2.0
+_STORAGE_PROBE_TIMEOUT_SECONDS = 8.0
+
+
+def _expected_alembic_heads() -> set[str]:
+    """Read the migration heads shipped in the running image."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    config = Config(str(_BACKEND_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(_BACKEND_ROOT / "alembic"))
+    return set(ScriptDirectory.from_config(config).get_heads())
+
+
+async def _probe_database() -> bool:
+    try:
+        from app.models.database import async_session
+
+        async with async_session() as session:
+            await session.execute(text("SELECT 1"))
+        return True
+    except Exception as exc:
+        logger.warning("health/deep: db probe failed: %s", exc)
+        return False
+
+
+async def _probe_schema_head() -> tuple[bool, str]:
+    """Verify that the database revision exactly matches every shipped head."""
+    try:
+        from app.models.database import async_session
+
+        expected = _expected_alembic_heads()
+        async with async_session() as session:
+            rows = await session.execute(text("SELECT version_num FROM alembic_version"))
+            current = {str(row[0]) for row in rows}
+        if current == expected and current:
+            return True, "ok"
+        logger.warning(
+            "health/deep: schema revision mismatch (current=%s expected=%s)",
+            sorted(current),
+            sorted(expected),
+        )
+        return False, "revision_mismatch"
+    except Exception as exc:
+        # Do not return SQL text or connection details on the unauthenticated
+        # health endpoint; the full exception remains in server logs.
+        logger.warning("health/deep: schema probe failed: %s", exc)
+        return False, "unversioned_or_unreachable"
+
+
+async def _probe_broker() -> bool:
+    try:
+        import redis.asyncio as aioredis
+        from app.config import settings
+
+        kwargs = dict(settings.redis_tls_kwargs())
+        client = aioredis.from_url(
+            settings.redis_url,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            **kwargs,
+        )
+        try:
+            await client.ping()
+        finally:
+            await client.aclose()
+        return True
+    except Exception as exc:
+        logger.warning("health/deep: broker probe failed: %s", exc)
+        return False
+
+
+async def _probe_celery_workers() -> int:
+    """Return the number of workers that answer Celery's control ping."""
+    try:
+        from celery_worker import celery_app
+
+        def _ping() -> list[dict]:
+            return celery_app.control.ping(timeout=_CELERY_PING_TIMEOUT_SECONDS) or []
+
+        replies = await asyncio.wait_for(
+            asyncio.to_thread(_ping),
+            timeout=_CELERY_PING_TIMEOUT_SECONDS + 1.0,
+        )
+        return sum(
+            1
+            for reply in replies
+            if isinstance(reply, dict)
+            and any(payload == {"ok": "pong"} for payload in reply.values())
+        )
+    except Exception as exc:
+        logger.warning("health/deep: Celery worker probe failed: %s", exc)
+        return 0
+
+
+def _round_trip_storage() -> dict:
+    """Run the storage probe and remove its empty local namespace."""
+    from app.config import settings
+    from app.storage import storage_healthcheck
+
+    result = storage_healthcheck()
+    if settings.storage_backend == "local":
+        try:
+            (Path(settings.local_storage_dir) / ".health").rmdir()
+        except OSError:
+            # Non-empty means another concurrent probe still owns an object.
+            pass
+    return result
+
+
+def _probe_storage() -> tuple[bool, str]:
+    """Round-trip the configured object store and verify local mount placement."""
+    from app.config import settings
+
+    try:
+        expected_mount_raw = os.getenv("PERSISTENT_STORAGE_MOUNT", "").strip()
+        if expected_mount_raw:
+            expected_mount = Path(expected_mount_raw).resolve()
+            if not expected_mount.is_mount():
+                return False, "persistent_mount_missing"
+            runtime_probe = expected_mount / f".runtime_health_{os.getpid()}"
+            try:
+                payload = os.urandom(32)
+                with runtime_probe.open("wb") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if runtime_probe.read_bytes() != payload:
+                    return False, "persistent_mount_read_mismatch"
+            finally:
+                runtime_probe.unlink(missing_ok=True)
+
+        if settings.storage_backend == "local":
+            root = Path(settings.local_storage_dir)
+            root.mkdir(parents=True, exist_ok=True)
+            if expected_mount_raw:
+                root.resolve().relative_to(expected_mount)
+            elif os.getenv("ENV", "dev").lower() == "production":
+                return False, "persistent_mount_not_configured"
+
+        probe = _round_trip_storage()
+        if not probe.get("ok"):
+            return False, "round_trip_failed"
+        return True, "ok"
+    except Exception as exc:
+        logger.warning("health/deep: storage probe failed: %s", exc)
+        return False, "unavailable"
 
 
 async def _probe_url(url: str, timeout: float = 2.0) -> tuple[str, int]:
@@ -68,18 +220,18 @@ async def health_detailed(_user: User = Depends(get_current_user)):
         checks["redis"] = {"status": f"error: {exc}", "response_time_ms": int((time.monotonic() - t0) * 1000)}
         overall = "degraded"
 
-    # --- Storage (local filesystem — see app/storage.py; MinIO was removed) ---
+    # --- Durable research-object storage ---
     t0 = time.monotonic()
     try:
-        from pathlib import Path
-
-        from app.config import settings
-        root = Path(settings.local_storage_dir)
-        root.mkdir(parents=True, exist_ok=True)
-        probe = root / ".health_probe"
-        probe.write_bytes(b"ok")
-        probe.unlink()
-        checks["storage"] = {"status": "ok", "response_time_ms": int((time.monotonic() - t0) * 1000)}
+        storage_result = await asyncio.wait_for(
+            asyncio.to_thread(_round_trip_storage),
+            timeout=_STORAGE_PROBE_TIMEOUT_SECONDS,
+        )
+        checks["storage"] = {
+            "status": "ok",
+            "backend": storage_result.get("backend"),
+            "response_time_ms": int((time.monotonic() - t0) * 1000),
+        }
     except Exception as exc:
         checks["storage"] = {"status": f"error: {exc}", "response_time_ms": int((time.monotonic() - t0) * 1000)}
         overall = "degraded"
@@ -101,15 +253,15 @@ async def health_detailed(_user: User = Depends(get_current_user)):
 
 @router.get("/health/deep")
 async def health_deep():
-    """Deep health probe used by Render auto-rollback (Phase 5 / R18).
+    """Deployment readiness probe used by Render and Docker Compose.
 
-    Returns 200 only when the backend can actually serve chat requests:
-    DB reachable, Redis reachable (if configured), and at least one AI
-    backend key is present.  Unauthenticated so Render's health checker
-    can poll it; it does NOT leak credential shapes — just booleans +
-    short non-sensitive status strings.
+    Production is ready only when its DB is migrated to the image's Alembic
+    head, durable storage is mounted and writable, and the configured Celery
+    broker has at least one live worker. The endpoint is unauthenticated, so it
+    returns only short status labels; detailed failures stay in server logs.
     """
-    import os
+    from app.config import settings
+
     result: dict[str, object] = {"ok": True, "components": {}}
     # G1 (PART AD): deploy version transparency. Render injects these git env
     # vars automatically; they read "unknown" locally. Lets a dashboard or a
@@ -120,42 +272,53 @@ async def health_deep():
         "service": os.getenv("RENDER_SERVICE_NAME") or "unknown",
     }
 
-    # DB
-    try:
-        from app.models.database import async_session
-        async with async_session() as s:
-            await s.execute(text("SELECT 1"))
-        result["components"]["db"] = "ok"
-    except Exception as exc:
+    db_ok = await _probe_database()
+    result["components"]["db"] = "ok" if db_ok else "fail"
+    if not db_ok:
         result["ok"] = False
-        result["components"]["db"] = "fail"
-        logger.warning("health/deep: db probe failed: %s", exc)
 
-    # Redis is optional — don't fail the gate just because dev has no Redis.
+    schema_ok, schema_status = await _probe_schema_head()
+    if not schema_ok and os.getenv("ENV", "dev").lower() != "production":
+        # Local SQLite is intentionally create_all-managed. Still expose the
+        # mismatch, but reserve deploy blocking for Alembic-managed production.
+        schema_status = "unmanaged_dev"
+    elif not schema_ok:
+        result["ok"] = False
+    result["components"]["schema"] = schema_status
+
     try:
-        import redis.asyncio as aioredis
-        from app.config import settings
-        if settings.redis_url and "localhost" not in settings.redis_url:
-            kwargs = dict(settings.redis_tls_kwargs())
-            r = aioredis.from_url(settings.redis_url, **kwargs)
-            try:
-                await r.ping()
-                result["components"]["redis"] = "ok"
-            finally:
-                await r.aclose()
+        storage_ok, storage_status = await asyncio.wait_for(
+            asyncio.to_thread(_probe_storage),
+            timeout=_STORAGE_PROBE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        storage_ok, storage_status = False, "timeout"
+        logger.warning("health/deep: storage probe timed out")
+    result["components"]["storage"] = storage_status
+    if not storage_ok:
+        result["ok"] = False
+
+    if settings.pipeline_mode == "celery":
+        broker_ok = await _probe_broker()
+        result["components"]["broker"] = "ok" if broker_ok else "fail"
+        if not broker_ok:
+            result["ok"] = False
+            result["components"]["celery_worker"] = "unreachable"
         else:
-            result["components"]["redis"] = "skipped"
-    except Exception as exc:
-        # Non-fatal for now; Redis being down shouldn't block the deploy
-        # gate because the backend degrades gracefully when Redis is absent.
-        result["components"]["redis"] = "degraded"
-        logger.warning("health/deep: redis probe failed: %s", exc)
+            worker_count = await _probe_celery_workers()
+            result["components"]["celery_worker"] = (
+                "ok" if worker_count > 0 else "none"
+            )
+            result["worker_count"] = worker_count
+            if worker_count < 1:
+                result["ok"] = False
+    else:
+        result["components"]["broker"] = "not_required"
+        result["components"]["celery_worker"] = "not_required"
 
     # At least one AI provider key configured.  Scanning env so we
     # don't inadvertently read a user's localStorage-sent key.
     try:
-        from app.config import settings
-
         settings_deepseek_key = (
             str(getattr(settings, "platform_deepseek_api_key", "") or "").strip()
             or str(getattr(settings, "deepseek_api_key", "") or "").strip()

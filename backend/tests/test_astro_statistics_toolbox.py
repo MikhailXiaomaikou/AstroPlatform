@@ -11,6 +11,20 @@ def test_robust_summary_reports_median_mad_and_bootstrap_ci() -> None:
     assert result["median"] == 3.0
     assert result["mad_sigma"] > 1.0
     assert len(result["median_bootstrap_ci_16_84"]) == 2
+    assert result["publication_ready"] is False
+    assert result["analysis_tier"] == "exploratory"
+    assert "sample_size_at_least_20" in result["publication_gate"]["reasons"]
+
+
+def test_one_value_summary_is_descriptive_not_publication_ready() -> None:
+    from app.services.astro_statistics import robust_summary
+
+    result = robust_summary([42.0])
+
+    assert result["success"] is True
+    assert result["publication_ready"] is False
+    assert result["preliminary_ready"] is False
+    assert "finite_nonzero_sample_spread" in result["publication_gate"]["reasons"]
 
 
 def test_linear_regression_uses_odr_when_two_axis_errors_available() -> None:
@@ -26,6 +40,7 @@ def test_linear_regression_uses_odr_when_two_axis_errors_available() -> None:
     assert result["method"] == "odr"
     assert abs(result["slope"] - 2.0) < 1e-3
     assert abs(result["intercept"] - 1.0) < 1e-3
+    assert result["publication_ready"] is False
 
 
 def test_bootstrap_linear_regression_is_seed_reproducible() -> None:
@@ -39,6 +54,23 @@ def test_bootstrap_linear_regression_is_seed_reproducible() -> None:
 
     assert first["slope_ci_16_84"] == second["slope_ci_16_84"]
     assert first["intercept_ci_16_84"] == second["intercept_ci_16_84"]
+    assert first["publication_ready"] is False
+
+
+def test_large_noisy_regression_can_be_preliminary_but_not_publication_ready() -> None:
+    from app.services.astro_statistics import linear_regression
+
+    x = [float(i) for i in range(30)]
+    y = [1.0 + 2.0 * value + (0.2 if i % 2 else -0.2) for i, value in enumerate(x)]
+
+    result = linear_regression(x, y)
+
+    assert result["preliminary_ready"] is True
+    assert result["supports_measurement_claims"] is True
+    assert result["publication_ready"] is False
+    assert result["publication_gate"]["reasons"] == [
+        "inline_array_source_provenance_unverified"
+    ]
 
 
 def test_censored_summary_counts_upper_limits_without_claiming_distribution_fit() -> None:
@@ -53,6 +85,20 @@ def test_censored_summary_counts_upper_limits_without_claiming_distribution_fit(
     assert "survival-analysis likelihood" in result["caveat"]
 
 
+def test_censored_summary_never_promotes_descriptive_counts_to_publication() -> None:
+    from app.services.astro_statistics import censored_summary
+
+    values = [float(i) for i in range(1, 26)]
+    flags = [False] * 20 + [True] * 5
+    result = censored_summary(values, is_upper_limit=flags)
+
+    assert result["preliminary_ready"] is True
+    assert result["publication_ready"] is False
+    assert "descriptive_only_no_survival_likelihood" in result[
+        "publication_gate"
+    ]["reasons"]
+
+
 def test_astro_statistics_toolbox_dispatches_regression() -> None:
     from app.services.ai_tools import _exec_astro_statistics_toolbox
 
@@ -65,6 +111,7 @@ def test_astro_statistics_toolbox_dispatches_regression() -> None:
     assert result["success"] is True
     assert result["tool"] == "astro_statistics_toolbox"
     assert result["slope"] == 2.0
+    assert result["publication_ready"] is False
 
 
 def test_inline_statistics_prompt_routes_to_toolbox_with_uniform_errors() -> None:

@@ -1,23 +1,22 @@
 # ── astro-platform backend requirements (source of truth) ───────────────────
-# This file is the ONLY requirements file consumed by production.
-#   Dockerfile (line 37):     pip install --no-cache-dir -r requirements.txt
-#   render.yaml:              same
+# This is the human-maintained input to the reproducible production lock.
+# Production images and CI consume requirements.lock with --require-hashes.
 #
-# Versions are pinned with permissive ranges (>=X,<Y) so security patches land
-# automatically while major-version breaking changes do NOT.
+# Versions use permissive ranges (>=X,<Y) so a deliberate lock regeneration
+# can take compatible security patches without accepting major-version breaks.
 #
 # Sibling files:
 #   requirements-local.txt  — historical minimal dev-only list (NOT in sync
 #                             with this file). Kept for backward compatibility
 #                             with any old IDE / scripts that reference it,
-#                             but new dev work should `pip install -r
-#                             requirements.txt`. Safe to ignore.
-#   requirements.lock       — snapshot from a past `pip freeze`, exact `==`
-#                             pins including transitive deps. Useful when
-#                             diagnosing dependency drift between local and
-#                             production. NOT consumed by Dockerfile or
-#                             Render. Regenerate manually if needed:
-#                                pip freeze > requirements.lock
+#                             but new dev work should install the hash-locked
+#                             requirements.lock. Safe to ignore.
+#   requirements.lock       — generated, exact transitive pins plus package
+#                             hashes; this is the production/CI install input.
+#                             Regenerate from backend/ with:
+#                                uv pip compile requirements.txt \
+#                                  --python-version 3.11 --universal \
+#                                  --generate-hashes -o requirements.lock
 #
 # Adding a dependency: add the line below with a `>=major.minor,<next-major`
 # pin. Add a `# WHY:` comment if the package is non-obvious or replaces a
@@ -27,6 +26,7 @@
 fastapi>=0.109.2,<1
 uvicorn[standard]>=0.27.1,<1
 sqlalchemy>=2.0.27,<3
+alembic>=1.13,<2
 asyncpg>=0.29.0,<1
 psycopg2-binary>=2.9.9,<3
 aiosqlite>=0.20.0,<1
@@ -48,6 +48,8 @@ anthropic>=0.43.0,<1
 # Optional: used by specific features when available
 celery[redis]>=5.3.6,<6
 redis[hiredis]>=5.0.1,<6
+# WHY: durable S3-compatible storage for uploaded research data and artifacts.
+boto3>=1.34,<2
 matplotlib>=3.8.3,<4
 # PART AD C6: AI run_python sometimes reaches for seaborn for prettier
 # statistical plots (regplot, pairplot, kdeplot). Pre-AC the sandbox

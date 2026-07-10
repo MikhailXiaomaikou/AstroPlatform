@@ -239,11 +239,10 @@ def get_preset(name: str | None = None) -> dict[str, Any]:
             ),
         }
 
-    logger.warning(
-        "get_preset(%r): unknown preset; falling back to %s. Available: %s",
-        name, DEFAULT_PRESET, list_presets(),
+    raise ValueError(
+        f"unknown cosmology preset {name!r}; choose one of {list_presets()} "
+        "or a supported legacy Astropy alias"
     )
-    return dict(PRESETS[DEFAULT_PRESET])
 
 
 def build_cosmology_from_preset(name: str | None = None):

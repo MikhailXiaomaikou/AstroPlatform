@@ -51,7 +51,8 @@ TOOL_SCHEMAS = [
             "OLS/weighted/ODR/Theil-Sen linear regression, bootstrap linear regression, "
             "and descriptive censored-data summaries for upper limits. Prefer this over "
             "ad-hoc run_python for common statistics when the data arrays are already "
-            "available from real tools."
+            "available from real tools. Outputs are preliminary supplied-array "
+            "calculations, never a publication certificate by themselves."
         ),
         "input_schema": {
             "type": "object",

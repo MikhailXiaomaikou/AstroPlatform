@@ -2,6 +2,7 @@
 
 import uuid
 import logging
+from copy import deepcopy
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
-from app.auth import get_current_user, get_optional_user, hash_password
+from app.auth import get_current_user, get_optional_user
 from app.config import settings
 from app.rate_limit import limiter
 from app.models.database import get_db
@@ -19,15 +20,10 @@ from app.pipeline.engine import execute_dag, execute_pipeline_task, topological_
 from app.pipeline.nodes import dag_has_heavy_nodes
 from app.pipeline.nodes import registry
 from app.pipeline.validate import DAGValidationError, validate_dag
-from app.utils.usernames import internal_email_for_username
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
-
-_ANONYMOUS_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
-_ANONYMOUS_USER_EMAIL = internal_email_for_username("guest")
-
 
 # ── Request / Response models ──
 
@@ -84,26 +80,6 @@ class DiffResult(BaseModel):
     removed_edges: list[dict]
 
 
-async def _get_or_create_anonymous_user(db: AsyncSession) -> User:
-    result = await db.execute(select(User).where(User.id == _ANONYMOUS_USER_ID))
-    user = result.scalar_one_or_none()
-    if user is not None:
-        return user
-
-    user = User(
-        id=_ANONYMOUS_USER_ID,
-        username="guest",
-        email=_ANONYMOUS_USER_EMAIL,
-        password_hash=hash_password(str(uuid.uuid4())),
-        subscription_tier="solo",
-        display_name="Guest",
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    return user
-
-
 async def _get_owned_template(
     db: AsyncSession, template_id: uuid.UUID, user: User
 ) -> PipelineTemplateDB:
@@ -135,6 +111,85 @@ async def _get_accessible_template(
     if template is None:
         raise HTTPException(status_code=404, detail="Template not found")
     return template
+
+
+async def _bind_owned_pipeline_inputs(
+    *,
+    dag: dict,
+    input_data_id: str,
+    user: User,
+    db: AsyncSession,
+) -> tuple[dict, str]:
+    """Bind every storage-reading node to a ``DataFile`` owned by ``user``.
+
+    Pipeline nodes execute later in a thread or Celery worker and therefore
+    cannot safely infer request ownership.  Resolve paths at the authenticated
+    HTTP boundary, write only the authorised canonical key into a copied DAG,
+    and pass that copy downstream.  A physical object existing in local/S3
+    storage is never authorization by itself.
+    """
+    from app.storage import (
+        StorageOwnerRequired,
+        StorageOwnershipError,
+        resolve_owned_storage_key,
+    )
+
+    bound = deepcopy(dag)
+    canonical_default = input_data_id
+    default_was_resolved = False
+
+    async def _owned(raw: object) -> str:
+        try:
+            return await resolve_owned_storage_key(
+                str(raw or ""), owner_id=user.id, db=db
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid pipeline input path") from exc
+        except (StorageOwnershipError, StorageOwnerRequired) as exc:
+            # Uniform missing semantics prevent cross-account enumeration.
+            raise HTTPException(status_code=404, detail="Pipeline input not found") from exc
+
+    for node in bound.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        node_type = str(node.get("type") or "")
+        if node_type == "CustomScript" and settings.sandbox_backend == "disabled":
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "CustomScript is disabled because no OS-isolated code "
+                    "execution backend is configured"
+                ),
+            )
+        data = node.setdefault("data", {})
+        if not isinstance(data, dict):
+            data = {}
+            node["data"] = data
+        params = data.setdefault("params", {})
+        if not isinstance(params, dict):
+            params = {}
+            data["params"] = params
+
+        # Any direct fits_path reaches download_fits in at least one built-in
+        # node.  Bind it regardless of node type so future nodes inherit the
+        # same safe default.
+        if params.get("fits_path"):
+            params["fits_path"] = await _owned(params["fits_path"])
+        elif node_type in {"LoadData", "PSFPhotometry"}:
+            canonical_default = await _owned(input_data_id)
+            default_was_resolved = True
+            params["fits_path"] = canonical_default
+
+        if node_type == "ImportWorkspace":
+            raw_path = params.get("path") or input_data_id
+            params["path"] = await _owned(raw_path)
+            if raw_path == input_data_id:
+                canonical_default = params["path"]
+                default_was_resolved = True
+
+    # If no storage-reading node consumes the default id, it remains an opaque
+    # scientific identifier for query-only pipelines.
+    return bound, canonical_default if default_was_resolved else input_data_id
 
 
 # ── Built-in templates (seeded on first request) ──
@@ -196,7 +251,7 @@ _BUILTIN_TEMPLATES = [
 
 @router.get("/nodes/types")
 async def list_node_types():
-    return [
+    node_types = [
         {"type": "QueryData", "label": "Query Data", "description": "Search catalog sources like SIMBAD, Gaia, SDSS, or MAST", "inputs": 0, "outputs": 1},
         {"type": "ImportWorkspace", "label": "Import Workspace", "description": "Load a saved Workspace file into the pipeline", "inputs": 0, "outputs": 1},
         {"type": "LoadData", "label": "Load Data", "description": "Load a FITS file from storage", "inputs": 0, "outputs": 1},
@@ -220,6 +275,9 @@ async def list_node_types():
         {"type": "CustomScript", "label": "Custom Script", "description": "Run custom Python code (numpy, scipy, astropy)", "inputs": 1, "outputs": 1},
         {"type": "TimeSeriesAnalysis", "label": "Time Series", "description": "Lomb-Scargle period detection and variability classification", "inputs": 1, "outputs": 1},
     ]
+    if settings.sandbox_backend == "disabled":
+        node_types = [node for node in node_types if node["type"] != "CustomScript"]
+    return node_types
 
 
 @router.get("/templates", response_model=list[PipelineTemplate])
@@ -288,7 +346,7 @@ async def run_pipeline(
     request: Request,
     req: RunRequest,
     db: AsyncSession = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
     async_mode: bool = Query(True, description="When True, dispatch via Celery (requires Redis)"),
 ):
     """Validate DAG and execute pipeline.
@@ -318,14 +376,20 @@ async def run_pipeline(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    bound_dag, bound_input_data_id = await _bind_owned_pipeline_inputs(
+        dag=req.dag,
+        input_data_id=req.input_data_id,
+        user=user,
+        db=db,
+    )
+
     # Create DB record
     run_id = uuid.uuid4()
-    owner = user or await _get_or_create_anonymous_user(db)
 
     run = PipelineRun(
         id=run_id,
-        user_id=owner.id,
-        dag=req.dag,
+        user_id=user.id,
+        dag=bound_dag,
         status="pending",
     )
     db.add(run)
@@ -337,12 +401,12 @@ async def run_pipeline(
     # enables Celery.  In sync mode, heavy nodes must fail before dispatch.
     if async_mode and settings.pipeline_mode == "celery":
         try:
-            execute_pipeline_task.delay(run_id_str, req.dag, req.input_data_id)
+            execute_pipeline_task.delay(run_id_str, bound_dag, bound_input_data_id)
             return RunResponse(run_id=run_id_str, status="running", warnings=dag_warnings)
         except Exception as e:
             logger.warning(f"Celery dispatch failed, falling back to sync: {e}")
 
-    heavy_ids = dag_has_heavy_nodes(req.dag)
+    heavy_ids = dag_has_heavy_nodes(bound_dag)
     if heavy_ids:
         raise HTTPException(
             status_code=503,
@@ -358,7 +422,7 @@ async def run_pipeline(
     loop = asyncio.get_running_loop()
     try:
         node_results = await loop.run_in_executor(
-            None, execute_dag, req.dag, req.input_data_id, run_id_str
+            None, execute_dag, bound_dag, bound_input_data_id, run_id_str
         )
     except Exception as e:
         logger.exception(f"Pipeline run {run_id_str} failed")
@@ -401,7 +465,7 @@ async def batch_run_pipeline(
     request: Request,
     req: BatchRunRequest,
     db: AsyncSession = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
 ):
     """Run the same pipeline on multiple input files. Max 200 per batch."""
     import asyncio
@@ -425,8 +489,14 @@ async def batch_run_pipeline(
     for input_id in req.input_data_ids:
         run_id = str(uuid.uuid4())
         try:
+            bound_dag, bound_input_id = await _bind_owned_pipeline_inputs(
+                dag=req.dag,
+                input_data_id=input_id,
+                user=user,
+                db=db,
+            )
             node_results = await loop.run_in_executor(
-                None, execute_dag, req.dag, input_id, run_id
+                None, execute_dag, bound_dag, bound_input_id, run_id
             )
             safe = _trim_for_api(node_results)
             # In-band node errors don't raise; a run with any errored/skipped

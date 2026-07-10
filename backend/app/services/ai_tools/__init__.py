@@ -8,6 +8,7 @@ import logging
 import math
 import time
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -427,6 +428,237 @@ TOOLS.extend(_RESEARCH_TOOL_SCHEMAS)
 
 # ── Tool Executors ──
 
+# User-controlled storage paths accepted by the tool layer.  Authorization is
+# centralized here because the domain executors are a mix of sync/async code
+# and several historically opened paths directly.  Every listed input is
+# normalized and matched to a DataFile row for the authenticated user before
+# dispatch; downstream code therefore never sees an unowned key.
+_OWNED_STORAGE_TOOL_FIELDS: dict[str, tuple[str, ...]] = {
+    "analyze_spectrum": ("fits_path",),
+    "analyze_spectrum_pro": ("fits_path",),
+    "fit_line_lfr": ("user_file",),
+    "process_image": ("fits_path", "fits_paths"),
+    "read_fits_header": ("fits_path",),
+    "run_pipeline": ("input_data_id",),
+    "reduce_ccd_image": ("science_fits_path", "bias_paths", "dark_paths", "flat_paths"),
+    "solve_astrometry": ("fits_path",),
+    "extract_photometry": ("fits_path",),
+    "extract_sources": ("fits_path",),
+    "fit_sersic_morphology": ("fits_path",),
+    "x_ray_spectral_fit": ("pha_path",),
+}
+
+
+def _storage_access_failure(error_class: str, message: str) -> dict[str, Any]:
+    return {
+        "success": False,
+        "error": message,
+        "error_class": error_class,
+        "__tool_status__": "FAILED",
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            f"User-file access was refused: {message} Do not infer, replace, "
+            "or fabricate data from the unavailable file."
+        ),
+    }
+
+
+async def _authorize_pipeline_dag_storage_inputs(
+    tool_input: dict,
+    *,
+    user_id: str | None,
+) -> tuple[dict, dict[str, Any] | None]:
+    """Owner-resolve every storage capability embedded in an AI pipeline DAG."""
+
+    safe_input = deepcopy(tool_input)
+    requested: list[tuple[dict, str, str]] = []
+    top_level = safe_input.get("input_data_id")
+    if isinstance(top_level, str) and top_level.strip():
+        requested.append((safe_input, "input_data_id", top_level))
+
+    dag = safe_input.get("dag")
+    if isinstance(dag, dict):
+        for node in dag.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            node_type = str(node.get("type") or "")
+            data = node.get("data")
+            if not isinstance(data, dict):
+                continue
+            params = data.get("params")
+            if not isinstance(params, dict):
+                continue
+            fields: tuple[str, ...]
+            if node_type == "LoadData":
+                fields = ("fits_path",)
+            elif node_type == "ImportWorkspace":
+                fields = ("path", "fits_path")
+            elif node_type == "PSFPhotometry":
+                fields = ("fits_path",)
+            else:
+                fields = ()
+            for field in fields:
+                value = params.get(field)
+                if isinstance(value, str) and value.strip():
+                    requested.append((params, field, value))
+
+    if not requested:
+        return safe_input, None
+    if not user_id:
+        return safe_input, _storage_access_failure(
+            "storage_owner_context_required",
+            "Authenticated owner context is required for this file read.",
+        )
+
+    try:
+        from app.storage import resolve_owned_storage_key
+
+        for target, field, path in requested:
+            target[field] = await resolve_owned_storage_key(path, owner_id=user_id)
+    except ValueError:
+        return safe_input, _storage_access_failure(
+            "invalid_storage_path", "A supplied storage path is invalid."
+        )
+    except Exception as exc:
+        from app.storage import StorageOwnerRequired, StorageOwnershipError
+
+        if isinstance(exc, (StorageOwnerRequired, StorageOwnershipError)):
+            return safe_input, _storage_access_failure(
+                "storage_file_not_found",
+                "A supplied file does not exist or is not owned by the current user.",
+            )
+        logger.exception("run_pipeline nested storage ownership lookup failed")
+        return safe_input, _storage_access_failure(
+            "storage_authorization_unavailable",
+            "File ownership could not be verified safely.",
+        )
+    return safe_input, None
+
+
+async def _authorize_tool_storage_inputs(
+    tool_name: str,
+    tool_input: dict,
+    *,
+    user_id: str | None,
+) -> tuple[dict, dict[str, Any] | None]:
+    """Return normalized, owner-authorized tool input or a fail-closed result."""
+    if tool_name == "run_pipeline":
+        return await _authorize_pipeline_dag_storage_inputs(
+            tool_input,
+            user_id=user_id,
+        )
+    fields = _OWNED_STORAGE_TOOL_FIELDS.get(tool_name, ())
+
+    # run_python can embed arbitrary filesystem reads in source code, so an
+    # owner check on its declared data_source cannot bind the actual path used
+    # by pandas/astropy.  Verify the declaration when possible, then fail
+    # closed until the sandbox accepts an immutable allow-list of object keys.
+    data_source = str(tool_input.get("data_source") or "").strip()
+    if tool_name == "run_python" and data_source.startswith(("fits:", "user_file:")):
+        declared_path = data_source.split(":", 1)[1].strip()
+        if not user_id:
+            logger.warning("run_python user-file read refused: missing owner context")
+            return tool_input, _storage_access_failure(
+                "storage_owner_context_required",
+                "Authenticated owner context is required for this file read.",
+            )
+        try:
+            from app.storage import resolve_owned_storage_key
+
+            await resolve_owned_storage_key(declared_path, owner_id=user_id)
+        except ValueError:
+            return tool_input, _storage_access_failure(
+                "invalid_storage_path", "The declared storage path is invalid."
+            )
+        except Exception as exc:
+            from app.storage import StorageOwnerRequired, StorageOwnershipError
+
+            if isinstance(exc, (StorageOwnerRequired, StorageOwnershipError)):
+                return tool_input, _storage_access_failure(
+                    "storage_file_not_found",
+                    "The declared file does not exist or is not owned by the current user.",
+                )
+            logger.exception("run_python storage ownership lookup failed")
+            return tool_input, _storage_access_failure(
+                "storage_authorization_unavailable",
+                "File ownership could not be verified safely.",
+            )
+        logger.warning(
+            "run_python owner-verified file still refused: sandbox path cannot be bound to allow-list"
+        )
+        return tool_input, _storage_access_failure(
+            "unbound_user_file_execution",
+            "The code sandbox cannot yet bind embedded file reads to the verified object key.",
+        )
+
+    if not fields:
+        return tool_input, None
+
+    safe_input = deepcopy(tool_input)
+    requested: list[tuple[str, int | None, str]] = []
+    for field in fields:
+        value = safe_input.get(field)
+        if isinstance(value, str) and value.strip():
+            requested.append((field, None, value))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, str) and item.strip():
+                    requested.append((field, index, item))
+
+    # process_image may use a second user FITS file as the target WCS.
+    params = safe_input.get("params")
+    if tool_name == "process_image" and isinstance(params, dict):
+        target_wcs = params.get("target_wcs_fits")
+        if isinstance(target_wcs, str) and target_wcs.strip():
+            requested.append(("params.target_wcs_fits", None, target_wcs))
+
+    if not requested:
+        return safe_input, None
+    if not user_id:
+        logger.warning("%s user-file read refused: missing owner context", tool_name)
+        return safe_input, _storage_access_failure(
+            "storage_owner_context_required",
+            "Authenticated owner context is required for this file read.",
+        )
+
+    try:
+        from app.storage import resolve_owned_storage_key
+
+        resolved: list[tuple[str, int | None, str]] = []
+        for field, index, path in requested:
+            key = await resolve_owned_storage_key(path, owner_id=user_id)
+            resolved.append((field, index, key))
+    except ValueError:
+        return safe_input, _storage_access_failure(
+            "invalid_storage_path", "A supplied storage path is invalid."
+        )
+    except Exception as exc:
+        from app.storage import StorageOwnerRequired, StorageOwnershipError
+
+        if isinstance(exc, (StorageOwnerRequired, StorageOwnershipError)):
+            return safe_input, _storage_access_failure(
+                "storage_file_not_found",
+                "A supplied file does not exist or is not owned by the current user.",
+            )
+        logger.exception("%s storage ownership lookup failed", tool_name)
+        return safe_input, _storage_access_failure(
+            "storage_authorization_unavailable",
+            "File ownership could not be verified safely.",
+        )
+
+    for field, index, key in resolved:
+        if field == "params.target_wcs_fits":
+            updated_params = dict(safe_input.get("params") or {})
+            updated_params["target_wcs_fits"] = key
+            safe_input["params"] = updated_params
+        elif index is None:
+            safe_input[field] = key
+        else:
+            values = list(safe_input.get(field) or [])
+            values[index] = key
+            safe_input[field] = values
+    return safe_input, None
+
 async def execute_tool(
     tool_name: str,
     tool_input: dict,
@@ -494,6 +726,11 @@ async def _execute_tool_inner(
 ) -> dict:
     """Inner dispatch — called by execute_tool, result wrapped with provenance."""
     try:
+        tool_input, storage_error = await _authorize_tool_storage_inputs(
+            tool_name, tool_input, user_id=user_id
+        )
+        if storage_error is not None:
+            return storage_error
         if tool_name == "search_objects":
             return await _exec_search(tool_input, python_session_id)
         elif tool_name == "run_adql":
@@ -582,7 +819,7 @@ async def _execute_tool_inner(
         elif tool_name == "fit_isochrone":
             return await _exec_fit_isochrone(tool_input)
         elif tool_name == "get_async_job_status":
-            return _exec_get_async_job_status(tool_input)
+            return _exec_get_async_job_status(tool_input, user_id=user_id)
         # ── H1 split (2026-05-26): cosmology centralized dispatch ──
         # Deployment-readiness introspection scans this function body for
         # quoted tool names. Keep this inventory in sync with COSMOLOGY_TOOL_NAMES:
@@ -596,7 +833,13 @@ async def _execute_tool_inner(
         # "compute_theory_cmb_spectrum".
         elif tool_name in _COSMOLOGY_TOOL_NAMES:
             from app.services.ai_tools_cosmology import dispatch_cosmology
-            return await dispatch_cosmology(tool_name, tool_input, python_session_id)
+            return await dispatch_cosmology(
+                tool_name,
+                tool_input,
+                python_session_id,
+                user_id=user_id,
+                chat_session_id=chat_session_id,
+            )
         # ── H1 split (2026-05-26): research-core 5-tool centralized dispatch ──
         # Deployment-readiness introspection scans this function body for
         # quoted tool names. Keep in sync with RESEARCH_TOOL_NAMES:
@@ -707,7 +950,12 @@ async def _execute_tool_inner(
             _async_threshold = _time_len >= 50_000 or (_period_max - _period_min) > 50
             _force_background = bool(tool_input.get("background", False))
             if not in_async_worker() and (_async_threshold or _force_background):
-                return submit_async_job("transit_search_bls", tool_input)
+                return submit_async_job(
+                    "transit_search_bls",
+                    tool_input,
+                    user_id=user_id,
+                    session_id=chat_session_id,
+                )
 
             from app.services.time_domain_pro import transit_search_bls as _bls
             return _bls(
@@ -761,12 +1009,27 @@ async def _execute_tool_inner(
             from app.services.provenance import get_lineage, get_reproducibility_package, generate_doi_metadata
             action = tool_input.get("action", "lineage")
             eid = tool_input["entity_id"]
+            # Provenance parameters and environment manifests are private
+            # research data. Never perform the legacy unscoped lookup.
+            if not user_id:
+                return {
+                    "error": "Provenance record not found",
+                    "error_class": "not_found",
+                }
+            lineage = get_lineage(eid, owner_id=str(user_id))
+            if not lineage.get("nodes"):
+                # Uniform response prevents entity-id enumeration across
+                # accounts (and does not reveal whether another owner has it).
+                return {
+                    "error": "Provenance record not found",
+                    "error_class": "not_found",
+                }
             if action == "lineage":
-                return get_lineage(eid)
+                return lineage
             elif action == "reproduce":
-                return get_reproducibility_package(eid)
+                return get_reproducibility_package(eid, owner_id=str(user_id))
             elif action == "doi_metadata":
-                return generate_doi_metadata(eid)
+                return generate_doi_metadata(eid, owner_id=str(user_id))
             return {"error": f"Unknown provenance action: {action}"}
         # ── Photo-Z Pro + Batch Tools ──
         elif tool_name == "estimate_photo_z_pro":

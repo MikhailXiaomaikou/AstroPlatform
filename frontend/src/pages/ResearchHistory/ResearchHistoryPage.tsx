@@ -2,11 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
+  browseFITS,
+  cancelResearchJob,
   deleteResearchMemory,
+  fetchResearchArtifact,
   getResearchProfile,
+  listResearchJobs,
   listResearchHistory,
   refreshResearchProfile,
+  retryResearchJob,
   updateResearchProfile,
+  type FITSFileInfo,
+  type ResearchJobSummary,
   type ResearchHistoryItem,
   type ResearchProfile,
 } from "../../api/client";
@@ -15,20 +22,27 @@ export default function ResearchHistoryPage() {
   const navigate = useNavigate();
   const [profile, setProfile] = useState<ResearchProfile | null>(null);
   const [history, setHistory] = useState<ResearchHistoryItem[]>([]);
+  const [jobs, setJobs] = useState<ResearchJobSummary[]>([]);
+  const [artifacts, setArtifacts] = useState<FITSFileInfo[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [activeJob, setActiveJob] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadAll = async (search?: string) => {
     setLoading(true);
     try {
-      const [nextProfile, nextHistory] = await Promise.all([
+      const [nextProfile, nextHistory, nextJobs, nextArtifacts] = await Promise.all([
         getResearchProfile(),
         listResearchHistory(search),
+        listResearchJobs(),
+        browseFITS(),
       ]);
       setProfile(nextProfile);
       setHistory(nextHistory);
+      setJobs(nextJobs.items);
+      setArtifacts(nextArtifacts);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load research history");
@@ -78,6 +92,35 @@ export default function ResearchHistoryPage() {
       await loadAll(query || undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete memory");
+    }
+  };
+
+  const handleJobAction = async (job: ResearchJobSummary, action: "cancel" | "retry") => {
+    setActiveJob(job.job_id);
+    try {
+      if (action === "cancel") await cancelResearchJob(job.job_id);
+      else await retryResearchJob(job.job_id);
+      await loadAll(query || undefined);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to ${action} job`);
+    } finally {
+      setActiveJob(null);
+    }
+  };
+
+  const handleDownload = async (artifact: FITSFileInfo) => {
+    try {
+      const blob = await fetchResearchArtifact(artifact.fits_path);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = artifact.filename || artifact.object_id;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to download artifact");
     }
   };
 
@@ -203,6 +246,92 @@ export default function ResearchHistoryPage() {
               ))}
             </div>
           )}
+        </div>
+      </div>
+
+      <div style={{ marginTop: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <div>
+            <h2 style={{ marginBottom: 4 }}>Artifacts &amp; Long Jobs</h2>
+            <div style={{ color: "var(--color-text-secondary)" }}>
+              Durable outputs, integrity hashes, and work that continues across page refreshes.
+            </div>
+          </div>
+          <button className="btn-secondary" onClick={() => { void loadAll(query || undefined); }}>
+            Refresh
+          </button>
+        </div>
+
+        <div className="workspace-layout">
+          <div className="workspace-file-list" style={{ maxWidth: 520 }}>
+            <h3>Long-running jobs</h3>
+            {jobs.length === 0 ? (
+              <div className="fits-hint">No background research jobs yet.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {jobs.map((job) => (
+                  <div key={job.job_id} className="note-card">
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                      <strong>{job.tool_name}</strong>
+                      <span>{job.status}</span>
+                    </div>
+                    <div style={{ color: "var(--color-text-secondary)", fontSize: "0.82rem", overflowWrap: "anywhere", marginTop: 6 }}>
+                      {job.job_id}
+                    </div>
+                    {job.progress != null && (
+                      <div style={{ marginTop: 8 }}>{Math.round(job.progress)}% {job.progress_message || ""}</div>
+                    )}
+                    {job.error && <div className="error-banner" style={{ marginTop: 8 }}>{job.error}</div>}
+                    {(job.can_cancel || job.can_retry) && (
+                      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                        {job.can_cancel && (
+                          <button className="btn-secondary btn-small" disabled={activeJob === job.job_id} onClick={() => { void handleJobAction(job, "cancel"); }}>
+                            Cancel
+                          </button>
+                        )}
+                        {job.can_retry && (
+                          <button className="btn-secondary btn-small" disabled={activeJob === job.job_id} onClick={() => { void handleJobAction(job, "retry"); }}>
+                            Retry
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="workspace-detail" style={{ display: "block" }}>
+            <h3>Research artifacts</h3>
+            {artifacts.length === 0 ? (
+              <div className="fits-hint">No saved files or exports yet.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {artifacts.map((artifact) => {
+                  const sha = typeof artifact.metadata?.sha256 === "string" ? artifact.metadata.sha256 : null;
+                  return (
+                    <div key={artifact.id} className="note-card">
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                        <div style={{ minWidth: 0 }}>
+                          <strong style={{ overflowWrap: "anywhere" }}>{artifact.filename || artifact.object_id}</strong>
+                          <div style={{ color: "var(--color-text-secondary)", fontSize: "0.86rem", marginTop: 5 }}>
+                            {artifact.source} · {artifact.size_bytes.toLocaleString()} bytes
+                          </div>
+                          <div style={{ color: "var(--color-text-secondary)", fontSize: "0.78rem", marginTop: 5, overflowWrap: "anywhere" }}>
+                            SHA-256: {sha || "legacy object — hash not recorded"}
+                          </div>
+                        </div>
+                        <button className="btn-secondary btn-small" onClick={() => { void handleDownload(artifact); }}>
+                          Download
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

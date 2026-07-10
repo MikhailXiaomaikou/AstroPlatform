@@ -13,11 +13,21 @@ from typing import Any
 
 import numpy as np
 
+from app.services.cosmology_likelihoods.verification import (
+    PUBLICATION_ESS_MIN,
+    PUBLICATION_MIN_INDEPENDENT_CHAINS,
+    PUBLICATION_RHAT_MAX,
+    _assess_publication_gate,
+)
 
-MIN_CHAINS = 2
+
+# Vehtari et al. (2021) recommend multiple independent chains and the modern
+# rank-normalized split-R-hat.  Two chains are enough to *compute* a diagnostic,
+# but are too fragile for this service's publication gate; require four.
+MIN_CHAINS = PUBLICATION_MIN_INDEPENDENT_CHAINS
 MIN_DRAWS_PER_CHAIN = 20
-R_HAT_MAX = 1.05
-ESS_MIN = 400.0
+R_HAT_MAX = PUBLICATION_RHAT_MAX
+ESS_MIN = PUBLICATION_ESS_MIN
 
 
 def evaluate_chain_diagnostics(
@@ -40,6 +50,7 @@ def evaluate_chain_diagnostics(
         }
 
     diagnostics: dict[str, dict[str, Any]] = {}
+    gate_diagnostics: dict[str, dict[str, float | None]] = {}
     warnings: list[str] = []
     for name, chain_arrays in parsed.items():
         stacked = np.vstack(chain_arrays)
@@ -48,9 +59,15 @@ def evaluate_chain_diagnostics(
         values = stacked.reshape(-1)
         status = "ok"
         if rhat is None:
-            status = "single_chain_no_rhat"
-            warnings.append(f"{name}: at least two chains are required for R-hat.")
-        elif rhat > R_HAT_MAX:
+            status = "rhat_unavailable"
+            warnings.append(
+                f"{name}: publication-grade rank-normalized R-hat requires at least "
+                f"{MIN_CHAINS} non-degenerate chains."
+            )
+        elif not math.isfinite(rhat):
+            status = "rhat_nonfinite"
+            warnings.append(f"{name}: R-hat is non-finite; the chains are degenerate or not comparable.")
+        elif rhat >= R_HAT_MAX:
             status = "rhat_high"
             warnings.append(f"{name}: R-hat={rhat:.3f} exceeds {R_HAT_MAX}.")
         if ess < ESS_MIN:
@@ -71,37 +88,84 @@ def evaluate_chain_diagnostics(
             "draws_per_chain": int(min(len(arr) for arr in chain_arrays)),
             "status": status,
         }
+        gate_diagnostics[name] = {
+            "rhat": float(rhat) if rhat is not None else None,
+            "ess_bulk": float(ess),
+        }
 
-    publication_ready = all(item["status"] == "ok" for item in diagnostics.values())
+    n_independent_chains = min(item["n_chains"] for item in diagnostics.values())
+    convergence_gate = _assess_publication_gate(
+        cov_fidelity=None,
+        likelihood_is_compressed_or_approximate=False,
+        n_independent_chains=n_independent_chains,
+        per_parameter=gate_diagnostics,
+        critical_parameters=list(diagnostics),
+        # This standalone tool has no likelihood/data receipt.  Reuse only the
+        # shared convergence half of the gate, then fail scientific publication
+        # closed below with an explicit provenance reason.
+        assess_data_likelihood=False,
+    )
+    convergence_ready = bool(convergence_gate["eligible"])
+    publication_gate = {
+        **convergence_gate,
+        "eligible": False,
+        "reasons": [*convergence_gate["reasons"], "missing_likelihood_provenance"],
+        "observed": {
+            **convergence_gate["observed"],
+            "likelihood_provenance_available": False,
+        },
+    }
+    publication_ready = False
+    warnings.append(
+        "Standalone chain diagnostics do not include the fitted likelihood, data "
+        "checksums, covariance fidelity, or runner provenance; scientific "
+        "publication readiness cannot be certified here."
+    )
     return {
         "success": True,
-        "__tool_status__": "COMPLETED" if publication_ready else "PARTIAL",
-        "analysis_status": "CHAIN_DIAGNOSTICS_READY" if publication_ready else "PARTIAL",
+        "__tool_status__": "COMPLETED" if convergence_ready else "PARTIAL",
+        "analysis_status": "CHAIN_DIAGNOSTICS_READY" if convergence_ready else "PARTIAL",
         "publication_ready": publication_ready,
+        "convergence_ready": convergence_ready,
+        "diagnostics_ready": convergence_ready,
+        "publication_gate": publication_gate,
+        "publication_reasons": list(publication_gate["reasons"]),
         "claim_scope": "posterior_chain_diagnostics",
+        "scientific_claim_scope": "diagnostics_only",
         "parameters": diagnostics,
         "chain_diagnostics": {
-            "overall_status": "ok" if publication_ready else "not_publication_ready",
+            "overall_status": "ok" if convergence_ready else "not_converged",
+            "convergence_ready": convergence_ready,
+            "diagnostics_ready": convergence_ready,
             "publication_ready": publication_ready,
+            "publication_gate": publication_gate,
+            "n_independent_chains": n_independent_chains,
             "parameter_count": len(diagnostics),
             "thresholds": {
                 "min_chains": MIN_CHAINS,
                 "min_draws_per_chain": MIN_DRAWS_PER_CHAIN,
+                "rhat_method": "rank",
                 "rhat_max": R_HAT_MAX,
+                "rhat_max_exclusive": R_HAT_MAX,
+                "ess_method": "bulk",
                 "ess_min": ESS_MIN,
             },
         },
         "warnings": warnings,
         "__message_to_model__": (
             "This tool diagnoses supplied posterior chains only. It can support "
-            "claims about convergence diagnostics, not cosmological parameter "
-            "constraints unless those chains came from a publication-ready runner."
+            "claims about rank-normalized R-hat and bulk ESS when convergence_ready=true, "
+            "but it cannot certify scientific publication readiness without the fitted "
+            "likelihood, verified data products, and runner provenance."
         ),
-        "__do_not_claim__": (
-            [] if publication_ready else [
-                "Do not call these chains converged or publication-ready; inspect the diagnostics first."
-            ]
-        ),
+        "__do_not_claim__": [
+            *(
+                []
+                if convergence_ready
+                else ["Do not call these chains converged; inspect the diagnostics first."]
+            ),
+            "Do not use standalone chain diagnostics as a scientific publication gate; likelihood/data provenance is missing.",
+        ],
     }
 
 
@@ -174,37 +238,49 @@ def _valid_array(values: list[Any]) -> np.ndarray | None:
 
 
 def _rhat(chains: list[np.ndarray]) -> float | None:
+    """Return rank-normalized split-R-hat, or ``None`` when unavailable.
+
+    The previous hand-written estimator returned 1.0 whenever within-chain
+    variance was zero.  That certified chains stuck at different constants as
+    perfectly converged.  Publication readiness now depends on ArviZ's
+    rank-normalized split diagnostic and fails closed if it cannot be computed.
+    """
     if len(chains) < MIN_CHAINS:
         return None
     n = min(len(chain) for chain in chains)
     if n < MIN_DRAWS_PER_CHAIN:
         return None
     trimmed = np.asarray([chain[:n] for chain in chains], dtype=float)
-    chain_means = np.mean(trimmed, axis=1)
-    chain_vars = np.var(trimmed, axis=1, ddof=1)
-    between = n * float(np.var(chain_means, ddof=1))
-    within = float(np.mean(chain_vars))
-    if within <= 0:
-        return 1.0
-    var_hat = ((n - 1) / n) * within + between / n
-    return math.sqrt(max(var_hat / within, 0.0))
+    if np.any(np.var(trimmed, axis=1, ddof=1) <= 0.0):
+        return None
+    try:
+        import arviz as az
+
+        idata = az.from_dict(posterior={"value": trimmed})
+        value = az.rhat(idata, var_names=["value"], method="rank")["value"]
+        result = float(value.values) if hasattr(value, "values") else float(value)
+        return result if math.isfinite(result) else None
+    except Exception:
+        # A missing/failed diagnostic is not evidence of convergence.
+        return None
 
 
 def _ess(chains: list[np.ndarray]) -> float:
-    values = np.concatenate(chains)
-    n_total = values.size
-    if n_total < MIN_DRAWS_PER_CHAIN:
+    """Return chain-aware bulk ESS; never concatenate chain boundaries."""
+    if len(chains) < MIN_CHAINS:
         return 0.0
-    centered = values - np.mean(values)
-    variance = float(np.var(centered))
-    if variance <= 0:
-        return float(n_total)
-    max_lag = min(1000, n_total // 2)
-    positive_sum = 0.0
-    for lag in range(1, max_lag):
-        rho = float(np.dot(centered[:-lag], centered[lag:]) / ((n_total - lag) * variance))
-        if rho <= 0:
-            break
-        positive_sum += rho
-    tau = 1.0 + 2.0 * positive_sum
-    return float(n_total / max(tau, 1.0))
+    n = min(len(chain) for chain in chains)
+    if n < MIN_DRAWS_PER_CHAIN:
+        return 0.0
+    trimmed = np.asarray([chain[:n] for chain in chains], dtype=float)
+    if not np.all(np.isfinite(trimmed)) or float(np.var(trimmed)) <= 0.0:
+        return 0.0
+    try:
+        import arviz as az
+
+        idata = az.from_dict(posterior={"value": trimmed})
+        value = az.ess(idata, var_names=["value"], method="bulk")["value"]
+        result = float(value.values) if hasattr(value, "values") else float(value)
+        return result if math.isfinite(result) and result > 0.0 else 0.0
+    except Exception:
+        return 0.0

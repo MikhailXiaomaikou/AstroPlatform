@@ -7,16 +7,16 @@ layer actually works, **including its failures and its open gaps**. Nothing
 here requires installing anything: every claim links to a source document,
 test case, or CI run in this public repository.
 
-Numbers below are copied from the linked sources as of 2026-07-09; the linked
+Numbers below are copied from the linked sources as of 2026-07-10; the linked
 documents are authoritative if they diverge.
 
-## 1. The strongest single result: a real DESI reproduction
+## 1. Archived DESI cross-check: useful, but not a validated reproduction
 
 A dedicated offline Cobaya+CAMB run (DESI DR1 BAO + Pantheon+ SN + a clik-free
 Planck 2018 CMB stack: CamSpec2021 high-ℓ TT/TE/EE, native low-ℓ, native
 lensing — a close proxy for DESI's plik + PR4/ACT lensing, not a byte-identical
-pipeline; free local compute) reproduced the DESI 2024 VI w0waCDM
-evolving-dark-energy result:
+pipeline; free local compute) produced the following preliminary parameter
+cross-check against DESI 2024 VI:
 
 | Parameter | This run | DESI 2024 VI Table 3 | Consistency |
 |---|---|---|---|
@@ -25,23 +25,34 @@ evolving-dark-energy result:
 | Ωm | 0.3076 ± 0.0068 | 0.3085 ± 0.0068 | 0.09 σ |
 | H0 | 67.95 ± 0.73 | 68.03 ± 0.72 | 0.08 σ |
 
-Joint (w0, wa) departure from ΛCDM: Δχ² = 6.60 (2 dof) → 2.09 σ (DESI reports
-~2.5 σ). Two honesty caveats on that significance: the chain converged at
-R-1(means) < 0.05, not the stricter 0.01 gold standard — the tails, which drive
-significance, reached only R-1(bounds) = 0.13 — and the analysis script refuses
-to print significances at that convergence unless its gate is explicitly
-relaxed, which it was here; treat 2.09 σ as indicative. Also: the run shares
-its BAO and SN data (and Cobaya's own official likelihoods) with DESI's
-analysis, so sub-0.3 σ agreement demonstrates a correct implementation, not an
-independent confirmation. Full numbers and reproduction commands are in
+The chain reached only R-1(means)=0.047 and R-1(bounds)=0.13, above the
+project's R-1<=0.01 publication threshold. A former version of this document
+called the posterior-mean Mahalanobis displacement “Delta chi2=6.60 -> 2.09
+sigma.” That was not a likelihood-ratio statistic. No matching fixed-model fit
+or calibrated comparison is available here, so no DESI-comparable preference
+is claimed. The
+sub-0.3-sigma table also combines errors as if the estimates were independent
+despite shared BAO/SN and related CMB inputs; it is qualitative only. Full
+numbers and commands are retained in
 [the reproduction record](../backend/scripts/cobaya/README_full_cmb_reproduction.md).
 
 The honesty-relevant part: **the platform refuses to claim this result
 autonomously.** The in-process 45-second chat path uses a compressed CMB that
 does *not* reproduce DESI (it leaves w0 ≈ -0.62), so w0/wa goals stay
 off-anchor (exploratory / human-review) in the anchor oracle. The trustworthy
-figure comes from the dedicated offline run, and the platform says so instead
-of borrowing the credit.
+offline run remains preliminary until strict convergence and the fixed-model
+MAP comparison are both complete.
+
+The repository now includes a fail-closed canonical evidence workflow for
+that missing work. It requires four distinct chain files, rank-normalized
+R-hat `<1.01` and bulk ESS `>=400` for every sampled and nuisance parameter,
+byte-level hashes for all six likelihood groups, and matched successful free-
+`w0wa`/fixed-LambdaCDM MAP fits before emitting intervals or raw paired-point
+objective/likelihood differences. Because those committed fits optimize the
+posterior (`ignore_prior: false`), the workflow explicitly withholds a Wilks
+p-value or sigma. Running the archived chain through that workflow returns
+`FAIL` and emits neither quantity; adding stricter code has not retroactively
+upgraded the old scientific result.
 
 ## 2. Anti-fabrication defenses triggered by real LLM behavior
 
@@ -105,11 +116,16 @@ agreement.
 | 10 papers (2026-05-26) | 0 | 7 | 2 | 0 | 1 | [report](./COSMOLOGY_10_PAPER_TEST_REPORT.md) |
 | 20 papers (2026-05-27) | 0 | 15 | 3 | 0 | 2 | [report](./COSMOLOGY_20_PAPER_TEST_REPORT.md) |
 
-A separate 30-prompt run (2026-05-31) compared two model backends, this time
-through the real browser Chat UI: **0 unsupported numeric-risk flags observed
-in either backend across all 60 cases**, and honest scope-gap statements
-visible in 30/30 for both
+A separate 30-prompt run (2026-05-31) compared two model backends through the
+real browser Chat UI. Its historical evaluator reported zero unsupported-
+numeric flags across 60 cases and scope-gap statements in 30/30 for both
 ([comparison report](./COSMOLOGY_30_PAPER_MODEL_COMPARISON_2026_05_31.md)).
+That zero must not be read as a measured fabrication rate: the old evaluator
+treated prose words such as “evidence”, “verified”, or “citation” anywhere in
+the reply as support for every numeric claim, and the raw per-case artifacts
+are local/gitignored. The evaluator now requires an explicit successful
+numeric-gate record; these historical cases have not yet been rerun under that
+stricter rule.
 
 The honest reading: what these runs demonstrate is *not fabricating and
 saying precisely what is missing* — they explicitly do **not** demonstrate
@@ -120,9 +136,13 @@ paper-level scientific answers. Zero A grades means zero A grades.
 - **No organic users yet.** Every recorded gate event so far comes from test
   harness traffic, not real user turns (documented in the gate-event report's
   addendum).
-- **Production gate events are not durably logged.** The hosted deployment
-  has no persistent disk; the durable production signal is a metrics counter
-  only. Conclusions above cover local dev + blind-test traffic.
+- **The new durability topology is code-verified, not yet live-verified.** The
+  Blueprint now declares a persistent disk for gate-event JSONL, shared
+  checksum-verified object storage, PostgreSQL-backed provenance/jobs, and a
+  backup/restore drill. Until that Blueprint is actually synced with real S3
+  credentials and a restore exercise succeeds against the hosted environment,
+  the historical conclusions above still cover local dev + blind-test traffic,
+  not a measured production durability record.
 - **The bare-LLM control is qualitative only (so far).** A first controlled
   run (2026-07-09) fed the fabrication-decoy prompts to the platform's own
   underlying model with no tools or gates: it fabricated or laundered numbers

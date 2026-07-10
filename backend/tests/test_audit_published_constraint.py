@@ -156,4 +156,39 @@ def test_audit_overlapping_datasets_flagged(monkeypatch):
         claimed_datasets=["pantheon_plus"],  # overlaps the reproduction
     )
     assert r["audit_report"]["independence"] == "overlapping_data"
+    assert r["audit_report"]["comparisons"][0]["tension_sigma"] is None
+    assert r["audit_report"]["comparisons"][0]["verdict"] == "OVERLAPPING_DATA_NOT_COMPARABLE"
     assert any("overlap" in w.lower() for w in r["warnings"])
+
+
+def test_audit_detects_pantheon_shoes_shared_calibration(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.cosmology_likelihoods.run_likelihood_chain",
+        _mock_chain({"H0": {"median": 73.0, "std": 1.0}}),
+    )
+    r = audit_published_constraint(
+        model="lcdm",
+        dataset_keys=["pantheon_plus"],
+        claimed={"H0": [73.04, 1.04]},
+        claimed_datasets=["shoes_h0_riess22"],
+    )
+
+    assert r["audit_report"]["independence"] == "overlapping_data"
+    comparison = r["audit_report"]["comparisons"][0]
+    assert comparison["tension_sigma"] is None
+    assert comparison["verdict"] == "OVERLAPPING_DATA_NOT_COMPARABLE"
+
+
+def test_audit_runs_external_status_dataset_when_execution_mode_is_available(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.cosmology_likelihoods.run_likelihood_chain",
+        _mock_chain({"omegam": {"median": 0.3, "std": 0.02}}),
+    )
+    r = audit_published_constraint(
+        model="lcdm",
+        dataset_keys=["desi_dr1_bao"],
+        claimed={"omegam": [0.3, 0.02]},
+    )
+
+    assert r["analysis_status"] == "AUDIT_READY"
+    assert r["audit_report"]["datasets_run"] == ["desi_dr1_bao"]

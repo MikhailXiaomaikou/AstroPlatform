@@ -393,14 +393,12 @@ def _child_main(code: str, conn, memory_bytes: int, cpu_seconds: int, cache_cont
         import numpy as np
         saved_figures, original_savefig, restore_savefig = _install_savefig_capture(plt, stderr_buf)
 
-        # H4: Filter the truly dangerous builtins (open/exec/eval/compile) from
-        # user code.  Previously the subprocess backend exposed the full
-        # builtins module — a weaker posture than the in-proc sandbox it was
-        # meant to harden.  Note: subprocess mode is still "crash isolation,
-        # not full security isolation", so we preserve native __import__ (the
-        # child has its own OS process; module-level restrictions that the
-        # in-proc sandbox relies on are not needed here and would break
-        # legitimate `import sys` / `import time` usage).
+        # Filter common direct file/code builtins as defense in depth for the
+        # trusted-local opt-in. This is NOT a security sandbox: native
+        # ``__import__`` and Python object graphs can recover host capabilities,
+        # and the child shares the application's filesystem trust domain.
+        # Production/default configuration therefore disables this backend;
+        # the process boundary below protects availability, not confidentiality.
         import builtins as _builtins
         _BLOCKED = {"exec", "eval", "compile", "open"}
         _safe_builtins = {k: v for k, v in vars(_builtins).items() if k not in _BLOCKED}

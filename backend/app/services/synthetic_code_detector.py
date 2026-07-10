@@ -116,6 +116,7 @@ class _CodeVisitor(ast.NodeVisitor):
         self.time_series_reader_calls: list[str] = []
         self.legit_random_refs: list[str] = []
         self.legit_random_actual_usages: list[str] = []  # PART Y Batch 3
+        self.manual_bootstrap_usages: list[str] = []
         self.suspicious_var_names: list[str] = []
         self.constant_redshift_sequences: list[str] = []
         self.phase_axis_generators: list[str] = []
@@ -233,6 +234,29 @@ class _CodeVisitor(ast.NodeVisitor):
         last_attr = chain.rsplit(".", 1)[-1] if chain else ""
         if last_attr in _LEGIT_RANDOM_USAGE_NAMES:
             self.legit_random_actual_usages.append(chain or last_attr)
+        # A common bootstrap is written directly with
+        # ``rng.choice(..., size=len(data), replace=True)`` rather than a
+        # function named ``bootstrap``.  Recognise that narrow structure so
+        # tightening the real-data+RNG rule below does not taint genuine
+        # resampling.  The real-data-reader requirement is applied after the
+        # whole tree has been visited; random choice from literals alone is
+        # not enough.
+        if last_attr == "choice":
+            replace_true = any(
+                kw.arg == "replace"
+                and isinstance(kw.value, ast.Constant)
+                and kw.value.value is True
+                for kw in node.keywords
+            )
+            has_len_size = any(
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "len"
+                for arg in node.args
+                for child in ast.walk(arg)
+            )
+            if replace_true and has_len_size:
+                self.manual_bootstrap_usages.append(chain or last_attr)
         # PART Y Batch 3: large literal arrays via np.array([many constants])
         # are fabricated data. Audit case: `np.array([0.5, 0.51, ..., 50 vals])`.
         if chain in {"np.array", "numpy.array", "np.asarray", "numpy.asarray"} and node.args:
@@ -472,7 +496,9 @@ def analyze(code: str) -> DetectionResult:
     result.reads_real_data = bool(visitor.real_data_reader_calls)
     result.reads_time_series_data = bool(visitor.time_series_reader_calls)
     result.legitimate_random_context = bool(visitor.legit_random_refs)
-    result.actual_mcmc_usage = bool(visitor.legit_random_actual_usages)
+    result.actual_mcmc_usage = bool(visitor.legit_random_actual_usages) or bool(
+        result.reads_real_data and visitor.manual_bootstrap_usages
+    )
     result.has_constant_redshift_sequence = bool(visitor.constant_redshift_sequences)
     result.has_large_literal_array = bool(visitor.large_literal_arrays)
     if visitor.large_literal_arrays:
@@ -542,7 +568,11 @@ def analyze(code: str) -> DetectionResult:
         if result.has_schematic_phase_curve:
             result.verdict = "suspicious"
         elif result.has_np_random and not result.actual_mcmc_usage:
-            result.verdict = "suspicious" if hard_signals >= 2 else "clean"
+            # Merely touching an archive/cache does not authenticate a random
+            # number generated in the same cell.  Without a structurally
+            # recognised MCMC/bootstrap call, the output must be non-claimable
+            # even when RNG is the only hard signal.
+            result.verdict = "suspicious"
         elif result.has_large_literal_array:
             # A real reader alongside a large literal array is rare: typically
             # the reader fetches a catalog while the literal array is a fabricated

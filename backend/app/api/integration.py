@@ -3,19 +3,34 @@
 import io
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import get_current_user, get_optional_user
+from app.auth import get_current_user
 from app.models.database import get_db
-from app.models.schemas import PipelineRun, PipelineTemplateDB, User
+from app.models.schemas import (
+    DataFile,
+    PipelineRun,
+    PipelineTemplateDB,
+    SharedPipeline,
+    User,
+)
 from app.services.ai_tools import augment_adql_payload, build_adql_result_set, store_adql_result_set
-from app.storage import download_fits, upload_fits
+from app.storage import (
+    StorageOwnerRequired,
+    StorageOwnershipError,
+    delete_fits,
+    download_fits,
+    get_storage_metadata,
+    resolve_owned_storage_key,
+    upload_fits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +46,19 @@ class SAMPStatus(BaseModel):
     hub_url: str | None = None
     registered_clients: list[str] = []
 
+def _require_local_samp() -> None:
+    """SAMP is a local-desktop protocol, never a hosted multi-tenant API."""
+    if os.getenv("ENV", "dev").strip().lower() == "production":
+        raise HTTPException(
+            status_code=503,
+            detail="SAMP is disabled in hosted production",
+        )
+
+
 @router.get("/samp/status")
-async def samp_status(_user: User | None = Depends(get_optional_user)):
+async def samp_status(_user: User = Depends(get_current_user)):
     """Check if a SAMP hub is available."""
+    _require_local_samp()
     try:
         from astropy.samp import SAMPIntegratedClient
         client = SAMPIntegratedClient()
@@ -51,32 +76,42 @@ class SAMPSendRequest(BaseModel):
     message_type: str = "table.load.fits"  # or "image.load.fits"
 
 @router.post("/samp/send")
-async def samp_send(req: SAMPSendRequest, _user: User = Depends(get_current_user)):
+async def samp_send(
+    req: SAMPSendRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Send a FITS file to connected SAMP clients (DS9, Aladin, TOPCAT)."""
-    from pathlib import Path
-
+    _require_local_samp()
     from app.config import settings
+    from app.storage import _validate_path
 
-    # H10: enforce that fits_path stays within the storage root.  `exists()`
-    # alone is bypassable with `../../../etc/passwd`; resolve then verify the
-    # resolved path is a descendant of local_storage_dir.
-    storage_root = Path(settings.local_storage_dir).resolve()
-    full_path = (Path(settings.local_storage_dir) / req.fits_path).resolve()
     try:
-        full_path.relative_to(storage_root)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid fits_path: outside storage root")
-    if not full_path.exists():
+        key = await resolve_owned_storage_key(req.fits_path, owner_id=user.id, db=db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid FITS path") from exc
+    except (StorageOwnershipError, StorageOwnerRequired) as exc:
+        raise HTTPException(status_code=404, detail="FITS file not found") from exc
+    if str(settings.storage_backend).lower() != "local":
+        raise HTTPException(
+            status_code=409,
+            detail="SAMP file:// delivery requires local storage",
+        )
+    full_path = _validate_path(key)
+    if not full_path.is_file():
         raise HTTPException(status_code=404, detail="FITS file not found")
 
-    file_url = f"file://{full_path}"
+    file_url = full_path.as_uri()
+
+    if req.message_type not in {"table.load.fits", "image.load.fits"}:
+        raise HTTPException(status_code=400, detail="Unsupported SAMP message type")
 
     try:
         from astropy.samp import SAMPIntegratedClient
         client = SAMPIntegratedClient()
         client.connect()
 
-        params = {"url": file_url, "name": req.fits_path}
+        params = {"url": file_url, "name": key}
         message = {"samp.mtype": req.message_type, "samp.params": params}
         client.notify_all(message)
         client.disconnect()
@@ -87,18 +122,26 @@ async def samp_send(req: SAMPSendRequest, _user: User = Depends(get_current_user
 
 
 class SAMPReceiver:
-    """Bidirectional SAMP client that can receive messages from DS9/TOPCAT/Aladin."""
+    """One authenticated local user's SAMP client and receive buffer."""
 
-    _instance = None
-    _received: list[dict] = []
-    _client = None
-    _connected = False
+    _instances: dict[str, "SAMPReceiver"] = {}
+
+    def __init__(self, owner_id: str):
+        self.owner_id = owner_id
+        self._received: list[dict] = []
+        self._client = None
+        self._connected = False
 
     @classmethod
-    def get_instance(cls):
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
+    def get_instance(cls, owner_id: str | uuid.UUID):
+        key = str(owner_id)
+        if key not in cls._instances:
+            cls._instances[key] = cls(key)
+        return cls._instances[key]
+
+    @classmethod
+    def drop_instance(cls, owner_id: str | uuid.UUID) -> None:
+        cls._instances.pop(str(owner_id), None)
 
     def connect_and_subscribe(self):
         """Connect to SAMP hub and subscribe to common MTypes."""
@@ -157,24 +200,29 @@ class SAMPReceiver:
 
 
 @router.post("/samp/subscribe")
-async def samp_subscribe(_user: User = Depends(get_current_user)):
+async def samp_subscribe(user: User = Depends(get_current_user)):
     """Connect to SAMP hub and subscribe to receive messages."""
-    receiver = SAMPReceiver.get_instance()
+    _require_local_samp()
+    receiver = SAMPReceiver.get_instance(user.id)
     return receiver.connect_and_subscribe()
 
 
 @router.get("/samp/received")
-async def samp_received(_user: User | None = Depends(get_optional_user)):
+async def samp_received(user: User = Depends(get_current_user)):
     """List messages received via SAMP from external clients."""
-    receiver = SAMPReceiver.get_instance()
+    _require_local_samp()
+    receiver = SAMPReceiver.get_instance(user.id)
     return {"messages": receiver.get_received(), "connected": receiver.is_connected}
 
 
 @router.post("/samp/unsubscribe")
-async def samp_unsubscribe(_user: User = Depends(get_current_user)):
+async def samp_unsubscribe(user: User = Depends(get_current_user)):
     """Disconnect from SAMP hub."""
-    receiver = SAMPReceiver.get_instance()
-    return receiver.disconnect()
+    _require_local_samp()
+    receiver = SAMPReceiver.get_instance(user.id)
+    result = receiver.disconnect()
+    SAMPReceiver.drop_instance(user.id)
+    return result
 
 
 # ══════════════════════════════════════
@@ -184,11 +232,21 @@ async def samp_unsubscribe(_user: User = Depends(get_current_user)):
 @router.get("/votable/convert")
 async def convert_to_votable(
     fits_path: str = Query(..., description="Storage path to FITS file"),
-    _user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Convert a FITS table to VOTable format."""
     from astropy.io import fits
     from astropy.table import Table
+
+    try:
+        fits_path = await resolve_owned_storage_key(
+            fits_path, owner_id=user.id, db=db
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid FITS path") from exc
+    except (StorageOwnershipError, StorageOwnerRequired) as exc:
+        raise HTTPException(status_code=404, detail="FITS file not found") from exc
 
     try:
         raw = download_fits(fits_path)
@@ -237,11 +295,20 @@ async def convert_to_votable(
 
 
 @router.post("/votable/upload")
-async def upload_votable(file: UploadFile = File(...), user: User = Depends(get_current_user)):
+async def upload_votable(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Upload a VOTable file and convert to FITS for browsing."""
     from astropy.io.votable import parse as parse_votable
+    from app.config import settings as app_settings
 
-    content = await file.read()
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename")
+    content = await file.read(app_settings.max_upload_size + 1)
+    if len(content) > app_settings.max_upload_size:
+        raise HTTPException(status_code=413, detail="VOTable file is too large")
     try:
         votable = parse_votable(io.BytesIO(content))
         table = votable.get_first_table().to_table()
@@ -252,11 +319,46 @@ async def upload_votable(file: UploadFile = File(...), user: User = Depends(get_
     fits_buf = io.BytesIO()
     table.write(fits_buf, format='fits', overwrite=True)
     fits_buf.seek(0)
+    fits_payload = fits_buf.read()
+    if len(fits_payload) > app_settings.max_upload_size:
+        raise HTTPException(status_code=413, detail="Converted FITS file is too large")
 
-    path = f"votable_imports/{uuid.uuid4()}.fits"
-    upload_fits(path, fits_buf.read())
+    safe_name = file.filename.replace("/", "_").replace("\\", "_")
+    safe_name = "".join(char if char.isprintable() else "_" for char in safe_name)
+    path = f"votable_imports/{str(user.id)[:8]}/{uuid.uuid4().hex}.fits"
+    upload_fits(path, fits_payload)
+    storage_meta = get_storage_metadata(path)
+
+    data_file = DataFile(
+        user_id=user.id,
+        source="votable_upload",
+        object_id=safe_name,
+        fits_path=path,
+        metadata_={
+            "original_filename": safe_name,
+            "input_size_bytes": len(content),
+            "size_bytes": len(fits_payload),
+            "content_type": "application/fits",
+            "source_content_type": file.content_type or "application/x-votable+xml",
+            "rows": len(table),
+            "columns": list(table.colnames),
+            "sha256": storage_meta.get("sha256"),
+            "storage_backend": storage_meta.get("backend"),
+            "storage_version_id": storage_meta.get("version_id"),
+        },
+    )
+    try:
+        db.add(data_file)
+        await db.commit()
+        await db.refresh(data_file)
+    except Exception:
+        await db.rollback()
+        delete_fits(path)
+        logger.exception("VOTable upload ownership record could not be saved")
+        raise HTTPException(status_code=500, detail="Could not save VOTable upload")
 
     return {
+        "id": str(data_file.id),
         "path": path,
         "rows": len(table),
         "columns": list(table.colnames),
@@ -276,15 +378,33 @@ class JupyterExportRequest(BaseModel):
 async def export_jupyter(
     req: JupyterExportRequest,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Export a pipeline template or run as a Jupyter notebook."""
     dag = None
     title = "Astro Pipeline"
 
     if req.template_id:
+        try:
+            template_id = uuid.UUID(req.template_id)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=404, detail="Template not found") from exc
         result = await db.execute(
-            select(PipelineTemplateDB).where(PipelineTemplateDB.id == uuid.UUID(req.template_id))
+            select(PipelineTemplateDB)
+            .distinct()
+            .outerjoin(
+                SharedPipeline,
+                (SharedPipeline.template_id == PipelineTemplateDB.id)
+                & (SharedPipeline.shared_with == user.id),
+            )
+            .where(
+                PipelineTemplateDB.id == template_id,
+                or_(
+                    PipelineTemplateDB.user_id == user.id,
+                    PipelineTemplateDB.is_builtin.is_(True),
+                    SharedPipeline.id.isnot(None),
+                ),
+            )
         )
         tpl = result.scalar_one_or_none()
         if not tpl:
@@ -292,8 +412,15 @@ async def export_jupyter(
         dag = tpl.dag
         title = tpl.name
     elif req.run_id:
+        try:
+            run_id = uuid.UUID(req.run_id)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
         result = await db.execute(
-            select(PipelineRun).where(PipelineRun.id == uuid.UUID(req.run_id))
+            select(PipelineRun).where(
+                PipelineRun.id == run_id,
+                PipelineRun.user_id == user.id,
+            )
         )
         run = result.scalar_one_or_none()
         if not run:

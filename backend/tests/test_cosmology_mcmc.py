@@ -27,6 +27,30 @@ def test_distance_modulus_validation_and_hash_are_stable():
     assert first.z[0] < first.z[-1]
 
 
+def test_distance_modulus_zero_point_is_exactly_degenerate_with_h0():
+    """A constant magnitude zero point can be absorbed exactly by H0.
+
+    This is why a generic ``(z, mu, sigma_mu)`` table without an explicit
+    absolute calibration or M_B nuisance cannot yield a claimable H0.
+    """
+    import numpy as np
+
+    from app.services.cosmology_mcmc import distance_modulus_model
+
+    z = np.array([0.02, 0.1, 0.4, 0.9])
+    h0 = 70.0
+    delta_mu = 0.37
+    shifted_h0 = h0 * 10.0 ** (-delta_mu / 5.0)
+    baseline = distance_modulus_model(z, "flat_lcdm", {"H0": h0, "Om0": 0.3})
+    shifted = distance_modulus_model(
+        z,
+        "flat_lcdm",
+        {"H0": shifted_h0, "Om0": 0.3},
+    )
+
+    np.testing.assert_allclose(shifted, baseline + delta_mu, rtol=0.0, atol=1e-12)
+
+
 def test_invalid_distance_modulus_columns_error():
     from app.services.cosmology_mcmc import CosmologyMCMCError, validate_distance_modulus_rows
 
@@ -110,7 +134,9 @@ def test_inline_rows_remain_unciteable_even_with_good_diagnostics(monkeypatch):
     assert inline["publication_ready"] is False
     assert inline["__do_not_claim__"] is True
     assert inline["data_origin"] == "unavailable"
-    assert "inline/unverified rows" in inline["warnings"][0]
+    assert "absolute calibration" in inline["warnings"][0]
+    assert inline["likelihood_fidelity"]["h0_identifiable"] is False
+    assert inline["parameters"]["H0"]["claimable"] is False
 
     cached = cm.fit_cosmology_emcee(
         toy_distance_modulus_rows(),
@@ -122,16 +148,18 @@ def test_inline_rows_remain_unciteable_even_with_good_diagnostics(monkeypatch):
         input_data_origin="cached_real",
         source_cache_key="latest_adql",
     )
-    assert cached["publication_ready"] is True
+    assert cached["publication_ready"] is False
+    assert cached["chain_tier"] == "blocked"
+    assert cached["__do_not_claim__"] is True
     assert cached["input_rows_verified"] is True
-    assert "__do_not_claim__" not in cached
+    assert cached["likelihood_fidelity"]["full_covariance_present"] is False
+    assert cached["chain_diagnostics"]["sampler_diagnostics_passed"] is True
+    assert cached["chain_diagnostics"]["publication_ready"] is False
+    assert "full covariance" in cached["warnings"][0]
 
 
-def test_user_uploaded_input_origin_is_now_claimable(monkeypatch):
-    """Plan A (2026-05-20): user_uploaded joins cached_real as a claimable
-    origin. FITS upload audit log + sandbox synthetic-fallback defences
-    already gate that path, so blocking it at the MCMC layer was redundant
-    and broke the "user supplied a real distance-modulus table" case."""
+def test_user_uploaded_rows_do_not_bypass_sn_likelihood_science_gate(monkeypatch):
+    """Trusted provenance cannot supply calibration/covariance absent in schema."""
     import app.services.cosmology_mcmc as cm
 
     def fake_good_diagnostics(_chain, names):
@@ -163,17 +191,15 @@ def test_user_uploaded_input_origin_is_now_claimable(monkeypatch):
         random_seed=3,
         input_data_origin="user_uploaded",
     )
-    assert result["publication_ready"] is True
-    assert result["chain_tier"] == "publication"
+    assert result["publication_ready"] is False
+    assert result["chain_tier"] == "blocked"
     assert result["input_rows_verified"] is True
-    assert "__do_not_claim__" not in result
+    assert result["__do_not_claim__"] is True
+    assert result["parameters"]["H0"]["scientifically_identified"] is False
 
 
-def test_exploratory_tier_for_medium_ess(monkeypatch):
-    """Plan B-1 (2026-05-20): a chain with min ESS in [100, 400) and
-    max R-hat <= 1.10 + claimable origin tiers as 'exploratory'.
-    Publication_ready stays False (no citation pool inclusion) but
-    __do_not_claim__ is NOT set (chat-level discussion is allowed)."""
+def test_medium_ess_cannot_override_sn_likelihood_science_gate(monkeypatch):
+    """Sampler quality cannot rescue a scientifically incomplete likelihood."""
     import app.services.cosmology_mcmc as cm
 
     def fake_medium_diagnostics(_chain, names):
@@ -206,13 +232,12 @@ def test_exploratory_tier_for_medium_ess(monkeypatch):
         input_data_origin="cached_real",
         source_cache_key="latest_adql",
     )
-    assert result["chain_tier"] == "exploratory"
+    assert result["chain_tier"] == "blocked"
     assert result["publication_ready"] is False
-    assert result["__tool_status__"] == "EXPLORATORY"
-    assert result["analysis_status"] == "EXPLORATORY"
-    assert "__do_not_claim__" not in result
-    assert "__exploratory_warning__" in result
-    assert "ESS=200" in result["__exploratory_warning__"]
+    assert result["__tool_status__"] == "PARTIAL"
+    assert result["analysis_status"] == "PARTIAL"
+    assert result["__do_not_claim__"] is True
+    assert "absolute calibration" in result["warnings"][0]
 
 
 def test_blocked_tier_for_low_ess_even_with_claimable_origin(monkeypatch):
@@ -256,7 +281,7 @@ def test_blocked_tier_for_low_ess_even_with_claimable_origin(monkeypatch):
     assert result["publication_ready"] is False
     assert result["__tool_status__"] == "PARTIAL"
     assert result["__do_not_claim__"] is True
-    assert "below exploratory floor" in result["warnings"][0]
+    assert "absolute calibration" in result["warnings"][0]
 
 
 def test_background_status_roundtrip():
@@ -276,6 +301,37 @@ def test_background_status_roundtrip():
     assert status["status"] in {"queued", "running", "completed", "failed"}
     # The submit banner reports the real backend now (Celery via async_tool_runtime).
     assert queued["background_backend"] == "celery"
+
+
+@pytest.mark.asyncio
+async def test_legacy_cosmology_poll_is_owner_scoped_end_to_end():
+    from app.services.ai_tools_cosmology import dispatch_cosmology
+    from app.services.cosmology_mcmc import submit_emcee_job
+
+    owner = "owner-a"
+    queued = submit_emcee_job(
+        user_id=owner,
+        rows=toy_distance_modulus_rows(),
+        model="flat_lcdm",
+        n_walkers=10,
+        n_steps=24,
+        n_burn=6,
+        random_seed=9,
+    )
+
+    visible = await dispatch_cosmology(
+        "get_cosmology_run_status",
+        {"job_id": queued["job_id"]},
+        user_id=owner,
+    )
+    hidden = await dispatch_cosmology(
+        "get_cosmology_run_status",
+        {"job_id": queued["job_id"]},
+        user_id="owner-b",
+    )
+
+    assert visible is not None and visible["job_id"] == queued["job_id"]
+    assert hidden is not None and hidden["error_class"] == "not_found"
 
 
 def test_cobaya_unavailable_is_structured_when_missing_or_disabled(monkeypatch):

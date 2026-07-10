@@ -113,23 +113,39 @@ def test_linmix_seed_reproducibility():
     out2 = kelly07_linmix_fit(x=x, y=y, xerr=xerr, yerr=yerr,
                               K=2, nchains=2, miniter=1000, maxiter=4000,
                               seed=99, parallelize=False)
-    # Reproducibility for a K=2 mixture Gibbs sampler is STATISTICAL, not
-    # bit-exact. Two effects make the posterior median drift run-to-run:
-    # (1) label-switching between the two mixture components, and (2) the
-    # R-hat<1.1 self-termination stopping at slightly different iteration
-    # counts. The drift is mostly ~0.4% but has an occasional >5% tail, so
-    # any median-rtol bound is flaky (CI run 26593759741 tripped rtol=0.01;
-    # local runs trip 0.05 too). The vendored linmix Chain ctor also cannot
-    # be seeded under parallelize=False.
-    #
-    # The invariant that is both reliable AND scientifically meaningful: two
-    # same-seed runs must produce OVERLAPPING 94% HDIs — i.e. consistent
-    # constraints, not identical point estimates. (HDI coverage of the true
-    # values is separately asserted by the recovery test above.)
+    # Every non-parallel chain now receives RandomState(seed + chain_index),
+    # so the retained posterior and stopping iteration must be replayable.
     for name in ("alpha", "beta", "sigma_int"):
         p1 = out1["parameters"][name]
         p2 = out2["parameters"][name]
-        assert p1["hdi_low_94"] <= p2["hdi_high_94"] and p2["hdi_low_94"] <= p1["hdi_high_94"], (
-            f"{name} 94% HDIs disjoint across same-seed runs: "
-            f"[{p1['hdi_low_94']}, {p1['hdi_high_94']}] vs [{p2['hdi_low_94']}, {p2['hdi_high_94']}]"
-        )
+        assert p1 == p2
+    assert out1["iterations"] == out2["iterations"]
+    assert out1["random_seed"] == out2["random_seed"] == 99
+
+
+@pytest.mark.timeout(60)
+def test_linmix_maxiter_stop_is_not_reported_converged(monkeypatch):
+    from app.services._vendored.linmix import LinMix
+
+    monkeypatch.setattr(LinMix, "_get_Rhat", lambda self: np.full(6, 2.0))
+    rng = np.random.default_rng(321)
+    x = rng.normal(size=24)
+    y = 0.5 + 1.2 * x + rng.normal(0, 0.4, size=x.size)
+    err = np.full(x.size, 0.15)
+
+    out = kelly07_linmix_fit(
+        x=x,
+        y=y,
+        xerr=err,
+        yerr=err,
+        K=2,
+        nchains=4,
+        miniter=100,
+        maxiter=100,
+        seed=17,
+        parallelize=False,
+    )
+
+    assert out["iterations"] == 100
+    assert out["converged"] is False
+    assert out["publication_ready"] is False

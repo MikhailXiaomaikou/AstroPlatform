@@ -241,12 +241,18 @@ export function PaperDraftModal({
   paperLoading: boolean;
   paperGenerating: boolean;
   paperSaving: boolean;
-  handleGeneratePaper: (overrideValidation?: boolean) => Promise<void>;
+  handleGeneratePaper: () => Promise<void>;
   handleSavePaperDraft: () => Promise<void>;
   handleTogglePaperPublish: () => Promise<void>;
   handleRegeneratePaperSection: () => Promise<void>;
   setInput: (value: string) => void;
 }) {
+  const paperHasUnsavedChanges = Boolean(
+    paperDraft
+    && paperEditorJson
+    && JSON.stringify(paperDraft.paper_json) !== JSON.stringify(paperEditorJson),
+  );
+
   return (
         <div className="viz-overlay" onClick={() => setPaperModalOpen(false)}>
           <div
@@ -281,9 +287,13 @@ export function PaperDraftModal({
               <button
                 className="btn-primary btn-small"
                 disabled={paperLoading || paperGenerating || !paperSessionId}
-                onClick={() => { void handleGeneratePaper(paperValidation?.overall_status === "FAIL"); }}
+                onClick={() => { void handleGeneratePaper(); }}
               >
-                {paperGenerating ? "Generating..." : paperValidation?.overall_status === "FAIL" ? "Generate Anyway" : "Generate Draft"}
+                {paperGenerating
+                  ? "Generating..."
+                  : paperValidation?.overall_status === "PASS"
+                    ? "Generate Draft"
+                    : "Generate Private Unverified Draft"}
               </button>
               {paperDraft && (
                 <>
@@ -296,9 +306,21 @@ export function PaperDraftModal({
                   </button>
                   <button
                     className={paperDraft.is_public ? "btn-secondary btn-small" : "btn-primary btn-small"}
-                    disabled={paperSaving}
+                    disabled={
+                      paperSaving
+                      || (!paperDraft.is_public
+                        && (paperDraft.validation.publishable !== true || paperHasUnsavedChanges))
+                    }
                     onClick={() => { void handleTogglePaperPublish(); }}
-                    title={paperDraft.is_public ? "Remove the public draft link" : "Create a public read-only draft link"}
+                    title={
+                      paperDraft.is_public
+                        ? "Remove the public draft link"
+                        : paperHasUnsavedChanges
+                          ? "Save and revalidate the current changes before publication"
+                        : paperDraft.validation.publishable === true
+                          ? "Create a public read-only draft link"
+                          : "A current PASS validation is required before publication"
+                    }
                   >
                     {paperDraft.is_public ? "Unpublish Draft" : "Publish Draft"}
                   </button>
@@ -341,6 +363,24 @@ export function PaperDraftModal({
                 <a href={paperDraft.public_url} target="_blank" rel="noopener noreferrer">
                   {new URL(paperDraft.public_url, window.location.origin).toString()}
                 </a>
+              </div>
+            )}
+
+            {paperDraft && paperDraft.validation.publishable !== true && (
+              <div style={{
+                marginBottom: 16,
+                padding: "0.7rem 0.85rem",
+                borderRadius: 6,
+                border: "1px solid rgba(185,28,28,0.32)",
+                background: "rgba(254,226,226,0.7)",
+                color: "#991b1b",
+                fontSize: "0.85rem",
+                fontWeight: 700,
+              }}>
+                {paperDraft.validation.watermark || "UNVERIFIED DRAFT — NOT FOR PUBLICATION"}
+                <div style={{ marginTop: 4, fontWeight: 400 }}>
+                  This private draft can be saved and downloaded, but it cannot be published until its current contents pass validation.
+                </div>
               </div>
             )}
 

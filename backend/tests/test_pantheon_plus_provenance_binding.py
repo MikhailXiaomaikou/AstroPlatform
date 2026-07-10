@@ -1,13 +1,4 @@
-"""T1-U6a: provenance-bind the Pantheon+SH0ES full-covariance supernova fit.
-
-Mirrors the BAO/CC/RSD pattern — the 1701-SN distance-modulus covariance the χ²
-inverts must be the sha256-pinned committed data product (object identity), not an
-unverified ``np.load``.  Unlike CC/RSD (diagonal), the Pantheon+SH0ES stat+sys
-matrix IS a released FULL covariance, so cov_fidelity is "full" once the vendored
-``data.npz`` digest matches the registry pin.  The npz lives under
-``data/pantheon_plus_2022/`` (not ``data/cosmology/``), so the loader keys off
-``_PANTHEON_PLUS_DATA_DIR``.
-"""
+"""Provenance and scientific-schema gates for Pantheon+SH0ES."""
 from __future__ import annotations
 
 import asyncio
@@ -48,37 +39,120 @@ def test_load_verified_pantheon_is_full_and_verified():
     # The Pantheon+SH0ES stat+sys covariance IS a released FULL covariance.
     assert v["cov_fidelity"] == "full"
     assert v["sha256"]
+    assert v["shoes_calibration_ready"] is True
+    assert v["likelihood_ready"] is True
+    assert v["selection_mask"] is not None
+    assert v["n_selected"] == 1657
+    assert v["n_calibrators"] == 77
+    assert v["scientific_issues"] == ()
+    assert v["covariance_max_asymmetry_raw"] <= 5e-8
 
 
-def test_fitted_cov_is_the_checksummed_object():
-    """OBJECT IDENTITY: the covariance the χ² inverts IS the verified loader's
-    array — proving the fit reads the sha256-pinned npz, not an unchecked copy."""
+def test_current_pantheon_bundle_executes_official_selected_likelihood():
     from app.services import cosmology_likelihoods as cl
 
-    verified = cl.load_verified_pantheon_plus_data("pantheon_plus")
     fitted = cl._load_pantheon_plus_data()
-    # cov (the checksummed artifact) IS the same object the loader verified.
-    assert fitted["cov"] is verified["cov"]
-    # cov_inv is DERIVED from that verified cov (not itself a checksummed artifact),
-    # so assert it is the correct inverse rather than object identity.
-    n = fitted["cov"].shape[0]
-    assert np.allclose(fitted["cov_inv"] @ fitted["cov"], np.eye(n), atol=1e-6)
+    assert fitted["z_hd"].shape == (1657,)
+    assert fitted["m_b_corr"].shape == (1657,)
+    assert fitted["is_calibrator"].sum() == 77
+    assert fitted["cov"].shape == (1657, 1657)
+    assert fitted["cov_inv"].shape == (1657, 1657)
 
 
-def test_pantheon_binding_zero_drift():
-    """Binding must not move any number: shapes hold and the χ² at the
-    Pantheon+SH0ES fiducial equals its pre-binding value."""
+def test_complete_bundle_applies_official_selection_before_inversion(tmp_path, monkeypatch):
+    """A complete future bundle executes only the release likelihood rows."""
     from app.services import cosmology_likelihoods as cl
 
-    data = cl._load_pantheon_plus_data()
-    assert data["mu"].shape == (1701,)
-    assert data["cov"].shape == (1701, 1701)
-    theta = np.array([[73.04, 0.334, -19.253]])
-    chi2 = float(cl._pantheon_plus_chi2_samples(theta, ["H0", "omegam", "M_B"])[0])
-    # Pin the actual chi2 (captured pre-binding) so any prediction/data drift fails.
-    # Deterministic value (fixed theta + data, no RNG); tol tight enough to catch a
-    # real prediction-kernel drift, not 9 orders looser than the float noise floor.
-    assert chi2 == pytest.approx(1755.9316662998824, abs=1e-6)
+    z_hd = np.array([0.005, 0.005, 0.02])
+    z_hel = np.array([0.0045, 0.0045, 0.019])
+    is_calibrator = np.array([False, True, False])
+    covariance = np.diag([1.0, 2.0, 3.0])
+    path = tmp_path / "data.npz"
+    np.savez_compressed(
+        path,
+        cid=np.array(["excluded", "calibrator", "hubble_flow"]),
+        z_hd=z_hd,
+        z_hel=z_hel,
+        mu=np.array([30.0, 31.0, 34.0]),
+        mu_err_diag=np.sqrt(np.diag(covariance)),
+        m_b_corr=np.array([10.0, 11.0, 14.0]),
+        is_calibrator=is_calibrator,
+        cepheid_distance=np.array([-9.0, 30.0, -9.0]),
+        cov=covariance,
+    )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    monkeypatch.setattr(cl, "_PANTHEON_PLUS_DATA_DIR", tmp_path)
+    monkeypatch.setattr(cl, "_registry_product_sha256", lambda *_args: digest)
+    cl.load_verified_pantheon_plus_data.cache_clear()
+    cl._load_pantheon_plus_data.cache_clear()
+    cl._pantheon_plus_cov_inv.cache_clear()
+    try:
+        verified = cl.load_verified_pantheon_plus_data("pantheon_plus")
+        assert verified["likelihood_ready"] is True
+        np.testing.assert_array_equal(verified["selection_mask"], [False, True, True])
+        assert verified["n_selected"] == 2
+        assert verified["n_calibrators"] == 1
+
+        fitted = cl._load_pantheon_plus_data()
+        np.testing.assert_array_equal(fitted["is_calibrator"], [True, False])
+        np.testing.assert_array_equal(fitted["cov"], np.diag([2.0, 3.0]))
+        np.testing.assert_allclose(fitted["cov_inv"], np.diag([0.5, 1.0 / 3.0]))
+    finally:
+        cl.load_verified_pantheon_plus_data.cache_clear()
+        cl._load_pantheon_plus_data.cache_clear()
+        cl._pantheon_plus_cov_inv.cache_clear()
+
+
+def test_cepheid_calibrator_theory_breaks_h0_mb_degeneracy(monkeypatch):
+    """Hubble-flow rows alone have an H0-M_B ridge; calibrators break it."""
+    import app.services.cosmology_likelihoods.sn as sn
+
+    z_hd = np.array([0.05, 0.005])
+    z_hel = np.array([0.049, 0.0045])
+    is_calibrator = np.array([False, True])
+    cepheid_distance = np.array([-9.0, 31.0])
+    h0 = 70.0
+    omega_m = 0.3
+    m_b = -19.253
+
+    dm = sn._flat_de_dm_grid_vectorized(
+        z_hd,
+        np.array([h0]),
+        np.array([omega_m]),
+        np.array([-1.0]),
+        np.array([0.0]),
+    )[:, 0]
+    hubble_flow_mu = 5.0 * np.log10((1.0 + z_hel[0]) * dm[0]) + 25.0
+    m_obs = np.array([hubble_flow_mu + m_b, cepheid_distance[1] + m_b])
+
+    monkeypatch.setattr(
+        sn,
+        "_load_pantheon_plus_data",
+        lambda: {
+            "z_hd": z_hd,
+            "z_hel": z_hel,
+            "m_b_corr": m_obs,
+            "is_calibrator": is_calibrator,
+            "cepheid_distance": cepheid_distance,
+            "cov_inv": np.eye(2),
+        },
+    )
+
+    shifted_h0 = 80.0
+    ridge_shift = 5.0 * np.log10(shifted_h0 / h0)
+    samples = np.array(
+        [
+            [h0, omega_m, m_b],
+            [shifted_h0, omega_m, m_b + ridge_shift],
+        ]
+    )
+    chi2 = sn._pantheon_plus_chi2_samples(samples, ["H0", "omegam", "M_B"])
+
+    assert chi2[0] == pytest.approx(0.0, abs=1e-20)
+    # The Hubble-flow prediction is unchanged along the ridge, while
+    # CEPH_DIST + M_B shifts and penalizes the second sample.
+    assert chi2[1] == pytest.approx(ridge_shift**2, rel=0.0, abs=1e-12)
 
 
 def test_default_pantheon_product_is_not_the_binary_npz():

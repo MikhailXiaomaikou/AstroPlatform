@@ -277,6 +277,10 @@ def reproduce_anchor(anchor: OracleAnchor) -> dict:
         "reproduced_value": float(med) if has_value else None,
         "within_tol": bool(within),
         "publication_ready": bool(r.get("publication_ready")),
+        "preliminary_ready": bool(r.get("preliminary_ready")),
+        "chain_tier": r.get("chain_tier"),
+        "publication_gate": r.get("publication_gate"),
+        "preliminary_reasons": list(r.get("preliminary_reasons") or []),
         "datasets": list(anchor.datasets),
         "source_arxiv": anchor.source_arxiv,
     }

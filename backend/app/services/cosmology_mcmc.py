@@ -74,6 +74,22 @@ RHAT_EXPLORATORY_THRESHOLD = 1.10
 # synthetic_code_detector) already gate the upload path.
 CLAIMABLE_INPUT_ORIGINS = frozenset({"cached_real", "user_uploaded"})
 
+# The generic row schema below carries only (z, mu, sigma_mu).  It has neither
+# an absolute-magnitude calibration (M_B / Cepheid-host distances) nor a released
+# full covariance matrix.  Consequently H0 is exactly degenerate with an
+# arbitrary additive distance-modulus zero point: shifting every mu by Delta mu
+# is equivalent to H0 -> H0 * 10**(-Delta mu / 5).  A trusted row origin or good
+# sampler diagnostics cannot cure that scientific non-identifiability.  Keep the
+# numerical fit available as an audit/debug calculation, but fail closed for
+# posterior claims until the input contract explicitly represents both pieces.
+DISTANCE_MODULUS_SCIENCE_BLOCKER = (
+    "Generic distance-modulus rows provide only diagonal sigma_mu errors and no "
+    "absolute calibration (M_B or calibrated-host distances). H0 is therefore "
+    "exactly degenerate with the unknown magnitude zero point, and the likelihood "
+    "does not carry the released full covariance. This fit is diagnostic-only and "
+    "cannot support publication-ready H0 or cosmological posterior claims."
+)
+
 
 @dataclass(frozen=True)
 class DistanceModulusDataset:
@@ -278,11 +294,10 @@ def fit_cosmology_emcee(
     """Run a bounded emcee fit and return posterior summary + provenance.
 
     ``manual_attestation`` lets the caller declare the source of inline rows
-    (paper bibcode + arxiv + DOI) so the result can be cited even when rows
-    were not produced by a platform cache.  The attestation propagates into
-    both the top-level ``citations`` array (so claim_validator picks up the
-    bibcode for the valid-citation pool) and the ``provenance.cosmology``
-    block (so reproducibility audits can trace the data back to a paper).
+    (paper bibcode + arxiv + DOI) for provenance.  It cannot make the current
+    diagonal-only, uncalibrated row schema publication-ready: H0 remains
+    unidentifiable without an explicit absolute calibration/M_B treatment and
+    the released full covariance.
     """
     import emcee
 
@@ -327,6 +342,33 @@ def fit_cosmology_emcee(
     parameter_summary = diagnostics["parameters"]
     diagnostics_publication_ready = bool(diagnostics.get("publication_ready"))
     input_is_claimable = input_data_origin in CLAIMABLE_INPUT_ORIGINS
+    # The current input schema cannot establish the SN absolute scale or ingest a
+    # full covariance.  Mark H0 at the parameter level as well as blocking the
+    # top-level result so downstream renderers cannot mistake good R-hat/ESS for
+    # physical identifiability.
+    likelihood_fidelity = {
+        "absolute_calibration_present": False,
+        "absolute_magnitude_nuisance_modeled": False,
+        "full_covariance_present": False,
+        "covariance_fidelity": "diagonal_only",
+        "h0_identifiable": False,
+        "publication_gate_passed": False,
+        "reason": DISTANCE_MODULUS_SCIENCE_BLOCKER,
+    }
+    # Preserve the convergence-only verdict under an unambiguous name, but do
+    # not leave a nested publication_ready=True that a downstream consumer
+    # could detach from the failed scientific gate.
+    diagnostics["sampler_diagnostics_passed"] = diagnostics_publication_ready
+    diagnostics["scientific_gate_passed"] = False
+    diagnostics["publication_ready"] = False
+    diagnostics["publication_blocker"] = DISTANCE_MODULUS_SCIENCE_BLOCKER
+    h0_summary = parameter_summary.get("H0")
+    if isinstance(h0_summary, dict):
+        h0_summary["claimable"] = False
+        h0_summary["scientifically_identified"] = False
+        h0_summary["identifiability_note"] = (
+            "H0 is degenerate with the unmodeled distance-modulus zero point / M_B."
+        )
 
     # Three-tier publication_ready (2026-05-20): publication / exploratory / blocked.
     # ESS+R-hat extracted from parameter_summary["<param>"]["ess_bulk"/"rhat"];
@@ -339,7 +381,9 @@ def fit_cosmology_emcee(
     max_rhat = max(valid_rhats) if valid_rhats else None
     diagnostics_available = min_ess is not None and max_rhat is not None
 
-    if diagnostics_publication_ready and input_is_claimable:
+    if not likelihood_fidelity["publication_gate_passed"]:
+        chain_tier = "blocked"
+    elif diagnostics_publication_ready and input_is_claimable:
         chain_tier = "publication"
     elif (
         diagnostics_available
@@ -376,14 +420,13 @@ def fit_cosmology_emcee(
         "input_data_origin": input_data_origin,
         "source_cache_key": source_cache_key,
         "input_rows_verified": input_is_claimable,
+        "likelihood_fidelity": likelihood_fidelity,
         "manual_attestation": manual_attestation,
         "package_versions": package_versions(["astropy", "emcee", "arviz", "numpy"]),
     }
     if manual_attestation:
-        # Surface the attestation as a citation entry so claim_validator's
-        # bibcode harvester adds the source paper to the valid citation pool.
-        # Only one of bibcode/arxiv/doi is required; we propagate whichever
-        # the caller supplied.
+        # Preserve the source record for audit/reproducibility. The scientific
+        # gate above still blocks posterior claims from this row schema.
         result["citations"] = [
             {
                 "label": manual_attestation.get("source"),
@@ -420,7 +463,12 @@ def fit_cosmology_emcee(
         result["__tool_status__"] = "PARTIAL"
         result["analysis_status"] = "PARTIAL"
         result["__do_not_claim__"] = True
-        if not input_is_claimable:
+        if not likelihood_fidelity["publication_gate_passed"]:
+            result["data_origin"] = (
+                input_data_origin if input_is_claimable else "unavailable"
+            )
+            reason = DISTANCE_MODULUS_SCIENCE_BLOCKER
+        elif not input_is_claimable:
             result["data_origin"] = "unavailable"
             reason = (
                 "Cosmology MCMC used inline/unverified rows. Inline rows are audit-only "
@@ -448,7 +496,12 @@ def should_run_background(n_walkers: int, n_steps: int, force_background: bool =
     return bool(force_background) or int(n_walkers) * int(n_steps) > SYNC_SAMPLE_BUDGET
 
 
-def submit_emcee_job(**kwargs: Any) -> dict[str, Any]:
+def submit_emcee_job(
+    *,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
     """Hand a large emcee chain off to the Celery worker.
 
     Previously this started a ``threading.Thread`` inside the web process
@@ -465,7 +518,12 @@ def submit_emcee_job(**kwargs: Any) -> dict[str, Any]:
     """
     from app.services.async_tool_runtime import submit_async_job
 
-    banner = submit_async_job("fit_cosmology_mcmc", dict(kwargs))
+    banner = submit_async_job(
+        "fit_cosmology_mcmc",
+        dict(kwargs),
+        user_id=user_id,
+        session_id=session_id,
+    )
     # Augment the generic banner with the cosmology-specific fields the
     # agent's prompt expects to see.
     banner["sampler"] = "emcee"
@@ -479,7 +537,11 @@ def submit_emcee_job(**kwargs: Any) -> dict[str, Any]:
     return banner
 
 
-def get_cosmology_job_status(job_id: str) -> dict[str, Any]:
+def get_cosmology_job_status(
+    job_id: str,
+    *,
+    owner_id: str | None = None,
+) -> dict[str, Any]:
     """Poll a job submitted via ``submit_emcee_job`` (or the generic runtime).
 
     Backward-compat shim: shapes the response so the legacy
@@ -491,7 +553,7 @@ def get_cosmology_job_status(job_id: str) -> dict[str, Any]:
         get_async_job,
     )
 
-    job = get_async_job(str(job_id))
+    job = get_async_job(str(job_id), owner_id=owner_id)
     if job is None:
         return {
             "success": False,
@@ -517,7 +579,9 @@ def run_cobaya_cosmology(
     seed = int(random_seed if random_seed is not None else 20260424)
     info = build_cobaya_info(dataset, model, sanitized_priors, seed=seed, max_samples=max_samples)
     return _cobaya_unavailable(
-        "Cobaya cosmology is phase-1 disabled until posterior sample summarization is implemented; use fit_cosmology_mcmc for citeable short-chain fits.",
+        "Cobaya cosmology is phase-1 disabled until posterior sample summarization is implemented. "
+        "The generic fit_cosmology_mcmc row path is diagnostic-only because it has no "
+        "absolute SN calibration or released full covariance.",
         None,
         info,
         dataset,
@@ -711,6 +775,7 @@ def _cosmology_provenance(result: dict[str, Any]) -> dict[str, Any]:
         "input_data_origin": result.get("input_data_origin"),
         "source_cache_key": result.get("source_cache_key"),
         "input_rows_verified": result.get("input_rows_verified"),
+        "likelihood_fidelity": result.get("likelihood_fidelity"),
         "package_versions": result.get("package_versions"),
         "chain_diagnostics": result.get("chain_diagnostics"),
         "publication_ready": result.get("publication_ready"),

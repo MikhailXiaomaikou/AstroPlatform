@@ -80,13 +80,16 @@ def test_emcee_ess_failure_caps_tier_at_exploratory(monkeypatch):
     assert any("UNVERIFIED" in w for w in r["warnings"])
 
 
-def test_emcee_working_autocorr_still_reaches_publication():
+def test_emcee_working_autocorr_is_preliminary_without_independent_chains():
     r = cl._run_sampling_likelihood_chain(
         model_key="lcdm", entries=[cl.get_cosmology_dataset("union3")],
         priors=None, seed=42, sample_count=1500, allow_emcee_fallback=True,
     )
     assert r["sampler"] == "sn_emcee"
-    assert r["chain_tier"] == "publication"
+    assert r["chain_tier"] == "exploratory"
+    assert r["publication_ready"] is False
+    assert r["preliminary_ready"] is True
+    assert "flattened_coupled_emcee_ensemble" in r["preliminary_reasons"]
     assert r["chain_diagnostics"]["ess_source"] == "emcee_autocorr"
     assert r["chain_diagnostics"]["proposal_ess"] > 400
 
@@ -167,7 +170,7 @@ def test_cmb_rotation_rhat_no_longer_fabricated(monkeypatch):
             mean=0.35,
             sigma=0.10,
             source_locator="unit test compressed EB/TB beta likelihood",
-            approximation="one-dimensional Gaussian beta posterior",
+            approximation="Gaussian observed-angle likelihood before calibration marginalization",
         ),
     )
     monkeypatch.setitem(cr.CMB_ROTATION_DATASETS, fixture.key, fixture)
@@ -178,6 +181,7 @@ def test_cmb_rotation_rhat_no_longer_fabricated(monkeypatch):
     )
     assert r["success"] is True
     assert r["analysis_status"] == "CMB_ROTATION_CHAIN_READY"
+    assert r["publication_ready"] is False
     d = r["chain_diagnostics"]
     assert d["rhat"] is None
     assert "not applicable" in d["rhat_note"]

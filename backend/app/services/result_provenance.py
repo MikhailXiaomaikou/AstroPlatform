@@ -522,6 +522,65 @@ _REFERENCE_TOOLS = {
 }
 # Introspection helper for tests / CI: full known tool set.
 ALL_KNOWN_TOOLS = _DATA_TOOLS | _COMPUTE_TOOLS | _REFERENCE_TOOLS
+
+
+def _taint_unverified_run_python_randomness(
+    tool_name: str,
+    result: dict[str, Any],
+    tool_input: Any,
+) -> dict[str, Any]:
+    """Fail closed when a Python cell mixes real-data access with bare RNG.
+
+    ``_exec_run_python`` normally applies the same decision before execution,
+    but normalization is also called directly by dispatchers and tests.  A
+    successful compute result must therefore not default to ``real_archive``
+    solely because its code touched an archive helper before printing an
+    unrelated random value.  Structurally recognised MCMC/bootstrap usage is
+    exempt and retains the normal provenance path.
+    """
+    if tool_name != "run_python" or result.get("success") is False or result.get("error"):
+        return result
+    if not isinstance(tool_input, dict):
+        return result
+    code = tool_input.get("code")
+    if not isinstance(code, str) or not code.strip():
+        return result
+    try:
+        from app.services.synthetic_code_detector import analyze
+
+        detection = analyze(code)
+    except Exception:
+        return result
+    if not detection.has_np_random or detection.actual_mcmc_usage:
+        return result
+
+    warning = (
+        "run_python used random-number generation outside a recognised "
+        "MCMC/bootstrap workflow; its numerical output is non-claimable."
+    )
+    tainted = dict(result)
+    warnings = tainted.get("warnings") or []
+    if isinstance(warnings, str):
+        warnings = [warnings]
+    else:
+        warnings = list(warnings)
+    if warning not in warnings:
+        warnings.append(warning)
+    tainted.update({
+        "__tool_status__": "SYNTHETIC",
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            "This run_python cell used random-number generation outside a "
+            "recognised MCMC/bootstrap workflow. Its numerical output MUST "
+            "NOT be presented as an observational or publication-ready result."
+        ),
+        "data_origin": SYNTHETIC,
+        "analysis_status": SIMULATED_DEMO,
+        "warnings": warnings,
+    })
+    return tainted
+
+
 def normalize_tool_result(
     tool_name: str,
     result: Any,
@@ -549,6 +608,7 @@ def normalize_tool_result(
             random_seed=random_seed,
             archive_version=archive_version,
         )
+    result = _taint_unverified_run_python_randomness(tool_name, result, tool_input)
     # R4: best-effort unit + frame annotation for well-known astronomical
     # column names (ra/dec → deg + ICRS, parallax → mas, teff → K, …).
     # Idempotent; pre-existing `*_unit` siblings win.

@@ -61,11 +61,11 @@ def test_research_matrix_runs_executable_cells_and_marks_config_gaps() -> None:
     )["research_plan"]
     result = run_research_matrix(research_plan=plan, n_samples=512)
 
-    assert result["analysis_status"] == "RESEARCH_MATRIX_READY"
-    assert result["ready_cells"] >= 1
-    assert any(cell["publication_ready"] is True for cell in result["matrix"])
+    assert result["analysis_status"] == "RESEARCH_MATRIX_PARTIAL"
+    assert result["ready_cells"] == 0
+    assert all(cell["publication_ready"] is False for cell in result["matrix"])
     assert any(
-        cell["publication_ready"] is True
+        cell.get("result", {}).get("preliminary_ready") is True
         and cell["dataset_keys"] == ["pantheon_plus"]
         for cell in result["matrix"]
     )
@@ -81,15 +81,15 @@ def test_research_matrix_runs_executable_cells_and_marks_config_gaps() -> None:
     assert charts["posterior_forest"]
     assert charts["diagnostics"]
     assert any(row["parameter"] == "H0" for row in charts["posterior_forest"])
-    assert any(row["status"] == "ready" for row in charts["matrix_status"])
+    assert any(row["status"] == "not_ready" for row in charts["matrix_status"])
 
 
-def test_workflow2_bao_cmb_public_path_is_publication_ready() -> None:
+def test_workflow2_bao_cmb_public_path_is_preliminary_only() -> None:
     """Lock the full public Research Matrix path, not just the private sampler.
 
-    Regression target: Workflow 2 BAO+CMB should no longer look like
-    ESS≈1/40 in Chat UI.  The public plan→matrix path must mark the BAO+CMB
-    cell publication-ready with H0 around the Planck-calibrated 67–68 range.
+    Regression target: Workflow 2 BAO+CMB keeps the correct H0 anchor and useful
+    ESS, but compressed inputs and absent independent chains must withhold the
+    publication label.
     """
     from app.services.research_program import plan_research_program, run_research_matrix
 
@@ -106,8 +106,9 @@ def test_workflow2_bao_cmb_public_path_is_publication_ready() -> None:
     bao_cmb = next(cell for cell in result["matrix"] if cell["label"] == "BAO + CMB")
     chain = bao_cmb["result"]
 
-    assert bao_cmb["publication_ready"] is True
-    assert bao_cmb["execution_level"] == "compressed_preliminary"
+    assert bao_cmb["publication_ready"] is False
+    assert bao_cmb["execution_level"] == "executed_not_ready"
+    assert chain["preliminary_ready"] is True
     assert chain["chain_diagnostics"]["proposal_ess"] >= 400
     assert 67.0 <= chain["parameters"]["H0"]["median"] <= 68.0
 
@@ -264,7 +265,7 @@ def test_cmb_rotation_matrix_execution_rejects_forced_late_time_dataset_keys() -
     assert any("not valid substitutes" in warning for warning in matrix["warnings"])
 
 
-def test_cmb_rotation_runner_supports_publication_ready_fixture(monkeypatch) -> None:
+def test_cmb_rotation_runner_applies_calibration_and_stays_exploratory(monkeypatch) -> None:
     from app.services import cmb_rotation_likelihoods as cr
     from app.services.research_program import run_research_matrix, verify_research_facts
 
@@ -283,7 +284,7 @@ def test_cmb_rotation_runner_supports_publication_ready_fixture(monkeypatch) -> 
             mean=0.35,
             sigma=0.10,
             source_locator="unit test compressed EB/TB beta likelihood",
-            approximation="one-dimensional Gaussian beta posterior",
+            approximation="Gaussian observed-angle likelihood before calibration marginalization",
         ),
     )
     monkeypatch.setitem(cr.CMB_ROTATION_DATASETS, fixture.key, fixture)
@@ -295,9 +296,11 @@ def test_cmb_rotation_runner_supports_publication_ready_fixture(monkeypatch) -> 
         n_samples=1024,
     )
 
-    assert result["publication_ready"] is True
+    assert result["publication_ready"] is False
+    assert result["chain_tier"] == "exploratory"
     assert result["analysis_status"] == "CMB_ROTATION_CHAIN_READY"
     assert abs(result["parameters"]["beta_deg"]["median"] - 0.35) < 0.02
+    assert abs(result["parameters"]["beta_deg"]["std"] - (0.10**2 + 0.05**2) ** 0.5) < 0.02
 
     matrix = run_research_matrix(
         question=(
@@ -308,8 +311,8 @@ def test_cmb_rotation_runner_supports_publication_ready_fixture(monkeypatch) -> 
         n_samples=1024,
     )
 
-    assert matrix["publication_ready"] is True
-    assert matrix["ready_cells"] == 1
+    assert matrix["publication_ready"] is False
+    assert matrix["ready_cells"] == 0
     assert matrix["matrix"][0]["result"]["parameters"]["beta_deg"]["median"]
 
     fact = verify_research_facts(
@@ -317,8 +320,8 @@ def test_cmb_rotation_runner_supports_publication_ready_fixture(monkeypatch) -> 
         final_reply="Compressed-likelihood preliminary: beta_deg = 0.35 deg.",
     )
 
-    assert fact["status"] == "passed"
-    assert fact["unsupported_claim_count"] == 0
+    assert fact["status"] == "blocked"
+    assert fact["unsupported_claim_count"] >= 1
 
 
 def test_cmb_rotation_fact_check_blocks_beta_without_runner() -> None:
@@ -422,7 +425,10 @@ def test_ede_request_records_missing_model_but_runs_lcdm_baseline() -> None:
     matrix = run_research_matrix(research_plan=plan, n_samples=512)
 
     assert any("Early-dark-energy" in gap for gap in plan["blocking_gaps"])
-    assert any(cell.get("publication_ready") is True for cell in matrix["matrix"])
+    assert any(
+        cell.get("result", {}).get("preliminary_ready") is True
+        for cell in matrix["matrix"]
+    )
     assert any(
         cell.get("baseline_only") is True
         and any("baseline only" in warning.lower() for warning in cell.get("warnings", []))
@@ -472,7 +478,10 @@ def test_modified_gravity_request_records_dedicated_likelihood_gap() -> None:
     matrix = run_research_matrix(research_plan=plan, n_samples=512)
 
     assert any("Modified-gravity" in gap for gap in plan["blocking_gaps"])
-    assert any(cell.get("publication_ready") is True for cell in matrix["matrix"])
+    assert any(
+        cell.get("result", {}).get("preliminary_ready") is True
+        for cell in matrix["matrix"]
+    )
     assert any(
         cell.get("publication_ready") is False
         for cell in matrix["matrix"]
@@ -526,7 +535,7 @@ def test_physical_dark_energy_histories_route_to_scope_gap_not_python() -> None:
     assert plan["proposed_experiment_matrix"]
 
 
-def test_evidence_graph_links_claims_to_publication_ready_runs() -> None:
+def test_evidence_graph_does_not_promote_preliminary_runs_to_claims() -> None:
     from app.services.research_program import build_evidence_graph, plan_research_program, run_research_matrix
 
     plan = plan_research_program(question="Research DESI BAO LCDM constraints.")["research_plan"]
@@ -534,13 +543,10 @@ def test_evidence_graph_links_claims_to_publication_ready_runs() -> None:
     graph = build_evidence_graph(tool_results=[{"tool": "run_research_matrix", "result": matrix}])
 
     assert graph["analysis_status"] == "EVIDENCE_GRAPH_READY"
-    assert "omegam" in graph["claimable_parameters"]
+    assert graph["claimable_parameters"] == []
     assert graph["unsupported_claim_count"] == 0
-    assert graph["evidence_graph"]["supported_claims"]
-    assert any(node["type"] == "result" for node in graph["evidence_graph"]["nodes"])
-    first_claim = graph["evidence_graph"]["supported_claims"][0]
-    assert first_claim["supporting_result"].startswith("result:")
-    assert first_claim["evidence_path"][0].startswith("claim:")
+    assert graph["evidence_graph"]["supported_claims"] == []
+    assert any(node["type"] == "tool_run" for node in graph["evidence_graph"]["nodes"])
 
 
 def test_evidence_graph_flags_unsupported_final_reply_claims() -> None:

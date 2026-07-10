@@ -54,6 +54,102 @@ def test_extract_cosmology_parameter_claims():
     assert {"cosmology_h0", "cosmology_om0", "cosmology_w0", "cosmology_wa"} <= labels
 
 
+def test_markdown_cosmology_table_values_are_numeric_claims():
+    """A column separator/unit cell must not hide cosmology constraints."""
+    reply = """| parameter | result |
+|---|---|
+| H0 (km/s/Mpc) | 71.4 +/- 0.3 |
+| Omega_m | 0.31 |
+| n_s | 0.970 |
+| tau | 0.055 |
+| ombh2 | 0.0224 |
+"""
+    claims = extract_claims(reply)
+    assert {claim.label for claim in claims} >= {
+        "cosmology_h0",
+        "cosmology_om0",
+        "cosmology_ns",
+        "cosmology_tau",
+        "cosmology_ombh2",
+    }
+    assert {claim.value for claim in claims} >= {71.4, 0.31, 0.970, 0.055, 0.0224}
+
+
+def test_markdown_cosmology_table_fails_closed_without_tool_evidence():
+    reply = """| parameter | result |
+|---|---|
+| H₀ (km/s/Mpc) | 71.4 |
+| Ωₘ | 0.31 |
+| Ω_b h² | 0.0224 |
+"""
+    result = validate_claims(reply, [])
+    assert result.ok is False
+    assert result.universe_size == 0
+    assert {claim.label for claim in result.uncited} >= {
+        "cosmology_h0",
+        "cosmology_om0",
+        "cosmology_ombh2",
+    }
+
+
+def test_markdown_cosmology_table_without_outer_pipes_is_caught():
+    reply = """parameter | result
+---|---
+H0 (km/s/Mpc) | 71.4
+Omega_m | 0.31
+"""
+    result = validate_claims(reply, [])
+    assert result.ok is False
+    assert {claim.label for claim in result.uncited} >= {
+        "cosmology_h0",
+        "cosmology_om0",
+    }
+
+
+def test_latex_parameter_labels_in_markdown_table_are_caught():
+    reply = r"""| parameter | result |
+|---|---|
+| $H_{0}$ | 71.4 |
+| $\Omega_m$ | 0.31 |
+| $n_{s}$ | 0.970 |
+| $\tau$ | 0.055 |
+| $\Omega_b h^2$ | 0.0224 |
+"""
+    result = validate_claims(reply, [])
+    assert result.ok is False
+    assert {claim.label for claim in result.uncited} >= {
+        "cosmology_h0",
+        "cosmology_om0",
+        "cosmology_ns",
+        "cosmology_tau",
+        "cosmology_ombh2",
+    }
+
+
+def test_markdown_cosmology_table_passes_with_matching_parameter_evidence():
+    reply = """| parameter | result |
+|---|---|
+| H0 (km/s/Mpc) | 67.36 |
+| n_s | 0.9649 |
+| tau | 0.0544 |
+| ombh2 | 0.02237 |
+"""
+    tool_results = [{
+        "tool": "run_cosmology_likelihood_chain",
+        "result": {
+            "success": True,
+            "publication_ready": True,
+            "parameters": {
+                "H0": {"median": 67.36},
+                "ns": {"median": 0.9649},
+                "tau": {"median": 0.0544},
+                "ombh2": {"median": 0.02237},
+            },
+        },
+    }]
+    assert validate_claims(reply, tool_results).ok is True
+
+
 def test_b15_unicode_minus_claim_is_extracted():
     """B15: a value written with the Unicode minus U+2212 ('w0 = −0.84') must
     still be extracted as a claim; otherwise it bypasses the whole gate."""

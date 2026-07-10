@@ -434,7 +434,15 @@ class LinMix(object):
         else:
             self._chains = []
             for i in range(self.nchains):
-                self._chains.append(Chain(x, y, xsig, ysig, xycov, delta, K, self.nchains))
+                # The upstream non-parallel path constructed an unseeded
+                # RandomState for every chain, so LinMix(seed=...) was not
+                # reproducible unless multiprocessing was enabled.
+                self._chains.append(
+                    Chain(
+                        x, y, xsig, ysig, xycov, delta, K, self.nchains,
+                        rng=np.random.RandomState(seed + i),
+                    )
+                )
                 self._chains[-1].initial_guess()
 
     def _get_psi(self):
@@ -509,9 +517,10 @@ class LinMix(object):
             for p in self.pipes:
                 p.send({'task':'fetch',
                         'key':'chain'})
-            self.chain = np.hstack([p.recv()[ikeep:] for p in self.pipes])
+            self.chain_list = [p.recv()[ikeep:] for p in self.pipes]
         else:
-            self.chain = np.hstack([c.chain[ikeep:] for c in self._chains])
+            self.chain_list = [c.chain[ikeep:] for c in self._chains]
+        self.chain = np.hstack(self.chain_list)
 
     def run_mcmc(self, miniter=5000, maxiter=100000, silent=False):
         """ Run the Markov Chain Monte Carlo for the LinMix object.
@@ -528,7 +537,11 @@ class LinMix(object):
             silent(bool): If true, then suppress updates during sampling.
         """
         checkiter = 100
+        if miniter <= 0 or maxiter < miniter:
+            raise ValueError("require 0 < miniter <= maxiter")
         self._initialize_chains(miniter)
+        i = 0
+        Rhat = np.full(6, np.inf, dtype=float)
         for i in range(0, miniter, checkiter):
             self._step(checkiter)
             Rhat = self._get_Rhat()
@@ -553,6 +566,14 @@ class LinMix(object):
                        ", mean(xi), log(var(xi)), atanh(corr(xi, eta)):")
                 print(Rhat)
             i += checkiter
+
+        self.iterations = int(i)
+        self.last_rhat = np.asarray(Rhat, dtype=float)
+        self.converged = bool(
+            np.all(np.isfinite(self.last_rhat))
+            and np.all(self.last_rhat < 1.1)
+            and self.iterations <= maxiter
+        )
 
         # Throw away first half of each chain
         self._build_chain(int(i/2))

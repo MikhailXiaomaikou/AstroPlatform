@@ -453,16 +453,44 @@ def _external_chain_success_payload() -> dict:
     from app.services import cobaya_runner
     from app.services.cosmology_likelihoods import _validate_dataset_selection
 
-    entries = _validate_dataset_selection("lcdm", ["spt3g_cmb"])
+    # Use an external likelihood whose exact on-disk inputs are pinned in the
+    # registry, then exercise the same hash verifier used by the real Cobaya
+    # dispatch path.  A bare ``hash_verified=True`` fixture would only assert a
+    # label; this proves the payload is backed by the vendored bytes it claims.
+    entries = _validate_dataset_selection(
+        "lcdm", ["planck_2018_highl_TTTEEE_lite"]
+    )
+    data_verification = cobaya_runner._verify_pinned_cmb_data(entries)  # noqa: SLF001
+    assert data_verification is not None
+    assert data_verification["hash_verified"] is True
+    assert data_verification["files_sha256"]
+
+    per_parameter = {
+        "H0": {"rhat": 1.005, "ess_bulk": 900.0},
+        "omegam": {"rhat": 1.004, "ess_bulk": 850.0},
+    }
     payload = cobaya_runner._runner_success(  # noqa: SLF001 — contract under test
         model_key="lcdm",
         entries=entries,
         seed=42,
         sampler="mcmc",
-        summaries={"H0": {"mean": 67.4, "std": 0.5}},
-        diagnostics={"overall_status": "ok", "rhat": 1.01, "ess_bulk": 900.0},
-        chain_meta={},
+        summaries={
+            "H0": {"mean": 67.4, "std": 0.5},
+            "omegam": {"mean": 0.315, "std": 0.007},
+        },
+        diagnostics={
+            "overall_status": "ok",
+            "rhat": max(record["rhat"] for record in per_parameter.values()),
+            "ess_bulk": min(
+                record["ess_bulk"] for record in per_parameter.values()
+            ),
+            "n_chains": 4,
+            "n_independent_chains": 4,
+            "per_parameter": per_parameter,
+        },
+        chain_meta={"n_chains": 4, "n_draws_total": 4_000},
         stdout_tail="",
+        data_verification=data_verification,
     )
     assert payload["publication_ready"] is True
     assert payload["analysis_status"] == "EXTERNAL_COBAYA_READY"

@@ -55,8 +55,8 @@ const FAQ_DATA: FaqItem[] = [
       zh: "如何将结果导出用于论文？",
     },
     a: {
-      en: "You can export search results as CSV or VOTable, chat sessions as Jupyter Notebooks or Markdown, and plots as publication-ready SVG/PNG figures with customizable fonts and color schemes.",
-      zh: "您可以将搜索结果导出为 CSV 或 VOTable，聊天会话导出为 Jupyter Notebook 或 Markdown，图表导出为可用于发表的 SVG/PNG 图像，并支持自定义字体和配色。",
+      en: "You can export search results as CSV or VOTable, chat sessions as Jupyter Notebooks or Markdown, and plots as SVG/PNG. Exportability does not imply scientific publication readiness; validation status is preserved separately.",
+      zh: "您可以将搜索结果导出为 CSV 或 VOTable，将聊天会话导出为 Jupyter Notebook 或 Markdown，并将图表导出为 SVG/PNG。可导出不等于科学上可发表，验证状态会单独保留。",
     },
   },
   {
@@ -105,8 +105,8 @@ const FAQ_DATA: FaqItem[] = [
       zh: "可以与团队协作吗？",
     },
     a: {
-      en: "Yes. The Team page lets you create shared workspaces where members can share queries, pipeline templates, and saved results. Each member can have different permission levels.",
-      zh: "可以。团队页面允许您创建共享工作区，成员可以共享查询、流水线模板和保存的结果。每个成员可以有不同的权限级别。",
+      en: "Yes. You can share a read-only or forkable research session, comment on it, and preserve its validation evidence. Long jobs and artifacts remain owner-scoped until access is explicitly granted.",
+      zh: "可以。您可以分享只读或可分叉的研究会话、添加评论，并保留其中的验证证据。长任务和研究产物在显式授权前仍归账户所有。",
     },
   },
 ];
@@ -121,69 +121,69 @@ interface Tutorial {
 
 const TUTORIALS: Tutorial[] = [
   {
-    title: { en: "HR Diagram of a Star Cluster", zh: "星团的赫罗图" },
+    title: { en: "DESI DR1 BAO Numerical Baseline", zh: "DESI DR1 BAO 数值基线" },
     desc: {
-      en: "Query Gaia DR3 for a nearby open cluster, filter members by parallax and proper motion, and construct a color-magnitude diagram.",
-      zh: "从 Gaia DR3 查询附近疏散星团，通过视差和自行筛选成员星，构建颜色-星等图。",
+      en: "Load the registered DESI measurement vector and covariance, inspect their hashes, and run the flat-ΛCDM regression path.",
+      zh: "加载已注册的 DESI 测量向量与协方差，检查其哈希，并运行平直 ΛCDM 回归路径。",
     },
     outcome: {
-      en: "You'll produce a publication-ready CMD showing the main sequence, turnoff point, and any giant branch stars.",
-      zh: "您将生成可用于发表的 CMD，显示主序、拐点和巨星支。",
+      en: "You'll get a reproducible numerical check plus an explicit preliminary—not publication-ready—gate decision.",
+      zh: "您将得到可复现的数值检查，以及明确的“初步、不可发表”门槛结论。",
     },
   },
   {
-    title: { en: "Variable Star Light Curve Analysis", zh: "变星光变曲线分析" },
+    title: { en: "Pantheon+SH0ES Identifiability Audit", zh: "Pantheon+SH0ES 可识别性审计" },
     desc: {
-      en: "Retrieve time-series photometry, apply the Lomb-Scargle periodogram to find the period, and phase-fold the light curve.",
-      zh: "获取时间序列测光数据，使用 Lomb-Scargle 周期图找到周期，并将光变曲线相位折叠。",
+      en: "Verify the official selection, calibrator fields, fitted absolute-magnitude nuisance, covariance shape and vendored artifact hash.",
+      zh: "核验官方样本选择、标定星字段、绝对星等滋扰参数拟合、协方差形状与本地数据产物哈希。",
     },
     outcome: {
-      en: "You'll detect periodic signals, classify the variable type (Cepheid, RR Lyrae, eclipsing binary), and measure the amplitude.",
-      zh: "您将检测周期信号，分类变星类型（造父变星、天琴座 RR 型、食双星），并测量振幅。",
+      en: "You'll learn why generic (z, μ, σ) rows cannot identify H0 and what the calibrated path adds.",
+      zh: "您将理解为何普通 (z, μ, σ) 数据无法识别 H0，以及标定路径补充了什么。",
     },
   },
   {
-    title: { en: "Galaxy Spectral Classification (BPT)", zh: "星系光谱分类（BPT 图）" },
+    title: { en: "Planck Likelihood Fidelity Review", zh: "Planck 似然保真度审查" },
     desc: {
-      en: "Cross-match SDSS spectroscopic galaxies, measure emission line ratios, and plot the BPT diagram.",
-      zh: "交叉匹配 SDSS 光谱星系，测量发射线比值，绘制 BPT 图。",
+      en: "Compare compressed CMB summaries with the staged full TT/TE/EE, low-ℓ and lensing likelihood path and its nuisance parameters.",
+      zh: "比较压缩 CMB 摘要与分阶段完整 TT/TE/EE、低多极矩和 lensing 似然路径及其滋扰参数。",
     },
     outcome: {
-      en: "You'll classify galaxies into star-forming, Seyfert, and LINER regions and understand the physical drivers behind each category.",
-      zh: "您将把星系分类为恒星形成、赛弗特和 LINER 区域，并理解每种类别背后的物理驱动因素。",
+      en: "You'll produce a claim-scope matrix rather than treating a compressed prior as a full-likelihood reproduction.",
+      zh: "您将生成结论适用范围矩阵，而不会把压缩先验误称为完整似然复现。",
     },
   },
   {
-    title: { en: "Spectral Line Fitting", zh: "谱线拟合" },
+    title: { en: "BAO Dataset Independence Matrix", zh: "BAO 数据独立性矩阵" },
     desc: {
-      en: "Load a spectrum, identify emission or absorption lines, fit Gaussian/Voigt profiles, and measure equivalent widths.",
-      zh: "加载光谱，识别发射或吸收线，拟合高斯/Voigt 轮廓，测量等值宽度。",
+      en: "Compare DESI, SDSS and eBOSS products by redshift coverage, source identity, known overlap and declared independence group.",
+      zh: "按红移覆盖、来源身份、已知重叠和声明的独立数据组比较 DESI、SDSS 与 eBOSS 数据产物。",
     },
     outcome: {
-      en: "You'll extract line centers, widths, and fluxes, and learn to estimate redshifts from line positions.",
-      zh: "您将提取谱线中心、宽度和流量，学会从谱线位置估算红移。",
+      en: "Unsafe co-additions are rejected with a machine-readable explanation before sampling begins.",
+      zh: "不安全的数据合并会在采样开始前被拒绝，并给出机器可读的原因。",
     },
   },
   {
-    title: { en: "Multi-Wavelength SED Analysis", zh: "多波段 SED 分析" },
+    title: { en: "Strict Four-chain Diagnostics", zh: "严格四链诊断" },
     desc: {
-      en: "Collect photometry across UV, optical, and infrared bands from multiple catalogs and fit a spectral energy distribution model.",
-      zh: "从多个星表收集紫外、光学和红外波段测光数据，拟合光谱能量分布模型。",
+      en: "Inspect four independent chains with rank-normalized R-hat, bulk ESS, finite within-chain variation and retained chain identity.",
+      zh: "使用秩归一化 R-hat、bulk ESS、有限逐链方差和保留的链身份检查四条独立链。",
     },
     outcome: {
-      en: "You'll determine stellar temperature, luminosity, and dust reddening E(B-V) from the best-fit SED model.",
-      zh: "您将从最佳拟合 SED 模型中确定恒星温度、光度和尘埃红化 E(B-V)。",
+      en: "Intervals remain suppressed unless every required parameter passes R-hat < 1.01 and ESS ≥ 400.",
+      zh: "除非所有关键参数都满足 R-hat < 1.01 且 ESS ≥ 400，否则区间结果会被抑制。",
     },
   },
   {
-    title: { en: "Redshift Distribution of Quasars", zh: "类星体红移分布" },
+    title: { en: "Private-to-public Paper Gate", zh: "从私有到公开的论文门禁" },
     desc: {
-      en: "Query large quasar catalogs, compute redshift distributions, and explore the cosmological implications.",
-      zh: "查询大型类星体星表，计算红移分布，探索宇宙学含义。",
+      en: "Generate a draft from a cosmology session, inspect its content-bound validation hash, edit it, and revalidate before publishing.",
+      zh: "从宇宙学会话生成草稿，检查绑定内容的验证哈希，编辑后重新验证，再尝试公开。",
     },
     outcome: {
-      en: "You'll create histograms and cumulative distributions showing how quasar density evolves with redshift.",
-      zh: "您将创建直方图和累积分布图，展示类星体密度如何随红移演化。",
+      en: "A failed draft stays private and visibly watermarked; any edit revokes its previous public validation.",
+      zh: "验证失败的草稿会保持私有并带醒目水印；任何编辑都会撤销此前的公开验证。",
     },
   },
 ];
@@ -214,8 +214,8 @@ export default function HelpPage() {
         <h1>{tx("Help & Learning Center", "帮助与学习中心", lang)}</h1>
         <p style={{ color: "var(--color-text-secondary)", maxWidth: 820 }}>
           {tx(
-            "Everything you need to get started with astronomical research on Standard Astro.",
-            "在 Standard Astro 上开始天文研究所需的一切。",
+            "Everything you need to run auditable observational-cosmology workflows on Standard Astro.",
+            "在 Standard Astro 上运行可审计观测宇宙学工作流所需的一切。",
             lang,
           )}
         </p>
@@ -276,8 +276,8 @@ function QuickStartTab({ lang }: { lang: Lang }) {
     },
     {
       icon: "4",
-      en: "Export your results as LaTeX, Jupyter Notebook, or publication-ready figures for your papers and presentations.",
-      zh: "将结果导出为 LaTeX、Jupyter Notebook 或可用于发表的图表，用于论文和报告。",
+      en: "Export results as LaTeX, Jupyter Notebook, or figures while preserving the evidence and validation status needed for review.",
+      zh: "将结果导出为 LaTeX、Jupyter Notebook 或图表，同时保留审查所需的证据与验证状态。",
     },
   ];
 
