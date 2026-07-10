@@ -2,9 +2,11 @@
 
 Adds columns and indexes that were previously handled by
 _migrate_add_columns() in app/main.py.  All column operations use
-batch mode for SQLite compatibility; every operation is wrapped in
-try/except so the migration is fully idempotent (safe to run on a
-fresh database *or* one that already had the manual migration applied).
+batch mode for SQLite compatibility; every operation is guarded by an
+inspector existence check so the migration is fully idempotent (safe to run
+on a fresh database *or* one that already had the manual migration applied)
+without ever issuing a colliding DDL statement — on PostgreSQL a failed DDL
+aborts the whole transaction even when the Python exception is swallowed.
 
 Revision ID: 002
 Revises: 001_initial
@@ -21,41 +23,68 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+
+def _inspector():
+    return sa.inspect(op.get_bind())
+
+
+def _table_exists(table_name: str) -> bool:
+    return table_name in _inspector().get_table_names()
+
+
+def _column_exists(table_name: str, column_name: str) -> bool:
+    if not _table_exists(table_name):
+        return False
+    return column_name in {col["name"] for col in _inspector().get_columns(table_name)}
+
+
+def _index_exists(table_name: str, index_name: str) -> bool:
+    if not _table_exists(table_name):
+        return False
+    return index_name in {idx["name"] for idx in _inspector().get_indexes(table_name)}
+
+
 def upgrade() -> None:
     # ── Users table: new profile / OAuth columns ─────────────────────
-    with op.batch_alter_table("users", schema=None) as batch_op:
-        for col_name, col_type in [
-            ("username", sa.String(255)),
-            ("google_id", sa.String(255)),
-            ("avatar_url", sa.Text()),
-            ("display_name", sa.String(255)),
-        ]:
-            try:
+    user_columns = [
+        ("username", sa.String(255)),
+        ("google_id", sa.String(255)),
+        ("avatar_url", sa.Text()),
+        ("display_name", sa.String(255)),
+    ]
+    missing_user_columns = [
+        (col_name, col_type)
+        for col_name, col_type in user_columns
+        if not _column_exists("users", col_name)
+    ]
+    if missing_user_columns:
+        with op.batch_alter_table("users", schema=None) as batch_op:
+            for col_name, col_type in missing_user_columns:
                 batch_op.add_column(sa.Column(col_name, col_type, nullable=True))
-            except Exception:
-                pass  # Column may already exist from manual migration
 
     # ── Users table: unique indexes ──────────────────────────────────
     for idx_name, table, cols, unique in [
         ("ix_users_username", "users", ["username"], True),
         ("ix_users_google_id", "users", ["google_id"], True),
     ]:
-        try:
+        if not _index_exists(table, idx_name):
             op.create_index(idx_name, table, cols, unique=unique)
-        except Exception:
-            pass  # Index may already exist
 
     # ── RunResult: reproducibility metadata columns ──────────────────
-    with op.batch_alter_table("run_results", schema=None) as batch_op:
-        for col_name, col_type in [
-            ("input_hash", sa.String(64)),
-            ("output_checksum", sa.String(64)),
-            ("execution_time_ms", sa.Integer()),
-        ]:
-            try:
+    run_result_columns = [
+        ("input_hash", sa.String(64)),
+        ("output_checksum", sa.String(64)),
+        ("execution_time_ms", sa.Integer()),
+    ]
+    missing_run_result_columns = [
+        (col_name, col_type)
+        for col_name, col_type in run_result_columns
+        if not _column_exists("run_results", col_name)
+    ]
+    if missing_run_result_columns:
+        with op.batch_alter_table("run_results", schema=None) as batch_op:
+            for col_name, col_type in missing_run_result_columns:
                 batch_op.add_column(sa.Column(col_name, col_type, nullable=True))
-            except Exception:
-                pass  # Column may already exist
 
     # ── Performance indexes on data_files and pipeline_runs ──────────
     for idx_name, table, cols in [
@@ -65,10 +94,8 @@ def upgrade() -> None:
         ("idx_pipelinerun_status", "pipeline_runs", ["status"]),
         ("idx_pipelinerun_user_status", "pipeline_runs", ["user_id", "status"]),
     ]:
-        try:
+        if not _index_exists(table, idx_name):
             op.create_index(idx_name, table, cols)
-        except Exception:
-            pass  # Index may already exist
 
 
 def downgrade() -> None:
@@ -80,30 +107,32 @@ def downgrade() -> None:
         ("idx_datafile_object_id", "data_files"),
         ("idx_datafile_source", "data_files"),
     ]:
-        try:
+        if _index_exists(table, idx_name):
             op.drop_index(idx_name, table_name=table)
-        except Exception:
-            pass
 
     # ── Remove RunResult metadata columns ────────────────────────────
-    with op.batch_alter_table("run_results", schema=None) as batch_op:
-        for col_name in ["execution_time_ms", "output_checksum", "input_hash"]:
-            try:
+    run_result_drops = [
+        col_name
+        for col_name in ["execution_time_ms", "output_checksum", "input_hash"]
+        if _column_exists("run_results", col_name)
+    ]
+    if run_result_drops:
+        with op.batch_alter_table("run_results", schema=None) as batch_op:
+            for col_name in run_result_drops:
                 batch_op.drop_column(col_name)
-            except Exception:
-                pass
 
     # ── Remove user unique indexes ───────────────────────────────────
     for idx_name in ["ix_users_google_id", "ix_users_username"]:
-        try:
+        if _index_exists("users", idx_name):
             op.drop_index(idx_name, table_name="users")
-        except Exception:
-            pass
 
     # ── Remove user profile / OAuth columns ──────────────────────────
-    with op.batch_alter_table("users", schema=None) as batch_op:
-        for col_name in ["display_name", "avatar_url", "google_id", "username"]:
-            try:
+    user_drops = [
+        col_name
+        for col_name in ["display_name", "avatar_url", "google_id", "username"]
+        if _column_exists("users", col_name)
+    ]
+    if user_drops:
+        with op.batch_alter_table("users", schema=None) as batch_op:
+            for col_name in user_drops:
                 batch_op.drop_column(col_name)
-            except Exception:
-                pass

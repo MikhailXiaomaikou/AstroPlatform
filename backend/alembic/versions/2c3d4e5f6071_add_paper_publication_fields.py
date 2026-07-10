@@ -29,6 +29,12 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     return column_name in {col["name"] for col in _inspector().get_columns(table_name)}
 
 
+def _index_exists(table_name: str, index_name: str) -> bool:
+    if not _table_exists(table_name):
+        return False
+    return index_name in {idx["name"] for idx in _inspector().get_indexes(table_name)}
+
+
 def upgrade() -> None:
     if not _table_exists("paper_drafts"):
         return
@@ -40,24 +46,23 @@ def upgrade() -> None:
         if not _column_exists("paper_drafts", "published_at"):
             batch_op.add_column(sa.Column("published_at", sa.DateTime(timezone=True), nullable=True))
 
+    # Existence-guarded, not try/except: paper_drafts may already carry these
+    # indexes on fresh databases (0c9293030537 builds it from model metadata),
+    # and on PostgreSQL a failed CREATE INDEX aborts the whole transaction.
     for idx_name, columns, unique in [
         ("ix_paper_drafts_is_public", ["is_public"], False),
         ("ix_paper_drafts_public_token", ["public_token"], True),
     ]:
-        try:
+        if not _index_exists("paper_drafts", idx_name):
             op.create_index(idx_name, "paper_drafts", columns, unique=unique)
-        except Exception:
-            pass
 
 
 def downgrade() -> None:
     if not _table_exists("paper_drafts"):
         return
     for idx_name in ["ix_paper_drafts_public_token", "ix_paper_drafts_is_public"]:
-        try:
+        if _index_exists("paper_drafts", idx_name):
             op.drop_index(idx_name, table_name="paper_drafts")
-        except Exception:
-            pass
     with op.batch_alter_table("paper_drafts", schema=None) as batch_op:
         for column in ["published_at", "public_token", "is_public"]:
             if _column_exists("paper_drafts", column):

@@ -4,7 +4,9 @@ UUID keys use the models' UUIDType (String(36) on SQLite, native UUID on
 PostgreSQL) so a fresh PostgreSQL database is type-consistent with the
 model-metadata tables that revision 0c9293030537 creates later; a varchar
 users.id made chat_sessions' native-UUID FK fail with DatatypeMismatchError
-on fresh installs. Existing databases never re-run this revision.
+on fresh installs. JSON payload columns (dag/results/metadata) use the
+models' JSONType for the same reason. Existing databases never re-run
+this revision.
 
 Revision ID: 001_initial
 Revises:
@@ -15,7 +17,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-from app.models.schemas import UUIDType
+from app.models.schemas import JSONType, UUIDType
 
 revision: str = "001_initial"
 down_revision: Union[str, None] = None
@@ -43,7 +45,7 @@ def upgrade() -> None:
         sa.Column("source", sa.String(50), nullable=False),
         sa.Column("object_id", sa.String(255), nullable=False),
         sa.Column("fits_path", sa.Text, nullable=True),
-        sa.Column("metadata", sa.Text, nullable=True),
+        sa.Column("metadata", JSONType(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
@@ -52,9 +54,9 @@ def upgrade() -> None:
         "pipeline_runs",
         sa.Column("id", UUIDType(), primary_key=True),
         sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("dag", sa.Text, nullable=False),
+        sa.Column("dag", JSONType(), nullable=False),
         sa.Column("status", sa.String(50), server_default="pending"),
-        sa.Column("results", sa.Text, nullable=True),
+        sa.Column("results", JSONType(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
     )
@@ -76,7 +78,7 @@ def upgrade() -> None:
         sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=True),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("description", sa.Text, server_default=""),
-        sa.Column("dag", sa.Text, nullable=False),
+        sa.Column("dag", JSONType(), nullable=False),
         sa.Column("is_builtin", sa.Boolean, server_default="0"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
@@ -107,7 +109,7 @@ def upgrade() -> None:
         sa.Column("id", UUIDType(), primary_key=True),
         sa.Column("template_id", UUIDType(), sa.ForeignKey("pipeline_templates.id"), nullable=False),
         sa.Column("version", sa.Integer, server_default="1"),
-        sa.Column("dag", sa.Text, nullable=False),
+        sa.Column("dag", JSONType(), nullable=False),
         sa.Column("change_note", sa.Text, server_default=""),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
@@ -159,7 +161,7 @@ def upgrade() -> None:
         sa.Column("id", UUIDType(), primary_key=True),
         sa.Column("user_id", UUIDType(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("name", sa.String(255), nullable=False),
-        sa.Column("dag", sa.Text, nullable=False),
+        sa.Column("dag", JSONType(), nullable=False),
         sa.Column("input_data_id", sa.String(500), nullable=False),
         sa.Column("cron_expr", sa.String(100), nullable=False),
         sa.Column("enabled", sa.Boolean, server_default="1"),

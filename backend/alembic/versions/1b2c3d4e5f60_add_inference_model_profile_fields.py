@@ -29,6 +29,12 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     return column_name in {col["name"] for col in _inspector().get_columns(table_name)}
 
 
+def _index_exists(table_name: str, index_name: str) -> bool:
+    if not _table_exists(table_name):
+        return False
+    return index_name in {idx["name"] for idx in _inspector().get_indexes(table_name)}
+
+
 def upgrade() -> None:
     if not _table_exists("inference_logs"):
         return
@@ -40,24 +46,24 @@ def upgrade() -> None:
         if not _column_exists("inference_logs", "fallback_from"):
             batch_op.add_column(sa.Column("fallback_from", sa.String(length=255), nullable=True))
 
+    # Existence-guarded, not try/except: 0c9293030537 creates inference_logs
+    # from current model metadata on fresh databases (indexes included), and
+    # on PostgreSQL a failed CREATE INDEX aborts the whole transaction even
+    # when the Python exception is swallowed.
     for idx_name, column in [
         ("ix_inference_logs_model_name", "model_name"),
         ("ix_inference_logs_model_profile", "model_profile"),
     ]:
-        try:
+        if not _index_exists("inference_logs", idx_name):
             op.create_index(idx_name, "inference_logs", [column], unique=False)
-        except Exception:
-            pass
 
 
 def downgrade() -> None:
     if not _table_exists("inference_logs"):
         return
     for idx_name in ["ix_inference_logs_model_profile", "ix_inference_logs_model_name"]:
-        try:
+        if _index_exists("inference_logs", idx_name):
             op.drop_index(idx_name, table_name="inference_logs")
-        except Exception:
-            pass
     with op.batch_alter_table("inference_logs", schema=None) as batch_op:
         for column in ["fallback_from", "model_profile", "model_name"]:
             if _column_exists("inference_logs", column):
