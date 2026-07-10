@@ -518,14 +518,18 @@ class TestCrossWavelengthEntryPoint:
 
         result = await cross_wavelength_analysis(180.0, 45.0, dossier={})
         assert result["checks_run"] == 0  # all skipped
-        assert result["anomalies_found"] == 0
+        assert result["anomalies_found"] is None
+        assert result["__tool_status__"] == "EMPTY"
+        assert result["__do_not_claim__"] is True
 
     async def test_cross_wavelength_analysis_dossier_generation_fails(self):
         from app.services.cross_wavelength import cross_wavelength_analysis
 
         with patch("app.services.dossier_generator.generate_dossier", side_effect=RuntimeError("fail")):
             result = await cross_wavelength_analysis(0.0, 0.0, dossier=None)
-            assert result["anomalies_found"] == 0
+            assert result["anomalies_found"] is None
+            assert result["__tool_status__"] == "FAILED"
+            assert result["__do_not_claim__"] is True
             assert "aborted" in result["briefing"].lower()
 
 

@@ -28,7 +28,8 @@ from app.services.agent_runtime.sse import _slim_tool_result_for_sse
 
 logger = logging.getLogger(__name__)
 
-SERVER_EVIDENCE_SCHEMA_VERSION = 1
+LEGACY_SERVER_EVIDENCE_SCHEMA_VERSION = 1
+SERVER_EVIDENCE_SCHEMA_VERSION = 2
 SERVER_EVIDENCE_SOURCE = "server_tool_execution"
 _SERVER_EVIDENCE_MAX_RECORDS = 100
 _SERVER_EVIDENCE_RESULT_MAX_BYTES = 250_000
@@ -72,13 +73,39 @@ def _canonical_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _record_signature(payload: Mapping[str, Any]) -> str:
+def _record_signature(payload: Mapping[str, Any], *, key: str) -> str:
+    schema_version = int(
+        payload.get("schema_version", LEGACY_SERVER_EVIDENCE_SCHEMA_VERSION)
+    )
     digest = hmac.new(
-        settings.jwt_secret.encode("utf-8"),
-        b"standard-astro/server-evidence/v1\0" + _canonical_bytes(payload),
+        key.encode("utf-8"),
+        f"standard-astro/server-evidence/v{schema_version}\0".encode("ascii")
+        + _canonical_bytes(payload),
         hashlib.sha256,
     ).hexdigest()
     return f"hmac-sha256:{digest}"
+
+
+def _verification_keys(record: Mapping[str, Any]) -> list[str]:
+    """Resolve trusted verification keys without accepting unknown key ids."""
+
+    schema_version = record.get("schema_version")
+    keyring = settings.evidence_verification_keyring
+    if schema_version == LEGACY_SERVER_EVIDENCE_SCHEMA_VERSION:
+        # Schema-v1 records predate key ids and were signed with JWT_SECRET.
+        # Trying the retired-key ring as well lets an operator preserve the old
+        # JWT secret under a descriptive id before rotating JWT_SECRET.
+        candidates = [settings.jwt_secret, *keyring.values()]
+        return list(dict.fromkeys(key for key in candidates if key))
+    if schema_version != SERVER_EVIDENCE_SCHEMA_VERSION:
+        return []
+    key_id = record.get("key_id")
+    if not isinstance(key_id, str) or not key_id:
+        return []
+    if key_id == settings.evidence_signing_key_id:
+        return [settings.evidence_signing_key]
+    retired = keyring.get(key_id)
+    return [retired] if retired else []
 
 
 def build_server_evidence_record(
@@ -113,6 +140,7 @@ def build_server_evidence_record(
     payload: dict[str, Any] = {
         "schema_version": SERVER_EVIDENCE_SCHEMA_VERSION,
         "source": SERVER_EVIDENCE_SOURCE,
+        "key_id": settings.evidence_signing_key_id,
         "record_id": str(uuid.uuid4()),
         "session_id": str(session_id),
         "owner_id": str(owner_id),
@@ -122,7 +150,9 @@ def build_server_evidence_record(
         "tool_results": bounded_results,
         "validation_summary": _json_safe(validation_summary or {}),
     }
-    payload["signature"] = _record_signature(payload)
+    payload["signature"] = _record_signature(
+        payload, key=settings.evidence_signing_key
+    )
     return payload
 
 
@@ -136,7 +166,10 @@ def verify_server_evidence_record(
 
     if not isinstance(record, dict):
         return False
-    if record.get("schema_version") != SERVER_EVIDENCE_SCHEMA_VERSION:
+    if record.get("schema_version") not in {
+        LEGACY_SERVER_EVIDENCE_SCHEMA_VERSION,
+        SERVER_EVIDENCE_SCHEMA_VERSION,
+    }:
         return False
     if record.get("source") != SERVER_EVIDENCE_SOURCE:
         return False
@@ -150,8 +183,10 @@ def verify_server_evidence_record(
     if not isinstance(supplied, str):
         return False
     payload = {key: value for key, value in record.items() if key != "signature"}
-    expected = _record_signature(payload)
-    return hmac.compare_digest(supplied, expected)
+    return any(
+        hmac.compare_digest(supplied, _record_signature(payload, key=key))
+        for key in _verification_keys(record)
+    )
 
 
 def verified_server_evidence_records(

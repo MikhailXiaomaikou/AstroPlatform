@@ -6,7 +6,6 @@ via astroquery.ipac.irsa.
 
 from __future__ import annotations
 
-import io
 import logging
 from typing import TYPE_CHECKING
 
@@ -140,24 +139,11 @@ class IRSAConnector(BaseConnector):
 
     @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
-        """Create metadata FITS for an IRSA catalog source.
-
-        Full image cutouts require separate IRSA image service calls.
-        We provide a metadata FITS placeholder.
-        """
-        from astropy.io import fits
-
-        hdu = fits.PrimaryHDU()
-        hdu.header["OBJECT"] = object_id
-        hdu.header["ORIGIN"] = "NASA/IPAC IRSA"
-        hdu.header["COMMENT"] = "Metadata-only. Download full data from irsa.ipac.caltech.edu"
-        buf = io.BytesIO()
-        hdu.writeto(buf)
-        return FITSFile(
-            object_id=object_id,
-            source="irsa",
-            data=buf.getvalue(),
-            filename=f"irsa_{object_id}.fits",
+        """Reject metadata-only stand-ins for IRSA image products."""
+        raise NotImplementedError(
+            "IRSA catalog metadata is not a FITS image data product; this "
+            "connector will not fabricate an empty FITS file. Request a real "
+            "cutout from the appropriate IRSA image service and upload it."
         )
 
     def normalize(self, raw_data) -> Table:

@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -6,7 +7,9 @@ from pydantic_settings import BaseSettings
 
 _PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 
-_ENV = os.getenv("ENV", "dev")
+_ENV = os.getenv("ENV", "dev").strip().lower()
+if _ENV == "prod":
+    _ENV = "production"
 
 # ---------------------------------------------------------------------------
 # Ensure astropy / astroquery have a writable cache & config directory.
@@ -43,12 +46,25 @@ class Settings(BaseSettings):
     fernet_key: str = ""
     admin_secret: str = ""
 
+    # Scientific evidence is signed independently from login tokens.  The
+    # current key signs new records; the JSON keyring retains retired keys so
+    # historical paper evidence remains verifiable after an intentional
+    # rotation.  Legacy schema-v1 records had no key id and were signed with
+    # JWT_SECRET; their old JWT key can be retained in the same keyring.
+    evidence_signing_key: str = ""
+    evidence_signing_key_id: str = ""
+    evidence_verification_keys: str = ""
+
     # Durable research object storage.  Local is appropriate for development
     # and Docker Compose with a mounted volume.  Hosted production should use
     # an S3-compatible store so uploads and exported artifacts survive deploys.
     storage_backend: str = "local"
     storage_require_integrity: bool = _ENV == "production"
-    local_storage_dir: str = str(Path("/app/data/fits") if os.getenv("ENV") == "production" else _PROJECT_DIR / "data" / "fits")
+    local_storage_dir: str = str(
+        Path("/app/data/fits")
+        if _ENV == "production"
+        else _PROJECT_DIR / "data" / "fits"
+    )
     s3_endpoint_url: str = ""
     s3_bucket: str = ""
     s3_access_key_id: str = ""
@@ -62,7 +78,7 @@ class Settings(BaseSettings):
     # deployments without that mount must export these events to their log/
     # metrics backend instead of assuming the container filesystem is durable.
     gate_events_jsonl_path: str = str(
-        Path("/app/data/gate_events.jsonl") if os.getenv("ENV") == "production"
+        Path("/app/data/gate_events.jsonl") if _ENV == "production"
         else _PROJECT_DIR / "data" / "gate_events.jsonl"
     )
 
@@ -80,6 +96,12 @@ class Settings(BaseSettings):
     sandbox_backend: str = "disabled"
     sandbox_memory_bytes: int = 1024 * 1024 * 1024  # 1 GB per call
     sandbox_timeout_seconds: int = 75
+
+    # Subscription-authenticated CLIs execute as local child processes and may
+    # access the operator's login state.  They are a single-user development
+    # convenience, never a hosted/multi-tenant production backend.
+    openai_cli_enabled: bool = False
+    claude_cli_enabled: bool = False
 
     # Raw connector response cache backend:
     # "auto" picks Redis → SQLite → Null based on availability,
@@ -196,6 +218,94 @@ class Settings(BaseSettings):
                 "SANDBOX_BACKEND=disabled until an external isolated runner is "
                 "implemented."
             )
+        if _ENV == "production" and (
+            self.openai_cli_enabled or self.claude_cli_enabled
+        ):
+            raise ValueError(
+                "OPENAI_CLI_ENABLED and CLAUDE_CLI_ENABLED are local-only. "
+                "Hosted production must use an isolated model service or a "
+                "provider API backend."
+            )
+
+        self.evidence_signing_key_id = str(
+            self.evidence_signing_key_id or ""
+        ).strip()
+        if not self.evidence_signing_key:
+            if _ENV == "dev":
+                import secrets as _s
+                import logging as _log
+
+                self.evidence_signing_key = _s.token_hex(32)
+                self.evidence_signing_key_id = (
+                    self.evidence_signing_key_id or "dev-ephemeral"
+                )
+                _log.getLogger(__name__).warning(
+                    "EVIDENCE_SIGNING_KEY not set — using a separate random dev "
+                    "key (paper evidence won't survive restarts)"
+                )
+            else:
+                raise ValueError(
+                    "EVIDENCE_SIGNING_KEY must be set in production so scientific "
+                    "evidence remains verifiable across restarts and JWT rotation."
+                )
+        if not self.evidence_signing_key_id:
+            if _ENV == "dev":
+                self.evidence_signing_key_id = "dev-ephemeral"
+            else:
+                raise ValueError(
+                    "EVIDENCE_SIGNING_KEY_ID must be set in production."
+                )
+        if any(ch.isspace() for ch in self.evidence_signing_key_id):
+            raise ValueError("EVIDENCE_SIGNING_KEY_ID must not contain whitespace")
+        if _ENV == "production" and self.evidence_signing_key == self.jwt_secret:
+            raise ValueError(
+                "EVIDENCE_SIGNING_KEY must be independent from JWT_SECRET in production."
+            )
+        keyring = self.evidence_verification_keyring
+        current_in_ring = keyring.get(self.evidence_signing_key_id)
+        if current_in_ring is not None and current_in_ring != self.evidence_signing_key:
+            raise ValueError(
+                "EVIDENCE_VERIFICATION_KEYS contains the current key id with a "
+                "different secret"
+            )
+        if (
+            _ENV == "production"
+            and len(self.evidence_signing_key.encode("utf-8")) < 32
+        ):
+            raise ValueError(
+                "EVIDENCE_SIGNING_KEY must contain at least 32 bytes in production."
+            )
+
+    @property
+    def evidence_verification_keyring(self) -> dict[str, str]:
+        """Parse the retired evidence-key map without ever logging its values."""
+
+        raw = str(self.evidence_verification_keys or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "EVIDENCE_VERIFICATION_KEYS must be a JSON object mapping key ids "
+                "to secrets"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "EVIDENCE_VERIFICATION_KEYS must be a JSON object mapping key ids "
+                "to secrets"
+            )
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_secret in parsed.items():
+            key_id = str(raw_key_id or "").strip()
+            secret = str(raw_secret or "")
+            if not key_id or any(ch.isspace() for ch in key_id) or not secret:
+                raise ValueError(
+                    "EVIDENCE_VERIFICATION_KEYS requires non-empty, whitespace-free "
+                    "key ids and non-empty secrets"
+                )
+            normalized[key_id] = secret
+        return normalized
 
     @property
     def redis_ssl(self) -> bool:

@@ -184,6 +184,8 @@ def test_production_default_is_one_trusted_hop():
         "os.environ['ENV'] = 'production';"
         "os.environ['JWT_SECRET'] = 'test-secret';"
         "os.environ['FERNET_KEY'] = 'test-fernet';"
+        "os.environ['EVIDENCE_SIGNING_KEY'] = 'test-evidence-signing-key-32-bytes';"
+        "os.environ['EVIDENCE_SIGNING_KEY_ID'] = 'test-v1';"
         "from app.config import Settings;"
         "print(Settings().trusted_proxy_mode)"
     )

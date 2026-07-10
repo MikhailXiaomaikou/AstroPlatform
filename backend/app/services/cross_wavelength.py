@@ -45,6 +45,32 @@ def _get_phot(dossier: dict, section: str, band: str) -> float | None:
     return _safe_float(sec.get(band))
 
 
+def _get_phot_error(dossier: dict, section: str, band: str) -> float | None:
+    """Extract a positive, catalog-reported 1-sigma magnitude uncertainty.
+
+    New dossiers keep uncertainties in a parallel ``photometry_errors`` tree
+    so existing callers that expect scalar values under ``photometry`` remain
+    compatible.  The inline ``<band>_err`` lookup accepts older/ad-hoc
+    dossiers without silently inventing an uncertainty.
+    """
+    error_tree = dossier.get("photometry_errors")
+    if isinstance(error_tree, dict):
+        section_errors = error_tree.get(section)
+        if isinstance(section_errors, dict):
+            error = _safe_float(section_errors.get(band))
+            if error is not None and error > 0:
+                return error
+
+    phot = dossier.get("photometry")
+    if isinstance(phot, dict):
+        section_phot = phot.get(section)
+        if isinstance(section_phot, dict):
+            error = _safe_float(section_phot.get(f"{band}_err"))
+            if error is not None and error > 0:
+                return error
+    return None
+
+
 def _get_astrometry(dossier: dict, key: str) -> float | None:
     astro = dossier.get("astrometry")
     if not isinstance(astro, dict):
@@ -130,6 +156,11 @@ def _mag_to_flux(mag: float, band: str) -> float | None:
     return f0 * 10.0 ** (-0.4 * mag)
 
 
+def _mag_error_to_flux_error(flux: float, mag_error: float) -> float:
+    """Propagate a small 1-sigma magnitude error into flux density."""
+    return math.log(10.0) * 0.4 * flux * mag_error
+
+
 def _planck_flux_ratio(wavelength_um: float, T: float) -> float:
     """Planck function B_nu in arbitrary units (proportional).
 
@@ -177,7 +208,13 @@ def _fit_blackbody(
         model = np.array([_planck_flux_ratio(w, T) for w in wavelengths_um_arr])
         if model.max() == 0:
             return np.inf
-        scale = np.dot(fluxes_arr, model) / np.dot(model, model)
+        # The normalization is a fitted parameter and must use the same
+        # inverse-variance weights as the reported chi-square.
+        inverse_variance = 1.0 / sigma**2
+        denominator = np.sum(model**2 * inverse_variance)
+        if denominator <= 0 or not np.isfinite(denominator):
+            return np.inf
+        scale = np.sum(fluxes_arr * model * inverse_variance) / denominator
         residuals = fluxes_arr - scale * model
         return float(np.sum((residuals / sigma) ** 2))
 
@@ -247,37 +284,87 @@ def _check_ir_excess(dossier: dict) -> dict[str, Any]:
         expected_label = "W1-W2 < 0.3 for main sequence"
 
     excess = w1_w2 - threshold
-    # Typical WISE photometric error ~0.03-0.05 mag; use 0.05 as 1-sigma
-    sigma_w1w2 = 0.05
-    significance = excess / sigma_w1w2 if excess > 0 else None
+    w1_error = _get_phot_error(dossier, "mir", "W1")
+    w2_error = _get_phot_error(dossier, "mir", "W2")
+    has_reported_errors = w1_error is not None and w2_error is not None
+    sigma_w1w2 = (
+        math.hypot(w1_error, w2_error) if has_reported_errors else None
+    )
+    sigma_excess = (
+        excess / sigma_w1w2
+        if sigma_w1w2 is not None and sigma_w1w2 > 0 and excess > 0
+        else None
+    )
 
-    if excess > 0.5:
-        return {
-            "check": "ir_excess",
-            "status": "ANOMALY",
-            "observed": f"W1-W2 = {w1_w2:.2f}",
-            "expected": expected_label,
-            "significance": f"{significance:.1f} sigma" if significance else None,
-            "possible_causes": [
-                "circumstellar disk",
-                "dusty envelope",
-                "young stellar object (YSO)",
-                "AGN contamination",
-            ],
-            "recommended_followup": (
-                "Mid-IR spectroscopy to distinguish thermal dust emission "
-                "from non-thermal AGN contribution; check for variability."
-            ),
-        }
-    return {
+    # With real catalog errors, require a 3-sigma threshold crossing.  Without
+    # them, retain only a visibly quarantined candidate screen: no typical
+    # WISE error is substituted and no significance is emitted.
+    is_anomaly = (
+        sigma_excess is not None and sigma_excess >= 3.0
+        if has_reported_errors
+        else excess > 0
+    )
+    result: dict[str, Any] = {
         "check": "ir_excess",
-        "status": "NORMAL",
-        "observed": f"W1-W2 = {w1_w2:.2f}",
+        "status": "ANOMALY" if is_anomaly else "NORMAL",
+        "observed": (
+            f"W1-W2 = {w1_w2:.2f} +/- {sigma_w1w2:.3f} mag"
+            if sigma_w1w2 is not None
+            else f"W1-W2 = {w1_w2:.2f} (catalog uncertainty unavailable)"
+        ),
         "expected": expected_label,
-        "significance": None,
-        "possible_causes": None,
-        "recommended_followup": None,
+        "significance": (
+            f"{sigma_excess:.1f} sigma above threshold"
+            if sigma_excess is not None
+            else None
+        ),
+        "statistics_ready": has_reported_errors,
+        "publication_ready": False,
+        "claim_scope": (
+            "catalog_error_cross_wavelength_screening"
+            if has_reported_errors
+            else "preliminary_missing_photometric_uncertainty"
+        ),
+        "uncertainty_provenance": {
+            "source": (
+                "catalog_reported_magnitude_errors"
+                if has_reported_errors
+                else "unavailable_no_error_substitution"
+            ),
+            "unit": "mag",
+            "bands": {"W1": w1_error, "W2": w2_error},
+        },
     }
+    if not has_reported_errors:
+        result.update(
+            {
+                "__do_not_claim__": True,
+                "preliminary": True,
+                "__message_to_model__": (
+                    "W1/W2 catalog uncertainties are unavailable. Treat the color "
+                    "threshold outcome only as a preliminary candidate screen; do "
+                    "not report an IR-excess significance."
+                ),
+            }
+        )
+    if is_anomaly:
+        result.update(
+            {
+                "possible_causes": [
+                    "circumstellar disk",
+                    "dusty envelope",
+                    "young stellar object (YSO)",
+                    "AGN contamination",
+                ],
+                "recommended_followup": (
+                    "Mid-IR spectroscopy to distinguish thermal dust emission "
+                    "from non-thermal AGN contribution; check for variability."
+                ),
+            }
+        )
+    else:
+        result.update({"possible_causes": None, "recommended_followup": None})
+    return result
 
 
 def _check_xray_optical(dossier: dict) -> dict[str, Any]:
@@ -563,9 +650,14 @@ def _check_color_color(dossier: dict) -> dict[str, Any]:
 def _check_sed_shape(dossier: dict) -> dict[str, Any]:
     """Check e: SED shape vs. single-temperature blackbody."""
     # Collect all available photometric bands
-    bands_data: list[tuple[str, float, float]] = []  # (band, wavelength_um, flux)
+    bands_data: list[tuple[str, float, float, float | None]] = []
+    # tuple = (band, wavelength_um, flux_jy, propagated_flux_error_jy)
+    magnitude_errors_by_band: dict[str, float] = {}
+    flux_errors_by_band: dict[str, float] = {}
 
-    phot = dossier.get("photometry", {})
+    phot = dossier.get("photometry")
+    if not isinstance(phot, dict):
+        phot = {}
     for section in ("optical", "nir", "mir"):
         sec = phot.get(section, {})
         if not isinstance(sec, dict):
@@ -578,7 +670,18 @@ def _check_sed_shape(dossier: dict) -> dict[str, Any]:
                 continue
             flux = _mag_to_flux(mag_f, band)
             if flux is not None and flux > 0:
-                bands_data.append((band, _BAND_WAVELENGTH_UM[band], flux))
+                mag_error = _get_phot_error(dossier, section, band)
+                flux_error = (
+                    _mag_error_to_flux_error(flux, mag_error)
+                    if mag_error is not None
+                    else None
+                )
+                if mag_error is not None and flux_error is not None:
+                    magnitude_errors_by_band[band] = mag_error
+                    flux_errors_by_band[band] = flux_error
+                bands_data.append(
+                    (band, _BAND_WAVELENGTH_UM[band], flux, flux_error)
+                )
 
     if len(bands_data) < 4:
         return {
@@ -594,45 +697,110 @@ def _check_sed_shape(dossier: dict) -> dict[str, Any]:
     wavelengths = [b[1] for b in bands_data]
     fluxes = [b[2] for b in bands_data]
     band_names = [b[0] for b in bands_data]
-
-    best_T, chi2, dof, T_err = _fit_blackbody(wavelengths, fluxes)
-    chi2_dof = chi2 / dof
-
-    observed_str = (
-        f"Blackbody fit: T = {best_T:.0f} +/- {T_err:.0f} K, chi2/dof = {chi2_dof:.1f} "
-        f"({len(bands_data)} bands: {', '.join(band_names)})"
+    reported_flux_errors = [b[3] for b in bands_data]
+    missing_error_bands = [
+        band for band, _, _, error in bands_data if error is None
+    ]
+    has_complete_reported_errors = not missing_error_bands
+    fit_errors = (
+        [float(error) for error in reported_flux_errors if error is not None]
+        if has_complete_reported_errors
+        else None
     )
 
-    if chi2_dof > 5.0:
-        return {
-            "check": "sed_shape",
-            "status": "ANOMALY",
-            "observed": observed_str,
-            "expected": "chi2/dof < 5 for single-temperature blackbody",
-            "significance": f"chi2/dof = {chi2_dof:.1f}",
-            "T_err": T_err,
-            "possible_causes": [
-                "non-stellar SED (composite source)",
-                "AGN power-law continuum",
-                "significant dust reddening or circumstellar emission",
-                "photometric contamination from nearby source",
-            ],
-            "recommended_followup": (
-                "Multi-component SED fitting; spectroscopy to determine "
-                "physical nature of the excess/deficit."
-            ),
-        }
-
-    return {
+    best_T, chi2, dof, T_err = _fit_blackbody(
+        wavelengths,
+        fluxes,
+        fit_errors,
+    )
+    chi2_dof = chi2 / dof
+    is_anomaly = chi2_dof > 5.0
+    result: dict[str, Any] = {
         "check": "sed_shape",
-        "status": "NORMAL",
-        "observed": observed_str,
-        "expected": "chi2/dof < 5 for single-temperature blackbody",
-        "significance": f"chi2/dof = {chi2_dof:.1f}",
-        "T_err": T_err,
-        "possible_causes": None,
-        "recommended_followup": None,
+        "status": "ANOMALY" if is_anomaly else "NORMAL",
+        "statistics_ready": has_complete_reported_errors,
+        # A single-temperature, mixed-survey quick-look fit remains a screen,
+        # not a publication analysis, even when its catalog errors are real.
+        "publication_ready": False,
+        "uncertainty_provenance": {
+            "source": (
+                "catalog_reported_magnitude_errors_propagated_to_flux"
+                if has_complete_reported_errors
+                else "assumed_10_percent_relative_flux_error_for_screening_only"
+            ),
+            "reported_error_bands": [
+                band for band in band_names if band not in missing_error_bands
+            ],
+            "missing_error_bands": missing_error_bands,
+            "magnitude_errors_by_band": magnitude_errors_by_band,
+            "propagated_flux_errors_jy_by_band": flux_errors_by_band,
+            "magnitude_error_unit": "mag",
+            "flux_error_unit": "Jy",
+        },
     }
+    if has_complete_reported_errors:
+        result.update(
+            {
+                "observed": (
+                    f"Blackbody fit: T = {best_T:.0f} +/- {T_err:.0f} K, "
+                    f"chi2/dof = {chi2_dof:.1f} "
+                    f"({len(bands_data)} bands: {', '.join(band_names)})"
+                ),
+                "expected": "chi2/dof < 5 for single-temperature blackbody",
+                "significance": f"chi2/dof = {chi2_dof:.1f}",
+                "chi2": chi2,
+                "chi2_dof": chi2_dof,
+                "dof": dof,
+                "temperature_K": best_T,
+                "T_err": T_err,
+                "claim_scope": "catalog_error_cross_wavelength_screening",
+            }
+        )
+    else:
+        # The internal 10% scale is useful only to decide whether follow-up is
+        # worth considering.  Do not expose its numerical fit statistic or a
+        # derived temperature uncertainty as if either came from measurements.
+        result.update(
+            {
+                "observed": (
+                    "Exploratory blackbody screen only: one or more catalog "
+                    "photometric uncertainties are unavailable; a 10% relative "
+                    f"flux error was assumed across {len(bands_data)} bands."
+                ),
+                "expected": None,
+                "significance": None,
+                "T_err": None,
+                "claim_scope": "preliminary_assumed_uncertainty_screening",
+                "preliminary": True,
+                "__do_not_claim__": True,
+                "__message_to_model__": (
+                    "The SED screen used assumed 10% relative flux errors because "
+                    "catalog uncertainties were incomplete. Do not quote a fit "
+                    "significance, goodness-of-fit statistic, or temperature "
+                    "constraint from this check."
+                ),
+            }
+        )
+
+    if is_anomaly:
+        result.update(
+            {
+                "possible_causes": [
+                    "non-stellar SED (composite source)",
+                    "AGN power-law continuum",
+                    "significant dust reddening or circumstellar emission",
+                    "photometric contamination from nearby source",
+                ],
+                "recommended_followup": (
+                    "Multi-component SED fitting with measured uncertainties; "
+                    "spectroscopy to determine the physical nature of the "
+                    "excess/deficit."
+                ),
+            }
+        )
+    else:
+        result.update({"possible_causes": None, "recommended_followup": None})
+    return result
 
 
 def _check_variability(dossier: dict) -> dict[str, Any]:
@@ -721,12 +889,41 @@ def _check_variability(dossier: dict) -> dict[str, Any]:
 
 def _generate_briefing(results: list[dict[str, Any]]) -> str:
     """Build a template-based plain-text briefing of all check results."""
-    anomalies = [r for r in results if r["status"] == "ANOMALY"]
+    if not results or all(r.get("status") == "SKIPPED" for r in results):
+        return (
+            "No cross-wavelength checks could be evaluated because the required "
+            "measurements were unavailable. No discrepancy or normality "
+            "conclusion is supported."
+        )
+
+    preliminary = [r for r in results if r.get("__do_not_claim__") is True]
+    anomalies = [
+        r
+        for r in results
+        if r["status"] == "ANOMALY" and r.get("__do_not_claim__") is not True
+    ]
     skipped = [r for r in results if r["status"] == "SKIPPED"]
-    normal = [r for r in results if r["status"] == "NORMAL"]
+    normal = [
+        r
+        for r in results
+        if r["status"] == "NORMAL" and r.get("__do_not_claim__") is not True
+    ]
 
     if not anomalies:
-        summary = "No multi-wavelength discrepancies detected."
+        if normal:
+            summary = (
+                "No multi-wavelength discrepancies detected among the "
+                f"{len(normal)} evaluated, non-preliminary check(s)."
+            )
+        else:
+            summary = "No claimable multi-wavelength conclusion is available."
+        if preliminary:
+            preliminary_names = ", ".join(r["check"] for r in preliminary)
+            summary += (
+                f" {len(preliminary)} preliminary check(s) were withheld because "
+                "reliable measurement uncertainties were unavailable: "
+                f"{preliminary_names}."
+            )
         if skipped:
             skipped_names = ", ".join(r["check"] for r in skipped)
             summary += f" ({len(skipped)} check(s) skipped due to missing data: {skipped_names}.)"
@@ -745,6 +942,12 @@ def _generate_briefing(results: list[dict[str, Any]]) -> str:
 
     if normal:
         parts.append(f"\n{len(normal)} check(s) passed normally.")
+    if preliminary:
+        preliminary_names = ", ".join(r["check"] for r in preliminary)
+        parts.append(
+            f"{len(preliminary)} preliminary check(s) withheld from claims: "
+            f"{preliminary_names}."
+        )
     if skipped:
         skipped_names = ", ".join(r["check"] for r in skipped)
         parts.append(f"{len(skipped)} check(s) skipped: {skipped_names}.")
@@ -790,7 +993,18 @@ async def cross_wavelength_analysis(
                 "Failed to generate dossier for (%.4f, %.4f): %s", ra, dec, exc
             )
             return {
-                "anomalies_found": 0,
+                "__tool_status__": "FAILED",
+                "__do_not_claim__": True,
+                "__message_to_model__": (
+                    "Cross-wavelength analysis could not obtain a dossier. Do "
+                    "not infer a normal or anomalous result from this call."
+                ),
+                "publication_ready": False,
+                "preliminary_ready": False,
+                "claim_scope": "failed_no_input_data",
+                "data_origin": "unavailable",
+                "analysis_status": "failed",
+                "anomalies_found": None,
                 "checks_run": 0,
                 "results": [],
                 "briefing": f"Analysis aborted: could not generate dossier ({exc})",
@@ -807,7 +1021,20 @@ async def cross_wavelength_analysis(
     ]
 
     checks_run = sum(1 for r in results if r["status"] != "SKIPPED")
-    anomalies_found = sum(1 for r in results if r["status"] == "ANOMALY")
+    preliminary_results = [
+        result for result in results if result.get("__do_not_claim__") is True
+    ]
+    anomalies_found = sum(
+        1
+        for result in results
+        if result["status"] == "ANOMALY"
+        and result.get("__do_not_claim__") is not True
+    )
+    candidate_anomalies_found = sum(
+        1
+        for result in preliminary_results
+        if result["status"] == "ANOMALY"
+    )
 
     briefing = _generate_briefing(results)
 
@@ -819,9 +1046,66 @@ async def cross_wavelength_analysis(
         anomalies_found,
     )
 
-    return {
+    if checks_run == 0:
+        return {
+            "__tool_status__": "EMPTY",
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "All cross-wavelength checks were skipped because required data "
+                "were unavailable. Do not describe the source as normal, "
+                "consistent, anomaly-free, or discrepant."
+            ),
+            "publication_ready": False,
+            "preliminary_ready": False,
+            "claim_scope": "empty_no_executed_checks",
+            "data_origin": "real_archive",
+            "analysis_status": "empty",
+            "anomalies_found": None,
+            "candidate_anomalies_found": 0,
+            "checks_run": 0,
+            "checks_skipped": len(results),
+            "results": results,
+            "briefing": briefing,
+        }
+
+    result_payload: dict[str, Any] = {
+        "__tool_status__": "PARTIAL" if preliminary_results else "COMPLETED",
+        # This service is explicitly a heterogeneous quick-look screen, not a
+        # publication pipeline. Reliable-error checks may be discussed only in
+        # that limited diagnostic scope.
+        "publication_ready": False,
+        "preliminary_ready": True,
+        "claim_scope": (
+            "preliminary_uncertainty_assumption_screening"
+            if preliminary_results
+            else "cross_wavelength_screening_only"
+        ),
+        "data_origin": "real_archive",
+        "analysis_status": "partial" if preliminary_results else "completed",
         "anomalies_found": anomalies_found,
+        "candidate_anomalies_found": candidate_anomalies_found,
         "checks_run": checks_run,
+        "checks_skipped": sum(1 for result in results if result["status"] == "SKIPPED"),
         "results": results,
         "briefing": briefing,
     }
+    if preliminary_results:
+        result_payload.update(
+            {
+                "__do_not_claim__": True,
+                "__message_to_model__": (
+                    "One or more checks used incomplete or assumed uncertainties. "
+                    "Do not quote their anomaly status, significance, fit statistic, "
+                    "or temperature constraint; obtain catalog-reported errors first."
+                ),
+                "preliminary_checks": [
+                    result["check"] for result in preliminary_results
+                ],
+            }
+        )
+    else:
+        result_payload["__message_to_model__"] = (
+            "This is a cross-wavelength screening result, not a publication-ready "
+            "physical inference. State the diagnostic scope and any skipped checks."
+        )
+    return result_payload

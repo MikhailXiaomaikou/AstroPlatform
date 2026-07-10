@@ -76,19 +76,33 @@ def _cache_set_sync(key: str, value, ttl: int | None = None):
         logger.debug("Cache set failed for key %s: %s", key, e)
 
 
-def _build_node_cache_key(node_type: str, params: dict, parents: list[str], node_results: dict) -> str | None:
+def _build_node_cache_key(
+    node_type: str,
+    params: dict,
+    parents: list[str],
+    node_results: dict,
+    *,
+    owner_scope: str = "",
+    root_input_capability: str = "",
+) -> str | None:
     """Compute a deterministic cache key for a pipeline node.
 
-    The key incorporates the node type, its parameters, and the output
-    checksums of all parent nodes so that any upstream change invalidates
-    the cache automatically.  Returns ``None`` if the key cannot be built.
+    The key incorporates the tenant owner, canonical root-input capability,
+    node type, parameters, and output checksums of all parent nodes so that
+    another account or root input can never reuse the cached result. Returns
+    ``None`` if the key cannot be built.
     """
     try:
-        parent_hashes = "".join(
+        parent_hashes = [
             node_results.get(p, {}).get("_output_checksum", "") for p in parents
-        ) if parents else ""
+        ]
         cache_payload = json.dumps(
-            {"params": params, "parent_hashes": parent_hashes},
+            {
+                "owner_scope": str(owner_scope),
+                "root_input_capability": str(root_input_capability),
+                "params": params,
+                "parent_hashes": parent_hashes,
+            },
             sort_keys=True, default=str,
         )
         return f"pipeline_node:{node_type}:{hashlib.sha256(cache_payload.encode()).hexdigest()}"
@@ -213,12 +227,22 @@ def _capture_environment() -> dict:
     return versions
 
 
-def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
+def execute_dag(
+    dag: dict,
+    input_data_id: str,
+    run_id: str,
+    owner_scope: str | None = None,
+) -> dict:
     """Run the pipeline synchronously (local mode, no Celery needed).
 
     Returns dict of {node_id: result} for all nodes.
     """
     env_snapshot = _capture_environment()
+    # Callers with an authenticated owner pass that stable tenant id.  The
+    # per-run fallback keeps legacy/internal callers safe by disabling cache
+    # sharing across runs instead of silently using a global namespace.
+    cache_owner_scope = str(owner_scope or f"run:{run_id}")
+    root_input_capability = str(input_data_id)
 
     levels = topological_sort(dag)
     node_map = build_node_map(dag)
@@ -299,7 +323,14 @@ def execute_dag(dag: dict, input_data_id: str, run_id: str) -> dict:
             # -- Node-level cache: skip execution if result already cached ------
             # Build a cache key from node type, params, and parent output checksums.
             # Setting params["force_rerun"] = True bypasses the cache for this node.
-            cache_key = _build_node_cache_key(node_type, params, parents, node_results)
+            cache_key = _build_node_cache_key(
+                node_type,
+                params,
+                parents,
+                node_results,
+                owner_scope=cache_owner_scope,
+                root_input_capability=root_input_capability,
+            )
 
             if cache_key and not params.get("force_rerun"):
                 try:
@@ -455,6 +486,8 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
             return {"run_id": run_id, "status": "failed", "error": "Run not found"}
 
         run.status = "running"
+        cache_owner_scope = str(run.user_id)
+        root_input_capability = str(input_data_id)
         env_snapshot = _capture_environment()
         run.environment = env_snapshot
         session.commit()
@@ -566,7 +599,14 @@ def execute_pipeline_task(self, run_id: str, dag_dict: dict, input_data_id: str)
                 # -- Node-level cache: skip execution if result already cached --
                 # Build a cache key from node type, params, and parent output
                 # checksums.  Set params["force_rerun"] = True to bypass cache.
-                cache_key = _build_node_cache_key(node_type, params, parents, node_results)
+                cache_key = _build_node_cache_key(
+                    node_type,
+                    params,
+                    parents,
+                    node_results,
+                    owner_scope=cache_owner_scope,
+                    root_input_capability=root_input_capability,
+                )
 
                 if cache_key and not params.get("force_rerun"):
                     try:

@@ -135,7 +135,8 @@ Unchanged from the original plan:
 4. **Field-level scan performance**: column-name only, no value-content scan beyond reading matched bibcode columns
 
 Deferred decisions stay deferred:
-- Citation validator defaults to warning mode
+- Citation validator originally defaulted to warning mode; the current runtime
+  hard-block default superseded this historical milestone decision.
 - Registry remains in-repo
 
 ## 4. Not in scope

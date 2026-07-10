@@ -314,7 +314,11 @@ async def _exec_generate_paper_draft(
     }
 
 
-async def _exec_run_pipeline(inp: dict) -> dict:
+async def _exec_run_pipeline(
+    inp: dict,
+    *,
+    owner_scope: str | None = None,
+) -> dict:
     """Execute a pipeline DAG synchronously and return results."""
     from app.pipeline.engine import execute_dag, topological_sort
     from app.pipeline.nodes import registry
@@ -340,7 +344,14 @@ async def _exec_run_pipeline(inp: dict) -> dict:
     try:
         # Run in executor to avoid blocking the async event loop
         loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(None, execute_dag, dag, input_data_id, run_id)
+        results = await loop.run_in_executor(
+            None,
+            execute_dag,
+            dag,
+            input_data_id,
+            run_id,
+            owner_scope,
+        )
     except Exception as e:
         return {"error": f"Pipeline execution failed: {e}"}
 
@@ -373,6 +384,10 @@ async def _exec_generate_proposal(inp: dict) -> dict:
     exposure_hours = inp.get("exposure_hours")
 
     proposal: dict = {
+        "analysis_status": "PLANNING_ESTIMATE",
+        "publication_ready": False,
+        "preliminary_ready": True,
+        "claim_scope": "rough_observation_planning_only",
         "target_name": target_name,
         "telescope": telescope,
         "instrument": instrument,
@@ -420,8 +435,20 @@ async def _exec_generate_proposal(inp: dict) -> dict:
     except Exception:
         pass
 
-    # 2. Compute visibility
-    if ra is not None and dec is not None:
+    # 2. Compute visibility. Earth-surface altitude/airmass is scientifically
+    # inapplicable to space observatories; never substitute a convenient ground
+    # site for HST/JWST schedulability.
+    is_space_telescope = telescope in {"hst", "jwst"}
+    if is_space_telescope:
+        proposal["visibility"] = {
+            "status": "not_applicable",
+            "reason": (
+                "Ground altitude, airmass, and night length do not describe "
+                f"{telescope.upper()} visibility."
+            ),
+            "scheduling_reference": "STScI Astronomer's Proposal Tool (APT)",
+        }
+    elif ra is not None and dec is not None:
         try:
             from app.services.astro_analysis import target_visibility, _TELESCOPE_OBSERVATORY
             obs = _TELESCOPE_OBSERVATORY.get(telescope, "paranal")
@@ -433,7 +460,15 @@ async def _exec_generate_proposal(inp: dict) -> dict:
         proposal["visibility"] = {"error": "No coordinates available"}
 
     # 3. Exposure time estimate (if magnitude available)
-    if target_mag is not None:
+    if is_space_telescope:
+        proposal["exposure_estimate"] = {
+            "status": "not_available",
+            "reason": (
+                "The generic estimator assumes ground sky background, seeing, "
+                "and a simplified CCD; use the official STScI instrument ETC."
+            ),
+        }
+    elif target_mag is not None:
         try:
             from app.services.astro_analysis import exposure_time_estimate
             etc_result = exposure_time_estimate(
@@ -458,15 +493,21 @@ async def _exec_generate_proposal(inp: dict) -> dict:
     # 5. Summary notes
     notes = []
     vis = proposal.get("visibility", {})
-    if isinstance(vis, dict) and not vis.get("error"):
+    if (
+        isinstance(vis, dict)
+        and not vis.get("error")
+        and vis.get("status") != "not_applicable"
+    ):
         hrs = vis.get("hours_observable", 0)
         if hrs < 2:
             notes.append(f"Warning: target only observable {hrs:.1f} hours (alt > 30 deg).")
         if vis.get("never_rises"):
             notes.append("Target never rises from this observatory — choose a different site.")
     if telescope in ("hst", "jwst"):
-        notes.append("Space telescope — ground visibility is for reference only. "
-                     "Check STScI APT for actual schedulability.")
+        notes.append(
+            "Space-telescope schedulability and exposure time require STScI "
+            "APT and the official instrument ETC; no ground proxy was computed."
+        )
     if exposure_hours and exposure_hours > 10:
         notes.append("Large time request — ensure strong scientific justification.")
     proposal["notes"] = notes

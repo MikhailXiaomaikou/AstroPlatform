@@ -47,6 +47,28 @@ FEATURE_NAMES = [
     "median_abs_dev",
 ]
 
+# This classifier is a software demonstration trained entirely on generated
+# feature distributions.  These thresholds prevent the demo from silently
+# imputing an empty/inadequate light curve into a plausible-looking class.
+MIN_LIGHT_CURVE_POINTS = 10
+REQUIRED_DIRECT_FEATURES = frozenset(
+    {
+        "rise_time",
+        "peak_magnitude",
+        "amplitude",
+        "duration_above_half",
+        "mean_mag",
+        "std_mag",
+    }
+)
+
+_SYNTHETIC_MODEL_WARNING = (
+    "This random-forest model was trained only on generated feature "
+    "distributions. Its candidate class, score, probabilities, and feature "
+    "importance are a software demonstration, not an observational "
+    "classification or a calibrated scientific result."
+)
+
 
 # ---------------------------------------------------------------------------
 # Feature extraction
@@ -79,15 +101,30 @@ def extract_lc_features(
         Feature dictionary.  All values are floats or *None* for features that
         could not be computed.
     """
-    times = np.asarray(times, dtype=float)
-    mags = np.asarray(mags, dtype=float)
+    try:
+        times = np.asarray(times, dtype=float)
+        mags = np.asarray(mags, dtype=float)
+        if mag_errs is not None:
+            mag_errs = np.asarray(mag_errs, dtype=float)
+    except (TypeError, ValueError):
+        return _invalid_features("Light-curve arrays must contain only numeric values")
+
+    if times.ndim != 1 or mags.ndim != 1:
+        return _invalid_features("Light-curve times and magnitudes must be one-dimensional arrays")
+    if len(times) != len(mags):
+        return _invalid_features(
+            "Light-curve times and magnitudes must have the same length"
+        )
     if mag_errs is not None:
-        mag_errs = np.asarray(mag_errs, dtype=float)
+        if mag_errs.ndim != 1 or len(mag_errs) != len(times):
+            return _invalid_features(
+                "Magnitude uncertainties must be a one-dimensional array matching the data length"
+            )
 
     # --- strip NaN / Inf ------------------------------------------------
     valid = np.isfinite(times) & np.isfinite(mags)
     if mag_errs is not None:
-        valid &= np.isfinite(mag_errs)
+        valid &= np.isfinite(mag_errs) & (mag_errs > 0)
     times = times[valid]
     mags = mags[valid]
     if mag_errs is not None:
@@ -95,10 +132,15 @@ def extract_lc_features(
 
     n = len(times)
 
-    # Fall back to safe defaults if too few data points.
-    if n < 3:
+    # Fail closed instead of turning absent/sparse observations into a median
+    # synthetic object.  Ten points is still not a scientific validation
+    # threshold; it is only the minimum needed to run this demo at all.
+    if n < MIN_LIGHT_CURVE_POINTS:
         logger.warning("Too few valid data points (%d) for feature extraction", n)
-        return _empty_features()
+        return _invalid_features(
+            f"At least {MIN_LIGHT_CURVE_POINTS} valid photometry points are required; got {n}",
+            n_valid_points=n,
+        )
 
     # Sort by time
     order = np.argsort(times)
@@ -255,6 +297,20 @@ def _empty_features() -> dict[str, Any]:
         "mean_mag": 0.0,
         "std_mag": 0.0,
         "median_abs_dev": 0.0,
+    }
+
+
+def _invalid_features(
+    message: str,
+    *,
+    n_valid_points: int = 0,
+) -> dict[str, Any]:
+    """Return an explicitly invalid feature envelope for fail-closed callers."""
+    return {
+        **_empty_features(),
+        "feature_extraction_valid": False,
+        "feature_extraction_error": message,
+        "n_valid_points": int(n_valid_points),
     }
 
 
@@ -518,7 +574,32 @@ class TransientClassifier:
             ``feature_importance`` : dict[str, float] — RF importances.
             ``features_used`` : dict — the numeric features fed to the model.
         """
-        # Lazy-init
+        if not isinstance(features, dict) or not features:
+            return classification_failure("A non-empty feature dictionary is required")
+
+        extraction_error = features.get("feature_extraction_error")
+        if features.get("feature_extraction_valid") is False or extraction_error:
+            return classification_failure(
+                str(extraction_error or "Feature extraction failed")
+            )
+
+        missing_required: list[str] = []
+        for name in sorted(REQUIRED_DIRECT_FEATURES):
+            value = features.get(name)
+            try:
+                valid = value is not None and np.isfinite(float(value))
+            except (TypeError, ValueError):
+                valid = False
+            if not valid:
+                missing_required.append(name)
+        if missing_required:
+            return classification_failure(
+                "Missing or non-finite required classification features: "
+                + ", ".join(missing_required)
+            )
+
+        # Lazy-init only after input validation so empty requests do not train
+        # the synthetic model or produce a plausible median-imputed answer.
         if not cls._is_trained:
             cls._train_model()
 
@@ -529,7 +610,11 @@ class TransientClassifier:
         feature_vector = []
         for i, fname in enumerate(cls._feature_names):
             val = features.get(fname)
-            if val is None or not np.isfinite(float(val)):
+            try:
+                valid = val is not None and np.isfinite(float(val))
+            except (TypeError, ValueError):
+                valid = False
+            if not valid:
                 val = cls._feature_medians[i]
             feature_vector.append(float(val))
 
@@ -561,12 +646,35 @@ class TransientClassifier:
         }
 
         return {
+            "__tool_status__": "SYNTHETIC",
+            "__do_not_claim__": True,
+            "__message_to_model__": (
+                "The transient candidate class and confidence below come from "
+                "a model trained entirely on generated feature distributions. "
+                "You MUST NOT report either value as a scientific classification, "
+                "observational conclusion, calibrated probability, or publication "
+                "result. Independent validation on labelled survey data and/or "
+                "spectroscopic confirmation is required."
+            ),
+            "data_origin": "synthetic",
+            "analysis_status": "simulated_demo",
+            "publication_ready": False,
+            "preliminary_ready": False,
+            "scientific_conclusion_ready": False,
+            "classification_claimable": False,
+            "confidence_calibrated": False,
             "classification": classification,
             "confidence": round(confidence, 4),
             "probabilities": probabilities,
             "feature_importance": feature_importance,
             "features_used": features_used,
-            "warning": "Trained on synthetic data — verify with spectroscopy",
+            "warning": _SYNTHETIC_MODEL_WARNING,
+            "warnings": [_SYNTHETIC_MODEL_WARNING],
+            "model_provenance": {
+                "training_data_origin": "generated_feature_distributions",
+                "independent_validation": False,
+                "intended_use": "software_demonstration_only",
+            },
         }
 
     # ------------------------------------------------------------------
@@ -596,17 +704,17 @@ class TransientClassifier:
         # --- unpack raw photometry from the alert -----------------------
         raw = alert_data.get("raw_data")
         if raw is None:
-            return _error_result("No raw_data in alert")
+            return classification_failure("No raw_data in alert")
 
         if isinstance(raw, str):
             try:
                 raw = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
-                return _error_result("raw_data is not valid JSON")
+                return classification_failure("raw_data is not valid JSON")
 
         candidates = raw.get("candidates")
         if not candidates or not isinstance(candidates, list):
-            return _error_result("No candidates list in raw_data")
+            return classification_failure("No candidates list in raw_data")
 
         times: list[float] = []
         mags: list[float] = []
@@ -634,8 +742,10 @@ class TransientClassifier:
             mag_errs.append(err_f)
             fids.append(fid_i)
 
-        if len(times) < 3:
-            return _error_result(f"Too few valid photometry points ({len(times)})")
+        if len(times) < MIN_LIGHT_CURVE_POINTS:
+            return classification_failure(
+                f"Too few valid photometry points ({len(times)})"
+            )
 
         # Prefer g-band (fid=1) if available; otherwise use all data.
         times_arr = np.array(times)
@@ -681,9 +791,21 @@ class TransientClassifier:
 # ---------------------------------------------------------------------------
 
 
-def _error_result(message: str) -> dict[str, Any]:
+def classification_failure(message: str) -> dict[str, Any]:
     """Return an error-state classification result."""
     return {
+        "__tool_status__": "FAILED",
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            "Transient classification did not run because the input was invalid "
+            "or insufficient. You MUST NOT infer or report a class or confidence."
+        ),
+        "success": False,
+        "data_origin": "unavailable",
+        "analysis_status": "failed",
+        "publication_ready": False,
+        "preliminary_ready": False,
+        "scientific_conclusion_ready": False,
         "classification": "Unknown",
         "confidence": 0.0,
         "probabilities": {},

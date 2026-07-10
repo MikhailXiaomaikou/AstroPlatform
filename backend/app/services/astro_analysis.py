@@ -2769,8 +2769,6 @@ _TELESCOPE_OBSERVATORY = {
     "gemini": "mauna_kea",
     "gemini-n": "mauna_kea",
     "gemini-s": "cerro_pachon",
-    "hst": "paranal",       # HST is space-based; use Paranal as placeholder
-    "jwst": "paranal",      # JWST is space-based; use Paranal as placeholder
     "subaru": "mauna_kea",
     "alma": "alma",
     "gtc": "la_palma",
@@ -2989,10 +2987,6 @@ _TELESCOPE_PARAMS = {
              "name": "Keck (10m)"},
     "gemini": {"diameter_m": 8.1, "qe": 0.82, "read_noise": 4.5, "dark_current": 0.002,
                "name": "Gemini (8.1m)"},
-    "hst": {"diameter_m": 2.4, "qe": 0.70, "read_noise": 3.0, "dark_current": 0.005,
-            "name": "HST (2.4m)"},
-    "jwst": {"diameter_m": 6.5, "qe": 0.90, "read_noise": 6.0, "dark_current": 0.01,
-             "name": "JWST (6.5m)"},
     "subaru": {"diameter_m": 8.2, "qe": 0.82, "read_noise": 4.0, "dark_current": 0.002,
                "name": "Subaru (8.2m)"},
 }
@@ -3024,8 +3018,9 @@ def exposure_time_estimate(target_mag, snr_target=10, telescope="vlt",
     Args:
         target_mag: Target apparent magnitude in the chosen band.
         snr_target: Desired signal-to-noise ratio (default 10).
-        telescope: 'vlt' (8.2m), 'keck' (10m), 'gemini' (8.1m), 'hst' (2.4m),
-                   'jwst' (6.5m), 'subaru' (8.2m).
+        telescope: 'vlt' (8.2m), 'keck' (10m), 'gemini' (8.1m),
+                   or 'subaru' (8.2m). Space observatories deliberately require
+                   their official instrument ETCs.
         filter_band: Photometric band ('U','B','V','R','I','J','H','K','g','r','i','z').
         seeing: Seeing FWHM in arcseconds (default 1.0).
 
@@ -3033,7 +3028,13 @@ def exposure_time_estimate(target_mag, snr_target=10, telescope="vlt",
         dict: exposure_time_seconds, electrons_target, electrons_sky,
               snr_achieved, notes.
     """
-    tel = _TELESCOPE_PARAMS.get(telescope.lower())
+    telescope_key = telescope.lower()
+    if telescope_key in {"hst", "jwst"}:
+        raise ValueError(
+            f"{telescope_key.upper()} exposure time cannot be estimated with "
+            "the ground-based generic CCD model; use the official STScI ETC."
+        )
+    tel = _TELESCOPE_PARAMS.get(telescope_key)
     if tel is None:
         raise ValueError(
             f"Unknown telescope '{telescope}'. "
@@ -3115,6 +3116,10 @@ def exposure_time_estimate(target_mag, snr_target=10, telescope="vlt",
     notes.append(f"Simplified ETC; use {tel['name']} official ETC for proposals.")
 
     return {
+        "analysis_status": "PLANNING_ESTIMATE",
+        "publication_ready": False,
+        "preliminary_ready": True,
+        "claim_scope": "rough_observation_planning_only",
         "exposure_time_seconds": round(t_exp, 1),
         "electrons_target": round(float(signal), 0),
         "electrons_sky": round(float(B * t_exp), 0),

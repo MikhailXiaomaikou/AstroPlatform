@@ -149,10 +149,12 @@ paper-level scientific answers. Zero A grades means zero A grades.
   on 4 of 4 hard decoys, while handling the softer cases reasonably — see
   [the bare-LLM baseline](./BARE_LLM_BASELINE_2026_07_09.md). N=7, one model,
   one run, self-judged: a demonstration, not a fabrication-rate measurement.
-- **The guarantee sits at the final-answer boundary, not inside the model.**
+- **The enforcement target is the final-answer boundary, not the model.**
   Model drafts have generated unsupported numbers in intermediate text (e.g. an
   example-style birefringence constraint, case P19 of the 20-paper round);
-  such text is gated or suppressed before display — it is not never-generated.
+  covered claim classes are gated or suppressed before display. This is a
+  tested control, not a proof that every future wording or scientific quantity
+  is detectable; independent review remains required for publication.
 - **Research-grade (A-level) agreement has never been achieved** on the graded
   blind rounds (see §4).
 

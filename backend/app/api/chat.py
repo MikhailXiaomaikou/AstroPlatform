@@ -459,9 +459,7 @@ def _enforce_starter_daily_quota(
     preferred = str((context or {}).get("api_provider") or "").strip().lower()
     if preferred and preferred in own_key_providers:
         return
-    if preferred == "local" and (
-        os.getenv("LOCAL_MODEL_ENABLED", "") or os.getenv("OPENAI_CLI_ENABLED", "")
-    ):
+    if preferred == "local" and _local_backend_configured():
         return  # dev-only local backend spends no platform money
     verdict = daily_quota.check_and_increment(str(user.id), "starter", "api_calls")
     if not verdict.get("allowed", True):
@@ -504,6 +502,21 @@ def _preferred_model_profile(context: dict | None) -> ModelProfile | None:
 
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _subscription_cli_enabled(name: str) -> bool:
+    """Return whether a local subscription CLI is safely available here."""
+    environment = os.getenv("ENV", "dev").strip().lower()
+    return environment not in {"production", "prod"} and _env_truthy(name)
+
+
+def _local_backend_configured() -> bool:
+    """Whether the local provider has an actually usable configured backend."""
+    return (
+        _env_truthy("LOCAL_MODEL_ENABLED")
+        or _subscription_cli_enabled("OPENAI_CLI_ENABLED")
+        or _subscription_cli_enabled("CLAUDE_CLI_ENABLED")
+    )
 
 
 def _context_truthy(value: Any) -> bool:
@@ -1742,7 +1755,7 @@ async def ai_backend_status(
     configured: list[str] = []
     # Server-side shared DeepSeek may be enabled for public chat. Other hosted
     # providers remain BYOK.
-    if _env_truthy("LOCAL_MODEL_ENABLED") or _env_truthy("OPENAI_CLI_ENABLED"):
+    if _local_backend_configured():
         configured.append("local")
     if _server_deepseek_api_key():
         configured.append("deepseek")

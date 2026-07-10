@@ -581,6 +581,64 @@ def _taint_unverified_run_python_randomness(
     return tainted
 
 
+def _taint_synthetic_transient_classifier(
+    tool_name: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Prevent the synthetic-training transient demo from being laundered.
+
+    ``classify_transient`` currently has no fitted artefact trained and
+    validated on labelled survey observations.  Even if a caller strips the
+    classifier's own provenance fields or supplies contradictory
+    ``real_archive/completed/publication_ready`` fields, normalization must
+    preserve the scientific limitation of the model itself.
+    """
+    if (
+        tool_name != "classify_transient"
+        or result.get("error")
+        or result.get("success") is False
+    ):
+        return result
+
+    warning = (
+        "Transient candidate labels and scores come from a model trained only "
+        "on generated feature distributions; they are uncalibrated, "
+        "non-claimable software-demo output."
+    )
+    warnings = result.get("warnings") or []
+    if isinstance(warnings, str):
+        warnings = [warnings]
+    else:
+        warnings = list(warnings)
+    if warning not in warnings:
+        warnings.append(warning)
+
+    forced = {
+        "__tool_status__": "SYNTHETIC",
+        "__do_not_claim__": True,
+        "__message_to_model__": (
+            "The transient candidate class and confidence were produced by a "
+            "model trained entirely on generated feature distributions. You "
+            "MUST NOT report either value as a scientific classification, "
+            "observational conclusion, calibrated probability, preliminary "
+            "finding, or publication result."
+        ),
+        "data_origin": SYNTHETIC,
+        "analysis_status": SIMULATED_DEMO,
+        "publication_ready": False,
+        "preliminary_ready": False,
+        "scientific_conclusion_ready": False,
+        "classification_claimable": False,
+        "confidence_calibrated": False,
+        "warnings": warnings,
+    }
+    # Put the warning banner first in JSON iteration order and do not let
+    # contradictory keys in the original payload overwrite it.
+    tainted = dict(forced)
+    tainted.update({key: value for key, value in result.items() if key not in forced})
+    return tainted
+
+
 def normalize_tool_result(
     tool_name: str,
     result: Any,
@@ -609,6 +667,7 @@ def normalize_tool_result(
             archive_version=archive_version,
         )
     result = _taint_unverified_run_python_randomness(tool_name, result, tool_input)
+    result = _taint_synthetic_transient_classifier(tool_name, result)
     # R4: best-effort unit + frame annotation for well-known astronomical
     # column names (ra/dec → deg + ICRS, parallax → mas, teff → K, …).
     # Idempotent; pre-existing `*_unit` siblings win.

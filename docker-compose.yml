@@ -47,13 +47,15 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: alembic upgrade head
+    command: ["sh", "-c", "alembic upgrade head && alembic check"]
     restart: "no"
     environment:
       ENV: production
       DATABASE_URL: postgresql+asyncpg://astro:astro@postgres:5432/astro
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
       FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
+      EVIDENCE_SIGNING_KEY: ${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY must be set explicitly}
+      EVIDENCE_SIGNING_KEY_ID: ${EVIDENCE_SIGNING_KEY_ID:-evidence-compose-v1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +74,9 @@ services:
       # 生产密钥必须显式提供, 不给弱默认值 (render.yaml 用 generateValue, 这里同理 fail-fast)
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
       FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
+      EVIDENCE_SIGNING_KEY: ${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY must be set explicitly}
+      EVIDENCE_SIGNING_KEY_ID: ${EVIDENCE_SIGNING_KEY_ID:-evidence-compose-v1}
+      EVIDENCE_VERIFICATION_KEYS: ${EVIDENCE_VERIFICATION_KEYS:-}
       PIPELINE_MODE: celery
       STORAGE_BACKEND: local
       PERSISTENT_STORAGE_MOUNT: /app/data
@@ -111,6 +116,9 @@ services:
       # app.config 在 ENV=production 下没有这两个密钥会直接拒绝启动
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
       FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
+      EVIDENCE_SIGNING_KEY: ${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY must be set explicitly}
+      EVIDENCE_SIGNING_KEY_ID: ${EVIDENCE_SIGNING_KEY_ID:-evidence-compose-v1}
+      EVIDENCE_VERIFICATION_KEYS: ${EVIDENCE_VERIFICATION_KEYS:-}
       PIPELINE_MODE: celery
       STORAGE_BACKEND: local
       CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: "43200"
@@ -149,6 +157,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set explicitly (no default)}
       FERNET_KEY: ${FERNET_KEY:?FERNET_KEY must be set explicitly (encrypts stored user API keys)}
+      EVIDENCE_SIGNING_KEY: ${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY must be set explicitly}
+      EVIDENCE_SIGNING_KEY_ID: ${EVIDENCE_SIGNING_KEY_ID:-evidence-compose-v1}
+      EVIDENCE_VERIFICATION_KEYS: ${EVIDENCE_VERIFICATION_KEYS:-}
       PIPELINE_MODE: celery
     depends_on:
       migrate:

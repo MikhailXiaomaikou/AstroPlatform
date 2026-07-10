@@ -12,6 +12,11 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
+from app.pipeline.storage_auth import (
+    PipelineStorageInputError,
+    bind_pipeline_storage_inputs,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -471,58 +476,36 @@ async def _authorize_pipeline_dag_storage_inputs(
     """Owner-resolve every storage capability embedded in an AI pipeline DAG."""
 
     safe_input = deepcopy(tool_input)
-    requested: list[tuple[dict, str, str]] = []
-    top_level = safe_input.get("input_data_id")
-    if isinstance(top_level, str) and top_level.strip():
-        requested.append((safe_input, "input_data_id", top_level))
-
     dag = safe_input.get("dag")
-    if isinstance(dag, dict):
-        for node in dag.get("nodes") or []:
-            if not isinstance(node, dict):
-                continue
-            node_type = str(node.get("type") or "")
-            data = node.get("data")
-            if not isinstance(data, dict):
-                continue
-            params = data.get("params")
-            if not isinstance(params, dict):
-                continue
-            fields: tuple[str, ...]
-            if node_type == "LoadData":
-                fields = ("fits_path",)
-            elif node_type == "ImportWorkspace":
-                fields = ("path", "fits_path")
-            elif node_type == "PSFPhotometry":
-                fields = ("fits_path",)
-            else:
-                fields = ()
-            for field in fields:
-                value = params.get(field)
-                if isinstance(value, str) and value.strip():
-                    requested.append((params, field, value))
-
-    if not requested:
+    if not isinstance(dag, dict):
         return safe_input, None
-    if not user_id:
-        return safe_input, _storage_access_failure(
-            "storage_owner_context_required",
-            "Authenticated owner context is required for this file read.",
-        )
 
     try:
         from app.storage import resolve_owned_storage_key
 
-        for target, field, path in requested:
-            target[field] = await resolve_owned_storage_key(path, owner_id=user_id)
-    except ValueError:
+        async def _owned(path: str) -> str:
+            return await resolve_owned_storage_key(path, owner_id=user_id)
+
+        bound_dag, bound_default = await bind_pipeline_storage_inputs(
+            dag=dag,
+            input_data_id=safe_input.get("input_data_id", ""),
+            resolve_key=_owned,
+        )
+        safe_input["dag"] = bound_dag
+        safe_input["input_data_id"] = bound_default
+    except (PipelineStorageInputError, ValueError):
         return safe_input, _storage_access_failure(
             "invalid_storage_path", "A supplied storage path is invalid."
         )
     except Exception as exc:
         from app.storage import StorageOwnerRequired, StorageOwnershipError
 
-        if isinstance(exc, (StorageOwnerRequired, StorageOwnershipError)):
+        if isinstance(exc, StorageOwnerRequired):
+            return safe_input, _storage_access_failure(
+                "storage_owner_context_required",
+                "Authenticated owner context is required for this file read.",
+            )
+        if isinstance(exc, StorageOwnershipError):
             return safe_input, _storage_access_failure(
                 "storage_file_not_found",
                 "A supplied file does not exist or is not owned by the current user.",
@@ -805,7 +788,7 @@ async def _execute_tool_inner(
         elif tool_name == "generate_paper_draft":
             return await _exec_generate_paper_draft(tool_input, chat_session_id or python_session_id, user_id=user_id)
         elif tool_name == "run_pipeline":
-            return await _exec_run_pipeline(tool_input)
+            return await _exec_run_pipeline(tool_input, owner_scope=user_id)
         elif tool_name == "generate_proposal":
             return await _exec_generate_proposal(tool_input)
         elif tool_name == "query_transients":

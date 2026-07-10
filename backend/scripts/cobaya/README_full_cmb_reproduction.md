@@ -136,6 +136,12 @@ affected numerical result.
    hashes, all data versions/file hashes, Python/package environment, chain
    diagnostics, MAP component chi-squares, run attestations, and a final
    manifest hash. The command exits nonzero whenever `publication_ready=false`.
+   If a future likelihood-only or simulation-calibrated comparison also sets
+   `significance_ready=true`, the manifest emits versioned conclusion
+   attestations. Each attestation binds one claim kind to the exact LCDM versus
+   w0waCDM model pair, data/likelihood fingerprints, calibration method, and
+   evidence-manifest hash; a bare readiness boolean is never manuscript
+   authority.
 
 The legacy `analyze_w0wa_run.py` command is retained only as a compatibility
 wrapper around this strict analyzer; it no longer prints progress-file-based
@@ -155,4 +161,8 @@ calibration, well outside DESI. So w0/wa goals correctly stay OFF-ANCHOR
 (exploratory / human-review) in the oracle: the platform does not autonomously claim
 the dark-energy result. This full-CMB run is an offline validation path, not an
 autonomous result. It becomes publication-usable only after strict convergence and
-a separate fixed-LambdaCDM MAP fit are both available.
+all data/likelihood provenance gates pass. Even then, those conditions support
+posterior intervals only. A claim that the extended model is preferred or that
+LambdaCDM is ruled out additionally requires matched likelihood-only MLE fits
+with justified Wilks assumptions, or an explicit simulation calibration; the
+committed posterior-mode MAP pair does not provide that significance evidence.

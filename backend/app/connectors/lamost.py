@@ -6,7 +6,6 @@ the Chinese large sky survey with millions of stellar spectra.
 
 from __future__ import annotations
 
-import io
 import logging
 from typing import TYPE_CHECKING
 
@@ -162,24 +161,11 @@ class LAMOSTConnector(BaseConnector):
 
     @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
-        """Create metadata FITS for a LAMOST spectrum.
-
-        Full LAMOST spectra can be downloaded from the LAMOST archive.
-        We provide a metadata FITS placeholder.
-        """
-        from astropy.io import fits
-
-        hdu = fits.PrimaryHDU()
-        hdu.header["OBJECT"] = object_id
-        hdu.header["TELESCOP"] = "LAMOST"
-        hdu.header["COMMENT"] = "Metadata-only. Download full spectra from www.lamost.org"
-        buf = io.BytesIO()
-        hdu.writeto(buf)
-        return FITSFile(
-            object_id=object_id,
-            source="lamost",
-            data=buf.getvalue(),
-            filename=f"lamost_{object_id}.fits",
+        """Reject metadata-only stand-ins for LAMOST spectra."""
+        raise NotImplementedError(
+            "LAMOST catalog metadata is not a spectrum; this connector will not "
+            "fabricate an empty FITS file. Download the real spectrum from the "
+            "LAMOST data service and upload it."
         )
 
     def normalize(self, raw_data) -> Table:
