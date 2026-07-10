@@ -10,7 +10,9 @@ from sqlalchemy import select
 
 from app.models.schemas import ChatSession, PaperDraft
 from app.services.analysis_validator import (
+    PUBLICATION_LANGUAGE_ATTESTATION_KEY,
     bind_paper_validation,
+    build_publication_language_attestation,
     build_evidence_snapshot,
     evidence_snapshot_fingerprint,
     paper_content_hash,
@@ -82,6 +84,13 @@ def _generated(title: str = "Content-bound draft") -> dict:
         "conclusions": "Conclusion.",
         "acknowledgments": "Acknowledgments.",
     }
+    paper_json[PUBLICATION_LANGUAGE_ATTESTATION_KEY] = (
+        build_publication_language_attestation(
+            paper_json,
+            source="human_review",
+            reviewer_id=_UNIT_OWNER_ID,
+        )
+    )
     return {
         "paper_json": paper_json,
         "latex_source": "\\documentclass{aastex631}\n\\begin{document}\nDraft\n\\end{document}",
@@ -163,15 +172,21 @@ async def test_validator_assesses_the_current_draft_text(db_session, test_user):
     db_session.add(session)
     await db_session.commit()
 
+    safe_json = {
+        "results": {
+            "text": "We report p=0.01 and p=0.02 in a descriptive catalog result."
+        }
+    }
+    safe_json[PUBLICATION_LANGUAGE_ATTESTATION_KEY] = (
+        build_publication_language_attestation(
+            safe_json, source="human_review", reviewer_id=str(user.id)
+        )
+    )
     safe = await validate_analysis(
         str(session.id),
         db_session,
         owner_id=str(user.id),
-        paper_json={
-            "results": {
-                "text": "We report p=0.01 and p=0.02 in a descriptive catalog result."
-            }
-        },
+        paper_json=safe_json,
     )
     assert safe["overall_status"] == "PASS"
     statistical_check = next(
@@ -836,7 +851,7 @@ async def test_legacy_public_row_fails_closed_then_upgrades_on_publish(
     body = publish.json()
     assert body["is_public"] is True
     assert body["public_token"] == "legacy-public-token"
-    assert body["validation"]["schema_version"] == 4
+    assert body["validation"]["schema_version"] == 5
     assert body["validation"]["publishable"] is True
     assert (
         await app_client.get("/api/paper/public/legacy-public-token")

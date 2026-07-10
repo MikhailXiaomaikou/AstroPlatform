@@ -331,7 +331,8 @@ Every rule here traces to a real incident in past agent sessions
   (`local:claude-cli` via CLAUDE_CLI_ENABLED, `local:openai-cli` via
   OPENAI_CLI_ENABLED) are a supported self-hosting feature (2026-07-10):
   they require the CLI installed and logged in on the same machine, run it
-  as a pure completion endpoint (no CLI tools/settings/session), and never
+  as a local-only ephemeral bridge (Claude tools/settings/session disabled;
+  Codex config/rules ignored in a read-only sandbox), and never
   exist on the hosted deployment.
 - Render auto-deploy can lag behind `main`; local verification comes first.
 - After a deploy lands, curl `/health` and `/health/deep` — the deep

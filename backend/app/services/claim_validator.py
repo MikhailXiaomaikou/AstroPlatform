@@ -164,6 +164,10 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         rf"\bp[-\s]?value\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b",
         re.I,
     )),
+    ("p_value", re.compile(
+        rf"\bp\s*(?:=|<|>|≤|≥)\s*{_NUM}\b",
+        re.I,
+    )),
     ("correlation_r", re.compile(
         rf"\b(?:Pearson\s+)?r\s*(?:is|was|=|≈|~|:|about|approximately)?\s*{_NUM}\b",
         re.I,
@@ -1302,6 +1306,107 @@ def _build_cosmology_labeled_universe(payload: Any, out: dict[str, set[float]] |
     return out
 
 
+_PUBLICATION_TYPED_RESULT_KEYS: dict[str, frozenset[str]] = {
+    "significance_sigma": frozenset(
+        {
+            "equivalentsigma",
+            "gaussianequivalentsigma",
+            "significancesigma",
+            "sigmaequivalent",
+            "detectionsignificancesigma",
+        }
+    ),
+    "p_value": frozenset(
+        {
+            "pvalue",
+            "pvalues",
+            "adjustedpvalue",
+            "correctedpvalue",
+            "pearsonp",
+            "spearmanp",
+            "kendallp",
+        }
+    ),
+    "correlation_r": frozenset(
+        {"correlationr", "pearsonr", "spearmanr", "kendalltau", "rvalue"}
+    ),
+    "parallax_mas": frozenset(
+        {"parallax", "parallaxmas", "meanparallaxmas", "medianparallaxmas"}
+    ),
+    "distance_pc": frozenset({"distancepc", "distanceparsec"}),
+    "distance_kpc": frozenset({"distancekpc", "distancekiloparsec"}),
+    "distance_mpc": frozenset({"distancempc", "distancemegaparsec"}),
+    "mass_solar": frozenset(
+        {"masssolar", "massmsun", "stellarmasssolar", "stellarmassmsun"}
+    ),
+    "age_myr": frozenset(
+        {"agemyr", "agemegayear", "clusteragemyr", "clustagemyr"}
+    ),
+    "age_gyr": frozenset({"agegyr", "agegigayear"}),
+    "period_days": frozenset({"perioddays", "periodday"}),
+    "redshift": frozenset({"redshift", "redshiftz", "zspec", "zphot"}),
+    "radius_ratio": frozenset({"radiusratio", "rprs", "planettostarradiusratio"}),
+    "transit_depth": frozenset({"transitdepth", "depthfraction"}),
+    "line_fwhm": frozenset({"fwhm", "fwhmkms", "linewidth", "linewidthkms"}),
+}
+_PUBLICATION_TYPED_KEY_TO_LABELS: dict[str, set[str]] = {}
+for _typed_label, _typed_keys in _PUBLICATION_TYPED_RESULT_KEYS.items():
+    for _typed_key in _typed_keys:
+        _PUBLICATION_TYPED_KEY_TO_LABELS.setdefault(_typed_key, set()).add(
+            _typed_label
+        )
+
+
+def _build_publication_typed_universe(
+    payload: Any, out: dict[str, set[float]] | None = None
+) -> dict[str, set[float]]:
+    if out is None:
+        out = {}
+    if isinstance(payload, dict):
+        if _is_tainted_synthetic_payload(payload):
+            return out
+        for key, value in payload.items():
+            key_lower = str(key).lower()
+            if (
+                key_lower in _METADATA_KEYS_BLACKLIST
+                or key_lower in _CITATION_KEYS_BLACKLIST
+                or key_lower in _NON_EVIDENCE_KEYS
+            ):
+                continue
+            key_norm = re.sub(r"[^a-z0-9]", "", key_lower)
+            labels = _PUBLICATION_TYPED_KEY_TO_LABELS.get(key_norm, set())
+            for label in labels:
+                out.setdefault(label, set()).update(_iter_numeric_values(value))
+            _build_publication_typed_universe(value, out)
+    elif isinstance(payload, (list, tuple)):
+        for value in payload:
+            _build_publication_typed_universe(value, out)
+    return out
+
+
+def _publication_typed_claim_label(claim: Claim) -> str | None:
+    base = claim.label.split(".g", 1)[0]
+    if base in _PUBLICATION_TYPED_RESULT_KEYS:
+        return base
+    if base in {"redshift_z", "redshift_word"}:
+        return "redshift"
+    if base == "label_colon":
+        raw = claim.raw.lower()
+        for token, label in (
+            ("parallax", "parallax_mas"),
+            ("p-value", "p_value"),
+            ("p value", "p_value"),
+            ("pearson", "correlation_r"),
+            ("spearman", "correlation_r"),
+            ("period", "period_days"),
+            ("age", "age_myr" if "myr" in raw else "age_gyr"),
+            ("distance", "distance_mpc" if "mpc" in raw else "distance_kpc" if "kpc" in raw else "distance_pc"),
+        ):
+            if token in raw:
+                return label
+    return None
+
+
 # F1.3: when the tool-result universe is thin, switch to a tight tolerance
 # so an invented number cannot accidentally match some stray column index
 # or row count.  10 entries was chosen to be larger than the typical
@@ -1317,6 +1422,7 @@ def validate_claims(
     *,
     tolerance: float = DEFAULT_TOLERANCE,
     strict_when_empty: bool = True,
+    require_typed_scientific_match: bool = False,
 ) -> ValidationResult:
     """Check every numeric claim in `reply` against `tool_results`.
 
@@ -1329,6 +1435,12 @@ def validate_claims(
     `STRICT_UNIVERSE_THRESHOLD` entries, tighten tolerance to
     `STRICT_TOLERANCE` (0.1 %) to prevent accidental matches against
     indices / row counts / offsets.
+
+    ``require_typed_scientific_match`` is the fail-closed manuscript mode.  A
+    recognisable cosmology parameter must then match that same parameter's
+    labelled result bucket; it may not fall back to an unrelated number in the
+    flat universe.  Gaussian-equivalent significance claims likewise match
+    only explicitly labelled significance fields, never S/N or another sigma.
 
     NOTE (2026-06-12): an earlier round tried admitting USER-prompt numbers so
     honest restatements ("at z=1.5 ...") would validate. Adversarial review
@@ -1379,11 +1491,32 @@ def validate_claims(
     labeled = _build_cosmology_labeled_universe(claimable_nodes) if tool_results else {}
     if input_numbers:  # same structural anti-echo for the per-parameter buckets
         labeled = {param: (vals - input_numbers) for param, vals in labeled.items()}
+    typed_universe: dict[str, set[float]] = {}
+    if require_typed_scientific_match:
+        typed_universe = _build_publication_typed_universe(claimable_nodes)
+        if input_numbers:
+            typed_universe = {
+                label: values - input_numbers
+                for label, values in typed_universe.items()
+            }
+
     uncited: list[Claim] = []
     for c in claims:
         param = _claim_cosmology_param(c)
-        if param is not None and labeled.get(param):
-            if not _matches_any(c.value, labeled[param], effective_tol):
+        if param is not None:
+            param_values = labeled.get(param, set())
+            if require_typed_scientific_match and not param_values:
+                uncited.append(c)
+            elif param_values and not _matches_any(c.value, param_values, effective_tol):
+                uncited.append(c)
+            elif not param_values and not _matches_any(c.value, universe, effective_tol):
+                uncited.append(c)
+        elif require_typed_scientific_match and (
+            typed_label := _publication_typed_claim_label(c)
+        ) is not None:
+            if not _matches_any(
+                c.value, typed_universe.get(typed_label, set()), effective_tol
+            ):
                 uncited.append(c)
         elif not _matches_any(c.value, universe, effective_tol):
             uncited.append(c)
@@ -2144,6 +2277,285 @@ def _cosmology_publication_ready_available(tool_results: Any) -> bool:
         if _payload_is_claimable_success(tool_name, result):
             return True
     return False
+
+
+_CONCLUSION_ATTESTATION_SCHEMA_VERSION = 1
+_CONCLUSION_ATTESTATION_ARTIFACT_TYPE = "scientific_conclusion_attestation"
+_CONCLUSION_ATTESTATION_TOOLS: frozenset[str] = frozenset(
+    {
+        "get_cosmology_run_status",
+        "run_cobaya_cosmology",
+        "run_cosmology_likelihood_chain",
+        "run_cosmology_robustness_matrix",
+    }
+)
+_SHA256_VALUE_RE = re.compile(r"^sha256:[0-9a-f]{64}$", re.I)
+_EVIDENCE_REF_RE = re.compile(
+    r"\[evidence:(?P<id>[A-Za-z0-9][A-Za-z0-9_.:-]{2,127})\]",
+    re.I,
+)
+_LCDM_RE = re.compile(
+    r"\b(?:cosmological\s+constant|lambda\s*cdm|lcdm)\b|Λ\s*CDM",
+    re.I,
+)
+_W0WA_RE = re.compile(
+    r"\b(?:w\s*0\s*w\s*a\s*cdm|w0wa\s*cdm|cpl)\b|"
+    r"w\s*[_\{]?0\}?\s*[-+/]\s*w\s*[_\{]?a\}?",
+    re.I,
+)
+_WCDM_RE = re.compile(r"(?<![0a-z])w\s*cdm\b", re.I)
+_BASELINE_REJECTION_RE = re.compile(
+    r"(?:\b(?:rule[sd]?\s+out|exclude[sd]?|reject(?:ed|s)?|"
+    r"disfavou?r(?:ed|s)?|inconsistent|incompatible|conflict(?:s|ed)?)\b"
+    r"[^.\n;]{0,140}(?:cosmological\s+constant|(?:lambda|Λ)\s*CDM|LCDM)\b|"
+    r"(?:cosmological\s+constant|(?:lambda|Λ)\s*CDM|LCDM)\b"
+    r"[^.\n;]{0,140}\b(?:ruled\s+out|excluded|rejected|disfavou?red|"
+    r"inconsistent|incompatible|fails?\s+to\s+fit)\b)",
+    re.I,
+)
+_MODEL_PREFERENCE_RE = re.compile(
+    r"\b(?:favou?r(?:s|ed)?|prefer(?:s|red)?|preference|evidence|support)\b"
+    r"[^.\n;]{0,180}\b(?:w\s*0\s*w\s*a\s*cdm|w0wa\s*cdm|"
+    r"w\s*cdm|cpl|evolving|dynamical|time[-\s]?varying)\b|"
+    r"\b(?:w\s*0\s*w\s*a\s*cdm|w0wa\s*cdm|w\s*cdm|cpl)\b"
+    r"[^.\n;]{0,180}\b(?:favou?red|preferred|supported)\b",
+    re.I,
+)
+_DARK_ENERGY_EVOLUTION_RE = re.compile(
+    r"(?:\bdark[-\s]+energy\b[^.\n;]{0,120}\b"
+    r"(?:evolv(?:e|es|ed|ing)|dynamical|time[-\s]?(?:varying|dependent)|"
+    r"var(?:y|ies|ied|iation))\b|"
+    r"\b(?:evolving|dynamical|time[-\s]?(?:varying|dependent))\s+dark[-\s]+energy\b|"
+    r"\bequation\s+of\s+state\b[^.\n;]{0,120}\b"
+    r"(?:evolv(?:e|es|ed|ing)|var(?:y|ies|ied|iation)|time[-\s]?dependent)\b|"
+    r"\b(?:non[-\s]?zero\s+)?time\s+variation\b[^.\n;]{0,120}"
+    r"\b(?:dark[-\s]+energy|equation\s+of\s+state)\b|"
+    r"\b(?:non[-\s]?zero\s+\$?\s*w\s*[_\{]?a\}?\s*\$?|"
+    r"\$?\s*w\s*[_\{]?a\}?\s*\$?\s+(?:differs?|deviates?)\s+from\s+zero|"
+    r"\$?\s*w\s*[_\{]?a\}?\s*(?:\\ne|\\neq|≠)\s*0\s*\$?)\b)",
+    re.I,
+)
+_NONASSERTIVE_COSMOLOGY_CONTEXT_RE = re.compile(
+    r"\b(?:no\s+(?:statistically\s+significant\s+)?evidence|"
+    r"insufficient\s+evidence|cannot\s+conclude|can't\s+conclude|"
+    r"do(?:es)?\s+not\s+(?:show|support|establish|favour|favor)|"
+    r"failed?\s+to\s+(?:show|establish|detect)|"
+    r"test(?:ed|ing)?\s+whether|investigat(?:e|ed|ing)\s+whether|"
+    r"ask(?:ed|ing)?\s+whether|may|might|could|hypothesis|forecast|"
+    r"not\s+ruled\s+out|consistent\s+with\s+zero|does\s+not\s+evolve)\b",
+    re.I,
+)
+
+
+def _normalize_cosmology_model(value: Any) -> str | None:
+    norm = re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+    aliases = {
+        "lcdm": "lcdm",
+        "lambdacdm": "lcdm",
+        "flatlcdm": "lcdm",
+        "wcdm": "wcdm",
+        "flatwcdm": "wcdm",
+        "w0wacdm": "w0wa_cdm",
+        "w0wa": "w0wa_cdm",
+        "cpl": "w0wa_cdm",
+    }
+    return aliases.get(norm)
+
+
+def _attestation_calibration_is_valid(attestation: dict[str, Any]) -> bool:
+    calibration = attestation.get("calibration")
+    if not isinstance(calibration, dict) or calibration.get("verified") is not True:
+        return False
+    method = str(calibration.get("method") or "").strip().lower()
+    if method == "wilks":
+        return (
+            calibration.get("assumptions_verified") is True
+            and calibration.get("likelihood_only_mle_proven") is True
+        )
+    if method in {"simulation", "parametric_bootstrap"}:
+        return (
+            calibration.get("simulation_calibration_verified") is True
+            and bool(
+                _SHA256_VALUE_RE.fullmatch(
+                    str(calibration.get("simulation_manifest_sha256") or "")
+                )
+            )
+        )
+    return False
+
+
+def _validated_conclusion_attestations(tool_results: Any) -> dict[str, dict[str, Any]]:
+    """Index exact, same-branch model-comparison attestations by id.
+
+    No recursive boolean walk is permitted here.  Posterior readiness,
+    significance readiness, calibration, model pair, data/likelihood hashes,
+    and the manifest hash must coexist in one result object produced by an
+    approved cosmology tool.  This prevents unrelated session evidence, or two
+    different nested branches, from jointly unlocking a headline conclusion.
+    """
+
+    indexed: dict[str, dict[str, Any]] = {}
+    entries = tool_results if isinstance(tool_results, list) else [tool_results]
+    for entry in entries or []:
+        tool_name, result = _entry_tool_and_result(entry)
+        if tool_name not in _CONCLUSION_ATTESTATION_TOOLS or not isinstance(result, dict):
+            continue
+        candidates = [result]
+        if tool_name == "get_cosmology_run_status" and isinstance(result.get("result"), dict):
+            candidates = [result["result"]]
+        for candidate in candidates:
+            if (
+                candidate.get("publication_ready") is not True
+                or candidate.get("significance_ready") is not True
+                or candidate.get("__do_not_claim__") is True
+                or candidate.get("success") is False
+                or bool(candidate.get("error"))
+            ):
+                continue
+            raw_attestations = candidate.get("conclusion_attestations")
+            if not isinstance(raw_attestations, list):
+                single = candidate.get("conclusion_attestation")
+                raw_attestations = [single] if isinstance(single, dict) else []
+            result_manifest_hash = str(
+                candidate.get("evidence_manifest_sha256")
+                or candidate.get("manifest_sha256")
+                or ""
+            )
+            result_data_fingerprint = str(
+                candidate.get("data_fingerprint")
+                or (
+                    (candidate.get("data") or {}).get("fingerprint")
+                    if isinstance(candidate.get("data"), dict)
+                    else ""
+                )
+                or ""
+            )
+            map_comparison = candidate.get("map_comparison")
+            free_w0wa = (
+                map_comparison.get("free_w0wa")
+                if isinstance(map_comparison, dict)
+                else None
+            )
+            result_likelihood_fingerprint = str(
+                candidate.get("likelihood_fingerprint")
+                or (
+                    (free_w0wa.get("fingerprints") or {}).get("likelihood")
+                    if isinstance(free_w0wa, dict)
+                    and isinstance(free_w0wa.get("fingerprints"), dict)
+                    else ""
+                )
+                or ""
+            )
+            for attestation in raw_attestations:
+                if not isinstance(attestation, dict):
+                    continue
+                attestation_id = str(attestation.get("attestation_id") or "")
+                manifest_hash = str(attestation.get("manifest_sha256") or "")
+                if (
+                    attestation.get("schema_version")
+                    != _CONCLUSION_ATTESTATION_SCHEMA_VERSION
+                    or attestation.get("artifact_type")
+                    != _CONCLUSION_ATTESTATION_ARTIFACT_TYPE
+                    or not attestation_id
+                    or attestation.get("publication_ready") is not True
+                    or attestation.get("significance_ready") is not True
+                    or not _SHA256_VALUE_RE.fullmatch(manifest_hash)
+                    or manifest_hash != result_manifest_hash
+                    or not _SHA256_VALUE_RE.fullmatch(
+                        str(attestation.get("data_fingerprint") or "")
+                    )
+                    or str(attestation.get("data_fingerprint") or "")
+                    != result_data_fingerprint
+                    or not _SHA256_VALUE_RE.fullmatch(
+                        str(attestation.get("likelihood_fingerprint") or "")
+                    )
+                    or str(attestation.get("likelihood_fingerprint") or "")
+                    != result_likelihood_fingerprint
+                    or str(attestation.get("comparison_type") or "")
+                    not in {
+                        "likelihood_ratio",
+                        "simulation_calibrated_likelihood_ratio",
+                    }
+                    or not _attestation_calibration_is_valid(attestation)
+                    or _normalize_cosmology_model(attestation.get("baseline_model"))
+                    is None
+                    or _normalize_cosmology_model(attestation.get("alternative_model"))
+                    is None
+                ):
+                    continue
+                indexed[attestation_id] = attestation
+    return indexed
+
+
+def _strong_conclusion_from_sentence(sentence: str) -> dict[str, str | None] | None:
+    if not sentence or "?" in sentence or _NONASSERTIVE_COSMOLOGY_CONTEXT_RE.search(sentence):
+        return None
+    kind: str | None = None
+    if _BASELINE_REJECTION_RE.search(sentence):
+        kind = "baseline_rejection"
+    elif _MODEL_PREFERENCE_RE.search(sentence):
+        kind = "extended_model_preference"
+    elif _DARK_ENERGY_EVOLUTION_RE.search(sentence):
+        kind = "dark_energy_evolution"
+    if kind is None:
+        return None
+    baseline = "lcdm" if _LCDM_RE.search(sentence) else None
+    alternative = (
+        "w0wa_cdm"
+        if _W0WA_RE.search(sentence)
+        else "wcdm"
+        if _WCDM_RE.search(sentence)
+        else None
+    )
+    return {"kind": kind, "baseline_model": baseline, "alternative_model": alternative}
+
+
+def _attestation_matches_claim(
+    attestation: dict[str, Any], claim: dict[str, str | None]
+) -> bool:
+    return (
+        str(attestation.get("claim_kind") or "") == claim.get("kind")
+        and claim.get("baseline_model") is not None
+        and claim.get("alternative_model") is not None
+        and _normalize_cosmology_model(attestation.get("baseline_model"))
+        == claim.get("baseline_model")
+        and _normalize_cosmology_model(attestation.get("alternative_model"))
+        == claim.get("alternative_model")
+    )
+
+
+def scientific_conclusion_scope_violations(
+    reply: str,
+    tool_results: Any,
+) -> list[CitationViolation]:
+    """Require a same-sentence reference to an exactly matched attestation."""
+    if not reply:
+        return []
+
+    stripped, stripped_map = _strip_markdown_code_with_map(reply)
+    attestations = _validated_conclusion_attestations(tool_results)
+    violations: list[CitationViolation] = []
+    for sentence_match in re.finditer(r"[^.\n;]+(?:[.\n;]|$)", stripped):
+        sentence = sentence_match.group(0).strip()
+        claim = _strong_conclusion_from_sentence(sentence)
+        if claim is None:
+            continue
+        evidence_ids = [m.group("id") for m in _EVIDENCE_REF_RE.finditer(sentence)]
+        if any(
+            evidence_id in attestations
+            and _attestation_matches_claim(attestations[evidence_id], claim)
+            for evidence_id in evidence_ids
+        ):
+            continue
+        start = sentence_match.start()
+        violations.append(
+            CitationViolation(
+                kind="cosmology_conclusion_without_matched_attestation",
+                match_text=sentence,
+                line_number=_line_number(reply, stripped_map[start]),
+            )
+        )
+    return violations
 
 
 def _full_external_likelihood_ready_available(tool_results: Any) -> bool:

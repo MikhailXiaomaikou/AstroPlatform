@@ -1141,6 +1141,101 @@ def compare_map_runs(
     return result
 
 
+CONCLUSION_ATTESTATION_SCHEMA_VERSION = 1
+CONCLUSION_ATTESTATION_ARTIFACT_TYPE = "scientific_conclusion_attestation"
+
+
+def build_conclusion_attestations(
+    *,
+    map_comparison: Mapping[str, Any],
+    data_fingerprint: str,
+    likelihood_fingerprint: str,
+    evidence_manifest_sha256: str,
+) -> list[dict[str, Any]]:
+    """Emit the exact schema consumed by the manuscript conclusion gate.
+
+    Attestations are absent unless significance calibration is itself verified.
+    Posterior convergence or a finite paired optimizer delta never enters this
+    path on its own.
+    """
+
+    if map_comparison.get("significance_ready") is not True:
+        return []
+    method = map_comparison.get("method")
+    if not isinstance(method, Mapping):
+        return []
+    calibration: dict[str, Any]
+    comparison_type: str
+    if (
+        method.get("wilks_calibration_verified") is True
+        and map_comparison.get("likelihood_only_mle_proven") is True
+    ):
+        calibration = {
+            "method": "wilks",
+            "verified": True,
+            "assumptions_verified": True,
+            "likelihood_only_mle_proven": True,
+        }
+        comparison_type = "likelihood_ratio"
+    elif method.get("simulation_calibration_verified") is True:
+        simulation_manifest_sha256 = str(
+            method.get("simulation_manifest_sha256") or ""
+        )
+        if not (
+            simulation_manifest_sha256.startswith("sha256:")
+            and len(simulation_manifest_sha256) == 71
+        ):
+            return []
+        calibration = {
+            "method": "simulation",
+            "verified": True,
+            "simulation_calibration_verified": True,
+            "simulation_manifest_sha256": simulation_manifest_sha256,
+        }
+        comparison_type = "simulation_calibrated_likelihood_ratio"
+    else:
+        return []
+    if not all(
+        isinstance(value, str)
+        and value.startswith("sha256:")
+        and len(value) == 71
+        for value in (
+            data_fingerprint,
+            likelihood_fingerprint,
+            evidence_manifest_sha256,
+        )
+    ):
+        return []
+
+    common = {
+        "schema_version": CONCLUSION_ATTESTATION_SCHEMA_VERSION,
+        "artifact_type": CONCLUSION_ATTESTATION_ARTIFACT_TYPE,
+        "baseline_model": "lcdm",
+        "alternative_model": "w0wa_cdm",
+        "data_fingerprint": data_fingerprint,
+        "likelihood_fingerprint": likelihood_fingerprint,
+        "comparison_type": comparison_type,
+        "calibration": calibration,
+        "manifest_sha256": evidence_manifest_sha256,
+        "publication_ready": True,
+        "significance_ready": True,
+    }
+    return [
+        {
+            **common,
+            "attestation_id": (
+                f"{claim_kind}:{evidence_manifest_sha256.split(':', 1)[1][:24]}"
+            ),
+            "claim_kind": claim_kind,
+        }
+        for claim_kind in (
+            "baseline_rejection",
+            "extended_model_preference",
+            "dark_energy_evolution",
+        )
+    ]
+
+
 def build_evidence_manifest(
     *,
     canonical_config_path: str | Path,
@@ -1258,7 +1353,9 @@ def build_evidence_manifest(
         "created_at": _utc_now(),
         "status": "PASS" if publication_ready else "FAIL",
         "publication_ready": publication_ready,
-        "significance_ready": bool(map_comparison.get("significance_ready")),
+        # Set below only after a versioned, calibrated, hash-bound conclusion
+        # attestation has been constructed from this same manifest branch.
+        "significance_ready": False,
         "claim_scope": (
             "posterior_intervals_and_descriptive_paired_optimizer_differences"
             if publication_ready and not map_comparison.get("significance_ready")
@@ -1296,6 +1393,29 @@ def build_evidence_manifest(
         "posterior": posterior,
         "map_comparison": map_comparison,
     }
+    evidence_manifest_sha256 = _hash_object(manifest)
+    manifest["evidence_manifest_sha256"] = evidence_manifest_sha256
+    likelihood_fingerprint = str(
+        ((map_comparison.get("free_w0wa") or {}).get("fingerprints") or {}).get(
+            "likelihood"
+        )
+        or ""
+    )
+    conclusion_attestations = build_conclusion_attestations(
+        map_comparison=map_comparison,
+        data_fingerprint=str(inventory.get("fingerprint") or ""),
+        likelihood_fingerprint=likelihood_fingerprint,
+        evidence_manifest_sha256=evidence_manifest_sha256,
+    )
+    manifest["conclusion_attestations"] = conclusion_attestations
+    manifest["significance_ready"] = bool(conclusion_attestations)
+    manifest["claim_scope"] = (
+        "posterior_intervals_and_likelihood_ratio_significance"
+        if publication_ready and conclusion_attestations
+        else "posterior_intervals_and_descriptive_paired_optimizer_differences"
+        if publication_ready
+        else "none"
+    )
     manifest["manifest_sha256"] = _hash_object(manifest)
     return manifest
 

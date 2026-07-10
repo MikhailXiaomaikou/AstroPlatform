@@ -45,6 +45,8 @@ def test_production_configuration_rejects_legacy_executors(monkeypatch):
             config.Settings(
                 jwt_secret="test-jwt",
                 fernet_key="test-fernet",
+                evidence_signing_key="test-evidence-signing-key-32-bytes",
+                evidence_signing_key_id="test-v1",
                 sandbox_backend=backend,
             )
         except ValueError as exc:
@@ -60,9 +62,31 @@ def test_production_configuration_accepts_disabled(monkeypatch):
     configured = config.Settings(
         jwt_secret="test-jwt",
         fernet_key="test-fernet",
+        evidence_signing_key="test-evidence-signing-key-32-bytes",
+        evidence_signing_key_id="test-v1",
         sandbox_backend="disabled",
     )
     assert configured.sandbox_backend == "disabled"
+
+
+def test_production_configuration_rejects_subscription_cli_children(monkeypatch):
+    import app.config as config
+
+    monkeypatch.setattr(config, "_ENV", "production")
+    for field in ("openai_cli_enabled", "claude_cli_enabled"):
+        try:
+            config.Settings(
+                jwt_secret="test-jwt",
+                fernet_key="test-fernet",
+                evidence_signing_key="test-evidence-signing-key-32-bytes",
+                evidence_signing_key_id="test-v1",
+                sandbox_backend="disabled",
+                **{field: True},
+            )
+        except ValueError as exc:
+            assert "local-only" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"production accepted local CLI flag {field}")
 
 
 async def test_disabled_backend_is_not_advertised_as_pipeline_node(monkeypatch):

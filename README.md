@@ -170,11 +170,16 @@ OPENAI_CLI_ENABLED=1 uvicorn app.main:app --reload --port 8000   # ChatGPT/Codex
 ```
 
 then pick provider **Local** -> "Claude CLI" or "OpenAI CLI" in the chat
-model picker. The CLI runs as a pure completion endpoint: its own tools,
-settings, and session persistence are disabled, and all platform tools
-(archives, likelihoods, validation gates) execute in the backend exactly as
-with API providers. Optional: `CLAUDE_CLI_MODEL` / `OPENAI_CLI_MODEL` pin a
-model; otherwise the CLI's configured default is used.
+model picker. Both bridges run ephemerally from an empty temporary directory
+with a minimal child environment that excludes database, JWT, object-store,
+encryption, and provider API secrets. Claude's built-in tools/settings/session
+are disabled. Codex ignores user config and rules and runs in its read-only
+sandbox; because that is still a local process rather than an OS-isolated model
+service, both bridges are restricted to trusted single-user development and
+are rejected in production. Platform tools (archives, likelihoods, validation
+gates) still execute in the backend. This consumes the corresponding CLI
+subscription allowance. Optional: `CLAUDE_CLI_MODEL` / `OPENAI_CLI_MODEL` pin
+a model; otherwise the CLI's configured default is used.
 
 **If startup fails with `Provenance registry freshness check failed`:** the
 backend intentionally refuses to boot — in every environment, local dev
@@ -194,6 +199,7 @@ to try once the app is running — it is not a development-setup guide).
 - Observational cosmology beta: [docs/OBSERVATIONAL_COSMOLOGY_BETA.md](./docs/OBSERVATIONAL_COSMOLOGY_BETA.md)
 - Blind-test target: [docs/COSMOLOGY_PARTIAL_PASS_95_TARGET.md](./docs/COSMOLOGY_PARTIAL_PASS_95_TARGET.md)
 - Blind-test protocol: [docs/BLIND_RESEARCH_TESTING_LOG.md](./docs/BLIND_RESEARCH_TESTING_LOG.md)
+- Scientific-rigor remediation ledger: [docs/SCIENTIFIC_RIGOR_REMEDIATION.md](./docs/SCIENTIFIC_RIGOR_REMEDIATION.md)
 - Source mapping: [docs/SOURCE_MAPPING.md](./docs/SOURCE_MAPPING.md)
 - Reference literature: [docs/REFERENCES.md](./docs/REFERENCES.md)
 - Deployment: [DEPLOYMENT.md](./DEPLOYMENT.md)

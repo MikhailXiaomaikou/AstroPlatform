@@ -21,6 +21,84 @@ from app.models.schemas import InferenceLog
 
 logger = logging.getLogger(__name__)
 
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    """Parse a boolean environment flag without treating ``"0"`` as true."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in _TRUE_ENV_VALUES
+
+
+def _local_cli_enabled(name: str) -> bool:
+    """Subscription CLIs are intentionally unavailable in production."""
+    if os.getenv("ENV", "dev").strip().lower() in {"production", "prod"}:
+        return False
+    return _env_flag(name)
+
+
+_CLI_CHILD_ENV_ALLOWLIST = {
+    # Process/runtime basics.  The resolved CLI path may use /usr/bin/env in
+    # its shebang, so PATH must remain available.
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "COLORTERM",
+    "TZ",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    # CLI authentication/config locations.  OAuth credentials stay in these
+    # user-owned directories; provider API-key variables are not inherited.
+    "CODEX_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    # Corporate proxy/custom-CA support.  Both upper- and lower-case spellings
+    # are common across Node and Rust HTTP clients.
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+    # Windows process-launch essentials (harmless on POSIX).
+    "SYSTEMROOT",
+    "COMSPEC",
+    "PATHEXT",
+}
+
+
+def _cli_child_env() -> dict[str, str]:
+    """Return a minimal environment that excludes platform secrets.
+
+    The backend process can hold database, object-store, JWT, encryption, and
+    provider credentials.  A local completion CLI needs none of those.  An
+    allowlist is safer than trying to keep an ever-growing secret denylist in
+    sync with application configuration.
+    """
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key in _CLI_CHILD_ENV_ALLOWLIST
+    }
+
 
 class InferenceError(RuntimeError):
     pass
@@ -597,7 +675,7 @@ class LocalBackend(OpenAICompatibleBackend):
         if (
             profile
             and profile.id == "local:openai-cli"
-            and os.getenv("OPENAI_CLI_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+            and _local_cli_enabled("OPENAI_CLI_ENABLED")
         ):
             return await self._complete_openai_cli(
                 messages,
@@ -610,7 +688,7 @@ class LocalBackend(OpenAICompatibleBackend):
         if (
             profile
             and profile.id == "local:claude-cli"
-            and os.getenv("CLAUDE_CLI_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+            and _local_cli_enabled("CLAUDE_CLI_ENABLED")
         ):
             return await self._complete_claude_cli(
                 messages,
@@ -620,7 +698,7 @@ class LocalBackend(OpenAICompatibleBackend):
                 request_timeout=request_timeout,
                 model_profile=profile,
             )
-        if not os.getenv("LOCAL_MODEL_ENABLED", ""):
+        if not _env_flag("LOCAL_MODEL_ENABLED"):
             raise InferenceError("Local model backend is not enabled. Set LOCAL_MODEL_ENABLED=1 and provide an OpenAI-compatible server.")
         return await super().complete(messages, system=system, tools=tools, max_tokens=max_tokens, temperature=temperature, api_key=api_key, provider_api_keys=provider_api_keys, request_timeout=request_timeout, model_profile=model_profile)
 
@@ -686,6 +764,28 @@ class LocalBackend(OpenAICompatibleBackend):
             content = ""
         return content, tool_calls
 
+    @staticmethod
+    def _validate_cli_tool_calls(
+        tool_calls: list[dict], tools: list[dict] | None
+    ) -> None:
+        """Reject model-requested tools that were not exposed to this turn."""
+        allowed = {
+            str(tool.get("name"))
+            for tool in (tools or [])
+            if isinstance(tool, dict) and tool.get("name")
+        }
+        unknown = sorted(
+            {
+                str(call.get("name"))
+                for call in tool_calls
+                if str(call.get("name")) not in allowed
+            }
+        )
+        if unknown:
+            raise InferenceError(
+                "Local CLI requested unavailable tool(s): " + ", ".join(unknown)
+            )
+
     async def _complete_openai_cli(
         self,
         messages,
@@ -718,9 +818,14 @@ class LocalBackend(OpenAICompatibleBackend):
                     "--ephemeral",
                     "--sandbox",
                     "read-only",
+                    "--skip-git-repo-check",
                     "--output-last-message",
                     str(output_path),
                 ]
+                if _env_flag("OPENAI_CLI_IGNORE_USER_CONFIG", default=True):
+                    cmd.append("--ignore-user-config")
+                if _env_flag("OPENAI_CLI_IGNORE_RULES", default=True):
+                    cmd.append("--ignore-rules")
                 if model_profile.resolved_model_id and model_profile.resolved_model_id != "codex-config-default":
                     cmd.extend(["--model", model_profile.resolved_model_id])
                 cmd.append("-")
@@ -730,13 +835,19 @@ class LocalBackend(OpenAICompatibleBackend):
                         stdin=asyncio.subprocess.PIPE,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
+                        cwd=tmp,
+                        env=_cli_child_env(),
                     )
                     stdout, stderr = await asyncio.wait_for(
                         proc.communicate(prompt.encode("utf-8")),
                         timeout=timeout,
                     )
-                except asyncio.TimeoutError:
-                    raise InferenceError(f"OpenAI CLI request timed out after {timeout}s")
+                except asyncio.TimeoutError as exc:
+                    proc.kill()
+                    await proc.wait()
+                    raise InferenceError(
+                        f"OpenAI CLI request timed out after {timeout}s"
+                    ) from exc
                 except OSError as exc:
                     raise InferenceError(f"OpenAI CLI could not be started: {exc}")
                 if proc.returncode != 0:
@@ -757,6 +868,7 @@ class LocalBackend(OpenAICompatibleBackend):
                     )
                     continue
                 content, tool_calls = self._parse_openai_cli_result(last_text)
+                self._validate_cli_tool_calls(tool_calls, tools)
                 if not content and not tool_calls:
                     raise InferenceError("OpenAI CLI returned an empty completion")
                 return {
@@ -770,6 +882,7 @@ class LocalBackend(OpenAICompatibleBackend):
                 }
 
         content, tool_calls = self._parse_openai_cli_result(last_text)
+        self._validate_cli_tool_calls(tool_calls, tools)
         return {
             "content": content,
             "tool_calls": tool_calls,
@@ -807,11 +920,7 @@ class LocalBackend(OpenAICompatibleBackend):
         attempts = 2
         last_text = ""
         retry_note: str | None = None
-        child_env = {
-            key: value
-            for key, value in os.environ.items()
-            if key not in {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"}
-        }
+        child_env = _cli_child_env()
 
         for attempt in range(attempts):
             with tempfile.TemporaryDirectory(prefix="standard-astro-claude-cli-") as tmp:
@@ -847,8 +956,12 @@ class LocalBackend(OpenAICompatibleBackend):
                         proc.communicate(prompt.encode("utf-8")),
                         timeout=timeout,
                     )
-                except asyncio.TimeoutError:
-                    raise InferenceError(f"Claude CLI request timed out after {timeout}s")
+                except asyncio.TimeoutError as exc:
+                    proc.kill()
+                    await proc.wait()
+                    raise InferenceError(
+                        f"Claude CLI request timed out after {timeout}s"
+                    ) from exc
                 except OSError as exc:
                     raise InferenceError(f"Claude CLI could not be started: {exc}")
                 if proc.returncode != 0:
@@ -866,6 +979,7 @@ class LocalBackend(OpenAICompatibleBackend):
                     )
                     continue
                 content, tool_calls = self._parse_openai_cli_result(last_text)
+                self._validate_cli_tool_calls(tool_calls, tools)
                 if not content and not tool_calls:
                     raise InferenceError("Claude CLI returned an empty completion")
                 return {
@@ -879,6 +993,7 @@ class LocalBackend(OpenAICompatibleBackend):
                 }
 
         content, tool_calls = self._parse_openai_cli_result(last_text)
+        self._validate_cli_tool_calls(tool_calls, tools)
         return {
             "content": content,
             "tool_calls": tool_calls,
@@ -931,9 +1046,9 @@ class InferenceRouter:
             return bool(keys.get("deepseek") or os.getenv("DEEPSEEK_API_KEY", ""))
         if backend_name == "local":
             return bool(
-                os.getenv("LOCAL_MODEL_ENABLED", "")
-                or os.getenv("OPENAI_CLI_ENABLED", "")
-                or os.getenv("CLAUDE_CLI_ENABLED", "")
+                _env_flag("LOCAL_MODEL_ENABLED")
+                or _local_cli_enabled("OPENAI_CLI_ENABLED")
+                or _local_cli_enabled("CLAUDE_CLI_ENABLED")
             )
         return backend_name in self.backends
 

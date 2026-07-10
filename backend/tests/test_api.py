@@ -215,6 +215,14 @@ class TestPaperDraftPrivacy:
         public_before = await app_client.get("/api/paper/public/not-a-real-token")
         assert public_before.status_code == 404
 
+        language_review = await app_client.post(
+            f"/api/paper/{draft.id}/language-review",
+            json={"confirmed_english": True},
+            headers=owner_headers,
+        )
+        assert language_review.status_code == 200
+        assert language_review.json()["validation"]["checks"][1]["status"] == "PASS"
+
         publish = await app_client.post(f"/api/paper/{draft.id}/publish", headers=owner_headers)
         assert publish.status_code == 200
         assert publish.json()["is_public"] is True
@@ -1360,6 +1368,14 @@ class TestCollaborationAndMemoryEndpoints:
         assert shared_resp.json()["session"]["title"] == "Shared M31 Session"
         assert shared_resp.json()["can_fork"] is True
         assert shared_resp.json()["session"]["paper_drafts"] == []
+
+        language_review = await app_client.post(
+            f"/api/paper/{draft.id}/language-review",
+            json={"confirmed_english": True},
+            headers=owner_headers,
+        )
+        assert language_review.status_code == 200, language_review.text
+        assert language_review.json()["validation"]["checks"][1]["status"] == "PASS"
 
         publish_resp = await app_client.post(f"/api/paper/{draft.id}/publish", headers=owner_headers)
         assert publish_resp.status_code == 200, publish_resp.text

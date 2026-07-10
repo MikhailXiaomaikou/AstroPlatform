@@ -20,9 +20,9 @@ def test_render_workers_wait_for_exact_schema_head():
     blueprint = _yaml("render.yaml")
     services = {service["name"]: service for service in blueprint["services"]}
 
-    assert services["standard-astro-backend"]["preDeployCommand"] == (
-        "alembic upgrade head"
-    )
+    predeploy = services["standard-astro-backend"]["preDeployCommand"]
+    assert "alembic upgrade head" in predeploy
+    assert "alembic check" in predeploy
     for name in ("standard-astro-celery-worker", "standard-astro-celery-beat"):
         command = services[name]["dockerCommand"]
         assert "scripts/wait_for_schema_head.py" in command

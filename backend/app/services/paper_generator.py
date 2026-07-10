@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -15,6 +16,7 @@ from app.api.citations import _get_bibtex_sync
 from app.common.regex import BIBCODE_RE as _BIBCODE_RE
 from app.models.schemas import ChatSession
 from app.services.event_collector import track_event
+from app.services.server_evidence import verified_server_evidence_records
 
 _ACKNOWLEDGMENTS = {
     "gaia": "This work has made use of data from the European Space Agency (ESA) mission Gaia.",
@@ -832,49 +834,242 @@ def render_latex(paper_json: dict, format: str = "aastex",
     return text
 
 
-async def generate_reproducibility_appendix(session_id: str, db: AsyncSession) -> str:
+def _canonical_manifest_hash(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _manifest_fields(value: object, *, kind: str, path: str = "") -> dict[str, object]:
+    """Collect load-bearing execution metadata without copying huge results."""
+
+    found: dict[str, object] = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            key_norm = str(key).lower()
+            include = (
+                kind == "seed"
+                and key_norm in {"seed", "random_seed", "random_state"}
+            ) or (
+                kind == "hash"
+                and (
+                    key_norm.endswith("_hash")
+                    or key_norm.endswith("_sha256")
+                    or key_norm.endswith("_fingerprint")
+                    or key_norm in {"sha256", "digest", "manifest_sha256"}
+                )
+            ) or (
+                kind == "version"
+                and (
+                    key_norm.endswith("version")
+                    or key_norm.endswith("_version")
+                    or key_norm in {"package_versions", "environment"}
+                )
+            )
+            if include:
+                found[child_path] = item
+            else:
+                found.update(_manifest_fields(item, kind=kind, path=child_path))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.update(
+                _manifest_fields(item, kind=kind, path=f"{path}[{index}]")
+            )
+    return found
+
+
+async def build_reproducibility_manifest(
+    session_id: str, db: AsyncSession
+) -> dict[str, object]:
+    """Build a deterministic manifest from owner-bound signed executions only."""
+
     result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    artifacts = _extract_actions(session.messages or [])
+    evidence_records = verified_server_evidence_records(
+        session.audit_log,
+        session_id=session.id,
+        owner_id=session.user_id,
+    )
+    manifest_records: list[dict[str, object]] = []
+    for record in evidence_records:
+        tool_runs: list[dict[str, object]] = []
+        for tool_record in record.get("tool_results") or []:
+            if not isinstance(tool_record, dict):
+                continue
+            tool_name = str(tool_record.get("tool") or "")
+            if not tool_name:
+                continue
+            tool_input = tool_record.get("input")
+            tool_result = tool_record.get("result")
+            status_summary = {}
+            if isinstance(tool_result, dict):
+                for key in (
+                    "success",
+                    "analysis_status",
+                    "__tool_status__",
+                    "publication_ready",
+                    "preliminary_ready",
+                    "claim_scope",
+                    "model",
+                    "sampler",
+                    "dataset_keys",
+                    "datasets_used",
+                ):
+                    if key in tool_result:
+                        status_summary[key] = tool_result[key]
+            tool_runs.append(
+                {
+                    "tool_call_id": tool_record.get("id"),
+                    "tool": tool_name,
+                    # Inputs are the actual reproducibility recipe (ADQL, Python,
+                    # DAG, model config). Never silently truncate them.
+                    "input": tool_input if isinstance(tool_input, dict) else {},
+                    "result_sha256": _canonical_manifest_hash(tool_result),
+                    "status": status_summary,
+                    "scientific_hashes": _manifest_fields(
+                        tool_result, kind="hash"
+                    ),
+                    "random_seeds": {
+                        **_manifest_fields(tool_input, kind="seed", path="input"),
+                        **_manifest_fields(tool_result, kind="seed", path="result"),
+                    },
+                    "execution_versions": _manifest_fields(
+                        tool_result, kind="version"
+                    ),
+                }
+            )
+        manifest_records.append(
+            {
+                "record_id": record.get("record_id"),
+                "run_id": record.get("run_id"),
+                "recorded_at": record.get("recorded_at"),
+                "schema_version": record.get("schema_version"),
+                "key_id": record.get("key_id"),
+                "signature": record.get("signature"),
+                "tool_runs": tool_runs,
+            }
+        )
+
+    manifest: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_type": "standard_astro_reproducibility_manifest",
+        "session_id": str(session.id),
+        "owner_id": str(session.user_id),
+        "evidence_record_count": len(manifest_records),
+        "evidence_snapshot_sha256": _canonical_manifest_hash(evidence_records),
+        "records": manifest_records,
+    }
+    manifest["manifest_sha256"] = _canonical_manifest_hash(manifest)
+    return manifest
+
+
+async def generate_reproducibility_appendix(session_id: str, db: AsyncSession) -> str:
+    """Render the full deterministic manifest; never trust display history."""
+
+    manifest = await build_reproducibility_manifest(session_id, db)
+    tool_runs = [
+        run
+        for record in manifest.get("records", [])
+        if isinstance(record, dict)
+        for run in record.get("tool_runs", [])
+        if isinstance(run, dict)
+    ]
+    search_tools = {"search", "search_objects", "search_literature"}
+    query_tools = {
+        "adql",
+        "run_adql",
+        "run_sdss_sql",
+        "query_gaia_cluster",
+        "query_high_velocity_stars",
+    }
     query_lines: list[str] = []
-    for action in artifacts.search_calls:
-        query_lines.append(f"- Search: {action.get('query', '')} | sources={action.get('sources', [])}")
-    for action in artifacts.adql_calls:
-        query_lines.append(f"- ADQL ({action.get('service', 'gaia')}): {str(action.get('query', ''))[:200]}")
+    for run in tool_runs:
+        tool_name = str(run.get("tool") or "")
+        tool_input = run.get("input") if isinstance(run.get("input"), dict) else {}
+        if tool_name in search_tools:
+            query_lines.append(
+                f"- Search ({tool_name}): {tool_input.get('query', '')} | "
+                f"sources={tool_input.get('sources', [])}"
+            )
+        elif tool_name in query_tools:
+            query_lines.append(
+                f"- Query ({tool_name}, service={tool_input.get('service', 'unspecified')}): "
+                + str(tool_input.get("query", ""))
+            )
 
     pipeline_lines = [
-        f"- Pipeline action: {action.get('action', '')}"
-        for action in artifacts.pipeline_calls
+        "- "
+        + str(run.get("tool"))
+        + ": "
+        + json.dumps(run.get("input") or {}, ensure_ascii=False, sort_keys=True)
+        for run in tool_runs
+        if run.get("tool") in {"generate_pipeline", "run_pipeline", "modify_pipeline"}
     ] or ["- No pipeline DAGs recorded in this session."]
 
     code_lines = [
-        str(action.get("code") or (action.get("tool_input") or {}).get("code") or "")[:600]
-        for action in artifacts.python_calls
+        str((run.get("input") or {}).get("code") or "")
+        for run in tool_runs
+        if run.get("tool") == "run_python" and isinstance(run.get("input"), dict)
     ] or ["No custom Python analysis was recorded."]
 
-    versions = {"platform": "Standard Astro"}
+    versions = {"platform": "Standard Astro", "scope": "appendix export runtime"}
     for package in ("numpy", "scipy", "astropy"):
         try:
             versions[package] = version(package)
         except Exception:
             versions[package] = "unknown"
 
+    execution_metadata = [
+        {
+            "tool": run.get("tool"),
+            "result_sha256": run.get("result_sha256"),
+            "scientific_hashes": run.get("scientific_hashes"),
+            "random_seeds": run.get("random_seeds"),
+            "execution_versions": run.get("execution_versions"),
+        }
+        for run in tool_runs
+    ]
+    manifest_json = json.dumps(
+        manifest, ensure_ascii=False, sort_keys=True, indent=2, default=str
+    )
+
     appendix = [
         r"\appendix",
         r"\section{Reproducibility Appendix}",
+        _escape_latex(
+            f"Built from {manifest['evidence_record_count']} owner-bound, server-signed execution record(s). "
+            f"Canonical manifest: {manifest['manifest_sha256']}."
+        ),
         r"\subsection{Queries Executed}",
         _escape_latex("\n".join(query_lines or ["No catalog queries were recorded."])),
         r"\subsection{Pipeline DAG Description}",
         _escape_latex("\n".join(pipeline_lines)),
         r"\subsection{Python Code}",
         _escape_latex("\n\n".join(code_lines)),
-        r"\subsection{Software Versions}",
+        r"\subsection{Signed Execution Metadata}",
+        _escape_latex(
+            json.dumps(
+                execution_metadata,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+                default=str,
+            )
+        ),
+        r"\subsection{Export Runtime Software Versions}",
         _escape_latex(json.dumps(versions, indent=2)),
-        r"\subsection{Random Seeds}",
-        "No explicit stochastic seeds were captured in this session.",
+        r"\subsection{Canonical Reproducibility Manifest}",
+        _escape_latex(manifest_json),
     ]
     return "\n".join(appendix)
 
@@ -893,6 +1088,19 @@ async def generate_paper_draft(session_id: str, journal_format: str, db: AsyncSe
     artifacts = _extract_actions(session.messages or [])
     artifacts.session = session
     paper_json = _build_default_paper_json(artifacts, format_key)
+    # Local import avoids the module cycle (analysis_validator imports
+    # _extract_actions). Only confidently English server output receives this
+    # content-bound attestation; ambiguous/foreign output remains private.
+    from app.services.analysis_validator import (
+        PUBLICATION_LANGUAGE_ATTESTATION_KEY,
+        build_publication_language_attestation,
+    )
+
+    language_attestation = build_publication_language_attestation(
+        paper_json, source="server_generated"
+    )
+    if language_attestation is not None:
+        paper_json[PUBLICATION_LANGUAGE_ATTESTATION_KEY] = language_attestation
     appendix = await generate_reproducibility_appendix(str(session.id), db)
     latex_source = render_latex(paper_json, format_key) + "\n\n" + appendix
 

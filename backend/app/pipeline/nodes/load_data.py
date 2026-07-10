@@ -97,6 +97,12 @@ def load_data(input_data: dict | None, params: dict) -> dict:
 
     hdul.close()
 
+    if table_data is None:
+        raise ValueError(
+            "LoadData found no image pixels or table rows in the FITS file. "
+            "Metadata-only FITS headers are not scientific data products."
+        )
+
     return {
         "type": "spectrum",
         "fits_path": fits_path,

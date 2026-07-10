@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.schemas import DataFile, ScheduledRun
+from app.pipeline.storage_auth import collect_pipeline_storage_paths
 from app.storage import normalize_storage_key
 
 logger = logging.getLogger(__name__)
@@ -25,25 +26,11 @@ POLL_INTERVAL_SECONDS = 60
 
 def _scheduled_storage_keys(schedule: ScheduledRun) -> set[str]:
     """Return every storage key a scheduled DAG can open directly."""
-    keys: set[str] = set()
-    for node in (schedule.dag or {}).get("nodes", []):
-        if not isinstance(node, dict):
-            continue
-        node_type = str(node.get("type") or "")
-        params = ((node.get("data") or {}).get("params") or {})
-        if not isinstance(params, dict):
-            params = {}
-        if params.get("fits_path"):
-            keys.add(normalize_storage_key(str(params["fits_path"])))
-        elif node_type in {"LoadData", "PSFPhotometry"}:
-            keys.add(normalize_storage_key(str(schedule.input_data_id)))
-        if node_type == "ImportWorkspace":
-            keys.add(
-                normalize_storage_key(
-                    str(params.get("path") or schedule.input_data_id)
-                )
-            )
-    return keys
+    paths = collect_pipeline_storage_paths(
+        dag=schedule.dag or {},
+        input_data_id=str(schedule.input_data_id or ""),
+    )
+    return {normalize_storage_key(path) for path in paths}
 
 
 def _scheduled_inputs_are_owned(session: Session, schedule: ScheduledRun) -> bool:

@@ -1,7 +1,7 @@
 """Sync Alembic schema with current SQLAlchemy models.
 
 Revision ID: 0c9293030537
-Revises: 002
+Revises: 002a_uuid_bridge
 Create Date: 2026-04-20
 """
 from typing import Sequence, Union
@@ -15,7 +15,7 @@ from app.models.schemas import EncryptedJSONType, JSONType, UUIDType
 
 
 revision: str = "0c9293030537"
-down_revision: Union[str, None] = "002"
+down_revision: Union[str, None] = "002a_uuid_bridge"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

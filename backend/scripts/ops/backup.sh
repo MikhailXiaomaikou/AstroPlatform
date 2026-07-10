@@ -9,6 +9,7 @@ umask 077
 BACKUP_ROOT="${BACKUP_ROOT:-./backups}"
 STORAGE_DIR="${STORAGE_DIR:-}"
 FERNET_KEY_ID="${FERNET_KEY_ID:-unrecorded}"
+EVIDENCE_SIGNING_KEY_ID="${EVIDENCE_SIGNING_KEY_ID:-unrecorded}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-0}"
 
 for command_name in pg_dump psql python3 tar; do
@@ -94,7 +95,7 @@ PY
     .
 fi
 
-python3 - "$work" "$backup_id" "$commit" "$alembic_revision" "$storage_file" "$FERNET_KEY_ID" <<'PY'
+python3 - "$work" "$backup_id" "$commit" "$alembic_revision" "$storage_file" "$FERNET_KEY_ID" "$EVIDENCE_SIGNING_KEY_ID" <<'PY'
 import datetime
 import hashlib
 import json
@@ -102,7 +103,7 @@ import pathlib
 import sys
 
 work = pathlib.Path(sys.argv[1])
-backup_id, commit, revision, storage_file, key_id = sys.argv[2:]
+backup_id, commit, revision, storage_file, fernet_key_id, evidence_key_id = sys.argv[2:]
 
 def digest(name: str) -> str:
     hasher = hashlib.sha256()
@@ -117,7 +118,8 @@ manifest = {
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "git_commit": commit,
     "alembic_revision": revision,
-    "fernet_key_id": key_id,
+    "fernet_key_id": fernet_key_id,
+    "evidence_signing_key_id": evidence_key_id,
     "database": {
         "file": "database.dump",
         "sha256": digest("database.dump"),

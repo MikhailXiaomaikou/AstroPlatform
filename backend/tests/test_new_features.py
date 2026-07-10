@@ -424,6 +424,13 @@ class TestInferenceRouting:
         assert profile.resolved_model_id == "claude-sonnet-5"
         assert profile.supports_tools is True
 
+    def test_subscription_cli_is_disabled_for_prod_alias(self, monkeypatch):
+        from app.ai.inference_router import _local_cli_enabled
+
+        monkeypatch.setenv("ENV", "prod")
+        monkeypatch.setenv("CLAUDE_CLI_ENABLED", "1")
+        assert _local_cli_enabled("CLAUDE_CLI_ENABLED") is False
+
     @pytest.mark.asyncio
     async def test_local_backend_can_call_claude_cli(self, monkeypatch):
         from app.ai.inference_router import LocalBackend
@@ -454,6 +461,8 @@ class TestInferenceRouting:
         monkeypatch.setenv("CLAUDE_CLI_ENABLED", "1")
         monkeypatch.setenv("CLAUDE_CLI_COMMAND", "claude")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-leak")
+        monkeypatch.setenv("JWT_SECRET", "must-not-leak")
+        monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "must-not-leak")
         monkeypatch.setattr("app.ai.inference_router.shutil.which", lambda name: "/usr/bin/claude")
         monkeypatch.setattr("app.ai.inference_router.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
 
@@ -479,6 +488,8 @@ class TestInferenceRouting:
         # Subscription auth contract: API-key variables never reach the CLI.
         child_env = captured["kwargs"]["env"]
         assert "ANTHROPIC_API_KEY" not in child_env
+        assert "JWT_SECRET" not in child_env
+        assert "S3_SECRET_ACCESS_KEY" not in child_env
         assert "JSON bridge" in captured["stdin"]
         assert "search_objects" in captured["stdin"]
 
@@ -616,6 +627,8 @@ class TestInferenceRouting:
 
         monkeypatch.setenv("OPENAI_CLI_ENABLED", "1")
         monkeypatch.setenv("OPENAI_CLI_COMMAND", "codex")
+        monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://must-not-leak")
         monkeypatch.setattr("app.ai.inference_router.shutil.which", lambda name: "/usr/bin/codex")
         monkeypatch.setattr("app.ai.inference_router.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
 
@@ -634,11 +647,50 @@ class TestInferenceRouting:
         assert "--ephemeral" in captured["cmd"]
         assert "--sandbox" in captured["cmd"]
         assert "read-only" in captured["cmd"]
+        assert "--ignore-user-config" in captured["cmd"]
+        assert "--ignore-rules" in captured["cmd"]
+        assert "--skip-git-repo-check" in captured["cmd"]
         assert "--ask-for-approval" not in captured["cmd"]
+        assert captured["kwargs"]["cwd"]
+        assert "OPENAI_API_KEY" not in captured["kwargs"]["env"]
+        assert "DATABASE_URL" not in captured["kwargs"]["env"]
         assert "JSON bridge" in captured["stdin"]
         assert "ADQL/database access" in captured["stdin"]
         assert "literature/network search" in captured["stdin"]
         assert "search_objects" in captured["stdin"]
+
+    @pytest.mark.asyncio
+    async def test_local_cli_rejects_unadvertised_tool_call(self, monkeypatch):
+        from app.ai.inference_router import InferenceError, LocalBackend
+        from app.ai.model_profiles import resolve_model_profile
+
+        backend = LocalBackend()
+        profile = resolve_model_profile("local", "local:claude-cli")
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self, stdin):
+                return b'{"tool_calls":[{"name":"run_python","input":{}}]}', b""
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            return FakeProc()
+
+        monkeypatch.setenv("CLAUDE_CLI_ENABLED", "1")
+        monkeypatch.setattr(
+            "app.ai.inference_router.shutil.which", lambda name: "/usr/bin/claude"
+        )
+        monkeypatch.setattr(
+            "app.ai.inference_router.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+
+        with pytest.raises(InferenceError, match="unavailable tool.*run_python"):
+            await backend.complete(
+                [{"role": "user", "content": "read a host file"}],
+                tools=[{"name": "search_objects", "input_schema": {"type": "object"}}],
+                model_profile=profile,
+            )
 
     @pytest.mark.asyncio
     async def test_local_openai_cli_bridge_accepts_database_tool_aliases(self, monkeypatch):

@@ -38,7 +38,7 @@ services:
     dockerContext: backend
     plan: standard              # 2 GB RAM / 1 CPU
     autoDeployTrigger: checksPass
-    preDeployCommand: alembic upgrade head
+    preDeployCommand: sh -c 'alembic upgrade head && alembic check'
     # /health/deep verifies schema + durable storage + broker + worker so
     # Render rejects a process that cannot execute the production workload.
     healthCheckPath: /health/deep
@@ -58,6 +58,14 @@ services:
         generateValue: true
       - key: FERNET_KEY
         generateValue: true
+      - key: EVIDENCE_SIGNING_KEY
+        generateValue: true
+      - key: EVIDENCE_SIGNING_KEY_ID
+        value: evidence-prod-v1
+      # JSON object of retired key-id -> secret.  Populate before rotating the
+      # current key; legacy JWT evidence can retain its old JWT secret here.
+      - key: EVIDENCE_VERIFICATION_KEYS
+        sync: false
       - key: PIPELINE_MODE
         value: celery
       # Shared research-object storage. Set bucket + credentials (and endpoint
@@ -140,6 +148,21 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: FERNET_KEY
+      - key: EVIDENCE_SIGNING_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_SIGNING_KEY
+      - key: EVIDENCE_SIGNING_KEY_ID
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_SIGNING_KEY_ID
+      - key: EVIDENCE_VERIFICATION_KEYS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_VERIFICATION_KEYS
       - key: ANTHROPIC_API_KEY
         fromService:
           name: standard-astro-backend
@@ -233,6 +256,21 @@ services:
           name: standard-astro-backend
           type: web
           envVarKey: FERNET_KEY
+      - key: EVIDENCE_SIGNING_KEY
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_SIGNING_KEY
+      - key: EVIDENCE_SIGNING_KEY_ID
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_SIGNING_KEY_ID
+      - key: EVIDENCE_VERIFICATION_KEYS
+        fromService:
+          name: standard-astro-backend
+          type: web
+          envVarKey: EVIDENCE_VERIFICATION_KEYS
       - key: PIPELINE_MODE
         value: celery
       - key: SCHEMA_WAIT_TIMEOUT_SECONDS

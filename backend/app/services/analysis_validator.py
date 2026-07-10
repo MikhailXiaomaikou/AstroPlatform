@@ -13,12 +13,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
+from langdetect import DetectorFactory, LangDetectException, detect_langs
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.schemas import ChatSession
 from app.services.claim_validator import (
+    literature_prior_violations,
+    methodology_consistency_violations,
     provenance_citation_violations,
+    reply_contains_cjk,
+    scientific_conclusion_scope_violations,
+    unclassified_literature_violations,
     unsupported_literature_narrative_violations,
     validate_claims,
 )
@@ -31,10 +38,358 @@ from app.services.server_evidence import (
 )
 
 
-PAPER_VALIDATION_SCHEMA_VERSION = 4
+PAPER_VALIDATION_SCHEMA_VERSION = 5
 PAPER_VALIDATION_ARTIFACT_TYPE = "paper_draft"
 EVIDENCE_SNAPSHOT_SCHEMA_VERSION = 2
 UNVERIFIED_DRAFT_WATERMARK = "UNVERIFIED DRAFT — NOT FOR PUBLICATION"
+PUBLICATION_LANGUAGE_ATTESTATION_KEY = "_publication_language_attestation"
+PUBLICATION_LANGUAGE_ATTESTATION_SCHEMA_VERSION = 1
+PUBLICATION_LANGUAGE_ATTESTATION_ARTIFACT_TYPE = "publication_language_attestation"
+PUBLICATION_LANGUAGE_DETECTOR = "langdetect-1.0.9"
+PUBLICATION_LANGUAGE_MIN_WORDS = 4
+PUBLICATION_LANGUAGE_MIN_PROBABILITY = 0.95
+
+# langdetect otherwise seeds its character n-gram sampler from process entropy.
+# Publication decisions must be bit-for-bit deterministic across workers.
+DetectorFactory.seed = 0
+
+_UNSUPPORTED_PUBLICATION_SCRIPT_RE = re.compile(
+    "["
+    "\\u0400-\\u052f"  # Cyrillic
+    "\\u0590-\\u05ff"  # Hebrew
+    "\\u0600-\\u06ff"  # Arabic
+    "\\u0900-\\u097f"  # Devanagari
+    "\\u0e00-\\u0e7f"  # Thai
+    "]"
+)
+_NON_ENGLISH_PUBLICATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "Spanish",
+        re.compile(
+            r"\b(?:los\s+datos|la\s+energ[ií]a\s+oscura|"
+            r"constante\s+cosmol[oó]gica|nuestros?\s+resultados?|"
+            r"favorecen|evoluciona)\b",
+            re.I,
+        ),
+    ),
+    (
+        "French",
+        re.compile(
+            r"\b(?:les\s+donn[eé]es|[eé]nergie\s+sombre|"
+            r"constante\s+cosmologique|nos\s+r[eé]sultats|"
+            r"favorisent|[eé]volue)\b",
+            re.I,
+        ),
+    ),
+    (
+        "German",
+        re.compile(
+            r"\b(?:die\s+daten|dunkle\s+energie|kosmologische\s+konstante|"
+            r"unsere\s+ergebnisse|bevorzug(?:en|t)|entwickelt\s+sich)\b",
+            re.I,
+        ),
+    ),
+)
+
+_PAPER_REQUIRES_EXPLICIT_PUBLICATION_READY = {
+    "generate_proposal",
+    "run_pipeline",
+    "run_python",
+}
+
+
+def _paper_without_language_attestation(paper_json: Mapping[str, Any]) -> dict[str, Any]:
+    clean = copy.deepcopy(dict(paper_json))
+    clean.pop(PUBLICATION_LANGUAGE_ATTESTATION_KEY, None)
+    return clean
+
+
+def _paper_claim_text(paper_json: Mapping[str, Any]) -> str:
+    """Return claim-bearing string leaves without hidden attestation metadata."""
+
+    values: list[str] = []
+
+    def _walk(value: Any, key: str = "") -> None:
+        if key == PUBLICATION_LANGUAGE_ATTESTATION_KEY:
+            return
+        if isinstance(value, Mapping):
+            for child_key, child in value.items():
+                _walk(child, str(child_key))
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for child in value:
+                _walk(child, key)
+        elif isinstance(value, str):
+            values.append(value)
+
+    _walk(paper_json)
+    return "\n".join(values)
+
+
+def _unsupported_publication_language(
+    text: str, *, require_confident_english: bool = True
+) -> str | None:
+    """Reject any claim-bearing segment not confidently detected as English."""
+
+    if reply_contains_cjk(text, threshold=1):
+        return "CJK/Japanese/Korean or full-width claim text"
+    if _UNSUPPORTED_PUBLICATION_SCRIPT_RE.search(text):
+        return "a non-Latin script outside the English validator scope"
+    for language, pattern in _NON_ENGLISH_PUBLICATION_PATTERNS:
+        if pattern.search(text):
+            return f"{language} claim text"
+    for segment in re.split(r"[\n;]+|(?<=[.!?])\s+", text):
+        words = _natural_language_words(segment)
+        if len(words) < PUBLICATION_LANGUAGE_MIN_WORDS:
+            continue
+        detector_text = " ".join(words)
+        try:
+            ranked = detect_langs(detector_text)
+        except LangDetectException:
+            return "claim text whose language could not be determined"
+        if not ranked:
+            return "claim text whose language could not be determined"
+        top = ranked[0]
+        if top.lang != "en" or (
+            require_confident_english
+            and float(top.prob) < PUBLICATION_LANGUAGE_MIN_PROBABILITY
+        ):
+            return (
+                f"claim text detected as {top.lang} with probability "
+                f"{float(top.prob):.3f} (English >= "
+                f"{PUBLICATION_LANGUAGE_MIN_PROBABILITY:.2f} is required)"
+            )
+    return None
+
+
+def _has_positive_english_segment(text: str) -> bool:
+    for segment in re.split(r"[\n;]+|(?<=[.!?])\s+", text):
+        words = _natural_language_words(segment)
+        if len(words) < PUBLICATION_LANGUAGE_MIN_WORDS:
+            continue
+        try:
+            ranked = detect_langs(" ".join(words))
+        except LangDetectException:
+            continue
+        if (
+            ranked
+            and ranked[0].lang == "en"
+            and float(ranked[0].prob) >= PUBLICATION_LANGUAGE_MIN_PROBABILITY
+        ):
+            return True
+    return False
+
+
+def _natural_language_words(segment: str) -> list[str]:
+    """Exclude formula/unit fragments before applying the language threshold."""
+
+    without_math = re.sub(r"\$.*?\$|\\\([^)]*\\\)|\\\[[^]]*\\\]", " ", segment)
+    without_math = re.sub(r"\b[A-Za-z_]+\d+[A-Za-z_]*\b", " ", without_math)
+    tokens = re.findall(
+        r"(?<![\\\w])[^\W\d_]+(?:[-'][^\W\d_]+)*(?![\w])",
+        without_math,
+        re.UNICODE,
+    )
+    scientific_units = {
+        "aa",
+        "arcsec",
+        "day",
+        "days",
+        "deg",
+        "erg",
+        "gyr",
+        "jy",
+        "kelvin",
+        "km",
+        "kpc",
+        "mas",
+        "mpc",
+        "myr",
+        "pc",
+        "sec",
+        "sigma",
+        "snr",
+    }
+    return [
+        token
+        for token in tokens
+        if token.lower() not in scientific_units
+        and not (token.isupper() and len(token) <= 4)
+    ]
+
+
+def _language_claim_hash(paper_json: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        _paper_without_language_attestation(paper_json),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _language_attestation_signature(payload: Mapping[str, Any], *, key: str) -> str:
+    encoded = json.dumps(
+        dict(payload),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=str,
+    ).encode("utf-8")
+    digest = hmac.new(
+        key.encode("utf-8"),
+        b"standard-astro/publication-language/v1\0" + encoded,
+        hashlib.sha256,
+    ).hexdigest()
+    return f"hmac-sha256:{digest}"
+
+
+def build_publication_language_attestation(
+    paper_json: Mapping[str, Any],
+    *,
+    source: str = "human_review",
+    reviewer_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Attest exact human-reviewed English-scope paper content.
+
+    Automatic server generation is accepted only when every natural-language
+    segment of four or more words is deterministically detected as English at
+    probability >=0.95. Short formula/parameter fragments are neutral. A fully
+    neutral draft requires explicit human review.
+    """
+
+    if source not in {"server_generated", "human_review"}:
+        raise ValueError("Unsupported publication language attestation source")
+    if source == "human_review" and not str(reviewer_id or "").strip():
+        raise ValueError("Human review requires a reviewer id")
+    claim_text = _paper_claim_text(paper_json)
+    if _unsupported_publication_language(
+        claim_text, require_confident_english=source == "server_generated"
+    ):
+        return None
+    positive_english = _has_positive_english_segment(claim_text)
+    if source == "server_generated" and not positive_english:
+        return None
+    payload: dict[str, Any] = {
+        "schema_version": PUBLICATION_LANGUAGE_ATTESTATION_SCHEMA_VERSION,
+        "artifact_type": PUBLICATION_LANGUAGE_ATTESTATION_ARTIFACT_TYPE,
+        "language": "en",
+        "source": source,
+        "reviewer_id": str(reviewer_id or "standard-astro-paper-generator"),
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "detector": PUBLICATION_LANGUAGE_DETECTOR,
+        "detector_seed": 0,
+        "minimum_words_per_segment": PUBLICATION_LANGUAGE_MIN_WORDS,
+        "minimum_english_probability": PUBLICATION_LANGUAGE_MIN_PROBABILITY,
+        "positive_english_segment": positive_english,
+        "claim_text_sha256": _language_claim_hash(paper_json),
+        "key_id": settings.evidence_signing_key_id,
+    }
+    payload["signature"] = _language_attestation_signature(
+        payload, key=settings.evidence_signing_key
+    )
+    return payload
+
+
+def verify_publication_language_attestation(paper_json: Mapping[str, Any]) -> bool:
+    attestation = paper_json.get(PUBLICATION_LANGUAGE_ATTESTATION_KEY)
+    if not isinstance(attestation, dict):
+        return False
+    try:
+        attested_probability = float(
+            attestation.get("minimum_english_probability") or 0.0
+        )
+    except (TypeError, ValueError):
+        return False
+    if (
+        attestation.get("schema_version")
+        != PUBLICATION_LANGUAGE_ATTESTATION_SCHEMA_VERSION
+        or attestation.get("artifact_type")
+        != PUBLICATION_LANGUAGE_ATTESTATION_ARTIFACT_TYPE
+        or attestation.get("language") != "en"
+        or attestation.get("source") not in {"server_generated", "human_review"}
+        or not str(attestation.get("reviewer_id") or "").strip()
+        or attestation.get("detector") != PUBLICATION_LANGUAGE_DETECTOR
+        or attestation.get("detector_seed") != 0
+        or attestation.get("minimum_words_per_segment")
+        != PUBLICATION_LANGUAGE_MIN_WORDS
+        or attested_probability != PUBLICATION_LANGUAGE_MIN_PROBABILITY
+        or attestation.get("claim_text_sha256") != _language_claim_hash(paper_json)
+        or _unsupported_publication_language(
+            _paper_claim_text(paper_json),
+            require_confident_english=(
+                attestation.get("source") == "server_generated"
+            ),
+        )
+        is not None
+        or (
+            attestation.get("source") == "server_generated"
+            and not _has_positive_english_segment(_paper_claim_text(paper_json))
+        )
+    ):
+        return False
+    supplied = attestation.get("signature")
+    key_id = attestation.get("key_id")
+    if not isinstance(supplied, str) or not isinstance(key_id, str):
+        return False
+    unsigned = {key: value for key, value in attestation.items() if key != "signature"}
+    verification_keys: list[str] = []
+    if key_id == settings.evidence_signing_key_id:
+        verification_keys.append(settings.evidence_signing_key)
+    retired = settings.evidence_verification_keyring.get(key_id)
+    if retired:
+        verification_keys.append(retired)
+    return any(
+        hmac.compare_digest(
+            supplied, _language_attestation_signature(unsigned, key=key)
+        )
+        for key in dict.fromkeys(verification_keys)
+    )
+
+
+def _publication_numeric_evidence(
+    tool_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep only signed results eligible to support manuscript numbers.
+
+    Chat may discuss an explicitly labelled exploratory result, but the paper
+    boundary is stricter.  Any tool that declares itself preliminary, partial,
+    exploratory, or non-publication is removed from the numeric evidence
+    universe.  Free-form Python and rough proposal estimates require an
+    explicit positive publication attestation rather than inheriting trust from
+    successful execution alone.
+    """
+    eligible: list[dict[str, Any]] = []
+    for record in tool_results:
+        if not isinstance(record, dict):
+            continue
+        tool_name = str(record.get("tool") or "")
+        result = record.get("result")
+        if not isinstance(result, dict):
+            continue
+        statuses = {
+            str(result.get(key) or "").strip().upper()
+            for key in ("analysis_status", "__tool_status__", "status")
+            if result.get(key) is not None
+        }
+        scope = str(result.get("claim_scope") or "").strip().lower()
+        if (
+            result.get("__do_not_claim__") is True
+            or result.get("publication_ready") is False
+            or bool(statuses & {"PARTIAL", "EXPLORATORY", "BLOCKED", "FAILED"})
+            or any(token in scope for token in ("preliminary", "exploratory"))
+            or (
+                tool_name in _PAPER_REQUIRES_EXPLICIT_PUBLICATION_READY
+                and result.get("publication_ready") is not True
+            )
+        ):
+            continue
+        eligible.append(record)
+    return eligible
 
 
 def _normalize_evidence_value(value: Any) -> Any:
@@ -436,13 +791,19 @@ async def validate_analysis(
             }
         )
     artifacts = _extract_actions(trusted_messages)
+    publication_numeric_results = _publication_numeric_evidence(
+        trusted_tool_results
+    )
     draft_text = ""
     if paper_json is not None:
         # paper_json is the source of truth for API-authored drafts. Avoid also
         # appending its rendered LaTeX, which would duplicate every p-value and
         # bias the multiple-testing heuristic below.
         draft_text = json.dumps(
-            paper_json, ensure_ascii=False, sort_keys=True, default=str
+            _paper_without_language_attestation(paper_json),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
         )
     elif latex_source:
         # Legacy/imported content can still be assessed before it is re-rendered.
@@ -453,6 +814,7 @@ async def validate_analysis(
     # warnings. Bibliography titles are likewise not scientific claims; the
     # BibTeX bytes are integrity-bound by ``paper_content_hash`` instead.
     claim_text = [draft_text] if draft_text else artifacts.assistant_text
+    validation_text = draft_text or "\n".join(artifacts.assistant_text)
     combined_text = "\n".join(
         artifacts.user_prompts
         + claim_text
@@ -483,11 +845,72 @@ async def validate_analysis(
             )
         )
 
+    # The claim catalogue is English-only. CJK detection alone is not English
+    # detection, so each natural-language segment is deterministically detected
+    # and the result is HMAC-bound to exact paper JSON. Editing invalidates the
+    # hash and fails closed until server generation or human review re-attests.
+    language_text = (
+        _paper_claim_text(paper_json)
+        if isinstance(paper_json, Mapping)
+        else validation_text
+    )
+    language_attestation = (
+        paper_json.get(PUBLICATION_LANGUAGE_ATTESTATION_KEY)
+        if isinstance(paper_json, Mapping)
+        else None
+    )
+    human_reviewed_language = (
+        isinstance(language_attestation, Mapping)
+        and language_attestation.get("source") == "human_review"
+    )
+    language_problem = _unsupported_publication_language(
+        language_text,
+        require_confident_english=not human_reviewed_language,
+    )
+    language_attested = (
+        verify_publication_language_attestation(paper_json)
+        if isinstance(paper_json, Mapping)
+        else latex_source is None
+    )
+    if language_problem is not None:
+        checks.append(
+            _build_check(
+                "claim_language",
+                "FAIL",
+                "The draft is outside the supported English claim scope: "
+                + language_problem
+                + ".",
+                "Translate the scientific claims to English and obtain a new content-bound server or human-review attestation.",
+            )
+        )
+    elif not language_attested:
+        checks.append(
+            _build_check(
+                "claim_language",
+                "FAIL",
+                "The editable/free-form draft has no valid server-signed English-scope attestation for its exact content.",
+                "Regenerate the draft on the server or obtain a human language review attestation after the final edit.",
+            )
+        )
+    else:
+        checks.append(
+            _build_check(
+                "claim_language",
+                "PASS",
+                "Claim-bearing text is content-bound to the supported English-language publication policy.",
+                "Any edit requires a fresh content-bound language attestation.",
+            )
+        )
+
     # Reuse the same numeric claim validator as chat. Any validator failure,
     # empty numeric universe for a quantitative claim, or unsupported number
     # fails closed at the publication boundary.
     try:
-        numeric_validation = validate_claims(draft_text, trusted_tool_results)
+        numeric_validation = validate_claims(
+            validation_text,
+            publication_numeric_results,
+            require_typed_scientific_match=True,
+        )
     except Exception as exc:
         checks.append(
             _build_check(
@@ -501,7 +924,7 @@ async def validate_analysis(
         if numeric_validation.ok:
             details = (
                 f"All {len(numeric_validation.claims)} detected numeric claim(s) "
-                "are supported by signed tool results."
+                "are supported by publication-eligible signed tool results."
                 if numeric_validation.claims
                 else "No unsupported numeric scientific claims were detected."
             )
@@ -526,12 +949,20 @@ async def validate_analysis(
 
     try:
         citation_violations = provenance_citation_violations(
-            draft_text,
+            validation_text,
             trusted_tool_results,
             strict=True,
         )
         narrative_violations = unsupported_literature_narrative_violations(
-            draft_text,
+            validation_text,
+            trusted_tool_results,
+        )
+        unclassified_violations = unclassified_literature_violations(
+            validation_text,
+            trusted_tool_results,
+        )
+        prior_violations = literature_prior_violations(
+            validation_text,
             trusted_tool_results,
         )
     except Exception as exc:
@@ -544,12 +975,17 @@ async def validate_analysis(
             )
         )
     else:
-        all_provenance_violations = [*citation_violations, *narrative_violations]
-        if all_provenance_violations:
-            details = ", ".join(
-                f"{item.kind}: {item.match_text}"
-                for item in all_provenance_violations[:8]
-            )
+        all_provenance_violations = [
+            *citation_violations,
+            *narrative_violations,
+            *unclassified_violations,
+        ]
+        all_provenance_details = [
+            *(f"{item.kind}: {item.match_text}" for item in all_provenance_violations),
+            *(f"unsupported_literature_prior: {item.raw}" for item in prior_violations),
+        ]
+        if all_provenance_details:
+            details = ", ".join(all_provenance_details[:8])
             checks.append(
                 _build_check(
                     "citation_and_narrative_provenance",
@@ -565,6 +1001,46 @@ async def validate_analysis(
                     "PASS",
                     "Citations and literature assertions are grounded in signed tool results.",
                     "Keep citations bound to the same server evidence snapshot.",
+                )
+            )
+
+    try:
+        method_violations = methodology_consistency_violations(
+            validation_text, trusted_tool_results
+        )
+        conclusion_scope_violations = scientific_conclusion_scope_violations(
+            validation_text, trusted_tool_results
+        )
+    except Exception as exc:
+        checks.append(
+            _build_check(
+                "methodology_and_conclusion_scope",
+                "FAIL",
+                f"Scientific scope validation could not complete: {exc.__class__.__name__}.",
+                "Restore the scope validator and rerun before publishing.",
+            )
+        )
+    else:
+        scope_violations = [*method_violations, *conclusion_scope_violations]
+        if scope_violations:
+            details = ", ".join(
+                f"{item.kind}: {item.match_text}" for item in scope_violations[:8]
+            )
+            checks.append(
+                _build_check(
+                    "methodology_and_conclusion_scope",
+                    "FAIL",
+                    "Unsupported methodology or conclusion scope: " + details,
+                    "Remove the claim or produce a signed, publication-ready result with calibrated model-comparison evidence.",
+                )
+            )
+        else:
+            checks.append(
+                _build_check(
+                    "methodology_and_conclusion_scope",
+                    "PASS",
+                    "Method and high-level scientific conclusions match the signed evidence scope.",
+                    "Keep conclusion language within the validated claim scope.",
                 )
             )
     # Unit consistency
@@ -628,7 +1104,21 @@ async def validate_analysis(
     provenance_status = "PASS"
     provenance_details = "Queries and data sources were captured in the session history."
     provenance_reco = "Retain archive names, data release identifiers, and query strings in the appendix."
-    if not artifacts.search_calls and not artifacts.adql_calls:
+    has_signed_dataset_provenance = any(
+        isinstance(record.get("result"), dict)
+        and bool(
+            record["result"].get("datasets_used")
+            or record["result"].get("provenance")
+            or record["result"].get("source_url")
+        )
+        for record in trusted_tool_results
+        if isinstance(record, dict)
+    )
+    if (
+        not artifacts.search_calls
+        and not artifacts.adql_calls
+        and not has_signed_dataset_provenance
+    ):
         provenance_status = "FAIL"
         provenance_details = "No recorded search or ADQL actions were found for this session."
         provenance_reco = "Run the analysis from a saved session that includes the underlying data acquisition steps."

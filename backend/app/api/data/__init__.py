@@ -1911,6 +1911,12 @@ async def fetch_object(
         fits_file = await asyncio.wait_for(connector.fetch(object_id), timeout=30.0)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail=f"Timeout fetching from {source} — the external service took too long")
+    except NotImplementedError as exc:
+        # Some searchable archives require product staging/authentication that
+        # this connector does not implement.  Report that boundary explicitly
+        # instead of returning a metadata-only empty FITS file or labelling it
+        # as an upstream outage.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as e:

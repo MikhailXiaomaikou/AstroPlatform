@@ -30,7 +30,8 @@ DOSSIER_TOOL_SCHEMAS = [
         "description": (
             "Generate a comprehensive cross-match dossier for a sky position. "
             "Queries SIMBAD, Gaia DR3, SDSS, 2MASS, AllWISE, NED, and TNS concurrently "
-            "and returns structured photometry (ugriz, JHKs, W1-W4), astrometry "
+            "and returns structured photometry (ugriz, JHKs, W1-W4), a parallel "
+            "tree of catalog-reported 1-sigma magnitude errors, astrometry "
             "(parallax, proper motion, distance), redshift, host galaxy info, "
             "cross-identifications, and prior transient classifications."
         ),
@@ -81,11 +82,14 @@ DOSSIER_TOOL_SCHEMAS = [
     {
         "name": "analyze_cross_wavelength",
         "description": (
-            "Run cross-wavelength anomaly detection on a sky position. "
+            "Run a non-publication cross-wavelength screening analysis on a sky position. "
             "Checks IR excess (W1-W2), X-ray/optical ratio, astrometric anomalies, "
             "optical color consistency, SED shape vs blackbody, and variability. "
-            "Returns a list of checks with ANOMALY/NORMAL/SKIPPED status, "
-            "possible physical causes, and recommended follow-up observations."
+            "Returns ANOMALY/NORMAL/SKIPPED checks plus catalog uncertainty "
+            "provenance. If all checks are skipped the result is EMPTY and must "
+            "not be described as anomaly-free. Any SED screen that had to assume "
+            "10% flux errors is preliminary, non-claimable, and does not expose a "
+            "claimable significance or goodness-of-fit statistic."
         ),
         "input_schema": {
             "type": "object",
@@ -236,6 +240,36 @@ async def _exec_cross_wavelength(inp: dict) -> dict:
             return {"error": "ra and dec are required (or provide a name for resolution)"}
 
     result = await cross_wavelength_analysis(ra=ra, dec=dec)
+    checks = result.get("results")
+    all_skipped = bool(checks) and all(
+        isinstance(check, dict) and check.get("status") == "SKIPPED"
+        for check in checks
+    )
+    if result.get("checks_run") == 0 or all_skipped:
+        # Boundary-level fail-closed guard: even if the implementation changes,
+        # the AI-facing tool must never turn zero evaluated checks into a clean
+        # bill of health.
+        result.update(
+            {
+                "__tool_status__": "EMPTY",
+                "__do_not_claim__": True,
+                "__message_to_model__": (
+                    "No cross-wavelength check was evaluated. Do not describe "
+                    "the source as normal, consistent, anomaly-free, or discrepant."
+                ),
+                "publication_ready": False,
+                "preliminary_ready": False,
+                "claim_scope": "empty_no_executed_checks",
+                "data_origin": "real_archive",
+                "analysis_status": "empty",
+                "anomalies_found": None,
+                "briefing": (
+                    "No cross-wavelength checks could be evaluated because the "
+                    "required measurements were unavailable. No discrepancy or "
+                    "normality conclusion is supported."
+                ),
+            }
+        )
     return result
 
 

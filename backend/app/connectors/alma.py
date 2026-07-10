@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import logging
 from typing import TYPE_CHECKING
 
@@ -156,24 +155,12 @@ class ALMAConnector(BaseConnector):
 
     @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
-        """Create metadata FITS for an ALMA observation.
-
-        Full ALMA data products are large (GB+) and require archive access.
-        We provide a metadata FITS placeholder.
-        """
-        from astropy.io import fits
-
-        hdu = fits.PrimaryHDU()
-        hdu.header["OBJECT"] = object_id
-        hdu.header["TELESCOP"] = "ALMA"
-        hdu.header["COMMENT"] = "Metadata-only. Download full data from almascience.eso.org"
-        buf = io.BytesIO()
-        hdu.writeto(buf)
-        return FITSFile(
-            object_id=object_id,
-            source="alma",
-            data=buf.getvalue(),
-            filename=f"alma_{object_id}.fits",
+        """Reject metadata-only stand-ins for staged ALMA products."""
+        raise NotImplementedError(
+            "ALMA science products require archive staging; this connector only "
+            "returns searchable observation metadata and will not fabricate an "
+            "empty FITS data product. Download the staged product from the ALMA "
+            "Science Archive and upload the resulting FITS file."
         )
 
     def normalize(self, raw_data) -> Table:

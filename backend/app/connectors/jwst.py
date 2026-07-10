@@ -6,7 +6,6 @@ including NIRCam, NIRSpec, MIRI, and NIRISS instruments.
 
 from __future__ import annotations
 
-import io
 import logging
 from typing import TYPE_CHECKING
 
@@ -117,24 +116,11 @@ class JWSTConnector(BaseConnector):
 
     @with_retry(max_retries=1, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
-        """Create metadata FITS for a JWST observation.
-
-        Full JWST data products are large and hosted on MAST.
-        We provide a metadata FITS placeholder.
-        """
-        from astropy.io import fits
-
-        hdu = fits.PrimaryHDU()
-        hdu.header["OBJECT"] = object_id
-        hdu.header["TELESCOP"] = "JWST"
-        hdu.header["COMMENT"] = "Metadata-only. Download full data from mast.stsci.edu"
-        buf = io.BytesIO()
-        hdu.writeto(buf)
-        return FITSFile(
-            object_id=object_id,
-            source="jwst",
-            data=buf.getvalue(),
-            filename=f"jwst_{object_id}.fits",
+        """Reject metadata-only stand-ins for MAST JWST products."""
+        raise NotImplementedError(
+            "JWST observation metadata is not a calibrated science product; "
+            "this connector will not fabricate an empty FITS file. Download the "
+            "selected product from MAST and upload the resulting FITS file."
         )
 
     def normalize(self, raw_data) -> Table:

@@ -20,7 +20,10 @@ research artifacts. The backend also has a persistent `/app/data` disk for
 gate-event logs, local caches, and export staging. Before syncing an existing
 Blueprint, set `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` on the
 backend, plus `S3_ENDPOINT_URL` for R2/MinIO; missing required values fail
-startup closed. See
+startup closed. On that existing backend also initialize
+`EVIDENCE_VERIFICATION_KEYS` to `{}` before the first sync that introduces the
+evidence-key configuration, because Render ignores newly added `sync: false`
+variables during Blueprint updates. See
 [`docs/OPERATIONS_RUNBOOK.md`](./docs/OPERATIONS_RUNBOOK.md) for this boundary,
 backup policy, and recovery steps.
 
@@ -45,6 +48,10 @@ ENV=production
 DATABASE_URL=postgresql://...          # Render internal DB URL; backend converts to asyncpg
 JWT_SECRET=<random-hex-32>
 FERNET_KEY=<random-secret-stored-outside-the-database>
+EVIDENCE_SIGNING_KEY=<independent-random-secret-at-least-32-bytes>
+EVIDENCE_SIGNING_KEY_ID=evidence-prod-v1
+# JSON map of retired key ids to secrets; normally empty until a rotation:
+EVIDENCE_VERIFICATION_KEYS={}
 CORS_ORIGINS=https://astro-frontend-tyfr.onrender.com,http://localhost:5173
 RATE_LIMIT_ENABLED=true
 REDIS_URL=redis://...                   # Blueprint injects Render Key Value URL
@@ -57,6 +64,16 @@ S3_SECRET_ACCESS_KEY=...
 STORAGE_REQUIRE_INTEGRITY=true          # fail closed if SHA-256 metadata is missing
 PORT=8000
 ```
+
+`EVIDENCE_SIGNING_KEY` is deliberately independent from `JWT_SECRET` and is
+required in production. New server tool-evidence records carry
+`EVIDENCE_SIGNING_KEY_ID`. Before rotating the current evidence key, retain the
+old id/secret in `EVIDENCE_VERIFICATION_KEYS`, for example
+`{"evidence-prod-v1":"<old-secret>"}`, then deploy the new key and id to all
+services together. Pre-key-id evidence was signed with the JWT secret; before a
+JWT rotation, retain that old JWT value in the same map under a descriptive id
+such as `legacy-jwt-2026-07`. Unknown key ids and keyless new-schema records fail
+closed.
 
 Long-job worker defaults (all values are seconds):
 
@@ -88,12 +105,12 @@ ADS_API_KEY=...
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 ADMIN_SECRET=<random-hex-32>
-PROVENANCE_VALIDATOR_HARDBLOCK=false
+PROVENANCE_VALIDATOR_HARDBLOCK=true          # default; set false only for an emergency warn-only downgrade
 ASTRO_RESEARCH_FOCUS=cosmology          # cosmology | all  (any other value fails closed to cosmology)
 TRUSTED_PROXY_MODE=1                    # none | <hop count> | cloudflare  (see paragraph below)
 ```
 
-`PROVENANCE_VALIDATOR_HARDBLOCK` defaults to warning mode. When set to `true`, citation violations from the provenance-v2 validator block replies.
+`PROVENANCE_VALIDATOR_HARDBLOCK` defaults to hard-block mode. Leave it unset or set it to `true` so provenance-v2 citation violations block replies. Set it to `false` only as a temporary emergency downgrade to warning-only behavior.
 
 Before upgrading a legacy local-volume deployment to integrity-required reads,
 inventory then backfill its existing objects from `backend/`:

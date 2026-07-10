@@ -2,7 +2,6 @@
 
 import uuid
 import logging
-from copy import deepcopy
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +18,10 @@ from app.models.schemas import PipelineRun, PipelineTemplateDB, PipelineVersion,
 from app.pipeline.engine import execute_dag, execute_pipeline_task, topological_sort
 from app.pipeline.nodes import dag_has_heavy_nodes
 from app.pipeline.nodes import registry
+from app.pipeline.storage_auth import (
+    PipelineStorageInputError,
+    bind_pipeline_storage_inputs,
+)
 from app.pipeline.validate import DAGValidationError, validate_dag
 
 logger = logging.getLogger(__name__)
@@ -134,26 +137,12 @@ async def _bind_owned_pipeline_inputs(
         resolve_owned_storage_key,
     )
 
-    bound = deepcopy(dag)
-    canonical_default = input_data_id
-    default_was_resolved = False
-
-    async def _owned(raw: object) -> str:
-        try:
-            return await resolve_owned_storage_key(
-                str(raw or ""), owner_id=user.id, db=db
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid pipeline input path") from exc
-        except (StorageOwnershipError, StorageOwnerRequired) as exc:
-            # Uniform missing semantics prevent cross-account enumeration.
-            raise HTTPException(status_code=404, detail="Pipeline input not found") from exc
-
-    for node in bound.get("nodes", []):
-        if not isinstance(node, dict):
-            continue
-        node_type = str(node.get("type") or "")
-        if node_type == "CustomScript" and settings.sandbox_backend == "disabled":
+    for node in dag.get("nodes", []):
+        if (
+            isinstance(node, dict)
+            and node.get("type") == "CustomScript"
+            and settings.sandbox_backend == "disabled"
+        ):
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -161,35 +150,23 @@ async def _bind_owned_pipeline_inputs(
                     "execution backend is configured"
                 ),
             )
-        data = node.setdefault("data", {})
-        if not isinstance(data, dict):
-            data = {}
-            node["data"] = data
-        params = data.setdefault("params", {})
-        if not isinstance(params, dict):
-            params = {}
-            data["params"] = params
 
-        # Any direct fits_path reaches download_fits in at least one built-in
-        # node.  Bind it regardless of node type so future nodes inherit the
-        # same safe default.
-        if params.get("fits_path"):
-            params["fits_path"] = await _owned(params["fits_path"])
-        elif node_type in {"LoadData", "PSFPhotometry"}:
-            canonical_default = await _owned(input_data_id)
-            default_was_resolved = True
-            params["fits_path"] = canonical_default
+    async def _owned(raw: str) -> str:
+        return await resolve_owned_storage_key(raw, owner_id=user.id, db=db)
 
-        if node_type == "ImportWorkspace":
-            raw_path = params.get("path") or input_data_id
-            params["path"] = await _owned(raw_path)
-            if raw_path == input_data_id:
-                canonical_default = params["path"]
-                default_was_resolved = True
-
-    # If no storage-reading node consumes the default id, it remains an opaque
-    # scientific identifier for query-only pipelines.
-    return bound, canonical_default if default_was_resolved else input_data_id
+    try:
+        return await bind_pipeline_storage_inputs(
+            dag=dag,
+            input_data_id=input_data_id,
+            resolve_key=_owned,
+        )
+    except (PipelineStorageInputError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid pipeline input path"
+        ) from exc
+    except (StorageOwnershipError, StorageOwnerRequired) as exc:
+        # Uniform missing semantics prevent cross-account enumeration.
+        raise HTTPException(status_code=404, detail="Pipeline input not found") from exc
 
 
 # ── Built-in templates (seeded on first request) ──
@@ -422,7 +399,12 @@ async def run_pipeline(
     loop = asyncio.get_running_loop()
     try:
         node_results = await loop.run_in_executor(
-            None, execute_dag, bound_dag, bound_input_data_id, run_id_str
+            None,
+            execute_dag,
+            bound_dag,
+            bound_input_data_id,
+            run_id_str,
+            str(user.id),
         )
     except Exception as e:
         logger.exception(f"Pipeline run {run_id_str} failed")
@@ -496,7 +478,12 @@ async def batch_run_pipeline(
                 db=db,
             )
             node_results = await loop.run_in_executor(
-                None, execute_dag, bound_dag, bound_input_id, run_id
+                None,
+                execute_dag,
+                bound_dag,
+                bound_input_id,
+                run_id,
+                str(user.id),
             )
             safe = _trim_for_api(node_results)
             # In-band node errors don't raise; a run with any errored/skipped

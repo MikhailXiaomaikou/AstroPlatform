@@ -178,11 +178,13 @@ TOOL_SCHEMAS = [
     {
         "name": "classify_transient",
         "description": (
-            "Classify a transient event from light curve data. Accepts pre-extracted features dict "
-            "OR raw light curve arrays (times, magnitudes, mag_errors). Returns classification "
-            "(SN_Ia, SN_II, SN_Ib_c, TDE, CV, AGN, KN, LPV, Unknown), confidence score, and "
-            "per-class probabilities. WARNING: Uses synthetic training data — verify results "
-            "with spectroscopy."
+            "Run a NON-SCIENTIFIC software demonstration of transient classification from a "
+            "complete feature dict OR at least 10 raw light-curve samples (times, magnitudes, "
+            "mag_errors). The random forest is trained entirely on generated feature "
+            "distributions, so its candidate class, score, and probabilities are always marked "
+            "SYNTHETIC and MUST NOT be reported as a scientific classification or calibrated "
+            "confidence. Use an independently validated survey classifier and/or spectroscopy "
+            "for scientific conclusions."
         ),
         "input_schema": {
             "type": "object",
@@ -194,11 +196,13 @@ TOOL_SCHEMAS = [
                 "times": {
                     "type": "array",
                     "items": {"type": "number"},
+                    "minItems": 10,
                     "description": "MJD observation times (alternative to features)",
                 },
                 "magnitudes": {
                     "type": "array",
                     "items": {"type": "number"},
+                    "minItems": 10,
                     "description": "Magnitude measurements",
                 },
                 "mag_errors": {
@@ -884,7 +888,11 @@ async def _exec_search_lightcurve(inp: dict) -> dict:
 
 async def _exec_classify_transient(inp: dict) -> dict:
     """Classify a transient from features or raw light curve data."""
-    from app.services.transient_classifier import TransientClassifier, extract_lc_features
+    from app.services.transient_classifier import (
+        TransientClassifier,
+        classification_failure,
+        extract_lc_features,
+    )
 
     features = inp.get("features")
     times = inp.get("times")
@@ -892,7 +900,10 @@ async def _exec_classify_transient(inp: dict) -> dict:
     mag_errors = inp.get("mag_errors")
 
     if features is None and times is None:
-        return {"error": "Either 'features' dict or 'times'+'magnitudes' arrays are required"}
+        return classification_failure(
+            "Either a non-empty 'features' dict or matching 'times' and "
+            "'magnitudes' arrays are required"
+        )
 
     loop = asyncio.get_running_loop()
 
@@ -900,9 +911,14 @@ async def _exec_classify_transient(inp: dict) -> dict:
         if features is not None:
             return TransientClassifier.classify_transient(features)
         # Extract features from raw light curve, then classify
-        mags = magnitudes or []
-        errs = mag_errors if mag_errors else None
-        extracted = extract_lc_features(times, mags, errs)
+        mags = magnitudes if magnitudes is not None else []
+        errs = mag_errors if mag_errors is not None else None
+        extracted = extract_lc_features(
+            times,
+            mags,
+            errs,
+            band=str(inp.get("band") or "g"),
+        )
         return TransientClassifier.classify_transient(extracted)
 
     try:
@@ -911,6 +927,11 @@ async def _exec_classify_transient(inp: dict) -> dict:
             timeout=60.0,
         )
     except asyncio.TimeoutError:
-        return {"error": "Transient classification timed out after 60 seconds"}
+        return classification_failure(
+            "Transient classification timed out after 60 seconds"
+        )
+    except Exception:
+        logger.exception("Transient classification failed")
+        return classification_failure("Transient classification could not be completed")
 
     return result

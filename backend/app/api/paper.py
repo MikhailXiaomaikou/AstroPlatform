@@ -17,7 +17,9 @@ from app.auth import get_current_user
 from app.models.database import get_db
 from app.models.schemas import ChatSession, PaperDraft, User
 from app.services.analysis_validator import (
+    PUBLICATION_LANGUAGE_ATTESTATION_KEY,
     bind_paper_validation,
+    build_publication_language_attestation,
     paper_validation_is_publishable,
     validate_analysis,
 )
@@ -40,6 +42,10 @@ class PaperGenerateRequest(BaseModel):
 
 class PaperUpdateRequest(BaseModel):
     paper_json: dict
+
+
+class PaperLanguageReviewRequest(BaseModel):
+    confirmed_english: bool
 
 
 _UNVERIFIED_LATEX_MARKER = "% STANDARD_ASTRO_UNVERIFIED_DRAFT"
@@ -410,6 +416,61 @@ async def update_paper_draft(
     await db.commit()
     await db.refresh(draft)
 
+    return _serialize_draft(draft)
+
+
+@router.post("/{paper_id}/language-review")
+async def attest_paper_english_language(
+    paper_id: str,
+    req: PaperLanguageReviewRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Record an explicit human English-language review of exact draft bytes."""
+
+    if req.confirmed_english is not True:
+        raise HTTPException(
+            status_code=400,
+            detail="English-language review must be explicitly confirmed.",
+        )
+    draft = await _require_owned_draft(paper_id, user, db)
+    reviewed_json = deepcopy(draft.paper_json)
+    reviewed_json.pop(PUBLICATION_LANGUAGE_ATTESTATION_KEY, None)
+    attestation = build_publication_language_attestation(
+        reviewed_json,
+        source="human_review",
+        reviewer_id=str(user.id),
+    )
+    if attestation is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The draft contains text outside the supported English claim "
+                "scope. Translate it before attesting."
+            ),
+        )
+    reviewed_json[PUBLICATION_LANGUAGE_ATTESTATION_KEY] = attestation
+    appendix = await generate_reproducibility_appendix(str(draft.session_id), db)
+    clean_latex_source = (
+        render_latex(reviewed_json, draft.journal_format) + "\n\n" + appendix
+    )
+    latex_source, validation = await _validate_and_bind_content(
+        session_id=str(draft.session_id),
+        owner_id=str(user.id),
+        paper_json=reviewed_json,
+        clean_latex_source=clean_latex_source,
+        bibtex=draft.bibtex,
+        journal_format=draft.journal_format,
+        db=db,
+    )
+    draft.paper_json = reviewed_json
+    draft.latex_source = latex_source
+    draft.validation = validation
+    draft.is_public = False
+    draft.public_token = None
+    draft.published_at = None
+    await db.commit()
+    await db.refresh(draft)
     return _serialize_draft(draft)
 
 

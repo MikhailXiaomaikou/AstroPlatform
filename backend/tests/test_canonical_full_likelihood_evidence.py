@@ -241,6 +241,7 @@ def test_complete_synthetic_evidence_emits_intervals_and_verified_map_delta(tmp_
     assert manifest["map_comparison"]["likelihood_only_mle_proven"] is False
     assert manifest["map_comparison"]["significance_ready"] is False
     assert manifest["significance_ready"] is False
+    assert manifest["conclusion_attestations"] == []
     assert manifest["claim_scope"] == (
         "posterior_intervals_and_descriptive_paired_optimizer_differences"
     )
@@ -252,6 +253,47 @@ def test_complete_synthetic_evidence_emits_intervals_and_verified_map_delta(tmp_
     assert manifest["data"]["fingerprint"]
     assert manifest["environment"]["packages"]["cobaya"]
     assert manifest["manifest_sha256"].startswith("sha256:")
+
+
+def test_calibrated_comparison_emits_versioned_conclusion_attestations():
+    manifest_hash = "sha256:" + "a" * 64
+    attestations = evidence.build_conclusion_attestations(
+        map_comparison={
+            "significance_ready": True,
+            "likelihood_only_mle_proven": True,
+            "method": {
+                "wilks_calibration_verified": True,
+                "simulation_calibration_verified": False,
+            },
+        },
+        data_fingerprint="sha256:" + "b" * 64,
+        likelihood_fingerprint="sha256:" + "c" * 64,
+        evidence_manifest_sha256=manifest_hash,
+    )
+    assert {item["claim_kind"] for item in attestations} == {
+        "baseline_rejection",
+        "extended_model_preference",
+        "dark_energy_evolution",
+    }
+    assert all(
+        item["schema_version"] == 1
+        and item["artifact_type"] == "scientific_conclusion_attestation"
+        and item["manifest_sha256"] == manifest_hash
+        and item["calibration"]["likelihood_only_mle_proven"] is True
+        for item in attestations
+    )
+
+    uncalibrated = evidence.build_conclusion_attestations(
+        map_comparison={
+            "significance_ready": True,
+            "likelihood_only_mle_proven": True,
+            "method": {"wilks_calibration_verified": False},
+        },
+        data_fingerprint="sha256:" + "b" * 64,
+        likelihood_fingerprint="sha256:" + "c" * 64,
+        evidence_manifest_sha256=manifest_hash,
+    )
+    assert uncalibrated == []
 
 
 def test_shifted_chain_fails_rank_gate_and_suppresses_intervals(tmp_path):

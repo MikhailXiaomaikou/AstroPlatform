@@ -28,11 +28,22 @@ evidence that a cosmological result is scientifically established.
 | SR-017 | High | Tiny inline samples, including one-point summaries and three-point regressions, could be labelled publication-ready without provenance, uncertainty, or effect diagnostics. | Inline-array statistics are preliminary at best, require minimum sample/variation/uncertainty checks even for preliminary use, and always disclose the missing source/selection/model binding. | Small-sample, large-sample, bootstrap, ODR, and censored-summary regressions. |
 | SR-018 | High | The hand-entered Gaussian lowE constraint on `tau` could inherit the same status as a selected, hash-verified low-l EE likelihood. | Mark the Gaussian constraint as a compressed stand-in; require the real low-l EE dataset to be both selected and individually hash-verified before it can clear the publication gate. | Stand-in, selected-but-unverified, and verified-lowE runner tests. |
 | SR-019 | High | A likelihood chi-square difference evaluated at posterior modes was converted to a Wilks p-value and Gaussian-equivalent sigma even though the optimizer used `ignore_prior: false`. | Retain signed objective and likelihood chi-square differences as auditable descriptive quantities; withhold p/sigma unless attested optimizers prove likelihood-only MLE targets. | Canonical evidence-manifest MAP regression. |
+| SR-020 | Critical | A paper could pair an unrelated signed catalog lookup with an unsupported qualitative cosmology conclusion, including claims that dark energy evolves or that the cosmological constant is ruled out. | Any conclusion recognized by the current strong-cosmology claim catalogue now needs a same-sentence evidence reference to one versioned attestation whose claim kind, baseline/alternative model pair, data and likelihood fingerprints, comparison calibration, and manifest hash match in the same signed result branch. A session-level `significance_ready` boolean cannot unlock unrelated prose. The catalogue is not claimed to cover every possible paraphrase. | Synonym/LaTeX attacks, cross-model/data/branch attacks, and exact calibrated-attestation positive regressions. |
+| SR-021 | Critical | Non-English claim text bypassed the English regex catalogue, and a client-authored session transcript could inject queries/code into the public reproducibility appendix. | Claim-bearing segments of four or more natural-language words are deterministically language-detected; automatic attestation requires English probability at least 0.95, while short formula-only content is neutral and editable content needs a content-hash-bound server/human attestation. Evidence uses an independent versioned signing key with a retained verification keyring. The attestation records this gate outcome for exact content; it does not validate the scientific meaning or correctness of the content. | Spanish, French, German, Portuguese, Italian, CJK, mixed-language, English-formula, edit-invalidates-signature, and signing-key rotation regressions. |
+| SR-022 | Critical | A number that was legitimate for exploratory chat could enter the paper validator's numeric universe even when its tool explicitly said `publication_ready=false`; an unrelated value with the same number could also support the wrong physical quantity. | The paper boundary excludes partial/exploratory/non-publication results and enables typed quantity matching. Cosmology parameters, significance, p-values, correlations, parallax, distance, mass, age, period, redshift, transit ratios/depths, and line widths cannot fall back to an unrelated flat numeric pool. | Preliminary/free-form manuscript attacks plus H0-from-parallax, Omega-m-from-redshift, sigma-from-S/N, p-from-period/redshift, and correlation cross-quantity regressions. |
+| SR-023 | High | HST/JWST proposal planning substituted Cerro Paranal for orbital visibility and fed space observatories into a ground-sky/seeing CCD exposure model. | Ground visibility is now `not_applicable` for space telescopes, the generic ETC rejects them, and proposal output directs users to STScI APT and the official instrument ETC without computing a ground proxy. | Space-observatory visibility and ETC guard regressions. |
+| SR-024 | Critical | The so-called reproducibility appendix silently cut ADQL after 200 characters and Python after 600, and listed only a pipeline action name rather than its DAG. | The appendix now derives a deterministic owner-bound manifest only from HMAC-verified records, preserves the complete input payload stored in each included server-attested evidence record (including queries, code, and DAGs), records result/data/config hashes, seeds, execution versions and record signatures, and publishes an explicit manifest SHA-256. | Long-query/code/DAG preservation, manifest tamper/hash, and forged-client-action exclusion regressions. |
+| SR-025 | Critical | Several archive connectors could return a metadata-only synthetic FITS header, and `LoadData` could accept the zero-row placeholder as though it were a scientific data product. | Metadata-only headers are no longer treated as scientific products; real archive products must be downloaded or uploaded, and empty FITS payloads fail the load boundary. | Connector metadata-only and empty-LoadData guard regressions. |
+| SR-026 | Critical | `classify_transient` trained a random forest entirely on generated feature distributions, returned a specific class/confidence for empty or undersampled inputs, and could then be normalized as `real_archive/completed`. | Empty, malformed, incomplete-feature, and fewer-than-10-point inputs now fail closed. Every successful output is forcibly marked `SYNTHETIC`, `__do_not_claim__`, non-preliminary, and non-publication at both the classifier and result-normalization boundaries; the candidate label and score are explicitly uncalibrated software-demo values. | Transient input attacks, normal sampled-light-curve regression, and contradictory-provenance laundering regression. |
+| SR-027 | Critical | `analyze_cross_wavelength` reported “No discrepancies” when every check was skipped, discarded catalog photometric errors already returned by 2MASS/AllWISE, and exposed chi-square/significance after silently assuming 10% flux errors. | Zero evaluated checks now return `EMPTY`, non-publication, and `__do_not_claim__`; dossiers preserve a band-aligned catalog-error tree; magnitude errors are propagated to flux and used in a weighted fit. Incomplete-error SED/IR screens remain visibly preliminary and expose no claimable significance or chi-square. | All-skipped abstention, missing-error quarantine, catalog-error propagation, and real-error weighted-fit regressions. |
 
-## Publication gate after remediation
+## Platform publication-export gate after remediation
 
-A numerical result may be labelled publication-ready only when all applicable
-conditions below are true:
+Within this platform, a numerical result is eligible for publication export
+only when all applicable evidence-binding conditions below are true. Passing
+these controls is necessary but not sufficient for scientific validity, which
+still requires domain review, model-adequacy and systematics assessment, and
+independent reproduction.
 
 1. The exact data bytes and covariance are source-pinned and hash-verified.
 2. Dataset independence/overlap has been checked before likelihood combination.
@@ -48,8 +59,31 @@ conditions below are true:
 7. Method-specific claim gates also pass: the requested sampler converged, any
    compressed stand-in is disclosed, and significance calibration matches the
    quantity actually optimized.
+8. Qualitative headline conclusions are relevant to the signed evidence scope;
+   model-selection language requires its own calibrated significance evidence,
+   and the public reproducibility appendix contains only server-attested runs.
+9. A chat-discussable preliminary value is not manuscript evidence: the paper
+   numeric universe excludes every explicitly exploratory or non-publication
+   result, requires the same typed physical quantity, and never treats
+   successful process execution as scientific validity.
+10. Claim-bearing prose passes the English-language gate for the exact draft
+    content, and the exported reproducibility manifest contains the full stored
+    input payload of every included signed evidence record plus hashes rather
+    than silently truncated display text.
+11. A model trained only on generated distributions remains synthetic even
+    when it receives real observations; its label and confidence cannot become
+    a scientific conclusion until an independently validated trained artefact
+    and calibration evidence replace the demonstration model.
+12. A missing-data cross-wavelength screen is not evidence of consistency, and
+    an assumed uncertainty cannot support a quoted significance or goodness of
+    fit; catalog-reported per-band errors must survive ingestion and propagation.
 
-## Deliberately unresolved scientific work
+The language attestation records a detector or reviewer gate outcome; it does
+not establish that the scientific content is correct. The manifest does not by
+itself guarantee external-service availability, long-term data availability,
+or bit-for-bit environment reconstruction.
+
+## Deliberately unresolved scientific work and validation boundaries
 
 The earlier DESI+CMB+SN `w0wa` output is no longer represented as a converged
 detection. Establishing a new significance would require a fresh, fully
@@ -61,22 +95,33 @@ scientific computation was not replaced by a shortcut or by relabelling the old
 chain; until it is run and independently checked, the platform must withhold
 that detection claim.
 
+Passing the software suite demonstrates that known unsupported claims are
+blocked; it does not establish a positive astrophysical result. The synthetic
+transient classifier remains an uncalibrated demonstration, incomplete-error
+cross-wavelength analyses remain non-publication, HST/JWST exposure feasibility
+still requires the official instrument tools, and archive metadata alone is
+not scientific data. Independent scientific review and reproduction remain
+outside the automated test claim.
+
 ## Verification performed
 
-- Platform CI test scope: **2679 passed, 3 skipped, 59 deselected, 0 failed**.
-- Focused scientific-remediation set: **497 passed** after correcting the one
-  stale Pantheon+ header fixture uncovered by the first run.
-- Default cosmology benchmark suite: **22 passed, 3 explicitly skipped/not
+- Full backend regression suite (2026-07-10): **2871 passed, 3 skipped, 59
+  deselected, 0 failed**; total measured coverage was **63.49%**.
+- Joint scientific-integrity, security-authority, storage, migration, archive,
+  transient, and cross-wavelength attack suite: **238 passed, 0 failed**.
+- Default cosmology benchmark suite: **23 passed, 2 explicitly skipped/not
   validated, 0 failed**; outcome accounting is exhaustive (25 of 25).
 - Slow Pantheon+SH0ES full-covariance benchmark: **passed**, with
   `cov_fidelity=full` and the fitted artifact digest equal to the registry pin.
 - Cosmology registry audit: **34/34 clean**, with no executable-pin issue.
 - Citation reachability audit: all **87 declared identifiers** (2 bibcodes, 67
   arXiv IDs, and 18 DOIs) are reachable through actual tool-result provenance.
-- `ruff` application lint and `git diff --check`: passed.
+- Ruff fatal-rule checks for the backend application and `git diff --check`:
+  passed.
 
-The three default-suite skips are not passes: one is the intentionally
-non-publication extended-DE diagnostic, while two are explicit slow full-SN
-opt-ins.  The full Pantheon+ covariance opt-in was additionally executed during
-this remediation and passed; the hours-long DESI `w0wa` significance rerun
-described above remains deliberately outstanding.
+The two default-suite skips are not passes: they are explicit slow full-data
+opt-ins. The full Pantheon+ covariance opt-in and the extended-DE numerical
+diagnostic were additionally executed during this remediation and passed their
+stated numerical checks, but both remained correctly withheld from scientific
+publication. The hours-long DESI `w0wa` significance rerun described above
+remains deliberately outstanding.

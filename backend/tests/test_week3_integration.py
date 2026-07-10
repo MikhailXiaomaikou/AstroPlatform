@@ -77,7 +77,7 @@ class TestTransientClassifier:
         ), f"Got {result['classification']}"
 
     def test_too_few_points(self):
-        """Only 2 data points -> still returns a result."""
+        """Only 2 data points -> explicit non-claimable failure."""
         from app.services.transient_classifier import (
             TransientClassifier,
             extract_lc_features,
@@ -86,7 +86,11 @@ class TestTransientClassifier:
         features = extract_lc_features([0, 1], [18, 17.5], [0.1, 0.1])
         classifier = TransientClassifier()
         result = classifier.classify_transient(features)
-        assert "classification" in result
+        assert result["classification"] == "Unknown"
+        assert result["confidence"] == 0.0
+        assert result["__tool_status__"] == "FAILED"
+        assert result["__do_not_claim__"] is True
+        assert result["publication_ready"] is False
 
 
 # =====================================================================

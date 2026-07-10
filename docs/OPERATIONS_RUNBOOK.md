@@ -27,8 +27,10 @@ to shared external storage and the disk can be removed.
 
 Before syncing an existing Blueprint, set `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and
 `S3_SECRET_ACCESS_KEY` on the backend, plus `S3_ENDPOINT_URL` for R2/MinIO.
-Render ignores new `sync: false` values during an update; if required values are
-not pre-seeded, the deliberate
+Also pre-seed `EVIDENCE_VERIFICATION_KEYS` as `{}` when first introducing the
+evidence-key configuration, then replace it with the retained-key map before a
+rotation. Render ignores new `sync: false` values during an update; if required
+values are not pre-seeded, the deliberate
 `STORAGE_BACKEND=s3` startup guard will stop the backend. Worker values reference
 the backend variables so both processes address the same bucket. Docker Compose
 uses local storage and shares the named FITS volume between backend and worker.
@@ -142,7 +144,7 @@ Operational targets:
 | PostgreSQL | Render PITR plus weekly portable export | 1 hour | 2 hours |
 | S3 research objects | bucket versioning plus provider replication/lifecycle policy | 24 hours | 4 hours |
 | `/app/data` events/cache | Render daily disk snapshot plus weekly portable export | 24 hours | 4 hours |
-| JWT/Fernet secrets | external secret manager, versioned key IDs | manual change only | 1 hour |
+| JWT/Fernet/evidence-signing secrets | external secret manager, versioned key IDs | manual change only | 1 hour |
 | Whole service | DB recovery + disk recovery + redeploy | 24 hours | 4 hours |
 
 RPO/RTO are targets, not claims of successful recovery. Run a recovery exercise
@@ -158,6 +160,7 @@ export DATABASE_URL='postgresql://...'
 export STORAGE_DIR=/app/data
 export BACKUP_ROOT=/tmp/astro-portable-backups
 export FERNET_KEY_ID='fernet-prod-2026-01'  # identifier only, never the key
+export EVIDENCE_SIGNING_KEY_ID='evidence-prod-v1'  # identifier only
 backend/scripts/ops/backup.sh  # repo-root shell
 # scripts/ops/backup.sh        # inside the backend/Render image
 ```
@@ -166,7 +169,8 @@ The script writes one `standard-astro-*.tar.gz` containing:
 
 - `database.dump` from `pg_dump --format=custom`;
 - optional local `storage.tar.gz` (it does not export an S3 bucket);
-- `manifest.json` with SHA-256 hashes, Alembic revision, commit and key ID.
+- `manifest.json` with SHA-256 hashes, Alembic revision, commit, Fernet key ID,
+  and evidence-signing key ID.
 
 The bundle contains no database URL, JWT secret, Fernet key, API key, or other
 credential. Copy it off the Render disk after creation; a backup stored only on
@@ -177,8 +181,31 @@ Enable bucket versioning and a provider-side retention/replication policy for
 S3/R2. Periodically perform a provider-native object export or replication test;
 the local backup script is not a substitute for object-store protection.
 
-Store the actual Fernet/JWT values in an external secret manager. Database
-recovery without the matching Fernet key leaves encrypted BYOK fields unreadable.
+Store the actual Fernet/JWT/evidence-signing values and retired evidence
+verification keyring in an external secret manager. Database recovery without
+the matching Fernet key leaves encrypted BYOK fields unreadable; recovery
+without the evidence keyring makes historical paper evidence unverifiable.
+
+### Evidence-key rotation
+
+Evidence keys are rotated additively, never by replacing the only verifier:
+
+1. Copy the current `EVIDENCE_SIGNING_KEY_ID` and secret into the JSON
+   `EVIDENCE_VERIFICATION_KEYS` map in the external secret manager.
+2. Generate a new independent `EVIDENCE_SIGNING_KEY` and a new immutable id.
+3. Deploy the new current key/id and the expanded keyring to backend, worker,
+   and beat together.
+4. Verify one historical public paper and create/validate one new signed tool
+   record. Roll back the deployment if either fails.
+5. Retain old keys for at least as long as any evidence-bearing paper or session
+   is retained. Do not remove a key merely because JWT tokens using a similar
+   date have expired.
+
+Schema-v1 records have no key id and were signed with the then-current
+`JWT_SECRET`. Before rotating JWT, preserve the old JWT secret in
+`EVIDENCE_VERIFICATION_KEYS` under a descriptive id such as
+`legacy-jwt-2026-07`; the verifier tries retained keys only for those legacy
+records. Never place secret values in the backup manifest.
 
 ## 5. Restore procedure
 
@@ -207,8 +234,9 @@ After restore:
 
 1. Set `DATABASE_URL` to the recovery database in an isolated backend.
 2. Run `alembic current`, `alembic check`, and `/health/deep`.
-3. Verify login, one encrypted BYOK record, one chat/session record, and one FITS
-   download by checksum.
+3. Verify login, one encrypted BYOK record, one chat/session record, one FITS
+   download by checksum, one historical public paper signed by a retired key,
+   and one newly generated evidence record signed by the current key id.
 4. Switch all production services together; do not leave worker/beat connected
    to the old database.
 5. Preserve the old resources until the recovery has passed a full smoke test.
@@ -233,10 +261,20 @@ After restore:
 ```bash
 export JWT_SECRET="$(openssl rand -hex 32)"
 export FERNET_KEY="$(openssl rand -hex 32)"
+export EVIDENCE_SIGNING_KEY="$(openssl rand -hex 32)"
+export EVIDENCE_SIGNING_KEY_ID="evidence-compose-v1"
 docker compose up --build -d
 docker compose ps
 curl --fail http://localhost:8000/health/deep
 ```
+
+The `openssl` commands above are for the first start of a disposable verification
+stack. If the named volumes will be reused, generate the three secrets once,
+assign the evidence key ID once, store them outside the repository, and reuse
+the same values on every start.
+Changing `FERNET_KEY` makes stored BYOK records unreadable; changing the evidence
+key without the additive rotation procedure above makes historical evidence
+unverifiable. Never commit these values to the repository.
 
 The one-shot `migrate` service must exit `0`; backend and worker both wait for
 it. Redis AOF, PostgreSQL, runtime data, and FITS data use named volumes. The

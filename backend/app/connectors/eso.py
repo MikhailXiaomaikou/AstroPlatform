@@ -6,7 +6,6 @@ ESO telescopes via astroquery.eso.
 
 from __future__ import annotations
 
-import io
 import logging
 from typing import TYPE_CHECKING
 
@@ -142,24 +141,12 @@ class ESOConnector(BaseConnector):
 
     @with_retry(max_retries=2, retryable_exceptions=(ConnectionError, TimeoutError, IOError))
     async def fetch(self, object_id: str) -> FITSFile:
-        """Create metadata FITS for an ESO observation.
-
-        Full ESO data products require authentication and are large.
-        We provide a metadata FITS placeholder.
-        """
-        from astropy.io import fits
-
-        hdu = fits.PrimaryHDU()
-        hdu.header["OBJECT"] = object_id
-        hdu.header["TELESCOP"] = "ESO/VLT"
-        hdu.header["COMMENT"] = "Metadata-only. Download full data from archive.eso.org"
-        buf = io.BytesIO()
-        hdu.writeto(buf)
-        return FITSFile(
-            object_id=object_id,
-            source="eso",
-            data=buf.getvalue(),
-            filename=f"eso_{object_id}.fits",
+        """Reject metadata-only stand-ins for authenticated ESO products."""
+        raise NotImplementedError(
+            "ESO science products require archive retrieval and, for some data, "
+            "authentication; this connector will not fabricate an empty FITS "
+            "data product. Download the real product from the ESO archive and "
+            "upload the resulting FITS file."
         )
 
     def normalize(self, raw_data) -> Table:

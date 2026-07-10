@@ -280,17 +280,35 @@ async def _query_sdss(ra: float, dec: float) -> dict:
 
     # Take closest match
     obj = rows[0] if isinstance(rows[0], dict) else {}
+    lower_obj = {str(key).lower(): value for key, value in obj.items()}
+
+    def _row_float(*keys: str) -> float | None:
+        for key in keys:
+            value = _safe_float(lower_obj.get(key.lower()))
+            if value is not None:
+                return value
+        return None
+
+    redshift = _row_float("redshift")
     return {
         "status": "ok",
         "objid": obj.get("objid") or obj.get("ObjID"),
-        "u": _safe_float(obj.get("u")),
-        "g": _safe_float(obj.get("g")),
-        "r": _safe_float(obj.get("r")),
-        "i": _safe_float(obj.get("i")),
-        "z": _safe_float(obj.get("z")),
-        "redshift": _safe_float(obj.get("redshift")),
+        "u": _row_float("u"),
+        "g": _row_float("g"),
+        "r": _row_float("r"),
+        "i": _row_float("i"),
+        "z": _row_float("z"),
+        # SkyServer deployments have used several spellings for the same
+        # catalog-reported magnitude errors. Preserve whichever one is
+        # present; never manufacture a substitute here.
+        "u_err": _row_float("err_u", "u_err", "uErr", "psfMagErr_u"),
+        "g_err": _row_float("err_g", "g_err", "gErr", "psfMagErr_g"),
+        "r_err": _row_float("err_r", "r_err", "rErr", "psfMagErr_r"),
+        "i_err": _row_float("err_i", "i_err", "iErr", "psfMagErr_i"),
+        "z_err": _row_float("err_z", "z_err", "zErr", "psfMagErr_z"),
+        "redshift": redshift,
         "type": obj.get("type"),
-        "redshift_source": "spectroscopic" if obj.get("redshift") else None,
+        "redshift_source": "spectroscopic" if redshift is not None else None,
     }
 
 
@@ -530,6 +548,30 @@ async def generate_dossier(
             "W4": allwise.get("W4"),
         },
     }
+    # Preserve the catalog-reported magnitude uncertainties in a parallel
+    # shape-compatible tree.  The former implementation queried 2MASS and
+    # AllWISE errors but discarded them while compiling the dossier, forcing
+    # downstream SED checks to invent a nominal uncertainty.
+    photometry_errors = {
+        "optical": {
+            "u": sdss.get("u_err"),
+            "g": sdss.get("g_err"),
+            "r": sdss.get("r_err"),
+            "i": sdss.get("i_err"),
+            "z": sdss.get("z_err"),
+        },
+        "nir": {
+            "J": twomass.get("J_err"),
+            "H": twomass.get("H_err"),
+            "Ks": twomass.get("Ks_err"),
+        },
+        "mir": {
+            "W1": allwise.get("W1_err"),
+            "W2": allwise.get("W2_err"),
+            "W3": allwise.get("W3_err"),
+            "W4": allwise.get("W4_err"),
+        },
+    }
 
     # Astrometry
     astrometry_warnings: list[str] = []
@@ -540,6 +582,7 @@ async def generate_dossier(
         )
     astrometry = {
         "parallax_mas": gaia.get("parallax_mas"),
+        "parallax_error_mas": gaia.get("parallax_error_mas"),
         "pm_ra": gaia.get("pm_ra"),
         "pm_dec": gaia.get("pm_dec"),
         "distance_pc": gaia.get("distance_pc"),
@@ -629,6 +672,13 @@ async def generate_dossier(
             "dec": dec,
         },
         "photometry": photometry,
+        "photometry_errors": photometry_errors,
+        "photometry_error_unit": "mag (catalog-reported 1-sigma)",
+        "photometry_error_sources": {
+            "optical": "SDSS DR18",
+            "nir": "2MASS II/246/out",
+            "mir": "AllWISE II/328/allwise",
+        },
         "astrometry": astrometry,
         "redshift": redshift,
         "host_galaxy": host_galaxy,
